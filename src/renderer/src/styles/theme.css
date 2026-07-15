@@ -1,0 +1,126 @@
+/* ==========================================================================
+   RM Operations App — design tokens & base styles
+   Brand: navy blue, professional (Inter). Light content surface, navy chrome.
+   ========================================================================== */
+
+:root {
+  /* Navy brand ramp */
+  --navy-950: #060f1f;
+  --navy-900: #0b1f3a;
+  --navy-850: #0e2647;
+  --navy-800: #123054;
+  --navy-700: #17406e;
+  --navy-600: #1e5288;
+  --navy-500: #2a6bb0;
+
+  /* Interactive blue */
+  --brand-600: #1e5288;
+  --brand-500: #2a6bb0;
+  --brand-400: #4a86c8;
+  --brand-300: #7db0e0;
+
+  /* Premium accent (used sparingly) */
+  --accent-500: #c9a24b;
+  --accent-400: #d8b76a;
+
+  /* Neutrals — content area */
+  --bg: #f4f6fa;
+  --surface: #ffffff;
+  --surface-2: #f8fafc;
+  --surface-3: #eef2f7;
+  --border: #e2e8f0;
+  --border-strong: #cbd5e1;
+
+  /* Text */
+  --text: #16223a;
+  --text-2: #46566f;
+  --text-3: #6b7a93;
+  --text-inverse: #eef4fb;
+  --text-on-navy: #d7e3f2;
+  --text-on-navy-dim: #91a6c4;
+
+  /* Semantic */
+  --success: #1f8b5b;
+  --success-bg: #e6f6ee;
+  --warning: #b7791f;
+  --warning-bg: #fbf3e0;
+  --danger: #c33d33;
+  --danger-bg: #fbe9e7;
+  --info: #2a6bb0;
+  --info-bg: #e8f1fb;
+
+  /* Radii & shadows */
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+  --shadow-sm: 0 1px 2px rgba(15, 34, 63, 0.06);
+  --shadow: 0 6px 18px rgba(15, 34, 63, 0.08);
+  --shadow-lg: 0 18px 48px rgba(11, 31, 58, 0.18);
+
+  --sidebar-w: 264px;
+  --topbar-h: 64px;
+
+  --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: var(--font);
+  color: var(--text);
+  background: var(--bg);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  margin: 0;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+a {
+  color: var(--brand-500);
+  text-decoration: none;
+}
+
+button {
+  font-family: inherit;
+}
+
+::selection {
+  background: var(--brand-300);
+  color: var(--navy-900);
+}
+
+/* Scrollbars */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(70, 86, 111, 0.28);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(70, 86, 111, 0.45);
+  background-clip: content-box;
+}

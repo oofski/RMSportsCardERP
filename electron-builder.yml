@@ -1,0 +1,86 @@
+appId: com.rmcardz.operations
+productName: RM Operations App
+copyright: Copyright © RM Cardz
+
+directories:
+  buildResources: build
+  output: release/${version}
+
+files:
+  - '!**/.vscode/*'
+  - '!src/*'
+  - '!electron.vite.config.{js,ts,mjs,cjs}'
+  - '!electron-builder.yml'
+  - '!{.editorconfig,.eslintignore,.eslintrc.cjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
+  - '!{.env,.env.*,.npmrc,pnpm-lock.yaml,package-lock.json}'
+  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+
+asarUnpack:
+  - resources/**
+  # better-sqlite3 is a native module and must remain unpacked so its .node binary can be loaded
+  - '**/*.node'
+
+# ---------------------------------------------------------------------------
+# Windows — produces the downloadable .exe installer
+# ---------------------------------------------------------------------------
+win:
+  executableName: RM Operations App
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: ${productName}-Setup-${version}.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  allowElevation: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: RM Operations App
+  deleteAppDataOnUninstall: false
+  # electron-updater differential download support
+  differentialPackage: true
+
+# ---------------------------------------------------------------------------
+# macOS — for the Mac side of the team (auto-update wiring comes in a later pass)
+# ---------------------------------------------------------------------------
+mac:
+  category: public.app-category.business
+  target:
+    - target: dmg
+      arch:
+        - arm64
+        - x64
+    - target: zip
+      arch:
+        - arm64
+        - x64
+  artifactName: ${productName}-${version}-${arch}.${ext}
+  darkModeSupport: true
+  hardenedRuntime: true
+  gatekeeperAssess: false
+
+dmg:
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+# ---------------------------------------------------------------------------
+# Linux — convenience target for internal testing
+# ---------------------------------------------------------------------------
+linux:
+  target:
+    - AppImage
+  category: Office
+  maintainer: RM Cardz
+
+# ---------------------------------------------------------------------------
+# Update feed — electron-updater pulls new versions from GitHub Releases.
+# Publishing a GitHub Release (tag vX.Y.Z) with the built artifacts is what
+# makes "Check for updates" find a new version.
+# ---------------------------------------------------------------------------
+publish:
+  provider: github
+  owner: oofski
+  repo: rmsportscarderp
+  releaseType: release

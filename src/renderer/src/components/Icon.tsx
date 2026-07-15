@@ -1,0 +1,98 @@
+import {
+  ShieldCheck,
+  PackageCheck,
+  Truck,
+  BookOpen,
+  ReceiptText,
+  ListTree,
+  ClipboardList,
+  Clock,
+  TrendingUp,
+  Plus,
+  Search,
+  X,
+  Check,
+  CheckCircle2,
+  AlertCircle,
+  Info,
+  RefreshCw,
+  Download,
+  DownloadCloud,
+  LogOut,
+  Users,
+  KeyRound,
+  Mail,
+  Copy,
+  Pencil,
+  ChevronDown,
+  UserPlus,
+  Trash2,
+  Rocket,
+  Building2,
+  Loader2,
+  ArrowRight,
+  Send,
+  UserCog,
+  CalendarClock,
+  Ban,
+  RotateCcw,
+  Sparkles,
+  type LucideIcon
+} from 'lucide-react'
+
+const MAP: Record<string, LucideIcon> = {
+  ShieldCheck,
+  PackageCheck,
+  Truck,
+  BookOpen,
+  ReceiptText,
+  ListTree,
+  ClipboardList,
+  Clock,
+  TrendingUp,
+  Plus,
+  Search,
+  X,
+  Check,
+  CheckCircle2,
+  AlertCircle,
+  Info,
+  RefreshCw,
+  Download,
+  DownloadCloud,
+  LogOut,
+  Users,
+  KeyRound,
+  Mail,
+  Copy,
+  Pencil,
+  ChevronDown,
+  UserPlus,
+  Trash2,
+  Rocket,
+  Building2,
+  Loader2,
+  ArrowRight,
+  Send,
+  UserCog,
+  CalendarClock,
+  Ban,
+  RotateCcw,
+  Sparkles
+}
+
+export function Icon({
+  name,
+  size = 18,
+  className,
+  strokeWidth = 2
+}: {
+  name: string
+  size?: number
+  className?: string
+  strokeWidth?: number
+}): JSX.Element | null {
+  const Cmp = MAP[name]
+  if (!Cmp) return null
+  return <Cmp size={size} className={className} strokeWidth={strokeWidth} />
+}

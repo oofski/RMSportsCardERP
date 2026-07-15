@@ -1,0 +1,6 @@
+# Used by electron-updater during local development so "Check for updates"
+# can be exercised without a packaged build. Points at the same GitHub feed.
+provider: github
+owner: oofski
+repo: rmsportscarderp
+updaterCacheDirName: rm-operations-app-updater
