@@ -159,6 +159,12 @@ export function registerIpcHandlers(): void {
         const existing = getEmployeeById(input.id)
         if (!existing) return { ok: false, error: 'Employee not found.' }
 
+        // You may only modify an account whose role you are allowed to manage.
+        // Without this, a lower-privileged actor could rewrite a higher one's
+        // login identifiers (email / Company ID) and take the account over.
+        if (!assignableRoles(actor.role).includes(existing.role)) {
+          return { ok: false, error: 'You do not have permission to manage that user.' }
+        }
         if (input.role && !assignableRoles(actor.role).includes(input.role)) {
           return { ok: false, error: `You cannot assign the ${input.role} role.` }
         }
@@ -200,9 +206,14 @@ export function registerIpcHandlers(): void {
     IPC.employeesResetPassword,
     (_e, payload: { id: string }): Result<EmployeeInvite> => {
       try {
-        requirePermission('admin.employees.manage')
+        const actor = requirePermission('admin.employees.manage')
         const employee = getEmployeeById(payload.id)
         if (!employee) return { ok: false, error: 'Employee not found.' }
+        // Prevent resetting the password of an account you may not manage
+        // (e.g. Operations resetting the Owner and reading the new temp password).
+        if (!assignableRoles(actor.role).includes(employee.role)) {
+          return { ok: false, error: 'You do not have permission to manage that user.' }
+        }
         const temporaryPassword = generateTempPassword()
         setTemporaryPassword(payload.id, temporaryPassword)
         const refreshed = getEmployeeById(payload.id) as Employee
@@ -259,9 +270,12 @@ export function registerIpcHandlers(): void {
     IPC.emailComposeInvite,
     (_e, payload: { employeeId: string; temporaryPassword: string | null }): Result<ComposedEmail> => {
       try {
-        requirePermission('admin.employees.manage')
+        const actor = requirePermission('admin.employees.manage')
         const employee = getEmployeeById(payload.employeeId)
         if (!employee) return { ok: false, error: 'Employee not found.' }
+        if (!assignableRoles(actor.role).includes(employee.role)) {
+          return { ok: false, error: 'You do not have permission to manage that user.' }
+        }
         const sender = currentUser()
         const senderName = sender ? `${sender.firstName} ${sender.lastName}` : 'your administrator'
         const email = composeInviteEmail(employee, payload.temporaryPassword, senderName)
@@ -285,7 +299,10 @@ export function registerIpcHandlers(): void {
   })
 
   // ---- Updates (available to any signed-in user) --------------------------
-  ipcMain.handle(IPC.updatesGetStatus, (): UpdateStatus => getUpdateStatus())
+  ipcMain.handle(IPC.updatesGetStatus, (): UpdateStatus => {
+    guardSignedIn()
+    return getUpdateStatus()
+  })
 
   ipcMain.handle(IPC.updatesCheck, async (): Promise<UpdateStatus> => {
     guardSignedIn()

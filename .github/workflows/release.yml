@@ -38,6 +38,20 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # electron-builder versions artifacts from package.json, not the git tag.
+      # Fail fast if a tag was pushed that doesn't match, so the update feed can
+      # never advertise the wrong version.
+      - name: Verify tag matches package.json version
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          PKG_VERSION="v$(node -p "require('./package.json').version")"
+          if [ "$PKG_VERSION" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match package.json version ${PKG_VERSION}. Bump package.json before tagging."
+            exit 1
+          fi
+          echo "Tag and package.json agree on ${PKG_VERSION}."
+
       - name: Build & publish (${{ matrix.platform }})
         run: npm run build:${{ matrix.platform }} -- --publish always
         env:

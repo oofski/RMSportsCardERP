@@ -4,6 +4,7 @@ on:
   push:
     branches: ['**']
   pull_request:
+  workflow_dispatch:
 
 jobs:
   verify:
@@ -21,3 +22,21 @@ jobs:
         run: npm run typecheck
       - name: Build bundles
         run: npm run build
+
+  # Exercises electron-builder packaging (native-module rebuild + asar pack) on
+  # Windows without publishing, so packaging regressions are caught before a
+  # release rather than at tag time. Runs on PRs and on demand to save minutes.
+  package-smoke:
+    name: Packaging smoke (Windows)
+    runs-on: windows-latest
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Build unpacked app
+        run: npm run build:unpack

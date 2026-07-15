@@ -3,7 +3,7 @@ import type { Employee, EmployeeInvite } from '@shared/types'
 import { useSession } from '../../lib/session'
 import { api } from '../../lib/api'
 import { useToast } from '../../components/Toast'
-import { Avatar, Button, EmptyState, Input, RoleBadge, StatusBadge } from '../../components/ui'
+import { Avatar, Button, EmptyState, Input, Modal, RoleBadge, StatusBadge } from '../../components/ui'
 import { Icon } from '../../components/Icon'
 import { initials, fullName, formatDate } from '../../lib/format'
 import { EmployeeFormModal } from './EmployeeFormModal'
@@ -24,6 +24,7 @@ export function EmployeesTab({
   const [formOpen, setFormOpen] = useState(false)
   const [editing, setEditing] = useState<Employee | null>(null)
   const [invite, setInvite] = useState<EmployeeInvite | null>(null)
+  const [confirmReset, setConfirmReset] = useState<Employee | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
 
   const filtered = useMemo(() => {
@@ -75,6 +76,7 @@ export function EmployeesTab({
         return
       }
       await onChanged()
+      setConfirmReset(null)
       setInvite(res.data)
     } finally {
       setBusyId(null)
@@ -179,7 +181,9 @@ export function EmployeesTab({
                         variant="ghost"
                         icon={e.status === 'invited' ? 'Send' : 'KeyRound'}
                         loading={busyId === e.id}
-                        onClick={() => regenerateInvite(e)}
+                        onClick={() =>
+                          e.status === 'invited' ? regenerateInvite(e) : setConfirmReset(e)
+                        }
                         title={e.status === 'invited' ? 'Resend invite email' : 'Reset password & invite'}
                       >
                         {e.status === 'invited' ? 'Resend' : 'Reset'}
@@ -206,6 +210,37 @@ export function EmployeesTab({
       )}
 
       {invite && <InviteModal invite={invite} onClose={() => setInvite(null)} />}
+
+      {confirmReset && (
+        <Modal
+          title="Reset this password?"
+          subtitle={`A new temporary password will be issued for ${fullName(
+            confirmReset.firstName,
+            confirmReset.lastName
+          )}.`}
+          onClose={() => setConfirmReset(null)}
+          footer={
+            <>
+              <Button variant="ghost" onClick={() => setConfirmReset(null)}>
+                Cancel
+              </Button>
+              <Button
+                variant="danger"
+                icon="KeyRound"
+                loading={busyId === confirmReset.id}
+                onClick={() => regenerateInvite(confirmReset)}
+              >
+                Reset password
+              </Button>
+            </>
+          }
+        >
+          <p className="muted">
+            This immediately invalidates {confirmReset.firstName}&rsquo;s current password. They will
+            need the new temporary password (shown next) to sign in and set a new one.
+          </p>
+        </Modal>
+      )}
     </>
   )
 }

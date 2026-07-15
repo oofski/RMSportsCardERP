@@ -28,7 +28,10 @@ function createWindow(): BrowserWindow {
   win.on('ready-to-show', () => win.show())
 
   win.webContents.setWindowOpenHandler((details) => {
-    shell.openExternal(details.url)
+    // Never open windows in-app; hand only safe, expected schemes to the OS.
+    if (/^https?:/i.test(details.url) || /^mailto:/i.test(details.url)) {
+      shell.openExternal(details.url)
+    }
     return { action: 'deny' }
   })
 
