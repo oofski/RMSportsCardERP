@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react'
 import type { Employee, EmployeeInvite } from '@shared/types'
 import { useSession } from '../../lib/session'
+import { useChrome } from '../../lib/chrome'
 import { api } from '../../lib/api'
 import { useToast } from '../../components/Toast'
-import { Avatar, Button, EmptyState, Input, Modal, RoleBadge, StatusBadge } from '../../components/ui'
+import { Avatar, Button, EmptyState, Modal, RoleBadge, StatusBadge } from '../../components/ui'
 import { Icon } from '../../components/Icon'
 import { initials, fullName, formatDate } from '../../lib/format'
 import { EmployeeFormModal } from './EmployeeFormModal'
@@ -17,10 +18,10 @@ export function EmployeesTab({
   onChanged: () => Promise<void>
 }): JSX.Element {
   const { can } = useSession()
+  const { search } = useChrome()
   const toast = useToast()
   const canManage = can('admin.employees.manage')
 
-  const [query, setQuery] = useState('')
   const [formOpen, setFormOpen] = useState(false)
   const [editing, setEditing] = useState<Employee | null>(null)
   const [invite, setInvite] = useState<EmployeeInvite | null>(null)
@@ -28,7 +29,7 @@ export function EmployeesTab({
   const [busyId, setBusyId] = useState<string | null>(null)
 
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase()
+    const q = search.trim().toLowerCase()
     if (!q) return employees
     return employees.filter((e) =>
       [e.firstName, e.lastName, e.companyId, e.email, e.title]
@@ -36,7 +37,7 @@ export function EmployeesTab({
         .toLowerCase()
         .includes(q)
     )
-  }, [employees, query])
+  }, [employees, search])
 
   const stats = useMemo(
     () => ({
@@ -119,18 +120,12 @@ export function EmployeesTab({
       </div>
 
       <div className="section-head">
-        <div style={{ position: 'relative', flex: 1, maxWidth: 320 }}>
-          <span
-            style={{ position: 'absolute', left: 12, top: 11, color: 'var(--text-3)' }}
-          >
-            <Icon name="Search" size={16} />
-          </span>
-          <Input
-            style={{ paddingLeft: 34 }}
-            placeholder="Search employees…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
+        <div>
+          <h2>Employees</h2>
+          <p>
+            {filtered.length} of {employees.length}
+            {search.trim() ? ` matching "${search.trim()}"` : ' team members'}
+          </p>
         </div>
         {canManage && (
           <Button variant="primary" icon="UserPlus" onClick={openCreate}>
@@ -153,6 +148,15 @@ export function EmployeesTab({
             </tr>
           </thead>
           <tbody>
+            {filtered.length === 0 && (
+              <tr>
+                <td colSpan={canManage ? 7 : 6}>
+                  <div className="muted" style={{ padding: '20px 0', textAlign: 'center' }}>
+                    No employees match “{search.trim()}”.
+                  </div>
+                </td>
+              </tr>
+            )}
             {filtered.map((e) => (
               <tr key={e.id}>
                 <td>

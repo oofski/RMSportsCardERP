@@ -37,6 +37,16 @@ import {
   Ban,
   RotateCcw,
   Sparkles,
+  LayoutDashboard,
+  ChevronsUpDown,
+  Bell,
+  Settings,
+  Zap,
+  ArrowUpRight,
+  Activity,
+  Wallet,
+  BarChart3,
+  LineChart,
   type LucideIcon
 } from 'lucide-react'
 
@@ -78,7 +88,17 @@ const MAP: Record<string, LucideIcon> = {
   CalendarClock,
   Ban,
   RotateCcw,
-  Sparkles
+  Sparkles,
+  LayoutDashboard,
+  ChevronsUpDown,
+  Bell,
+  Settings,
+  Zap,
+  ArrowUpRight,
+  Activity,
+  Wallet,
+  BarChart3,
+  LineChart
 }
 
 export function Icon({

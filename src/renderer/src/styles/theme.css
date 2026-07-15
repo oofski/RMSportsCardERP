@@ -1,65 +1,68 @@
 /* ==========================================================================
    RM Operations App — design tokens & base styles
-   Brand: navy blue, professional (Inter). Light content surface, navy chrome.
+   Light, airy SaaS aesthetic: white cards on a soft grey canvas, one confident
+   indigo-blue accent, thin iconography, generous whitespace.
    ========================================================================== */
 
 :root {
-  /* Navy brand ramp */
-  --navy-950: #060f1f;
-  --navy-900: #0b1f3a;
-  --navy-850: #0e2647;
-  --navy-800: #123054;
-  --navy-700: #17406e;
-  --navy-600: #1e5288;
-  --navy-500: #2a6bb0;
+  /* Brand — vivid indigo-blue accent */
+  --brand-700: #1f3bc4;
+  --brand-600: #2646d8;
+  --brand-500: #3358ff;
+  --brand-400: #5b78ff;
+  --brand-300: #93a6ff;
+  --brand-soft: #eef1ff;
+  --brand-soft-2: #e2e8ff;
 
-  /* Interactive blue */
-  --brand-600: #1e5288;
-  --brand-500: #2a6bb0;
-  --brand-400: #4a86c8;
-  --brand-300: #7db0e0;
+  /* Ink — dark indigo-slate for avatars, inverted cards, auth panel */
+  --ink-900: #121829;
+  --ink-800: #1a2238;
+  --ink-700: #232e4d;
+  --ink-600: #33406a;
 
-  /* Premium accent (used sparingly) */
-  --accent-500: #c9a24b;
-  --accent-400: #d8b76a;
+  /* Chart palette */
+  --chart-blue: #3358ff;
+  --chart-green: #12a150;
+  --chart-purple: #7c5cfc;
+  --chart-grid: #eef0f4;
 
-  /* Neutrals — content area */
-  --bg: #f4f6fa;
+  /* Neutrals — content surfaces */
+  --bg: #f5f6f8;
   --surface: #ffffff;
-  --surface-2: #f8fafc;
-  --surface-3: #eef2f7;
-  --border: #e2e8f0;
-  --border-strong: #cbd5e1;
+  --surface-2: #f8f9fb;
+  --surface-3: #f1f3f6;
+  --border: #ebedf1;
+  --border-strong: #dde1e8;
 
-  /* Text */
-  --text: #16223a;
-  --text-2: #46566f;
-  --text-3: #6b7a93;
-  --text-inverse: #eef4fb;
-  --text-on-navy: #d7e3f2;
-  --text-on-navy-dim: #91a6c4;
+  /* Text — slate with a faint cool bias */
+  --text: #1b2130;
+  --text-2: #58616f;
+  --text-3: #8b93a1;
+  --text-inverse: #eef2fb;
+  --text-on-ink: #d5ddf0;
+  --text-on-ink-dim: #93a0bd;
 
   /* Semantic */
-  --success: #1f8b5b;
-  --success-bg: #e6f6ee;
-  --warning: #b7791f;
-  --warning-bg: #fbf3e0;
-  --danger: #c33d33;
-  --danger-bg: #fbe9e7;
-  --info: #2a6bb0;
-  --info-bg: #e8f1fb;
+  --success: #12a150;
+  --success-bg: #e7f6ee;
+  --warning: #b7860b;
+  --warning-bg: #fbf1d3;
+  --danger: #dc4b52;
+  --danger-bg: #fbeaea;
+  --info: #3358ff;
+  --info-bg: #eef1ff;
 
   /* Radii & shadows */
-  --radius-sm: 6px;
+  --radius-sm: 8px;
   --radius: 10px;
-  --radius-lg: 14px;
-  --radius-xl: 20px;
-  --shadow-sm: 0 1px 2px rgba(15, 34, 63, 0.06);
-  --shadow: 0 6px 18px rgba(15, 34, 63, 0.08);
-  --shadow-lg: 0 18px 48px rgba(11, 31, 58, 0.18);
+  --radius-lg: 16px;
+  --radius-xl: 22px;
+  --shadow-sm: 0 1px 2px rgba(24, 39, 75, 0.05);
+  --shadow: 0 4px 18px rgba(24, 39, 75, 0.07);
+  --shadow-lg: 0 24px 60px rgba(24, 39, 75, 0.18);
 
-  --sidebar-w: 264px;
-  --topbar-h: 64px;
+  --sidebar-w: 244px;
+  --topbar-h: 66px;
 
   --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 }
@@ -91,7 +94,7 @@ h3,
 h4 {
   margin: 0;
   font-weight: 600;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.014em;
   color: var(--text);
 }
 
@@ -106,21 +109,20 @@ button {
 
 ::selection {
   background: var(--brand-300);
-  color: var(--navy-900);
+  color: #fff;
 }
 
-/* Scrollbars */
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(70, 86, 111, 0.28);
+  background: rgba(88, 97, 111, 0.22);
   border-radius: 999px;
   border: 2px solid transparent;
   background-clip: content-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(70, 86, 111, 0.45);
+  background: rgba(88, 97, 111, 0.36);
   background-clip: content-box;
 }
