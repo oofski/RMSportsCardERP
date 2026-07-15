@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Employee, EmployeeHoursSummary, TimeEntry } from '@shared/types'
 import { MODULES } from '@shared/modules'
 import { ROLES } from '@shared/permissions'
@@ -8,6 +8,7 @@ import { api } from '../../lib/api'
 import { Icon } from '../../components/Icon'
 import { Donut, AreaChart } from '../../components/charts'
 import { CenterLoader } from '../../components/ui'
+import { TimeClock } from '../../components/TimeClock'
 import { formatHours } from '../../lib/format'
 
 function greetingWord(): string {
@@ -107,6 +108,10 @@ export function HomeModule(): JSX.Element {
           {greetingWord()}, {user?.firstName}
         </h2>
         <p>Here's what's happening across RM Cardz — {monthLabel()}.</p>
+      </div>
+
+      <div style={{ marginBottom: 16 }}>
+        <TimeClock />
       </div>
 
       {canEmployees && (
@@ -239,36 +244,84 @@ export function HomeModule(): JSX.Element {
             </div>
           </div>
 
-          <div className="panel-card">
-            <div className="panel-head">
-              <h3>Modules</h3>
-              <span className="ph-sub">{visibleModules.length}</span>
-            </div>
-            <div className="module-grid">
-              {visibleModules.map((m) => (
-                <button
-                  key={m.id}
-                  className={`module-tile ${m.status === 'active' ? 'live' : ''}`}
-                  onClick={() => navigate(m.id)}
-                >
-                  <div className="mt-ico">
-                    <Icon name={m.icon} size={19} />
-                  </div>
-                  <div className="mt-name">{m.name}</div>
-                  <div className="mt-desc">{m.description}</div>
-                  <div className="mt-tag">
-                    {m.status === 'active' ? (
-                      <span className="badge badge-active">Live</span>
-                    ) : (
-                      <span className="badge badge-soon">Soon</span>
-                    )}
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
         </div>
       </div>
+
+      <div className="panel-card" style={{ marginTop: 16 }}>
+        <div className="panel-head">
+          <h3>Modules</h3>
+          <span className="ph-sub">{visibleModules.length}</span>
+        </div>
+        <ModulesCarousel modules={visibleModules} onOpen={navigate} />
+      </div>
+    </div>
+  )
+}
+
+function ModulesCarousel({
+  modules,
+  onOpen
+}: {
+  modules: typeof MODULES
+  onOpen: (id: string) => void
+}): JSX.Element {
+  const trackRef = useRef<HTMLDivElement | null>(null)
+  const [atStart, setAtStart] = useState(true)
+  const [atEnd, setAtEnd] = useState(false)
+
+  const updateArrows = useCallback(() => {
+    const el = trackRef.current
+    if (!el) return
+    setAtStart(el.scrollLeft <= 2)
+    setAtEnd(el.scrollLeft + el.clientWidth >= el.scrollWidth - 2)
+  }, [])
+
+  useEffect(() => {
+    updateArrows()
+    const el = trackRef.current
+    if (!el) return
+    el.addEventListener('scroll', updateArrows, { passive: true })
+    window.addEventListener('resize', updateArrows)
+    return () => {
+      el.removeEventListener('scroll', updateArrows)
+      window.removeEventListener('resize', updateArrows)
+    }
+  }, [updateArrows])
+
+  const scrollBy = (dir: 1 | -1): void => {
+    trackRef.current?.scrollBy({ left: dir * 250, behavior: 'smooth' })
+  }
+
+  return (
+    <div className="mc-wrap">
+      <button className="mc-arrow left" disabled={atStart} onClick={() => scrollBy(-1)} aria-label="Previous">
+        <Icon name="ArrowLeft" size={17} />
+      </button>
+      <div className="mc-track" ref={trackRef}>
+        {modules.map((m) => (
+          <button
+            key={m.id}
+            className={`module-tile ${m.status === 'active' ? 'live' : ''}`}
+            onClick={() => onOpen(m.id)}
+          >
+            <div className="mt-ico">
+              <Icon name={m.icon} size={19} />
+            </div>
+            <div className="mt-name">{m.name}</div>
+            <div className="mt-desc">{m.description}</div>
+            <div className="mt-tag">
+              {m.status === 'active' ? (
+                <span className="badge badge-active">Live</span>
+              ) : (
+                <span className="badge badge-soon">Soon</span>
+              )}
+            </div>
+          </button>
+        ))}
+      </div>
+      <button className="mc-arrow right" disabled={atEnd} onClick={() => scrollBy(1)} aria-label="Next">
+        <Icon name="ChevronRight" size={17} />
+      </button>
     </div>
   )
 }

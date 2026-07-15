@@ -62,8 +62,8 @@ export function AdminModule(): JSX.Element {
       {tab === 'employees' && (
         <EmployeesTab employees={employees} onChanged={loadEmployees} />
       )}
-      {tab === 'hours' && <HoursTab employees={employees} />}
-      {tab === 'roles' && <RolesTab />}
+      {tab === 'hours' && <HoursTab />}
+      {tab === 'roles' && <RolesTab employees={employees} onChanged={loadEmployees} />}
     </div>
   )
 }

@@ -1,15 +1,21 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC, type AppInfo } from '@shared/ipc'
+import type { Permission } from '@shared/permissions'
 import type {
   AuthResult,
+  ClockStatus,
   ComposedEmail,
   Employee,
   EmployeeHoursSummary,
   EmployeeInvite,
+  ExportRequest,
+  ExportResult,
   NewEmployeeInput,
   NewTimeEntryInput,
+  RememberedCredentials,
   Result,
   SessionUser,
+  ThemeMode,
   TimeEntry,
   UpdateEmployeeInput,
   UpdateStatus
@@ -43,7 +49,9 @@ const api = {
     update: (input: UpdateEmployeeInput): Promise<Result<Employee>> =>
       ipcRenderer.invoke(IPC.employeesUpdate, input),
     resetPassword: (id: string): Promise<Result<EmployeeInvite>> =>
-      ipcRenderer.invoke(IPC.employeesResetPassword, { id })
+      ipcRenderer.invoke(IPC.employeesResetPassword, { id }),
+    setPermissions: (id: string, permissions: Permission[]): Promise<Result<Employee>> =>
+      ipcRenderer.invoke(IPC.employeesSetPermissions, { id, permissions })
   },
   hours: {
     summary: (): Promise<EmployeeHoursSummary[]> => ipcRenderer.invoke(IPC.hoursSummary),
@@ -51,7 +59,23 @@ const api = {
       ipcRenderer.invoke(IPC.hoursList, employeeId),
     create: (input: NewTimeEntryInput): Promise<Result<TimeEntry>> =>
       ipcRenderer.invoke(IPC.hoursCreate, input),
-    delete: (id: string): Promise<Result> => ipcRenderer.invoke(IPC.hoursDelete, { id })
+    delete: (id: string): Promise<Result> => ipcRenderer.invoke(IPC.hoursDelete, { id }),
+    timesheet: (employeeId: string, start: string, end: string): Promise<TimeEntry[]> =>
+      ipcRenderer.invoke(IPC.hoursTimesheet, { employeeId, start, end }),
+    export: (req: ExportRequest): Promise<ExportResult> => ipcRenderer.invoke(IPC.hoursExport, req)
+  },
+  clock: {
+    status: (): Promise<ClockStatus> => ipcRenderer.invoke(IPC.clockStatus),
+    in: (): Promise<Result<ClockStatus>> => ipcRenderer.invoke(IPC.clockIn),
+    out: (): Promise<Result<ClockStatus>> => ipcRenderer.invoke(IPC.clockOut)
+  },
+  credentials: {
+    get: (): Promise<RememberedCredentials | null> => ipcRenderer.invoke(IPC.credGet),
+    set: (creds: RememberedCredentials): Promise<Result> => ipcRenderer.invoke(IPC.credSet, creds),
+    clear: (): Promise<Result> => ipcRenderer.invoke(IPC.credClear)
+  },
+  theme: {
+    set: (mode: ThemeMode): Promise<Result> => ipcRenderer.invoke(IPC.themeSet, mode)
   },
   email: {
     composeInvite: (

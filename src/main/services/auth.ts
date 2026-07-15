@@ -1,5 +1,5 @@
 import type { AuthResult, Result, SessionUser } from '@shared/types'
-import { permissionsForRole } from '@shared/permissions'
+import { effectivePermissions } from '@shared/permissions'
 import {
   countEmployees,
   getEmployeeById,
@@ -31,7 +31,7 @@ function sessionUserFor(id: string): SessionUser | null {
     title: employee.title,
     email: employee.email,
     role: employee.role,
-    permissions: permissionsForRole(employee.role),
+    permissions: effectivePermissions(employee.role, employee.extraPermissions),
     mustChangePassword: employee.mustChangePassword
   }
 }

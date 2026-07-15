@@ -6,7 +6,7 @@ import type {
   NewEmployeeInput,
   UpdateEmployeeInput
 } from '@shared/types'
-import type { Role } from '@shared/permissions'
+import { sanitizePermissions, type Permission, type Role } from '@shared/permissions'
 import { getDb } from './database'
 import { newId, nowIso } from '../util'
 
@@ -29,6 +29,15 @@ interface EmployeeRow {
   created_by: string | null
 }
 
+function parseExtraPermissions(json: string | null): Permission[] {
+  if (!json) return []
+  try {
+    return sanitizePermissions(JSON.parse(json))
+  } catch {
+    return []
+  }
+}
+
 function toEmployee(row: EmployeeRow): Employee {
   return {
     id: row.id,
@@ -40,10 +49,20 @@ function toEmployee(row: EmployeeRow): Employee {
     role: row.role as Role,
     status: row.status as EmployeeStatus,
     mustChangePassword: row.must_change_password === 1,
+    extraPermissions: parseExtraPermissions(row.permissions_json),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     createdBy: row.created_by
   }
+}
+
+/** Replace an employee's individual permission overrides. */
+export function setEmployeePermissions(id: string, permissions: Permission[]): boolean {
+  const clean = sanitizePermissions(permissions)
+  const info = getDb()
+    .prepare('UPDATE employees SET permissions_json = ?, updated_at = ? WHERE id = ?')
+    .run(JSON.stringify(clean), nowIso(), id)
+  return info.changes > 0
 }
 
 export function countEmployees(): number {

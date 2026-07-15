@@ -47,6 +47,17 @@ import {
   Wallet,
   BarChart3,
   LineChart,
+  MapPin,
+  Play,
+  Square,
+  Sun,
+  Moon,
+  Timer,
+  ChevronRight,
+  ArrowLeft,
+  FileSpreadsheet,
+  CircleDot,
+  CalendarDays,
   type LucideIcon
 } from 'lucide-react'
 
@@ -98,7 +109,18 @@ const MAP: Record<string, LucideIcon> = {
   Activity,
   Wallet,
   BarChart3,
-  LineChart
+  LineChart,
+  MapPin,
+  Play,
+  Square,
+  Sun,
+  Moon,
+  Timer,
+  ChevronRight,
+  ArrowLeft,
+  FileSpreadsheet,
+  CircleDot,
+  CalendarDays
 }
 
 export function Icon({

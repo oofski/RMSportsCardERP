@@ -16,12 +16,28 @@ export const IPC = {
   employeesCreate: 'employees:create',
   employeesUpdate: 'employees:update',
   employeesResetPassword: 'employees:reset-password',
+  employeesSetPermissions: 'employees:set-permissions',
 
   // Hours
   hoursSummary: 'hours:summary',
   hoursList: 'hours:list',
   hoursCreate: 'hours:create',
   hoursDelete: 'hours:delete',
+  hoursTimesheet: 'hours:timesheet',
+  hoursExport: 'hours:export',
+
+  // Time clock (self-service)
+  clockStatus: 'clock:status',
+  clockIn: 'clock:in',
+  clockOut: 'clock:out',
+
+  // Remembered credentials (pre-login)
+  credGet: 'credentials:get',
+  credSet: 'credentials:set',
+  credClear: 'credentials:clear',
+
+  // Theme
+  themeSet: 'theme:set',
 
   // Email
   emailComposeInvite: 'email:compose-invite',

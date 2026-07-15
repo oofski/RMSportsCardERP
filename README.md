@@ -1,8 +1,8 @@
 # RM Operations App
 
 The internal operations platform for **RM Cardz** — a single Windows/Mac desktop
-app that will grow to house nine major modules. This is **v0.0.0**: the app
-foundation plus the first module (**Admin**).
+app that will grow to house nine major modules. Current release: **v0.0.1** —
+the app foundation, the **Admin** module, and a full **Time & Payroll** module.
 
 > Navy-blue, professional, built to scale. SQLite today (same SQL dialect as
 > Cloudflare D1), so the move to a shared cloud database later is a drop-in swap.
@@ -32,18 +32,32 @@ foundation plus the first module (**Admin**).
   GitHub Releases). macOS auto-update is a later pass; today it points Mac users
   to the download page.
 
+## New in v0.0.1 — Time & Payroll
+
+- **Self-service time clock** on the Home page (every user): clock in / out with a
+  live shift timer; a **rough location** is captured on each punch.
+- **Time & Payroll module** (company-level): per-employee **timesheets** grouped by
+  day and pay period, weekly-overtime totals, and **CSV export** — a detailed
+  timesheet and a **Gusto-friendly hours summary** (single employee or whole team).
+- **Admin › Hours** is now a high-level overview that links into Time & Payroll.
+- **Individual permission overrides**: from Roles & Permissions, grant a specific
+  person extra access on top of their role (e.g. give a Staff member "view hours").
+- **Dark mode**, a **workspace switcher** (RM Cardz Operations, with RM Cardz
+  Shipping coming soon), **Remember me** on sign-in, and **Check for updates**
+  reachable from the top bar on every screen.
+
 ## The nine modules
 
 | # | Module | Status |
 |---|--------|--------|
-| 1 | Admin (employees, hours, permissions) | ✅ Live |
-| 2 | Order & Fulfillment | 🚧 Roadmap |
-| 3 | Shipping Tracking & CRM | 🚧 Roadmap |
-| 4 | Bookkeeping / Business Ledger | 🚧 Roadmap |
-| 5 | Invoice & Purchase Order Automation | 🚧 Roadmap |
-| 6 | Chart of Accounts & Categorization | 🚧 Roadmap |
-| 7 | SOP Creation | 🚧 Roadmap |
-| 8 | Time Tracker / Payroll Automation | 🚧 Roadmap |
+| 1 | Admin (employees, hours overview, permissions) | ✅ Live |
+| 2 | Time Tracker / Payroll (timesheets, Gusto export) | ✅ Live |
+| 3 | Order & Fulfillment | 🚧 Roadmap |
+| 4 | Shipping Tracking & CRM | 🚧 Roadmap |
+| 5 | Bookkeeping / Business Ledger | 🚧 Roadmap |
+| 6 | Invoice & Purchase Order Automation | 🚧 Roadmap |
+| 7 | Chart of Accounts & Categorization | 🚧 Roadmap |
+| 8 | SOP Creation | 🚧 Roadmap |
 | 9 | Financial Forecasting | 🚧 Roadmap |
 
 ---

@@ -79,9 +79,32 @@ function migrate(database: Database.Database): void {
     );
   `)
 
-  const current = getMeta(database, 'schema_version')
-  if (current === null) {
+  if (getMeta(database, 'schema_version') === null) {
     setMeta(database, 'schema_version', '1')
+  }
+
+  // --- Migration to v2: geolocation on time entries -----------------------
+  // Additive columns, applied idempotently so existing v0.0.0 databases
+  // upgrade cleanly on first launch of a newer build.
+  addColumnIfMissing(database, 'time_entries', 'clock_in_lat', 'REAL')
+  addColumnIfMissing(database, 'time_entries', 'clock_in_lng', 'REAL')
+  addColumnIfMissing(database, 'time_entries', 'clock_in_place', 'TEXT')
+  addColumnIfMissing(database, 'time_entries', 'clock_out_lat', 'REAL')
+  addColumnIfMissing(database, 'time_entries', 'clock_out_lng', 'REAL')
+  addColumnIfMissing(database, 'time_entries', 'clock_out_place', 'TEXT')
+  setMeta(database, 'schema_version', '2')
+}
+
+/** Add a column only if the table doesn't already have it (safe re-run). */
+function addColumnIfMissing(
+  database: Database.Database,
+  table: string,
+  column: string,
+  type: string
+): void {
+  const cols = database.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
+  if (!cols.some((c) => c.name === column)) {
+    database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`)
   }
 }
 

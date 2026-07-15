@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { AuthHero } from './AuthHero'
-import { Button, Field, Input } from '../components/ui'
+import { Button, Checkbox, Field, Input } from '../components/ui'
 import { useSession } from '../lib/session'
 import { api } from '../lib/api'
 
@@ -8,8 +8,20 @@ export function LoginScreen(): JSX.Element {
   const { setUser } = useSession()
   const [identifier, setIdentifier] = useState('')
   const [password, setPassword] = useState('')
+  const [remember, setRemember] = useState(false)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+
+  // Prefill from remembered credentials so people just click Sign in.
+  useEffect(() => {
+    api.credentials.get().then((creds) => {
+      if (creds) {
+        setIdentifier(creds.identifier)
+        setPassword(creds.password)
+        setRemember(true)
+      }
+    })
+  }, [])
 
   const submit = async (e: React.FormEvent): Promise<void> => {
     e.preventDefault()
@@ -21,6 +33,9 @@ export function LoginScreen(): JSX.Element {
         setError(res.error ?? 'Sign-in failed.')
         return
       }
+      // Persist or clear remembered credentials based on the checkbox.
+      if (remember) await api.credentials.set({ identifier, password })
+      else await api.credentials.clear()
       setUser(res.user)
     } finally {
       setBusy(false)
@@ -53,6 +68,10 @@ export function LoginScreen(): JSX.Element {
               required
             />
           </Field>
+
+          <div style={{ margin: '2px 0 18px' }}>
+            <Checkbox checked={remember} onChange={setRemember} label="Remember me on this device" />
+          </div>
 
           <Button type="submit" variant="primary" block loading={busy} icon="ArrowRight">
             Sign in

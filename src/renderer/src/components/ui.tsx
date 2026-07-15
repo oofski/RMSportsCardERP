@@ -188,3 +188,24 @@ export function Modal({
 export function Avatar({ text, small }: { text: string; small?: boolean }): JSX.Element {
   return <div className={`avatar ${small ? 'avatar-sm' : ''}`}>{text}</div>
 }
+
+// ---------- Checkbox ----------
+export function Checkbox({
+  checked,
+  onChange,
+  label
+}: {
+  checked: boolean
+  onChange: (checked: boolean) => void
+  label: string
+}): JSX.Element {
+  return (
+    <label className="checkbox">
+      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+      <span className="box">
+        <Icon name="Check" size={13} strokeWidth={3} />
+      </span>
+      {label}
+    </label>
+  )
+}

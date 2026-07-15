@@ -86,10 +86,10 @@ export const MODULES: AppModule[] = [
     id: 'timepay',
     name: 'Time & Payroll',
     shortName: 'Payroll',
-    description: 'Time tracking and payroll automation.',
+    description: 'Timesheets, pay periods and Gusto export.',
     icon: 'Clock',
-    permission: 'module.timepay',
-    status: 'coming-soon'
+    permission: 'admin.hours.view',
+    status: 'active'
   },
   {
     id: 'forecasting',

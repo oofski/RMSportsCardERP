@@ -14,7 +14,7 @@ function createWindow(): BrowserWindow {
     minHeight: 680,
     show: false,
     title: APP_NAME,
-    backgroundColor: '#0b1f3a',
+    backgroundColor: '#f5f6f8',
     autoHideMenuBar: true,
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     webPreferences: {

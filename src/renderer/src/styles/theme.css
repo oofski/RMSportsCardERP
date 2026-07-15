@@ -67,6 +67,51 @@
   --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 }
 
+/* Dark theme — activated when the root carries data-theme="dark". The theme
+   attribute is always set by the app, so these overrides drive dark mode. */
+:root[data-theme='dark'] {
+  --brand-700: #9db2ff;
+  --brand-600: #829bff;
+  --brand-500: #4f6dff;
+  --brand-400: #6f8bff;
+  --brand-300: #47588f;
+  --brand-soft: #1b2544;
+  --brand-soft-2: #243163;
+
+  --ink-900: #090e18;
+  --ink-800: #0d1524;
+  --ink-700: #182036;
+
+  --bg: #0d131f;
+  --surface: #151c29;
+  --surface-2: #1a2230;
+  --surface-3: #232c3d;
+  --border: #26303f;
+  --border-strong: #364253;
+
+  --text: #e8edf6;
+  --text-2: #abb5c5;
+  --text-3: #707c90;
+  --text-inverse: #0d131f;
+  --text-on-ink: #d5ddf0;
+  --text-on-ink-dim: #93a0bd;
+
+  --success: #38c47d;
+  --success-bg: #123021;
+  --warning: #e2ac3e;
+  --warning-bg: #322810;
+  --danger: #f2726f;
+  --danger-bg: #391c1d;
+  --info: #829bff;
+  --info-bg: #1b2544;
+
+  --chart-grid: #232c3d;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 24px 60px rgba(0, 0, 0, 0.6);
+}
+
 * {
   box-sizing: border-box;
 }

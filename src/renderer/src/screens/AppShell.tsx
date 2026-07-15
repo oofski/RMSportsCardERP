@@ -1,24 +1,34 @@
 import { useEffect, useMemo, useState } from 'react'
 import { MODULES } from '@shared/modules'
-import { COMPANY_NAME } from '@shared/config'
 import { useSession } from '../lib/session'
+import { useTheme } from '../lib/theme'
 import { ChromeContext } from '../lib/chrome'
 import { Brand } from '../components/Brand'
 import { Icon } from '../components/Icon'
 import { Avatar } from '../components/ui'
 import { UpdatePanel } from '../components/UpdatePanel'
+import { useToast } from '../components/Toast'
 import { initials, fullName } from '../lib/format'
 import { roleLabel } from '@shared/permissions'
 import { AdminModule } from '../modules/admin/AdminModule'
 import { HomeModule } from '../modules/home/HomeModule'
+import { TimePayrollModule } from '../modules/timepay/TimePayrollModule'
 import { ComingSoon } from '../modules/ComingSoon'
 
 const HOME = { id: 'home', name: 'Home', description: 'Your operations overview.' }
 
+const WORKSPACES = [
+  { id: 'ops', name: 'RM Cardz Operations', status: 'active' as const },
+  { id: 'shipping', name: 'RM Cardz Shipping', status: 'soon' as const }
+]
+
 export function AppShell(): JSX.Element {
   const { user, appInfo, can, logout } = useSession()
+  const { mode, toggle } = useTheme()
+  const toast = useToast()
   const [showUpdates, setShowUpdates] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
+  const [wsOpen, setWsOpen] = useState(false)
   const [search, setSearch] = useState('')
   const [activeId, setActiveId] = useState<string>('home')
 
@@ -30,7 +40,6 @@ export function AppShell(): JSX.Element {
     [can]
   )
 
-  // Let the dashboard's "Check for updates" quick action open the panel.
   useEffect(() => {
     const handler = (): void => setShowUpdates(true)
     window.addEventListener('rmops:check-updates', handler)
@@ -59,15 +68,52 @@ export function AppShell(): JSX.Element {
           <div className="sidebar-brand">
             <Brand />
           </div>
-          <div className="workspace">
-            <span className="ws-ico">
-              <Icon name="Building2" size={15} />
-            </span>
-            <span className="ws-meta">
-              <span className="ws-label">Workspace</span>
-              <span className="ws-name">{COMPANY_NAME}</span>
-            </span>
-            <Icon name="ChevronsUpDown" size={15} />
+
+          <div className="ws-switch">
+            <button className="workspace" onClick={() => setWsOpen((v) => !v)}>
+              <span className="ws-ico">
+                <Icon name="Building2" size={15} />
+              </span>
+              <span className="ws-meta">
+                <span className="ws-label">Workspace</span>
+                <span className="ws-name">RM Cardz Operations</span>
+              </span>
+              <Icon name="ChevronsUpDown" size={15} />
+            </button>
+            {wsOpen && (
+              <>
+                <div
+                  style={{ position: 'fixed', inset: 0, zIndex: 40 }}
+                  onClick={() => setWsOpen(false)}
+                />
+                <div className="ws-pop">
+                  {WORKSPACES.map((ws) => (
+                    <button
+                      key={ws.id}
+                      className="ws-item"
+                      onClick={() => {
+                        setWsOpen(false)
+                        if (ws.status === 'soon') {
+                          toast.toast(`${ws.name} is coming soon.`)
+                        }
+                      }}
+                    >
+                      <span className="ws-i">
+                        <Icon name={ws.id === 'shipping' ? 'Truck' : 'Building2'} size={14} />
+                      </span>
+                      <span className="ws-n">{ws.name}</span>
+                      {ws.status === 'active' ? (
+                        <span className="ws-check">
+                          <Icon name="Check" size={16} />
+                        </span>
+                      ) : (
+                        <span className="soon">SOON</span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
           </div>
 
           <nav className="nav">
@@ -123,6 +169,21 @@ export function AppShell(): JSX.Element {
             </div>
 
             <div className="topbar-actions">
+              <button
+                className="icon-btn"
+                onClick={toggle}
+                title={mode === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+              >
+                <Icon name={mode === 'dark' ? 'Sun' : 'Moon'} size={18} />
+              </button>
+              <button
+                className="icon-btn"
+                onClick={() => setShowUpdates(true)}
+                title="Check for updates"
+              >
+                <Icon name="RefreshCw" size={18} />
+              </button>
+
               <div className="usermenu">
                 <button className="usermenu-btn" onClick={() => setMenuOpen((v) => !v)}>
                   <Avatar text={initials(user.firstName, user.lastName)} small />
@@ -150,6 +211,16 @@ export function AppShell(): JSX.Element {
                         className="menu-item"
                         onClick={() => {
                           setMenuOpen(false)
+                          toggle()
+                        }}
+                      >
+                        <Icon name={mode === 'dark' ? 'Sun' : 'Moon'} size={16} />
+                        {mode === 'dark' ? 'Light mode' : 'Dark mode'}
+                      </button>
+                      <button
+                        className="menu-item"
+                        onClick={() => {
+                          setMenuOpen(false)
                           setShowUpdates(true)
                         }}
                       >
@@ -172,6 +243,8 @@ export function AppShell(): JSX.Element {
               <HomeModule />
             ) : activeModule?.id === 'admin' ? (
               <AdminModule />
+            ) : activeModule?.id === 'timepay' ? (
+              <TimePayrollModule />
             ) : activeModule ? (
               <ComingSoon module={activeModule} />
             ) : (

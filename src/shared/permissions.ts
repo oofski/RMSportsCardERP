@@ -72,7 +72,6 @@ export type Permission =
   | 'module.invoicing'
   | 'module.accounts'
   | 'module.sops'
-  | 'module.timepay'
   | 'module.forecasting'
 
 export interface PermissionDefinition {
@@ -156,12 +155,6 @@ export const PERMISSIONS: PermissionDefinition[] = [
     group: 'Modules'
   },
   {
-    key: 'module.timepay',
-    label: 'Time & Payroll',
-    description: 'Access the Time Tracker / Payroll module.',
-    group: 'Modules'
-  },
-  {
     key: 'module.forecasting',
     label: 'Financial Forecasting',
     description: 'Access the Financial Forecasting module.',
@@ -183,7 +176,6 @@ const OPERATIONS_PERMISSIONS: Permission[] = [
   'module.invoicing',
   'module.accounts',
   'module.sops',
-  'module.timepay',
   'module.forecasting'
 ]
 
@@ -204,6 +196,31 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
 /** Resolve the effective permission set for a role. */
 export function permissionsForRole(role: Role): Permission[] {
   return ROLE_PERMISSIONS[role] ?? STAFF_PERMISSIONS
+}
+
+const KNOWN_PERMISSIONS = new Set<Permission>(PERMISSIONS.map((p) => p.key))
+
+/** Keep only recognised permission keys (defends against stale stored data). */
+export function sanitizePermissions(list: unknown): Permission[] {
+  if (!Array.isArray(list)) return []
+  return list.filter((p): p is Permission => KNOWN_PERMISSIONS.has(p as Permission))
+}
+
+/**
+ * The effective permissions for an employee: everything their role grants, plus
+ * any individually-granted overrides. Overrides are additive — they can only
+ * grant access, never remove what a role provides.
+ */
+export function effectivePermissions(role: Role, overrides: Permission[] = []): Permission[] {
+  const set = new Set<Permission>(permissionsForRole(role))
+  for (const p of sanitizePermissions(overrides)) set.add(p)
+  return [...set]
+}
+
+/** Overrides worth surfacing individually — the module/admin grants a role may
+ * lack. (Excludes 'updates.check' which everyone already has.) */
+export function grantablePermissions(): PermissionDefinition[] {
+  return PERMISSIONS.filter((p) => p.key !== 'updates.check')
 }
 
 /** Whether a role grants a specific permission. */

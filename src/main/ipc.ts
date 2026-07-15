@@ -1,20 +1,26 @@
-import { ipcMain, shell, app } from 'electron'
+import { ipcMain, shell, app, dialog, nativeTheme, BrowserWindow } from 'electron'
+import { writeFileSync } from 'fs'
 import { IPC, type AppInfo } from '@shared/ipc'
 import type {
   AuthResult,
+  ClockStatus,
   ComposedEmail,
   Employee,
   EmployeeHoursSummary,
   EmployeeInvite,
+  ExportRequest,
+  ExportResult,
   NewEmployeeInput,
   NewTimeEntryInput,
+  RememberedCredentials,
   Result,
   SessionUser,
+  ThemeMode,
   TimeEntry,
   UpdateEmployeeInput,
   UpdateStatus
 } from '@shared/types'
-import { assignableRoles, roleHas, type Permission } from '@shared/permissions'
+import { assignableRoles, sanitizePermissions, type Permission } from '@shared/permissions'
 import {
   changeOwnPassword,
   createOwner,
@@ -31,16 +37,25 @@ import {
   getEmployeeById,
   insertEmployee,
   listEmployees,
+  setEmployeePermissions,
   setTemporaryPassword,
   updateEmployee
 } from './db/employees'
 import {
+  clockIn as dbClockIn,
+  clockOut as dbClockOut,
   deleteTimeEntry,
+  getOpenEntry,
   hoursSummary,
   insertTimeEntry,
-  listTimeEntries
+  listInRange,
+  listTimeEntries,
+  minutesInRange
 } from './db/timeEntries'
 import { composeInviteEmail } from './services/email'
+import { roughLocation } from './services/location'
+import { computePayroll, gustoCsv, timesheetCsv, type GustoRow } from './services/csv'
+import { clearRemembered, getRemembered, setRemembered } from './services/credentials'
 import { generateTempPassword, isValidEmail } from './util'
 import {
   checkForUpdates,
@@ -49,13 +64,47 @@ import {
   installUpdate
 } from './services/updater'
 
+/** Local day boundaries as ISO strings, for "today" / "this week" totals. */
+function startOfToday(): string {
+  const d = new Date()
+  d.setHours(0, 0, 0, 0)
+  return d.toISOString()
+}
+function startOfWeek(): string {
+  const d = new Date()
+  d.setHours(0, 0, 0, 0)
+  const day = (d.getDay() + 6) % 7 // Monday = 0
+  d.setDate(d.getDate() - day)
+  return d.toISOString()
+}
+function nowIsoLocal(): string {
+  return new Date().toISOString()
+}
+function datePart(iso: string): string {
+  const d = new Date(iso)
+  const p = (n: number): string => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
+function buildStatus(userId: string): ClockStatus {
+  return {
+    open: getOpenEntry(userId),
+    todayMinutes: minutesInRange(userId, startOfToday(), nowIsoLocal()),
+    weekMinutes: minutesInRange(userId, startOfWeek(), nowIsoLocal())
+  }
+}
+
+/** Effective permission check — honours role grants AND individual overrides. */
+function userCan(user: SessionUser, permission: Permission): boolean {
+  return user.permissions.includes(permission)
+}
+
 /** Return the signed-in user or throw a Result-shaped rejection. */
 function requirePermission(permission: Permission): SessionUser {
   const user = currentUser()
   if (!user) {
     throw new PermissionError('You are not signed in.')
   }
-  if (!roleHas(user.role, permission)) {
+  if (!userCan(user, permission)) {
     throw new PermissionError('You do not have permission to do that.')
   }
   return user
@@ -117,7 +166,7 @@ export function registerIpcHandlers(): void {
   // ---- Employees ----------------------------------------------------------
   ipcMain.handle(IPC.employeesList, (): Employee[] => {
     const user = currentUser()
-    if (!user || !roleHas(user.role, 'admin.employees.view')) return []
+    if (!user || !userCan(user, 'admin.employees.view')) return []
     return listEmployees()
   })
 
@@ -224,16 +273,41 @@ export function registerIpcHandlers(): void {
     }
   )
 
+  ipcMain.handle(
+    IPC.employeesSetPermissions,
+    (_e, payload: { id: string; permissions: Permission[] }): Result<Employee> => {
+      try {
+        const actor = requirePermission('admin.roles.manage')
+        const target = getEmployeeById(payload.id)
+        if (!target) return { ok: false, error: 'Employee not found.' }
+        if (!assignableRoles(actor.role).includes(target.role)) {
+          return { ok: false, error: 'You do not have permission to manage that user.' }
+        }
+        const requested = sanitizePermissions(payload.permissions)
+        // You can only grant permissions you yourself hold — no escalating a
+        // person above the grantor's own access.
+        const notAllowed = requested.filter((p) => !userCan(actor, p))
+        if (notAllowed.length > 0) {
+          return { ok: false, error: 'You can only grant permissions you have yourself.' }
+        }
+        setEmployeePermissions(payload.id, requested)
+        return { ok: true, data: getEmployeeById(payload.id) as Employee }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
   // ---- Hours --------------------------------------------------------------
   ipcMain.handle(IPC.hoursSummary, (): EmployeeHoursSummary[] => {
     const user = currentUser()
-    if (!user || !roleHas(user.role, 'admin.hours.view')) return []
+    if (!user || !userCan(user, 'admin.hours.view')) return []
     return hoursSummary()
   })
 
   ipcMain.handle(IPC.hoursList, (_e, employeeId?: string): TimeEntry[] => {
     const user = currentUser()
-    if (!user || !roleHas(user.role, 'admin.hours.view')) return []
+    if (!user || !userCan(user, 'admin.hours.view')) return []
     return listTimeEntries(employeeId)
   })
 
@@ -260,6 +334,93 @@ export function registerIpcHandlers(): void {
       return deleteTimeEntry(payload.id)
         ? { ok: true }
         : { ok: false, error: 'Entry not found.' }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle(
+    IPC.hoursTimesheet,
+    (_e, payload: { employeeId: string; start: string; end: string }): TimeEntry[] => {
+      const user = currentUser()
+      if (!user || !userCan(user, 'admin.hours.view')) return []
+      return listInRange(payload.start, payload.end, payload.employeeId)
+    }
+  )
+
+  ipcMain.handle(IPC.hoursExport, async (_e, req: ExportRequest): Promise<ExportResult> => {
+    try {
+      const user = currentUser()
+      if (!user || !userCan(user, 'admin.hours.view')) {
+        return { ok: false, error: 'You do not have permission to export hours.' }
+      }
+
+      let csv: string
+      let defaultName: string
+
+      if (req.format === 'gusto') {
+        const employees =
+          req.scope === 'employee' && req.employeeId
+            ? ([getEmployeeById(req.employeeId)].filter(Boolean) as Employee[])
+            : listEmployees()
+        const rows: GustoRow[] = employees.map((emp) => ({
+          employee: emp,
+          totals: computePayroll(listInRange(req.start, req.end, emp.id))
+        }))
+        csv = gustoCsv(rows, req.start, req.end)
+        defaultName = `gusto-hours-${datePart(req.start)}_${datePart(req.end)}.csv`
+      } else {
+        if (!req.employeeId) return { ok: false, error: 'Select an employee.' }
+        const emp = getEmployeeById(req.employeeId)
+        if (!emp) return { ok: false, error: 'Employee not found.' }
+        const entries = listInRange(req.start, req.end, emp.id)
+        csv = timesheetCsv(emp, entries)
+        defaultName = `timesheet-${emp.companyId}-${datePart(req.start)}_${datePart(req.end)}.csv`
+      }
+
+      const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+      const { canceled, filePath } = await dialog.showSaveDialog(win, {
+        title: 'Export hours',
+        defaultPath: defaultName,
+        filters: [{ name: 'CSV', extensions: ['csv'] }]
+      })
+      if (canceled || !filePath) return { ok: false, canceled: true }
+      writeFileSync(filePath, csv, 'utf8')
+      return { ok: true, path: filePath }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
+  // ---- Time clock (self-service, any signed-in user) ----------------------
+  ipcMain.handle(IPC.clockStatus, (): ClockStatus => {
+    const user = currentUser()
+    if (!user) return { open: null, todayMinutes: 0, weekMinutes: 0 }
+    return buildStatus(user.id)
+  })
+
+  ipcMain.handle(IPC.clockIn, async (): Promise<Result<ClockStatus>> => {
+    try {
+      const user = currentUser()
+      if (!user) return { ok: false, error: 'You are not signed in.' }
+      if (getOpenEntry(user.id)) return { ok: false, error: "You're already clocked in." }
+      const location = await roughLocation()
+      dbClockIn(user.id, location)
+      return { ok: true, data: buildStatus(user.id) }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle(IPC.clockOut, async (): Promise<Result<ClockStatus>> => {
+    try {
+      const user = currentUser()
+      if (!user) return { ok: false, error: 'You are not signed in.' }
+      const open = getOpenEntry(user.id)
+      if (!open) return { ok: false, error: "You're not clocked in." }
+      const location = await roughLocation()
+      dbClockOut(open.id, location)
+      return { ok: true, data: buildStatus(user.id) }
     } catch (err) {
       return fail(err)
     }
@@ -317,6 +478,32 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(IPC.updatesInstall, (): Result => {
     guardSignedIn()
     installUpdate()
+    return { ok: true }
+  })
+
+  // ---- Remembered credentials (pre-login, no session) ---------------------
+  ipcMain.handle(IPC.credGet, (): RememberedCredentials | null => getRemembered())
+
+  ipcMain.handle(IPC.credSet, (_e, creds: RememberedCredentials): Result => {
+    try {
+      if (!creds || typeof creds.identifier !== 'string' || typeof creds.password !== 'string') {
+        return { ok: false, error: 'Invalid credentials.' }
+      }
+      setRemembered(creds)
+      return { ok: true }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle(IPC.credClear, (): Result => {
+    clearRemembered()
+    return { ok: true }
+  })
+
+  // ---- Theme --------------------------------------------------------------
+  ipcMain.handle(IPC.themeSet, (_e, mode: ThemeMode): Result => {
+    nativeTheme.themeSource = mode === 'dark' ? 'dark' : 'light'
     return { ok: true }
   })
 }

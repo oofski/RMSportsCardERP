@@ -9,13 +9,16 @@ import './styles/app.css'
 import App from './App'
 import { SessionProvider } from './lib/session'
 import { ToastProvider } from './components/Toast'
+import { ThemeProvider } from './lib/theme'
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   <React.StrictMode>
-    <ToastProvider>
-      <SessionProvider>
-        <App />
-      </SessionProvider>
-    </ToastProvider>
+    <ThemeProvider>
+      <ToastProvider>
+        <SessionProvider>
+          <App />
+        </SessionProvider>
+      </ToastProvider>
+    </ThemeProvider>
   </React.StrictMode>
 )
