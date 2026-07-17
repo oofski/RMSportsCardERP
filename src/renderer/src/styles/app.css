@@ -1861,6 +1861,111 @@ table.data tbody tr:hover {
   font-size: 12.5px;
 }
 
+/* ---------- Bar list (inventory value by category) ---------- */
+.barlist {
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+}
+.barlist-row {
+  display: grid;
+  grid-template-columns: 104px 1fr auto;
+  align-items: center;
+  gap: 12px;
+}
+.barlist-label {
+  font-size: 12.5px;
+  color: var(--text-2);
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.barlist-track {
+  height: 9px;
+  background: var(--surface-3);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.barlist-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--brand-400), var(--brand-500));
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+.barlist-value {
+  font-size: 12.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  min-width: 64px;
+  text-align: right;
+}
+
+/* ---------- Inventory ---------- */
+.badge.unit-case {
+  background: #efe8d3;
+  color: #8a6d1f;
+}
+.badge.unit-box {
+  background: var(--brand-soft);
+  color: var(--brand-600);
+}
+.badge.unit-pack {
+  background: var(--success-bg);
+  color: var(--success);
+}
+.badge.unit-single {
+  background: var(--surface-3);
+  color: var(--text-2);
+}
+.badge.unit-other {
+  background: var(--surface-3);
+  color: var(--text-3);
+}
+.badge.txn-sale {
+  background: var(--success-bg);
+  color: var(--success);
+}
+.badge.txn-purchase,
+.badge.txn-restock {
+  background: var(--brand-soft);
+  color: var(--brand-600);
+}
+.badge.txn-adjustment {
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+.stock-low {
+  color: var(--warning);
+  font-weight: 700;
+}
+.money {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.lowstock-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 15px;
+  border-radius: var(--radius-lg);
+  background: var(--warning-bg);
+  color: var(--warning);
+  border: 1px solid rgba(183, 134, 11, 0.2);
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 18px;
+}
+.lowstock-banner svg {
+  flex-shrink: 0;
+}
+.prod-cell .p-sub {
+  font-size: 12px;
+  color: var(--text-3);
+  margin-top: 1px;
+}
+
 /* ---------- Top-bar user menu ---------- */
 .usermenu {
   position: relative;

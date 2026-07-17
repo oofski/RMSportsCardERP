@@ -29,6 +29,15 @@ export const MODULES: AppModule[] = [
     status: 'active'
   },
   {
+    id: 'inventory',
+    name: 'Inventory',
+    shortName: 'Inventory',
+    description: 'Cards, boxes and cases — stock, value and sales.',
+    icon: 'Boxes',
+    permission: 'module.inventory',
+    status: 'active'
+  },
+  {
     id: 'orders',
     name: 'Order & Fulfillment',
     shortName: 'Orders',

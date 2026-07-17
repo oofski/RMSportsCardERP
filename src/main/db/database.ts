@@ -77,6 +77,44 @@ function migrate(database: Database.Database): void {
       detail     TEXT,
       created_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS inventory_products (
+      id             TEXT PRIMARY KEY,
+      sku            TEXT NOT NULL UNIQUE COLLATE NOCASE,
+      name           TEXT NOT NULL,
+      category       TEXT NOT NULL DEFAULT '',
+      brand          TEXT NOT NULL DEFAULT '',
+      set_name       TEXT NOT NULL DEFAULT '',
+      year           TEXT NOT NULL DEFAULT '',
+      unit_type      TEXT NOT NULL DEFAULT 'box',
+      quantity       INTEGER NOT NULL DEFAULT 0,
+      unit_cost      REAL NOT NULL DEFAULT 0,
+      sale_price     REAL,
+      boxes_per_case INTEGER,
+      packs_per_box  INTEGER,
+      reorder_point  INTEGER NOT NULL DEFAULT 0,
+      notes          TEXT,
+      created_at     TEXT NOT NULL,
+      updated_at     TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS inventory_transactions (
+      id              TEXT PRIMARY KEY,
+      product_id      TEXT NOT NULL,
+      type            TEXT NOT NULL,
+      quantity_change INTEGER NOT NULL,
+      unit_price      REAL,
+      counterparty    TEXT,
+      note            TEXT,
+      actor_id        TEXT,
+      created_at      TEXT NOT NULL,
+      FOREIGN KEY (product_id) REFERENCES inventory_products (id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_inv_txn_product
+      ON inventory_transactions (product_id);
+    CREATE INDEX IF NOT EXISTS idx_inv_txn_type
+      ON inventory_transactions (type);
   `)
 
   if (getMeta(database, 'schema_version') === null) {
@@ -92,7 +130,9 @@ function migrate(database: Database.Database): void {
   addColumnIfMissing(database, 'time_entries', 'clock_out_lat', 'REAL')
   addColumnIfMissing(database, 'time_entries', 'clock_out_lng', 'REAL')
   addColumnIfMissing(database, 'time_entries', 'clock_out_place', 'TEXT')
-  setMeta(database, 'schema_version', '2')
+
+  // v3 adds the inventory tables (created idempotently in the block above).
+  setMeta(database, 'schema_version', '3')
 }
 
 /** Add a column only if the table doesn't already have it (safe re-run). */

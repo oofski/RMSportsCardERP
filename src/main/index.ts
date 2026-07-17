@@ -3,6 +3,7 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { APP_NAME } from '@shared/config'
 import { registerIpcHandlers } from './ipc'
+import { registerInventoryIpc } from './inventoryIpc'
 import { getDb, closeDb } from './db/database'
 import { initUpdater } from './services/updater'
 
@@ -55,6 +56,7 @@ app.whenReady().then(() => {
   // Initialise the database up front so a failure surfaces early.
   getDb()
   registerIpcHandlers()
+  registerInventoryIpc()
   initUpdater()
 
   createWindow()

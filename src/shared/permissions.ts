@@ -66,6 +66,8 @@ export type Permission =
   // Available to everyone
   | 'updates.check'
   // Module access (built out over time)
+  | 'module.inventory'
+  | 'inventory.manage'
   | 'module.orders'
   | 'module.shipping'
   | 'module.bookkeeping'
@@ -119,6 +121,18 @@ export const PERMISSIONS: PermissionDefinition[] = [
     group: 'System'
   },
   {
+    key: 'module.inventory',
+    label: 'Inventory',
+    description: 'View the Inventory module and search stock.',
+    group: 'Modules'
+  },
+  {
+    key: 'inventory.manage',
+    label: 'Manage inventory',
+    description: 'Add products, record sales, restock and adjust stock.',
+    group: 'Modules'
+  },
+  {
     key: 'module.orders',
     label: 'Order & Fulfillment',
     description: 'Access the Order & Fulfillment module.',
@@ -170,6 +184,8 @@ const OPERATIONS_PERMISSIONS: Permission[] = [
   'admin.employees.manage',
   'admin.hours.view',
   'updates.check',
+  'module.inventory',
+  'inventory.manage',
   'module.orders',
   'module.shipping',
   'module.bookkeeping',
@@ -181,6 +197,7 @@ const OPERATIONS_PERMISSIONS: Permission[] = [
 
 const STAFF_PERMISSIONS: Permission[] = [
   'updates.check',
+  'module.inventory',
   'module.orders',
   'module.shipping',
   'module.sops'

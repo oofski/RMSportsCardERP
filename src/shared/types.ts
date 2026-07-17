@@ -103,6 +103,120 @@ export interface RememberedCredentials {
 
 export type ThemeMode = 'light' | 'dark'
 
+// ---------------------------------------------------------------------------
+// Inventory
+// ---------------------------------------------------------------------------
+
+export type UnitType = 'case' | 'box' | 'pack' | 'single' | 'other'
+
+export interface InventoryProduct {
+  id: string
+  sku: string
+  name: string
+  category: string
+  brand: string
+  setName: string
+  year: string
+  unitType: UnitType
+  quantity: number
+  /** What we paid per unit. */
+  unitCost: number
+  /** Default asking price per unit (optional). */
+  salePrice: number | null
+  /** Informational: how many boxes make up a case. */
+  boxesPerCase: number | null
+  /** Informational: how many packs make up a box. */
+  packsPerBox: number | null
+  /** Low-stock threshold. */
+  reorderPoint: number
+  notes: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface NewInventoryProduct {
+  sku: string
+  name: string
+  category: string
+  brand: string
+  setName: string
+  year: string
+  unitType: UnitType
+  quantity: number
+  unitCost: number
+  salePrice: number | null
+  boxesPerCase: number | null
+  packsPerBox: number | null
+  reorderPoint: number
+  notes: string | null
+}
+
+export interface UpdateInventoryProduct extends Partial<NewInventoryProduct> {
+  id: string
+}
+
+export type InventoryTxnType = 'purchase' | 'sale' | 'restock' | 'adjustment'
+
+export interface InventoryTransaction {
+  id: string
+  productId: string
+  productName: string
+  sku: string
+  type: InventoryTxnType
+  /** Positive for stock in, negative for stock out. */
+  quantityChange: number
+  /** Sale price (sales) or unit cost (purchases/restock). */
+  unitPrice: number | null
+  /** Client (sale) or vendor (purchase). */
+  counterparty: string | null
+  note: string | null
+  actorName: string | null
+  createdAt: string
+}
+
+export interface RecordSaleInput {
+  productId: string
+  quantity: number
+  unitPrice: number
+  client: string
+  note?: string | null
+}
+
+export interface AdjustStockInput {
+  productId: string
+  type: 'restock' | 'adjustment'
+  quantityChange: number
+  /** Unit cost for a restock. */
+  unitCost?: number | null
+  note?: string | null
+}
+
+export interface InventoryStats {
+  totalValue: number
+  boxes: number
+  cases: number
+  packs: number
+  singles: number
+  units: number
+  skuCount: number
+  lowStockCount: number
+  salesRevenue: number
+  salesCount: number
+}
+
+export interface CategoryValue {
+  category: string
+  value: number
+  units: number
+}
+
+export interface SalesPoint {
+  /** Day-of-month label. */
+  label: string
+  revenue: number
+}
+
+
 /** Aggregated hours for the Admin > Hours view. */
 export interface EmployeeHoursSummary {
   employeeId: string

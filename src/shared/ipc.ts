@@ -39,6 +39,19 @@ export const IPC = {
   // Theme
   themeSet: 'theme:set',
 
+  // Inventory
+  invProductsList: 'inventory:products:list',
+  invProductCreate: 'inventory:products:create',
+  invProductUpdate: 'inventory:products:update',
+  invProductDelete: 'inventory:products:delete',
+  invSaleRecord: 'inventory:sale:record',
+  invStockAdjust: 'inventory:stock:adjust',
+  invStats: 'inventory:stats',
+  invRecentSales: 'inventory:sales:recent',
+  invTransactions: 'inventory:transactions:list',
+  invValueByCategory: 'inventory:value-by-category',
+  invSalesSeries: 'inventory:sales:series',
+
   // Email
   emailComposeInvite: 'email:compose-invite',
   emailOpenExternal: 'email:open-external',

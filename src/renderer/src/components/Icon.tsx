@@ -58,6 +58,16 @@ import {
   FileSpreadsheet,
   CircleDot,
   CalendarDays,
+  Boxes,
+  Package,
+  PackagePlus,
+  DollarSign,
+  ShoppingCart,
+  Tag,
+  Layers,
+  AlertTriangle,
+  Warehouse,
+  TrendingDown,
   type LucideIcon
 } from 'lucide-react'
 
@@ -120,7 +130,17 @@ const MAP: Record<string, LucideIcon> = {
   ArrowLeft,
   FileSpreadsheet,
   CircleDot,
-  CalendarDays
+  CalendarDays,
+  Boxes,
+  Package,
+  PackagePlus,
+  DollarSign,
+  ShoppingCart,
+  Tag,
+  Layers,
+  AlertTriangle,
+  Warehouse,
+  TrendingDown
 }
 
 export function Icon({

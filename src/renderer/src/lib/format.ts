@@ -2,6 +2,23 @@ export function initials(first: string, last: string): string {
   return `${first.charAt(0)}${last.charAt(0)}`.toUpperCase()
 }
 
+export function formatMoney(amount: number, opts?: { compact?: boolean }): string {
+  if (opts?.compact && Math.abs(amount) >= 1000) {
+    return new Intl.NumberFormat(undefined, {
+      style: 'currency',
+      currency: 'USD',
+      notation: 'compact',
+      maximumFractionDigits: 1
+    }).format(amount)
+  }
+  return new Intl.NumberFormat(undefined, {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(amount)
+}
+
 export function fullName(first: string, last: string): string {
   return `${first} ${last}`.trim()
 }

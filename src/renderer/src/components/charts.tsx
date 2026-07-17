@@ -17,6 +17,35 @@ export function Donut({ percent }: { percent: number }): JSX.Element {
   )
 }
 
+/** Horizontal bar list — like the reference "Country Redistribution" panel. */
+export function BarList({
+  items,
+  formatValue
+}: {
+  items: Array<{ label: string; value: number }>
+  formatValue?: (v: number) => string
+}): JSX.Element {
+  const max = Math.max(1, ...items.map((i) => i.value))
+  return (
+    <div className="barlist">
+      {items.map((it, i) => (
+        <div className="barlist-row" key={`${it.label}-${i}`}>
+          <div className="barlist-label" title={it.label}>
+            {it.label}
+          </div>
+          <div className="barlist-track">
+            <div
+              className="barlist-fill"
+              style={{ width: `${Math.max(3, (it.value / max) * 100)}%` }}
+            />
+          </div>
+          <div className="barlist-value">{formatValue ? formatValue(it.value) : it.value}</div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 interface Series {
   points: number[]
   color: string
