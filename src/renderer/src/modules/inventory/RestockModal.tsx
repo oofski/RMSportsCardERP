@@ -28,6 +28,11 @@ export function RestockModal({
       setError('Enter a non-zero quantity.')
       return
     }
+    const cost = parseFloat(unitCost)
+    if (mode === 'restock' && (!Number.isFinite(cost) || cost < 0)) {
+      setError('Enter a valid unit cost.')
+      return
+    }
     // Restock adds stock; adjustment can be positive or negative.
     const change = mode === 'restock' ? Math.abs(n) : n
     setBusy(true)
@@ -36,7 +41,7 @@ export function RestockModal({
         productId: product.id,
         type: mode,
         quantityChange: change,
-        unitCost: mode === 'restock' ? parseFloat(unitCost) : null,
+        unitCost: mode === 'restock' ? cost : null,
         note: note.trim() || null
       })
       if (!res.ok) {

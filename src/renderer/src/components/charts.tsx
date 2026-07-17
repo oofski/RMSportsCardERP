@@ -117,7 +117,7 @@ export function AreaChart({
         const last = pts[pts.length - 1]
         return (
           <g key={si}>
-            {s.fill && (
+            {s.fill && last && (
               <path
                 d={`${line} L${last[0]},${H - padB} L${pts[0][0]},${H - padB} Z`}
                 fill={`url(#area-${si})`}

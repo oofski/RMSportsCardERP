@@ -98,11 +98,28 @@ export function registerInventoryIpc(): void {
     (_e, input: UpdateInventoryProduct): Result<InventoryProduct> => {
       try {
         requireManage()
-        if (input.sku && skuExists(input.sku, input.id)) {
-          return { ok: false, error: 'That SKU is already in use.' }
+        // Apply the same guards as create to any field that is being changed,
+        // so an edit can't blank a required value or write a non-finite number.
+        if (input.sku !== undefined && !input.sku.trim()) {
+          return { ok: false, error: 'A SKU is required.' }
+        }
+        if (input.name !== undefined && !input.name.trim()) {
+          return { ok: false, error: 'A product name is required.' }
         }
         if (input.unitType && !UNIT_TYPES.includes(input.unitType)) {
           return { ok: false, error: 'Invalid unit type.' }
+        }
+        for (const [label, value] of [
+          ['Unit cost', input.unitCost],
+          ['Sale price', input.salePrice],
+          ['Low-stock alert', input.reorderPoint]
+        ] as const) {
+          if (value != null && (!Number.isFinite(value) || value < 0)) {
+            return { ok: false, error: `${label} must be 0 or more.` }
+          }
+        }
+        if (input.sku !== undefined && skuExists(input.sku, input.id)) {
+          return { ok: false, error: 'That SKU is already in use.' }
         }
         const updated = updateProduct(input)
         return updated ? { ok: true, data: updated } : { ok: false, error: 'Product not found.' }
