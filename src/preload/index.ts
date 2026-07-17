@@ -119,6 +119,8 @@ const api = {
     check: (): Promise<UpdateStatus> => ipcRenderer.invoke(IPC.updatesCheck),
     download: (): Promise<UpdateStatus> => ipcRenderer.invoke(IPC.updatesDownload),
     install: (): Promise<Result> => ipcRenderer.invoke(IPC.updatesInstall),
+    openDownload: (url?: string): Promise<Result> =>
+      ipcRenderer.invoke(IPC.updatesOpenDownload, url),
     onStatus: (callback: (status: UpdateStatus) => void): (() => void) => {
       const listener = (_e: unknown, status: UpdateStatus): void => callback(status)
       ipcRenderer.on(IPC.updatesStatusEvent, listener)

@@ -2,26 +2,29 @@ import { app, BrowserWindow } from 'electron'
 import pkg from 'electron-updater'
 import type { UpdateStatus } from '@shared/types'
 import { IPC } from '@shared/ipc'
+import { UPDATE_FEED_URL } from '@shared/config'
 
 // electron-updater ships as CommonJS; destructure the default export.
 const { autoUpdater } = pkg
 
 /**
- * Auto-update wiring.
+ * Auto-update wiring, delivered from the Cloudflare-hosted feed.
  *
- * For now the full download-and-install flow is Windows-only (per the current
- * requirement). On macOS/Linux the "Check for updates" panel reports that
- * auto-update isn't available yet, rather than erroring — the Mac flow will be
- * added in a later pass once the app is code-signed.
+ * - Windows: electron-updater (generic provider → Cloudflare) downloads and
+ *   installs the new version automatically.
+ * - macOS: because unsigned Mac apps cannot self-install (an Apple / Gatekeeper
+ *   requirement, independent of where the files are hosted), the app instead
+ *   checks a small `update.json` on the feed and, when a newer version exists,
+ *   offers a direct download of the .dmg for the user to reinstall. Once the
+ *   app is code-signed + notarized this can be switched to true auto-update.
  */
-const isWindows = process.platform === 'win32'
+const platform = process.platform
+const isWindows = platform === 'win32'
 
 let status: UpdateStatus = {
-  phase: isWindows ? 'idle' : 'unsupported',
+  phase: 'idle',
   currentVersion: app.getVersion(),
-  message: isWindows
-    ? undefined
-    : 'Automatic updates are Windows-only for now. On Mac, download the latest version from the releases page.'
+  platform
 }
 
 let initialised = false
@@ -33,30 +36,23 @@ function broadcast(): void {
 }
 
 function setStatus(patch: Partial<UpdateStatus>): void {
-  status = { ...status, ...patch, currentVersion: app.getVersion() }
+  status = { ...status, ...patch, currentVersion: app.getVersion(), platform }
   broadcast()
 }
 
 export function initUpdater(): void {
-  if (initialised || !isWindows) {
-    initialised = true
-    return
-  }
+  if (initialised) return
   initialised = true
+  if (!isWindows) return // macOS/Linux use the JSON check below, no listeners needed
 
   autoUpdater.autoDownload = false
   autoUpdater.autoInstallOnAppQuit = true
-  // Lets "Check for updates" be exercised against the real feed while running
-  // an unpackaged dev build (uses dev-app-update.yml).
   if (!app.isPackaged) {
     autoUpdater.forceDevUpdateConfig = true
   }
 
-  autoUpdater.on('checking-for-update', () => {
-    setStatus({ phase: 'checking', message: 'Checking for updates…' })
-  })
-
-  autoUpdater.on('update-available', (info) => {
+  autoUpdater.on('checking-for-update', () => setStatus({ phase: 'checking', message: 'Checking for updates…' }))
+  autoUpdater.on('update-available', (info) =>
     setStatus({
       phase: 'available',
       availableVersion: info.version,
@@ -64,58 +60,111 @@ export function initUpdater(): void {
       releaseDate: info.releaseDate,
       message: `Version ${info.version} is available.`
     })
-  })
-
-  autoUpdater.on('update-not-available', () => {
-    setStatus({
-      phase: 'not-available',
-      message: "You're on the latest version."
-    })
-  })
-
-  autoUpdater.on('download-progress', (progress) => {
-    setStatus({
-      phase: 'downloading',
-      percent: Math.round(progress.percent),
-      bytesPerSecond: progress.bytesPerSecond,
-      message: `Downloading… ${Math.round(progress.percent)}%`
-    })
-  })
-
-  autoUpdater.on('update-downloaded', (info) => {
-    setStatus({
-      phase: 'downloaded',
-      availableVersion: info.version,
-      percent: 100,
-      message: `Version ${info.version} is ready to install.`
-    })
-  })
-
-  autoUpdater.on('error', (err) => {
-    setStatus({
-      phase: 'error',
-      message: err == null ? 'Update error.' : String(err.message ?? err)
-    })
-  })
+  )
+  autoUpdater.on('update-not-available', () =>
+    setStatus({ phase: 'not-available', message: "You're on the latest version." })
+  )
+  autoUpdater.on('download-progress', (p) =>
+    setStatus({ phase: 'downloading', percent: Math.round(p.percent), bytesPerSecond: p.bytesPerSecond, message: `Downloading… ${Math.round(p.percent)}%` })
+  )
+  autoUpdater.on('update-downloaded', (info) =>
+    setStatus({ phase: 'downloaded', availableVersion: info.version, percent: 100, message: `Version ${info.version} is ready to install.` })
+  )
+  autoUpdater.on('error', (err) =>
+    setStatus({ phase: 'error', message: err == null ? 'Update error.' : String(err.message ?? err) })
+  )
 }
 
 export function getUpdateStatus(): UpdateStatus {
-  return { ...status, currentVersion: app.getVersion() }
+  return { ...status, currentVersion: app.getVersion(), platform }
 }
 
-export async function checkForUpdates(): Promise<UpdateStatus> {
-  if (!isWindows) {
-    return getUpdateStatus()
+// ---------------------------------------------------------------------------
+// macOS / Linux: JSON feed check (no auto-install for unsigned builds)
+// ---------------------------------------------------------------------------
+
+interface UpdateJson {
+  version: string
+  releaseDate?: string
+  notes?: string
+  downloads?: Record<string, string>
+}
+
+/** Compare dotted numeric versions. Returns true when `remote` > `current`. */
+function isNewer(remote: string, current: string): boolean {
+  const norm = (v: string): number[] =>
+    v.replace(/^v/, '').split('-')[0].split('.').map((n) => parseInt(n, 10) || 0)
+  const a = norm(remote)
+  const b = norm(current)
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const d = (a[i] ?? 0) - (b[i] ?? 0)
+    if (d !== 0) return d > 0
   }
+  return false
+}
+
+function macDownloadKey(): string {
+  return process.arch === 'arm64' ? 'mac-arm64' : 'mac-x64'
+}
+
+async function checkViaJson(): Promise<void> {
+  setStatus({ phase: 'checking', message: 'Checking for updates…' })
   try {
-    await autoUpdater.checkForUpdates()
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 8000)
+    let res: Response
+    try {
+      res = await fetch(`${UPDATE_FEED_URL}/update.json?ts=${app.getVersion()}`, {
+        signal: controller.signal,
+        cache: 'no-store'
+      } as RequestInit)
+    } finally {
+      clearTimeout(timer)
+    }
+    if (!res.ok) throw new Error(`Feed responded ${res.status}`)
+    const data = (await res.json()) as UpdateJson
+
+    if (!data.version || !isNewer(data.version, app.getVersion())) {
+      setStatus({ phase: 'not-available', message: "You're on the latest version." })
+      return
+    }
+    const key = platform === 'darwin' ? macDownloadKey() : 'win'
+    const url = data.downloads?.[key]
+    setStatus({
+      phase: 'available',
+      availableVersion: data.version,
+      releaseNotes: data.notes,
+      releaseDate: data.releaseDate,
+      downloadUrl: url,
+      message: `Version ${data.version} is available to download.`
+    })
   } catch (err) {
-    setStatus({ phase: 'error', message: err instanceof Error ? err.message : String(err) })
+    setStatus({
+      phase: 'error',
+      message: err instanceof Error ? err.message : 'Could not reach the update server.'
+    })
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Public actions (called from IPC)
+// ---------------------------------------------------------------------------
+
+export async function checkForUpdates(): Promise<UpdateStatus> {
+  if (isWindows) {
+    try {
+      await autoUpdater.checkForUpdates()
+    } catch (err) {
+      setStatus({ phase: 'error', message: err instanceof Error ? err.message : String(err) })
+    }
+  } else {
+    await checkViaJson()
   }
   return getUpdateStatus()
 }
 
 export async function downloadUpdate(): Promise<UpdateStatus> {
+  // Only Windows performs an in-app download+install; macOS uses openDownload().
   if (!isWindows) return getUpdateStatus()
   if (status.phase !== 'available' && status.phase !== 'error') return getUpdateStatus()
   try {
@@ -130,6 +179,10 @@ export async function downloadUpdate(): Promise<UpdateStatus> {
 export function installUpdate(): void {
   if (!isWindows) return
   if (status.phase !== 'downloaded') return
-  // Quit and install on next tick so the IPC reply can flush first.
   setImmediate(() => autoUpdater.quitAndInstall(false, true))
+}
+
+/** The direct download link for the current available update (macOS path). */
+export function currentDownloadUrl(): string | null {
+  return status.downloadUrl ?? null
 }

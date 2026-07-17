@@ -46,8 +46,20 @@ export function UpdatePanel({ onClose }: { onClose: () => void }): JSX.Element {
     await api.updates.install()
   }
 
+  const openDownload = async (): Promise<void> => {
+    setBusy(true)
+    try {
+      const res = await api.updates.openDownload(status?.downloadUrl)
+      if (!res.ok) toast.error(res.error ?? 'No download link available.')
+      else toast.success('Opening the download in your browser…')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const phase = status?.phase ?? 'idle'
   const version = status?.currentVersion ?? '—'
+  const isWin = status?.platform === 'win32'
 
   let tone = ''
   let icon = 'RefreshCw'
@@ -107,11 +119,16 @@ export function UpdatePanel({ onClose }: { onClose: () => void }): JSX.Element {
           <Button variant="ghost" onClick={onClose}>
             Close
           </Button>
-          {phase === 'available' && (
-            <Button variant="primary" icon="Download" loading={busy} onClick={download}>
-              Download update
-            </Button>
-          )}
+          {phase === 'available' &&
+            (isWin ? (
+              <Button variant="primary" icon="Download" loading={busy} onClick={download}>
+                Download update
+              </Button>
+            ) : (
+              <Button variant="primary" icon="DownloadCloud" loading={busy} onClick={openDownload}>
+                Download v{status?.availableVersion}
+              </Button>
+            ))}
           {phase === 'downloaded' && (
             <Button variant="primary" icon="RefreshCw" onClick={install}>
               Restart & install
@@ -156,9 +173,15 @@ export function UpdatePanel({ onClose }: { onClose: () => void }): JSX.Element {
         </div>
       )}
 
+      {phase === 'available' && !isWin && (
+        <div className="auth-note mt-16">
+          Downloads the new installer — open it and drag the app to Applications to finish updating.
+        </div>
+      )}
+
       <p className="muted text-sm mt-16">
         Updates are delivered from the RM Cardz release channel. On Windows the app downloads and
-        installs the new version for you; Mac support is coming in a later release.
+        installs the update automatically; on Mac it downloads the new version for you to reinstall.
       </p>
     </Modal>
   )

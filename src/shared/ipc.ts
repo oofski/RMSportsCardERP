@@ -60,6 +60,7 @@ export const IPC = {
   updatesCheck: 'updates:check',
   updatesDownload: 'updates:download',
   updatesInstall: 'updates:install',
+  updatesOpenDownload: 'updates:open-download',
   updatesGetStatus: 'updates:get-status',
   updatesStatusEvent: 'updates:status-event',
 

@@ -1,6 +1,6 @@
-# Used by electron-updater during local development so "Check for updates"
-# can be exercised without a packaged build. Points at the same GitHub feed.
-provider: github
-owner: oofski
-repo: rmsportscarderp
+# Used by electron-updater during local development so "Check for updates" can
+# be exercised without a packaged build. Points at the Cloudflare generic feed.
+provider: generic
+url: https://updates.rmcardz.com
+channel: latest
 updaterCacheDirName: rm-operations-app-updater

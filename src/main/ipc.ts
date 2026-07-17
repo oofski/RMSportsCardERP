@@ -59,6 +59,7 @@ import { clearRemembered, getRemembered, setRemembered } from './services/creden
 import { generateTempPassword, isValidEmail } from './util'
 import {
   checkForUpdates,
+  currentDownloadUrl,
   downloadUpdate,
   getUpdateStatus,
   installUpdate
@@ -478,6 +479,17 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(IPC.updatesInstall, (): Result => {
     guardSignedIn()
     installUpdate()
+    return { ok: true }
+  })
+
+  // Opens the update download in the browser (macOS manual-install path).
+  ipcMain.handle(IPC.updatesOpenDownload, async (_e, url?: string): Promise<Result> => {
+    guardSignedIn()
+    const target = url ?? currentDownloadUrl()
+    if (!target || !/^https:/i.test(target)) {
+      return { ok: false, error: 'No download link available.' }
+    }
+    await shell.openExternal(target)
     return { ok: true }
   })
 

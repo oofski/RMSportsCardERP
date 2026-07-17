@@ -75,12 +75,22 @@ linux:
   maintainer: RM Cardz
 
 # ---------------------------------------------------------------------------
-# Update feed — electron-updater pulls new versions from GitHub Releases.
-# Publishing a GitHub Release (tag vX.Y.Z) with the built artifacts is what
-# makes "Check for updates" find a new version.
+# Update feed. Windows auto-update (electron-updater) reads latest.yml from the
+# FIRST provider below — the Cloudflare-hosted generic feed. The generic
+# provider is download-only, so CI uploads the built artifacts to Cloudflare R2
+# (see .github/workflows/release.yml -> cloudflare-publish and docs/UPDATES.md).
+#
+# `url` MUST match UPDATE_FEED_URL in src/shared/config.ts and CF_UPDATES_URL in
+# the release workflow. Complete the Cloudflare setup before releasing through
+# it. GitHub is kept as a second publish target during the transition so
+# existing GitHub-fed installs (<= v0.0.2) can still find the next version;
+# remove it once everyone is on the Cloudflare feed.
 # ---------------------------------------------------------------------------
 publish:
-  provider: github
-  owner: oofski
-  repo: rmsportscarderp
-  releaseType: release
+  - provider: generic
+    url: https://updates.rmcardz.com
+    channel: latest
+  - provider: github
+    owner: oofski
+    repo: rmsportscarderp
+    releaseType: release

@@ -287,4 +287,8 @@ export interface UpdateStatus {
   percent?: number
   bytesPerSecond?: number
   message?: string
+  /** Platform for which auto-install applies (windows) vs manual download (mac). */
+  platform?: NodeJS.Platform
+  /** On platforms without auto-install (macOS unsigned), the direct download link. */
+  downloadUrl?: string
 }

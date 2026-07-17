@@ -66,5 +66,78 @@ jobs:
         run: npm run build:${{ matrix.platform }} -- --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # macOS builds are unsigned for now (Windows-only auto-update).
+          # macOS builds are unsigned for now (Windows-only auto-install).
           CSC_IDENTITY_AUTO_DISCOVERY: false
+
+  # ---------------------------------------------------------------------------
+  # Mirror the release artifacts (+ a cross-platform update.json) to Cloudflare
+  # R2 so updates are served from the Cloudflare feed instead of GitHub.
+  # Stays OFF until you set the repo variable CLOUDFLARE_UPDATES = true and add
+  # the R2 secrets — so it can never break the existing GitHub release. See
+  # docs/UPDATES.md for setup.
+  # ---------------------------------------------------------------------------
+  cloudflare-publish:
+    needs: release
+    if: ${{ vars.CLOUDFLARE_UPDATES == 'true' }}
+    runs-on: ubuntu-latest
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      # R2 + the AWS CLI: only send/validate checksums when the API requires it.
+      AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+      AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+      R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      CF_UPDATES_URL: ${{ vars.CF_UPDATES_URL }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: v
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Download release assets
+        run: |
+          mkdir -p dist-assets
+          gh release download "v${{ steps.v.outputs.version }}" \
+            --repo "${{ github.repository }}" --dir dist-assets --clobber
+
+      - name: Generate update.json
+        run: |
+          node -e '
+            const fs = require("fs");
+            const base = (process.env.CF_UPDATES_URL || "").replace(/\/$/, "");
+            const files = fs.readdirSync("dist-assets");
+            const find = (re) => files.find((f) => re.test(f));
+            const url = (f) => (f ? base + "/" + encodeURIComponent(f) : undefined);
+            const j = {
+              version: require("./package.json").version,
+              releaseDate: new Date().toISOString(),
+              downloads: {
+                win: url(find(/Setup-.*\.exe$/)),
+                "mac-arm64": url(find(/-arm64\.dmg$/)),
+                "mac-x64": url(find(/-x64\.dmg$/))
+              }
+            };
+            fs.writeFileSync("dist-assets/update.json", JSON.stringify(j, null, 2));
+            console.log(j);
+          '
+
+      - name: Sync to Cloudflare R2
+        run: |
+          # Large artifacts: cache aggressively (immutable, versioned filenames).
+          aws s3 sync dist-assets "s3://${R2_BUCKET}/" \
+            --endpoint-url "${R2_ENDPOINT}" \
+            --exclude "update.json" --exclude "latest*.yml" \
+            --cache-control "public, max-age=31536000, immutable"
+          # Feed files: never cache, so clients always see the newest version.
+          for f in update.json latest.yml latest-mac.yml; do
+            if [ -f "dist-assets/$f" ]; then
+              ct="text/yaml"; [ "$f" = "update.json" ] && ct="application/json"
+              aws s3 cp "dist-assets/$f" "s3://${R2_BUCKET}/$f" \
+                --endpoint-url "${R2_ENDPOINT}" \
+                --content-type "$ct" --cache-control "no-cache"
+            fi
+          done
