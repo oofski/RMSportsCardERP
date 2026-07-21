@@ -41,15 +41,18 @@ export const IPC = {
 
   // Inventory
   invProductsList: 'inventory:products:list',
+  invCatalogSearch: 'inventory:catalog:search',
   invProductCreate: 'inventory:products:create',
   invProductUpdate: 'inventory:products:update',
   invProductDelete: 'inventory:products:delete',
   invSaleRecord: 'inventory:sale:record',
+  invStockAdd: 'inventory:stock:add',
   invStockAdjust: 'inventory:stock:adjust',
   invStats: 'inventory:stats',
+  invCategories: 'inventory:categories',
+  invByCategory: 'inventory:by-category',
   invRecentSales: 'inventory:sales:recent',
   invTransactions: 'inventory:transactions:list',
-  invValueByCategory: 'inventory:value-by-category',
   invSalesSeries: 'inventory:sales:series',
 
   // Email

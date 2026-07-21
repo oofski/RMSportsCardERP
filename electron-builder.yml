@@ -87,10 +87,14 @@ linux:
 # remove it once everyone is on the Cloudflare feed.
 # ---------------------------------------------------------------------------
 publish:
-  - provider: generic
-    url: https://updates.rmcardz.com
-    channel: latest
+  # GitHub is the ACTIVE feed until the Cloudflare setup (docs/UPDATES.md) is
+  # complete. To switch updates to Cloudflare, move the `generic` entry to the
+  # top (it becomes the feed the app checks) and enable the cloudflare-publish
+  # CI job — do this only once the R2 bucket + custom domain are live.
   - provider: github
     owner: oofski
     repo: rmsportscarderp
     releaseType: release
+  - provider: generic
+    url: https://updates.rmcardz.com
+    channel: latest

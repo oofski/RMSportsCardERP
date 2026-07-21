@@ -3,7 +3,7 @@ import type { InventoryTransaction } from '@shared/types'
 import { api } from '../../lib/api'
 import { CenterLoader, EmptyState } from '../../components/ui'
 import { formatMoney, formatDateTime } from '../../lib/format'
-import { TxnBadge } from './helpers'
+import { TxnBadge, LocBadge } from './helpers'
 
 export function ActivityTab(): JSX.Element {
   const [txns, setTxns] = useState<InventoryTransaction[]>([])
@@ -42,6 +42,7 @@ export function ActivityTab(): JSX.Element {
               <th>When</th>
               <th>Product</th>
               <th>Type</th>
+              <th>Location</th>
               <th>Change</th>
               <th>Unit price</th>
               <th>Client / vendor</th>
@@ -59,9 +60,10 @@ export function ActivityTab(): JSX.Element {
                 <td>
                   <TxnBadge type={t.type} />
                 </td>
-                <td
-                  style={{ fontWeight: 600, color: t.quantityChange < 0 ? 'var(--danger)' : 'var(--success)' }}
-                >
+                <td>
+                  <LocBadge location={t.location} />
+                </td>
+                <td style={{ fontWeight: 600, color: t.quantityChange < 0 ? 'var(--danger)' : 'var(--success)' }}>
                   {t.quantityChange > 0 ? '+' : ''}
                   {t.quantityChange}
                 </td>

@@ -2,6 +2,7 @@ import { app } from 'electron'
 import { join } from 'path'
 import { existsSync, mkdirSync } from 'fs'
 import Database from 'better-sqlite3'
+import { seedCatalog } from './inventorySeed'
 
 let db: Database.Database | null = null
 
@@ -78,25 +79,40 @@ function migrate(database: Database.Database): void {
       created_at TEXT NOT NULL
     );
 
+    -- Catalog of every product ever carried. SKU is a short (often shared)
+    -- abbreviation, so it is NOT unique; the UPC barcode is the natural key.
     CREATE TABLE IF NOT EXISTS inventory_products (
       id             TEXT PRIMARY KEY,
-      sku            TEXT NOT NULL UNIQUE COLLATE NOCASE,
+      sku            TEXT NOT NULL DEFAULT '',
+      upc            TEXT UNIQUE,
       name           TEXT NOT NULL,
       category       TEXT NOT NULL DEFAULT '',
       brand          TEXT NOT NULL DEFAULT '',
       set_name       TEXT NOT NULL DEFAULT '',
       year           TEXT NOT NULL DEFAULT '',
       unit_type      TEXT NOT NULL DEFAULT 'box',
-      quantity       INTEGER NOT NULL DEFAULT 0,
-      unit_cost      REAL NOT NULL DEFAULT 0,
-      sale_price     REAL,
       boxes_per_case INTEGER,
       packs_per_box  INTEGER,
+      unit_cost      REAL NOT NULL DEFAULT 0,
+      sale_price     REAL,
       reorder_point  INTEGER NOT NULL DEFAULT 0,
       notes          TEXT,
       created_at     TEXT NOT NULL,
       updated_at     TEXT NOT NULL
     );
+
+    -- On-hand quantity per product per location (RM / AM).
+    CREATE TABLE IF NOT EXISTS inventory_stock (
+      id         TEXT PRIMARY KEY,
+      product_id TEXT NOT NULL,
+      location   TEXT NOT NULL,
+      quantity   INTEGER NOT NULL DEFAULT 0,
+      UNIQUE (product_id, location),
+      FOREIGN KEY (product_id) REFERENCES inventory_products (id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_inv_stock_product
+      ON inventory_stock (product_id);
 
     CREATE TABLE IF NOT EXISTS inventory_transactions (
       id              TEXT PRIMARY KEY,
@@ -107,6 +123,7 @@ function migrate(database: Database.Database): void {
       counterparty    TEXT,
       note            TEXT,
       actor_id        TEXT,
+      location        TEXT,
       created_at      TEXT NOT NULL,
       FOREIGN KEY (product_id) REFERENCES inventory_products (id) ON DELETE CASCADE
     );
@@ -131,8 +148,75 @@ function migrate(database: Database.Database): void {
   addColumnIfMissing(database, 'time_entries', 'clock_out_lng', 'REAL')
   addColumnIfMissing(database, 'time_entries', 'clock_out_place', 'TEXT')
 
-  // v3 adds the inventory tables (created idempotently in the block above).
-  setMeta(database, 'schema_version', '3')
+  // v3 added the inventory tables (created idempotently in the block above).
+
+  // v4: catalog + per-location stock. New installs already get the new schema
+  // above; this upgrades any existing v0.0.2 inventory table in place.
+  migrateInventoryV4(database)
+  addColumnIfMissing(database, 'inventory_transactions', 'location', 'TEXT')
+  setMeta(database, 'schema_version', '4')
+
+  // Seed the product catalog once.
+  seedCatalogIfNeeded(database)
+}
+
+/**
+ * Rebuild a pre-v4 `inventory_products` table (single `quantity` column, unique
+ * SKU, no `upc`) into the catalog shape, moving its stock into inventory_stock
+ * at the default RM location. No-op when the table is already the new shape.
+ */
+function migrateInventoryV4(database: Database.Database): void {
+  const cols = database
+    .prepare(`PRAGMA table_info(inventory_products)`)
+    .all() as Array<{ name: string }>
+  const isOld = cols.some((c) => c.name === 'quantity') && !cols.some((c) => c.name === 'upc')
+  if (!isOld) return
+
+  database.pragma('foreign_keys = OFF')
+  try {
+    database.exec(`
+      CREATE TABLE inventory_products_v4 (
+        id             TEXT PRIMARY KEY,
+        sku            TEXT NOT NULL DEFAULT '',
+        upc            TEXT UNIQUE,
+        name           TEXT NOT NULL,
+        category       TEXT NOT NULL DEFAULT '',
+        brand          TEXT NOT NULL DEFAULT '',
+        set_name       TEXT NOT NULL DEFAULT '',
+        year           TEXT NOT NULL DEFAULT '',
+        unit_type      TEXT NOT NULL DEFAULT 'box',
+        boxes_per_case INTEGER,
+        packs_per_box  INTEGER,
+        unit_cost      REAL NOT NULL DEFAULT 0,
+        sale_price     REAL,
+        reorder_point  INTEGER NOT NULL DEFAULT 0,
+        notes          TEXT,
+        created_at     TEXT NOT NULL,
+        updated_at     TEXT NOT NULL
+      );
+      INSERT INTO inventory_products_v4
+        (id, sku, upc, name, category, brand, set_name, year, unit_type,
+         boxes_per_case, packs_per_box, unit_cost, sale_price, reorder_point,
+         notes, created_at, updated_at)
+        SELECT id, sku, NULL, name, category, brand, set_name, year, unit_type,
+               boxes_per_case, packs_per_box, unit_cost, sale_price, reorder_point,
+               notes, created_at, updated_at
+        FROM inventory_products;
+      INSERT INTO inventory_stock (id, product_id, location, quantity)
+        SELECT lower(hex(randomblob(16))), id, 'RM', quantity
+        FROM inventory_products WHERE quantity <> 0;
+      DROP TABLE inventory_products;
+      ALTER TABLE inventory_products_v4 RENAME TO inventory_products;
+    `)
+  } finally {
+    database.pragma('foreign_keys = ON')
+  }
+}
+
+function seedCatalogIfNeeded(database: Database.Database): void {
+  if (getMeta(database, 'catalog_seeded') === '1') return
+  seedCatalog(database)
+  setMeta(database, 'catalog_seeded', '1')
 }
 
 /** Add a column only if the table doesn't already have it (safe re-run). */

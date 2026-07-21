@@ -2,9 +2,10 @@ import { contextBridge, ipcRenderer } from 'electron'
 import { IPC, type AppInfo } from '@shared/ipc'
 import type { Permission } from '@shared/permissions'
 import type {
+  AddStockInput,
   AdjustStockInput,
   AuthResult,
-  CategoryValue,
+  CategorySummary,
   ClockStatus,
   ComposedEmail,
   Employee,
@@ -88,12 +89,16 @@ const api = {
   },
   inventory: {
     list: (): Promise<InventoryProduct[]> => ipcRenderer.invoke(IPC.invProductsList),
+    search: (query: string): Promise<InventoryProduct[]> =>
+      ipcRenderer.invoke(IPC.invCatalogSearch, query),
     stats: (): Promise<InventoryStats | null> => ipcRenderer.invoke(IPC.invStats),
+    categories: (): Promise<CategorySummary[]> => ipcRenderer.invoke(IPC.invCategories),
+    byCategory: (category: string): Promise<InventoryProduct[]> =>
+      ipcRenderer.invoke(IPC.invByCategory, category),
     recentSales: (limit?: number): Promise<InventoryTransaction[]> =>
       ipcRenderer.invoke(IPC.invRecentSales, limit),
     transactions: (limit?: number): Promise<InventoryTransaction[]> =>
       ipcRenderer.invoke(IPC.invTransactions, limit),
-    valueByCategory: (): Promise<CategoryValue[]> => ipcRenderer.invoke(IPC.invValueByCategory),
     salesSeries: (days?: number): Promise<SalesPoint[]> =>
       ipcRenderer.invoke(IPC.invSalesSeries, days),
     create: (input: NewInventoryProduct): Promise<Result<InventoryProduct>> =>
@@ -101,10 +106,12 @@ const api = {
     update: (input: UpdateInventoryProduct): Promise<Result<InventoryProduct>> =>
       ipcRenderer.invoke(IPC.invProductUpdate, input),
     delete: (id: string): Promise<Result> => ipcRenderer.invoke(IPC.invProductDelete, { id }),
-    recordSale: (input: RecordSaleInput): Promise<Result<InventoryProduct>> =>
-      ipcRenderer.invoke(IPC.invSaleRecord, input),
+    addStock: (input: AddStockInput): Promise<Result<InventoryProduct>> =>
+      ipcRenderer.invoke(IPC.invStockAdd, input),
     adjustStock: (input: AdjustStockInput): Promise<Result<InventoryProduct>> =>
-      ipcRenderer.invoke(IPC.invStockAdjust, input)
+      ipcRenderer.invoke(IPC.invStockAdjust, input),
+    recordSale: (input: RecordSaleInput): Promise<Result<InventoryProduct>> =>
+      ipcRenderer.invoke(IPC.invSaleRecord, input)
   },
   email: {
     composeInvite: (

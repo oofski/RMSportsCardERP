@@ -1,6 +1,7 @@
 # Used by electron-updater during local development so "Check for updates" can
-# be exercised without a packaged build. Points at the Cloudflare generic feed.
-provider: generic
-url: https://updates.rmcardz.com
-channel: latest
+# be exercised without a packaged build. Matches the ACTIVE feed (GitHub).
+# Switch to the generic Cloudflare provider once that feed is live.
+provider: github
+owner: oofski
+repo: rmsportscarderp
 updaterCacheDirName: rm-operations-app-updater

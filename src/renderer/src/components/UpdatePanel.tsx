@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { UpdateStatus } from '@shared/types'
+import { DOWNLOAD_URL } from '@shared/config'
 import { Modal, Button } from './ui'
 import { Icon } from './Icon'
 import { api } from '../lib/api'
@@ -119,6 +120,11 @@ export function UpdatePanel({ onClose }: { onClose: () => void }): JSX.Element {
           <Button variant="ghost" onClick={onClose}>
             Close
           </Button>
+          {!isWin && (
+            <Button variant="secondary" icon="DownloadCloud" onClick={() => api.updates.openDownload(DOWNLOAD_URL)}>
+              Downloads page
+            </Button>
+          )}
           {phase === 'available' &&
             (isWin ? (
               <Button variant="primary" icon="Download" loading={busy} onClick={download}>

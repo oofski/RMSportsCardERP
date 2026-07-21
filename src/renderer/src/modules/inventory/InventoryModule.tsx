@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import type {
-  CategoryValue,
+  CategorySummary,
   InventoryProduct,
   InventoryStats,
   InventoryTransaction,
@@ -26,7 +26,8 @@ const EMPTY_STATS: InventoryStats = {
   skuCount: 0,
   lowStockCount: 0,
   salesRevenue: 0,
-  salesCount: 0
+  salesCount: 0,
+  unitsByLocation: {}
 }
 
 export function InventoryModule(): JSX.Element {
@@ -35,7 +36,7 @@ export function InventoryModule(): JSX.Element {
 
   const [products, setProducts] = useState<InventoryProduct[]>([])
   const [stats, setStats] = useState<InventoryStats>(EMPTY_STATS)
-  const [categories, setCategories] = useState<CategoryValue[]>([])
+  const [categories, setCategories] = useState<CategorySummary[]>([])
   const [series, setSeries] = useState<SalesPoint[]>([])
   const [recentSales, setRecentSales] = useState<InventoryTransaction[]>([])
   const [loading, setLoading] = useState(true)
@@ -45,7 +46,7 @@ export function InventoryModule(): JSX.Element {
     const [prods, st, cats, ser, sales] = await Promise.all([
       api.inventory.list(),
       api.inventory.stats(),
-      api.inventory.valueByCategory(),
+      api.inventory.categories(),
       api.inventory.salesSeries(14),
       api.inventory.recentSales(8)
     ])
@@ -64,8 +65,8 @@ export function InventoryModule(): JSX.Element {
   }, [reload])
 
   const tabs: { id: TabId; label: string; icon: string }[] = [
-    { id: 'overview', label: 'Overview', icon: 'LayoutDashboard' },
-    { id: 'products', label: 'Products', icon: 'Boxes' },
+    { id: 'overview', label: 'Dashboard', icon: 'LayoutDashboard' },
+    { id: 'products', label: 'Catalog', icon: 'Boxes' },
     { id: 'activity', label: 'Activity', icon: 'Layers' }
   ]
 

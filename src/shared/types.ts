@@ -109,49 +109,57 @@ export type ThemeMode = 'light' | 'dark'
 
 export type UnitType = 'case' | 'box' | 'pack' | 'single' | 'other'
 
+/** A catalog product plus its on-hand stock per location. */
 export interface InventoryProduct {
   id: string
   sku: string
+  upc: string | null
   name: string
   category: string
   brand: string
   setName: string
   year: string
   unitType: UnitType
-  quantity: number
-  /** What we paid per unit. */
-  unitCost: number
-  /** Default asking price per unit (optional). */
-  salePrice: number | null
   /** Informational: how many boxes make up a case. */
   boxesPerCase: number | null
   /** Informational: how many packs make up a box. */
   packsPerBox: number | null
-  /** Low-stock threshold. */
+  /** What we paid per unit. */
+  unitCost: number
+  /** Default asking price per unit (optional). */
+  salePrice: number | null
+  /** Low-stock threshold (on total across locations). */
   reorderPoint: number
   notes: string | null
+  /** On-hand quantity per location, e.g. { RM: 4, AM: 2 }. */
+  quantityByLocation: Record<string, number>
+  /** Total on hand across all locations. */
+  quantity: number
   createdAt: string
   updatedAt: string
 }
 
 export interface NewInventoryProduct {
   sku: string
+  upc: string | null
   name: string
   category: string
   brand: string
   setName: string
   year: string
   unitType: UnitType
-  quantity: number
-  unitCost: number
-  salePrice: number | null
   boxesPerCase: number | null
   packsPerBox: number | null
+  unitCost: number
+  salePrice: number | null
   reorderPoint: number
   notes: string | null
+  /** Optional opening stock so a new product can go straight into a location. */
+  openingQuantity?: number
+  openingLocation?: string
 }
 
-export interface UpdateInventoryProduct extends Partial<NewInventoryProduct> {
+export type UpdateInventoryProduct = Partial<Omit<NewInventoryProduct, 'openingQuantity' | 'openingLocation'>> & {
   id: string
 }
 
@@ -169,25 +177,35 @@ export interface InventoryTransaction {
   unitPrice: number | null
   /** Client (sale) or vendor (purchase). */
   counterparty: string | null
+  location: string | null
   note: string | null
   actorName: string | null
   createdAt: string
 }
 
-export interface RecordSaleInput {
+/** Add received stock to a product at a location. */
+export interface AddStockInput {
   productId: string
+  location: string
   quantity: number
-  unitPrice: number
-  client: string
+  unitCost?: number | null
   note?: string | null
 }
 
+/** Correct a location's count up or down. */
 export interface AdjustStockInput {
   productId: string
-  type: 'restock' | 'adjustment'
+  location: string
   quantityChange: number
-  /** Unit cost for a restock. */
-  unitCost?: number | null
+  note?: string | null
+}
+
+export interface RecordSaleInput {
+  productId: string
+  location: string
+  quantity: number
+  unitPrice: number
+  client: string
   note?: string | null
 }
 
@@ -199,9 +217,22 @@ export interface InventoryStats {
   singles: number
   units: number
   skuCount: number
+  /** Products with stock at or below their reorder point. */
   lowStockCount: number
   salesRevenue: number
   salesCount: number
+  /** Total on-hand units per location. */
+  unitsByLocation: Record<string, number>
+}
+
+/** Per-category rollup for the dashboard. */
+export interface CategorySummary {
+  category: string
+  cases: number
+  boxes: number
+  units: number
+  value: number
+  productCount: number
 }
 
 export interface CategoryValue {

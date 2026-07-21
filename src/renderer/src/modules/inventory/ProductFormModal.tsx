@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { InventoryProduct, UnitType } from '@shared/types'
+import { LOCATIONS, type Location } from '@shared/inventory'
 import { api } from '../../lib/api'
 import { useToast } from '../../components/Toast'
 import { Button, Field, Input, Modal, Select, Textarea } from '../../components/ui'
@@ -23,19 +24,21 @@ export function ProductFormModal({
   const isEdit = !!product
   const [form, setForm] = useState({
     sku: product?.sku ?? '',
+    upc: product?.upc ?? '',
     name: product?.name ?? '',
     category: product?.category ?? '',
     brand: product?.brand ?? '',
     setName: product?.setName ?? '',
     year: product?.year ?? '',
     unitType: (product?.unitType ?? 'box') as UnitType,
-    quantity: String(product?.quantity ?? 0),
-    unitCost: product ? String(product.unitCost) : '',
-    salePrice: product?.salePrice != null ? String(product.salePrice) : '',
     boxesPerCase: product?.boxesPerCase != null ? String(product.boxesPerCase) : '',
     packsPerBox: product?.packsPerBox != null ? String(product.packsPerBox) : '',
+    unitCost: product ? String(product.unitCost) : '',
+    salePrice: product?.salePrice != null ? String(product.salePrice) : '',
     reorderPoint: String(product?.reorderPoint ?? 0),
-    notes: product?.notes ?? ''
+    notes: product?.notes ?? '',
+    openingQuantity: '',
+    openingLocation: 'RM' as Location
   })
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -50,29 +53,34 @@ export function ProductFormModal({
     setError('')
     setBusy(true)
     try {
-      const payloadBase = {
+      const base = {
         sku: form.sku,
+        upc: form.upc.trim() || null,
         name: form.name,
         category: form.category,
         brand: form.brand,
         setName: form.setName,
         year: form.year,
         unitType: form.unitType,
-        unitCost: numOrNull(form.unitCost) ?? 0,
-        salePrice: numOrNull(form.salePrice),
         boxesPerCase: numOrNull(form.boxesPerCase),
         packsPerBox: numOrNull(form.packsPerBox),
+        unitCost: numOrNull(form.unitCost) ?? 0,
+        salePrice: numOrNull(form.salePrice),
         reorderPoint: numOrNull(form.reorderPoint) ?? 0,
         notes: form.notes.trim() || null
       }
       const res = isEdit
-        ? await api.inventory.update({ id: product.id, ...payloadBase })
-        : await api.inventory.create({ ...payloadBase, quantity: numOrNull(form.quantity) ?? 0 })
+        ? await api.inventory.update({ id: product.id, ...base })
+        : await api.inventory.create({
+            ...base,
+            openingQuantity: numOrNull(form.openingQuantity) ?? 0,
+            openingLocation: form.openingLocation
+          })
       if (!res.ok) {
         setError(res.error ?? 'Could not save the product.')
         return
       }
-      toast.success(isEdit ? 'Product updated.' : `${form.name} added to inventory.`)
+      toast.success(isEdit ? 'Product updated.' : `${form.name} added to the catalog.`)
       await onSaved()
     } finally {
       setBusy(false)
@@ -84,8 +92,8 @@ export function ProductFormModal({
       title={isEdit ? 'Edit product' : 'Add product'}
       subtitle={
         isEdit
-          ? 'Update product details. Quantity changes through sales and restocks.'
-          : 'Create an inventory product and set its opening stock.'
+          ? 'Update catalog details. Stock changes through Add stock and sales.'
+          : 'Add a product to the catalog (with optional opening stock).'
       }
       onClose={onClose}
       wide
@@ -103,9 +111,22 @@ export function ProductFormModal({
       <form onSubmit={submit}>
         {error && <div className="auth-alert">{error}</div>}
 
+        <Field label="Product name">
+          <Input value={form.name} onChange={set('name')} placeholder="2026 Bowman Baseball Hobby 12-Box Case" required autoFocus />
+        </Field>
+
         <div className="field-row">
-          <Field label="SKU">
-            <Input value={form.sku} onChange={set('sku')} placeholder="e.g. TOPPS-CHR-2023-HB" required autoFocus />
+          <Field label="SKU" hint="Short code — can repeat (e.g. BOX)">
+            <Input value={form.sku} onChange={set('sku')} placeholder="6578" />
+          </Field>
+          <Field label="UPC" hint="Barcode — unique">
+            <Input value={form.upc} onChange={set('upc')} placeholder="887521158126" />
+          </Field>
+        </div>
+
+        <div className="field-row">
+          <Field label="Category">
+            <Input value={form.category} onChange={set('category')} placeholder="Baseball" />
           </Field>
           <Field label="Unit type">
             <Select value={form.unitType} onChange={set('unitType')}>
@@ -118,59 +139,53 @@ export function ProductFormModal({
           </Field>
         </div>
 
-        <Field label="Product name">
-          <Input value={form.name} onChange={set('name')} placeholder="2023 Topps Chrome Baseball Hobby Box" required />
-        </Field>
-
         <div className="field-row">
-          <Field label="Category">
-            <Input value={form.category} onChange={set('category')} placeholder="Baseball" />
-          </Field>
           <Field label="Brand">
-            <Input value={form.brand} onChange={set('brand')} placeholder="Topps" />
-          </Field>
-        </div>
-        <div className="field-row">
-          <Field label="Set">
-            <Input value={form.setName} onChange={set('setName')} placeholder="Chrome" />
+            <Input value={form.brand} onChange={set('brand')} placeholder="Bowman" />
           </Field>
           <Field label="Year">
-            <Input value={form.year} onChange={set('year')} placeholder="2023" />
+            <Input value={form.year} onChange={set('year')} placeholder="2026" />
           </Field>
         </div>
 
         <div className="field-row">
-          <Field label={isEdit ? 'Quantity (change via sales/restock)' : 'Opening quantity'}>
-            <Input
-              type="number"
-              min={0}
-              value={form.quantity}
-              onChange={set('quantity')}
-              disabled={isEdit}
-            />
-          </Field>
-          <Field label="Unit cost" hint="What you paid per unit">
-            <Input type="number" min={0} step="0.01" value={form.unitCost} onChange={set('unitCost')} placeholder="0.00" />
-          </Field>
-        </div>
-
-        <div className="field-row">
-          <Field label="Default sale price" hint="Optional">
-            <Input type="number" min={0} step="0.01" value={form.salePrice} onChange={set('salePrice')} placeholder="0.00" />
-          </Field>
-          <Field label="Low-stock alert at" hint="0 = off">
-            <Input type="number" min={0} value={form.reorderPoint} onChange={set('reorderPoint')} />
-          </Field>
-        </div>
-
-        <div className="field-row">
-          <Field label="Boxes per case" hint="Optional">
+          <Field label="Boxes per case" hint="e.g. 12">
             <Input type="number" min={0} value={form.boxesPerCase} onChange={set('boxesPerCase')} placeholder="—" />
           </Field>
           <Field label="Packs per box" hint="Optional">
             <Input type="number" min={0} value={form.packsPerBox} onChange={set('packsPerBox')} placeholder="—" />
           </Field>
         </div>
+
+        <div className="field-row">
+          <Field label="Unit cost" hint="What you paid per unit">
+            <Input type="number" min={0} step="0.01" value={form.unitCost} onChange={set('unitCost')} placeholder="0.00" />
+          </Field>
+          <Field label="Default sale price" hint="Optional">
+            <Input type="number" min={0} step="0.01" value={form.salePrice} onChange={set('salePrice')} placeholder="0.00" />
+          </Field>
+        </div>
+
+        {!isEdit && (
+          <div className="field-row">
+            <Field label="Opening quantity" hint="Optional — stock on hand now">
+              <Input type="number" min={0} value={form.openingQuantity} onChange={set('openingQuantity')} placeholder="0" />
+            </Field>
+            <Field label="Opening location">
+              <Select value={form.openingLocation} onChange={set('openingLocation')}>
+                {LOCATIONS.map((l) => (
+                  <option key={l.id} value={l.id}>
+                    {l.label}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+          </div>
+        )}
+
+        <Field label="Low-stock alert at" hint="0 = off">
+          <Input type="number" min={0} value={form.reorderPoint} onChange={set('reorderPoint')} />
+        </Field>
 
         <Field label="Notes">
           <Textarea value={form.notes} onChange={set('notes')} placeholder="Anything worth noting…" />

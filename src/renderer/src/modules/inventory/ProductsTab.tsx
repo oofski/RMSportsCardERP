@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { InventoryProduct } from '@shared/types'
+import { LOCATIONS } from '@shared/inventory'
 import { useChrome } from '../../lib/chrome'
 import { api } from '../../lib/api'
 import { useToast } from '../../components/Toast'
@@ -9,7 +10,7 @@ import { formatMoney } from '../../lib/format'
 import { UnitBadge } from './helpers'
 import { ProductFormModal } from './ProductFormModal'
 import { RecordSaleModal } from './RecordSaleModal'
-import { RestockModal } from './RestockModal'
+import { StockModal } from './StockModal'
 
 export function ProductsTab({
   products,
@@ -24,7 +25,7 @@ export function ProductsTab({
   const toast = useToast()
   const [formFor, setFormFor] = useState<InventoryProduct | null | 'new'>(null)
   const [saleFor, setSaleFor] = useState<InventoryProduct | 'any' | null>(null)
-  const [restockFor, setRestockFor] = useState<InventoryProduct | null>(null)
+  const [stockFor, setStockFor] = useState<InventoryProduct | 'any' | null>(null)
   const [deleteFor, setDeleteFor] = useState<InventoryProduct | null>(null)
   const [busy, setBusy] = useState(false)
 
@@ -32,7 +33,10 @@ export function ProductsTab({
     const q = search.trim().toLowerCase()
     if (!q) return products
     return products.filter((p) =>
-      [p.sku, p.name, p.category, p.brand, p.setName, p.year].join(' ').toLowerCase().includes(q)
+      [p.sku, p.upc ?? '', p.name, p.category, p.brand, p.setName, p.year]
+        .join(' ')
+        .toLowerCase()
+        .includes(q)
     )
   }, [products, search])
 
@@ -52,131 +56,22 @@ export function ProductsTab({
     }
   }
 
-  if (products.length === 0) {
-    return (
-      <>
-        <EmptyState
-          icon="Boxes"
-          title="No inventory yet"
-          message="Add your first product — a case, box, pack or single — and set its opening stock and cost."
-          action={
-            canManage ? (
-              <Button variant="primary" icon="PackagePlus" onClick={() => setFormFor('new')}>
-                Add product
-              </Button>
-            ) : undefined
-          }
-        />
-        {formFor && (
-          <ProductFormModal
-            product={null}
-            onClose={() => setFormFor(null)}
-            onSaved={async () => {
-              setFormFor(null)
-              await onChanged()
-            }}
-          />
-        )}
-      </>
-    )
-  }
+  const headerActions = canManage && (
+    <div className="row" style={{ gap: 8 }}>
+      <Button variant="secondary" icon="ShoppingCart" onClick={() => setSaleFor('any')}>
+        Record sale
+      </Button>
+      <Button variant="secondary" icon="PackagePlus" onClick={() => setStockFor('any')}>
+        Add stock
+      </Button>
+      <Button variant="primary" icon="Plus" onClick={() => setFormFor('new')}>
+        Add product
+      </Button>
+    </div>
+  )
 
-  return (
+  const modals = (
     <>
-      <div className="section-head">
-        <div>
-          <h2>Products</h2>
-          <p>
-            {filtered.length} of {products.length} shown. Search from the top bar.
-          </p>
-        </div>
-        {canManage && (
-          <div className="row" style={{ gap: 8 }}>
-            <Button variant="secondary" icon="ShoppingCart" onClick={() => setSaleFor('any')}>
-              Record sale
-            </Button>
-            <Button variant="primary" icon="PackagePlus" onClick={() => setFormFor('new')}>
-              Add product
-            </Button>
-          </div>
-        )}
-      </div>
-
-      {filtered.length === 0 ? (
-        <EmptyState icon="Search" title="No products match your search" />
-      ) : (
-        <div className="table-wrap">
-          <table className="data">
-            <thead>
-              <tr>
-                <th>Product</th>
-                <th>Category</th>
-                <th>Unit</th>
-                <th>Qty</th>
-                <th>Unit cost</th>
-                <th>Value</th>
-                {canManage && <th style={{ textAlign: 'right' }}>Actions</th>}
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((p) => {
-                const low = p.reorderPoint > 0 && p.quantity <= p.reorderPoint
-                return (
-                  <tr key={p.id}>
-                    <td>
-                      <div className="prod-cell">
-                        <div style={{ fontWeight: 600 }}>{p.name}</div>
-                        <div className="p-sub">
-                          <span className="mono">{p.sku}</span>
-                          {(p.brand || p.setName || p.year) && (
-                            <>
-                              {' · '}
-                              {[p.brand, p.setName, p.year].filter(Boolean).join(' ')}
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    </td>
-                    <td>{p.category || <span className="muted">—</span>}</td>
-                    <td>
-                      <UnitBadge unit={p.unitType} />
-                    </td>
-                    <td className={low ? 'stock-low' : ''} style={{ fontWeight: 600 }}>
-                      {p.quantity}
-                      {low && (
-                        <Icon name="AlertTriangle" size={13} className="" strokeWidth={2.5} />
-                      )}
-                    </td>
-                    <td className="money">{formatMoney(p.unitCost)}</td>
-                    <td className="money">{formatMoney(p.quantity * p.unitCost)}</td>
-                    {canManage && (
-                      <td>
-                        <div className="cell-actions">
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            icon="ShoppingCart"
-                            disabled={p.quantity <= 0}
-                            onClick={() => setSaleFor(p)}
-                          >
-                            Sell
-                          </Button>
-                          <Button size="sm" variant="ghost" icon="PackagePlus" onClick={() => setRestockFor(p)}>
-                            Stock
-                          </Button>
-                          <Button size="sm" variant="secondary" icon="Pencil" onClick={() => setFormFor(p)} />
-                          <Button size="sm" variant="ghost" icon="Trash2" onClick={() => setDeleteFor(p)} />
-                        </div>
-                      </td>
-                    )}
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
-
       {formFor && (
         <ProductFormModal
           product={formFor === 'new' ? null : formFor}
@@ -187,7 +82,6 @@ export function ProductsTab({
           }}
         />
       )}
-
       {saleFor && (
         <RecordSaleModal
           products={products}
@@ -199,18 +93,16 @@ export function ProductsTab({
           }}
         />
       )}
-
-      {restockFor && (
-        <RestockModal
-          product={restockFor}
-          onClose={() => setRestockFor(null)}
+      {stockFor && (
+        <StockModal
+          presetProduct={stockFor === 'any' ? null : stockFor}
+          onClose={() => setStockFor(null)}
           onSaved={async () => {
-            setRestockFor(null)
+            setStockFor(null)
             await onChanged()
           }}
         />
       )}
-
       {deleteFor && (
         <Modal
           title="Delete product?"
@@ -228,11 +120,120 @@ export function ProductsTab({
           }
         >
           <p className="muted">
-            This removes the product and its stock history. Recorded sales revenue is also removed.
-            This can't be undone.
+            This removes the product from the catalog along with its stock and history. This can't be
+            undone.
           </p>
         </Modal>
       )}
+    </>
+  )
+
+  if (products.length === 0) {
+    return (
+      <>
+        <EmptyState
+          icon="Boxes"
+          title="Your catalog is empty"
+          message="Add a product to the catalog, then add stock to a location."
+          action={
+            canManage ? (
+              <Button variant="primary" icon="PackagePlus" onClick={() => setFormFor('new')}>
+                Add product
+              </Button>
+            ) : undefined
+          }
+        />
+        {modals}
+      </>
+    )
+  }
+
+  return (
+    <>
+      <div className="section-head">
+        <div>
+          <h2>Catalog</h2>
+          <p>
+            {filtered.length} of {products.length} products. Search from the top bar.
+          </p>
+        </div>
+        {headerActions}
+      </div>
+
+      {filtered.length === 0 ? (
+        <EmptyState icon="Search" title="No products match your search" />
+      ) : (
+        <div className="table-wrap">
+          <table className="data">
+            <thead>
+              <tr>
+                <th>Product</th>
+                <th>Category</th>
+                <th>Structure</th>
+                {LOCATIONS.map((l) => (
+                  <th key={l.id} style={{ textAlign: 'center' }}>
+                    {l.label}
+                  </th>
+                ))}
+                <th>Total</th>
+                <th>Value</th>
+                {canManage && <th style={{ textAlign: 'right' }}>Actions</th>}
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((p) => {
+                const low = p.reorderPoint > 0 && p.quantity <= p.reorderPoint
+                return (
+                  <tr key={p.id}>
+                    <td>
+                      <div className="prod-cell">
+                        <div style={{ fontWeight: 600 }}>{p.name}</div>
+                        <div className="p-sub">
+                          <span className="mono">{p.sku}</span>
+                          {p.upc && <span className="mono"> · {p.upc}</span>}
+                        </div>
+                      </div>
+                    </td>
+                    <td>{p.category || <span className="muted">—</span>}</td>
+                    <td>
+                      <UnitBadge unit={p.unitType} />
+                      {p.unitType === 'case' && p.boxesPerCase ? (
+                        <span className="muted text-sm"> {p.boxesPerCase}/case</span>
+                      ) : null}
+                    </td>
+                    {LOCATIONS.map((l) => (
+                      <td key={l.id} style={{ textAlign: 'center' }} className="mono">
+                        {p.quantityByLocation[l.id] ?? 0}
+                      </td>
+                    ))}
+                    <td className={low ? 'stock-low' : ''} style={{ fontWeight: 700 }}>
+                      {p.quantity}
+                      {low && <Icon name="AlertTriangle" size={13} strokeWidth={2.5} />}
+                    </td>
+                    <td className="money">{formatMoney(p.quantity * p.unitCost)}</td>
+                    {canManage && (
+                      <td>
+                        <div className="cell-actions">
+                          <Button size="sm" variant="ghost" icon="ShoppingCart" disabled={p.quantity <= 0} onClick={() => setSaleFor(p)}>
+                            Sell
+                          </Button>
+                          <Button size="sm" variant="ghost" icon="PackagePlus" onClick={() => setStockFor(p)}>
+                            Stock
+                          </Button>
+                          <Button size="sm" variant="secondary" icon="Pencil" onClick={() => setFormFor(p)} />
+                          <Button size="sm" variant="ghost" icon="Trash2" onClick={() => setDeleteFor(p)} />
+                        </div>
+                      </td>
+                    )}
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {modals}
     </>
   )
 }
