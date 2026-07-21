@@ -172,9 +172,14 @@ function migrateInventoryV4(database: Database.Database): void {
   const isOld = cols.some((c) => c.name === 'quantity') && !cols.some((c) => c.name === 'upc')
   if (!isOld) return
 
+  // FK toggle must be outside the transaction (the pragma is a no-op inside
+  // one); the DDL itself runs in a transaction so an interrupted migration
+  // rolls back cleanly instead of leaving a half-built, unopenable database.
   database.pragma('foreign_keys = OFF')
   try {
-    database.exec(`
+    database.transaction(() => {
+      database.exec(`
+      DROP TABLE IF EXISTS inventory_products_v4;
       CREATE TABLE inventory_products_v4 (
         id             TEXT PRIMARY KEY,
         sku            TEXT NOT NULL DEFAULT '',
@@ -208,6 +213,7 @@ function migrateInventoryV4(database: Database.Database): void {
       DROP TABLE inventory_products;
       ALTER TABLE inventory_products_v4 RENAME TO inventory_products;
     `)
+    })()
   } finally {
     database.pragma('foreign_keys = ON')
   }

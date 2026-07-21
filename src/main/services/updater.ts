@@ -103,8 +103,11 @@ function isNewer(remote: string, current: string): boolean {
   return false
 }
 
-function macDownloadKey(): string {
-  return process.arch === 'arm64' ? 'mac-arm64' : 'mac-x64'
+/** The update.json download key for the current platform, or null if none. */
+function downloadKey(): string | null {
+  if (platform === 'darwin') return process.arch === 'arm64' ? 'mac-arm64' : 'mac-x64'
+  if (platform === 'win32') return 'win'
+  return null
 }
 
 async function checkViaJson(): Promise<void> {
@@ -114,7 +117,7 @@ async function checkViaJson(): Promise<void> {
     const timer = setTimeout(() => controller.abort(), 8000)
     let res: Response
     try {
-      res = await fetch(`${UPDATE_FEED_URL}/update.json?ts=${app.getVersion()}`, {
+      res = await fetch(`${UPDATE_FEED_URL}/update.json?ts=${Date.now()}`, {
         signal: controller.signal,
         cache: 'no-store'
       } as RequestInit)
@@ -128,8 +131,8 @@ async function checkViaJson(): Promise<void> {
       setStatus({ phase: 'not-available', message: "You're on the latest version." })
       return
     }
-    const key = platform === 'darwin' ? macDownloadKey() : 'win'
-    const url = data.downloads?.[key]
+    const key = downloadKey()
+    const url = key ? data.downloads?.[key] : undefined
     setStatus({
       phase: 'available',
       availableVersion: data.version,

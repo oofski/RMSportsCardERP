@@ -181,13 +181,18 @@ function CatalogTypeahead({ onSelect }: { onSelect: (p: InventoryProduct) => voi
       setResults([])
       return
     }
+    let cancelled = false
     setLoading(true)
     if (timer.current) window.clearTimeout(timer.current)
     timer.current = window.setTimeout(async () => {
-      setResults(await api.inventory.search(query))
-      setLoading(false)
+      const r = await api.inventory.search(query)
+      if (!cancelled) {
+        setResults(r)
+        setLoading(false)
+      }
     }, 180)
     return () => {
+      cancelled = true
       if (timer.current) window.clearTimeout(timer.current)
     }
   }, [query])

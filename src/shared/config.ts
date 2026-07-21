@@ -10,14 +10,17 @@ export const COMPANY_NAME = 'RM Cardz'
 export const APP_ID = 'com.rmcardz.operations'
 
 /**
- * Base URL of the Cloudflare-hosted update feed (R2 bucket behind a custom
- * domain). The app fetches `${UPDATE_FEED_URL}/update.json` to check for new
- * versions, and Windows auto-update reads its generic feed (latest.yml) from
- * the same base. Point this at your real Cloudflare domain before releasing
- * through Cloudflare — it MUST match the `publish.url` in electron-builder.yml
- * and the CF_UPDATES_URL used by the release workflow.
+ * Base URL the app fetches `${UPDATE_FEED_URL}/update.json` from to check for
+ * updates (the macOS/Linux path; Windows auto-update uses electron-updater).
+ *
+ * ACTIVE phase = GitHub: `releases/latest/download` always resolves to the
+ * newest release's assets, and the release workflow attaches update.json there.
+ * When you move to Cloudflare, change this to your R2 domain (e.g.
+ * https://updates.rmcardz.com) in the same change that flips electron-builder's
+ * publish to generic-first and enables the cloudflare-publish CI job.
  */
-export const UPDATE_FEED_URL = 'https://updates.rmcardz.com'
+export const UPDATE_FEED_URL =
+  'https://github.com/oofski/rmsportscarderp/releases/latest/download'
 
 /**
  * Where employees download the desktop app manually. Point this at your

@@ -70,7 +70,7 @@ export function registerInventoryIpc(): void {
     can('module.inventory') ? categorySummaries() : []
   )
   ipcMain.handle(IPC.invByCategory, (_e, category: string): InventoryProduct[] =>
-    can('module.inventory') ? productsByCategory(category) : []
+    can('module.inventory') ? productsByCategory(String(category ?? '')) : []
   )
   ipcMain.handle(IPC.invRecentSales, (_e, limit?: number): InventoryTransaction[] =>
     can('module.inventory') ? recentSales(limit ?? 8) : []
@@ -118,6 +118,14 @@ export function registerInventoryIpc(): void {
         ['Low-stock alert', input.reorderPoint]
       ] as const) {
         if (value != null && (!Number.isFinite(value) || value < 0)) {
+          return { ok: false, error: `${label} must be 0 or more.` }
+        }
+      }
+      for (const [label, value] of [
+        ['Boxes per case', input.boxesPerCase],
+        ['Packs per box', input.packsPerBox]
+      ] as const) {
+        if (value != null && (!Number.isInteger(value) || value < 0)) {
           return { ok: false, error: `${label} must be 0 or more.` }
         }
       }
@@ -195,5 +203,14 @@ function validateProduct(input: NewInventoryProduct): string | null {
   if (!UNIT_TYPES.includes(input.unitType)) return 'Choose a unit type.'
   if (!Number.isFinite(input.unitCost) || input.unitCost < 0) return 'Unit cost must be 0 or more.'
   if (!Number.isFinite(input.reorderPoint) || input.reorderPoint < 0) return 'Low-stock alert must be 0 or more.'
+  if (input.salePrice != null && (!Number.isFinite(input.salePrice) || input.salePrice < 0)) {
+    return 'Sale price must be 0 or more.'
+  }
+  for (const [label, value] of [
+    ['Boxes per case', input.boxesPerCase],
+    ['Packs per box', input.packsPerBox]
+  ] as const) {
+    if (value != null && (!Number.isInteger(value) || value < 0)) return `${label} must be 0 or more.`
+  }
   return null
 }

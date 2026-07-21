@@ -16,6 +16,13 @@ GitHub to **Cloudflare**.
 The feed lives wherever you point it. We're moving it from GitHub Releases to a
 **Cloudflare R2 bucket behind your own domain** (e.g. `updates.rmcardz.com`).
 
+> **Current state — GitHub phase.** Until the Cloudflare setup below is done,
+> GitHub is the active feed and everything works there: Windows reads
+> `latest.yml` from the GitHub release, and the `github-update-json` CI job
+> attaches an `update.json` so the macOS check works too (`UPDATE_FEED_URL`
+> points at `…/releases/latest/download`). The Cloudflare provider + R2 mirror
+> job exist but stay inert until you enable them.
+
 ---
 
 ## One-time Cloudflare setup

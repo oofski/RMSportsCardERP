@@ -69,6 +69,42 @@ jobs:
           # macOS builds are unsigned for now (Windows-only auto-install).
           CSC_IDENTITY_AUTO_DISCOVERY: false
 
+  # Attach a cross-platform update.json to the GitHub release so the macOS/Linux
+  # in-app "Check for updates" (which reads update.json) works while GitHub is
+  # the active feed. Windows uses electron-updater's latest.yml directly.
+  github-update-json:
+    needs: release
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve version
+        id: v
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+      - name: Generate + upload update.json
+        env:
+          V: ${{ steps.v.outputs.version }}
+        run: |
+          node -e '
+            const fs = require("fs");
+            const v = process.env.V;
+            const base = "https://github.com/" + process.env.REPO + "/releases/download/v" + v;
+            const j = {
+              version: v,
+              releaseDate: new Date().toISOString(),
+              downloads: {
+                win: base + "/RM-Operations-App-Setup-" + v + ".exe",
+                "mac-arm64": base + "/RM-Operations-App-" + v + "-arm64.dmg",
+                "mac-x64": base + "/RM-Operations-App-" + v + "-x64.dmg"
+              }
+            };
+            fs.writeFileSync("update.json", JSON.stringify(j, null, 2));
+            console.log(j);
+          '
+          gh release upload "v$V" update.json --repo "$REPO" --clobber
+
   # ---------------------------------------------------------------------------
   # Mirror the release artifacts (+ a cross-platform update.json) to Cloudflare
   # R2 so updates are served from the Cloudflare feed instead of GitHub.
