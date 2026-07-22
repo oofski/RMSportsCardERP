@@ -804,7 +804,7 @@ table.data tbody tr:hover {
   align-items: center;
   gap: 16px;
   flex-wrap: wrap;
-  margin-bottom: 22px;
+  margin-bottom: 20px;
 }
 .inv-header .tabs {
   margin-bottom: 0;
@@ -899,14 +899,14 @@ table.data tbody tr:hover {
 .stat-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
-  gap: 14px;
-  margin-bottom: 22px;
+  gap: 12px;
+  margin-bottom: 20px;
 }
 .stat {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  padding: 17px 19px;
+  padding: 16px 18px;
   display: flex;
   gap: 14px;
   align-items: center;
@@ -928,7 +928,7 @@ table.data tbody tr:hover {
   height: 21px;
 }
 .stat .stat-val {
-  font-size: 23px;
+  font-size: 24px;
   font-weight: 700;
   letter-spacing: -0.02em;
   line-height: 1.1;
@@ -1002,7 +1002,7 @@ table.data tfoot .data-total td {
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-sm);
-  padding: 20px 22px;
+  padding: 16px 18px;
 }
 .panel-card.tint {
   background: linear-gradient(150deg, var(--brand-soft), #fff 82%);
@@ -1021,6 +1021,19 @@ table.data tfoot .data-total td {
 .panel-head .ph-sub {
   font-size: 12px;
   color: var(--text-3);
+}
+.panel-head .ph-right {
+  text-align: right;
+}
+.panel-head .ph-total {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+/* Keep a real gap between the chart panel and the next section heading. */
+.panel-card + .section-head {
+  margin-top: 24px;
 }
 .delta {
   display: inline-flex;
@@ -1950,7 +1963,7 @@ table.data tfoot .data-total td {
 .barlist {
   display: flex;
   flex-direction: column;
-  gap: 13px;
+  gap: 12px;
 }
 .barlist-row {
   display: grid;
@@ -2049,7 +2062,7 @@ table.data tfoot .data-total td {
   border: 1px solid rgba(183, 134, 11, 0.2);
   font-size: 13px;
   font-weight: 500;
-  margin-bottom: 18px;
+  margin-bottom: 16px;
 }
 .lowstock-banner svg {
   flex-shrink: 0;
@@ -2066,14 +2079,20 @@ table.data tfoot .data-total td {
 }
 
 /* ---------- Catalog list (product rows + inline detail) ---------- */
-.cat-toolbar {
+.cat-subhead {
   display: flex;
-  gap: 10px;
-  margin-bottom: 14px;
+  align-items: center;
+  gap: 12px;
+  margin-top: 4px;
+  font-size: 12.5px;
+  color: var(--text-3);
 }
-.cat-toolbar .select {
+.cat-subhead .select {
   width: auto;
-  min-width: 190px;
+  min-width: 150px;
+  height: 30px;
+  padding: 0 26px 0 10px;
+  font-size: 12.5px;
 }
 .cat-list {
   display: flex;
@@ -2198,12 +2217,12 @@ table.data tfoot .data-total td {
 .cat-detail {
   border-top: 1px solid var(--border);
   background: var(--surface-2);
-  padding: 18px;
+  padding: 16px;
 }
 .cd-grid {
   display: grid;
-  grid-template-columns: 220px 1fr;
-  gap: 22px;
+  grid-template-columns: 200px 1fr;
+  gap: 20px;
 }
 .cd-media {
   display: flex;
@@ -2294,8 +2313,10 @@ table.data tfoot .data-total td {
 }
 .cd-stockline {
   display: flex;
+  flex-wrap: wrap;
   gap: 18px;
-  padding: 10px 0;
+  margin-top: 14px;
+  padding: 12px 0 0;
   border-top: 1px solid var(--border);
   font-size: 13px;
   font-variant-numeric: tabular-nums;
@@ -2310,6 +2331,7 @@ table.data tfoot .data-total td {
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
+  margin-top: 12px;
 }
 .cd-loading {
   display: flex;
@@ -2369,8 +2391,8 @@ table.data tfoot .data-total td {
 .cat-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(196px, 1fr));
-  gap: 13px;
-  margin-bottom: 24px;
+  gap: 12px;
+  margin-bottom: 8px;
 }
 .cat-card {
   border: 1px solid var(--border);
@@ -2396,9 +2418,9 @@ table.data tfoot .data-total td {
   margin-bottom: 12px;
 }
 .cat-card .cc-ico {
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2410,10 +2432,16 @@ table.data tfoot .data-total td {
   font-size: 14px;
 }
 .cat-card .cc-cases {
-  font-size: 27px;
+  font-size: 24px;
   font-weight: 700;
   letter-spacing: -0.02em;
   line-height: 1.1;
+}
+.cat-card .cc-sub span:last-child {
+  margin-left: auto;
+  font-weight: 600;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
 }
 .cat-card .cc-cases small {
   font-size: 13px;

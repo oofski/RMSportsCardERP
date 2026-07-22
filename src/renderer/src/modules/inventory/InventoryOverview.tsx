@@ -9,7 +9,7 @@ import { formatMoney } from '../../lib/format'
 import { UnitBadge, productMetrics } from './helpers'
 import { CategoryLogo } from './CategoryLogo'
 
-type MetricKind = 'value' | 'cost' | 'spread' | 'cases'
+type MetricKind = 'value' | 'cost' | 'spread' | 'cases' | 'skus'
 type Detail = { kind: 'category'; category: string; label: string } | { kind: MetricKind; label: string }
 
 export function InventoryOverview({
@@ -44,12 +44,6 @@ export function InventoryOverview({
 
   return (
     <>
-      <div className="section-head">
-        <div>
-          <h2>Inventory overview</h2>
-        </div>
-      </div>
-
       <div className="stat-grid">
         <Stat icon="DollarSign" value={formatMoney(stats.totalValue, { compact: true })} label="Inventory value" onClick={() => setDetail({ kind: 'value', label: 'Inventory value' })} />
         <Stat icon="Wallet" value={formatMoney(stats.totalCost, { compact: true })} label="Total cost" onClick={() => setDetail({ kind: 'cost', label: 'Total cost' })} />
@@ -76,8 +70,8 @@ export function InventoryOverview({
             <h3>Inventory value by category</h3>
             <span className="ph-sub">Market value on hand</span>
           </div>
-          <div style={{ textAlign: 'right' }}>
-            <div style={{ fontWeight: 700, fontSize: 18 }}>{formatMoney(stats.totalValue)}</div>
+          <div className="ph-right">
+            <div className="ph-total">{formatMoney(stats.totalValue, { compact: true })}</div>
             <div className="ph-sub">
               {LOCATIONS.map((l) => `${l.label} ${stats.unitsByLocation[l.id] ?? 0}`).join(' · ')} units
             </div>
@@ -100,6 +94,9 @@ export function InventoryOverview({
         <div>
           <h2>By category</h2>
         </div>
+        <button className="link-btn" onClick={() => setDetail({ kind: 'skus', label: 'All products' })}>
+          View all {stats.skuCount} products
+        </button>
       </div>
 
       {orderedCategories.length === 0 ? (
@@ -187,6 +184,8 @@ function InventoryDetail({ detail, onBack }: { detail: Detail; onBack: () => voi
         return withM.filter((x) => x.p.quantity > 0 && x.m.hasCost).sort((a, b) => b.m.spread - a.m.spread)
       case 'cases':
         return withM.filter((x) => x.p.unitType === 'case' && x.p.quantity > 0).sort((a, b) => b.p.quantity - a.p.quantity)
+      case 'skus':
+        return withM.sort((a, b) => a.p.name.localeCompare(b.p.name))
       case 'category':
       default:
         return withM.sort((a, b) => b.p.quantity - a.p.quantity || a.p.name.localeCompare(b.p.name))

@@ -234,22 +234,21 @@ export function ProductsTab({
       <div className="section-head">
         <div>
           <h2>Catalog</h2>
-          <p>
-            {filtered.length} of {products.length} products
-          </p>
+          <div className="cat-subhead">
+            <span>
+              {filtered.length} of {products.length} products
+            </span>
+            <Select value={category} onChange={(e) => onCategory(e.target.value)}>
+              <option value="">All categories</option>
+              {categoryOptions.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </Select>
+          </div>
         </div>
         {headerActions}
-      </div>
-
-      <div className="cat-toolbar">
-        <Select value={category} onChange={(e) => onCategory(e.target.value)}>
-          <option value="">All categories</option>
-          {categoryOptions.map((c) => (
-            <option key={c} value={c}>
-              {c}
-            </option>
-          ))}
-        </Select>
       </div>
 
       {filtered.length === 0 ? (
@@ -535,40 +534,42 @@ function ProductDetail({
               <ReadRow label="Barcode" value={product.upc ?? '—'} />
               <ReadRow label="Brand" value={product.brand || '—'} />
               <ReadRow label="Category" value={product.category || '—'} />
-              <ReadRow label="Structure" value={structureLabel(product)} />
-            </div>
-          )}
-
-          <div className="cd-stockline">
-            {LOCATIONS.map((l) => (
-              <span key={l.id}>
-                <em>{l.label}</em> {product.quantityByLocation[l.id] ?? 0}
-              </span>
-            ))}
-            <span>
-              <em>Total</em> {product.quantity}
-            </span>
-          </div>
-
-          {canManage && (
-            <div className="cd-actions">
-              <Button size="sm" variant="secondary" icon="PackagePlus" onClick={onStock}>
-                Add stock
-              </Button>
-              <Button size="sm" variant="secondary" icon="ShoppingCart" disabled={product.quantity <= 0} onClick={onSell}>
-                Sell
-              </Button>
-              <Button size="sm" variant="ghost" icon="Pencil" onClick={onEdit}>
-                Full edit
-              </Button>
-              <Button size="sm" variant="ghost" icon="Trash2" aria-label="Delete product" title="Delete product" onClick={onDelete} />
-              <span className={`cd-saved ${saved ? 'show' : ''}`}>
-                <Icon name="Check" size={13} /> Saved
-              </span>
             </div>
           )}
         </div>
       </div>
+
+      <div className="cd-stockline">
+        <span>
+          <em>Type</em> {structureLabel(product)}
+        </span>
+        {LOCATIONS.map((l) => (
+          <span key={l.id}>
+            <em>{l.label}</em> {product.quantityByLocation[l.id] ?? 0}
+          </span>
+        ))}
+        <span>
+          <em>Total</em> {product.quantity}
+        </span>
+      </div>
+
+      {canManage && (
+        <div className="cd-actions">
+          <Button size="sm" variant="secondary" icon="PackagePlus" onClick={onStock}>
+            Add stock
+          </Button>
+          <Button size="sm" variant="secondary" icon="ShoppingCart" disabled={product.quantity <= 0} onClick={onSell}>
+            Sell
+          </Button>
+          <Button size="sm" variant="ghost" icon="Pencil" onClick={onEdit}>
+            Full edit
+          </Button>
+          <Button size="sm" variant="ghost" icon="Trash2" aria-label="Delete product" title="Delete product" onClick={onDelete} />
+          <span className={`cd-saved ${saved ? 'show' : ''}`}>
+            <Icon name="Check" size={13} /> Saved
+          </span>
+        </div>
+      )}
     </div>
   )
 }

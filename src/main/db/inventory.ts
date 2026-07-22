@@ -112,7 +112,9 @@ export function getProduct(id: string): InventoryProduct | null {
 export function searchCatalog(query: string, limit = 25): InventoryProduct[] {
   const terms = query.trim().split(/\s+/).filter(Boolean)
   const like = (t: string): string => `%${t.replace(/[%_\\]/g, (m) => '\\' + m)}%`
-  const fields = ['name', 'sku', 'upc', 'category', 'brand']
+  // Mirror the renderer's search haystack so the add-stock typeahead and the
+  // catalog filter find the same products (set_name / year were missing).
+  const fields = ['name', 'sku', 'upc', 'category', 'brand', 'set_name', 'year']
   const clause = `(${fields.map((f) => `${f} LIKE ? ESCAPE '\\'`).join(' OR ')})`
   const where = terms.length ? terms.map(() => clause).join(' AND ') : '1=1'
   const params: unknown[] = []
