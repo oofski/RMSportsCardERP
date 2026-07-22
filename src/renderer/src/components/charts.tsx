@@ -52,22 +52,52 @@ interface Series {
   fill?: boolean
 }
 
+/**
+ * Monotone cubic interpolation (Fritsch–Carlson). Unlike a plain Catmull-Rom
+ * spline, this never overshoots the data range, so a flat run followed by a
+ * spike can't bow the curve below the baseline (or above the peak). Assumes x
+ * is strictly increasing, which it always is here (equally-spaced points).
+ */
 function smoothPath(pts: Array<[number, number]>): string {
-  if (pts.length === 0) return ''
-  if (pts.length === 1) return `M${pts[0][0]},${pts[0][1]}`
-  let d = `M${pts[0][0]},${pts[0][1]}`
-  for (let i = 0; i < pts.length - 1; i++) {
-    const p0 = pts[i - 1] || pts[i]
-    const p1 = pts[i]
-    const p2 = pts[i + 1]
-    const p3 = pts[i + 2] || p2
-    const cp1x = p1[0] + (p2[0] - p0[0]) / 6
-    const cp1y = p1[1] + (p2[1] - p0[1]) / 6
-    const cp2x = p2[0] - (p3[0] - p1[0]) / 6
-    const cp2y = p2[1] - (p3[1] - p1[1]) / 6
-    d += ` C${cp1x.toFixed(1)},${cp1y.toFixed(1)} ${cp2x.toFixed(1)},${cp2y.toFixed(1)} ${p2[0].toFixed(
-      1
-    )},${p2[1].toFixed(1)}`
+  const n = pts.length
+  if (n === 0) return ''
+  if (n === 1) return `M${pts[0][0]},${pts[0][1]}`
+  if (n === 2) return `M${pts[0][0]},${pts[0][1]} L${pts[1][0]},${pts[1][1]}`
+
+  // Secant slopes between consecutive points.
+  const dx: number[] = []
+  const slope: number[] = []
+  for (let i = 0; i < n - 1; i++) {
+    dx[i] = pts[i + 1][0] - pts[i][0]
+    slope[i] = dx[i] === 0 ? 0 : (pts[i + 1][1] - pts[i][1]) / dx[i]
+  }
+
+  // Tangents: 0 at local extrema (sign change / flat), otherwise a slope-
+  // limited average that keeps every segment monotonic — the anti-overshoot.
+  const m: number[] = new Array(n)
+  m[0] = slope[0]
+  m[n - 1] = slope[n - 2]
+  for (let i = 1; i < n - 1; i++) {
+    const s0 = slope[i - 1]
+    const s1 = slope[i]
+    if (s0 * s1 <= 0) {
+      m[i] = 0
+    } else {
+      const p = (s0 * dx[i] + s1 * dx[i - 1]) / (dx[i - 1] + dx[i])
+      m[i] =
+        (Math.sign(s0) + Math.sign(s1)) * Math.min(Math.abs(s0), Math.abs(s1), 0.5 * Math.abs(p)) || 0
+    }
+  }
+
+  let d = `M${pts[0][0].toFixed(1)},${pts[0][1].toFixed(1)}`
+  for (let i = 0; i < n - 1; i++) {
+    const [x1, y1] = pts[i]
+    const [x2, y2] = pts[i + 1]
+    const cp1x = x1 + dx[i] / 3
+    const cp1y = y1 + (m[i] * dx[i]) / 3
+    const cp2x = x2 - dx[i] / 3
+    const cp2y = y2 - (m[i + 1] * dx[i]) / 3
+    d += ` C${cp1x.toFixed(1)},${cp1y.toFixed(1)} ${cp2x.toFixed(1)},${cp2y.toFixed(1)} ${x2.toFixed(1)},${y2.toFixed(1)}`
   }
   return d
 }
