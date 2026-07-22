@@ -1,11 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import type {
-  CategorySummary,
-  InventoryProduct,
-  InventoryStats,
-  InventoryTransaction,
-  SalesPoint
-} from '@shared/types'
+import type { CategorySummary, InventoryProduct, InventoryStats } from '@shared/types'
 import { useSession } from '../../lib/session'
 import { api } from '../../lib/api'
 import { Icon } from '../../components/Icon'
@@ -18,6 +12,8 @@ type TabId = 'overview' | 'products' | 'activity'
 
 const EMPTY_STATS: InventoryStats = {
   totalValue: 0,
+  totalCost: 0,
+  spread: 0,
   boxes: 0,
   cases: 0,
   packs: 0,
@@ -37,24 +33,18 @@ export function InventoryModule(): JSX.Element {
   const [products, setProducts] = useState<InventoryProduct[]>([])
   const [stats, setStats] = useState<InventoryStats>(EMPTY_STATS)
   const [categories, setCategories] = useState<CategorySummary[]>([])
-  const [series, setSeries] = useState<SalesPoint[]>([])
-  const [recentSales, setRecentSales] = useState<InventoryTransaction[]>([])
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState<TabId>('overview')
 
   const reload = useCallback(async () => {
-    const [prods, st, cats, ser, sales] = await Promise.all([
+    const [prods, st, cats] = await Promise.all([
       api.inventory.list(),
       api.inventory.stats(),
-      api.inventory.categories(),
-      api.inventory.salesSeries(14),
-      api.inventory.recentSales(8)
+      api.inventory.categories()
     ])
     setProducts(prods)
     setStats(st ?? EMPTY_STATS)
     setCategories(cats)
-    setSeries(ser)
-    setRecentSales(sales)
   }, [])
 
   useEffect(() => {
@@ -87,17 +77,7 @@ export function InventoryModule(): JSX.Element {
         ))}
       </div>
 
-      {tab === 'overview' && (
-        <InventoryOverview
-          stats={stats}
-          categories={categories}
-          series={series}
-          recentSales={recentSales}
-          products={products}
-          canManage={canManage}
-          onChanged={reload}
-        />
-      )}
+      {tab === 'overview' && <InventoryOverview stats={stats} categories={categories} />}
       {tab === 'products' && (
         <ProductsTab products={products} canManage={canManage} onChanged={reload} />
       )}

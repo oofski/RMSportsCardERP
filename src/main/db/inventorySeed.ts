@@ -46,26 +46,26 @@ const CATALOG: Array<[string, string, string, string]> = [
 ]
 
 /** A case if the name says "Case", otherwise a single box. */
-function unitTypeOf(name: string): 'case' | 'box' | 'other' {
+export function unitTypeOf(name: string): 'case' | 'box' | 'other' {
   if (/case/i.test(name)) return 'case'
   if (/box/i.test(name)) return 'box'
   return 'other'
 }
 
 /** Boxes per case, parsed from "…N-Box Case". Null when not stated. */
-function boxesPerCaseOf(name: string): number | null {
+export function boxesPerCaseOf(name: string): number | null {
   const m = name.match(/(\d+)-Box\s+Case/i)
   return m ? parseInt(m[1], 10) : null
 }
 
-function brandOf(name: string): string {
+export function brandOf(name: string): string {
   for (const b of ['Bowman', 'Panini', 'Topps', 'Pokemon']) {
     if (name.includes(b)) return b
   }
   return ''
 }
 
-function yearOf(name: string): string {
+export function yearOf(name: string): string {
   const m = name.match(/^(\d{4}(?:-\d{2})?)/)
   return m ? m[1] : ''
 }

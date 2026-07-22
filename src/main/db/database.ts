@@ -3,6 +3,7 @@ import { join } from 'path'
 import { existsSync, mkdirSync } from 'fs'
 import Database from 'better-sqlite3'
 import { seedCatalog } from './inventorySeed'
+import { seedSnapshot } from './inventorySnapshot'
 
 let db: Database.Database | null = null
 
@@ -94,6 +95,7 @@ function migrate(database: Database.Database): void {
       boxes_per_case INTEGER,
       packs_per_box  INTEGER,
       unit_cost      REAL NOT NULL DEFAULT 0,
+      high_bid       REAL,
       sale_price     REAL,
       reorder_point  INTEGER NOT NULL DEFAULT 0,
       notes          TEXT,
@@ -154,10 +156,13 @@ function migrate(database: Database.Database): void {
   // above; this upgrades any existing v0.0.2 inventory table in place.
   migrateInventoryV4(database)
   addColumnIfMissing(database, 'inventory_transactions', 'location', 'TEXT')
-  setMeta(database, 'schema_version', '4')
+  // v5: high bid (market value per unit) on products.
+  addColumnIfMissing(database, 'inventory_products', 'high_bid', 'REAL')
+  setMeta(database, 'schema_version', '5')
 
-  // Seed the product catalog once.
+  // Seed the product catalog once, then apply the on-hand snapshot once.
   seedCatalogIfNeeded(database)
+  seedSnapshotIfNeeded(database)
 }
 
 /**
@@ -223,6 +228,18 @@ function seedCatalogIfNeeded(database: Database.Database): void {
   if (getMeta(database, 'catalog_seeded') === '1') return
   seedCatalog(database)
   setMeta(database, 'catalog_seeded', '1')
+}
+
+/**
+ * Apply the current on-hand snapshot once: match each row to the catalog by
+ * name, set its location quantity, high bid and average cost, creating any
+ * product not already in the catalog. Gated so later manual edits are never
+ * clobbered on subsequent launches.
+ */
+function seedSnapshotIfNeeded(database: Database.Database): void {
+  if (getMeta(database, 'snapshot_v1_seeded') === '1') return
+  seedSnapshot(database)
+  setMeta(database, 'snapshot_v1_seeded', '1')
 }
 
 /** Add a column only if the table doesn't already have it (safe re-run). */

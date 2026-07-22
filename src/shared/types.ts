@@ -124,8 +124,10 @@ export interface InventoryProduct {
   boxesPerCase: number | null
   /** Informational: how many packs make up a box. */
   packsPerBox: number | null
-  /** What we paid per unit. */
+  /** Average cost per unit (what we paid). */
   unitCost: number
+  /** Current top bid / market value per unit. Drives inventory value + spread. */
+  highBid: number | null
   /** Default asking price per unit (optional). */
   salePrice: number | null
   /** Low-stock threshold (on total across locations). */
@@ -151,6 +153,7 @@ export interface NewInventoryProduct {
   boxesPerCase: number | null
   packsPerBox: number | null
   unitCost: number
+  highBid: number | null
   salePrice: number | null
   reorderPoint: number
   notes: string | null
@@ -210,7 +213,12 @@ export interface RecordSaleInput {
 }
 
 export interface InventoryStats {
+  /** Market value on hand = Σ (qty × high bid, falling back to unit cost). */
   totalValue: number
+  /** Cost basis on hand = Σ (qty × average unit cost). */
+  totalCost: number
+  /** totalValue − totalCost. */
+  spread: number
   boxes: number
   cases: number
   packs: number

@@ -1,40 +1,20 @@
 import { useEffect, useMemo, useState } from 'react'
-import type {
-  CategorySummary,
-  InventoryProduct,
-  InventoryStats,
-  InventoryTransaction,
-  SalesPoint
-} from '@shared/types'
+import type { CategorySummary, InventoryProduct, InventoryStats } from '@shared/types'
 import { CATEGORY_ORDER, LOCATIONS } from '@shared/inventory'
-import { AreaChart } from '../../components/charts'
 import { Icon } from '../../components/Icon'
 import { Button, CenterLoader, EmptyState } from '../../components/ui'
 import { api } from '../../lib/api'
 import { formatMoney } from '../../lib/format'
-import { UnitBadge } from './helpers'
-import { RecordSaleModal } from './RecordSaleModal'
+import { UnitBadge, productMetrics } from './helpers'
 
 export function InventoryOverview({
   stats,
-  categories,
-  series,
-  recentSales,
-  products,
-  canManage,
-  onChanged
+  categories
 }: {
   stats: InventoryStats
   categories: CategorySummary[]
-  series: SalesPoint[]
-  recentSales: InventoryTransaction[]
-  products: InventoryProduct[]
-  canManage: boolean
-  onChanged: () => Promise<void>
 }): JSX.Element {
-  const [saleOpen, setSaleOpen] = useState(false)
   const [drill, setDrill] = useState<string | null>(null)
-  const hasSales = series.some((s) => s.revenue > 0)
 
   // Order categories by the preferred order, then any extras alphabetically.
   const orderedCategories = useMemo(() => {
@@ -54,17 +34,19 @@ export function InventoryOverview({
       <div className="section-head">
         <div>
           <h2>Inventory overview</h2>
-          <p>Cases and boxes on hand across RM and AM.</p>
+          <p>Cases and boxes on hand across RM and AM, with value and spread.</p>
         </div>
-        {canManage && products.length > 0 && (
-          <Button variant="primary" icon="ShoppingCart" onClick={() => setSaleOpen(true)}>
-            Record sale
-          </Button>
-        )}
       </div>
 
       <div className="stat-grid">
         <Stat icon="DollarSign" value={formatMoney(stats.totalValue, { compact: true })} label="Inventory value" />
+        <Stat icon="Wallet" value={formatMoney(stats.totalCost, { compact: true })} label="Total cost" />
+        <Stat
+          icon="TrendingUp"
+          value={formatMoney(stats.spread, { compact: true })}
+          label="Spread"
+          tone={stats.spread < 0 ? 'neg' : stats.spread > 0 ? 'pos' : undefined}
+        />
         <Stat icon="Boxes" value={String(stats.cases)} label="Cases on hand" />
         <Stat icon="Package" value={String(stats.boxes)} label="Boxes on hand" />
         <Stat icon="Tag" value={String(stats.skuCount)} label="Products (SKUs)" />
@@ -104,90 +86,34 @@ export function InventoryOverview({
               </div>
               <div className="cc-sub">
                 <span>{c.boxes} boxes</span>
-                <span>{c.productCount} products</span>
+                <span>{formatMoney(c.value, { compact: true })}</span>
               </div>
             </button>
           ))}
         </div>
       )}
-
-      <div className="dash-grid">
-        <div className="dash-col">
-          <div className="panel-card">
-            <div className="panel-head">
-              <div>
-                <h3>Sales</h3>
-                <span className="ph-sub">Last 14 days</span>
-              </div>
-              <div style={{ textAlign: 'right' }}>
-                <div style={{ fontWeight: 700, fontSize: 18 }}>{formatMoney(stats.salesRevenue)}</div>
-                <div className="ph-sub">
-                  {stats.salesCount} sale{stats.salesCount === 1 ? '' : 's'} all-time
-                </div>
-              </div>
-            </div>
-            {hasSales ? (
-              <AreaChart series={[{ points: series.map((s) => s.revenue), color: 'var(--chart-green)', fill: true }]} labels={series.map((s) => s.label)} height={190} />
-            ) : (
-              <div className="chart-empty">
-                <Icon name="TrendingUp" size={26} />
-                <div>
-                  <div style={{ fontWeight: 600, color: 'var(--text-2)' }}>No sales in the last 14 days</div>
-                  <div className="text-sm">Record a sale and it'll chart here.</div>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div className="dash-col">
-          <div className="panel-card">
-            <div className="panel-head">
-              <h3>Recent sales</h3>
-            </div>
-            {recentSales.length === 0 ? (
-              <p className="muted text-sm">No sales yet.</p>
-            ) : (
-              <div className="metric-list">
-                {recentSales.slice(0, 6).map((t) => (
-                  <div className="metric-row" key={t.id}>
-                    <span className="m-k" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 2 }}>
-                      <span style={{ fontWeight: 600, color: 'var(--text)' }}>{t.productName}</span>
-                      <span className="text-sm muted">
-                        {Math.abs(t.quantityChange)} · {t.counterparty || '—'} · {t.location ?? '—'}
-                      </span>
-                    </span>
-                    <span className="m-v">{formatMoney(Math.abs(t.quantityChange) * (t.unitPrice ?? 0))}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {saleOpen && (
-        <RecordSaleModal
-          products={products}
-          onClose={() => setSaleOpen(false)}
-          onSaved={async () => {
-            setSaleOpen(false)
-            await onChanged()
-          }}
-        />
-      )}
     </>
   )
 }
 
-function Stat({ icon, value, label }: { icon: string; value: string; label: string }): JSX.Element {
+function Stat({
+  icon,
+  value,
+  label,
+  tone
+}: {
+  icon: string
+  value: string
+  label: string
+  tone?: 'pos' | 'neg'
+}): JSX.Element {
   return (
     <div className="stat">
       <div className="stat-ico">
         <Icon name={icon} size={21} />
       </div>
       <div>
-        <div className="stat-val">{value}</div>
+        <div className={`stat-val ${tone === 'pos' ? 'pos' : tone === 'neg' ? 'neg' : ''}`}>{value}</div>
         <div className="stat-label">{label}</div>
       </div>
     </div>
@@ -238,35 +164,50 @@ function CategoryDrilldown({ category, onBack }: { category: string; onBack: () 
                   {l.label}
                 </th>
               ))}
-              <th>Total</th>
-              <th>Value</th>
+              <th style={{ textAlign: 'center' }}>Total</th>
+              <th style={{ textAlign: 'right' }}>High bid</th>
+              <th style={{ textAlign: 'right' }}>Inv. value</th>
+              <th style={{ textAlign: 'right' }}>Avg cost</th>
+              <th style={{ textAlign: 'right' }}>Total cost</th>
+              <th style={{ textAlign: 'right' }}>Spread</th>
             </tr>
           </thead>
           <tbody>
-            {rows.map((p) => (
-              <tr key={p.id} style={{ opacity: p.quantity > 0 ? 1 : 0.55 }}>
-                <td>
-                  <div style={{ fontWeight: 600 }}>{p.name}</div>
-                  <div className="p-sub mono">{p.sku}</div>
-                </td>
-                <td>
-                  <UnitBadge unit={p.unitType} />
-                  {p.unitType === 'case' && p.boxesPerCase ? (
-                    <span className="muted text-sm"> {p.boxesPerCase}/case</span>
-                  ) : null}
-                </td>
-                {LOCATIONS.map((l) => (
-                  <td key={l.id} style={{ textAlign: 'center' }} className="mono">
-                    {p.quantityByLocation[l.id] ?? 0}
+            {rows.map((p) => {
+              const m = productMetrics(p)
+              return (
+                <tr key={p.id} style={{ opacity: p.quantity > 0 ? 1 : 0.55 }}>
+                  <td>
+                    <div style={{ fontWeight: 600 }}>{p.name}</div>
+                    <div className="p-sub mono">{p.sku}</div>
                   </td>
-                ))}
-                <td style={{ fontWeight: 700 }}>{p.quantity}</td>
-                <td className="money">{formatMoney(p.quantity * p.unitCost)}</td>
-              </tr>
-            ))}
+                  <td>
+                    <UnitBadge unit={p.unitType} />
+                    {p.unitType === 'case' && p.boxesPerCase ? (
+                      <span className="muted text-sm"> {p.boxesPerCase}/case</span>
+                    ) : null}
+                  </td>
+                  {LOCATIONS.map((l) => (
+                    <td key={l.id} style={{ textAlign: 'center' }} className="mono">
+                      {p.quantityByLocation[l.id] ?? 0}
+                    </td>
+                  ))}
+                  <td style={{ fontWeight: 700, textAlign: 'center' }}>{p.quantity}</td>
+                  <td className="money">{m.hasBid ? formatMoney(m.marketUnit) : dash}</td>
+                  <td className="money">{p.quantity > 0 ? formatMoney(m.invValue) : dash}</td>
+                  <td className="money">{m.hasCost ? formatMoney(m.avgCost) : dash}</td>
+                  <td className="money">{m.hasCost && p.quantity > 0 ? formatMoney(m.totalCost) : dash}</td>
+                  <td className={`money ${m.hasCost ? (m.spread < 0 ? 'neg' : m.spread > 0 ? 'pos' : '') : ''}`}>
+                    {m.hasCost && p.quantity > 0 ? formatMoney(m.spread) : dash}
+                  </td>
+                </tr>
+              )
+            })}
           </tbody>
         </table>
       </div>
     </>
   )
 }
+
+const dash = <span className="muted">—</span>

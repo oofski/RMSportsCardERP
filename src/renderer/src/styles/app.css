@@ -1944,6 +1944,15 @@ table.data tbody tr:hover {
   font-variant-numeric: tabular-nums;
   font-weight: 600;
 }
+/* Positive / negative money (spread) and stat values. */
+.money.pos,
+.stat-val.pos {
+  color: var(--success);
+}
+.money.neg,
+.stat-val.neg {
+  color: var(--danger);
+}
 .lowstock-banner {
   display: flex;
   align-items: center;

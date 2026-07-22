@@ -34,6 +34,7 @@ export function ProductFormModal({
     boxesPerCase: product?.boxesPerCase != null ? String(product.boxesPerCase) : '',
     packsPerBox: product?.packsPerBox != null ? String(product.packsPerBox) : '',
     unitCost: product ? String(product.unitCost) : '',
+    highBid: product?.highBid != null ? String(product.highBid) : '',
     salePrice: product?.salePrice != null ? String(product.salePrice) : '',
     reorderPoint: String(product?.reorderPoint ?? 0),
     notes: product?.notes ?? '',
@@ -65,6 +66,7 @@ export function ProductFormModal({
         boxesPerCase: numOrNull(form.boxesPerCase),
         packsPerBox: numOrNull(form.packsPerBox),
         unitCost: numOrNull(form.unitCost) ?? 0,
+        highBid: numOrNull(form.highBid),
         salePrice: numOrNull(form.salePrice),
         reorderPoint: numOrNull(form.reorderPoint) ?? 0,
         notes: form.notes.trim() || null
@@ -158,13 +160,17 @@ export function ProductFormModal({
         </div>
 
         <div className="field-row">
-          <Field label="Unit cost" hint="What you paid per unit">
+          <Field label="Average cost" hint="Average cost per unit">
             <Input type="number" min={0} step="0.01" value={form.unitCost} onChange={set('unitCost')} placeholder="0.00" />
           </Field>
-          <Field label="Default sale price" hint="Optional">
-            <Input type="number" min={0} step="0.01" value={form.salePrice} onChange={set('salePrice')} placeholder="0.00" />
+          <Field label="High bid" hint="Current top bid / market value per unit">
+            <Input type="number" min={0} step="0.01" value={form.highBid} onChange={set('highBid')} placeholder="0.00" />
           </Field>
         </div>
+
+        <Field label="Default sale price" hint="Optional">
+          <Input type="number" min={0} step="0.01" value={form.salePrice} onChange={set('salePrice')} placeholder="0.00" />
+        </Field>
 
         {!isEdit && (
           <div className="field-row">

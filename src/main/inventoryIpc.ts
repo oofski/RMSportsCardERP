@@ -114,6 +114,7 @@ export function registerInventoryIpc(): void {
       }
       for (const [label, value] of [
         ['Unit cost', input.unitCost],
+        ['High bid', input.highBid],
         ['Sale price', input.salePrice],
         ['Low-stock alert', input.reorderPoint]
       ] as const) {
@@ -205,6 +206,9 @@ function validateProduct(input: NewInventoryProduct): string | null {
   if (!Number.isFinite(input.reorderPoint) || input.reorderPoint < 0) return 'Low-stock alert must be 0 or more.'
   if (input.salePrice != null && (!Number.isFinite(input.salePrice) || input.salePrice < 0)) {
     return 'Sale price must be 0 or more.'
+  }
+  if (input.highBid != null && (!Number.isFinite(input.highBid) || input.highBid < 0)) {
+    return 'High bid must be 0 or more.'
   }
   for (const [label, value] of [
     ['Boxes per case', input.boxesPerCase],

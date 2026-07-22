@@ -25,6 +25,7 @@ interface ProductRow {
   boxes_per_case: number | null
   packs_per_box: number | null
   unit_cost: number
+  high_bid: number | null
   sale_price: number | null
   reorder_point: number
   notes: string | null
@@ -74,6 +75,7 @@ function toProduct(row: ProductRow, byLoc: Record<string, number>): InventoryPro
     boxesPerCase: row.boxes_per_case,
     packsPerBox: row.packs_per_box,
     unitCost: row.unit_cost,
+    highBid: row.high_bid,
     salePrice: row.sale_price,
     reorderPoint: row.reorder_point,
     notes: row.notes,
@@ -169,11 +171,11 @@ export function createProduct(input: NewInventoryProduct, actorId: string | null
     db.prepare(
       `INSERT INTO inventory_products
          (id, sku, upc, name, category, brand, set_name, year, unit_type,
-          boxes_per_case, packs_per_box, unit_cost, sale_price, reorder_point,
+          boxes_per_case, packs_per_box, unit_cost, high_bid, sale_price, reorder_point,
           notes, created_at, updated_at)
        VALUES
          (@id, @sku, @upc, @name, @category, @brand, @set_name, @year, @unit_type,
-          @boxes_per_case, @packs_per_box, @unit_cost, @sale_price, @reorder_point,
+          @boxes_per_case, @packs_per_box, @unit_cost, @high_bid, @sale_price, @reorder_point,
           @notes, @ts, @ts)`
     ).run({
       id,
@@ -188,6 +190,7 @@ export function createProduct(input: NewInventoryProduct, actorId: string | null
       boxes_per_case: input.boxesPerCase,
       packs_per_box: input.packsPerBox,
       unit_cost: Math.max(0, input.unitCost),
+      high_bid: input.highBid != null ? Math.max(0, input.highBid) : null,
       sale_price: input.salePrice,
       reorder_point: Math.max(0, Math.round(input.reorderPoint)),
       notes: input.notes,
@@ -222,6 +225,12 @@ export function updateProduct(input: UpdateInventoryProduct): InventoryProduct |
     boxes_per_case: input.boxesPerCase !== undefined ? input.boxesPerCase : existing.boxesPerCase,
     packs_per_box: input.packsPerBox !== undefined ? input.packsPerBox : existing.packsPerBox,
     unit_cost: input.unitCost != null ? Math.max(0, input.unitCost) : existing.unitCost,
+    high_bid:
+      input.highBid !== undefined
+        ? input.highBid == null
+          ? null
+          : Math.max(0, input.highBid)
+        : existing.highBid,
     sale_price: input.salePrice !== undefined ? input.salePrice : existing.salePrice,
     reorder_point:
       input.reorderPoint != null ? Math.max(0, Math.round(input.reorderPoint)) : existing.reorderPoint,
@@ -235,8 +244,8 @@ export function updateProduct(input: UpdateInventoryProduct): InventoryProduct |
          sku=@sku, upc=@upc, name=@name, category=@category, brand=@brand,
          set_name=@set_name, year=@year, unit_type=@unit_type,
          boxes_per_case=@boxes_per_case, packs_per_box=@packs_per_box,
-         unit_cost=@unit_cost, sale_price=@sale_price, reorder_point=@reorder_point,
-         notes=@notes, updated_at=@updated_at
+         unit_cost=@unit_cost, high_bid=@high_bid, sale_price=@sale_price,
+         reorder_point=@reorder_point, notes=@notes, updated_at=@updated_at
        WHERE id=@id`
     )
     .run(next)
@@ -386,9 +395,13 @@ export function recentSales(limit = 8): InventoryTransaction[] {
   ).map(toTxn)
 }
 
-/** Per-product total on-hand joined to catalog attributes. */
+/**
+ * Per-product total on-hand joined to catalog attributes.
+ * `market` is the per-unit value: the high bid when set, else the average cost.
+ */
 const PRODUCT_TOTALS = `
   SELECT p.id, p.unit_type, p.unit_cost, p.reorder_point, p.category,
+         COALESCE(NULLIF(p.high_bid, 0), p.unit_cost) AS market,
          COALESCE(s.qty, 0) AS qty
   FROM inventory_products p
   LEFT JOIN (SELECT product_id, SUM(quantity) AS qty FROM inventory_stock GROUP BY product_id) s
@@ -400,7 +413,8 @@ export function inventoryStats(): InventoryStats {
   const p = db
     .prepare(
       `SELECT
-         COALESCE(SUM(t.qty * t.unit_cost), 0)                                     AS total_value,
+         COALESCE(SUM(t.qty * t.market), 0)                                        AS total_value,
+         COALESCE(SUM(t.qty * t.unit_cost), 0)                                     AS total_cost,
          COALESCE(SUM(CASE WHEN t.unit_type='case'   THEN t.qty ELSE 0 END), 0)     AS cases,
          COALESCE(SUM(CASE WHEN t.unit_type='box'    THEN t.qty ELSE 0 END), 0)     AS boxes,
          COALESCE(SUM(CASE WHEN t.unit_type='pack'   THEN t.qty ELSE 0 END), 0)     AS packs,
@@ -428,6 +442,8 @@ export function inventoryStats(): InventoryStats {
 
   return {
     totalValue: p.total_value,
+    totalCost: p.total_cost,
+    spread: p.total_value - p.total_cost,
     boxes: p.boxes,
     cases: p.cases,
     packs: p.packs,
@@ -449,7 +465,7 @@ export function categorySummaries(): CategorySummary[] {
          COALESCE(SUM(CASE WHEN t.unit_type='case' THEN t.qty ELSE 0 END),0) AS cases,
          COALESCE(SUM(CASE WHEN t.unit_type='box'  THEN t.qty ELSE 0 END),0) AS boxes,
          COALESCE(SUM(t.qty),0)          AS units,
-         COALESCE(SUM(t.qty*t.unit_cost),0) AS value,
+         COALESCE(SUM(t.qty*t.market),0) AS value,
          COUNT(t.id)                     AS product_count
        FROM (${PRODUCT_TOTALS}) t
        GROUP BY category
