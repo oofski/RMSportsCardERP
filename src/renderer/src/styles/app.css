@@ -798,6 +798,58 @@ table.data tbody tr:hover {
   border-radius: 12px;
   margin-bottom: 22px;
 }
+/* Inventory header: tabs on the left, quick-search on the right. */
+.inv-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 22px;
+}
+.inv-header .tabs {
+  margin-bottom: 0;
+}
+.inv-search {
+  position: relative;
+  flex: 1 1 240px;
+  max-width: 360px;
+  margin-left: auto;
+}
+.inv-search .topsearch {
+  flex: none;
+  max-width: none;
+  width: 100%;
+}
+.inv-search .topsearch input {
+  padding-right: 34px;
+}
+.inv-search .ts-clear {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  border-radius: 6px;
+  color: var(--text-3);
+  background: transparent;
+  cursor: pointer;
+}
+.inv-search .ts-clear:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+.inv-search-menu {
+  top: 46px;
+  z-index: 30;
+}
+.ta-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+}
 .tab {
   padding: 7px 15px;
   font-size: 13px;

@@ -1,7 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { InventoryProduct } from '@shared/types'
 import { LOCATIONS } from '@shared/inventory'
-import { useChrome } from '../../lib/chrome'
 import { api } from '../../lib/api'
 import { useToast } from '../../components/Toast'
 import { Button, EmptyState, Modal } from '../../components/ui'
@@ -13,14 +12,15 @@ import { StockModal } from './StockModal'
 
 export function ProductsTab({
   products,
+  query,
   canManage,
   onChanged
 }: {
   products: InventoryProduct[]
+  query: string
   canManage: boolean
   onChanged: () => Promise<void>
 }): JSX.Element {
-  const { search } = useChrome()
   const toast = useToast()
   const [formFor, setFormFor] = useState<InventoryProduct | null | 'new'>(null)
   const [saleFor, setSaleFor] = useState<InventoryProduct | 'any' | null>(null)
@@ -29,7 +29,7 @@ export function ProductsTab({
   const [busy, setBusy] = useState(false)
 
   const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase()
+    const q = query.trim().toLowerCase()
     if (!q) return products
     return products.filter((p) =>
       [p.sku, p.upc ?? '', p.name, p.category, p.brand, p.setName, p.year]
@@ -37,7 +37,7 @@ export function ProductsTab({
         .toLowerCase()
         .includes(q)
     )
-  }, [products, search])
+  }, [products, query])
 
   const remove = async (p: InventoryProduct): Promise<void> => {
     setBusy(true)

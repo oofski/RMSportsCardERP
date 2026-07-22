@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { CategorySummary, InventoryProduct, InventoryStats } from '@shared/types'
+import { LOCATIONS } from '@shared/inventory'
 import { useSession } from '../../lib/session'
 import { api } from '../../lib/api'
 import { Icon } from '../../components/Icon'
@@ -35,6 +36,7 @@ export function InventoryModule(): JSX.Element {
   const [categories, setCategories] = useState<CategorySummary[]>([])
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState<TabId>('overview')
+  const [query, setQuery] = useState('')
 
   const reload = useCallback(async () => {
     const [prods, st, cats] = await Promise.all([
@@ -60,28 +62,122 @@ export function InventoryModule(): JSX.Element {
     { id: 'activity', label: 'Activity', icon: 'Layers' }
   ]
 
+  // Jump to the Catalog, optionally focused on a single product.
+  const goToCatalog = (p?: InventoryProduct): void => {
+    if (p) setQuery(p.name)
+    setTab('products')
+  }
+
   if (loading) return <CenterLoader />
 
   return (
     <div className="content-narrow">
-      <div className="tabs">
-        {tabs.map((t) => (
-          <button
-            key={t.id}
-            className={`tab ${tab === t.id ? 'active' : ''}`}
-            onClick={() => setTab(t.id)}
-          >
-            <Icon name={t.icon} size={16} />
-            {t.label}
-          </button>
-        ))}
+      <div className="inv-header">
+        <div className="tabs">
+          {tabs.map((t) => (
+            <button
+              key={t.id}
+              className={`tab ${tab === t.id ? 'active' : ''}`}
+              onClick={() => setTab(t.id)}
+            >
+              <Icon name={t.icon} size={16} />
+              {t.label}
+            </button>
+          ))}
+        </div>
+        <QuickSearch products={products} query={query} onQuery={setQuery} onGo={goToCatalog} />
       </div>
 
       {tab === 'overview' && <InventoryOverview stats={stats} categories={categories} />}
       {tab === 'products' && (
-        <ProductsTab products={products} canManage={canManage} onChanged={reload} />
+        <ProductsTab products={products} query={query} canManage={canManage} onChanged={reload} />
       )}
       {tab === 'activity' && <ActivityTab />}
+    </div>
+  )
+}
+
+/**
+ * Quick product finder in the Inventory header. Type to see matches across all
+ * 122 products with their on-hand counts; pick one to jump straight to it in the
+ * Catalog, or press Enter to open the Catalog filtered to what you typed.
+ */
+function QuickSearch({
+  products,
+  query,
+  onQuery,
+  onGo
+}: {
+  products: InventoryProduct[]
+  query: string
+  onQuery: (q: string) => void
+  onGo: (p?: InventoryProduct) => void
+}): JSX.Element {
+  const [open, setOpen] = useState(false)
+
+  const matches = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    if (!q) return []
+    return products
+      .filter((p) => [p.name, p.sku, p.upc ?? '', p.category].join(' ').toLowerCase().includes(q))
+      .slice(0, 8)
+  }, [products, query])
+
+  return (
+    <div className="inv-search">
+      <div className="topsearch">
+        <Icon name="Search" size={16} />
+        <input
+          placeholder="Quick search products…"
+          value={query}
+          onChange={(e) => {
+            onQuery(e.target.value)
+            setOpen(true)
+          }}
+          onFocus={() => setOpen(true)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              setOpen(false)
+              onGo()
+            } else if (e.key === 'Escape') {
+              setOpen(false)
+            }
+          }}
+        />
+        {query && (
+          <button className="ts-clear" title="Clear" onClick={() => onQuery('')}>
+            <Icon name="X" size={14} />
+          </button>
+        )}
+      </div>
+
+      {open && query.trim() && (
+        <>
+          <div className="ta-backdrop" onClick={() => setOpen(false)} />
+          <div className="ta-menu inv-search-menu">
+            {matches.length === 0 ? (
+              <div className="ta-empty">No products match “{query.trim()}”.</div>
+            ) : (
+              matches.map((p) => (
+                <button
+                  key={p.id}
+                  className="ta-item"
+                  onClick={() => {
+                    setOpen(false)
+                    onGo(p)
+                  }}
+                >
+                  <span className="ta-name">{p.name}</span>
+                  <span className="ta-sub">
+                    {p.sku} · {p.category || 'Uncategorized'} ·{' '}
+                    {LOCATIONS.map((l) => `${l.label} ${p.quantityByLocation[l.id] ?? 0}`).join(' / ')} · {p.quantity} total
+                  </span>
+                </button>
+              ))
+            )}
+          </div>
+        </>
+      )}
     </div>
   )
 }
