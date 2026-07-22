@@ -30,6 +30,10 @@ jobs:
       contains(github.event.head_commit.message, '[release]')
     strategy:
       fail-fast: false
+      # Run the platforms one at a time: both jobs publish to the same GitHub
+      # release, and creating it concurrently races (422 already_exists). The
+      # first job creates the release; the second reuses it.
+      max-parallel: 1
       matrix:
         include:
           - os: windows-latest
