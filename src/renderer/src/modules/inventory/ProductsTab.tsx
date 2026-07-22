@@ -6,8 +6,7 @@ import { api } from '../../lib/api'
 import { useToast } from '../../components/Toast'
 import { Button, EmptyState, Modal } from '../../components/ui'
 import { Icon } from '../../components/Icon'
-import { formatMoney } from '../../lib/format'
-import { productMetrics, structureLabel } from './helpers'
+import { structureLabel } from './helpers'
 import { ProductFormModal } from './ProductFormModal'
 import { RecordSaleModal } from './RecordSaleModal'
 import { StockModal } from './StockModal'
@@ -175,18 +174,12 @@ export function ProductsTab({
                   </th>
                 ))}
                 <th style={{ textAlign: 'center' }}>Total</th>
-                <th style={{ textAlign: 'right' }}>High bid</th>
-                <th style={{ textAlign: 'right' }}>Inv. value</th>
-                <th style={{ textAlign: 'right' }}>Avg cost</th>
-                <th style={{ textAlign: 'right' }}>Total cost</th>
-                <th style={{ textAlign: 'right' }}>Spread</th>
                 {canManage && <th style={{ textAlign: 'right' }}>Actions</th>}
               </tr>
             </thead>
             <tbody>
               {filtered.map((p) => {
                 const low = p.reorderPoint > 0 && p.quantity <= p.reorderPoint
-                const m = productMetrics(p)
                 return (
                   <tr key={p.id}>
                     <td>
@@ -210,15 +203,6 @@ export function ProductsTab({
                     >
                       {p.quantity}
                       {low && <Icon name="AlertTriangle" size={13} strokeWidth={2.5} />}
-                    </td>
-                    <td className="money">{m.hasBid ? formatMoney(m.marketUnit) : <span className="muted">—</span>}</td>
-                    <td className="money">{p.quantity > 0 ? formatMoney(m.invValue) : <span className="muted">—</span>}</td>
-                    <td className="money">{m.hasCost ? formatMoney(m.avgCost) : <span className="muted">—</span>}</td>
-                    <td className="money">
-                      {m.hasCost && p.quantity > 0 ? formatMoney(m.totalCost) : <span className="muted">—</span>}
-                    </td>
-                    <td className={`money ${m.hasCost ? (m.spread < 0 ? 'neg' : m.spread > 0 ? 'pos' : '') : ''}`}>
-                      {m.hasCost && p.quantity > 0 ? formatMoney(m.spread) : <span className="muted">—</span>}
                     </td>
                     {canManage && (
                       <td>
