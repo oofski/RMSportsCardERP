@@ -276,7 +276,6 @@ function AddTimeEntryModal({
   return (
     <Modal
       title="Add time entry"
-      subtitle="Log a shift manually. Leave clock-out blank for an in-progress shift."
       onClose={onClose}
       footer={
         <>

@@ -154,7 +154,7 @@ export function ProductsTab({
         <div>
           <h2>Catalog</h2>
           <p>
-            {filtered.length} of {products.length} products. Search from the top bar.
+            {filtered.length} of {products.length} products
           </p>
         </div>
         {headerActions}
