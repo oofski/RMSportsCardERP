@@ -4,6 +4,7 @@ import type {
   InventoryStats,
   InventoryTransaction,
   NewInventoryProduct,
+  ProductImage,
   SalesPoint,
   UnitType,
   UpdateInventoryProduct
@@ -11,6 +12,7 @@ import type {
 import { LOCATION_IDS } from '@shared/inventory'
 import { getDb } from './database'
 import { movingAverageCost } from './costing'
+import { deleteImageFile, imageDataUrl, importImageFile } from '../services/media'
 import { newId, nowIso } from '../util'
 
 interface ProductRow {
@@ -262,8 +264,74 @@ export function updateProduct(input: UpdateInventoryProduct): InventoryProduct |
 }
 
 export function deleteProduct(id: string): boolean {
+  const files = (
+    getDb().prepare('SELECT filename FROM inventory_product_images WHERE product_id = ?').all(id) as Array<{
+      filename: string
+    }>
+  ).map((r) => r.filename)
   const info = getDb().prepare('DELETE FROM inventory_products WHERE id = ?').run(id)
+  if (info.changes > 0) files.forEach(deleteImageFile)
   return info.changes > 0
+}
+
+// ---------------------------------------------------------------------------
+// Product images
+// ---------------------------------------------------------------------------
+
+/** Images for one product, as ready-to-use data URLs (missing files skipped). */
+export function listProductImages(productId: string): ProductImage[] {
+  const rows = getDb()
+    .prepare(
+      'SELECT id, filename, position FROM inventory_product_images WHERE product_id = ? ORDER BY position, created_at'
+    )
+    .all(productId) as Array<{ id: string; filename: string; position: number }>
+  return rows
+    .map((r) => ({ id: r.id, position: r.position, dataUrl: imageDataUrl(r.filename) ?? '' }))
+    .filter((x) => x.dataUrl)
+}
+
+/** Copy a picked file into the media store and attach it to a product. */
+export function addProductImage(productId: string, srcPath: string): ProductImage[] {
+  const exists = getDb().prepare('SELECT id FROM inventory_products WHERE id = ?').get(productId)
+  if (!exists) throw new Error('Product not found.')
+  const id = newId()
+  const filename = importImageFile(srcPath, id)
+  const pos = (
+    getDb()
+      .prepare('SELECT COALESCE(MAX(position), -1) + 1 AS p FROM inventory_product_images WHERE product_id = ?')
+      .get(productId) as { p: number }
+  ).p
+  getDb()
+    .prepare(
+      'INSERT INTO inventory_product_images (id, product_id, filename, position, created_at) VALUES (?, ?, ?, ?, ?)'
+    )
+    .run(id, productId, filename, pos, nowIso())
+  return listProductImages(productId)
+}
+
+/** Detach an image (removing the file); returns the product's remaining images. */
+export function removeProductImage(imageId: string): { productId: string | null; images: ProductImage[] } {
+  const row = getDb()
+    .prepare('SELECT product_id, filename FROM inventory_product_images WHERE id = ?')
+    .get(imageId) as { product_id: string; filename: string } | undefined
+  if (!row) return { productId: null, images: [] }
+  getDb().prepare('DELETE FROM inventory_product_images WHERE id = ?').run(imageId)
+  deleteImageFile(row.filename)
+  return { productId: row.product_id, images: listProductImages(row.product_id) }
+}
+
+/** Map of productId → primary image data URL, for products that have one. */
+export function productThumbnails(): Record<string, string> {
+  const rows = getDb()
+    .prepare('SELECT product_id, filename FROM inventory_product_images ORDER BY product_id, position, created_at')
+    .all() as Array<{ product_id: string; filename: string }>
+  const out: Record<string, string> = {}
+  for (const r of rows) {
+    if (out[r.product_id]) continue
+    const url = imageDataUrl(r.filename)
+    if (url) out[r.product_id] = url
+  }
+  return out
 }
 
 export interface StockResult {

@@ -34,19 +34,22 @@ export function InventoryModule(): JSX.Element {
   const [products, setProducts] = useState<InventoryProduct[]>([])
   const [stats, setStats] = useState<InventoryStats>(EMPTY_STATS)
   const [categories, setCategories] = useState<CategorySummary[]>([])
+  const [thumbnails, setThumbnails] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState<TabId>('overview')
   const [query, setQuery] = useState('')
 
   const reload = useCallback(async () => {
-    const [prods, st, cats] = await Promise.all([
+    const [prods, st, cats, thumbs] = await Promise.all([
       api.inventory.list(),
       api.inventory.stats(),
-      api.inventory.categories()
+      api.inventory.categories(),
+      api.inventory.thumbnails()
     ])
     setProducts(prods)
     setStats(st ?? EMPTY_STATS)
     setCategories(cats)
+    setThumbnails(thumbs)
   }, [])
 
   useEffect(() => {
@@ -90,7 +93,13 @@ export function InventoryModule(): JSX.Element {
 
       {tab === 'overview' && <InventoryOverview stats={stats} categories={categories} />}
       {tab === 'products' && (
-        <ProductsTab products={products} query={query} canManage={canManage} onChanged={reload} />
+        <ProductsTab
+          products={products}
+          query={query}
+          thumbnails={thumbnails}
+          canManage={canManage}
+          onChanged={reload}
+        />
       )}
       {tab === 'activity' && <ActivityTab />}
     </div>

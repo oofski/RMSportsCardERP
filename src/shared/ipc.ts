@@ -54,6 +54,10 @@ export const IPC = {
   invRecentSales: 'inventory:sales:recent',
   invTransactions: 'inventory:transactions:list',
   invSalesSeries: 'inventory:sales:series',
+  invThumbnails: 'inventory:images:thumbnails',
+  invImageList: 'inventory:images:list',
+  invImageAdd: 'inventory:images:add',
+  invImageRemove: 'inventory:images:remove',
 
   // Email
   emailComposeInvite: 'email:compose-invite',

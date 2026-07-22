@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { CategorySummary, InventoryProduct, InventoryStats } from '@shared/types'
 import { CATEGORY_ORDER, LOCATIONS } from '@shared/inventory'
+import { BarList } from '../../components/charts'
 import { Icon } from '../../components/Icon'
 import { Button, CenterLoader, EmptyState } from '../../components/ui'
 import { api } from '../../lib/api'
@@ -20,7 +21,6 @@ export function InventoryOverview({
 }): JSX.Element {
   const [detail, setDetail] = useState<Detail | null>(null)
 
-  // Order categories by the preferred order, then any extras alphabetically.
   const orderedCategories = useMemo(() => {
     const rank = (c: string): number => {
       const i = CATEGORY_ORDER.indexOf(c)
@@ -28,6 +28,15 @@ export function InventoryOverview({
     }
     return [...categories].sort((a, b) => rank(a.category) - rank(b.category) || a.category.localeCompare(b.category))
   }, [categories])
+
+  const valueByCategory = useMemo(
+    () =>
+      [...categories]
+        .filter((c) => c.value > 0)
+        .sort((a, b) => b.value - a.value)
+        .map((c) => ({ label: c.category, value: Math.round(c.value) })),
+    [categories]
+  )
 
   if (detail) {
     return <InventoryDetail detail={detail} onBack={() => setDetail(null)} />
@@ -52,7 +61,6 @@ export function InventoryOverview({
           onClick={() => setDetail({ kind: 'spread', label: 'Spread' })}
         />
         <Stat icon="Boxes" value={String(stats.cases)} label="Cases on hand" onClick={() => setDetail({ kind: 'cases', label: 'Cases on hand' })} />
-        <Stat icon="Tag" value={String(stats.skuCount)} label="Products (SKUs)" onClick={() => setDetail({ kind: 'skus', label: 'Products' })} />
       </div>
 
       {stats.lowStockCount > 0 && (
@@ -62,12 +70,35 @@ export function InventoryOverview({
         </div>
       )}
 
+      <div className="panel-card">
+        <div className="panel-head">
+          <div>
+            <h3>Inventory value by category</h3>
+            <span className="ph-sub">Market value on hand</span>
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <div style={{ fontWeight: 700, fontSize: 18 }}>{formatMoney(stats.totalValue)}</div>
+            <div className="ph-sub">
+              {LOCATIONS.map((l) => `${l.label} ${stats.unitsByLocation[l.id] ?? 0}`).join(' · ')} units
+            </div>
+          </div>
+        </div>
+        {valueByCategory.length === 0 ? (
+          <div className="chart-empty">
+            <Icon name="BarChart3" size={26} />
+            <div>
+              <div style={{ fontWeight: 600, color: 'var(--text-2)' }}>No value on hand yet</div>
+              <div className="text-sm">Add stock to a product and it'll chart here.</div>
+            </div>
+          </div>
+        ) : (
+          <BarList items={valueByCategory} formatValue={(v) => formatMoney(v, { compact: true })} />
+        )}
+      </div>
+
       <div className="section-head">
         <div>
           <h2>By category</h2>
-        </div>
-        <div className="muted text-sm">
-          {LOCATIONS.map((l) => `${l.label}: ${stats.unitsByLocation[l.id] ?? 0}`).join('  ·  ')} units
         </div>
       </div>
 

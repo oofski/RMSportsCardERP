@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { BrowserWindow, dialog, ipcMain, type OpenDialogOptions } from 'electron'
 import { IPC } from '@shared/ipc'
 import type {
   AddStockInput,
@@ -8,6 +8,7 @@ import type {
   InventoryStats,
   InventoryTransaction,
   NewInventoryProduct,
+  ProductImage,
   RecordSaleInput,
   Result,
   SalesPoint,
@@ -17,18 +18,23 @@ import type {
 import { isLocation } from '@shared/inventory'
 import type { Permission } from '@shared/permissions'
 import { currentUser } from './services/auth'
+import { IMAGE_EXTENSIONS } from './services/media'
 import {
+  addProductImage,
   addStock,
   adjustStock,
   categorySummaries,
   createProduct,
   deleteProduct,
   inventoryStats,
+  listProductImages,
   listProducts,
   listTransactions,
+  productThumbnails,
   productsByCategory,
   recentSales,
   recordSale,
+  removeProductImage,
   salesSeries,
   searchCatalog,
   updateProduct,
@@ -80,6 +86,12 @@ export function registerInventoryIpc(): void {
   )
   ipcMain.handle(IPC.invSalesSeries, (_e, days?: number): SalesPoint[] =>
     can('module.inventory') ? salesSeries(days ?? 14) : []
+  )
+  ipcMain.handle(IPC.invThumbnails, (): Record<string, string> =>
+    can('module.inventory') ? productThumbnails() : {}
+  )
+  ipcMain.handle(IPC.invImageList, (_e, productId: string): ProductImage[] =>
+    can('module.inventory') ? listProductImages(productId) : []
   )
 
   // ---- Writes (inventory.manage) ------------------------------------------
@@ -174,6 +186,34 @@ export function registerInventoryIpc(): void {
       }
       const res = adjustStock(input.productId, input.location, input.quantityChange, input.note ?? null, actor.id)
       return res.error ? { ok: false, error: res.error } : { ok: true, data: res.product as InventoryProduct }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle(IPC.invImageAdd, async (e, productId: string): Promise<Result<ProductImage[]>> => {
+    try {
+      requireManage()
+      if (!productId) return { ok: false, error: 'Select a product.' }
+      const win = BrowserWindow.fromWebContents(e.sender) ?? BrowserWindow.getFocusedWindow()
+      const opts: OpenDialogOptions = {
+        title: 'Add product image',
+        properties: ['openFile'],
+        filters: [{ name: 'Images', extensions: IMAGE_EXTENSIONS }]
+      }
+      const picked = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts)
+      if (picked.canceled || !picked.filePaths[0]) return { ok: false, error: 'No image selected.' }
+      return { ok: true, data: addProductImage(productId, picked.filePaths[0]) }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle(IPC.invImageRemove, (_e, imageId: string): Result<ProductImage[]> => {
+    try {
+      requireManage()
+      if (!imageId) return { ok: false, error: 'No image specified.' }
+      return { ok: true, data: removeProductImage(imageId).images }
     } catch (err) {
       return fail(err)
     }

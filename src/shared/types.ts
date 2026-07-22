@@ -233,6 +233,14 @@ export interface InventoryStats {
   unitsByLocation: Record<string, number>
 }
 
+/** A product photo, delivered to the renderer as a ready-to-use data URL. */
+export interface ProductImage {
+  id: string
+  /** base64 `data:` URL for direct use in an <img src>. */
+  dataUrl: string
+  position: number
+}
+
 /** Per-category rollup for the dashboard. */
 export interface CategorySummary {
   category: string

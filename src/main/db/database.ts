@@ -135,6 +135,18 @@ function migrate(database: Database.Database): void {
       ON inventory_transactions (product_id);
     CREATE INDEX IF NOT EXISTS idx_inv_txn_type
       ON inventory_transactions (type);
+
+    -- Product photos (files live in userData/product-images; this tracks them).
+    CREATE TABLE IF NOT EXISTS inventory_product_images (
+      id         TEXT PRIMARY KEY,
+      product_id TEXT NOT NULL,
+      filename   TEXT NOT NULL,
+      position   INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (product_id) REFERENCES inventory_products (id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_inv_img_product
+      ON inventory_product_images (product_id);
   `)
 
   if (getMeta(database, 'schema_version') === null) {

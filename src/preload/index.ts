@@ -19,6 +19,7 @@ import type {
   NewEmployeeInput,
   NewInventoryProduct,
   NewTimeEntryInput,
+  ProductImage,
   RecordSaleInput,
   RememberedCredentials,
   Result,
@@ -111,7 +112,14 @@ const api = {
     adjustStock: (input: AdjustStockInput): Promise<Result<InventoryProduct>> =>
       ipcRenderer.invoke(IPC.invStockAdjust, input),
     recordSale: (input: RecordSaleInput): Promise<Result<InventoryProduct>> =>
-      ipcRenderer.invoke(IPC.invSaleRecord, input)
+      ipcRenderer.invoke(IPC.invSaleRecord, input),
+    thumbnails: (): Promise<Record<string, string>> => ipcRenderer.invoke(IPC.invThumbnails),
+    listImages: (productId: string): Promise<ProductImage[]> =>
+      ipcRenderer.invoke(IPC.invImageList, productId),
+    addImage: (productId: string): Promise<Result<ProductImage[]>> =>
+      ipcRenderer.invoke(IPC.invImageAdd, productId),
+    removeImage: (imageId: string): Promise<Result<ProductImage[]>> =>
+      ipcRenderer.invoke(IPC.invImageRemove, imageId)
   },
   email: {
     composeInvite: (

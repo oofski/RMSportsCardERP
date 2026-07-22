@@ -1,10 +1,11 @@
-import { useMemo, useState } from 'react'
-import type { InventoryProduct } from '@shared/types'
-import { LOCATIONS } from '@shared/inventory'
+import { useEffect, useMemo, useState } from 'react'
+import type { InventoryProduct, ProductImage, UpdateInventoryProduct } from '@shared/types'
+import { CATEGORY_ORDER, LOCATIONS } from '@shared/inventory'
 import { api } from '../../lib/api'
 import { useToast } from '../../components/Toast'
-import { Button, EmptyState, Modal } from '../../components/ui'
+import { Button, EmptyState, Field, Input, Modal, Select } from '../../components/ui'
 import { Icon } from '../../components/Icon'
+import { CategoryLogo } from './CategoryLogo'
 import { structureLabel } from './helpers'
 import { ProductFormModal } from './ProductFormModal'
 import { RecordSaleModal } from './RecordSaleModal'
@@ -13,11 +14,13 @@ import { StockModal } from './StockModal'
 export function ProductsTab({
   products,
   query,
+  thumbnails,
   canManage,
   onChanged
 }: {
   products: InventoryProduct[]
   query: string
+  thumbnails: Record<string, string>
   canManage: boolean
   onChanged: () => Promise<void>
 }): JSX.Element {
@@ -26,18 +29,40 @@ export function ProductsTab({
   const [saleFor, setSaleFor] = useState<InventoryProduct | 'any' | null>(null)
   const [stockFor, setStockFor] = useState<InventoryProduct | 'any' | null>(null)
   const [deleteFor, setDeleteFor] = useState<InventoryProduct | null>(null)
+  const [category, setCategory] = useState('')
+  const [expanded, setExpanded] = useState<string | null>(null)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [bulkDelete, setBulkDelete] = useState(false)
   const [busy, setBusy] = useState(false)
+
+  const categoryOptions = useMemo(() => {
+    const set = new Set(products.map((p) => p.category).filter(Boolean))
+    const rank = (c: string): number => {
+      const i = CATEGORY_ORDER.indexOf(c)
+      return i === -1 ? CATEGORY_ORDER.length : i
+    }
+    return [...set].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b))
+  }, [products])
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
-    if (!q) return products
-    return products.filter((p) =>
-      [p.sku, p.upc ?? '', p.name, p.category, p.brand, p.setName, p.year]
+    return products.filter((p) => {
+      if (category && p.category !== category) return false
+      if (!q) return true
+      return [p.sku, p.upc ?? '', p.name, p.category, p.brand, p.setName, p.year]
         .join(' ')
         .toLowerCase()
         .includes(q)
-    )
-  }, [products, query])
+    })
+  }, [products, query, category])
+
+  const toggleSelect = (id: string): void =>
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
 
   const remove = async (p: InventoryProduct): Promise<void> => {
     setBusy(true)
@@ -50,6 +75,20 @@ export function ProductsTab({
       } else {
         toast.error(res.error ?? 'Could not delete.')
       }
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const removeSelected = async (): Promise<void> => {
+    setBusy(true)
+    try {
+      const ids = [...selected]
+      for (const id of ids) await api.inventory.delete(id)
+      toast.success(`Deleted ${ids.length} product${ids.length === 1 ? '' : 's'}.`)
+      setSelected(new Set())
+      setBulkDelete(false)
+      await onChanged()
     } finally {
       setBusy(false)
     }
@@ -119,8 +158,28 @@ export function ProductsTab({
           }
         >
           <p className="muted">
-            This removes the product from the catalog along with its stock and history. This can't be
-            undone.
+            This removes the product from the catalog along with its stock, images and history. This
+            can't be undone.
+          </p>
+        </Modal>
+      )}
+      {bulkDelete && (
+        <Modal
+          title={`Delete ${selected.size} product${selected.size === 1 ? '' : 's'}?`}
+          onClose={() => setBulkDelete(false)}
+          footer={
+            <>
+              <Button variant="ghost" onClick={() => setBulkDelete(false)}>
+                Cancel
+              </Button>
+              <Button variant="danger" icon="Trash2" loading={busy} onClick={removeSelected}>
+                Delete selected
+              </Button>
+            </>
+          }
+        >
+          <p className="muted">
+            This permanently removes the selected products, their stock, images and history.
           </p>
         </Modal>
       )}
@@ -159,74 +218,343 @@ export function ProductsTab({
         {headerActions}
       </div>
 
+      <div className="cat-toolbar">
+        <Select value={category} onChange={(e) => setCategory(e.target.value)}>
+          <option value="">All categories</option>
+          {categoryOptions.map((c) => (
+            <option key={c} value={c}>
+              {c}
+            </option>
+          ))}
+        </Select>
+      </div>
+
       {filtered.length === 0 ? (
-        <EmptyState icon="Search" title="No products match your search" />
+        <EmptyState icon="Search" title="No products match" />
       ) : (
-        <div className="table-wrap">
-          <table className="data">
-            <thead>
-              <tr>
-                <th>Product</th>
-                <th>Category</th>
-                {LOCATIONS.map((l) => (
-                  <th key={l.id} style={{ textAlign: 'center' }}>
-                    {l.label}
-                  </th>
-                ))}
-                <th style={{ textAlign: 'center' }}>Total</th>
-                {canManage && <th style={{ textAlign: 'right' }}>Actions</th>}
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((p) => {
-                const low = p.reorderPoint > 0 && p.quantity <= p.reorderPoint
-                return (
-                  <tr key={p.id}>
-                    <td>
-                      <div className="prod-cell">
-                        <div style={{ fontWeight: 600 }}>{p.name}</div>
-                        <div className="p-sub">
-                          <span className="mono">{p.sku}</span>
-                          <span className="muted"> · {structureLabel(p)}</span>
-                        </div>
-                      </div>
-                    </td>
-                    <td>{p.category || <span className="muted">—</span>}</td>
-                    {LOCATIONS.map((l) => (
-                      <td key={l.id} style={{ textAlign: 'center' }} className="mono">
-                        {p.quantityByLocation[l.id] ?? 0}
-                      </td>
-                    ))}
-                    <td
-                      className={low ? 'stock-low' : ''}
-                      style={{ fontWeight: 700, textAlign: 'center' }}
-                    >
-                      {p.quantity}
-                      {low && <Icon name="AlertTriangle" size={13} strokeWidth={2.5} />}
-                    </td>
-                    {canManage && (
-                      <td>
-                        <div className="cell-actions">
-                          <Button size="sm" variant="ghost" icon="ShoppingCart" disabled={p.quantity <= 0} onClick={() => setSaleFor(p)}>
-                            Sell
-                          </Button>
-                          <Button size="sm" variant="ghost" icon="PackagePlus" onClick={() => setStockFor(p)}>
-                            Stock
-                          </Button>
-                          <Button size="sm" variant="secondary" icon="Pencil" onClick={() => setFormFor(p)} />
-                          <Button size="sm" variant="ghost" icon="Trash2" onClick={() => setDeleteFor(p)} />
-                        </div>
-                      </td>
-                    )}
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
+        <div className="cat-list">
+          {filtered.map((p) => {
+            const open = expanded === p.id
+            const thumb = thumbnails[p.id]
+            const low = p.reorderPoint > 0 && p.quantity <= p.reorderPoint
+            return (
+              <div className={`cat-row ${open ? 'open' : ''}`} key={p.id}>
+                <div className="cr-head">
+                  {canManage && (
+                    <input
+                      type="checkbox"
+                      className="cr-check"
+                      checked={selected.has(p.id)}
+                      onChange={() => toggleSelect(p.id)}
+                      onClick={(e) => e.stopPropagation()}
+                      aria-label={`Select ${p.name}`}
+                    />
+                  )}
+                  <button className="cr-open" onClick={() => setExpanded(open ? null : p.id)}>
+                    <span className="cr-thumb">
+                      {thumb ? (
+                        <img src={thumb} alt="" />
+                      ) : (
+                        <span className="cr-thumb-ph">
+                          <CategoryLogo category={p.category} size={18} />
+                        </span>
+                      )}
+                    </span>
+                    <span className="cr-main">
+                      <span className="cr-name">{p.name}</span>
+                      <span className="cr-sub">
+                        <span className="mono">{p.sku}</span>
+                        {p.category && <span className="cr-chip">{p.category}</span>}
+                      </span>
+                    </span>
+                    <span className="cr-stock">
+                      {LOCATIONS.map((l) => (
+                        <span key={l.id} className="crs-loc">
+                          <em>{l.label}</em> {p.quantityByLocation[l.id] ?? 0}
+                        </span>
+                      ))}
+                      <span className={`crs-total ${low ? 'stock-low' : ''}`}>
+                        {p.quantity}
+                        {low && <Icon name="AlertTriangle" size={12} strokeWidth={2.5} />}
+                      </span>
+                    </span>
+                    <Icon name={open ? 'ChevronDown' : 'ChevronRight'} size={17} className="cr-exp" />
+                  </button>
+                </div>
+                {open && (
+                  <ProductDetail
+                    product={p}
+                    canManage={canManage}
+                    onChanged={onChanged}
+                    onEdit={() => setFormFor(p)}
+                    onStock={() => setStockFor(p)}
+                    onSell={() => setSaleFor(p)}
+                    onDelete={() => setDeleteFor(p)}
+                  />
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {canManage && selected.size > 0 && (
+        <div className="cat-bulkbar">
+          <span>
+            {selected.size} selected
+            <button className="link-btn" onClick={() => setSelected(new Set())}>
+              Clear
+            </button>
+          </span>
+          <Button variant="danger" size="sm" icon="Trash2" onClick={() => setBulkDelete(true)}>
+            Delete selected
+          </Button>
         </div>
       )}
 
       {modals}
     </>
+  )
+}
+
+/** Expanded product detail: image carousel + Add image, plus auto-saving fields. */
+function ProductDetail({
+  product,
+  canManage,
+  onChanged,
+  onEdit,
+  onStock,
+  onSell,
+  onDelete
+}: {
+  product: InventoryProduct
+  canManage: boolean
+  onChanged: () => Promise<void>
+  onEdit: () => void
+  onStock: () => void
+  onSell: () => void
+  onDelete: () => void
+}): JSX.Element {
+  const toast = useToast()
+  const [images, setImages] = useState<ProductImage[] | null>(null)
+  const [idx, setIdx] = useState(0)
+  const [imgBusy, setImgBusy] = useState(false)
+  const [saved, setSaved] = useState(false)
+
+  useEffect(() => {
+    let active = true
+    api.inventory.listImages(product.id).then((imgs) => {
+      if (active) {
+        setImages(imgs)
+        setIdx(0)
+      }
+    })
+    return () => {
+      active = false
+    }
+  }, [product.id])
+
+  const flash = (): void => {
+    setSaved(true)
+    window.setTimeout(() => setSaved(false), 1500)
+  }
+
+  const save = async (patch: Omit<UpdateInventoryProduct, 'id'>): Promise<void> => {
+    const res = await api.inventory.update({ id: product.id, ...patch })
+    if (res.ok) {
+      flash()
+      await onChanged()
+    } else {
+      toast.error(res.error ?? 'Could not save.')
+    }
+  }
+
+  const addImage = async (): Promise<void> => {
+    setImgBusy(true)
+    try {
+      const res = await api.inventory.addImage(product.id)
+      if (res.ok && res.data) {
+        setImages(res.data)
+        setIdx(res.data.length - 1)
+        toast.success('Image added.')
+        await onChanged()
+      } else if (res.error && res.error !== 'No image selected.') {
+        toast.error(res.error)
+      }
+    } finally {
+      setImgBusy(false)
+    }
+  }
+
+  const removeImage = async (id: string): Promise<void> => {
+    setImgBusy(true)
+    try {
+      const res = await api.inventory.removeImage(id)
+      if (res.ok && res.data) {
+        const imgs = res.data
+        setImages(imgs)
+        setIdx((i) => Math.max(0, Math.min(i, imgs.length - 1)))
+        await onChanged()
+      } else {
+        toast.error(res.error ?? 'Could not remove image.')
+      }
+    } finally {
+      setImgBusy(false)
+    }
+  }
+
+  const current = images && images.length > 0 ? images[Math.min(idx, images.length - 1)] : null
+
+  return (
+    <div className="cat-detail">
+      <div className="cd-grid">
+        <div className="cd-media">
+          <div className="cd-frame">
+            {current ? (
+              <img src={current.dataUrl} alt={product.name} />
+            ) : (
+              <div className="cd-ph">
+                <CategoryLogo category={product.category} size={34} />
+                <span>No image yet</span>
+              </div>
+            )}
+            {canManage && current && (
+              <button className="cd-remove" title="Remove image" onClick={() => removeImage(current.id)}>
+                <Icon name="Trash2" size={14} />
+              </button>
+            )}
+          </div>
+          <div className="cd-media-bar">
+            {images && images.length > 1 ? (
+              <div className="cd-nav">
+                <button onClick={() => setIdx((i) => (i - 1 + images.length) % images.length)}>
+                  <Icon name="ArrowLeft" size={15} />
+                </button>
+                <span>
+                  {Math.min(idx, images.length - 1) + 1} of {images.length}
+                </span>
+                <button onClick={() => setIdx((i) => (i + 1) % images.length)}>
+                  <Icon name="ArrowRight" size={15} />
+                </button>
+              </div>
+            ) : (
+              <span />
+            )}
+            {canManage && (
+              <Button size="sm" variant="secondary" icon="Plus" loading={imgBusy} onClick={addImage}>
+                Add image
+              </Button>
+            )}
+          </div>
+        </div>
+
+        <div className="cd-fields">
+          {canManage ? (
+            <>
+              <div className="field-row">
+                <EditField label="Display name" value={product.name} onCommit={(v) => v.trim() && save({ name: v.trim() })} />
+              </div>
+              <div className="field-row">
+                <EditField label="SKU" value={product.sku} onCommit={(v) => save({ sku: v.trim() })} />
+                <EditField label="Barcode (UPC)" value={product.upc ?? ''} onCommit={(v) => save({ upc: v.trim() || null })} />
+              </div>
+              <div className="field-row">
+                <EditField label="Brand" value={product.brand} onCommit={(v) => save({ brand: v.trim() })} />
+                <EditField label="Category" value={product.category} onCommit={(v) => save({ category: v.trim() })} />
+              </div>
+              <div className="field-row">
+                <EditField
+                  label="Average cost"
+                  type="number"
+                  value={product.unitCost ? String(product.unitCost) : ''}
+                  onCommit={(v) => save({ unitCost: v.trim() === '' ? 0 : Number(v) || 0 })}
+                />
+                <EditField
+                  label="High bid"
+                  type="number"
+                  value={product.highBid != null ? String(product.highBid) : ''}
+                  onCommit={(v) => save({ highBid: v.trim() === '' ? null : Number(v) || 0 })}
+                />
+              </div>
+            </>
+          ) : (
+            <div className="cd-readonly">
+              <ReadRow label="SKU" value={product.sku} />
+              <ReadRow label="Barcode" value={product.upc ?? '—'} />
+              <ReadRow label="Brand" value={product.brand || '—'} />
+              <ReadRow label="Category" value={product.category || '—'} />
+              <ReadRow label="Structure" value={structureLabel(product)} />
+            </div>
+          )}
+
+          <div className="cd-stockline">
+            {LOCATIONS.map((l) => (
+              <span key={l.id}>
+                <em>{l.label}</em> {product.quantityByLocation[l.id] ?? 0}
+              </span>
+            ))}
+            <span>
+              <em>Total</em> {product.quantity}
+            </span>
+          </div>
+
+          {canManage && (
+            <div className="cd-actions">
+              <Button size="sm" variant="secondary" icon="PackagePlus" onClick={onStock}>
+                Add stock
+              </Button>
+              <Button size="sm" variant="secondary" icon="ShoppingCart" disabled={product.quantity <= 0} onClick={onSell}>
+                Sell
+              </Button>
+              <Button size="sm" variant="ghost" icon="Pencil" onClick={onEdit}>
+                Full edit
+              </Button>
+              <Button size="sm" variant="ghost" icon="Trash2" onClick={onDelete} />
+              <span className={`cd-saved ${saved ? 'show' : ''}`}>
+                <Icon name="Check" size={13} /> Saved
+              </span>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function EditField({
+  label,
+  value,
+  onCommit,
+  type = 'text'
+}: {
+  label: string
+  value: string
+  onCommit: (v: string) => void
+  type?: string
+}): JSX.Element {
+  const [v, setV] = useState(value)
+  useEffect(() => {
+    setV(value)
+  }, [value])
+  return (
+    <Field label={label}>
+      <Input
+        type={type}
+        value={v}
+        onChange={(e) => setV(e.target.value)}
+        onBlur={() => {
+          if (v !== value) onCommit(v)
+        }}
+      />
+    </Field>
+  )
+}
+
+function ReadRow({ label, value }: { label: string; value: string }): JSX.Element {
+  return (
+    <div className="metric-row">
+      <span className="m-k">{label}</span>
+      <span className="m-v">{value}</span>
+    </div>
   )
 }
