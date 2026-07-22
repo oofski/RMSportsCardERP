@@ -104,18 +104,23 @@ export function getProduct(id: string): InventoryProduct | null {
   return row ? toProduct(row, stockFor(id)) : null
 }
 
-/** Typeahead search over the catalog. Matches name / SKU / UPC / category. */
+/**
+ * Keyword typeahead over the catalog: each whitespace-separated term must match
+ * name / SKU / UPC / category / brand (LIKE is case-insensitive), in any order,
+ * so "bowman 2026" and "2026 bowman" both find the 2026 Bowman case.
+ */
 export function searchCatalog(query: string, limit = 25): InventoryProduct[] {
-  const q = `%${query.trim().replace(/[%_]/g, (m) => '\\' + m)}%`
+  const terms = query.trim().split(/\s+/).filter(Boolean)
+  const like = (t: string): string => `%${t.replace(/[%_\\]/g, (m) => '\\' + m)}%`
+  const fields = ['name', 'sku', 'upc', 'category', 'brand']
+  const clause = `(${fields.map((f) => `${f} LIKE ? ESCAPE '\\'`).join(' OR ')})`
+  const where = terms.length ? terms.map(() => clause).join(' AND ') : '1=1'
+  const params: unknown[] = []
+  for (const t of terms) for (let i = 0; i < fields.length; i++) params.push(like(t))
+  params.push(limit)
   const rows = getDb()
-    .prepare(
-      `SELECT * FROM inventory_products
-       WHERE name LIKE ? ESCAPE '\\' OR sku LIKE ? ESCAPE '\\'
-          OR upc LIKE ? ESCAPE '\\' OR category LIKE ? ESCAPE '\\'
-       ORDER BY name COLLATE NOCASE
-       LIMIT ?`
-    )
-    .all(q, q, q, q, limit) as ProductRow[]
+    .prepare(`SELECT * FROM inventory_products WHERE ${where} ORDER BY name COLLATE NOCASE LIMIT ?`)
+    .all(...params) as ProductRow[]
   const stock = allStockMap()
   return rows.map((r) => toProduct(r, stock.get(r.id) ?? {}))
 }

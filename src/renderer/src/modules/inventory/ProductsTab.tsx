@@ -6,7 +6,7 @@ import { useToast } from '../../components/Toast'
 import { Button, EmptyState, Field, Input, Modal, Select } from '../../components/ui'
 import { Icon } from '../../components/Icon'
 import { CategoryLogo } from './CategoryLogo'
-import { structureLabel } from './helpers'
+import { productMatches, structureLabel } from './helpers'
 import { ProductFormModal } from './ProductFormModal'
 import { RecordSaleModal } from './RecordSaleModal'
 import { StockModal } from './StockModal'
@@ -49,17 +49,14 @@ export function ProductsTab({
     return [...set].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b))
   }, [products])
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase()
-    return products.filter((p) => {
-      if (category && p.category !== category) return false
-      if (!q) return true
-      return [p.sku, p.upc ?? '', p.name, p.category, p.brand, p.setName, p.year]
-        .join(' ')
-        .toLowerCase()
-        .includes(q)
-    })
-  }, [products, query, category])
+  const filtered = useMemo(
+    () =>
+      products.filter((p) => {
+        if (category && p.category !== category) return false
+        return productMatches(p, query)
+      }),
+    [products, query, category]
+  )
 
   const toggleSelect = (id: string): void =>
     setSelected((prev) => {

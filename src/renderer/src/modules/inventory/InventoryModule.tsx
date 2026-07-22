@@ -8,6 +8,7 @@ import { CenterLoader } from '../../components/ui'
 import { InventoryOverview } from './InventoryOverview'
 import { ProductsTab } from './ProductsTab'
 import { ActivityTab } from './ActivityTab'
+import { productMatches } from './helpers'
 
 type TabId = 'overview' | 'products' | 'activity'
 
@@ -141,11 +142,8 @@ function QuickSearch({
   const [open, setOpen] = useState(false)
 
   const matches = useMemo(() => {
-    const q = query.trim().toLowerCase()
-    if (!q) return []
-    return products
-      .filter((p) => [p.name, p.sku, p.upc ?? '', p.category].join(' ').toLowerCase().includes(q))
-      .slice(0, 8)
+    if (!query.trim()) return []
+    return products.filter((p) => productMatches(p, query)).slice(0, 8)
   }, [products, query])
 
   return (

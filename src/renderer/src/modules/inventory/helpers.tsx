@@ -1,5 +1,22 @@
 import type { InventoryProduct, InventoryTxnType, UnitType } from '@shared/types'
 
+/** The text a product is searchable by. */
+function haystack(p: InventoryProduct): string {
+  return [p.name, p.sku, p.upc ?? '', p.category, p.brand, p.setName, p.year].join(' ').toLowerCase()
+}
+
+/**
+ * Keyword search: every whitespace-separated term must appear somewhere in the
+ * product's text, in ANY order (so "bowman 2026" and "2026 bowman" both match
+ * "2026 Bowman Baseball Hobby 12-Box Case"). Empty query matches everything.
+ */
+export function productMatches(p: InventoryProduct, query: string): boolean {
+  const q = query.trim().toLowerCase()
+  if (!q) return true
+  const hay = haystack(p)
+  return q.split(/\s+/).every((term) => hay.includes(term))
+}
+
 export const UNIT_TYPES: { value: UnitType; label: string; plural: string }[] = [
   { value: 'case', label: 'Case', plural: 'Cases' },
   { value: 'box', label: 'Box', plural: 'Boxes' },
