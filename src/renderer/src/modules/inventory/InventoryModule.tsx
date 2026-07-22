@@ -35,22 +35,31 @@ export function InventoryModule(): JSX.Element {
   const [stats, setStats] = useState<InventoryStats>(EMPTY_STATS)
   const [categories, setCategories] = useState<CategorySummary[]>([])
   const [thumbnails, setThumbnails] = useState<Record<string, string>>({})
+  const [thumbVersion, setThumbVersion] = useState(0)
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState<TabId>('overview')
   const [query, setQuery] = useState('')
+  const [category, setCategory] = useState('')
 
+  // Product/catalog data — refetched after edits (does NOT re-read images).
   const reload = useCallback(async () => {
-    const [prods, st, cats, thumbs] = await Promise.all([
+    const [prods, st, cats] = await Promise.all([
       api.inventory.list(),
       api.inventory.stats(),
-      api.inventory.categories(),
-      api.inventory.thumbnails()
+      api.inventory.categories()
     ])
     setProducts(prods)
     setStats(st ?? EMPTY_STATS)
     setCategories(cats)
-    setThumbnails(thumbs)
   }, [])
+
+  // Thumbnails are comparatively expensive (base64), so load them on their own
+  // cadence — only on mount and when an image is actually added/removed.
+  useEffect(() => {
+    api.inventory.thumbnails().then(setThumbnails)
+  }, [thumbVersion])
+
+  const refreshThumbs = useCallback(() => setThumbVersion((v) => v + 1), [])
 
   useEffect(() => {
     ;(async () => {
@@ -65,9 +74,13 @@ export function InventoryModule(): JSX.Element {
     { id: 'activity', label: 'Activity', icon: 'Layers' }
   ]
 
-  // Jump to the Catalog, optionally focused on a single product.
+  // Jump to the Catalog, optionally focused on a single product (clearing any
+  // active category filter so the chosen product is never hidden).
   const goToCatalog = (p?: InventoryProduct): void => {
-    if (p) setQuery(p.name)
+    if (p) {
+      setQuery(p.name)
+      setCategory('')
+    }
     setTab('products')
   }
 
@@ -96,9 +109,12 @@ export function InventoryModule(): JSX.Element {
         <ProductsTab
           products={products}
           query={query}
+          category={category}
+          onCategory={setCategory}
           thumbnails={thumbnails}
           canManage={canManage}
           onChanged={reload}
+          onImagesChanged={refreshThumbs}
         />
       )}
       {tab === 'activity' && <ActivityTab />}

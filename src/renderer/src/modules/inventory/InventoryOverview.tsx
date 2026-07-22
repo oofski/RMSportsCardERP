@@ -9,7 +9,7 @@ import { formatMoney } from '../../lib/format'
 import { UnitBadge, productMetrics } from './helpers'
 import { CategoryLogo } from './CategoryLogo'
 
-type MetricKind = 'value' | 'cost' | 'spread' | 'cases' | 'skus'
+type MetricKind = 'value' | 'cost' | 'spread' | 'cases'
 type Detail = { kind: 'category'; category: string; label: string } | { kind: MetricKind; label: string }
 
 export function InventoryOverview({
@@ -187,8 +187,6 @@ function InventoryDetail({ detail, onBack }: { detail: Detail; onBack: () => voi
         return withM.filter((x) => x.p.quantity > 0 && x.m.hasCost).sort((a, b) => b.m.spread - a.m.spread)
       case 'cases':
         return withM.filter((x) => x.p.unitType === 'case' && x.p.quantity > 0).sort((a, b) => b.p.quantity - a.p.quantity)
-      case 'skus':
-        return withM.sort((a, b) => a.p.name.localeCompare(b.p.name))
       case 'category':
       default:
         return withM.sort((a, b) => b.p.quantity - a.p.quantity || a.p.name.localeCompare(b.p.name))

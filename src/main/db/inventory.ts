@@ -296,16 +296,21 @@ export function addProductImage(productId: string, srcPath: string): ProductImag
   if (!exists) throw new Error('Product not found.')
   const id = newId()
   const filename = importImageFile(srcPath, id)
-  const pos = (
+  try {
+    const pos = (
+      getDb()
+        .prepare('SELECT COALESCE(MAX(position), -1) + 1 AS p FROM inventory_product_images WHERE product_id = ?')
+        .get(productId) as { p: number }
+    ).p
     getDb()
-      .prepare('SELECT COALESCE(MAX(position), -1) + 1 AS p FROM inventory_product_images WHERE product_id = ?')
-      .get(productId) as { p: number }
-  ).p
-  getDb()
-    .prepare(
-      'INSERT INTO inventory_product_images (id, product_id, filename, position, created_at) VALUES (?, ?, ?, ?, ?)'
-    )
-    .run(id, productId, filename, pos, nowIso())
+      .prepare(
+        'INSERT INTO inventory_product_images (id, product_id, filename, position, created_at) VALUES (?, ?, ?, ?, ?)'
+      )
+      .run(id, productId, filename, pos, nowIso())
+  } catch (err) {
+    deleteImageFile(filename) // don't leak the copied file if the row insert fails
+    throw err
+  }
   return listProductImages(productId)
 }
 

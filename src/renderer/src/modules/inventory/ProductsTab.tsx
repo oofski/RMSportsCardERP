@@ -14,22 +14,27 @@ import { StockModal } from './StockModal'
 export function ProductsTab({
   products,
   query,
+  category,
+  onCategory,
   thumbnails,
   canManage,
-  onChanged
+  onChanged,
+  onImagesChanged
 }: {
   products: InventoryProduct[]
   query: string
+  category: string
+  onCategory: (c: string) => void
   thumbnails: Record<string, string>
   canManage: boolean
   onChanged: () => Promise<void>
+  onImagesChanged: () => void
 }): JSX.Element {
   const toast = useToast()
   const [formFor, setFormFor] = useState<InventoryProduct | null | 'new'>(null)
   const [saleFor, setSaleFor] = useState<InventoryProduct | 'any' | null>(null)
   const [stockFor, setStockFor] = useState<InventoryProduct | 'any' | null>(null)
   const [deleteFor, setDeleteFor] = useState<InventoryProduct | null>(null)
-  const [category, setCategory] = useState('')
   const [expanded, setExpanded] = useState<string | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [bulkDelete, setBulkDelete] = useState(false)
@@ -64,6 +69,14 @@ export function ProductsTab({
       return next
     })
 
+  const dropSelected = (id: string): void =>
+    setSelected((prev) => {
+      if (!prev.has(id)) return prev
+      const next = new Set(prev)
+      next.delete(id)
+      return next
+    })
+
   const remove = async (p: InventoryProduct): Promise<void> => {
     setBusy(true)
     try {
@@ -71,6 +84,8 @@ export function ProductsTab({
       if (res.ok) {
         toast.success('Product deleted.')
         setDeleteFor(null)
+        dropSelected(p.id)
+        onImagesChanged()
         await onChanged()
       } else {
         toast.error(res.error ?? 'Could not delete.')
@@ -84,10 +99,21 @@ export function ProductsTab({
     setBusy(true)
     try {
       const ids = [...selected]
-      for (const id of ids) await api.inventory.delete(id)
-      toast.success(`Deleted ${ids.length} product${ids.length === 1 ? '' : 's'}.`)
+      let ok = 0
+      for (const id of ids) {
+        try {
+          const res = await api.inventory.delete(id)
+          if (res.ok) ok++
+        } catch {
+          // count as failure, keep going
+        }
+      }
+      const failed = ids.length - ok
+      if (ok > 0) toast.success(`Deleted ${ok} product${ok === 1 ? '' : 's'}.`)
+      if (failed > 0) toast.error(`${failed} could not be deleted.`)
       setSelected(new Set())
       setBulkDelete(false)
+      onImagesChanged()
       await onChanged()
     } finally {
       setBusy(false)
@@ -219,7 +245,7 @@ export function ProductsTab({
       </div>
 
       <div className="cat-toolbar">
-        <Select value={category} onChange={(e) => setCategory(e.target.value)}>
+        <Select value={category} onChange={(e) => onCategory(e.target.value)}>
           <option value="">All categories</option>
           {categoryOptions.map((c) => (
             <option key={c} value={c}>
@@ -230,7 +256,18 @@ export function ProductsTab({
       </div>
 
       {filtered.length === 0 ? (
-        <EmptyState icon="Search" title="No products match" />
+        <EmptyState
+          icon="Search"
+          title="No products match"
+          message={category ? 'Try clearing the category filter or search.' : 'Try a different search.'}
+          action={
+            category ? (
+              <Button variant="secondary" icon="X" onClick={() => onCategory('')}>
+                Clear category
+              </Button>
+            ) : undefined
+          }
+        />
       ) : (
         <div className="cat-list">
           {filtered.map((p) => {
@@ -250,7 +287,12 @@ export function ProductsTab({
                       aria-label={`Select ${p.name}`}
                     />
                   )}
-                  <button className="cr-open" onClick={() => setExpanded(open ? null : p.id)}>
+                  <button
+                    className="cr-open"
+                    aria-expanded={open}
+                    aria-controls={`cd-${p.id}`}
+                    onClick={() => setExpanded(open ? null : p.id)}
+                  >
                     <span className="cr-thumb">
                       {thumb ? (
                         <img src={thumb} alt="" />
@@ -286,6 +328,7 @@ export function ProductsTab({
                     product={p}
                     canManage={canManage}
                     onChanged={onChanged}
+                    onImagesChanged={onImagesChanged}
                     onEdit={() => setFormFor(p)}
                     onStock={() => setStockFor(p)}
                     onSell={() => setSaleFor(p)}
@@ -322,6 +365,7 @@ function ProductDetail({
   product,
   canManage,
   onChanged,
+  onImagesChanged,
   onEdit,
   onStock,
   onSell,
@@ -330,6 +374,7 @@ function ProductDetail({
   product: InventoryProduct
   canManage: boolean
   onChanged: () => Promise<void>
+  onImagesChanged: () => void
   onEdit: () => void
   onStock: () => void
   onSell: () => void
@@ -377,7 +422,7 @@ function ProductDetail({
         setImages(res.data)
         setIdx(res.data.length - 1)
         toast.success('Image added.')
-        await onChanged()
+        onImagesChanged()
       } else if (res.error && res.error !== 'No image selected.') {
         toast.error(res.error)
       }
@@ -394,7 +439,7 @@ function ProductDetail({
         const imgs = res.data
         setImages(imgs)
         setIdx((i) => Math.max(0, Math.min(i, imgs.length - 1)))
-        await onChanged()
+        onImagesChanged()
       } else {
         toast.error(res.error ?? 'Could not remove image.')
       }
@@ -406,11 +451,15 @@ function ProductDetail({
   const current = images && images.length > 0 ? images[Math.min(idx, images.length - 1)] : null
 
   return (
-    <div className="cat-detail">
+    <div className="cat-detail" id={`cd-${product.id}`}>
       <div className="cd-grid">
         <div className="cd-media">
           <div className="cd-frame">
-            {current ? (
+            {images === null ? (
+              <div className="cd-loading">
+                <span className="spinner dark" />
+              </div>
+            ) : current ? (
               <img src={current.dataUrl} alt={product.name} />
             ) : (
               <div className="cd-ph">
@@ -427,13 +476,19 @@ function ProductDetail({
           <div className="cd-media-bar">
             {images && images.length > 1 ? (
               <div className="cd-nav">
-                <button onClick={() => setIdx((i) => (i - 1 + images.length) % images.length)}>
+                <button
+                  aria-label="Previous image"
+                  onClick={() => setIdx((i) => (i - 1 + images.length) % images.length)}
+                >
                   <Icon name="ArrowLeft" size={15} />
                 </button>
                 <span>
                   {Math.min(idx, images.length - 1) + 1} of {images.length}
                 </span>
-                <button onClick={() => setIdx((i) => (i + 1) % images.length)}>
+                <button
+                  aria-label="Next image"
+                  onClick={() => setIdx((i) => (i + 1) % images.length)}
+                >
                   <Icon name="ArrowRight" size={15} />
                 </button>
               </div>
@@ -452,28 +507,28 @@ function ProductDetail({
           {canManage ? (
             <>
               <div className="field-row">
-                <EditField label="Display name" value={product.name} onCommit={(v) => v.trim() && save({ name: v.trim() })} />
+                <EditField label="Display name" required value={product.name} onCommit={(v) => save({ name: v })} />
               </div>
               <div className="field-row">
-                <EditField label="SKU" value={product.sku} onCommit={(v) => save({ sku: v.trim() })} />
-                <EditField label="Barcode (UPC)" value={product.upc ?? ''} onCommit={(v) => save({ upc: v.trim() || null })} />
+                <EditField label="SKU" value={product.sku} onCommit={(v) => save({ sku: v })} />
+                <EditField label="Barcode (UPC)" value={product.upc ?? ''} onCommit={(v) => save({ upc: v || null })} />
               </div>
               <div className="field-row">
-                <EditField label="Brand" value={product.brand} onCommit={(v) => save({ brand: v.trim() })} />
-                <EditField label="Category" value={product.category} onCommit={(v) => save({ category: v.trim() })} />
+                <EditField label="Brand" value={product.brand} onCommit={(v) => save({ brand: v })} />
+                <EditField label="Category" value={product.category} onCommit={(v) => save({ category: v })} />
               </div>
               <div className="field-row">
                 <EditField
                   label="Average cost"
                   type="number"
-                  value={product.unitCost ? String(product.unitCost) : ''}
-                  onCommit={(v) => save({ unitCost: v.trim() === '' ? 0 : Number(v) || 0 })}
+                  value={String(product.unitCost)}
+                  onCommit={(v) => save({ unitCost: v === '' ? 0 : Number(v) })}
                 />
                 <EditField
                   label="High bid"
                   type="number"
                   value={product.highBid != null ? String(product.highBid) : ''}
-                  onCommit={(v) => save({ highBid: v.trim() === '' ? null : Number(v) || 0 })}
+                  onCommit={(v) => save({ highBid: v === '' ? null : Number(v) })}
                 />
               </div>
             </>
@@ -509,7 +564,7 @@ function ProductDetail({
               <Button size="sm" variant="ghost" icon="Pencil" onClick={onEdit}>
                 Full edit
               </Button>
-              <Button size="sm" variant="ghost" icon="Trash2" onClick={onDelete} />
+              <Button size="sm" variant="ghost" icon="Trash2" aria-label="Delete product" title="Delete product" onClick={onDelete} />
               <span className={`cd-saved ${saved ? 'show' : ''}`}>
                 <Icon name="Check" size={13} /> Saved
               </span>
@@ -525,27 +580,52 @@ function EditField({
   label,
   value,
   onCommit,
-  type = 'text'
+  type = 'text',
+  required = false
 }: {
   label: string
   value: string
   onCommit: (v: string) => void
   type?: string
+  required?: boolean
 }): JSX.Element {
   const [v, setV] = useState(value)
   useEffect(() => {
     setV(value)
   }, [value])
+
+  // On blur: normalize, revert invalid/blanked-required input, and only save a
+  // genuine change — then snap the field to the canonical value so it never
+  // stays "dirty" (e.g. "10.0" → "10") and re-fires on every subsequent blur.
+  const commit = (): void => {
+    const raw = v.trim()
+    if (type === 'number') {
+      if (raw === '') {
+        if (value !== '') onCommit('')
+        setV('')
+        return
+      }
+      const num = Number(raw)
+      if (!Number.isFinite(num)) {
+        setV(value)
+        return
+      }
+      const canonical = String(num)
+      if (canonical !== value) onCommit(canonical)
+      setV(canonical)
+      return
+    }
+    if (required && raw === '') {
+      setV(value)
+      return
+    }
+    if (raw !== value) onCommit(raw)
+    setV(raw)
+  }
+
   return (
     <Field label={label}>
-      <Input
-        type={type}
-        value={v}
-        onChange={(e) => setV(e.target.value)}
-        onBlur={() => {
-          if (v !== value) onCommit(v)
-        }}
-      />
+      <Input type={type} value={v} onChange={(e) => setV(e.target.value)} onBlur={commit} />
     </Field>
   )
 }
