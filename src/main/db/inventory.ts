@@ -10,6 +10,7 @@ import type {
 } from '@shared/types'
 import { LOCATION_IDS } from '@shared/inventory'
 import { getDb } from './database'
+import { movingAverageCost } from './costing'
 import { newId, nowIso } from '../util'
 
 interface ProductRow {
@@ -162,6 +163,14 @@ function stockQty(productId: string, location: string): number {
   return row?.quantity ?? 0
 }
 
+/** Total on-hand across every location for a product. */
+function stockTotal(productId: string): number {
+  const row = getDb()
+    .prepare('SELECT COALESCE(SUM(quantity), 0) AS q FROM inventory_stock WHERE product_id = ?')
+    .get(productId) as { q: number }
+  return row.q
+}
+
 export function createProduct(input: NewInventoryProduct, actorId: string | null): InventoryProduct {
   const db = getDb()
   const id = newId()
@@ -262,7 +271,13 @@ export interface StockResult {
   error?: string
 }
 
-/** Add received stock to a location (and refresh the product's unit cost). */
+/**
+ * Add received stock to a location. When a unit cost is supplied the product's
+ * average cost is rolled forward as a **moving weighted-average** across all
+ * on-hand units, so cost (and therefore total cost and spread) tracks what we
+ * actually paid over time rather than staying frozen. If there was no prior
+ * cost basis, the purchase price simply becomes the average.
+ */
 export function addStock(
   productId: string,
   location: string,
@@ -274,13 +289,19 @@ export function addStock(
   const db = getDb()
   const qty = Math.round(quantity)
   const run = db.transaction((): StockResult => {
-    const exists = db.prepare('SELECT id FROM inventory_products WHERE id = ?').get(productId)
-    if (!exists) return { product: null, error: 'Product not found.' }
+    const row = db.prepare('SELECT unit_cost FROM inventory_products WHERE id = ?').get(productId) as
+      | { unit_cost: number }
+      | undefined
+    if (!row) return { product: null, error: 'Product not found.' }
     if (qty <= 0) return { product: getProduct(productId), error: 'Quantity must be at least 1.' }
+
+    const prevQty = stockTotal(productId)
     bumpStock(productId, location, qty)
+
     if (unitCost != null && Number.isFinite(unitCost) && unitCost >= 0) {
+      const newAvg = movingAverageCost(prevQty, row.unit_cost, qty, unitCost)
       db.prepare('UPDATE inventory_products SET unit_cost = ?, updated_at = ? WHERE id = ?').run(
-        unitCost,
+        newAvg,
         nowIso(),
         productId
       )

@@ -85,5 +85,12 @@ const LOGOS: Record<string, JSX.Element> = {
       <path d="M15.6 12H21" />
       <circle cx="12" cy="12" r="2.6" />
     </>
+  ),
+  Hockey: (
+    <>
+      <path d="M7 4l9 13" />
+      <path d="M16 17h3.6" />
+      <ellipse cx="8.5" cy="19" rx="3" ry="1.3" />
+    </>
   )
 }

@@ -4,6 +4,7 @@ import { existsSync, mkdirSync } from 'fs'
 import Database from 'better-sqlite3'
 import { seedCatalog } from './inventorySeed'
 import { seedSnapshot } from './inventorySnapshot'
+import { seedCatalogExpansion } from './inventoryCatalogV2'
 
 let db: Database.Database | null = null
 
@@ -177,6 +178,9 @@ function migrate(database: Database.Database): void {
       )
       .run()
   )
+
+  // Expand the catalog with more products (blank financials). Runs once.
+  runOnce(database, 'catalog_expansion_v1', () => seedCatalogExpansion(database))
 }
 
 /** Run `fn` once, ever, tracked by a meta flag. */

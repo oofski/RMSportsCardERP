@@ -18,6 +18,7 @@ export const CATEGORY_ORDER = [
   'Basketball',
   'Football',
   'Soccer',
+  'Hockey',
   'UFC',
   'Entertainment',
   'Pokemon'
