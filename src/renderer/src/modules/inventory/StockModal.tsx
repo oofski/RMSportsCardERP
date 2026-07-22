@@ -88,11 +88,7 @@ export function StockModal({
   return (
     <Modal
       title={presetProduct ? 'Update stock' : 'Add stock'}
-      subtitle={
-        presetProduct
-          ? `${presetProduct.name}`
-          : 'Search your catalog, pick a product, then set the location and quantity.'
-      }
+      subtitle={presetProduct ? presetProduct.name : undefined}
       onClose={onClose}
       footer={
         <>

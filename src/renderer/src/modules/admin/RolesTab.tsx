@@ -39,7 +39,6 @@ export function RolesTab({
       <div className="section-head">
         <div>
           <h2>Roles</h2>
-          <p>Three roles to begin with. Grant extra access to individuals below.</p>
         </div>
       </div>
 
@@ -65,7 +64,6 @@ export function RolesTab({
       <div className="section-head">
         <div>
           <h2>Permission matrix</h2>
-          <p>What each role can do by default. Individual grants add on top of this.</p>
         </div>
       </div>
 

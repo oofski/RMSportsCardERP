@@ -43,17 +43,17 @@ const SNAPSHOT: SnapshotRow[] = [
   ['2025 Topps Inception Baseball Hobby 8-Box Case', '6483', 'Baseball', 'RM', 2, 2000, 2260],
   ['2025-26 Topps Three Basketball Hobby 4-Box Case', '6668', 'Basketball', 'RM', 1, 3820, 3900],
   ['2026 Topps Disney Chrome Hobby 8-Box Case', '6782', 'Entertainment', 'RM', 1, 3725, 3710],
-  ['2026 Topps Knockout UFC Hobby 8-Box Case', '7138', 'Combat', 'RM', 2, 1735, 1550],
+  ['2026 Topps Knockout UFC Hobby 8-Box Case', '7138', 'UFC', 'RM', 2, 1735, 1550],
   ['2025 Topps Chrome Platinum Baseball Hobby 12-Box Case', '6178', 'Baseball', 'RM', 1, 2850, 2500],
   ['2025-26 Topps Basketball Hobby Box', 'BOX', 'Basketball', 'AM', 8, 355, null],
   ['2025-26 Topps Hoops Basketball Hobby 12-Box Case', '6698', 'Basketball', 'RM', 1, 2630, 2560],
   ['2026 Topps Chrome VeeFriends Hobby Box', 'BOX', 'Entertainment', 'RM', 10, 252.08, null],
-  ['2026 Topps Chrome UFC Delight 8-Box Case', '7128', 'Combat', 'RM', 1, 2310, 2000],
-  ['2026 Topps Cosmic Chrome WWE Wrestling Hobby 8-Box Case', '7160', 'Combat', 'RM', 1, 2300, 2000],
+  ['2026 Topps Chrome UFC Delight 8-Box Case', '7128', 'UFC', 'RM', 1, 2310, 2000],
+  ['2026 Topps Cosmic Chrome WWE Wrestling Hobby 8-Box Case', '7160', 'UFC', 'RM', 1, 2300, 2000],
   ['2025 Topps Chrome Black Football Hobby Box', 'BOX', 'Football', 'RM', 5, 405, null],
   ['2025-26 Topps Chrome Cactus Jack Basketball Hobby Box', 'BOX', 'Basketball', 'RM', 3, 517.58, null],
   ['2025 Topps Inception Baseball Hobby Box', 'BOX', 'Baseball', 'RM', 4, 262, null],
-  ['2025 Topps Stadium Club UFC Hobby Box', 'BOX', 'Combat', 'RM', 8, 87.5, null]
+  ['2025 Topps Stadium Club UFC Hobby Box', 'BOX', 'UFC', 'RM', 8, 87.5, null]
 ]
 
 /**

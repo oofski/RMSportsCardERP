@@ -18,10 +18,6 @@ function greetingWord(): string {
   return 'Good evening'
 }
 
-function monthLabel(): string {
-  return new Date().toLocaleDateString(undefined, { month: 'long', year: 'numeric' })
-}
-
 /** Bucket completed time entries into per-day totals for the last N days. */
 function hoursByDay(entries: TimeEntry[], days: number): { labels: string[]; minutes: number[] } {
   const labels: string[] = []
@@ -107,7 +103,6 @@ export function HomeModule(): JSX.Element {
         <h2>
           {greetingWord()}, {user?.firstName}
         </h2>
-        <p>Here's what's happening across RM Cardz — {monthLabel()}.</p>
       </div>
 
       <div style={{ marginBottom: 16 }}>

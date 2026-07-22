@@ -886,6 +886,39 @@ table.data tbody tr:hover {
   color: var(--text-3);
   margin-top: 2px;
 }
+/* Clickable stat card → drills into a detail view. */
+.stat-btn {
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  position: relative;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+.stat-btn:hover {
+  border-color: var(--brand-400);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
+}
+.stat-btn .stat-go {
+  position: absolute;
+  top: 50%;
+  right: 12px;
+  transform: translateY(-50%);
+  color: var(--text-3);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.stat-btn:hover .stat-go {
+  opacity: 1;
+}
+/* Totals row on detail tables. */
+table.data tfoot .data-total td {
+  border-top: 2px solid var(--border);
+  background: var(--surface-2);
+  padding: 12px 16px;
+}
 
 /* ---------- Dashboard (Home) ---------- */
 .greeting {

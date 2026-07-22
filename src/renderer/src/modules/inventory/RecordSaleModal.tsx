@@ -76,7 +76,6 @@ export function RecordSaleModal({
   return (
     <Modal
       title="Record a sale"
-      subtitle="Selling reduces stock at the chosen location and logs it to your sales ledger."
       onClose={onClose}
       footer={
         <>

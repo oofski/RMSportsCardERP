@@ -36,7 +36,7 @@ export function ProductFormModal({
     unitCost: product ? String(product.unitCost) : '',
     highBid: product?.highBid != null ? String(product.highBid) : '',
     salePrice: product?.salePrice != null ? String(product.salePrice) : '',
-    reorderPoint: String(product?.reorderPoint ?? 0),
+    reorderPoint: product?.reorderPoint ? String(product.reorderPoint) : '',
     notes: product?.notes ?? '',
     openingQuantity: '',
     openingLocation: 'RM' as Location
@@ -92,11 +92,6 @@ export function ProductFormModal({
   return (
     <Modal
       title={isEdit ? 'Edit product' : 'Add product'}
-      subtitle={
-        isEdit
-          ? 'Update catalog details. Stock changes through Add stock and sales.'
-          : 'Add a product to the catalog (with optional opening stock).'
-      }
       onClose={onClose}
       wide
       footer={

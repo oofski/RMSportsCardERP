@@ -111,7 +111,6 @@ export function TimePayrollModule(): JSX.Element {
       <div className="section-head">
         <div>
           <h2>Timesheets</h2>
-          <p>Open an employee to review their timesheet and export to Gusto.</p>
         </div>
         <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
           <div style={{ width: 150 }}>

@@ -43,7 +43,6 @@ export function HoursTab(): JSX.Element {
       <div className="section-head">
         <div>
           <h2>Hours at a glance</h2>
-          <p>A quick overview. Open Time &amp; Payroll for timesheets and Gusto export.</p>
         </div>
         <Button variant="primary" icon="ArrowUpRight" onClick={() => navigate('timepay')}>
           Open Time &amp; Payroll

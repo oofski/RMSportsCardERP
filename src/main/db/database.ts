@@ -163,6 +163,27 @@ function migrate(database: Database.Database): void {
   // Seed the product catalog once, then apply the on-hand snapshot once.
   seedCatalogIfNeeded(database)
   seedSnapshotIfNeeded(database)
+
+  // One-time data touch-ups (each guarded by a meta flag so they run once).
+  runOnce(database, 'combat_to_ufc', () =>
+    database.prepare("UPDATE inventory_products SET category = 'UFC' WHERE category = 'Combat'").run()
+  )
+  // Clear the per-product template fields for now; they're set later by supervisors.
+  runOnce(database, 'blank_template_fields_v1', () =>
+    database
+      .prepare(
+        `UPDATE inventory_products
+           SET boxes_per_case = NULL, packs_per_box = NULL, sale_price = NULL, reorder_point = 0`
+      )
+      .run()
+  )
+}
+
+/** Run `fn` once, ever, tracked by a meta flag. */
+function runOnce(database: Database.Database, key: string, fn: () => void): void {
+  if (getMeta(database, key) === '1') return
+  fn()
+  setMeta(database, key, '1')
 }
 
 /**

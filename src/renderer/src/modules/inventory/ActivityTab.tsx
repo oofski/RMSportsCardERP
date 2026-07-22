@@ -32,7 +32,6 @@ export function ActivityTab(): JSX.Element {
       <div className="section-head">
         <div>
           <h2>Activity</h2>
-          <p>Every stock movement — sales, purchases, restocks and adjustments.</p>
         </div>
       </div>
       <div className="table-wrap">
