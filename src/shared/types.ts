@@ -376,6 +376,67 @@ export interface ComposedEmail {
 }
 
 // ---------------------------------------------------------------------------
+// Purchase orders
+// ---------------------------------------------------------------------------
+
+export type PurchaseOrderStatus = 'ordered' | 'paid' | 'received' | 'cancelled'
+
+/** A PO line as sent to the renderer: catalog identity (JOINed) + buy price. */
+export interface PurchaseOrderLine {
+  id: string
+  productId: string
+  productName: string
+  sku: string
+  category: string
+  /** Whole units being purchased. */
+  quantity: number
+  /** Per-unit buy price being paid (future FIFO cost basis). */
+  unitPrice: number
+  /** quantity × unitPrice. */
+  lineTotal: number
+}
+
+/** A purchase order header (list/summary row on the kanban board). */
+export interface PurchaseOrder {
+  id: string
+  /** Human PO number, e.g. "PO-0001". */
+  poNumber: string
+  /** Optional free-text supplier (minimal header for now). */
+  supplier: string | null
+  notes: string | null
+  status: PurchaseOrderStatus
+  /** Σ(line qty × unit price), stored snapshot. */
+  total: number
+  /** Number of line items. */
+  lineCount: number
+  createdAt: string
+  updatedAt: string
+  orderedAt: string | null
+  paidAt: string | null
+  receivedAt: string | null
+  cancelledAt: string | null
+}
+
+/** A PO with its line items (detail view + receipt). */
+export interface PurchaseOrderDetail extends PurchaseOrder {
+  lines: PurchaseOrderLine[]
+}
+
+/** One line when creating a PO. */
+export interface NewPurchaseOrderLine {
+  productId: string
+  quantity: number
+  unitPrice: number
+}
+
+/** Create a purchase order from catalog line items. */
+export interface NewPurchaseOrder {
+  supplier?: string | null
+  notes?: string | null
+  lines: NewPurchaseOrderLine[]
+}
+
+// ---------------------------------------------------------------------------
 // Auto-update
 // ---------------------------------------------------------------------------
 

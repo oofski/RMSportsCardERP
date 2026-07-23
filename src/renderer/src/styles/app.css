@@ -932,17 +932,17 @@ table.data tbody tr:hover {
 /* ---------- Stat cards ---------- */
 .stat-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(176px, 1fr));
+  gap: 14px;
   margin-bottom: 20px;
 }
 .stat {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  padding: 16px 18px;
+  padding: 22px 24px;
   display: flex;
-  gap: 14px;
+  gap: 16px;
   align-items: center;
   box-shadow: var(--shadow-sm);
 }
@@ -990,7 +990,7 @@ table.data tbody tr:hover {
 .stat-btn .stat-go {
   position: absolute;
   top: 50%;
-  right: 12px;
+  right: 14px;
   transform: translateY(-50%);
   color: var(--text-3);
   opacity: 0;
@@ -3257,4 +3257,384 @@ tr.hoverable-row:hover {
   padding: 0 8px;
   margin-left: auto;
   display: block;
+}
+
+/* ==========================================================================
+   Invoicing / Purchase orders
+   Buy-side kanban pipeline + a clean, printable PO receipt. Theme-aware via the
+   shared tokens; dark overrides are added only where a value would otherwise
+   read wrong in dark mode.
+   ========================================================================== */
+
+/* ---------- Kanban board ---------- */
+.po-board {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  overflow-x: auto;
+  padding: 4px 2px 8px;
+}
+.po-col {
+  flex: 1 0 250px;
+  min-width: 250px;
+  max-width: 320px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  max-height: 100%;
+}
+.po-col-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.po-col-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+.po-col-received .po-col-title {
+  color: var(--success);
+}
+.po-col-cancelled .po-col-title {
+  color: var(--danger);
+}
+.po-col-count {
+  min-width: 22px;
+  height: 22px;
+  padding: 0 7px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-2);
+  background: var(--surface-3);
+  border-radius: 999px;
+}
+.po-col-body {
+  flex: 1;
+  min-height: 60px;
+  overflow-y: auto;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.po-col-empty {
+  padding: 18px 8px;
+  text-align: center;
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+
+/* ---------- PO card ---------- */
+.po-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-sm);
+  padding: 11px 12px;
+  cursor: pointer;
+  transition: border-color 0.13s ease, box-shadow 0.13s ease, transform 0.13s ease;
+}
+.po-card:hover {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow);
+  transform: translateY(-1px);
+}
+.po-card-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.po-card-num {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--brand-700);
+}
+.po-card-total {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+.po-card-supplier {
+  margin-top: 4px;
+  font-size: 13px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.po-card-meta {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+.po-card-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 11px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.po-move.po-move-cancelled {
+  color: var(--danger);
+}
+.po-move.po-move-received {
+  color: var(--success);
+}
+
+/* ---------- Create modal: line items ---------- */
+.po-lines-empty {
+  margin-top: 14px;
+  padding: 22px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-3);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+}
+.po-lines {
+  margin-top: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.po-lines-table {
+  font-size: 13px;
+}
+.po-lines-table th.num,
+.po-lines-table td.num {
+  text-align: right;
+}
+.po-lines-table td {
+  vertical-align: middle;
+}
+.po-line-name {
+  font-weight: 600;
+  color: var(--text);
+}
+.po-line-sub {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+.po-qty-input {
+  width: 74px;
+  text-align: right;
+  margin-left: auto;
+}
+.po-price-input {
+  width: 104px;
+  text-align: right;
+  margin-left: auto;
+}
+.po-total {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 13px 16px;
+  background: var(--surface-2);
+  border-top: 1px solid var(--border);
+  font-weight: 700;
+  font-size: 14px;
+}
+
+/* ---------- Receipt ---------- */
+.po-receipt {
+  background: var(--surface);
+}
+.po-receipt-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+.po-rh-num {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text);
+}
+.po-rh-supplier {
+  margin-top: 4px;
+  font-size: 14px;
+  color: var(--text);
+}
+.po-rh-date {
+  margin-top: 2px;
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+.po-receipt-notes {
+  margin-top: 14px;
+  padding: 11px 13px;
+  font-size: 13px;
+  color: var(--text-2);
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+}
+.po-receipt-lines {
+  margin-top: 8px;
+}
+.po-receipt-line {
+  display: grid;
+  grid-template-columns: 46px 1fr 60px 110px 120px;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 4px;
+  border-bottom: 1px solid var(--border);
+}
+.po-receipt-line-head {
+  padding: 12px 4px;
+  border-bottom: 1px solid var(--border-strong);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-3);
+}
+.po-receipt-line-head .po-rl-qty,
+.po-receipt-line-head .po-rl-price,
+.po-receipt-line-head .po-rl-total {
+  text-align: right;
+}
+.po-line-img {
+  width: 46px;
+  height: 46px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  color: var(--text-3);
+}
+.po-line-img img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.po-rl-name {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.po-rl-pname {
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.po-rl-sku {
+  font-size: 12px;
+  color: var(--text-3);
+}
+.po-rl-qty,
+.po-rl-price,
+.po-rl-total {
+  text-align: right;
+  color: var(--text);
+}
+.po-rl-total {
+  font-weight: 600;
+}
+.po-grand-total {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 2px solid var(--border-strong);
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+/* ---------- Stage badges ---------- */
+.po-badge {
+  gap: 5px;
+}
+.po-badge-ordered {
+  background: var(--brand-soft);
+  color: var(--brand-600);
+}
+.po-badge-paid {
+  background: var(--info-bg);
+  color: var(--info);
+}
+.po-badge-received {
+  background: var(--success-bg);
+  color: var(--success);
+}
+.po-badge-cancelled {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+/* ---------- Print: isolate the receipt ---------- */
+@media print {
+  body * {
+    visibility: hidden !important;
+  }
+  .po-receipt,
+  .po-receipt * {
+    visibility: visible !important;
+  }
+  .modal-overlay {
+    position: static !important;
+    background: none !important;
+    padding: 0 !important;
+  }
+  .modal,
+  .modal-lg {
+    position: static !important;
+    box-shadow: none !important;
+    border: none !important;
+    max-width: none !important;
+    width: 100% !important;
+  }
+  .modal-head,
+  .modal-foot {
+    display: none !important;
+  }
+  .po-receipt {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+  }
+  /* Force a light, ink-friendly receipt regardless of the app theme. Browsers
+     drop backgrounds when printing but KEEP text color, so a dark-mode user
+     would otherwise print near-white text on white paper. Re-declaring the core
+     tokens here makes every var(--text*/--surface*/--border*) inside the receipt
+     resolve to light values. */
+  .po-receipt {
+    --surface: #ffffff;
+    --surface-2: #ffffff;
+    --surface-3: #f2f3f5;
+    --text: #1b2130;
+    --text-2: #454e60;
+    --text-3: #6b7488;
+    --border: #dcdfe6;
+    --border-strong: #c3c8d2;
+    background: #ffffff !important;
+    color: #1b2130 !important;
+  }
 }

@@ -14,6 +14,7 @@ import { AdminModule } from '../modules/admin/AdminModule'
 import { HomeModule } from '../modules/home/HomeModule'
 import { TimePayrollModule } from '../modules/timepay/TimePayrollModule'
 import { InventoryModule } from '../modules/inventory/InventoryModule'
+import { InvoicingModule } from '../modules/invoicing/InvoicingModule'
 import { ComingSoon } from '../modules/ComingSoon'
 
 const HOME = { id: 'home', name: 'Home', description: 'Your operations overview.' }
@@ -248,6 +249,8 @@ export function AppShell(): JSX.Element {
               <TimePayrollModule />
             ) : activeModule?.id === 'inventory' ? (
               <InventoryModule />
+            ) : activeModule?.id === 'invoicing' ? (
+              <InvoicingModule />
             ) : activeModule ? (
               <ComingSoon module={activeModule} />
             ) : (

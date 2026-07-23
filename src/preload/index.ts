@@ -20,10 +20,14 @@ import type {
   NewEmployeeInput,
   NewIncomingShipment,
   NewInventoryProduct,
+  NewPurchaseOrder,
   NewTimeEntryInput,
   PricingRow,
   ProductImage,
   ProductLot,
+  PurchaseOrder,
+  PurchaseOrderDetail,
+  PurchaseOrderStatus,
   RecordSaleInput,
   RememberedCredentials,
   Result,
@@ -136,6 +140,18 @@ const api = {
       ipcRenderer.invoke(IPC.invHighBidUpdate, { productId, highBid }),
     productLots: (productId: string): Promise<ProductLot[]> =>
       ipcRenderer.invoke(IPC.invProductLots, productId)
+  },
+  purchaseOrders: {
+    list: (): Promise<PurchaseOrder[]> => ipcRenderer.invoke(IPC.poList),
+    get: (id: string): Promise<PurchaseOrderDetail | null> =>
+      ipcRenderer.invoke(IPC.poGet, id),
+    create: (input: NewPurchaseOrder): Promise<Result<PurchaseOrderDetail>> =>
+      ipcRenderer.invoke(IPC.poCreate, input),
+    setStatus: (id: string, status: PurchaseOrderStatus): Promise<Result<PurchaseOrderDetail>> =>
+      ipcRenderer.invoke(IPC.poSetStatus, { id, status }),
+    searchCatalog: (query: string): Promise<InventoryProduct[]> =>
+      ipcRenderer.invoke(IPC.poCatalogSearch, query),
+    thumbnails: (): Promise<Record<string, string>> => ipcRenderer.invoke(IPC.poThumbnails)
   },
   email: {
     composeInvite: (

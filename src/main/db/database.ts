@@ -190,6 +190,47 @@ function migrate(database: Database.Database): void {
       ON inventory_lots (product_id, location, received_at, id);
     CREATE INDEX IF NOT EXISTS idx_inv_lots_product
       ON inventory_lots (product_id);
+
+    -- Purchase orders (buy-side). A PO moves through a deal pipeline
+    -- (ordered -> paid -> received, or cancelled). total is a stored snapshot
+    -- of Σ(line qty × unit_price) at creation. Receiving a PO does NOT yet write
+    -- stock/cost into inventory (deferred); it is a normal pipeline stage.
+    CREATE TABLE IF NOT EXISTS purchase_orders (
+      id           TEXT PRIMARY KEY,
+      po_number    TEXT NOT NULL UNIQUE,
+      supplier     TEXT,
+      notes        TEXT,
+      status       TEXT NOT NULL DEFAULT 'ordered',
+      total        REAL NOT NULL DEFAULT 0,
+      created_by   TEXT,
+      created_at   TEXT NOT NULL,
+      updated_at   TEXT NOT NULL,
+      ordered_at   TEXT,
+      paid_at      TEXT,
+      received_at  TEXT,
+      cancelled_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_po_status
+      ON purchase_orders (status);
+
+    -- Line items on a PO. Each references a real catalog product and stores the
+    -- quantity and the per-unit buy price being paid; the buy price is retained
+    -- so it can later become the FIFO cost basis when received->inventory ships.
+    CREATE TABLE IF NOT EXISTS purchase_order_lines (
+      id         TEXT PRIMARY KEY,
+      po_id      TEXT NOT NULL,
+      product_id TEXT NOT NULL,
+      quantity   INTEGER NOT NULL,
+      unit_price REAL NOT NULL DEFAULT 0,
+      position   INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (po_id) REFERENCES purchase_orders (id) ON DELETE CASCADE,
+      FOREIGN KEY (product_id) REFERENCES inventory_products (id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_po_lines_po
+      ON purchase_order_lines (po_id);
+    CREATE INDEX IF NOT EXISTS idx_po_lines_product
+      ON purchase_order_lines (product_id);
   `)
 
   if (getMeta(database, 'schema_version') === null) {
@@ -218,7 +259,9 @@ function migrate(database: Database.Database): void {
   // cost basis (COGS) recorded on each sale from the consumed lots.
   addColumnIfMissing(database, 'inventory_products', 'high_bid_at', 'TEXT')
   addColumnIfMissing(database, 'inventory_transactions', 'cost_basis', 'REAL')
-  setMeta(database, 'schema_version', '6')
+  // v7: purchase orders (buy-side pipeline). Brand-new tables are created
+  // idempotently in the schema-init block above for both fresh and existing DBs.
+  setMeta(database, 'schema_version', '7')
 
   // Seed the product catalog once, then apply the on-hand snapshot once.
   seedCatalogIfNeeded(database)

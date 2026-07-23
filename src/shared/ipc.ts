@@ -66,6 +66,14 @@ export const IPC = {
   invHighBidUpdate: 'inventory:pricing:high-bid',
   invProductLots: 'inventory:product:lots',
 
+  // Purchase orders
+  poList: 'po:list',
+  poGet: 'po:get',
+  poCreate: 'po:create',
+  poSetStatus: 'po:set-status',
+  poCatalogSearch: 'po:catalog-search',
+  poThumbnails: 'po:thumbnails',
+
   // Email
   emailComposeInvite: 'email:compose-invite',
   emailOpenExternal: 'email:open-external',
