@@ -7,6 +7,7 @@ import { Button, EmptyState, Field, Input, Modal, Select } from '../../component
 import { Icon } from '../../components/Icon'
 import { CategoryLogo } from './CategoryLogo'
 import { productMatches, structureLabel } from './helpers'
+import { ImageLightbox } from './ImageLightbox'
 import { ProductFormModal } from './ProductFormModal'
 import { RecordSaleModal } from './RecordSaleModal'
 import { StockModal } from './StockModal'
@@ -385,6 +386,7 @@ function ProductDetail({
   const [idx, setIdx] = useState(0)
   const [imgBusy, setImgBusy] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [zoom, setZoom] = useState(false)
 
   useEffect(() => {
     let active = true
@@ -460,7 +462,18 @@ function ProductDetail({
                 <span className="spinner dark" />
               </div>
             ) : current ? (
-              <img src={current.dataUrl} alt={product.name} />
+              <button
+                type="button"
+                className="cd-frame-img"
+                onClick={() => setZoom(true)}
+                aria-label="Expand image"
+                title="Click to expand"
+              >
+                <img src={current.dataUrl} alt={product.name} />
+                <span className="cd-zoom-hint">
+                  <Icon name="Maximize2" size={15} />
+                </span>
+              </button>
             ) : (
               <div className="cd-ph">
                 <CategoryLogo category={product.category} size={34} />
@@ -573,6 +586,16 @@ function ProductDetail({
             <Icon name="Check" size={13} /> Saved
           </span>
         </div>
+      )}
+
+      {zoom && images && images.length > 0 && (
+        <ImageLightbox
+          images={images}
+          index={idx}
+          alt={product.name}
+          onIndex={setIdx}
+          onClose={() => setZoom(false)}
+        />
       )}
     </div>
   )
