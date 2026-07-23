@@ -417,11 +417,26 @@ export interface PurchaseOrder {
   paidAt: string | null
   receivedAt: string | null
   cancelledAt: string | null
+  /** When the PO's cases were scanned into stock (idempotency guard). */
+  scannedAt: string | null
 }
 
 /** A PO with its line items (detail view + receipt). */
 export interface PurchaseOrderDetail extends PurchaseOrder {
   lines: PurchaseOrderLine[]
+}
+
+/** A Cost-of-Goods-Sold ledger entry recorded when a PO (a purchase) is created. */
+export interface CogsEntry {
+  id: string
+  poId: string
+  poNumber: string
+  /** = the PO total at creation. */
+  amount: number
+  /** = the PO creation timestamp. */
+  occurredAt: string
+  note: string | null
+  createdAt: string
 }
 
 /** One line when creating a PO. */

@@ -55,7 +55,7 @@ export const MODULES: AppModule[] = [
     description: 'Invoice and purchase-order automation.',
     icon: 'ReceiptText',
     permission: 'module.invoicing',
-    status: 'coming-soon'
+    status: 'active'
   },
   {
     id: 'finance',

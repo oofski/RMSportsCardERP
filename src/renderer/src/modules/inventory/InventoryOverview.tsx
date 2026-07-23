@@ -175,9 +175,21 @@ function IncomingPanel({
   const [thumbs, setThumbs] = useState<Record<string, string>>({})
   const [adding, setAdding] = useState(false)
   const [busy, setBusy] = useState<Set<string>>(new Set())
+  // The panel unmounts if the user opens a stat detail mid-action, so every
+  // post-await setState (here and in the receive/scan/cancel handlers) checks this.
+  const mounted = useRef(true)
+  useEffect(() => () => {
+    mounted.current = false
+  }, [])
 
   const load = useCallback(async () => {
-    setItems(await api.inventory.listIncoming())
+    const r = await api.inventory.listIncoming()
+    if (mounted.current) setItems(r)
+  }, [])
+
+  const loadBoxes = useCallback(async () => {
+    const b = await api.purchaseOrders.incomingBoxes().catch(() => [])
+    if (mounted.current) setPoBoxes(b)
   }, [])
 
   // Guarded initial fetch — the whole panel unmounts if the user opens a stat
@@ -206,13 +218,15 @@ function IncomingPanel({
     }
   }, [])
 
-  const setBusyFor = (id: string, on: boolean): void =>
+  const setBusyFor = (id: string, on: boolean): void => {
+    if (!mounted.current) return
     setBusy((prev) => {
       const next = new Set(prev)
       if (on) next.add(id)
       else next.delete(id)
       return next
     })
+  }
 
   const boxes = poBoxes ?? []
   const manual = items ?? []
@@ -235,6 +249,22 @@ function IncomingPanel({
       }
     } finally {
       setBusyFor(s.id, false)
+    }
+  }
+
+  const scanIn = async (box: PurchaseOrderDetail): Promise<void> => {
+    setBusyFor(box.id, true)
+    try {
+      const res = await api.purchaseOrders.scanIn(box.id)
+      if (res.ok) {
+        toast.success(`Scanned in ${box.poNumber} into ${box.location}.`)
+        await loadBoxes()
+        await onReceived()
+      } else {
+        toast.error(res.error ?? 'Could not scan in the purchase order.')
+      }
+    } finally {
+      setBusyFor(box.id, false)
     }
   }
 
@@ -285,7 +315,14 @@ function IncomingPanel({
           {boxes.length > 0 && (
             <div className="po-ship-list">
               {boxes.map((b) => (
-                <PurchaseOrderBox key={b.id} box={b} thumbnails={thumbs} />
+                <PurchaseOrderBox
+                  key={b.id}
+                  box={b}
+                  thumbnails={thumbs}
+                  canManage={canManage}
+                  busy={busy.has(b.id)}
+                  onScan={() => scanIn(b)}
+                />
               ))}
             </div>
           )}
@@ -362,10 +399,16 @@ function IncomingPanel({
  */
 function PurchaseOrderBox({
   box,
-  thumbnails
+  thumbnails,
+  canManage,
+  busy,
+  onScan
 }: {
   box: PurchaseOrderDetail
   thumbnails: Record<string, string>
+  canManage: boolean
+  busy: boolean
+  onScan: () => void | Promise<void>
 }): JSX.Element {
   const [open, setOpen] = useState(false)
   const meta = PO_STAGE_META[box.status]
@@ -413,6 +456,13 @@ function PurchaseOrderBox({
               <span className="po-ship-qty mono">×{l.quantity}</span>
             </div>
           ))}
+        </div>
+      )}
+      {canManage && (
+        <div className="po-ship-foot">
+          <button type="button" className="btn btn-sm po-ship-scan" disabled={busy} onClick={onScan}>
+            <Icon name="PackageCheck" size={14} /> {busy ? 'Scanning…' : 'Scanned in'}
+          </button>
         </div>
       )}
     </div>

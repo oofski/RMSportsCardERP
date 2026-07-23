@@ -9,6 +9,8 @@ import type {
 import { canTransition } from '@shared/purchaseOrders'
 import { LOCATION_IDS, isLocation } from '@shared/inventory'
 import { getDb, getMeta, setMeta } from './database'
+import { addStock } from './inventory'
+import { recordPoCogs, voidPoCogs } from './finance'
 import { newId, nowIso } from '../util'
 
 interface PoRow {
@@ -26,6 +28,7 @@ interface PoRow {
   paid_at: string | null
   received_at: string | null
   cancelled_at: string | null
+  scanned_at: string | null
 }
 
 interface PoLineRow {
@@ -58,7 +61,8 @@ function toSummary(row: PoRow & { line_count: number }): PurchaseOrder {
     orderedAt: row.ordered_at,
     paidAt: row.paid_at,
     receivedAt: row.received_at,
-    cancelledAt: row.cancelled_at
+    cancelledAt: row.cancelled_at,
+    scannedAt: row.scanned_at
   }
 }
 
@@ -78,7 +82,7 @@ function toLine(row: PoLineRow): PurchaseOrderLine {
 const PO_SELECT = `
   SELECT po.id, po.po_number, po.supplier, po.notes, po.status, po.location, po.total,
          po.created_by, po.created_at, po.updated_at,
-         po.ordered_at, po.paid_at, po.received_at, po.cancelled_at,
+         po.ordered_at, po.paid_at, po.received_at, po.cancelled_at, po.scanned_at,
          (SELECT COUNT(*) FROM purchase_order_lines l WHERE l.po_id = po.id) AS line_count
   FROM purchase_orders po
 `
@@ -117,9 +121,18 @@ export function getPurchaseOrder(id: string): PurchaseOrderDetail | null {
  */
 export function listActivePurchaseOrderBoxes(): PurchaseOrderDetail[] {
   const db = getDb()
+  // ISO strings sort chronologically (matching nowIso() storage), so a lexical
+  // >= compare against a computed cutoff is a valid 14-day window test.
+  const cutoff = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString()
   const headers = db
-    .prepare(`${PO_SELECT} WHERE po.status != 'cancelled' ORDER BY po.created_at DESC`)
-    .all() as Array<PoRow & { line_count: number }>
+    .prepare(
+      `${PO_SELECT}
+       WHERE po.status != 'cancelled'
+         AND po.scanned_at IS NULL
+         AND (po.status != 'received' OR po.received_at IS NULL OR po.received_at >= @cutoff)
+       ORDER BY po.created_at DESC`
+    )
+    .all({ cutoff }) as Array<PoRow & { line_count: number }>
   const lineStmt = db.prepare(LINE_SELECT)
   return headers.map((h) => ({
     ...toSummary(h),
@@ -167,6 +180,9 @@ export function createPurchaseOrder(
     input.lines.forEach((line, i) => {
       insertLine.run(newId(), id, line.productId, Math.round(line.quantity), Math.max(0, line.unitPrice), i, ts)
     })
+    // Record the purchase as a Cost-of-Goods-Sold ledger entry (same rounded
+    // total, same creation timestamp), atomic with the PO insert.
+    recordPoCogs(db, { poId: id, poNumber, amount: total, occurredAt: ts, note: `Purchase order ${poNumber}` })
     return id
   })
   const id = create()
@@ -215,6 +231,9 @@ export function setPurchaseOrderStatus(
       db.prepare(
         `UPDATE purchase_orders SET status = ?, ${tsCol} = ?, updated_at = ? WHERE id = ?`
       ).run(status, ts, ts, id)
+      // Cancelling a PO voids its COGS ledger entry. Cancel is only reachable
+      // from ordered/paid (per PO_TRANSITIONS), so this is the single void point.
+      if (status === 'cancelled') voidPoCogs(db, id)
     }
 
     if (status === 'received') {
@@ -234,6 +253,52 @@ export function setPurchaseOrderStatus(
     return { po: getPurchaseOrder(id) }
   })
   return run()
+}
+
+export interface ScanInResult {
+  po: PurchaseOrderDetail | null
+  error?: string
+}
+
+/**
+ * Scan a PO's cases into on-hand stock. Idempotent + atomic: the scanned_at
+ * guard is read INSIDE the same transaction that stamps it, so a double-click
+ * adds stock exactly once. Each line folds into inventory through the existing
+ * addStock engine (moving weighted-average cost + FIFO cost lot), so no stock or
+ * cost math is hand-rolled. A line failure THROWS to roll back every prior line.
+ */
+export function scanInPurchaseOrder(id: string, actorId: string | null): ScanInResult {
+  const db = getDb()
+  const run = db.transaction((): ScanInResult => {
+    const h = db
+      .prepare('SELECT id, status, po_number, location, scanned_at FROM purchase_orders WHERE id = ?')
+      .get(id) as
+      | { id: string; status: PurchaseOrderStatus; po_number: string; location: string; scanned_at: string | null }
+      | undefined
+    if (!h) return { po: null, error: 'Purchase order not found.' }
+    if (h.status === 'cancelled') return { po: getPurchaseOrder(id), error: 'This purchase order was cancelled.' }
+    if (h.scanned_at)
+      return { po: getPurchaseOrder(id), error: 'This purchase order has already been scanned in.' } // idempotency guard
+    const lines = db
+      .prepare('SELECT product_id, quantity, unit_price FROM purchase_order_lines WHERE po_id = ?')
+      .all(id) as Array<{ product_id: string; quantity: number; unit_price: number }>
+    for (const l of lines) {
+      const res = addStock(l.product_id, h.location, l.quantity, l.unit_price, `Scanned in ${h.po_number}`, actorId)
+      if (res.error) throw new Error(res.error) // THROW so the outer txn rolls back every prior line (atomic)
+    }
+    const ts = nowIso()
+    if (h.status !== 'received')
+      db.prepare(
+        'UPDATE purchase_orders SET status = ?, received_at = ?, scanned_at = ?, updated_at = ? WHERE id = ?'
+      ).run('received', ts, ts, ts, id)
+    else db.prepare('UPDATE purchase_orders SET scanned_at = ?, updated_at = ? WHERE id = ?').run(ts, ts, id)
+    return { po: getPurchaseOrder(id) }
+  })
+  try {
+    return run()
+  } catch (err) {
+    return { po: getPurchaseOrder(id), error: err instanceof Error ? err.message : String(err) }
+  }
 }
 
 /** Read + increment the shared PO sequence counter, returning "PO-0001" etc.

@@ -232,6 +232,20 @@ function migrate(database: Database.Database): void {
       ON purchase_order_lines (po_id);
     CREATE INDEX IF NOT EXISTS idx_po_lines_product
       ON purchase_order_lines (product_id);
+
+    -- Cost-of-Goods-Sold ledger. One row per purchase order (a purchase),
+    -- recorded when the PO is created; voided (deleted) if the PO is cancelled.
+    CREATE TABLE IF NOT EXISTS finance_cogs (
+      id          TEXT PRIMARY KEY,
+      po_id       TEXT NOT NULL,
+      po_number   TEXT NOT NULL,
+      amount      REAL NOT NULL DEFAULT 0,
+      occurred_at TEXT NOT NULL,
+      note        TEXT,
+      created_at  TEXT NOT NULL,
+      FOREIGN KEY (po_id) REFERENCES purchase_orders (id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_finance_cogs_po ON finance_cogs (po_id);
   `)
 
   if (getMeta(database, 'schema_version') === null) {
@@ -264,7 +278,9 @@ function migrate(database: Database.Database): void {
   // idempotently in the schema-init block above for both fresh and existing DBs.
   // v8: destination stock location on a PO (where its cases will be checked in).
   addColumnIfMissing(database, 'purchase_orders', 'location', "TEXT NOT NULL DEFAULT 'RM'")
-  setMeta(database, 'schema_version', '8')
+  // v9: scanned_at on purchase_orders (idempotent scan-in) + finance_cogs COGS ledger.
+  addColumnIfMissing(database, 'purchase_orders', 'scanned_at', 'TEXT')
+  setMeta(database, 'schema_version', '9')
 
   // Seed the product catalog once, then apply the on-hand snapshot once.
   seedCatalogIfNeeded(database)

@@ -74,6 +74,8 @@ export const IPC = {
   poCatalogSearch: 'po:catalog-search',
   poThumbnails: 'po:thumbnails',
   poIncomingBoxes: 'po:incoming-boxes',
+  poScanIn: 'po:scan-in',
+  poCogsList: 'po:cogs-list',
 
   // Email
   emailComposeInvite: 'email:compose-invite',

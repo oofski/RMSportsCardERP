@@ -90,6 +90,12 @@ export function PurchaseOrderReceipt({
           </span>
         </div>
 
+        <div className="po-receipt-timeline">
+          <TimeRow icon="ShoppingCart" label="Ordered" date={detail.orderedAt} />
+          <TimeRow icon="DollarSign" label="Paid" date={detail.paidAt} />
+          <TimeRow icon="PackageCheck" label="Received" date={detail.receivedAt} />
+        </div>
+
         {detail.notes && <div className="po-receipt-notes">{detail.notes}</div>}
 
         <div className="po-receipt-lines">
@@ -111,6 +117,24 @@ export function PurchaseOrderReceipt({
         </div>
       </div>
     </Modal>
+  )
+}
+
+function TimeRow({
+  icon,
+  label,
+  date
+}: {
+  icon: string
+  label: string
+  date: string | null
+}): JSX.Element {
+  return (
+    <div className="po-rt-row">
+      <Icon name={icon} size={14} />
+      <span className="po-rt-label">{label}</span>
+      <span className="po-rt-date mono">{date ? formatDate(date) : '—'}</span>
+    </div>
   )
 }
 

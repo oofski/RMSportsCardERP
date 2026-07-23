@@ -3712,6 +3712,66 @@ tr.hoverable-row:hover {
   color: var(--text-2);
 }
 
+/* ---------- Scan-in footer on an incoming PO box ---------- */
+.po-ship-foot {
+  display: flex;
+  justify-content: flex-end;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+}
+.po-ship-scan {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ---------- Kanban drag-and-drop states ---------- */
+.po-card[draggable='true'] {
+  cursor: grab;
+}
+.po-card-dragging {
+  opacity: 0.5;
+}
+.po-col-dragover {
+  border-color: var(--brand-500);
+}
+.po-col-dragover .po-col-body {
+  background: color-mix(in srgb, var(--brand-500) 8%, transparent);
+  box-shadow: inset 0 0 0 2px var(--brand-500);
+  border-radius: var(--radius);
+}
+/* Columns the dragged card cannot move to — dim them so the valid target stands out. */
+.po-col-noallow {
+  opacity: 0.45;
+  transition: opacity 0.12s ease;
+}
+
+/* ---------- Receipt timestamp timeline ---------- */
+.po-receipt-timeline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 22px;
+  margin: 12px 0 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+.po-rt-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.po-rt-label {
+  font-weight: 600;
+  color: var(--text);
+}
+.po-rt-date {
+  color: var(--text-3);
+}
+
 /* ---------- Print: isolate the receipt ---------- */
 @media print {
   body * {

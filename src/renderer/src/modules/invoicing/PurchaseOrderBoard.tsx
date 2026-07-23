@@ -1,5 +1,6 @@
+import { useState } from 'react'
 import type { PurchaseOrder, PurchaseOrderStatus } from '@shared/types'
-import { PO_STAGES, PO_TRANSITIONS } from '@shared/purchaseOrders'
+import { PO_STAGES, PO_TRANSITIONS, canTransition } from '@shared/purchaseOrders'
 import { Icon } from '../../components/Icon'
 import { formatMoney } from '../../lib/format'
 import { PO_MOVE_LABEL, PO_STAGE_META } from './helpers'
@@ -7,9 +8,9 @@ import { PO_MOVE_LABEL, PO_STAGE_META } from './helpers'
 /**
  * The buy-side pipeline. One column per PO_STAGES entry (Ordered / Paid /
  * Received / Cancelled); each PO sits in the column matching its status. Moves
- * are button-driven (no drag-and-drop for MVP) — the available buttons come from
- * PO_TRANSITIONS so terminal stages show none. Clicking a card body opens its
- * receipt.
+ * are both button-driven (from PO_TRANSITIONS, so terminal stages show none) and
+ * drag-and-drop: a card can be dragged into any column its status can legally
+ * transition to (canTransition). Clicking a card body opens its receipt.
  */
 export function PurchaseOrderBoard({
   pos,
@@ -23,13 +24,45 @@ export function PurchaseOrderBoard({
   onMove: (id: string, to: PurchaseOrderStatus) => void
   onOpen: (id: string) => void
 }): JSX.Element {
+  const [dragId, setDragId] = useState<string | null>(null)
+  const [overStage, setOverStage] = useState<PurchaseOrderStatus | null>(null)
+  const fromStatus = dragId ? pos.find((p) => p.id === dragId)?.status ?? null : null
+
   return (
     <div className="po-board">
       {PO_STAGES.map((stage) => {
         const inStage = pos.filter((p) => p.status === stage.id)
         const meta = PO_STAGE_META[stage.id]
+        const canDrop = !!(dragId && fromStatus && canTransition(fromStatus, stage.id))
+        // While dragging, dim the columns this card can't move to (never the
+        // column it came from) so valid vs invalid targets are both explicit.
+        const noAllow = !!dragId && fromStatus !== stage.id && !canDrop
         return (
-          <div className={`po-col po-col-${stage.id}`} key={stage.id}>
+          <div
+            className={`po-col po-col-${stage.id}${overStage === stage.id ? ' po-col-dragover' : ''}${
+              noAllow ? ' po-col-noallow' : ''
+            }`}
+            key={stage.id}
+            onDragOver={(e) => {
+              if (canDrop) {
+                e.preventDefault()
+                e.dataTransfer.dropEffect = 'move'
+                if (overStage !== stage.id) setOverStage(stage.id)
+              }
+            }}
+            onDragLeave={(e) => {
+              if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                setOverStage((s) => (s === stage.id ? null : s))
+              }
+            }}
+            onDrop={(e) => {
+              e.preventDefault()
+              const id = dragId
+              if (id && fromStatus && canTransition(fromStatus, stage.id)) onMove(id, stage.id)
+              setDragId(null)
+              setOverStage(null)
+            }}
+          >
             <div className="po-col-head">
               <span className="po-col-title">
                 <Icon name={meta.icon} size={15} />
@@ -42,7 +75,18 @@ export function PurchaseOrderBoard({
                 <div className="po-col-empty">Nothing here.</div>
               ) : (
                 inStage.map((po) => (
-                  <PoCard key={po.id} po={po} onMove={onMove} onOpen={onOpen} />
+                  <PoCard
+                    key={po.id}
+                    po={po}
+                    onMove={onMove}
+                    onOpen={onOpen}
+                    dragging={dragId === po.id}
+                    onDragStart={setDragId}
+                    onDragEnd={() => {
+                      setDragId(null)
+                      setOverStage(null)
+                    }}
+                  />
                 ))
               )}
             </div>
@@ -56,16 +100,29 @@ export function PurchaseOrderBoard({
 function PoCard({
   po,
   onMove,
-  onOpen
+  onOpen,
+  dragging,
+  onDragStart,
+  onDragEnd
 }: {
   po: PurchaseOrder
   onMove: (id: string, to: PurchaseOrderStatus) => void
   onOpen: (id: string) => void
+  dragging: boolean
+  onDragStart: (id: string) => void
+  onDragEnd: () => void
 }): JSX.Element {
   const moves = PO_TRANSITIONS[po.status] ?? []
   return (
     <div
-      className="po-card"
+      className={`po-card${dragging ? ' po-card-dragging' : ''}`}
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.setData('text/plain', po.id)
+        e.dataTransfer.effectAllowed = 'move'
+        onDragStart(po.id)
+      }}
+      onDragEnd={() => onDragEnd()}
       onClick={() => onOpen(po.id)}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {

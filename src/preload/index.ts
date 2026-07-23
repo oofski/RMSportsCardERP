@@ -7,6 +7,7 @@ import type {
   AuthResult,
   CategorySummary,
   ClockStatus,
+  CogsEntry,
   ComposedEmail,
   Employee,
   EmployeeHoursSummary,
@@ -152,7 +153,10 @@ const api = {
     searchCatalog: (query: string): Promise<InventoryProduct[]> =>
       ipcRenderer.invoke(IPC.poCatalogSearch, query),
     thumbnails: (): Promise<Record<string, string>> => ipcRenderer.invoke(IPC.poThumbnails),
-    incomingBoxes: (): Promise<PurchaseOrderDetail[]> => ipcRenderer.invoke(IPC.poIncomingBoxes)
+    incomingBoxes: (): Promise<PurchaseOrderDetail[]> => ipcRenderer.invoke(IPC.poIncomingBoxes),
+    scanIn: (id: string): Promise<Result<PurchaseOrderDetail>> =>
+      ipcRenderer.invoke(IPC.poScanIn, { id }),
+    cogsList: (): Promise<CogsEntry[]> => ipcRenderer.invoke(IPC.poCogsList)
   },
   email: {
     composeInvite: (

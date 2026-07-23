@@ -1,6 +1,7 @@
 import { ipcMain } from 'electron'
 import { IPC } from '@shared/ipc'
 import type {
+  CogsEntry,
   InventoryProduct,
   NewPurchaseOrder,
   PurchaseOrder,
@@ -16,8 +17,10 @@ import {
   getPurchaseOrder,
   listActivePurchaseOrderBoxes,
   listPurchaseOrders,
+  scanInPurchaseOrder,
   setPurchaseOrderStatus
 } from './db/purchaseOrders'
+import { listCogsEntries } from './db/finance'
 import { getProduct, productThumbnails, searchCatalog } from './db/inventory'
 
 function can(permission: Permission): boolean {
@@ -59,6 +62,10 @@ export function registerPurchaseOrdersIpc(): void {
   ipcMain.handle(IPC.poIncomingBoxes, (): PurchaseOrderDetail[] =>
     can('module.inventory') || can('module.invoicing') ? listActivePurchaseOrderBoxes() : []
   )
+  // COGS ledger read — visible to finance or invoicing users.
+  ipcMain.handle(IPC.poCogsList, (): CogsEntry[] =>
+    can('module.finance') || can('module.invoicing') ? listCogsEntries() : []
+  )
 
   // ---- Writes (module.invoicing) ------------------------------------------
   ipcMain.handle(IPC.poCreate, (_e, input: NewPurchaseOrder): Result<PurchaseOrderDetail> => {
@@ -79,6 +86,20 @@ export function registerPurchaseOrdersIpc(): void {
         }
       }
       return { ok: true, data: createPurchaseOrder(input, actor.id) }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  // Scan-in folds a PO's cases into stock — same audience as poIncomingBoxes.
+  ipcMain.handle(IPC.poScanIn, (_e, payload: { id: string }): Result<PurchaseOrderDetail> => {
+    try {
+      if (!can('module.inventory') && !can('module.invoicing'))
+        return { ok: false, error: 'You do not have access to receive purchase orders.' }
+      const id = String(payload?.id ?? '')
+      if (!id) return { ok: false, error: 'No purchase order specified.' }
+      const res = scanInPurchaseOrder(id, currentUser()?.id ?? null)
+      return res.error ? { ok: false, error: res.error } : { ok: true, data: res.po as PurchaseOrderDetail }
     } catch (err) {
       return fail(err)
     }
