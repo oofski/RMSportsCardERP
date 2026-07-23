@@ -3115,6 +3115,103 @@ table.data tfoot .data-total td {
   color: var(--danger);
 }
 
+/* Product card body (image + specs + cases) — shared by the quick-view modal
+   and the dashboard hover card. */
+.qv-body {
+  display: flex;
+  flex-direction: column;
+}
+.qv-top {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  margin-bottom: 16px;
+}
+.qv-img {
+  flex: 0 0 112px;
+  width: 112px;
+  height: 112px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  color: var(--text-3);
+}
+.qv-img img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.qv-top .qv-specs {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-bottom: 0;
+  grid-template-columns: repeat(auto-fit, minmax(84px, 1fr));
+}
+
+/* Floating hover card on the dashboard product table */
+.hovercard {
+  position: fixed;
+  z-index: 80;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  padding: 14px;
+  overflow: hidden;
+  animation: hovercard-in 0.09s ease-out;
+}
+@keyframes hovercard-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.hovercard .qv-body {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.hovercard .qv-cases-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+.hovercard .cases-list {
+  max-height: none;
+  overflow: visible;
+}
+.hovercard-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+.hc-name {
+  font-weight: 700;
+  font-size: 14px;
+  line-height: 1.25;
+  color: var(--text);
+}
+.hc-sub {
+  font-size: 12px;
+  color: var(--text-3);
+}
+tr.hoverable-row:hover {
+  background: var(--surface-2);
+}
+
 /* Daily pricing table */
 .pricing-search {
   max-width: 260px;

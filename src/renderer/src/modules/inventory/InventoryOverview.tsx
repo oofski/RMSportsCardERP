@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import type { CategorySummary, IncomingShipment, InventoryProduct, InventoryStats } from '@shared/types'
 import { CATEGORY_ORDER, LOCATIONS, categoryColor } from '@shared/inventory'
 import { BarList } from '../../components/charts'
@@ -10,6 +10,7 @@ import { formatDate, formatMoney } from '../../lib/format'
 import { UnitBadge, productMetrics } from './helpers'
 import { CategoryLogo } from './CategoryLogo'
 import { IncomingModal } from './IncomingModal'
+import { ProductHoverCard, type ProductCardData } from './ProductCases'
 
 type MetricKind = 'value' | 'cost' | 'spread' | 'cases' | 'skus'
 type Detail = { kind: 'category'; category: string; label: string } | { kind: MetricKind; label: string }
@@ -336,9 +337,21 @@ function Stat({
   )
 }
 
+/** Position a hover card next to a row: to its right, or left if there's no room. */
+const HOVER_W = 340
+function hoverStyle(rect: DOMRect): CSSProperties {
+  const margin = 12
+  const fitsRight = window.innerWidth - rect.right >= HOVER_W + margin
+  const left = fitsRight ? rect.right + margin : Math.max(margin, rect.left - HOVER_W - margin)
+  const top = Math.max(margin, Math.min(rect.top, window.innerHeight - margin - 260))
+  return { top, left, width: HOVER_W, maxHeight: window.innerHeight - top - margin }
+}
+
 /** Shared detail view: a product table with the money metrics + a totals row. */
 function InventoryDetail({ detail, onBack }: { detail: Detail; onBack: () => void }): JSX.Element {
   const [rows, setRows] = useState<InventoryProduct[] | null>(null)
+  const [hover, setHover] = useState<{ data: ProductCardData; style: CSSProperties } | null>(null)
+  const closeTimer = useRef<number | undefined>(undefined)
 
   useEffect(() => {
     let active = true
@@ -350,6 +363,38 @@ function InventoryDetail({ detail, onBack }: { detail: Detail; onBack: () => voi
       active = false
     }
   }, [detail])
+
+  // Tear down any pending hover timer if the detail view unmounts.
+  useEffect(
+    () => () => {
+      if (closeTimer.current) window.clearTimeout(closeTimer.current)
+    },
+    []
+  )
+
+  const openHover = (p: InventoryProduct, rect: DOMRect): void => {
+    if (closeTimer.current) window.clearTimeout(closeTimer.current)
+    setHover({
+      data: {
+        productId: p.id,
+        name: p.name,
+        sku: p.sku,
+        category: p.category,
+        unitType: p.unitType,
+        quantity: p.quantity,
+        unitCost: p.unitCost,
+        highBid: p.highBid
+      },
+      style: hoverStyle(rect)
+    })
+  }
+  const scheduleClose = (): void => {
+    if (closeTimer.current) window.clearTimeout(closeTimer.current)
+    closeTimer.current = window.setTimeout(() => setHover(null), 160)
+  }
+  const cancelClose = (): void => {
+    if (closeTimer.current) window.clearTimeout(closeTimer.current)
+  }
 
   const shown = useMemo(() => {
     if (!rows) return []
@@ -378,10 +423,12 @@ function InventoryDetail({ detail, onBack }: { detail: Detail; onBack: () => voi
       acc.value += p.quantity > 0 ? m.invValue : 0
       acc.cost += m.hasCost && p.quantity > 0 ? m.totalCost : 0
       acc.spread += m.hasCost && p.quantity > 0 ? m.spread : 0
-      acc.qty += p.quantity
+      // "On hand" counts cases specifically (matching the category cards), not a
+      // mix of every unit type.
+      acc.cases += p.unitType === 'case' ? p.quantity : 0
       return acc
     },
-    { value: 0, cost: 0, spread: 0, qty: 0 }
+    { value: 0, cost: 0, spread: 0, cases: 0 }
   )
 
   return (
@@ -394,7 +441,8 @@ function InventoryDetail({ detail, onBack }: { detail: Detail; onBack: () => voi
           <div>
             <h2>{detail.label}</h2>
             <p>
-              {shown.length} product{shown.length === 1 ? '' : 's'} · {totals.qty} on hand
+              {shown.length} product{shown.length === 1 ? '' : 's'} · {totals.cases} case
+              {totals.cases === 1 ? '' : 's'} on hand
             </p>
           </div>
         </div>
@@ -424,7 +472,13 @@ function InventoryDetail({ detail, onBack }: { detail: Detail; onBack: () => voi
             </thead>
             <tbody>
               {shown.map(({ p, m }) => (
-                <tr key={p.id} style={{ opacity: p.quantity > 0 ? 1 : 0.55 }}>
+                <tr
+                  key={p.id}
+                  className="hoverable-row"
+                  style={{ opacity: p.quantity > 0 ? 1 : 0.55 }}
+                  onMouseEnter={(e) => openHover(p, e.currentTarget.getBoundingClientRect())}
+                  onMouseLeave={scheduleClose}
+                >
                   <td>
                     <div style={{ fontWeight: 600 }}>{p.name}</div>
                     <div className="p-sub mono">{p.sku}</div>
@@ -464,6 +518,15 @@ function InventoryDetail({ detail, onBack }: { detail: Detail; onBack: () => voi
             </tfoot>
           </table>
         </div>
+      )}
+
+      {hover && (
+        <ProductHoverCard
+          data={hover.data}
+          style={hover.style}
+          onMouseEnter={cancelClose}
+          onMouseLeave={scheduleClose}
+        />
       )}
     </>
   )

@@ -1,9 +1,11 @@
 import type { Permission } from './permissions'
 
 /**
- * The nine major modules of the RM Operations App. The Admin module is built
- * first; the remaining eight are registered here as "coming soon" so they
- * appear in the navigation and can be filled in one at a time.
+ * The major modules of the RM Operations App. Admin, Inventory and Time &
+ * Payroll are built; the rest are registered here as "coming soon" so they
+ * appear in the navigation and can be filled in one at a time. Related areas are
+ * grouped into single modules — Fulfillment (orders + shipping/CRM) and Finance
+ * (bookkeeping/ledger + chart of accounts + forecasting).
  */
 export interface AppModule {
   id: string
@@ -38,30 +40,12 @@ export const MODULES: AppModule[] = [
     status: 'active'
   },
   {
-    id: 'orders',
-    name: 'Order & Fulfillment',
-    shortName: 'Orders',
-    description: 'Track orders from placement through fulfillment.',
+    id: 'fulfillment',
+    name: 'Fulfillment',
+    shortName: 'Fulfillment',
+    description: 'Orders, fulfillment, shipment tracking and customer relationships.',
     icon: 'PackageCheck',
-    permission: 'module.orders',
-    status: 'coming-soon'
-  },
-  {
-    id: 'shipping',
-    name: 'Shipping & CRM',
-    shortName: 'Shipping',
-    description: 'Shipment tracking and customer relationships.',
-    icon: 'Truck',
-    permission: 'module.shipping',
-    status: 'coming-soon'
-  },
-  {
-    id: 'bookkeeping',
-    name: 'Bookkeeping & Ledger',
-    shortName: 'Ledger',
-    description: 'Business ledger and day-to-day bookkeeping.',
-    icon: 'BookOpen',
-    permission: 'module.bookkeeping',
+    permission: 'module.fulfillment',
     status: 'coming-soon'
   },
   {
@@ -74,12 +58,12 @@ export const MODULES: AppModule[] = [
     status: 'coming-soon'
   },
   {
-    id: 'accounts',
-    name: 'Chart of Accounts',
-    shortName: 'Accounts',
-    description: 'Chart of accounts and general categorization.',
-    icon: 'ListTree',
-    permission: 'module.accounts',
+    id: 'finance',
+    name: 'Finance',
+    shortName: 'Finance',
+    description: 'Bookkeeping, business ledger, chart of accounts and financial forecasting.',
+    icon: 'Wallet',
+    permission: 'module.finance',
     status: 'coming-soon'
   },
   {
@@ -99,15 +83,6 @@ export const MODULES: AppModule[] = [
     icon: 'Clock',
     permission: 'admin.hours.view',
     status: 'active'
-  },
-  {
-    id: 'forecasting',
-    name: 'Financial Forecasting',
-    shortName: 'Forecast',
-    description: 'Model and forecast the financial future.',
-    icon: 'TrendingUp',
-    permission: 'module.forecasting',
-    status: 'coming-soon'
   }
 ]
 

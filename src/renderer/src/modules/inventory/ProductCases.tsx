@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type CSSProperties } from 'react'
 import type { ProductLot, UnitType } from '@shared/types'
 import { api } from '../../lib/api'
 import { Modal } from '../../components/ui'
 import { formatDate, formatMoney } from '../../lib/format'
+import { CategoryLogo } from './CategoryLogo'
 import { unitLabel } from './helpers'
 
 interface CaseUnit {
@@ -10,6 +11,18 @@ interface CaseUnit {
   unitCost: number
   location: string
   receivedAt: string
+}
+
+/** The identity + money a product card needs to render specs and cases. */
+export interface ProductCardData {
+  productId: string
+  name: string
+  sku: string
+  category: string
+  unitType: UnitType
+  quantity: number
+  unitCost: number
+  highBid: number | null
 }
 
 /** Flatten FIFO lots into one row per physical case, in consumption order. */
@@ -79,43 +92,121 @@ export function ProductCasesLoader({ productId, unitType }: { productId: string;
   return <CaseList lots={lots} unitType={unitType} />
 }
 
-/** Quick-view modal: product specs + the FIFO case breakdown. */
-export function ProductQuickView({
+/** The product's primary uploaded image, falling back to its category logo. */
+function ProductImageThumb({
   productId,
-  name,
-  sku,
   category,
-  unitType,
-  quantity,
-  unitCost,
-  highBid,
-  onClose
+  name
 }: {
   productId: string
-  name: string
-  sku: string
   category: string
-  unitType: UnitType
-  quantity: number
-  unitCost: number
-  highBid: number | null
-  onClose: () => void
+  name: string
 }): JSX.Element {
+  // undefined = loading, null = no image on file.
+  const [url, setUrl] = useState<string | null | undefined>(undefined)
+  useEffect(() => {
+    let active = true
+    api.inventory
+      .listImages(productId)
+      .then((imgs) => {
+        if (active) setUrl(imgs[0]?.dataUrl ?? null)
+      })
+      .catch(() => {
+        if (active) setUrl(null)
+      })
+    return () => {
+      active = false
+    }
+  }, [productId])
+
+  return (
+    <div className="qv-img">
+      {url === undefined ? (
+        <span className="spinner dark" />
+      ) : url ? (
+        <img src={url} alt={name} />
+      ) : (
+        <CategoryLogo category={category} size={34} />
+      )}
+    </div>
+  )
+}
+
+/**
+ * Shared card content — the uploaded image, the money specs, and the FIFO case
+ * breakdown. Used by both the click-to-open quick-view modal (Pricing tab) and
+ * the dashboard hover card, so they always show the same thing.
+ */
+export function ProductDetailBody({ data }: { data: ProductCardData }): JSX.Element {
+  const { productId, name, category, unitType, quantity, unitCost, highBid } = data
   const market = highBid != null && highBid > 0 ? highBid : unitCost
   const invValue = quantity * market
-  const spread = invValue - quantity * unitCost
+  const totalCost = quantity * unitCost
+  const spread = invValue - totalCost
+  const noun = unitLabel(unitType).toLowerCase()
   return (
-    <Modal title={name} subtitle={`${sku}${category ? ` · ${category}` : ''}`} onClose={onClose} wide>
-      <div className="qv-specs">
-        <Spec label="On hand" value={`${quantity} ${unitLabel(unitType).toLowerCase()}${quantity === 1 ? '' : 's'}`} />
-        <Spec label="Avg cost" value={formatMoney(unitCost)} />
-        <Spec label="High bid" value={highBid != null && highBid > 0 ? formatMoney(highBid) : '—'} />
-        <Spec label="Inv. value" value={formatMoney(invValue)} />
-        <Spec label="Spread" value={formatMoney(spread)} tone={spread < 0 ? 'neg' : spread > 0 ? 'pos' : undefined} />
+    <div className="qv-body">
+      <div className="qv-top">
+        <ProductImageThumb productId={productId} category={category} name={name} />
+        <div className="qv-specs">
+          <Spec label="On hand" value={`${quantity} ${noun}${quantity === 1 ? '' : 's'}`} />
+          <Spec label="Avg cost" value={formatMoney(unitCost)} />
+          <Spec label="Total cost" value={formatMoney(totalCost)} />
+          <Spec label="High bid" value={highBid != null && highBid > 0 ? formatMoney(highBid) : '—'} />
+          <Spec label="Inv. value" value={formatMoney(invValue)} />
+          <Spec label="Spread" value={formatMoney(spread)} tone={spread < 0 ? 'neg' : spread > 0 ? 'pos' : undefined} />
+        </div>
       </div>
       <div className="qv-cases-head">Cases · FIFO order (sold oldest first)</div>
-      <ProductCasesLoader productId={productId} unitType={unitType} />
+      <div className="qv-cases-scroll">
+        <ProductCasesLoader productId={productId} unitType={unitType} />
+      </div>
+    </div>
+  )
+}
+
+/** Quick-view modal: product image + specs + the FIFO case breakdown. */
+export function ProductQuickView({
+  data,
+  onClose
+}: {
+  data: ProductCardData
+  onClose: () => void
+}): JSX.Element {
+  return (
+    <Modal title={data.name} subtitle={`${data.sku}${data.category ? ` · ${data.category}` : ''}`} onClose={onClose} wide>
+      <ProductDetailBody data={data} />
     </Modal>
+  )
+}
+
+/**
+ * Floating hover card for the dashboard product table — the same image, specs
+ * and FIFO cases as the quick-view, positioned next to the hovered row. It stays
+ * open while the pointer is over the card (so the case list can be scrolled).
+ */
+export function ProductHoverCard({
+  data,
+  style,
+  onMouseEnter,
+  onMouseLeave
+}: {
+  data: ProductCardData
+  style: CSSProperties
+  onMouseEnter: () => void
+  onMouseLeave: () => void
+}): JSX.Element {
+  return (
+    <div className="hovercard" style={style} onMouseEnter={onMouseEnter} onMouseLeave={onMouseLeave}>
+      <div className="hovercard-head">
+        <span className="hc-name">{data.name}</span>
+        <span className="hc-sub">
+          <span className="mono">{data.sku}</span>
+          {data.category && <span> · {data.category}</span>}
+        </span>
+      </div>
+      <ProductDetailBody data={data} />
+    </div>
   )
 }
 

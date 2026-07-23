@@ -69,13 +69,10 @@ export type Permission =
   | 'module.inventory'
   | 'inventory.manage'
   | 'inventory.pricing'
-  | 'module.orders'
-  | 'module.shipping'
-  | 'module.bookkeeping'
+  | 'module.fulfillment'
   | 'module.invoicing'
-  | 'module.accounts'
+  | 'module.finance'
   | 'module.sops'
-  | 'module.forecasting'
 
 export interface PermissionDefinition {
   key: Permission
@@ -140,21 +137,9 @@ export const PERMISSIONS: PermissionDefinition[] = [
     group: 'Modules'
   },
   {
-    key: 'module.orders',
-    label: 'Order & Fulfillment',
-    description: 'Access the Order & Fulfillment module.',
-    group: 'Modules'
-  },
-  {
-    key: 'module.shipping',
-    label: 'Shipping & CRM',
-    description: 'Access the Shipping Tracking & CRM module.',
-    group: 'Modules'
-  },
-  {
-    key: 'module.bookkeeping',
-    label: 'Bookkeeping & Ledger',
-    description: 'Access the Bookkeeping / Business Ledger module.',
+    key: 'module.fulfillment',
+    label: 'Fulfillment',
+    description: 'Access the Fulfillment module (orders, shipping and CRM).',
     group: 'Modules'
   },
   {
@@ -164,21 +149,15 @@ export const PERMISSIONS: PermissionDefinition[] = [
     group: 'Modules'
   },
   {
-    key: 'module.accounts',
-    label: 'Chart of Accounts',
-    description: 'Access the Chart of Accounts module.',
+    key: 'module.finance',
+    label: 'Finance',
+    description: 'Access the Finance module (bookkeeping, ledger, chart of accounts and forecasting).',
     group: 'Modules'
   },
   {
     key: 'module.sops',
     label: 'SOP Creation',
     description: 'Access the SOP Creation module.',
-    group: 'Modules'
-  },
-  {
-    key: 'module.forecasting',
-    label: 'Financial Forecasting',
-    description: 'Access the Financial Forecasting module.',
     group: 'Modules'
   }
 ]
@@ -193,20 +172,16 @@ const OPERATIONS_PERMISSIONS: Permission[] = [
   'updates.check',
   'module.inventory',
   'inventory.manage',
-  'module.orders',
-  'module.shipping',
-  'module.bookkeeping',
+  'module.fulfillment',
   'module.invoicing',
-  'module.accounts',
-  'module.sops',
-  'module.forecasting'
+  'module.finance',
+  'module.sops'
 ]
 
 const STAFF_PERMISSIONS: Permission[] = [
   'updates.check',
   'module.inventory',
-  'module.orders',
-  'module.shipping',
+  'module.fulfillment',
   'module.sops'
 ]
 

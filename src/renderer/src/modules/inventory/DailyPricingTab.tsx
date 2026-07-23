@@ -91,7 +91,7 @@ export function DailyPricingTab({ onChanged }: { onChanged: () => Promise<void> 
     <>
       <div className="section-head">
         <div>
-          <h2>Daily pricing</h2>
+          <h2>Pricing</h2>
           <div className="cat-subhead">
             <span>{filtered.length} in stock</span>
             <span className="pricing-tot">
@@ -158,14 +158,16 @@ export function DailyPricingTab({ onChanged }: { onChanged: () => Promise<void> 
 
       {quick && (
         <ProductQuickView
-          productId={quick.id}
-          name={quick.name}
-          sku={quick.sku}
-          category={quick.category}
-          unitType={quick.unitType}
-          quantity={quick.quantity}
-          unitCost={quick.unitCost}
-          highBid={quick.highBid}
+          data={{
+            productId: quick.id,
+            name: quick.name,
+            sku: quick.sku,
+            category: quick.category,
+            unitType: quick.unitType,
+            quantity: quick.quantity,
+            unitCost: quick.unitCost,
+            highBid: quick.highBid
+          }}
           onClose={() => setQuick(null)}
         />
       )}
