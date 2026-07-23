@@ -2688,6 +2688,17 @@ table.data tfoot .data-total td {
   padding: 5px;
   animation: pop 0.12s ease;
 }
+/* Inside a modal the results render in-flow instead of as an absolute overlay,
+   so the modal body sizes to them rather than clipping them or spawning a
+   second, competing scrollbar. (The dashboard quick-search keeps its overlay.) */
+.typeahead .ta-menu {
+  position: static;
+  top: auto;
+  margin-top: 8px;
+  max-height: 260px;
+  box-shadow: var(--shadow);
+  animation: none;
+}
 .ta-item {
   display: flex;
   flex-direction: column;
