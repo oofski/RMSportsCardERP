@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { CategorySummary, InventoryProduct, InventoryStats } from '@shared/types'
-import { LOCATIONS } from '@shared/inventory'
 import { useSession } from '../../lib/session'
 import { api } from '../../lib/api'
 import { Icon } from '../../components/Icon'
@@ -105,7 +104,14 @@ export function InventoryModule(): JSX.Element {
         <QuickSearch products={products} query={query} onQuery={setQuery} onGo={goToCatalog} />
       </div>
 
-      {tab === 'overview' && <InventoryOverview stats={stats} categories={categories} />}
+      {tab === 'overview' && (
+        <InventoryOverview
+          stats={stats}
+          categories={categories}
+          canManage={canManage}
+          onChanged={reload}
+        />
+      )}
       {tab === 'products' && (
         <ProductsTab
           products={products}
@@ -192,8 +198,7 @@ function QuickSearch({
                 >
                   <span className="ta-name">{p.name}</span>
                   <span className="ta-sub">
-                    {p.sku} · {p.category || 'Uncategorized'} ·{' '}
-                    {LOCATIONS.map((l) => `${l.label} ${p.quantityByLocation[l.id] ?? 0}`).join(' / ')} · {p.quantity} total
+                    {p.sku} · {p.category || 'Uncategorized'}
                   </span>
                 </button>
               ))

@@ -1,23 +1,29 @@
-import { useEffect, useMemo, useState } from 'react'
-import type { CategorySummary, InventoryProduct, InventoryStats } from '@shared/types'
-import { CATEGORY_ORDER, LOCATIONS } from '@shared/inventory'
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react'
+import type { CategorySummary, IncomingShipment, InventoryProduct, InventoryStats } from '@shared/types'
+import { CATEGORY_ORDER, LOCATIONS, categoryColor } from '@shared/inventory'
 import { BarList } from '../../components/charts'
 import { Icon } from '../../components/Icon'
 import { Button, CenterLoader, EmptyState } from '../../components/ui'
+import { useToast } from '../../components/Toast'
 import { api } from '../../lib/api'
-import { formatMoney } from '../../lib/format'
+import { formatDate, formatMoney } from '../../lib/format'
 import { UnitBadge, productMetrics } from './helpers'
 import { CategoryLogo } from './CategoryLogo'
+import { IncomingModal } from './IncomingModal'
 
 type MetricKind = 'value' | 'cost' | 'spread' | 'cases' | 'skus'
 type Detail = { kind: 'category'; category: string; label: string } | { kind: MetricKind; label: string }
 
 export function InventoryOverview({
   stats,
-  categories
+  categories,
+  canManage,
+  onChanged
 }: {
   stats: InventoryStats
   categories: CategorySummary[]
+  canManage: boolean
+  onChanged: () => Promise<void>
 }): JSX.Element {
   const [detail, setDetail] = useState<Detail | null>(null)
 
@@ -64,30 +70,40 @@ export function InventoryOverview({
         </div>
       )}
 
-      <div className="panel-card">
-        <div className="panel-head">
-          <div>
-            <h3>Inventory value by category</h3>
-            <span className="ph-sub">Market value on hand</span>
-          </div>
-          <div className="ph-right">
-            <div className="ph-total">{formatMoney(stats.totalValue, { compact: true })}</div>
-            <div className="ph-sub">
-              {LOCATIONS.map((l) => `${l.label} ${stats.unitsByLocation[l.id] ?? 0}`).join(' · ')} units
-            </div>
-          </div>
-        </div>
-        {valueByCategory.length === 0 ? (
-          <div className="chart-empty">
-            <Icon name="BarChart3" size={26} />
+      <div className="panel-row">
+        <div className="panel-card">
+          <div className="panel-head">
             <div>
-              <div style={{ fontWeight: 600, color: 'var(--text-2)' }}>No value on hand yet</div>
-              <div className="text-sm">Add stock to a product and it'll chart here.</div>
+              <h3>Inventory value by category</h3>
+              <span className="ph-sub">Market value on hand</span>
+            </div>
+            <div className="ph-right">
+              <div className="ph-total">{formatMoney(stats.totalValue, { compact: true })}</div>
+              <div className="ph-sub">
+                {LOCATIONS.map((l) => `${l.label} ${stats.unitsByLocation[l.id] ?? 0}`).join(' · ')} units
+              </div>
             </div>
           </div>
-        ) : (
-          <BarList items={valueByCategory} formatValue={(v) => formatMoney(v, { compact: true })} />
-        )}
+          {valueByCategory.length === 0 ? (
+            <div className="chart-empty">
+              <Icon name="BarChart3" size={26} />
+              <div>
+                <div style={{ fontWeight: 600, color: 'var(--text-2)' }}>No value on hand yet</div>
+                <div className="text-sm">Add stock to a product and it'll chart here.</div>
+              </div>
+            </div>
+          ) : (
+            <BarList
+              items={valueByCategory}
+              formatValue={(v) => formatMoney(v, { compact: true })}
+              colorFor={(label) => categoryColor(label)}
+              renderIcon={(label) => <CategoryLogo category={label} size={16} />}
+              showShare
+            />
+          )}
+        </div>
+
+        <IncomingPanel canManage={canManage} onReceived={onChanged} />
       </div>
 
       <div className="section-head">
@@ -107,6 +123,7 @@ export function InventoryOverview({
             <button
               key={c.category}
               className="cat-card"
+              style={{ '--cat': categoryColor(c.category) } as CSSProperties}
               onClick={() => setDetail({ kind: 'category', category: c.category, label: c.category })}
             >
               <div className="cc-head">
@@ -127,6 +144,168 @@ export function InventoryOverview({
         </div>
       )}
     </>
+  )
+}
+
+/** Dashboard panel: stock on its way in, with receive / cancel actions. */
+function IncomingPanel({
+  canManage,
+  onReceived
+}: {
+  canManage: boolean
+  onReceived: () => Promise<void>
+}): JSX.Element {
+  const toast = useToast()
+  const [items, setItems] = useState<IncomingShipment[] | null>(null)
+  const [adding, setAdding] = useState(false)
+  const [busy, setBusy] = useState<Set<string>>(new Set())
+
+  const load = useCallback(async () => {
+    setItems(await api.inventory.listIncoming())
+  }, [])
+
+  // Guarded initial fetch — the whole panel unmounts if the user opens a stat
+  // detail mid-load, so don't set state after that.
+  useEffect(() => {
+    let active = true
+    api.inventory.listIncoming().then((r) => {
+      if (active) setItems(r)
+    })
+    return () => {
+      active = false
+    }
+  }, [])
+
+  const setBusyFor = (id: string, on: boolean): void =>
+    setBusy((prev) => {
+      const next = new Set(prev)
+      if (on) next.add(id)
+      else next.delete(id)
+      return next
+    })
+
+  const totalUnits = (items ?? []).reduce((sum, i) => sum + i.quantity, 0)
+
+  const receive = async (s: IncomingShipment): Promise<void> => {
+    setBusyFor(s.id, true)
+    try {
+      const res = await api.inventory.receiveIncoming(s.id)
+      if (res.ok) {
+        toast.success(`Received ${s.quantity} × ${s.productName} into ${s.location}.`)
+        await load()
+        await onReceived()
+      } else {
+        toast.error(res.error ?? 'Could not receive the shipment.')
+      }
+    } finally {
+      setBusyFor(s.id, false)
+    }
+  }
+
+  const cancel = async (s: IncomingShipment): Promise<void> => {
+    setBusyFor(s.id, true)
+    try {
+      const res = await api.inventory.cancelIncoming(s.id)
+      if (res.ok) {
+        toast.success(`Cancelled incoming ${s.productName}.`)
+        await load()
+      } else {
+        toast.error(res.error ?? 'Could not cancel the shipment.')
+      }
+    } finally {
+      setBusyFor(s.id, false)
+    }
+  }
+
+  return (
+    <div className="panel-card incoming-card">
+      <div className="panel-head">
+        <div>
+          <h3>Incoming inventory</h3>
+          <span className="ph-sub">Stock on its way in</span>
+        </div>
+        <div className="ph-right">
+          <div className="ph-total">{items === null ? '—' : totalUnits}</div>
+          <div className="ph-sub">unit{totalUnits === 1 ? '' : 's'}</div>
+        </div>
+      </div>
+
+      {items === null ? (
+        <div className="incoming-loading">
+          <span className="spinner dark" />
+        </div>
+      ) : items.length === 0 ? (
+        <div className="incoming-empty">
+          <Icon name="Truck" size={24} />
+          <div className="text-sm">Nothing scheduled to arrive.</div>
+          {canManage && (
+            <Button size="sm" variant="secondary" icon="Plus" onClick={() => setAdding(true)}>
+              Log a shipment
+            </Button>
+          )}
+        </div>
+      ) : (
+        <>
+          <div className="incoming-list">
+            {items.map((s) => (
+              <div className="incoming-row" key={s.id} style={{ '--cat': categoryColor(s.category) } as CSSProperties}>
+                <span className="inc-dot" />
+                <div className="inc-main">
+                  <span className="inc-name" title={s.productName}>
+                    {s.productName}
+                  </span>
+                  <span className="inc-meta">
+                    <span className="inc-loc">{s.location}</span>
+                    <span>{s.expectedDate ? formatDate(s.expectedDate) : 'No ETA'}</span>
+                    {s.reference && <span className="inc-ref">{s.reference}</span>}
+                  </span>
+                </div>
+                <span className="inc-qty">+{s.quantity}</span>
+                {canManage && (
+                  <span className="inc-actions">
+                    <button
+                      type="button"
+                      className="inc-btn receive"
+                      title="Receive into stock"
+                      aria-label={`Receive ${s.productName} into ${s.location}`}
+                      disabled={busy.has(s.id)}
+                      onClick={() => receive(s)}
+                    >
+                      <Icon name="PackageCheck" size={15} />
+                    </button>
+                    <button
+                      type="button"
+                      className="inc-btn"
+                      title="Cancel shipment"
+                      aria-label={`Cancel incoming ${s.productName}`}
+                      disabled={busy.has(s.id)}
+                      onClick={() => cancel(s)}
+                    >
+                      <Icon name="X" size={14} />
+                    </button>
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+          {canManage && (
+            <button type="button" className="incoming-add" onClick={() => setAdding(true)}>
+              <Icon name="Plus" size={14} /> Log a shipment
+            </button>
+          )}
+        </>
+      )}
+
+      {adding && (
+        <IncomingModal
+          onClose={() => setAdding(false)}
+          onSaved={async () => {
+            setAdding(false)
+            await load()
+          }}
+        />
+      )}
+    </div>
   )
 }
 

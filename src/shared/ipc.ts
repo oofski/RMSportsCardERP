@@ -58,6 +58,10 @@ export const IPC = {
   invImageList: 'inventory:images:list',
   invImageAdd: 'inventory:images:add',
   invImageRemove: 'inventory:images:remove',
+  invIncomingList: 'inventory:incoming:list',
+  invIncomingAdd: 'inventory:incoming:add',
+  invIncomingReceive: 'inventory:incoming:receive',
+  invIncomingCancel: 'inventory:incoming:cancel',
 
   // Email
   emailComposeInvite: 'email:compose-invite',

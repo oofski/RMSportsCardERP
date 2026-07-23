@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import type { InventoryProduct, ProductImage, UpdateInventoryProduct } from '@shared/types'
-import { CATEGORY_ORDER, LOCATIONS } from '@shared/inventory'
+import { CATEGORY_ORDER, LOCATIONS, categoryColor } from '@shared/inventory'
 import { api } from '../../lib/api'
 import { useToast } from '../../components/Toast'
 import { Button, EmptyState, Field, Input, Modal, Select } from '../../components/ui'
@@ -271,7 +271,11 @@ export function ProductsTab({
             const thumb = thumbnails[p.id]
             const low = p.reorderPoint > 0 && p.quantity <= p.reorderPoint
             return (
-              <div className={`cat-row ${open ? 'open' : ''}`} key={p.id}>
+              <div
+                className={`cat-row ${open ? 'open' : ''}`}
+                key={p.id}
+                style={p.category ? ({ '--cat': categoryColor(p.category) } as CSSProperties) : undefined}
+              >
                 <div className="cr-head">
                   {canManage && (
                     <input

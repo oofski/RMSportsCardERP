@@ -7,25 +7,24 @@ import { Button, Field, Input, Modal } from '../../components/ui'
 import { structureLabel } from './helpers'
 
 /**
- * The fast "add stock" flow: type a name → pick from the catalog → it
- * autopopulates → choose RM/AM → enter quantity → save. Also supports
- * corrections (adjust) once a product is chosen.
+ * Log an expected shipment of stock. Pick a catalog product, choose where it's
+ * headed and how many are coming, then it shows up on the dashboard's "Incoming"
+ * panel until someone receives it (which folds it into on-hand stock).
  */
-export function StockModal({
-  presetProduct,
+export function IncomingModal({
   onClose,
   onSaved
 }: {
-  presetProduct?: InventoryProduct | null
   onClose: () => void
   onSaved: () => void | Promise<void>
 }): JSX.Element {
   const toast = useToast()
-  const [selected, setSelected] = useState<InventoryProduct | null>(presetProduct ?? null)
-  const [mode, setMode] = useState<'add' | 'adjust'>('add')
+  const [selected, setSelected] = useState<InventoryProduct | null>(null)
   const [location, setLocation] = useState<Location>('RM')
   const [quantity, setQuantity] = useState('1')
+  const [expectedDate, setExpectedDate] = useState('')
   const [unitCost, setUnitCost] = useState('')
+  const [reference, setReference] = useState('')
   const [note, setNote] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -40,45 +39,33 @@ export function StockModal({
       setError('Choose a product first.')
       return
     }
-    setError('')
     const qty = parseInt(quantity, 10)
-    if (!Number.isFinite(qty) || qty === 0) {
-      setError('Enter a non-zero quantity.')
+    if (!Number.isFinite(qty) || qty <= 0) {
+      setError('Quantity must be at least 1.')
       return
     }
-    if (mode === 'add' && qty < 0) {
-      setError('Quantity must be positive when adding stock.')
+    const cost = unitCost.trim() === '' ? null : parseFloat(unitCost)
+    if (cost != null && (!Number.isFinite(cost) || cost < 0)) {
+      setError('Enter a valid unit cost.')
       return
     }
+    setError('')
     setBusy(true)
     try {
-      let res
-      if (mode === 'add') {
-        const cost = unitCost.trim() === '' ? null : parseFloat(unitCost)
-        if (cost != null && (!Number.isFinite(cost) || cost < 0)) {
-          setError('Enter a valid unit cost.')
-          return
-        }
-        res = await api.inventory.addStock({
-          productId: selected.id,
-          location,
-          quantity: qty,
-          unitCost: cost,
-          note: note.trim() || null
-        })
-      } else {
-        res = await api.inventory.adjustStock({
-          productId: selected.id,
-          location,
-          quantityChange: qty,
-          note: note.trim() || null
-        })
-      }
+      const res = await api.inventory.addIncoming({
+        productId: selected.id,
+        location,
+        quantity: qty,
+        unitCost: cost,
+        expectedDate: expectedDate || null,
+        reference: reference.trim() || null,
+        note: note.trim() || null
+      })
       if (!res.ok) {
-        setError(res.error ?? 'Could not update stock.')
+        setError(res.error ?? 'Could not log the shipment.')
         return
       }
-      toast.success(mode === 'add' ? `Added ${qty} to ${location}.` : `Adjusted ${location}.`)
+      toast.success(`Logged ${qty} incoming to ${location}.`)
       await onSaved()
     } finally {
       setBusy(false)
@@ -87,16 +74,15 @@ export function StockModal({
 
   return (
     <Modal
-      title={presetProduct ? 'Update stock' : 'Add stock'}
-      subtitle={presetProduct ? presetProduct.name : undefined}
+      title="Log incoming shipment"
       onClose={onClose}
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button variant="primary" icon="PackagePlus" loading={busy} onClick={submit} disabled={!selected}>
-            {mode === 'add' ? `Add to ${location}` : `Adjust ${location}`}
+          <Button variant="primary" icon="Truck" loading={busy} onClick={submit} disabled={!selected}>
+            Log incoming
           </Button>
         </>
       }
@@ -112,19 +98,16 @@ export function StockModal({
               <div className="sp-name">{selected.name}</div>
               <div className="sp-meta">
                 <span className="mono">{selected.sku}</span>
-                {selected.upc && <span className="mono">{selected.upc}</span>}
                 {selected.category && <span>{selected.category}</span>}
                 <span>{structureLabel(selected)}</span>
               </div>
             </div>
-            {!presetProduct && (
-              <button className="btn btn-ghost btn-sm" style={{ marginLeft: 'auto' }} onClick={() => setSelected(null)}>
-                Change
-              </button>
-            )}
+            <button type="button" className="btn btn-ghost btn-sm" style={{ marginLeft: 'auto' }} onClick={() => setSelected(null)}>
+              Change
+            </button>
           </div>
 
-          <Field label="Location">
+          <Field label="Destination">
             <div className="loc-pills">
               {LOCATIONS.map((l) => (
                 <button
@@ -141,24 +124,25 @@ export function StockModal({
           </Field>
 
           <div className="field-row">
-            <Field label="Mode">
-              <select className="select" value={mode} onChange={(e) => setMode(e.target.value as 'add' | 'adjust')}>
-                <option value="add">Add received stock</option>
-                <option value="adjust">Adjust / correct (+/−)</option>
-              </select>
+            <Field label="Quantity coming in">
+              <Input type="number" min={1} value={quantity} onChange={(e) => setQuantity(e.target.value)} autoFocus />
             </Field>
-            <Field label={mode === 'add' ? 'Quantity' : 'Change (use − to reduce)'}>
-              <Input type="number" value={quantity} onChange={(e) => setQuantity(e.target.value)} autoFocus />
+            <Field label="Expected date" hint="Optional">
+              <Input type="date" value={expectedDate} onChange={(e) => setExpectedDate(e.target.value)} />
             </Field>
           </div>
 
-          {mode === 'add' && (
-            <Field label="Unit cost" hint="What you paid per unit (optional — updates the product cost)">
+          <div className="field-row">
+            <Field label="Unit cost" hint="Optional — rolls into average cost on receive">
               <Input type="number" min={0} step="0.01" value={unitCost} onChange={(e) => setUnitCost(e.target.value)} placeholder="0.00" />
             </Field>
-          )}
+            <Field label="Reference" hint="Optional">
+              <Input value={reference} onChange={(e) => setReference(e.target.value)} placeholder="PO / vendor / tracking" />
+            </Field>
+          </div>
+
           <Field label="Note" hint="Optional">
-            <Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. New case from vendor" />
+            <Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. Split shipment, arriving Fri" />
           </Field>
         </>
       )}
@@ -208,12 +192,10 @@ function CatalogTypeahead({ onSelect }: { onSelect: (p: InventoryProduct) => voi
           {loading && results.length === 0 ? (
             <div className="ta-empty">Searching…</div>
           ) : results.length === 0 ? (
-            <div className="ta-empty">
-              No match. Add it as a new product from the catalog.
-            </div>
+            <div className="ta-empty">No match in the catalog.</div>
           ) : (
             results.map((p) => (
-              <button key={p.id} className="ta-item" onClick={() => onSelect(p)}>
+              <button type="button" key={p.id} className="ta-item" onClick={() => onSelect(p)}>
                 <span className="ta-name">{p.name}</span>
                 <span className="ta-sub">
                   {p.sku} · {p.category || 'Uncategorized'} · {structureLabel(p)}

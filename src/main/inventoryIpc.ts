@@ -4,9 +4,11 @@ import type {
   AddStockInput,
   AdjustStockInput,
   CategorySummary,
+  IncomingShipment,
   InventoryProduct,
   InventoryStats,
   InventoryTransaction,
+  NewIncomingShipment,
   NewInventoryProduct,
   ProductImage,
   RecordSaleInput,
@@ -26,6 +28,7 @@ import {
   categorySummaries,
   createProduct,
   deleteProduct,
+  getProduct,
   inventoryStats,
   listProductImages,
   listProducts,
@@ -40,6 +43,7 @@ import {
   updateProduct,
   upcExists
 } from './db/inventory'
+import { addIncoming, cancelIncoming, listIncoming, receiveIncoming } from './db/incoming'
 
 const UNIT_TYPES: UnitType[] = ['case', 'box', 'pack', 'single', 'other']
 
@@ -92,6 +96,9 @@ export function registerInventoryIpc(): void {
   )
   ipcMain.handle(IPC.invImageList, (_e, productId: string): ProductImage[] =>
     can('module.inventory') ? listProductImages(productId) : []
+  )
+  ipcMain.handle(IPC.invIncomingList, (): IncomingShipment[] =>
+    can('module.inventory') ? listIncoming() : []
   )
 
   // ---- Writes (inventory.manage) ------------------------------------------
@@ -214,6 +221,48 @@ export function registerInventoryIpc(): void {
       requireManage()
       if (!imageId) return { ok: false, error: 'No image specified.' }
       return { ok: true, data: removeProductImage(imageId).images }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle(IPC.invIncomingAdd, (_e, input: NewIncomingShipment): Result<IncomingShipment> => {
+    try {
+      requireManage()
+      if (!input.productId) return { ok: false, error: 'Select a product.' }
+      if (!getProduct(input.productId)) return { ok: false, error: 'Select a valid product.' }
+      if (!isLocation(input.location)) return { ok: false, error: 'Choose a destination location.' }
+      if (!Number.isInteger(input.quantity) || input.quantity <= 0) {
+        return { ok: false, error: 'Quantity must be a whole number of at least 1.' }
+      }
+      if (input.unitCost != null && (!Number.isFinite(input.unitCost) || input.unitCost < 0)) {
+        return { ok: false, error: 'Enter a valid unit cost.' }
+      }
+      if (input.expectedDate != null && input.expectedDate !== '' && !/^\d{4}-\d{2}-\d{2}$/.test(input.expectedDate)) {
+        return { ok: false, error: 'Enter the expected date as YYYY-MM-DD.' }
+      }
+      return { ok: true, data: addIncoming(input) }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle(IPC.invIncomingReceive, (_e, payload: { id: string }): Result => {
+    try {
+      const actor = requireManage()
+      if (!payload?.id) return { ok: false, error: 'No shipment specified.' }
+      const res = receiveIncoming(payload.id, actor.id)
+      return res.ok ? { ok: true } : { ok: false, error: res.error }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle(IPC.invIncomingCancel, (_e, payload: { id: string }): Result => {
+    try {
+      requireManage()
+      if (!payload?.id) return { ok: false, error: 'No shipment specified.' }
+      return cancelIncoming(payload.id) ? { ok: true } : { ok: false, error: 'Shipment not found.' }
     } catch (err) {
       return fail(err)
     }

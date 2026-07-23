@@ -1031,9 +1031,161 @@ table.data tfoot .data-total td {
   letter-spacing: -0.01em;
   font-variant-numeric: tabular-nums;
 }
+/* Two panels side by side: value-by-category + incoming inventory. */
+.panel-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(268px, 1fr);
+  gap: 14px;
+  align-items: stretch;
+}
+.panel-row > .panel-card {
+  min-width: 0;
+}
+@media (max-width: 880px) {
+  .panel-row {
+    grid-template-columns: 1fr;
+  }
+}
 /* Keep a real gap between the chart panel and the next section heading. */
-.panel-card + .section-head {
+.panel-card + .section-head,
+.panel-row + .section-head {
   margin-top: 24px;
+}
+
+/* ---------- Incoming inventory panel ---------- */
+.incoming-card {
+  display: flex;
+  flex-direction: column;
+}
+.incoming-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 0;
+}
+.incoming-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 20px 8px;
+  text-align: center;
+  color: var(--text-3);
+  flex: 1;
+}
+.incoming-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+}
+.incoming-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 4px;
+  border-radius: var(--radius-sm);
+}
+.incoming-row:hover {
+  background: var(--surface-2);
+}
+.inc-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--cat, var(--brand-500));
+  flex: none;
+}
+.inc-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.inc-name {
+  font-weight: 600;
+  font-size: 12.5px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.inc-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.inc-loc {
+  font-weight: 700;
+  color: var(--text-2);
+}
+.inc-ref {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.inc-qty {
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--success);
+}
+.inc-actions {
+  display: flex;
+  gap: 4px;
+}
+.inc-btn {
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-3);
+  cursor: pointer;
+  transition: border-color 0.12s ease, color 0.12s ease, background 0.12s ease;
+}
+.inc-btn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--border-strong, var(--text-3));
+}
+.inc-btn.receive:hover:not(:disabled) {
+  color: var(--success);
+  border-color: var(--success);
+  background: color-mix(in srgb, var(--success) 10%, transparent);
+}
+.inc-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.incoming-add {
+  margin-top: 10px;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-2);
+  font-weight: 600;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: border-color 0.12s ease, color 0.12s ease, background 0.12s ease;
+}
+.incoming-add:hover {
+  border-color: var(--brand-400);
+  color: var(--brand-600);
+  background: var(--brand-soft);
 }
 .delta {
   display: inline-flex;
@@ -1963,41 +2115,68 @@ table.data tfoot .data-total td {
 .barlist {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 13px;
 }
 .barlist-row {
   display: grid;
-  grid-template-columns: 104px 1fr auto;
+  grid-template-columns: 148px 1fr auto;
   align-items: center;
   gap: 12px;
+}
+.barlist-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.barlist-ico {
+  color: var(--bar, var(--brand-500));
+  display: flex;
+  flex: none;
 }
 .barlist-label {
   font-size: 12.5px;
   color: var(--text-2);
-  font-weight: 500;
+  font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .barlist-track {
-  height: 9px;
+  height: 10px;
   background: var(--surface-3);
   border-radius: 999px;
   overflow: hidden;
+  box-shadow: inset 0 1px 2px rgb(0 0 0 / 6%);
 }
 .barlist-fill {
   height: 100%;
-  background: linear-gradient(90deg, var(--brand-400), var(--brand-500));
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--bar, var(--brand-500)) 55%, transparent),
+    var(--bar, var(--brand-500))
+  );
   border-radius: 999px;
   transition: width 0.3s ease;
 }
 .barlist-value {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  min-width: 68px;
+}
+.barlist-amt {
   font-size: 12.5px;
-  font-weight: 600;
+  font-weight: 700;
   font-variant-numeric: tabular-nums;
   color: var(--text);
-  min-width: 64px;
-  text-align: right;
+}
+.barlist-share {
+  font-size: 10.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+  margin-top: 1px;
 }
 
 /* ---------- Inventory ---------- */
@@ -2154,7 +2333,7 @@ table.data tfoot .data-total td {
   object-fit: cover;
 }
 .cr-thumb-ph {
-  color: var(--text-3);
+  color: var(--cat, var(--text-3));
   display: flex;
 }
 .cr-main {
@@ -2182,8 +2361,8 @@ table.data tfoot .data-total td {
 .cr-chip {
   padding: 1px 8px;
   border-radius: 999px;
-  background: var(--surface-3);
-  color: var(--text-2);
+  background: color-mix(in srgb, var(--cat, var(--surface-3)) 15%, transparent);
+  color: color-mix(in srgb, var(--cat, var(--text-2)) 82%, var(--text));
   font-weight: 600;
   font-size: 11px;
 }
@@ -2405,7 +2584,7 @@ table.data tfoot .data-total td {
   transition: border-color 0.13s ease, box-shadow 0.13s ease, transform 0.05s ease;
 }
 .cat-card:hover {
-  border-color: var(--brand-300);
+  border-color: color-mix(in srgb, var(--cat, var(--brand-300)) 55%, var(--border));
   box-shadow: var(--shadow);
 }
 .cat-card:active {
@@ -2424,8 +2603,8 @@ table.data tfoot .data-total td {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--brand-soft);
-  color: var(--brand-600);
+  background: color-mix(in srgb, var(--cat, var(--brand-500)) 15%, transparent);
+  color: var(--cat, var(--brand-600));
 }
 .cat-card .cc-name {
   font-weight: 600;

@@ -17,31 +17,54 @@ export function Donut({ percent }: { percent: number }): JSX.Element {
   )
 }
 
-/** Horizontal bar list — like the reference "Country Redistribution" panel. */
+/**
+ * Horizontal bar list. Optionally colors each bar (and its leading icon) by a
+ * per-row hue and shows each row's share of the total — enough to make a plain
+ * value breakdown read like a proper dashboard panel.
+ */
 export function BarList({
   items,
-  formatValue
+  formatValue,
+  colorFor,
+  renderIcon,
+  showShare = false
 }: {
   items: Array<{ label: string; value: number }>
   formatValue?: (v: number) => string
+  colorFor?: (label: string) => string
+  renderIcon?: (label: string) => JSX.Element
+  showShare?: boolean
 }): JSX.Element {
   const max = Math.max(1, ...items.map((i) => i.value))
+  const total = items.reduce((sum, i) => sum + i.value, 0)
   return (
     <div className="barlist">
-      {items.map((it, i) => (
-        <div className="barlist-row" key={`${it.label}-${i}`}>
-          <div className="barlist-label" title={it.label}>
-            {it.label}
+      {items.map((it, i) => {
+        const color = colorFor?.(it.label)
+        const share = total > 0 ? Math.round((it.value / total) * 100) : 0
+        const style: CSSProperties = {}
+        if (color) (style as Record<string, string>)['--bar'] = color
+        return (
+          <div className="barlist-row" key={`${it.label}-${i}`} style={style}>
+            <div className="barlist-head">
+              {renderIcon && <span className="barlist-ico">{renderIcon(it.label)}</span>}
+              <span className="barlist-label" title={it.label}>
+                {it.label}
+              </span>
+            </div>
+            <div className="barlist-track">
+              <div
+                className="barlist-fill"
+                style={{ width: `${Math.max(3, (it.value / max) * 100)}%` }}
+              />
+            </div>
+            <div className="barlist-value">
+              <span className="barlist-amt">{formatValue ? formatValue(it.value) : it.value}</span>
+              {showShare && <span className="barlist-share">{share}%</span>}
+            </div>
           </div>
-          <div className="barlist-track">
-            <div
-              className="barlist-fill"
-              style={{ width: `${Math.max(3, (it.value / max) * 100)}%` }}
-            />
-          </div>
-          <div className="barlist-value">{formatValue ? formatValue(it.value) : it.value}</div>
-        </div>
-      ))}
+        )
+      })}
     </div>
   )
 }

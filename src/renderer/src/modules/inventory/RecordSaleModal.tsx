@@ -98,7 +98,7 @@ export function RecordSaleModal({
             <Select value={productId} onChange={(e) => onProductChange(e.target.value)}>
               {products.map((p) => (
                 <option key={p.id} value={p.id} disabled={p.quantity <= 0}>
-                  {p.name} · {p.sku} ({p.quantity} on hand)
+                  {p.name} · {p.sku}
                 </option>
               ))}
             </Select>

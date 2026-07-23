@@ -13,10 +13,12 @@ import type {
   EmployeeInvite,
   ExportRequest,
   ExportResult,
+  IncomingShipment,
   InventoryProduct,
   InventoryStats,
   InventoryTransaction,
   NewEmployeeInput,
+  NewIncomingShipment,
   NewInventoryProduct,
   NewTimeEntryInput,
   ProductImage,
@@ -119,7 +121,14 @@ const api = {
     addImage: (productId: string): Promise<Result<ProductImage[]>> =>
       ipcRenderer.invoke(IPC.invImageAdd, productId),
     removeImage: (imageId: string): Promise<Result<ProductImage[]>> =>
-      ipcRenderer.invoke(IPC.invImageRemove, imageId)
+      ipcRenderer.invoke(IPC.invImageRemove, imageId),
+    listIncoming: (): Promise<IncomingShipment[]> => ipcRenderer.invoke(IPC.invIncomingList),
+    addIncoming: (input: NewIncomingShipment): Promise<Result<IncomingShipment>> =>
+      ipcRenderer.invoke(IPC.invIncomingAdd, input),
+    receiveIncoming: (id: string): Promise<Result> =>
+      ipcRenderer.invoke(IPC.invIncomingReceive, { id }),
+    cancelIncoming: (id: string): Promise<Result> =>
+      ipcRenderer.invoke(IPC.invIncomingCancel, { id })
   },
   email: {
     composeInvite: (

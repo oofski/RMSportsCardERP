@@ -5,6 +5,7 @@ import Database from 'better-sqlite3'
 import { seedCatalog } from './inventorySeed'
 import { seedSnapshot } from './inventorySnapshot'
 import { seedCatalogExpansion } from './inventoryCatalogV2'
+import { dedupeProducts } from './dedupe'
 
 let db: Database.Database | null = null
 
@@ -147,6 +148,26 @@ function migrate(database: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_inv_img_product
       ON inventory_product_images (product_id);
+
+    -- Stock on its way in: expected shipments / purchase orders. Receiving one
+    -- folds its quantity into inventory_stock (and its cost into the average).
+    CREATE TABLE IF NOT EXISTS inventory_incoming (
+      id            TEXT PRIMARY KEY,
+      product_id    TEXT NOT NULL,
+      location      TEXT NOT NULL,
+      quantity      INTEGER NOT NULL,
+      unit_cost     REAL,
+      reference     TEXT,
+      expected_date TEXT,
+      status        TEXT NOT NULL DEFAULT 'expected',
+      note          TEXT,
+      created_at    TEXT NOT NULL,
+      updated_at    TEXT NOT NULL,
+      received_at   TEXT,
+      FOREIGN KEY (product_id) REFERENCES inventory_products (id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_inv_incoming_status
+      ON inventory_incoming (status);
   `)
 
   if (getMeta(database, 'schema_version') === null) {
@@ -193,6 +214,10 @@ function migrate(database: Database.Database): void {
 
   // Expand the catalog with more products (blank financials). Runs once.
   runOnce(database, 'catalog_expansion_v1', () => seedCatalogExpansion(database))
+
+  // Merge legacy duplicate products (same name created twice by an early beta
+  // build). Runs once; a clean catalog is a no-op.
+  runOnce(database, 'dedupe_products_v1', () => dedupeProducts(database))
 }
 
 /** Run `fn` once, ever, tracked by a meta flag. */

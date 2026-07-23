@@ -233,6 +233,40 @@ export interface InventoryStats {
   unitsByLocation: Record<string, number>
 }
 
+export type IncomingStatus = 'expected' | 'received' | 'cancelled'
+
+/** A shipment of stock on its way in (an expected delivery / purchase order). */
+export interface IncomingShipment {
+  id: string
+  productId: string
+  productName: string
+  sku: string
+  category: string
+  location: string
+  quantity: number
+  /** What we expect to pay per unit — folds into average cost when received. */
+  unitCost: number | null
+  /** Vendor / PO / tracking reference (optional). */
+  reference: string | null
+  /** ISO date the shipment is expected (optional). */
+  expectedDate: string | null
+  status: IncomingStatus
+  note: string | null
+  createdAt: string
+  receivedAt: string | null
+}
+
+/** Log an expected shipment of stock coming in. */
+export interface NewIncomingShipment {
+  productId: string
+  location: string
+  quantity: number
+  unitCost?: number | null
+  reference?: string | null
+  expectedDate?: string | null
+  note?: string | null
+}
+
 /** A product photo, delivered to the renderer as a ready-to-use data URL. */
 export interface ProductImage {
   id: string
