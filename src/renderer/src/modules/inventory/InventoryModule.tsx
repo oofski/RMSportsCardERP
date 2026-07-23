@@ -90,7 +90,7 @@ export function InventoryModule(): JSX.Element {
   if (loading) return <CenterLoader />
 
   return (
-    <div className="content-narrow">
+    <div className="content-narrow inv-shell">
       <div className="inv-header">
         <div className="tabs">
           {tabs.map((t) => (
@@ -107,28 +107,30 @@ export function InventoryModule(): JSX.Element {
         <QuickSearch products={products} query={query} onQuery={setQuery} onGo={goToCatalog} />
       </div>
 
-      {tab === 'overview' && (
-        <InventoryOverview
-          stats={stats}
-          categories={categories}
-          canManage={canManage}
-          onChanged={reload}
-        />
-      )}
-      {tab === 'products' && (
-        <ProductsTab
-          products={products}
-          query={query}
-          category={category}
-          onCategory={setCategory}
-          thumbnails={thumbnails}
-          canManage={canManage}
-          onChanged={reload}
-          onImagesChanged={refreshThumbs}
-        />
-      )}
-      {tab === 'pricing' && canPrice && <DailyPricingTab onChanged={reload} />}
-      {tab === 'activity' && <ActivityTab />}
+      <div className="inv-scroll">
+        {tab === 'overview' && (
+          <InventoryOverview
+            stats={stats}
+            categories={categories}
+            canManage={canManage}
+            onChanged={reload}
+          />
+        )}
+        {tab === 'products' && (
+          <ProductsTab
+            products={products}
+            query={query}
+            category={category}
+            onCategory={setCategory}
+            thumbnails={thumbnails}
+            canManage={canManage}
+            onChanged={reload}
+            onImagesChanged={refreshThumbs}
+          />
+        )}
+        {tab === 'pricing' && canPrice && <DailyPricingTab onChanged={reload} />}
+        {tab === 'activity' && <ActivityTab />}
+      </div>
     </div>
   )
 }
