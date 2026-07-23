@@ -8,6 +8,7 @@ import { Icon } from '../../components/Icon'
 import { CategoryLogo } from './CategoryLogo'
 import { productMatches, structureLabel } from './helpers'
 import { ImageLightbox } from './ImageLightbox'
+import { ProductCasesLoader } from './ProductCases'
 import { ProductFormModal } from './ProductFormModal'
 import { RecordSaleModal } from './RecordSaleModal'
 import { StockModal } from './StockModal'
@@ -569,6 +570,15 @@ function ProductDetail({
           <em>Total</em> {product.quantity}
         </span>
       </div>
+
+      {product.quantity > 0 && (
+        <div className="cd-cases">
+          <div className="cd-cases-head">
+            Cases · FIFO order <span>(sold oldest first)</span>
+          </div>
+          <ProductCasesLoader productId={product.id} unitType={product.unitType} />
+        </div>
+      )}
 
       {canManage && (
         <div className="cd-actions">

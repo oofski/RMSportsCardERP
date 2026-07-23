@@ -10,7 +10,9 @@ import type {
   InventoryTransaction,
   NewIncomingShipment,
   NewInventoryProduct,
+  PricingRow,
   ProductImage,
+  ProductLot,
   RecordSaleInput,
   Result,
   SalesPoint,
@@ -30,9 +32,11 @@ import {
   deleteProduct,
   getProduct,
   inventoryStats,
+  listLots,
   listProductImages,
   listProducts,
   listTransactions,
+  pricingList,
   productThumbnails,
   productsByCategory,
   recentSales,
@@ -40,6 +44,7 @@ import {
   removeProductImage,
   salesSeries,
   searchCatalog,
+  updateHighBid,
   updateProduct,
   upcExists
 } from './db/inventory'
@@ -57,6 +62,17 @@ function requireManage(): { id: string } {
   if (!user) throw new Error('You are not signed in.')
   if (!user.permissions.includes('inventory.manage')) {
     throw new Error('You do not have permission to manage inventory.')
+  }
+  return { id: user.id }
+}
+
+/** Pricing updates are allowed for inventory managers or holders of the
+ * individually-granted `inventory.pricing` permission. */
+function requirePricing(): { id: string } {
+  const user = currentUser()
+  if (!user) throw new Error('You are not signed in.')
+  if (!user.permissions.includes('inventory.pricing') && !user.permissions.includes('inventory.manage')) {
+    throw new Error('You do not have permission to update pricing.')
   }
   return { id: user.id }
 }
@@ -99,6 +115,12 @@ export function registerInventoryIpc(): void {
   )
   ipcMain.handle(IPC.invIncomingList, (): IncomingShipment[] =>
     can('module.inventory') ? listIncoming() : []
+  )
+  ipcMain.handle(IPC.invPricingList, (): PricingRow[] =>
+    can('module.inventory') ? pricingList() : []
+  )
+  ipcMain.handle(IPC.invProductLots, (_e, productId: string): ProductLot[] =>
+    can('module.inventory') ? listLots(String(productId ?? '')) : []
   )
 
   // ---- Writes (inventory.manage) ------------------------------------------
@@ -267,6 +289,23 @@ export function registerInventoryIpc(): void {
       return fail(err)
     }
   })
+
+  ipcMain.handle(
+    IPC.invHighBidUpdate,
+    (_e, input: { productId: string; highBid: number | null }): Result<InventoryProduct> => {
+      try {
+        requirePricing()
+        if (!input?.productId) return { ok: false, error: 'Select a product.' }
+        if (input.highBid != null && (!Number.isFinite(input.highBid) || input.highBid < 0)) {
+          return { ok: false, error: 'High bid must be 0 or more.' }
+        }
+        const updated = updateHighBid(input.productId, input.highBid)
+        return updated ? { ok: true, data: updated } : { ok: false, error: 'Product not found.' }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
 
   ipcMain.handle(IPC.invSaleRecord, (_e, input: RecordSaleInput): Result<InventoryProduct> => {
     try {

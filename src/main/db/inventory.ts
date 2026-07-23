@@ -4,14 +4,16 @@ import type {
   InventoryStats,
   InventoryTransaction,
   NewInventoryProduct,
+  PricingRow,
   ProductImage,
+  ProductLot,
   SalesPoint,
   UnitType,
   UpdateInventoryProduct
 } from '@shared/types'
 import { LOCATION_IDS } from '@shared/inventory'
 import { getDb } from './database'
-import { movingAverageCost } from './costing'
+import { consumeFifo, createLot, slicesCost, syncProductAvgCost } from './lots'
 import { deleteImageFile, imageDataUrl, importImageFile } from '../services/media'
 import { newId, nowIso } from '../util'
 
@@ -143,15 +145,16 @@ function insertTxn(
   counterparty: string | null,
   note: string | null,
   actorId: string | null,
-  location: string | null
+  location: string | null,
+  costBasis: number | null = null
 ): void {
   getDb()
     .prepare(
       `INSERT INTO inventory_transactions
-         (id, product_id, type, quantity_change, unit_price, counterparty, note, actor_id, location, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         (id, product_id, type, quantity_change, unit_price, counterparty, note, actor_id, location, cost_basis, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
-    .run(newId(), productId, type, quantityChange, unitPrice, counterparty, note, actorId, location, nowIso())
+    .run(newId(), productId, type, quantityChange, unitPrice, counterparty, note, actorId, location, costBasis, nowIso())
 }
 
 /** Add `delta` to a product's stock at a location (delta may be negative). */
@@ -170,14 +173,6 @@ function stockQty(productId: string, location: string): number {
     .prepare('SELECT quantity FROM inventory_stock WHERE product_id = ? AND location = ?')
     .get(productId, location) as { quantity: number } | undefined
   return row?.quantity ?? 0
-}
-
-/** Total on-hand across every location for a product. */
-function stockTotal(productId: string): number {
-  const row = getDb()
-    .prepare('SELECT COALESCE(SUM(quantity), 0) AS q FROM inventory_stock WHERE product_id = ?')
-    .get(productId) as { q: number }
-  return row.q
 }
 
 export function createProduct(input: NewInventoryProduct, actorId: string | null): InventoryProduct {
@@ -221,6 +216,8 @@ export function createProduct(input: NewInventoryProduct, actorId: string | null
         ? (input.openingLocation as string)
         : LOCATION_IDS[0]
       bumpStock(id, loc, openQty)
+      createLot(db, id, loc, openQty, Math.max(0, input.unitCost), ts, 'opening', 'Opening stock')
+      syncProductAvgCost(db, id)
       insertTxn(id, 'purchase', openQty, input.unitCost, null, 'Opening stock', actorId, loc)
     }
   })
@@ -268,6 +265,92 @@ export function updateProduct(input: UpdateInventoryProduct): InventoryProduct |
     )
     .run(next)
   return getProduct(input.id)
+}
+
+/** Update only a product's high bid (market value) + when it was set. */
+export function updateHighBid(productId: string, highBid: number | null): InventoryProduct | null {
+  if (!getProduct(productId)) return null
+  const val = highBid == null ? null : Math.max(0, highBid)
+  const ts = nowIso()
+  getDb()
+    .prepare('UPDATE inventory_products SET high_bid = ?, high_bid_at = ?, updated_at = ? WHERE id = ?')
+    .run(val, ts, ts, productId)
+  return getProduct(productId)
+}
+
+interface LotRow {
+  id: string
+  product_id: string
+  location: string
+  qty_received: number
+  qty_remaining: number
+  unit_cost: number
+  received_at: string
+  source: string
+}
+
+/** A product's open cost lots, oldest first (for the FIFO case view). */
+export function listLots(productId: string): ProductLot[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT id, product_id, location, qty_received, qty_remaining, unit_cost, received_at, source
+       FROM inventory_lots
+       WHERE product_id = ? AND qty_remaining > 0
+       ORDER BY received_at ASC, id ASC`
+    )
+    .all(productId) as LotRow[]
+  return rows.map((r) => ({
+    id: r.id,
+    productId: r.product_id,
+    location: r.location,
+    qtyReceived: r.qty_received,
+    qtyRemaining: r.qty_remaining,
+    unitCost: r.unit_cost,
+    receivedAt: r.received_at,
+    source: r.source
+  }))
+}
+
+/** In-stock products with the money needed by the Daily Pricing screen. */
+export function pricingList(): PricingRow[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT p.id, p.name, p.sku, p.category, p.unit_type,
+              p.unit_cost, p.high_bid, p.high_bid_at,
+              COALESCE(SUM(s.quantity), 0) AS qty
+       FROM inventory_products p
+       JOIN inventory_stock s ON s.product_id = p.id
+       GROUP BY p.id
+       HAVING qty > 0
+       ORDER BY p.category, p.name COLLATE NOCASE`
+    )
+    .all() as Array<{
+    id: string
+    name: string
+    sku: string
+    category: string
+    unit_type: string
+    unit_cost: number
+    high_bid: number | null
+    high_bid_at: string | null
+    qty: number
+  }>
+  return rows.map((r) => {
+    const market = r.high_bid && r.high_bid > 0 ? r.high_bid : r.unit_cost
+    return {
+      id: r.id,
+      name: r.name,
+      sku: r.sku,
+      category: r.category,
+      unitType: (UNIT_TYPES.includes(r.unit_type as UnitType) ? r.unit_type : 'other') as UnitType,
+      quantity: r.qty,
+      unitCost: r.unit_cost,
+      highBid: r.high_bid,
+      highBidAt: r.high_bid_at,
+      invValue: r.qty * market,
+      spread: r.qty * (market - r.unit_cost)
+    }
+  })
 }
 
 export function deleteProduct(id: string): boolean {
@@ -375,17 +458,15 @@ export function addStock(
     if (!row) return { product: null, error: 'Product not found.' }
     if (qty <= 0) return { product: getProduct(productId), error: 'Quantity must be at least 1.' }
 
-    const prevQty = stockTotal(productId)
     bumpStock(productId, location, qty)
 
-    if (unitCost != null && Number.isFinite(unitCost) && unitCost >= 0) {
-      const newAvg = movingAverageCost(prevQty, row.unit_cost, qty, unitCost)
-      db.prepare('UPDATE inventory_products SET unit_cost = ?, updated_at = ? WHERE id = ?').run(
-        newAvg,
-        nowIso(),
-        productId
-      )
-    }
+    // Record the purchase as a FIFO cost lot. A restock with no cost given
+    // inherits the current average so it doesn't move the basis.
+    const lotCost =
+      unitCost != null && Number.isFinite(unitCost) && unitCost >= 0 ? unitCost : row.unit_cost
+    createLot(db, productId, location, qty, lotCost, nowIso(), 'restock', note)
+    syncProductAvgCost(db, productId)
+
     insertTxn(productId, 'restock', qty, unitCost, null, note, actorId, location)
     return { product: getProduct(productId) }
   })
@@ -410,6 +491,17 @@ export function adjustStock(
       return { product: getProduct(productId), error: 'Adjustment would make stock negative.' }
     }
     bumpStock(productId, location, delta)
+    if (delta < 0) {
+      // Shrinkage / correction down — consume the oldest lots.
+      consumeFifo(db, productId, location, -delta)
+    } else {
+      // Found stock — value it at the current average so the basis is undistorted.
+      const row = db.prepare('SELECT unit_cost FROM inventory_products WHERE id = ?').get(productId) as
+        | { unit_cost: number }
+        | undefined
+      createLot(db, productId, location, delta, row?.unit_cost ?? 0, nowIso(), 'adjustment', note)
+    }
+    syncProductAvgCost(db, productId)
     insertTxn(productId, 'adjustment', delta, null, null, note, actorId, location)
     return { product: getProduct(productId) }
   })
@@ -435,7 +527,10 @@ export function recordSale(
     const have = stockQty(productId, location)
     if (qty > have) return { product: getProduct(productId), error: `Only ${have} in ${location}.` }
     bumpStock(productId, location, -qty)
-    insertTxn(productId, 'sale', -qty, unitPrice, client.trim() || null, note, actorId, location)
+    // Consume the oldest cost lots first (FIFO); the consumed cost is the COGS.
+    const cogs = slicesCost(consumeFifo(db, productId, location, qty))
+    syncProductAvgCost(db, productId)
+    insertTxn(productId, 'sale', -qty, unitPrice, client.trim() || null, note, actorId, location, cogs)
     return { product: getProduct(productId) }
   })
   return run()

@@ -75,10 +75,11 @@ export function dedupeProducts(database: Database): void {
           .all(dup.id) as Array<{ location: string; quantity: number }>
         for (const s of dupStock) bump.run(newId(), keeper.id, s.location, s.quantity)
 
-        // 2. Re-point history, images + any incoming shipments to the keeper.
+        // 2. Re-point history, images, incoming + cost lots to the keeper.
         database.prepare('UPDATE inventory_transactions SET product_id = ? WHERE product_id = ?').run(keeper.id, dup.id)
         database.prepare('UPDATE inventory_product_images SET product_id = ? WHERE product_id = ?').run(keeper.id, dup.id)
         database.prepare('UPDATE inventory_incoming SET product_id = ? WHERE product_id = ?').run(keeper.id, dup.id)
+        database.prepare('UPDATE inventory_lots SET product_id = ? WHERE product_id = ?').run(keeper.id, dup.id)
 
         // 3. Remove the duplicate (frees its UPC before any backfill).
         database.prepare('DELETE FROM inventory_stock WHERE product_id = ?').run(dup.id)

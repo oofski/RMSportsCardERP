@@ -275,6 +275,38 @@ export interface ProductImage {
   position: number
 }
 
+/** A FIFO cost layer: a dated batch of stock bought at a unit cost. */
+export interface ProductLot {
+  id: string
+  productId: string
+  location: string
+  qtyReceived: number
+  qtyRemaining: number
+  unitCost: number
+  receivedAt: string
+  /** How the lot was created: restock | opening | adjustment | backfill. */
+  source: string
+}
+
+/** A row on the Daily Pricing screen (in-stock products with derived money). */
+export interface PricingRow {
+  id: string
+  name: string
+  sku: string
+  category: string
+  unitType: UnitType
+  quantity: number
+  /** Average cost per unit (FIFO remaining-lot weighted average). */
+  unitCost: number
+  highBid: number | null
+  /** ISO timestamp the high bid was last set. */
+  highBidAt: string | null
+  /** quantity × (high bid, falling back to average cost). */
+  invValue: number
+  /** invValue − quantity × average cost. */
+  spread: number
+}
+
 /** Per-category rollup for the dashboard. */
 export interface CategorySummary {
   category: string

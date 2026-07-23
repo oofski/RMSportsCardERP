@@ -7,9 +7,10 @@ import { CenterLoader } from '../../components/ui'
 import { InventoryOverview } from './InventoryOverview'
 import { ProductsTab } from './ProductsTab'
 import { ActivityTab } from './ActivityTab'
+import { DailyPricingTab } from './DailyPricingTab'
 import { productMatches } from './helpers'
 
-type TabId = 'overview' | 'products' | 'activity'
+type TabId = 'overview' | 'products' | 'pricing' | 'activity'
 
 const EMPTY_STATS: InventoryStats = {
   totalValue: 0,
@@ -30,6 +31,7 @@ const EMPTY_STATS: InventoryStats = {
 export function InventoryModule(): JSX.Element {
   const { can } = useSession()
   const canManage = can('inventory.manage')
+  const canPrice = can('inventory.pricing') || canManage
 
   const [products, setProducts] = useState<InventoryProduct[]>([])
   const [stats, setStats] = useState<InventoryStats>(EMPTY_STATS)
@@ -71,6 +73,7 @@ export function InventoryModule(): JSX.Element {
   const tabs: { id: TabId; label: string; icon: string }[] = [
     { id: 'overview', label: 'Dashboard', icon: 'LayoutDashboard' },
     { id: 'products', label: 'Catalog', icon: 'Boxes' },
+    ...(canPrice ? [{ id: 'pricing' as TabId, label: 'Pricing', icon: 'DollarSign' }] : []),
     { id: 'activity', label: 'Activity', icon: 'Layers' }
   ]
 
@@ -124,6 +127,7 @@ export function InventoryModule(): JSX.Element {
           onImagesChanged={refreshThumbs}
         />
       )}
+      {tab === 'pricing' && canPrice && <DailyPricingTab onChanged={reload} />}
       {tab === 'activity' && <ActivityTab />}
     </div>
   )

@@ -62,6 +62,9 @@ export const IPC = {
   invIncomingAdd: 'inventory:incoming:add',
   invIncomingReceive: 'inventory:incoming:receive',
   invIncomingCancel: 'inventory:incoming:cancel',
+  invPricingList: 'inventory:pricing:list',
+  invHighBidUpdate: 'inventory:pricing:high-bid',
+  invProductLots: 'inventory:product:lots',
 
   // Email
   emailComposeInvite: 'email:compose-invite',

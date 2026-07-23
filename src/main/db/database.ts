@@ -6,6 +6,7 @@ import { seedCatalog } from './inventorySeed'
 import { seedSnapshot } from './inventorySnapshot'
 import { seedCatalogExpansion } from './inventoryCatalogV2'
 import { dedupeProducts } from './dedupe'
+import { backfillLots } from './lots'
 
 let db: Database.Database | null = null
 
@@ -168,6 +169,27 @@ function migrate(database: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_inv_incoming_status
       ON inventory_incoming (status);
+
+    -- FIFO cost layers. Every stock-in creates a lot (a dated batch bought at a
+    -- unit cost); sales/negative adjustments consume the oldest lots first. The
+    -- product's unit_cost is kept as the weighted average of remaining lots.
+    CREATE TABLE IF NOT EXISTS inventory_lots (
+      id            TEXT PRIMARY KEY,
+      product_id    TEXT NOT NULL,
+      location      TEXT NOT NULL,
+      qty_received  INTEGER NOT NULL,
+      qty_remaining INTEGER NOT NULL,
+      unit_cost     REAL NOT NULL DEFAULT 0,
+      received_at   TEXT NOT NULL,
+      source        TEXT NOT NULL DEFAULT 'restock',
+      note          TEXT,
+      created_at    TEXT NOT NULL,
+      FOREIGN KEY (product_id) REFERENCES inventory_products (id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_inv_lots_fifo
+      ON inventory_lots (product_id, location, received_at, id);
+    CREATE INDEX IF NOT EXISTS idx_inv_lots_product
+      ON inventory_lots (product_id);
   `)
 
   if (getMeta(database, 'schema_version') === null) {
@@ -192,7 +214,11 @@ function migrate(database: Database.Database): void {
   addColumnIfMissing(database, 'inventory_transactions', 'location', 'TEXT')
   // v5: high bid (market value per unit) on products.
   addColumnIfMissing(database, 'inventory_products', 'high_bid', 'REAL')
-  setMeta(database, 'schema_version', '5')
+  // v6: FIFO cost lots. When a high bid was last set (pricing recency), and the
+  // cost basis (COGS) recorded on each sale from the consumed lots.
+  addColumnIfMissing(database, 'inventory_products', 'high_bid_at', 'TEXT')
+  addColumnIfMissing(database, 'inventory_transactions', 'cost_basis', 'REAL')
+  setMeta(database, 'schema_version', '6')
 
   // Seed the product catalog once, then apply the on-hand snapshot once.
   seedCatalogIfNeeded(database)
@@ -218,6 +244,11 @@ function migrate(database: Database.Database): void {
   // Merge legacy duplicate products (same name created twice by an early beta
   // build). Runs once; a clean catalog is a no-op.
   runOnce(database, 'dedupe_products_v1', () => dedupeProducts(database))
+
+  // Seed FIFO cost lots from existing on-hand stock. Runs LAST, after seeds +
+  // catalog expansion + dedupe have settled the final stock/cost, so the lots
+  // match the aggregate quantities exactly.
+  runOnce(database, 'inventory_lots_backfill_v1', () => backfillLots(database))
 }
 
 /** Run `fn` once, ever, tracked by a meta flag. */

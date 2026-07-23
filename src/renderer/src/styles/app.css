@@ -2976,3 +2976,148 @@ table.data tfoot .data-total td {
     right: 10px;
   }
 }
+
+/* ---------- FIFO cases + daily pricing ---------- */
+.cd-cases {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+  margin-top: 4px;
+}
+.cd-cases-head,
+.qv-cases-head {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-2);
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.cd-cases-head span,
+.qv-cases-head span {
+  color: var(--text-3);
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.cases-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.case-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+}
+.case-row:nth-child(odd) {
+  background: var(--surface-2);
+}
+.case-n {
+  font-weight: 600;
+  color: var(--text);
+}
+.case-loc {
+  font-weight: 700;
+  font-size: 11px;
+  color: var(--text-2);
+  background: var(--surface-3);
+  padding: 1px 7px;
+  border-radius: 999px;
+}
+.case-date {
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.case-cost {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  min-width: 84px;
+  text-align: right;
+}
+.cases-empty,
+.cases-loading {
+  padding: 14px;
+  text-align: center;
+  color: var(--text-3);
+  font-size: 12.5px;
+}
+.cases-loading {
+  display: flex;
+  justify-content: center;
+}
+
+/* Quick-view specs */
+.qv-specs {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 10px;
+  margin-bottom: 18px;
+}
+.qv-spec {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  background: var(--surface-2);
+}
+.qv-k {
+  font-size: 11px;
+  color: var(--text-3);
+  margin-bottom: 3px;
+}
+.qv-v {
+  font-size: 15px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.qv-v.pos {
+  color: var(--success);
+}
+.qv-v.neg {
+  color: var(--danger);
+}
+
+/* Daily pricing table */
+.pricing-search {
+  max-width: 260px;
+}
+.pricing-tot {
+  color: var(--text-3);
+}
+.pricing-tot strong {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.pricing-tot strong.pos {
+  color: var(--success);
+}
+.pricing-tot strong.neg {
+  color: var(--danger);
+}
+.pricing-name {
+  border: none;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: inherit;
+}
+.pricing-name:hover .p-sub {
+  color: var(--brand-500);
+}
+.bid-input {
+  width: 104px;
+  text-align: right;
+  height: 32px;
+  padding: 0 8px;
+  margin-left: auto;
+  display: block;
+}

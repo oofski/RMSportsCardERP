@@ -21,7 +21,9 @@ import type {
   NewIncomingShipment,
   NewInventoryProduct,
   NewTimeEntryInput,
+  PricingRow,
   ProductImage,
+  ProductLot,
   RecordSaleInput,
   RememberedCredentials,
   Result,
@@ -128,7 +130,12 @@ const api = {
     receiveIncoming: (id: string): Promise<Result> =>
       ipcRenderer.invoke(IPC.invIncomingReceive, { id }),
     cancelIncoming: (id: string): Promise<Result> =>
-      ipcRenderer.invoke(IPC.invIncomingCancel, { id })
+      ipcRenderer.invoke(IPC.invIncomingCancel, { id }),
+    pricingList: (): Promise<PricingRow[]> => ipcRenderer.invoke(IPC.invPricingList),
+    updateHighBid: (productId: string, highBid: number | null): Promise<Result<InventoryProduct>> =>
+      ipcRenderer.invoke(IPC.invHighBidUpdate, { productId, highBid }),
+    productLots: (productId: string): Promise<ProductLot[]> =>
+      ipcRenderer.invoke(IPC.invProductLots, productId)
   },
   email: {
     composeInvite: (
