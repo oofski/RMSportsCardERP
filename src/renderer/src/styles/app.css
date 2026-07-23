@@ -3097,16 +3097,21 @@ table.data tfoot .data-total td {
   border-radius: var(--radius);
   padding: 10px 12px;
   background: var(--surface-2);
+  min-width: 0; /* let grid cells shrink without their content overflowing */
 }
 .qv-k {
   font-size: 11px;
   color: var(--text-3);
   margin-bottom: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .qv-v {
   font-size: 15px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap; /* keep a money value on one line, never mid-value wrap */
 }
 .qv-v.pos {
   color: var(--success);
@@ -3150,7 +3155,9 @@ table.data tfoot .data-total td {
   flex: 1 1 auto;
   min-width: 0;
   margin-bottom: 0;
-  grid-template-columns: repeat(auto-fit, minmax(84px, 1fr));
+  /* Wider tracks so money values ($1,500.00) sit comfortably in each box —
+     two clean columns beside the image, more in the wider Pricing modal. */
+  grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
 }
 
 /* Floating hover card on the dashboard product table */

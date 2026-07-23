@@ -337,12 +337,14 @@ function Stat({
   )
 }
 
-/** Position a hover card next to a row: to its right, or left if there's no room. */
-const HOVER_W = 340
+/** Position a hover card to the RIGHT of a row, clamped to stay on-screen. */
+const HOVER_W = 384
 function hoverStyle(rect: DOMRect): CSSProperties {
   const margin = 12
-  const fitsRight = window.innerWidth - rect.right >= HOVER_W + margin
-  const left = fitsRight ? rect.right + margin : Math.max(margin, rect.left - HOVER_W - margin)
+  // Always anchor to the right of the row. If that would run off the right
+  // edge, slide it left just enough to stay fully visible (never flip it over
+  // the row, never go negative).
+  const left = Math.max(margin, Math.min(rect.right + margin, window.innerWidth - HOVER_W - margin))
   const top = Math.max(margin, Math.min(rect.top, window.innerHeight - margin - 260))
   return { top, left, width: HOVER_W, maxHeight: window.innerHeight - top - margin }
 }
