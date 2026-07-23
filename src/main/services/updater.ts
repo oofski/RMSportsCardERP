@@ -45,7 +45,10 @@ export function initUpdater(): void {
   initialised = true
   if (!isWindows) return // macOS/Linux use the JSON check below, no listeners needed
 
-  autoUpdater.autoDownload = false
+  // Auto-sync: on launch the app quietly pulls a newer version in the background
+  // (delta download) and installs it on the next quit — or the user can restart
+  // to apply it immediately from the update panel.
+  autoUpdater.autoDownload = true
   autoUpdater.autoInstallOnAppQuit = true
   if (!app.isPackaged) {
     autoUpdater.forceDevUpdateConfig = true
@@ -73,6 +76,15 @@ export function initUpdater(): void {
   autoUpdater.on('error', (err) =>
     setStatus({ phase: 'error', message: err == null ? 'Update error.' : String(err.message ?? err) })
   )
+
+  // Check once on launch, a few seconds after startup so it never blocks the UI.
+  // Only in packaged builds; errors are swallowed so a transient network hiccup
+  // never nags the user (the manual "Check for updates" button still reports).
+  if (app.isPackaged) {
+    setTimeout(() => {
+      autoUpdater.checkForUpdates().catch(() => undefined)
+    }, 4000)
+  }
 }
 
 export function getUpdateStatus(): UpdateStatus {
