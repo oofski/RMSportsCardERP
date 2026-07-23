@@ -46,19 +46,17 @@ the app foundation, the **Admin** module, and a full **Time & Payroll** module.
   Shipping coming soon), **Remember me** on sign-in, and **Check for updates**
   reachable from the top bar on every screen.
 
-## The nine modules
+## The modules
 
 | # | Module | Status |
 |---|--------|--------|
 | 1 | Admin (employees, hours overview, permissions) | ✅ Live |
-| 2 | Time Tracker / Payroll (timesheets, Gusto export) | ✅ Live |
-| 3 | Order & Fulfillment | 🚧 Roadmap |
-| 4 | Shipping Tracking & CRM | 🚧 Roadmap |
-| 5 | Bookkeeping / Business Ledger | 🚧 Roadmap |
-| 6 | Invoice & Purchase Order Automation | 🚧 Roadmap |
-| 7 | Chart of Accounts & Categorization | 🚧 Roadmap |
-| 8 | SOP Creation | 🚧 Roadmap |
-| 9 | Financial Forecasting | 🚧 Roadmap |
+| 2 | Inventory (catalog, stock, value, FIFO cases, pricing) | ✅ Live |
+| 3 | Time & Payroll (timesheets, Gusto export) | ✅ Live |
+| 4 | Fulfillment (orders, shipping & CRM) | 🚧 Roadmap |
+| 5 | Invoicing & POs | 🚧 Roadmap |
+| 6 | Finance (bookkeeping, ledger, chart of accounts, forecasting) | 🚧 Roadmap |
+| 7 | SOP Creation | 🚧 Roadmap |
 
 ---
 

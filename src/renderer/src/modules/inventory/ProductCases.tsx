@@ -147,7 +147,9 @@ export function ProductDetailBody({ data }: { data: ProductCardData }): JSX.Elem
   return (
     <div className="qv-body">
       <div className="qv-top">
-        <ProductImageThumb productId={productId} category={category} name={name} />
+        {/* key on productId so switching products (e.g. dashboard row → row)
+            remounts the image loader instead of briefly showing the old one. */}
+        <ProductImageThumb key={productId} productId={productId} category={category} name={name} />
         <div className="qv-specs">
           <Spec label="On hand" value={`${quantity} ${noun}${quantity === 1 ? '' : 's'}`} />
           <Spec label="Avg cost" value={formatMoney(unitCost)} />
@@ -159,7 +161,7 @@ export function ProductDetailBody({ data }: { data: ProductCardData }): JSX.Elem
       </div>
       <div className="qv-cases-head">Cases · FIFO order (sold oldest first)</div>
       <div className="qv-cases-scroll">
-        <ProductCasesLoader productId={productId} unitType={unitType} />
+        <ProductCasesLoader key={productId} productId={productId} unitType={unitType} />
       </div>
     </div>
   )
