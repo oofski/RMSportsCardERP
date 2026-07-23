@@ -405,6 +405,8 @@ export interface PurchaseOrder {
   supplier: string | null
   notes: string | null
   status: PurchaseOrderStatus
+  /** Destination stock location (RM/AM) its cases will be checked into. */
+  location: string
   /** Σ(line qty × unit price), stored snapshot. */
   total: number
   /** Number of line items. */
@@ -433,6 +435,8 @@ export interface NewPurchaseOrderLine {
 export interface NewPurchaseOrder {
   supplier?: string | null
   notes?: string | null
+  /** Destination stock location (RM/AM); defaults to the first location. */
+  location?: string | null
   lines: NewPurchaseOrderLine[]
 }
 

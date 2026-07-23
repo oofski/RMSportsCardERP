@@ -73,6 +73,7 @@ export const IPC = {
   poSetStatus: 'po:set-status',
   poCatalogSearch: 'po:catalog-search',
   poThumbnails: 'po:thumbnails',
+  poIncomingBoxes: 'po:incoming-boxes',
 
   // Email
   emailComposeInvite: 'email:compose-invite',

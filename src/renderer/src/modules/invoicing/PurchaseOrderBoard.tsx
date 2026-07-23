@@ -82,7 +82,7 @@ function PoCard({
       </div>
       <div className="po-card-supplier">{po.supplier || 'No supplier'}</div>
       <div className="po-card-meta">
-        {po.lineCount} {po.lineCount === 1 ? 'item' : 'items'}
+        {po.lineCount} {po.lineCount === 1 ? 'item' : 'items'} · → {po.location}
       </div>
       {moves.length > 0 && (
         <div className="po-card-foot" onClick={(e) => e.stopPropagation()}>

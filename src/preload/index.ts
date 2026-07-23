@@ -151,7 +151,8 @@ const api = {
       ipcRenderer.invoke(IPC.poSetStatus, { id, status }),
     searchCatalog: (query: string): Promise<InventoryProduct[]> =>
       ipcRenderer.invoke(IPC.poCatalogSearch, query),
-    thumbnails: (): Promise<Record<string, string>> => ipcRenderer.invoke(IPC.poThumbnails)
+    thumbnails: (): Promise<Record<string, string>> => ipcRenderer.invoke(IPC.poThumbnails),
+    incomingBoxes: (): Promise<PurchaseOrderDetail[]> => ipcRenderer.invoke(IPC.poIncomingBoxes)
   },
   email: {
     composeInvite: (

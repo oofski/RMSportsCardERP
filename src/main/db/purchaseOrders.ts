@@ -7,6 +7,7 @@ import type {
   PurchaseOrderStatus
 } from '@shared/types'
 import { canTransition } from '@shared/purchaseOrders'
+import { LOCATION_IDS, isLocation } from '@shared/inventory'
 import { getDb, getMeta, setMeta } from './database'
 import { newId, nowIso } from '../util'
 
@@ -16,6 +17,7 @@ interface PoRow {
   supplier: string | null
   notes: string | null
   status: string
+  location: string
   total: number
   created_by: string | null
   created_at: string
@@ -48,6 +50,7 @@ function toSummary(row: PoRow & { line_count: number }): PurchaseOrder {
     supplier: row.supplier ?? null,
     notes: row.notes ?? null,
     status: row.status as PurchaseOrderStatus,
+    location: row.location,
     total: row.total,
     lineCount: row.line_count,
     createdAt: row.created_at,
@@ -73,7 +76,7 @@ function toLine(row: PoLineRow): PurchaseOrderLine {
 }
 
 const PO_SELECT = `
-  SELECT po.id, po.po_number, po.supplier, po.notes, po.status, po.total,
+  SELECT po.id, po.po_number, po.supplier, po.notes, po.status, po.location, po.total,
          po.created_by, po.created_at, po.updated_at,
          po.ordered_at, po.paid_at, po.received_at, po.cancelled_at,
          (SELECT COUNT(*) FROM purchase_order_lines l WHERE l.po_id = po.id) AS line_count
@@ -105,11 +108,31 @@ export function getPurchaseOrder(id: string): PurchaseOrderDetail | null {
   return { ...toSummary(header), lines }
 }
 
+/**
+ * Every not-yet-cancelled PO with its line items, newest first — the "incoming
+ * shipment boxes" the Inventory module shows. Each box carries the PO's live
+ * stage (ordered/paid/received), so the tag always matches the pipeline. These
+ * do NOT touch on-hand stock; the cases only fold into inventory later, at the
+ * scan/check-in step.
+ */
+export function listActivePurchaseOrderBoxes(): PurchaseOrderDetail[] {
+  const db = getDb()
+  const headers = db
+    .prepare(`${PO_SELECT} WHERE po.status != 'cancelled' ORDER BY po.created_at DESC`)
+    .all() as Array<PoRow & { line_count: number }>
+  const lineStmt = db.prepare(LINE_SELECT)
+  return headers.map((h) => ({
+    ...toSummary(h),
+    lines: (lineStmt.all(h.id) as PoLineRow[]).map(toLine)
+  }))
+}
+
 export function createPurchaseOrder(
   input: NewPurchaseOrder,
   actorId: string | null
 ): PurchaseOrderDetail {
   const db = getDb()
+  const location = isLocation(input.location) ? input.location : LOCATION_IDS[0]
   const create = db.transaction((): string => {
     const id = newId()
     const ts = nowIso()
@@ -122,14 +145,15 @@ export function createPurchaseOrder(
     )
     db.prepare(
       `INSERT INTO purchase_orders
-         (id, po_number, supplier, notes, status, total, created_by, created_at, updated_at, ordered_at)
+         (id, po_number, supplier, notes, status, location, total, created_by, created_at, updated_at, ordered_at)
        VALUES
-         (@id, @po_number, @supplier, @notes, 'ordered', @total, @created_by, @ts, @ts, @ts)`
+         (@id, @po_number, @supplier, @notes, 'ordered', @location, @total, @created_by, @ts, @ts, @ts)`
     ).run({
       id,
       po_number: poNumber,
       supplier: input.supplier?.trim() || null,
       notes: input.notes?.trim() || null,
+      location,
       total,
       created_by: actorId,
       ts

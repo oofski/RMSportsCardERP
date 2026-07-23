@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react'
 import type { InventoryProduct } from '@shared/types'
+import { LOCATIONS } from '@shared/inventory'
 import { api } from '../../lib/api'
 import { useToast } from '../../components/Toast'
-import { Button, Field, Input, Modal } from '../../components/ui'
+import { Button, Field, Input, Modal, Select } from '../../components/ui'
 import { Icon } from '../../components/Icon'
 import { formatMoney } from '../../lib/format'
 import { POCatalogTypeahead } from './POCatalogTypeahead'
@@ -33,6 +34,7 @@ export function CreatePurchaseOrderModal({
 }): JSX.Element {
   const toast = useToast()
   const [supplier, setSupplier] = useState('')
+  const [location, setLocation] = useState<string>(LOCATIONS[0].id)
   const [notes, setNotes] = useState('')
   const [lines, setLines] = useState<DraftLine[]>([])
   const [error, setError] = useState('')
@@ -104,6 +106,7 @@ export function CreatePurchaseOrderModal({
     try {
       const res = await api.purchaseOrders.create({
         supplier: supplier.trim() || null,
+        location,
         notes: notes.trim() || null,
         lines: lines.map((l) => ({
           productId: l.productId,
@@ -155,6 +158,15 @@ export function CreatePurchaseOrderModal({
             onChange={(e) => setSupplier(e.target.value)}
             placeholder="e.g. Steel City Collectibles"
           />
+        </Field>
+        <Field label="Destination" hint="Where the cases land">
+          <Select value={location} onChange={(e) => setLocation(e.target.value)}>
+            {LOCATIONS.map((l) => (
+              <option key={l.id} value={l.id}>
+                {l.label}
+              </option>
+            ))}
+          </Select>
         </Field>
         <Field label="Notes" hint="Optional">
           <Input

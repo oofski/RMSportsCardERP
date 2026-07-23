@@ -14,6 +14,7 @@ import { currentUser } from './services/auth'
 import {
   createPurchaseOrder,
   getPurchaseOrder,
+  listActivePurchaseOrderBoxes,
   listPurchaseOrders,
   setPurchaseOrderStatus
 } from './db/purchaseOrders'
@@ -52,6 +53,11 @@ export function registerPurchaseOrdersIpc(): void {
   )
   ipcMain.handle(IPC.poThumbnails, (): Record<string, string> =>
     can('module.invoicing') ? productThumbnails() : {}
+  )
+  // Incoming PO "boxes" for the Inventory module — visible to inventory users too
+  // (they see the shipments landing), not just invoicing users.
+  ipcMain.handle(IPC.poIncomingBoxes, (): PurchaseOrderDetail[] =>
+    can('module.inventory') || can('module.invoicing') ? listActivePurchaseOrderBoxes() : []
   )
 
   // ---- Writes (module.invoicing) ------------------------------------------

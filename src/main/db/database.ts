@@ -201,6 +201,7 @@ function migrate(database: Database.Database): void {
       supplier     TEXT,
       notes        TEXT,
       status       TEXT NOT NULL DEFAULT 'ordered',
+      location     TEXT NOT NULL DEFAULT 'RM',
       total        REAL NOT NULL DEFAULT 0,
       created_by   TEXT,
       created_at   TEXT NOT NULL,
@@ -261,7 +262,9 @@ function migrate(database: Database.Database): void {
   addColumnIfMissing(database, 'inventory_transactions', 'cost_basis', 'REAL')
   // v7: purchase orders (buy-side pipeline). Brand-new tables are created
   // idempotently in the schema-init block above for both fresh and existing DBs.
-  setMeta(database, 'schema_version', '7')
+  // v8: destination stock location on a PO (where its cases will be checked in).
+  addColumnIfMissing(database, 'purchase_orders', 'location', "TEXT NOT NULL DEFAULT 'RM'")
+  setMeta(database, 'schema_version', '8')
 
   // Seed the product catalog once, then apply the on-hand snapshot once.
   seedCatalogIfNeeded(database)

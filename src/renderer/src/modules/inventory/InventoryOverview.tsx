@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
-import type { CategorySummary, IncomingShipment, InventoryProduct, InventoryStats } from '@shared/types'
+import type {
+  CategorySummary,
+  IncomingShipment,
+  InventoryProduct,
+  InventoryStats,
+  PurchaseOrderDetail
+} from '@shared/types'
 import { CATEGORY_ORDER, LOCATIONS, categoryColor } from '@shared/inventory'
 import { BarList } from '../../components/charts'
 import { Icon } from '../../components/Icon'
@@ -11,6 +17,7 @@ import { UnitBadge, productMetrics } from './helpers'
 import { CategoryLogo } from './CategoryLogo'
 import { IncomingModal } from './IncomingModal'
 import { ProductHoverCard, type ProductCardData } from './ProductCases'
+import { PO_STAGE_META } from '../invoicing/helpers'
 
 type MetricKind = 'value' | 'cost' | 'spread' | 'cases' | 'skus'
 type Detail = { kind: 'category'; category: string; label: string } | { kind: MetricKind; label: string }
@@ -148,7 +155,13 @@ export function InventoryOverview({
   )
 }
 
-/** Dashboard panel: stock on its way in, with receive / cancel actions. */
+/**
+ * Dashboard panel: stock on its way in. Shows a "shipping box" per open purchase
+ * order (grouped, stage-tagged, live from the PO pipeline) plus any manually
+ * logged shipments. PO boxes are display-only here — their cases only fold into
+ * on-hand stock later, at the scan/check-in step; the manual shipments keep
+ * their receive / cancel actions.
+ */
 function IncomingPanel({
   canManage,
   onReceived
@@ -158,6 +171,8 @@ function IncomingPanel({
 }): JSX.Element {
   const toast = useToast()
   const [items, setItems] = useState<IncomingShipment[] | null>(null)
+  const [poBoxes, setPoBoxes] = useState<PurchaseOrderDetail[] | null>(null)
+  const [thumbs, setThumbs] = useState<Record<string, string>>({})
   const [adding, setAdding] = useState(false)
   const [busy, setBusy] = useState<Set<string>>(new Set())
 
@@ -172,6 +187,20 @@ function IncomingPanel({
     api.inventory.listIncoming().then((r) => {
       if (active) setItems(r)
     })
+    api.purchaseOrders
+      .incomingBoxes()
+      .then((b) => {
+        if (active) setPoBoxes(b)
+      })
+      .catch(() => {
+        if (active) setPoBoxes([])
+      })
+    api.purchaseOrders
+      .thumbnails()
+      .then((t) => {
+        if (active) setThumbs(t)
+      })
+      .catch(() => undefined)
     return () => {
       active = false
     }
@@ -185,7 +214,13 @@ function IncomingPanel({
       return next
     })
 
-  const totalUnits = (items ?? []).reduce((sum, i) => sum + i.quantity, 0)
+  const boxes = poBoxes ?? []
+  const manual = items ?? []
+  const poUnits = boxes.reduce((s, b) => s + b.lines.reduce((n, l) => n + l.quantity, 0), 0)
+  const manualUnits = manual.reduce((sum, i) => sum + i.quantity, 0)
+  const totalUnits = poUnits + manualUnits
+  const loading = items === null || poBoxes === null
+  const empty = !loading && boxes.length === 0 && manual.length === 0
 
   const receive = async (s: IncomingShipment): Promise<void> => {
     setBusyFor(s.id, true)
@@ -226,16 +261,16 @@ function IncomingPanel({
           <span className="ph-sub">Stock on its way in</span>
         </div>
         <div className="ph-right">
-          <div className="ph-total">{items === null ? '—' : totalUnits}</div>
+          <div className="ph-total">{loading ? '—' : totalUnits}</div>
           <div className="ph-sub">unit{totalUnits === 1 ? '' : 's'}</div>
         </div>
       </div>
 
-      {items === null ? (
+      {loading ? (
         <div className="incoming-loading">
           <span className="spinner dark" />
         </div>
-      ) : items.length === 0 ? (
+      ) : empty ? (
         <div className="incoming-empty">
           <Icon name="Truck" size={24} />
           <div className="text-sm">Nothing scheduled to arrive.</div>
@@ -247,8 +282,16 @@ function IncomingPanel({
         </div>
       ) : (
         <>
+          {boxes.length > 0 && (
+            <div className="po-ship-list">
+              {boxes.map((b) => (
+                <PurchaseOrderBox key={b.id} box={b} thumbnails={thumbs} />
+              ))}
+            </div>
+          )}
+          {manual.length > 0 && (
           <div className="incoming-list">
-            {items.map((s) => (
+            {manual.map((s) => (
               <div className="incoming-row" key={s.id} style={{ '--cat': categoryColor(s.category) } as CSSProperties}>
                 <span className="inc-dot" />
                 <div className="inc-main">
@@ -289,6 +332,7 @@ function IncomingPanel({
               </div>
             ))}
           </div>
+          )}
           {canManage && (
             <button type="button" className="incoming-add" onClick={() => setAdding(true)}>
               <Icon name="Plus" size={14} /> Log a shipment
@@ -305,6 +349,71 @@ function IncomingPanel({
             await load()
           }}
         />
+      )}
+    </div>
+  )
+}
+
+/**
+ * One purchase order shown as a shipping-box container in the Incoming panel:
+ * the PO number + its live stage tag, a supplier/destination/units summary, and
+ * (expanded) the products inside. Display-only — receiving into stock happens at
+ * the future scan/check-in step.
+ */
+function PurchaseOrderBox({
+  box,
+  thumbnails
+}: {
+  box: PurchaseOrderDetail
+  thumbnails: Record<string, string>
+}): JSX.Element {
+  const [open, setOpen] = useState(false)
+  const meta = PO_STAGE_META[box.status]
+  const units = box.lines.reduce((s, l) => s + l.quantity, 0)
+  return (
+    <div className={`po-ship-box po-ship-${box.status}`}>
+      <button
+        type="button"
+        className="po-ship-head"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className="po-ship-ico">
+          <Icon name="Package" size={17} />
+        </span>
+        <span className="po-ship-main">
+          <span className="po-ship-top">
+            <span className="mono po-ship-num">{box.poNumber}</span>
+            <span className={`badge po-badge po-badge-${meta.tone}`}>
+              <Icon name={meta.icon} size={12} />
+              {meta.label}
+            </span>
+          </span>
+          <span className="po-ship-sub">
+            {box.supplier || 'No supplier'} · → {box.location} · {box.lineCount}{' '}
+            {box.lineCount === 1 ? 'item' : 'items'} · {units} unit{units === 1 ? '' : 's'}
+          </span>
+        </span>
+        <Icon name={open ? 'ChevronDown' : 'ChevronRight'} size={16} className="po-ship-exp" />
+      </button>
+      {open && (
+        <div className="po-ship-lines">
+          {box.lines.map((l) => (
+            <div className="po-ship-line" key={l.id}>
+              <span className="po-ship-thumb">
+                {thumbnails[l.productId] ? (
+                  <img src={thumbnails[l.productId]} alt="" />
+                ) : (
+                  <CategoryLogo category={l.category} size={16} />
+                )}
+              </span>
+              <span className="po-ship-name" title={l.productName}>
+                {l.productName}
+              </span>
+              <span className="po-ship-qty mono">×{l.quantity}</span>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   )

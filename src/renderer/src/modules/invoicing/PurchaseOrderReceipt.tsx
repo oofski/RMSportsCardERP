@@ -80,7 +80,9 @@ export function PurchaseOrderReceipt({
           <div className="po-rh-left">
             <div className="po-rh-num mono">{detail.poNumber}</div>
             <div className="po-rh-supplier">{detail.supplier || 'No supplier'}</div>
-            <div className="po-rh-date">{formatDate(detail.createdAt)}</div>
+            <div className="po-rh-date">
+              {formatDate(detail.createdAt)} · Ships to {detail.location}
+            </div>
           </div>
           <span className={`badge po-badge po-badge-${meta.tone}`}>
             <Icon name={meta.icon} size={13} />
