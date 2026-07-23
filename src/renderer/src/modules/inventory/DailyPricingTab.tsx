@@ -50,25 +50,27 @@ export function DailyPricingTab({ onChanged }: { onChanged: () => Promise<void> 
 
   const commitBid = async (row: PricingRow, raw: string): Promise<void> => {
     const trimmed = raw.trim()
-    const highBid = trimmed === '' ? null : Number(trimmed)
-    if (highBid != null && (!Number.isFinite(highBid) || highBid < 0)) {
+    const num = trimmed === '' ? null : Number(trimmed)
+    if (num != null && (!Number.isFinite(num) || num < 0)) {
       toast.error('Enter a valid high bid.')
       return
     }
-    // No change → skip.
-    if ((row.highBid ?? null) === (highBid ?? null)) return
+    // 0 or blank means "not priced".
+    const highBid = num == null || num === 0 ? null : num
+    if ((row.highBid ?? null) === highBid) return // no change
     const res = await api.inventory.updateHighBid(row.id, highBid)
     if (res.ok && res.data) {
       const p = res.data
       const market = p.highBid != null && p.highBid > 0 ? p.highBid : p.unitCost
-      const nowIso = new Date().toISOString()
+      // Mirror the backend: stamp "last priced" only when a bid is set.
+      const at = p.highBid != null ? new Date().toISOString() : null
       setRows((prev) =>
         (prev ?? []).map((r) =>
           r.id === row.id
             ? {
                 ...r,
                 highBid: p.highBid,
-                highBidAt: nowIso,
+                highBidAt: at,
                 unitCost: p.unitCost,
                 invValue: p.quantity * market,
                 spread: p.quantity * market - p.quantity * p.unitCost
@@ -76,7 +78,7 @@ export function DailyPricingTab({ onChanged }: { onChanged: () => Promise<void> 
             : r
         )
       )
-      toast.success(`Priced ${p.name}.`)
+      toast.success(`Updated ${p.name}.`)
       await onChanged()
     } else {
       toast.error(res.error ?? 'Could not update the high bid.')
@@ -177,6 +179,18 @@ function BidInput({ value, onCommit }: { value: number | null; onCommit: (raw: s
   useEffect(() => {
     setV(value != null ? String(value) : '')
   }, [value])
+  const commit = (): void => {
+    const raw = v.trim()
+    if (raw !== '') {
+      const n = Number(raw)
+      if (!Number.isFinite(n) || n < 0) {
+        // Invalid — snap back to the last good value rather than commit it.
+        setV(value != null ? String(value) : '')
+        return
+      }
+    }
+    onCommit(v)
+  }
   return (
     <input
       className="input bid-input"
@@ -186,7 +200,7 @@ function BidInput({ value, onCommit }: { value: number | null; onCommit: (raw: s
       value={v}
       placeholder="—"
       onChange={(e) => setV(e.target.value)}
-      onBlur={() => onCommit(v)}
+      onBlur={commit}
       onKeyDown={(e) => {
         if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
       }}

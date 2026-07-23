@@ -56,9 +56,14 @@ export function ProductCasesLoader({ productId, unitType }: { productId: string;
   const [lots, setLots] = useState<ProductLot[] | null>(null)
   useEffect(() => {
     let active = true
-    api.inventory.productLots(productId).then((l) => {
-      if (active) setLots(l)
-    })
+    api.inventory
+      .productLots(productId)
+      .then((l) => {
+        if (active) setLots(l)
+      })
+      .catch(() => {
+        if (active) setLots([])
+      })
     return () => {
       active = false
     }

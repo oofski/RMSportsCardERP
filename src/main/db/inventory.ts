@@ -184,11 +184,11 @@ export function createProduct(input: NewInventoryProduct, actorId: string | null
     db.prepare(
       `INSERT INTO inventory_products
          (id, sku, upc, name, category, brand, set_name, year, unit_type,
-          boxes_per_case, packs_per_box, unit_cost, high_bid, sale_price, reorder_point,
+          boxes_per_case, packs_per_box, unit_cost, high_bid, high_bid_at, sale_price, reorder_point,
           notes, created_at, updated_at)
        VALUES
          (@id, @sku, @upc, @name, @category, @brand, @set_name, @year, @unit_type,
-          @boxes_per_case, @packs_per_box, @unit_cost, @high_bid, @sale_price, @reorder_point,
+          @boxes_per_case, @packs_per_box, @unit_cost, @high_bid, @high_bid_at, @sale_price, @reorder_point,
           @notes, @ts, @ts)`
     ).run({
       id,
@@ -203,7 +203,8 @@ export function createProduct(input: NewInventoryProduct, actorId: string | null
       boxes_per_case: input.boxesPerCase,
       packs_per_box: input.packsPerBox,
       unit_cost: Math.max(0, input.unitCost),
-      high_bid: input.highBid != null ? Math.max(0, input.highBid) : null,
+      high_bid: normalizeHighBid(input.highBid),
+      high_bid_at: normalizeHighBid(input.highBid) != null ? ts : null,
       sale_price: input.salePrice,
       reorder_point: Math.max(0, Math.round(input.reorderPoint)),
       notes: input.notes,
@@ -225,6 +226,12 @@ export function createProduct(input: NewInventoryProduct, actorId: string | null
   return getProduct(id) as InventoryProduct
 }
 
+/** Normalize a high bid: 0 / invalid → null (unpriced), otherwise clamp ≥ 0. */
+function normalizeHighBid(highBid: number | null | undefined): number | null {
+  if (highBid == null || highBid === 0 || !Number.isFinite(highBid)) return null
+  return Math.max(0, highBid)
+}
+
 export function updateProduct(input: UpdateInventoryProduct): InventoryProduct | null {
   const existing = getProduct(input.id)
   if (!existing) return null
@@ -240,12 +247,7 @@ export function updateProduct(input: UpdateInventoryProduct): InventoryProduct |
     boxes_per_case: input.boxesPerCase !== undefined ? input.boxesPerCase : existing.boxesPerCase,
     packs_per_box: input.packsPerBox !== undefined ? input.packsPerBox : existing.packsPerBox,
     unit_cost: input.unitCost != null ? Math.max(0, input.unitCost) : existing.unitCost,
-    high_bid:
-      input.highBid !== undefined
-        ? input.highBid == null
-          ? null
-          : Math.max(0, input.highBid)
-        : existing.highBid,
+    high_bid: input.highBid !== undefined ? normalizeHighBid(input.highBid) : existing.highBid,
     sale_price: input.salePrice !== undefined ? input.salePrice : existing.salePrice,
     reorder_point:
       input.reorderPoint != null ? Math.max(0, Math.round(input.reorderPoint)) : existing.reorderPoint,
@@ -264,17 +266,26 @@ export function updateProduct(input: UpdateInventoryProduct): InventoryProduct |
        WHERE id=@id`
     )
     .run(next)
+  // Keep the "last priced" timestamp in sync when the bid changes here too, so
+  // the Pricing screen's recency doesn't go stale when a bid is edited in the
+  // catalog. Stamp when a bid is set, clear when it's removed.
+  if (input.highBid !== undefined) {
+    getDb()
+      .prepare('UPDATE inventory_products SET high_bid_at = ? WHERE id = ?')
+      .run(next.high_bid != null ? nowIso() : null, input.id)
+  }
   return getProduct(input.id)
 }
 
 /** Update only a product's high bid (market value) + when it was set. */
 export function updateHighBid(productId: string, highBid: number | null): InventoryProduct | null {
   if (!getProduct(productId)) return null
-  const val = highBid == null ? null : Math.max(0, highBid)
+  const val = normalizeHighBid(highBid)
   const ts = nowIso()
+  // Stamp "last priced" when a bid is set; clear it when the bid is removed.
   getDb()
     .prepare('UPDATE inventory_products SET high_bid = ?, high_bid_at = ?, updated_at = ? WHERE id = ?')
-    .run(val, ts, ts, productId)
+    .run(val, val != null ? ts : null, ts, productId)
   return getProduct(productId)
 }
 
@@ -296,7 +307,7 @@ export function listLots(productId: string): ProductLot[] {
       `SELECT id, product_id, location, qty_received, qty_remaining, unit_cost, received_at, source
        FROM inventory_lots
        WHERE product_id = ? AND qty_remaining > 0
-       ORDER BY received_at ASC, id ASC`
+       ORDER BY received_at ASC, rowid ASC`
     )
     .all(productId) as LotRow[]
   return rows.map((r) => ({

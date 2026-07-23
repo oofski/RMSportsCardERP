@@ -55,7 +55,7 @@ export function consumeFifo(db: Database, productId: string, location: string, q
     .prepare(
       `SELECT id, qty_remaining, unit_cost FROM inventory_lots
        WHERE product_id = ? AND location = ? AND qty_remaining > 0
-       ORDER BY received_at ASC, id ASC`
+       ORDER BY received_at ASC, rowid ASC`
     )
     .all(productId, location) as Array<{ id: string; qty_remaining: number; unit_cost: number }>
   const dec = db.prepare('UPDATE inventory_lots SET qty_remaining = qty_remaining - ? WHERE id = ?')
@@ -113,22 +113,23 @@ export function slicesCost(slices: LotSlice[]): number {
  * product's creation (so legacy stock is consumed first under FIFO).
  */
 export function backfillLots(db: Database): void {
-  const rows = db
-    .prepare(
-      `SELECT s.product_id AS pid, s.location AS loc, s.quantity AS qty,
-              p.unit_cost AS cost, p.created_at AS created
-       FROM inventory_stock s
-       JOIN inventory_products p ON p.id = s.product_id
-       WHERE s.quantity <> 0`
-    )
-    .all() as Array<{ pid: string; loc: string; qty: number; cost: number; created: string }>
-  const hasLot = db.prepare(
-    'SELECT 1 FROM inventory_lots WHERE product_id = ? AND location = ? LIMIT 1'
-  )
-  for (const r of rows) {
-    if (hasLot.get(r.pid, r.loc)) continue
-    createLot(db, r.pid, r.loc, r.qty, r.cost, r.created, 'backfill', 'Opening balance')
-  }
+  const run = db.transaction(() => {
+    const rows = db
+      .prepare(
+        `SELECT s.product_id AS pid, s.location AS loc, s.quantity AS qty,
+                p.unit_cost AS cost, p.created_at AS created
+         FROM inventory_stock s
+         JOIN inventory_products p ON p.id = s.product_id
+         WHERE s.quantity > 0`
+      )
+      .all() as Array<{ pid: string; loc: string; qty: number; cost: number; created: string }>
+    const hasLot = db.prepare('SELECT 1 FROM inventory_lots WHERE product_id = ? AND location = ? LIMIT 1')
+    for (const r of rows) {
+      if (hasLot.get(r.pid, r.loc)) continue
+      createLot(db, r.pid, r.loc, r.qty, r.cost, r.created, 'backfill', 'Opening balance')
+    }
+  })
+  run()
 }
 
 /**
