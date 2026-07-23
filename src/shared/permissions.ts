@@ -68,6 +68,7 @@ export type Permission =
   // Module access (built out over time)
   | 'module.inventory'
   | 'inventory.manage'
+  | 'inventory.pricing'
   | 'module.orders'
   | 'module.shipping'
   | 'module.bookkeeping'
@@ -130,6 +131,12 @@ export const PERMISSIONS: PermissionDefinition[] = [
     key: 'inventory.manage',
     label: 'Manage inventory',
     description: 'Add products, record sales, restock and adjust stock.',
+    group: 'Modules'
+  },
+  {
+    key: 'inventory.pricing',
+    label: 'Update market prices',
+    description: 'Update daily high bids on the Pricing screen; recomputes inventory value and spread.',
     group: 'Modules'
   },
   {
