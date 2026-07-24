@@ -69,6 +69,7 @@ import {
   Warehouse,
   TrendingDown,
   Maximize2,
+  ImagePlus,
   type LucideIcon
 } from 'lucide-react'
 
@@ -142,7 +143,8 @@ const MAP: Record<string, LucideIcon> = {
   AlertTriangle,
   Warehouse,
   TrendingDown,
-  Maximize2
+  Maximize2,
+  ImagePlus
 }
 
 export function Icon({

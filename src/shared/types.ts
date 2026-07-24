@@ -15,6 +15,8 @@ export interface Employee {
   mustChangePassword: boolean
   /** Individually-granted permissions on top of the role (special access). */
   extraPermissions: Permission[]
+  /** Profile picture as a ready-to-use data URL, or null if none set. */
+  avatarUrl: string | null
   createdAt: string
   updatedAt: string
   createdBy: string | null
@@ -351,6 +353,8 @@ export interface SessionUser {
   role: Role
   permissions: Permission[]
   mustChangePassword: boolean
+  /** Profile picture as a ready-to-use data URL, or null if none set. */
+  avatarUrl: string | null
 }
 
 export interface AuthResult {

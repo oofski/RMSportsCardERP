@@ -8,6 +8,7 @@ import type {
 } from '@shared/types'
 import { sanitizePermissions, type Permission, type Role } from '@shared/permissions'
 import { getDb } from './database'
+import { deleteImageFile, imageDataUrl, importImageFile } from '../services/media'
 import { newId, nowIso } from '../util'
 
 const BCRYPT_ROUNDS = 12
@@ -24,6 +25,7 @@ interface EmployeeRow {
   password_hash: string | null
   must_change_password: number
   permissions_json: string | null
+  avatar: string | null
   created_at: string
   updated_at: string
   created_by: string | null
@@ -50,6 +52,7 @@ function toEmployee(row: EmployeeRow): Employee {
     status: row.status as EmployeeStatus,
     mustChangePassword: row.must_change_password === 1,
     extraPermissions: parseExtraPermissions(row.permissions_json),
+    avatarUrl: row.avatar ? imageDataUrl(row.avatar) : null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     createdBy: row.created_by
@@ -177,6 +180,34 @@ export function updateEmployee(input: UpdateEmployeeInput): Employee | null {
   ).run(next)
 
   return getEmployeeById(input.id)
+}
+
+/** Import a picked image as an employee's profile picture, replacing any prior
+ *  one (the old file is deleted so the media dir doesn't leak). */
+export function setEmployeeAvatar(id: string, srcPath: string): Employee | null {
+  const db = getDb()
+  const row = db.prepare('SELECT avatar FROM employees WHERE id = ?').get(id) as
+    | { avatar: string | null }
+    | undefined
+  if (!row) return null
+  const filename = importImageFile(srcPath, `emp-${id}`)
+  // Delete the previous file only if a different extension made a new filename,
+  // so we never orphan e.g. an old .png after switching to a .jpg.
+  if (row.avatar && row.avatar !== filename) deleteImageFile(row.avatar)
+  db.prepare('UPDATE employees SET avatar = ?, updated_at = ? WHERE id = ?').run(filename, nowIso(), id)
+  return getEmployeeById(id)
+}
+
+/** Remove an employee's profile picture (deletes the stored file). */
+export function clearEmployeeAvatar(id: string): Employee | null {
+  const db = getDb()
+  const row = db.prepare('SELECT avatar FROM employees WHERE id = ?').get(id) as
+    | { avatar: string | null }
+    | undefined
+  if (!row) return null
+  if (row.avatar) deleteImageFile(row.avatar)
+  db.prepare('UPDATE employees SET avatar = NULL, updated_at = ? WHERE id = ?').run(nowIso(), id)
+  return getEmployeeById(id)
 }
 
 /** Set a fresh temporary password (invite reset). Returns nothing sensitive. */

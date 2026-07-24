@@ -197,7 +197,7 @@ function IndividualAccess({
       {selected && (
         <>
           <div className="row" style={{ gap: 11, marginBottom: 6 }}>
-            <Avatar text={initials(selected.firstName, selected.lastName)} small />
+            <Avatar text={initials(selected.firstName, selected.lastName)} src={selected.avatarUrl} small />
             <div>
               <div style={{ fontWeight: 600 }}>{fullName(selected.firstName, selected.lastName)}</div>
               <div className="muted text-sm" style={{ textTransform: 'capitalize' }}>

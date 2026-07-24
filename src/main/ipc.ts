@@ -1,4 +1,4 @@
-import { ipcMain, shell, app, dialog, nativeTheme, BrowserWindow } from 'electron'
+import { ipcMain, shell, app, dialog, nativeTheme, BrowserWindow, type OpenDialogOptions } from 'electron'
 import { writeFileSync } from 'fs'
 import { IPC, type AppInfo } from '@shared/ipc'
 import type {
@@ -32,11 +32,13 @@ import {
   validateNewEmployee
 } from './services/auth'
 import {
+  clearEmployeeAvatar,
   companyIdExists,
   emailExists,
   getEmployeeById,
   insertEmployee,
   listEmployees,
+  setEmployeeAvatar,
   setEmployeePermissions,
   setTemporaryPassword,
   updateEmployee
@@ -298,6 +300,51 @@ export function registerIpcHandlers(): void {
       }
     }
   )
+
+  /** Authorize an avatar change: an employee may set their OWN picture, and an
+   *  admin may set one for anyone whose role they are allowed to manage. */
+  const canEditAvatar = (targetId: string): string | Employee => {
+    const user = currentUser()
+    if (!user) return 'You are not signed in.'
+    const target = getEmployeeById(targetId)
+    if (!target) return 'Employee not found.'
+    if (user.id === targetId) return target
+    if (!userCan(user, 'admin.employees.manage')) return 'You cannot change that profile picture.'
+    if (!assignableRoles(user.role).includes(target.role)) {
+      return 'You do not have permission to manage that user.'
+    }
+    return target
+  }
+
+  ipcMain.handle(IPC.employeesSetAvatar, async (e, id: string): Promise<Result<Employee>> => {
+    try {
+      const auth = canEditAvatar(String(id ?? ''))
+      if (typeof auth === 'string') return { ok: false, error: auth }
+      const win = BrowserWindow.fromWebContents(e.sender) ?? BrowserWindow.getFocusedWindow()
+      const opts: OpenDialogOptions = {
+        title: 'Choose a profile picture',
+        properties: ['openFile'],
+        filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp'] }]
+      }
+      const picked = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts)
+      if (picked.canceled || !picked.filePaths[0]) return { ok: false, error: 'No image selected.' }
+      const updated = setEmployeeAvatar(String(id), picked.filePaths[0])
+      return updated ? { ok: true, data: updated } : { ok: false, error: 'Could not set the picture.' }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle(IPC.employeesRemoveAvatar, (_e, id: string): Result<Employee> => {
+    try {
+      const auth = canEditAvatar(String(id ?? ''))
+      if (typeof auth === 'string') return { ok: false, error: auth }
+      const updated = clearEmployeeAvatar(String(id))
+      return updated ? { ok: true, data: updated } : { ok: false, error: 'Could not remove the picture.' }
+    } catch (err) {
+      return fail(err)
+    }
+  })
 
   // ---- Hours --------------------------------------------------------------
   ipcMain.handle(IPC.hoursSummary, (): EmployeeHoursSummary[] => {

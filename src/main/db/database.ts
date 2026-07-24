@@ -280,7 +280,9 @@ function migrate(database: Database.Database): void {
   addColumnIfMissing(database, 'purchase_orders', 'location', "TEXT NOT NULL DEFAULT 'RM'")
   // v9: scanned_at on purchase_orders (idempotent scan-in) + finance_cogs COGS ledger.
   addColumnIfMissing(database, 'purchase_orders', 'scanned_at', 'TEXT')
-  setMeta(database, 'schema_version', '9')
+  // v10: employee profile picture (stored media filename).
+  addColumnIfMissing(database, 'employees', 'avatar', 'TEXT')
+  setMeta(database, 'schema_version', '10')
 
   // Seed the product catalog once, then apply the on-hand snapshot once.
   seedCatalogIfNeeded(database)

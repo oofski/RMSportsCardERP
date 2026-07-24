@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { MODULES } from '@shared/modules'
 import { useSession } from '../lib/session'
 import { useTheme } from '../lib/theme'
+import { api } from '../lib/api'
 import { ChromeContext } from '../lib/chrome'
 import { Brand } from '../components/Brand'
 import { Icon } from '../components/Icon'
@@ -25,7 +26,7 @@ const WORKSPACES = [
 ]
 
 export function AppShell(): JSX.Element {
-  const { user, appInfo, can, logout } = useSession()
+  const { user, appInfo, can, logout, refresh } = useSession()
   const { mode, toggle } = useTheme()
   const toast = useToast()
   const [showUpdates, setShowUpdates] = useState(false)
@@ -54,6 +55,29 @@ export function AppShell(): JSX.Element {
   }
 
   if (!user) return <></>
+
+  // Self-service profile picture: pick/remove the signed-in user's own photo,
+  // then refresh the session so the shell + everywhere they appear updates.
+  const changePhoto = async (): Promise<void> => {
+    setMenuOpen(false)
+    const res = await api.employees.setAvatar(user.id)
+    if (res.ok) {
+      await refresh()
+      toast.success('Profile picture updated.')
+    } else if (res.error && res.error !== 'No image selected.') {
+      toast.error(res.error)
+    }
+  }
+  const removePhoto = async (): Promise<void> => {
+    setMenuOpen(false)
+    const res = await api.employees.removeAvatar(user.id)
+    if (res.ok) {
+      await refresh()
+      toast.success('Profile picture removed.')
+    } else {
+      toast.error(res.error ?? 'Could not remove the picture.')
+    }
+  }
 
   const activeModule = visible.find((m) => m.id === activeId)
   const header =
@@ -188,7 +212,7 @@ export function AppShell(): JSX.Element {
 
               <div className="usermenu">
                 <button className="usermenu-btn" onClick={() => setMenuOpen((v) => !v)}>
-                  <Avatar text={initials(user.firstName, user.lastName)} small />
+                  <Avatar text={initials(user.firstName, user.lastName)} src={user.avatarUrl} small />
                   <span className="um-name">{user.firstName}</span>
                   <Icon name="ChevronDown" size={15} />
                 </button>
@@ -200,15 +224,30 @@ export function AppShell(): JSX.Element {
                     />
                     <div className="usermenu-pop">
                       <div className="um-head">
-                        <div className="um-h-name">{fullName(user.firstName, user.lastName)}</div>
-                        <div className="um-h-email">{user.email}</div>
-                        <div style={{ marginTop: 6 }}>
+                        <div className="um-head-id">
+                          <Avatar text={initials(user.firstName, user.lastName)} src={user.avatarUrl} />
+                          <div>
+                            <div className="um-h-name">{fullName(user.firstName, user.lastName)}</div>
+                            <div className="um-h-email">{user.email}</div>
+                          </div>
+                        </div>
+                        <div style={{ marginTop: 8 }}>
                           <span className={`badge badge-${user.role}`}>
                             <span className="dot" />
                             {roleLabel(user.role)}
                           </span>
                         </div>
                       </div>
+                      <button className="menu-item" onClick={changePhoto}>
+                        <Icon name="ImagePlus" size={16} />
+                        {user.avatarUrl ? 'Change photo' : 'Add photo'}
+                      </button>
+                      {user.avatarUrl && (
+                        <button className="menu-item" onClick={removePhoto}>
+                          <Icon name="Trash2" size={16} />
+                          Remove photo
+                        </button>
+                      )}
                       <button
                         className="menu-item"
                         onClick={() => {

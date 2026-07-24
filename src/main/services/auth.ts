@@ -32,7 +32,8 @@ function sessionUserFor(id: string): SessionUser | null {
     email: employee.email,
     role: employee.role,
     permissions: effectivePermissions(employee.role, employee.extraPermissions),
-    mustChangePassword: employee.mustChangePassword
+    mustChangePassword: employee.mustChangePassword,
+    avatarUrl: employee.avatarUrl
   }
 }
 

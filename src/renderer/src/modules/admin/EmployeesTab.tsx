@@ -161,7 +161,7 @@ export function EmployeesTab({
               <tr key={e.id}>
                 <td>
                   <div className="cell-name">
-                    <Avatar text={initials(e.firstName, e.lastName)} />
+                    <Avatar text={initials(e.firstName, e.lastName)} src={e.avatarUrl} />
                     <div>
                       <div style={{ fontWeight: 600 }}>{fullName(e.firstName, e.lastName)}</div>
                       <div className="muted text-sm">{e.email}</div>

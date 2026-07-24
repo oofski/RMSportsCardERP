@@ -185,8 +185,21 @@ export function Modal({
 }
 
 // ---------- Avatar ----------
-export function Avatar({ text, small }: { text: string; small?: boolean }): JSX.Element {
-  return <div className={`avatar ${small ? 'avatar-sm' : ''}`}>{text}</div>
+export function Avatar({
+  text,
+  src,
+  small
+}: {
+  text: string
+  /** Profile-picture data URL; falls back to the initials when absent. */
+  src?: string | null
+  small?: boolean
+}): JSX.Element {
+  return (
+    <div className={`avatar ${small ? 'avatar-sm' : ''}`}>
+      {src ? <img className="avatar-img" src={src} alt="" /> : text}
+    </div>
+  )
 }
 
 // ---------- Checkbox ----------

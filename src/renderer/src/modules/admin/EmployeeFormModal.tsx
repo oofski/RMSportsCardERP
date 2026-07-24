@@ -3,8 +3,9 @@ import type { Employee, EmployeeInvite, EmployeeStatus } from '@shared/types'
 import { assignableRoles, ROLES, type Role } from '@shared/permissions'
 import { useSession } from '../../lib/session'
 import { api } from '../../lib/api'
+import { initials } from '../../lib/format'
 import { useToast } from '../../components/Toast'
-import { Button, Field, Input, Modal, Select } from '../../components/ui'
+import { Avatar, Button, Field, Input, Modal, Select } from '../../components/ui'
 
 const STATUS_OPTIONS: { value: EmployeeStatus; label: string }[] = [
   { value: 'invited', label: 'Invited' },
@@ -38,6 +39,41 @@ export function EmployeeFormModal({
   })
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(employee?.avatarUrl ?? null)
+  const [avatarBusy, setAvatarBusy] = useState(false)
+
+  const changePhoto = async (): Promise<void> => {
+    if (!employee) return
+    setAvatarBusy(true)
+    try {
+      const res = await api.employees.setAvatar(employee.id)
+      if (res.ok && res.data) {
+        setAvatarUrl(res.data.avatarUrl)
+        await onUpdated()
+        toast.success('Profile picture updated.')
+      } else if (res.error && res.error !== 'No image selected.') {
+        toast.error(res.error)
+      }
+    } finally {
+      setAvatarBusy(false)
+    }
+  }
+  const removePhoto = async (): Promise<void> => {
+    if (!employee) return
+    setAvatarBusy(true)
+    try {
+      const res = await api.employees.removeAvatar(employee.id)
+      if (res.ok) {
+        setAvatarUrl(null)
+        await onUpdated()
+        toast.success('Profile picture removed.')
+      } else {
+        toast.error(res.error ?? 'Could not remove the picture.')
+      }
+    } finally {
+      setAvatarBusy(false)
+    }
+  }
 
   const set =
     (k: keyof typeof form) =>
@@ -118,6 +154,29 @@ export function EmployeeFormModal({
     >
       <form onSubmit={submit}>
         {error && <div className="auth-alert">{error}</div>}
+
+        {isEdit && employee && (
+          <div className="emp-avatar-row">
+            <Avatar text={initials(form.firstName, form.lastName)} src={avatarUrl} />
+            <div className="emp-avatar-actions">
+              <Button
+                size="sm"
+                variant="secondary"
+                icon="ImagePlus"
+                loading={avatarBusy}
+                onClick={changePhoto}
+                type="button"
+              >
+                {avatarUrl ? 'Change photo' : 'Add photo'}
+              </Button>
+              {avatarUrl && (
+                <Button size="sm" variant="ghost" icon="Trash2" onClick={removePhoto} type="button">
+                  Remove
+                </Button>
+              )}
+            </div>
+          </div>
+        )}
 
         <div className="field-row">
           <Field label="First name">

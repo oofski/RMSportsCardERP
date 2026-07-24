@@ -71,7 +71,11 @@ const api = {
     resetPassword: (id: string): Promise<Result<EmployeeInvite>> =>
       ipcRenderer.invoke(IPC.employeesResetPassword, { id }),
     setPermissions: (id: string, permissions: Permission[]): Promise<Result<Employee>> =>
-      ipcRenderer.invoke(IPC.employeesSetPermissions, { id, permissions })
+      ipcRenderer.invoke(IPC.employeesSetPermissions, { id, permissions }),
+    setAvatar: (id: string): Promise<Result<Employee>> =>
+      ipcRenderer.invoke(IPC.employeesSetAvatar, id),
+    removeAvatar: (id: string): Promise<Result<Employee>> =>
+      ipcRenderer.invoke(IPC.employeesRemoveAvatar, id)
   },
   hours: {
     summary: (): Promise<EmployeeHoursSummary[]> => ipcRenderer.invoke(IPC.hoursSummary),

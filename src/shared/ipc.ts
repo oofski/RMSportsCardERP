@@ -17,6 +17,8 @@ export const IPC = {
   employeesUpdate: 'employees:update',
   employeesResetPassword: 'employees:reset-password',
   employeesSetPermissions: 'employees:set-permissions',
+  employeesSetAvatar: 'employees:set-avatar',
+  employeesRemoveAvatar: 'employees:remove-avatar',
 
   // Hours
   hoursSummary: 'hours:summary',
