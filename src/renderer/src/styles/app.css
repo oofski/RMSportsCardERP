@@ -4005,3 +4005,152 @@ tr.hoverable-row:hover {
 .supply-order-summary .sos-row strong {
   font-variant-numeric: tabular-nums;
 }
+
+/* ---------- Supply orders pipeline (right rail) ---------- */
+.supplies-row {
+  margin-top: 4px;
+}
+.supplies-main {
+  min-width: 0;
+}
+.supplies-main .table-wrap {
+  overflow-x: auto;
+}
+.supply-orders-panel {
+  display: flex;
+  flex-direction: column;
+}
+.so-stages {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 12px;
+}
+.so-stage-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.so-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  padding: 3px 9px;
+  border-radius: 999px;
+}
+.so-badge svg {
+  width: 13px;
+  height: 13px;
+}
+.so-badge-ordered {
+  background: var(--brand-soft);
+  color: var(--brand-600);
+}
+.so-badge-transit {
+  background: var(--info-bg);
+  color: var(--info);
+}
+.so-badge-delivered {
+  background: var(--success-bg);
+  color: var(--success);
+}
+.so-count {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-3);
+}
+.so-stage-empty {
+  font-size: 13px;
+  color: var(--text-3);
+  padding: 2px 2px 4px;
+}
+.so-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  padding: 10px 11px;
+  margin-bottom: 8px;
+}
+.so-card:last-child {
+  margin-bottom: 0;
+}
+.so-card-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.so-thumb {
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-sm);
+}
+.so-card-main {
+  min-width: 0;
+}
+.so-card-name {
+  font-weight: 600;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.so-card-sub {
+  font-size: 12px;
+  color: var(--text-3);
+  margin-top: 1px;
+}
+.so-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 9px;
+}
+.so-card-actions .btn-sm {
+  flex: 1;
+  justify-content: center;
+  white-space: nowrap;
+}
+.so-cancel {
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+}
+.so-cancel svg {
+  width: 14px;
+  height: 14px;
+}
+.so-delivered {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--success);
+}
+.so-empty-all {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  text-align: center;
+  color: var(--text-3);
+  font-size: 13px;
+  padding: 26px 12px;
+}
+.link-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--brand-600);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.link-btn:hover {
+  text-decoration: underline;
+}

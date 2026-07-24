@@ -279,6 +279,27 @@ function migrate(database: Database.Database): void {
       FOREIGN KEY (supply_id) REFERENCES supplies (id) ON DELETE CASCADE
     );
     CREATE INDEX IF NOT EXISTS idx_supply_txn_supply ON supply_transactions (supply_id);
+
+    -- v14: supply orders — a lightweight CRM pipeline for reorders moving through
+    -- Ordered → In-transit → Delivered. Stock/cost are applied when an order is
+    -- marked Delivered (until a purchasing API can drive the stages).
+    CREATE TABLE IF NOT EXISTS supply_orders (
+      id             TEXT PRIMARY KEY,
+      supply_id      TEXT NOT NULL,
+      units          INTEGER NOT NULL,
+      items_per_unit INTEGER NOT NULL,
+      total          REAL NOT NULL DEFAULT 0,
+      status         TEXT NOT NULL DEFAULT 'ordered',
+      note           TEXT,
+      actor_id       TEXT,
+      ordered_at     TEXT,
+      in_transit_at  TEXT,
+      delivered_at   TEXT,
+      cancelled_at   TEXT,
+      created_at     TEXT NOT NULL,
+      FOREIGN KEY (supply_id) REFERENCES supplies (id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_supply_orders_supply ON supply_orders (supply_id);
   `)
 
   if (getMeta(database, 'schema_version') === null) {
@@ -327,7 +348,9 @@ function migrate(database: Database.Database): void {
   // reorder today, and the hook for automated reordering once a purchasing API
   // (Amazon Business) is available.
   addColumnIfMissing(database, 'supplies', 'reorder_url', 'TEXT')
-  setMeta(database, 'schema_version', '13')
+  // v14: supply_orders pipeline (Ordered → In-transit → Delivered). New table
+  // created idempotently in the schema-init block above.
+  setMeta(database, 'schema_version', '14')
 
   // Seed the product catalog once, then apply the on-hand snapshot once.
   seedCatalogIfNeeded(database)

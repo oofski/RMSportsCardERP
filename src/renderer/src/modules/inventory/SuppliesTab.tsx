@@ -6,6 +6,7 @@ import { Icon } from '../../components/Icon'
 import { formatMoney } from '../../lib/format'
 import { SupplyFormModal } from './SupplyFormModal'
 import { SupplyStockModal } from './SupplyStockModal'
+import { SupplyOrdersPanel } from './SupplyOrdersPanel'
 
 const UNIT_LABEL: Record<string, string> = {
   each: 'each',
@@ -118,7 +119,9 @@ export function SuppliesTab({ canManage }: { canManage: boolean }): JSX.Element 
           }
         />
       ) : (
-        <div className="table-wrap">
+        <div className="panel-row supplies-row">
+          <div className="supplies-main">
+            <div className="table-wrap">
           <table className="data">
             <thead>
               <tr>
@@ -240,6 +243,9 @@ export function SuppliesTab({ canManage }: { canManage: boolean }): JSX.Element 
               ))}
             </tbody>
           </table>
+            </div>
+          </div>
+          <SupplyOrdersPanel supplies={supplies} canManage={canManage} onChanged={load} />
         </div>
       )}
 

@@ -11,6 +11,7 @@ import type {
   NewIncomingShipment,
   NewInventoryProduct,
   NewSupply,
+  NewSupplyOrder,
   PricingRow,
   ProductImage,
   ProductLot,
@@ -18,6 +19,8 @@ import type {
   Result,
   SalesPoint,
   Supply,
+  SupplyOrder,
+  SupplyOrderStatus,
   SupplyPurchaseInput,
   SupplyStats,
   SupplyUseInput,
@@ -60,10 +63,14 @@ import {
   adjustSupply,
   clearSupplyImage,
   createSupply,
+  createSupplyOrder,
   deleteSupply,
+  deleteSupplyOrder,
   listSupplies,
+  listSupplyOrders,
   purchaseSupply,
   setSupplyImage,
+  setSupplyOrderStatus,
   supplyStats,
   updateSupply,
   useSupply
@@ -519,6 +526,57 @@ export function registerInventoryIpc(): void {
       }
     }
   )
+
+  // ---- Supply orders (Ordered → In-transit → Delivered) -------------------
+  ipcMain.handle(IPC.supplyOrdersList, (): SupplyOrder[] =>
+    can('module.inventory') ? listSupplyOrders() : []
+  )
+
+  ipcMain.handle(IPC.supplyOrderCreate, (_e, input: NewSupplyOrder): Result<SupplyOrder> => {
+    try {
+      const actor = requireManage()
+      if (!input?.supplyId) return { ok: false, error: 'Choose a supply.' }
+      if (!Number.isFinite(input.units) || input.units <= 0) {
+        return { ok: false, error: 'Enter at least 1 unit.' }
+      }
+      if (!Number.isFinite(input.itemsPerUnit) || input.itemsPerUnit < 1) {
+        return { ok: false, error: 'Items per unit must be at least 1.' }
+      }
+      if (!Number.isFinite(input.total) || input.total < 0) {
+        return { ok: false, error: 'Enter the order total.' }
+      }
+      const res = createSupplyOrder(input, actor.id)
+      return res.error ? { ok: false, error: res.error } : { ok: true, data: res.order as SupplyOrder }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle(
+    IPC.supplyOrderSetStatus,
+    (_e, payload: { id: string; status: SupplyOrderStatus }): Result<SupplyOrder> => {
+      try {
+        const actor = requireManage()
+        if (!payload?.id) return { ok: false, error: 'No order specified.' }
+        const valid: SupplyOrderStatus[] = ['ordered', 'in_transit', 'delivered', 'cancelled']
+        if (!valid.includes(payload.status)) return { ok: false, error: 'Invalid status.' }
+        const res = setSupplyOrderStatus(payload.id, payload.status, actor.id)
+        return res.error ? { ok: false, error: res.error } : { ok: true, data: res.order as SupplyOrder }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  ipcMain.handle(IPC.supplyOrderDelete, (_e, payload: { id: string }): Result => {
+    try {
+      requireManage()
+      if (!payload?.id) return { ok: false, error: 'No order specified.' }
+      return deleteSupplyOrder(payload.id) ? { ok: true } : { ok: false, error: 'Order not found.' }
+    } catch (err) {
+      return fail(err)
+    }
+  })
 }
 
 function validateProduct(input: NewInventoryProduct): string | null {

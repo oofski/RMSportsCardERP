@@ -79,6 +79,10 @@ export const IPC = {
   supplyAdjust: 'supplies:adjust',
   supplySetImage: 'supplies:set-image',
   supplyRemoveImage: 'supplies:remove-image',
+  supplyOrdersList: 'supplies:orders:list',
+  supplyOrderCreate: 'supplies:orders:create',
+  supplyOrderSetStatus: 'supplies:orders:set-status',
+  supplyOrderDelete: 'supplies:orders:delete',
 
   // Purchase orders
   poList: 'po:list',

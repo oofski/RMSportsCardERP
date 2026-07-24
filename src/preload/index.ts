@@ -23,6 +23,7 @@ import type {
   NewInventoryProduct,
   NewPurchaseOrder,
   NewSupply,
+  NewSupplyOrder,
   NewTimeEntryInput,
   PricingRow,
   ProductImage,
@@ -36,6 +37,8 @@ import type {
   SalesPoint,
   SessionUser,
   Supply,
+  SupplyOrder,
+  SupplyOrderStatus,
   SupplyPurchaseInput,
   SupplyStats,
   SupplyUseInput,
@@ -169,7 +172,14 @@ const api = {
     setImage: (id: string): Promise<Result<Supply>> =>
       ipcRenderer.invoke(IPC.supplySetImage, { id }),
     removeImage: (id: string): Promise<Result<Supply>> =>
-      ipcRenderer.invoke(IPC.supplyRemoveImage, { id })
+      ipcRenderer.invoke(IPC.supplyRemoveImage, { id }),
+    listOrders: (): Promise<SupplyOrder[]> => ipcRenderer.invoke(IPC.supplyOrdersList),
+    createOrder: (input: NewSupplyOrder): Promise<Result<SupplyOrder>> =>
+      ipcRenderer.invoke(IPC.supplyOrderCreate, input),
+    setOrderStatus: (id: string, status: SupplyOrderStatus): Promise<Result<SupplyOrder>> =>
+      ipcRenderer.invoke(IPC.supplyOrderSetStatus, { id, status }),
+    deleteOrder: (id: string): Promise<Result> =>
+      ipcRenderer.invoke(IPC.supplyOrderDelete, { id })
   },
   purchaseOrders: {
     list: (): Promise<PurchaseOrder[]> => ipcRenderer.invoke(IPC.poList),

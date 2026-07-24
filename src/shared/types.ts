@@ -370,6 +370,38 @@ export interface SupplyStats {
   spendAllTime: number
 }
 
+export type SupplyOrderStatus = 'ordered' | 'in_transit' | 'delivered' | 'cancelled'
+
+/** A reorder moving through the Ordered → In-transit → Delivered pipeline. */
+export interface SupplyOrder {
+  id: string
+  supplyId: string
+  supplyName: string
+  unit: SupplyUnit
+  /** Supply photo (data URL) for the card thumbnail, if any. */
+  imageUrl: string | null
+  units: number
+  itemsPerUnit: number
+  /** Items this order adds on delivery (units × itemsPerUnit). */
+  items: number
+  total: number
+  status: SupplyOrderStatus
+  note: string | null
+  orderedAt: string | null
+  inTransitAt: string | null
+  deliveredAt: string | null
+  cancelledAt: string | null
+  createdAt: string
+}
+
+export interface NewSupplyOrder {
+  supplyId: string
+  units: number
+  itemsPerUnit: number
+  total: number
+  note?: string | null
+}
+
 /** A product photo, delivered to the renderer as a ready-to-use data URL. */
 export interface ProductImage {
   id: string
