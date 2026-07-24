@@ -31,6 +31,13 @@ export function SupplyFormModal({
   const [itemsPerUnit, setItemsPerUnit] = useState(
     supply && supply.itemsPerUnit > 1 ? String(supply.itemsPerUnit) : ''
   )
+  // Price the user actually pays: the cost of one ordering unit (a box/pack).
+  // Stored as a per-item cost internally; prefilled as unitCost × itemsPerUnit.
+  const [costPerUnit, setCostPerUnit] = useState(
+    supply && supply.unitCost > 0
+      ? String(Math.round(supply.unitCost * supply.itemsPerUnit * 100) / 100)
+      : ''
+  )
   const [reorderPoint, setReorderPoint] = useState(
     supply?.reorderPoint ? String(supply.reorderPoint) : ''
   )
@@ -95,6 +102,11 @@ export function SupplyFormModal({
       setError('Reorder point must be 0 or more.')
       return
     }
+    const cpu = numOrNull(costPerUnit)
+    if (cpu != null && cpu < 0) {
+      setError('Cost must be 0 or more.')
+      return
+    }
     const link = reorderUrl.trim()
     if (link && !/^https?:\/\//i.test(link)) {
       setError('Reorder link must start with http:// or https://')
@@ -102,6 +114,9 @@ export function SupplyFormModal({
     }
     setError('')
     setBusy(true)
+    const ipu = perUnit ?? 1
+    // Store the per-item cost derived from the per-unit price they entered.
+    const perItemCost = cpu != null ? cpu / ipu : 0
     try {
       let res
       if (isEdit) {
@@ -109,7 +124,8 @@ export function SupplyFormModal({
           id: supply!.id,
           name: name.trim(),
           unit,
-          itemsPerUnit: perUnit ?? 1,
+          unitCost: perItemCost,
+          itemsPerUnit: ipu,
           reorderPoint: reorder ?? 0,
           recurring,
           notes: notes.trim() || null,
@@ -119,8 +135,8 @@ export function SupplyFormModal({
         res = await api.supplies.create({
           name: name.trim(),
           unit,
-          unitCost: 0,
-          itemsPerUnit: perUnit ?? 1,
+          unitCost: perItemCost,
+          itemsPerUnit: ipu,
           reorderPoint: reorder ?? 0,
           recurring,
           notes: notes.trim() || null,
@@ -138,6 +154,15 @@ export function SupplyFormModal({
       setBusy(false)
     }
   }
+
+  const unitLabel = (UNIT_OPTIONS.find((u) => u.id === unit)?.label ?? 'unit').toLowerCase()
+  const ipuNum = parseInt(itemsPerUnit || '1', 10) || 1
+  const cpuNum = parseFloat(costPerUnit)
+  const costHint =
+    ipuNum > 1
+      ? `Price for one ${unitLabel} of ${ipuNum}` +
+        (Number.isFinite(cpuNum) && cpuNum > 0 ? ` · ≈ $${(cpuNum / ipuNum).toFixed(2)}/item` : '')
+      : 'What you pay for one'
 
   return (
     <Modal
@@ -210,16 +235,28 @@ export function SupplyFormModal({
         </Field>
       </div>
 
-      <Field label="Reorder at" hint="Flag low when on-hand items hit this (0 = off)">
-        <Input
-          type="number"
-          min={0}
-          step="1"
-          value={reorderPoint}
-          onChange={(e) => setReorderPoint(e.target.value)}
-          placeholder="0"
-        />
-      </Field>
+      <div className="field-row">
+        <Field label="Cost per unit" hint={costHint}>
+          <Input
+            type="number"
+            min={0}
+            step="0.01"
+            value={costPerUnit}
+            onChange={(e) => setCostPerUnit(e.target.value)}
+            placeholder="0.00"
+          />
+        </Field>
+        <Field label="Reorder at" hint="Flag low when on-hand items hit this (0 = off)">
+          <Input
+            type="number"
+            min={0}
+            step="1"
+            value={reorderPoint}
+            onChange={(e) => setReorderPoint(e.target.value)}
+            placeholder="0"
+          />
+        </Field>
+      </div>
 
       <div style={{ margin: '10px 0' }}>
         <Checkbox
@@ -248,8 +285,8 @@ export function SupplyFormModal({
 
       {!isEdit && (
         <p className="muted text-sm" style={{ marginTop: 4 }}>
-          Add stock and its cost afterwards with <strong>Buy</strong> — you can also add a photo once
-          it&apos;s saved.
+          Set the price here, or leave it — logging a <strong>Buy</strong> also updates the cost from the
+          order. Add stock and a photo once it&apos;s saved.
         </p>
       )}
     </Modal>

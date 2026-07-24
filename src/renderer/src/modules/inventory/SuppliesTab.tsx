@@ -124,7 +124,7 @@ export function SuppliesTab({ canManage }: { canManage: boolean }): JSX.Element 
               <tr>
                 <th>Supply</th>
                 <th style={{ textAlign: 'right' }}>On hand</th>
-                <th style={{ textAlign: 'right' }}>Cost / item</th>
+                <th style={{ textAlign: 'right' }}>Cost</th>
                 <th style={{ textAlign: 'right' }}>Stock value</th>
                 <th style={{ textAlign: 'right' }}>Reorder at</th>
                 {canManage && <th style={{ textAlign: 'right' }}>Actions</th>}
@@ -172,7 +172,18 @@ export function SuppliesTab({ canManage }: { canManage: boolean }): JSX.Element 
                     )}
                   </td>
                   <td className="money" style={{ textAlign: 'right' }}>
-                    {s.unitCost > 0 ? formatMoney(s.unitCost) : <span className="muted">—</span>}
+                    {s.unitCost > 0 ? (
+                      s.itemsPerUnit > 1 ? (
+                        <>
+                          {formatMoney(s.unitCost * s.itemsPerUnit)}
+                          <div className="p-sub">{formatMoney(s.unitCost)}/item</div>
+                        </>
+                      ) : (
+                        formatMoney(s.unitCost)
+                      )
+                    ) : (
+                      <span className="muted">—</span>
+                    )}
                   </td>
                   <td className="money" style={{ textAlign: 'right' }}>
                     {formatMoney(s.stockValue)}
