@@ -281,16 +281,20 @@ export interface Supply {
   id: string
   name: string
   unit: SupplyUnit
-  /** On-hand count (single total; supplies aren't split across locations). */
+  /** On-hand count in individual items (what gets consumed per shipment). */
   quantity: number
-  /** Moving weighted-average cost per unit. */
+  /** Moving weighted-average cost per item. */
   unitCost: number
-  /** Low-stock threshold; 0 disables the alert. */
+  /** How many items come in one ordering unit (a box/pack). Default 1. */
+  itemsPerUnit: number
+  /** Low-stock threshold (in items); 0 disables the alert. */
   reorderPoint: number
   /** Whether this is a repeat/recurring order (mailers, bags, labels…). */
   recurring: boolean
   notes: string | null
-  /** quantity × unitCost. */
+  /** Photo of the supply, as a ready-to-use data URL (null when none). */
+  imageUrl: string | null
+  /** quantity × unitCost (items × per-item cost). */
   stockValue: number
   /** reorderPoint > 0 && quantity <= reorderPoint. */
   lowStock: boolean
@@ -301,20 +305,31 @@ export interface Supply {
 export interface NewSupply {
   name: string
   unit: SupplyUnit
+  /** Per-item cost (optional; usually set by logging a purchase). */
   unitCost: number
+  /** Items per ordering unit (pack size). Default 1. */
+  itemsPerUnit: number
   reorderPoint: number
   recurring: boolean
   notes: string | null
-  /** Optional opening on-hand count (logged as the first purchase). */
+  /** Optional opening on-hand count of items (logged as the first purchase). */
   openingQuantity?: number
 }
 
 export type UpdateSupply = Partial<Omit<NewSupply, 'openingQuantity'>> & { id: string }
 
-/** Add stock to a supply and record the spend. */
+/**
+ * Record a supply purchase as an order: how many units (boxes/packs) were
+ * bought, how many items are in each, and the total paid. The per-unit and
+ * per-item cost are derived from these.
+ */
 export interface SupplyPurchaseInput {
-  quantity: number
-  unitCost?: number | null
+  /** Number of ordering units (boxes / packs) bought. */
+  units: number
+  /** Items in each unit. */
+  itemsPerUnit: number
+  /** Total paid for the whole order. */
+  total: number
   note?: string | null
 }
 

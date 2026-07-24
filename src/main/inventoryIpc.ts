@@ -58,10 +58,12 @@ import { addIncoming, cancelIncoming, listIncoming, receiveIncoming } from './db
 import {
   SUPPLY_UNITS,
   adjustSupply,
+  clearSupplyImage,
   createSupply,
   deleteSupply,
   listSupplies,
   purchaseSupply,
+  setSupplyImage,
   supplyStats,
   updateSupply,
   useSupply
@@ -360,6 +362,9 @@ export function registerInventoryIpc(): void {
       if (input.reorderPoint != null && (!Number.isFinite(input.reorderPoint) || input.reorderPoint < 0)) {
         return { ok: false, error: 'Reorder point must be 0 or more.' }
       }
+      if (input.itemsPerUnit != null && (!Number.isFinite(input.itemsPerUnit) || input.itemsPerUnit < 1)) {
+        return { ok: false, error: 'Items per unit must be at least 1.' }
+      }
       if (
         input.openingQuantity != null &&
         (!Number.isFinite(input.openingQuantity) || input.openingQuantity < 0)
@@ -388,6 +393,9 @@ export function registerInventoryIpc(): void {
       if (input.reorderPoint != null && (!Number.isFinite(input.reorderPoint) || input.reorderPoint < 0)) {
         return { ok: false, error: 'Reorder point must be 0 or more.' }
       }
+      if (input.itemsPerUnit != null && (!Number.isFinite(input.itemsPerUnit) || input.itemsPerUnit < 1)) {
+        return { ok: false, error: 'Items per unit must be at least 1.' }
+      }
       const updated = updateSupply(input)
       return updated ? { ok: true, data: updated } : { ok: false, error: 'Supply not found.' }
     } catch (err) {
@@ -411,15 +419,23 @@ export function registerInventoryIpc(): void {
       try {
         const actor = requireManage()
         if (!payload?.id) return { ok: false, error: 'No supply specified.' }
-        if (!Number.isFinite(payload.quantity) || payload.quantity <= 0) {
-          return { ok: false, error: 'Quantity must be at least 1.' }
+        if (!Number.isFinite(payload.units) || payload.units <= 0) {
+          return { ok: false, error: 'Enter at least 1 unit.' }
         }
-        if (payload.unitCost != null && (!Number.isFinite(payload.unitCost) || payload.unitCost < 0)) {
-          return { ok: false, error: 'Enter a valid unit cost.' }
+        if (!Number.isFinite(payload.itemsPerUnit) || payload.itemsPerUnit < 1) {
+          return { ok: false, error: 'Items per unit must be at least 1.' }
+        }
+        if (!Number.isFinite(payload.total) || payload.total < 0) {
+          return { ok: false, error: 'Enter the order total.' }
         }
         const res = purchaseSupply(
           payload.id,
-          { quantity: payload.quantity, unitCost: payload.unitCost ?? null, note: payload.note ?? null },
+          {
+            units: payload.units,
+            itemsPerUnit: payload.itemsPerUnit,
+            total: payload.total,
+            note: payload.note ?? null
+          },
           actor.id
         )
         return res.error ? { ok: false, error: res.error } : { ok: true, data: res.supply as Supply }
@@ -428,6 +444,36 @@ export function registerInventoryIpc(): void {
       }
     }
   )
+
+  ipcMain.handle(IPC.supplySetImage, async (e, payload: { id: string }): Promise<Result<Supply>> => {
+    try {
+      requireManage()
+      if (!payload?.id) return { ok: false, error: 'No supply specified.' }
+      const win = BrowserWindow.fromWebContents(e.sender) ?? BrowserWindow.getFocusedWindow()
+      const opts: OpenDialogOptions = {
+        title: 'Add supply photo',
+        properties: ['openFile'],
+        filters: [{ name: 'Images', extensions: IMAGE_EXTENSIONS }]
+      }
+      const picked = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts)
+      if (picked.canceled || !picked.filePaths[0]) return { ok: false, error: 'No image selected.' }
+      const updated = setSupplyImage(payload.id, picked.filePaths[0])
+      return updated ? { ok: true, data: updated } : { ok: false, error: 'Supply not found.' }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle(IPC.supplyRemoveImage, (_e, payload: { id: string }): Result<Supply> => {
+    try {
+      requireManage()
+      if (!payload?.id) return { ok: false, error: 'No supply specified.' }
+      const updated = clearSupplyImage(payload.id)
+      return updated ? { ok: true, data: updated } : { ok: false, error: 'Supply not found.' }
+    } catch (err) {
+      return fail(err)
+    }
+  })
 
   ipcMain.handle(IPC.supplyUse, (_e, payload: { id: string } & SupplyUseInput): Result<Supply> => {
     try {

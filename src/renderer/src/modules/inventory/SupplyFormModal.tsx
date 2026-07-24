@@ -3,6 +3,7 @@ import type { Supply, SupplyUnit } from '@shared/types'
 import { api } from '../../lib/api'
 import { useToast } from '../../components/Toast'
 import { Button, Checkbox, Field, Input, Modal, Select } from '../../components/ui'
+import { Icon } from '../../components/Icon'
 
 const UNIT_OPTIONS: { id: SupplyUnit; label: string }[] = [
   { id: 'each', label: 'Each' },
@@ -27,15 +28,50 @@ export function SupplyFormModal({
   const isEdit = !!supply
   const [name, setName] = useState(supply?.name ?? '')
   const [unit, setUnit] = useState<SupplyUnit>(supply?.unit ?? 'each')
-  const [unitCost, setUnitCost] = useState(supply?.unitCost ? String(supply.unitCost) : '')
+  const [itemsPerUnit, setItemsPerUnit] = useState(
+    supply && supply.itemsPerUnit > 1 ? String(supply.itemsPerUnit) : ''
+  )
   const [reorderPoint, setReorderPoint] = useState(
     supply?.reorderPoint ? String(supply.reorderPoint) : ''
   )
   const [recurring, setRecurring] = useState(supply?.recurring ?? false)
-  const [openingQty, setOpeningQty] = useState('')
   const [notes, setNotes] = useState(supply?.notes ?? '')
+  const [imageUrl, setImageUrl] = useState<string | null>(supply?.imageUrl ?? null)
+  const [imgBusy, setImgBusy] = useState(false)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+
+  const changePhoto = async (): Promise<void> => {
+    if (!supply) return
+    setImgBusy(true)
+    try {
+      const res = await api.supplies.setImage(supply.id)
+      if (res.ok) {
+        setImageUrl(res.data?.imageUrl ?? null)
+        await onSaved()
+      } else if (res.error && res.error !== 'No image selected.') {
+        toast.error(res.error)
+      }
+    } finally {
+      setImgBusy(false)
+    }
+  }
+
+  const removePhoto = async (): Promise<void> => {
+    if (!supply) return
+    setImgBusy(true)
+    try {
+      const res = await api.supplies.removeImage(supply.id)
+      if (res.ok) {
+        setImageUrl(null)
+        await onSaved()
+      } else if (res.error) {
+        toast.error(res.error)
+      }
+    } finally {
+      setImgBusy(false)
+    }
+  }
 
   const numOrNull = (v: string): number | null => {
     if (v.trim() === '') return null
@@ -48,9 +84,9 @@ export function SupplyFormModal({
       setError('Enter a name.')
       return
     }
-    const cost = numOrNull(unitCost)
-    if (cost != null && cost < 0) {
-      setError('Unit cost must be 0 or more.')
+    const perUnit = numOrNull(itemsPerUnit)
+    if (perUnit != null && perUnit < 1) {
+      setError('Items per unit must be at least 1.')
       return
     }
     const reorder = numOrNull(reorderPoint)
@@ -67,26 +103,20 @@ export function SupplyFormModal({
           id: supply!.id,
           name: name.trim(),
           unit,
-          unitCost: cost ?? 0,
+          itemsPerUnit: perUnit ?? 1,
           reorderPoint: reorder ?? 0,
           recurring,
           notes: notes.trim() || null
         })
       } else {
-        const opening = numOrNull(openingQty)
-        if (opening != null && opening < 0) {
-          setError('Opening quantity must be 0 or more.')
-          setBusy(false)
-          return
-        }
         res = await api.supplies.create({
           name: name.trim(),
           unit,
-          unitCost: cost ?? 0,
+          unitCost: 0,
+          itemsPerUnit: perUnit ?? 1,
           reorderPoint: reorder ?? 0,
           recurring,
-          notes: notes.trim() || null,
-          openingQuantity: opening ?? 0
+          notes: notes.trim() || null
         })
       }
       if (!res.ok) {
@@ -119,6 +149,28 @@ export function SupplyFormModal({
     >
       {error && <div className="auth-alert">{error}</div>}
 
+      {isEdit && (
+        <div className="emp-avatar-row supply-photo-row">
+          <div className="supply-photo">
+            {imageUrl ? (
+              <img src={imageUrl} alt="" />
+            ) : (
+              <Icon name="Package" size={26} />
+            )}
+          </div>
+          <div className="emp-avatar-actions">
+            <Button variant="secondary" size="sm" icon="ImagePlus" loading={imgBusy} onClick={changePhoto}>
+              {imageUrl ? 'Change photo' : 'Add photo'}
+            </Button>
+            {imageUrl && (
+              <Button variant="ghost" size="sm" icon="Trash2" disabled={imgBusy} onClick={removePhoto}>
+                Remove
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
+
       <Field label="Name">
         <Input
           value={name}
@@ -138,44 +190,30 @@ export function SupplyFormModal({
             ))}
           </Select>
         </Field>
-        <Field label="Cost per unit" hint="What you pay each">
+        <Field label="Items per unit" hint="How many come in one box/pack (default 1)">
           <Input
             type="number"
-            min={0}
-            step="0.01"
-            value={unitCost}
-            onChange={(e) => setUnitCost(e.target.value)}
-            placeholder="0.00"
-          />
-        </Field>
-      </div>
-
-      <div className="field-row">
-        <Field label="Reorder at" hint="Flag low when on-hand hits this (0 = off)">
-          <Input
-            type="number"
-            min={0}
+            min={1}
             step="1"
-            value={reorderPoint}
-            onChange={(e) => setReorderPoint(e.target.value)}
-            placeholder="0"
+            value={itemsPerUnit}
+            onChange={(e) => setItemsPerUnit(e.target.value)}
+            placeholder="1"
           />
         </Field>
-        {!isEdit && (
-          <Field label="On hand now" hint="Opening count (optional)">
-            <Input
-              type="number"
-              min={0}
-              step="1"
-              value={openingQty}
-              onChange={(e) => setOpeningQty(e.target.value)}
-              placeholder="0"
-            />
-          </Field>
-        )}
       </div>
 
-      <div style={{ margin: '4px 0 10px' }}>
+      <Field label="Reorder at" hint="Flag low when on-hand items hit this (0 = off)">
+        <Input
+          type="number"
+          min={0}
+          step="1"
+          value={reorderPoint}
+          onChange={(e) => setReorderPoint(e.target.value)}
+          placeholder="0"
+        />
+      </Field>
+
+      <div style={{ margin: '10px 0' }}>
         <Checkbox
           checked={recurring}
           onChange={setRecurring}
@@ -190,6 +228,13 @@ export function SupplyFormModal({
           placeholder="e.g. Amazon, 200-count box"
         />
       </Field>
+
+      {!isEdit && (
+        <p className="muted text-sm" style={{ marginTop: 4 }}>
+          Add stock and its cost afterwards with <strong>Buy</strong> — you can also add a photo once
+          it&apos;s saved.
+        </p>
+      )}
     </Modal>
   )
 }

@@ -9,6 +9,7 @@ import type {
   UpdateSupply
 } from '@shared/types'
 import { getDb } from './database'
+import { deleteImageFile, imageDataUrl, importImageFile } from '../services/media'
 import { newId, nowIso } from '../util'
 
 /**
@@ -26,9 +27,11 @@ interface SupplyRow {
   unit: string
   quantity: number
   unit_cost: number
+  items_per_unit: number
   reorder_point: number
   recurring: number
   notes: string | null
+  image: string | null
   created_at: string
   updated_at: string
 }
@@ -41,9 +44,11 @@ function toSupply(r: SupplyRow): Supply {
     unit,
     quantity: r.quantity,
     unitCost: r.unit_cost,
+    itemsPerUnit: r.items_per_unit > 0 ? r.items_per_unit : 1,
     reorderPoint: r.reorder_point,
     recurring: r.recurring === 1,
     notes: r.notes,
+    imageUrl: r.image ? imageDataUrl(r.image) : null,
     stockValue: r.quantity * r.unit_cost,
     lowStock: r.reorder_point > 0 && r.quantity <= r.reorder_point,
     createdAt: r.created_at,
@@ -70,15 +75,17 @@ function insertSupplyTxn(
   unitCost: number | null,
   totalCost: number | null,
   note: string | null,
-  actorId: string | null
+  actorId: string | null,
+  units: number | null = null,
+  itemsPerUnit: number | null = null
 ): void {
   getDb()
     .prepare(
       `INSERT INTO supply_transactions
-         (id, supply_id, type, quantity_change, unit_cost, total_cost, note, actor_id, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         (id, supply_id, type, quantity_change, unit_cost, total_cost, note, actor_id, units, items_per_unit, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
-    .run(newId(), supplyId, type, quantityChange, unitCost, totalCost, note, actorId, nowIso())
+    .run(newId(), supplyId, type, quantityChange, unitCost, totalCost, note, actorId, units, itemsPerUnit, nowIso())
 }
 
 export function createSupply(input: NewSupply, actorId: string | null): Supply {
@@ -89,17 +96,20 @@ export function createSupply(input: NewSupply, actorId: string | null): Supply {
   const openQty = Math.max(0, Math.round(input.openingQuantity ?? 0))
   const cost = Math.max(0, Number.isFinite(input.unitCost) ? input.unitCost : 0)
 
+  const itemsPerUnit = Math.max(1, Math.round(input.itemsPerUnit ?? 1))
+
   const create = db.transaction(() => {
     db.prepare(
       `INSERT INTO supplies
-         (id, name, unit, quantity, unit_cost, reorder_point, recurring, notes, created_at, updated_at)
-       VALUES (@id, @name, @unit, @quantity, @unit_cost, @reorder_point, @recurring, @notes, @ts, @ts)`
+         (id, name, unit, quantity, unit_cost, items_per_unit, reorder_point, recurring, notes, created_at, updated_at)
+       VALUES (@id, @name, @unit, @quantity, @unit_cost, @items_per_unit, @reorder_point, @recurring, @notes, @ts, @ts)`
     ).run({
       id,
       name: input.name.trim(),
       unit,
       quantity: openQty,
       unit_cost: cost,
+      items_per_unit: itemsPerUnit,
       reorder_point: Math.max(0, Math.round(input.reorderPoint ?? 0)),
       recurring: input.recurring ? 1 : 0,
       notes: input.notes?.trim() || null,
@@ -123,6 +133,8 @@ export function updateSupply(input: UpdateSupply): Supply | null {
     name: (input.name ?? existing.name).trim(),
     unit: (input.unit && SUPPLY_UNITS.includes(input.unit) ? input.unit : existing.unit) as SupplyUnit,
     unit_cost: input.unitCost != null ? Math.max(0, input.unitCost) : existing.unitCost,
+    items_per_unit:
+      input.itemsPerUnit != null ? Math.max(1, Math.round(input.itemsPerUnit)) : existing.itemsPerUnit,
     reorder_point:
       input.reorderPoint != null ? Math.max(0, Math.round(input.reorderPoint)) : existing.reorderPoint,
     recurring: input.recurring != null ? (input.recurring ? 1 : 0) : existing.recurring ? 1 : 0,
@@ -132,16 +144,51 @@ export function updateSupply(input: UpdateSupply): Supply | null {
   getDb()
     .prepare(
       `UPDATE supplies SET
-         name=@name, unit=@unit, unit_cost=@unit_cost, reorder_point=@reorder_point,
-         recurring=@recurring, notes=@notes, updated_at=@updated_at
+         name=@name, unit=@unit, unit_cost=@unit_cost, items_per_unit=@items_per_unit,
+         reorder_point=@reorder_point, recurring=@recurring, notes=@notes, updated_at=@updated_at
        WHERE id=@id`
     )
     .run(next)
   return getSupply(input.id)
 }
 
+/** Attach (or replace) a supply's photo. Copies the file into the media store. */
+export function setSupplyImage(id: string, srcPath: string): Supply | null {
+  const row = getDb().prepare('SELECT image FROM supplies WHERE id = ?').get(id) as
+    | { image: string | null }
+    | undefined
+  if (!row) return null
+  const filename = importImageFile(srcPath, `supply-${id}`)
+  try {
+    getDb().prepare('UPDATE supplies SET image = ?, updated_at = ? WHERE id = ?').run(filename, nowIso(), id)
+  } catch (err) {
+    deleteImageFile(filename)
+    throw err
+  }
+  // Remove the previous file if the name changed (different extension).
+  if (row.image && row.image !== filename) deleteImageFile(row.image)
+  return getSupply(id)
+}
+
+/** Remove a supply's photo. */
+export function clearSupplyImage(id: string): Supply | null {
+  const row = getDb().prepare('SELECT image FROM supplies WHERE id = ?').get(id) as
+    | { image: string | null }
+    | undefined
+  if (!row) return null
+  if (row.image) {
+    getDb().prepare('UPDATE supplies SET image = NULL, updated_at = ? WHERE id = ?').run(nowIso(), id)
+    deleteImageFile(row.image)
+  }
+  return getSupply(id)
+}
+
 export function deleteSupply(id: string): boolean {
+  const row = getDb().prepare('SELECT image FROM supplies WHERE id = ?').get(id) as
+    | { image: string | null }
+    | undefined
   const info = getDb().prepare('DELETE FROM supplies WHERE id = ?').run(id)
+  if (info.changes > 0 && row?.image) deleteImageFile(row.image)
   return info.changes > 0
 }
 
@@ -151,33 +198,45 @@ export interface SupplyResult {
 }
 
 /**
- * Record a supply purchase: add to on-hand and roll the moving weighted-average
- * unit cost so stock value tracks what we actually paid. The purchase total is
- * logged as the operating-expense line for the spend rollup.
+ * Record a supply purchase as an order: `units` (boxes/packs) × `itemsPerUnit`
+ * items are added to on-hand, and `total` is what we paid for the whole order.
+ * The per-item cost is total ÷ items, which rolls the moving weighted-average.
+ * The order total is logged as the operating-expense line for the spend rollup,
+ * and the supply's default pack size is updated to the ordered items-per-unit.
  */
 export function purchaseSupply(id: string, input: SupplyPurchaseInput, actorId: string | null): SupplyResult {
   const db = getDb()
-  const qty = Math.round(input.quantity)
+  const units = Math.round(input.units)
+  const itemsPerUnit = Math.round(input.itemsPerUnit)
+  const total = Number.isFinite(input.total) ? Math.max(0, input.total) : 0
   const run = db.transaction((): SupplyResult => {
     const row = db.prepare('SELECT quantity, unit_cost FROM supplies WHERE id = ?').get(id) as
       | { quantity: number; unit_cost: number }
       | undefined
     if (!row) return { supply: null, error: 'Supply not found.' }
-    if (qty <= 0) return { supply: getSupply(id), error: 'Quantity must be at least 1.' }
-    const cost =
-      input.unitCost != null && Number.isFinite(input.unitCost) && input.unitCost >= 0
-        ? input.unitCost
-        : row.unit_cost
-    const newQty = row.quantity + qty
-    // Moving weighted-average across all on-hand units.
-    const newAvg = newQty > 0 ? (row.quantity * row.unit_cost + qty * cost) / newQty : cost
-    db.prepare('UPDATE supplies SET quantity = ?, unit_cost = ?, updated_at = ? WHERE id = ?').run(
-      newQty,
-      newAvg,
-      nowIso(),
-      id
+    if (units <= 0) return { supply: getSupply(id), error: 'Enter at least 1 unit.' }
+    if (itemsPerUnit <= 0) return { supply: getSupply(id), error: 'Items per unit must be at least 1.' }
+
+    const itemsAdded = units * itemsPerUnit
+    // Per-item cost derived from the whole-order total.
+    const perItem = itemsAdded > 0 ? total / itemsAdded : 0
+    const newQty = row.quantity + itemsAdded
+    // Moving weighted-average across all on-hand items.
+    const newAvg = newQty > 0 ? (row.quantity * row.unit_cost + total) / newQty : perItem
+    db.prepare(
+      'UPDATE supplies SET quantity = ?, unit_cost = ?, items_per_unit = ?, updated_at = ? WHERE id = ?'
+    ).run(newQty, newAvg, itemsPerUnit, nowIso(), id)
+    insertSupplyTxn(
+      id,
+      'purchase',
+      itemsAdded,
+      perItem,
+      total,
+      input.note?.trim() || null,
+      actorId,
+      units,
+      itemsPerUnit
     )
-    insertSupplyTxn(id, 'purchase', qty, cost, cost * qty, input.note?.trim() || null, actorId)
     return { supply: getSupply(id) }
   })
   return run()

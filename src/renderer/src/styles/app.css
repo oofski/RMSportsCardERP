@@ -3942,3 +3942,66 @@ tr.hoverable-row:hover {
   color: var(--danger);
   border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
 }
+.supply-row-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.supply-thumb {
+  width: 42px;
+  height: 42px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.supply-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+/* Photo picker inside the supply form. */
+.supply-photo-row .supply-photo {
+  width: 64px;
+  height: 64px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.supply-photo-row .supply-photo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+/* Live per-unit / per-item breakdown in the purchase modal. */
+.supply-order-summary {
+  margin: 6px 0 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  padding: 10px 14px;
+}
+.supply-order-summary .sos-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 3px 0;
+  font-size: 13px;
+}
+.supply-order-summary .sos-row span {
+  color: var(--text-3);
+}
+.supply-order-summary .sos-row strong {
+  font-variant-numeric: tabular-nums;
+}

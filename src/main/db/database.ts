@@ -317,7 +317,13 @@ function migrate(database: Database.Database): void {
   addColumnIfMissing(database, 'employees', 'avatar', 'TEXT')
   // v11: operating supplies / consumables (supplies + supply_transactions).
   // Brand-new tables created idempotently in the schema-init block above.
-  setMeta(database, 'schema_version', '11')
+  // v12: supply photo + pack size (items per ordering unit), and the order
+  // breakdown (units + items per unit) recorded on each purchase.
+  addColumnIfMissing(database, 'supplies', 'image', 'TEXT')
+  addColumnIfMissing(database, 'supplies', 'items_per_unit', 'INTEGER NOT NULL DEFAULT 1')
+  addColumnIfMissing(database, 'supply_transactions', 'units', 'INTEGER')
+  addColumnIfMissing(database, 'supply_transactions', 'items_per_unit', 'INTEGER')
+  setMeta(database, 'schema_version', '12')
 
   // Seed the product catalog once, then apply the on-hand snapshot once.
   seedCatalogIfNeeded(database)

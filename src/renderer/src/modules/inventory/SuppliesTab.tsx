@@ -120,7 +120,7 @@ export function SuppliesTab({ canManage }: { canManage: boolean }): JSX.Element 
               <tr>
                 <th>Supply</th>
                 <th style={{ textAlign: 'right' }}>On hand</th>
-                <th style={{ textAlign: 'right' }}>Unit cost</th>
+                <th style={{ textAlign: 'right' }}>Cost / item</th>
                 <th style={{ textAlign: 'right' }}>Stock value</th>
                 <th style={{ textAlign: 'right' }}>Reorder at</th>
                 {canManage && <th style={{ textAlign: 'right' }}>Actions</th>}
@@ -130,16 +130,33 @@ export function SuppliesTab({ canManage }: { canManage: boolean }): JSX.Element 
               {supplies.map((s) => (
                 <tr key={s.id} className={s.lowStock ? 'supply-low-row' : ''}>
                   <td>
-                    <div className="supply-name-cell">
-                      <span style={{ fontWeight: 600 }}>{s.name}</span>
-                      {s.recurring && (
-                        <span className="supply-chip" title="Recurring order">
-                          <Icon name="Repeat" size={12} />
-                          Recurring
-                        </span>
-                      )}
+                    <div className="supply-row-main">
+                      <div className="supply-thumb">
+                        {s.imageUrl ? (
+                          <img src={s.imageUrl} alt="" />
+                        ) : (
+                          <Icon name="Package" size={18} />
+                        )}
+                      </div>
+                      <div>
+                        <div className="supply-name-cell">
+                          <span style={{ fontWeight: 600 }}>{s.name}</span>
+                          {s.recurring && (
+                            <span className="supply-chip" title="Recurring order">
+                              <Icon name="Repeat" size={12} />
+                              Recurring
+                            </span>
+                          )}
+                        </div>
+                        {(s.itemsPerUnit > 1 || s.notes) && (
+                          <div className="p-sub">
+                            {[s.itemsPerUnit > 1 ? `Pack of ${s.itemsPerUnit}` : null, s.notes]
+                              .filter(Boolean)
+                              .join(' · ')}
+                          </div>
+                        )}
+                      </div>
                     </div>
-                    {s.notes && <div className="p-sub">{s.notes}</div>}
                   </td>
                   <td style={{ textAlign: 'right' }}>
                     <span className={`supply-onhand ${s.lowStock ? 'low' : ''}`}>{s.quantity}</span>

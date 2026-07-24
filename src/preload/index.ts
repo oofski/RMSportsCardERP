@@ -165,7 +165,11 @@ const api = {
     use: (id: string, input: SupplyUseInput): Promise<Result<Supply>> =>
       ipcRenderer.invoke(IPC.supplyUse, { id, ...input }),
     adjust: (id: string, quantityChange: number, note?: string | null): Promise<Result<Supply>> =>
-      ipcRenderer.invoke(IPC.supplyAdjust, { id, quantityChange, note: note ?? null })
+      ipcRenderer.invoke(IPC.supplyAdjust, { id, quantityChange, note: note ?? null }),
+    setImage: (id: string): Promise<Result<Supply>> =>
+      ipcRenderer.invoke(IPC.supplySetImage, { id }),
+    removeImage: (id: string): Promise<Result<Supply>> =>
+      ipcRenderer.invoke(IPC.supplyRemoveImage, { id })
   },
   purchaseOrders: {
     list: (): Promise<PurchaseOrder[]> => ipcRenderer.invoke(IPC.poList),
