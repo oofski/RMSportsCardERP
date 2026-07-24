@@ -10,14 +10,20 @@ import type {
   InventoryTransaction,
   NewIncomingShipment,
   NewInventoryProduct,
+  NewSupply,
   PricingRow,
   ProductImage,
   ProductLot,
   RecordSaleInput,
   Result,
   SalesPoint,
+  Supply,
+  SupplyPurchaseInput,
+  SupplyStats,
+  SupplyUseInput,
   UnitType,
-  UpdateInventoryProduct
+  UpdateInventoryProduct,
+  UpdateSupply
 } from '@shared/types'
 import { isLocation } from '@shared/inventory'
 import type { Permission } from '@shared/permissions'
@@ -49,6 +55,17 @@ import {
   upcExists
 } from './db/inventory'
 import { addIncoming, cancelIncoming, listIncoming, receiveIncoming } from './db/incoming'
+import {
+  SUPPLY_UNITS,
+  adjustSupply,
+  createSupply,
+  deleteSupply,
+  listSupplies,
+  purchaseSupply,
+  supplyStats,
+  updateSupply,
+  useSupply
+} from './db/supplies'
 
 const UNIT_TYPES: UnitType[] = ['case', 'box', 'pack', 'single', 'other']
 
@@ -325,6 +342,123 @@ export function registerInventoryIpc(): void {
       return fail(err)
     }
   })
+
+  // ---- Supplies (operating consumables) -----------------------------------
+  ipcMain.handle(IPC.suppliesList, (): Supply[] => (can('module.inventory') ? listSupplies() : []))
+  ipcMain.handle(IPC.suppliesStats, (): SupplyStats | null =>
+    can('module.inventory') ? supplyStats() : null
+  )
+
+  ipcMain.handle(IPC.supplyCreate, (_e, input: NewSupply): Result<Supply> => {
+    try {
+      const actor = requireManage()
+      if (!input?.name?.trim()) return { ok: false, error: 'A supply name is required.' }
+      if (!SUPPLY_UNITS.includes(input.unit)) return { ok: false, error: 'Choose a unit.' }
+      if (input.unitCost != null && (!Number.isFinite(input.unitCost) || input.unitCost < 0)) {
+        return { ok: false, error: 'Unit cost must be 0 or more.' }
+      }
+      if (input.reorderPoint != null && (!Number.isFinite(input.reorderPoint) || input.reorderPoint < 0)) {
+        return { ok: false, error: 'Reorder point must be 0 or more.' }
+      }
+      if (
+        input.openingQuantity != null &&
+        (!Number.isFinite(input.openingQuantity) || input.openingQuantity < 0)
+      ) {
+        return { ok: false, error: 'Opening quantity must be 0 or more.' }
+      }
+      return { ok: true, data: createSupply(input, actor.id) }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle(IPC.supplyUpdate, (_e, input: UpdateSupply): Result<Supply> => {
+    try {
+      requireManage()
+      if (!input?.id) return { ok: false, error: 'No supply specified.' }
+      if (input.name !== undefined && !input.name.trim()) {
+        return { ok: false, error: 'A supply name is required.' }
+      }
+      if (input.unit !== undefined && !SUPPLY_UNITS.includes(input.unit)) {
+        return { ok: false, error: 'Invalid unit.' }
+      }
+      if (input.unitCost != null && (!Number.isFinite(input.unitCost) || input.unitCost < 0)) {
+        return { ok: false, error: 'Unit cost must be 0 or more.' }
+      }
+      if (input.reorderPoint != null && (!Number.isFinite(input.reorderPoint) || input.reorderPoint < 0)) {
+        return { ok: false, error: 'Reorder point must be 0 or more.' }
+      }
+      const updated = updateSupply(input)
+      return updated ? { ok: true, data: updated } : { ok: false, error: 'Supply not found.' }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle(IPC.supplyDelete, (_e, payload: { id: string }): Result => {
+    try {
+      requireManage()
+      if (!payload?.id) return { ok: false, error: 'No supply specified.' }
+      return deleteSupply(payload.id) ? { ok: true } : { ok: false, error: 'Supply not found.' }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle(
+    IPC.supplyPurchase,
+    (_e, payload: { id: string } & SupplyPurchaseInput): Result<Supply> => {
+      try {
+        const actor = requireManage()
+        if (!payload?.id) return { ok: false, error: 'No supply specified.' }
+        if (!Number.isFinite(payload.quantity) || payload.quantity <= 0) {
+          return { ok: false, error: 'Quantity must be at least 1.' }
+        }
+        if (payload.unitCost != null && (!Number.isFinite(payload.unitCost) || payload.unitCost < 0)) {
+          return { ok: false, error: 'Enter a valid unit cost.' }
+        }
+        const res = purchaseSupply(
+          payload.id,
+          { quantity: payload.quantity, unitCost: payload.unitCost ?? null, note: payload.note ?? null },
+          actor.id
+        )
+        return res.error ? { ok: false, error: res.error } : { ok: true, data: res.supply as Supply }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  ipcMain.handle(IPC.supplyUse, (_e, payload: { id: string } & SupplyUseInput): Result<Supply> => {
+    try {
+      const actor = requireManage()
+      if (!payload?.id) return { ok: false, error: 'No supply specified.' }
+      if (!Number.isFinite(payload.quantity) || payload.quantity <= 0) {
+        return { ok: false, error: 'Quantity must be at least 1.' }
+      }
+      const res = useSupply(payload.id, { quantity: payload.quantity, note: payload.note ?? null }, actor.id)
+      return res.error ? { ok: false, error: res.error } : { ok: true, data: res.supply as Supply }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle(
+    IPC.supplyAdjust,
+    (_e, payload: { id: string; quantityChange: number; note?: string | null }): Result<Supply> => {
+      try {
+        const actor = requireManage()
+        if (!payload?.id) return { ok: false, error: 'No supply specified.' }
+        if (!Number.isFinite(payload.quantityChange) || payload.quantityChange === 0) {
+          return { ok: false, error: 'Enter a non-zero quantity.' }
+        }
+        const res = adjustSupply(payload.id, payload.quantityChange, payload.note ?? null, actor.id)
+        return res.error ? { ok: false, error: res.error } : { ok: true, data: res.supply as Supply }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
 }
 
 function validateProduct(input: NewInventoryProduct): string | null {

@@ -269,6 +269,88 @@ export interface NewIncomingShipment {
   note?: string | null
 }
 
+// ---------------------------------------------------------------------------
+// Operating supplies / consumables (bubble mailers, poly bags, labels, tape).
+// Tracked separately from sellable products so they never affect inventory
+// value or spread.
+// ---------------------------------------------------------------------------
+
+export type SupplyUnit = 'each' | 'roll' | 'pack' | 'box' | 'case' | 'other'
+
+export interface Supply {
+  id: string
+  name: string
+  unit: SupplyUnit
+  /** On-hand count (single total; supplies aren't split across locations). */
+  quantity: number
+  /** Moving weighted-average cost per unit. */
+  unitCost: number
+  /** Low-stock threshold; 0 disables the alert. */
+  reorderPoint: number
+  /** Whether this is a repeat/recurring order (mailers, bags, labels…). */
+  recurring: boolean
+  notes: string | null
+  /** quantity × unitCost. */
+  stockValue: number
+  /** reorderPoint > 0 && quantity <= reorderPoint. */
+  lowStock: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export interface NewSupply {
+  name: string
+  unit: SupplyUnit
+  unitCost: number
+  reorderPoint: number
+  recurring: boolean
+  notes: string | null
+  /** Optional opening on-hand count (logged as the first purchase). */
+  openingQuantity?: number
+}
+
+export type UpdateSupply = Partial<Omit<NewSupply, 'openingQuantity'>> & { id: string }
+
+/** Add stock to a supply and record the spend. */
+export interface SupplyPurchaseInput {
+  quantity: number
+  unitCost?: number | null
+  note?: string | null
+}
+
+/** Consume supplies. */
+export interface SupplyUseInput {
+  quantity: number
+  note?: string | null
+}
+
+export type SupplyTxnType = 'purchase' | 'use' | 'adjustment'
+
+export interface SupplyTransaction {
+  id: string
+  supplyId: string
+  supplyName: string
+  type: SupplyTxnType
+  quantityChange: number
+  unitCost: number | null
+  totalCost: number | null
+  note: string | null
+  actorName: string | null
+  createdAt: string
+}
+
+export interface SupplyStats {
+  itemCount: number
+  unitsOnHand: number
+  stockValue: number
+  lowStockCount: number
+  recurringCount: number
+  /** Sum of purchase totals this calendar month (operating spend). */
+  spendThisMonth: number
+  /** Sum of all purchase totals ever. */
+  spendAllTime: number
+}
+
 /** A product photo, delivered to the renderer as a ready-to-use data URL. */
 export interface ProductImage {
   id: string

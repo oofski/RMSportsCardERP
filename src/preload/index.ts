@@ -22,6 +22,7 @@ import type {
   NewIncomingShipment,
   NewInventoryProduct,
   NewPurchaseOrder,
+  NewSupply,
   NewTimeEntryInput,
   PricingRow,
   ProductImage,
@@ -34,10 +35,15 @@ import type {
   Result,
   SalesPoint,
   SessionUser,
+  Supply,
+  SupplyPurchaseInput,
+  SupplyStats,
+  SupplyUseInput,
   ThemeMode,
   TimeEntry,
   UpdateEmployeeInput,
   UpdateInventoryProduct,
+  UpdateSupply,
   UpdateStatus
 } from '@shared/types'
 
@@ -145,6 +151,21 @@ const api = {
       ipcRenderer.invoke(IPC.invHighBidUpdate, { productId, highBid }),
     productLots: (productId: string): Promise<ProductLot[]> =>
       ipcRenderer.invoke(IPC.invProductLots, productId)
+  },
+  supplies: {
+    list: (): Promise<Supply[]> => ipcRenderer.invoke(IPC.suppliesList),
+    stats: (): Promise<SupplyStats | null> => ipcRenderer.invoke(IPC.suppliesStats),
+    create: (input: NewSupply): Promise<Result<Supply>> =>
+      ipcRenderer.invoke(IPC.supplyCreate, input),
+    update: (input: UpdateSupply): Promise<Result<Supply>> =>
+      ipcRenderer.invoke(IPC.supplyUpdate, input),
+    delete: (id: string): Promise<Result> => ipcRenderer.invoke(IPC.supplyDelete, { id }),
+    purchase: (id: string, input: SupplyPurchaseInput): Promise<Result<Supply>> =>
+      ipcRenderer.invoke(IPC.supplyPurchase, { id, ...input }),
+    use: (id: string, input: SupplyUseInput): Promise<Result<Supply>> =>
+      ipcRenderer.invoke(IPC.supplyUse, { id, ...input }),
+    adjust: (id: string, quantityChange: number, note?: string | null): Promise<Result<Supply>> =>
+      ipcRenderer.invoke(IPC.supplyAdjust, { id, quantityChange, note: note ?? null })
   },
   purchaseOrders: {
     list: (): Promise<PurchaseOrder[]> => ipcRenderer.invoke(IPC.poList),

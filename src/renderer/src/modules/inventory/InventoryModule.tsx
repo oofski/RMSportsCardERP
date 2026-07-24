@@ -6,11 +6,11 @@ import { Icon } from '../../components/Icon'
 import { CenterLoader } from '../../components/ui'
 import { InventoryOverview } from './InventoryOverview'
 import { ProductsTab } from './ProductsTab'
-import { ActivityTab } from './ActivityTab'
+import { SuppliesTab } from './SuppliesTab'
 import { DailyPricingTab } from './DailyPricingTab'
 import { productMatches } from './helpers'
 
-type TabId = 'overview' | 'products' | 'pricing' | 'activity'
+type TabId = 'overview' | 'products' | 'pricing' | 'supplies'
 
 const EMPTY_STATS: InventoryStats = {
   totalValue: 0,
@@ -74,7 +74,7 @@ export function InventoryModule(): JSX.Element {
     { id: 'overview', label: 'Dashboard', icon: 'LayoutDashboard' },
     { id: 'products', label: 'Catalog', icon: 'Boxes' },
     ...(canPrice ? [{ id: 'pricing' as TabId, label: 'Pricing', icon: 'DollarSign' }] : []),
-    { id: 'activity', label: 'Activity', icon: 'Layers' }
+    { id: 'supplies', label: 'Supplies', icon: 'Package' }
   ]
 
   // Jump to the Catalog, optionally focused on a single product (clearing any
@@ -129,7 +129,7 @@ export function InventoryModule(): JSX.Element {
           />
         )}
         {tab === 'pricing' && canPrice && <DailyPricingTab onChanged={reload} />}
-        {tab === 'activity' && <ActivityTab />}
+        {tab === 'supplies' && <SuppliesTab canManage={canManage} />}
       </div>
     </div>
   )

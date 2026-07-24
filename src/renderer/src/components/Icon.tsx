@@ -70,6 +70,8 @@ import {
   TrendingDown,
   Maximize2,
   ImagePlus,
+  PackageMinus,
+  Repeat,
   type LucideIcon
 } from 'lucide-react'
 
@@ -144,7 +146,9 @@ const MAP: Record<string, LucideIcon> = {
   Warehouse,
   TrendingDown,
   Maximize2,
-  ImagePlus
+  ImagePlus,
+  PackageMinus,
+  Repeat
 }
 
 export function Icon({

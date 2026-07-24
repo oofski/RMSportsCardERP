@@ -3,17 +3,27 @@ import type { InventoryTransaction } from '@shared/types'
 import { api } from '../../lib/api'
 import { CenterLoader, EmptyState } from '../../components/ui'
 import { formatMoney, formatDateTime } from '../../lib/format'
-import { TxnBadge, LocBadge } from './helpers'
+import { TxnBadge, LocBadge } from '../inventory/helpers'
 
+/**
+ * Inventory activity log — every sale, restock and adjustment across the
+ * catalog. Lives in Admin as an oversight tool.
+ */
 export function ActivityTab(): JSX.Element {
   const [txns, setTxns] = useState<InventoryTransaction[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
+    let mounted = true
     ;(async () => {
-      setTxns(await api.inventory.transactions(300))
+      const list = await api.inventory.transactions(300)
+      if (!mounted) return
+      setTxns(list)
       setLoading(false)
     })()
+    return () => {
+      mounted = false
+    }
   }, [])
 
   if (loading) return <CenterLoader />
@@ -22,7 +32,7 @@ export function ActivityTab(): JSX.Element {
       <EmptyState
         icon="Layers"
         title="No activity yet"
-        message="Sales, restocks and adjustments will show up here as you make them."
+        message="Sales, restocks and adjustments will show up here as they happen."
       />
     )
   }
@@ -31,7 +41,8 @@ export function ActivityTab(): JSX.Element {
     <>
       <div className="section-head">
         <div>
-          <h2>Activity</h2>
+          <h2>Inventory activity</h2>
+          <p className="section-sub">Every sale, restock and adjustment across the catalog.</p>
         </div>
       </div>
       <div className="table-wrap">

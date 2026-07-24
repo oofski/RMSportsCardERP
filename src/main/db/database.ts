@@ -246,6 +246,39 @@ function migrate(database: Database.Database): void {
       FOREIGN KEY (po_id) REFERENCES purchase_orders (id) ON DELETE CASCADE
     );
     CREATE INDEX IF NOT EXISTS idx_finance_cogs_po ON finance_cogs (po_id);
+
+    -- v11: operating supplies / consumables (bubble mailers, poly bags, labels,
+    -- tape, boxes). Deliberately SEPARATE from inventory_products so supply stock
+    -- never touches sellable inventory value or spread. Single on-hand count
+    -- (supplies aren't split across RM/AM the way cards are).
+    CREATE TABLE IF NOT EXISTS supplies (
+      id            TEXT PRIMARY KEY,
+      name          TEXT NOT NULL,
+      unit          TEXT NOT NULL DEFAULT 'each',
+      quantity      INTEGER NOT NULL DEFAULT 0,
+      unit_cost     REAL NOT NULL DEFAULT 0,
+      reorder_point INTEGER NOT NULL DEFAULT 0,
+      recurring     INTEGER NOT NULL DEFAULT 0,
+      notes         TEXT,
+      created_at    TEXT NOT NULL,
+      updated_at    TEXT NOT NULL
+    );
+
+    -- Purchase / use / adjust log for supplies. 'purchase' rows carry the spend
+    -- (total_cost) that powers the operating-expense rollup.
+    CREATE TABLE IF NOT EXISTS supply_transactions (
+      id              TEXT PRIMARY KEY,
+      supply_id       TEXT NOT NULL,
+      type            TEXT NOT NULL,
+      quantity_change INTEGER NOT NULL,
+      unit_cost       REAL,
+      total_cost      REAL,
+      note            TEXT,
+      actor_id        TEXT,
+      created_at      TEXT NOT NULL,
+      FOREIGN KEY (supply_id) REFERENCES supplies (id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_supply_txn_supply ON supply_transactions (supply_id);
   `)
 
   if (getMeta(database, 'schema_version') === null) {
@@ -282,7 +315,9 @@ function migrate(database: Database.Database): void {
   addColumnIfMissing(database, 'purchase_orders', 'scanned_at', 'TEXT')
   // v10: employee profile picture (stored media filename).
   addColumnIfMissing(database, 'employees', 'avatar', 'TEXT')
-  setMeta(database, 'schema_version', '10')
+  // v11: operating supplies / consumables (supplies + supply_transactions).
+  // Brand-new tables created idempotently in the schema-init block above.
+  setMeta(database, 'schema_version', '11')
 
   // Seed the product catalog once, then apply the on-hand snapshot once.
   seedCatalogIfNeeded(database)

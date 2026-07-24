@@ -68,6 +68,16 @@ export const IPC = {
   invHighBidUpdate: 'inventory:pricing:high-bid',
   invProductLots: 'inventory:product:lots',
 
+  // Supplies (operating consumables)
+  suppliesList: 'supplies:list',
+  suppliesStats: 'supplies:stats',
+  supplyCreate: 'supplies:create',
+  supplyUpdate: 'supplies:update',
+  supplyDelete: 'supplies:delete',
+  supplyPurchase: 'supplies:purchase',
+  supplyUse: 'supplies:use',
+  supplyAdjust: 'supplies:adjust',
+
   // Purchase orders
   poList: 'po:list',
   poGet: 'po:get',

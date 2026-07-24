@@ -7,8 +7,9 @@ import { CenterLoader } from '../../components/ui'
 import { EmployeesTab } from './EmployeesTab'
 import { HoursTab } from './HoursTab'
 import { RolesTab } from './RolesTab'
+import { ActivityTab } from './ActivityTab'
 
-type TabId = 'employees' | 'hours' | 'roles'
+type TabId = 'employees' | 'hours' | 'roles' | 'activity'
 
 interface TabDef {
   id: TabId
@@ -37,7 +38,8 @@ export function AdminModule(): JSX.Element {
   const tabs: TabDef[] = [
     { id: 'employees', label: 'Employees', icon: 'Users', visible: can('admin.employees.view') },
     { id: 'hours', label: 'Hours', icon: 'Clock', visible: can('admin.hours.view') },
-    { id: 'roles', label: 'Roles & Permissions', icon: 'ShieldCheck', visible: can('admin.access') }
+    { id: 'roles', label: 'Roles & Permissions', icon: 'ShieldCheck', visible: can('admin.access') },
+    { id: 'activity', label: 'Inventory activity', icon: 'Layers', visible: can('module.inventory') }
   ]
   const visibleTabs = tabs.filter((t) => t.visible)
   const [tab, setTab] = useState<TabId>(visibleTabs[0]?.id ?? 'employees')
@@ -64,6 +66,7 @@ export function AdminModule(): JSX.Element {
       )}
       {tab === 'hours' && <HoursTab />}
       {tab === 'roles' && <RolesTab employees={employees} onChanged={loadEmployees} />}
+      {tab === 'activity' && <ActivityTab />}
     </div>
   )
 }

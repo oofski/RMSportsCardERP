@@ -3857,3 +3857,88 @@ tr.hoverable-row:hover {
     color: #1b2130 !important;
   }
 }
+
+/* ---------- Supplies (operating consumables) ---------- */
+.supply-stats {
+  margin-bottom: 22px;
+}
+.stat .stat-ico.stat-ico-warn {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+.supply-name-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.supply-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--info-bg);
+  color: var(--info);
+}
+.supply-chip svg {
+  width: 12px;
+  height: 12px;
+}
+.supply-onhand {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.supply-onhand.low {
+  color: var(--danger);
+}
+.supply-unit {
+  font-size: 12px;
+  color: var(--text-3);
+}
+.supply-low-tag {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--danger);
+  margin-top: 2px;
+}
+.supply-low-tag svg {
+  width: 11px;
+  height: 11px;
+}
+.supply-low-row {
+  background: color-mix(in srgb, var(--danger) 5%, transparent);
+}
+.supply-low-row:hover {
+  background: color-mix(in srgb, var(--danger) 9%, transparent);
+}
+.supply-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  align-items: center;
+}
+.supply-actions .btn-sm {
+  white-space: nowrap;
+}
+.supply-actions .icon-btn {
+  width: 32px;
+  height: 32px;
+}
+.supply-actions .icon-btn svg {
+  width: 15px;
+  height: 15px;
+}
+.icon-btn.danger:hover {
+  background: var(--danger-bg);
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
+}
