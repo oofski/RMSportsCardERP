@@ -49,8 +49,21 @@ jobs:
           node-version: 20
           cache: npm
 
-      - name: Install dependencies
-        run: npm ci
+      # electron's postinstall downloads its binary from GitHub, which
+      # intermittently 504s. Retry so a transient blip doesn't fail the release.
+      - name: Install dependencies (retry on transient download failures)
+        shell: bash
+        run: |
+          n=0
+          until npm ci; do
+            n=$((n+1))
+            if [ "$n" -ge 3 ]; then
+              echo "::error::npm ci failed after $n attempts"; exit 1
+            fi
+            echo "npm ci failed (attempt $n) — likely a transient GitHub download timeout; retrying in $((n*15))s…"
+            npm cache verify || true
+            sleep $((n*15))
+          done
 
       # electron-builder versions artifacts from package.json, not the git tag.
       # Fail fast if a tag was pushed that doesn't match, so the update feed can
@@ -66,8 +79,21 @@ jobs:
           fi
           echo "Tag and package.json agree on ${PKG_VERSION}."
 
+      # electron-builder downloads its toolchain (winCodeSign / nsis) from GitHub
+      # and then uploads the artifacts back — both can 504 when GitHub is flaky.
+      # Retry the whole build/publish; electron-builder overwrites partial uploads.
       - name: Build & publish (${{ matrix.platform }})
-        run: npm run build:${{ matrix.platform }} -- --publish always
+        shell: bash
+        run: |
+          n=0
+          until npm run build:${{ matrix.platform }} -- --publish always; do
+            n=$((n+1))
+            if [ "$n" -ge 3 ]; then
+              echo "::error::build:${{ matrix.platform }} failed after $n attempts"; exit 1
+            fi
+            echo "build/publish failed (attempt $n) — likely a transient GitHub download/upload timeout; retrying in $((n*20))s…"
+            sleep $((n*20))
+          done
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # macOS builds are unsigned for now (Windows-only auto-install).
