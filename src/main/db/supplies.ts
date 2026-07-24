@@ -31,6 +31,7 @@ interface SupplyRow {
   reorder_point: number
   recurring: number
   notes: string | null
+  reorder_url: string | null
   image: string | null
   created_at: string
   updated_at: string
@@ -48,6 +49,7 @@ function toSupply(r: SupplyRow): Supply {
     reorderPoint: r.reorder_point,
     recurring: r.recurring === 1,
     notes: r.notes,
+    reorderUrl: r.reorder_url,
     imageUrl: r.image ? imageDataUrl(r.image) : null,
     stockValue: r.quantity * r.unit_cost,
     lowStock: r.reorder_point > 0 && r.quantity <= r.reorder_point,
@@ -101,8 +103,8 @@ export function createSupply(input: NewSupply, actorId: string | null): Supply {
   const create = db.transaction(() => {
     db.prepare(
       `INSERT INTO supplies
-         (id, name, unit, quantity, unit_cost, items_per_unit, reorder_point, recurring, notes, created_at, updated_at)
-       VALUES (@id, @name, @unit, @quantity, @unit_cost, @items_per_unit, @reorder_point, @recurring, @notes, @ts, @ts)`
+         (id, name, unit, quantity, unit_cost, items_per_unit, reorder_point, recurring, notes, reorder_url, created_at, updated_at)
+       VALUES (@id, @name, @unit, @quantity, @unit_cost, @items_per_unit, @reorder_point, @recurring, @notes, @reorder_url, @ts, @ts)`
     ).run({
       id,
       name: input.name.trim(),
@@ -113,6 +115,7 @@ export function createSupply(input: NewSupply, actorId: string | null): Supply {
       reorder_point: Math.max(0, Math.round(input.reorderPoint ?? 0)),
       recurring: input.recurring ? 1 : 0,
       notes: input.notes?.trim() || null,
+      reorder_url: input.reorderUrl?.trim() || null,
       ts
     })
     // A non-zero opening count is logged as the first purchase so the spend
@@ -139,13 +142,15 @@ export function updateSupply(input: UpdateSupply): Supply | null {
       input.reorderPoint != null ? Math.max(0, Math.round(input.reorderPoint)) : existing.reorderPoint,
     recurring: input.recurring != null ? (input.recurring ? 1 : 0) : existing.recurring ? 1 : 0,
     notes: input.notes !== undefined ? input.notes?.trim() || null : existing.notes,
+    reorder_url: input.reorderUrl !== undefined ? input.reorderUrl?.trim() || null : existing.reorderUrl,
     updated_at: nowIso()
   }
   getDb()
     .prepare(
       `UPDATE supplies SET
          name=@name, unit=@unit, unit_cost=@unit_cost, items_per_unit=@items_per_unit,
-         reorder_point=@reorder_point, recurring=@recurring, notes=@notes, updated_at=@updated_at
+         reorder_point=@reorder_point, recurring=@recurring, notes=@notes, reorder_url=@reorder_url,
+         updated_at=@updated_at
        WHERE id=@id`
     )
     .run(next)

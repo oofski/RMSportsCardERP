@@ -292,6 +292,8 @@ export interface Supply {
   /** Whether this is a repeat/recurring order (mailers, bags, labels…). */
   recurring: boolean
   notes: string | null
+  /** Link to reorder this item (e.g. its Amazon product page). */
+  reorderUrl: string | null
   /** Photo of the supply, as a ready-to-use data URL (null when none). */
   imageUrl: string | null
   /** quantity × unitCost (items × per-item cost). */
@@ -312,6 +314,8 @@ export interface NewSupply {
   reorderPoint: number
   recurring: boolean
   notes: string | null
+  /** Optional reorder link (e.g. an Amazon product URL). */
+  reorderUrl?: string | null
   /** Optional opening on-hand count of items (logged as the first purchase). */
   openingQuantity?: number
 }

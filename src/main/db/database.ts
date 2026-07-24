@@ -323,7 +323,11 @@ function migrate(database: Database.Database): void {
   addColumnIfMissing(database, 'supplies', 'items_per_unit', 'INTEGER NOT NULL DEFAULT 1')
   addColumnIfMissing(database, 'supply_transactions', 'units', 'INTEGER')
   addColumnIfMissing(database, 'supply_transactions', 'items_per_unit', 'INTEGER')
-  setMeta(database, 'schema_version', '12')
+  // v13: a reorder link (e.g. the Amazon product page) per supply — one-click
+  // reorder today, and the hook for automated reordering once a purchasing API
+  // (Amazon Business) is available.
+  addColumnIfMissing(database, 'supplies', 'reorder_url', 'TEXT')
+  setMeta(database, 'schema_version', '13')
 
   // Seed the product catalog once, then apply the on-hand snapshot once.
   seedCatalogIfNeeded(database)

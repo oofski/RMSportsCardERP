@@ -60,6 +60,10 @@ export function SuppliesTab({ canManage }: { canManage: boolean }): JSX.Element 
     if (mounted.current) setConfirmDelete(null)
   }
 
+  const openReorder = (s: Supply): void => {
+    if (s.reorderUrl) api.email.openExternal(s.reorderUrl)
+  }
+
   if (loading) return <CenterLoader />
 
   return (
@@ -179,6 +183,15 @@ export function SuppliesTab({ canManage }: { canManage: boolean }): JSX.Element 
                   {canManage && (
                     <td>
                       <div className="supply-actions">
+                        {s.reorderUrl && (
+                          <button
+                            className={`btn btn-sm ${s.lowStock ? 'btn-primary' : 'btn-ghost'} supply-reorder-btn`}
+                            onClick={() => openReorder(s)}
+                            title={`Reorder — opens ${s.reorderUrl}`}
+                          >
+                            <Icon name="ShoppingCart" size={15} /> Reorder
+                          </button>
+                        )}
                         <button
                           className="btn btn-secondary btn-sm"
                           onClick={() => setStockFor({ supply: s, mode: 'purchase' })}

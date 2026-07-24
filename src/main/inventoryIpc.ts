@@ -100,6 +100,16 @@ function fail(err: unknown): Result<never> {
   return { ok: false, error: err instanceof Error ? err.message : String(err) }
 }
 
+/** A reorder link is optional, but when given must be a web URL we can open. */
+function validateReorderUrl(url: string | null | undefined): string | null {
+  const trimmed = url?.trim()
+  if (!trimmed) return null
+  if (!/^https?:\/\//i.test(trimmed)) {
+    return 'Reorder link must start with http:// or https://'
+  }
+  return null
+}
+
 export function registerInventoryIpc(): void {
   // ---- Reads (module.inventory) -------------------------------------------
   ipcMain.handle(IPC.invProductsList, (): InventoryProduct[] =>
@@ -365,6 +375,8 @@ export function registerInventoryIpc(): void {
       if (input.itemsPerUnit != null && (!Number.isFinite(input.itemsPerUnit) || input.itemsPerUnit < 1)) {
         return { ok: false, error: 'Items per unit must be at least 1.' }
       }
+      const urlErr = validateReorderUrl(input.reorderUrl)
+      if (urlErr) return { ok: false, error: urlErr }
       if (
         input.openingQuantity != null &&
         (!Number.isFinite(input.openingQuantity) || input.openingQuantity < 0)
@@ -396,6 +408,8 @@ export function registerInventoryIpc(): void {
       if (input.itemsPerUnit != null && (!Number.isFinite(input.itemsPerUnit) || input.itemsPerUnit < 1)) {
         return { ok: false, error: 'Items per unit must be at least 1.' }
       }
+      const urlErr = validateReorderUrl(input.reorderUrl)
+      if (urlErr) return { ok: false, error: urlErr }
       const updated = updateSupply(input)
       return updated ? { ok: true, data: updated } : { ok: false, error: 'Supply not found.' }
     } catch (err) {

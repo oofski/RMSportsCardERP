@@ -36,6 +36,7 @@ export function SupplyFormModal({
   )
   const [recurring, setRecurring] = useState(supply?.recurring ?? false)
   const [notes, setNotes] = useState(supply?.notes ?? '')
+  const [reorderUrl, setReorderUrl] = useState(supply?.reorderUrl ?? '')
   const [imageUrl, setImageUrl] = useState<string | null>(supply?.imageUrl ?? null)
   const [imgBusy, setImgBusy] = useState(false)
   const [error, setError] = useState('')
@@ -94,6 +95,11 @@ export function SupplyFormModal({
       setError('Reorder point must be 0 or more.')
       return
     }
+    const link = reorderUrl.trim()
+    if (link && !/^https?:\/\//i.test(link)) {
+      setError('Reorder link must start with http:// or https://')
+      return
+    }
     setError('')
     setBusy(true)
     try {
@@ -106,7 +112,8 @@ export function SupplyFormModal({
           itemsPerUnit: perUnit ?? 1,
           reorderPoint: reorder ?? 0,
           recurring,
-          notes: notes.trim() || null
+          notes: notes.trim() || null,
+          reorderUrl: link || null
         })
       } else {
         res = await api.supplies.create({
@@ -116,7 +123,8 @@ export function SupplyFormModal({
           itemsPerUnit: perUnit ?? 1,
           reorderPoint: reorder ?? 0,
           recurring,
-          notes: notes.trim() || null
+          notes: notes.trim() || null,
+          reorderUrl: link || null
         })
       }
       if (!res.ok) {
@@ -220,6 +228,15 @@ export function SupplyFormModal({
           label="Recurring — we reorder this on repeat"
         />
       </div>
+
+      <Field label="Reorder link" hint="Paste the Amazon (or supplier) product URL to reorder in one click">
+        <Input
+          type="url"
+          value={reorderUrl}
+          onChange={(e) => setReorderUrl(e.target.value)}
+          placeholder="https://www.amazon.com/…"
+        />
+      </Field>
 
       <Field label="Notes" hint="Optional">
         <Input
