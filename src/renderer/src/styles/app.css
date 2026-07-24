@@ -3925,6 +3925,8 @@ tr.hoverable-row:hover {
   gap: 6px;
   justify-content: flex-end;
   align-items: center;
+  /* Wrap to a second line rather than forcing the table to scroll sideways. */
+  flex-wrap: wrap;
 }
 .supply-actions .btn-sm {
   white-space: nowrap;
@@ -4009,6 +4011,14 @@ tr.hoverable-row:hover {
 /* ---------- Supply orders pipeline (right rail) ---------- */
 .supplies-row {
   margin-top: 4px;
+  /* Give the table all the room it needs; keep the orders rail narrow + fixed
+     so the supply rows never scroll sideways. */
+  grid-template-columns: minmax(0, 1fr) 300px;
+}
+@media (max-width: 1040px) {
+  .supplies-row {
+    grid-template-columns: 1fr;
+  }
 }
 .supplies-main {
   min-width: 0;
