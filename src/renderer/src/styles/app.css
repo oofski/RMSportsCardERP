@@ -5994,3 +5994,31 @@ tr.hoverable-row:hover {
     padding-left: 13px;
   }
 }
+
+/* Active stage chip picks up its stage's colour so the filter reads like the
+   rows it filters. */
+.ship-stage-chip[data-stage='put_together'].active {
+  background: var(--brand-soft);
+  border-color: var(--brand-300);
+  color: var(--brand-700);
+}
+.ship-stage-chip[data-stage='sent'].active,
+.ship-stage-chip[data-stage='sent'].active span {
+  background: var(--warning-bg);
+  border-color: var(--warning);
+  color: var(--warning);
+}
+.ship-stage-chip[data-stage='all_good'].active,
+.ship-stage-chip[data-stage='all_good'].active span {
+  background: var(--success-bg);
+  border-color: var(--success);
+  color: var(--success);
+}
+.ship-stage-chip[data-stage='exception'].active,
+.ship-stage-chip[data-stage='exception'].active span,
+.ship-stage-chip[data-stage='returned'].active,
+.ship-stage-chip[data-stage='returned'].active span {
+  background: var(--danger-bg);
+  border-color: var(--danger);
+  color: var(--danger);
+}

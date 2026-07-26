@@ -73,6 +73,16 @@ export function ShippingModule(): JSX.Element {
     }
   }, [reload])
 
+  // A parse can finish while the operator is on another tab, so the shell — not
+  // the Upload tab — owns the "dataset changed" refresh. Without this the tab
+  // badges would keep showing the previous import until something else reloaded.
+  useEffect(() => {
+    const off = api.shipping.onParseProgress((job) => {
+      if (job.status === 'done') void reload()
+    })
+    return off
+  }, [reload])
+
   if (loading) return <CenterLoader />
 
   const counts = summary?.counts
