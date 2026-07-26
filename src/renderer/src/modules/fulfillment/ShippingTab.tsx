@@ -482,7 +482,10 @@ export function ShippingTab({ canManage, onChanged, onGoTo }: ShipTabProps): JSX
           }
         />
       ) : (
-        <div className="trk-table">
+        // `has-sel` switches the grid template: the select column only exists
+        // for a writer, so a read-only view must not leave an empty column
+        // behind and misalign every header.
+        <div className={`trk-table ${canManage ? 'has-sel' : ''}`}>
           <div className="trk-head">
             {canManage && (
               <button

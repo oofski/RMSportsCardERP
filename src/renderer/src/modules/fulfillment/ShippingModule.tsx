@@ -4,9 +4,12 @@ import { useSession } from '../../lib/session'
 import { api } from '../../lib/api'
 import { formatMoney } from '../../lib/format'
 import { Icon } from '../../components/Icon'
-import { CenterLoader, EmptyState } from '../../components/ui'
+import { CenterLoader } from '../../components/ui'
 import { UploadTab } from './UploadTab'
 import { OrdersTab } from './OrdersTab'
+import { CheckerTab } from './CheckerTab'
+import { ShippingTab } from './ShippingTab'
+import { HistoryTab } from './HistoryTab'
 
 /**
  * RM Cardz Shipping Workspace — the module shell.
@@ -173,52 +176,10 @@ export function ShippingModule(): JSX.Element {
       <div className="ship-scroll">
         {tab === 'upload' && <UploadTab {...tabProps} />}
         {tab === 'orders' && <OrdersTab {...tabProps} />}
-
-        {/* ---------------------------------------------------------------
-            FRONTEND-2 owns these three. Swap each placeholder for the real
-            component — the props are already the shared `ShipTabProps`:
-              {tab === 'checker'  && <CheckerTab  {...tabProps} />}
-              {tab === 'shipping' && <ShippingTab {...tabProps} />}
-              {tab === 'history'  && <HistoryTab  {...tabProps} />}
-            --------------------------------------------------------------- */}
-        {tab === 'checker' && (
-          <TabPlaceholder
-            icon="ListChecks"
-            title="Checker"
-            message="The per-break pick list lands here — every customer's teams in break order, with check-off and top-sleeve tracking."
-          />
-        )}
-        {tab === 'shipping' && (
-          <TabPlaceholder
-            icon="Truck"
-            title="Shipping tracker"
-            message="Manual tracking status, bulk status paste and the USPS “open all” batch links land here."
-          />
-        )}
-        {tab === 'history' && (
-          <TabPlaceholder
-            icon="History"
-            title="History"
-            message="Import history, dated snapshots and CSV exports land here."
-          />
-        )}
+        {tab === 'checker' && <CheckerTab {...tabProps} />}
+        {tab === 'shipping' && <ShippingTab {...tabProps} />}
+        {tab === 'history' && <HistoryTab {...tabProps} />}
       </div>
-    </div>
-  )
-}
-
-function TabPlaceholder({
-  icon,
-  title,
-  message
-}: {
-  icon: string
-  title: string
-  message: string
-}): JSX.Element {
-  return (
-    <div className="ship-placeholder">
-      <EmptyState icon={icon} title={title} message={message} />
     </div>
   )
 }

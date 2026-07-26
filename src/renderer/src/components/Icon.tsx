@@ -97,6 +97,21 @@ import {
   ArrowDown,
   Eraser,
   ChevronUp,
+  // --- RM Cardz Shipping workspace (Checker / Shipping / History) ---
+  Circle,
+  CheckCheck,
+  ClipboardCheck,
+  ClipboardPaste,
+  PackageOpen,
+  Link2,
+  Archive,
+  Save,
+  FileDown,
+  FileText,
+  Filter,
+  Eye,
+  User,
+  Scale,
   type LucideIcon
 } from 'lucide-react'
 
@@ -198,7 +213,22 @@ const MAP: Record<string, LucideIcon> = {
   ArrowUp,
   ArrowDown,
   Eraser,
-  ChevronUp
+  ChevronUp,
+  // --- RM Cardz Shipping workspace (Checker / Shipping / History) ---
+  Circle,
+  CheckCheck,
+  ClipboardCheck,
+  ClipboardPaste,
+  PackageOpen,
+  Link2,
+  Archive,
+  Save,
+  FileDown,
+  FileText,
+  Filter,
+  Eye,
+  User,
+  Scale
 }
 
 export function Icon({
