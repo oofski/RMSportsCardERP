@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, nativeTheme } from 'electron'
+import { app, shell, BrowserWindow, nativeTheme, session } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { APP_NAME } from '@shared/config'
@@ -53,6 +53,15 @@ app.whenReady().then(() => {
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
   })
+
+  // Camera access for in-app barcode scanning: grant only 'media' (getUserMedia)
+  // to our own window and deny every other permission class outright. Both
+  // handlers are needed — Chromium asks the check handler before it even offers
+  // the device list.
+  session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) =>
+    callback(permission === 'media')
+  )
+  session.defaultSession.setPermissionCheckHandler((_wc, permission) => permission === 'media')
 
   // Initialise the database up front so a failure surfaces early.
   getDb()

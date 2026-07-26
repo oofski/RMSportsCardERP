@@ -2,6 +2,7 @@ import { app } from 'electron'
 import { join } from 'path'
 import { existsSync, mkdirSync } from 'fs'
 import Database from 'better-sqlite3'
+import { normalizeUpc } from '@shared/upc'
 import { seedCatalog } from './inventorySeed'
 import { seedSnapshot } from './inventorySnapshot'
 import { seedCatalogExpansion } from './inventoryCatalogV2'
@@ -300,6 +301,50 @@ function migrate(database: Database.Database): void {
       FOREIGN KEY (supply_id) REFERENCES supplies (id) ON DELETE CASCADE
     );
     CREATE INDEX IF NOT EXISTS idx_supply_orders_supply ON supply_orders (supply_id);
+
+    -- v15: the UPC scan log. One row per scan that did something (or explicitly
+    -- did nothing). product_name / sku / po_number are DENORMALISED snapshots so
+    -- history survives a product or PO delete — which is also why the two FKs
+    -- are SET NULL rather than CASCADE, and why po_line_id is deliberately NOT a
+    -- foreign key (PO lines cascade away with their PO; the audit row outlives
+    -- them). lot_id + txn_id are what make undo exact: the reversal targets the
+    -- precise FIFO lot this scan created instead of consuming FIFO-oldest, which
+    -- would silently corrupt the cost basis. po_completed / po_prev_status /
+    -- po_prev_received_at capture whether THIS scan auto-completed the PO and
+    -- what the header looked like before, so undo can restore it.
+    CREATE TABLE IF NOT EXISTS inventory_scans (
+      id                  TEXT PRIMARY KEY,
+      raw_code            TEXT NOT NULL,
+      normalized_code     TEXT,
+      mode                TEXT NOT NULL DEFAULT 'wedge',
+      outcome             TEXT NOT NULL,
+      product_id          TEXT,
+      product_name        TEXT,
+      sku                 TEXT,
+      po_id               TEXT,
+      po_number           TEXT,
+      po_line_id          TEXT,
+      location            TEXT,
+      quantity            INTEGER NOT NULL DEFAULT 0,
+      unit_cost           REAL,
+      lot_id              TEXT,
+      txn_id              TEXT,
+      po_completed        INTEGER NOT NULL DEFAULT 0,
+      po_prev_status      TEXT,
+      po_prev_received_at TEXT,
+      client_token        TEXT,
+      actor_id            TEXT,
+      created_at          TEXT NOT NULL,
+      undone_at           TEXT,
+      undone_by           TEXT,
+      FOREIGN KEY (product_id) REFERENCES inventory_products (id) ON DELETE SET NULL,
+      FOREIGN KEY (po_id)      REFERENCES purchase_orders (id)   ON DELETE SET NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_inv_scans_created ON inventory_scans (created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_inv_scans_po_line ON inventory_scans (po_line_id);
+    -- Network-retry / future-phone-client idempotency key.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_inv_scans_token
+      ON inventory_scans (client_token) WHERE client_token IS NOT NULL;
   `)
 
   if (getMeta(database, 'schema_version') === null) {
@@ -350,7 +395,43 @@ function migrate(database: Database.Database): void {
   addColumnIfMissing(database, 'supplies', 'reorder_url', 'TEXT')
   // v14: supply_orders pipeline (Ordered → In-transit → Delivered). New table
   // created idempotently in the schema-init block above.
-  setMeta(database, 'schema_version', '14')
+  // v15: UPC scanning — per-line receipt tracking on PO lines, a canonical
+  // (GTIN-14) lookup key on products, and the inventory_scans log (created
+  // idempotently in the schema-init block above).
+  //
+  // qty_received is the AUTHORITATIVE double-add guard: cumulative units already
+  // folded into stock for that line, so `outstanding = quantity - qty_received`.
+  // An integer rather than a boolean so a future phone client can receive
+  // per-unit without another migration.
+  addColumnIfMissing(database, 'purchase_order_lines', 'qty_received', 'INTEGER NOT NULL DEFAULT 0')
+  addColumnIfMissing(database, 'purchase_order_lines', 'received_at', 'TEXT')
+  // The canonical form of `upc` (which is free text the user typed, e.g.
+  // "0 12345 67890 5", and so cannot be matched against directly). NOT unique:
+  // dirty legacy data could normalise two rows to the same value and a UNIQUE
+  // index would fail the migration on a live database — duplicates surface at
+  // runtime as the 'ambiguous_product' resolve state instead.
+  addColumnIfMissing(database, 'inventory_products', 'upc_norm', 'TEXT')
+  // Created HERE, not in the schema-init block above: that block runs BEFORE the
+  // addColumnIfMissing calls, so an index on upc_norm would throw "no such
+  // column" on every upgrading database.
+  database.exec(`CREATE INDEX IF NOT EXISTS idx_inv_products_upc_norm ON inventory_products (upc_norm)`)
+  // POs already whole-PO scanned in under the pre-v15 code have their stock in
+  // inventory but would default to qty_received = 0 — scanning any UPC on such a
+  // PO would then add that line's stock a SECOND time. Only POs with scanned_at
+  // set are backfilled: a PO with status='received' but scanned_at NULL never
+  // wrote stock (see the deferred TODO in setPurchaseOrderStatus), so its lines
+  // are genuinely still outstanding and must stay at 0.
+  runOnce(database, 'po_lines_received_backfill_v1', () =>
+    database
+      .prepare(
+        `UPDATE purchase_order_lines
+            SET qty_received = quantity,
+                received_at = (SELECT po.scanned_at FROM purchase_orders po WHERE po.id = purchase_order_lines.po_id)
+          WHERE po_id IN (SELECT id FROM purchase_orders WHERE scanned_at IS NOT NULL)`
+      )
+      .run()
+  )
+  setMeta(database, 'schema_version', '15')
 
   // Seed the product catalog once, then apply the on-hand snapshot once.
   seedCatalogIfNeeded(database)
@@ -381,6 +462,37 @@ function migrate(database: Database.Database): void {
   // catalog expansion + dedupe have settled the final stock/cost, so the lots
   // match the aggregate quantities exactly.
   runOnce(database, 'inventory_lots_backfill_v1', () => backfillLots(database))
+
+  // v15: fill upc_norm for the existing catalog. Deliberately placed after the
+  // seeds / catalog expansion / dedupe above, all of which write `upc` with raw
+  // SQL — a runOnce that ran before them would leave those rows permanently
+  // unscannable. Normalisation (UPC-E expansion, leading-zero stripping,
+  // GTIN-14 padding) isn't expressible in SQL, so it's a JS pass; ~122 rows is
+  // instant. createProduct/updateProduct keep it in sync from here on.
+  runOnce(database, 'upc_norm_backfill_v1', () => backfillUpcNorm(database, true))
+  // Cheap self-heal (normally zero rows): any product whose upc was written by a
+  // future seed batch that forgets upc_norm would otherwise never scan.
+  backfillUpcNorm(database, false)
+}
+
+/**
+ * Recompute `upc_norm` from `upc`. `all` re-normalises every product carrying a
+ * UPC (the one-time backfill); otherwise only rows still missing the canonical
+ * form are touched. Wrapped in a transaction so a crash leaves nothing
+ * half-normalised (and the runOnce flag unset, so it retries next launch).
+ */
+function backfillUpcNorm(database: Database.Database, all: boolean): void {
+  const rows = database
+    .prepare(
+      `SELECT id, upc FROM inventory_products
+        WHERE upc IS NOT NULL AND TRIM(upc) <> ''${all ? '' : ' AND upc_norm IS NULL'}`
+    )
+    .all() as Array<{ id: string; upc: string }>
+  if (rows.length === 0) return
+  const upd = database.prepare('UPDATE inventory_products SET upc_norm = ? WHERE id = ?')
+  database.transaction(() => {
+    for (const r of rows) upd.run(normalizeUpc(r.upc), r.id)
+  })()
 }
 
 /** Run `fn` once, ever, tracked by a meta flag. */

@@ -18,6 +18,11 @@ import type {
   RecordSaleInput,
   Result,
   SalesPoint,
+  ScanCommitInput,
+  ScanCommitResult,
+  ScanMode,
+  ScanRecord,
+  ScanResolution,
   Supply,
   SupplyOrder,
   SupplyOrderStatus,
@@ -58,6 +63,7 @@ import {
   upcExists
 } from './db/inventory'
 import { addIncoming, cancelIncoming, listIncoming, receiveIncoming } from './db/incoming'
+import { commitScan, listScans, logScanMiss, resolveScan, undoScan } from './db/scanning'
 import {
   SUPPLY_UNITS,
   adjustSupply,
@@ -158,6 +164,72 @@ export function registerInventoryIpc(): void {
   ipcMain.handle(IPC.invProductLots, (_e, productId: string): ProductLot[] =>
     can('module.inventory') ? listLots(String(productId ?? '')) : []
   )
+
+  // ---- UPC scanning -------------------------------------------------------
+  // Looking a barcode up is a read (a view-only user may check what a box is);
+  // committing, logging a miss and undoing all write stock and cost, so they go
+  // through requireManage(). Deliberately stricter than poScanIn, which also
+  // accepts module.invoicing: 'inventory.manage' is the app's single gate for
+  // writing stock and cost, and this path writes both.
+  ipcMain.handle(IPC.invScanResolve, (_e, rawCode: string): ScanResolution | null =>
+    can('module.inventory') ? resolveScan(String(rawCode ?? '')) : null
+  )
+  ipcMain.handle(IPC.invScanHistory, (_e, limit?: number): ScanRecord[] =>
+    can('module.inventory') ? listScans(limit ?? 50) : []
+  )
+
+  ipcMain.handle(IPC.invScanCommit, (_e, input: ScanCommitInput): Result<ScanCommitResult> => {
+    try {
+      const actor = requireManage()
+      if (input?.kind !== 'po_line' && input?.kind !== 'add_stock') {
+        return { ok: false, error: 'Nothing to scan in.' }
+      }
+      if (input.kind === 'po_line' && !input.lineId) {
+        return { ok: false, error: 'No purchase order line specified.' }
+      }
+      if (input.kind === 'add_stock') {
+        if (!input.productId) return { ok: false, error: 'Select a product.' }
+        if (input.location != null && !isLocation(input.location)) {
+          return { ok: false, error: 'Choose a location.' }
+        }
+      }
+      // A quantity is optional on a PO line ("receive the rest"), but when given
+      // it must be a whole number of at least 1 on either path.
+      if (input.quantity != null && (!Number.isInteger(input.quantity) || input.quantity < 1)) {
+        return { ok: false, error: 'Quantity must be a whole number of at least 1.' }
+      }
+      if (input.unitCost != null && (!Number.isFinite(input.unitCost) || input.unitCost < 0)) {
+        return { ok: false, error: 'Enter a valid unit cost.' }
+      }
+      const res = commitScan(input, actor.id)
+      return res.error ? { ok: false, error: res.error } : { ok: true, data: res.result as ScanCommitResult }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle(
+    IPC.invScanLogMiss,
+    (_e, payload: { rawCode: string; mode: ScanMode }): Result<ScanRecord | null> => {
+      try {
+        const actor = requireManage()
+        return { ok: true, data: logScanMiss(String(payload?.rawCode ?? ''), payload?.mode ?? 'wedge', actor.id) }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  ipcMain.handle(IPC.invScanUndo, (_e, payload: { id: string }): Result<ScanRecord> => {
+    try {
+      const actor = requireManage()
+      if (!payload?.id) return { ok: false, error: 'No scan specified.' }
+      const res = undoScan(String(payload.id), actor.id)
+      return res.error ? { ok: false, error: res.error } : { ok: true, data: res.record as ScanRecord }
+    } catch (err) {
+      return fail(err)
+    }
+  })
 
   // ---- Writes (inventory.manage) ------------------------------------------
   ipcMain.handle(IPC.invProductCreate, (_e, input: NewInventoryProduct): Result<InventoryProduct> => {

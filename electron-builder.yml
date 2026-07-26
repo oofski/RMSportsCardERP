@@ -61,6 +61,11 @@ mac:
   darkModeSupport: true
   hardenedRuntime: true
   gatekeeperAssess: false
+  # Required for in-app barcode scanning: with hardenedRuntime on, macOS
+  # terminates the app on the first getUserMedia call unless this usage string
+  # is present in Info.plist.
+  extendInfo:
+    NSCameraUsageDescription: RM Operations uses your camera to scan product barcodes.
 
 dmg:
   artifactName: ${productName}-${version}-${arch}.${ext}

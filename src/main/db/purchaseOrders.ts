@@ -4,7 +4,8 @@ import type {
   PurchaseOrder,
   PurchaseOrderDetail,
   PurchaseOrderLine,
-  PurchaseOrderStatus
+  PurchaseOrderStatus,
+  ScanPoCandidate
 } from '@shared/types'
 import { canTransition } from '@shared/purchaseOrders'
 import { LOCATION_IDS, isLocation } from '@shared/inventory'
@@ -41,12 +42,14 @@ interface PoLineRow {
   quantity: number
   unit_price: number
   position: number
+  qty_received: number
+  received_at: string | null
 }
 
 /** Round to whole cents so line totals never carry float drift. */
 const cents = (n: number): number => Math.round(n * 100) / 100
 
-function toSummary(row: PoRow & { line_count: number }): PurchaseOrder {
+function toSummary(row: PoRow & { line_count: number; received_line_count: number }): PurchaseOrder {
   return {
     id: row.id,
     poNumber: row.po_number,
@@ -56,6 +59,7 @@ function toSummary(row: PoRow & { line_count: number }): PurchaseOrder {
     location: row.location,
     total: row.total,
     lineCount: row.line_count,
+    receivedLineCount: row.received_line_count,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     orderedAt: row.ordered_at,
@@ -75,7 +79,10 @@ function toLine(row: PoLineRow): PurchaseOrderLine {
     category: row.category,
     quantity: row.quantity,
     unitPrice: row.unit_price,
-    lineTotal: cents(row.quantity * row.unit_price)
+    lineTotal: cents(row.quantity * row.unit_price),
+    qtyReceived: row.qty_received,
+    qtyOutstanding: Math.max(0, row.quantity - row.qty_received),
+    receivedAt: row.received_at
   }
 }
 
@@ -83,30 +90,31 @@ const PO_SELECT = `
   SELECT po.id, po.po_number, po.supplier, po.notes, po.status, po.location, po.total,
          po.created_by, po.created_at, po.updated_at,
          po.ordered_at, po.paid_at, po.received_at, po.cancelled_at, po.scanned_at,
-         (SELECT COUNT(*) FROM purchase_order_lines l WHERE l.po_id = po.id) AS line_count
+         (SELECT COUNT(*) FROM purchase_order_lines l WHERE l.po_id = po.id) AS line_count,
+         (SELECT COUNT(*) FROM purchase_order_lines l
+           WHERE l.po_id = po.id AND l.qty_received >= l.quantity) AS received_line_count
   FROM purchase_orders po
 `
 
 const LINE_SELECT = `
   SELECT l.id, l.po_id, l.product_id, p.name AS product_name, p.sku AS sku,
-         p.category AS category, l.quantity, l.unit_price, l.position
+         p.category AS category, l.quantity, l.unit_price, l.position,
+         l.qty_received, l.received_at
   FROM purchase_order_lines l
   JOIN inventory_products p ON p.id = l.product_id
   WHERE l.po_id = ?
   ORDER BY l.position ASC, l.created_at ASC
 `
 
+type PoHeaderRow = PoRow & { line_count: number; received_line_count: number }
+
 export function listPurchaseOrders(): PurchaseOrder[] {
-  const rows = getDb()
-    .prepare(`${PO_SELECT} ORDER BY po.created_at DESC`)
-    .all() as Array<PoRow & { line_count: number }>
+  const rows = getDb().prepare(`${PO_SELECT} ORDER BY po.created_at DESC`).all() as PoHeaderRow[]
   return rows.map(toSummary)
 }
 
 export function getPurchaseOrder(id: string): PurchaseOrderDetail | null {
-  const header = getDb().prepare(`${PO_SELECT} WHERE po.id = ?`).get(id) as
-    | (PoRow & { line_count: number })
-    | undefined
+  const header = getDb().prepare(`${PO_SELECT} WHERE po.id = ?`).get(id) as PoHeaderRow | undefined
   if (!header) return null
   const lines = (getDb().prepare(LINE_SELECT).all(id) as PoLineRow[]).map(toLine)
   return { ...toSummary(header), lines }
@@ -132,7 +140,7 @@ export function listActivePurchaseOrderBoxes(): PurchaseOrderDetail[] {
          AND (po.status != 'received' OR po.received_at IS NULL OR po.received_at >= @cutoff)
        ORDER BY po.created_at DESC`
     )
-    .all({ cutoff }) as Array<PoRow & { line_count: number }>
+    .all({ cutoff }) as PoHeaderRow[]
   const lineStmt = db.prepare(LINE_SELECT)
   return headers.map((h) => ({
     ...toSummary(h),
@@ -237,22 +245,245 @@ export function setPurchaseOrderStatus(
     }
 
     if (status === 'received') {
-      // --- DEFERRED: received -> inventory writeback -------------------------
-      // TODO(po-receive): when the received->inventory feature ships, fold each
-      // PO line into on-hand stock + a FIFO cost lot HERE, e.g.:
-      //   const lines = db.prepare('SELECT product_id, quantity, unit_price FROM purchase_order_lines WHERE po_id = ?').all(id)
-      //   for (const l of lines) addStock(l.product_id, <destination location>, l.quantity, l.unit_price, `PO ${row.po_number}`, actorId)
-      // The line's unit_price is the intended FIFO cost basis (see db/inventory.ts
-      // addStock -> lots.createLot). A destination location is NOT captured on the
-      // PO header yet (minimal header for now) and must be added before this runs.
-      // Until then, 'received' is a pipeline stage ONLY — no stock/lot mutation.
-      // ----------------------------------------------------------------------
-      void actorId // reserved: becomes the ledger actor when the hook above ships
+      // Moving a PO to Received on the board takes its stock in for real — the
+      // same primitive the scanner uses, so both routes to "Received" produce
+      // identical stock, FIFO lots and average cost. Without this the board and
+      // the scan path would disagree: two cards in the Received column, only one
+      // of which actually moved inventory.
+      // Only OUTSTANDING quantity is received, so a PO that was partially
+      // scanned in is topped up rather than double-counted.
+      const outstanding = db
+        .prepare(
+          `SELECT id, quantity - qty_received AS outstanding
+             FROM purchase_order_lines
+            WHERE po_id = ? AND qty_received < quantity
+            ORDER BY position, rowid`
+        )
+        .all(id) as Array<{ id: string; outstanding: number }>
+      for (const l of outstanding) {
+        // Throws on failure so the whole transaction (including the status
+        // change above) rolls back — never a "Received" PO with partial stock.
+        receivePoLine(db, l.id, l.outstanding, `Received ${row.po_number}`, actorId)
+      }
+      // Stamps scanned_at once every line is in, which also retires the PO's box
+      // from the Incoming panel.
+      completePoIfFullyReceived(db, id)
     }
 
     return { po: getPurchaseOrder(id) }
   })
-  return run()
+  try {
+    return run()
+  } catch (err) {
+    return { po: getPurchaseOrder(id), error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+/** What receiving one PO line actually did (the scan log records all of it). */
+export interface ReceivedPoLine {
+  lineId: string
+  poId: string
+  poNumber: string
+  productId: string
+  productName: string
+  location: string
+  /** Units actually received on this call (clamped to the outstanding amount). */
+  quantity: number
+  unitCost: number
+  lotId: string
+  txnId: string
+}
+
+/**
+ * THE single primitive for receiving ONE PO line's stock — used by both the
+ * whole-PO button and a UPC scan, so the two paths can never disagree (or
+ * double-add).
+ *
+ * MUST be called inside the caller's db.transaction(): it opens none of its own
+ * so it composes with either flow. Throws (rather than returning an error) so a
+ * failure rolls back every line received before it, matching the existing
+ * scan-in line-loop contract.
+ */
+export function receivePoLine(
+  db: Database.Database,
+  lineId: string,
+  qty: number,
+  note: string | null,
+  actorId: string | null
+): ReceivedPoLine {
+  const row = db
+    .prepare(
+      `SELECT l.id, l.po_id, l.product_id, l.quantity, l.qty_received, l.unit_price,
+              p.name AS product_name, po.po_number, po.status, po.location
+       FROM purchase_order_lines l
+       JOIN purchase_orders po ON po.id = l.po_id
+       JOIN inventory_products p ON p.id = l.product_id
+       WHERE l.id = ?`
+    )
+    .get(lineId) as
+    | {
+        id: string
+        po_id: string
+        product_id: string
+        quantity: number
+        qty_received: number
+        unit_price: number
+        product_name: string
+        po_number: string
+        status: PurchaseOrderStatus
+        location: string
+      }
+    | undefined
+  if (!row) throw new Error('That purchase order line no longer exists.')
+  // Re-read inside the transaction, so a PO cancelled between resolve and commit
+  // is caught here and rolls the whole commit back.
+  if (row.status === 'cancelled') throw new Error('That purchase order was cancelled.')
+  // THIS is the real double-add guard — not the header's scanned_at. Two scans
+  // of the same box serialise (better-sqlite3 is synchronous), and the second
+  // sees the first's qty_received.
+  const outstanding = row.quantity - row.qty_received
+  if (outstanding <= 0) throw new Error('That line has already been fully received.')
+  // No quantity (or a nonsense one) means "receive the rest"; over-receiving is
+  // impossible because the ask is clamped to what's outstanding.
+  const want = Number.isFinite(qty) ? Math.round(qty) : outstanding
+  const take = Math.min(Math.max(1, want), outstanding)
+
+  // The one money path: FIFO lot + moving weighted-average cost + ledger entry.
+  const res = addStock(
+    row.product_id,
+    row.location,
+    take,
+    row.unit_price,
+    note ?? `Scanned in ${row.po_number}`,
+    actorId
+  )
+  if (res.error) throw new Error(res.error) // THROW so the outer txn rolls back every prior line (atomic)
+
+  db.prepare(
+    `UPDATE purchase_order_lines
+        SET qty_received = qty_received + @take,
+            received_at  = CASE WHEN qty_received + @take >= quantity THEN @ts ELSE received_at END
+      WHERE id = @id`
+  ).run({ take, ts: nowIso(), id: lineId })
+
+  return {
+    lineId,
+    poId: row.po_id,
+    poNumber: row.po_number,
+    productId: row.product_id,
+    productName: row.product_name,
+    location: row.location,
+    quantity: take,
+    unitCost: row.unit_price,
+    lotId: res.lotId ?? '',
+    txnId: res.txnId ?? ''
+  }
+}
+
+/** The PO header state a completion overwrote, so an undo can restore it. */
+export interface PoCompletion {
+  completed: boolean
+  prevStatus: PurchaseOrderStatus
+  prevReceivedAt: string | null
+}
+
+/**
+ * Auto-complete a PO once every line is fully received. Call inside the caller's
+ * transaction, immediately after any receivePoLine.
+ *
+ * Because listActivePurchaseOrderBoxes() filters on `scanned_at IS NULL`,
+ * stamping scanned_at is what makes the completed PO's box leave the Incoming
+ * panel. Deliberately does NOT touch finance_cogs: the COGS entry is written
+ * once at PO creation by recordPoCogs, and booking it again on receipt would
+ * double-count the purchase.
+ */
+export function completePoIfFullyReceived(db: Database.Database, poId: string): PoCompletion {
+  const h = db
+    .prepare('SELECT status, received_at, scanned_at FROM purchase_orders WHERE id = ?')
+    .get(poId) as
+    | { status: PurchaseOrderStatus; received_at: string | null; scanned_at: string | null }
+    | undefined
+  const unchanged: PoCompletion = {
+    completed: false,
+    prevStatus: h?.status ?? 'ordered',
+    prevReceivedAt: h?.received_at ?? null
+  }
+  if (!h || h.scanned_at) return unchanged
+  const c = db
+    .prepare(
+      `SELECT COUNT(*) AS total,
+              COALESCE(SUM(CASE WHEN qty_received >= quantity THEN 1 ELSE 0 END), 0) AS done
+       FROM purchase_order_lines WHERE po_id = ?`
+    )
+    .get(poId) as { total: number; done: number }
+  // total > 0 guard: over zero rows SUM and COUNT are both 0, so an empty PO
+  // would otherwise auto-complete itself.
+  if (c.total === 0 || c.done < c.total) return unchanged
+  const ts = nowIso()
+  db.prepare(
+    `UPDATE purchase_orders
+        SET status = 'received', received_at = COALESCE(received_at, @ts), scanned_at = @ts, updated_at = @ts
+      WHERE id = @id`
+  ).run({ ts, id: poId })
+  return { ...unchanged, completed: true }
+}
+
+/**
+ * Every still-outstanding PO line for a product, oldest PO first (purchase-side
+ * FIFO — the earliest order is the one most likely arriving). Read-only.
+ *
+ * Eligibility keys on scanned_at + qty_received, never on status alone: a PO
+ * with status='received' but scanned_at NULL never wrote stock (see the deferred
+ * TODO in setPurchaseOrderStatus), so its lines ARE still outstanding and stay
+ * scannable. Cancelled POs are excluded entirely.
+ */
+export function outstandingLinesForProduct(productId: string): ScanPoCandidate[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT l.id AS line_id, l.po_id, l.quantity, l.qty_received, l.unit_price, l.position,
+              po.po_number, po.status, po.supplier, po.location, po.created_at,
+              (SELECT COUNT(*) FROM purchase_order_lines x WHERE x.po_id = l.po_id) AS po_lines_total,
+              (SELECT COUNT(*) FROM purchase_order_lines x
+                WHERE x.po_id = l.po_id AND x.qty_received < x.quantity) AS po_lines_outstanding
+       FROM purchase_order_lines l
+       JOIN purchase_orders po ON po.id = l.po_id
+       WHERE l.product_id = ?
+         AND po.status != 'cancelled'
+         AND po.scanned_at IS NULL
+         AND l.qty_received < l.quantity
+       ORDER BY po.created_at ASC, po.po_number ASC, l.position ASC`
+    )
+    .all(productId) as Array<{
+    line_id: string
+    po_id: string
+    quantity: number
+    qty_received: number
+    unit_price: number
+    position: number
+    po_number: string
+    status: PurchaseOrderStatus
+    supplier: string | null
+    location: string
+    created_at: string
+    po_lines_total: number
+    po_lines_outstanding: number
+  }>
+  return rows.map((r) => ({
+    lineId: r.line_id,
+    poId: r.po_id,
+    poNumber: r.po_number,
+    supplier: r.supplier,
+    status: r.status,
+    location: r.location,
+    quantity: r.quantity,
+    qtyReceived: r.qty_received,
+    qtyOutstanding: Math.max(0, r.quantity - r.qty_received),
+    unitPrice: r.unit_price,
+    poCreatedAt: r.created_at,
+    completesPo: r.po_lines_outstanding === 1,
+    poLinesTotal: r.po_lines_total,
+    poLinesOutstanding: r.po_lines_outstanding
+  }))
 }
 
 export interface ScanInResult {
@@ -261,11 +492,15 @@ export interface ScanInResult {
 }
 
 /**
- * Scan a PO's cases into on-hand stock. Idempotent + atomic: the scanned_at
- * guard is read INSIDE the same transaction that stamps it, so a double-click
- * adds stock exactly once. Each line folds into inventory through the existing
- * addStock engine (moving weighted-average cost + FIFO cost lot), so no stock or
- * cost math is hand-rolled. A line failure THROWS to roll back every prior line.
+ * Receive a whole PO's remaining cases into on-hand stock. Line-aware since v15:
+ * each line is received through receivePoLine, which re-reads its qty_received
+ * INSIDE this transaction — so lines already received one-by-one by UPC add
+ * nothing here and the PO is simply stamped. (Under the pre-v15 implementation
+ * this button would have double-added them.)
+ *
+ * The header scanned_at check is now only a fast-path early return; per-line
+ * qty_received is the authoritative guard. A line failure THROWS to roll back
+ * every prior line.
  */
 export function scanInPurchaseOrder(id: string, actorId: string | null): ScanInResult {
   const db = getDb()
@@ -278,20 +513,23 @@ export function scanInPurchaseOrder(id: string, actorId: string | null): ScanInR
     if (!h) return { po: null, error: 'Purchase order not found.' }
     if (h.status === 'cancelled') return { po: getPurchaseOrder(id), error: 'This purchase order was cancelled.' }
     if (h.scanned_at)
-      return { po: getPurchaseOrder(id), error: 'This purchase order has already been scanned in.' } // idempotency guard
+      return { po: getPurchaseOrder(id), error: 'This purchase order has already been scanned in.' } // fast path
     const lines = db
-      .prepare('SELECT product_id, quantity, unit_price FROM purchase_order_lines WHERE po_id = ?')
-      .all(id) as Array<{ product_id: string; quantity: number; unit_price: number }>
-    for (const l of lines) {
-      const res = addStock(l.product_id, h.location, l.quantity, l.unit_price, `Scanned in ${h.po_number}`, actorId)
-      if (res.error) throw new Error(res.error) // THROW so the outer txn rolls back every prior line (atomic)
+      .prepare('SELECT id, quantity, qty_received FROM purchase_order_lines WHERE po_id = ?')
+      .all(id) as Array<{ id: string; quantity: number; qty_received: number }>
+    // A PO with no lines can never auto-complete (see completePoIfFullyReceived),
+    // so say so rather than appearing to do nothing.
+    if (lines.length === 0) {
+      return { po: getPurchaseOrder(id), error: 'This purchase order has no line items to receive.' }
     }
-    const ts = nowIso()
-    if (h.status !== 'received')
-      db.prepare(
-        'UPDATE purchase_orders SET status = ?, received_at = ?, scanned_at = ?, updated_at = ? WHERE id = ?'
-      ).run('received', ts, ts, ts, id)
-    else db.prepare('UPDATE purchase_orders SET scanned_at = ?, updated_at = ? WHERE id = ?').run(ts, ts, id)
+    for (const l of lines) {
+      const outstanding = l.quantity - l.qty_received
+      if (outstanding <= 0) continue // already received by UPC scan — never add it twice
+      receivePoLine(db, l.id, outstanding, `Scanned in ${h.po_number}`, actorId)
+    }
+    // Stamps status/received_at/scanned_at once every line is in (a zero-line PO
+    // is left alone), so the whole-PO and per-line paths complete identically.
+    completePoIfFullyReceived(db, id)
     return { po: getPurchaseOrder(id) }
   })
   try {

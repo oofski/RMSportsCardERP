@@ -72,6 +72,13 @@ import {
   ImagePlus,
   PackageMinus,
   Repeat,
+  ScanBarcode,
+  ScanLine,
+  Camera,
+  CameraOff,
+  Keyboard,
+  Undo2,
+  History,
   type LucideIcon
 } from 'lucide-react'
 
@@ -148,7 +155,14 @@ const MAP: Record<string, LucideIcon> = {
   Maximize2,
   ImagePlus,
   PackageMinus,
-  Repeat
+  Repeat,
+  ScanBarcode,
+  ScanLine,
+  Camera,
+  CameraOff,
+  Keyboard,
+  Undo2,
+  History
 }
 
 export function Icon({

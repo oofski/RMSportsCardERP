@@ -67,6 +67,12 @@ export const IPC = {
   invPricingList: 'inventory:pricing:list',
   invHighBidUpdate: 'inventory:pricing:high-bid',
   invProductLots: 'inventory:product:lots',
+  // UPC scanning. resolve/history are reads; commit/log-miss/undo write stock.
+  invScanResolve: 'inventory:scan:resolve',
+  invScanCommit: 'inventory:scan:commit',
+  invScanLogMiss: 'inventory:scan:log-miss',
+  invScanHistory: 'inventory:scan:history',
+  invScanUndo: 'inventory:scan:undo',
 
   // Supplies (operating consumables)
   suppliesList: 'supplies:list',

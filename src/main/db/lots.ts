@@ -23,7 +23,9 @@ export type LotSource = 'restock' | 'opening' | 'adjustment' | 'backfill'
 
 const cents = (n: number): number => Math.round(n * 100) / 100
 
-/** Insert one cost lot (qty_received === qty_remaining === qty). */
+/** Insert one cost lot (qty_received === qty_remaining === qty). Returns the new
+ * lot's id (empty string when nothing was inserted) so a caller can record
+ * exactly which cost layer a receipt created and reverse that one later. */
 export function createLot(
   db: Database,
   productId: string,
@@ -33,14 +35,46 @@ export function createLot(
   receivedAt: string,
   source: LotSource,
   note: string | null
-): void {
+): string {
   const q = Math.round(qty)
-  if (q <= 0) return
+  if (q <= 0) return ''
+  const id = newId()
   db.prepare(
     `INSERT INTO inventory_lots
        (id, product_id, location, qty_received, qty_remaining, unit_cost, received_at, source, note, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(newId(), productId, location, q, q, cents(Math.max(0, unitCost)), receivedAt, source, note, nowIso())
+  ).run(id, productId, location, q, q, cents(Math.max(0, unitCost)), receivedAt, source, note, nowIso())
+  return id
+}
+
+/**
+ * Reverse a specific receipt (an undo), targeting the exact lot it created
+ * rather than consuming FIFO-oldest — undoing an old scan must never cannibalise
+ * a newer cost layer. MUST be called inside the caller's db.transaction().
+ *
+ * Throws when the lot is gone, or when part of it has already been sold (a clean
+ * reversal is impossible then); the throw rolls the caller back. Decrements BOTH
+ * qty_received and qty_remaining so the engine invariant
+ * `Σ lot.qty_remaining == inventory_stock.quantity` per (product, location) —
+ * the one assertStockLotsConsistent() checks — stays intact.
+ */
+export function reverseLotReceipt(db: Database, lotId: string, qty: number): void {
+  const q = Math.round(qty)
+  if (q <= 0) return
+  const lot = db
+    .prepare('SELECT qty_received, qty_remaining FROM inventory_lots WHERE id = ?')
+    .get(lotId) as { qty_received: number; qty_remaining: number } | undefined
+  if (!lot) throw new Error('That cost lot no longer exists.')
+  if (lot.qty_remaining < q) {
+    throw new Error('Some of that stock has already been sold — adjust it manually instead.')
+  }
+  if (lot.qty_received - q <= 0) {
+    db.prepare('DELETE FROM inventory_lots WHERE id = ?').run(lotId)
+    return
+  }
+  db.prepare(
+    'UPDATE inventory_lots SET qty_received = qty_received - ?, qty_remaining = qty_remaining - ? WHERE id = ?'
+  ).run(q, q, lotId)
 }
 
 /**

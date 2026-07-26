@@ -531,6 +531,12 @@ export interface PurchaseOrderLine {
   unitPrice: number
   /** quantity × unitPrice. */
   lineTotal: number
+  /** Units already folded into stock (by UPC scan or a whole-PO receive). */
+  qtyReceived: number
+  /** quantity − qtyReceived, floored at 0. */
+  qtyOutstanding: number
+  /** ISO timestamp qtyReceived first reached quantity (null while outstanding). */
+  receivedAt: string | null
 }
 
 /** A purchase order header (list/summary row on the kanban board). */
@@ -548,6 +554,8 @@ export interface PurchaseOrder {
   total: number
   /** Number of line items. */
   lineCount: number
+  /** How many of those lines are fully received (partial-receipt progress). */
+  receivedLineCount: number
   createdAt: string
   updatedAt: string
   orderedAt: string | null
@@ -590,6 +598,139 @@ export interface NewPurchaseOrder {
   /** Destination stock location (RM/AM); defaults to the first location. */
   location?: string | null
   lines: NewPurchaseOrderLine[]
+}
+
+// ---------------------------------------------------------------------------
+// UPC scanning
+//
+// Two steps by design: resolveScan READS a barcode (never writes), commitScan
+// performs the single confirmed action. The split is what makes the camera
+// decoder — which fires many times a second — safe, and keeps a future phone
+// client on exactly the same contract.
+// ---------------------------------------------------------------------------
+
+/** Where a scan came from: handheld keyboard wedge, webcam, or typed by hand. */
+export type ScanMode = 'wedge' | 'camera' | 'manual'
+
+/** What resolveScan made of a barcode. */
+export type ScanStatus = 'po_line' | 'product' | 'unknown' | 'ambiguous_product'
+
+/** What commitScan did — also the stored `inventory_scans.outcome`. */
+export type ScanCommitKind = 'po_line' | 'add_stock'
+
+/** An outstanding PO line a scanned product can be received against. */
+export interface ScanPoCandidate {
+  lineId: string
+  poId: string
+  poNumber: string
+  supplier: string | null
+  status: PurchaseOrderStatus
+  /** Destination stock location the PO's cases check into. */
+  location: string
+  quantity: number
+  qtyReceived: number
+  qtyOutstanding: number
+  /** Per-unit buy price on this line — the FIFO cost basis it will book at. */
+  unitPrice: number
+  poCreatedAt: string
+  /** Advisory: this is the PO's last outstanding line. Auto-completion is
+   * decided inside the commit transaction, never from this flag. */
+  completesPo: boolean
+  poLinesTotal: number
+  poLinesOutstanding: number
+}
+
+/** One of several catalog products sharing a normalised UPC (dirty legacy data). */
+export interface ScanProductMatch {
+  id: string
+  name: string
+  sku: string
+  upc: string | null
+}
+
+/** Step A: what a scanned barcode means. Read-only — nothing is written. */
+export interface ScanResolution {
+  status: ScanStatus
+  /** Exactly what the wedge / camera sent. */
+  rawCode: string
+  /** Canonical GTIN-14 lookup key; null when nothing usable was scanned. */
+  normalizedCode: string | null
+  /** The cleaned code, echoed verbatim in the "not recognised" state. */
+  cleanedCode: string
+  product: InventoryProduct | null
+  /** The product's primary photo as a data URL (so the preview shows the box). */
+  imageUrl: string | null
+  /** Outstanding PO lines, oldest PO first (purchase-side FIFO). */
+  candidates: ScanPoCandidate[]
+  /** candidates[0].lineId — the preselected choice. */
+  defaultLineId: string | null
+  /** Populated only for 'ambiguous_product'. */
+  productMatches: ScanProductMatch[]
+  suggestedQuantity: number
+  suggestedUnitCost: number | null
+  suggestedLocation: string
+  message: string
+}
+
+/** Step B: the single confirmed action to perform. */
+export interface ScanCommitInput {
+  kind: ScanCommitKind
+  rawCode: string
+  mode: ScanMode
+  /** Required for 'po_line'. Commit never re-resolves and re-picks a line. */
+  lineId?: string
+  /** Required for 'add_stock'. */
+  productId?: string
+  location?: string
+  /** Omitted on a PO line means "receive the rest"; clamped to the outstanding. */
+  quantity?: number
+  unitCost?: number | null
+  note?: string | null
+  /** Idempotency key for a retry / double-click / future phone client. */
+  clientToken?: string
+}
+
+export interface ScanCommitResult {
+  scanId: string
+  kind: ScanCommitKind
+  product: InventoryProduct | null
+  quantity: number
+  unitCost: number | null
+  location: string
+  /** The PO after receiving, when this was a PO-line scan. */
+  po: PurchaseOrderDetail | null
+  /** True when this scan received the PO's last outstanding line. */
+  poCompleted: boolean
+  /** True when a clientToken replayed an earlier commit — nothing was written. */
+  replayed: boolean
+  /** Toast copy, shown verbatim. */
+  message: string
+}
+
+/** A row in the scan log (including unrecognised scans). */
+export interface ScanRecord {
+  id: string
+  rawCode: string
+  normalizedCode: string | null
+  mode: ScanMode
+  outcome: ScanCommitKind | 'unknown'
+  productId: string | null
+  /** Denormalised so history survives a product delete. */
+  productName: string | null
+  sku: string | null
+  poId: string | null
+  poNumber: string | null
+  poLineId: string | null
+  location: string | null
+  quantity: number
+  unitCost: number | null
+  poCompleted: boolean
+  actorName: string | null
+  createdAt: string
+  undoneAt: string | null
+  /** False once any of the received stock has been sold — the UI disables Undo
+   * rather than offering an action that is guaranteed to fail. */
+  undoable: boolean
 }
 
 // ---------------------------------------------------------------------------

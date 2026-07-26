@@ -11,9 +11,11 @@ import type {
   UnitType,
   UpdateInventoryProduct
 } from '@shared/types'
+import type { Database } from 'better-sqlite3'
 import { LOCATION_IDS } from '@shared/inventory'
+import { normalizeUpc } from '@shared/upc'
 import { getDb } from './database'
-import { consumeFifo, createLot, slicesCost, syncProductAvgCost } from './lots'
+import { consumeFifo, createLot, reverseLotReceipt, slicesCost, syncProductAvgCost } from './lots'
 import { deleteImageFile, imageDataUrl, importImageFile } from '../services/media'
 import { newId, nowIso } from '../util'
 
@@ -129,14 +131,33 @@ export function searchCatalog(query: string, limit = 25): InventoryProduct[] {
   return rows.map((r) => toProduct(r, stock.get(r.id) ?? {}))
 }
 
+/**
+ * Is this UPC already in the catalog? Compares on the CANONICAL form, so
+ * "0012345678905" is correctly rejected when "012345678905" already exists —
+ * which is what keeps newly-entered data out of the ambiguous-scan state.
+ */
 export function upcExists(upc: string, exceptId?: string): boolean {
-  if (!upc.trim()) return false
-  const row = getDb().prepare('SELECT id FROM inventory_products WHERE upc = ?').get(upc.trim()) as
-    | { id: string }
-    | undefined
+  const normalized = normalizeUpc(upc)
+  if (!normalized) return false
+  const row = getDb()
+    .prepare('SELECT id FROM inventory_products WHERE upc_norm = ?')
+    .get(normalized) as { id: string } | undefined
   return !!row && row.id !== exceptId
 }
 
+/** Every catalog product carrying this canonical UPC. Returns an ARRAY because
+ * upc_norm is intentionally non-unique: the caller decides whether 0 / 1 / many
+ * means unknown / product / ambiguous. */
+export function findProductsByUpc(normalized: string | null): InventoryProduct[] {
+  if (!normalized) return []
+  const rows = getDb()
+    .prepare('SELECT * FROM inventory_products WHERE upc_norm = ? ORDER BY name COLLATE NOCASE')
+    .all(normalized) as ProductRow[]
+  return rows.map((r) => toProduct(r, stockFor(r.id)))
+}
+
+/** Returns the new transaction's id so a caller can point an audit row at the
+ * exact ledger entry it wrote. */
 function insertTxn(
   productId: string,
   type: string,
@@ -147,14 +168,16 @@ function insertTxn(
   actorId: string | null,
   location: string | null,
   costBasis: number | null = null
-): void {
+): string {
+  const id = newId()
   getDb()
     .prepare(
       `INSERT INTO inventory_transactions
          (id, product_id, type, quantity_change, unit_price, counterparty, note, actor_id, location, cost_basis, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
-    .run(newId(), productId, type, quantityChange, unitPrice, counterparty, note, actorId, location, costBasis, nowIso())
+    .run(id, productId, type, quantityChange, unitPrice, counterparty, note, actorId, location, costBasis, nowIso())
+  return id
 }
 
 /** Add `delta` to a product's stock at a location (delta may be negative). */
@@ -183,17 +206,20 @@ export function createProduct(input: NewInventoryProduct, actorId: string | null
   const create = db.transaction(() => {
     db.prepare(
       `INSERT INTO inventory_products
-         (id, sku, upc, name, category, brand, set_name, year, unit_type,
+         (id, sku, upc, upc_norm, name, category, brand, set_name, year, unit_type,
           boxes_per_case, packs_per_box, unit_cost, high_bid, high_bid_at, sale_price, reorder_point,
           notes, created_at, updated_at)
        VALUES
-         (@id, @sku, @upc, @name, @category, @brand, @set_name, @year, @unit_type,
+         (@id, @sku, @upc, @upc_norm, @name, @category, @brand, @set_name, @year, @unit_type,
           @boxes_per_case, @packs_per_box, @unit_cost, @high_bid, @high_bid_at, @sale_price, @reorder_point,
           @notes, @ts, @ts)`
     ).run({
       id,
       sku: input.sku.trim(),
       upc: input.upc?.trim() || null,
+      // The scan lookup key. A product whose upc_norm goes stale is permanently
+      // unscannable, so it is written on every path that touches upc.
+      upc_norm: normalizeUpc(input.upc),
       name: input.name.trim(),
       category: input.category.trim(),
       brand: input.brand.trim(),
@@ -235,9 +261,12 @@ function normalizeHighBid(highBid: number | null | undefined): number | null {
 export function updateProduct(input: UpdateInventoryProduct): InventoryProduct | null {
   const existing = getProduct(input.id)
   if (!existing) return null
+  const upc = input.upc !== undefined ? input.upc?.trim() || null : existing.upc
   const next = {
     sku: (input.sku ?? existing.sku).trim(),
-    upc: input.upc !== undefined ? input.upc?.trim() || null : existing.upc,
+    upc,
+    // Kept in lockstep with upc — see createProduct.
+    upc_norm: normalizeUpc(upc),
     name: (input.name ?? existing.name).trim(),
     category: (input.category ?? existing.category).trim(),
     brand: (input.brand ?? existing.brand).trim(),
@@ -258,7 +287,7 @@ export function updateProduct(input: UpdateInventoryProduct): InventoryProduct |
   getDb()
     .prepare(
       `UPDATE inventory_products SET
-         sku=@sku, upc=@upc, name=@name, category=@category, brand=@brand,
+         sku=@sku, upc=@upc, upc_norm=@upc_norm, name=@name, category=@category, brand=@brand,
          set_name=@set_name, year=@year, unit_type=@unit_type,
          boxes_per_case=@boxes_per_case, packs_per_box=@packs_per_box,
          unit_cost=@unit_cost, high_bid=@high_bid, sale_price=@sale_price,
@@ -440,9 +469,24 @@ export function productThumbnails(): Record<string, string> {
   return out
 }
 
+/** One product's primary photo as a data URL (null when it has none) — the
+ * single-product form of productThumbnails(), for the scan preview. */
+export function productThumbnail(productId: string): string | null {
+  const row = getDb()
+    .prepare(
+      'SELECT filename FROM inventory_product_images WHERE product_id = ? ORDER BY position, created_at LIMIT 1'
+    )
+    .get(productId) as { filename: string } | undefined
+  return row ? (imageDataUrl(row.filename) ?? null) : null
+}
+
 export interface StockResult {
   product: InventoryProduct | null
   error?: string
+  /** The FIFO cost lot this receipt created (undo reverses exactly this one). */
+  lotId?: string
+  /** The ledger row this receipt wrote. */
+  txnId?: string
 }
 
 /**
@@ -475,13 +519,44 @@ export function addStock(
     // inherits the current average so it doesn't move the basis.
     const lotCost =
       unitCost != null && Number.isFinite(unitCost) && unitCost >= 0 ? unitCost : row.unit_cost
-    createLot(db, productId, location, qty, lotCost, nowIso(), 'restock', note)
+    const lotId = createLot(db, productId, location, qty, lotCost, nowIso(), 'restock', note)
     syncProductAvgCost(db, productId)
 
-    insertTxn(productId, 'restock', qty, unitCost, null, note, actorId, location)
-    return { product: getProduct(productId) }
+    const txnId = insertTxn(productId, 'restock', qty, unitCost, null, note, actorId, location)
+    // lotId/txnId are optional on the result, so the existing call sites that
+    // ignore them are unaffected; the scan log records them to make undo exact.
+    return { product: getProduct(productId), lotId, txnId }
   })
   return run()
+}
+
+/**
+ * Reverse ONE receipt previously written by addStock: its exact FIFO lot, the
+ * stock it added, the average cost it rolled, and a visible reversing ledger
+ * entry (the audit trail stays append-only — the original transaction is never
+ * deleted). Lives here, beside addStock, so no caller ever hand-rolls stock or
+ * cost SQL.
+ *
+ * MUST be called inside the caller's db.transaction(). Throws — rolling the
+ * caller back — when the lot is gone or part of it has already been sold.
+ */
+export function reverseStockReceipt(
+  db: Database,
+  args: {
+    productId: string
+    location: string
+    quantity: number
+    lotId: string
+    note: string | null
+    actorId: string | null
+  }
+): string {
+  const qty = Math.round(args.quantity)
+  if (qty <= 0) throw new Error('There is nothing to reverse for that scan.')
+  reverseLotReceipt(db, args.lotId, qty)
+  bumpStock(args.productId, args.location, -qty)
+  syncProductAvgCost(db, args.productId)
+  return insertTxn(args.productId, 'adjustment', -qty, null, null, args.note, args.actorId, args.location)
 }
 
 /** Correct a location's count up or down (never below zero). */

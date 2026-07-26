@@ -3,11 +3,13 @@ import type { CategorySummary, InventoryProduct, InventoryStats } from '@shared/
 import { useSession } from '../../lib/session'
 import { api } from '../../lib/api'
 import { Icon } from '../../components/Icon'
-import { CenterLoader } from '../../components/ui'
+import { Button, CenterLoader } from '../../components/ui'
 import { InventoryOverview } from './InventoryOverview'
 import { ProductsTab } from './ProductsTab'
 import { SuppliesTab } from './SuppliesTab'
 import { DailyPricingTab } from './DailyPricingTab'
+import { ProductFormModal } from './ProductFormModal'
+import { ScanStation } from './ScanStation'
 import { productMatches } from './helpers'
 
 type TabId = 'overview' | 'products' | 'pricing' | 'supplies'
@@ -38,10 +40,18 @@ export function InventoryModule(): JSX.Element {
   const [categories, setCategories] = useState<CategorySummary[]>([])
   const [thumbnails, setThumbnails] = useState<Record<string, string>>({})
   const [thumbVersion, setThumbVersion] = useState(0)
+  // Bumped by every reload so panels holding their own data (the Incoming
+  // panel's PO boxes) re-read too — scanning a PO's last line completes it, and
+  // its box has to leave the panel without a manual refresh.
+  const [dataVersion, setDataVersion] = useState(0)
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState<TabId>('overview')
   const [query, setQuery] = useState('')
   const [category, setCategory] = useState('')
+  const [scanning, setScanning] = useState(false)
+  // Set from the scan station's "not recognised" state so the new product opens
+  // with the barcode that was just scanned already filled in.
+  const [newProductUpc, setNewProductUpc] = useState<string | null>(null)
 
   // Product/catalog data — refetched after edits (does NOT re-read images).
   const reload = useCallback(async () => {
@@ -53,6 +63,7 @@ export function InventoryModule(): JSX.Element {
     setProducts(prods)
     setStats(st ?? EMPTY_STATS)
     setCategories(cats)
+    setDataVersion((v) => v + 1)
   }, [])
 
   // Thumbnails are comparatively expensive (base64), so load them on their own
@@ -105,6 +116,11 @@ export function InventoryModule(): JSX.Element {
           ))}
         </div>
         <QuickSearch products={products} query={query} onQuery={setQuery} onGo={goToCatalog} />
+        {canManage && (
+          <Button variant="primary" icon="ScanBarcode" onClick={() => setScanning(true)}>
+            Scan
+          </Button>
+        )}
       </div>
 
       <div className="inv-scroll">
@@ -114,6 +130,8 @@ export function InventoryModule(): JSX.Element {
             categories={categories}
             canManage={canManage}
             onChanged={reload}
+            onScan={() => setScanning(true)}
+            refreshKey={dataVersion}
           />
         )}
         {tab === 'products' && (
@@ -131,6 +149,37 @@ export function InventoryModule(): JSX.Element {
         {tab === 'pricing' && canPrice && <DailyPricingTab onChanged={reload} />}
         {tab === 'supplies' && <SuppliesTab canManage={canManage} />}
       </div>
+
+      {scanning && (
+        <ScanStation
+          products={products}
+          canManage={canManage}
+          onClose={() => setScanning(false)}
+          onChanged={reload}
+          onSearchCatalog={(code) => {
+            setScanning(false)
+            setCategory('')
+            setQuery(code)
+            setTab('products')
+          }}
+          onCreateProduct={(upc) => {
+            setScanning(false)
+            setNewProductUpc(upc)
+          }}
+        />
+      )}
+
+      {newProductUpc !== null && (
+        <ProductFormModal
+          product={null}
+          presetUpc={newProductUpc}
+          onClose={() => setNewProductUpc(null)}
+          onSaved={async () => {
+            setNewProductUpc(null)
+            await reload()
+          }}
+        />
+      )}
     </div>
   )
 }

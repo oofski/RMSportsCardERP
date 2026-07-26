@@ -26,12 +26,18 @@ export function InventoryOverview({
   stats,
   categories,
   canManage,
-  onChanged
+  onChanged,
+  onScan,
+  refreshKey = 0
 }: {
   stats: InventoryStats
   categories: CategorySummary[]
   canManage: boolean
   onChanged: () => Promise<void>
+  /** Opens the scan station (owned by InventoryModule). */
+  onScan?: () => void
+  /** Bumped on every module reload so the Incoming panel re-reads its own data. */
+  refreshKey?: number
 }): JSX.Element {
   const [detail, setDetail] = useState<Detail | null>(null)
 
@@ -111,7 +117,12 @@ export function InventoryOverview({
           )}
         </div>
 
-        <IncomingPanel canManage={canManage} onReceived={onChanged} />
+        <IncomingPanel
+          canManage={canManage}
+          onReceived={onChanged}
+          onScan={onScan}
+          refreshKey={refreshKey}
+        />
       </div>
 
       <div className="section-head">
@@ -164,10 +175,14 @@ export function InventoryOverview({
  */
 function IncomingPanel({
   canManage,
-  onReceived
+  onReceived,
+  onScan,
+  refreshKey
 }: {
   canManage: boolean
   onReceived: () => Promise<void>
+  onScan?: () => void
+  refreshKey: number
 }): JSX.Element {
   const toast = useToast()
   const [items, setItems] = useState<IncomingShipment[] | null>(null)
@@ -192,8 +207,9 @@ function IncomingPanel({
     if (mounted.current) setPoBoxes(b)
   }, [])
 
-  // Guarded initial fetch — the whole panel unmounts if the user opens a stat
-  // detail mid-load, so don't set state after that.
+  // Guarded fetch — the whole panel unmounts if the user opens a stat detail
+  // mid-load, so don't set state after that. Re-runs on refreshKey: receiving a
+  // PO's last line by UPC scan completes it, and its box must leave the panel.
   useEffect(() => {
     let active = true
     api.inventory.listIncoming().then((r) => {
@@ -216,7 +232,7 @@ function IncomingPanel({
     return () => {
       active = false
     }
-  }, [])
+  }, [refreshKey])
 
   const setBusyFor = (id: string, on: boolean): void => {
     if (!mounted.current) return
@@ -230,7 +246,10 @@ function IncomingPanel({
 
   const boxes = poBoxes ?? []
   const manual = items ?? []
-  const poUnits = boxes.reduce((s, b) => s + b.lines.reduce((n, l) => n + l.quantity, 0), 0)
+  // Count what is still INCOMING, not what was ordered: a part-scanned PO has
+  // already put some of its units into stock, and counting those again would
+  // overstate the panel headline.
+  const poUnits = boxes.reduce((s, b) => s + b.lines.reduce((n, l) => n + l.qtyOutstanding, 0), 0)
   const manualUnits = manual.reduce((sum, i) => sum + i.quantity, 0)
   const totalUnits = poUnits + manualUnits
   const loading = items === null || poBoxes === null
@@ -288,7 +307,13 @@ function IncomingPanel({
       <div className="panel-head">
         <div>
           <h3>Incoming inventory</h3>
-          <span className="ph-sub">Stock on its way in</span>
+          {canManage && onScan ? (
+            <button type="button" className="link-btn incoming-scan-link" onClick={onScan}>
+              <Icon name="ScanBarcode" size={13} /> Scan items in
+            </button>
+          ) : (
+            <span className="ph-sub">Stock on its way in</span>
+          )}
         </div>
         <div className="ph-right">
           <div className="ph-total">{loading ? '—' : totalUnits}</div>
@@ -412,7 +437,13 @@ function PurchaseOrderBox({
 }): JSX.Element {
   const [open, setOpen] = useState(false)
   const meta = PO_STAGE_META[box.status]
-  const units = box.lines.reduce((s, l) => s + l.quantity, 0)
+  // Both are "still to come" so the box, the panel headline and the expanded
+  // line list always report the same number.
+  const units = box.lines.reduce((s, l) => s + l.qtyOutstanding, 0)
+  const outstanding = units
+  // A PO can now be received a line at a time by UPC scan, so a box in this
+  // panel may be part-way done. Say so rather than showing the full order.
+  const partial = box.receivedLineCount > 0 && box.receivedLineCount < box.lineCount
   return (
     <div className={`po-ship-box po-ship-${box.status}`}>
       <button
@@ -433,35 +464,51 @@ function PurchaseOrderBox({
             </span>
           </span>
           <span className="po-ship-sub">
-            {box.supplier || 'No supplier'} · → {box.location} · {box.lineCount}{' '}
-            {box.lineCount === 1 ? 'item' : 'items'} · {units} unit{units === 1 ? '' : 's'}
+            {box.supplier || 'No supplier'} · → {box.location} ·{' '}
+            {partial
+              ? `${box.receivedLineCount} of ${box.lineCount} items received · ${outstanding} unit${
+                  outstanding === 1 ? '' : 's'
+                } left`
+              : `${box.lineCount} ${box.lineCount === 1 ? 'item' : 'items'} · ${units} unit${
+                  units === 1 ? '' : 's'
+                }`}
           </span>
         </span>
         <Icon name={open ? 'ChevronDown' : 'ChevronRight'} size={16} className="po-ship-exp" />
       </button>
       {open && (
         <div className="po-ship-lines">
-          {box.lines.map((l) => (
-            <div className="po-ship-line" key={l.id}>
-              <span className="po-ship-thumb">
-                {thumbnails[l.productId] ? (
-                  <img src={thumbnails[l.productId]} alt="" />
-                ) : (
-                  <CategoryLogo category={l.category} size={16} />
-                )}
-              </span>
-              <span className="po-ship-name" title={l.productName}>
-                {l.productName}
-              </span>
-              <span className="po-ship-qty mono">×{l.quantity}</span>
-            </div>
-          ))}
+          {box.lines.map((l) => {
+            const done = l.qtyOutstanding <= 0
+            return (
+              <div className={`po-ship-line ${done ? 'po-ship-line-done' : ''}`} key={l.id}>
+                <span className="po-ship-thumb">
+                  {thumbnails[l.productId] ? (
+                    <img src={thumbnails[l.productId]} alt="" />
+                  ) : (
+                    <CategoryLogo category={l.category} size={16} />
+                  )}
+                </span>
+                <span className="po-ship-name" title={l.productName}>
+                  {l.productName}
+                </span>
+                <span className="po-ship-qty mono" title={done ? 'Received' : 'Still outstanding'}>
+                  {done ? (
+                    <Icon name="PackageCheck" size={14} className="po-ship-tick" />
+                  ) : (
+                    `×${l.qtyOutstanding}${l.qtyReceived > 0 ? ` of ${l.quantity}` : ''}`
+                  )}
+                </span>
+              </div>
+            )
+          })}
         </div>
       )}
       {canManage && (
         <div className="po-ship-foot">
           <button type="button" className="btn btn-sm po-ship-scan" disabled={busy} onClick={onScan}>
-            <Icon name="PackageCheck" size={14} /> {busy ? 'Scanning…' : 'Scanned in'}
+            <Icon name="PackageCheck" size={14} />{' '}
+            {busy ? 'Scanning…' : partial ? 'Receive all remaining' : 'Scanned in'}
           </button>
         </div>
       )}

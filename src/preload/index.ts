@@ -35,6 +35,11 @@ import type {
   RememberedCredentials,
   Result,
   SalesPoint,
+  ScanCommitInput,
+  ScanCommitResult,
+  ScanMode,
+  ScanRecord,
+  ScanResolution,
   SessionUser,
   Supply,
   SupplyOrder,
@@ -153,7 +158,20 @@ const api = {
     updateHighBid: (productId: string, highBid: number | null): Promise<Result<InventoryProduct>> =>
       ipcRenderer.invoke(IPC.invHighBidUpdate, { productId, highBid }),
     productLots: (productId: string): Promise<ProductLot[]> =>
-      ipcRenderer.invoke(IPC.invProductLots, productId)
+      ipcRenderer.invoke(IPC.invProductLots, productId),
+    // UPC scanning. resolve is read-only and safe to call repeatedly (the camera
+    // decoder fires many times a second); commit performs the one confirmed
+    // action. The raw code is sent un-trimmed — the backend does the cleaning so
+    // wedge, camera and a future phone client cannot drift apart.
+    scanResolve: (rawCode: string): Promise<ScanResolution | null> =>
+      ipcRenderer.invoke(IPC.invScanResolve, rawCode),
+    scanCommit: (input: ScanCommitInput): Promise<Result<ScanCommitResult>> =>
+      ipcRenderer.invoke(IPC.invScanCommit, input),
+    scanLogMiss: (rawCode: string, mode: ScanMode): Promise<Result<ScanRecord | null>> =>
+      ipcRenderer.invoke(IPC.invScanLogMiss, { rawCode, mode }),
+    scanHistory: (limit?: number): Promise<ScanRecord[]> =>
+      ipcRenderer.invoke(IPC.invScanHistory, limit),
+    scanUndo: (id: string): Promise<Result<ScanRecord>> => ipcRenderer.invoke(IPC.invScanUndo, { id })
   },
   supplies: {
     list: (): Promise<Supply[]> => ipcRenderer.invoke(IPC.suppliesList),

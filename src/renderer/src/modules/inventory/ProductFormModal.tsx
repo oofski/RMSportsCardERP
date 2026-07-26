@@ -13,10 +13,14 @@ function numOrNull(v: string): number | null {
 
 export function ProductFormModal({
   product,
+  presetUpc,
   onClose,
   onSaved
 }: {
   product: InventoryProduct | null
+  /** Prefills the UPC when creating — used by the scan station's "not
+   * recognised" escape hatch so the code you just scanned is already in. */
+  presetUpc?: string | null
   onClose: () => void
   onSaved: () => void | Promise<void>
 }): JSX.Element {
@@ -24,7 +28,7 @@ export function ProductFormModal({
   const isEdit = !!product
   const [form, setForm] = useState({
     sku: product?.sku ?? '',
-    upc: product?.upc ?? '',
+    upc: product?.upc ?? presetUpc ?? '',
     name: product?.name ?? '',
     category: product?.category ?? '',
     brand: product?.brand ?? '',

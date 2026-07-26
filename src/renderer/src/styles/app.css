@@ -3759,6 +3759,622 @@ tr.hoverable-row:hover {
   align-items: center;
   gap: 6px;
 }
+/* A line already received by UPC scan — dimmed, with a tick instead of a count. */
+.po-ship-line-done .po-ship-name {
+  color: var(--text-3);
+}
+.po-ship-line-done .po-ship-thumb {
+  opacity: 0.6;
+}
+.po-ship-tick {
+  color: var(--success);
+}
+.incoming-scan-link {
+  margin-left: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
+}
+
+/* ========================================================================== */
+/* UPC scanning                                                                */
+/* ========================================================================== */
+
+.scan-station {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* ---------- Input mode switch ---------- */
+.scan-modes {
+  display: flex;
+  gap: 8px;
+}
+.scan-mode-btn {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 9px 12px;
+  border: 1.5px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.13s ease, background 0.13s ease, color 0.13s ease;
+}
+.scan-mode-btn:hover {
+  border-color: var(--brand-300);
+  color: var(--text);
+}
+.scan-mode-btn.active {
+  border-color: var(--brand-500);
+  background: var(--brand-soft);
+  color: var(--brand-700);
+}
+
+/* ---------- "Ready to scan" indicator + wedge target field ---------- */
+.scan-target {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.scan-target.ready {
+  border-color: color-mix(in srgb, var(--success) 45%, var(--border));
+  background: var(--success-bg);
+}
+.scan-target-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.scan-target.ready .scan-target-label {
+  color: var(--success);
+}
+.scan-pulse {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: var(--text-3);
+  flex-shrink: 0;
+}
+.scan-target.ready .scan-pulse {
+  background: var(--success);
+  animation: scan-pulse 1.6s ease-in-out infinite;
+}
+@keyframes scan-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--success) 55%, transparent);
+  }
+  60% {
+    box-shadow: 0 0 0 7px transparent;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .scan-target.ready .scan-pulse {
+    animation: none;
+  }
+}
+.scan-input {
+  margin-left: auto;
+  flex: 0 1 220px;
+  min-width: 120px;
+  padding: 6px 10px;
+  font-family: inherit;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  outline: none;
+}
+.scan-input:focus {
+  border-color: var(--brand-500);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand-500) 18%, transparent);
+}
+.scan-input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* ---------- Camera ---------- */
+.scan-cam {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  max-height: 260px;
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--ink-900);
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.scan-cam-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+/* Reticle: a dimmed surround with a clear window and corner ticks. Drawn with
+   a box-shadow spread so it works over any video content in either theme. */
+.scan-cam-frame {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 68%;
+  height: 46%;
+  border: 2px solid var(--brand-400);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 0 0 2000px rgba(9, 14, 24, 0.42);
+  pointer-events: none;
+}
+.scan-cam-hint {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(9, 14, 24, 0.62);
+  color: #e8edf6;
+  font-size: 11.5px;
+  font-weight: 600;
+  pointer-events: none;
+}
+.scan-cam-error {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 20px;
+  text-align: center;
+  background: var(--surface-2);
+  color: var(--text-3);
+}
+.scan-cam-error-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+.scan-cam-error-detail {
+  font-size: 12.5px;
+  color: var(--text-2);
+  max-width: 340px;
+}
+
+/* ---------- Result card (shared shell) ---------- */
+.scan-result {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent, var(--brand-500));
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.scan-result-po {
+  --accent: var(--brand-500);
+}
+.scan-result-product {
+  --accent: var(--info);
+}
+.scan-result-ambiguous {
+  --accent: var(--warning);
+}
+.scan-result-unknown {
+  --accent: var(--danger);
+  align-items: center;
+  text-align: center;
+  gap: 7px;
+  padding: 22px 16px;
+}
+
+/* Product hero */
+.scan-hero {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.scan-thumb {
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  flex-shrink: 0;
+  background: var(--surface-3);
+  color: var(--text-3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.scan-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.scan-hero-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.scan-name {
+  font-size: 14.5px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.scan-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+/* Small status chips */
+.scan-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.scan-chip-brand {
+  background: var(--brand-soft);
+  color: var(--brand-600);
+}
+.scan-chip-info {
+  background: var(--info-bg);
+  color: var(--info);
+}
+.scan-chip-success {
+  background: var(--success-bg);
+  color: var(--success);
+}
+.scan-chip-muted {
+  background: var(--surface-3);
+  color: var(--text-3);
+}
+
+/* The plain-English "here's what will happen" block */
+.scan-plan {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.scan-plan-empty {
+  color: var(--text-3);
+  font-size: 12.5px;
+  text-align: center;
+  padding: 14px 12px;
+}
+.scan-plan-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+}
+.scan-plan-key {
+  flex: 0 0 82px;
+  color: var(--text-3);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.scan-plan-val {
+  color: var(--text);
+  min-width: 0;
+}
+.scan-note {
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.scan-warn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--warning-bg);
+  color: var(--warning);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+/* Choosing between several open PO lines / colliding products */
+.scan-choose-label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+.scan-candidates {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.scan-candidate {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 11px;
+  text-align: left;
+  border: 1.5px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-2);
+  cursor: pointer;
+  font: inherit;
+  transition: border-color 0.13s ease, background 0.13s ease;
+}
+.scan-candidate:hover {
+  border-color: var(--brand-300);
+}
+.scan-candidate.active {
+  border-color: var(--brand-500);
+  background: var(--brand-soft);
+}
+.scan-cand-radio {
+  width: 15px;
+  height: 15px;
+  border-radius: 999px;
+  border: 2px solid var(--border-strong);
+  flex-shrink: 0;
+  transition: border-color 0.13s ease, box-shadow 0.13s ease;
+}
+.scan-candidate.active .scan-cand-radio {
+  border-color: var(--brand-500);
+  box-shadow: inset 0 0 0 3px var(--surface), inset 0 0 0 9px var(--brand-500);
+}
+.scan-cand-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.scan-cand-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.scan-cand-sub {
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+/* Not-recognised state */
+.scan-unknown-ico {
+  width: 46px;
+  height: 46px;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+.scan-unknown-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+.scan-unknown-msg {
+  font-size: 12.5px;
+  color: var(--text-2);
+  max-width: 380px;
+}
+.scan-code {
+  display: inline-block;
+  padding: 5px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px dashed var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+}
+
+.scan-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.scan-actions-center {
+  justify-content: center;
+  margin-top: 4px;
+}
+
+/* Post-commit confirmation strip */
+.scan-banner {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  font-size: 13px;
+  font-weight: 500;
+}
+.scan-banner-success {
+  background: var(--success-bg);
+  color: var(--success);
+}
+.scan-banner-warn {
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+/* A transient, dismissible lookup failure — deliberately distinct from the
+   permanent "no permission" panel, which replaces the whole scan surface. */
+.scan-banner-error {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+.scan-banner-error .link-btn {
+  margin-left: auto;
+  color: inherit;
+  text-decoration: underline;
+}
+
+/* ---------- Recent scans ---------- */
+.scan-hist-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-3);
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+  margin-top: 2px;
+}
+.scan-history {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.scan-hist-loading,
+.scan-hist-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  padding: 22px 12px;
+  color: var(--text-3);
+  font-size: 12.5px;
+}
+.scan-hist-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  transition: background 0.12s ease;
+}
+.scan-hist-row:hover {
+  background: var(--surface-2);
+}
+.scan-hist-ico {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--brand-soft);
+  color: var(--brand-600);
+  flex-shrink: 0;
+}
+.scan-hist-row.miss .scan-hist-ico {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+.scan-hist-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.scan-hist-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.scan-hist-row.miss .scan-hist-title {
+  font-weight: 500;
+  color: var(--text-3);
+}
+.scan-hist-sub {
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+.scan-hist-undone .scan-hist-title,
+.scan-hist-undone .scan-hist-sub {
+  text-decoration: line-through;
+  color: var(--text-3);
+}
+.scan-hist-undo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-2);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: border-color 0.12s ease, color 0.12s ease, background 0.12s ease;
+}
+.scan-hist-undo:hover:not(:disabled) {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: var(--danger-bg);
+}
+.scan-hist-undo:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Dark theme: the brand pulse and reticle need a lighter accent to read against
+   the darker surfaces, and the video surround stays dark in both themes. */
+:root[data-theme='dark'] .scan-cam-frame {
+  border-color: var(--brand-400);
+}
+:root[data-theme='dark'] .scan-candidate.active {
+  background: color-mix(in srgb, var(--brand-500) 16%, var(--surface));
+}
+:root[data-theme='dark'] .scan-target.ready {
+  background: color-mix(in srgb, var(--success) 14%, var(--surface-2));
+}
 
 /* ---------- Kanban drag-and-drop states ---------- */
 .po-card[draggable='true'] {
