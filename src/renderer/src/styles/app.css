@@ -6022,3 +6022,10 @@ tr.hoverable-row:hover {
   border-color: var(--danger);
   color: var(--danger);
 }
+
+/* Dark: white-on-red loses contrast against the lighter dark-mode danger red,
+   so the alarm glyphs flip to the page background instead. */
+:root[data-theme='dark'] .ship-danger-ico,
+:root[data-theme='dark'] .ship-tab-badge.danger {
+  color: var(--bg);
+}
