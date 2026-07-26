@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { MODULES } from '@shared/modules'
 import { useSession } from '../lib/session'
 import { useTheme } from '../lib/theme'
@@ -21,9 +21,11 @@ import { ComingSoon } from '../modules/ComingSoon'
 
 const HOME = { id: 'home', name: 'Home', description: 'Your operations overview.' }
 
-const WORKSPACES = [
-  { id: 'ops', name: 'RM Cardz Operations', status: 'active' as const },
-  { id: 'shipping', name: 'RM Cardz Shipping', status: 'soon' as const }
+type WorkspaceId = 'ops' | 'shipping'
+
+const WORKSPACES: { id: WorkspaceId; name: string; icon: string }[] = [
+  { id: 'ops', name: 'RM Cardz Operations', icon: 'Building2' },
+  { id: 'shipping', name: 'RM Cardz Shipping', icon: 'Truck' }
 ]
 
 export function AppShell(): JSX.Element {
@@ -35,13 +37,31 @@ export function AppShell(): JSX.Element {
   const [wsOpen, setWsOpen] = useState(false)
   const [search, setSearch] = useState('')
   const [activeId, setActiveId] = useState<string>('home')
+  const [workspace, setWorkspace] = useState<WorkspaceId>(() => {
+    const saved = localStorage.getItem('rmops.workspace')
+    return saved === 'shipping' ? 'shipping' : 'ops'
+  })
 
   const visible = useMemo(
     () =>
-      MODULES.filter((m) =>
-        m.status === 'active' ? (m.permission ? can(m.permission) : true) : true
+      MODULES.filter(
+        (m) =>
+          (m.workspace ?? 'ops') === workspace &&
+          (m.status === 'active' ? (m.permission ? can(m.permission) : true) : true)
       ),
-    [can]
+    [can, workspace]
+  )
+
+  // Switching workspace swaps the whole sidebar, so land on something that
+  // exists there rather than leaving the old module mounted.
+  const switchWorkspace = useCallback(
+    (next: WorkspaceId): void => {
+      setWorkspace(next)
+      localStorage.setItem('rmops.workspace', next)
+      setSearch('')
+      setActiveId(next === 'shipping' ? 'fulfillment' : 'home')
+    },
+    []
   )
 
   useEffect(() => {
@@ -103,7 +123,9 @@ export function AppShell(): JSX.Element {
               </span>
               <span className="ws-meta">
                 <span className="ws-label">Workspace</span>
-                <span className="ws-name">RM Cardz Operations</span>
+                <span className="ws-name">
+                  {WORKSPACES.find((w) => w.id === workspace)?.name ?? 'RM Cardz Operations'}
+                </span>
               </span>
               <Icon name="ChevronsUpDown" size={15} />
             </button>
@@ -120,21 +142,17 @@ export function AppShell(): JSX.Element {
                       className="ws-item"
                       onClick={() => {
                         setWsOpen(false)
-                        if (ws.status === 'soon') {
-                          toast.toast(`${ws.name} is coming soon.`)
-                        }
+                        switchWorkspace(ws.id)
                       }}
                     >
                       <span className="ws-i">
-                        <Icon name={ws.id === 'shipping' ? 'Truck' : 'Building2'} size={14} />
+                        <Icon name={ws.icon} size={14} />
                       </span>
                       <span className="ws-n">{ws.name}</span>
-                      {ws.status === 'active' ? (
+                      {ws.id === workspace && (
                         <span className="ws-check">
                           <Icon name="Check" size={16} />
                         </span>
-                      ) : (
-                        <span className="soon">SOON</span>
                       )}
                     </button>
                   ))}

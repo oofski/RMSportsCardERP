@@ -66,6 +66,7 @@ export function OrdersTab({ canManage, onChanged, onGoTo }: ShipTabProps): JSX.E
   const [editor, setEditor] = useState<EditorState | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [showVip, setShowVip] = useState(false)
+  const [slotBusy, setSlotBusy] = useState<string | null>(null)
 
   // Both VIP controls and the special-request pin are operator preferences, so
   // they persist locally rather than in the shared dataset.
@@ -219,6 +220,40 @@ export function OrdersTab({ canManage, onChanged, onGoTo }: ShipTabProps): JSX.E
       })
     },
     [applyRow, guard, toast]
+  )
+
+  // Check a single card off from inside the order — the same slot the Checker
+  // flips, so both views stay in step. Patched locally first so the click feels
+  // instant, then reconciled from the row the backend returns.
+  const toggleSlot = useCallback(
+    async (slotId: string, checked: boolean) => {
+      setSlotBusy(slotId)
+      setRows((prev) =>
+        prev.map((r) => ({
+          ...r,
+          breaks: r.breaks.map((b) => ({
+            ...b,
+            teams: b.teams.map((t) => (t.slotId === slotId ? { ...t, checkedOff: checked } : t))
+          }))
+        }))
+      )
+      try {
+        const res = await api.shipping.setSlotChecked(slotId, checked)
+        if (!res.ok) {
+          toast.error(res.error ?? 'Could not update that card.')
+          await reload()
+          return
+        }
+        if (res.data?.order) applyRow(res.data.order)
+        await onChangedRef.current()
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : 'Could not update that card.')
+        await reload()
+      } finally {
+        setSlotBusy(null)
+      }
+    },
+    [applyRow, reload, toast]
   )
 
   const setHold = useCallback(
@@ -489,6 +524,8 @@ export function OrdersTab({ canManage, onChanged, onGoTo }: ShipTabProps): JSX.E
               onMove={(d) => move(row, d)}
               onHoldOff={() => setHold(row, false, null)}
               onEdit={(kind) => setEditor({ kind, row })}
+              slotBusy={slotBusy}
+              onToggleSlot={toggleSlot}
             />
           ))}
         </div>
@@ -567,7 +604,9 @@ function OrderRow({
   onStage,
   onMove,
   onHoldOff,
-  onEdit
+  onEdit,
+  slotBusy,
+  onToggleSlot
 }: {
   row: ShipOrderRow
   pos?: { index: number; size: number }
@@ -581,6 +620,9 @@ function OrderRow({
   onMove: (direction: 'up' | 'down') => void
   onHoldOff: () => void
   onEdit: (kind: 'hold' | 'special' | 'notes') => void
+  /** slotId currently being written, so its row can show as busy. */
+  slotBusy: string | null
+  onToggleSlot: (slotId: string, checked: boolean) => void
 }): JSX.Element {
   const pickPct = row.pick.total > 0 ? Math.round((row.pick.checked / row.pick.total) * 100) : 0
   const fullyPicked = row.pick.total > 0 && row.pick.checked >= row.pick.total
@@ -715,13 +757,6 @@ function OrderRow({
               </span>
             )}
 
-            {row.orderIds.length > 0 && (
-              <span className="sor-orderids mono" title={row.orderIds.join(', ')}>
-                <Icon name="Hash" size={12} />
-                {row.orderIds.slice(0, 2).join(' · ')}
-                {row.orderIds.length > 2 ? ` +${row.orderIds.length - 2}` : ''}
-              </span>
-            )}
           </div>
 
           {row.notes && (
@@ -734,6 +769,28 @@ function OrderRow({
 
         <div className="sor-side">
           <span className="sor-value mono">{formatMoney(row.value)}</span>
+          {/* The one-click move an operator makes all day: picked -> put together.
+              Once it IS put together the button flips to the next step (Sent), so
+              the row always offers the obvious next action without hunting in the
+              dropdown. */}
+          {canManage && (row.stage === 'to_pick' || row.stage === 'put_together') && (
+            <button
+              type="button"
+              className={`sor-advance ${row.stage === 'put_together' ? 'next' : ''}`}
+              disabled={busy}
+              title={
+                row.stage === 'to_pick'
+                  ? fullyPicked
+                    ? 'Mark this package put together'
+                    : `Mark put together (${row.pick.checked}/${row.pick.total} picked)`
+                  : 'Mark this package sent'
+              }
+              onClick={() => onStage(row.stage === 'to_pick' ? 'put_together' : 'sent')}
+            >
+              <Icon name={row.stage === 'to_pick' ? 'PackageCheck' : 'Truck'} size={14} />
+              {row.stage === 'to_pick' ? 'Put together' : 'Mark sent'}
+            </button>
+          )}
           <Select
             className="ship-stage-select"
             data-stage={row.stage}
@@ -804,7 +861,21 @@ function OrderRow({
                 </div>
                 <div className="sor-teams">
                   {b.teams.map((t) => (
-                    <div className={`sor-team ${t.checkedOff ? 'checked' : ''}`} key={t.slotId}>
+                    <button
+                      type="button"
+                      className={`sor-team ${t.checkedOff ? 'checked' : ''}`}
+                      key={t.slotId}
+                      disabled={!canManage || slotBusy === t.slotId}
+                      aria-pressed={t.checkedOff}
+                      title={
+                        canManage
+                          ? t.checkedOff
+                            ? `Uncheck ${t.teamName}`
+                            : `Check off ${t.teamName}`
+                          : undefined
+                      }
+                      onClick={() => onToggleSlot(t.slotId, !t.checkedOff)}
+                    >
                       <span className="sor-team-check">
                         <Icon
                           name={t.checkedOff ? 'CheckCircle2' : 'CircleDot'}
@@ -823,7 +894,6 @@ function OrderRow({
                           <Icon name="Sticker" size={11} /> Top-sleeved
                         </span>
                       )}
-                      {t.orderId && <span className="sor-team-order mono">#{t.orderId}</span>}
                       <span className="sor-team-price mono">{formatMoney(t.price)}</span>
                       {t.checkedOff && (
                         <span className="sor-team-by">
@@ -831,7 +901,7 @@ function OrderRow({
                           {formatDateTime(t.checkedOffAt)}
                         </span>
                       )}
-                    </div>
+                    </button>
                   ))}
                 </div>
               </div>

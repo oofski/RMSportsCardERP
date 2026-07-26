@@ -18,6 +18,13 @@ export interface AppModule {
   /** Permission required to open the module. null = always available. */
   permission: Permission | null
   status: 'active' | 'coming-soon'
+  /**
+   * Which workspace the module belongs to. 'ops' is the day-to-day operations
+   * business; 'shipping' is the RM Cardz Shipping (break fulfilment) business,
+   * which is a separate workflow with its own people and its own screens.
+   * Defaults to 'ops' when omitted.
+   */
+  workspace?: 'ops' | 'shipping'
 }
 
 export const MODULES: AppModule[] = [
@@ -46,7 +53,10 @@ export const MODULES: AppModule[] = [
     description: 'Break packing slips, pick lists, package queue and shipment tracking.',
     icon: 'PackageCheck',
     permission: 'module.fulfillment',
-    status: 'active'
+    status: 'active',
+    // Lives in its own workspace: break fulfilment is a separate business from
+    // day-to-day operations, so it should not sit in the Operations sidebar.
+    workspace: 'shipping'
   },
   {
     id: 'invoicing',
@@ -85,6 +95,11 @@ export const MODULES: AppModule[] = [
     status: 'active'
   }
 ]
+
+/** Modules belonging to a workspace ('ops' is the default for untagged ones). */
+export function modulesForWorkspace(workspace: 'ops' | 'shipping'): AppModule[] {
+  return MODULES.filter((m) => (m.workspace ?? 'ops') === workspace)
+}
 
 export function getModule(id: string): AppModule | undefined {
   return MODULES.find((m) => m.id === id)

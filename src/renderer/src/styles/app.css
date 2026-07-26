@@ -7511,3 +7511,86 @@ tr.hoverable-row:hover {
 .trk-row.selected[data-hold='true'] {
   background: var(--brand-soft);
 }
+
+/* One-click stage advance on an order row (To pick -> Put together -> Sent). */
+.sor-advance {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--brand-500);
+  background: var(--brand-500);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.13s ease, border-color 0.13s ease;
+}
+.sor-advance:hover:not(:disabled) {
+  background: var(--brand-600);
+  border-color: var(--brand-600);
+}
+.sor-advance.next {
+  background: var(--surface);
+  color: var(--brand-600);
+}
+.sor-advance.next:hover:not(:disabled) {
+  background: var(--brand-soft);
+}
+.sor-advance:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+/* Team rows are checkoff controls now, not static text. */
+button.sor-team {
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+button.sor-team:hover:not(:disabled) {
+  background: var(--surface-3);
+}
+button.sor-team:disabled {
+  cursor: default;
+}
+button.sor-team:focus-visible {
+  outline: 2px solid var(--brand-500);
+  outline-offset: -2px;
+}
+
+/* Dropdowns read as the primary control on the Shipping screens, so give them a
+   larger hit area and a visible chevron rather than the cramped native arrow. */
+.select {
+  height: 44px;
+  font-size: 14.5px;
+  padding-right: 34px;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-3) 50%),
+    linear-gradient(135deg, var(--text-3) 50%, transparent 50%);
+  background-position: calc(100% - 17px) 19px, calc(100% - 12px) 19px;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  cursor: pointer;
+}
+.select:hover:not(:disabled) {
+  border-color: var(--border-strong);
+}
+/* The compact in-row pickers grow too, but stay smaller than a form field. */
+.ship-stage-select,
+.trk-status-select,
+.chk-status-select,
+.ship-filter {
+  height: 38px;
+  font-size: 13.5px;
+  background-position: calc(100% - 15px) 16px, calc(100% - 10px) 16px;
+}

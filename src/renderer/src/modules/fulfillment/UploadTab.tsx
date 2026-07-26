@@ -41,6 +41,13 @@ function readSport(): ShipSportOption {
   return hit ?? 'auto'
 }
 
+/** Local calendar date as YYYY-MM-DD (not UTC — an evening break must not roll over). */
+function todayIso(): string {
+  const d = new Date()
+  const p = (n: number): string => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
+
 export function UploadTab({ summary, canManage, onChanged, onGoTo }: ShipTabProps): JSX.Element {
   const toast = useToast()
 
@@ -48,6 +55,9 @@ export function UploadTab({ summary, canManage, onChanged, onGoTo }: ShipTabProp
   const [importName, setImportName] = useState('')
   const [eventName, setEventName] = useState('')
   const [eventDate, setEventDate] = useState('')
+  // Suppress the auto-name once the operator types their own.
+  const [nameTouched, setNameTouched] = useState(false)
+  const [eventTouched, setEventTouched] = useState(false)
   const [starting, setStarting] = useState(false)
   const [job, setJob] = useState<ShipParseJob | null>(null)
   const [confirmClear, setConfirmClear] = useState(false)
@@ -92,7 +102,42 @@ export function UploadTab({ summary, canManage, onChanged, onGoTo }: ShipTabProp
         if (found.status !== 'running') localStorage.removeItem(JOB_KEY)
       })
       .catch(() => localStorage.removeItem(JOB_KEY))
-    return () => {
+    // Auto-name the import as "[Sport] - [Pack] - [Date]". The sport comes from the
+  // League selector (or whatever the parse detected), the pack type from the
+  // product title the slips carry, and the date defaults to today. Anything the
+  // operator has typed themselves is never overwritten.
+  const autoName = useCallback(
+    (detected?: ShipSportOption | null, packHint?: string | null): string => {
+      const sportPart =
+        detected && detected !== 'auto'
+          ? SHIP_SPORT_LABELS[detected]
+          : sport !== 'auto'
+            ? SHIP_SPORT_LABELS[sport]
+            : ''
+      const datePart = (eventDate || todayIso()).split('-').reverse().slice(0, 2).reverse().join('/')
+      return [sportPart, packHint?.trim(), datePart].filter(Boolean).join(' - ')
+    },
+    [sport, eventDate]
+  )
+
+  // Seed the date once so the field is never empty on a fresh workspace.
+  useEffect(() => {
+    if (!eventDate) setEventDate(todayIso())
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Keep the suggestion in step with the League picker until it is edited.
+  useEffect(() => {
+    if (nameTouched) return
+    const suggested = autoName()
+    if (suggested) {
+      setImportName(suggested)
+      if (!eventTouched) setEventName(suggested)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sport, eventDate, nameTouched])
+
+  return () => {
       active = false
     }
   }, [])
@@ -207,14 +252,11 @@ export function UploadTab({ summary, canManage, onChanged, onGoTo }: ShipTabProp
         <div className="panel-head">
           <div>
             <h3>Import a Whatnot PDF</h3>
-            <span className="ph-sub">
-              Combined labels + packing slips. One active dataset — importing replaces it.
-            </span>
           </div>
         </div>
 
         <div className="ship-upload-form">
-          <Field label="League" hint="Auto detects from the team names on the slips.">
+          <Field label="League">
             <Select
               value={sport}
               disabled={!canManage || running}
@@ -233,21 +275,27 @@ export function UploadTab({ summary, canManage, onChanged, onGoTo }: ShipTabProp
             </Select>
           </Field>
 
-          <Field label="Import name" hint="Optional — defaults to the file name.">
+          <Field label="Import name">
             <Input
               value={importName}
               placeholder="Saturday night football"
               disabled={!canManage || running}
-              onChange={(e) => setImportName(e.target.value)}
+              onChange={(e) => {
+                setNameTouched(true)
+                setImportName(e.target.value)
+              }}
             />
           </Field>
 
-          <Field label="Event name" hint="Needed to carry operator progress forward.">
+          <Field label="Event name">
             <Input
               value={eventName}
               placeholder="Unnamed event"
               disabled={!canManage || running}
-              onChange={(e) => setEventName(e.target.value)}
+              onChange={(e) => {
+                setEventTouched(true)
+                setEventName(e.target.value)
+              }}
             />
           </Field>
 
