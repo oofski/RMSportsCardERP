@@ -126,6 +126,7 @@ export function ShippingTab({ canManage, onChanged, onGoTo }: ShipTabProps): JSX
   const [rows, setRows] = useState<ShipShipmentRow[]>([])
   const [batches, setBatches] = useState<ShipBatchUrl[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<'all' | ShipStatusCode>('all')
   const [flag, setFlag] = useState<FlagFilter>('all')
@@ -149,8 +150,15 @@ export function ShippingTab({ canManage, onChanged, onGoTo }: ShipTabProps): JSX
   useEffect(() => {
     let active = true
     ;(async () => {
-      await reload()
-      if (active) setLoading(false)
+      // A rejected read must never leave the view on a permanent spinner: catch,
+      // surface it, and always clear loading.
+      try {
+        await reload()
+      } catch (err) {
+        if (active) setLoadError(err instanceof Error ? err.message : 'Could not load shipping data.')
+      } finally {
+        if (active) setLoading(false)
+      }
     })()
     return () => {
       active = false
@@ -322,6 +330,33 @@ export function ShippingTab({ canManage, onChanged, onGoTo }: ShipTabProps): JSX
   }, [])
 
   if (loading) return <CenterLoader />
+  // A failed load is a dead end otherwise — show what happened and offer a retry.
+  if (loadError) {
+    return (
+      <EmptyState
+        icon="AlertTriangle"
+        title="Could not load shipping data"
+        message={loadError}
+        action={
+          <Button
+            variant="primary"
+            icon="RefreshCw"
+            onClick={() => {
+              setLoadError(null)
+              setLoading(true)
+              void reload()
+                .catch((err) =>
+                  setLoadError(err instanceof Error ? err.message : 'Could not load shipping data.')
+                )
+                .finally(() => setLoading(false))
+            }}
+          >
+            Try again
+          </Button>
+        }
+      />
+    )
+  }
 
   if (rows.length === 0) {
     return (

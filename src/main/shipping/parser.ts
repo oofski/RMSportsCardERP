@@ -57,13 +57,22 @@ const RE_ORDER_GLOBAL = /Order\s+(\d+)/gi
 /** 1–3 digits only: an order id (10 digits) must never read as a break number. */
 const RE_BREAK_NUMBER = /Break\s*#\s*(\d{1,3})(?!\d)/i
 const RE_CHECKBOX = /^(?:_{2,}|\[[ xX]?\]|[☐☑✓✔❑▢◻◼□■•·])\s+(.+)$/
-const RE_ITEMS_NOISE = /^\d+\s*items?$/i
+const RE_ITEMS_NOISE = /^\d+\s*x?\s*items?$/i
 const RE_TOTAL_LINE = /^Total\s*:/i
 const RE_ORDERS_LINE = /\bOrders?\s*:\s*(.+)$/i
 const RE_ORDER_ID_TOKEN = /#\s*(\d+)/g
-const RE_USPS_STRICT = /USPS\s+([\w\s®™]+?)\s+#\s*(\d+)/i
-/** Same line, but the label prints the tracking number in spaced groups. */
-const RE_USPS_SPACED = /USPS\s+([\w\s®™]+?)\s+#\s*(\d[\d\s]{8,})/i
+/**
+ * USPS prints tracking in 4-digit groups (`#9400 1118 9922 3197 4284 90`), so the
+ * SPACED form must be tried first: the strict pattern's language is a superset and
+ * it would happily stop at the first group, truncating every tracking number to
+ * `9400` and collapsing every package onto one id.
+ *
+ * The service-type class deliberately excludes newlines (` ` not `\s`). With `\s`
+ * an unanchored match starting at a line-final "USPS" token runs down the page and
+ * captures the buyer's name and street address as the shipping service.
+ */
+const RE_USPS_SPACED = /USPS\s+([\w ®™]+?)\s+#\s*(\d[\d ]{8,})/i
+const RE_USPS_STRICT = /USPS\s+([\w ®™]+?)\s+#\s*(\d{6,})/i
 const RE_WEIGHT = /([\d.]+)\s*oz\b/i
 /** Thousands separators are part of the number: `$1,250.00` is 1250, not 1. */
 const RE_PRICE = /\$\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)/
@@ -639,9 +648,10 @@ export function parsePackingSlip(
 
   // --- tracking / service / weight: the LAST page with a USPS line wins ----
   for (const page of pages) {
-    const strict = page.text.match(RE_USPS_STRICT)
-    const spaced = strict ? null : page.text.match(RE_USPS_SPACED)
-    const hit = strict ?? spaced
+    // Spaced first (see the regex comments): a real label is grouped, and the
+    // strict form would win on just its first group.
+    const spaced = page.text.match(RE_USPS_SPACED)
+    const hit = spaced ?? page.text.match(RE_USPS_STRICT)
     if (hit) {
       slip.serviceType = hit[1].replace(/\s+/g, ' ').trim() || null
       slip.trackingNumber = hit[2].replace(/\s+/g, '')
@@ -704,7 +714,13 @@ export function parsePackingSlip(
       const candidate = truncateCandidate(after)
       if (candidate) candidates.push(candidate)
     }
-    const beforeCandidate = cleanTeamText(stripQty(stripPrices(beforeOrder)))
+    // Test the noise guard BEFORE stripQty: it anchors on the leading digits
+    // ("1 Item"), and stripping the quantity first leaves a bare "Item" that
+    // sails through and becomes a team name in the pick list.
+    const beforePre = cleanTeamText(stripPrices(beforeOrder))
+    const beforeCandidate = RE_ITEMS_NOISE.test(beforePre)
+      ? ''
+      : cleanTeamText(stripQty(beforePre))
     if (beforeCandidate) candidates.push(beforeCandidate)
 
     let team: string | null = null
