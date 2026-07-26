@@ -37,6 +37,7 @@ import type {
   ShipWarningInput,
   ShippingDataset
 } from '@shared/shippingTypes'
+import { SHIP_SPORT_LABELS } from '@shared/shippingTypes'
 import {
   createNullTeamMatcher,
   createTeamMatcher,
@@ -1209,6 +1210,31 @@ function emptyDataset(sport: ShipSport | null, eventName: string, eventDate: str
 }
 
 /**
+ * The name the Upload screen would otherwise make the operator type:
+ * `[Sport] - [Pack] - [Date]`, e.g. "Football - 2025 Finest Football - 26/07".
+ * Built from what the slips already say, so the field can fill itself in.
+ * Any segment that cannot be determined is simply left out.
+ */
+function buildAutoEventName(
+  sport: ShipSport | null,
+  packTitle: string | null,
+  eventDate: string
+): string {
+  const sportPart = sport ? SHIP_SPORT_LABELS[sport] : ''
+  // Titles print in shouty caps; Title Case reads better in a form field.
+  const packPart = packTitle
+    ? packTitle
+        .toLowerCase()
+        .replace(/\b[a-z]/g, (c) => c.toUpperCase())
+        .replace(/\s+/g, ' ')
+        .trim()
+    : ''
+  const iso = /^\d{4}-\d{2}-\d{2}$/.test(eventDate) ? eventDate : ''
+  const datePart = iso ? `${iso.slice(5, 7)}/${iso.slice(8, 10)}` : ''
+  return [sportPart, packPart, datePart].filter(Boolean).join(' - ')
+}
+
+/**
  * pages -> normalized dataset. PURE.
  */
 export function parsePages(pages: string[], options: ParsePagesOptions = {}): ShippingDataset {
@@ -1240,6 +1266,9 @@ export function parsePages(pages: string[], options: ParsePagesOptions = {}): Sh
     return dataset
   }
 
+  // Product titles seen across the slips, used to name the import.
+  const seenPackTitles: string[] = []
+
   // Bind the league ONCE for the whole upload.
   const requested: ShipSportOption = options.sport ?? 'auto'
   const sport: ShipSport = requested === 'auto' ? detectSport(collectTeamCandidates(groups)) : requested
@@ -1270,6 +1299,7 @@ export function parsePages(pages: string[], options: ParsePagesOptions = {}): Sh
 
     if (packing) warnings.push(...packing.warnings)
     if (breaking) warnings.push(...breaking.warnings)
+    if (packing?.packTitle) seenPackTitles.push(packing.packTitle)
 
     // §2.4 — fix a corrupted break NUMBER before anything is emitted.
     if (breaking && breaking.breaks.length && packing) {
@@ -1338,8 +1368,13 @@ export function parsePages(pages: string[], options: ParsePagesOptions = {}): Sh
     message: `Parsed ${customers.length} customers, ${breaks.length} breaks, ${teamSlots.length} cards.`
   })
 
+  // The operator can always type their own name; when they leave it blank we
+  // name the import after what the slips say was actually broken.
+  const packTitle = bestPackTitle(seenPackTitles)
+  const resolvedEventName = eventName || buildAutoEventName(sport, packTitle, eventDate)
+
   return {
-    event: { name: eventName, date: eventDate },
+    event: { name: resolvedEventName, date: eventDate },
     sport,
     breaks,
     customers,
