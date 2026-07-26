@@ -79,6 +79,24 @@ import {
   Keyboard,
   Undo2,
   History,
+  // --- RM Cardz Shipping workspace (shell / Upload / Orders) ---
+  UploadCloud,
+  FileUp,
+  ListChecks,
+  Siren,
+  SquareStack,
+  Gift,
+  Megaphone,
+  PauseCircle,
+  Crown,
+  Sticker,
+  StickyNote,
+  Hash,
+  ExternalLink,
+  ArrowUp,
+  ArrowDown,
+  Eraser,
+  ChevronUp,
   type LucideIcon
 } from 'lucide-react'
 
@@ -162,7 +180,25 @@ const MAP: Record<string, LucideIcon> = {
   CameraOff,
   Keyboard,
   Undo2,
-  History
+  History,
+  // --- RM Cardz Shipping workspace (shell / Upload / Orders) ---
+  UploadCloud,
+  FileUp,
+  ListChecks,
+  Siren,
+  SquareStack,
+  Gift,
+  Megaphone,
+  PauseCircle,
+  Crown,
+  Sticker,
+  StickyNote,
+  Hash,
+  ExternalLink,
+  ArrowUp,
+  ArrowDown,
+  Eraser,
+  ChevronUp
 }
 
 export function Icon({

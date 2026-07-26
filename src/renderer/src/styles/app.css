@@ -4780,3 +4780,1217 @@ tr.hoverable-row:hover {
 .link-btn:hover {
   text-decoration: underline;
 }
+
+/* ==========================================================================
+   RM Cardz Shipping Workspace — shell, Upload tab, Orders tab   [FRONTEND-1]
+   Everything below is token-driven so it is correct in light AND dark.
+   FRONTEND-2 appends the Checker / Shipping / History styles BELOW this block.
+   ========================================================================== */
+
+/* ---------- Shell ---------- */
+.ship-shell {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.ship-topbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+  flex-shrink: 0;
+}
+.ship-topbar .tabs {
+  margin-bottom: 0;
+}
+.ship-topmeta {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-left: auto;
+  font-size: 12.5px;
+  color: var(--text-3);
+  flex-wrap: wrap;
+}
+.ship-meta-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+.ship-meta-item svg {
+  color: var(--text-3);
+}
+.ship-meta-item.money {
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.ship-tab-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.tab.active .ship-tab-badge {
+  background: var(--brand-soft);
+  color: var(--brand-700);
+}
+.ship-tab-badge.warning {
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+.ship-tab-badge.danger {
+  background: var(--danger);
+  color: #fff;
+}
+.ship-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  outline: none;
+  padding: 0 8px 20px;
+  margin: 0 -8px;
+}
+.ship-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.ship-placeholder {
+  padding-top: 24px;
+}
+
+/* The collision alarm rides along on every tab until it is reviewed. */
+.ship-collision-strip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius);
+  background: var(--danger-bg);
+  color: var(--danger);
+  font-size: 13px;
+  cursor: pointer;
+}
+.ship-collision-strip b {
+  font-weight: 700;
+}
+.ship-collision-strip span {
+  color: var(--danger);
+}
+.ship-collision-go {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+/* ---------- Shared chips ---------- */
+.ship-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--text-2);
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.ship-chip.mini {
+  font-size: 10.5px;
+  padding: 1px 6px;
+}
+.ship-chip.ok {
+  background: var(--success-bg);
+  color: var(--success);
+}
+.ship-chip.warn {
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+.ship-chip.danger {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+.ship-chip.info {
+  background: var(--info-bg);
+  color: var(--info);
+}
+.ship-chip.vip {
+  background: var(--brand-soft-2);
+  color: var(--brand-700);
+}
+
+/* ---------- Upload: import form ---------- */
+.ship-upload-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 14px;
+  margin-top: 4px;
+}
+.ship-upload-form .field {
+  margin: 0;
+}
+.ship-upload-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+}
+.ship-readonly {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+.ship-carry-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-2);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.ship-carry-note svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--text-3);
+}
+
+/* ---------- Upload: live parse job ---------- */
+.ship-job.error {
+  border-color: var(--danger);
+}
+.ship-job.done {
+  border-color: var(--success);
+}
+.ship-job-head {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+.ship-job-ico {
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  background: var(--brand-soft);
+  color: var(--brand-600);
+}
+.ship-job-ico.done {
+  background: var(--success-bg);
+  color: var(--success);
+}
+.ship-job-ico.error {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+.ship-job-main {
+  min-width: 0;
+  flex: 1;
+}
+.ship-job-title {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ship-job-sub {
+  font-size: 12.5px;
+  color: var(--text-3);
+  margin-top: 1px;
+}
+.ship-job.error .ship-job-sub {
+  color: var(--danger);
+}
+.ship-job-dismiss {
+  position: static;
+  transform: none;
+}
+.ship-job-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+.ship-job-foot .btn {
+  margin-left: auto;
+}
+
+/* ---------- Count tiles ---------- */
+.ship-count-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+.ship-count {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 11px 13px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.ship-count-ico {
+  color: var(--text-3);
+  height: 18px;
+}
+.ship-count-val {
+  font-size: 19px;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1.15;
+}
+.ship-count-label {
+  font-size: 11.5px;
+  color: var(--text-3);
+  font-weight: 600;
+}
+.ship-count.warning {
+  border-color: var(--warning);
+  background: var(--warning-bg);
+}
+.ship-count.warning .ship-count-val,
+.ship-count.warning .ship-count-ico,
+.ship-count.warning .ship-count-label {
+  color: var(--warning);
+}
+.ship-count.danger {
+  border-color: var(--danger);
+  background: var(--danger-bg);
+}
+.ship-count.danger .ship-count-val,
+.ship-count.danger .ship-count-ico,
+.ship-count.danger .ship-count-label {
+  color: var(--danger);
+}
+
+/* ---------- Upload: collisions (the safety net — impossible to miss) ------ */
+.ship-danger-card {
+  border: 2px solid var(--danger);
+  border-radius: var(--radius-lg);
+  background: var(--danger-bg);
+  padding: 18px 20px;
+  box-shadow: var(--shadow-sm);
+}
+.ship-danger-head {
+  display: flex;
+  gap: 13px;
+  align-items: flex-start;
+}
+.ship-danger-ico {
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 11px;
+  background: var(--danger);
+  color: #fff;
+}
+.ship-danger-head h3 {
+  font-size: 15px;
+  color: var(--danger);
+  margin: 0;
+}
+.ship-danger-head p {
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-2);
+  max-width: 78ch;
+}
+.ship-collision-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 14px;
+}
+.ship-collision-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  border: 1px solid var(--danger);
+}
+.ship-collision-break {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--danger);
+  background: var(--danger-bg);
+  padding: 2px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.ship-collision-team {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+.ship-collision-handles {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+.ship-handle-chip {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-2);
+  background: var(--surface-3);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+/* ---------- Upload: break audit ---------- */
+.ship-audit-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-top: 12px;
+}
+.ship-audit-row {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.ship-audit-row.warn {
+  border-color: var(--warning);
+}
+.ship-audit-row.danger {
+  border-color: var(--danger);
+}
+.ship-audit-head {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  padding: 9px 13px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  color: var(--text);
+  font: inherit;
+}
+.ship-audit-head:hover {
+  background: var(--surface-3);
+}
+.ship-audit-num {
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+  min-width: 84px;
+}
+.ship-audit-bar {
+  flex: 1;
+  min-width: 60px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  overflow: hidden;
+}
+.ship-audit-row.ok .ship-audit-bar {
+  background: var(--success-bg);
+}
+.ship-audit-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--brand-500);
+}
+.ship-audit-row.ok .ship-audit-fill {
+  background: var(--success);
+}
+.ship-audit-row.warn .ship-audit-fill {
+  background: var(--warning);
+}
+.ship-audit-row.danger .ship-audit-fill {
+  background: var(--danger);
+}
+.ship-audit-count {
+  font-size: 12.5px;
+  color: var(--text-2);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.ship-audit-caret {
+  color: var(--text-3);
+  flex-shrink: 0;
+}
+.ship-audit-body {
+  padding: 4px 13px 13px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+.ship-audit-block {
+  margin-top: 10px;
+}
+.ship-audit-block-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-3);
+  margin-bottom: 7px;
+}
+.ship-audit-block.danger .ship-audit-block-label {
+  color: var(--danger);
+}
+.ship-team-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.ship-team-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--text-2);
+}
+.ship-team-chip em {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--text-3);
+}
+.ship-team-chip.danger {
+  background: var(--danger-bg);
+  color: var(--danger);
+  font-weight: 600;
+}
+.ship-team-chip.danger em {
+  color: var(--danger);
+  opacity: 0.85;
+}
+.ship-audit-clean {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--success);
+  padding: 6px 2px;
+}
+
+/* ---------- Upload: parser warnings ---------- */
+.ship-warn-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 12px;
+}
+.ship-warn {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.ship-warn-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 8px 11px;
+  background: none;
+  border: none;
+  font: inherit;
+  text-align: left;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.ship-warn-head:disabled {
+  cursor: default;
+}
+.ship-warn-head > svg:first-child {
+  color: var(--warning);
+  flex-shrink: 0;
+}
+.ship-warn-page {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-3);
+  background: var(--surface-3);
+  padding: 1px 6px;
+  border-radius: 5px;
+}
+.ship-warn-msg {
+  flex: 1;
+  font-size: 12.5px;
+  min-width: 0;
+}
+.ship-warn-raw {
+  margin: 0;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-3);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 200px;
+  overflow: auto;
+}
+.ship-more {
+  margin-top: 10px;
+  align-self: flex-start;
+}
+.ship-hero-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 4px;
+  padding: 28px 20px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--surface-2);
+}
+.ship-hero-empty h3 {
+  font-size: 15px;
+  margin: 6px 0 0;
+}
+.ship-hero-empty p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-3);
+  max-width: 62ch;
+}
+
+/* ---------- Orders: toolbar ---------- */
+.ship-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  background: var(--bg);
+  padding: 2px 0 6px;
+}
+.ship-search {
+  flex: 1 1 300px;
+  max-width: 460px;
+  position: relative;
+}
+.ship-search input {
+  padding-right: 32px;
+}
+.ship-filter {
+  width: auto;
+  min-width: 170px;
+  flex: none;
+}
+.ship-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+.ship-vip-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.ship-vip-btn:hover {
+  background: var(--brand-soft);
+  color: var(--brand-700);
+  border-color: var(--brand-300);
+}
+.ship-vip-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* ---------- Orders: stage filter bar + totals ---------- */
+.ship-stage-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.ship-stage-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.ship-stage-chip span {
+  color: var(--text-3);
+  font-weight: 700;
+}
+.ship-stage-chip:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.ship-stage-chip.active {
+  background: var(--brand-soft);
+  border-color: var(--brand-300);
+  color: var(--brand-700);
+}
+.ship-stage-chip.active span {
+  color: var(--brand-700);
+}
+.ship-totals {
+  font-size: 12.5px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+.ship-totals b {
+  color: var(--text);
+  font-weight: 700;
+}
+.ship-total-money {
+  color: var(--success) !important;
+}
+
+/* ---------- Orders: special-request strip ---------- */
+.ship-special-strip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 9px 13px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius);
+  background: var(--danger-bg);
+  color: var(--danger);
+  font-size: 12.5px;
+}
+.ship-pin-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  font-weight: 600;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.ship-pin-toggle input {
+  accent-color: var(--brand-500);
+}
+.ship-special-strip .link-btn {
+  color: var(--danger);
+}
+
+/* ---------- Orders: the package row ---------- */
+.ship-orders {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ship-order {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  transition: border-color 0.13s ease, box-shadow 0.13s ease, opacity 0.13s ease;
+}
+.ship-order:hover {
+  box-shadow: var(--shadow-md);
+}
+.ship-order.busy {
+  opacity: 0.6;
+  pointer-events: none;
+}
+.ship-order[data-stage='put_together'] {
+  border-left-color: var(--brand-500);
+}
+.ship-order[data-stage='sent'] {
+  border-left-color: var(--warning);
+}
+.ship-order[data-stage='all_good'] {
+  border-left-color: var(--success);
+}
+.ship-order[data-stage='exception'],
+.ship-order[data-stage='returned'] {
+  border-left-color: var(--danger);
+}
+.ship-order[data-hold='true'] {
+  background: var(--surface-2);
+}
+.ship-order[data-vip='true'] {
+  border-color: var(--brand-300);
+}
+.ship-order[data-special='true'] {
+  border-color: var(--danger);
+}
+
+/* The special request renders red and sits above everything on the row. */
+.ship-special {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 7px 13px;
+  background: var(--danger-bg);
+  color: var(--danger);
+  font-size: 12.5px;
+  border-bottom: 1px solid var(--danger);
+  border-radius: 6px 6px 0 0;
+}
+.ship-special-text {
+  font-weight: 700;
+}
+.ship-special-meta {
+  color: var(--danger);
+  opacity: 0.75;
+  font-size: 11.5px;
+  margin-left: auto;
+}
+.ship-special .link-btn {
+  color: var(--danger);
+}
+
+.ship-order-main {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 11px 13px;
+}
+
+/* Queue position + the up/down arrows (gated within the hold group). */
+.sor-rank {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  width: 30px;
+  padding-top: 1px;
+}
+.sor-rank-num {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-3);
+}
+.sor-arrow {
+  width: 22px;
+  height: 17px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 5px;
+  background: var(--surface-3);
+  color: var(--text-2);
+  cursor: pointer;
+}
+.sor-arrow:hover:not(:disabled) {
+  background: var(--brand-soft);
+  color: var(--brand-700);
+}
+.sor-arrow:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.sor-body {
+  flex: 1;
+  min-width: 0;
+}
+.sor-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.sor-handle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+  cursor: pointer;
+}
+.sor-handle:hover {
+  color: var(--brand-600);
+}
+.sor-handle svg {
+  color: var(--text-3);
+}
+.sor-name {
+  font-size: 13px;
+  color: var(--text-2);
+}
+.sor-addr {
+  font-size: 12px;
+  color: var(--text-3);
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+.sor-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 7px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+.sor-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+.sor-pick.done {
+  color: var(--success);
+}
+.sor-pick-bar {
+  width: 54px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  overflow: hidden;
+}
+.sor-pick-fill {
+  display: block;
+  height: 100%;
+  background: var(--brand-500);
+  border-radius: 999px;
+}
+.sor-pick.done .sor-pick-fill {
+  background: var(--success);
+}
+.sor-breaks {
+  display: inline-flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.sor-break-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border-radius: 6px;
+  background: var(--surface-3);
+  color: var(--text-2);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.sor-break-chip em {
+  font-style: normal;
+  color: var(--text-3);
+  font-weight: 700;
+}
+.sor-track {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 7px 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.sor-track:hover {
+  border-color: var(--brand-300);
+  color: var(--brand-700);
+}
+.sor-track em {
+  font-style: normal;
+  color: var(--text-3);
+}
+.sor-track.empty {
+  cursor: default;
+  color: var(--text-3);
+  background: none;
+  border-style: dashed;
+}
+.sor-orderids {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+.sor-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 7px;
+  padding: 6px 9px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-2);
+}
+.sor-note svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: var(--text-3);
+}
+
+/* Right rail: value, stage control, per-row actions. */
+.sor-side {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.sor-value {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+  min-width: 72px;
+  text-align: right;
+}
+.ship-stage-select {
+  width: auto;
+  min-width: 128px;
+  height: 32px;
+  padding: 0 26px 0 10px;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.ship-stage-select[data-stage='put_together'] {
+  background-color: var(--brand-soft);
+  border-color: var(--brand-300);
+  color: var(--brand-700);
+}
+.ship-stage-select[data-stage='sent'] {
+  background-color: var(--warning-bg);
+  border-color: var(--warning);
+  color: var(--warning);
+}
+.ship-stage-select[data-stage='all_good'] {
+  background-color: var(--success-bg);
+  border-color: var(--success);
+  color: var(--success);
+}
+.ship-stage-select[data-stage='exception'],
+.ship-stage-select[data-stage='returned'] {
+  background-color: var(--danger-bg);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.ship-stage-select option {
+  color: var(--text);
+  background: var(--surface);
+}
+.sor-actions {
+  display: flex;
+  gap: 4px;
+}
+.sor-act {
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-3);
+  cursor: pointer;
+}
+.sor-act:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+.sor-act:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.sor-act.on {
+  background: var(--brand-soft);
+  border-color: var(--brand-300);
+  color: var(--brand-700);
+}
+.sor-act.alert {
+  background: var(--danger-bg);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+/* ---------- Orders: expanded card detail ---------- */
+.sor-expand {
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+  padding: 12px 13px 11px 55px;
+  border-radius: 0 0 6px 6px;
+}
+.sor-empty-cards {
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+.sor-break + .sor-break {
+  margin-top: 10px;
+}
+.sor-break-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 5px;
+  border-bottom: 1px solid var(--border);
+}
+.sor-break-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text);
+}
+.sor-break-title svg {
+  color: var(--text-3);
+}
+.sor-break-prog {
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+.sor-break-val {
+  margin-left: auto;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text-2);
+}
+.sor-teams {
+  display: flex;
+  flex-direction: column;
+}
+.sor-team {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 5px 2px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.sor-team:last-child {
+  border-bottom: none;
+}
+.sor-team-check {
+  color: var(--text-3);
+  display: flex;
+}
+.sor-team.checked .sor-team-check {
+  color: var(--success);
+}
+.sor-team-name {
+  font-weight: 600;
+  color: var(--text);
+}
+.sor-team.checked .sor-team-name {
+  color: var(--text-2);
+}
+.sor-team-order {
+  font-size: 11px;
+  color: var(--text-3);
+}
+.sor-team-price {
+  margin-left: auto;
+  font-weight: 700;
+  color: var(--text);
+}
+.sor-team-by {
+  font-size: 11px;
+  color: var(--text-3);
+  min-width: 150px;
+  text-align: right;
+}
+.sor-footer {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-top: 11px;
+  padding-top: 9px;
+  border-top: 1px solid var(--border);
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+.sor-footer span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.sor-id {
+  margin-left: auto;
+  opacity: 0.7;
+}
+
+@media (max-width: 1080px) {
+  .ship-order-main {
+    flex-wrap: wrap;
+  }
+  .sor-side {
+    width: 100%;
+    justify-content: flex-end;
+  }
+  .sor-expand {
+    padding-left: 13px;
+  }
+}
