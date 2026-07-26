@@ -603,6 +603,9 @@ export function parsePackingSlip(
 
   if (anchor >= 0) {
     const addressLines: string[] = []
+    // Lines seen while hunting for the name — used as the address when the slip
+    // has no proper-case buyer name at all.
+    const beforeName: string[] = []
     for (let i = anchor + 1; i < firstLinesOfSlip.length; i++) {
       const line = firstLinesOfSlip[i]
       if (RE_ADDRESS_STOP.test(line)) break
@@ -613,13 +616,14 @@ export function parsePackingSlip(
           slip.realName = line
           continue
         }
+        beforeName.push(line)
         if (i - anchor > 5) break
         continue
       }
       addressLines.push(line)
       if (addressLines.length >= 3) break
     }
-    slip.address = addressLines.join(', ')
+    slip.address = (addressLines.length ? addressLines : beforeName).slice(0, 3).join(', ')
   }
 
   // The `NEW` badge sits on (or right under) the To: line. Never treat the
@@ -939,45 +943,65 @@ function emitCustomerRecords(
       continue
     }
 
-    for (const team of entry.teams) {
+    // Pair each breaking-slip team with a packing order: FIRST by canonical
+    // team across the whole break, THEN hand the leftovers to whichever teams
+    // are still unpaired, in order. Resolving the canonical matches globally
+    // (rather than greedily, team by team) stops an unmatched team from
+    // swallowing the pack that belongs by name to a later team.
+    const resolved = entry.teams.map((team) => {
       const hit = matcher.matchTeam(team.raw)
-      const teamName = hit.team || cleanTeamText(team.raw) || 'Unknown team'
-      if (!hit.team) {
-        warnings.push({
-          page: team.page,
-          message: `Could not match “${team.raw}” (@${handle}, break #${breakNumber}) to a ${matcher.sport.toUpperCase()} team — kept as printed.`,
-          rawText: team.raw
-        })
+      return {
+        team,
+        hit,
+        teamName: hit.team || cleanTeamText(team.raw) || 'Unknown team',
+        wanted: hit.team ?? normalizeTeamKey(team.raw),
+        pack: null as PackingOrder | null
       }
-
-      // Pair with a packing order: first by canonical team, else the next
-      // unused pack in this break.
-      const wanted = hit.team ?? normalizeTeamKey(team.raw)
-      let pack =
-        wanted === ''
-          ? undefined
-          : packsForBreak.find((p) => !usedInBreak.has(p) && packCanonical(p, matcher) === wanted)
-      if (!pack) pack = packsForBreak.find((p) => !usedInBreak.has(p))
+    })
+    for (const item of resolved) {
+      if (!item.wanted) continue
+      const pack = packsForBreak.find(
+        (p) => !usedInBreak.has(p) && packCanonical(p, matcher) === item.wanted
+      )
       if (pack) {
+        item.pack = pack
         usedInBreak.add(pack)
         consumedPacks.add(pack)
-      } else {
-        warnings.push({
-          page: team.page,
-          message: `${teamName} in break #${breakNumber} (@${handle}) has no matching line on the packing slip — the card is still pickable at $0.`,
-          rawText: null
-        })
       }
+    }
+    for (const item of resolved) {
+      if (item.pack) continue
+      const pack = packsForBreak.find((p) => !usedInBreak.has(p))
+      if (!pack) continue
+      item.pack = pack
+      usedInBreak.add(pack)
+      consumedPacks.add(pack)
+    }
 
-      if (teamsSeen.has(teamName)) {
+    for (const item of resolved) {
+      if (!item.hit.team) {
         warnings.push({
-          page: team.page,
-          message: `@${handle} has ${teamName} twice in break #${breakNumber} — both cards kept, please verify.`,
+          page: item.team.page,
+          message: `Could not match “${item.team.raw}” (@${handle}, break #${breakNumber}) to a ${matcher.sport.toUpperCase()} team — kept as printed.`,
+          rawText: item.team.raw
+        })
+      }
+      if (!item.pack) {
+        warnings.push({
+          page: item.team.page,
+          message: `${item.teamName} in break #${breakNumber} (@${handle}) has no matching line on the packing slip — the card is still pickable at $0.`,
           rawText: null
         })
       }
-      teamsSeen.add(teamName)
-      pushSlot(breakNumber, breakId, teamName, pack ?? null)
+      if (teamsSeen.has(item.teamName)) {
+        warnings.push({
+          page: item.team.page,
+          message: `@${handle} has ${item.teamName} twice in break #${breakNumber} — both cards kept, please verify.`,
+          rawText: null
+        })
+      }
+      teamsSeen.add(item.teamName)
+      pushSlot(breakNumber, breakId, item.teamName, item.pack)
     }
   }
 
