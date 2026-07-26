@@ -191,6 +191,13 @@ export interface PackingSlip {
   weightOz: number | null
   orders: PackingOrder[]
   warnings: ShipWarningInput[]
+  /**
+   * The product / pack title printed on the slip, e.g. "2025 FINEST FOOTBALL".
+   * Loud all-caps marketing lines like "BREAKERS DELIGHT! RANDOM" sit next to
+   * the buyer's address, so they are detected here BOTH to keep them out of the
+   * address and to name the import after what was actually broken.
+   */
+  packTitle: string | null
 }
 
 export interface ParsePagesOptions {
@@ -270,6 +277,34 @@ function toLines(pages: PageRef[]): PageLine[] {
 
 function firstLines(text: string, count = 3): string {
   return text.split('\n').slice(0, count).join(' | ').slice(0, 240)
+}
+
+/**
+ * A product / pack title line: shouty, usually carrying a year and a product
+ * word. These print between the buyer name and the street address, so without
+ * this they end up inside `address`.
+ */
+const RE_PACK_YEAR = /\b(19|20)\d{2}\b/
+function isPackTitleLine(line: string): boolean {
+  if (!line || line.length < 6 || line.length > 90) return false
+  const letters = line.replace(/[^A-Za-z]/g, '')
+  if (letters.length < 4) return false
+  // Overwhelmingly upper-case is the signal — a street address is title-case.
+  const upper = letters.replace(/[^A-Z]/g, '').length / letters.length
+  if (upper < 0.8) return false
+  // A pure ALL-CAPS city/state line ("LOS ANGELES CA") is an address, not a pack.
+  if (/^[A-Z .'-]+,?\s*[A-Z]{2}\s*\d{5}(-\d{4})?$/.test(line.trim())) return false
+  return RE_PACK_YEAR.test(line) || /\b(BREAK|BREAKERS|RANDOM|PYT|MIXER|CASE|BOX|HOBBY|PACK|RIP)\b/.test(line)
+}
+
+/** Prefer the most specific title seen: the one carrying a year. */
+function bestPackTitle(titles: string[]): string | null {
+  if (!titles.length) return null
+  const withYear = titles.filter((t) => RE_PACK_YEAR.test(t))
+  const pool = withYear.length ? withYear : titles
+  const counts = new Map<string, number>()
+  for (const t of pool) counts.set(t, (counts.get(t) ?? 0) + 1)
+  return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].length - b[0].length)[0][0]
 }
 
 function isProperNameLine(line: string): boolean {
@@ -591,6 +626,7 @@ export function parsePackingSlip(
     handle,
     realName: '',
     address: '',
+    packTitle: null,
     isNew: false,
     trackingNumber: null,
     carrier: null,
@@ -612,6 +648,7 @@ export function parsePackingSlip(
 
   if (anchor >= 0) {
     const addressLines: string[] = []
+    const packTitles: string[] = []
     // Lines seen while hunting for the name — used as the address when the slip
     // has no proper-case buyer name at all.
     const beforeName: string[] = []
@@ -629,10 +666,16 @@ export function parsePackingSlip(
         if (i - anchor > 5) break
         continue
       }
+      // A pack title is not part of the address — bank it and carry on.
+      if (isPackTitleLine(line)) {
+        packTitles.push(line.replace(/\s+/g, ' ').trim())
+        continue
+      }
       addressLines.push(line)
       if (addressLines.length >= 3) break
     }
     slip.address = (addressLines.length ? addressLines : beforeName).slice(0, 3).join(', ')
+    slip.packTitle = bestPackTitle(packTitles)
   }
 
   // The `NEW` badge sits on (or right under) the To: line. Never treat the
