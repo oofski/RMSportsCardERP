@@ -345,6 +345,160 @@ function migrate(database: Database.Database): void {
     -- Network-retry / future-phone-client idempotency key.
     CREATE UNIQUE INDEX IF NOT EXISTS idx_inv_scans_token
       ON inventory_scans (client_token) WHERE client_token IS NOT NULL;
+
+    -- ===================================================================
+    -- v16: the Shipping workspace (RM Cardz break fulfillment).
+    --
+    -- ONE active dataset at a time: a Whatnot "labels + packing slips" PDF is
+    -- parsed into these tables, and the next import overwrites them wholesale
+    -- (operator state is carried forward only on a confirmed same-named-event
+    -- re-import — see importDataset in db/shipping.ts).
+    --
+    -- Deliberately NO foreign keys between the ship_* tables: the import
+    -- rewrites every array in one transaction, and a break-less giveaway's
+    -- break_id ('giveaway_<handle>') intentionally has no ship_breaks row, so
+    -- referential constraints would reject legitimate data.
+    -- ===================================================================
+
+    -- The active dataset's event. Single row (id = 1). The name is usually
+    -- blank (these PDFs rarely carry one) which is precisely why carry-forward
+    -- requires a NON-EMPTY name on both sides.
+    CREATE TABLE IF NOT EXISTS ship_event (
+      id         INTEGER PRIMARY KEY CHECK (id = 1),
+      name       TEXT,
+      date       TEXT,
+      updated_at TEXT
+    );
+
+    -- One row per DISTINCT break number in the dataset.
+    CREATE TABLE IF NOT EXISTS ship_breaks (
+      id           TEXT PRIMARY KEY,
+      break_number INTEGER,
+      event_name   TEXT,
+      event_date   TEXT,
+      status       TEXT NOT NULL DEFAULT 'pending'
+    );
+
+    -- id = the Whatnot handle: the join key between packing and breaking slips.
+    CREATE TABLE IF NOT EXISTS ship_customers (
+      id             TEXT PRIMARY KEY,
+      whatnot_handle TEXT,
+      real_name      TEXT,
+      address        TEXT,
+      is_new         INTEGER NOT NULL DEFAULT 0
+    );
+
+    -- ONE row per physical card — the atomic unit of pick work. break_number is
+    -- NULL for a break-less giveaway (a promo rider that belongs to no break).
+    CREATE TABLE IF NOT EXISTS ship_team_slots (
+      id             TEXT PRIMARY KEY,
+      break_id       TEXT,
+      break_number   INTEGER,
+      team_name      TEXT,
+      customer_id    TEXT,
+      order_id       TEXT,
+      price          REAL NOT NULL DEFAULT 0,
+      is_giveaway    INTEGER NOT NULL DEFAULT 0,
+      top_sleeved    INTEGER NOT NULL DEFAULT 0,
+      checked_off    INTEGER NOT NULL DEFAULT 0,
+      checked_off_at TEXT,
+      checked_off_by TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_ship_slots_customer ON ship_team_slots (customer_id);
+    CREATE INDEX IF NOT EXISTS idx_ship_slots_break    ON ship_team_slots (break_id);
+
+    -- ONE row per customer package (id = 'ship_<handle>'). status_code +
+    -- status_set_at/by are the manual tracking status; the order's fulfillment
+    -- stage is derived from it so Orders and Shipping can never disagree.
+    CREATE TABLE IF NOT EXISTS ship_shipments (
+      id                 TEXT PRIMARY KEY,
+      customer_id        TEXT,
+      tracking_number    TEXT,
+      carrier            TEXT,
+      service_type       TEXT,
+      weight_oz          REAL,
+      usps_url           TEXT,
+      status_code        TEXT NOT NULL DEFAULT 'not_shipped',
+      status_set_at      TEXT,
+      status_set_by      TEXT,
+      notes              TEXT,
+      packed_at          TEXT,
+      packed_by          TEXT,
+      on_hold            INTEGER NOT NULL DEFAULT 0,
+      held_reason        TEXT,
+      queue_order        INTEGER NOT NULL DEFAULT 0,
+      special_request    TEXT,
+      special_request_at TEXT,
+      special_request_by TEXT,
+      last_updated       TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_ship_shipments_customer ON ship_shipments (customer_id);
+
+    -- Line-item mirror of ship_team_slots; drives sales / ledger math.
+    CREATE TABLE IF NOT EXISTS ship_orders (
+      id           TEXT PRIMARY KEY,
+      customer_id  TEXT,
+      break_id     TEXT,
+      break_number INTEGER,
+      team_name    TEXT,
+      price        REAL NOT NULL DEFAULT 0,
+      is_giveaway  INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_ship_orders_customer ON ship_orders (customer_id);
+
+    -- USPS "open all" bulk-tracking URLs, chunked into batches.
+    CREATE TABLE IF NOT EXISTS ship_batch_urls (
+      batch_number INTEGER PRIMARY KEY,
+      count        INTEGER,
+      url          TEXT
+    );
+
+    -- Per-break fidelity audit: captured teams vs the league's full slate, plus
+    -- collisions (one team claimed by two customers in the same break — a real
+    -- data error worth surfacing instead of silently guessing).
+    -- missing_teams / collisions are JSON arrays.
+    CREATE TABLE IF NOT EXISTS ship_break_audit (
+      break_number       INTEGER PRIMARY KEY,
+      team_count         INTEGER,
+      distinct_team_count INTEGER,
+      max_teams          INTEGER,
+      missing_count      INTEGER,
+      missing_teams      TEXT,
+      has_all            INTEGER,
+      collisions         TEXT
+    );
+
+    -- Parse-time warnings (unmatched team names, duplicate slots, ...).
+    CREATE TABLE IF NOT EXISTS ship_warnings (
+      id       TEXT PRIMARY KEY,
+      page     INTEGER,
+      message  TEXT,
+      raw_text TEXT
+    );
+
+    -- Nameable import log; survives re-imports. counts = JSON.
+    CREATE TABLE IF NOT EXISTS ship_imports (
+      id         TEXT PRIMARY KEY,
+      name       TEXT,
+      filename   TEXT,
+      kind       TEXT,
+      created_at TEXT,
+      counts     TEXT
+    );
+
+    -- Dated capture of orders + shipments + sales for CSV export. payload =
+    -- JSON; deliberately NOT cleared by an import.
+    CREATE TABLE IF NOT EXISTS ship_snapshots (
+      id         TEXT PRIMARY KEY,
+      name       TEXT,
+      created_at TEXT,
+      payload    TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS ship_settings (
+      key   TEXT PRIMARY KEY,
+      value TEXT
+    );
   `)
 
   if (getMeta(database, 'schema_version') === null) {
@@ -431,7 +585,11 @@ function migrate(database: Database.Database): void {
       )
       .run()
   )
-  setMeta(database, 'schema_version', '15')
+  // v16: the Shipping workspace (ship_* tables + indexes), created idempotently
+  // in the schema-init block above. Purely additive — no existing table changes,
+  // so an upgrading v15 database gains the tables empty and the Upload tab is
+  // the only thing that fills them.
+  setMeta(database, 'schema_version', '16')
 
   // Seed the product catalog once, then apply the on-hand snapshot once.
   seedCatalogIfNeeded(database)
