@@ -29,7 +29,8 @@
     "bcryptjs": "^2.4.3",
     "better-sqlite3": "^11.7.0",
     "electron-updater": "^6.3.9",
-    "lucide-react": "^0.469.0"
+    "lucide-react": "^0.469.0",
+    "pdfjs-dist": "^5.7.284"
   },
   "devDependencies": {
     "@electron-toolkit/tsconfig": "^1.0.1",
