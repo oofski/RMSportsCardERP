@@ -205,10 +205,12 @@ export function UploadTab({ summary, canManage, onChanged, onGoTo }: ShipTabProp
       {/* ---------------- Import ---------------- */}
       <div className="panel-card ship-upload-card">
         <div className="panel-head">
-          <h3>Import a Whatnot PDF</h3>
-          <span className="ph-sub">
-            Combined labels + packing slips. One active dataset — importing replaces it.
-          </span>
+          <div>
+            <h3>Import a Whatnot PDF</h3>
+            <span className="ph-sub">
+              Combined labels + packing slips. One active dataset — importing replaces it.
+            </span>
+          </div>
         </div>
 
         <div className="ship-upload-form">
@@ -250,8 +252,11 @@ export function UploadTab({ summary, canManage, onChanged, onGoTo }: ShipTabProp
           </Field>
 
           <Field label="Event date">
+            {/* A date picker silently blanks a value it cannot parse, and
+                blanking the date would break same-event carry-forward — so a
+                non-ISO date from the slip stays editable as plain text. */}
             <Input
-              type="date"
+              type={/^\d{4}-\d{2}-\d{2}$/.test(eventDate) || eventDate === '' ? 'date' : 'text'}
               value={eventDate}
               disabled={!canManage || running}
               onChange={(e) => setEventDate(e.target.value)}
@@ -420,13 +425,15 @@ export function UploadTab({ summary, canManage, onChanged, onGoTo }: ShipTabProp
       {audit.length > 0 && (
         <div className="panel-card">
           <div className="panel-head">
-            <h3>Break audit</h3>
-            <span className="ph-sub">
-              Captured teams vs the full league slate, per break.
-              {incomplete.length > 0
-                ? ` ${incomplete.length} of ${audit.length} incomplete.`
-                : ' Every break is complete.'}
-            </span>
+            <div>
+              <h3>Break audit</h3>
+              <span className="ph-sub">
+                Captured teams vs the full league slate, per break.
+                {incomplete.length > 0
+                  ? ` ${incomplete.length} of ${audit.length} incomplete.`
+                  : ' Every break is complete.'}
+              </span>
+            </div>
             <div className="ph-right">
               <Checkbox
                 checked={showAllAudit}
@@ -453,11 +460,13 @@ export function UploadTab({ summary, canManage, onChanged, onGoTo }: ShipTabProp
       {warnings.length > 0 && (
         <div className="panel-card">
           <div className="panel-head">
-            <h3>Parser warnings</h3>
-            <span className="ph-sub">
-              {warnings.length} line{warnings.length === 1 ? '' : 's'} the grammar could not fully
-              resolve. Cards are still imported — the raw text is kept so you can check the slip.
-            </span>
+            <div>
+              <h3>Parser warnings</h3>
+              <span className="ph-sub">
+                {warnings.length} line{warnings.length === 1 ? '' : 's'} the grammar could not fully
+                resolve. Cards are still imported — the raw text is kept so you can check the slip.
+              </span>
+            </div>
           </div>
           <div className="ship-warn-list">
             {(showAllWarnings ? warnings : warnings.slice(0, 12)).map((w) => (
@@ -476,14 +485,16 @@ export function UploadTab({ summary, canManage, onChanged, onGoTo }: ShipTabProp
       {hasDataset && summary && (
         <div className="panel-card">
           <div className="panel-head">
-            <h3>Active dataset</h3>
-            <span className="ph-sub">
-              {summary.lastImport
-                ? `${summary.lastImport.name} · imported ${formatDateTime(
-                    summary.lastImport.createdAt
-                  )}`
-                : 'Loaded'}
-            </span>
+            <div>
+              <h3>Active dataset</h3>
+              <span className="ph-sub">
+                {summary.lastImport
+                  ? `${summary.lastImport.name} · imported ${formatDateTime(
+                      summary.lastImport.createdAt
+                    )}`
+                  : 'Loaded'}
+              </span>
+            </div>
           </div>
           <div className="ship-count-grid">
             <CountTile label="Packages" value={summary.counts.shipments} icon="Package" />

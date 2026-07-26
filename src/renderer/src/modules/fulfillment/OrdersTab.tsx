@@ -503,6 +503,7 @@ export function OrdersTab({ canManage, onChanged, onGoTo }: ShipTabProps): JSX.E
 
       {editor && (
         <EditorModal
+          key={`${editor.kind}:${editor.row.id}`}
           state={editor}
           busy={busyId === editor.row.id}
           onClose={() => setEditor(null)}
