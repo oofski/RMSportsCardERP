@@ -122,7 +122,6 @@ export function CheckerTab({ canManage, onChanged, onGoTo }: ShipTabProps): JSX.
     try {
       const next = await api.shipping.break(id)
       if (next) setDetail(next)
-      setQuery('')
     } finally {
       setOpeningId(null)
     }
@@ -243,6 +242,10 @@ export function CheckerTab({ canManage, onChanged, onGoTo }: ShipTabProps): JSX.
     return (
       <>
         <BreakDetailView
+          // Keyed on the break so opening a different one starts with a clean
+          // search / grouping / hide-picked state instead of inheriting the
+          // last break's filters.
+          key={detail.id}
           detail={detail}
           canManage={canManage}
           busy={busy}
@@ -506,7 +509,11 @@ function BreakCard({
           {STATUS_LABELS[summary.status]}
         </span>
         <span className="chk-card-open">
-          <Icon name={opening ? 'Loader2' : 'ChevronRight'} size={16} />
+          <Icon
+            name={opening ? 'Loader2' : 'ChevronRight'}
+            size={16}
+            className={opening ? 'spin-ico' : undefined}
+          />
         </span>
       </div>
 
@@ -673,7 +680,7 @@ function BreakDetailView({
         <Button
           size="sm"
           icon="CheckCheck"
-          disabled={!canManage || busy || done}
+          disabled={!canManage || busy || done || detail.slots.length === 0}
           onClick={() => onCheckAll(true)}
         >
           Check all

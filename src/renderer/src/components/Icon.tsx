@@ -108,8 +108,6 @@ import {
   Save,
   FileDown,
   FileText,
-  Filter,
-  Eye,
   User,
   Scale,
   type LucideIcon
@@ -225,8 +223,6 @@ const MAP: Record<string, LucideIcon> = {
   Save,
   FileDown,
   FileText,
-  Filter,
-  Eye,
   User,
   Scale
 }

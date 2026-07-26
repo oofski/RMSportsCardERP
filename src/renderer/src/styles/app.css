@@ -7490,3 +7490,24 @@ tr.hoverable-row:hover {
 :root[data-theme='dark'] .trk-row.selected:hover {
   filter: brightness(1.12);
 }
+
+/* Tinted tracker rows: the address / service / status-meta lines are --text-3,
+   which reads fine on --surface but drops under 3:1 on the warning and brand
+   tints. They step up one level on a tinted row, in both themes. */
+.trk-row.selected .trk-addr,
+.trk-row.selected .trk-service,
+.trk-row.selected .trk-status-meta,
+.trk-row[data-hold='true'] .trk-addr,
+.trk-row[data-hold='true'] .trk-service,
+.trk-row[data-hold='true'] .trk-status-meta,
+.trk-row.selected .trk-cards,
+.trk-row[data-hold='true'] .trk-cards {
+  color: var(--text-2);
+}
+
+/* Selection is the operator's own transient state, so it has to stay visible
+   even on a held row — this sits after the hold tint deliberately. */
+.trk-row.selected,
+.trk-row.selected[data-hold='true'] {
+  background: var(--brand-soft);
+}

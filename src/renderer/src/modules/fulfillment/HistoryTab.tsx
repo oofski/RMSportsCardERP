@@ -263,7 +263,11 @@ export function HistoryTab({ summary, canManage, onChanged, onGoTo }: ShipTabPro
                 onClick={() => runExport(`live:${kind}`, kind)}
               >
                 <span className="hist-export-ico">
-                  <Icon name={exporting === `live:${kind}` ? 'Loader2' : EXPORT_ICONS[kind]} size={16} />
+                  <Icon
+                    name={exporting === `live:${kind}` ? 'Loader2' : EXPORT_ICONS[kind]}
+                    size={16}
+                    className={exporting === `live:${kind}` ? 'spin-ico' : undefined}
+                  />
                 </span>
                 <span className="hist-export-body">
                   <b>{SHIP_EXPORT_LABELS[kind]}</b>
@@ -343,7 +347,11 @@ export function HistoryTab({ summary, canManage, onChanged, onGoTo }: ShipTabPro
                         disabled={exporting !== null}
                         onClick={() => runExport(`snap:${s.id}`, 'orders', s.id)}
                       >
-                        <Icon name={exporting === `snap:${s.id}` ? 'Loader2' : 'FileDown'} size={15} />
+                        <Icon
+                          name={exporting === `snap:${s.id}` ? 'Loader2' : 'FileDown'}
+                          size={15}
+                          className={exporting === `snap:${s.id}` ? 'spin-ico' : undefined}
+                        />
                       </button>
                       {canManage && (
                         <>
