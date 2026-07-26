@@ -5,6 +5,7 @@ import { APP_NAME } from '@shared/config'
 import { registerIpcHandlers } from './ipc'
 import { registerInventoryIpc } from './inventoryIpc'
 import { registerPurchaseOrdersIpc } from './purchaseOrdersIpc'
+import { registerShippingIpc } from './shippingIpc'
 import { getDb, closeDb } from './db/database'
 import { initUpdater } from './services/updater'
 
@@ -68,6 +69,7 @@ app.whenReady().then(() => {
   registerIpcHandlers()
   registerInventoryIpc()
   registerPurchaseOrdersIpc()
+  registerShippingIpc()
   initUpdater()
 
   createWindow()

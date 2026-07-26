@@ -70,6 +70,7 @@ export type Permission =
   | 'inventory.manage'
   | 'inventory.pricing'
   | 'module.fulfillment'
+  | 'shipping.manage'
   | 'module.invoicing'
   | 'module.finance'
   | 'module.sops'
@@ -138,8 +139,15 @@ export const PERMISSIONS: PermissionDefinition[] = [
   },
   {
     key: 'module.fulfillment',
-    label: 'Fulfillment',
-    description: 'Access the Fulfillment module (orders, shipping and CRM).',
+    label: 'Shipping',
+    description: 'Open the Shipping workspace — orders, pick lists and shipment tracking.',
+    group: 'Modules'
+  },
+  {
+    key: 'shipping.manage',
+    label: 'Manage shipping',
+    description:
+      'Upload packing-slip PDFs, check cards off, move the queue and set shipment statuses.',
     group: 'Modules'
   },
   {
@@ -173,6 +181,7 @@ const OPERATIONS_PERMISSIONS: Permission[] = [
   'module.inventory',
   'inventory.manage',
   'module.fulfillment',
+  'shipping.manage',
   'module.invoicing',
   'module.finance',
   'module.sops'

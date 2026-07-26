@@ -54,6 +54,36 @@ import type {
   UpdateSupply,
   UpdateStatus
 } from '@shared/types'
+import type {
+  ShipBatchUrl,
+  ShipBreakAudit,
+  ShipBreakStatus,
+  ShipEvent,
+  ShipImportRecord,
+  ShipSnapshot,
+  ShipSnapshotSummary,
+  ShipStatusCode,
+  ShipWarning
+} from '@shared/shippingTypes'
+import type {
+  ShipBreakDetail,
+  ShipBreakSummary,
+  ShipBulkStatusEntry,
+  ShipBulkStatusResult,
+  ShipCustomerRow,
+  ShipExportKind,
+  ShipFulfillmentStage,
+  ShipLedgerRow,
+  ShipOrderRow,
+  ShipParseJob,
+  ShipParseRequest,
+  ShipParseStart,
+  ShipQueueDirection,
+  ShipSalesSummary,
+  ShipShipmentRow,
+  ShipSlotUpdate,
+  ShipWorkspaceSummary
+} from '@shared/shippingViews'
 
 const api = {
   app: {
@@ -214,6 +244,115 @@ const api = {
     scanIn: (id: string): Promise<Result<PurchaseOrderDetail>> =>
       ipcRenderer.invoke(IPC.poScanIn, { id }),
     cogsList: (): Promise<CogsEntry[]> => ipcRenderer.invoke(IPC.poCogsList)
+  },
+  /**
+   * RM Cardz Shipping Workspace. Reads resolve to an empty value when the user
+   * lacks `module.fulfillment`; every write returns `Result<T>` carrying the
+   * freshly derived row so a screen can reconcile without a refetch.
+   */
+  shipping: {
+    // ---- Workspace ---------------------------------------------------------
+    summary: (): Promise<ShipWorkspaceSummary | null> => ipcRenderer.invoke(IPC.shipSummary),
+    event: (): Promise<ShipEvent | null> => ipcRenderer.invoke(IPC.shipEvent),
+    setEvent: (name: string, date: string): Promise<Result<ShipEvent>> =>
+      ipcRenderer.invoke(IPC.shipSetEvent, { name, date }),
+    warnings: (): Promise<ShipWarning[]> => ipcRenderer.invoke(IPC.shipWarnings),
+    audit: (): Promise<ShipBreakAudit[]> => ipcRenderer.invoke(IPC.shipAudit),
+    customers: (): Promise<ShipCustomerRow[]> => ipcRenderer.invoke(IPC.shipCustomers),
+    clearDataset: (): Promise<Result<ShipWorkspaceSummary>> =>
+      ipcRenderer.invoke(IPC.shipDatasetClear),
+
+    // ---- Upload: the parse runs as a background job ------------------------
+    /** Opens a PDF picker (unless `filePath` is given) and starts the job. */
+    startParse: (request?: ShipParseRequest): Promise<Result<ShipParseStart>> =>
+      ipcRenderer.invoke(IPC.shipParseStart, request ?? {}),
+    parseJob: (jobId: string): Promise<ShipParseJob | null> =>
+      ipcRenderer.invoke(IPC.shipParseJob, jobId),
+    onParseProgress: (callback: (job: ShipParseJob) => void): (() => void) => {
+      const listener = (_e: unknown, job: ShipParseJob): void => callback(job)
+      ipcRenderer.on(IPC.shipParseEvent, listener)
+      return () => ipcRenderer.removeListener(IPC.shipParseEvent, listener)
+    },
+
+    // ---- Orders ------------------------------------------------------------
+    orders: (): Promise<ShipOrderRow[]> => ipcRenderer.invoke(IPC.shipOrdersList),
+    order: (id: string): Promise<ShipOrderRow | null> => ipcRenderer.invoke(IPC.shipOrderGet, id),
+    setStage: (id: string, stage: ShipFulfillmentStage): Promise<Result<ShipOrderRow>> =>
+      ipcRenderer.invoke(IPC.shipOrderStage, { id, stage }),
+    setHold: (id: string, onHold: boolean, reason?: string | null): Promise<Result<ShipOrderRow>> =>
+      ipcRenderer.invoke(IPC.shipOrderHold, { id, onHold, reason: reason ?? null }),
+    moveOrder: (id: string, direction: ShipQueueDirection): Promise<Result<ShipOrderRow[]>> =>
+      ipcRenderer.invoke(IPC.shipOrderMove, { id, direction }),
+    setSpecialRequest: (id: string, text: string): Promise<Result<ShipOrderRow>> =>
+      ipcRenderer.invoke(IPC.shipOrderSpecialRequest, { id, text }),
+    setOrderNotes: (id: string, notes: string): Promise<Result<ShipOrderRow>> =>
+      ipcRenderer.invoke(IPC.shipOrderNotes, { id, notes }),
+    resetQueue: (): Promise<Result<ShipOrderRow[]>> => ipcRenderer.invoke(IPC.shipOrdersResetQueue),
+
+    // ---- Checker -----------------------------------------------------------
+    breaks: (): Promise<ShipBreakSummary[]> => ipcRenderer.invoke(IPC.shipBreaksList),
+    break: (id: string): Promise<ShipBreakDetail | null> => ipcRenderer.invoke(IPC.shipBreakGet, id),
+    setSlotChecked: (id: string, checked: boolean): Promise<Result<ShipSlotUpdate>> =>
+      ipcRenderer.invoke(IPC.shipSlotChecked, { id, checked }),
+    setSlotTopSleeved: (id: string, topSleeved: boolean): Promise<Result<ShipSlotUpdate>> =>
+      ipcRenderer.invoke(IPC.shipSlotTopSleeved, { id, topSleeved }),
+    setBreakChecked: (id: string, checked: boolean): Promise<Result<ShipBreakDetail>> =>
+      ipcRenderer.invoke(IPC.shipBreakCheckAll, { id, checked }),
+    packBreak: (id: string): Promise<Result<ShipBreakDetail>> =>
+      ipcRenderer.invoke(IPC.shipBreakPack, { id }),
+    clearBreak: (id: string): Promise<Result<ShipBreakDetail>> =>
+      ipcRenderer.invoke(IPC.shipBreakClear, { id }),
+    sleeveBreak: (id: string, topSleeved: boolean): Promise<Result<ShipBreakDetail>> =>
+      ipcRenderer.invoke(IPC.shipBreakSleeveAll, { id, topSleeved }),
+    setBreakStatus: (id: string, status: ShipBreakStatus): Promise<Result<ShipBreakDetail>> =>
+      ipcRenderer.invoke(IPC.shipBreakSetStatus, { id, status }),
+
+    // ---- Shipping tracker --------------------------------------------------
+    shipments: (): Promise<ShipShipmentRow[]> => ipcRenderer.invoke(IPC.shipShipmentsList),
+    setShipmentStatus: (id: string, code: ShipStatusCode): Promise<Result<ShipShipmentRow>> =>
+      ipcRenderer.invoke(IPC.shipShipmentStatus, { id, code }),
+    setShipmentNotes: (id: string, notes: string): Promise<Result<ShipShipmentRow>> =>
+      ipcRenderer.invoke(IPC.shipShipmentNotes, { id, notes }),
+    /** Omit `by` for a human write; pass 'auto' / '17track' / 'usps' for a scan. */
+    bulkSetStatus: (
+      entries: ShipBulkStatusEntry[],
+      by?: string | null
+    ): Promise<Result<ShipBulkStatusResult>> =>
+      ipcRenderer.invoke(IPC.shipShipmentBulkStatus, { entries, by: by ?? null }),
+    batchUrls: (): Promise<ShipBatchUrl[]> => ipcRenderer.invoke(IPC.shipBatchUrls),
+    trackingNumbers: (): Promise<string[]> => ipcRenderer.invoke(IPC.shipTrackingNumbers),
+    openTracking: (trackingNumber: string): Promise<Result> =>
+      ipcRenderer.invoke(IPC.shipOpenTracking, trackingNumber),
+    /** Opens the USPS "open all" tabs — one batch, or every batch when omitted. */
+    openBatch: (batchNumber?: number): Promise<Result<{ opened: number }>> =>
+      ipcRenderer.invoke(IPC.shipOpenBatch, { batchNumber }),
+
+    // ---- Sales / ledger ----------------------------------------------------
+    sales: (): Promise<ShipSalesSummary | null> => ipcRenderer.invoke(IPC.shipSales),
+    ledger: (): Promise<ShipLedgerRow[]> => ipcRenderer.invoke(IPC.shipLedger),
+
+    // ---- History -----------------------------------------------------------
+    imports: (): Promise<ShipImportRecord[]> => ipcRenderer.invoke(IPC.shipImportsList),
+    renameImport: (id: string, name: string): Promise<Result<ShipImportRecord>> =>
+      ipcRenderer.invoke(IPC.shipImportRename, { id, name }),
+    deleteImport: (id: string): Promise<Result> => ipcRenderer.invoke(IPC.shipImportDelete, { id }),
+    snapshots: (): Promise<ShipSnapshotSummary[]> => ipcRenderer.invoke(IPC.shipSnapshotsList),
+    snapshot: (id: string): Promise<ShipSnapshot | null> =>
+      ipcRenderer.invoke(IPC.shipSnapshotGet, id),
+    createSnapshot: (name?: string): Promise<Result<ShipSnapshot>> =>
+      ipcRenderer.invoke(IPC.shipSnapshotCreate, { name: name ?? '' }),
+    renameSnapshot: (id: string, name: string): Promise<Result<ShipSnapshot>> =>
+      ipcRenderer.invoke(IPC.shipSnapshotRename, { id, name }),
+    deleteSnapshot: (id: string): Promise<Result> =>
+      ipcRenderer.invoke(IPC.shipSnapshotDelete, { id }),
+    /** Pass a `snapshotId` to export the dated capture instead of live data. */
+    export: (kind: ShipExportKind, snapshotId?: string | null): Promise<ExportResult> =>
+      ipcRenderer.invoke(IPC.shipExport, { kind, snapshotId: snapshotId ?? null }),
+
+    // ---- Settings ----------------------------------------------------------
+    settings: (): Promise<Record<string, string>> => ipcRenderer.invoke(IPC.shipSettingsGet),
+    saveSettings: (patch: Record<string, string | null>): Promise<Result<Record<string, string>>> =>
+      ipcRenderer.invoke(IPC.shipSettingsPatch, patch)
   },
   email: {
     composeInvite: (

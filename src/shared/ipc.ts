@@ -101,6 +101,64 @@ export const IPC = {
   poScanIn: 'po:scan-in',
   poCogsList: 'po:cogs-list',
 
+  // Shipping (RM Cardz Shipping Workspace)
+  // Reads are gated by 'module.fulfillment'; every write by 'shipping.manage'.
+  shipSummary: 'shipping:summary',
+  shipEvent: 'shipping:event',
+  shipSetEvent: 'shipping:event:set',
+  shipWarnings: 'shipping:warnings',
+  shipAudit: 'shipping:audit',
+  shipCustomers: 'shipping:customers',
+  // Parse runs as a background job — startParse returns a jobId immediately.
+  shipParseStart: 'shipping:parse:start',
+  shipParseJob: 'shipping:parse:job',
+  shipParseEvent: 'shipping:parse:event',
+  shipDatasetClear: 'shipping:dataset:clear',
+  // Orders
+  shipOrdersList: 'shipping:orders:list',
+  shipOrderGet: 'shipping:orders:get',
+  shipOrderStage: 'shipping:orders:stage',
+  shipOrderHold: 'shipping:orders:hold',
+  shipOrderMove: 'shipping:orders:move',
+  shipOrderSpecialRequest: 'shipping:orders:special-request',
+  shipOrderNotes: 'shipping:orders:notes',
+  shipOrdersResetQueue: 'shipping:orders:reset-queue',
+  // Checker
+  shipBreaksList: 'shipping:breaks:list',
+  shipBreakGet: 'shipping:breaks:get',
+  shipBreakPack: 'shipping:breaks:pack',
+  shipBreakClear: 'shipping:breaks:clear',
+  shipBreakSleeveAll: 'shipping:breaks:sleeve-all',
+  shipBreakCheckAll: 'shipping:breaks:check-all',
+  shipBreakSetStatus: 'shipping:breaks:set-status',
+  shipSlotChecked: 'shipping:teamslot:checked',
+  shipSlotTopSleeved: 'shipping:teamslot:top-sleeved',
+  // Shipping tracker
+  shipShipmentsList: 'shipping:shipments:list',
+  shipShipmentStatus: 'shipping:shipments:status',
+  shipShipmentNotes: 'shipping:shipments:notes',
+  shipShipmentBulkStatus: 'shipping:shipments:bulk-status',
+  shipBatchUrls: 'shipping:shipments:batch-urls',
+  shipTrackingNumbers: 'shipping:shipments:tracking-numbers',
+  shipOpenTracking: 'shipping:tracking:open',
+  shipOpenBatch: 'shipping:tracking:open-batch',
+  // Sales / ledger
+  shipSales: 'shipping:sales',
+  shipLedger: 'shipping:ledger',
+  // History
+  shipImportsList: 'shipping:imports:list',
+  shipImportRename: 'shipping:imports:rename',
+  shipImportDelete: 'shipping:imports:delete',
+  shipSnapshotsList: 'shipping:snapshots:list',
+  shipSnapshotGet: 'shipping:snapshots:get',
+  shipSnapshotCreate: 'shipping:snapshots:create',
+  shipSnapshotRename: 'shipping:snapshots:rename',
+  shipSnapshotDelete: 'shipping:snapshots:delete',
+  shipExport: 'shipping:export',
+  // Settings
+  shipSettingsGet: 'shipping:settings:get',
+  shipSettingsPatch: 'shipping:settings:patch',
+
   // Email
   emailComposeInvite: 'email:compose-invite',
   emailOpenExternal: 'email:open-external',

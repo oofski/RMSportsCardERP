@@ -41,12 +41,12 @@ export const MODULES: AppModule[] = [
   },
   {
     id: 'fulfillment',
-    name: 'Fulfillment',
-    shortName: 'Fulfillment',
-    description: 'Orders, fulfillment, shipment tracking and customer relationships.',
+    name: 'Shipping',
+    shortName: 'Shipping',
+    description: 'Break packing slips, pick lists, package queue and shipment tracking.',
     icon: 'PackageCheck',
     permission: 'module.fulfillment',
-    status: 'coming-soon'
+    status: 'active'
   },
   {
     id: 'invoicing',
