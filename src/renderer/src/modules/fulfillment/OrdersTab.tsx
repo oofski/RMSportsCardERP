@@ -21,11 +21,21 @@ import {
 /**
  * Orders tab — ONE row per package (per shipment), the fulfillment queue.
  *
- * Every field the architecture doc's section 4 lists lives on this row: the
- * customer, the tracking + service, the per-break card groups (expandable to
- * each team with price / check state / giveaway / top-sleeve), the value pill,
- * the order ids, the stage control, hold + reason, the queue arrows, the
- * special request, the notes and the VIP highlight.
+ * The row is deliberately minimal. Its identity is @handle + the buyer's real
+ * name and NOTHING else: no tracking number, no order ids, no row id, no queue
+ * position, and no per-card "who checked it / when" stamp. Tracking still lives
+ * on the Shipping tracker tab — none of the rest is something an operator
+ * picking a package ever needs to read, and printing it only added noise.
+ *
+ * What the row does carry: the address, the pick progress, the per-break card
+ * groups (expandable to each team with price / check state / giveaway /
+ * top-sleeve), the value pill, the stage control, hold + reason, the queue
+ * arrows, the special request, the notes and the VIP highlight.
+ *
+ * Two breaks inside ONE package must be impossible to confuse, so every break
+ * carries `data-accent` = its index WITHIN that package, mod 6, on both the
+ * collapsed chip and the expanded block. It is a per-package hue, not a global
+ * identity: break #1 in two different packages need not match.
  *
  * The stage is derived from the shipment's manual status in the domain layer,
  * so this screen and the Shipping tracker can never disagree — changing the
@@ -657,8 +667,9 @@ function OrderRow({
       )}
 
       <div className="ship-order-main">
+        {/* Arrows only — the queue position is a number the operator never
+            needs to read, so it is not printed. Reordering is unchanged. */}
         <div className="sor-rank">
-          <span className="sor-rank-num mono">{(pos?.index ?? 0) + 1}</span>
           <button
             className="sor-arrow"
             title={moveTitle ?? 'Move up'}
@@ -691,17 +702,17 @@ function OrderRow({
               </span>
             )}
             {row.multiCard && (
-              <span className="ship-chip" title={`${row.cardCount} cards in this package`}>
+              <span className="ship-chip cards" title={`${row.cardCount} cards in this package`}>
                 <Icon name="SquareStack" size={12} /> {row.cardCount} cards
               </span>
             )}
             {row.hasGiveaway && (
-              <span className="ship-chip" title={`${row.giveawayCount} giveaway card(s)`}>
+              <span className="ship-chip gift" title={`${row.giveawayCount} giveaway card(s)`}>
                 <Icon name="Gift" size={12} /> {row.giveawayCount}
               </span>
             )}
             {row.topSleevedCount > 0 && (
-              <span className="ship-chip" title="Top-sleeved cards">
+              <span className="ship-chip sticker" title="Top-sleeved cards">
                 <Icon name="Sticker" size={12} /> {row.topSleevedCount}
               </span>
             )}
@@ -731,8 +742,11 @@ function OrderRow({
               {row.breaks.length === 0 ? (
                 <span className="muted">No cards</span>
               ) : (
-                row.breaks.map((b) => (
-                  <span className="sor-break-chip" key={b.breakId}>
+                // data-accent is the break's position WITHIN this package, so two
+                // breaks on one row can never be confused. It deliberately does
+                // not mean the same colour across packages.
+                row.breaks.map((b, i) => (
+                  <span className="sor-break-chip" data-accent={String(i % 6)} key={b.breakId}>
                     {b.breakNumber == null ? 'Giveaway' : `#${b.breakNumber}`}
                     <em className="mono">{b.total}</em>
                   </span>
@@ -740,31 +754,13 @@ function OrderRow({
               )}
             </span>
 
-            {row.trackingNumber ? (
-              <button
-                className="sor-track"
-                title="Open USPS tracking"
-                onClick={() => api.shipping.openTracking(row.trackingNumber as string)}
-              >
-                <Icon name="Truck" size={13} />
-                <span className="mono">{row.trackingNumber}</span>
-                {row.serviceType && <em>{row.serviceType}</em>}
-                <Icon name="ExternalLink" size={12} />
-              </button>
-            ) : (
-              <span className="sor-track empty">
-                <Icon name="Truck" size={13} /> No tracking
-              </span>
+            {row.notes && (
+              <div className="sor-note">
+                <Icon name="StickyNote" size={13} />
+                {row.notes}
+              </div>
             )}
-
           </div>
-
-          {row.notes && (
-            <div className="sor-note">
-              <Icon name="StickyNote" size={13} />
-              {row.notes}
-            </div>
-          )}
         </div>
 
         <div className="sor-side">
@@ -840,8 +836,10 @@ function OrderRow({
               This package has no cards — a giveaway-only or empty order.
             </div>
           ) : (
-            row.breaks.map((b) => (
-              <div className="sor-break" key={b.breakId}>
+            // Same accent index as the collapsed chip above, so the chip and the
+            // expanded block for one break read as the same thing.
+            row.breaks.map((b, i) => (
+              <div className="sor-break" data-accent={String(i % 6)} key={b.breakId}>
                 <div className="sor-break-head">
                   <span className="sor-break-title">
                     {b.breakNumber == null ? (
@@ -894,13 +892,9 @@ function OrderRow({
                           <Icon name="Sticker" size={11} /> Top-sleeved
                         </span>
                       )}
+                      {/* Checked reads as checked: the glyph fills and the row
+                          changes colour. No stamp, no id, nothing numeric. */}
                       <span className="sor-team-price mono">{formatMoney(t.price)}</span>
-                      {t.checkedOff && (
-                        <span className="sor-team-by">
-                          {t.checkedOffBy ? `${t.checkedOffBy} · ` : ''}
-                          {formatDateTime(t.checkedOffAt)}
-                        </span>
-                      )}
                     </button>
                   ))}
                 </div>
@@ -908,10 +902,10 @@ function OrderRow({
             ))
           )}
 
+          {/* No address here: .sor-addr already prints it two inches above, and
+              saying it twice on one row is exactly the clutter this pass is
+              removing. Only what the row does NOT already show belongs here. */}
           <div className="sor-footer">
-            <span>
-              <Icon name="MapPin" size={13} /> {row.customer.address || '—'}
-            </span>
             {row.weightOz != null && (
               <span>
                 <Icon name="Package" size={13} /> {row.weightOz} oz
@@ -934,7 +928,6 @@ function OrderRow({
                 {row.manualStatus.setBy ? ` by ${row.manualStatus.setBy}` : ''}
               </span>
             )}
-            <span className="mono sor-id">{row.id}</span>
           </div>
         </div>
       )}

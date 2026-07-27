@@ -323,6 +323,54 @@ function isProperNameLine(line: string): boolean {
   return true
 }
 
+/**
+ * Defensive last pass over a buyer's real name.
+ *
+ * WHY: a pre-v0.0.25 build shipped names with the slip's pack title glued on
+ * ("Bailey Arnett 2025 FINEST FOOTBALL"), and those names are still sitting in
+ * saved datasets. `isProperNameLine` rejects any line containing a digit, so
+ * the current parser cannot reproduce the year-bearing form — but a YEAR-LESS
+ * shouty tail ("Bailey Arnett FINEST FOOTBALL") is all letters, four words and
+ * carries no stopword, so it would still pass. This trims that tail plus the
+ * stray box / bullet glyphs the PDF text layer leaves behind.
+ *
+ * It is deliberately conservative: a name that is uniformly shouty is a real
+ * name printed in caps ("BAILEY ARNETT") with nothing to tell head from tail,
+ * so it is left exactly as it is, and the first word is never dropped.
+ *
+ * A LONE shouty tail word is also kept. All-caps surnames are ordinary in a
+ * shipping address ("Kevin MCDONALD", "Anne-Marie DE LA CRUZ"), and dropping
+ * one silently mails a package to half a name — much worse than leaving a
+ * stray title word on. A real glued-on pack title always shows itself as
+ * either a year/number or two or more shouty words, so that is what is cut.
+ */
+export function sanitizeRealName(raw: string | null | undefined): string {
+  const cleaned = (raw ?? '').replace(/[☐☑✓✔❑▢◻◼□■•·*_]+/g, ' ').replace(/\s+/g, ' ').trim()
+  if (!cleaned) return ''
+  // A pack-title word: carries a digit, or is >=4 chars of pure upper case.
+  // The length floor keeps real suffixes ("JR", "III") out of it.
+  const isPackWord = (w: string): boolean =>
+    /\d/.test(w) || (w.length >= 4 && /^[A-Z][A-Z.'À-ɏ-]*$/.test(w))
+  const words = cleaned.split(' ')
+  if (words.every(isPackWord)) return cleaned
+  // Measure the trailing run first, then decide whether it is a title at all.
+  let run = words.length
+  while (run > 1 && isPackWord(words[run - 1])) run--
+  const tail = words.slice(run)
+  // A year opens the pack title, so cut from it and keep whatever shouty word
+  // came before ("Kevin MCDONALD 2025 PRIZM" -> "Kevin MCDONALD").
+  const year = tail.findIndex((w) => /\d/.test(w))
+  if (year >= 0) return words.slice(0, run + year).join(' ')
+  // No number to anchor on, so this is a guess — take it only when it is safe.
+  // Two or more shouty words read as a title ("Bailey Arnett FINEST FOOTBALL"),
+  // but never cut down to a lone first name: "Mary SMITH JONES" is a person
+  // with a double-barrelled surname, not a pack title. Losing half of a real
+  // name is worse than keeping a title we were not sure about.
+  const keptWords = run
+  if (tail.length >= 2 && keptWords >= 2) return words.slice(0, run).join(' ')
+  return words.join(' ')
+}
+
 export function trackingUrl(tracking: string): string {
   return `${USPS_TRACK_BASE}${encodeURIComponent(tracking)}`
 }
@@ -552,7 +600,9 @@ export function parseBreakingSlip(pages: PageRef[], matcher: TeamMatcher): Break
 
     if (!realName) {
       const guess = guessBreakingRealName(text)
-      if (guess) realName = guess
+      // Same defensive trim as the packing side — the breaking slip's
+      // `Real Name (handle)` capture has no digit guard at all.
+      if (guess) realName = sanitizeRealName(guess) || guess
     }
 
     const header = text.match(RE_BREAK_NUMBER)
@@ -660,7 +710,9 @@ export function parsePackingSlip(
         // Skip the badge / blank filler that can sit between To: and the name.
         if (/^NEW\b/i.test(line)) continue
         if (isProperNameLine(line)) {
-          slip.realName = line
+          // Defensive only — see sanitizeRealName. Never let the sanitiser blank
+          // a name it could not read: fall back to the line as printed.
+          slip.realName = sanitizeRealName(line) || line
           continue
         }
         beforeName.push(line)

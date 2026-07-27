@@ -4949,6 +4949,24 @@ tr.hoverable-row:hover {
   background: var(--brand-soft-2);
   color: var(--brand-700);
 }
+/* The three status chips on an Orders row. They were rendering with the base
+   chip only, so a card count, a giveaway count and a top-sleeve count were three
+   identical grey pills — the modifier existed in the markup and meant nothing.
+   Each now carries its own reading, using pairs that clear 4.5:1 in both themes
+   (--warning / --danger on their own tints do not, which is why neither is used
+   here). */
+.ship-chip.cards {
+  background: var(--surface-3);
+  color: var(--text);
+}
+.ship-chip.gift {
+  background: var(--success-bg);
+  color: var(--success-strong);
+}
+.ship-chip.sticker {
+  background: var(--brand-soft);
+  color: var(--brand-700);
+}
 
 /* ---------- Upload: import form ---------- */
 .ship-upload-form {
@@ -5542,16 +5560,22 @@ tr.hoverable-row:hover {
   color: var(--danger);
 }
 
-/* ---------- Orders: the package row ---------- */
+/* ---------- Orders: the package row ----------
+   The queue is the one screen an operator lives in all day, so a row is a real
+   card, not a strip: card padding, a name readable at arm's length, and a right
+   rail that stacks money over controls instead of crowding them onto one line.
+   Identity on the row is only @handle + the person's name — no pack title, no
+   order number, no tracking. Tracking lives on the Shipping tracker tab.
+   ------------------------------------------------------------------------ */
 .ship-orders {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 14px;
 }
 .ship-order {
   border: 1px solid var(--border);
-  border-left: 3px solid var(--border-strong);
-  border-radius: var(--radius);
+  border-left: 4px solid var(--border-strong);
+  border-radius: var(--radius-lg);
   background: var(--surface);
   box-shadow: var(--shadow-sm);
   transition: border-color 0.13s ease, box-shadow 0.13s ease, opacity 0.13s ease;
@@ -5590,14 +5614,14 @@ tr.hoverable-row:hover {
 .ship-special {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   flex-wrap: wrap;
-  padding: 7px 13px;
+  padding: 11px 22px;
   background: var(--danger-bg);
   color: var(--danger);
-  font-size: 12.5px;
+  font-size: 13.5px;
   border-bottom: 1px solid var(--danger);
-  border-radius: 6px 6px 0 0;
+  border-radius: 15px 15px 0 0;
 }
 .ship-special-text {
   font-weight: 700;
@@ -5605,7 +5629,7 @@ tr.hoverable-row:hover {
 .ship-special-meta {
   color: var(--danger);
   opacity: 0.75;
-  font-size: 11.5px;
+  font-size: 12.5px;
   margin-left: auto;
 }
 .ship-special .link-btn {
@@ -5615,39 +5639,36 @@ tr.hoverable-row:hover {
 .ship-order-main {
   display: flex;
   align-items: flex-start;
-  gap: 12px;
-  padding: 11px 13px;
+  gap: 16px;
+  padding: 20px 22px;
 }
 
-/* Queue position + the up/down arrows (gated within the hold group). */
+/* Reorder arrows only — the queue position is the row's own place in the list,
+   so printing the number again was noise. */
 .sor-rank {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 2px;
+  gap: 5px;
   flex-shrink: 0;
-  width: 30px;
-  padding-top: 1px;
-}
-.sor-rank-num {
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--text-3);
+  width: 32px;
+  padding-top: 2px;
 }
 .sor-arrow {
-  width: 22px;
-  height: 17px;
+  width: 32px;
+  height: 27px;
   display: flex;
   align-items: center;
   justify-content: center;
-  border: none;
-  border-radius: 5px;
-  background: var(--surface-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
   color: var(--text-2);
   cursor: pointer;
 }
 .sor-arrow:hover:not(:disabled) {
   background: var(--brand-soft);
+  border-color: var(--brand-300);
   color: var(--brand-700);
 }
 .sor-arrow:disabled {
@@ -5661,19 +5682,20 @@ tr.hoverable-row:hover {
 .sor-head {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   flex-wrap: wrap;
 }
 .sor-handle {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
   padding: 0;
   border: none;
   background: none;
   font: inherit;
-  font-size: 14px;
+  font-size: 17px;
   font-weight: 700;
+  letter-spacing: -0.012em;
   color: var(--text);
   cursor: pointer;
 }
@@ -5684,13 +5706,23 @@ tr.hoverable-row:hover {
   color: var(--text-3);
 }
 .sor-name {
-  font-size: 13px;
+  font-size: 15px;
   color: var(--text-2);
 }
+/* Chips inside a queue row scale with the row; the compact 11.5px chip stays
+   the default everywhere else in the workspace. */
+.ship-order .ship-chip {
+  padding: 3px 10px;
+  font-size: 12.5px;
+}
+.ship-order .ship-chip.mini {
+  padding: 2px 8px;
+  font-size: 11.5px;
+}
 .sor-addr {
-  font-size: 12px;
-  color: var(--text-3);
-  margin-top: 2px;
+  font-size: 13px;
+  color: var(--text-2);
+  margin-top: 6px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -5699,25 +5731,26 @@ tr.hoverable-row:hover {
 .sor-meta {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px 16px;
   flex-wrap: wrap;
-  margin-top: 7px;
-  font-size: 12px;
-  color: var(--text-3);
+  margin-top: 14px;
+  font-size: 13px;
+  color: var(--text-2);
 }
 .sor-pick {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--text-2);
 }
 .sor-pick.done {
-  color: var(--success);
+  color: var(--success-strong);
 }
 .sor-pick-bar {
-  width: 54px;
-  height: 5px;
+  width: 80px;
+  height: 7px;
   border-radius: 999px;
   background: var(--surface-3);
   overflow: hidden;
@@ -5733,96 +5766,75 @@ tr.hoverable-row:hover {
 }
 .sor-breaks {
   display: inline-flex;
-  gap: 4px;
+  gap: 6px;
   flex-wrap: wrap;
 }
+/* Each break in the package carries the same accent here as it does in the
+   expanded body, so the chip and the block below are read as one thing. */
 .sor-break-chip {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 1px 7px;
-  border-radius: 6px;
+  gap: 6px;
+  padding: 4px 10px;
+  border-left: 3px solid var(--border-strong);
+  border-radius: 4px 8px 8px 4px;
   background: var(--surface-3);
   color: var(--text-2);
-  font-size: 11.5px;
+  font-size: 12.5px;
   font-weight: 600;
 }
 .sor-break-chip em {
   font-style: normal;
-  color: var(--text-3);
-  font-weight: 700;
-}
-.sor-track {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 1px 7px 1px 5px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--surface-2);
   color: var(--text-2);
-  font-size: 11.5px;
-  cursor: pointer;
-}
-.sor-track:hover {
-  border-color: var(--brand-300);
-  color: var(--brand-700);
-}
-.sor-track em {
-  font-style: normal;
-  color: var(--text-3);
-}
-.sor-track.empty {
-  cursor: default;
-  color: var(--text-3);
-  background: none;
-  border-style: dashed;
-}
-.sor-orderids {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  font-size: 11.5px;
-  color: var(--text-3);
+  font-weight: 700;
 }
 .sor-note {
   display: flex;
   align-items: flex-start;
-  gap: 6px;
-  margin-top: 7px;
-  padding: 6px 9px;
+  gap: 8px;
+  flex-basis: 100%;
+  margin-top: 2px;
+  padding: 9px 12px;
   border-radius: var(--radius-sm);
   background: var(--surface-2);
   border: 1px solid var(--border);
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text-2);
 }
 .sor-note svg {
   flex-shrink: 0;
-  margin-top: 1px;
-  color: var(--text-3);
+  margin-top: 2px;
+  color: var(--text-2);
 }
 
-/* Right rail: value, stage control, per-row actions. */
+/* Right rail: the money reads first, then the one-click advance, then the
+   stage picker and the row actions on a second line. Placement is explicit so
+   an absent advance button leaves the rest exactly where it was. */
 .sor-side {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(132px, auto) auto;
   align-items: center;
-  gap: 8px;
+  justify-items: end;
+  gap: 10px 12px;
   flex-shrink: 0;
 }
 .sor-value {
-  font-size: 14px;
+  grid-area: 1 / 1;
+  font-size: 20px;
   font-weight: 700;
   color: var(--text);
-  min-width: 72px;
   text-align: right;
 }
+.sor-advance {
+  grid-area: 1 / 2;
+}
 .ship-stage-select {
+  grid-area: 2 / 1;
+  justify-self: stretch;
   width: auto;
-  min-width: 128px;
-  height: 32px;
-  padding: 0 26px 0 10px;
-  font-size: 12.5px;
+  min-width: 132px;
+  padding: 0 30px 0 12px;
+  font-size: 13px;
   font-weight: 600;
 }
 .ship-stage-select[data-stage='put_together'] {
@@ -5838,7 +5850,7 @@ tr.hoverable-row:hover {
 .ship-stage-select[data-stage='all_good'] {
   background-color: var(--success-bg);
   border-color: var(--success);
-  color: var(--success);
+  color: var(--success-strong);
 }
 .ship-stage-select[data-stage='exception'],
 .ship-stage-select[data-stage='returned'] {
@@ -5851,12 +5863,13 @@ tr.hoverable-row:hover {
   background: var(--surface);
 }
 .sor-actions {
+  grid-area: 2 / 2;
   display: flex;
-  gap: 4px;
+  gap: 6px;
 }
 .sor-act {
-  width: 30px;
-  height: 30px;
+  width: 36px;
+  height: 36px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -5889,120 +5902,201 @@ tr.hoverable-row:hover {
 .sor-expand {
   border-top: 1px solid var(--border);
   background: var(--surface-2);
-  padding: 12px 13px 11px 55px;
-  border-radius: 0 0 6px 6px;
+  padding: 16px 22px 18px 70px;
+  border-radius: 0 0 15px 15px;
 }
 .sor-empty-cards {
-  font-size: 12.5px;
-  color: var(--text-3);
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+/* ---------- Per-break emphasis ----------
+   Two breaks in one package must be impossible to confuse, so each break in a
+   package takes the next of six accents (index % 6) on both its chip in the
+   collapsed meta row and its block down here: a thick coloured rail plus a
+   header tinted from the same token. Every accent is a theme token and the
+   tints are mixed against --surface, so both themes follow automatically.
+   Adjacent indices are deliberately different hues — most packages have two or
+   three breaks, so 0/1/2 (indigo, amber, green) do the heavy lifting.
+   ------------------------------------------------------------------------ */
+.sor-break[data-accent='0'],
+.sor-break-chip[data-accent='0'] {
+  --sor-accent: var(--brand-500);
+}
+.sor-break[data-accent='1'],
+.sor-break-chip[data-accent='1'] {
+  --sor-accent: var(--warning);
+}
+.sor-break[data-accent='2'],
+.sor-break-chip[data-accent='2'] {
+  --sor-accent: var(--success);
+}
+.sor-break[data-accent='3'],
+.sor-break-chip[data-accent='3'] {
+  --sor-accent: var(--danger);
+}
+.sor-break[data-accent='4'],
+.sor-break-chip[data-accent='4'] {
+  --sor-accent: var(--chart-purple);
+}
+.sor-break[data-accent='5'],
+.sor-break-chip[data-accent='5'] {
+  --sor-accent: var(--text-2);
+}
+
+.sor-break {
+  border: 1px solid var(--border);
+  border-left: 6px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
 }
 .sor-break + .sor-break {
-  margin-top: 10px;
+  margin-top: 14px;
+}
+.sor-break[data-accent] {
+  border-left-color: var(--sor-accent);
 }
 .sor-break-head {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding-bottom: 5px;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 11px 15px;
+  background: var(--surface-3);
   border-bottom: 1px solid var(--border);
 }
+.sor-break[data-accent] .sor-break-head {
+  background: color-mix(in srgb, var(--sor-accent) 20%, var(--surface));
+  border-bottom-color: color-mix(in srgb, var(--sor-accent) 40%, var(--surface));
+}
+.sor-break-chip[data-accent] {
+  border-left-color: var(--sor-accent);
+  background: color-mix(in srgb, var(--sor-accent) 20%, var(--surface));
+  color: var(--text);
+}
+.sor-break-chip[data-accent] em {
+  color: var(--text-2);
+}
+/* A 15% wash of a bright accent barely registers on a dark surface, so dark
+   leans on the tint harder to keep the six lanes as separable as in light. */
+:root[data-theme='dark'] .sor-break[data-accent] .sor-break-head {
+  background: color-mix(in srgb, var(--sor-accent) 26%, var(--surface));
+  border-bottom-color: color-mix(in srgb, var(--sor-accent) 50%, var(--surface));
+}
+:root[data-theme='dark'] .sor-break-chip[data-accent] {
+  background: color-mix(in srgb, var(--sor-accent) 26%, var(--surface));
+}
+
 .sor-break-title {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  font-size: 12.5px;
+  gap: 7px;
+  font-size: 14.5px;
   font-weight: 700;
   color: var(--text);
 }
 .sor-break-title svg {
-  color: var(--text-3);
+  color: var(--text-2);
 }
 .sor-break-prog {
-  font-size: 11.5px;
-  color: var(--text-3);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-2);
 }
 .sor-break-val {
   margin-left: auto;
-  font-size: 12.5px;
+  font-size: 14.5px;
   font-weight: 700;
-  color: var(--text-2);
+  color: var(--text);
 }
+
+/* ---------- The team check-off tiles ----------
+   This is the control an operator hits hundreds of times a day, so every team
+   is a full tile: 48px tall, its own surface, its own border, an obvious hover
+   and a checked state you can read from across the room. Checking one off adds
+   no id, no order number and no who/when stamp — the glyph and the colour are
+   the whole signal.
+   ------------------------------------------------------------------------ */
 .sor-teams {
   display: flex;
   flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
 }
 .sor-team {
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 5px 2px;
-  border-bottom: 1px solid var(--border);
-  font-size: 12.5px;
+  gap: 12px;
+  min-height: 48px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  font-size: 14px;
   color: var(--text-2);
-}
-.sor-team:last-child {
-  border-bottom: none;
+  transition: background 0.12s ease, border-color 0.12s ease;
 }
 .sor-team-check {
-  color: var(--text-3);
   display: flex;
-}
-.sor-team.checked .sor-team-check {
-  color: var(--success);
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  color: var(--text-2);
 }
 .sor-team-name {
+  font-size: 14px;
   font-weight: 600;
   color: var(--text);
 }
-.sor-team.checked .sor-team-name {
-  color: var(--text-2);
-}
-.sor-team-order {
-  font-size: 11px;
-  color: var(--text-3);
-}
 .sor-team-price {
   margin-left: auto;
+  font-size: 14px;
   font-weight: 700;
   color: var(--text);
 }
-.sor-team-by {
-  font-size: 11px;
-  color: var(--text-3);
-  min-width: 150px;
-  text-align: right;
+.sor-team.checked {
+  background: var(--success-bg);
+  border-color: var(--success);
 }
+.sor-team.checked .sor-team-check {
+  color: var(--success-strong);
+}
+/* Done recedes so the tiles still to pick are what the eye lands on. */
+.sor-team.checked .sor-team-name,
+.sor-team.checked .sor-team-price {
+  color: var(--text-2);
+}
+
 .sor-footer {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 16px;
   flex-wrap: wrap;
-  margin-top: 11px;
-  padding-top: 9px;
+  margin-top: 14px;
+  padding-top: 12px;
   border-top: 1px solid var(--border);
-  font-size: 11.5px;
-  color: var(--text-3);
+  font-size: 12.5px;
+  color: var(--text-2);
 }
 .sor-footer span {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-}
-.sor-id {
-  margin-left: auto;
-  opacity: 0.7;
+  gap: 6px;
 }
 
-@media (max-width: 1080px) {
+@media (max-width: 1180px) {
   .ship-order-main {
     flex-wrap: wrap;
   }
   .sor-side {
     width: 100%;
-    justify-content: flex-end;
+    justify-content: end;
   }
   .sor-expand {
-    padding-left: 13px;
+    padding-left: 20px;
   }
 }
 
@@ -7823,18 +7917,27 @@ tr.hoverable-row:hover {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  width: 100%;
-  padding: 7px 10px;
+  gap: 7px;
+  min-width: 118px;
+  padding: 9px 14px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--brand-500);
   background: var(--brand-500);
-  color: #fff;
-  font-size: 12px;
+  /* Was a literal #fff, which is only 4.24:1 on the dark theme's lighter
+     --brand-500. Both themes now use a token and clear 4.5:1. */
+  color: var(--text-inverse);
+  font-size: 13px;
   font-weight: 650;
   cursor: pointer;
   white-space: nowrap;
   transition: background 0.13s ease, border-color 0.13s ease;
+}
+/* Only the FILLED variant sits on --brand-500 and needs dark ink. `.next` is an
+   outline button on --surface, and this selector outranks `.sor-advance.next`
+   (0,3,0 vs 0,2,0) — without :not() it repainted "Mark sent" in --ink-900 on
+   --surface, i.e. 1.13:1 and invisible on the dark theme. */
+:root[data-theme='dark'] .sor-advance:not(.next) {
+  color: var(--ink-900);
 }
 .sor-advance:hover:not(:disabled) {
   background: var(--brand-600);
@@ -7851,26 +7954,32 @@ tr.hoverable-row:hover {
   opacity: 0.55;
   cursor: default;
 }
-/* Team rows are checkoff controls now, not static text. */
+/* Team rows are checkoff controls, not static text. The button reset stays
+   deliberately thin — the tile's surface, border and radius live on .sor-team
+   so the checked state is not fought by a more specific element+class rule. */
 button.sor-team {
   width: 100%;
   text-align: left;
-  font: inherit;
-  color: inherit;
-  background: none;
-  border: none;
+  /* font-family only. A `font: inherit` shorthand here silently clobbers the
+     tile font-size, which is declared once on .sor-team. */
+  font-family: inherit;
+  font-weight: inherit;
   cursor: pointer;
-  border-radius: var(--radius-sm);
 }
 button.sor-team:hover:not(:disabled) {
-  background: var(--surface-3);
+  background: var(--brand-soft);
+  border-color: var(--brand-300);
+}
+button.sor-team.checked:hover:not(:disabled) {
+  background: var(--success-bg);
+  border-color: var(--success-strong);
 }
 button.sor-team:disabled {
   cursor: default;
 }
 button.sor-team:focus-visible {
   outline: 2px solid var(--brand-500);
-  outline-offset: -2px;
+  outline-offset: 2px;
 }
 
 /* Dropdowns read as the primary control on the Shipping screens, so give them a
