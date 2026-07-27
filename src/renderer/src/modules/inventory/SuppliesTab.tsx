@@ -6,7 +6,6 @@ import { Icon } from '../../components/Icon'
 import { formatMoney } from '../../lib/format'
 import { SupplyFormModal } from './SupplyFormModal'
 import { SupplyStockModal } from './SupplyStockModal'
-import { SupplyOrdersPanel } from './SupplyOrdersPanel'
 
 const UNIT_LABEL: Record<string, string> = {
   each: 'each',
@@ -24,6 +23,10 @@ type StockTarget = { supply: Supply; mode: 'purchase' | 'use' | 'adjust' }
  * tape. Separate from the sellable card catalog: their stock and cost never
  * touch inventory value or spread. Track how many you have, log purchases (which
  * records the spend), and get low-stock flags on the repeat items.
+ *
+ * This tab owns the supplies themselves — stock, per-item cost, buy/use/adjust.
+ * Tracking a reorder through Ordered → In-transit → Delivered lives on the
+ * Purchase Orders tab, next to the buy-side PO board.
  */
 export function SuppliesTab({ canManage }: { canManage: boolean }): JSX.Element {
   const [supplies, setSupplies] = useState<Supply[]>([])
@@ -73,7 +76,8 @@ export function SuppliesTab({ canManage }: { canManage: boolean }): JSX.Element 
         <div>
           <h2>Supplies</h2>
           <p className="section-sub">
-            Packaging &amp; operating consumables — kept separate from card inventory.
+            Packaging &amp; operating consumables — kept separate from card inventory. Reorders are
+            tracked on the Purchase Orders tab.
           </p>
         </div>
         {canManage && (
@@ -119,9 +123,7 @@ export function SuppliesTab({ canManage }: { canManage: boolean }): JSX.Element 
           }
         />
       ) : (
-        <div className="panel-row supplies-row">
-          <div className="supplies-main">
-            <div className="table-wrap">
+        <div className="table-wrap supplies-table">
           <table className="data">
             <thead>
               <tr>
@@ -243,9 +245,6 @@ export function SuppliesTab({ canManage }: { canManage: boolean }): JSX.Element 
               ))}
             </tbody>
           </table>
-            </div>
-          </div>
-          <SupplyOrdersPanel supplies={supplies} canManage={canManage} onChanged={load} />
         </div>
       )}
 

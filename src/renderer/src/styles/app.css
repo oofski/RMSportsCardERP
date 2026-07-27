@@ -3307,56 +3307,171 @@ tr.hoverable-row:hover {
    read wrong in dark mode.
    ========================================================================== */
 
-/* ---------- Kanban board ---------- */
-.po-board {
-  display: flex;
-  gap: 14px;
-  align-items: flex-start;
-  overflow-x: auto;
-  padding: 4px 2px 8px;
+/* ---------- The Purchase Orders tab: two stacked workspace sections ----------
+   One shell used twice — purchase orders on top, supply orders beneath. Each is
+   a full-width card with a real header band (icon, title, live counters, its one
+   primary action) over a roomy body. Stacked, never side by side: both are
+   pipelines that want the whole width for their lanes.
+   ------------------------------------------------------------------------ */
+.po-tab {
+  padding-bottom: 32px;
 }
-.po-col {
-  flex: 1 0 250px;
-  min-width: 250px;
-  max-width: 320px;
-  background: var(--surface-2);
+.wsec {
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-xl);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+.wsec + .wsec {
+  margin-top: 26px;
+}
+.wsec-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 20px 24px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  border-radius: 21px 21px 0 0;
+}
+.wsec-ico {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 46px;
+  flex-shrink: 0;
+  border-radius: 13px;
+  background: var(--brand-soft);
+  color: var(--brand-700);
+}
+.wsec-title h3 {
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: -0.016em;
+}
+.wsec-title p {
+  margin: 3px 0 0;
+  font-size: 13.5px;
+  color: var(--text-2);
+}
+.wsec-title {
+  flex: 1 1 260px;
+  min-width: 0;
+}
+/* Counters + the section's one primary action travel together, so on a narrow
+   window they wrap to their own line as a block and stay right-aligned. */
+.wsec-actions {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  margin-left: auto;
+}
+.wsec-stats {
+  display: flex;
+  align-items: stretch;
+  gap: 22px;
+}
+.wsec-stat {
   display: flex;
   flex-direction: column;
-  max-height: 100%;
+  align-items: flex-end;
+  gap: 1px;
+}
+.wsec-stat-val {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.wsec-stat-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+.wsec-body {
+  padding: 22px 24px 26px;
+}
+@media (max-width: 720px) {
+  .wsec-head {
+    padding: 16px 16px;
+  }
+  .wsec-body {
+    padding: 16px;
+  }
+  .wsec-stats {
+    gap: 16px;
+  }
+}
+
+/* ---------- Kanban board ----------
+   Four lanes on one grid rather than a horizontal scroll strip, so Cancelled is
+   never half off the edge, and each card is a real object: number + destination,
+   the supplier as the headline, the money big, and full-width move buttons. */
+.po-board {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  /* Lanes run to the same depth so the board reads as one object rather than
+     four ragged stacks — and so a near-empty lane is still an obvious target. */
+  align-items: stretch;
+}
+@media (max-width: 1080px) {
+  .po-board {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 620px) {
+  .po-board {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.po-col {
+  min-width: 0;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  display: flex;
+  flex-direction: column;
 }
 .po-col-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 14px;
+  gap: 8px;
+  padding: 14px 16px;
   border-bottom: 1px solid var(--border);
 }
 .po-col-title {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
   font-size: 12.5px;
   font-weight: 700;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--text-2);
 }
+/* --success / --danger only clear 3:1 on the light column head, so the words
+   take a token that clears 4.5:1 in both themes and the glyph carries the hue. */
 .po-col-received .po-col-title {
-  color: var(--success);
+  color: var(--success-strong);
 }
-.po-col-cancelled .po-col-title {
+.po-col-cancelled .po-col-title svg {
   color: var(--danger);
 }
 .po-col-count {
-  min-width: 22px;
-  height: 22px;
-  padding: 0 7px;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 9px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 700;
   color: var(--text-2);
   background: var(--surface-3);
@@ -3364,27 +3479,26 @@ tr.hoverable-row:hover {
 }
 .po-col-body {
   flex: 1;
-  min-height: 60px;
-  overflow-y: auto;
-  padding: 10px;
+  min-height: 76px;
+  padding: 14px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 14px;
 }
 .po-col-empty {
-  padding: 18px 8px;
+  padding: 26px 8px;
   text-align: center;
-  font-size: 12.5px;
-  color: var(--text-3);
+  font-size: 13px;
+  color: var(--text-2);
 }
 
 /* ---------- PO card ---------- */
 .po-card {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius);
   box-shadow: var(--shadow-sm);
-  padding: 11px 12px;
+  padding: 15px 16px 16px;
   cursor: pointer;
   transition: border-color 0.13s ease, box-shadow 0.13s ease, transform 0.13s ease;
 }
@@ -3395,46 +3509,95 @@ tr.hoverable-row:hover {
 }
 .po-card-top {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: 8px;
 }
 .po-card-num {
-  font-size: 13px;
+  font-size: 14.5px;
   font-weight: 700;
+  letter-spacing: -0.01em;
   color: var(--brand-700);
 }
-.po-card-total {
-  font-size: 13px;
+/* Where the boxes land — a quiet chip so the number keeps the line's weight. */
+.po-card-dest {
+  flex-shrink: 0;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--text-2);
+  font-size: 11.5px;
   font-weight: 700;
-  color: var(--text);
-}
-.po-card-supplier {
-  margin-top: 4px;
-  font-size: 13px;
-  color: var(--text);
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
-.po-card-meta {
-  margin-top: 2px;
-  font-size: 12px;
-  color: var(--text-3);
+.po-card-supplier {
+  margin-top: 8px;
+  font-size: 14.5px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--text);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
+.po-card-figs {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 12px;
+}
+.po-card-total {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.po-card-meta {
+  font-size: 12.5px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+/* Moves stack full width: at four lanes across a card is ~190px wide, and a
+   half-width button is a worse target than a stacked one. */
 .po-card-foot {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 11px;
-  padding-top: 10px;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 14px;
   border-top: 1px solid var(--border);
 }
+.po-card-foot .po-move {
+  width: 100%;
+  height: 36px;
+  justify-content: center;
+  font-size: 13px;
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.po-card-foot .po-move:hover {
+  background: var(--surface-3);
+}
+/* Destructive without shouting: --danger never clears 4.5:1 on a light surface,
+   so the label keeps a legible token and the red arrives as tint + border. */
 .po-move.po-move-cancelled {
-  color: var(--danger);
+  color: var(--text-2);
+}
+.po-card-foot .po-move.po-move-cancelled:hover {
+  background: var(--danger-bg);
+  border-color: var(--danger);
+  color: var(--text);
 }
 .po-move.po-move-received {
-  color: var(--success);
+  color: var(--success-strong);
+}
+.po-card-foot .po-move.po-move-received:hover {
+  background: var(--success-bg);
+  border-color: var(--success);
 }
 
 /* ---------- Create modal: line items ---------- */
@@ -4630,150 +4793,290 @@ tr.hoverable-row:hover {
   font-variant-numeric: tabular-nums;
 }
 
-/* ---------- Supply orders pipeline (right rail) ---------- */
-.supplies-row {
+/* ---------- Supplies table (Inventory > Supplies) ----------
+   The supplies table used to share the row with a narrow supply-order rail; the
+   order tracker now lives on the Purchase Orders tab, so the table gets the
+   full width and scrolls sideways only if it truly has to. */
+.supplies-table {
   margin-top: 4px;
-  /* Give the table all the room it needs; keep the orders rail narrow + fixed
-     so the supply rows never scroll sideways. */
-  grid-template-columns: minmax(0, 1fr) 300px;
-}
-@media (max-width: 1040px) {
-  .supplies-row {
-    grid-template-columns: 1fr;
-  }
-}
-.supplies-main {
-  min-width: 0;
-}
-.supplies-main .table-wrap {
   overflow-x: auto;
 }
-.supply-orders-panel {
+
+/* ---------- Supply orders pipeline (Purchase Orders tab) ----------
+   Relocated out of Inventory > Supplies and rebuilt at the scale of the Orders
+   queue: one lane per stage stacked down the section, and inside a lane a full
+   width row — 60px photo, the supply named at 17px, the money and the two
+   things you can do to it on the right edge. No 262px card, no 13px name.
+   ------------------------------------------------------------------------ */
+.so-lanes {
   display: flex;
   flex-direction: column;
+  gap: 24px;
 }
-.so-stages {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  margin-top: 12px;
-}
-.so-stage-head {
+.so-lane-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  margin-bottom: 8px;
+  gap: 12px;
+  margin-bottom: 12px;
 }
-.so-badge {
+.so-lane-badge {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  font-size: 11px;
+  gap: 7px;
+  padding: 6px 13px;
+  border-radius: 999px;
+  font-size: 12.5px;
   font-weight: 700;
   letter-spacing: 0.02em;
-  padding: 3px 9px;
-  border-radius: 999px;
+  white-space: nowrap;
+  background: var(--surface-3);
+  color: var(--text-2);
 }
-.so-badge svg {
-  width: 13px;
-  height: 13px;
-}
-.so-badge-ordered {
+/* Each pair below is verified ≥4.5:1 in BOTH themes (see the lane comment in
+   SupplyOrdersSection). The glyph inherits the label colour so it can never
+   drop under the tint it sits on. */
+.so-lane-badge[data-lane='ordered'] {
   background: var(--brand-soft);
-  color: var(--brand-600);
+  color: var(--brand-700);
 }
-.so-badge-transit {
-  background: var(--info-bg);
-  color: var(--info);
+.so-lane-badge[data-lane='in_transit'] {
+  background: var(--warning-bg);
+  color: var(--text);
 }
-.so-badge-delivered {
+.so-lane-badge[data-lane='delivered'] {
   background: var(--success-bg);
-  color: var(--success);
+  color: var(--success-strong);
 }
-.so-count {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-3);
+.so-lane-badge[data-lane='cancelled'] {
+  background: var(--danger-bg);
+  color: var(--text-2);
 }
-.so-stage-empty {
+.so-lane-count {
   font-size: 13px;
-  color: var(--text-3);
-  padding: 2px 2px 4px;
+  font-weight: 700;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
 }
-.so-card {
+.so-lane-rule {
+  flex: 1 1 auto;
+  height: 1px;
+  background: var(--border);
+}
+.so-lane-empty {
+  padding: 16px 2px 4px;
+  font-size: 13.5px;
+  color: var(--text-2);
+}
+.so-lane-more {
+  margin-top: 12px;
+  font-size: 13px;
+}
+.so-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* ---- One order ---- */
+.so-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 18px;
+  padding: 20px 22px;
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-left: 4px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  transition: border-color 0.13s ease, box-shadow 0.13s ease, opacity 0.13s ease;
+}
+.so-row:hover {
+  box-shadow: var(--shadow-md);
+}
+.so-row.busy {
+  opacity: 0.55;
+  pointer-events: none;
+}
+.so-row[data-lane='ordered'] {
+  border-left-color: var(--brand-500);
+}
+.so-row[data-lane='in_transit'] {
+  border-left-color: var(--warning);
+}
+.so-row[data-lane='delivered'] {
+  border-left-color: var(--success);
+}
+.so-row[data-lane='cancelled'] {
   background: var(--surface-2);
-  padding: 10px 11px;
-  margin-bottom: 8px;
 }
-.so-card:last-child {
-  margin-bottom: 0;
-}
-.so-card-top {
+.so-row-thumb {
+  width: 60px;
+  height: 60px;
+  flex-shrink: 0;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-2);
   display: flex;
   align-items: center;
-  gap: 10px;
-}
-.so-thumb {
-  width: 34px;
-  height: 34px;
-  border-radius: var(--radius-sm);
-}
-.so-card-main {
-  min-width: 0;
-}
-.so-card-name {
-  font-weight: 600;
-  font-size: 13px;
-  white-space: nowrap;
+  justify-content: center;
   overflow: hidden;
-  text-overflow: ellipsis;
 }
-.so-card-sub {
-  font-size: 12px;
-  color: var(--text-3);
-  margin-top: 1px;
+.so-row-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
-.so-card-actions {
+.so-row-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding-top: 2px;
+}
+.so-row-name {
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.012em;
+  color: var(--text);
+}
+.so-row-meta {
   display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+  font-size: 13.5px;
+  color: var(--text-2);
+}
+.so-row-qty {
+  font-weight: 700;
+  color: var(--text);
+}
+.so-row-dot {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--border-strong);
+}
+.so-row-sub {
+  display: flex;
+  align-items: center;
+  gap: 8px 14px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.so-row-stamp {
+  display: inline-flex;
   align-items: center;
   gap: 6px;
-  margin-top: 9px;
 }
-.so-card-actions .btn-sm {
-  flex: 1;
-  justify-content: center;
+.so-row-stamp svg {
+  color: var(--text-2);
+}
+.so-row-note {
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--text-2);
+  max-width: 340px;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
-.so-cancel {
-  width: 30px;
-  height: 30px;
+.so-row-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 12px;
   flex-shrink: 0;
+  margin-left: auto;
 }
-.so-cancel svg {
-  width: 14px;
-  height: 14px;
+.so-row-total {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
 }
-.so-delivered {
+.so-row-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
-  margin-top: 8px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--success);
+  gap: 8px;
 }
-.so-empty-all {
+.so-row-actions .btn {
+  height: 38px;
+}
+.so-advance {
+  padding: 0 16px;
+}
+/* Quiet by default, red only on approach — --danger cannot clear 4.5:1 on a
+   light surface, so the word keeps a legible token and the tint does the work. */
+.so-cancel,
+.so-delete {
+  border-color: var(--border-strong);
+  color: var(--text-2);
+}
+.so-cancel:hover:not(:disabled),
+.so-delete:hover:not(:disabled) {
+  background: var(--danger-bg);
+  border-color: var(--danger);
+  color: var(--text);
+}
+
+.wsec-loading {
+  padding: 34px 4px;
+  text-align: center;
+  font-size: 13.5px;
+  color: var(--text-2);
+}
+
+/* ---- A section with nothing in it yet — shared by both sections ---- */
+.wsec-empty {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 7px;
+  gap: 12px;
   text-align: center;
-  color: var(--text-3);
-  font-size: 13px;
-  padding: 26px 12px;
+  padding: 44px 24px 48px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--surface-2);
 }
+.wsec-empty-ico {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 16px;
+  background: var(--surface-3);
+  color: var(--text-2);
+}
+.wsec-empty-title {
+  font-size: 16.5px;
+  font-weight: 700;
+  color: var(--text);
+}
+.wsec-empty-msg {
+  margin: 0;
+  max-width: 52ch;
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--text-2);
+}
+
+@media (max-width: 760px) {
+  .so-row {
+    flex-wrap: wrap;
+  }
+  .so-row-right {
+    align-items: flex-start;
+    width: 100%;
+    margin-left: 0;
+  }
+}
+
 .link-btn {
   background: none;
   border: none;

@@ -36,7 +36,8 @@ export function InventoryOverview({
   onChanged: () => Promise<void>
   /** Opens the scan station (owned by InventoryModule). */
   onScan?: () => void
-  /** Bumped on every module reload so the Incoming panel re-reads its own data. */
+  /** Bumped on every module reload so panels holding their OWN data (the
+   * Incoming panel, the drill-down table) re-read too. */
   refreshKey?: number
 }): JSX.Element {
   const [detail, setDetail] = useState<Detail | null>(null)
@@ -59,7 +60,11 @@ export function InventoryOverview({
   )
 
   if (detail) {
-    return <InventoryDetail detail={detail} onBack={() => setDetail(null)} />
+    // refreshKey is threaded in so the drill-down re-reads on every module
+    // reload: a scan committed while this view is open (the Scan button lives
+    // in the module header and stays reachable here) changes the average cost,
+    // and the spread on screen must move with it.
+    return <InventoryDetail detail={detail} refreshKey={refreshKey} onBack={() => setDetail(null)} />
   }
 
   return (
@@ -556,7 +561,19 @@ function hoverStyle(rect: DOMRect): CSSProperties {
 }
 
 /** Shared detail view: a product table with the money metrics + a totals row. */
-function InventoryDetail({ detail, onBack }: { detail: Detail; onBack: () => void }): JSX.Element {
+function InventoryDetail({
+  detail,
+  refreshKey = 0,
+  onBack
+}: {
+  detail: Detail
+  /** Bumped by every module reload — re-reads the rows this table derives its
+   * money columns (and the totals row) from. Without it a scan committed while
+   * this view is open would roll the average cost in the database and leave the
+   * spread on screen frozen at its pre-scan value. */
+  refreshKey?: number
+  onBack: () => void
+}): JSX.Element {
   const [rows, setRows] = useState<InventoryProduct[] | null>(null)
   const [hover, setHover] = useState<{ data: ProductCardData; style: CSSProperties } | null>(null)
   const closeTimer = useRef<number | undefined>(undefined)
@@ -565,12 +582,14 @@ function InventoryDetail({ detail, onBack }: { detail: Detail; onBack: () => voi
     let active = true
     const load = detail.kind === 'category' ? api.inventory.byCategory(detail.category) : api.inventory.list()
     load.then((r) => {
+      // Not reset to null first: a refresh swaps the numbers in place instead of
+      // flashing the whole table back to a spinner.
       if (active) setRows(r)
     })
     return () => {
       active = false
     }
-  }, [detail])
+  }, [detail, refreshKey])
 
   // Tear down any pending hover timer if the detail view unmounts.
   useEffect(

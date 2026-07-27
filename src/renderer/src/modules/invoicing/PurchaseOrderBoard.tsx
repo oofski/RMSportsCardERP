@@ -135,11 +135,16 @@ function PoCard({
     >
       <div className="po-card-top">
         <span className="po-card-num mono">{po.poNumber}</span>
-        <span className="po-card-total mono">{formatMoney(po.total)}</span>
+        <span className="po-card-dest" title={`Boxes land at ${po.location}`}>
+          → {po.location}
+        </span>
       </div>
       <div className="po-card-supplier">{po.supplier || 'No supplier'}</div>
-      <div className="po-card-meta">
-        {po.lineCount} {po.lineCount === 1 ? 'item' : 'items'} · → {po.location}
+      <div className="po-card-figs">
+        <span className="po-card-total mono">{formatMoney(po.total)}</span>
+        <span className="po-card-meta">
+          {po.lineCount} {po.lineCount === 1 ? 'item' : 'items'}
+        </span>
       </div>
       {moves.length > 0 && (
         <div className="po-card-foot" onClick={(e) => e.stopPropagation()}>
@@ -147,7 +152,7 @@ function PoCard({
             <button
               key={to}
               type="button"
-              className={`btn btn-sm po-move po-move-${to}`}
+              className={`btn po-move po-move-${to}`}
               onClick={() => onMove(po.id, to)}
             >
               {PO_MOVE_LABEL[to]}
