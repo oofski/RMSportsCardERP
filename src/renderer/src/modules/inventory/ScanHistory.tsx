@@ -40,12 +40,16 @@ export function ScanHistory({
   const [busyId, setBusyId] = useState<string | null>(null)
   const mounted = useRef(true)
 
-  useEffect(
-    () => () => {
+  // Set on mount as well as cleared on unmount: StrictMode mounts, unmounts and
+  // remounts every effect in development, and a cleanup-only version leaves
+  // this false forever — `load()` would then never call setRows and the history
+  // would spin for good.
+  useEffect(() => {
+    mounted.current = true
+    return () => {
       mounted.current = false
-    },
-    []
-  )
+    }
+  }, [])
 
   const load = useCallback(async () => {
     const r = await api.inventory.scanHistory(50).catch(() => [])
@@ -101,10 +105,13 @@ export function ScanHistory({
       {rows.map((r) => {
         const undone = !!r.undoneAt
         const miss = r.outcome === 'unknown'
+        const out = r.outcome === 'remove_stock'
         return (
           <div
             key={r.id}
-            className={`scan-hist-row ${miss ? 'miss' : ''} ${undone ? 'scan-hist-undone' : ''}`}
+            className={`scan-hist-row ${miss ? 'miss' : ''} ${out ? 'out' : ''} ${
+              undone ? 'scan-hist-undone' : ''
+            }`}
           >
             <span className="scan-hist-ico" title={MODE_LABEL[r.mode]}>
               <Icon name={miss ? 'AlertCircle' : MODE_ICON[r.mode]} size={15} />
@@ -122,8 +129,13 @@ export function ScanHistory({
               <span className="scan-hist-sub">
                 {!miss && (
                   <>
-                    <strong>+{r.quantity}</strong>
-                    {r.location && <> → {r.location}</>}
+                    {/* The sign is the whole story on this row: the quantity is
+                        stored positive, and the outcome says which way it went. */}
+                    <strong>
+                      {out ? '−' : '+'}
+                      {r.quantity}
+                    </strong>
+                    {r.location && <> {out ? 'from' : '→'} {r.location}</>}
                     {r.poNumber && (
                       <>
                         {' · '}
@@ -146,7 +158,11 @@ export function ScanHistory({
             )}
             {undone && <span className="scan-chip scan-chip-muted">Undone</span>}
 
-            {canManage && !undone && !miss && (
+            {/* Undo reverses the exact FIFO lot a receipt created. A scan-OUT
+                created no lot — putting those units back would have to invent a
+                cost for them — so it is not offered here at all rather than
+                offered and refused. */}
+            {canManage && !undone && !miss && !out && (
               <button
                 type="button"
                 className="scan-hist-undo"

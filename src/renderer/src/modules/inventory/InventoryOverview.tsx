@@ -1,10 +1,19 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type MutableRefObject
+} from 'react'
 import type {
   CategorySummary,
   IncomingShipment,
   InventoryProduct,
   InventoryStats,
-  PurchaseOrderDetail
+  PurchaseOrderDetail,
+  PurchaseOrderStatus
 } from '@shared/types'
 import { CATEGORY_ORDER, LOCATIONS, categoryColor } from '@shared/inventory'
 import { BarList } from '../../components/charts'
@@ -12,6 +21,8 @@ import { Icon } from '../../components/Icon'
 import { Button, CenterLoader, EmptyState } from '../../components/ui'
 import { useToast } from '../../components/Toast'
 import { api } from '../../lib/api'
+import { useChrome } from '../../lib/chrome'
+import { useSession } from '../../lib/session'
 import { formatDate, formatMoney } from '../../lib/format'
 import { UnitBadge, productMetrics } from './helpers'
 import { CategoryLogo } from './CategoryLogo'
@@ -19,7 +30,7 @@ import { IncomingModal } from './IncomingModal'
 import { ProductHoverCard, type ProductCardData } from './ProductCases'
 import { PO_STAGE_META } from '../invoicing/helpers'
 
-type MetricKind = 'value' | 'cost' | 'spread' | 'cases' | 'skus'
+type MetricKind = 'cost' | 'spread' | 'cases' | 'skus'
 type Detail = { kind: 'category'; category: string; label: string } | { kind: MetricKind; label: string }
 
 export function InventoryOverview({
@@ -40,7 +51,68 @@ export function InventoryOverview({
    * Incoming panel, the drill-down table) re-read too. */
   refreshKey?: number
 }): JSX.Element {
+  const { navigate } = useChrome()
+  const { can } = useSession()
   const [detail, setDetail] = useState<Detail | null>(null)
+
+  // Incoming stock is read ONCE here and shared by the "Incoming orders" tile,
+  // its hover summary and the Incoming panel below, so the headline number and
+  // the breakdown can never disagree.
+  const feed = useIncomingFeed(refreshKey)
+  const incoming = useMemo(
+    () => summariseIncoming(feed.boxes ?? [], feed.manual ?? []),
+    [feed.boxes, feed.manual]
+  )
+  const incomingLoading = feed.boxes === null || feed.manual === null
+
+  // Hover summary for the Incoming orders tile — same mechanism as the product
+  // hover card further down this file: a fixed-position `.hovercard` placed from
+  // the trigger's box, held open while the pointer is over the card itself.
+  const [incHover, setIncHover] = useState<CSSProperties | null>(null)
+  const incTimer = useRef<number | undefined>(undefined)
+  const openIncHover = (rect: DOMRect): void => {
+    if (incTimer.current) window.clearTimeout(incTimer.current)
+    setIncHover(statHoverStyle(rect))
+  }
+  const closeIncHover = (): void => {
+    if (incTimer.current) window.clearTimeout(incTimer.current)
+    incTimer.current = window.setTimeout(() => setIncHover(null), 160)
+  }
+  const holdIncHover = (): void => {
+    if (incTimer.current) window.clearTimeout(incTimer.current)
+  }
+  useEffect(
+    () => () => {
+      if (incTimer.current) window.clearTimeout(incTimer.current)
+    },
+    []
+  )
+
+  // Purchase orders live in the Invoicing module, which is gated on
+  // 'module.invoicing' — navigating there for someone without it silently lands
+  // them on Home, so those users get walked to the Incoming panel instead, which
+  // shows the same boxes and is readable with plain 'module.inventory'.
+  const incomingRef = useRef<HTMLDivElement | null>(null)
+  const goToIncoming = (): void => {
+    if (can('module.invoicing')) {
+      navigate('invoicing')
+      return
+    }
+    const el = incomingRef.current
+    if (!el) return
+    el.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    el.classList.remove('incoming-flash')
+    // Reflow between remove and add so a second click replays the animation.
+    void el.offsetWidth
+    el.classList.add('incoming-flash')
+  }
+
+  // Opening a drill-down unmounts nothing (this component stays mounted), so a
+  // popover left open would reappear at a stale position on the way back.
+  const openDetail = (d: Detail): void => {
+    setIncHover(null)
+    setDetail(d)
+  }
 
   const orderedCategories = useMemo(() => {
     const rank = (c: string): number => {
@@ -70,16 +142,25 @@ export function InventoryOverview({
   return (
     <>
       <div className="stat-grid">
-        <Stat icon="DollarSign" value={formatMoney(stats.totalValue, { compact: true })} label="Inventory value" onClick={() => setDetail({ kind: 'value', label: 'Inventory value' })} />
-        <Stat icon="Wallet" value={formatMoney(stats.totalCost, { compact: true })} label="Total cost" onClick={() => setDetail({ kind: 'cost', label: 'Total cost' })} />
+        <Stat
+          icon="Truck"
+          value={incomingLoading ? '—' : String(incoming.totalUnits)}
+          unit={incomingLoading ? undefined : incoming.totalUnits === 1 ? 'unit' : 'units'}
+          label="Incoming orders"
+          onClick={goToIncoming}
+          describedBy={incHover ? INCOMING_HOVER_ID : undefined}
+          onHoverOpen={openIncHover}
+          onHoverClose={closeIncHover}
+        />
+        <Stat icon="Wallet" value={formatMoney(stats.totalCost, { compact: true })} label="Total cost" onClick={() => openDetail({ kind: 'cost', label: 'Total cost' })} />
         <Stat
           icon="TrendingUp"
           value={formatMoney(stats.spread, { compact: true })}
           label="Spread"
           tone={stats.spread < 0 ? 'neg' : stats.spread > 0 ? 'pos' : undefined}
-          onClick={() => setDetail({ kind: 'spread', label: 'Spread' })}
+          onClick={() => openDetail({ kind: 'spread', label: 'Spread' })}
         />
-        <Stat icon="Boxes" value={String(stats.cases)} label="Cases on hand" onClick={() => setDetail({ kind: 'cases', label: 'Cases on hand' })} />
+        <Stat icon="Boxes" value={String(stats.cases)} label="Cases on hand" onClick={() => openDetail({ kind: 'cases', label: 'Cases on hand' })} />
       </div>
 
       {stats.lowStockCount > 0 && (
@@ -123,10 +204,13 @@ export function InventoryOverview({
         </div>
 
         <IncomingPanel
+          panelRef={incomingRef}
           canManage={canManage}
           onReceived={onChanged}
           onScan={onScan}
-          refreshKey={refreshKey}
+          feed={feed}
+          summary={incoming}
+          loading={incomingLoading}
         />
       </div>
 
@@ -134,7 +218,7 @@ export function InventoryOverview({
         <div>
           <h2>By category</h2>
         </div>
-        <button className="link-btn" onClick={() => setDetail({ kind: 'skus', label: 'All products' })}>
+        <button className="link-btn" onClick={() => openDetail({ kind: 'skus', label: 'All products' })}>
           View all {stats.skuCount} products
         </button>
       </div>
@@ -167,66 +251,105 @@ export function InventoryOverview({
           ))}
         </div>
       )}
+
+      {incHover && (
+        <IncomingOrdersHoverCard
+          summary={incoming}
+          loading={incomingLoading}
+          style={incHover}
+          onMouseEnter={holdIncHover}
+          onMouseLeave={closeIncHover}
+        />
+      )}
     </>
   )
 }
 
+/** One order still on its way in — a purchase order, or a hand-logged shipment. */
+interface OutstandingOrder {
+  id: string
+  /** 'po' rows come from the PO pipeline; 'manual' from Log a shipment. */
+  source: 'po' | 'manual'
+  /** PO number, or the product name for a manual shipment. */
+  title: string
+  /** Supplier / destination / ETA line. */
+  detail: string
+  /** PO stage; null for manual shipments (they have no pipeline). */
+  status: PurchaseOrderStatus | null
+  /** Distinct products still outstanding on this order. */
+  itemCount: number
+  /** Units still to arrive. */
+  units: number
+  /** What those units are worth at their agreed buy price. */
+  value: number
+}
+
+interface IncomingSummary {
+  orders: OutstandingOrder[]
+  /** Σ units still to arrive across every order. */
+  totalUnits: number
+  /** Σ money still committed and undelivered. */
+  totalValue: number
+}
+
 /**
- * Dashboard panel: stock on its way in. Shows a "shipping box" per open purchase
- * order (grouped, stage-tagged, live from the PO pipeline) plus any manually
- * logged shipments. PO boxes are display-only here — their cases only fold into
- * on-hand stock later, at the scan/check-in step; the manual shipments keep
- * their receive / cancel actions.
+ * The one read of "what is on its way in", shared by the Incoming orders tile,
+ * its hover summary and the Incoming panel. Fetching it once means the tile's
+ * headline and the panel below can never drift apart.
+ *
+ * Re-runs on refreshKey: receiving a PO's last line by UPC scan completes it,
+ * and its box must leave both the tile and the panel without a manual refresh.
  */
-function IncomingPanel({
-  canManage,
-  onReceived,
-  onScan,
-  refreshKey
-}: {
-  canManage: boolean
-  onReceived: () => Promise<void>
-  onScan?: () => void
-  refreshKey: number
-}): JSX.Element {
-  const toast = useToast()
-  const [items, setItems] = useState<IncomingShipment[] | null>(null)
-  const [poBoxes, setPoBoxes] = useState<PurchaseOrderDetail[] | null>(null)
+interface IncomingFeed {
+  /** null while the first fetch is in flight. */
+  boxes: PurchaseOrderDetail[] | null
+  manual: IncomingShipment[] | null
+  thumbs: Record<string, string>
+  reloadManual: () => Promise<void>
+  reloadBoxes: () => Promise<void>
+}
+
+function useIncomingFeed(refreshKey: number): IncomingFeed {
+  const [boxes, setBoxes] = useState<PurchaseOrderDetail[] | null>(null)
+  const [manual, setManual] = useState<IncomingShipment[] | null>(null)
   const [thumbs, setThumbs] = useState<Record<string, string>>({})
-  const [adding, setAdding] = useState(false)
-  const [busy, setBusy] = useState<Set<string>>(new Set())
-  // The panel unmounts if the user opens a stat detail mid-action, so every
-  // post-await setState (here and in the receive/scan/cancel handlers) checks this.
+  // Every post-await setState checks this: the dashboard unmounts when the user
+  // switches Inventory tab, which can land mid-flight.
   const mounted = useRef(true)
-  useEffect(() => () => {
-    mounted.current = false
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
   }, [])
 
-  const load = useCallback(async () => {
-    const r = await api.inventory.listIncoming()
-    if (mounted.current) setItems(r)
+  const reloadManual = useCallback(async () => {
+    const r = await api.inventory.listIncoming().catch(() => [])
+    if (mounted.current) setManual(r)
   }, [])
 
-  const loadBoxes = useCallback(async () => {
+  const reloadBoxes = useCallback(async () => {
     const b = await api.purchaseOrders.incomingBoxes().catch(() => [])
-    if (mounted.current) setPoBoxes(b)
+    if (mounted.current) setBoxes(b)
   }, [])
 
-  // Guarded fetch — the whole panel unmounts if the user opens a stat detail
-  // mid-load, so don't set state after that. Re-runs on refreshKey: receiving a
-  // PO's last line by UPC scan completes it, and its box must leave the panel.
   useEffect(() => {
     let active = true
-    api.inventory.listIncoming().then((r) => {
-      if (active) setItems(r)
-    })
+    api.inventory
+      .listIncoming()
+      .then((r) => {
+        if (active) setManual(r)
+      })
+      .catch(() => {
+        if (active) setManual([])
+      })
     api.purchaseOrders
       .incomingBoxes()
       .then((b) => {
-        if (active) setPoBoxes(b)
+        if (active) setBoxes(b)
       })
       .catch(() => {
-        if (active) setPoBoxes([])
+        if (active) setBoxes([])
       })
     api.purchaseOrders
       .thumbnails()
@@ -239,6 +362,102 @@ function IncomingPanel({
     }
   }, [refreshKey])
 
+  return { boxes, manual, thumbs, reloadManual, reloadBoxes }
+}
+
+/**
+ * Fold the raw incoming reads into "what is still on order".
+ *
+ * Counts what is OUTSTANDING, not what was ordered: a part-scanned PO has
+ * already put some of its units into stock, and counting those again would
+ * overstate both the tile and its summary. Money is `qtyOutstanding ×
+ * unitPrice` — the agreed buy price on the line, which is exactly the cost
+ * basis addStock will open the lot at when the box is checked in.
+ */
+function summariseIncoming(
+  boxes: PurchaseOrderDetail[],
+  manual: IncomingShipment[]
+): IncomingSummary {
+  const orders: OutstandingOrder[] = []
+  for (const b of boxes) {
+    const open = b.lines.filter((l) => l.qtyOutstanding > 0)
+    const units = open.reduce((n, l) => n + l.qtyOutstanding, 0)
+    if (units <= 0) continue
+    orders.push({
+      id: b.id,
+      source: 'po',
+      title: b.poNumber,
+      detail: `${b.supplier || 'No supplier'} · → ${b.location}`,
+      status: b.status,
+      itemCount: open.length,
+      units,
+      value: open.reduce((sum, l) => sum + l.qtyOutstanding * l.unitPrice, 0)
+    })
+  }
+  for (const s of manual) {
+    if (s.quantity <= 0) continue
+    orders.push({
+      id: s.id,
+      source: 'manual',
+      title: s.productName,
+      detail: `→ ${s.location} · ${s.expectedDate ? formatDate(s.expectedDate) : 'No ETA'}`,
+      status: null,
+      itemCount: 1,
+      units: s.quantity,
+      value: s.quantity * (s.unitCost ?? 0)
+    })
+  }
+  // Biggest commitment first — that is the one worth chasing.
+  orders.sort((a, b) => b.value - a.value || b.units - a.units)
+  return {
+    orders,
+    totalUnits: orders.reduce((n, o) => n + o.units, 0),
+    totalValue: orders.reduce((n, o) => n + o.value, 0)
+  }
+}
+
+/**
+ * Dashboard panel: stock on its way in. Shows a "shipping box" per open purchase
+ * order (grouped, stage-tagged, live from the PO pipeline) plus any manually
+ * logged shipments. PO boxes are display-only here — their cases only fold into
+ * on-hand stock later, at the scan/check-in step; the manual shipments keep
+ * their receive / cancel actions.
+ *
+ * Its data comes from the dashboard's shared feed, so its headline is the same
+ * number the Incoming orders tile shows.
+ */
+function IncomingPanel({
+  panelRef,
+  canManage,
+  onReceived,
+  onScan,
+  feed,
+  summary,
+  loading
+}: {
+  /** Lets the Incoming orders tile walk a non-invoicing user down to this panel. */
+  panelRef: MutableRefObject<HTMLDivElement | null>
+  canManage: boolean
+  onReceived: () => Promise<void>
+  onScan?: () => void
+  feed: IncomingFeed
+  summary: IncomingSummary
+  loading: boolean
+}): JSX.Element {
+  const toast = useToast()
+  const { thumbs, reloadManual: load, reloadBoxes: loadBoxes } = feed
+  const [adding, setAdding] = useState(false)
+  const [busy, setBusy] = useState<Set<string>>(new Set())
+  // The panel unmounts if the user opens a stat detail mid-action, so every
+  // post-await setState in the receive/scan/cancel handlers checks this.
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
+
   const setBusyFor = (id: string, on: boolean): void => {
     if (!mounted.current) return
     setBusy((prev) => {
@@ -249,15 +468,9 @@ function IncomingPanel({
     })
   }
 
-  const boxes = poBoxes ?? []
-  const manual = items ?? []
-  // Count what is still INCOMING, not what was ordered: a part-scanned PO has
-  // already put some of its units into stock, and counting those again would
-  // overstate the panel headline.
-  const poUnits = boxes.reduce((s, b) => s + b.lines.reduce((n, l) => n + l.qtyOutstanding, 0), 0)
-  const manualUnits = manual.reduce((sum, i) => sum + i.quantity, 0)
-  const totalUnits = poUnits + manualUnits
-  const loading = items === null || poBoxes === null
+  const boxes = feed.boxes ?? []
+  const manual = feed.manual ?? []
+  const totalUnits = summary.totalUnits
   const empty = !loading && boxes.length === 0 && manual.length === 0
 
   const receive = async (s: IncomingShipment): Promise<void> => {
@@ -308,7 +521,7 @@ function IncomingPanel({
   }
 
   return (
-    <div className="panel-card incoming-card">
+    <div className="panel-card incoming-card" ref={panelRef}>
       <div className="panel-head">
         <div>
           <h3>Incoming inventory</h3>
@@ -524,23 +737,48 @@ function PurchaseOrderBox({
 function Stat({
   icon,
   value,
+  unit,
   label,
   tone,
-  onClick
+  onClick,
+  describedBy,
+  onHoverOpen,
+  onHoverClose
 }: {
   icon: string
   value: string
+  /** Optional noun rendered small after the figure ("46 units"). */
+  unit?: string
   label: string
   tone?: 'pos' | 'neg'
   onClick?: () => void
+  /** id of the popover this tile is currently describing itself with. */
+  describedBy?: string
+  /** Called with the tile's box when pointer or keyboard focus arrives. */
+  onHoverOpen?: (rect: DOMRect) => void
+  onHoverClose?: () => void
 }): JSX.Element {
   return (
-    <button type="button" className="stat stat-btn" onClick={onClick}>
+    <button
+      type="button"
+      className="stat stat-btn"
+      onClick={onClick}
+      aria-describedby={describedBy}
+      // Focus/blur as well as the pointer, so the summary is reachable from the
+      // keyboard rather than being a mouse-only affordance.
+      onMouseEnter={onHoverOpen ? (e) => onHoverOpen(e.currentTarget.getBoundingClientRect()) : undefined}
+      onMouseLeave={onHoverClose}
+      onFocus={onHoverOpen ? (e) => onHoverOpen(e.currentTarget.getBoundingClientRect()) : undefined}
+      onBlur={onHoverClose}
+    >
       <div className="stat-ico">
         <Icon name={icon} size={21} />
       </div>
       <div>
-        <div className={`stat-val ${tone === 'pos' ? 'pos' : tone === 'neg' ? 'neg' : ''}`}>{value}</div>
+        <div className={`stat-val ${tone === 'pos' ? 'pos' : tone === 'neg' ? 'neg' : ''}`}>
+          {value}
+          {unit && <small>{unit}</small>}
+        </div>
         <div className="stat-label">{label}</div>
       </div>
       <Icon name="ChevronRight" size={17} className="stat-go" />
@@ -558,6 +796,120 @@ function hoverStyle(rect: DOMRect): CSSProperties {
   const left = Math.max(margin, Math.min(rect.right + margin, window.innerWidth - HOVER_W - margin))
   const top = Math.max(margin, Math.min(rect.top, window.innerHeight - margin - 260))
   return { top, left, width: HOVER_W, maxHeight: window.innerHeight - top - margin }
+}
+
+const INCOMING_HOVER_ID = 'inv-incoming-summary'
+const INCOMING_HOVER_W = 404
+/**
+ * Position the incoming summary directly UNDER its tile (the tiles sit in a row
+ * at the top of the dashboard, so there is always room below and never room
+ * beside the rightmost one). Left-aligned to the tile, clamped to the viewport.
+ */
+function statHoverStyle(rect: DOMRect): CSSProperties {
+  const margin = 12
+  const left = Math.max(margin, Math.min(rect.left, window.innerWidth - INCOMING_HOVER_W - margin))
+  const top = rect.bottom + 8
+  return {
+    top,
+    left,
+    width: INCOMING_HOVER_W,
+    maxHeight: Math.max(200, window.innerHeight - top - margin)
+  }
+}
+
+/**
+ * The Incoming orders tile's hover summary: every order still outstanding, what
+ * is in it and what it is worth. Built on the same `.hovercard` shell as the
+ * product hover card on this dashboard — a fixed-position card placed from the
+ * trigger's box, held open while the pointer is over the card itself so a long
+ * list stays scrollable.
+ */
+function IncomingOrdersHoverCard({
+  summary,
+  loading,
+  style,
+  onMouseEnter,
+  onMouseLeave
+}: {
+  summary: IncomingSummary
+  loading: boolean
+  style: CSSProperties
+  onMouseEnter: () => void
+  onMouseLeave: () => void
+}): JSX.Element {
+  const { orders, totalUnits, totalValue } = summary
+  const poCount = orders.filter((o) => o.source === 'po').length
+  const manualCount = orders.length - poCount
+  const parts = [
+    `${poCount} purchase order${poCount === 1 ? '' : 's'}`,
+    ...(manualCount > 0 ? [`${manualCount} logged shipment${manualCount === 1 ? '' : 's'}`] : [])
+  ]
+
+  return (
+    <div
+      id={INCOMING_HOVER_ID}
+      role="tooltip"
+      className="hovercard inc-hover"
+      style={style}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+    >
+      <div className="hovercard-head">
+        <span className="hc-name">Outstanding orders</span>
+        <span className="hc-sub">
+          {loading ? 'Loading…' : orders.length === 0 ? 'Nothing on order' : parts.join(' · ')}
+        </span>
+      </div>
+
+      {loading ? (
+        <div className="inc-hover-empty">
+          <span className="spinner dark" />
+        </div>
+      ) : orders.length === 0 ? (
+        <div className="inc-hover-empty">
+          <Icon name="Truck" size={22} />
+          <span>Nothing scheduled to arrive.</span>
+        </div>
+      ) : (
+        <>
+          <div className="inc-hover-list">
+            {orders.map((o) => {
+              const meta = o.status ? PO_STAGE_META[o.status] : null
+              return (
+                <div className="ih-row" key={`${o.source}-${o.id}`}>
+                  <span className="ih-ico">
+                    <Icon name={o.source === 'po' ? 'Package' : 'Truck'} size={15} />
+                  </span>
+                  <span className="ih-main">
+                    <span className="ih-top">
+                      <span className={`ih-title ${o.source === 'po' ? 'mono' : ''}`} title={o.title}>
+                        {o.title}
+                      </span>
+                      <span className={`ih-stage ih-stage-${o.status ?? 'logged'}`}>
+                        {meta ? meta.label : 'Logged'}
+                      </span>
+                    </span>
+                    <span className="ih-sub">{o.detail}</span>
+                    <span className="ih-sub">
+                      {o.itemCount} {o.itemCount === 1 ? 'item' : 'items'} · {o.units} unit
+                      {o.units === 1 ? '' : 's'} to arrive
+                    </span>
+                  </span>
+                  <span className="ih-val mono">{formatMoney(o.value)}</span>
+                </div>
+              )
+            })}
+          </div>
+          <div className="inc-hover-foot">
+            <span>
+              {totalUnits} unit{totalUnits === 1 ? '' : 's'} on order
+            </span>
+            <span className="mono">{formatMoney(totalValue)}</span>
+          </div>
+        </>
+      )}
+    </div>
+  )
 }
 
 /** Shared detail view: a product table with the money metrics + a totals row. */
@@ -627,8 +979,6 @@ function InventoryDetail({
     if (!rows) return []
     const withM = rows.map((p) => ({ p, m: productMetrics(p) }))
     switch (detail.kind) {
-      case 'value':
-        return withM.filter((x) => x.p.quantity > 0).sort((a, b) => b.m.invValue - a.m.invValue)
       case 'cost':
         return withM.filter((x) => x.p.quantity > 0 && x.m.hasCost).sort((a, b) => b.m.totalCost - a.m.totalCost)
       case 'spread':

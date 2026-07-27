@@ -3,6 +3,7 @@ import type {
   ScanCommitInput,
   ScanCommitKind,
   ScanCommitResult,
+  ScanDirection,
   ScanMode,
   ScanRecord,
   ScanResolution
@@ -10,7 +11,14 @@ import type {
 import { LOCATION_IDS, isLocation } from '@shared/inventory'
 import { cleanScan, normalizeUpc } from '@shared/upc'
 import { getDb } from './database'
-import { addStock, findProductsByUpc, getProduct, productThumbnail, reverseStockReceipt } from './inventory'
+import {
+  addStock,
+  adjustStock,
+  findProductsByUpc,
+  getProduct,
+  productThumbnail,
+  reverseStockReceipt
+} from './inventory'
 import {
   completePoIfFullyReceived,
   getPurchaseOrder,
@@ -31,6 +39,13 @@ import { newId, nowIso } from '../util'
  *
  * Everything that adds stock goes through addStock / receivePoLine so FIFO lots,
  * moving weighted-average cost, inventory value and spread stay consistent.
+ * Everything that takes stock out goes through adjustStock, the outbound path
+ * shrinkage and corrections already use: it consumes FIFO lots, so a scan-out
+ * cannot invent a second way to decrement stock and cannot roll the average cost.
+ *
+ * A repeat-scanned item is ONE commit carrying the accumulated quantity — the
+ * renderer merges repeat scans onto a single pending line, and quantity has
+ * always been part of this contract, so nothing here needed a batch endpoint.
  */
 
 const money = (n: number): string => `$${n.toFixed(2)}`
@@ -45,11 +60,25 @@ const toMode = (mode: unknown): ScanMode => (SCAN_MODES.includes(mode as ScanMod
 // Step A — resolve (READ ONLY: this function must never write)
 // ---------------------------------------------------------------------------
 
-export function resolveScan(rawCode: string): ScanResolution {
+const toDirection = (d: unknown): ScanDirection => (d === 'out' ? 'out' : 'in')
+
+/** The location holding the most of this product — what an outbound scan should
+ * default to taking from. Ties keep LOCATION_IDS order. */
+function fullestLocation(product: InventoryProduct): string {
+  let best = LOCATION_IDS[0]
+  for (const loc of LOCATION_IDS) {
+    if ((product.quantityByLocation[loc] ?? 0) > (product.quantityByLocation[best] ?? 0)) best = loc
+  }
+  return best
+}
+
+export function resolveScan(rawCode: string, dir: ScanDirection = 'in'): ScanResolution {
   const raw = typeof rawCode === 'string' ? rawCode : ''
+  const direction = toDirection(dir)
   const normalized = normalizeUpc(raw)
   const base: ScanResolution = {
     status: 'unknown',
+    direction,
     rawCode: raw,
     normalizedCode: normalized,
     cleanedCode: cleanScan(raw),
@@ -89,6 +118,23 @@ export function resolveScan(rawCode: string): ScanResolution {
     product,
     imageUrl: productThumbnail(product.id),
     suggestedUnitCost: product.unitCost > 0 ? product.unitCost : null
+  }
+
+  // Taking stock OUT never looks at purchase orders — a PO is a promise about
+  // stock coming in, and nothing about it changes when stock leaves. There is no
+  // cost input either: the FIFO lots already say what the units cost.
+  if (direction === 'out') {
+    const location = fullestLocation(product)
+    return {
+      ...found,
+      status: 'product',
+      suggestedUnitCost: null,
+      suggestedLocation: location,
+      message:
+        product.quantity > 0
+          ? `${product.quantity} on hand — confirm the count to take stock out of ${location}.`
+          : 'None of this is on hand, so there is nothing to take out.'
+    }
   }
 
   const candidates = outstandingLinesForProduct(product.id)
@@ -290,6 +336,7 @@ export function logScanMiss(rawCode: string, mode: ScanMode, actorId: string | n
 
 /** Rebuild the result of an earlier commit for a replayed clientToken. */
 function replayResult(row: ScanRow): ScanCommitResult {
+  const out = row.outcome === 'remove_stock'
   return {
     scanId: row.id,
     kind: row.outcome as ScanCommitKind,
@@ -300,7 +347,10 @@ function replayResult(row: ScanRow): ScanCommitResult {
     po: row.po_id ? getPurchaseOrder(row.po_id) : null,
     poCompleted: row.po_completed === 1,
     replayed: true,
-    message: `Already scanned in — ${row.quantity} × ${row.product_name ?? 'item'} counted once.`
+    // The count is the LINE's count, so a replayed 5 says 5 — not "counted once".
+    message: `Already scanned ${out ? 'out' : 'in'} — ${row.quantity} × ${
+      row.product_name ?? 'item'
+    } counted once.`
   }
 }
 
@@ -375,7 +425,7 @@ export function commitScan(
       }
     }
 
-    // --- No open PO: the confirm-and-add-stock prompt -----------------------
+    // --- Direct product line (no PO): add stock, or take it out -------------
     const productId = input.productId?.trim()
     if (!productId) throw new Error('Select a product.')
     const location = isLocation(input.location) ? input.location : LOCATION_IDS[0]
@@ -383,6 +433,45 @@ export function commitScan(
     if (!Number.isInteger(quantity) || quantity < 1) {
       throw new Error('Quantity must be a whole number of at least 1.')
     }
+
+    if (input.kind === 'remove_stock') {
+      // THE outbound path, unchanged and unduplicated: adjustStock consumes the
+      // oldest FIFO lots and re-derives the average from what is LEFT, so taking
+      // stock out never rolls the cost basis. No purchase order is read or
+      // written here — an outbound scan has nothing to do with one.
+      const res = adjustStock(productId, location, -quantity, input.note ?? 'Scanned out', actorId)
+      // adjustStock RETURNS its errors ("would make stock negative", "not found");
+      // throwing turns that into a rollback, so no scan row is written either.
+      if (res.error) throw new Error(res.error)
+      const removed = res.product as InventoryProduct
+      const scanId = insertScan({
+        rawCode: raw,
+        normalizedCode: normalized,
+        mode,
+        outcome: 'remove_stock',
+        productId: removed.id,
+        productName: removed.name,
+        sku: removed.sku,
+        location,
+        // Stored positive; 'remove_stock' is what says which way it went.
+        quantity,
+        clientToken: token,
+        actorId
+      })
+      return {
+        scanId,
+        kind: 'remove_stock',
+        product: removed,
+        unitCost: null,
+        quantity,
+        location,
+        po: null,
+        poCompleted: false,
+        replayed: false,
+        message: `Took ${quantity} × ${removed.name} out of ${location}.`
+      }
+    }
+
     const unitCost = input.unitCost ?? null
     if (unitCost != null && (!Number.isFinite(unitCost) || unitCost < 0)) {
       throw new Error('Enter a valid unit cost.')
@@ -447,6 +536,13 @@ export function undoScan(scanId: string, actorId: string | null): { record?: Sca
     if (!row) throw new Error('That scan is no longer in the log.')
     if (row.undone_at) throw new Error('That scan was already undone.')
     if (row.outcome === 'unknown') throw new Error('There is nothing to undo for an unrecognised scan.')
+    // An outbound scan consumed FIFO lots that may since have been re-consumed or
+    // re-layered; putting the units back would have to invent a cost for them.
+    // The honest answer is to scan them back IN (or adjust), which prices the
+    // return explicitly instead of silently.
+    if (row.outcome === 'remove_stock') {
+      throw new Error('A scan-out cannot be undone automatically — scan the items back in instead.')
+    }
     if (!row.lot_id || !row.product_id || !row.location || row.quantity <= 0) {
       throw new Error('That scan cannot be undone automatically — adjust the stock manually instead.')
     }

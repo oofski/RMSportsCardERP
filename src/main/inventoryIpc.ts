@@ -19,7 +19,9 @@ import type {
   Result,
   SalesPoint,
   ScanCommitInput,
+  ScanCommitKind,
   ScanCommitResult,
+  ScanDirection,
   ScanMode,
   ScanRecord,
   ScanResolution,
@@ -171,8 +173,13 @@ export function registerInventoryIpc(): void {
   // through requireManage(). Deliberately stricter than poScanIn, which also
   // accepts module.invoicing: 'inventory.manage' is the app's single gate for
   // writing stock and cost, and this path writes both.
-  ipcMain.handle(IPC.invScanResolve, (_e, rawCode: string): ScanResolution | null =>
-    can('module.inventory') ? resolveScan(String(rawCode ?? '')) : null
+  // The direction rides the EXISTING channel as a second argument rather than a
+  // new one: an outbound resolve is the same question ("what is this barcode?")
+  // asked with purchase orders and cost out of the picture.
+  ipcMain.handle(
+    IPC.invScanResolve,
+    (_e, rawCode: string, direction?: ScanDirection): ScanResolution | null =>
+      can('module.inventory') ? resolveScan(String(rawCode ?? ''), direction === 'out' ? 'out' : 'in') : null
   )
   ipcMain.handle(IPC.invScanHistory, (_e, limit?: number): ScanRecord[] =>
     can('module.inventory') ? listScans(limit ?? 50) : []
@@ -181,13 +188,14 @@ export function registerInventoryIpc(): void {
   ipcMain.handle(IPC.invScanCommit, (_e, input: ScanCommitInput): Result<ScanCommitResult> => {
     try {
       const actor = requireManage()
-      if (input?.kind !== 'po_line' && input?.kind !== 'add_stock') {
-        return { ok: false, error: 'Nothing to scan in.' }
+      const kinds: ScanCommitKind[] = ['po_line', 'add_stock', 'remove_stock']
+      if (!kinds.includes(input?.kind)) {
+        return { ok: false, error: 'Nothing to scan.' }
       }
       if (input.kind === 'po_line' && !input.lineId) {
         return { ok: false, error: 'No purchase order line specified.' }
       }
-      if (input.kind === 'add_stock') {
+      if (input.kind === 'add_stock' || input.kind === 'remove_stock') {
         if (!input.productId) return { ok: false, error: 'Select a product.' }
         if (input.location != null && !isLocation(input.location)) {
           return { ok: false, error: 'Choose a location.' }

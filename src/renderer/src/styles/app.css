@@ -54,12 +54,19 @@
   background: var(--surface-3);
   color: var(--text);
 }
+/* This is the confirm on destructive actions — including the scan station's
+   "Take N out of stock" — so the label has to be readable before it is pressed.
+   White on --danger was 4.06:1 in light and 2.83:1 in dark. Light darkens the
+   fill; dark's --danger is already a light red, so it takes dark ink instead. */
 .btn-danger {
-  background: var(--danger);
+  background: var(--danger-strong);
   color: #fff;
 }
 .btn-danger:hover:not(:disabled) {
-  background: #c33b42;
+  filter: brightness(1.08);
+}
+:root[data-theme='dark'] .btn-danger {
+  color: var(--ink-900);
 }
 .btn-sm {
   height: 30px;
@@ -1013,6 +1020,19 @@ table.data tbody tr:hover {
   color: var(--text-3);
   margin-top: 2px;
 }
+/* Unit noun after a counted figure ("46 units"), same idea as the category
+   card's `24 cases`. --text-2 rather than --text-3: it carries a word. */
+.stat .stat-val small {
+  margin-left: 5px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--text-2);
+  /* Zero line-height so the suffix cannot grow the figure's line box — the tile
+     it sits in has to keep the exact baseline of the three tiles beside it. */
+  line-height: 0;
+  vertical-align: baseline;
+}
 /* Clickable stat card → drills into a detail view. */
 .stat-btn {
   width: 100%;
@@ -1131,6 +1151,24 @@ table.data tfoot .data-total td {
 .incoming-card {
   display: flex;
   flex-direction: column;
+}
+/* A user without module.invoicing can't be sent to the Purchase Orders tab, so
+   the Incoming orders tile walks them down to this panel instead — the pulse is
+   what tells them where they were taken. */
+@keyframes incoming-flash {
+  0%,
+  100% {
+    border-color: var(--border);
+    box-shadow: var(--shadow-sm);
+  }
+  25%,
+  65% {
+    border-color: var(--brand-400);
+    box-shadow: 0 0 0 3px var(--brand-soft-2);
+  }
+}
+.incoming-card.incoming-flash {
+  animation: incoming-flash 1.3s ease-in-out 1;
 }
 .incoming-loading {
   display: flex;
@@ -3260,6 +3298,124 @@ tr.hoverable-row:hover {
   background: var(--surface-2);
 }
 
+/* Incoming orders summary — the same floating .hovercard shell as the product
+   hover card above, hung under the dashboard tile instead of beside a row. */
+.inc-hover .hovercard-head {
+  margin-bottom: 10px;
+}
+.inc-hover-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.ih-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+.ih-ico {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-3);
+  color: var(--text-2);
+}
+.ih-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ih-top {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+.ih-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ih-stage {
+  flex-shrink: 0;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  background: var(--surface-3);
+  color: var(--text-2);
+}
+.ih-stage-ordered {
+  background: var(--brand-soft);
+  color: var(--brand-700);
+}
+.ih-stage-paid {
+  background: var(--success-bg);
+  color: var(--success-strong);
+}
+.ih-sub {
+  font-size: 11.5px;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ih-val {
+  flex-shrink: 0;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.inc-hover-foot {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 11px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+.inc-hover-foot .mono {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.inc-hover-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 18px 8px 22px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
 /* Daily pricing table */
 .pricing-search {
   max-width: 260px;
@@ -4146,9 +4302,6 @@ tr.hoverable-row:hover {
 .scan-result-po {
   --accent: var(--brand-500);
 }
-.scan-result-product {
-  --accent: var(--info);
-}
 .scan-result-ambiguous {
   --accent: var(--warning);
 }
@@ -4269,10 +4422,6 @@ tr.hoverable-row:hover {
 .scan-plan-val {
   color: var(--text);
   min-width: 0;
-}
-.scan-note {
-  font-size: 12.5px;
-  color: var(--text-2);
 }
 .scan-warn {
   display: flex;
@@ -4425,6 +4574,121 @@ tr.hoverable-row:hover {
   text-decoration: underline;
 }
 
+/* ---------- Pending scan list + session direction ----------
+   DIRECTION IS THE POINT. An operator part-way through a stack must never have
+   to re-read a word to know whether the last beep added or removed. Inbound
+   keeps the brand tone the whole station already uses; outbound restates itself
+   in the danger tone on the segmented control, the "ready to scan" chip, the
+   list's accent rail and the count field.
+
+   --danger does not clear 4.5:1 on its own tint in light, so every OUT surface
+   that carries WORDS uses --text on --danger-bg (14.72 light / 12.91 dark) and
+   lets the glyph, the border and the rail carry the red. */
+.scan-station-out .scan-dir-btn.active {
+  border-color: var(--danger);
+  background: var(--danger-bg);
+  color: var(--text);
+}
+.scan-station-out .scan-dir-btn.active svg {
+  color: var(--danger);
+}
+.scan-station-out .scan-dir-chip {
+  background: var(--danger-bg);
+  color: var(--text);
+}
+.scan-station-out .scan-dir-chip svg {
+  color: var(--danger);
+}
+/* .scan-result paints its left rail from --accent. */
+.scan-queue-out {
+  --accent: var(--danger);
+}
+
+/* The list header re-uses .scan-hist-head's typography but is a card heading,
+   not the divider above the history section. */
+.scan-queue-head {
+  border-top: none;
+  padding-top: 0;
+  margin-top: 0;
+}
+/* Carries the direction in words, so it is body ink, not --text-3 metadata
+   (which sits at 2.94:1 in light). */
+.scan-queue-title {
+  color: var(--text);
+}
+
+/* One line per thing. Without a rule between them a six-item batch reads as a
+   single block of text, because rows are different heights by nature (a PO
+   line has no location picker, a capped line carries a warning). */
+.scan-queue-row {
+  padding: 11px 2px;
+}
+.scan-queue-row + .scan-queue-row {
+  border-top: 1px solid var(--border);
+}
+.scan-queue-name {
+  font-size: 14.5px;
+  line-height: 1.3;
+  color: var(--text);
+}
+.scan-queue-sub {
+  color: var(--text-2);
+}
+.scan-queue-edit {
+  margin-top: 5px;
+  align-items: flex-end;
+}
+.scan-queue-locs {
+  flex: 0 0 auto;
+}
+
+/* THE COUNT sits in the same place on every row. Both trailing columns are
+   fixed, otherwise a longer money figure on one row shifts that row's counter
+   sideways and the number the operator is watching moves as they scan. */
+.scan-qty {
+  flex: 0 0 auto;
+  gap: 5px;
+  align-items: center;
+}
+.scan-qty-btn {
+  flex: 0 0 auto;
+  min-width: 28px;
+  padding: 6px 8px;
+}
+/* The loudest thing on the row, and a plain field: a miscount is typed over,
+   never rescanned. Sized here rather than inline so the row can be balanced
+   against the product name, which also has to stay readable. */
+.scan-qty-input {
+  width: 58px;
+  padding: 6px 4px;
+  font-size: 20px;
+  font-weight: 700;
+  text-align: center;
+}
+.scan-queue-money {
+  flex: 0 0 88px;
+  text-align: right;
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.scan-queue-drop {
+  flex: 0 0 auto;
+}
+/* An outbound count is a subtraction, and a capped one has stopped counting —
+   the field itself says so rather than only the text beneath it. */
+.scan-queue-row.is-out .scan-qty-input {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border-strong));
+}
+.scan-queue-row.is-capped .scan-qty-input {
+  border-color: var(--warning);
+}
+.scan-queue-actions {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+  align-items: center;
+}
+
 /* ---------- Recent scans ---------- */
 .scan-hist-head {
   display: flex;
@@ -4479,6 +4743,12 @@ tr.hoverable-row:hover {
   flex-shrink: 0;
 }
 .scan-hist-row.miss .scan-hist-ico {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+/* A scan that took stock OUT. The quantity already renders as −N; the icon
+   carries the same direction so the log is scannable without reading signs. */
+.scan-hist-row.out .scan-hist-ico {
   background: var(--danger-bg);
   color: var(--danger);
 }

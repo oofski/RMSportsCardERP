@@ -291,7 +291,11 @@ function OrderRow({
           <span className="so-row-dot" />
           <span>
             {order.items.toLocaleString()} items
-            {order.status === 'delivered' ? ' added' : ' on delivery'}
+            {order.status === 'delivered'
+              ? ' added'
+              : order.status === 'cancelled'
+                ? ' never shipped'
+                : ' on delivery'}
           </span>
           {perItem > 0 && (
             <>

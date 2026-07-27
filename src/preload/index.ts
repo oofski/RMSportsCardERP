@@ -37,6 +37,7 @@ import type {
   SalesPoint,
   ScanCommitInput,
   ScanCommitResult,
+  ScanDirection,
   ScanMode,
   ScanRecord,
   ScanResolution,
@@ -198,8 +199,13 @@ const api = {
     // decoder fires many times a second); commit performs the one confirmed
     // action. The raw code is sent un-trimmed — the backend does the cleaning so
     // wedge, camera and a future phone client cannot drift apart.
-    scanResolve: (rawCode: string): Promise<ScanResolution | null> =>
-      ipcRenderer.invoke(IPC.invScanResolve, rawCode),
+    //
+    // `direction` says which way the session moves stock; 'out' resolves the
+    // barcode with purchase orders and cost basis out of the picture. Repeat
+    // scans of one code are merged by the renderer into a single commit carrying
+    // the accumulated quantity, so no extra channel exists (or is needed).
+    scanResolve: (rawCode: string, direction: ScanDirection = 'in'): Promise<ScanResolution | null> =>
+      ipcRenderer.invoke(IPC.invScanResolve, rawCode, direction),
     scanCommit: (input: ScanCommitInput): Promise<Result<ScanCommitResult>> =>
       ipcRenderer.invoke(IPC.invScanCommit, input),
     scanLogMiss: (rawCode: string, mode: ScanMode): Promise<Result<ScanRecord | null>> =>

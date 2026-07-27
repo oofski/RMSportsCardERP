@@ -612,11 +612,23 @@ export interface NewPurchaseOrder {
 /** Where a scan came from: handheld keyboard wedge, webcam, or typed by hand. */
 export type ScanMode = 'wedge' | 'camera' | 'manual'
 
+/**
+ * Which way a scanning session moves stock. Chosen BEFORE scanning and held for
+ * the whole session — never per line — so the operator can never be halfway
+ * through a stack and unsure whether the last beep added or removed.
+ *
+ * 'in'  raises stock through addStock (PO-linked when a matching open line exists).
+ * 'out' lowers it through adjustStock, which consumes FIFO lots — the same path
+ *       shrinkage and corrections already use. Taking stock out must never roll
+ *       the average cost: what is left cost what it cost.
+ */
+export type ScanDirection = 'in' | 'out'
+
 /** What resolveScan made of a barcode. */
 export type ScanStatus = 'po_line' | 'product' | 'unknown' | 'ambiguous_product'
 
 /** What commitScan did — also the stored `inventory_scans.outcome`. */
-export type ScanCommitKind = 'po_line' | 'add_stock'
+export type ScanCommitKind = 'po_line' | 'add_stock' | 'remove_stock'
 
 /** An outstanding PO line a scanned product can be received against. */
 export interface ScanPoCandidate {
@@ -651,6 +663,10 @@ export interface ScanProductMatch {
 /** Step A: what a scanned barcode means. Read-only — nothing is written. */
 export interface ScanResolution {
   status: ScanStatus
+  /** Echoed back so the renderer can never queue a line under the wrong
+   * direction if the mode changed mid-flight. An 'out' resolution never carries
+   * PO candidates: taking stock out must not touch a purchase order. */
+  direction: ScanDirection
   /** Exactly what the wedge / camera sent. */
   rawCode: string
   /** Canonical GTIN-14 lookup key; null when nothing usable was scanned. */
@@ -679,11 +695,15 @@ export interface ScanCommitInput {
   mode: ScanMode
   /** Required for 'po_line'. Commit never re-resolves and re-picks a line. */
   lineId?: string
-  /** Required for 'add_stock'. */
+  /** Required for 'add_stock' and 'remove_stock'. */
   productId?: string
   location?: string
-  /** Omitted on a PO line means "receive the rest"; clamped to the outstanding. */
+  /** Omitted on a PO line means "receive the rest"; clamped to the outstanding.
+   * A repeat-scanned line sends its accumulated count here — ONE commit of
+   * quantity N, never N commits of 1. */
   quantity?: number
+  /** Inbound only. An outbound scan has no cost input at all: it consumes the
+   * FIFO lots that are there, at what they actually cost. */
   unitCost?: number | null
   note?: string | null
   /** Idempotency key for a retry / double-click / future phone client. */
@@ -722,6 +742,9 @@ export interface ScanRecord {
   poNumber: string | null
   poLineId: string | null
   location: string | null
+  /** Always POSITIVE — the number of units moved. The direction lives in
+   * `outcome` ('remove_stock' took them out), so the log reads the same way the
+   * scan station does. */
   quantity: number
   unitCost: number | null
   poCompleted: boolean

@@ -52,6 +52,9 @@
   --warning-bg: #fbf1d3;
   --danger: #dc4b52;
   --danger-bg: #fbeaea;
+  /* White on --danger is only 4.06:1. Use this wherever a danger fill carries
+     label text — e.g. the scan station's "Take N out of stock" confirm. */
+  --danger-strong: #c62828;
   --info: #3358ff;
   --info-bg: #eef1ff;
 
@@ -108,6 +111,9 @@
   --warning-bg: #322810;
   --danger: #f2726f;
   --danger-bg: #391c1d;
+  /* Dark's --danger is a light red, so a filled danger button takes dark ink
+     rather than a darker fill — see .btn-danger. */
+  --danger-strong: #f2726f;
   --info: #829bff;
   --info-bg: #1b2544;
 

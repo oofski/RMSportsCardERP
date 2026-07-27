@@ -453,15 +453,22 @@ function getSupplyOrder(id: string): SupplyOrder | null {
   return row ? toSupplyOrder(row) : null
 }
 
-/** Active orders (Ordered / In-transit) plus anything Delivered in the last 14
- * days. Cancelled orders are hidden. */
+/**
+ * Active orders (Ordered / In-transit) plus anything that reached a TERMINAL
+ * stage in the last 14 days — delivered or cancelled alike.
+ *
+ * Cancelled orders used to be filtered out entirely, which made cancelling a
+ * one-way disappearance: the row stayed in the table forever with no screen
+ * showing it and no way to reach deleteSupplyOrder. The Purchase Orders tab
+ * renders a Cancelled lane, so the rows have to reach it.
+ */
 export function listSupplyOrders(): SupplyOrder[] {
   const cutoff = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString()
   const rows = getDb()
     .prepare(
       `${SUPPLY_ORDER_SELECT}
-       WHERE o.status != 'cancelled'
-         AND (o.status != 'delivered' OR o.delivered_at IS NULL OR o.delivered_at >= @cutoff)
+       WHERE (o.status != 'delivered' OR o.delivered_at IS NULL OR o.delivered_at >= @cutoff)
+         AND (o.status != 'cancelled' OR o.cancelled_at IS NULL OR o.cancelled_at >= @cutoff)
        ORDER BY o.created_at DESC`
     )
     .all({ cutoff }) as SupplyOrderRow[]
