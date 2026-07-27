@@ -6,6 +6,7 @@ import { registerIpcHandlers } from './ipc'
 import { registerInventoryIpc } from './inventoryIpc'
 import { registerPurchaseOrdersIpc } from './purchaseOrdersIpc'
 import { registerShippingIpc } from './shippingIpc'
+import { registerQuickBooksIpc } from './quickbooksIpc'
 import { getDb, closeDb } from './db/database'
 import { initUpdater } from './services/updater'
 
@@ -70,6 +71,7 @@ app.whenReady().then(() => {
   registerInventoryIpc()
   registerPurchaseOrdersIpc()
   registerShippingIpc()
+  registerQuickBooksIpc()
   initUpdater()
 
   createWindow()

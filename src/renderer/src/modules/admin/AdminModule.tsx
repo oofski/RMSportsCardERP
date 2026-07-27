@@ -9,8 +9,9 @@ import { HoursTab } from './HoursTab'
 import { RolesTab } from './RolesTab'
 import { ActivityTab } from './ActivityTab'
 import { BreakAssignmentsTab } from './BreakAssignmentsTab'
+import { QuickBooksTab } from './QuickBooksTab'
 
-type TabId = 'employees' | 'hours' | 'roles' | 'breaks' | 'activity'
+type TabId = 'employees' | 'hours' | 'roles' | 'breaks' | 'activity' | 'quickbooks'
 
 interface TabDef {
   id: TabId
@@ -54,7 +55,8 @@ export function AdminModule(): JSX.Element {
       icon: 'UserCheck',
       visible: can('shipping.manage')
     },
-    { id: 'activity', label: 'Inventory activity', icon: 'Layers', visible: can('module.inventory') }
+    { id: 'activity', label: 'Inventory activity', icon: 'Layers', visible: can('module.inventory') },
+    { id: 'quickbooks', label: 'QuickBooks', icon: 'Wallet', visible: can('admin.access') }
   ]
   const visibleTabs = tabs.filter((t) => t.visible)
   const [tab, setTab] = useState<TabId>(visibleTabs[0]?.id ?? 'employees')
@@ -83,6 +85,7 @@ export function AdminModule(): JSX.Element {
       {tab === 'roles' && <RolesTab employees={employees} onChanged={loadEmployees} />}
       {tab === 'breaks' && <BreakAssignmentsTab />}
       {tab === 'activity' && <ActivityTab />}
+      {tab === 'quickbooks' && <QuickBooksTab />}
     </div>
   )
 }

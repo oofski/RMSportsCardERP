@@ -9587,3 +9587,127 @@ button.sor-team:focus-visible {
   font-size: 13.5px;
   line-height: 1.55;
 }
+
+/* ---------- QuickBooks Online connection (Admin) ---------- */
+.qbo-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 720px;
+}
+.qbo-denied {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 40px 4px;
+  color: var(--text-2);
+  font-size: 13.5px;
+}
+.qbo-denied svg {
+  color: var(--text-3);
+}
+/* The state strip is the answer to "is this working?", so it leads. */
+.qbo-state {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.qbo-state[data-connected='true'] {
+  border-color: var(--success);
+  background: var(--success-bg);
+}
+.qbo-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--text-3);
+}
+.qbo-state[data-connected='true'] .qbo-dot {
+  background: var(--success);
+}
+.qbo-state-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.qbo-state-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+}
+.qbo-state-sub {
+  margin-top: 2px;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.qbo-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 11px 14px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius);
+  background: var(--danger-bg);
+  font-size: 13px;
+  color: var(--text);
+}
+.qbo-error svg {
+  color: var(--danger);
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.qbo-form {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px 16px;
+}
+.qbo-form > *:first-child {
+  grid-column: 1 / -1;
+}
+.qbo-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-2);
+}
+.qbo-note svg {
+  color: var(--text-3);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.qbo-uri {
+  display: block;
+  margin-top: 6px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  background: var(--surface-3);
+  color: var(--text);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12.5px;
+  word-break: break-all;
+}
+.qbo-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.qbo-spacer {
+  flex: 1 1 auto;
+}
+
+@media (max-width: 720px) {
+  .qbo-form {
+    grid-template-columns: 1fr;
+  }
+}

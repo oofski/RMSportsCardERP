@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC, type AppInfo } from '@shared/ipc'
 import type { Permission } from '@shared/permissions'
+import type { QboEnvironment, QboStatus } from '@shared/quickbooks'
 import type {
   AddStockInput,
   AdjustStockInput,
@@ -240,6 +241,21 @@ const api = {
     deleteOrder: (id: string): Promise<Result> =>
       ipcRenderer.invoke(IPC.supplyOrderDelete, { id })
   },
+  quickbooks: {
+    status: (): Promise<QboStatus | null> => ipcRenderer.invoke(IPC.qboStatus),
+    saveConfig: (
+      clientId: string,
+      clientSecret: string,
+      environment: QboEnvironment
+    ): Promise<Result<QboStatus>> =>
+      ipcRenderer.invoke(IPC.qboSaveConfig, { clientId, clientSecret, environment }),
+    connect: (): Promise<Result<QboStatus>> => ipcRenderer.invoke(IPC.qboConnect),
+    disconnect: (): Promise<Result<QboStatus>> => ipcRenderer.invoke(IPC.qboDisconnect),
+    forget: (): Promise<Result<QboStatus>> => ipcRenderer.invoke(IPC.qboForget),
+    test: (): Promise<Result<{ companyName: string; realmId: string }>> =>
+      ipcRenderer.invoke(IPC.qboTest)
+  },
+
   purchaseOrders: {
     list: (): Promise<PurchaseOrder[]> => ipcRenderer.invoke(IPC.poList),
     get: (id: string): Promise<PurchaseOrderDetail | null> =>

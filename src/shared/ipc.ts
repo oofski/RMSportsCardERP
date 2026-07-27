@@ -171,6 +171,14 @@ export const IPC = {
   shipSettingsGet: 'shipping:settings:get',
   shipSettingsPatch: 'shipping:settings:patch',
 
+  // QuickBooks Online (admin.access only; the client secret is write-only)
+  qboStatus: 'qbo:status',
+  qboSaveConfig: 'qbo:config:save',
+  qboConnect: 'qbo:connect',
+  qboDisconnect: 'qbo:disconnect',
+  qboForget: 'qbo:forget',
+  qboTest: 'qbo:test',
+
   // Email
   emailComposeInvite: 'email:compose-invite',
   emailOpenExternal: 'email:open-external',
