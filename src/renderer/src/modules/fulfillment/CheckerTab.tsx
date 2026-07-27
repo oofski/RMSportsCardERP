@@ -6,6 +6,7 @@ import type {
   ShipBreakDetail,
   ShipBreakSlotRow,
   ShipBreakSummary,
+  ShipFulfillmentStage,
   ShipOrderRow,
   ShipOrderTeam
 } from '@shared/shippingViews'
@@ -55,6 +56,30 @@ const STATUS_ICONS: Record<ShipBreakStatus, string> = {
   picking: 'ListChecks',
   packed: 'PackageCheck',
   shipped: 'Truck'
+}
+
+/**
+ * One customer's share of a break, folded up into the package the picker is
+ * actually building. Totals are precomputed so the card's header can state the
+ * whole story with the body collapsed.
+ */
+interface PickPackData {
+  key: string
+  handle: string
+  realName: string
+  address: string
+  isNew: boolean
+  onHold: boolean
+  stage: ShipFulfillmentStage
+  trackingNumber: string | null
+  slots: ShipBreakSlotRow[]
+  /** Split so the body can head each run the way the slip reads. */
+  cards: ShipBreakSlotRow[]
+  giveaways: ShipBreakSlotRow[]
+  total: number
+  checked: number
+  sleeved: number
+  value: number
 }
 
 /** A break-less giveaway package — cards that belong to no break at all. */
@@ -146,6 +171,36 @@ export function CheckerTab({ canManage, onChanged, onGoTo }: ShipTabProps): JSX.
       }
       if (res.data.break) applyBreak(res.data.break)
       if (res.data.order) applyOrder(res.data.order)
+      await onChangedRef.current()
+    },
+    [applyBreak, applyOrder, toast]
+  )
+
+  /**
+   * Check off (or un-check) a whole customer's cards in one gesture — the
+   * "Done" button on a pick card. Sequential on purpose: better-sqlite3 is
+   * synchronous and each write hands back a freshly derived break, so racing
+   * them would just make the last reply win. Only the final break is applied
+   * and the workspace is told once, rather than N times.
+   */
+  const checkSlots = useCallback(
+    async (slotIds: string[], checked: boolean) => {
+      if (slotIds.length === 0) return
+      let latest: ShipBreakDetail | null = null
+      let failed = 0
+      for (const slotId of slotIds) {
+        const res = await api.shipping.setSlotChecked(slotId, checked)
+        if (!res.ok || !res.data) {
+          failed += 1
+          continue
+        }
+        if (res.data.break) latest = res.data.break
+        if (res.data.order) applyOrder(res.data.order)
+      }
+      if (latest) applyBreak(latest)
+      if (failed > 0) {
+        toast.error(`${failed} card${failed === 1 ? '' : 's'} could not be updated.`)
+      }
       await onChangedRef.current()
     },
     [applyBreak, applyOrder, toast]
@@ -288,6 +343,7 @@ export function CheckerTab({ canManage, onChanged, onGoTo }: ShipTabProps): JSX.
           onBack={() => setDetail(null)}
           onToggleSlot={toggleSlot}
           onToggleSleeve={toggleSleeve}
+          onCheckSlots={checkSlots}
           onCheckAll={(checked) =>
             runBreakAction(checked ? 'check every card' : 'un-check every card', () =>
               api.shipping.setBreakChecked(detail.id, checked)
@@ -657,6 +713,7 @@ function BreakDetailView({
   onBack,
   onToggleSlot,
   onToggleSleeve,
+  onCheckSlots,
   onCheckAll,
   onPack,
   onSleeve,
@@ -669,13 +726,17 @@ function BreakDetailView({
   onBack: () => void
   onToggleSlot: (slotId: string, checked: boolean) => void
   onToggleSleeve: (slotId: string, topSleeved: boolean) => void
+  /** Check off a whole customer's cards at once (the pick card's Done). */
+  onCheckSlots: (slotIds: string[], checked: boolean) => Promise<void>
   onCheckAll: (checked: boolean) => void
   onPack: () => void
   onSleeve: (on: boolean) => void
   onStatus: (status: ShipBreakStatus) => void
   onClear: () => void
 }): JSX.Element {
-  const [group, setGroup] = useState<GroupMode>('team')
+  // Packs by default: the picker is building one pile per customer, and that
+  // view carries far more of the story than a flat list of team names.
+  const [group, setGroup] = useState<GroupMode>('customer')
   const [hideChecked, setHideChecked] = useState(false)
   const [find, setFind] = useState('')
 
@@ -701,28 +762,79 @@ function BreakDetailView({
     })
   }, [detail.slots, hideChecked, find])
 
-  /** Sorted flat (by team) or bucketed per customer — same slots either way. */
-  const groups = useMemo(() => {
-    if (group === 'team') {
-      const sorted = [...filtered].sort(
+  /** Flat team order — one pile of cards to work straight down. */
+  const flat = useMemo(
+    () =>
+      [...filtered].sort(
         (a, b) => a.teamName.localeCompare(b.teamName) || a.handle.localeCompare(b.handle)
-      )
-      return [{ key: '__all__', label: null as string | null, slots: sorted }]
-    }
-    const byCustomer = new Map<string, ShipBreakSlotRow[]>()
+      ),
+    [filtered]
+  )
+
+  /**
+   * One pack per customer, carrying its own totals so the header can state the
+   * whole story without the body being open — the same shape the Orders queue
+   * shows for a package.
+   */
+  const packs = useMemo<PickPackData[]>(() => {
+    // Which packs appear, and which tiles are inside them, follows the filter.
+    const shown = new Map<string, ShipBreakSlotRow[]>()
     for (const s of filtered) {
-      const list = byCustomer.get(s.customerId)
+      const list = shown.get(s.customerId)
       if (list) list.push(s)
-      else byCustomer.set(s.customerId, [s])
+      else shown.set(s.customerId, [s])
     }
-    return [...byCustomer.entries()]
-      .map(([key, slots]) => ({
-        key,
-        label: slots[0].handle,
-        slots: [...slots].sort((a, b) => a.teamName.localeCompare(b.teamName))
-      }))
-      .sort((a, b) => (a.label ?? '').localeCompare(b.label ?? ''))
-  }, [filtered, group])
+    // The header's counts do NOT. "Hide picked" is a way to see what is left,
+    // not a claim that the picked cards stopped existing — a pack that is
+    // really 3 of 5 must never read 0/2 because two rows are hidden.
+    const all = new Map<string, ShipBreakSlotRow[]>()
+    for (const s of detail.slots) {
+      const list = all.get(s.customerId)
+      if (list) list.push(s)
+      else all.set(s.customerId, [s])
+    }
+
+    return [...shown.entries()]
+      .map(([customerId, visible]) => {
+        const sorted = [...visible].sort((a, b) => a.teamName.localeCompare(b.teamName))
+        const every = all.get(customerId) ?? sorted
+        const head = sorted[0]
+        return {
+          key: customerId,
+          handle: head.handle,
+          realName: head.realName,
+          address: head.address,
+          isNew: head.isNew,
+          // A hold or a stage belongs to the PACKAGE, so every slot carries the
+          // same value — read it off the first rather than re-deriving.
+          onHold: head.onHold,
+          stage: head.stage,
+          trackingNumber: head.trackingNumber,
+          slots: every,
+          cards: sorted.filter((s) => !s.isGiveaway),
+          giveaways: sorted.filter((s) => s.isGiveaway),
+          total: every.length,
+          checked: every.filter((s) => s.checkedOff).length,
+          sleeved: every.filter((s) => s.topSleeved).length,
+          value: every.reduce((sum, s) => sum + s.price, 0)
+        }
+      })
+      .sort((a, b) => a.handle.localeCompare(b.handle))
+  }, [filtered, detail.slots])
+
+  /**
+   * Which packs the operator has collapsed. Open is the default — a picker
+   * wants the cards in front of them, not a list of names to click through.
+   */
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set())
+  const toggleCollapsed = useCallback((key: string) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }, [])
 
   return (
     <div className="ship-page chk-detail">
@@ -934,18 +1046,18 @@ function BreakDetailView({
         <div className="ship-toolbar-right">
           <div className="chk-group-toggle">
             <button
+              className={group === 'customer' ? 'active' : ''}
+              onClick={() => setGroup('customer')}
+              title="One card per customer — matches the piles you are building"
+            >
+              <Icon name="User" size={14} /> Packs
+            </button>
+            <button
               className={group === 'team' ? 'active' : ''}
               onClick={() => setGroup('team')}
               title="One flat list in team order — fastest when you have the break's cards in hand"
             >
               <Icon name="ListChecks" size={14} /> By team
-            </button>
-            <button
-              className={group === 'customer' ? 'active' : ''}
-              onClick={() => setGroup('customer')}
-              title="Bucketed per customer — matches the piles you are building"
-            >
-              <Icon name="User" size={14} /> By customer
             </button>
           </div>
           <label className="ship-pin-toggle">
@@ -988,38 +1100,280 @@ function BreakDetailView({
         />
       ) : (
         <div className="chk-picklist">
-          {groups.map((g) => (
-            <div className="chk-group" key={g.key}>
-              {g.label && (
-                <div className="chk-group-head">
-                  <Icon name="User" size={13} />@{g.label}
-                  <span className="chk-group-count mono">
-                    {g.slots.filter((s) => s.checkedOff).length}/{g.slots.length}
-                  </span>
-                  <span className="chk-group-addr" title={g.slots[0].address}>
-                    {g.slots[0].address || 'No address on the slip'}
-                  </span>
-                </div>
-              )}
-              {g.slots.map((s) => (
-                <PickRow
+          {group === 'customer' ? (
+            packs.map((p) => (
+              <PickPack
+                key={p.key}
+                pack={p}
+                canManage={canManage}
+                open={!collapsed.has(p.key)}
+                onToggleOpen={() => toggleCollapsed(p.key)}
+                onToggleSlot={onToggleSlot}
+                onToggleSleeve={onToggleSleeve}
+                onCheckSlots={onCheckSlots}
+              />
+            ))
+          ) : (
+            <div className="chk-flat">
+              {flat.map((s) => (
+                <PickTile
                   key={s.id}
                   slot={s}
-                  showCustomer={group === 'team'}
+                  showCustomer
                   canManage={canManage}
                   onToggle={() => onToggleSlot(s.id, !s.checkedOff)}
                   onSleeve={() => onToggleSleeve(s.id, !s.topSleeved)}
                 />
               ))}
             </div>
-          ))}
+          )}
         </div>
       )}
     </div>
   )
 }
 
-function PickRow({
+// ---------------------------------------------------------------------------
+// The pick card — one customer's package, shaped like the Orders queue row so
+// the two screens read as the same object seen from two jobs.
+// ---------------------------------------------------------------------------
+
+function PickPack({
+  pack,
+  canManage,
+  open,
+  onToggleOpen,
+  onToggleSlot,
+  onToggleSleeve,
+  onCheckSlots
+}: {
+  pack: PickPackData
+  canManage: boolean
+  open: boolean
+  onToggleOpen: () => void
+  onToggleSlot: (slotId: string, checked: boolean) => void
+  onToggleSleeve: (slotId: string, topSleeved: boolean) => void
+  onCheckSlots: (slotIds: string[], checked: boolean) => Promise<void>
+}): JSX.Element {
+  // Local, because the bulk write is a loop of round-trips and the operator
+  // needs the card to say it is working rather than look inert.
+  const [bulking, setBulking] = useState(false)
+  const pct = pack.total > 0 ? Math.round((pack.checked / pack.total) * 100) : 0
+  const done = pack.total > 0 && pack.checked >= pack.total
+  // Off the FULL slot set: `pack.cards` / `pack.giveaways` are what survived the
+  // filter, and a hidden won card must not turn the pack into a giveaway.
+  const giveawayTotal = pack.slots.filter((s) => s.isGiveaway).length
+  const giveawayOnly = giveawayTotal > 0 && giveawayTotal === pack.total
+
+  const runBulk = async (): Promise<void> => {
+    const target = !done
+    const ids = pack.slots.filter((s) => s.checkedOff !== target).map((s) => s.id)
+    setBulking(true)
+    try {
+      await onCheckSlots(ids, target)
+    } finally {
+      setBulking(false)
+    }
+  }
+
+  return (
+    <div
+      className={`chk-pack ${done ? 'done' : ''} ${bulking ? 'busy' : ''}`}
+      data-stage={pack.stage}
+      data-hold={pack.onHold ? 'true' : undefined}
+    >
+      <div className="chk-pack-head">
+        {/* The package's own stage, first — a picker has to know before they
+            start that this one has already gone out. */}
+        <span className="chk-pack-stage" data-stage={pack.stage}>
+          <span className="chk-pack-dot" />
+          {SHIP_STAGE_LABELS[pack.stage]}
+        </span>
+
+        <span className="chk-pack-name">{pack.realName || '—'}</span>
+        <span className="chk-pack-handle">@{pack.handle}</span>
+        <span className="chk-pack-value mono">{formatMoney(pack.value)}</span>
+
+        {pack.isNew && <span className="ship-chip info">NEW</span>}
+        {giveawayOnly && (
+          <span className="ship-chip giveaway">
+            <Icon name="Gift" size={12} /> Giveaway only
+          </span>
+        )}
+        {!giveawayOnly && giveawayTotal > 0 && (
+          <span className="ship-chip" title={`${giveawayTotal} giveaway card(s)`}>
+            <Icon name="Gift" size={12} /> {giveawayTotal}
+          </span>
+        )}
+        {pack.sleeved > 0 && (
+          <span className="ship-chip" title={`${pack.sleeved} card(s) top-sleeved`}>
+            <Icon name="Sticker" size={12} /> {pack.sleeved}
+          </span>
+        )}
+        {pack.onHold && (
+          <span className="ship-chip warn">
+            <Icon name="PauseCircle" size={12} /> On hold
+          </span>
+        )}
+
+        <span className="chk-pack-spacer" />
+
+        <span className={`chk-pack-prog ${done ? 'done' : ''}`}>
+          <span className="chk-pack-bar">
+            <span className="chk-pack-fill" style={{ width: `${pct}%` }} />
+          </span>
+          <span className="chk-pack-num mono">
+            {pack.checked}/{pack.total}
+          </span>
+        </span>
+
+        {canManage && (
+          <button
+            type="button"
+            className={`chk-pack-done ${done ? 'undo' : ''}`}
+            disabled={bulking}
+            title={
+              done
+                ? 'Un-check every card in this pack'
+                : `Check off the remaining ${pack.total - pack.checked} card(s)`
+            }
+            onClick={() => void runBulk()}
+          >
+            <Icon name={bulking ? 'Loader2' : done ? 'RotateCcw' : 'CheckCheck'} size={14} className={bulking ? 'spin-ico' : undefined} />
+            {done ? 'Undo' : 'Done'}
+          </button>
+        )}
+
+        <button
+          type="button"
+          className="chk-pack-caret"
+          aria-expanded={open}
+          title={open ? 'Collapse this pack' : 'Show the cards'}
+          onClick={onToggleOpen}
+        >
+          <Icon name={open ? 'ChevronDown' : 'ChevronRight'} size={16} />
+        </button>
+      </div>
+
+      {open && (
+        <div className="chk-pack-body">
+          {pack.cards.length > 0 && (
+            <PackRun
+              icon="SquareStack"
+              label="Cards"
+              slots={pack.cards}
+              stats={runStats(pack.slots, false)}
+              canManage={canManage}
+              onToggleSlot={onToggleSlot}
+              onToggleSleeve={onToggleSleeve}
+            />
+          )}
+          {pack.giveaways.length > 0 && (
+            <PackRun
+              icon="Gift"
+              label="Giveaway"
+              slots={pack.giveaways}
+              stats={runStats(pack.slots, true)}
+              canManage={canManage}
+              onToggleSlot={onToggleSlot}
+              onToggleSleeve={onToggleSleeve}
+            />
+          )}
+
+          <div className="chk-pack-foot">
+            <span title={pack.address}>
+              <Icon name="MapPin" size={13} /> {pack.address || 'No address on the slip'}
+            </span>
+            {pack.trackingNumber && (
+              <span className="mono">
+                <Icon name="Truck" size={13} /> {pack.trackingNumber}
+              </span>
+            )}
+            {pack.sleeved > 0 && (
+              <span>
+                <Icon name="Sticker" size={13} /> {pack.sleeved} top-sleeved
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+interface RunStats {
+  total: number
+  checked: number
+  value: number
+}
+
+/**
+ * A run's headline counts come from every card in it, not from the ones the
+ * filter left on screen — same reason the pack header does.
+ */
+function runStats(slots: ShipBreakSlotRow[], giveaway: boolean): RunStats {
+  const mine = slots.filter((s) => s.isGiveaway === giveaway)
+  return {
+    total: mine.length,
+    checked: mine.filter((s) => s.checkedOff).length,
+    value: mine.reduce((sum, s) => sum + s.price, 0)
+  }
+}
+
+/** One labelled run of cards inside a pack — the cards, then the giveaways. */
+function PackRun({
+  icon,
+  label,
+  slots,
+  stats,
+  canManage,
+  onToggleSlot,
+  onToggleSleeve
+}: {
+  icon: string
+  label: string
+  /** The tiles to draw — already filtered. */
+  slots: ShipBreakSlotRow[]
+  /** The run's real totals, filter or no filter. */
+  stats: RunStats
+  canManage: boolean
+  onToggleSlot: (slotId: string, checked: boolean) => void
+  onToggleSleeve: (slotId: string, topSleeved: boolean) => void
+}): JSX.Element {
+  return (
+    <div className="chk-run">
+      <div className="chk-run-head">
+        <span className="chk-run-title">
+          <Icon name={icon} size={13} /> {label}
+        </span>
+        <span className="chk-run-spacer" />
+        <span className="chk-run-value mono">{formatMoney(stats.value)}</span>
+        <span className={`chk-run-count mono ${stats.checked >= stats.total ? 'done' : ''}`}>
+          {stats.checked}/{stats.total}
+        </span>
+      </div>
+      <div className="chk-run-tiles">
+        {slots.map((s) => (
+          <PickTile
+            key={s.id}
+            slot={s}
+            showCustomer={false}
+            canManage={canManage}
+            onToggle={() => onToggleSlot(s.id, !s.checkedOff)}
+            onSleeve={() => onToggleSleeve(s.id, !s.topSleeved)}
+          />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * One card. The tile is the check target — big enough to hit while holding a
+ * stack of cards — with the top-sleeve toggle as a SIBLING button rather than
+ * nested inside it, which would be invalid and unreachable by keyboard.
+ */
+function PickTile({
   slot,
   showCustomer,
   canManage,
@@ -1033,74 +1387,81 @@ function PickRow({
   onSleeve: () => void
 }): JSX.Element {
   return (
-    <div className={`chk-row ${slot.checkedOff ? 'checked' : ''}`}>
+    <div className={`chk-tile ${slot.checkedOff ? 'checked' : ''} ${showCustomer ? 'wide' : ''}`}>
       <button
-        className="chk-check"
+        type="button"
+        className="chk-tile-main"
         disabled={!canManage}
+        aria-pressed={slot.checkedOff}
         title={
           canManage
             ? slot.checkedOff
-              ? 'Un-check this card'
-              : 'Check this card off'
+              ? `Un-check ${slot.teamName}`
+              : `Check off ${slot.teamName}`
             : 'You do not have permission to check cards off.'
         }
         onClick={onToggle}
       >
-        <Icon
-          name={slot.checkedOff ? 'CheckCircle2' : 'Circle'}
-          size={19}
-          strokeWidth={slot.checkedOff ? 2.4 : 1.9}
-        />
+        <span className="chk-tile-check">
+          <Icon
+            name={slot.checkedOff ? 'CheckCircle2' : 'Circle'}
+            size={20}
+            strokeWidth={slot.checkedOff ? 2.4 : 1.9}
+          />
+        </span>
+
+        <span className="chk-tile-body">
+          <span className="chk-tile-team">{slot.teamName}</span>
+
+          {showCustomer && (
+            <span className="chk-tile-owner">
+              <b>{slot.realName || '—'}</b>
+              <span className="chk-tile-handle">@{slot.handle}</span>
+              <span className="chk-tile-addr" title={slot.address}>
+                {slot.address || 'No address on the slip'}
+              </span>
+            </span>
+          )}
+
+          {slot.checkedOff && (slot.checkedOffBy || slot.checkedOffAt) && (
+            <span className="chk-tile-by">
+              {slot.checkedOffBy ? `${slot.checkedOffBy} · ` : ''}
+              {formatDateTime(slot.checkedOffAt)}
+            </span>
+          )}
+        </span>
+
+        <span className="chk-tile-flags">
+          {slot.isNew && showCustomer && <span className="ship-chip info mini">NEW</span>}
+          {slot.isGiveaway && (
+            <span className="ship-chip mini">
+              <Icon name="Gift" size={11} /> Giveaway
+            </span>
+          )}
+          {slot.onHold && showCustomer && (
+            <span className="ship-chip warn mini">
+              <Icon name="PauseCircle" size={11} /> Hold
+            </span>
+          )}
+          {showCustomer && slot.stage !== 'to_pick' && (
+            <span className="ship-chip mini" data-stage={slot.stage} title="The package's stage">
+              {SHIP_STAGE_LABELS[slot.stage]}
+            </span>
+          )}
+        </span>
+
+        <span className="chk-tile-price mono">{formatMoney(slot.price)}</span>
       </button>
 
-      <span className="chk-team">{slot.teamName}</span>
-
-      {showCustomer && (
-        <span className="chk-owner">
-          <span className="chk-owner-handle">@{slot.handle}</span>
-          <span className="chk-owner-name">{slot.realName || '—'}</span>
-          <span className="chk-owner-addr" title={slot.address}>
-            {slot.address || 'No address on the slip'}
-          </span>
-        </span>
-      )}
-
-      <span className="chk-flags">
-        {slot.isNew && showCustomer && <span className="ship-chip info mini">NEW</span>}
-        {slot.isGiveaway && (
-          <span className="ship-chip mini">
-            <Icon name="Gift" size={11} /> Giveaway
-          </span>
-        )}
-        {slot.onHold && (
-          <span className="ship-chip warn mini">
-            <Icon name="PauseCircle" size={11} /> Hold
-          </span>
-        )}
-        {slot.stage !== 'to_pick' && (
-          <span className="ship-chip mini" data-stage={slot.stage} title="The package's stage">
-            {SHIP_STAGE_LABELS[slot.stage]}
-          </span>
-        )}
-      </span>
-
-      {slot.orderId && <span className="chk-order mono">#{slot.orderId}</span>}
-      <span className="chk-price mono">{formatMoney(slot.price)}</span>
-
       <button
-        className={`chk-sleeve ${slot.topSleeved ? 'on' : ''}`}
+        type="button"
+        className={`chk-tile-sleeve ${slot.topSleeved ? 'on' : ''}`}
         disabled={!canManage}
         title={slot.topSleeved ? 'Remove the top sleeve' : 'Mark this card top-sleeved'}
         onClick={onSleeve}
       >
-        <Icon name="Sticker" size={15} />
+        <Icon name="Sticker" size={16} />
       </button>
-
-      <span className="chk-by">
-        {slot.checkedOff
-          ? `${slot.checkedOffBy ? `${slot.checkedOffBy} · ` : ''}${formatDateTime(slot.checkedOffAt)}`
-          : ''}
-      </span>
     </div>
   )
 }

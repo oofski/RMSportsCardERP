@@ -4944,6 +4944,11 @@ tr.hoverable-row:hover {
   background: var(--brand-soft-2);
   color: var(--brand-700);
 }
+/* Nothing in this package was won — it is a promo rider only. */
+.ship-chip.giveaway {
+  background: var(--brand-soft-2);
+  color: var(--brand-700);
+}
 
 /* ---------- Upload: import form ---------- */
 .ship-upload-form {
@@ -6542,165 +6547,455 @@ tr.hoverable-row:hover {
   color: var(--brand-700);
 }
 
+/* ---------- Checker: the pick list ----------
+
+   A pick card is the SAME object as an Orders queue row, seen from the picking
+   job instead of the shipping one — so it is built from the same parts: a
+   header band that states the whole package, a body of card tiles, a footer of
+   context. Deliberately roomy: this is read at arm's length with a stack of
+   cards in one hand, so the tap targets are large and the type is not small. */
 .chk-picklist {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 10px;
 }
-.chk-group {
+
+/* ---- One customer's package ---- */
+.chk-pack {
   border: 1px solid var(--border);
+  border-left: 3px solid var(--border-strong);
   border-radius: var(--radius);
   background: var(--surface);
+  box-shadow: var(--shadow-sm);
   overflow: hidden;
+  transition: border-color 0.13s ease, box-shadow 0.13s ease, opacity 0.13s ease;
 }
-.chk-group-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 13px;
-  background: var(--surface-2);
-  border-bottom: 1px solid var(--border);
-  font-size: 12.5px;
-  font-weight: 700;
-  color: var(--text);
+.chk-pack:hover {
+  box-shadow: var(--shadow-md);
 }
-.chk-group-head svg {
-  color: var(--text-3);
+.chk-pack.busy {
+  opacity: 0.6;
+  pointer-events: none;
 }
-.chk-group-count {
-  color: var(--text-2);
-  font-weight: 700;
+.chk-pack.done {
+  border-left-color: var(--success);
 }
-.chk-group-addr {
-  margin-left: auto;
-  font-weight: 400;
-  color: var(--text-3);
-  font-size: 12px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 46%;
+.chk-pack[data-stage='put_together'] {
+  border-left-color: var(--brand-500);
 }
-.chk-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 7px 13px;
-  border-top: 1px solid var(--border);
-  font-size: 13px;
+.chk-pack[data-stage='sent'] {
+  border-left-color: var(--warning);
 }
-.chk-group > .chk-row:first-child {
-  border-top: none;
+.chk-pack[data-stage='all_good'] {
+  border-left-color: var(--success);
 }
-.chk-row:hover {
+.chk-pack[data-stage='exception'],
+.chk-pack[data-stage='returned'] {
+  border-left-color: var(--danger);
+}
+.chk-pack[data-hold='true'] {
   background: var(--surface-2);
 }
-.chk-row.checked .chk-team {
-  color: var(--text-3);
-  text-decoration: line-through;
-  text-decoration-color: var(--text-3);
+
+/* ---- The header band: the whole package on one line ---- */
+.chk-pack-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+  padding: 11px 13px;
 }
-.chk-check {
+/* The package's stage, first and unmissable — mirrors the Orders row so a
+   picker and a shipper point at the same badge and mean the same thing. */
+.chk-pack-stage {
   display: inline-flex;
-  padding: 2px;
-  border: none;
-  background: none;
-  color: var(--text-3);
-  cursor: pointer;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.chk-pack-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-3);
   flex-shrink: 0;
 }
-.chk-check:hover:not(:disabled) {
-  color: var(--brand-500);
+.chk-pack-stage[data-stage='put_together'] {
+  border-color: var(--brand-300);
+  background: var(--brand-soft);
+  color: var(--brand-700);
 }
-.chk-check:disabled {
-  cursor: default;
-  opacity: 0.5;
+.chk-pack-stage[data-stage='put_together'] .chk-pack-dot {
+  background: var(--brand-500);
 }
-.chk-row.checked .chk-check {
-  color: var(--success);
+.chk-pack-stage[data-stage='sent'] {
+  border-color: var(--warning);
+  background: var(--warning-bg);
+  color: var(--warning);
 }
-.chk-team {
-  flex: 0 0 195px;
-  font-weight: 600;
+.chk-pack-stage[data-stage='sent'] .chk-pack-dot {
+  background: var(--warning);
+}
+.chk-pack-stage[data-stage='all_good'] {
+  border-color: var(--success);
+  background: var(--success-bg);
+  color: var(--success-strong);
+}
+.chk-pack-stage[data-stage='all_good'] .chk-pack-dot {
+  background: var(--success);
+}
+.chk-pack-stage[data-stage='exception'],
+.chk-pack-stage[data-stage='returned'] {
+  border-color: var(--danger);
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+.chk-pack-stage[data-stage='exception'] .chk-pack-dot,
+.chk-pack-stage[data-stage='returned'] .chk-pack-dot {
+  background: var(--danger);
+}
+
+.chk-pack-name {
+  font-size: 15px;
+  font-weight: 700;
   color: var(--text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  letter-spacing: -0.01em;
 }
-.chk-owner {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  min-width: 0;
+.chk-pack-handle {
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+.chk-pack-value {
+  padding: 3px 9px;
+  border-radius: 6px;
+  background: var(--success-bg);
+  color: var(--success-strong);
+  font-size: 12.5px;
+  font-weight: 700;
+}
+/* Pushes the progress + actions to the right edge however many chips there are. */
+.chk-pack-spacer {
   flex: 1 1 auto;
-}
-.chk-owner-handle {
-  font-weight: 700;
-  color: var(--text-2);
-  white-space: nowrap;
-}
-.chk-owner-name {
-  color: var(--text-3);
-  font-size: 12.5px;
-  white-space: nowrap;
-}
-.chk-owner-addr {
-  color: var(--text-3);
-  font-size: 12px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   min-width: 0;
 }
-.chk-flags {
+.chk-pack-prog {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  margin-right: auto;
-  flex-shrink: 0;
+  gap: 8px;
 }
-.chk-order {
-  color: var(--text-3);
-  font-size: 11.5px;
-  white-space: nowrap;
+.chk-pack-bar {
+  display: block;
+  width: 96px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  overflow: hidden;
 }
-.chk-price {
+.chk-pack-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--brand-500);
+  transition: width 0.16s ease;
+}
+.chk-pack-prog.done .chk-pack-fill {
+  background: var(--success);
+}
+.chk-pack-num {
+  font-size: 12.5px;
   font-weight: 700;
-  color: var(--text);
-  min-width: 62px;
-  text-align: right;
+  color: var(--text-2);
 }
-.chk-sleeve {
+.chk-pack-prog.done .chk-pack-num {
+  color: var(--success-strong);
+}
+
+/* The one gesture a picker makes per pile. */
+.chk-pack-done {
   display: inline-flex;
-  padding: 4px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  background: none;
-  color: var(--text-3);
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid var(--brand-500);
+  border-radius: 7px;
+  background: var(--brand-500);
+  color: #fff;
+  font-size: 12.5px;
+  font-weight: 700;
   cursor: pointer;
-  flex-shrink: 0;
+  transition: filter 0.13s ease, background 0.13s ease;
 }
-.chk-sleeve:hover:not(:disabled) {
+.chk-pack-done:hover:not(:disabled) {
+  filter: brightness(1.07);
+}
+.chk-pack-done:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.chk-pack-done.undo {
+  border-color: var(--border-strong);
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+.chk-pack-caret {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  cursor: pointer;
+}
+.chk-pack-caret:hover {
   border-color: var(--border-strong);
   color: var(--text);
 }
-.chk-sleeve:disabled {
-  cursor: default;
-  opacity: 0.45;
+
+/* ---- The body: the cards themselves ---- */
+.chk-pack-body {
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+  padding: 11px 13px 10px;
 }
-.chk-sleeve.on {
-  background: var(--info-bg);
-  border-color: var(--info);
-  color: var(--info);
+.chk-run + .chk-run {
+  margin-top: 12px;
 }
-.chk-by {
-  flex: 0 0 128px;
-  text-align: right;
+.chk-run-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 6px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.chk-run-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+.chk-run-title svg {
   color: var(--text-3);
+}
+.chk-run-spacer {
+  flex: 1 1 auto;
+}
+.chk-run-value {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-2);
+}
+.chk-run-count {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-2);
+}
+.chk-run-count.done {
+  color: var(--success-strong);
+}
+.chk-run-tiles {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* ---- One card. The whole tile is the check target. ---- */
+.chk-tile {
+  display: flex;
+  align-items: stretch;
+  min-height: 46px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  overflow: hidden;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+.chk-tile:hover {
+  border-color: var(--border-strong);
+}
+.chk-tile.checked {
+  border-color: var(--success);
+  background: var(--success-bg);
+}
+.chk-tile-main {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 8px 12px;
+  border: none;
+  background: none;
+  text-align: left;
+  font: inherit;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.chk-tile-main:disabled {
+  cursor: default;
+}
+.chk-tile-check {
+  display: flex;
+  flex-shrink: 0;
+  color: var(--text-3);
+}
+.chk-tile.checked .chk-tile-check {
+  color: var(--success);
+}
+.chk-tile-body {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.chk-tile-team {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+}
+.chk-tile.checked .chk-tile-team {
+  color: var(--success-strong);
+}
+/* Only rendered in the flat by-team list, where the card alone says nothing
+   about which pile it belongs on. */
+.chk-tile-owner {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.chk-tile-handle {
+  color: var(--text-3);
+}
+.chk-tile-addr {
+  max-width: 280px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+.chk-tile-by {
+  font-size: 11px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+.chk-tile-flags {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+}
+.chk-tile-price {
+  flex-shrink: 0;
+  min-width: 68px;
+  text-align: right;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+.chk-tile.checked .chk-tile-price {
+  color: var(--success-strong);
+}
+/* A sibling of the check button, never nested inside it — a button in a button
+   is invalid and the inner one is unreachable by keyboard. */
+.chk-tile-sleeve {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 44px;
+  border: none;
+  border-left: 1px solid var(--border);
+  background: none;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.chk-tile-sleeve:hover:not(:disabled) {
+  background: var(--surface-3);
+  color: var(--text);
+}
+.chk-tile-sleeve:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.chk-tile-sleeve.on {
+  color: var(--brand-600);
+  background: var(--brand-soft);
+}
+
+/* ---- The footer: where it goes and what has happened to it ---- */
+.chk-pack-foot {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-top: 11px;
+  padding-top: 9px;
+  border-top: 1px solid var(--border);
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+.chk-pack-foot span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+.chk-pack-foot svg {
+  color: var(--text-3);
+  flex-shrink: 0;
+}
+
+/* ---- The flat by-team list: same tiles, one column, no pack chrome ---- */
+.chk-flat {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+/* In the flat list the tiles are a column of equals, so they hold one line
+   each: the team name gets a fixed lane and the address gives way rather than
+   the attribution wrapping and making one row taller than its neighbours. */
+.chk-tile.wide .chk-tile-body {
+  flex-wrap: nowrap;
+}
+.chk-tile.wide .chk-tile-team {
+  flex: 0 0 auto;
+  min-width: 190px;
+}
+.chk-tile.wide .chk-tile-owner {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.chk-tile.wide .chk-tile-owner b {
+  flex-shrink: 0;
+}
+.chk-tile.wide .chk-tile-addr {
+  flex: 1 1 auto;
+  max-width: none;
+}
+.chk-tile.wide .chk-tile-by {
+  flex: 0 0 auto;
 }
 
 /* Break-status filter chips pick up their status colour when active. */
@@ -7471,15 +7766,20 @@ tr.hoverable-row:hover {
   .trk-actions {
     justify-content: flex-start;
   }
-  .chk-row {
-    flex-wrap: wrap;
+  /* Narrow: the pack header's progress + actions drop under the name rather
+     than squeezing the customer off the line, and a tile lets its address go
+     rather than truncate the team name it exists to show. */
+  .chk-pack-spacer {
+    flex-basis: 100%;
   }
-  .chk-team {
-    flex: 1 1 160px;
+  .chk-pack-head {
+    row-gap: 8px;
   }
-  .chk-by {
-    flex: 1 1 100%;
-    text-align: left;
+  .chk-tile-addr {
+    display: none;
+  }
+  .chk-tile-by {
+    display: none;
   }
   .trk-bulk-line {
     grid-template-columns: 150px minmax(0, 1fr);
