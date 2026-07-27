@@ -10,7 +10,7 @@ import type {
 import { canTransition } from '@shared/purchaseOrders'
 import { LOCATION_IDS, isLocation } from '@shared/inventory'
 import { getDb, getMeta, setMeta } from './database'
-import { addStock } from './inventory'
+import { addStock, reverseStockReceipt } from './inventory'
 import { recordPoCogs, voidPoCogs } from './finance'
 import { newId, nowIso } from '../util'
 
@@ -239,9 +239,19 @@ export function setPurchaseOrderStatus(
       db.prepare(
         `UPDATE purchase_orders SET status = ?, ${tsCol} = ?, updated_at = ? WHERE id = ?`
       ).run(status, ts, ts, id)
-      // Cancelling a PO voids its COGS ledger entry. Cancel is only reachable
-      // from ordered/paid (per PO_TRANSITIONS), so this is the single void point.
-      if (status === 'cancelled') voidPoCogs(db, id)
+      // Cancelling a PO voids its COGS ledger entry — the single void point.
+      if (status === 'cancelled') {
+        // Cancelling a RECEIVED PO has to give the stock back, or inventory
+        // keeps units that no document accounts for. Each line is reversed
+        // against the exact FIFO lot its receipt opened, so the cost layer that
+        // came in is the one that goes out — never the FIFO-oldest, which would
+        // cannibalise a different (possibly cheaper) layer and quietly move the
+        // average. reverseStockReceipt THROWS when part of that stock has
+        // already been sold, which rolls this whole transaction back and leaves
+        // the PO exactly as it was.
+        reverseReceivedLines(db, id, row.po_number, actorId)
+        voidPoCogs(db, id)
+      }
     }
 
     if (status === 'received') {
@@ -362,9 +372,10 @@ export function receivePoLine(
   db.prepare(
     `UPDATE purchase_order_lines
         SET qty_received = qty_received + @take,
-            received_at  = CASE WHEN qty_received + @take >= quantity THEN @ts ELSE received_at END
+            received_at  = CASE WHEN qty_received + @take >= quantity THEN @ts ELSE received_at END,
+            lot_id       = @lotId
       WHERE id = @id`
-  ).run({ take, ts: nowIso(), id: lineId })
+  ).run({ take, ts: nowIso(), id: lineId, lotId: res.lotId ?? null })
 
   return {
     lineId,
@@ -537,6 +548,61 @@ export function scanInPurchaseOrder(id: string, actorId: string | null): ScanInR
   } catch (err) {
     return { po: getPurchaseOrder(id), error: err instanceof Error ? err.message : String(err) }
   }
+}
+
+/**
+ * Hand back everything a purchase order took into stock. Called only from the
+ * cancel path, inside its transaction.
+ *
+ * A line received BEFORE schema v19 has no lot recorded, so there is no way to
+ * know which cost layer to unwind. That is reported rather than approximated:
+ * unwinding the wrong layer would silently misstate the average cost of
+ * everything left on the shelf, which is worse than refusing.
+ */
+function reverseReceivedLines(
+  db: Database.Database,
+  poId: string,
+  poNumber: string,
+  actorId: string | null
+): void {
+  const lines = db
+    .prepare(
+      `SELECT l.id, l.product_id, l.qty_received, l.lot_id, p.location
+         FROM purchase_order_lines l
+         JOIN purchase_orders p ON p.id = l.po_id
+        WHERE l.po_id = ? AND l.qty_received > 0`
+    )
+    .all(poId) as Array<{
+    id: string
+    product_id: string
+    qty_received: number
+    lot_id: string | null
+    location: string
+  }>
+
+  for (const line of lines) {
+    if (!line.lot_id) {
+      throw new Error(
+        `${poNumber} was received before this version could track its cost layers, so cancelling it cannot return the stock automatically. Adjust the stock down by hand, then delete the PO.`
+      )
+    }
+    reverseStockReceipt(db, {
+      productId: line.product_id,
+      location: line.location,
+      quantity: line.qty_received,
+      lotId: line.lot_id,
+      note: `Cancelled ${poNumber}`,
+      actorId
+    })
+  }
+
+  // The lines are open again, and the header must not keep claiming a receipt.
+  db.prepare(
+    `UPDATE purchase_order_lines
+        SET qty_received = 0, received_at = NULL, lot_id = NULL
+      WHERE po_id = ?`
+  ).run(poId)
+  db.prepare('UPDATE purchase_orders SET received_at = NULL, scanned_at = NULL WHERE id = ?').run(poId)
 }
 
 /** Read + increment the shared PO sequence counter, returning "PO-0001" etc.

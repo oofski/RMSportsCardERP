@@ -3491,94 +3491,10 @@ tr.hoverable-row:hover {
 .po-tab {
   padding-bottom: 32px;
 }
-.wsec {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xl);
-  background: var(--surface);
-  box-shadow: var(--shadow-sm);
-}
-.wsec + .wsec {
-  margin-top: 26px;
-}
-.wsec-head {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  flex-wrap: wrap;
-  padding: 20px 24px;
-  background: var(--surface-2);
-  border-bottom: 1px solid var(--border);
-  border-radius: 21px 21px 0 0;
-}
-.wsec-ico {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 46px;
-  height: 46px;
-  flex-shrink: 0;
-  border-radius: 13px;
-  background: var(--brand-soft);
-  color: var(--brand-700);
-}
-.wsec-title h3 {
-  font-size: 19px;
-  font-weight: 700;
-  letter-spacing: -0.016em;
-}
-.wsec-title p {
-  margin: 3px 0 0;
-  font-size: 13.5px;
-  color: var(--text-2);
-}
-.wsec-title {
-  flex: 1 1 260px;
-  min-width: 0;
-}
-/* Counters + the section's one primary action travel together, so on a narrow
-   window they wrap to their own line as a block and stay right-aligned. */
-.wsec-actions {
-  display: flex;
-  align-items: center;
-  gap: 22px;
-  margin-left: auto;
-}
-.wsec-stats {
-  display: flex;
-  align-items: stretch;
-  gap: 22px;
-}
-.wsec-stat {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 1px;
-}
-.wsec-stat-val {
-  font-size: 20px;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  color: var(--text);
-  font-variant-numeric: tabular-nums;
-}
-.wsec-stat-label {
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-  color: var(--text-2);
-}
-.wsec-body {
-  padding: 22px 24px 26px;
-}
+/* Counters + the primary actions travel together, so on a narrow window they
+   wrap to their own line as a block and stay right-aligned. */
 @media (max-width: 720px) {
-  .wsec-head {
-    padding: 16px 16px;
-  }
-  .wsec-body {
-    padding: 16px;
-  }
-  .wsec-stats {
+  .po-page-stats {
     gap: 16px;
   }
 }
@@ -5181,47 +5097,8 @@ tr.hoverable-row:hover {
   overflow-x: auto;
 }
 
-.wsec-loading {
-  padding: 34px 4px;
-  text-align: center;
-  font-size: 13.5px;
-  color: var(--text-2);
-}
 
 /* ---- A section with nothing in it yet — shared by both sections ---- */
-.wsec-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-  text-align: center;
-  padding: 44px 24px 48px;
-  border: 1px dashed var(--border-strong);
-  border-radius: var(--radius-lg);
-  background: var(--surface-2);
-}
-.wsec-empty-ico {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 56px;
-  height: 56px;
-  border-radius: 16px;
-  background: var(--surface-3);
-  color: var(--text-2);
-}
-.wsec-empty-title {
-  font-size: 16.5px;
-  font-weight: 700;
-  color: var(--text);
-}
-.wsec-empty-msg {
-  margin: 0;
-  max-width: 52ch;
-  font-size: 13.5px;
-  line-height: 1.55;
-  color: var(--text-2);
-}
 
 .link-btn {
   background: none;
@@ -9640,4 +9517,73 @@ button.sor-team:focus-visible {
   .ba-roster-note {
     display: none;
   }
+}
+
+/* ---------- Purchase orders: a page, not a card ----------
+   The board used to sit inside a `.wsec` shell — a bordered card with a tinted
+   header band and an icon plate — wrapped around content that is already
+   columns of cards. Nesting a card in a card added chrome and a gray caption
+   without adding meaning, so the shell is gone and the page just flows.
+   ------------------------------------------------------------------------ */
+.po-page-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+.po-page-head h2 {
+  margin: 0;
+  font-size: 21px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+/* Pushes the counts and the actions to the right edge. */
+.po-page-stats {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  margin-left: auto;
+}
+.po-page-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  line-height: 1.15;
+}
+.po-page-stat-val {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text);
+}
+.po-page-stat-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+.po-page-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 56px 20px;
+  text-align: center;
+  color: var(--text-2);
+}
+.po-page-empty svg {
+  color: var(--text-3);
+}
+.po-page-empty-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+}
+.po-page-empty p {
+  margin: 0;
+  max-width: 52ch;
+  font-size: 13.5px;
+  line-height: 1.55;
 }

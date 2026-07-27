@@ -600,6 +600,11 @@ function migrate(database: Database.Database): void {
   // per-unit without another migration.
   addColumnIfMissing(database, 'purchase_order_lines', 'qty_received', 'INTEGER NOT NULL DEFAULT 0')
   addColumnIfMissing(database, 'purchase_order_lines', 'received_at', 'TEXT')
+  // v19: the FIFO lot each receipt opened, so cancelling a RECEIVED purchase
+  // order can hand back exactly the stock it took in — that lot, at that cost —
+  // instead of guessing which layer to unwind. Lines received before v19 have
+  // no lot recorded and are refused rather than reversed by approximation.
+  addColumnIfMissing(database, 'purchase_order_lines', 'lot_id', 'TEXT')
   // The canonical form of `upc` (which is free text the user typed, e.g.
   // "0 12345 67890 5", and so cannot be matched against directly). NOT unique:
   // dirty legacy data could normalise two rows to the same value and a UNIQUE
@@ -644,7 +649,11 @@ function migrate(database: Database.Database): void {
   // v18: supply_orders.source ('manual' | 'auto'). Purely additive, and the
   // default makes every existing row correct — nothing has been bought
   // automatically yet.
-  setMeta(database, 'schema_version', '18')
+  //
+  // v19: purchase_order_lines.lot_id, so a received PO can be cancelled by
+  // reversing the exact receipt. Purely additive; a NULL means "received before
+  // v19", which the cancel path reports honestly instead of guessing.
+  setMeta(database, 'schema_version', '19')
 
   // Seed the product catalog once, then apply the on-hand snapshot once.
   seedCatalogIfNeeded(database)

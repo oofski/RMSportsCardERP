@@ -159,75 +159,61 @@ export function InvoicingModule(): JSX.Element {
   return (
     <div className="content-narrow inv-shell">
       <div className="inv-scroll po-tab">
-        <section className="wsec wsec-po">
-          <header className="wsec-head">
-            <div className="wsec-ico">
-              <Icon name="ReceiptText" size={22} />
+        {/* No section shell: the board IS the page. A card-in-a-card added a
+            border, a tinted band and an icon plate around content that already
+            reads as columns of cards, so the chrome went and the page flows. */}
+        <div className="po-page-head">
+          <h2>Purchase orders</h2>
+          <div className="po-page-stats">
+            <div className="po-page-stat">
+              <span className="po-page-stat-val">{openPos.length}</span>
+              <span className="po-page-stat-label">Open</span>
             </div>
-            <div className="wsec-title">
-              <h3>Purchase orders</h3>
-              <p>
-                Product buys and supply reorders, moving Ordered → Paid →
-                Received. Drag a PO card to move it.
-              </p>
+            <div className="po-page-stat">
+              <span className="po-page-stat-val mono">
+                {formatMoney(committed, { compact: true })}
+              </span>
+              <span className="po-page-stat-label">Committed</span>
             </div>
-            <div className="wsec-actions">
-              <div className="wsec-stats">
-                <div className="wsec-stat">
-                  <span className="wsec-stat-val">{openPos.length}</span>
-                  <span className="wsec-stat-label">Open</span>
-                </div>
-                <div className="wsec-stat">
-                  <span className="wsec-stat-val mono">
-                    {formatMoney(committed, { compact: true })}
-                  </span>
-                  <span className="wsec-stat-label">Committed</span>
-                </div>
-              </div>
-              {canManageSupplies && supplies.length > 0 && (
-                <Button icon="Package" onClick={() => setNewSupplyOpen(true)}>
-                  New supply order
-                </Button>
-              )}
-              {canManage && (
-                <Button variant="primary" icon="Plus" onClick={() => setShowCreate(true)}>
-                  New PO
-                </Button>
-              )}
-            </div>
-          </header>
+          </div>
+          {canManageSupplies && supplies.length > 0 && (
+            <Button icon="Package" onClick={() => setNewSupplyOpen(true)}>
+              New supply order
+            </Button>
+          )}
+          {canManage && (
+            <Button variant="primary" icon="Plus" onClick={() => setShowCreate(true)}>
+              New PO
+            </Button>
+          )}
+        </div>
 
-          <div className="wsec-body">
-            {pos.length === 0 && supplyOrders.length === 0 ? (
-              <div className="wsec-empty">
-                <div className="wsec-empty-ico">
-                  <Icon name="ReceiptText" size={26} />
-                </div>
-                <div className="wsec-empty-title">Nothing on order</div>
-                <p className="wsec-empty-msg">
-                  Create a PO to start tracking a product buy — its lines, its cost and where the
-                  boxes land — or log a supply reorder for packaging.
-                </p>
-                {canManage && (
-                  <Button variant="primary" icon="Plus" onClick={() => setShowCreate(true)}>
-                    New PO
-                  </Button>
-                )}
-              </div>
-            ) : (
-              <PurchaseOrderBoard
-                pos={pos}
-                supplyOrders={supplyOrders}
-                canManageSupplies={canManageSupplies}
-                thumbnails={thumbnails}
-                onMove={move}
-                onOpen={(id) => setReceiptId(id)}
-                onMoveSupply={moveSupply}
-                onDeleteSupply={removeSupply}
-              />
+        {pos.length === 0 && supplyOrders.length === 0 ? (
+          <div className="po-page-empty">
+            <Icon name="ReceiptText" size={26} />
+            <div className="po-page-empty-title">Nothing on order</div>
+            <p>
+              Create a PO to start tracking a product buy — its lines, its cost and where the
+              boxes land — or log a supply reorder for packaging.
+            </p>
+            {canManage && (
+              <Button variant="primary" icon="Plus" onClick={() => setShowCreate(true)}>
+                New PO
+              </Button>
             )}
           </div>
-        </section>
+        ) : (
+          <PurchaseOrderBoard
+            pos={pos}
+            supplyOrders={supplyOrders}
+            canManageSupplies={canManageSupplies}
+            thumbnails={thumbnails}
+            onMove={move}
+            onOpen={(id) => setReceiptId(id)}
+            onMoveSupply={moveSupply}
+            onDeleteSupply={removeSupply}
+          />
+        )}
 
       </div>
 

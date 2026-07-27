@@ -10,11 +10,18 @@ export const PO_STAGES: { id: PurchaseOrderStatus; label: string }[] = [
   { id: 'cancelled', label: 'Cancelled' }
 ]
 
-/** Allowed forward/back moves between stages. received & cancelled are terminal. */
+/**
+ * Allowed moves between stages. Cancel is reachable from EVERY live stage,
+ * including received: a buy that was checked in by mistake has to be undoable,
+ * and refusing left the only exit as deleting the paperwork, which loses the
+ * record. Cancelling a received PO hands its stock back by reversing the exact
+ * FIFO lot each line opened — see setPurchaseOrderStatus — and is refused when
+ * that stock has already been sold. Cancelled is the one terminal stage.
+ */
 export const PO_TRANSITIONS: Record<PurchaseOrderStatus, PurchaseOrderStatus[]> = {
   ordered: ['paid', 'cancelled'],
   paid: ['ordered', 'received', 'cancelled'],
-  received: [],
+  received: ['cancelled'],
   cancelled: []
 }
 
