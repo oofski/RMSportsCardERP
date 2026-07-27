@@ -14,6 +14,7 @@ import type { Result } from '@shared/types'
 import type { QboEnvironment, QboStatus } from '@shared/quickbooks'
 import { getQboConfig, setQboConfig, clearQboConfig, getQboTokens, setQboTokens, clearQboTokens } from './quickbooks/store'
 import { authorize, exchangeCode, revokeTokens } from './quickbooks/oauth'
+import { QBO_REDIRECT_URI, buildAuthorizeUrl } from '@shared/quickbooks'
 import { fetchCompanyInfo } from './quickbooks/client'
 import { currentUser } from './services/auth'
 import { getDb, getMeta, setMeta } from './db/database'
@@ -154,6 +155,80 @@ export function registerQuickBooksIpc(): void {
       return { ok: false, error: err instanceof Error ? err.message : String(err) }
     }
   })
+
+  /**
+   * Diagnostics: the exact URL the browser is sent to. Intuit's "redirect_uri
+   * is invalid" error says nothing about what it actually received, so being
+   * able to read the outgoing value — and paste it into a browser by hand — is
+   * the difference between debugging and guessing. The client id is in this URL
+   * but that is not a secret; it travels in the address bar either way.
+   */
+  ipcMain.handle(IPC.qboAuthorizeUrl, (): Result<{ url: string; redirectUri: string }> => {
+    try {
+      requireAdmin()
+      const config = getQboConfig()
+      if (!config) return { ok: false, error: 'Enter the client id and secret first.' }
+      return {
+        ok: true,
+        data: {
+          url: buildAuthorizeUrl(config.clientId, 'diagnostic-state'),
+          redirectUri: QBO_REDIRECT_URI
+        }
+      }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
+  /**
+   * Adopt tokens minted elsewhere — Intuit's OAuth Playground, which every app
+   * already has a registered redirect for. This is not a lesser path: the
+   * tokens belong to the SAME app registration, so once stored the normal
+   * refresh cycle takes over and the operator never repeats it.
+   *
+   * expiresAt is deliberately set to 0 so the very first call must refresh.
+   * That proves the refresh token and the stored client credentials work
+   * TOGETHER before anything is called connected, and replaces the guessed
+   * lifetimes with the real ones Intuit hands back.
+   */
+  ipcMain.handle(
+    IPC.qboPasteTokens,
+    async (_e, input: { accessToken: string; refreshToken: string; realmId: string }): Promise<Result<QboStatus>> => {
+      try {
+        requireAdmin()
+        if (!getQboConfig()) return { ok: false, error: 'Save the client id and secret first.' }
+        const accessToken = (input?.accessToken ?? '').trim()
+        const refreshToken = (input?.refreshToken ?? '').trim()
+        const realmId = (input?.realmId ?? '').trim()
+        if (!refreshToken || !realmId) {
+          return { ok: false, error: 'The refresh token and the company (realm) id are both required.' }
+        }
+        const previous = getQboTokens()
+        setQboTokens({
+          accessToken,
+          refreshToken,
+          realmId,
+          expiresAt: 0,
+          refreshExpiresAt: Date.now() + 100 * 24 * 60 * 60 * 1000
+        })
+        try {
+          const info = await fetchCompanyInfo()
+          setMeta(getDb(), COMPANY_KEY, info.CompanyName ?? info.LegalName ?? '')
+        } catch (err) {
+          // Put back whatever was there rather than leaving a half-set state.
+          if (previous) setQboTokens(previous)
+          else clearQboTokens()
+          const message = err instanceof Error ? err.message : String(err)
+          noteError(message)
+          return { ok: false, error: message }
+        }
+        noteError(null)
+        return { ok: true, data: buildStatus() }
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      }
+    }
+  )
 
   /** Live round-trip against the API, so "connected" can be trusted. */
   ipcMain.handle(IPC.qboTest, async (): Promise<Result<{ companyName: string; realmId: string }>> => {

@@ -26,7 +26,17 @@ export function QuickBooksTab(): JSX.Element {
   const [clientId, setClientId] = useState('')
   const [clientSecret, setClientSecret] = useState('')
   const [environment, setEnvironment] = useState<QboEnvironment>('sandbox')
-  const [busy, setBusy] = useState<'save' | 'connect' | 'test' | 'disconnect' | 'forget' | null>(null)
+  const [busy, setBusy] = useState<
+    'save' | 'connect' | 'test' | 'disconnect' | 'forget' | 'paste' | null
+  >(null)
+  // Manual path: tokens minted in Intuit's OAuth Playground, which every app
+  // already has a registered redirect for. Needed when the loopback redirect
+  // cannot be registered — Intuit rejects some http:// URIs outright.
+  const [showManual, setShowManual] = useState(false)
+  const [accessToken, setAccessToken] = useState('')
+  const [refreshToken, setRefreshToken] = useState('')
+  const [realmId, setRealmId] = useState('')
+  const [authUrl, setAuthUrl] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     const s = await api.quickbooks.status()
@@ -150,15 +160,71 @@ export function QuickBooksTab(): JSX.Element {
       </div>
 
       {/* The single most common reason a connection fails, so it is stated
-          rather than left in a doc nobody opens. */}
+          rather than left in a doc nobody opens — and copyable, because a
+          hand-typed redirect URI has to match Intuit's copy character for
+          character or consent is refused. */}
       <div className="qbo-note">
         <Icon name="Info" size={15} />
         <div>
-          Add this exact redirect URI to the app in the Intuit developer portal, or consent will be
-          rejected:
+          Add this exact redirect URI to the app in the Intuit developer portal — under the SAME
+          tab (Development or Production) as the keys you saved — or consent will be rejected:
           <code className="qbo-uri">{QBO_REDIRECT_URI}</code>
+          <div className="qbo-note-acts">
+            <button
+              type="button"
+              className="link-btn"
+              onClick={() => {
+                void navigator.clipboard.writeText(QBO_REDIRECT_URI)
+                toast.success('Redirect URI copied.')
+              }}
+            >
+              <Icon name="Copy" size={13} /> Copy redirect URI
+            </button>
+            {status.configured && (
+              <button
+                type="button"
+                className="link-btn"
+                onClick={async () => {
+                  const res = await api.quickbooks.authorizeUrl()
+                  if (!res.ok || !res.data) {
+                    toast.error(res.error ?? 'Could not build the URL.')
+                    return
+                  }
+                  setAuthUrl(res.data.url)
+                }}
+              >
+                <Icon name="Search" size={13} /> Show what the app sends
+              </button>
+            )}
+          </div>
         </div>
       </div>
+
+      {authUrl && (
+        <div className="qbo-note">
+          <Icon name="ExternalLink" size={15} />
+          <div>
+            This is the exact URL the browser is opened at. Paste it into a browser to test the
+            consent step on its own:
+            <code className="qbo-uri">{authUrl}</code>
+            <div className="qbo-note-acts">
+              <button
+                type="button"
+                className="link-btn"
+                onClick={() => {
+                  void navigator.clipboard.writeText(authUrl)
+                  toast.success('Authorize URL copied.')
+                }}
+              >
+                <Icon name="Copy" size={13} /> Copy
+              </button>
+              <button type="button" className="link-btn" onClick={() => setAuthUrl(null)}>
+                Hide
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="qbo-actions">
         <Button
@@ -212,6 +278,15 @@ export function QuickBooksTab(): JSX.Element {
         )}
         {status.configured && (
           <Button
+            icon="ClipboardPaste"
+            disabled={busy !== null}
+            onClick={() => setShowManual((v) => !v)}
+          >
+            {showManual ? 'Hide manual tokens' : 'Paste tokens instead'}
+          </Button>
+        )}
+        {status.configured && (
+          <Button
             variant="danger"
             icon="Trash2"
             loading={busy === 'forget'}
@@ -225,6 +300,69 @@ export function QuickBooksTab(): JSX.Element {
           </Button>
         )}
       </div>
+      {showManual && (
+        <div className="qbo-manual">
+          <div className="qbo-manual-head">
+            <Icon name="ClipboardPaste" size={15} />
+            <div>
+              <b>Connect with tokens from the OAuth Playground</b>
+              <p>
+                Use this when the loopback redirect cannot be registered. Open Intuit&rsquo;s OAuth
+                2.0 Playground, pick this app and the Accounting scope, authorise, then paste what
+                it gives you. The tokens belong to the same app, so the connection refreshes itself
+                afterwards — you only do this once.
+              </p>
+            </div>
+          </div>
+          <div className="qbo-form">
+            <Field label="Refresh token">
+              <Input
+                value={refreshToken}
+                placeholder="Required — the long-lived one"
+                onChange={(e) => setRefreshToken(e.target.value)}
+              />
+            </Field>
+            <Field label="Company (realm) id">
+              <Input
+                value={realmId}
+                placeholder="Required — e.g. 4620816365..."
+                onChange={(e) => setRealmId(e.target.value)}
+              />
+            </Field>
+            <Field label="Access token (optional)">
+              <Input
+                value={accessToken}
+                placeholder="Left blank, a fresh one is fetched immediately"
+                onChange={(e) => setAccessToken(e.target.value)}
+              />
+            </Field>
+          </div>
+          <Button
+            variant="primary"
+            icon="Check"
+            loading={busy === 'paste'}
+            disabled={busy !== null || !refreshToken.trim() || !realmId.trim()}
+            onClick={() =>
+              void run(
+                'paste',
+                async () => {
+                  const res = await api.quickbooks.pasteTokens(accessToken, refreshToken, realmId)
+                  if (res.ok) {
+                    setAccessToken('')
+                    setRefreshToken('')
+                    setRealmId('')
+                    setShowManual(false)
+                  }
+                  return res
+                },
+                'QuickBooks connected.'
+              )
+            }
+          >
+            Use these tokens
+          </Button>
+        </div>
+      )}
     </div>
   )
 }

@@ -178,6 +178,9 @@ export const IPC = {
   qboDisconnect: 'qbo:disconnect',
   qboForget: 'qbo:forget',
   qboTest: 'qbo:test',
+  // Diagnostics + the manual (OAuth Playground) token path.
+  qboAuthorizeUrl: 'qbo:authorize-url',
+  qboPasteTokens: 'qbo:tokens:paste',
 
   // Email
   emailComposeInvite: 'email:compose-invite',

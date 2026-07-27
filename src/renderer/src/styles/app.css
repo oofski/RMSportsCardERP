@@ -9711,3 +9711,51 @@ button.sor-team:focus-visible {
     grid-template-columns: 1fr;
   }
 }
+.qbo-note-acts {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 8px;
+}
+.qbo-note-acts .link-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+/* The manual token path — visually secondary to Connect, because it is the
+   fallback, but a full panel rather than a cramped row: three long opaque
+   strings get pasted here and a mis-paste is invisible. */
+.qbo-manual {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 18px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+.qbo-manual-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.qbo-manual-head svg {
+  color: var(--text-3);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.qbo-manual-head b {
+  display: block;
+  font-size: 14px;
+  color: var(--text);
+}
+.qbo-manual-head p {
+  margin: 4px 0 0;
+  max-width: 62ch;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-2);
+}
+.qbo-manual .qbo-form > *:first-child {
+  grid-column: auto;
+}

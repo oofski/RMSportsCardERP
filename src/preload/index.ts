@@ -253,7 +253,15 @@ const api = {
     disconnect: (): Promise<Result<QboStatus>> => ipcRenderer.invoke(IPC.qboDisconnect),
     forget: (): Promise<Result<QboStatus>> => ipcRenderer.invoke(IPC.qboForget),
     test: (): Promise<Result<{ companyName: string; realmId: string }>> =>
-      ipcRenderer.invoke(IPC.qboTest)
+      ipcRenderer.invoke(IPC.qboTest),
+    authorizeUrl: (): Promise<Result<{ url: string; redirectUri: string }>> =>
+      ipcRenderer.invoke(IPC.qboAuthorizeUrl),
+    pasteTokens: (
+      accessToken: string,
+      refreshToken: string,
+      realmId: string
+    ): Promise<Result<QboStatus>> =>
+      ipcRenderer.invoke(IPC.qboPasteTokens, { accessToken, refreshToken, realmId })
   },
 
   purchaseOrders: {
