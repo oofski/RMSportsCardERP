@@ -234,6 +234,27 @@ function migrate(database: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_po_lines_product
       ON purchase_order_lines (product_id);
 
+    -- v20: one row per RECEIPT against a PO line. A line can be received in
+    -- several partial commits (scan 4 boxes, then 6 more), and each one opens
+    -- its own FIFO lot at its own cost — so the relationship is 1:N and a single
+    -- lot_id column on the line could only ever remember the last of them.
+    -- Cancelling a received PO walks these rows to hand back exactly what each
+    -- receipt took in.
+    CREATE TABLE IF NOT EXISTS po_line_receipts (
+      id          TEXT PRIMARY KEY,
+      po_id       TEXT NOT NULL,
+      po_line_id  TEXT NOT NULL,
+      lot_id      TEXT NOT NULL,
+      quantity    INTEGER NOT NULL,
+      created_at  TEXT NOT NULL,
+      FOREIGN KEY (po_id) REFERENCES purchase_orders (id) ON DELETE CASCADE,
+      FOREIGN KEY (po_line_id) REFERENCES purchase_order_lines (id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_po_line_receipts_po
+      ON po_line_receipts (po_id);
+    CREATE INDEX IF NOT EXISTS idx_po_line_receipts_line
+      ON po_line_receipts (po_line_id);
+
     -- Cost-of-Goods-Sold ledger. One row per purchase order (a purchase),
     -- recorded when the PO is created; voided (deleted) if the PO is cancelled.
     CREATE TABLE IF NOT EXISTS finance_cogs (
@@ -653,7 +674,15 @@ function migrate(database: Database.Database): void {
   // v19: purchase_order_lines.lot_id, so a received PO can be cancelled by
   // reversing the exact receipt. Purely additive; a NULL means "received before
   // v19", which the cancel path reports honestly instead of guessing.
-  setMeta(database, 'schema_version', '19')
+  //
+  // v20: po_line_receipts, because v19 got the cardinality wrong. A line can be
+  // received in SEVERAL partial commits, each opening its own lot, so one
+  // lot_id per line could only remember the last — and cancelling then tried to
+  // reverse the full quantity against a partial lot and refused with a wrong
+  // reason ("already sold"). Receipts are 1:N and are now stored that way.
+  // lot_id is kept, and read as a single-receipt fallback for the brief window
+  // where it was the only record.
+  setMeta(database, 'schema_version', '20')
 
   // Seed the product catalog once, then apply the on-hand snapshot once.
   seedCatalogIfNeeded(database)

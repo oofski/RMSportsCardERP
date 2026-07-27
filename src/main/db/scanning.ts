@@ -563,6 +563,13 @@ export function undoScan(scanId: string, actorId: string | null): { record?: Sca
       db.prepare(
         'UPDATE purchase_order_lines SET qty_received = MAX(0, qty_received - ?), received_at = NULL WHERE id = ?'
       ).run(row.quantity, row.po_line_id)
+      // This receipt's lot has just been reversed, so its row must go too —
+      // otherwise cancelling the PO later would try to hand back stock that is
+      // already gone, and refuse for a reason that is not the real one.
+      db.prepare('DELETE FROM po_line_receipts WHERE po_line_id = ? AND lot_id = ?').run(
+        row.po_line_id,
+        row.lot_id
+      )
     }
     // Reopen the PO this scan auto-completed, restoring the exact prior header.
     if (row.po_completed === 1 && row.po_id) {

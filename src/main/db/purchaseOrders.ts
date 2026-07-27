@@ -369,13 +369,25 @@ export function receivePoLine(
   )
   if (res.error) throw new Error(res.error) // THROW so the outer txn rolls back every prior line (atomic)
 
+  const ts = nowIso()
   db.prepare(
     `UPDATE purchase_order_lines
         SET qty_received = qty_received + @take,
             received_at  = CASE WHEN qty_received + @take >= quantity THEN @ts ELSE received_at END,
             lot_id       = @lotId
       WHERE id = @id`
-  ).run({ take, ts: nowIso(), id: lineId, lotId: res.lotId ?? null })
+  ).run({ take, ts, id: lineId, lotId: res.lotId ?? null })
+
+  // The authoritative record of what this receipt took in. A line received in
+  // several commits gets several rows, each naming its own lot — which is what
+  // makes an exact reversal possible. (lot_id above is kept only so a database
+  // written by the one build that had it can still be read.)
+  if (res.lotId) {
+    db.prepare(
+      `INSERT INTO po_line_receipts (id, po_id, po_line_id, lot_id, quantity, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ).run(newId(), row.po_id, lineId, res.lotId, take, ts)
+  }
 
   return {
     lineId,
@@ -581,22 +593,52 @@ function reverseReceivedLines(
   }>
 
   for (const line of lines) {
-    if (!line.lot_id) {
+    // Newest receipt first: unwinding in reverse order of arrival means a lot
+    // is never left half-open behind a later one.
+    const receipts = db
+      .prepare(
+        'SELECT lot_id, quantity FROM po_line_receipts WHERE po_line_id = ? ORDER BY created_at DESC, rowid DESC'
+      )
+      .all(line.id) as Array<{ lot_id: string; quantity: number }>
+
+    // No receipt rows: either this line predates v20, or it was received by the
+    // single build that recorded only lot_id. Fall back to that column when it
+    // accounts for the whole quantity, and refuse otherwise rather than reverse
+    // the wrong cost layer.
+    const plan =
+      receipts.length > 0
+        ? receipts
+        : line.lot_id
+          ? [{ lot_id: line.lot_id, quantity: line.qty_received }]
+          : []
+
+    if (plan.length === 0) {
       throw new Error(
         `${poNumber} was received before this version could track its cost layers, so cancelling it cannot return the stock automatically. Adjust the stock down by hand, then delete the PO.`
       )
     }
-    reverseStockReceipt(db, {
-      productId: line.product_id,
-      location: line.location,
-      quantity: line.qty_received,
-      lotId: line.lot_id,
-      note: `Cancelled ${poNumber}`,
-      actorId
-    })
+
+    const planned = plan.reduce((sum, r) => sum + r.quantity, 0)
+    if (planned !== line.qty_received) {
+      throw new Error(
+        `${poNumber} has ${line.qty_received} unit(s) received but only ${planned} accounted for, so cancelling it cannot return the stock safely. Adjust the stock by hand instead.`
+      )
+    }
+
+    for (const r of plan) {
+      reverseStockReceipt(db, {
+        productId: line.product_id,
+        location: line.location,
+        quantity: r.quantity,
+        lotId: r.lot_id,
+        note: `Cancelled ${poNumber}`,
+        actorId
+      })
+    }
   }
 
   // The lines are open again, and the header must not keep claiming a receipt.
+  db.prepare('DELETE FROM po_line_receipts WHERE po_id = ?').run(poId)
   db.prepare(
     `UPDATE purchase_order_lines
         SET qty_received = 0, received_at = NULL, lot_id = NULL
