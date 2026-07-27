@@ -372,6 +372,13 @@ export interface SupplyStats {
 
 export type SupplyOrderStatus = 'ordered' | 'in_transit' | 'delivered' | 'cancelled'
 
+/**
+ * Who placed a supply buy. Supply orders share the Purchase Orders board with
+ * product POs, so a card has to be able to say this outright rather than
+ * leaving the operator to infer it.
+ */
+export type SupplyOrderSource = 'manual' | 'auto'
+
 /** A reorder moving through the Ordered → In-transit → Delivered pipeline. */
 export interface SupplyOrder {
   id: string
@@ -386,6 +393,7 @@ export interface SupplyOrder {
   items: number
   total: number
   status: SupplyOrderStatus
+  source: SupplyOrderSource
   note: string | null
   orderedAt: string | null
   inTransitAt: string | null
@@ -400,6 +408,8 @@ export interface NewSupplyOrder {
   itemsPerUnit: number
   total: number
   note?: string | null
+  /** Only the reorder automation sets this; the form always creates 'manual'. */
+  source?: SupplyOrderSource
 }
 
 /** A product photo, delivered to the renderer as a ready-to-use data URL. */

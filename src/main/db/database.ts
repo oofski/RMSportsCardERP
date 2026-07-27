@@ -291,6 +291,11 @@ function migrate(database: Database.Database): void {
       items_per_unit INTEGER NOT NULL,
       total          REAL NOT NULL DEFAULT 0,
       status         TEXT NOT NULL DEFAULT 'ordered',
+      -- v18: who placed the buy. 'manual' is a person filling the form;
+      -- 'auto' is the low-stock reorder automation (Amazon Business API).
+      -- Supply orders sit in the same board as product POs, so the card has to
+      -- be able to say which of the two it was without guessing from the actor.
+      source         TEXT NOT NULL DEFAULT 'manual',
       note           TEXT,
       actor_id       TEXT,
       ordered_at     TEXT,
@@ -580,6 +585,11 @@ function migrate(database: Database.Database): void {
   addColumnIfMissing(database, 'supplies', 'reorder_url', 'TEXT')
   // v14: supply_orders pipeline (Ordered → In-transit → Delivered). New table
   // created idempotently in the schema-init block above.
+  // v18: how a supply order was placed. Supply orders now share the Purchase
+  // Orders board with product POs, so a card has to be able to say whether a
+  // person filled the form or the low-stock automation bought it. Existing
+  // rows are all hand-entered, which is exactly what the default says.
+  addColumnIfMissing(database, 'supply_orders', 'source', "TEXT NOT NULL DEFAULT 'manual'")
   // v15: UPC scanning — per-line receipt tracking on PO lines, a canonical
   // (GTIN-14) lookup key on products, and the inventory_scans log (created
   // idempotently in the schema-init block above).
@@ -630,7 +640,11 @@ function migrate(database: Database.Database): void {
   // ship_snapshots capture. A per-day rollup would only duplicate rows that
   // already exist — and would drift the moment a snapshot or import is renamed
   // or deleted. See db/shippingCalendar.ts.
-  setMeta(database, 'schema_version', '17')
+  //
+  // v18: supply_orders.source ('manual' | 'auto'). Purely additive, and the
+  // default makes every existing row correct — nothing has been bought
+  // automatically yet.
+  setMeta(database, 'schema_version', '18')
 
   // Seed the product catalog once, then apply the on-hand snapshot once.
   seedCatalogIfNeeded(database)

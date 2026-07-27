@@ -546,3 +546,57 @@ function nextPoNumber(db: Database.Database): string {
   setMeta(db, 'po_seq', String(seq))
   return 'PO-' + String(seq).padStart(4, '0')
 }
+
+/**
+ * Delete a purchase order outright — the paperwork was a mistake, not a buy
+ * that happened.
+ *
+ * REFUSED once ANY of its stock has landed. A received line has already gone
+ * through addStock: it bumped quantity, opened a FIFO lot at that unit price
+ * and rolled the moving average. Deleting the PO would leave that stock in
+ * inventory with its cost basis pointing at a document that no longer exists,
+ * and there would be no way to answer "where did these boxes come from and
+ * what did they cost". Cancel is the right move for a buy that fell through
+ * after receipt; delete is only for one that never should have existed.
+ *
+ * Lines and the COGS ledger row cascade on delete; inventory_scans keeps its
+ * audit rows with po_id set to NULL, so the scan history stays honest about
+ * what was scanned even though the order is gone.
+ */
+export function deletePurchaseOrder(
+  id: string,
+  actorId: string | null
+): { ok: boolean; error?: string } {
+  const db = getDb()
+  const row = db.prepare('SELECT id, po_number, status FROM purchase_orders WHERE id = ?').get(id) as
+    | { id: string; po_number: string; status: string }
+    | undefined
+  if (!row) return { ok: false, error: 'Purchase order not found.' }
+
+  const received = db
+    .prepare('SELECT COALESCE(SUM(qty_received), 0) AS n FROM purchase_order_lines WHERE po_id = ?')
+    .get(id) as { n: number }
+  if (row.status === 'received' || received.n > 0) {
+    return {
+      ok: false,
+      error:
+        received.n > 0 && row.status !== 'received'
+          ? `${row.po_number} has ${received.n} unit(s) already checked in. Cancel it instead — deleting would leave that stock with no cost record.`
+          : `${row.po_number} has been received into stock. Cancel it instead — deleting would leave that stock with no cost record.`
+    }
+  }
+
+  const run = db.transaction((): void => {
+    // Drop the COGS row explicitly rather than relying on the cascade, so the
+    // ledger is corrected the same way cancelling would correct it.
+    voidPoCogs(db, id)
+    db.prepare('DELETE FROM purchase_orders WHERE id = ?').run(id)
+  })
+  try {
+    run()
+    void actorId
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+  }
+}

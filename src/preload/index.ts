@@ -254,7 +254,12 @@ const api = {
     incomingBoxes: (): Promise<PurchaseOrderDetail[]> => ipcRenderer.invoke(IPC.poIncomingBoxes),
     scanIn: (id: string): Promise<Result<PurchaseOrderDetail>> =>
       ipcRenderer.invoke(IPC.poScanIn, { id }),
-    cogsList: (): Promise<CogsEntry[]> => ipcRenderer.invoke(IPC.poCogsList)
+    cogsList: (): Promise<CogsEntry[]> => ipcRenderer.invoke(IPC.poCogsList),
+    remove: (id: string): Promise<Result<null>> => ipcRenderer.invoke(IPC.poDelete, id),
+    openPdf: (id: string): Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC.poOpenPdf, id),
+    savePdf: (id: string): Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }> =>
+      ipcRenderer.invoke(IPC.poSavePdf, id)
   },
   /**
    * RM Cardz Shipping Workspace. Reads resolve to an empty value when the user

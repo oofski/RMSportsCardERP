@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { PurchaseOrder, PurchaseOrderStatus } from '@shared/types'
+import type {
+  PurchaseOrder,
+  PurchaseOrderStatus,
+  Supply,
+  SupplyOrder,
+  SupplyOrderStatus
+} from '@shared/types'
 import { useSession } from '../../lib/session'
 import { api } from '../../lib/api'
 import { useToast } from '../../components/Toast'
@@ -9,19 +15,22 @@ import { formatMoney } from '../../lib/format'
 import { PurchaseOrderBoard } from './PurchaseOrderBoard'
 import { CreatePurchaseOrderModal } from './CreatePurchaseOrderModal'
 import { PurchaseOrderReceipt } from './PurchaseOrderReceipt'
-import { SupplyOrdersSection } from './SupplyOrdersSection'
+import { SupplyOrderModal } from './SupplyOrderModal'
 
 /**
- * Invoicing & POs module — the buy side of the business, as two stacked
- * sections that share one header-band + body shell:
+ * Invoicing & POs module — the buy side of the business as ONE board:
+ * Ordered → Paid → Received / Cancelled.
  *
- *   [ Purchase orders ]  the kanban board: Ordered → Paid → Received/Cancelled
- *   [ Supply orders   ]  packaging reorders: Ordered → In-transit → Delivered
+ * Product purchase orders and supply reorders share those columns. They are the
+ * same job — money committed to a supplier, waiting to land — and keeping two
+ * separate lists meant looking in two places to answer one question. Supply
+ * cards are tinted and badged "Supply" so the two are never confused, and they
+ * keep their own status wording (a supply order is "In transit", not "Paid").
  *
- * Supply-order tracking used to sit in a narrow right rail on Inventory >
- * Supplies; it lives here now, beneath the POs, because both are the same job:
- * money committed to a supplier, waiting to land. Supplies themselves (stock,
- * cost, buy/use/adjust) stay on the Inventory tab.
+ * Supplies are increasingly bought without anyone pressing a button: once the
+ * low-stock reorder automation is live it writes orders with source='auto', and
+ * this board is where they surface. Supplies themselves (stock, cost,
+ * buy/use/adjust) stay on the Inventory tab.
  *
  * Access to the tab is gated by AppShell on 'module.invoicing'. Writing to a
  * supply order still needs 'inventory.manage', exactly as it did in its old
@@ -34,14 +43,25 @@ export function InvoicingModule(): JSX.Element {
   const toast = useToast()
 
   const [pos, setPos] = useState<PurchaseOrder[]>([])
+  const [supplyOrders, setSupplyOrders] = useState<SupplyOrder[]>([])
+  const [supplies, setSupplies] = useState<Supply[]>([])
+  const [newSupplyOpen, setNewSupplyOpen] = useState(false)
   const [thumbnails, setThumbnails] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(true)
   const [showCreate, setShowCreate] = useState(false)
   const [receiptId, setReceiptId] = useState<string | null>(null)
 
   const reload = useCallback(async () => {
-    const list = await api.purchaseOrders.list()
+    // One board, so both halves are refetched together — a stale supply column
+    // beside a fresh PO column would be worse than a slightly slower load.
+    const [list, orders, sup] = await Promise.all([
+      api.purchaseOrders.list(),
+      api.supplies.listOrders(),
+      api.supplies.list()
+    ])
     setPos(list)
+    setSupplyOrders(orders)
+    setSupplies(sup)
   }, [])
 
   useEffect(() => {
@@ -79,6 +99,55 @@ export function InvoicingModule(): JSX.Element {
     [reload, toast]
   )
 
+  const moveSupply = useCallback(
+    async (order: SupplyOrder, to: SupplyOrderStatus) => {
+      const res = await api.supplies.setOrderStatus(order.id, to)
+      if (!res.ok) {
+        toast.error(res.error ?? 'Could not move the supply order.')
+        return
+      }
+      toast.success(
+        to === 'delivered'
+          ? `${order.supplyName} delivered — ${order.items.toLocaleString()} items added.`
+          : `${order.supplyName} → ${to.replace('_', ' ')}.`
+      )
+      await reload()
+    },
+    [reload, toast]
+  )
+
+  const removeSupply = useCallback(
+    async (order: SupplyOrder) => {
+      if (!window.confirm(`Delete this ${order.supplyName} order? Stock already delivered stays.`)) {
+        return
+      }
+      const res = await api.supplies.deleteOrder(order.id)
+      if (!res.ok) {
+        toast.error(res.error ?? 'Could not delete the supply order.')
+        return
+      }
+      await reload()
+    },
+    [reload, toast]
+  )
+
+  // Deleting a PO is refused once any of its stock has been checked in — the
+  // backend owns that rule, so the error it returns is what the operator sees.
+  const removePo = useCallback(
+    async (id: string, poNumber: string) => {
+      if (!window.confirm(`Delete ${poNumber}? This cannot be undone.`)) return
+      const res = await api.purchaseOrders.remove(id)
+      if (!res.ok) {
+        toast.error(res.error ?? 'Could not delete the purchase order.')
+        return
+      }
+      toast.success(`${poNumber} deleted.`)
+      setReceiptId(null)
+      await reload()
+    },
+    [reload, toast]
+  )
+
   const openPos = useMemo(
     () => pos.filter((p) => p.status === 'ordered' || p.status === 'paid'),
     [pos]
@@ -97,7 +166,10 @@ export function InvoicingModule(): JSX.Element {
             </div>
             <div className="wsec-title">
               <h3>Purchase orders</h3>
-              <p>Buys moving Ordered → Paid → Received. Drag a card to move it.</p>
+              <p>
+                Product buys and supply reorders, moving Ordered → Paid →
+                Received. Drag a PO card to move it.
+              </p>
             </div>
             <div className="wsec-actions">
               <div className="wsec-stats">
@@ -112,6 +184,11 @@ export function InvoicingModule(): JSX.Element {
                   <span className="wsec-stat-label">Committed</span>
                 </div>
               </div>
+              {canManageSupplies && supplies.length > 0 && (
+                <Button icon="Package" onClick={() => setNewSupplyOpen(true)}>
+                  New supply order
+                </Button>
+              )}
               {canManage && (
                 <Button variant="primary" icon="Plus" onClick={() => setShowCreate(true)}>
                   New PO
@@ -121,15 +198,15 @@ export function InvoicingModule(): JSX.Element {
           </header>
 
           <div className="wsec-body">
-            {pos.length === 0 ? (
+            {pos.length === 0 && supplyOrders.length === 0 ? (
               <div className="wsec-empty">
                 <div className="wsec-empty-ico">
                   <Icon name="ReceiptText" size={26} />
                 </div>
-                <div className="wsec-empty-title">No purchase orders yet</div>
+                <div className="wsec-empty-title">Nothing on order</div>
                 <p className="wsec-empty-msg">
-                  Create a PO to start tracking a buy — its lines, its cost and where the boxes
-                  land when they arrive.
+                  Create a PO to start tracking a product buy — its lines, its cost and where the
+                  boxes land — or log a supply reorder for packaging.
                 </p>
                 {canManage && (
                   <Button variant="primary" icon="Plus" onClick={() => setShowCreate(true)}>
@@ -140,15 +217,18 @@ export function InvoicingModule(): JSX.Element {
             ) : (
               <PurchaseOrderBoard
                 pos={pos}
+                supplyOrders={supplyOrders}
+                canManageSupplies={canManageSupplies}
                 thumbnails={thumbnails}
                 onMove={move}
                 onOpen={(id) => setReceiptId(id)}
+                onMoveSupply={moveSupply}
+                onDeleteSupply={removeSupply}
               />
             )}
           </div>
         </section>
 
-        <SupplyOrdersSection canManage={canManageSupplies} />
       </div>
 
       {showCreate && (
@@ -159,7 +239,15 @@ export function InvoicingModule(): JSX.Element {
           id={receiptId}
           thumbnails={thumbnails}
           onMove={move}
+          onDelete={canManage ? removePo : undefined}
           onClose={() => setReceiptId(null)}
+        />
+      )}
+      {newSupplyOpen && (
+        <SupplyOrderModal
+          supplies={supplies}
+          onClose={() => setNewSupplyOpen(false)}
+          onSaved={reload}
         />
       )}
     </div>

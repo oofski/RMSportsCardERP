@@ -12,8 +12,10 @@ import type {
 import { isPurchaseOrderStatus } from '@shared/purchaseOrders'
 import type { Permission } from '@shared/permissions'
 import { currentUser } from './services/auth'
+import { openPoPdf, savePoPdf } from './poPdf'
 import {
   createPurchaseOrder,
+  deletePurchaseOrder,
   getPurchaseOrder,
   listActivePurchaseOrderBoxes,
   listPurchaseOrders,
@@ -121,4 +123,39 @@ export function registerPurchaseOrdersIpc(): void {
       }
     }
   )
+
+  ipcMain.handle(IPC.poDelete, (_e, id: string): Result<null> => {
+    try {
+      const actor = requireInvoicing()
+      if (!id) return { ok: false, error: 'No purchase order specified.' }
+      const res = deletePurchaseOrder(id, actor.id)
+      return res.ok ? { ok: true, data: null } : { ok: false, error: res.error }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  // Both PDF paths are READS of a PO — they change nothing — so they are gated
+  // like poGet rather than like a write.
+  ipcMain.handle(IPC.poOpenPdf, async (_e, id: string) => {
+    try {
+      requireInvoicing()
+      const po = getPurchaseOrder(id)
+      if (!po) return { ok: false, error: 'Purchase order not found.' }
+      return await openPoPdf(po)
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
+  ipcMain.handle(IPC.poSavePdf, async (_e, id: string) => {
+    try {
+      requireInvoicing()
+      const po = getPurchaseOrder(id)
+      if (!po) return { ok: false, error: 'Purchase order not found.' }
+      return await savePoPdf(po)
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
 }

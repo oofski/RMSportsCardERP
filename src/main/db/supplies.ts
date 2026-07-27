@@ -410,6 +410,7 @@ interface SupplyOrderRow {
   items_per_unit: number
   total: number
   status: string
+  source: string
   note: string | null
   ordered_at: string | null
   in_transit_at: string | null
@@ -420,7 +421,7 @@ interface SupplyOrderRow {
 
 const SUPPLY_ORDER_SELECT = `
   SELECT o.id, o.supply_id, s.name AS supply_name, s.unit AS unit, s.image AS image,
-         o.units, o.items_per_unit, o.total, o.status, o.note,
+         o.units, o.items_per_unit, o.total, o.status, o.source, o.note,
          o.ordered_at, o.in_transit_at, o.delivered_at, o.cancelled_at, o.created_at
   FROM supply_orders o
   JOIN supplies s ON s.id = o.supply_id
@@ -439,6 +440,8 @@ function toSupplyOrder(r: SupplyOrderRow): SupplyOrder {
     items: r.units * r.items_per_unit,
     total: r.total,
     status: r.status as SupplyOrderStatus,
+    // Anything not explicitly written by the automation is a person's doing.
+    source: r.source === 'auto' ? 'auto' : 'manual',
     note: r.note,
     orderedAt: r.ordered_at,
     inTransitAt: r.in_transit_at,
@@ -493,9 +496,21 @@ export function createSupplyOrder(input: NewSupplyOrder, actorId: string | null)
   const ts = nowIso()
   db.prepare(
     `INSERT INTO supply_orders
-       (id, supply_id, units, items_per_unit, total, status, note, actor_id, ordered_at, created_at)
-     VALUES (?, ?, ?, ?, ?, 'ordered', ?, ?, ?, ?)`
-  ).run(id, input.supplyId, units, itemsPerUnit, total, input.note?.trim() || null, actorId, ts, ts)
+       (id, supply_id, units, items_per_unit, total, status, source, note, actor_id, ordered_at, created_at)
+     VALUES (?, ?, ?, ?, ?, 'ordered', ?, ?, ?, ?, ?)`
+  ).run(
+    id,
+    input.supplyId,
+    units,
+    itemsPerUnit,
+    total,
+    // Only the reorder automation may claim 'auto'; a form post never can.
+    input.source === 'auto' ? 'auto' : 'manual',
+    input.note?.trim() || null,
+    actorId,
+    ts,
+    ts
+  )
   return { order: getSupplyOrder(id) }
 }
 

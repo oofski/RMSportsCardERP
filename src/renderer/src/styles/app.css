@@ -1120,6 +1120,25 @@ table.data tfoot .data-total td {
 .panel-head .ph-right {
   text-align: right;
 }
+/* The Incoming inventory panel's unit count is a button — hovering or focusing
+   it opens the outstanding-purchase-order breakdown — so the native button
+   chrome is stripped and only a quiet affordance is left. */
+.panel-head button.ph-right-hover {
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: none;
+  padding: 4px 8px;
+  margin: -4px -8px;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.panel-head button.ph-right-hover:hover,
+.panel-head button.ph-right-hover:focus-visible {
+  background: var(--surface-2);
+  border-color: var(--border);
+}
 .panel-head .ph-total {
   font-size: 16px;
   font-weight: 700;
@@ -3740,6 +3759,96 @@ tr.hoverable-row:hover {
 }
 /* Destructive without shouting: --danger never clears 4.5:1 on a light surface,
    so the label keeps a legible token and the red arrives as tint + border. */
+/* ---------- Supply reorders on the purchase-order board ----------
+   Same columns as a product PO, but never mistakable for one: a tinted surface,
+   an accent rail down the left edge, and a Supply badge in the top row. The
+   card keeps its own status wording ("In transit"), because the column it sits
+   in says "Paid" and a supply order has not necessarily been invoiced.
+   ---------------------------------------------------------------------- */
+.po-card.po-card-supply {
+  background: var(--brand-soft);
+  border-color: var(--brand-300);
+  border-left: 4px solid var(--brand-500);
+  /* Not a link to a receipt — a supply order has no line-item document. */
+  cursor: default;
+}
+.po-card.po-card-supply:hover {
+  border-color: var(--brand-500);
+  transform: none;
+}
+.po-card.po-card-supply[data-status='delivered'] {
+  background: var(--success-bg);
+  border-color: var(--success);
+  border-left-color: var(--success);
+}
+.po-card.po-card-supply[data-status='cancelled'] {
+  background: var(--surface-2);
+  border-color: var(--border);
+  border-left-color: var(--text-3);
+  opacity: 0.85;
+}
+.po-supply-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--brand-500);
+  color: var(--text-inverse);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+:root[data-theme='dark'] .po-supply-badge {
+  color: var(--ink-900);
+}
+/* Bought without anyone pressing a button — worth saying outright, so a card
+   nobody remembers creating explains itself. */
+.po-supply-auto {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--warning);
+  background: var(--warning-bg);
+  color: var(--text);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+.po-card-supply .po-card-supplier {
+  color: var(--text);
+}
+/* A supply's meta line carries three facts (units · items · per-item), which is
+   longer than a PO's "6 items" and was running off the card edge. Let it wrap
+   under the total rather than clip the price nobody could then read. */
+.po-card-supply .po-card-figs {
+  flex-wrap: wrap;
+  row-gap: 3px;
+}
+.po-card-supply .po-card-meta {
+  flex: 1 1 100%;
+  text-align: left;
+}
+.po-move.po-move-supply {
+  color: var(--brand-700);
+}
+.po-card-foot .po-move.po-move-supply:hover {
+  background: var(--brand-soft-2);
+  border-color: var(--brand-500);
+  color: var(--brand-700);
+}
+.po-move.po-move-remove {
+  color: var(--text-2);
+}
+.po-card-foot .po-move.po-move-remove:hover {
+  background: var(--danger-bg);
+  border-color: var(--danger);
+  color: var(--text);
+}
 .po-move.po-move-cancelled {
   color: var(--text-2);
 }
@@ -5072,228 +5181,6 @@ tr.hoverable-row:hover {
   overflow-x: auto;
 }
 
-/* ---------- Supply orders pipeline (Purchase Orders tab) ----------
-   Relocated out of Inventory > Supplies and rebuilt at the scale of the Orders
-   queue: one lane per stage stacked down the section, and inside a lane a full
-   width row — 60px photo, the supply named at 17px, the money and the two
-   things you can do to it on the right edge. No 262px card, no 13px name.
-   ------------------------------------------------------------------------ */
-.so-lanes {
-  display: flex;
-  flex-direction: column;
-  gap: 24px;
-}
-.so-lane-head {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-.so-lane-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 6px 13px;
-  border-radius: 999px;
-  font-size: 12.5px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  white-space: nowrap;
-  background: var(--surface-3);
-  color: var(--text-2);
-}
-/* Each pair below is verified ≥4.5:1 in BOTH themes (see the lane comment in
-   SupplyOrdersSection). The glyph inherits the label colour so it can never
-   drop under the tint it sits on. */
-.so-lane-badge[data-lane='ordered'] {
-  background: var(--brand-soft);
-  color: var(--brand-700);
-}
-.so-lane-badge[data-lane='in_transit'] {
-  background: var(--warning-bg);
-  color: var(--text);
-}
-.so-lane-badge[data-lane='delivered'] {
-  background: var(--success-bg);
-  color: var(--success-strong);
-}
-.so-lane-badge[data-lane='cancelled'] {
-  background: var(--danger-bg);
-  color: var(--text-2);
-}
-.so-lane-count {
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--text-2);
-  font-variant-numeric: tabular-nums;
-}
-.so-lane-rule {
-  flex: 1 1 auto;
-  height: 1px;
-  background: var(--border);
-}
-.so-lane-empty {
-  padding: 16px 2px 4px;
-  font-size: 13.5px;
-  color: var(--text-2);
-}
-.so-lane-more {
-  margin-top: 12px;
-  font-size: 13px;
-}
-.so-rows {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-/* ---- One order ---- */
-.so-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 18px;
-  padding: 20px 22px;
-  border: 1px solid var(--border);
-  border-left: 4px solid var(--border-strong);
-  border-radius: var(--radius-lg);
-  background: var(--surface);
-  box-shadow: var(--shadow-sm);
-  transition: border-color 0.13s ease, box-shadow 0.13s ease, opacity 0.13s ease;
-}
-.so-row:hover {
-  box-shadow: var(--shadow-md);
-}
-.so-row.busy {
-  opacity: 0.55;
-  pointer-events: none;
-}
-.so-row[data-lane='ordered'] {
-  border-left-color: var(--brand-500);
-}
-.so-row[data-lane='in_transit'] {
-  border-left-color: var(--warning);
-}
-.so-row[data-lane='delivered'] {
-  border-left-color: var(--success);
-}
-.so-row[data-lane='cancelled'] {
-  background: var(--surface-2);
-}
-.so-row-thumb {
-  width: 60px;
-  height: 60px;
-  flex-shrink: 0;
-  border-radius: var(--radius);
-  border: 1px solid var(--border);
-  background: var(--surface-2);
-  color: var(--text-2);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
-}
-.so-row-thumb img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-.so-row-body {
-  flex: 1 1 auto;
-  min-width: 0;
-  padding-top: 2px;
-}
-.so-row-name {
-  font-size: 17px;
-  font-weight: 700;
-  letter-spacing: -0.012em;
-  color: var(--text);
-}
-.so-row-meta {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  flex-wrap: wrap;
-  margin-top: 6px;
-  font-size: 13.5px;
-  color: var(--text-2);
-}
-.so-row-qty {
-  font-weight: 700;
-  color: var(--text);
-}
-.so-row-dot {
-  width: 3px;
-  height: 3px;
-  border-radius: 50%;
-  background: var(--border-strong);
-}
-.so-row-sub {
-  display: flex;
-  align-items: center;
-  gap: 8px 14px;
-  flex-wrap: wrap;
-  margin-top: 10px;
-  font-size: 12.5px;
-  color: var(--text-2);
-}
-.so-row-stamp {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-.so-row-stamp svg {
-  color: var(--text-2);
-}
-.so-row-note {
-  padding: 3px 10px;
-  border-radius: 999px;
-  background: var(--surface-3);
-  color: var(--text-2);
-  max-width: 340px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.so-row-right {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 12px;
-  flex-shrink: 0;
-  margin-left: auto;
-}
-.so-row-total {
-  font-size: 20px;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  color: var(--text);
-  font-variant-numeric: tabular-nums;
-}
-.so-row-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.so-row-actions .btn {
-  height: 38px;
-}
-.so-advance {
-  padding: 0 16px;
-}
-/* Quiet by default, red only on approach — --danger cannot clear 4.5:1 on a
-   light surface, so the word keeps a legible token and the tint does the work. */
-.so-cancel,
-.so-delete {
-  border-color: var(--border-strong);
-  color: var(--text-2);
-}
-.so-cancel:hover:not(:disabled),
-.so-delete:hover:not(:disabled) {
-  background: var(--danger-bg);
-  border-color: var(--danger);
-  color: var(--text);
-}
-
 .wsec-loading {
   padding: 34px 4px;
   text-align: center;
@@ -5334,17 +5221,6 @@ tr.hoverable-row:hover {
   font-size: 13.5px;
   line-height: 1.55;
   color: var(--text-2);
-}
-
-@media (max-width: 760px) {
-  .so-row {
-    flex-wrap: wrap;
-  }
-  .so-row-right {
-    align-items: flex-start;
-    width: 100%;
-    margin-left: 0;
-  }
 }
 
 .link-btn {

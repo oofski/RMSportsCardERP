@@ -21,8 +21,6 @@ import { Icon } from '../../components/Icon'
 import { Button, CenterLoader, EmptyState } from '../../components/ui'
 import { useToast } from '../../components/Toast'
 import { api } from '../../lib/api'
-import { useChrome } from '../../lib/chrome'
-import { useSession } from '../../lib/session'
 import { formatDate, formatMoney } from '../../lib/format'
 import { UnitBadge, productMetrics } from './helpers'
 import { CategoryLogo } from './CategoryLogo'
@@ -30,7 +28,7 @@ import { IncomingModal } from './IncomingModal'
 import { ProductHoverCard, type ProductCardData } from './ProductCases'
 import { PO_STAGE_META } from '../invoicing/helpers'
 
-type MetricKind = 'cost' | 'spread' | 'cases' | 'skus'
+type MetricKind = 'value' | 'cost' | 'spread' | 'cases' | 'skus'
 type Detail = { kind: 'category'; category: string; label: string } | { kind: MetricKind; label: string }
 
 export function InventoryOverview({
@@ -51,8 +49,6 @@ export function InventoryOverview({
    * Incoming panel, the drill-down table) re-read too. */
   refreshKey?: number
 }): JSX.Element {
-  const { navigate } = useChrome()
-  const { can } = useSession()
   const [detail, setDetail] = useState<Detail | null>(null)
 
   // Incoming stock is read ONCE here and shared by the "Incoming orders" tile,
@@ -65,9 +61,11 @@ export function InventoryOverview({
   )
   const incomingLoading = feed.boxes === null || feed.manual === null
 
-  // Hover summary for the Incoming orders tile — same mechanism as the product
-  // hover card further down this file: a fixed-position `.hovercard` placed from
-  // the trigger's box, held open while the pointer is over the card itself.
+  // Hover summary for the Incoming inventory panel's unit count — same
+  // mechanism as the product hover card further down this file: a fixed-position
+  // `.hovercard` placed from the trigger's box, held open while the pointer is
+  // over the card itself. It hangs off the panel rather than a dashboard tile
+  // because the purchase orders it lists are what that panel is showing.
   const [incHover, setIncHover] = useState<CSSProperties | null>(null)
   const incTimer = useRef<number | undefined>(undefined)
   const openIncHover = (rect: DOMRect): void => {
@@ -88,24 +86,8 @@ export function InventoryOverview({
     []
   )
 
-  // Purchase orders live in the Invoicing module, which is gated on
-  // 'module.invoicing' — navigating there for someone without it silently lands
-  // them on Home, so those users get walked to the Incoming panel instead, which
-  // shows the same boxes and is readable with plain 'module.inventory'.
+  // Kept so callers elsewhere can still scroll this panel into view.
   const incomingRef = useRef<HTMLDivElement | null>(null)
-  const goToIncoming = (): void => {
-    if (can('module.invoicing')) {
-      navigate('invoicing')
-      return
-    }
-    const el = incomingRef.current
-    if (!el) return
-    el.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
-    el.classList.remove('incoming-flash')
-    // Reflow between remove and add so a second click replays the animation.
-    void el.offsetWidth
-    el.classList.add('incoming-flash')
-  }
 
   // Opening a drill-down unmounts nothing (this component stays mounted), so a
   // popover left open would reappear at a stale position on the way back.
@@ -142,15 +124,15 @@ export function InventoryOverview({
   return (
     <>
       <div className="stat-grid">
+        {/* Inventory value is the headline figure of the whole module and stays
+            the first tile. The incoming-order breakdown it briefly replaced now
+            hovers off the Incoming inventory panel below, where the purchase
+            orders it describes actually live. */}
         <Stat
-          icon="Truck"
-          value={incomingLoading ? '—' : String(incoming.totalUnits)}
-          unit={incomingLoading ? undefined : incoming.totalUnits === 1 ? 'unit' : 'units'}
-          label="Incoming orders"
-          onClick={goToIncoming}
-          describedBy={incHover ? INCOMING_HOVER_ID : undefined}
-          onHoverOpen={openIncHover}
-          onHoverClose={closeIncHover}
+          icon="DollarSign"
+          value={formatMoney(stats.totalValue, { compact: true })}
+          label="Inventory value"
+          onClick={() => openDetail({ kind: 'value', label: 'Inventory value' })}
         />
         <Stat icon="Wallet" value={formatMoney(stats.totalCost, { compact: true })} label="Total cost" onClick={() => openDetail({ kind: 'cost', label: 'Total cost' })} />
         <Stat
@@ -204,6 +186,9 @@ export function InventoryOverview({
         </div>
 
         <IncomingPanel
+          hoverId={incHover ? INCOMING_HOVER_ID : undefined}
+          onHoverOpen={openIncHover}
+          onHoverClose={closeIncHover}
           panelRef={incomingRef}
           canManage={canManage}
           onReceived={onChanged}
@@ -433,9 +418,12 @@ function IncomingPanel({
   onScan,
   feed,
   summary,
-  loading
+  loading,
+  hoverId,
+  onHoverOpen,
+  onHoverClose
 }: {
-  /** Lets the Incoming orders tile walk a non-invoicing user down to this panel. */
+  /** Kept so other screens can still scroll this panel into view. */
   panelRef: MutableRefObject<HTMLDivElement | null>
   canManage: boolean
   onReceived: () => Promise<void>
@@ -443,6 +431,10 @@ function IncomingPanel({
   feed: IncomingFeed
   summary: IncomingSummary
   loading: boolean
+  /** id of the summary popover while it is open, for aria-describedby. */
+  hoverId?: string
+  onHoverOpen?: (rect: DOMRect) => void
+  onHoverClose?: () => void
 }): JSX.Element {
   const toast = useToast()
   const { thumbs, reloadManual: load, reloadBoxes: loadBoxes } = feed
@@ -533,10 +525,25 @@ function IncomingPanel({
             <span className="ph-sub">Stock on its way in</span>
           )}
         </div>
-        <div className="ph-right">
+        {/* The unit count is the trigger: hovering it breaks the figure down
+            into the purchase orders still outstanding. A button, not a div, so
+            it is reachable from the keyboard as well as the pointer. */}
+        <button
+          type="button"
+          className="ph-right ph-right-hover"
+          aria-describedby={hoverId}
+          onMouseEnter={
+            onHoverOpen ? (e) => onHoverOpen(e.currentTarget.getBoundingClientRect()) : undefined
+          }
+          onMouseLeave={onHoverClose}
+          onFocus={
+            onHoverOpen ? (e) => onHoverOpen(e.currentTarget.getBoundingClientRect()) : undefined
+          }
+          onBlur={onHoverClose}
+        >
           <div className="ph-total">{loading ? '—' : totalUnits}</div>
           <div className="ph-sub">unit{totalUnits === 1 ? '' : 's'}</div>
-        </div>
+        </button>
       </div>
 
       {loading ? (
@@ -979,6 +986,10 @@ function InventoryDetail({
     if (!rows) return []
     const withM = rows.map((p) => ({ p, m: productMetrics(p) }))
     switch (detail.kind) {
+      // Inventory value counts every unit on hand, cost basis or not — which is
+      // exactly what the tile above it counts.
+      case 'value':
+        return withM.filter((x) => x.p.quantity > 0).sort((a, b) => b.m.invValue - a.m.invValue)
       case 'cost':
         return withM.filter((x) => x.p.quantity > 0 && x.m.hasCost).sort((a, b) => b.m.totalCost - a.m.totalCost)
       case 'spread':

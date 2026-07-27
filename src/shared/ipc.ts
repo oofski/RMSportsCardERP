@@ -100,6 +100,10 @@ export const IPC = {
   poIncomingBoxes: 'po:incoming-boxes',
   poScanIn: 'po:scan-in',
   poCogsList: 'po:cogs-list',
+  poDelete: 'po:delete',
+  // Render the PO as a standalone PDF document (not a screen print).
+  poOpenPdf: 'po:pdf:open',
+  poSavePdf: 'po:pdf:save',
 
   // Shipping (RM Cardz Shipping Workspace)
   // Reads are gated by 'module.fulfillment'; every write by 'shipping.manage'.

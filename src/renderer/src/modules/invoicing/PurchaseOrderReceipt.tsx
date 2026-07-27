@@ -3,29 +3,42 @@ import type { PurchaseOrderDetail, PurchaseOrderLine, PurchaseOrderStatus } from
 import { PO_TRANSITIONS } from '@shared/purchaseOrders'
 import { api } from '../../lib/api'
 import { Button, CenterLoader, Modal } from '../../components/ui'
+import { useToast } from '../../components/Toast'
 import { Icon } from '../../components/Icon'
 import { formatDate, formatMoney } from '../../lib/format'
 import { CategoryLogo } from '../inventory/CategoryLogo'
 import { PO_MOVE_LABEL, PO_STAGE_META } from './helpers'
 
 /**
- * A clean, printable receipt for one PO: header (number, supplier, date, status)
- * then one row per line showing the product image, name/SKU, quantity, unit price
- * paid and line total, closing with the grand total. Stage controls live here too
- * so a PO can be advanced straight from its receipt. Print isolates `.po-receipt`.
+ * A receipt for one PO: header (number, supplier, date, status) then one row per
+ * line showing the product image, name/SKU, quantity, unit price paid and line
+ * total, closing with the grand total. Stage controls live here too, so a PO can
+ * be advanced straight from its receipt.
+ *
+ * "Open as PDF" does NOT print this markup. window.print() used to, behind a
+ * pile of @media rules that hid the app and un-hid `.po-receipt` — but the
+ * receipt sits inside a modal inside a fixed-height overflow:hidden shell, so
+ * the output was clipped to one viewport and long POs came out blank. The main
+ * process now builds a real paginated A4 document from the PO's data instead;
+ * see src/main/poPdf.ts.
  */
 export function PurchaseOrderReceipt({
   id,
   thumbnails,
   onMove,
+  onDelete,
   onClose
 }: {
   id: string
   thumbnails: Record<string, string>
   onMove: (id: string, to: PurchaseOrderStatus) => void | Promise<void>
+  /** Absent for users who cannot manage POs, which hides the action entirely. */
+  onDelete?: (id: string, poNumber: string) => void | Promise<void>
   onClose: () => void
 }): JSX.Element {
+  const toast = useToast()
   const [detail, setDetail] = useState<PurchaseOrderDetail | null>(null)
+  const [pdfBusy, setPdfBusy] = useState<'open' | 'save' | null>(null)
 
   useEffect(() => {
     let active = true
@@ -69,8 +82,52 @@ export function PurchaseOrderReceipt({
               {PO_MOVE_LABEL[to]}
             </Button>
           ))}
-          <Button variant="primary" icon="Download" onClick={() => window.print()}>
-            Print
+          {onDelete && (
+            <Button
+              variant="danger"
+              icon="Trash2"
+              onClick={() => void onDelete(detail.id, detail.poNumber)}
+            >
+              Delete
+            </Button>
+          )}
+          <Button
+            icon="Save"
+            loading={pdfBusy === 'save'}
+            disabled={pdfBusy !== null}
+            onClick={async () => {
+              setPdfBusy('save')
+              try {
+                const res = await api.purchaseOrders.savePdf(detail.id)
+                // A cancelled save dialog is not a failure — say nothing.
+                if (!res.ok && !res.canceled) {
+                  toast.error(res.error ?? 'Could not save the PDF.')
+                } else if (res.ok) {
+                  toast.success('PDF saved.')
+                }
+              } finally {
+                setPdfBusy(null)
+              }
+            }}
+          >
+            Save PDF
+          </Button>
+          <Button
+            variant="primary"
+            icon="FileText"
+            loading={pdfBusy === 'open'}
+            disabled={pdfBusy !== null}
+            onClick={async () => {
+              setPdfBusy('open')
+              try {
+                const res = await api.purchaseOrders.openPdf(detail.id)
+                if (!res.ok) toast.error(res.error ?? 'Could not open the PDF.')
+              } finally {
+                setPdfBusy(null)
+              }
+            }}
+          >
+            Open as PDF
           </Button>
         </>
       }

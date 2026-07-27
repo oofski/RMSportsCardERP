@@ -1,9 +1,46 @@
 import { useState } from 'react'
-import type { PurchaseOrder, PurchaseOrderStatus } from '@shared/types'
+import type {
+  PurchaseOrder,
+  PurchaseOrderStatus,
+  SupplyOrder,
+  SupplyOrderStatus
+} from '@shared/types'
 import { PO_STAGES, PO_TRANSITIONS, canTransition } from '@shared/purchaseOrders'
 import { Icon } from '../../components/Icon'
 import { formatMoney } from '../../lib/format'
 import { PO_MOVE_LABEL, PO_STAGE_META } from './helpers'
+
+/**
+ * Supply reorders share this board with product POs — they are the same job
+ * (money committed to a supplier, waiting to land) and splitting them across
+ * two lists meant checking two places to answer one question.
+ *
+ * Their stage vocabulary differs, so it is mapped onto the PO columns rather
+ * than renaming anything: a supply order in transit belongs in the same "in
+ * flight" column as a paid PO. The card keeps its OWN status word, so nothing
+ * claims a supply order was "Paid" when what is known is that it shipped.
+ */
+const SUPPLY_COLUMN: Record<SupplyOrderStatus, PurchaseOrderStatus> = {
+  ordered: 'ordered',
+  in_transit: 'paid',
+  delivered: 'received',
+  cancelled: 'cancelled'
+}
+
+/** The forward move offered on a supply card, and what to call it. */
+const SUPPLY_NEXT: Partial<
+  Record<SupplyOrderStatus, { to: SupplyOrderStatus; label: string }>
+> = {
+  ordered: { to: 'in_transit', label: 'In transit' },
+  in_transit: { to: 'delivered', label: 'Delivered' }
+}
+
+const SUPPLY_STATUS_LABEL: Record<SupplyOrderStatus, string> = {
+  ordered: 'Ordered',
+  in_transit: 'In transit',
+  delivered: 'Delivered',
+  cancelled: 'Cancelled'
+}
 
 /**
  * The buy-side pipeline. One column per PO_STAGES entry (Ordered / Paid /
@@ -14,15 +51,24 @@ import { PO_MOVE_LABEL, PO_STAGE_META } from './helpers'
  */
 export function PurchaseOrderBoard({
   pos,
+  supplyOrders,
+  canManageSupplies,
   onMove,
-  onOpen
+  onOpen,
+  onMoveSupply,
+  onDeleteSupply
 }: {
   pos: PurchaseOrder[]
+  /** Supply reorders, shown in the same columns and badged as supplies. */
+  supplyOrders: SupplyOrder[]
+  canManageSupplies: boolean
   /** Receipt line images, kept in the props for parity with the receipt view;
    *  the compact cards don't render thumbnails. */
   thumbnails: Record<string, string>
   onMove: (id: string, to: PurchaseOrderStatus) => void
   onOpen: (id: string) => void
+  onMoveSupply: (order: SupplyOrder, to: SupplyOrderStatus) => void
+  onDeleteSupply: (order: SupplyOrder) => void
 }): JSX.Element {
   const [dragId, setDragId] = useState<string | null>(null)
   const [overStage, setOverStage] = useState<PurchaseOrderStatus | null>(null)
@@ -32,6 +78,8 @@ export function PurchaseOrderBoard({
     <div className="po-board">
       {PO_STAGES.map((stage) => {
         const inStage = pos.filter((p) => p.status === stage.id)
+        const suppliesInStage = supplyOrders.filter((o) => SUPPLY_COLUMN[o.status] === stage.id)
+        const columnCount = inStage.length + suppliesInStage.length
         const meta = PO_STAGE_META[stage.id]
         const canDrop = !!(dragId && fromStatus && canTransition(fromStatus, stage.id))
         // While dragging, dim the columns this card can't move to (never the
@@ -68,26 +116,37 @@ export function PurchaseOrderBoard({
                 <Icon name={meta.icon} size={15} />
                 {stage.label}
               </span>
-              <span className="po-col-count">{inStage.length}</span>
+              <span className="po-col-count">{columnCount}</span>
             </div>
             <div className="po-col-body">
-              {inStage.length === 0 ? (
+              {columnCount === 0 ? (
                 <div className="po-col-empty">Nothing here.</div>
               ) : (
-                inStage.map((po) => (
-                  <PoCard
-                    key={po.id}
-                    po={po}
-                    onMove={onMove}
-                    onOpen={onOpen}
-                    dragging={dragId === po.id}
-                    onDragStart={setDragId}
-                    onDragEnd={() => {
-                      setDragId(null)
-                      setOverStage(null)
-                    }}
-                  />
-                ))
+                <>
+                  {inStage.map((po) => (
+                    <PoCard
+                      key={po.id}
+                      po={po}
+                      onMove={onMove}
+                      onOpen={onOpen}
+                      dragging={dragId === po.id}
+                      onDragStart={setDragId}
+                      onDragEnd={() => {
+                        setDragId(null)
+                        setOverStage(null)
+                      }}
+                    />
+                  ))}
+                  {suppliesInStage.map((o) => (
+                    <SupplyCard
+                      key={o.id}
+                      order={o}
+                      canManage={canManageSupplies}
+                      onMove={onMoveSupply}
+                      onDelete={onDeleteSupply}
+                    />
+                  ))}
+                </>
               )}
             </div>
           </div>
@@ -158,6 +217,92 @@ function PoCard({
               {PO_MOVE_LABEL[to]}
             </button>
           ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * A supply reorder, sitting in the same column as the product POs. Everything
+ * about it says "supply" before anything else does: a tinted card, a Supply
+ * badge in the top row, and the item name where a PO shows its number.
+ *
+ * The Auto badge is the point of the source field. Once the low-stock reorder
+ * automation is buying packaging on its own, this board is where an operator
+ * finds out it happened — a card nobody remembers creating has to explain
+ * itself rather than look like someone else's mistake.
+ */
+function SupplyCard({
+  order,
+  canManage,
+  onMove,
+  onDelete
+}: {
+  order: SupplyOrder
+  canManage: boolean
+  onMove: (order: SupplyOrder, to: SupplyOrderStatus) => void
+  onDelete: (order: SupplyOrder) => void
+}): JSX.Element {
+  const next = SUPPLY_NEXT[order.status]
+  const terminal = order.status === 'delivered' || order.status === 'cancelled'
+  const perItem = order.items > 0 ? order.total / order.items : 0
+
+  return (
+    <div className="po-card po-card-supply" data-status={order.status}>
+      <div className="po-card-top">
+        <span className="po-supply-badge">
+          <Icon name="Package" size={12} />
+          Supply
+        </span>
+        {order.source === 'auto' && (
+          <span className="po-supply-auto" title="Placed automatically by the low-stock reorder">
+            <Icon name="Zap" size={11} />
+            Auto
+          </span>
+        )}
+        <span className="po-card-dest">{SUPPLY_STATUS_LABEL[order.status]}</span>
+      </div>
+
+      <div className="po-card-supplier">{order.supplyName}</div>
+
+      <div className="po-card-figs">
+        <span className="po-card-total mono">{formatMoney(order.total)}</span>
+        <span className="po-card-meta">
+          {order.units} {order.unit} · {order.items.toLocaleString()} items
+          {perItem > 0 ? ` · ${formatMoney(perItem)}/item` : ''}
+        </span>
+      </div>
+
+      {canManage && (next || terminal) && (
+        <div className="po-card-foot">
+          {next && (
+            <button
+              type="button"
+              className="btn po-move po-move-supply"
+              onClick={() => onMove(order, next.to)}
+            >
+              {next.label}
+            </button>
+          )}
+          {!terminal && (
+            <button
+              type="button"
+              className="btn po-move po-move-cancelled"
+              onClick={() => onMove(order, 'cancelled')}
+            >
+              Cancel
+            </button>
+          )}
+          {terminal && (
+            <button
+              type="button"
+              className="btn po-move po-move-remove"
+              onClick={() => onDelete(order)}
+            >
+              Delete
+            </button>
+          )}
         </div>
       )}
     </div>
