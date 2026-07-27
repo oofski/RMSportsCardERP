@@ -18,6 +18,8 @@ import { writeFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import type { PurchaseOrderDetail } from '@shared/types'
+import { productThumbnails } from './db/inventory'
+import { RM_LOGO_DATA_URI } from './brand'
 
 const money = (n: number): string =>
   (Number.isFinite(n) ? n : 0).toLocaleString('en-US', { style: 'currency', currency: 'USD' })
@@ -52,14 +54,24 @@ const STATUS_LABEL: Record<string, string> = {
  * readable on paper rather than losing its column headings after page one.
  */
 export function buildPoHtml(po: PurchaseOrderDetail): string {
+  // Product photos, keyed by product id. Read once for the whole document —
+  // these are base64 data URLs and re-reading per line would balloon a 40-line
+  // PO. A product with no photo simply gets no cell content.
+  const thumbs = productThumbnails()
+
   const rows = po.lines
     .map(
       (l, i) => `
       <tr>
         <td class="num">${i + 1}</td>
         <td>
-          <div class="pname">${esc(l.productName)}</div>
-          ${l.sku ? `<div class="psku">${esc(l.sku)}</div>` : ''}
+          <div class="item">
+            <div class="itxt">
+              <div class="pname">${esc(l.productName)}</div>
+              ${l.sku ? `<div class="psku">${esc(l.sku)}</div>` : ''}
+            </div>
+            ${thumbs[l.productId] ? `<img class="pimg" src="${thumbs[l.productId]}" alt="">` : ''}
+          </div>
         </td>
         <td class="num">${l.quantity}</td>
         <td class="num">${money(l.unitPrice)}</td>
@@ -83,7 +95,8 @@ export function buildPoHtml(po: PurchaseOrderDetail): string {
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
   }
-  .head { display: flex; align-items: flex-start; border-bottom: 2px solid #111; padding-bottom: 10pt; }
+  .head { display: flex; align-items: center; gap: 12pt; border-bottom: 2px solid #111; padding-bottom: 10pt; }
+  .head .logo { width: 46pt; height: 46pt; flex-shrink: 0; }
   .head h1 { margin: 0 0 2pt; font-size: 19pt; letter-spacing: -0.3pt; }
   .head .org { font-size: 9pt; color: #555; text-transform: uppercase; letter-spacing: 1pt; }
   .head .right { margin-left: auto; text-align: right; }
@@ -113,6 +126,15 @@ export function buildPoHtml(po: PurchaseOrderDetail): string {
   .strong { font-weight: 700; }
   .pname { font-weight: 600; }
   .psku { font-size: 8.5pt; color: #666; margin-top: 1pt; }
+  /* The product photo sits to the RIGHT of the name, inside the item cell, so
+     the qty/unit/amount columns stay in the same place whether or not a product
+     has a picture. */
+  .item { display: flex; align-items: flex-start; gap: 8pt; }
+  .itxt { flex: 1 1 auto; min-width: 0; }
+  .pimg {
+    flex: 0 0 auto; width: 34pt; height: 34pt; object-fit: cover;
+    border: 0.5pt solid #ddd; border-radius: 3pt; background: #fafafa;
+  }
 
   .totals { margin-top: 12pt; display: flex; }
   .totals .box { margin-left: auto; min-width: 180pt; }
@@ -128,8 +150,9 @@ export function buildPoHtml(po: PurchaseOrderDetail): string {
 </style></head>
 <body>
   <div class="head">
+    <img class="logo" src="${RM_LOGO_DATA_URI}" alt="RM Sportscards">
     <div>
-      <div class="org">RM Cardz</div>
+      <div class="org">RM Sportscards</div>
       <h1>${esc(po.poNumber)}</h1>
     </div>
     <div class="right">
@@ -141,7 +164,6 @@ export function buildPoHtml(po: PurchaseOrderDetail): string {
     <div><div class="k">Supplier</div><div class="v">${esc(po.supplier || '—')}</div></div>
     <div><div class="k">Ordered</div><div class="v">${date(po.orderedAt ?? po.createdAt)}</div></div>
     <div><div class="k">Destination</div><div class="v">${esc(po.location)}</div></div>
-    <div><div class="k">Lines</div><div class="v">${po.lines.length} · ${units} unit${units === 1 ? '' : 's'}</div></div>
   </div>
 
   <table>
@@ -166,7 +188,7 @@ export function buildPoHtml(po: PurchaseOrderDetail): string {
 
   ${po.notes ? `<div class="notes"><div class="k">Notes</div><p>${esc(po.notes)}</p></div>` : ''}
 
-  <div class="foot">${esc(po.poNumber)} · generated ${date(new Date().toISOString())} · RM Operations</div>
+  <div class="foot">${esc(po.poNumber)} · generated ${date(new Date().toISOString())} · RM Sportscards</div>
 </body></html>`
 }
 
