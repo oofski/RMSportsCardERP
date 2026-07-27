@@ -66,10 +66,15 @@ import type {
   ShipWarning
 } from '@shared/shippingTypes'
 import type {
+  ShipAssignmentBoard,
+  ShipBreakAssignee,
+  ShipBreakAssignmentUpdate,
   ShipBreakDetail,
   ShipBreakSummary,
   ShipBulkStatusEntry,
   ShipBulkStatusResult,
+  ShipCalendarDayDetail,
+  ShipCalendarMonth,
   ShipCustomerRow,
   ShipExportKind,
   ShipFulfillmentStage,
@@ -307,6 +312,30 @@ const api = {
     setBreakStatus: (id: string, status: ShipBreakStatus): Promise<Result<ShipBreakDetail>> =>
       ipcRenderer.invoke(IPC.shipBreakSetStatus, { id, status }),
 
+    // ---- Break assignments (who is sorting which break) --------------------
+    /** Every assignment, or just one break's when `breakId` is given. */
+    assignments: (breakId?: string): Promise<ShipBreakAssignee[]> =>
+      ipcRenderer.invoke(IPC.shipAssignmentsList, breakId ?? ''),
+    /** The Admin tab's single read: breaks + assignees + the pickable roster. */
+    assignmentBoard: (): Promise<ShipAssignmentBoard | null> =>
+      ipcRenderer.invoke(IPC.shipAssignmentBoard),
+    /** Idempotent: re-assigning the same person just refreshes their note. */
+    assignBreak: (
+      breakId: string,
+      employeeId: string,
+      note?: string | null
+    ): Promise<Result<ShipBreakAssignmentUpdate>> =>
+      ipcRenderer.invoke(IPC.shipAssign, { breakId, employeeId, note: note ?? null }),
+    /** Remove by assignment id (what an assignee chip carries). */
+    unassignBreak: (assignmentId: string): Promise<Result<ShipBreakAssignmentUpdate>> =>
+      ipcRenderer.invoke(IPC.shipUnassign, { id: assignmentId }),
+    /** Remove by (break, person) — the shape a toggle already has. */
+    unassignEmployee: (
+      breakId: string,
+      employeeId: string
+    ): Promise<Result<ShipBreakAssignmentUpdate>> =>
+      ipcRenderer.invoke(IPC.shipUnassign, { breakId, employeeId }),
+
     // ---- Shipping tracker --------------------------------------------------
     shipments: (): Promise<ShipShipmentRow[]> => ipcRenderer.invoke(IPC.shipShipmentsList),
     setShipmentStatus: (id: string, code: ShipStatusCode): Promise<Result<ShipShipmentRow>> =>
@@ -332,6 +361,16 @@ const api = {
     ledger: (): Promise<ShipLedgerRow[]> => ipcRenderer.invoke(IPC.shipLedger),
 
     // ---- History -----------------------------------------------------------
+    /**
+     * A month of real activity, one entry per calendar day — imports, value,
+     * cards picked/total, tracking and sent/delivered counts — so the grid
+     * renders from a single call. `month` is 1-12; omit both for this month.
+     */
+    calendar: (year?: number, month?: number): Promise<ShipCalendarMonth | null> =>
+      ipcRenderer.invoke(IPC.shipCalendar, { year, month }),
+    /** One day expanded: per-break breakdown + the snapshot to jump to. */
+    calendarDay: (date: string): Promise<ShipCalendarDayDetail | null> =>
+      ipcRenderer.invoke(IPC.shipCalendarDay, date),
     imports: (): Promise<ShipImportRecord[]> => ipcRenderer.invoke(IPC.shipImportsList),
     renameImport: (id: string, name: string): Promise<Result<ShipImportRecord>> =>
       ipcRenderer.invoke(IPC.shipImportRename, { id, name }),

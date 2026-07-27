@@ -12,6 +12,7 @@
  */
 
 import type {
+  ShipBreakAssignment,
   ShipBreakAudit,
   ShipBreakStatus,
   ShipCustomer,
@@ -19,6 +20,7 @@ import type {
   ShipImportCounts,
   ShipImportRecord,
   ShipManualStatus,
+  ShipSnapshotSummary,
   ShipSpecialRequest,
   ShipSportOption,
   ShipStatusCode,
@@ -142,6 +144,67 @@ export interface ShipOrderRow {
 export type ShipQueueDirection = 'up' | 'down'
 
 // ---------------------------------------------------------------------------
+// Break assignments — the resolved, display-ready form of the stored row
+// ---------------------------------------------------------------------------
+
+/**
+ * A stored assignment with the employee resolved for display. The Checker card
+ * and the Admin board both render this straight into `<Avatar text={initials}
+ * src={avatarUrl} />`.
+ */
+export interface ShipBreakAssignee extends ShipBreakAssignment {
+  /** "Maya Ortiz", or the raw employee id when the record has been removed. */
+  name: string
+  /** Two-letter fallback for the Avatar component. */
+  initials: string
+  title: string
+  avatarUrl: string | null
+  /** False when the employee record no longer exists (assignment is orphaned). */
+  found: boolean
+}
+
+/** One pickable person for the Admin assign control. */
+export interface ShipAssignmentEmployee {
+  id: string
+  name: string
+  initials: string
+  title: string
+  avatarUrl: string | null
+}
+
+/**
+ * Everything the Admin assignment tab needs in ONE read: the current dataset's
+ * breaks (each already carrying its assignees) plus the roster to pick from.
+ *
+ * `employees` is populated only for a caller who can `shipping.manage` — a
+ * read-only fulfillment user sees who is assigned but is not handed the roster.
+ */
+export interface ShipAssignmentBoard {
+  event: ShipEvent
+  breaks: ShipBreakSummary[]
+  employees: ShipAssignmentEmployee[]
+  totalAssignments: number
+  /** Breaks in the current dataset with nobody assigned. */
+  unassignedBreaks: number
+  /** True when the caller may assign/unassign (drives the Admin tab's controls). */
+  canManage: boolean
+}
+
+/**
+ * What an assign/unassign hands back. Both the Admin board and the Checker card
+ * show assignments, so the freshly derived break comes back with the whole-board
+ * totals and either screen reconciles without a refetch.
+ */
+export interface ShipBreakAssignmentUpdate {
+  breakId: string
+  assignees: ShipBreakAssignee[]
+  /** The re-derived break summary; null only if the break vanished mid-flight. */
+  break: ShipBreakSummary | null
+  totalAssignments: number
+  unassignedBreaks: number
+}
+
+// ---------------------------------------------------------------------------
 // Checker — the inverse view: one pick list per break
 // ---------------------------------------------------------------------------
 
@@ -159,6 +222,8 @@ export interface ShipBreakSummary {
   value: number
   /** The fidelity audit for this break — null when the import produced none. */
   audit: ShipBreakAudit | null
+  /** Who is sorting this break. Empty when nobody has been assigned. */
+  assignees: ShipBreakAssignee[]
 }
 
 /** A pick row: the slot plus who it belongs to. */
@@ -420,4 +485,123 @@ export interface ShipCustomerRow extends ShipCustomer {
   shipmentId: string | null
   cardCount: number
   value: number
+}
+
+// ---------------------------------------------------------------------------
+// History calendar — a month of real, persisted activity
+// ---------------------------------------------------------------------------
+
+/**
+ * Where a day's numbers came from. The calendar is DERIVED from
+ * `ship_imports` + `ship_snapshots` + the live dataset — there is no rollup
+ * table — so the UI has to be able to say how solid a day's figures are:
+ *
+ *   'live'     — this day holds the dataset currently loaded in the workspace,
+ *                so every number is the real, up-to-the-second truth.
+ *   'snapshot' — the dataset has since been replaced; the numbers come from the
+ *                newest snapshot captured that day.
+ *   'import'   — an import ran that day but nothing captured its progress, so
+ *                only the imported volume/value is known (progress reads 0).
+ *   'none'     — nothing happened. A calm, empty cell.
+ */
+export type ShipCalendarSource = 'live' | 'snapshot' | 'import' | 'none'
+
+/**
+ * One calendar cell. Every day of the requested month gets one, including the
+ * empty ones, so the UI can lay out a grid without inventing placeholders.
+ *
+ * `packagesSent` counts packages that have physically left (in transit, out for
+ * delivery, delivered or returned); `packagesDelivered` is the delivered subset.
+ */
+export interface ShipCalendarDay {
+  /** Local date, `YYYY-MM-DD`. Bucketing is LOCAL, not UTC, so a 7pm import
+   *  lands on the day the operator actually did it. */
+  date: string
+  /** The import run(s) done that day — name, filename, counts and all. */
+  imports: ShipImportRecord[]
+  /** Dated captures taken that day; the UI's "jump to snapshot" targets. */
+  snapshots: ShipSnapshotSummary[]
+  /** The value of the day's dataset (live > snapshot > the day's last import). */
+  value: number
+  cards: number
+  cardsPicked: number
+  packages: number
+  packagesWithTracking: number
+  packagesSent: number
+  packagesDelivered: number
+  source: ShipCalendarSource
+  /** True when this day's dataset is the one currently loaded. */
+  isActive: boolean
+  /** False for a day with no import and no snapshot — render it calm. */
+  hasActivity: boolean
+  /** 0..1 against the busiest day of the month — the cell's visual weight. */
+  intensity: number
+}
+
+/**
+ * Month-level roll-up. Volume and money are summed from the month's IMPORTS
+ * (what came in), deliberately not from the per-day figures: the same dataset
+ * shows on its import day and again on every day it was snapshotted, so adding
+ * day values would double count. Fulfilment progress is per-dataset and so is
+ * only ever reported per day.
+ */
+export interface ShipCalendarMonthTotals {
+  imports: number
+  snapshots: number
+  /** Days with at least one import or snapshot. */
+  activeDays: number
+  /** Σ every import's card value this month. */
+  value: number
+  /** Σ every import's cards this month. */
+  cards: number
+  /** Σ every import's packages this month. */
+  packages: number
+}
+
+export interface ShipCalendarMonth {
+  year: number
+  /** 1-12. */
+  month: number
+  /** First and last day of the month, `YYYY-MM-DD`. */
+  start: string
+  end: string
+  /** The main process's local "today" — the UI never has to guess a timezone. */
+  today: string
+  /** 0 = Sunday. The weekday the 1st falls on, so the grid can pad correctly. */
+  startWeekday: number
+  /** One entry per day of the month, in order. */
+  days: ShipCalendarDay[]
+  totals: ShipCalendarMonthTotals
+  /** The heaviest day, or null when the month is empty. */
+  busiestDate: string | null
+  /** The raw activity score `intensity` was normalised against. */
+  peak: number
+  /** The day holding the live dataset, when it falls inside this month. */
+  activeDate: string | null
+}
+
+/** One break inside a day's detail. */
+export interface ShipCalendarBreakRow {
+  breakId: string
+  breakNumber: number | null
+  /** Null when the row was rebuilt from a snapshot (which stores no status). */
+  status: ShipBreakStatus | null
+  cards: number
+  picked: number
+  customers: number
+  value: number
+}
+
+/** What a day cell expands into when clicked. */
+export interface ShipCalendarDayDetail extends ShipCalendarDay {
+  year: number
+  /** 1-12. */
+  month: number
+  /** The event behind the day's numbers, when it can be resolved. */
+  event: ShipEvent | null
+  breaks: ShipCalendarBreakRow[]
+  /** Newest snapshot captured that day — what "open this snapshot" should load. */
+  snapshotId: string | null
+  /** The import whose dataset these numbers describe. */
+  importId: string | null
 }

@@ -8,8 +8,9 @@ import { EmployeesTab } from './EmployeesTab'
 import { HoursTab } from './HoursTab'
 import { RolesTab } from './RolesTab'
 import { ActivityTab } from './ActivityTab'
+import { BreakAssignmentsTab } from './BreakAssignmentsTab'
 
-type TabId = 'employees' | 'hours' | 'roles' | 'activity'
+type TabId = 'employees' | 'hours' | 'roles' | 'breaks' | 'activity'
 
 interface TabDef {
   id: TabId
@@ -30,8 +31,16 @@ export function AdminModule(): JSX.Element {
 
   useEffect(() => {
     ;(async () => {
-      await loadEmployees()
-      setLoading(false)
+      // A rejected roster read must never strand the whole module on a spinner —
+      // the tabs that do not need employees (Hours, Break assignments, Activity)
+      // still work, so always clear loading.
+      try {
+        await loadEmployees()
+      } catch {
+        setEmployees([])
+      } finally {
+        setLoading(false)
+      }
     })()
   }, [loadEmployees])
 
@@ -39,6 +48,12 @@ export function AdminModule(): JSX.Element {
     { id: 'employees', label: 'Employees', icon: 'Users', visible: can('admin.employees.view') },
     { id: 'hours', label: 'Hours', icon: 'Clock', visible: can('admin.hours.view') },
     { id: 'roles', label: 'Roles & Permissions', icon: 'ShieldCheck', visible: can('admin.access') },
+    {
+      id: 'breaks',
+      label: 'Break assignments',
+      icon: 'UserCheck',
+      visible: can('shipping.manage')
+    },
     { id: 'activity', label: 'Inventory activity', icon: 'Layers', visible: can('module.inventory') }
   ]
   const visibleTabs = tabs.filter((t) => t.visible)
@@ -66,6 +81,7 @@ export function AdminModule(): JSX.Element {
       )}
       {tab === 'hours' && <HoursTab />}
       {tab === 'roles' && <RolesTab employees={employees} onChanged={loadEmployees} />}
+      {tab === 'breaks' && <BreakAssignmentsTab />}
       {tab === 'activity' && <ActivityTab />}
     </div>
   )

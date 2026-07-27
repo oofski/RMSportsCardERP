@@ -363,6 +363,40 @@ export interface ShipSnapshot extends ShipSnapshotSummary {
 }
 
 // ---------------------------------------------------------------------------
+// Break assignments (v17) — "who is sorting break #12"
+// ---------------------------------------------------------------------------
+
+/**
+ * One employee assigned to one break, as stored in `ship_break_assignments`.
+ *
+ * The pair (breakId, employeeId) is UNIQUE, so assigning the same person twice
+ * updates the existing row rather than creating a duplicate.
+ *
+ * Assignments are operator state, NOT dataset rows: an import does not wipe
+ * them, it only PRUNES the ones whose break no longer exists. Break ids are
+ * `break_<n>` and therefore stable across re-imports, so "Maya is sorting
+ * break 12" survives a re-upload of the same show.
+ */
+export interface ShipBreakAssignment {
+  id: string
+  breakId: string
+  /** Denormalised from the break so a pruned/renumbered row still reads well. */
+  breakNumber: number | null
+  employeeId: string
+  assignedAt: string
+  /** The employee id of whoever made the assignment. */
+  assignedBy: string | null
+  note: string | null
+}
+
+/** What the domain layer accepts when assigning someone to a break. */
+export interface ShipBreakAssignmentInput {
+  breakId: string
+  employeeId: string
+  note?: string | null
+}
+
+// ---------------------------------------------------------------------------
 // Misc
 // ---------------------------------------------------------------------------
 

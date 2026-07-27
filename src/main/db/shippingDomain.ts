@@ -22,6 +22,7 @@ import {
   SHIP_STATUS_LABELS,
   SHIP_STATUS_RANK,
   type ShipBreak,
+  type ShipBreakAssignment,
   type ShipBreakAudit,
   type ShipBreakStatus,
   type ShipCustomer,
@@ -35,6 +36,10 @@ import {
 } from '@shared/shippingTypes'
 import {
   SHIP_STAGES,
+  type ShipAssignmentBoard,
+  type ShipAssignmentEmployee,
+  type ShipBreakAssignee,
+  type ShipBreakAssignmentUpdate,
   type ShipBreakDetail,
   type ShipBreakSlotRow,
   type ShipBreakSummary,
@@ -57,8 +62,13 @@ import {
   type ShipWorkspaceSummary
 } from '@shared/shippingViews'
 import {
+  assignShipBreak,
+  countShipBreakAssignments,
   createShipSnapshot,
+  deleteShipBreakAssignment,
+  deleteShipBreakAssignmentFor,
   getShipBreak,
+  getShipBreakAssignment,
   getShipBreakAudit,
   getShipCustomer,
   getShipDataCounts,
@@ -67,6 +77,8 @@ import {
   getShipShipmentByCustomer,
   hasShipDataset,
   listShipBatchUrls,
+  listShipBreakAssignments,
+  listShipBreakAssignmentsByBreak,
   listShipBreakAudit,
   listShipBreaks,
   listShipCustomers,
@@ -86,7 +98,9 @@ import {
   setTeamSlotTopSleeved as storeSetTeamSlotTopSleeved,
   updateShipment
 } from './shipping'
+import { getEmployeeById, listEmployees } from './employees'
 import { getDb } from './database'
+import type { Employee } from '@shared/types'
 
 // ---------------------------------------------------------------------------
 // Small helpers
@@ -466,13 +480,204 @@ export function resetOrderQueue(): ShipOrderRow[] {
 }
 
 // ---------------------------------------------------------------------------
+// Break assignments (v17) — "who is sorting break #12"
+//
+// Framework only, deliberately: assign / unassign / list, surfaced on the break
+// summary the Checker already consumes. No auto-assignment, no balancing, no
+// notifications.
+// ---------------------------------------------------------------------------
+
+function initialsOf(first: string, last: string, fallback: string): string {
+  const a = first.trim().charAt(0)
+  const b = last.trim().charAt(0)
+  const pair = `${a}${b}`.trim()
+  if (pair) return pair.toUpperCase()
+  return (fallback.trim().slice(0, 2) || '?').toUpperCase()
+}
+
+function employeeName(emp: Employee): string {
+  return `${emp.firstName} ${emp.lastName}`.trim() || emp.companyId || emp.id
+}
+
+/** The display-ready form of one employee for the Admin picker. */
+function toAssignmentEmployee(emp: Employee): ShipAssignmentEmployee {
+  return {
+    id: emp.id,
+    name: employeeName(emp),
+    initials: initialsOf(emp.firstName, emp.lastName, emp.companyId || emp.id),
+    title: emp.title,
+    avatarUrl: emp.avatarUrl
+  }
+}
+
+/**
+ * Resolve one stored assignment for display. A removed employee does NOT drop
+ * the row — it comes back with `found: false` so the board can show (and let
+ * someone clear) the orphan instead of silently losing who was on the break.
+ */
+function toAssignee(a: ShipBreakAssignment, emp: Employee | undefined): ShipBreakAssignee {
+  if (!emp) {
+    return {
+      ...a,
+      name: a.employeeId,
+      initials: initialsOf('', '', a.employeeId),
+      title: '',
+      avatarUrl: null,
+      found: false
+    }
+  }
+  return {
+    ...a,
+    name: employeeName(emp),
+    initials: initialsOf(emp.firstName, emp.lastName, emp.companyId || emp.id),
+    title: emp.title,
+    avatarUrl: emp.avatarUrl,
+    found: true
+  }
+}
+
+/**
+ * Every assignment in the workspace, grouped by break id, with the employee
+ * roster resolved ONCE. `listBreaks` derives a whole dataset in one pass, so it
+ * must never hit the employees table per break.
+ */
+function assigneesByBreak(): Map<string, ShipBreakAssignee[]> {
+  const assignments = listShipBreakAssignments()
+  const out = new Map<string, ShipBreakAssignee[]>()
+  if (assignments.length === 0) return out
+  const employees = new Map<string, Employee>()
+  for (const e of listEmployees()) employees.set(e.id, e)
+  for (const a of assignments) {
+    const row = toAssignee(a, employees.get(a.employeeId))
+    const list = out.get(a.breakId)
+    if (list) list.push(row)
+    else out.set(a.breakId, [row])
+  }
+  return out
+}
+
+/** The assignees on ONE break — cheap enough for a single-row re-derivation. */
+export function listBreakAssignees(breakId: string): ShipBreakAssignee[] {
+  return listShipBreakAssignmentsByBreak(breakId).map((a) =>
+    toAssignee(a, getEmployeeById(a.employeeId) ?? undefined)
+  )
+}
+
+/** Every assignment in the workspace, newest break first. */
+export function listAllBreakAssignees(): ShipBreakAssignee[] {
+  const grouped = assigneesByBreak()
+  const rows: ShipBreakAssignee[] = []
+  for (const list of grouped.values()) rows.push(...list)
+  return rows.sort((a, b) => {
+    const an = a.breakNumber ?? Number.MAX_SAFE_INTEGER
+    const bn = b.breakNumber ?? Number.MAX_SAFE_INTEGER
+    if (an !== bn) return an - bn
+    return a.assignedAt.localeCompare(b.assignedAt)
+  })
+}
+
+/** Breaks in the current dataset that nobody is on. */
+function unassignedBreakCount(grouped: Map<string, ShipBreakAssignee[]>): number {
+  let n = 0
+  for (const br of listShipBreaks()) {
+    if ((grouped.get(br.id)?.length ?? 0) === 0) n += 1
+  }
+  return n
+}
+
+/**
+ * Everything the Admin assignment tab needs in ONE read.
+ *
+ * `includeEmployees` is the caller's `shipping.manage` check: a read-only
+ * fulfillment user still sees who is assigned, but is not handed the roster.
+ */
+export function getAssignmentBoard(includeEmployees: boolean): ShipAssignmentBoard {
+  const breaks = listBreaks()
+  let totalAssignments = 0
+  let unassignedBreaks = 0
+  for (const br of breaks) {
+    totalAssignments += br.assignees.length
+    if (br.assignees.length === 0) unassignedBreaks += 1
+  }
+  return {
+    event: getShipEvent(),
+    breaks,
+    employees: includeEmployees ? listEmployees().map(toAssignmentEmployee) : [],
+    totalAssignments,
+    unassignedBreaks,
+    canManage: includeEmployees
+  }
+}
+
+/** The reconcile payload both the Admin board and the Checker card consume. */
+function assignmentUpdate(breakId: string): ShipBreakAssignmentUpdate {
+  const grouped = assigneesByBreak()
+  return {
+    breakId,
+    assignees: grouped.get(breakId) ?? [],
+    break: getBreakSummary(breakId),
+    totalAssignments: countShipBreakAssignments(),
+    unassignedBreaks: unassignedBreakCount(grouped)
+  }
+}
+
+/** Put an employee on a break. Re-assigning the same person refreshes the note. */
+export function assignBreak(
+  breakId: string,
+  employeeId: string,
+  note: string | null,
+  actorId: string | null
+): ShipBreakAssignmentUpdate {
+  const br = requireBreak(breakId)
+  const employee = getEmployeeById(employeeId)
+  if (!employee) throw new Error('Employee not found.')
+  assignShipBreak({
+    breakId: br.id,
+    breakNumber: br.breakNumber,
+    employeeId: employee.id,
+    note,
+    assignedBy: actorId
+  })
+  return assignmentUpdate(br.id)
+}
+
+/**
+ * Take someone off a break — by assignment id (what the UI holds) or by the
+ * (break, employee) pair (what a toggle naturally knows). An orphaned row whose
+ * break is long gone can still be cleared: the break lookup is only used to
+ * report back, never to authorise the delete.
+ */
+export function unassignBreak(target: {
+  id?: string | null
+  breakId?: string | null
+  employeeId?: string | null
+}): ShipBreakAssignmentUpdate {
+  const id = (target.id ?? '').trim()
+  const breakId = (target.breakId ?? '').trim()
+  const employeeId = (target.employeeId ?? '').trim()
+
+  if (id) {
+    const existing = getShipBreakAssignment(id)
+    if (!existing) throw new Error('That assignment is no longer there.')
+    deleteShipBreakAssignment(id)
+    return assignmentUpdate(existing.breakId)
+  }
+  if (!breakId || !employeeId) throw new Error('No assignment specified.')
+  if (!deleteShipBreakAssignmentFor(breakId, employeeId)) {
+    throw new Error('That assignment is no longer there.')
+  }
+  return assignmentUpdate(breakId)
+}
+
+// ---------------------------------------------------------------------------
 // 5 — the Checker
 // ---------------------------------------------------------------------------
 
 function summarizeBreak(
   br: ShipBreak,
   slots: ShipTeamSlot[],
-  audit: ShipBreakAudit | null
+  audit: ShipBreakAudit | null,
+  assignees: ShipBreakAssignee[]
 ): ShipBreakSummary {
   let checkedTeams = 0
   let topSleevedTeams = 0
@@ -498,7 +703,8 @@ function summarizeBreak(
     giveawayCount,
     customerCount: customers.size,
     value: cents(value),
-    audit
+    audit,
+    assignees
   }
 }
 
@@ -511,11 +717,29 @@ export function listBreaks(): ShipBreakSummary[] {
   }
   const auditByNumber = new Map<number, ShipBreakAudit>()
   for (const a of listShipBreakAudit()) auditByNumber.set(a.breakNumber, a)
+  const assignees = assigneesByBreak()
 
   // Only real breaks appear: a break-less giveaway's `giveaway_<handle>` id has
   // no `ship_breaks` row, so it is never shown as a phantom break (doc 5).
   return listShipBreaks().map((br) =>
-    summarizeBreak(br, slotsByBreak.get(br.id) ?? [], auditByNumber.get(br.breakNumber) ?? null)
+    summarizeBreak(
+      br,
+      slotsByBreak.get(br.id) ?? [],
+      auditByNumber.get(br.breakNumber) ?? null,
+      assignees.get(br.id) ?? []
+    )
+  )
+}
+
+/** The summary for ONE break, without its slot rows. */
+export function getBreakSummary(id: string): ShipBreakSummary | null {
+  const br = getShipBreak(id)
+  if (!br) return null
+  return summarizeBreak(
+    br,
+    listShipTeamSlotsByBreak(id),
+    getShipBreakAudit(br.breakNumber),
+    listBreakAssignees(id)
   )
 }
 
@@ -523,7 +747,7 @@ export function getBreak(id: string): ShipBreakDetail | null {
   const br = getShipBreak(id)
   if (!br) return null
   const slots = listShipTeamSlotsByBreak(id)
-  const summary = summarizeBreak(br, slots, getShipBreakAudit(br.breakNumber))
+  const summary = summarizeBreak(br, slots, getShipBreakAudit(br.breakNumber), listBreakAssignees(id))
 
   const customers = new Map<string, ShipCustomer>()
   const shipments = new Map<string, ShipShipment>()

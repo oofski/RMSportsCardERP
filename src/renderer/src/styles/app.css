@@ -767,6 +767,12 @@ table.data tbody tr:hover {
   height: 16px;
   color: var(--text-3);
 }
+/* ...but not the glyph inside the clear button, which does its own positioning.
+   Left absolute it escapes the field and floats in the gap beside it. */
+.topsearch .ts-clear svg {
+  position: static;
+  transform: none;
+}
 .topsearch input {
   width: 100%;
   height: 40px;
@@ -7593,4 +7599,1187 @@ button.sor-team:focus-visible {
   height: 38px;
   font-size: 13.5px;
   background-position: calc(100% - 15px) 16px, calc(100% - 10px) 16px;
+}
+
+/* ==========================================================================
+   History — activity calendar
+   --------------------------------------------------------------------------
+   A month grid over the same imports and snapshots the lists below show. The
+   cell's weight comes from `--hcal-w` (the day's 0..1 intensity against the
+   month's busiest), so a heavy day reads as heavy and an empty one stays calm
+   rather than looking broken. Every colour is a token, so both themes follow.
+   ========================================================================== */
+
+.hcal-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.hcal-nav-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-2);
+  cursor: pointer;
+  transition:
+    border-color 0.13s ease,
+    background 0.13s ease;
+}
+.hcal-nav-btn:hover {
+  border-color: var(--brand-400);
+  color: var(--brand-600);
+}
+.hcal-month {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 156px;
+  justify-content: center;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--text);
+}
+.hcal-month svg {
+  color: var(--text-3);
+}
+.hcal-today-btn {
+  height: 30px;
+  padding: 0 11px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.hcal-today-btn:hover:not(:disabled) {
+  border-color: var(--brand-400);
+  color: var(--brand-600);
+}
+.hcal-today-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.hcal-error {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 13px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius);
+  background: var(--danger-bg);
+  color: var(--danger);
+  font-size: 12.5px;
+}
+.hcal-error span {
+  flex: 1;
+}
+
+/* ---- Month totals ---- */
+.hcal-sum {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.hcal-sum-item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 6px 11px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+.hcal-sum-item svg {
+  color: var(--text-3);
+  align-self: center;
+}
+.hcal-sum-item b {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+.hcal-sum-item em {
+  font-style: normal;
+}
+.hcal-sum-item.strong {
+  border-color: var(--brand-300);
+  background: var(--brand-soft);
+}
+.hcal-sum-item.strong b {
+  color: var(--brand-700);
+}
+.hcal-sum-item.strong svg {
+  color: var(--brand-600);
+}
+
+/* ---- The grid ---- */
+.hcal {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: opacity 0.15s ease;
+}
+.hcal.is-loading {
+  opacity: 0.55;
+}
+.hcal-week,
+.hcal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+}
+.hcal-wd {
+  padding: 0 2px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  /* Structural chrome, but 10.5px uppercase — --text-3 on --bg is 2.9:1. */
+  color: var(--text-2);
+}
+.hcal-skel {
+  min-height: 116px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  animation: hcal-pulse 1.5s ease-in-out infinite;
+}
+@keyframes hcal-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 0.95;
+  }
+}
+
+.hcal-cell {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-height: 116px;
+  padding: 7px 8px;
+  overflow: hidden;
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  transition:
+    border-color 0.13s ease,
+    transform 0.13s ease;
+}
+.hcal-cell.pad {
+  border-color: transparent;
+  background: transparent;
+  cursor: default;
+  opacity: 0.4;
+}
+/* An empty day is not an error — it is simply quiet. */
+.hcal-cell.quiet {
+  background: var(--surface-2);
+  /* Not transparent: --surface-2 on --bg is 1.03:1 in light, so a quiet
+     in-month day would be indistinguishable from an out-of-month pad and the
+     month boundary would vanish. The edge is what makes it a day at all. */
+  border-color: var(--border);
+}
+/* Calm, not invisible: an empty day drops the border and the body, but its
+   number stays readable (--text-3 on --surface-2 is only 2.9:1). */
+.hcal-cell.quiet .hcal-num {
+  color: var(--text-2);
+  font-weight: 600;
+}
+.hcal-cell.live-day {
+  border-color: var(--border-strong);
+  /* Busy days sit forward: the shadow grows with the day's intensity. */
+  box-shadow: 0 calc(var(--hcal-w, 0) * 3px) calc(var(--hcal-w, 0) * 12px)
+    rgba(24, 39, 75, calc(var(--hcal-w, 0) * 0.12));
+}
+.hcal-cell.live-day:hover {
+  border-color: var(--brand-400);
+  transform: translateY(-1px);
+}
+.hcal-cell.quiet:hover {
+  border-color: var(--border-strong);
+}
+.hcal-cell.today {
+  border-color: var(--brand-400);
+}
+.hcal-cell.active-set {
+  border-color: var(--success);
+}
+.hcal-cell.selected {
+  outline: 2px solid var(--brand-500);
+  outline-offset: -2px;
+}
+.hcal-cell:focus-visible {
+  outline: 2px solid var(--brand-500);
+  outline-offset: -2px;
+}
+/* The wash IS the day's weight — a brand tint scaled by its intensity. */
+.hcal-wash {
+  position: absolute;
+  inset: 0;
+  background: var(--brand-500);
+  opacity: calc(var(--hcal-w, 0) * 0.15);
+  pointer-events: none;
+}
+
+.hcal-top {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.hcal-num {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1;
+}
+.hcal-today-dot {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--brand-500);
+  color: #fff;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+/* The two status glyphs sit ON the day's wash, whose strength varies with the
+   day. Giving them the surface as a chip keeps them legible at every
+   intensity instead of fading into a heavy tint. */
+.hcal-flame,
+.hcal-src {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--surface);
+}
+.hcal-flame {
+  color: var(--warning);
+}
+.hcal-src {
+  margin-left: auto;
+  color: var(--text-3);
+}
+.hcal-src.live {
+  color: var(--success);
+}
+.hcal-src.snapshot {
+  color: var(--brand-600);
+}
+.hcal-src.import {
+  color: var(--text-3);
+}
+
+.hcal-body {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.hcal-imp {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  font-size: 10.5px;
+  color: var(--text-2);
+}
+.hcal-imp svg {
+  flex-shrink: 0;
+  color: var(--text-3);
+}
+.hcal-imp b {
+  font-weight: 650;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hcal-imp em {
+  font-style: normal;
+  flex-shrink: 0;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--text-2);
+  font-size: 9.5px;
+  font-weight: 700;
+}
+.hcal-imp.snap svg {
+  color: var(--brand-600);
+}
+.hcal-file {
+  font-size: 9.5px;
+  /* One level up from the usual meta grey: this line only ever renders on a
+     day that has a wash behind it, where --text-3 drops under 3:1. */
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hcal-money {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+.hcal-bar {
+  display: block;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  overflow: hidden;
+}
+.hcal-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--success);
+}
+.hcal-stats {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+.hcal-stats em {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-style: normal;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+.hcal-stats em svg {
+  color: var(--text-2);
+}
+/* Nothing captured this dataset's progress — say so rather than draw a 0% bar.
+   This is the ONLY data line on a source:'import' day and it sits on the
+   intensity wash, where --text-3 drops to 2.5:1. Same reasoning as .hcal-file. */
+.hcal-unknown {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--text-2);
+}
+.hcal-quiet-mark {
+  flex: 1;
+}
+
+/* ---- The day panel ---- */
+.hcal-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 13px 15px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--brand-500);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.hcal-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+}
+.hcal-panel-date {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+}
+.hcal-panel-date svg {
+  color: var(--text-3);
+}
+.hcal-src-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--text-2);
+  font-size: 10.5px;
+  font-weight: 700;
+}
+.hcal-src-chip.live {
+  background: var(--success-bg);
+  /* Carries the word "Live", not a glyph — --success is only 3.0:1 here. */
+  color: var(--success-strong);
+}
+.hcal-src-chip.snapshot {
+  background: var(--brand-soft);
+  color: var(--brand-700);
+}
+.hcal-panel-event {
+  font-size: 12px;
+  color: var(--text-3);
+}
+.hcal-panel-close {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  background: none;
+  color: var(--text-3);
+  cursor: pointer;
+}
+.hcal-panel-close:hover {
+  border-color: var(--border);
+  color: var(--text);
+}
+.hcal-panel-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 2px;
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+
+.hcal-panel-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+  gap: 8px;
+}
+.hcal-panel-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.hcal-panel-stat svg {
+  color: var(--text-3);
+}
+.hcal-panel-stat b {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.hcal-panel-stat em {
+  font-style: normal;
+  font-size: 11px;
+  /* These label the panel's six headline numbers — load-bearing, not meta. */
+  color: var(--text-2);
+}
+.hcal-panel-stat.strong {
+  border-color: var(--brand-300);
+  background: var(--brand-soft);
+}
+.hcal-panel-stat.strong b {
+  color: var(--brand-700);
+}
+.hcal-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+.hcal-note svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.hcal-panel-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.hcal-panel-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-2);
+}
+.hcal-panel-title svg {
+  color: var(--text-3);
+}
+.hcal-imp-row,
+.hcal-snap-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.hcal-imp-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--text);
+  min-width: 0;
+}
+.hcal-imp-name svg {
+  color: var(--text-3);
+  flex-shrink: 0;
+}
+.hcal-imp-file {
+  flex: 1;
+  min-width: 90px;
+  font-size: 11px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hcal-imp-counts {
+  display: inline-flex;
+  gap: 9px;
+  flex-wrap: wrap;
+}
+.hcal-imp-counts em {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+.hcal-imp-when {
+  font-size: 11px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+.hcal-imp-value {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text);
+}
+.hcal-snap-row .hcal-imp-when {
+  flex: 1;
+}
+.hcal-snap-acts {
+  display: inline-flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.hcal-breaks {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.hcal-break {
+  display: grid;
+  grid-template-columns: 74px minmax(60px, 1fr) 66px 68px 84px;
+  align-items: center;
+  gap: 9px;
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+.hcal-break-no {
+  font-weight: 700;
+  color: var(--text);
+}
+.hcal-break-bar {
+  display: block;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  overflow: hidden;
+}
+.hcal-break-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--success);
+}
+.hcal-break-nums,
+.hcal-break-cust {
+  font-variant-numeric: tabular-nums;
+}
+.hcal-break-value {
+  text-align: right;
+  font-weight: 700;
+  color: var(--text);
+}
+
+/* Dark: the wash and the busy-day shadow both need more presence on a dark
+   surface, and the flat tint alone would disappear. */
+:root[data-theme='dark'] .hcal-wash {
+  opacity: calc(var(--hcal-w, 0) * 0.34);
+}
+:root[data-theme='dark'] .hcal-cell.live-day {
+  box-shadow: 0 calc(var(--hcal-w, 0) * 3px) calc(var(--hcal-w, 0) * 14px)
+    rgba(0, 0, 0, calc(var(--hcal-w, 0) * 0.45));
+}
+:root[data-theme='dark'] .hcal-today-dot {
+  color: var(--bg);
+}
+
+@media (max-width: 1100px) {
+  .hcal-cell {
+    min-height: 104px;
+  }
+  .hcal-file {
+    display: none;
+  }
+  .hcal-break {
+    grid-template-columns: 66px minmax(50px, 1fr) 60px 76px;
+  }
+  .hcal-break-cust {
+    display: none;
+  }
+}
+
+/* ==========================================================================
+   Break assignments — "who is sorting break #12"
+   Admin › Break assignments owns the controls; the Checker only shows the
+   result. Both surfaces share the chip/avatar language below so a face reads
+   the same wherever it appears.
+   ========================================================================== */
+
+/* ---- Admin: the roster read the other way round ---- */
+.ba-roster {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  padding: 13px 14px;
+  margin-bottom: 16px;
+}
+.ba-roster-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 11px;
+}
+.ba-roster-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--text);
+}
+.ba-roster-title svg {
+  color: var(--text-3);
+}
+.ba-roster-note {
+  font-size: 12px;
+  color: var(--text-3);
+}
+.ba-roster-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 8px;
+}
+.ba-person {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  min-width: 0;
+}
+.ba-person.gone {
+  border-color: var(--danger);
+  background: var(--danger-bg);
+}
+.ba-person-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.ba-person-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ba-person-breaks {
+  font-size: 11.5px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ba-person-count {
+  margin-left: auto;
+  flex-shrink: 0;
+  min-width: 24px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--brand-soft);
+  color: var(--brand-700);
+  font-size: 11.5px;
+  font-weight: 700;
+  text-align: center;
+}
+
+/* ---- Admin: toolbar ---- */
+.ba-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.ba-search {
+  flex: 1 1 280px;
+  max-width: 420px;
+  position: relative;
+}
+.ba-search input {
+  padding-right: 32px;
+}
+.ba-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 12.5px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition:
+    border-color 0.14s ease,
+    background 0.14s ease,
+    color 0.14s ease;
+}
+.ba-filter span {
+  color: var(--text-3);
+  font-weight: 700;
+}
+.ba-filter:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.ba-filter.active {
+  background: var(--brand-soft);
+  border-color: var(--brand-300);
+  color: var(--brand-700);
+}
+.ba-filter.active span {
+  color: var(--brand-700);
+}
+.ba-total {
+  font-size: 12.5px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+.ba-total b {
+  color: var(--text);
+  font-weight: 700;
+}
+.ba-readonly {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  margin-bottom: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+.ba-readonly svg {
+  color: var(--text-3);
+  flex-shrink: 0;
+}
+.ba-readonly b {
+  color: var(--text);
+}
+
+/* ---- Admin: one break, and who is sorting it ---- */
+.ba-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(268px, 1fr));
+  gap: 12px;
+  /* Crew sizes differ per break; without this a one-assignee card stretches to
+     match a four-assignee neighbour and trails ~110px of empty surface. */
+  align-items: start;
+}
+.ba-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 13px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  transition:
+    border-color 0.14s ease,
+    box-shadow 0.14s ease,
+    opacity 0.14s ease;
+}
+.ba-card:hover {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-md);
+}
+.ba-card.busy {
+  opacity: 0.62;
+}
+.ba-card[data-bstatus='picking'] {
+  border-left-color: var(--brand-500);
+}
+.ba-card[data-bstatus='packed'] {
+  border-left-color: var(--success);
+}
+.ba-card[data-bstatus='shipped'] {
+  border-left-color: var(--info);
+}
+.ba-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ba-num {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.ba-num svg {
+  color: var(--text-3);
+}
+.ba-headcount {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--brand-soft);
+  color: var(--brand-700);
+  font-size: 11.5px;
+  font-weight: 700;
+}
+.ba-headcount.none {
+  background: var(--surface-3);
+  color: var(--text-2);
+}
+.ba-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.ba-meta span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.ba-meta svg {
+  color: var(--text-3);
+}
+.ba-value {
+  margin-left: auto;
+  font-weight: 700;
+  color: var(--text);
+}
+.ba-prog {
+  height: 5px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  overflow: hidden;
+}
+.ba-prog-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--brand-500);
+  transition: width 0.18s ease;
+}
+.ba-nobody {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 600;
+}
+.ba-nobody svg {
+  /* Same reason as .ba-chip-x — --surface-2 needs --text-2 to stay legible. */
+  color: var(--text-2);
+}
+.ba-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.ba-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px 3px 3px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  max-width: 100%;
+}
+.ba-chip .avatar {
+  width: 22px;
+  height: 22px;
+  font-size: 9.5px;
+}
+.ba-chip-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 148px;
+}
+.ba-chip.gone {
+  border-color: var(--danger);
+  background: var(--danger-bg);
+}
+/* The name stays --text: --danger on --danger-bg is only 3.49:1 in the light
+   theme. The border, the tint and the .ba-gone-face glyph carry the meaning. */
+.ba-chip-warn {
+  display: inline-flex;
+  color: var(--danger);
+  flex-shrink: 0;
+}
+/* Stands in for the Avatar when the employee record is gone. An orphaned row
+   has no name, so Avatar would monogram the uuid — a person called "7F". */
+.ba-gone-face {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  color: var(--danger);
+  background: var(--surface-2);
+  border: 1px dashed var(--danger);
+  box-sizing: border-box;
+}
+.ba-chip-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-right: 2px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  /* --text-2, not --text-3: this glyph sits on a --surface-2 chip, where
+     --text-3 falls to 2.94:1 in the light theme. */
+  color: var(--text-2);
+  cursor: pointer;
+  transition:
+    background 0.13s ease,
+    color 0.13s ease;
+}
+.ba-chip-x:hover:not(:disabled) {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+.ba-chip-x:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.ba-assign {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ba-picker {
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  font-size: 12.5px;
+}
+.ba-spin {
+  flex-shrink: 0;
+  width: 15px;
+  height: 15px;
+}
+
+/* ---- Checker: who owns this break (read-only) ---- */
+.chk-crew {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.chk-crew-faces {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+.chk-crew-faces .avatar {
+  width: 22px;
+  height: 22px;
+  font-size: 9.5px;
+  border: 2px solid var(--surface);
+  box-sizing: content-box;
+}
+.chk-crew-faces .avatar + .avatar {
+  /* Avatar falls back to two-letter initials whenever avatarUrl is null, which
+     is the default — a photo-stack overlap would cover the second glyph and
+     every face but the last would be unreadable. Overlap just enough to read
+     as a stack. */
+  margin-left: -4px;
+}
+.chk-crew-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chk-crew-more {
+  color: var(--text-3);
+  font-weight: 700;
+}
+
+.chk-crew-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 9px 12px;
+  margin-bottom: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.chk-crew-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+.chk-crew-label svg {
+  /* --surface-2 again: --text-3 is 2.94:1 here in the light theme. */
+  color: var(--text-2);
+}
+.chk-crew-empty {
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.chk-crew-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px 3px 3px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+.chk-crew-chip .avatar {
+  width: 22px;
+  height: 22px;
+  font-size: 9.5px;
+}
+.chk-crew-chip.gone {
+  border-color: var(--danger);
+  background: var(--danger-bg);
+}
+.chk-crew-chip.gone svg {
+  color: var(--danger);
+}
+
+/* ---- Dark theme ----
+   The tinted surfaces above are token-driven and already flip, but the two
+   soft washes (--danger-bg / --brand-soft) sit very close to --surface in
+   dark, so the chips get their contrast from a border and a brighter text
+   colour instead of the fill. */
+:root[data-theme='dark'] .ba-person.gone,
+:root[data-theme='dark'] .ba-chip.gone,
+:root[data-theme='dark'] .chk-crew-chip.gone {
+  background: var(--surface-3);
+  border-color: var(--danger);
+}
+:root[data-theme='dark'] .ba-headcount {
+  background: var(--brand-soft-2);
+  color: var(--brand-600);
+}
+:root[data-theme='dark'] .ba-person-count,
+:root[data-theme='dark'] .ba-filter.active span,
+:root[data-theme='dark'] .ba-filter.active {
+  color: var(--brand-600);
+}
+:root[data-theme='dark'] .ba-person-count {
+  background: var(--brand-soft-2);
+}
+:root[data-theme='dark'] .ba-chip-x:hover:not(:disabled) {
+  background: var(--surface-3);
+}
+
+@media (max-width: 1100px) {
+  .ba-grid {
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  }
+  .ba-roster-note {
+    display: none;
+  }
 }

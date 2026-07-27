@@ -20,6 +20,8 @@ import type Database from 'better-sqlite3'
 import type {
   ShipBatchUrl,
   ShipBreak,
+  ShipBreakAssignment,
+  ShipBreakAssignmentInput,
   ShipBreakAudit,
   ShipBreakCollision,
   ShipBreakStatus,
@@ -158,6 +160,16 @@ interface SnapshotRow {
   name: string | null
   created_at: string | null
   payload: string | null
+}
+
+interface BreakAssignmentRow {
+  id: string
+  break_id: string
+  break_number: number | null
+  employee_id: string
+  assigned_at: string | null
+  assigned_by: string | null
+  note: string | null
 }
 
 // ---------------------------------------------------------------------------
@@ -322,6 +334,18 @@ function toImportRecord(r: ImportRow): ShipImportRecord {
     createdAt: str(r.created_at),
     counts,
     carriedForward: blob.carriedForward === true
+  }
+}
+
+function toBreakAssignment(r: BreakAssignmentRow): ShipBreakAssignment {
+  return {
+    id: r.id,
+    breakId: str(r.break_id),
+    breakNumber: r.break_number === null || r.break_number === undefined ? null : r.break_number,
+    employeeId: str(r.employee_id),
+    assignedAt: str(r.assigned_at),
+    assignedBy: r.assigned_by ?? null,
+    note: r.note && r.note.trim() !== '' ? r.note : null
   }
 }
 
@@ -699,6 +723,109 @@ export function recomputeBreakStatus(breakId: string): ShipBreak | null {
 }
 
 // ---------------------------------------------------------------------------
+// Break assignments (v17) — who is sorting which break
+// ---------------------------------------------------------------------------
+
+const ASSIGNMENT_SELECT = `
+  SELECT id, break_id, break_number, employee_id, assigned_at, assigned_by, note
+  FROM ship_break_assignments
+`
+
+/** Oldest first, so a break card reads in the order people were put on it. */
+const ASSIGNMENT_ORDER = `ORDER BY assigned_at ASC, rowid ASC`
+
+export function listShipBreakAssignments(): ShipBreakAssignment[] {
+  const rows = getDb()
+    .prepare(`${ASSIGNMENT_SELECT} ${ASSIGNMENT_ORDER}`)
+    .all() as BreakAssignmentRow[]
+  return rows.map(toBreakAssignment)
+}
+
+export function listShipBreakAssignmentsByBreak(breakId: string): ShipBreakAssignment[] {
+  const rows = getDb()
+    .prepare(`${ASSIGNMENT_SELECT} WHERE break_id = ? ${ASSIGNMENT_ORDER}`)
+    .all(breakId) as BreakAssignmentRow[]
+  return rows.map(toBreakAssignment)
+}
+
+export function getShipBreakAssignment(id: string): ShipBreakAssignment | null {
+  const row = getDb().prepare(`${ASSIGNMENT_SELECT} WHERE id = ?`).get(id) as
+    | BreakAssignmentRow
+    | undefined
+  return row ? toBreakAssignment(row) : null
+}
+
+export function findShipBreakAssignment(
+  breakId: string,
+  employeeId: string
+): ShipBreakAssignment | null {
+  const row = getDb()
+    .prepare(`${ASSIGNMENT_SELECT} WHERE break_id = ? AND employee_id = ?`)
+    .get(breakId, employeeId) as BreakAssignmentRow | undefined
+  return row ? toBreakAssignment(row) : null
+}
+
+export function countShipBreakAssignments(): number {
+  return countOf(getDb(), 'ship_break_assignments')
+}
+
+/**
+ * Put an employee on a break. Idempotent by (break, person): re-assigning the
+ * same person refreshes the stamp and note instead of stacking a duplicate row
+ * on the card — the UNIQUE index makes that the database's rule, not a
+ * caller's discipline.
+ */
+export function assignShipBreak(
+  input: ShipBreakAssignmentInput & { breakNumber: number | null; assignedBy: string | null }
+): ShipBreakAssignment {
+  const breakId = str(input.breakId).trim()
+  const employeeId = str(input.employeeId).trim()
+  const note = str(input.note).trim() || null
+  getDb()
+    .prepare(
+      `INSERT INTO ship_break_assignments
+         (id, break_id, break_number, employee_id, assigned_at, assigned_by, note)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(break_id, employee_id) DO UPDATE
+           SET break_number = excluded.break_number,
+               assigned_at  = excluded.assigned_at,
+               assigned_by  = excluded.assigned_by,
+               note         = excluded.note`
+    )
+    .run(newId(), breakId, input.breakNumber ?? null, employeeId, nowIso(), input.assignedBy, note)
+  const saved = findShipBreakAssignment(breakId, employeeId)
+  if (!saved) throw new Error('The assignment could not be saved.')
+  return saved
+}
+
+export function deleteShipBreakAssignment(id: string): boolean {
+  return getDb().prepare(`DELETE FROM ship_break_assignments WHERE id = ?`).run(id).changes > 0
+}
+
+export function deleteShipBreakAssignmentFor(breakId: string, employeeId: string): boolean {
+  return (
+    getDb()
+      .prepare(`DELETE FROM ship_break_assignments WHERE break_id = ? AND employee_id = ?`)
+      .run(breakId, employeeId).changes > 0
+  )
+}
+
+/**
+ * Drop assignments whose break is no longer in the dataset. Run after every
+ * import and after a dataset clear: assignments deliberately SURVIVE a
+ * re-import (break ids are stable), so pruning is what stops a break that
+ * genuinely went away from leaving a ghost on the Admin board.
+ */
+export function pruneShipBreakAssignments(database?: Database.Database): number {
+  return (database ?? getDb())
+    .prepare(
+      `DELETE FROM ship_break_assignments
+        WHERE break_id NOT IN (SELECT id FROM ship_breaks)`
+    )
+    .run().changes
+}
+
+// ---------------------------------------------------------------------------
 // Import — section 7
 // ---------------------------------------------------------------------------
 
@@ -714,12 +841,19 @@ const DATASET_TABLES = [
   'ship_warnings'
 ] as const
 
-/** Wipe the active dataset (leaves import history, snapshots and settings). */
+/**
+ * Wipe the active dataset (leaves import history, snapshots and settings).
+ *
+ * Break assignments are not in DATASET_TABLES — they are operator state — but
+ * clearing the dataset removes every break, so the prune takes them all with it
+ * rather than leaving orphans pointing at breaks that no longer exist.
+ */
 export function clearShipDataset(): void {
   const database = getDb()
   database.transaction(() => {
     for (const t of DATASET_TABLES) database.prepare(`DELETE FROM ${t}`).run()
     database.prepare(`DELETE FROM ship_event WHERE id = 1`).run()
+    pruneShipBreakAssignments(database)
   })()
 }
 
@@ -933,6 +1067,10 @@ export function importDataset(
     if (sameEvent) {
       carryForwardOperatorState(database, prevShipments, prevSlots, prevBreaks)
     }
+
+    // Break assignments survive an import (break ids are stable), but a break
+    // that is no longer in the dataset must not keep one.
+    pruneShipBreakAssignments(database)
 
     // --- 4. append the import-history row ---------------------------------
     database

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ShipBreakStatus } from '@shared/shippingTypes'
 import { SHIP_BREAK_STATUSES } from '@shared/shippingTypes'
 import type {
+  ShipBreakAssignee,
   ShipBreakDetail,
   ShipBreakSlotRow,
   ShipBreakSummary,
@@ -14,7 +15,7 @@ import { api } from '../../lib/api'
 import { formatDateTime, formatMoney } from '../../lib/format'
 import { Icon } from '../../components/Icon'
 import { useToast } from '../../components/Toast'
-import { Button, CenterLoader, EmptyState, Modal, Select } from '../../components/ui'
+import { Avatar, Button, CenterLoader, EmptyState, Modal, Select } from '../../components/ui'
 
 /**
  * Checker tab — the pick list, grouped BY BREAK (architecture doc section 5).
@@ -510,6 +511,20 @@ function stripSlots(detail: ShipBreakDetail): ShipBreakSummary {
   return summary
 }
 
+/**
+ * What to print for an assignee. An orphaned row carries the raw employee id in
+ * `name` (the record is gone), which is noise on a pick list — so it reads
+ * "Removed employee" and the id stays in the hover title.
+ */
+function crewLabel(a: ShipBreakAssignee): string {
+  return a.found ? a.name : 'Removed employee'
+}
+
+/** "Maya Ortiz, Dev Patel" — the hover title for a crowded assignee strip. */
+function crewNames(assignees: ShipBreakAssignee[]): string {
+  return assignees.map(crewLabel).join(', ')
+}
+
 // ---------------------------------------------------------------------------
 // One break in the grid
 // ---------------------------------------------------------------------------
@@ -577,6 +592,30 @@ function BreakCard({
         )}
         <span className="chk-card-value mono">{formatMoney(summary.value)}</span>
       </div>
+
+      {/* Who is sorting this break. Assignments are made in Admin › Break
+          assignments; the Checker only shows them, so a picker can spot their
+          own work at a glance. Nothing is drawn when nobody is on the break —
+          an absent strip already reads as "unassigned". */}
+      {summary.assignees.length > 0 && (
+        <div className="chk-crew" title={`Sorting this break: ${crewNames(summary.assignees)}`}>
+          {/* One face, then a count. Four faces beside "Maya Ortiz +5" makes a
+              reader who counts faces disagree with the number beside them. */}
+          <span className="chk-crew-faces">
+            <Avatar
+              text={summary.assignees[0].initials}
+              src={summary.assignees[0].avatarUrl}
+              small
+            />
+          </span>
+          <span className="chk-crew-name">
+            {crewLabel(summary.assignees[0])}
+            {summary.assignees.length > 1 && (
+              <span className="chk-crew-more"> +{summary.assignees.length - 1}</span>
+            )}
+          </span>
+        </div>
+      )}
 
       {/* The fidelity audit — how much of the league slate this break captured. */}
       {audit ? (
@@ -709,6 +748,36 @@ function BreakDetailView({
           </span>
         </div>
         <span className="chk-detail-value mono">{formatMoney(detail.value)}</span>
+      </div>
+
+      {/* Who owns this break. Read-only here on purpose — the assignment
+          framework lives in Admin › Break assignments. */}
+      <div className="chk-crew-row">
+        <span className="chk-crew-label">
+          <Icon name="UserCheck" size={14} />
+          Sorting
+        </span>
+        {detail.assignees.length === 0 ? (
+          <span className="chk-crew-empty">
+            Nobody is assigned yet — breaks are handed out in Admin › Break assignments.
+          </span>
+        ) : (
+          detail.assignees.map((a) => (
+            <span
+              key={a.id}
+              className={`chk-crew-chip ${a.found ? '' : 'gone'}`}
+              title={
+                a.found
+                  ? `Assigned ${formatDateTime(a.assignedAt)}${a.note ? ` · ${a.note}` : ''}`
+                  : `This employee record has been removed (${a.employeeId}).`
+              }
+            >
+              <Avatar text={a.initials} src={a.avatarUrl} small />
+              {!a.found && <Icon name="AlertTriangle" size={12} />}
+              {crewLabel(a)}
+            </span>
+          ))
+        )}
       </div>
 
       <div className="chk-actions">

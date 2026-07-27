@@ -70,7 +70,17 @@ export function AppShell(): JSX.Element {
     return () => window.removeEventListener('rmops:check-updates', handler)
   }, [])
 
+  // Modules live in workspaces, and `visible` is filtered by the active one —
+  // so setting activeId alone silently no-ops when the target is in the OTHER
+  // workspace (the render chain falls through to Home). Cross-workspace links
+  // switch the sidebar first, which is what "go to that screen" has to mean.
   const navigate = (id: string): void => {
+    const target = MODULES.find((m) => m.id === id)
+    const targetWorkspace: WorkspaceId = target?.workspace ?? 'ops'
+    if (target && targetWorkspace !== workspace) {
+      setWorkspace(targetWorkspace)
+      localStorage.setItem('rmops.workspace', targetWorkspace)
+    }
     setActiveId(id)
     setSearch('')
   }

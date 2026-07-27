@@ -110,6 +110,13 @@ import {
   FileText,
   User,
   Scale,
+  // --- History calendar ---
+  ChevronLeft,
+  CalendarRange,
+  Flame,
+  // --- Break assignments ---
+  UserCheck,
+  UserMinus,
   type LucideIcon
 } from 'lucide-react'
 
@@ -224,7 +231,14 @@ const MAP: Record<string, LucideIcon> = {
   FileDown,
   FileText,
   User,
-  Scale
+  Scale,
+  // --- History calendar ---
+  ChevronLeft,
+  CalendarRange,
+  Flame,
+  // --- Break assignments ---
+  UserCheck,
+  UserMinus
 }
 
 export function Icon({

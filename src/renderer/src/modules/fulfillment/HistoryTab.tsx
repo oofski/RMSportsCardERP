@@ -3,6 +3,7 @@ import type { ShipImportRecord, ShipSnapshotSummary } from '@shared/shippingType
 import type { ShipExportKind, ShipSnapshotContents } from '@shared/shippingViews'
 import { SHIP_EXPORT_KINDS, SHIP_EXPORT_LABELS } from '@shared/shippingViews'
 import type { ShipTabProps } from './ShippingModule'
+import { ShippingCalendar } from './ShippingCalendar'
 import { api } from '../../lib/api'
 import { formatDateTime, formatMoney } from '../../lib/format'
 import { Icon } from '../../components/Icon'
@@ -12,7 +13,12 @@ import { Button, CenterLoader, EmptyState, Field, Input, Modal } from '../../com
 /**
  * History tab — architecture doc section 7.
  *
- * Three things live here, and the difference between them is the whole point:
+ * Four things live here, and the difference between them is the whole point:
+ *
+ *  - **The activity calendar** is the month view over the two below: one cell
+ *    per day, derived by the main process from the same imports and snapshots
+ *    (there is no rollup table), showing what ran, what it was worth and how far
+ *    it got. It joins the lists — it does not replace them.
  *
  *  - **Import history** is a log. One active dataset exists at a time; every
  *    import overwrites it and appends a nameable row here recording what came in
@@ -72,6 +78,10 @@ export function HistoryTab({ summary, canManage, onChanged, onGoTo }: ShipTabPro
   const [openSnapshot, setOpenSnapshot] = useState<string | null>(null)
   const [snapshotBody, setSnapshotBody] = useState<ShipSnapshotContents | null>(null)
   const [snapshotLoading, setSnapshotLoading] = useState(false)
+  // Bumped after any import/snapshot mutation. The calendar derives its month
+  // from those same rows, so it has to re-read when one is renamed or deleted —
+  // it owns its own fetch, and this is how it is told the ground moved.
+  const [calendarVersion, setCalendarVersion] = useState(0)
 
   const onChangedRef = useRef(onChanged)
   onChangedRef.current = onChanged
@@ -81,6 +91,12 @@ export function HistoryTab({ summary, canManage, onChanged, onGoTo }: ShipTabPro
     setImports(i)
     setSnapshots(s)
   }, [])
+
+  /** Refetch the lists AND invalidate the calendar — used by every mutation. */
+  const reloadAll = useCallback(async () => {
+    await reload()
+    setCalendarVersion((v) => v + 1)
+  }, [reload])
 
   useEffect(() => {
     let active = true
@@ -147,14 +163,14 @@ export function HistoryTab({ summary, canManage, onChanged, onGoTo }: ShipTabPro
           toast.error(res.error ?? 'Could not create the snapshot.')
           return
         }
-        await reload()
+        await reloadAll()
         setEditing(null)
         toast.success(`Snapshot “${res.data.name}” captured.`)
       } finally {
         setBusy(false)
       }
     },
-    [reload, toast]
+    [reloadAll, toast]
   )
 
   const renameSnapshot = useCallback(
@@ -166,13 +182,13 @@ export function HistoryTab({ summary, canManage, onChanged, onGoTo }: ShipTabPro
           toast.error(res.error ?? 'Could not rename the snapshot.')
           return
         }
-        await reload()
+        await reloadAll()
         setEditing(null)
       } finally {
         setBusy(false)
       }
     },
-    [reload, toast]
+    [reloadAll, toast]
   )
 
   const deleteSnapshot = useCallback(
@@ -185,13 +201,13 @@ export function HistoryTab({ summary, canManage, onChanged, onGoTo }: ShipTabPro
           return
         }
         if (openSnapshot === id) setOpenSnapshot(null)
-        await reload()
+        await reloadAll()
         setEditing(null)
       } finally {
         setBusy(false)
       }
     },
-    [openSnapshot, reload, toast]
+    [openSnapshot, reloadAll, toast]
   )
 
   const renameImport = useCallback(
@@ -203,14 +219,14 @@ export function HistoryTab({ summary, canManage, onChanged, onGoTo }: ShipTabPro
           toast.error(res.error ?? 'Could not rename the import.')
           return
         }
-        await reload()
+        await reloadAll()
         await onChangedRef.current()
         setEditing(null)
       } finally {
         setBusy(false)
       }
     },
-    [reload, toast]
+    [reloadAll, toast]
   )
 
   const deleteImport = useCallback(
@@ -222,18 +238,36 @@ export function HistoryTab({ summary, canManage, onChanged, onGoTo }: ShipTabPro
           toast.error(res.error ?? 'Could not delete the import record.')
           return
         }
-        await reload()
+        await reloadAll()
         await onChangedRef.current()
         setEditing(null)
       } finally {
         setBusy(false)
       }
     },
-    [reload, toast]
+    [reloadAll, toast]
   )
+
+  /**
+   * "Jump to that snapshot" from a calendar day: expand the capture in the list
+   * below and bring it into view, so the click lands somewhere visible rather
+   * than silently opening a row three screens down.
+   */
+  const jumpToSnapshot = useCallback((id: string) => {
+    setOpenSnapshot(id)
+    // One frame later the row is expanded and has its final height.
+    requestAnimationFrame(() => {
+      document
+        .getElementById(`hist-snap-${id}`)
+        ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    })
+  }, [])
 
   const activeImportId = summary?.lastImport?.id ?? null
   const hasDataset = !!summary?.hasDataset
+  // The calendar shows a spinner on the snapshot whose CSV is being written;
+  // the export itself stays owned here, where the file dialog lives.
+  const exportingSnapshotId = exporting?.startsWith('snap:') ? exporting.slice(5) : null
 
   const importTotals = useMemo(() => {
     let cards = 0
@@ -245,37 +279,65 @@ export function HistoryTab({ summary, canManage, onChanged, onGoTo }: ShipTabPro
     return { cards, value }
   }, [imports])
 
-  if (loading) return <CenterLoader />
+  // The calendar owns a separate read (api.shipping.calendar) and its own error
+  // handling, so it renders above the loading/error branches rather than inside
+  // them — a slow or failed snapshot list must not take the month view with it.
+  const calendar = (
+    <ShippingCalendar
+      refreshToken={calendarVersion}
+      onOpenSnapshot={jumpToSnapshot}
+      onExportSnapshot={(id) => runExport(`snap:${id}`, 'orders', id)}
+      exportingSnapshotId={exportingSnapshotId}
+      exportBusy={exporting !== null}
+    />
+  )
+
+  if (loading) {
+    return (
+      <div className="ship-page hist-page">
+        {calendar}
+        <CenterLoader />
+      </div>
+    )
+  }
   // A failed load is a dead end otherwise — show what happened and offer a retry.
   if (loadError) {
     return (
-      <EmptyState
-        icon="AlertTriangle"
-        title="Could not load shipping data"
-        message={loadError}
-        action={
-          <Button
-            variant="primary"
-            icon="RefreshCw"
-            onClick={() => {
-              setLoadError(null)
-              setLoading(true)
-              void reload()
-                .catch((err) =>
-                  setLoadError(err instanceof Error ? err.message : 'Could not load shipping data.')
-                )
-                .finally(() => setLoading(false))
-            }}
-          >
-            Try again
-          </Button>
-        }
-      />
+      <div className="ship-page hist-page">
+        {calendar}
+        <EmptyState
+          icon="AlertTriangle"
+          title="Could not load shipping data"
+          message={loadError}
+          action={
+            <Button
+              variant="primary"
+              icon="RefreshCw"
+              onClick={() => {
+                setLoadError(null)
+                setLoading(true)
+                void reload()
+                  .catch((err) =>
+                    setLoadError(
+                      err instanceof Error ? err.message : 'Could not load shipping data.'
+                    )
+                  )
+                  .finally(() => setLoading(false))
+              }}
+            >
+              Try again
+            </Button>
+          }
+        />
+      </div>
     )
   }
 
   return (
     <div className="ship-page hist-page">
+      {/* ---- The month view over everything below ---- */}
+      {calendar}
+
       {/* ---- Exports from the live dataset ---- */}
       <section className="hist-section">
         <div className="hist-head">
@@ -362,7 +424,11 @@ export function HistoryTab({ summary, canManage, onChanged, onGoTo }: ShipTabPro
             {snapshots.map((s) => {
               const open = openSnapshot === s.id
               return (
-                <div className={`hist-row ${open ? 'open' : ''}`} key={s.id}>
+                <div
+                  className={`hist-row ${open ? 'open' : ''}`}
+                  key={s.id}
+                  id={`hist-snap-${s.id}`}
+                >
                   <div className="hist-row-main">
                     <button
                       className="hist-row-name"

@@ -499,6 +499,37 @@ function migrate(database: Database.Database): void {
       key   TEXT PRIMARY KEY,
       value TEXT
     );
+
+    -- v17: who is sorting which break ("who is doing break #12").
+    --
+    -- Operator state, NOT dataset rows: an import does NOT wipe this table, it
+    -- only PRUNES rows whose break_id no longer exists in ship_breaks. Break ids
+    -- are 'break_<n>' and stable across re-imports, so an assignment survives a
+    -- re-upload of the same show and disappears when its break genuinely does.
+    --
+    -- No foreign keys, matching the rest of the ship_* tables (the import
+    -- rewrites ship_breaks wholesale). employee_id is likewise unconstrained;
+    -- the domain layer resolves it and marks an orphaned row as not-found rather
+    -- than losing the record.
+    --
+    -- break_number is denormalised so a pruned row still reads as "break 12".
+    CREATE TABLE IF NOT EXISTS ship_break_assignments (
+      id           TEXT PRIMARY KEY,
+      break_id     TEXT NOT NULL,
+      break_number INTEGER,
+      employee_id  TEXT NOT NULL,
+      assigned_at  TEXT NOT NULL,
+      assigned_by  TEXT,
+      note         TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_ship_break_assign_break
+      ON ship_break_assignments (break_id);
+    CREATE INDEX IF NOT EXISTS idx_ship_break_assign_employee
+      ON ship_break_assignments (employee_id);
+    -- One row per (break, person): re-assigning somebody updates their row
+    -- instead of stacking duplicates on the card.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_ship_break_assign_pair
+      ON ship_break_assignments (break_id, employee_id);
   `)
 
   if (getMeta(database, 'schema_version') === null) {
@@ -589,7 +620,17 @@ function migrate(database: Database.Database): void {
   // in the schema-init block above. Purely additive — no existing table changes,
   // so an upgrading v15 database gains the tables empty and the Upload tab is
   // the only thing that fills them.
-  setMeta(database, 'schema_version', '16')
+  //
+  // v17: break assignments (ship_break_assignments + its indexes), also created
+  // idempotently in the schema-init block above. Purely additive.
+  //
+  // The History calendar shipped in v17 too and deliberately adds NO table: a
+  // day's imports come from ship_imports.created_at, its fulfilment progress
+  // from the live dataset (for the day still loaded) or from that day's newest
+  // ship_snapshots capture. A per-day rollup would only duplicate rows that
+  // already exist — and would drift the moment a snapshot or import is renamed
+  // or deleted. See db/shippingCalendar.ts.
+  setMeta(database, 'schema_version', '17')
 
   // Seed the product catalog once, then apply the on-hand snapshot once.
   seedCatalogIfNeeded(database)

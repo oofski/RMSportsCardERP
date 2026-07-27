@@ -142,10 +142,18 @@ export const IPC = {
   shipTrackingNumbers: 'shipping:shipments:tracking-numbers',
   shipOpenTracking: 'shipping:tracking:open',
   shipOpenBatch: 'shipping:tracking:open-batch',
+  // Break assignments (v17) — who is sorting which break. Writes need
+  // 'shipping.manage'; the Checker's read only needs 'module.fulfillment'.
+  shipAssignmentsList: 'shipping:assignments:list',
+  shipAssignmentBoard: 'shipping:assignments:board',
+  shipAssign: 'shipping:assignments:assign',
+  shipUnassign: 'shipping:assignments:unassign',
   // Sales / ledger
   shipSales: 'shipping:sales',
   shipLedger: 'shipping:ledger',
   // History
+  shipCalendar: 'shipping:calendar',
+  shipCalendarDay: 'shipping:calendar:day',
   shipImportsList: 'shipping:imports:list',
   shipImportRename: 'shipping:imports:rename',
   shipImportDelete: 'shipping:imports:delete',

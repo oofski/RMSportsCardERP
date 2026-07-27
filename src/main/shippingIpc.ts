@@ -42,10 +42,15 @@ import {
 import {
   SHIP_EXPORT_KINDS,
   SHIP_STAGES,
+  type ShipAssignmentBoard,
+  type ShipBreakAssignee,
+  type ShipBreakAssignmentUpdate,
   type ShipBreakDetail,
   type ShipBreakSummary,
   type ShipBulkStatusEntry,
   type ShipBulkStatusResult,
+  type ShipCalendarDayDetail,
+  type ShipCalendarMonth,
   type ShipCustomerRow,
   type ShipExportKind,
   type ShipFulfillmentStage,
@@ -77,17 +82,21 @@ import {
   setShipSettings
 } from './db/shipping'
 import {
+  assignBreak,
   buildCsv,
   buildSnapshotCsv,
   clearBreak,
   createSnapshot,
+  getAssignmentBoard,
   getBreak,
   getEvent,
   getLedger,
   getOrder,
   getSales,
   getWorkspaceSummary,
+  listAllBreakAssignees,
   listBatchUrls,
+  listBreakAssignees,
   listBreakAudit,
   listBreaks,
   listCustomerRows,
@@ -109,8 +118,10 @@ import {
   setShipmentStatus,
   setTeamSlotChecked,
   setTeamSlotTopSleeved,
+  unassignBreak,
   bulkSetShipmentStatusByTracking
 } from './db/shippingDomain'
+import { getShipCalendarDay, listShipCalendar } from './db/shippingCalendar'
 
 // ---------------------------------------------------------------------------
 // Guards
@@ -295,6 +306,42 @@ export function registerShippingIpc(): void {
   )
   ipcMain.handle(IPC.shipImportsList, (): ShipImportRecord[] =>
     can('module.fulfillment') ? listShipImports() : []
+  )
+  /**
+   * A month of history. `null` (rather than an empty month) when the caller has
+   * no access, matching every other read here, so the UI shows its permission
+   * empty state instead of an eerily blank calendar.
+   */
+  ipcMain.handle(
+    IPC.shipCalendar,
+    (_e, payload?: { year?: number; month?: number }): ShipCalendarMonth | null => {
+      if (!can('module.fulfillment')) return null
+      const now = new Date()
+      const year = Number(payload?.year)
+      const month = Number(payload?.month)
+      return listShipCalendar(
+        Number.isFinite(year) ? year : now.getFullYear(),
+        Number.isFinite(month) ? month : now.getMonth() + 1
+      )
+    }
+  )
+  ipcMain.handle(IPC.shipCalendarDay, (_e, date: string): ShipCalendarDayDetail | null => {
+    if (!can('module.fulfillment')) return null
+    // A malformed date is a caller bug, not something to spin forever on.
+    try {
+      return getShipCalendarDay(str(date))
+    } catch {
+      return null
+    }
+  })
+  ipcMain.handle(IPC.shipAssignmentsList, (_e, breakId?: string): ShipBreakAssignee[] => {
+    if (!can('module.fulfillment')) return []
+    const id = str(breakId).trim()
+    return id ? listBreakAssignees(id) : listAllBreakAssignees()
+  })
+  /** The Admin tab's one read. The roster rides along only for a manager. */
+  ipcMain.handle(IPC.shipAssignmentBoard, (): ShipAssignmentBoard | null =>
+    can('module.fulfillment') ? getAssignmentBoard(can('shipping.manage')) : null
   )
   ipcMain.handle(IPC.shipSnapshotsList, (): ShipSnapshotSummary[] =>
     can('module.fulfillment') ? listShipSnapshots() : []
@@ -553,6 +600,48 @@ export function registerShippingIpc(): void {
           return { ok: false, error: 'Unknown break status.' }
         }
         return { ok: true, data: setBreakStage(id, payload.status) }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  // ---- Break assignments (shipping.manage) -------------------------------
+  ipcMain.handle(
+    IPC.shipAssign,
+    (
+      _e,
+      payload: { breakId: string; employeeId: string; note?: string | null }
+    ): Result<ShipBreakAssignmentUpdate> => {
+      try {
+        const actor = requireManage()
+        const breakId = requireId(payload?.breakId, 'break')
+        const employeeId = requireId(payload?.employeeId, 'employee')
+        const note = str(payload?.note).trim() || null
+        return { ok: true, data: assignBreak(breakId, employeeId, note, actor.id) }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  /**
+   * Accepts either the assignment id (what an assignee chip holds) or the
+   * (breakId, employeeId) pair (what a toggle naturally knows).
+   */
+  ipcMain.handle(
+    IPC.shipUnassign,
+    (
+      _e,
+      payload: { id?: string | null; breakId?: string | null; employeeId?: string | null }
+    ): Result<ShipBreakAssignmentUpdate> => {
+      try {
+        requireManage()
+        const id = str(payload?.id).trim()
+        const breakId = str(payload?.breakId).trim()
+        const employeeId = str(payload?.employeeId).trim()
+        if (!id && !(breakId && employeeId)) return { ok: false, error: 'No assignment specified.' }
+        return { ok: true, data: unassignBreak({ id, breakId, employeeId }) }
       } catch (err) {
         return fail(err)
       }

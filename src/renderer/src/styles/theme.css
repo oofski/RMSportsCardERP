@@ -45,6 +45,9 @@
   /* Semantic */
   --success: #12a150;
   --success-bg: #e7f6ee;
+  /* --success sits at only 3.0:1 on --success-bg. Use this for success-tinted
+     chips that carry real words rather than a glyph. */
+  --success-strong: #0d7a3c;
   --warning: #b7860b;
   --warning-bg: #fbf1d3;
   --danger: #dc4b52;
@@ -99,6 +102,8 @@
 
   --success: #38c47d;
   --success-bg: #123021;
+  /* Dark already clears 6:1 on its own tint — no separate ramp needed. */
+  --success-strong: #38c47d;
   --warning: #e2ac3e;
   --warning-bg: #322810;
   --danger: #f2726f;
