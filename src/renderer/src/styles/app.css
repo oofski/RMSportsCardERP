@@ -11047,23 +11047,32 @@ button.sor-team:focus-visible {
    --------------------------------------------------------------------------
    Appended below the Streaming block; nothing above this line is modified.
 
-   Four things drive every choice below.
+   Five things drive every choice below.
 
    1. A NEGATIVE number must read as negative without colour. Money renders the
       U+2212 minus rather than Intl's ASCII hyphen — it is a digit wide, so it
       holds the column — and the danger ink is a second signal, never the only
       one.
-   2. The UNATTRIBUTED panel is the loudest thing here on purpose. It is the
-      warning ramp, not the danger ramp: money with no show attached is the
-      normal state of a fresh import and a two-minute fix, so it must read as a
-      job to do rather than a fault. Reconciliation failure IS the danger ramp,
+   2. The table is a P&L, so it is grouped like one: revenue in, then the fee
+      stack as a visible subtraction, then SHIPPING FENCED OFF ON ITS OWN, then
+      show costs. The group boundaries are real rules (.fin-edge), not spacing,
+      because "is this number inside the subtraction or beside it" is the
+      question the whole layout exists to answer.
+   3. The UNATTRIBUTED panel is deliberately NOT an alarm. Money waiting for a
+      show is information: a stream that was never in the schedule has nothing
+      to attach to, and that is expected. The panel is a neutral surface; the
+      only thing carrying emphasis inside it is the cluster list, because that
+      is the part you can act on. Reconciliation failure IS the danger ramp,
       because then the numbers genuinely cannot be trusted.
-   3. Amber grounds take --text ink. --warning on --warning-bg is 2.9:1 in
-      light; --text on it is 14.3:1 light / 12.3:1 dark. Red grounds take
-      --danger-strong, not --danger: 4.8:1 light / 5.5:1 dark against
+   4. Amber grounds take --text ink. --warning on --warning-bg is 2.90:1 in
+      light; --text on it is 14.25:1 light / 12.36:1 dark. Red grounds take
+      --danger-strong, not --danger: 4.83:1 light / 5.46:1 dark against
       --danger-bg, where --danger itself manages only ~3.5:1 in light.
-   4. The day table is wider than the page. It scrolls inside its own container
-      with the date column pinned, rather than pushing the whole app sideways.
+   5. The table is wider than the page. It scrolls inside its own container with
+      the day/week/month label pinned, rather than pushing the whole app
+      sideways. Shows and time on air live INSIDE that pinned cell, so the
+      context you need to read a money column stays on screen while you scroll
+      to it.
 
    Contrast is noted inline wherever a pair was actually computed.
    ========================================================================== */
@@ -11229,39 +11238,82 @@ button.sor-team:focus-visible {
   gap: 3px;
 }
 
-/* ---------- Headline stats ---------- */
-.fin-stats {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-  gap: 10px;
-}
-.fin-stat {
+/* ---------- The revenue model, as one line of arithmetic ---------- */
+/* Total revenue − fees = net revenue, with the operators printed between the
+   cells so the strip reads as the sentence the owner says it in. Shipping sits
+   the far side of a rule rather than behind an operator: it is not part of that
+   subtraction, and anything that implies it is would be wrong. */
+.fin-summary {
   display: flex;
-  flex-direction: column;
-  gap: 3px;
-  padding: 13px 14px;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 10px 14px;
+  padding: 14px 16px;
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   background: var(--surface);
   box-shadow: var(--shadow-sm);
 }
-.fin-stat-label {
+.fin-sum {
+  flex: 1 1 152px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.fin-sum-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+  /* 5.94:1 light, 7.71:1 dark on --surface — 6.26:1 / 8.25:1 on --surface. */
   color: var(--text-2);
 }
-.fin-stat-value {
-  font-size: 22px;
+.fin-sum-value {
+  font-size: 21px;
   font-weight: 700;
   color: var(--text);
 }
-.fin-stat-hint {
+.fin-sum-value .fin-money {
+  font-size: inherit;
+}
+/* The answer to the subtraction, so it outweighs its own inputs. */
+.fin-sum.is-net .fin-sum-value {
+  font-size: 26px;
+}
+.fin-sum-hint {
   font-style: normal;
   font-size: 11.5px;
-  line-height: 1.45;
+  line-height: 1.4;
   color: var(--text-2);
+}
+/* Nudged down to sit on the value row rather than on the labels above it. */
+.fin-sum-op {
+  flex: 0 0 auto;
+  align-self: center;
+  padding-top: 13px;
+  font-size: 19px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+.fin-sum-rule {
+  flex: 0 0 1px;
+  align-self: stretch;
+  background: var(--border-strong);
+}
+/* The number the owner sanity-checks, so it gets --text rather than the muted
+   ink of the label it sits in: 14.46:1 light, 11.92:1 dark on --surface-3. */
+.fin-rate {
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: var(--surface-3);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0;
 }
 
 /* ---------- Ledger imports ---------- */
@@ -11438,15 +11490,18 @@ button.sor-team:focus-visible {
   color: var(--text);
 }
 
-/* ---------- Unattributed money ---------- */
-/* The most important panel on the screen. Amber, not red: this is work to do,
-   not a fault — and on a fresh import it is routinely a quarter of the money. */
+/* ---------- Money waiting for a show ---------- */
+/* Neutral on purpose. This used to be amber; it is not a warning ramp and never
+   was one. A stream that was never in the schedule has nothing to attach to, so
+   its money sitting here is the system working, not failing. What the panel
+   spends its emphasis on is the cluster list further down — the only part of it
+   anyone can act on. */
 .fin-unattr {
   display: flex;
   flex-direction: column;
   gap: 14px;
   padding: 16px;
-  border: 1px solid var(--warning);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-lg);
   background: var(--surface);
   box-shadow: var(--shadow-sm);
@@ -11475,6 +11530,8 @@ button.sor-team:focus-visible {
   align-items: center;
   gap: 12px;
 }
+/* 7.52:1 light, 7.35:1 dark. Brand, not amber — the glyph says "there is
+   something here to do", not "something went wrong". */
 .fin-unattr-icon {
   display: flex;
   align-items: center;
@@ -11482,8 +11539,8 @@ button.sor-team:focus-visible {
   width: 38px;
   height: 38px;
   border-radius: 12px;
-  background: var(--warning-bg);
-  color: var(--text);
+  background: var(--brand-soft);
+  color: var(--brand-700);
 }
 .fin-unattr-headline {
   min-width: 0;
@@ -11533,10 +11590,16 @@ button.sor-team:focus-visible {
   color: var(--text-2);
   white-space: nowrap;
 }
+/* The block that keeps the emphasis the panel around it gave up: raised onto its
+   own ground so the list of probably-missing shows is what the eye lands on. */
 .fin-cluster-block {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface-2);
 }
 .fin-cluster-lead {
   margin: 0;
@@ -11552,15 +11615,18 @@ button.sor-team:focus-visible {
   flex-direction: column;
   gap: 6px;
 }
+/* 3.58:1 light, 5.18:1 dark for the accent against the block ground — above the
+   3:1 a non-text boundary needs, and it is never the only thing marking a row. */
 .fin-cluster {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   padding: 9px 12px;
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--brand-400);
   border-radius: var(--radius-sm);
-  background: var(--surface-2);
+  background: var(--surface);
   font-size: 13px;
 }
 .fin-cluster-when {
@@ -11602,8 +11668,51 @@ button.sor-team:focus-visible {
   color: var(--text-2);
 }
 
-/* ---------- Day by day ---------- */
+/* ---------- Day · Week · Month ---------- */
+/* Buttons in a group, not tabs: they re-grain one table rather than swap
+   panels, so they carry aria-pressed and look like a segmented control. */
+.fin-period {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+.fin-period-btn {
+  padding: 5px 14px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  /* 5.94:1 light, 7.71:1 dark on --surface-2. */
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.13s ease, color 0.13s ease;
+}
+.fin-period-btn:hover {
+  color: var(--text);
+}
+/* 7.52:1 light, 7.35:1 dark. The ground carries the state as well as the ink,
+   so it survives a grey-scale render. */
+.fin-period-btn.is-on {
+  background: var(--brand-soft);
+  color: var(--brand-700);
+  box-shadow: var(--shadow-sm);
+}
+.fin-period-btn:focus-visible {
+  outline: 2px solid var(--brand-500);
+  outline-offset: 1px;
+}
+
+/* ---------- The table ---------- */
+/* Its own line: the scope note is a sentence, and letting it share a row with
+   the title and the toggle squeezes all three. */
 .fin-days-scope {
+  flex: 1 0 100%;
+  order: 3;
   font-size: 12px;
   color: var(--text-2);
 }
@@ -11619,16 +11728,18 @@ button.sor-team:focus-visible {
   border-radius: var(--radius);
   background: var(--surface);
 }
+/* A floor, not a target: the headers are nowrap, so real content sets the width
+   whenever more columns are showing than the minimum. */
 .fin-table {
   width: 100%;
-  min-width: 1040px;
+  min-width: 1120px;
   border-collapse: separate;
   border-spacing: 0;
   font-size: 13px;
 }
 .fin-table th,
 .fin-table td {
-  padding: 9px 12px;
+  padding: 9px 11px;
   text-align: left;
   vertical-align: top;
   border-bottom: 1px solid var(--border);
@@ -11640,8 +11751,25 @@ button.sor-team:focus-visible {
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+  /* 5.94:1 light, 7.71:1 dark. */
   color: var(--text-2);
   white-space: nowrap;
+}
+/* The group band. This is the row that turns twelve money columns into a P&L:
+   "− Whatnot's cut" over three columns is what makes the two fee cells read as
+   deductions rather than as more revenue. */
+.fin-grp-row .fin-grp {
+  background: var(--surface-3);
+  border-bottom: 1px solid var(--border);
+  text-align: center;
+  letter-spacing: 0.07em;
+  /* 5.63:1 light, 6.77:1 dark on --surface-3. */
+  color: var(--text-2);
+}
+/* Closes each group. On the group band and on that group's result column, so
+   the two rules line up into one continuous vertical rule down the table. */
+.fin-table .fin-edge {
+  border-right: 1px solid var(--border-strong);
 }
 .fin-table .fin-num {
   text-align: right;
@@ -11650,13 +11778,13 @@ button.sor-team:focus-visible {
 .fin-table tbody th {
   font-weight: 600;
 }
-/* Pinned so the date stays readable while the money columns scroll under it.
+/* Pinned so the label stays readable while the money columns scroll under it.
    Each variant carries its own ground, or the numbers would show through. */
 .fin-table .fin-c-day {
   position: sticky;
   left: 0;
   z-index: 1;
-  min-width: 176px;
+  min-width: 190px;
   background: var(--surface);
   box-shadow: 1px 0 0 var(--border);
 }
@@ -11665,13 +11793,8 @@ button.sor-team:focus-visible {
   z-index: 2;
   background: var(--surface-2);
 }
-.fin-table .fin-c-shows,
-.fin-table .fin-c-dur {
-  white-space: nowrap;
-  color: var(--text-2);
-}
-.fin-table .fin-c-net {
-  border-left: 1px solid var(--border);
+.fin-table .fin-c-net .fin-money {
+  font-size: 13.5px;
 }
 .fin-day-row:hover td,
 .fin-day-row:hover .fin-c-day {
@@ -11696,6 +11819,25 @@ button.sor-team:focus-visible {
 }
 .fin-day-toggle:hover {
   color: var(--brand-700);
+}
+/* A week or a month has nothing to expand into, so it gets no affordance — but
+   it keeps the chevron's indent so every label in the column starts on the same
+   vertical, and the sub-lines below line up with it. */
+.fin-period-label {
+  display: inline-block;
+  padding-left: 20px;
+  font-weight: 600;
+  color: var(--text);
+}
+.fin-row-meta {
+  display: block;
+  padding-left: 20px;
+  font-size: 11px;
+  font-weight: 500;
+  /* 6.26:1 light, 8.25:1 dark on --surface; 5.94 / 7.71 on the hover and footer
+     ground; 5.56 / 7.28 on --brand-soft when the day is open. */
+  color: var(--text-2);
+  white-space: nowrap;
 }
 .fin-foot-label {
   font-weight: 700;
@@ -11936,8 +12078,21 @@ button.sor-team:focus-visible {
 
 /* ---------- Responsive ---------- */
 @media (max-width: 900px) {
-  .fin-stats {
-    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  /* The strip stops being one line of arithmetic and becomes a grid of tiles.
+     A "−" stranded at the end of a wrapped line reads as a typo, so the
+     operators go rather than dangle; the labels still say Total revenue, Fees,
+     Net revenue in that order, which is the same sentence. */
+  .fin-summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+    gap: 12px;
+  }
+  .fin-sum-op,
+  .fin-sum-rule {
+    display: none;
+  }
+  .fin-sum.is-net .fin-sum-value {
+    font-size: 21px;
   }
   .fin-unattr-figure {
     margin-left: 0;
@@ -11959,6 +12114,16 @@ button.sor-team:focus-visible {
   .fin-days-section,
   .fin-unattr {
     padding: 13px;
+  }
+  /* The toggle is the control that decides what the table below IS, so it gets
+     the full width rather than being squeezed beside the heading. */
+  .fin-period {
+    flex: 1 0 100%;
+    order: 2;
+  }
+  .fin-period-btn {
+    flex: 1;
+    padding: 6px 8px;
   }
   .fin-import-when {
     display: none;

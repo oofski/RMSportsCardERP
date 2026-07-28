@@ -1,24 +1,31 @@
-import { useCallback, useEffect, useState } from 'react'
-import type { StreamingFinanceView } from '@shared/financeStreaming'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import type { FinancePeriod, StreamFinanceTotals, StreamingFinanceView } from '@shared/financeStreaming'
 import { formatDuration } from '@shared/streaming'
 import { Icon } from '../../components/Icon'
 import { Button, CenterLoader } from '../../components/ui'
 import { useSession } from '../../lib/session'
-import { Money, Note, Stat, plural } from './bits'
-import { DayTable } from './DayTable'
+import { Money, Note, plural } from './bits'
+import { FinanceTable } from './FinanceTable'
 import { ImportPanel } from './ImportPanel'
 import { UnattributedPanel } from './UnattributedPanel'
 import { finance } from './api'
 
+const PERIODS: Array<{ id: FinancePeriod; label: string; hint: string }> = [
+  { id: 'day', label: 'Day', hint: 'One row per business day — the grain everything else is built from' },
+  { id: 'week', label: 'Week', hint: 'The same days summed by week' },
+  { id: 'month', label: 'Month', hint: 'The same days summed by calendar month' }
+]
+
 /**
  * Finance → Streaming: what the shows actually earned.
  *
- * The whole tab hangs off ONE read. `streamView()` derives the days, the totals,
- * the unattributed pile and the reconciliation verdict in a single pass, so
- * every write here (import, delete, re-attribute) hands back the whole view and
- * this screen replaces its state with it. Refetching the pieces separately would
- * let the day table and the unattributed panel disagree about the same money —
- * which is precisely the bug the reconciliation flag exists to catch.
+ * The whole tab hangs off ONE read. `streamView()` derives the days, the weekly
+ * and monthly rollups, the totals, the unattributed pile and the reconciliation
+ * verdict in a single pass, so every write here (import, delete, re-attribute)
+ * hands back the whole view and this screen replaces its state with it.
+ * Refetching the pieces separately would let the table and the unattributed
+ * panel disagree about the same money — which is precisely the bug the
+ * reconciliation flag exists to catch.
  *
  * Scope note, stated on screen as well: this is REVENUE. The only costs shown
  * are the ones the platform charged for running the show. Cost of goods is a
@@ -32,6 +39,7 @@ export function StreamingTab(): JSX.Element {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [attempt, setAttempt] = useState(0)
+  const [period, setPeriod] = useState<FinancePeriod>('day')
 
   useEffect(() => {
     let alive = true
@@ -56,6 +64,14 @@ export function StreamingTab(): JSX.Element {
 
   const applyView = useCallback((next: StreamingFinanceView) => setView(next), [])
 
+  // Only used for the caption, so an older main that returns no rollups shows
+  // "0 weeks" rather than throwing on first paint.
+  const rowCount = useMemo(() => {
+    if (!view) return 0
+    const src = period === 'day' ? view.days : period === 'week' ? view.weeks : view.months
+    return Array.isArray(src) ? src.length : 0
+  }, [view, period])
+
   if (loading) return <CenterLoader />
 
   if (error || !view) {
@@ -70,8 +86,9 @@ export function StreamingTab(): JSX.Element {
     )
   }
 
-  const { days, totals, imports } = view
+  const { totals, imports } = view
   const hasLedger = imports.length > 0
+  const grainWord = period === 'day' ? 'day' : period === 'week' ? 'week' : 'month'
 
   return (
     <div className="fin-stream">
@@ -98,48 +115,47 @@ export function StreamingTab(): JSX.Element {
         <>
           <UnattributedPanel view={view} canManage={canManage} onView={applyView} />
 
-          <div className="fin-stats">
-            <Stat label="Net revenue" hint="what the shows earned, after the platform's charges">
-              <Money value={totals.netRevenue} strong />
-            </Stat>
-            <Stat label="Gross revenue" hint="sales, subsidy, tips and bonuses, less reversals">
-              <Money value={totals.grossRevenue} strong />
-            </Stat>
-            <Stat label="Show costs" hint="giveaway postage, shipping charges and Show Boost">
-              <Money value={totals.showCosts} cost strong />
-            </Stat>
-            <Stat
-              label="Streamed"
-              hint={`${plural(totals.sessionCount, 'show')} · ${formatDuration(
-                totals.minutes
-              )} on air`}
-            >
-              <span className="mono">
-                {totals.dayCount} day{totals.dayCount === 1 ? '' : 's'}
-              </span>
-            </Stat>
-          </div>
+          <SummaryStrip totals={totals} />
 
           <section className="fin-days-section">
             <div className="fin-days-head">
               <span className="fin-section-title">
                 <Icon name="CalendarDays" size={15} />
-                Day by day
-                <span className="fin-count">{days.length}</span>
+                The ledger, by {grainWord}
+                <span className="fin-count">{rowCount}</span>
               </span>
+
+              <div className="fin-period" role="group" aria-label="Group the table by">
+                {PERIODS.map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    className={`fin-period-btn${period === p.id ? ' is-on' : ''}`}
+                    // aria-pressed, not aria-selected: these are toggle buttons
+                    // in a group, not tabs controlling separate panels.
+                    aria-pressed={period === p.id}
+                    title={p.hint}
+                    onClick={() => setPeriod(p.id)}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+
               <span className="fin-days-scope">
                 Revenue only — stock cost is not in these figures.
               </span>
             </div>
 
-            {days.length === 0 ? (
+            {rowCount === 0 ? (
               <p className="fin-detail-empty">
                 <Icon name="Info" size={14} />
-                The ledger is loaded, but no row matched a logged show, so there are no days to
-                show. Add the sessions listed above in <b>Streaming</b> and re-attribute.
+                {period === 'day'
+                  ? 'The ledger is loaded, but no row matched a logged show, so there are no days to show. Add the sessions listed above in Streaming and re-attribute.'
+                  : `There are no ${grainWord}s to show yet — weeks and months are built from the days above, so a day has to land first.`}
               </p>
             ) : (
-              <DayTable days={days} totals={totals} />
+              <FinanceTable view={view} period={period} totals={totals} />
             )}
           </section>
         </>
@@ -152,5 +168,84 @@ export function StreamingTab(): JSX.Element {
         </p>
       )}
     </div>
+  )
+}
+
+/**
+ * The owner's revenue model in one line, laid out as the arithmetic he states
+ * it as: total revenue, less the two fees, equals net revenue — with shipping
+ * beside it rather than inside it.
+ *
+ * The effective fee rate is the number that gets sanity-checked, so it is
+ * printed to two decimals and captioned with its own denominator. A rate whose
+ * base is ambiguous is worse than no rate: 6% + 2.9% + 30c a transaction lands
+ * near 9.2% of the top line on real data, but only because the flat 30c is
+ * charged thousands of times, and the same fees expressed against sales alone
+ * would be a different, equally true number.
+ */
+function SummaryStrip({ totals }: { totals: StreamFinanceTotals }): JSX.Element {
+  const rate = totals.totalRevenue > 0 ? Math.abs(totals.totalFees) / totals.totalRevenue : null
+
+  return (
+    <section className="fin-summary" aria-label="Streaming revenue summary">
+      <div className="fin-sum">
+        <span className="fin-sum-label">Total revenue</span>
+        <span className="fin-sum-value">
+          <Money value={totals.totalRevenue} strong />
+        </span>
+        <em className="fin-sum-hint">sales, tips and bonuses, before any deduction</em>
+      </div>
+
+      <span className="fin-sum-op" aria-hidden="true">
+        −
+      </span>
+
+      <div className="fin-sum">
+        <span className="fin-sum-label">
+          Fees
+          {rate !== null && (
+            <b className="fin-rate" title="Total fees as a share of total revenue">
+              {(rate * 100).toFixed(2)}%
+            </b>
+          )}
+        </span>
+        <span className="fin-sum-value">
+          <Money value={totals.totalFees} strong />
+        </span>
+        <em className="fin-sum-hint">6% Whatnot, plus 2.9% and 30¢ a transaction</em>
+      </div>
+
+      <span className="fin-sum-op" aria-hidden="true">
+        =
+      </span>
+
+      <div className="fin-sum is-net">
+        <span className="fin-sum-label">Net revenue</span>
+        <span className="fin-sum-value">
+          <Money value={totals.netRevenue} strong />
+        </span>
+        <em className="fin-sum-hint">what Whatnot actually keeps for you</em>
+      </div>
+
+      {/* Shipping sits the other side of a rule, not behind an operator: it is
+          not part of the fee subtraction and must never look like it is. */}
+      <span className="fin-sum-rule" aria-hidden="true" />
+
+      <div className="fin-sum">
+        <span className="fin-sum-label">Net shipping</span>
+        <span className="fin-sum-value">
+          <Money value={totals.netShipping} strong />
+        </span>
+        <em className="fin-sum-hint">subsidy in, postage out — tracked on its own</em>
+      </div>
+
+      <div className="fin-sum">
+        <span className="fin-sum-label">Streamed</span>
+        <span className="fin-sum-value mono">{plural(totals.dayCount, 'day')}</span>
+        <em className="fin-sum-hint">
+          {plural(totals.sessionCount, 'show')} · {formatDuration(totals.minutes)} on air
+        </em>
+      </div>
+    </section>
   )
 }

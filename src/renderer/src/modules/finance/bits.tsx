@@ -117,25 +117,6 @@ export function Note({
   )
 }
 
-/** One headline number. `hint` is what the number MEANS, not what it is. */
-export function Stat({
-  label,
-  hint,
-  children
-}: {
-  label: string
-  hint?: string
-  children: ReactNode
-}): JSX.Element {
-  return (
-    <div className="fin-stat">
-      <span className="fin-stat-label">{label}</span>
-      <span className="fin-stat-value">{children}</span>
-      {hint && <em className="fin-stat-hint">{hint}</em>}
-    </div>
-  )
-}
-
 /** "312 rows" / "1 row" — used often enough that getting it wrong once is worse
  *  than the helper. */
 export function plural(count: number, one: string, many = `${one}s`): string {

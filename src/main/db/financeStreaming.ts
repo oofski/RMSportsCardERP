@@ -50,6 +50,7 @@ import { readFileSync } from 'fs'
 import { basename } from 'path'
 import type { Result } from '@shared/types'
 import type {
+  FinancePeriodRow,
   LedgerAttribution,
   LedgerBucket,
   LedgerImport,
@@ -69,13 +70,13 @@ import {
   SESSION_VACUUM_SHARE,
   carryBackEligible,
   classifyLedgerRow,
+  computeFees,
   findCarryBackSession,
   ledgerFingerprintSource,
   parseBreakNumber,
   parseLedgerAmount,
   parseLedgerDate,
-  rowInSession,
-  sumTreatment
+  rowInSession
 } from '@shared/financeStreaming'
 import type { StreamSession } from '@shared/streaming'
 import { durationMinutes, isSuspiciouslyLong, streamDateOf } from '@shared/streaming'
@@ -127,30 +128,66 @@ const COL_ORDER = 3
 const COL_MESSAGE = 4
 const COL_TYPE = 6
 
+const FIELD_COUNT = LEDGER_HEADER.length
+
 /**
- * Strict RFC4180 for ONE physical line. Returns null the moment anything is not
- * exactly to spec — a bare `"` inside an unquoted field, a quote followed by
- * something other than `,` or end-of-line, an unterminated quote.
+ * WHATNOT SHIPPED A SECOND EXPORT FORMAT, AND BOTH MUST WORK
+ *
+ * The original export quoted every field, wrote negatives with a leading minus
+ * and was not valid RFC4180 (it wraps Show Boost titles in unescaped quotes).
+ * The current one quotes MINIMALLY — only fields containing a comma — writes
+ * negatives as accounting parentheses `($4.15)`, pads amounts with a trailing
+ * space, and is valid RFC4180. Measured on the staged pair: the old file needs
+ * the repair on 8 of 6,674 rows, the new file needs it on none of 2,551.
+ *
+ * There is exactly ONE import path and it AUTO-DETECTS. The operator is never
+ * asked which format a file is, because the answer would be a guess they cannot
+ * verify and a wrong guess silently mangles a whole week of money. A correct
+ * RFC4180 parse reads either format natively; the anchored repair below is a
+ * fallback for the rows that a correct parse rejects, in either format.
+ *
+ * The two format-specific traps live in the contract, not here:
+ * `parseLedgerAmount` knows `($4.15)` is NEGATIVE (strip the punctuation without
+ * checking and it reads as +4.15 — silent, plausible, and an expense becomes
+ * revenue), and `ledgerFingerprintSource` hashes the amount as integer cents so
+ * `-$4.15` and `($4.15)` are the SAME row. Without that last part the format
+ * change would have made every historic row look new and doubled the archive.
+ */
+type SplitResult =
+  | { kind: 'ok'; fields: string[] }
+  /** A quoted field ran off the end of the line — under RFC4180 the record may
+   *  legitimately continue onto the next physical line. */
+  | { kind: 'unterminated' }
+  /** Malformed in a way no amount of extra input can fix. */
+  | { kind: 'malformed' }
+
+/**
+ * Strict RFC4180 for one record's text. Fails the moment anything is not exactly
+ * to spec — a bare `"` inside an unquoted field, a quote followed by something
+ * other than `,` or end-of-record, an unterminated quote.
  *
  * Strictness is the point. A lenient parser hands back 8 plausible-looking
  * fields for 7 of Whatnot's 8 malformed rows and quietly produces garbage for
  * the 8th (the one whose show title contains commas reads its Transaction Type
  * as " CACTUS JACK BASKETBALL"). Nothing announces the problem. Failing here is
  * what routes those rows into the anchored repair instead.
+ *
+ * Unquoted fields are fully supported — that is what makes the minimally-quoted
+ * new format parse natively rather than through the repair path.
  */
-function strictSplit(line: string): string[] | null {
+function strictSplit(text: string): SplitResult {
   const out: string[] = []
-  const n = line.length
+  const n = text.length
   let i = 0
   for (;;) {
     let field = ''
-    if (line[i] === '"') {
+    if (text[i] === '"') {
       i += 1
       for (;;) {
-        if (i >= n) return null // unterminated quoted field
-        const ch = line[i]
+        if (i >= n) return { kind: 'unterminated' }
+        const ch = text[i]
         if (ch === '"') {
-          if (line[i + 1] === '"') {
+          if (text[i + 1] === '"') {
             field += '"'
             i += 2
             continue
@@ -161,16 +198,16 @@ function strictSplit(line: string): string[] | null {
         field += ch
         i += 1
       }
-      if (i < n && line[i] !== ',') return null // stray text after the close quote
+      if (i < n && text[i] !== ',') return { kind: 'malformed' } // stray text after the close quote
     } else {
-      while (i < n && line[i] !== ',') {
-        if (line[i] === '"') return null // bare quote in an unquoted field
-        field += line[i]
+      while (i < n && text[i] !== ',') {
+        if (text[i] === '"') return { kind: 'malformed' } // bare quote in an unquoted field
+        field += text[i]
         i += 1
       }
     }
     out.push(field)
-    if (i >= n) return out
+    if (i >= n) return { kind: 'ok', fields: out }
     i += 1 // consume the comma
   }
 }
@@ -179,26 +216,54 @@ function strictSplit(line: string): string[] | null {
  * The anchored repair, for Whatnot's unescaped-quote rows.
  *
  * The schema is pinned at BOTH ends: the first four fields and the last three
- * are quote-delimited and none of them can contain a `"` or a `,`. Only
- * `Message` is free text. So bind the head, bind the tail, and let a greedy
- * middle take everything else — which forces the tail anchors onto the LAST
- * three quoted fields and recovers the row with its inner quotes intact.
+ * cannot contain a `"` or a `,`. Only `Message` is free text. So bind the head,
+ * bind the tail, and let a greedy middle take everything else — which forces the
+ * tail anchors onto the LAST three fields and recovers the row with its inner
+ * quotes intact.
+ *
+ * Each anchor accepts a quoted OR a bare field, so the repair works on both
+ * export formats. The original version required every field to be quoted, which
+ * would silently refuse to repair a minimally-quoted row — and the minimally
+ * quoted format is the one Whatnot ships today.
  *
  * Deliberately per-row, and deliberately recorded: regex-replacing quotes across
  * the whole file before parsing would "fix" it invisibly and there would be no
  * way to tell a repaired row from a clean one afterwards.
  */
-const REPAIR_RE =
-  /^"([^"]*)","([^"]*)","([^"]*)","([^"]*)",(.*),"([^"]*)","([^"]*)","([^"]*)"$/
+const ANCHOR = '(?:"[^"]*"|[^",]*)'
+const REPAIR_RE = new RegExp(
+  `^(${ANCHOR}),(${ANCHOR}),(${ANCHOR}),(${ANCHOR}),(.*),(${ANCHOR}),(${ANCHOR}),(${ANCHOR})$`
+)
+
+/** Undo one level of CSV quoting on an anchor capture. */
+function unquote(value: string): string {
+  const v =
+    value.length >= 2 && value.startsWith('"') && value.endsWith('"')
+      ? value.slice(1, -1)
+      : value
+  return v.replace(/""/g, '"')
+}
 
 function repairSplit(line: string): string[] | null {
   const m = REPAIR_RE.exec(line)
   if (!m) return null
+  // The message is taken RAW rather than unquoted as a unit: its whole problem
+  // is that its quoting is broken, so only the outermost pair is stripped and
+  // any doubled quote inside is collapsed.
   let message = m[5]
   if (message.startsWith('"')) message = message.slice(1)
   if (message.endsWith('"')) message = message.slice(0, -1)
   message = message.replace(/""/g, '"')
-  return [m[1], m[2], m[3], m[4], message, m[6], m[7], m[8]]
+  return [
+    unquote(m[1]),
+    unquote(m[2]),
+    unquote(m[3]),
+    unquote(m[4]),
+    message,
+    unquote(m[6]),
+    unquote(m[7]),
+    unquote(m[8])
+  ]
 }
 
 interface ParsedRow {
@@ -217,23 +282,36 @@ interface ParseOutcome {
   rows: ParsedRow[]
   quarantine: QuarantinedLine[]
   repaired: number
-  /** Physical, non-blank lines after the header. rows + quarantine must equal it. */
+  /** Logical records found after the header. rows + quarantine must equal it. */
   dataLines: number
   headerError: string | null
 }
 
 /**
+ * A quoted field may legally span physical lines under RFC4180. This caps how
+ * far a record is allowed to reach for its closing quote — an unterminated quote
+ * caused by corruption would otherwise swallow the rest of the file into one
+ * record. Beyond the cap the line is repaired or quarantined on its own, which
+ * loses one line instead of every line after it.
+ */
+const MAX_RECORD_LINES = 32
+
+/**
  * Parse strictly, repair second, quarantine third — never in any other order.
+ * The same three steps read BOTH export formats; nothing here branches on which
+ * one it is looking at.
  *
- * Line-oriented is safe for this format because no record contains an embedded
- * newline (verified across 9,225 real rows). Should one ever appear, its two
- * halves fail both the strict parse and the repair and land in quarantine with
- * their raw text — visible and recoverable, rather than silently merged into
- * whatever the lenient parser felt like.
+ * Records are assembled a physical line at a time, and a line is only joined to
+ * the next when the strict parse says a quoted field is still open. That is the
+ * RFC4180-correct handling of an embedded newline (none occur in the 11,776 real
+ * rows measured, but a format that changed once will change again) and it is
+ * also the safe one: a malformed line can never desynchronise the parse and
+ * consume its neighbours, because a join that does not immediately yield a
+ * complete record is abandoned and the line is handled alone.
  */
 function parseLedgerCsv(text: string): ParseOutcome {
   const body = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text
-  const lines = body.split('\n')
+  const lines = body.split('\n').map((l) => l.replace(/\r$/, ''))
   const out: ParseOutcome = {
     rows: [],
     quarantine: [],
@@ -246,38 +324,83 @@ function parseLedgerCsv(text: string): ParseOutcome {
     return out
   }
 
-  const headerLine = lines[0].replace(/\r$/, '')
+  // The header is quoted in the old format and bare in the new one. A correct
+  // RFC4180 split makes both read identically, so the column check does not have
+  // to know which file it has. It is still exact: a silently renamed column is
+  // how a whole bucket goes missing while every total still looks plausible.
+  const headerLine = lines[0]
   const header = strictSplit(headerLine)
-  if (!header || header.length !== LEDGER_HEADER.length || LEDGER_HEADER.some((h, i) => header[i] !== h)) {
+  const names = header.kind === 'ok' ? header.fields.map((h) => h.trim()) : null
+  if (!names || names.length !== FIELD_COUNT || LEDGER_HEADER.some((h, i) => names[i] !== h)) {
     out.headerError =
       `That does not look like a Whatnot ledger export. Expected the columns ` +
       `${LEDGER_HEADER.join(', ')} but the file starts with: ${headerLine.slice(0, 300)}`
     return out
   }
 
-  for (let i = 1; i < lines.length; i += 1) {
-    const raw = lines[i].replace(/\r$/, '')
-    if (!raw.trim()) continue // blank lines are not data and are not rejects
+  let i = 1
+  while (i < lines.length) {
+    const raw = lines[i]
+    if (!raw.trim()) {
+      i += 1
+      continue // blank lines are not data and are not rejects
+    }
+    const lineNumber = i + 1
     out.dataLines += 1
+
+    // 1. Strict RFC4180 on the line as it stands. This is the path both real
+    //    formats take: 2,551 of 2,551 new-format rows and 6,666 of 6,674
+    //    old-format rows.
     const strict = strictSplit(raw)
-    if (strict && strict.length === LEDGER_HEADER.length) {
-      out.rows.push({ lineNumber: i + 1, fields: strict, repaired: false })
+    if (strict.kind === 'ok' && strict.fields.length === FIELD_COUNT) {
+      out.rows.push({ lineNumber, fields: strict.fields, repaired: false })
+      i += 1
       continue
     }
+
+    // 2. An open quoted field: pull in following lines until the record closes.
+    //    Abandoned the moment joining stops helping, and it never advances past
+    //    the lines it actually consumed.
+    if (strict.kind === 'unterminated') {
+      let joined = raw
+      let taken = 0
+      let closed = false
+      while (i + taken + 1 < lines.length && taken < MAX_RECORD_LINES) {
+        taken += 1
+        joined += `\n${lines[i + taken]}`
+        const again = strictSplit(joined)
+        if (again.kind === 'ok') {
+          if (again.fields.length === FIELD_COUNT) {
+            out.rows.push({ lineNumber, fields: again.fields, repaired: false })
+            i += taken + 1
+            closed = true
+          }
+          break
+        }
+        if (again.kind !== 'unterminated') break
+      }
+      if (closed) continue
+    }
+
+    // 3. The anchored repair, for the unescaped-quote rows.
     const fixed = repairSplit(raw)
     if (fixed) {
       out.repaired += 1
-      out.rows.push({ lineNumber: i + 1, fields: fixed, repaired: true })
+      out.rows.push({ lineNumber, fields: fixed, repaired: true })
+      i += 1
       continue
     }
+
+    // 4. Kept verbatim. A vanished row is money with no trace.
     out.quarantine.push({
-      lineNumber: i + 1,
+      lineNumber,
       raw,
       reason:
-        strict === null
-          ? 'The line is not valid CSV and the anchored repair did not match it.'
-          : `Expected ${LEDGER_HEADER.length} fields, found ${strict.length}.`
+        strict.kind === 'ok'
+          ? `Expected ${FIELD_COUNT} fields, found ${strict.fields.length}.`
+          : 'The line is not valid CSV and the anchored repair did not match it.'
     })
+    i += 1
   }
   return out
 }
@@ -524,10 +647,13 @@ export function importLedger(filePath: string, actorId: string | null): Result<L
         quarantinedExtra += 1
         continue
       }
-      // parseLedgerAmount treats "$" as 0 (Number('') === 0), so require a digit
-      // before trusting it. A zero-amount row is real and common (381 of 636
-      // shipping subsidies are $0.00); a DIGITLESS amount cell is not.
-      const amount = /\d/.test(amountRaw) ? parseLedgerAmount(amountRaw) : null
+      // `parseLedgerAmount` owns every money shape Whatnot has shipped: "$1.00",
+      // "-$4.15", "($4.15)" and "$139.21 " with its trailing pad. It is the ONLY
+      // place that knows parentheses mean negative, and it returns null rather
+      // than guessing — which is what puts an unreadable cell in quarantine
+      // instead of into the P&L as a confident zero. A $0.00 row is real and
+      // common (381 of 636 shipping subsidies are zero) and must still import.
+      const amount = parseLedgerAmount(amountRaw)
       if (amount === null) {
         quarantine.run(
           newId(),
@@ -742,10 +868,18 @@ function buildWarnings(
     )
   }
 
+  // NOT an error, and deliberately worded so it does not read like one. The
+  // owner's instruction is explicit: "if a stream isn't in the streaming
+  // schedule, don't worry about that ledger row, just let it be — it'll show up
+  // empty." So the money is kept, counted, clustered and stated, the import
+  // succeeds, and nothing waits on the operator. Adding the session later moves
+  // these rows onto it; never adding it leaves them visible here forever, which
+  // is a fine end state.
   if (stats.unattributedRows > 0) {
     warnings.push(
-      `${stats.unattributedRows} row${stats.unattributedRows === 1 ? '' : 's'} (${money(stats.unattributedCents)}) fell outside ` +
-        `every logged show. Add the missing session and re-run attribution — nothing has been reassigned or dropped.`
+      `${stats.unattributedRows} row${stats.unattributedRows === 1 ? '' : 's'} (${money(stats.unattributedCents)}) are not ` +
+        `inside any logged show. That is fine — they are stored, counted and listed under "outside every show". ` +
+        `If one of them was a real stream, add the session and re-run attribution and they will move onto it.`
     )
   }
 
@@ -1085,6 +1219,46 @@ export function listRows(filter: LedgerRowFilter): LedgerRow[] {
 // The day-by-day view
 // ---------------------------------------------------------------------------
 
+/**
+ * Every money field a day carries, in one list, used by the day builder AND by
+ * every rollup. Adding a field to the contract and forgetting it here would make
+ * a week quietly disagree with the days inside it, so the list is the single
+ * place it has to be named.
+ */
+const MONEY_FIELDS = [
+  'sales',
+  'tips',
+  'bonuses',
+  'totalRevenue',
+  'whatnotFee',
+  'processingFee',
+  'totalFees',
+  'netRevenue',
+  'shippingSubsidy',
+  'shippingCharges',
+  'giveawayShipping',
+  'refundShipping',
+  'netShipping',
+  'showBoost',
+  'reversals',
+  'netAfterCosts',
+  'carriedBackAmount',
+  'breakCost',
+  'giveawayCost'
+] as const
+
+/** Counts, which add as plain integers. */
+const COUNT_FIELDS = [
+  'sessionCount',
+  'minutes',
+  'saleCount',
+  'rowCount',
+  'carriedBackRows'
+] as const
+
+type MoneyField = (typeof MONEY_FIELDS)[number]
+type CountField = (typeof COUNT_FIELDS)[number]
+
 function emptyDay(streamDate: string): StreamDayFinance {
   return {
     streamDate,
@@ -1092,17 +1266,22 @@ function emptyDay(streamDate: string): StreamDayFinance {
     sessionTitles: [],
     minutes: 0,
     sales: 0,
-    shippingSubsidy: 0,
+    saleCount: 0,
     tips: 0,
     bonuses: 0,
-    reversals: 0,
-    giveawayShipping: 0,
-    shippingCharges: 0,
-    refundShipping: 0,
-    showBoost: 0,
-    grossRevenue: 0,
-    showCosts: 0,
+    totalRevenue: 0,
+    whatnotFee: 0,
+    processingFee: 0,
+    totalFees: 0,
     netRevenue: 0,
+    shippingSubsidy: 0,
+    shippingCharges: 0,
+    giveawayShipping: 0,
+    refundShipping: 0,
+    netShipping: 0,
+    showBoost: 0,
+    reversals: 0,
+    netAfterCosts: 0,
     rowCount: 0,
     carriedBackRows: 0,
     carriedBackAmount: 0,
@@ -1111,13 +1290,59 @@ function emptyDay(streamDate: string): StreamDayFinance {
   }
 }
 
+/**
+ * A rollup in progress. Money accumulates in INTEGER CENTS and converts back to
+ * dollars exactly once, at the end — adding 27 day figures as floats and then
+ * comparing the result to another float sum is how a reconciliation check
+ * reports a phantom cent.
+ */
+interface Rollup {
+  money: Map<MoneyField, number>
+  counts: Map<CountField, number>
+  dates: string[]
+}
+
+function newRollup(): Rollup {
+  return { money: new Map(), counts: new Map(), dates: [] }
+}
+
+/**
+ * Add ONE day to a rollup — the only way a week, a month or the grand total is
+ * ever built.
+ *
+ * Every field is SUMMED, including the fees. Recomputing `computeFees` on the
+ * period's gross would give the right percentages and the WRONG flat fee: the
+ * $0.30 is charged per sale row, so re-deriving it from a period's total gross
+ * would silently drop it or re-add it depending on how the period was sliced.
+ * Two numbers that must agree and are derived two different ways will eventually
+ * disagree, and a week that contradicts the days inside it is worse than no week
+ * at all.
+ */
+function addDay(roll: Rollup, day: StreamDayFinance): void {
+  const fields = day as unknown as Record<string, number>
+  for (const f of MONEY_FIELDS) roll.money.set(f, (roll.money.get(f) ?? 0) + toCents(fields[f]))
+  for (const f of COUNT_FIELDS) roll.counts.set(f, (roll.counts.get(f) ?? 0) + fields[f])
+  roll.dates.push(day.streamDate)
+}
+
+/**
+ * The summed body shared by `StreamFinanceTotals` and `FinancePeriodRow`.
+ *
+ * Built by starting from an empty DAY and stripping the two day-only fields, so
+ * that a field added to `StreamDayFinance` cannot be silently absent from a
+ * period — it would be present and zero, and the reconciliation would catch it.
+ */
+function rollupBody(roll: Rollup): Omit<StreamDayFinance, 'streamDate' | 'sessionTitles'> {
+  const out = emptyDay('') as unknown as Record<string, unknown>
+  for (const f of MONEY_FIELDS) out[f] = toDollars(roll.money.get(f) ?? 0)
+  for (const f of COUNT_FIELDS) out[f] = roll.counts.get(f) ?? 0
+  delete out.streamDate
+  delete out.sessionTitles
+  return out as unknown as Omit<StreamDayFinance, 'streamDate' | 'sessionTitles'>
+}
+
 function emptyTotals(): StreamFinanceTotals {
-  const day = emptyDay('')
-  const rest = day as Omit<StreamDayFinance, 'streamDate' | 'sessionTitles'> &
-    Partial<Pick<StreamDayFinance, 'streamDate' | 'sessionTitles'>>
-  delete rest.streamDate
-  delete rest.sessionTitles
-  return { ...(rest as Omit<StreamDayFinance, 'streamDate' | 'sessionTitles'>), dayCount: 0 }
+  return { ...rollupBody(newRollup()), dayCount: 0 }
 }
 
 function emptyUnattributed(): UnattributedSummary {
@@ -1134,6 +1359,8 @@ function emptyUnattributed(): UnattributedSummary {
 export function emptyView(): StreamingFinanceView {
   return {
     days: [],
+    weeks: [],
+    months: [],
     totals: emptyTotals(),
     unattributed: emptyUnattributed(),
     imports: [],
@@ -1142,7 +1369,146 @@ export function emptyView(): StreamingFinanceView {
   }
 }
 
-/** bucket key → the named field it lands in on a day. */
+// ---------------------------------------------------------------------------
+// Week and month keys
+//
+// A business day is a plain 'YYYY-MM-DD' string with no time and no zone. It is
+// read into a UTC instant purely so the weekday arithmetic has somewhere to
+// happen — using the local constructor here would let the machine's timezone
+// decide which week a day belongs to, and a day that changes week when the
+// laptop travels is a period total that changes with it.
+// ---------------------------------------------------------------------------
+
+const DAY_MS = 86_400_000
+const MONTH_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+const MONTH_LONG = [
+  'January','February','March','April','May','June',
+  'July','August','September','October','November','December'
+]
+
+function dayUtcMs(streamDate: string): number | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(streamDate)
+  if (!m) return null
+  const year = Number(m[1])
+  const month = Number(m[2]) - 1
+  const day = Number(m[3])
+  const ms = Date.UTC(year, month, day)
+  const d = new Date(ms)
+  // Reject a date the calendar rolled over rather than accepting JS's silent
+  // normalisation of "2026-02-31" to March 3.
+  if (d.getUTCFullYear() !== year || d.getUTCMonth() !== month || d.getUTCDate() !== day) {
+    return null
+  }
+  return ms
+}
+
+/** Weeks start MONDAY. */
+function mondayOf(ms: number): number {
+  const dow = new Date(ms).getUTCDay() // 0 Sun … 6 Sat
+  return ms - ((dow + 6) % 7) * DAY_MS
+}
+
+/**
+ * ISO-8601 week number and week-YEAR, taken from the Thursday of the week. The
+ * week-year is not always the calendar year of the Monday: the week of Mon 2025
+ * Dec 29 is 2026-W01, and keying it '2025-W01' would file it next to the
+ * previous January.
+ */
+function isoWeekKey(mondayMs: number): string {
+  const thursday = new Date(mondayMs + 3 * DAY_MS)
+  const year = thursday.getUTCFullYear()
+  const jan1 = Date.UTC(year, 0, 1)
+  const week = Math.floor((thursday.getTime() - jan1) / DAY_MS / 7) + 1
+  return `${year}-W${String(week).padStart(2, '0')}`
+}
+
+function weekLabel(mondayMs: number): string {
+  const d = new Date(mondayMs)
+  return `Week of ${MONTH_SHORT[d.getUTCMonth()]} ${d.getUTCDate()}`
+}
+
+function monthLabel(streamDate: string): string {
+  const ms = dayUtcMs(streamDate)
+  if (ms === null) return streamDate
+  const d = new Date(ms)
+  return `${MONTH_LONG[d.getUTCMonth()]} ${d.getUTCFullYear()}`
+}
+
+interface PeriodPlan {
+  key: string
+  label: string
+  /** Sorts periods; the earliest day the period could contain. */
+  order: string
+}
+
+/**
+ * Which week a business day rolls into. A day whose date does not parse gets a
+ * period of its own rather than being dropped — a malformed `stream_date` is a
+ * bug to find, not money to lose.
+ */
+function weekOf(streamDate: string): PeriodPlan {
+  const ms = dayUtcMs(streamDate)
+  if (ms === null) return { key: streamDate, label: streamDate, order: streamDate }
+  const monday = mondayOf(ms)
+  const iso = new Date(monday).toISOString().slice(0, 10)
+  return { key: isoWeekKey(monday), label: weekLabel(monday), order: iso }
+}
+
+function monthOf(streamDate: string): PeriodPlan {
+  const ms = dayUtcMs(streamDate)
+  if (ms === null) return { key: streamDate, label: streamDate, order: streamDate }
+  const key = streamDate.slice(0, 7)
+  return { key, label: monthLabel(streamDate), order: `${key}-01` }
+}
+
+/**
+ * Roll the day rows into periods BY SUMMING THEM. Nothing here reads the row
+ * table: `days` is the only input, so a period is a sum of exactly the days on
+ * screen and cannot disagree with them.
+ *
+ * `from`, `to` and `dayCount` describe the days that are actually PRESENT, not
+ * the calendar extent of the period — a week containing two shows reports those
+ * two days, because "7 days" would imply five days of measured zero that were
+ * never measured at all.
+ */
+function rollPeriods(
+  days: readonly StreamDayFinance[],
+  planOf: (streamDate: string) => PeriodPlan
+): FinancePeriodRow[] {
+  const rolls = new Map<string, { plan: PeriodPlan; roll: Rollup }>()
+  for (const day of days) {
+    const plan = planOf(day.streamDate)
+    let entry = rolls.get(plan.key)
+    if (!entry) {
+      entry = { plan, roll: newRollup() }
+      rolls.set(plan.key, entry)
+    }
+    addDay(entry.roll, day)
+  }
+  const out: FinancePeriodRow[] = []
+  for (const { plan, roll } of rolls.values()) {
+    const dates = [...roll.dates].sort()
+    out.push({
+      ...rollupBody(roll),
+      key: plan.key,
+      label: plan.label,
+      from: dates[0] ?? '',
+      to: dates[dates.length - 1] ?? '',
+      dayCount: dates.length
+    })
+  }
+  out.sort((a, b) => (a.from < b.from ? -1 : a.from > b.from ? 1 : 0))
+  return out
+}
+
+/**
+ * bucket key → the named field it lands in on a day.
+ *
+ * `payout` is absent because it never reaches a day. `unclassified` is absent
+ * because there is no field for a shape this version has never seen — it is
+ * handled explicitly in the day arithmetic below, at face value, so the money
+ * stays visible instead of falling between two named fields.
+ */
 const BUCKET_FIELD: Partial<Record<LedgerBucket, keyof StreamDayFinance>> = {
   sale: 'sales',
   shipping_subsidy: 'shippingSubsidy',
@@ -1271,6 +1637,10 @@ function buildView(db: Database): StreamingFinanceView {
     const day = dayFor(r.d)
     day.rowCount += r.rows
     const bucket = r.bucket as LedgerBucket
+    // ONE sale row is ONE transaction, and that is what the flat 30c processing
+    // fee is charged on. It is counted here, from the row table, rather than
+    // inferred from a dollar total — no average ticket price can recover it.
+    if (bucket === 'sale') day.saleCount += r.rows
     const amounts = dayCents.get(r.d) as Partial<Record<LedgerBucket, number>>
     amounts[bucket] = (amounts[bucket] ?? 0) + r.cents
     dayNetCents.set(r.d, (dayNetCents.get(r.d) ?? 0) + r.cents)
@@ -1300,59 +1670,73 @@ function buildView(db: Database): StreamingFinanceView {
     day.carriedBackAmount = toDollars(toCents(day.carriedBackAmount) + r.cents)
   }
 
+  // --- what Whatnot actually keeps -------------------------------------------
+  //
+  // The ledger's "Earnings for selling" figure is GROSS, before Whatnot takes
+  // anything (confirmed by the owner; the file itself has no commission line, so
+  // this could not be settled from the data). Two charges come off it:
+  //   commission  6%   of gross
+  //   processing  2.9% of gross PLUS 30c on every sale row
+  // Both on the GROSS amount, not one after the other, and on SALES ONLY —
+  // shipping subsidies, tips and bonuses arrive whole.
+  //
+  // The arithmetic is `computeFees` in the contract and is never restated here.
+  // A blended "8.9%" would be wrong in exactly the direction that matters: RM
+  // sells break spots at small ticket prices, so the flat 30c lands 1,929 times
+  // in a single week and is worth another 1.5% on a $20 spot. Modelling it as a
+  // percentage understates fees most on the shows that sell the most spots.
+  //
+  // A DAY IS WHERE FEES ARE COMPUTED, AND THE ONLY PLACE. Weeks, months and the
+  // grand total SUM these numbers (see `addDay`); none of them re-derive fees
+  // from their own gross, because the flat-fee component would then depend on
+  // how the period was sliced and two views of the same money would drift.
   for (const [date, day] of dayMap) {
     const cents = dayCents.get(date) ?? {}
-    const dollars: Partial<Record<LedgerBucket, number>> = {}
-    for (const key of Object.keys(cents) as LedgerBucket[]) {
-      dollars[key] = toDollars(cents[key] as number)
-    }
-    // sumTreatment is the ONE definition of a day's arithmetic, shared with the
-    // renderer. `unclassified` is treated as revenue here on purpose: the money
-    // is included at face value and flagged, never dropped, so the totals still
-    // tie out while the warning says the shape is unrecognised.
-    day.grossRevenue = sumTreatment(dollars, 'revenue') + sumTreatment(dollars, 'contra')
-    day.grossRevenue = toDollars(toCents(day.grossRevenue))
-    day.showCosts = sumTreatment(dollars, 'expense')
-    day.netRevenue = toDollars(toCents(day.grossRevenue) + toCents(day.showCosts))
+    const salesCents = toCents(day.sales)
+    const unknownCents = cents.unclassified ?? 0
+
+    // `unclassified` has no field of its own in the day shape, so its money is
+    // carried at FACE VALUE in totalRevenue and flagged in the import warnings.
+    // It is deliberately NOT added to `sales`: no fee is charged on a shape this
+    // version cannot identify, because charging 8.9% on a guess invents a cost.
+    day.totalRevenue = toDollars(
+      salesCents + toCents(day.tips) + toCents(day.bonuses) + unknownCents
+    )
+
+    const fees = computeFees(day.sales, day.saleCount)
+    day.whatnotFee = fees.whatnotFee
+    day.processingFee = fees.processingFee
+    day.totalFees = fees.totalFees
+    day.netRevenue = toDollars(toCents(day.totalRevenue) + toCents(day.totalFees))
+
+    day.netShipping = toDollars(
+      toCents(day.shippingSubsidy) +
+        toCents(day.shippingCharges) +
+        toCents(day.giveawayShipping) +
+        toCents(day.refundShipping)
+    )
+
+    day.netAfterCosts = toDollars(
+      toCents(day.netRevenue) +
+        toCents(day.netShipping) +
+        toCents(day.showBoost) +
+        toCents(day.reversals)
+    )
   }
 
   const days = [...dayMap.values()].sort((a, b) =>
     a.streamDate < b.streamDate ? -1 : a.streamDate > b.streamDate ? 1 : 0
   )
 
-  // --- totals ---------------------------------------------------------------
-  const totals = emptyTotals()
-  const MONEY_FIELDS: Array<keyof StreamFinanceTotals> = [
-    'sales',
-    'shippingSubsidy',
-    'tips',
-    'bonuses',
-    'reversals',
-    'giveawayShipping',
-    'shippingCharges',
-    'refundShipping',
-    'showBoost',
-    'grossRevenue',
-    'showCosts',
-    'netRevenue',
-    'carriedBackAmount',
-    'breakCost',
-    'giveawayCost'
-  ]
-  const acc = new Map<string, number>()
-  for (const day of days) {
-    const dayFields = day as unknown as Record<string, number>
-    totals.dayCount += 1
-    totals.sessionCount += day.sessionCount
-    totals.minutes += day.minutes
-    totals.rowCount += day.rowCount
-    totals.carriedBackRows += day.carriedBackRows
-    for (const f of MONEY_FIELDS) {
-      acc.set(f, (acc.get(f) ?? 0) + toCents(dayFields[f]))
-    }
-  }
-  const totalFields = totals as unknown as Record<string, number>
-  for (const f of MONEY_FIELDS) totalFields[f] = toDollars(acc.get(f) ?? 0)
+  // --- totals, weeks and months, all summed from `days` ----------------------
+  // Same accumulator, same field list, one input. A week that disagreed with the
+  // days inside it would be worse than no week at all, and the only way to make
+  // that impossible is to give the periods no other source of numbers.
+  const grand = newRollup()
+  for (const day of days) addDay(grand, day)
+  const totals: StreamFinanceTotals = { ...rollupBody(grand), dayCount: days.length }
+  const weeks = rollPeriods(days, weekOf)
+  const months = rollPeriods(days, monthOf)
 
   // --- unattributed ---------------------------------------------------------
   const unattributed = emptyUnattributed()
@@ -1404,6 +1788,17 @@ function buildView(db: Database): StreamingFinanceView {
   for (const [, c] of dayNetCents) daysCents += c
   for (const day of days) daysRows += day.rowCount
 
+  // The day fields must decompose the SAME money the rows carry. Fees are the
+  // only figure on a day that is not a row, so stripping them back out has to
+  // land exactly on the raw net:
+  //     netAfterCosts − totalFees == Σ(every attributed non-payout row)
+  // This is what catches a future bucket that classification learns to produce
+  // but the day shape has no field for. Without it that money would vanish from
+  // every screen while the row-level reconciliation above still said "fine",
+  // because the rows themselves would all still be present and counted.
+  let fieldCents = 0
+  for (const day of days) fieldCents += toCents(day.netAfterCosts) - toCents(day.totalFees)
+
   let reconciled = true
   let reconcileNote: string | null = null
   if (daysRows + unattributed.rowCount !== all.rows) {
@@ -1417,10 +1812,18 @@ function buildView(db: Database): StreamingFinanceView {
     reconcileNote =
       `${money(daysCents)} on shows + ${money(unCents)} unattributed = ${money(daysCents + unCents)}, ` +
       `but ${money(all.cents)} of non-payout money is stored. These totals are incomplete — do not book from them.`
+  } else if (fieldCents !== daysCents) {
+    reconciled = false
+    reconcileNote =
+      `The day breakdown adds to ${money(fieldCents)} before fees but ${money(daysCents)} of ledger money ` +
+      `is attributed to those days. A bucket is landing in no column — these totals are incomplete, ` +
+      `do not book from them.`
   }
 
   return {
     days,
+    weeks,
+    months,
     totals,
     unattributed,
     imports: listImportsWith(db),

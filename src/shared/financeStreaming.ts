@@ -236,12 +236,28 @@ export function parseLedgerDate(value: string): string | null {
   return d.toISOString()
 }
 
-/** Parse a money cell: "-$24,807.18" / "$0.00". */
+/**
+ * Parse a money cell.
+ *
+ * Whatnot has shipped TWO formats. The original wrote negatives with a minus
+ * ("-$4.15"); the current export uses accounting parentheses ("($4.15)") and
+ * pads values with a trailing space. Both must work, because an operator's
+ * archive contains files of both vintages.
+ *
+ * The parenthesis case is the dangerous one: strip the punctuation without
+ * checking for it and "($4.15)" reads as +4.15, turning an expense into
+ * revenue. That is silent and plausible, so it is handled explicitly and
+ * anything unrecognised returns null to be quarantined rather than guessed.
+ */
 export function parseLedgerAmount(value: string): number | null {
   const raw = (value || '').trim()
   if (!raw) return null
-  const neg = raw.startsWith('-')
-  const n = Number(raw.replace(/[-$,\s]/g, ''))
+  const neg = raw.startsWith('-') || (raw.startsWith('(') && raw.endsWith(')'))
+  const digits = raw.replace(/[^0-9.]/g, '')
+  // Guard the empty string: Number('') is 0, which would turn an unparseable
+  // cell into a confident zero.
+  if (!digits || !/[0-9]/.test(digits)) return null
+  const n = Number(digits)
   if (!Number.isFinite(n)) return null
   return neg ? -n : n
 }
@@ -251,7 +267,7 @@ export function parseLedgerAmount(value: string): number | null {
  *
  * SIX fields, and every one is load-bearing. Anything smaller collides on real
  * data: `Order ID` repeats across a sale and its shipping subsidy, and there are
- * 154 identical -$4.15 platform charges plus whole batches of $0.00 subsidies
+ * scores of identical platform charges plus whole batches of $0.00 subsidies
  * that differ only by their timestamp. A key of (order, type, amount) silently
  * discards 156-274 genuine rows per export — money that vanishes with no error.
  *
@@ -260,7 +276,9 @@ export function parseLedgerAmount(value: string): number | null {
  * same row look new and double-count it.
  *
  * Takes the RAW created-date string rather than the parsed instant so identity
- * never depends on the machine's timezone.
+ * never depends on the machine's timezone. The amount is normalised to cents so
+ * the same row exported as "-$4.15" and as "($4.15)" hashes identically —
+ * without that, the format change would have made every historic row look new.
  */
 export function ledgerFingerprintSource(
   createdDateRaw: string,
@@ -270,25 +288,37 @@ export function ledgerFingerprintSource(
   message: string,
   txnType: string
 ): string {
-  const cents = Math.round(amount * 100)
+  const c = Math.round(amount * 100)
+  // Joined on the ASCII unit separator, which cannot occur in any of these
+  // fields. An empty join would leave the boundaries ambiguous — ("ab","cdef")
+  // and ("abc","def") would hash identically — and the failure mode is a real
+  // row silently swallowed as a duplicate: money gone, no error anywhere.
   return [
     (createdDateRaw || '').trim(),
-    String(cents),
+    String(c),
     (listingId || '').trim(),
     (orderId || '').trim(),
     (message || '').trim(),
     (txnType || '').trim().toUpperCase()
-    // Joined on the ASCII unit separator, which cannot occur in any of these
-    // fields. An empty join would leave the boundaries ambiguous — ("ab","cdef")
-    // and ("abc","def") would hash identically — and the failure mode is a real
-    // row silently swallowed as a duplicate: money gone, no error anywhere.
   ].join('\u001F')
 }
 
-/** "Break #18" → 18. Present on break-spot sales, absent on direct sales. */
+/**
+ * The break number on a sale, if it has one.
+ *
+ * Two layouts, both live in real exports:
+ *   older  "...HOBBY BOX (NEW RELEASE!)- Break #18 - Arizona Diamondbacks"
+ *   newer  "Earnings for selling a Break 19: 4x TOPPS CHROME... - Phillies"
+ * The number moved to the front and lost its hash, so one pattern cannot cover
+ * both and a single-pattern parser silently returns null on half the file.
+ */
 export function parseBreakNumber(message: string): number | null {
-  const m = /-\s*Break\s*#?\s*(\d+)/i.exec(message || '')
-  return m ? Number(m[1]) : null
+  const m = message || ''
+  const trailing = /-\s*Break\s*#\s*(\d+)/i.exec(m)
+  if (trailing) return Number(trailing[1])
+  const leading = /\bBreak\s+(\d+)\s*:/i.exec(m)
+  if (leading) return Number(leading[1])
+  return null
 }
 
 // ---------------------------------------------------------------------------
@@ -478,6 +508,59 @@ export interface LedgerQuarantine {
 // The day-by-day view
 // ---------------------------------------------------------------------------
 
+/**
+ * WHAT WHATNOT ACTUALLY KEEPS
+ *
+ * The ledger's "Earnings for selling" figure is GROSS — the buyer's price,
+ * before Whatnot takes anything. Two charges come off it:
+ *
+ *   commission  6%   of the sale
+ *   processing  2.9% of the sale, plus 30c on every single transaction
+ *
+ * Both are computed on the GROSS amount, not one after the other. The flat 30c
+ * is what makes this worth modelling properly rather than applying a blended
+ * 8.9%: a show that sells 1,900 break spots at small ticket prices pays that
+ * 30c 1,900 times, and on a $20 spot the flat fee is another 1.5% on top. A
+ * percentage-only model quietly understates fees on exactly the shows that sell
+ * the most spots.
+ *
+ * Fees apply to SALES ONLY. Shipping subsidies, tips and bonuses arrive whole.
+ */
+export const WHATNOT_COMMISSION_RATE = 0.06
+export const PROCESSING_RATE = 0.029
+export const PROCESSING_PER_TRANSACTION = 0.3
+
+export interface FeeBreakdown {
+  /** Gross sales the fees were computed on. */
+  grossSales: number
+  /** Number of chargeable transactions — one per sale row. */
+  saleCount: number
+  /** Negative. */
+  whatnotFee: number
+  /** Negative. Percentage plus the per-transaction flat fee. */
+  processingFee: number
+  /** Negative. whatnotFee + processingFee. */
+  totalFees: number
+}
+
+const cents = (n: number): number => Math.round(n * 100) / 100
+
+/** Fees are returned NEGATIVE so every downstream total is a plain sum and no
+ *  screen has to remember which way to apply them. */
+export function computeFees(grossSales: number, saleCount: number): FeeBreakdown {
+  const whatnotFee = -cents(grossSales * WHATNOT_COMMISSION_RATE)
+  const processingFee = -cents(
+    grossSales * PROCESSING_RATE + saleCount * PROCESSING_PER_TRANSACTION
+  )
+  return {
+    grossSales: cents(grossSales),
+    saleCount,
+    whatnotFee,
+    processingFee,
+    totalFees: cents(whatnotFee + processingFee)
+  }
+}
+
 export interface StreamDayFinance {
   /** Business day (a session's streamDate). */
   streamDate: string
@@ -486,25 +569,44 @@ export interface StreamDayFinance {
   /** Total minutes streamed that day. */
   minutes: number
 
-  // Revenue
+  // --- Revenue ------------------------------------------------------------
+  /** Gross sales, before Whatnot's cut. */
   sales: number
-  shippingSubsidy: number
+  /** Sale rows — the per-transaction fee is charged this many times. */
+  saleCount: number
   tips: number
   bonuses: number
+  /** sales + tips + bonuses. What came in before fees. */
+  totalRevenue: number
+
+  // --- Fees (all negative) ------------------------------------------------
+  whatnotFee: number
+  processingFee: number
+  totalFees: number
+  /** totalRevenue + totalFees. What Whatnot actually keeps for you. */
+  netRevenue: number
+
+  // --- Shipping, tracked on its own -------------------------------------
+  /** Whatnot's contribution toward postage. Positive. */
+  shippingSubsidy: number
+  /** Postage charged back by Whatnot. Negative. */
+  shippingCharges: number
+  /** Postage for mailing giveaways won on stream. Negative. */
+  giveawayShipping: number
+  /** Postage on a refunded order. Negative. */
+  refundShipping: number
+  /** Subsidy less all postage. Can land either side of zero. */
+  netShipping: number
+
+  // --- Other show costs ---------------------------------------------------
+  /** Paid promotion. Negative. */
+  showBoost: number
+  /** Refunded orders. Negative. */
   reversals: number
 
-  // Show costs
-  giveawayShipping: number
-  shippingCharges: number
-  refundShipping: number
-  showBoost: number
-
-  /** revenue buckets + contra. */
-  grossRevenue: number
-  /** All expense buckets, as a negative number. */
-  showCosts: number
-  /** grossRevenue + showCosts. */
-  netRevenue: number
+  /** netRevenue + netShipping + showBoost + reversals. The day's bottom line
+   *  before cost of goods. */
+  netAfterCosts: number
 
   rowCount: number
   /** How many of those rows settled after the show rather than during it. Shown
@@ -517,6 +619,21 @@ export interface StreamDayFinance {
    *  here — the full COGS treatment belongs to the complete P&L tab. */
   breakCost: number
   giveawayCost: number
+}
+
+/** How the day rows are rolled up. Days always exist underneath; a period is
+ *  only ever a sum of them, so a week and a month can never disagree. */
+export type FinancePeriod = 'day' | 'week' | 'month'
+
+export interface FinancePeriodRow extends Omit<StreamDayFinance, 'streamDate' | 'sessionTitles'> {
+  /** Period key: '2026-07-24' | '2026-W30' | '2026-07'. */
+  key: string
+  /** Human label: 'Fri, Jul 24' | 'Week of Jul 20' | 'July 2026'. */
+  label: string
+  /** First and last business day actually present in this period. */
+  from: string
+  to: string
+  dayCount: number
 }
 
 export interface StreamFinanceTotals extends Omit<StreamDayFinance, 'streamDate' | 'sessionTitles'> {
@@ -548,6 +665,11 @@ export interface UnattributedSummary {
 
 export interface StreamingFinanceView {
   days: StreamDayFinance[]
+  /** The same days rolled into weeks and months. Derived from `days`, never
+   *  recomputed from rows, so a period can never disagree with the days inside
+   *  it. */
+  weeks: FinancePeriodRow[]
+  months: FinancePeriodRow[]
   totals: StreamFinanceTotals
   unattributed: UnattributedSummary
   imports: LedgerImport[]

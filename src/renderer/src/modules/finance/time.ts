@@ -32,6 +32,19 @@ export function shortDayLabel(key: string): string {
   return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
 }
 
+/**
+ * "Jul 20" — one end of a week or month span.
+ *
+ * No weekday and no year, because this only ever appears beneath a label that
+ * already carries them ("Week of Jul 20", "July 2026"). Repeating either turns a
+ * quiet caption into a second heading competing with the row's own.
+ */
+export function compactDayLabel(key: string): string {
+  const d = parseDayKey(key)
+  if (!d) return key || '—'
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
 /** "Friday, July 24, 2026" — used wherever a day heading must be unambiguous. */
 export function longDayLabel(key: string): string {
   const d = parseDayKey(key)

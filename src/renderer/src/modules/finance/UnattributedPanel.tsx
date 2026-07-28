@@ -14,15 +14,20 @@ import { crossedDays, shortDayLabel, timeLabel } from './time'
 const CLUSTER_PREVIEW = 6
 
 /**
- * Money that matched no show — the panel that decides whether the rest of this
- * screen can be believed.
+ * Money that matched no show.
  *
- * A row is attributed only when its instant falls inside a logged session, and
- * RM often runs two shows a day while only the evening one gets clocked. So a
- * big unattributed number is the normal state of a fresh import, not a bug: on
- * real data it has been about a quarter of the business. It is shown at full
- * size, with the missing shows named, because the fix is a two-minute job and
- * nobody does a job they cannot see.
+ * This is INFORMATION, not a failure, and the panel is written that way on the
+ * owner's instruction: "if a stream isn't in the streaming schedule, don't worry
+ * about it, it'll just show up empty." A row is attributed only when its instant
+ * falls inside a logged session, RM often runs two shows a day and only the
+ * evening one gets clocked, and on real data this pile has been about a quarter
+ * of the business. Nothing is lost and nothing is wrong — the money is stored,
+ * counted, and waiting for a session to claim it.
+ *
+ * So the panel is neutral: a plain surface and a plain heading. What stays loud
+ * is the CLUSTERS, because they are the only thing here that is actionable —
+ * each one names a time window where a show almost certainly ran, and adding it
+ * is a two-minute job nobody does if they cannot see it.
  */
 export function UnattributedPanel({
   view,
@@ -48,8 +53,10 @@ export function UnattributedPanel({
     [unattributed.clusters]
   )
 
-  const attributed = totals.grossRevenue
-  const pool = attributed + unattributed.amount
+  // Measured against the attributed TOP line, not net: the unattributed figure
+  // is a raw sum of ledger rows with no fees taken off it, so comparing it to
+  // net revenue would overstate the share against a smaller denominator.
+  const pool = totals.totalRevenue + unattributed.amount
   const share = pool > 0 ? unattributed.amount / pool : 0
 
   const reattribute = async (): Promise<void> => {
@@ -98,12 +105,13 @@ export function UnattributedPanel({
     <section className="fin-unattr">
       <div className="fin-unattr-head">
         <span className="fin-unattr-icon" aria-hidden="true">
-          <Icon name="Siren" size={18} />
+          <Icon name="CalendarRange" size={18} />
         </span>
         <div className="fin-unattr-headline">
-          <h3>Money with no show attached</h3>
+          <h3>Waiting for a show</h3>
           <p>
-            These rows fell outside every logged session, so none of it is on any day below.
+            These rows happened outside every logged session, so they are not on any day yet. That
+            is expected — a stream that was never in the schedule simply has nothing to attach to.
           </p>
         </div>
         <div className="fin-unattr-figure">
@@ -115,13 +123,13 @@ export function UnattributedPanel({
         </div>
       </div>
 
-      <Note tone="warn" icon="Info">
+      <Note tone="info" icon="Info">
         A sale is matched only when a session covers the moment it happened. RM often runs two shows
-        a day and only the evening one gets clocked, so an afternoon block ends up here in full.
+        a day and only the evening one gets clocked, so an afternoon block sits here in full.
         Settlement costs that post after a show — shipping, subsidies, giveaway postage — are booked
-        back to the show that caused them, so what is left here is mostly real sales from shows
-        nobody logged. Log the missing session in <b>Streaming</b>, then press <b>Re-attribute</b>:
-        every row is still stored and will land on the right day.
+        back to the show that caused them, so what waits here is mostly real sales from shows nobody
+        logged. Nothing is lost: every row is stored. Log the missing session in <b>Streaming</b>,
+        press <b>Re-attribute</b>, and it lands on the right day.
       </Note>
 
       {unattributed.byBucket.length > 0 && (
@@ -140,6 +148,8 @@ export function UnattributedPanel({
         </div>
       )}
 
+      {/* The clusters keep the emphasis the panel as a whole gave up. They are
+          the only actionable thing here: each one is a show you can go and log. */}
       <div className="fin-cluster-block">
         <span className="fin-section-title">
           <Icon name="CalendarDays" size={15} />
