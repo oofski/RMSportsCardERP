@@ -222,10 +222,7 @@ export function SessionDetail({
         adding={adding === 'break'}
         onOpenAdd={() => setAdding('break')}
         onCloseAdd={() => setAdding(null)}
-        onAdded={(next) => {
-          setAdding(null)
-          void applyDetail(next)
-        }}
+        onAdded={(next) => void applyDetail(next)}
         onRemove={setRemoving}
         sessionId={session.id}
       />
@@ -241,10 +238,7 @@ export function SessionDetail({
         adding={adding === 'giveaway'}
         onOpenAdd={() => setAdding('giveaway')}
         onCloseAdd={() => setAdding(null)}
-        onAdded={(next) => {
-          setAdding(null)
-          void applyDetail(next)
-        }}
+        onAdded={(next) => void applyDetail(next)}
         onRemove={setRemoving}
         sessionId={session.id}
       />

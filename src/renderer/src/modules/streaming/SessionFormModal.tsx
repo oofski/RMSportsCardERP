@@ -166,9 +166,11 @@ export function SessionFormModal({
         <Field label="Start time">
           <Input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} />
         </Field>
+        {/* Status is derived from the end time upstream, so clearing one really
+            does put the show back on air. Better said than discovered. */}
         <Field
           label="End time"
-          hint={isLive ? 'Blank keeps it live' : undefined}
+          hint={isLive ? 'Blank keeps it live' : 'Blank puts it back on air'}
           error={endsBeforeStart ? 'Before the start' : undefined}
         >
           <Input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} />

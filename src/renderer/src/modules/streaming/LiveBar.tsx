@@ -126,7 +126,6 @@ export function LiveBar({
                 value={hostId}
                 onChange={(e) => setHostId(e.target.value)}
                 aria-label="Host"
-                className="stm-host-select"
               >
                 <option value="">No host</option>
                 {hosts.map((h) => (

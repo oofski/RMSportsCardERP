@@ -130,8 +130,12 @@ export function registerInventoryIpc(): void {
   ipcMain.handle(IPC.invProductsList, (): InventoryProduct[] =>
     can('module.inventory') ? listProducts() : []
   )
+  // Streaming needs this too: recording a break means picking the product that
+  // was opened, and gating the search on inventory alone would leave a
+  // streaming-only operator able to read every session but unable to add a
+  // single line to one. Read-only catalog lookup either way.
   ipcMain.handle(IPC.invCatalogSearch, (_e, query: string): InventoryProduct[] =>
-    can('module.inventory') ? searchCatalog(query ?? '') : []
+    can('module.inventory') || can('module.streaming') ? searchCatalog(query ?? '') : []
   )
   ipcMain.handle(IPC.invStats, (): InventoryStats | null =>
     can('module.inventory') ? inventoryStats() : null

@@ -87,6 +87,14 @@ export function AddItemForm({
       }
       toast.success(`${qty} × ${product.name} out of ${location}.`)
       onAdded(res.data)
+      // A show breaks many boxes in a row, so the form stays open and resets
+      // itself instead of making the operator reopen it every time. The break
+      // number steps on because that is what the next one almost always is.
+      setProduct(null)
+      setQuantity('1')
+      setRecipient('')
+      setNote('')
+      setBreakNumber(num === null ? '' : String(num + 1))
     } finally {
       setBusy(false)
     }
@@ -196,8 +204,10 @@ export function AddItemForm({
       )}
 
       <div className="stm-additem-acts">
+        {/* "Close", not "Cancel": the panel survives a successful add, so by the
+            second line there is nothing left to cancel. */}
         <Button variant="ghost" onClick={onCancel}>
-          Cancel
+          Close
         </Button>
         <Button
           variant="primary"

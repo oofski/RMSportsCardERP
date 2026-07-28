@@ -9872,3 +9872,1172 @@ button.sor-team:focus-visible {
   font-size: 12.5px;
   color: var(--text-2);
 }
+
+/* ==========================================================================
+   Streaming — live bar, month calendar, session detail
+   --------------------------------------------------------------------------
+   Three things drive every colour choice below.
+
+   1. A LIVE session must be unmistakable, because a forgotten "End stream"
+      silently swallows days of ledger rows. Live is the success ramp, and the
+      runaway warning is the danger ramp — not a softer amber.
+   2. A QUIET day says nothing. `calendar()` only returns days that carried a
+      show, so an empty cell has no numbers to print, and printing zeroes would
+      make a slow month look like a broken screen.
+   3. Filled chips take --text-inverse, never a literal white: dark's success
+      and brand ramps are LIGHT colours, so white-on-fill drops under 3:1 there
+      while --text-inverse flips with the theme and stays legible in both.
+
+   Contrast notes are inline where a pair was actually checked.
+   ========================================================================== */
+
+.stm-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.stm-tabs {
+  margin: 0;
+}
+
+/* ---------- The live bar ---------- */
+/* Always mounted: either offering Start, or reporting what is on air. It never
+   collapses, because "is anything live?" is the question the operator needs
+   answered before anything else on this screen means what it says. */
+.stm-live {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+.stm-live.is-loading {
+  color: var(--text-2);
+  font-size: 13px;
+}
+.stm-live.is-on {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  /* 4.9:1 in light, 6.4:1 in dark for --success-strong on --success-bg. */
+  border-color: var(--success);
+  background: var(--success-bg);
+}
+.stm-live.is-runaway {
+  border-color: var(--danger);
+}
+.stm-live-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+.stm-live-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.stm-live-label.off {
+  color: var(--text-2);
+}
+.stm-live-label.on {
+  color: var(--success-strong);
+}
+.stm-live-hint {
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.stm-live-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: var(--success-strong);
+  animation: stm-pulse 1.6s ease-in-out infinite;
+}
+.stm-live-dot.small {
+  width: 7px;
+  height: 7px;
+}
+@keyframes stm-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(0.82);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .stm-live-dot {
+    animation: none;
+  }
+}
+.stm-live-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+.stm-live-title:hover {
+  text-decoration: underline;
+}
+.stm-live-since {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.stm-live-clock {
+  margin-left: auto;
+  font-size: 21px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  letter-spacing: 0.01em;
+}
+/* A runaway session is an error condition, not a preference — danger ramp.
+   --danger-strong on --danger-bg is 4.8:1 light / 5.5:1 dark. */
+.stm-live-warn {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 9px 11px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-sm);
+  background: var(--danger-bg);
+  color: var(--danger-strong);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.stm-live-warn svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+.stm-start {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.stm-start .input {
+  flex: 1 1 180px;
+  min-width: 0;
+  height: 36px;
+}
+.stm-start .select {
+  flex: 0 1 150px;
+  min-width: 0;
+  height: 36px;
+}
+
+/* ---------- Calendar ---------- */
+.stm-cal-section,
+.stm-list-section,
+.stm-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+.stm-cal-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.stm-cal-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: auto;
+}
+.stm-nav-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-2);
+  cursor: pointer;
+  transition:
+    border-color 0.13s ease,
+    color 0.13s ease;
+}
+.stm-nav-btn:hover {
+  border-color: var(--brand-400);
+  color: var(--brand-600);
+}
+.stm-cal-month {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 150px;
+  justify-content: center;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--text);
+}
+.stm-today-btn {
+  height: 30px;
+  padding: 0 11px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.stm-today-btn:hover:not(:disabled) {
+  border-color: var(--brand-400);
+  color: var(--brand-600);
+}
+.stm-today-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.stm-sum {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.stm-sum-item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 6px 11px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+.stm-sum-item svg {
+  align-self: center;
+  color: var(--text-3);
+}
+.stm-sum-item b {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+.stm-sum-item em {
+  font-style: normal;
+}
+.stm-sum-item.strong {
+  border-color: var(--brand-300);
+  background: var(--brand-soft);
+}
+/* --brand-700 on --brand-soft is 7.5:1 light / 7.4:1 dark. */
+.stm-sum-item.strong b,
+.stm-sum-item.strong svg {
+  color: var(--brand-700);
+}
+.stm-sum-item.strong em {
+  color: var(--text-2);
+}
+
+.stm-cal {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: opacity 0.15s ease;
+}
+.stm-cal.is-loading {
+  opacity: 0.55;
+}
+.stm-cal-week,
+.stm-cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+}
+.stm-wd {
+  padding: 0 2px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  /* --text-3 would be 2.9:1 on --bg at this size; structural chrome still has
+     to be readable. */
+  color: var(--text-2);
+}
+.stm-skel {
+  min-height: 104px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  animation: stm-skel-pulse 1.5s ease-in-out infinite;
+}
+@keyframes stm-skel-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 0.95;
+  }
+}
+
+.stm-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  min-height: 104px;
+  padding: 7px 8px;
+  overflow: hidden;
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  transition:
+    border-color 0.13s ease,
+    transform 0.13s ease;
+}
+.stm-cell.pad {
+  border-color: transparent;
+  background: transparent;
+  cursor: default;
+}
+/* An empty day is quiet, not broken. It keeps its edge (so the month's shape
+   stays readable) and its number, and prints nothing else. */
+.stm-cell.quiet {
+  background: var(--surface-2);
+}
+.stm-cell.quiet .stm-cell-num {
+  color: var(--text-2);
+  font-weight: 600;
+}
+.stm-cell.has-activity {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-sm);
+}
+.stm-cell:hover {
+  border-color: var(--brand-400);
+}
+.stm-cell.has-activity:hover {
+  transform: translateY(-1px);
+}
+.stm-cell.today {
+  border-color: var(--brand-400);
+}
+/* Unmistakable: the green edge plus a ring, so a live day reads as different
+   even at a glance across a full month. */
+.stm-cell.is-live {
+  border-color: var(--success);
+  background: var(--success-bg);
+  box-shadow: 0 0 0 2px var(--success-bg);
+}
+.stm-cell.selected,
+.stm-cell:focus-visible {
+  outline: 2px solid var(--brand-500);
+  outline-offset: -2px;
+}
+.stm-cell-top {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.stm-cell-num {
+  font-size: 12.5px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--text);
+}
+.stm-today-dot {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--brand-soft);
+  color: var(--brand-700);
+  font-size: 9.5px;
+  font-weight: 700;
+}
+/* Filled with the success ramp; --text-inverse rather than white because dark's
+   --success-strong is a light green (white on it would be 2.2:1). 4.8:1 light,
+   8.4:1 dark. */
+.stm-cell-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--success-strong);
+  color: var(--text-inverse);
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+.stm-cell-live .stm-live-dot {
+  background: var(--text-inverse);
+}
+.stm-cell-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.stm-cell-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 650;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.stm-cell-count svg {
+  flex: none;
+  color: var(--text-3);
+}
+.stm-cell-dur {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--text-2);
+}
+.stm-cell-units {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.stm-cell-units em {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-style: normal;
+  font-size: 10.5px;
+  font-weight: 650;
+  color: var(--text-2);
+}
+.stm-cell-cost {
+  margin-top: auto;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+}
+.stm-cell-quiet {
+  flex: 1;
+}
+
+/* ---------- The day panel ---------- */
+.stm-day-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 13px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+.stm-day-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.stm-day-date {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-right: auto;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+}
+.stm-day-date svg {
+  color: var(--text-3);
+}
+.stm-day-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-2);
+  cursor: pointer;
+}
+.stm-day-close:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.stm-day-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 2px;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.stm-day-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* ---------- Session rows ---------- */
+.stm-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 0.13s ease,
+    background 0.13s ease;
+}
+.stm-row:hover {
+  border-color: var(--brand-400);
+  background: var(--surface-2);
+}
+.stm-row > svg {
+  flex: none;
+  color: var(--text-3);
+}
+.stm-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+.stm-row-title {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stm-row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.stm-row-date {
+  font-weight: 650;
+  color: var(--text-2);
+}
+.stm-row-host {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.stm-row-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* ---------- Chips & the +1d marker ---------- */
+.stm-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.stm-chip.live {
+  background: var(--success-bg);
+  color: var(--success-strong);
+  border: 1px solid var(--success);
+}
+/* Measured time reads neutral; recalled time reads brand-tinted, so the two are
+   distinguishable without reading the label. Both clear 5.6:1 in both themes. */
+.stm-chip.src-live {
+  background: var(--surface-3);
+  color: var(--text-2);
+}
+.stm-chip.src-manual {
+  background: var(--brand-soft);
+  color: var(--brand-700);
+}
+.stm-span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.stm-span svg {
+  color: var(--text-3);
+}
+.stm-span .mono {
+  color: var(--text);
+  font-weight: 650;
+}
+.stm-span-open {
+  font-style: italic;
+  color: var(--success-strong);
+}
+.stm-span-dur {
+  color: var(--text-2);
+}
+/* The whole point of the module: a show that crossed midnight says so. */
+.stm-plus {
+  padding: 1px 6px;
+  border: 1px solid var(--brand-300);
+  border-radius: 999px;
+  background: var(--brand-soft);
+  color: var(--brand-700);
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+/* ---------- The flat list ---------- */
+.stm-list-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+}
+.stm-list-head .field {
+  margin-bottom: 0;
+  width: 160px;
+}
+.stm-list-count {
+  margin-right: auto;
+  padding-bottom: 10px;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.stm-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.stm-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.stm-group-date {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-2);
+}
+
+/* ---------- Session detail ---------- */
+.stm-detail-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.stm-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px 5px 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 12.5px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.stm-back:hover {
+  border-color: var(--brand-400);
+  color: var(--brand-600);
+}
+.stm-detail-title {
+  font-size: 19px;
+  font-weight: 700;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.stm-detail-acts {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+.stm-detail-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.stm-meta-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.stm-meta-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+.stm-meta-item b {
+  font-size: 13.5px;
+  font-weight: 650;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.stm-totals {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 10px;
+}
+.stm-total-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.stm-total-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--text-2);
+}
+.stm-total-card b {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text);
+}
+.stm-total-unit {
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--text-2);
+}
+.stm-total-card em {
+  font-style: normal;
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+.stm-total-card.strong {
+  border-color: var(--brand-300);
+  background: var(--brand-soft);
+}
+.stm-total-card.strong b,
+.stm-total-card.strong .stm-total-label {
+  color: var(--brand-700);
+}
+
+/* ---------- Break / giveaway sections ---------- */
+.stm-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 13px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.stm-section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.stm-section-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-right: auto;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+}
+.stm-count {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 650;
+}
+.stm-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+/* Product first and product biggest: the operator asked to see the ITEM, not an
+   id, so the image, name, sku and category all sit before any number. */
+.stm-line {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) auto auto auto 30px;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.stm-line-thumb {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-3);
+}
+.stm-line-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.stm-line-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.stm-line-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.stm-line-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+.stm-loc,
+.stm-line-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--text-2);
+  font-size: 10.5px;
+  font-weight: 700;
+}
+.stm-line-note {
+  font-size: 11.5px;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+.stm-line-qty {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+}
+.stm-line-unit {
+  font-size: 12px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+.stm-line-total {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+}
+.stm-line-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-2);
+  cursor: pointer;
+}
+.stm-line-remove:hover {
+  border-color: var(--danger);
+  color: var(--danger-strong);
+}
+.stm-line-remove.placeholder {
+  border-color: transparent;
+  background: none;
+  cursor: default;
+}
+
+/* ---------- Add break / giveaway ---------- */
+.stm-additem {
+  display: flex;
+  flex-direction: column;
+  padding: 13px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+.stm-additem .field:last-of-type {
+  margin-bottom: 0;
+}
+.stm-additem-acts {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+/* The line that has to be read before the button is pressed. Amber ground with
+   --text ink: --warning on --warning-bg is only 2.9:1 in light. */
+.stm-consume {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin-top: 4px;
+  padding: 9px 11px;
+  border: 1px solid var(--warning);
+  border-radius: var(--radius-sm);
+  background: var(--warning-bg);
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.stm-consume svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+/* ---------- Forms, notes, empties ---------- */
+.stm-form-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 14px;
+}
+.stm-form-row > .field {
+  flex: 1 1 160px;
+  min-width: 0;
+}
+.stm-preview {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: 13px;
+  color: var(--text-2);
+}
+.stm-preview > svg {
+  color: var(--text-3);
+}
+.stm-preview-times {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  font-weight: 650;
+}
+.stm-preview-times em {
+  font-style: italic;
+  font-weight: 500;
+  color: var(--text-2);
+}
+.stm-preview-dur {
+  margin-left: auto;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--text);
+}
+.stm-preview-note {
+  flex-basis: 100%;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-2);
+}
+.stm-inline-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.stm-inline-note svg {
+  flex: none;
+  margin-top: 1px;
+}
+.stm-inline-note.warn {
+  border-color: var(--warning);
+  background: var(--warning-bg);
+  color: var(--text);
+}
+.stm-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 13px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius);
+  background: var(--danger-bg);
+  /* --danger itself is only 3.5:1 on its own tint in light. */
+  color: var(--danger-strong);
+  font-size: 12.5px;
+}
+.stm-error span {
+  flex: 1;
+  min-width: 140px;
+}
+.stm-empty-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 14px 13px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.stm-empty-row svg {
+  flex: none;
+  color: var(--text-3);
+}
+.stm-empty-acts {
+  display: flex;
+  gap: 8px;
+}
+.stm-confirm-lead {
+  margin: 0 0 10px;
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--text-2);
+}
+.stm-confirm-lead b {
+  color: var(--text);
+}
+
+/* ---------- Narrow ---------- */
+/* At ~900px the seven columns are about 110px each. The cells shed their
+   secondary rows rather than letting the grid scroll sideways — a calendar that
+   moves horizontally stops being a calendar. */
+@media (max-width: 900px) {
+  .stm-cell {
+    min-height: 88px;
+    padding: 6px;
+  }
+  .stm-cell-units,
+  .stm-cell-dur {
+    display: none;
+  }
+  /* The LIVE badge keeps its word; the Today pill gives up its label instead —
+     between the two, "is a show on air right now" is the one that must survive
+     a narrow window. Both cells still carry a coloured border. */
+  .stm-today-dot {
+    font-size: 0;
+    padding: 4px;
+  }
+  .stm-live-clock {
+    font-size: 18px;
+  }
+  /* Unit cost is the one number that can be inferred from the other two, so it
+     is what goes when the row runs out of width. Five columns for the five
+     children that remain. */
+  .stm-line {
+    grid-template-columns: 40px minmax(0, 1fr) auto auto 30px;
+  }
+  .stm-line-unit {
+    display: none;
+  }
+  .stm-line-thumb {
+    width: 40px;
+    height: 40px;
+  }
+  .stm-detail-acts {
+    margin-left: 0;
+  }
+}
+@media (max-width: 640px) {
+  .stm-cal-week,
+  .stm-cal-grid {
+    gap: 4px;
+  }
+  .stm-cell {
+    min-height: 74px;
+  }
+  .stm-cell-count {
+    font-size: 10px;
+  }
+  .stm-cell-cost {
+    font-size: 11px;
+  }
+  .stm-list-head .field {
+    width: 100%;
+  }
+}

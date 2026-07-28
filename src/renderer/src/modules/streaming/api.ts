@@ -36,17 +36,19 @@ export interface StreamingApi {
   removeItem(id: string): Promise<Result<StreamSessionDetail>>
 }
 
-const bridge = api as unknown as { streaming?: StreamingApi }
+/**
+ * The annotation is the point: if the preload bridge ever stops satisfying the
+ * interface above, this line fails to compile instead of the drift surfacing as
+ * an undefined at runtime, halfway through recording a break.
+ */
+export const streaming: StreamingApi = api.streaming
 
 /**
- * False when the app is running against a build whose preload predates this
- * module. Every call here consumes stock or moves money, so the module says so
- * plainly rather than throwing "cannot read property of undefined" at the first
- * click.
+ * False when the renderer is running against an older packaged preload that
+ * predates this module. Every call here moves stock, so the module says so
+ * plainly rather than throwing "cannot read property of undefined" on click.
  */
-export const streamingReady = typeof bridge.streaming?.calendar === 'function'
-
-export const streaming = bridge.streaming as StreamingApi
+export const streamingReady = typeof streaming?.calendar === 'function'
 
 /** Result → message, so no failed write is ever swallowed into silence. */
 export function resultError(res: Result<unknown>, fallback: string): string {

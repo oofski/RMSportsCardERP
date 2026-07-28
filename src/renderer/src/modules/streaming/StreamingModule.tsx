@@ -4,7 +4,7 @@ import type { StreamSession } from '@shared/streaming'
 import { useSession } from '../../lib/session'
 import { api } from '../../lib/api'
 import { Icon } from '../../components/Icon'
-import { CenterLoader, EmptyState } from '../../components/ui'
+import { EmptyState } from '../../components/ui'
 import { LiveBar } from './LiveBar'
 import { StreamCalendar } from './StreamCalendar'
 import { SessionsTab } from './SessionsTab'
@@ -98,15 +98,9 @@ export function StreamingModule(): JSX.Element {
     )
   }
 
-  if (activeLoading && !active) {
-    // Only the very first read blocks; later refreshes happen under the bar.
-    return (
-      <div className="content-narrow stm-shell">
-        <CenterLoader />
-      </div>
-    )
-  }
-
+  // Nothing blocks on the live read: the bar reports its own progress and the
+  // calendar draws its own skeleton, so the month is already loading while the
+  // "is anything on air" question resolves.
   return (
     <div className="content-narrow stm-shell">
       <LiveBar
