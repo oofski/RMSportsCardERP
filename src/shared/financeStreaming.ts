@@ -319,6 +319,96 @@ export function rowInSession(instantMs: number, startedAt: string, endedAt: stri
  */
 export const SESSION_VACUUM_SHARE = 0.4
 
+/**
+ * How a row found its day.
+ * - in_window    : its instant fell inside a session. The strong case.
+ * - carried_back : it settled after the show that caused it (see below).
+ * - unattributed : nothing owns it, and the app says so rather than guessing.
+ */
+export type LedgerAttribution = 'in_window' | 'carried_back' | 'unattributed'
+
+/**
+ * CARRY-BACK: settlement rows belong to the show that caused them.
+ *
+ * Whatnot does not post a show's shipping economics while the show is running.
+ * Subsidies batch hours later, platform shipping charges post the next morning,
+ * giveaway postage lands whenever the label is bought. A show that runs 11pm to
+ * 3am produces adjustment rows all the way through the following afternoon —
+ * and if the next show starts at 9pm, every one of those rows sits in the gap
+ * between two sessions, owned by neither.
+ *
+ * Leaving them unattributed would be technically defensible and practically
+ * useless: the operator would see a permanent pile of shipping costs that can
+ * never be assigned to anything, no matter how carefully they log their shows.
+ * These rows are not missing a session — they are the *aftermath* of one.
+ *
+ * So a row in a gap attaches to the session that most recently ENDED before it.
+ *
+ * WHY THIS IS NOT APPLIED TO SALES — the important half of the rule.
+ *
+ * A sale is not a settlement, it is an event with its own time. RM runs two
+ * shows most days, and an unlogged afternoon show produces a solid block of
+ * genuine sales sitting in exactly the same gap. Carrying those back would
+ * silently merge a whole missing show into the previous night's numbers, and
+ * the operator would never learn the session was missing — the money would just
+ * be quietly on the wrong day. That is the one failure this design exists to
+ * prevent, so sales stay unattributed and visible until a session is added.
+ *
+ * Show Boost is excluded for the opposite reason: it is bought FOR an upcoming
+ * show, so attaching it to the previous one books it backwards in time.
+ */
+const CARRY_BACK_BUCKETS = new Set<LedgerBucket>([
+  'shipping_subsidy',
+  'shipping_charge',
+  'giveaway_shipping',
+  'refund_shipping',
+  'sale_reversal',
+  'seller_bonus',
+  'tip'
+])
+
+export function carryBackEligible(bucket: LedgerBucket): boolean {
+  return CARRY_BACK_BUCKETS.has(bucket)
+}
+
+/**
+ * A settlement row will not reach back further than this to find its show.
+ *
+ * The natural boundary is the next session starting, and that alone handles the
+ * normal case. This bound covers the abnormal one: after a week off, the first
+ * subsidy batch of the new week must not attach itself to a show from six days
+ * ago. Generous enough for the real pattern (a 3am finish still settling at 8pm
+ * is 17 hours) without spanning a gap that means something.
+ */
+export const CARRY_BACK_MAX_HOURS = 36
+
+/**
+ * Find the session a gap row settles against: the latest one that ended at or
+ * before the row, within the bound. `sessions` must be sorted by startedAt.
+ *
+ * A live session (no end) is skipped — it has not finished, so nothing can be
+ * settling after it, and anything inside it was already matched in-window.
+ */
+export function findCarryBackSession<T extends { startedAt: string; endedAt: string | null }>(
+  instantMs: number,
+  sessions: readonly T[]
+): T | null {
+  let best: T | null = null
+  let bestEnd = -Infinity
+  for (const s of sessions) {
+    if (!s.endedAt) continue
+    const end = new Date(s.endedAt).getTime()
+    if (Number.isNaN(end) || end > instantMs) continue
+    if (end > bestEnd) {
+      bestEnd = end
+      best = s
+    }
+  }
+  if (!best) return null
+  if (instantMs - bestEnd > CARRY_BACK_MAX_HOURS * 3600_000) return null
+  return best
+}
+
 // ---------------------------------------------------------------------------
 // Stored shapes
 // ---------------------------------------------------------------------------
@@ -340,6 +430,8 @@ export interface LedgerRow {
   sessionId: string | null
   /** Business day — the session's streamDate. null while unattributed. */
   streamDate: string | null
+  /** How it got that day. 'carried_back' means it settled after the show. */
+  attribution: LedgerAttribution
   breakNumber: number | null
   /** Stable identity for de-duplicating re-uploads of overlapping weeks. */
   fingerprint: string
@@ -411,6 +503,11 @@ export interface StreamDayFinance {
   netRevenue: number
 
   rowCount: number
+  /** How many of those rows settled after the show rather than during it. Shown
+   *  so a day's total is explainable: without it, a show's shipping costs look
+   *  like they appeared from nowhere hours after it ended. */
+  carriedBackRows: number
+  carriedBackAmount: number
 
   /** From the Streaming module: cost of stock consumed that day. Informational
    *  here — the full COGS treatment belongs to the complete P&L tab. */

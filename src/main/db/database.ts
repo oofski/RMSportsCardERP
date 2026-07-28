@@ -671,6 +671,113 @@ function migrate(database: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_stream_item_lots_item
       ON stream_item_lots (item_id);
+
+    -- ===================================================================
+    -- v23: Finance → Streaming. The Whatnot ledger, attributed to shows.
+    --
+    -- One upload of Whatnot's weekly CSV. rows_quarantined is the number that
+    -- matters: a line this app could not read is kept verbatim in
+    -- ledger_quarantine rather than dropped, and every total is labelled
+    -- incomplete while it is non-zero. A vanished row is money with no trace.
+    -- ===================================================================
+    CREATE TABLE IF NOT EXISTS ledger_imports (
+      id                TEXT PRIMARY KEY,
+      filename          TEXT NOT NULL DEFAULT '',
+      rows_parsed       INTEGER NOT NULL DEFAULT 0,
+      rows_imported     INTEGER NOT NULL DEFAULT 0,
+      rows_duplicate    INTEGER NOT NULL DEFAULT 0,
+      rows_repaired     INTEGER NOT NULL DEFAULT 0,
+      rows_quarantined  INTEGER NOT NULL DEFAULT 0,
+      first_occurred_at TEXT,
+      last_occurred_at  TEXT,
+      warnings_json     TEXT NOT NULL DEFAULT '[]',
+      created_at        TEXT NOT NULL,
+      created_by        TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_ledger_imports_created
+      ON ledger_imports (created_at DESC);
+
+    -- One money movement from the ledger.
+    --
+    -- fingerprint is the entire de-duplication guarantee: the sha256 of the
+    -- SIX-tuple (created date, amount, listing id, order id, message,
+    -- transaction type) — see ledgerFingerprintSource in
+    -- @shared/financeStreaming. Every shorter key was measured against real
+    -- exports and silently loses rows: (order, type, amount) drops 156 and
+    -- (created, message, amount) drops 274, because 154 platform charges are
+    -- identical -$4.15 rows and whole batches of $0.00 shipping subsidies share
+    -- one timestamp. Status and Completed Date are deliberately NOT in the key,
+    -- so a row that moves from pending to completed between two exports stays
+    -- ONE row instead of being counted twice.
+    --
+    -- stream_date is COPIED from the matched session, never derived from
+    -- occurred_at. RM's shows run past midnight and 24.5% of all money is
+    -- stamped 00:00-02:59; the local date of the row would move a quarter of
+    -- the business onto the following day.
+    --
+    -- session_id is ON DELETE SET NULL, NOT cascade. Deleting a show must
+    -- orphan its ledger rows into "unattributed" where the operator can see and
+    -- re-home them. Cascading would delete real money to tidy up a typo.
+    --
+    -- attribution records HOW a row got its day, and the distinction is not
+    -- cosmetic. 'in_window' is the strong case. 'carried_back' is a settlement
+    -- row — a shipping subsidy, a platform charge, giveaway postage — that
+    -- Whatnot posted hours after the show that caused it, sitting in the gap
+    -- between two sessions and owned by neither; it attaches to the show that
+    -- most recently ended before it. Sales are NEVER carried back: RM runs two
+    -- shows most days, so an unlogged afternoon show is a block of genuine sales
+    -- in exactly that gap, and folding it into the previous night would hide the
+    -- missing session instead of surfacing it.
+    CREATE TABLE IF NOT EXISTS ledger_rows (
+      id                 TEXT PRIMARY KEY,
+      import_id          TEXT NOT NULL,
+      occurred_at        TEXT NOT NULL,
+      amount             REAL NOT NULL DEFAULT 0,
+      order_id           TEXT,
+      listing_id         TEXT,
+      message            TEXT NOT NULL DEFAULT '',
+      txn_type           TEXT NOT NULL DEFAULT '',
+      bucket             TEXT NOT NULL DEFAULT 'unclassified',
+      session_id         TEXT,
+      stream_date        TEXT,
+      attribution        TEXT NOT NULL DEFAULT 'unattributed',
+      break_number       INTEGER,
+      fingerprint        TEXT NOT NULL,
+      repaired           INTEGER NOT NULL DEFAULT 0,
+      classifier_version INTEGER NOT NULL DEFAULT 1,
+      created_at         TEXT NOT NULL,
+      FOREIGN KEY (import_id)  REFERENCES ledger_imports (id)  ON DELETE CASCADE,
+      FOREIGN KEY (session_id) REFERENCES stream_sessions (id) ON DELETE SET NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_rows_fingerprint
+      ON ledger_rows (fingerprint);
+    CREATE INDEX IF NOT EXISTS idx_ledger_rows_stream_date
+      ON ledger_rows (stream_date);
+    CREATE INDEX IF NOT EXISTS idx_ledger_rows_session
+      ON ledger_rows (session_id);
+    CREATE INDEX IF NOT EXISTS idx_ledger_rows_bucket
+      ON ledger_rows (bucket);
+    CREATE INDEX IF NOT EXISTS idx_ledger_rows_occurred
+      ON ledger_rows (occurred_at);
+    CREATE INDEX IF NOT EXISTS idx_ledger_rows_import
+      ON ledger_rows (import_id);
+
+    -- A line that could not be read, kept verbatim with the reason. Whatnot's
+    -- export is not valid RFC4180 (it wraps show titles in unescaped quotes),
+    -- so the importer parses strictly, repairs the known malformation, and
+    -- quarantines whatever is left. It NEVER discards a line: the import still
+    -- commits (partial data beats no data) but says out loud that it is short.
+    CREATE TABLE IF NOT EXISTS ledger_quarantine (
+      id          TEXT PRIMARY KEY,
+      import_id   TEXT NOT NULL,
+      line_number INTEGER NOT NULL DEFAULT 0,
+      raw_line    TEXT NOT NULL DEFAULT '',
+      reason      TEXT NOT NULL DEFAULT '',
+      created_at  TEXT NOT NULL,
+      FOREIGN KEY (import_id) REFERENCES ledger_imports (id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_ledger_quarantine_import
+      ON ledger_quarantine (import_id);
   `)
 
   if (getMeta(database, 'schema_version') === null) {
@@ -816,7 +923,49 @@ function migrate(database: Database.Database): void {
   // by a constraint (SQLite has no exclusion constraints), and it is not a
   // nicety: an overlap leaves a sale with two candidate shows and no correct
   // way to pick one, which is exactly the attribution the module exists to fix.
-  setMeta(database, 'schema_version', '22')
+  //
+  // v23: the Whatnot ledger (ledger_imports / ledger_rows / ledger_quarantine),
+  // created idempotently above. Purely additive — an upgrading v22 database
+  // gains three empty tables, and no ledger rows means "nothing has been
+  // uploaded yet", which is true.
+  //
+  // Two columns carry the whole design.
+  //
+  // ledger_rows.fingerprint (UNIQUE) is what makes re-uploading an overlapping
+  // week safe. It hashes the SIX-tuple from ledgerFingerprintSource, and the
+  // width is not defensive: measured against two real exports, a key of
+  // (order id, type, amount) silently discards 156 genuine rows and
+  // (created, message, amount) discards 274, because 154 platform charges are
+  // byte-identical -$4.15 rows and batches of $0.00 shipping subsidies share a
+  // timestamp. Order ID is definitively not a key — a sale and its shipping
+  // subsidy share one.
+  //
+  // ledger_rows.stream_date is COPIED from the matched session, never computed
+  // from the row's own instant. On real data 80% of a night show's money is
+  // stamped after midnight and 24.5% of ALL money lands 00:00-02:59, so the
+  // row's local date would file a quarter of the business on the wrong day
+  // while every screen still looked right.
+  //
+  // And session_id is ON DELETE SET NULL rather than CASCADE, deliberately:
+  // deleting a mistyped show must ORPHAN its ledger rows into "unattributed",
+  // never delete money to tidy up a session.
+  //
+  // ledger_rows.attribution says HOW a row got its day: inside a session
+  // ('in_window'), settled after one ('carried_back'), or owned by nothing
+  // ('unattributed'). Whatnot posts a show's shipping economics hours later —
+  // subsidies batch overnight, platform charges post next morning — so those
+  // rows land in the gap between two shows and would otherwise be permanently
+  // unassignable. Sales are deliberately never carried back; see the table
+  // comment above.
+  addColumnIfMissing(database, 'ledger_rows', 'attribution', "TEXT NOT NULL DEFAULT 'unattributed'")
+  // Created HERE rather than in the schema block above, for the same reason
+  // idx_inv_products_upc_norm is: that block runs BEFORE addColumnIfMissing, so
+  // an index on a just-added column would throw "no such column" on any database
+  // that predates it.
+  database.exec(
+    `CREATE INDEX IF NOT EXISTS idx_ledger_rows_attribution ON ledger_rows (attribution)`
+  )
+  setMeta(database, 'schema_version', '23')
 
   // Seed the product catalog once, then apply the on-hand snapshot once.
   seedCatalogIfNeeded(database)

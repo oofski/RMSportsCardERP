@@ -105,6 +105,12 @@ import type {
   StreamSessionDetail,
   UpdateStreamSession
 } from '@shared/streaming'
+import type {
+  LedgerImport,
+  LedgerImportResult,
+  LedgerRow,
+  StreamingFinanceView
+} from '@shared/financeStreaming'
 
 const api = {
   app: {
@@ -485,6 +491,43 @@ const api = {
     /** Puts back exactly the cost layers the line took. */
     removeItem: (id: string): Promise<Result<StreamSessionDetail>> =>
       ipcRenderer.invoke(IPC.streamItemRemove, id)
+  },
+  /**
+   * Finance → Streaming: the Whatnot ledger, attributed to shows.
+   *
+   * Reads resolve to an empty view / [] without `module.finance`; every write
+   * needs `finance.manage` and hands back the freshly derived view, so a screen
+   * never has to refetch to find out what its own action did.
+   *
+   * A row's business day is its session's `streamDate` — the local date the show
+   * STARTED on — so a stream that ran 7/24 into 7/25 counts entirely to 7/24.
+   * Anything that matched no session stays in `unattributed`, clustered by time
+   * so the missing show is visible rather than merely counted.
+   */
+  finance: {
+    /** Day-by-day revenue, totals, unattributed money and the reconciliation
+     *  flag. `reconciled: false` means the numbers do not add up — show it. */
+    streamView: (): Promise<StreamingFinanceView> => ipcRenderer.invoke(IPC.finStreamView),
+    /** Opens a native file picker. Re-importing an overlapping week is safe:
+     *  matched rows are skipped as duplicates, never counted twice. */
+    importLedger: (): Promise<Result<LedgerImportResult>> =>
+      ipcRenderer.invoke(IPC.finLedgerImport),
+    imports: (): Promise<LedgerImport[]> => ipcRenderer.invoke(IPC.finLedgerImports),
+    /** Removes the upload AND the rows it brought in — a correction. */
+    deleteImport: (id: string): Promise<Result<StreamingFinanceView>> =>
+      ipcRenderer.invoke(IPC.finLedgerDeleteImport, id),
+    rows: (filter: {
+      streamDate?: string
+      sessionId?: string
+      bucket?: string
+      unattributed?: boolean
+      limit?: number
+    }): Promise<LedgerRow[]> => ipcRenderer.invoke(IPC.finLedgerRows, filter),
+    /** Re-runs attribution against the sessions as they are NOW. This is how
+     *  unattributed money moves onto a show after the operator adds the session
+     *  they forgot to log — data entry, never a heuristic. */
+    reattribute: (): Promise<Result<StreamingFinanceView>> =>
+      ipcRenderer.invoke(IPC.finLedgerReattribute)
   },
   email: {
     composeInvite: (

@@ -8,6 +8,7 @@ import { registerPurchaseOrdersIpc } from './purchaseOrdersIpc'
 import { registerShippingIpc } from './shippingIpc'
 import { registerStreamingIpc } from './streamingIpc'
 import { registerQuickBooksIpc } from './quickbooksIpc'
+import { registerFinanceIpc } from './financeIpc'
 import { getDb, closeDb } from './db/database'
 import { initUpdater } from './services/updater'
 
@@ -74,6 +75,7 @@ app.whenReady().then(() => {
   registerShippingIpc()
   registerStreamingIpc()
   registerQuickBooksIpc()
+  registerFinanceIpc()
   initUpdater()
 
   createWindow()
