@@ -80,10 +80,10 @@ export const MODULES: AppModule[] = [
     id: 'finance',
     name: 'Finance',
     shortName: 'Finance',
-    description: 'Bookkeeping, business ledger, chart of accounts and financial forecasting.',
+    description: 'Streaming, wholesale and the complete P&L.',
     icon: 'Wallet',
     permission: 'module.finance',
-    status: 'coming-soon'
+    status: 'active'
   },
   {
     id: 'sops',

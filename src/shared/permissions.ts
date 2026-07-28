@@ -73,6 +73,7 @@ export type Permission =
   | 'shipping.manage'
   | 'module.invoicing'
   | 'module.finance'
+  | 'finance.manage'
   | 'module.sops'
   | 'module.streaming'
   | 'streaming.manage'
@@ -177,6 +178,12 @@ export const PERMISSIONS: PermissionDefinition[] = [
     group: 'Modules'
   },
   {
+    key: 'finance.manage',
+    label: 'Manage finance data',
+    description: 'Upload Whatnot ledgers and rebuild the P&L.',
+    group: 'Modules'
+  },
+  {
     key: 'module.sops',
     label: 'SOP Creation',
     description: 'Access the SOP Creation module.',
@@ -200,7 +207,8 @@ const OPERATIONS_PERMISSIONS: Permission[] = [
   'module.finance',
   'module.sops',
   'module.streaming',
-  'streaming.manage'
+  'streaming.manage',
+  'finance.manage'
 ]
 
 const STAFF_PERMISSIONS: Permission[] = [

@@ -201,6 +201,14 @@ export const IPC = {
   streamItemAdd: 'stream:item:add',
   streamItemRemove: 'stream:item:remove',
 
+  // Finance — Streaming tab (Whatnot ledger import + day-by-day revenue)
+  finStreamView: 'finance:stream:view',
+  finLedgerImport: 'finance:ledger:import',
+  finLedgerImports: 'finance:ledger:imports',
+  finLedgerDeleteImport: 'finance:ledger:import:delete',
+  finLedgerRows: 'finance:ledger:rows',
+  finLedgerReattribute: 'finance:ledger:reattribute',
+
   // Email
   emailComposeInvite: 'email:compose-invite',
   emailOpenExternal: 'email:open-external',
