@@ -203,7 +203,10 @@ function ClusterRow({ cluster }: { cluster: UnattributedCluster }): JSX.Element 
           {timeLabel(cluster.from)}–{timeLabel(cluster.to)}
         </span>
         {days > 0 && (
-          <span className="fin-plus" title={`Ran on past midnight — ended ${days} day${days === 1 ? '' : 's'} later`}>
+          <span
+            className="fin-plus"
+            title={`Ran on past midnight — ended ${days} day${days === 1 ? '' : 's'} later`}
+          >
             +{days}d
           </span>
         )}

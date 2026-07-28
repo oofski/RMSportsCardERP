@@ -11041,3 +11041,929 @@ button.sor-team:focus-visible {
     width: 100%;
   }
 }
+
+/* ==========================================================================
+   Finance — Streaming revenue: ledger imports, day-by-day, unattributed money
+   --------------------------------------------------------------------------
+   Appended below the Streaming block; nothing above this line is modified.
+
+   Four things drive every choice below.
+
+   1. A NEGATIVE number must read as negative without colour. Money renders the
+      U+2212 minus rather than Intl's ASCII hyphen — it is a digit wide, so it
+      holds the column — and the danger ink is a second signal, never the only
+      one.
+   2. The UNATTRIBUTED panel is the loudest thing here on purpose. It is the
+      warning ramp, not the danger ramp: money with no show attached is the
+      normal state of a fresh import and a two-minute fix, so it must read as a
+      job to do rather than a fault. Reconciliation failure IS the danger ramp,
+      because then the numbers genuinely cannot be trusted.
+   3. Amber grounds take --text ink. --warning on --warning-bg is 2.9:1 in
+      light; --text on it is 14.3:1 light / 12.3:1 dark. Red grounds take
+      --danger-strong, not --danger: 4.8:1 light / 5.5:1 dark against
+      --danger-bg, where --danger itself manages only ~3.5:1 in light.
+   4. The day table is wider than the page. It scrolls inside its own container
+      with the date column pinned, rather than pushing the whole app sideways.
+
+   Contrast is noted inline wherever a pair was actually computed.
+   ========================================================================== */
+
+.fin-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.fin-tabs {
+  margin: 0;
+}
+.fin-stream {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* ---------- Shared panel shell ---------- */
+.fin-imports,
+.fin-days-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+.fin-imports-head,
+.fin-days-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.fin-section-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+}
+.fin-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 19px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  /* 5.6:1 light, 6.8:1 dark. */
+  color: var(--text-2);
+  font-size: 11.5px;
+  font-weight: 700;
+}
+
+/* ---------- Money ---------- */
+.fin-money {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+/* 5.6:1 on --surface and 5.3:1 on --surface-2 in light; 6.0:1 and 5.6:1 in
+   dark. The minus glyph carries the meaning; this only reinforces it. */
+.fin-money.neg {
+  color: var(--danger-strong);
+  font-weight: 600;
+}
+.fin-money.strong {
+  font-weight: 700;
+}
+.fin-money.zero {
+  color: var(--text-2);
+}
+
+/* ---------- Bucket chips ---------- */
+/* Tinted by what the bucket DOES to the P&L, not by what it is called: nobody
+   should have to remember that "Giveaway postage" is a cost. */
+.fin-bucket {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 19px;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+/* 4.9:1 light, 6.4:1 dark. */
+.fin-bucket.tone-revenue {
+  background: var(--success-bg);
+  color: var(--success-strong);
+}
+/* 4.8:1 light, 5.5:1 dark. */
+.fin-bucket.tone-contra {
+  background: var(--danger-bg);
+  color: var(--danger-strong);
+}
+/* 14.3:1 light, 12.3:1 dark. */
+.fin-bucket.tone-expense {
+  background: var(--warning-bg);
+  color: var(--text);
+}
+.fin-bucket.tone-ignored {
+  background: var(--surface-3);
+  color: var(--text-2);
+}
+
+/* ---------- Inline notes ---------- */
+.fin-note {
+  display: flex;
+  gap: 9px;
+  padding: 11px 13px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  font-size: 13px;
+  line-height: 1.55;
+}
+.fin-note > svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+.fin-note-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.fin-note-body p {
+  margin: 0;
+}
+.fin-note.tone-info {
+  background: var(--info-bg);
+  border-color: var(--brand-300);
+  color: var(--text);
+}
+.fin-note.tone-warn {
+  background: var(--warning-bg);
+  border-color: var(--warning);
+  color: var(--text);
+}
+.fin-note.tone-danger {
+  background: var(--danger-bg);
+  border-color: var(--danger-strong);
+  color: var(--danger-strong);
+}
+.fin-note.tone-good {
+  background: var(--success-bg);
+  border-color: var(--success);
+  color: var(--success-strong);
+}
+.fin-warn-list {
+  margin: 2px 0 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+/* ---------- Headline stats ---------- */
+.fin-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px;
+}
+.fin-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 13px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+.fin-stat-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+.fin-stat-value {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text);
+}
+.fin-stat-hint {
+  font-style: normal;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-2);
+}
+
+/* ---------- Ledger imports ---------- */
+.fin-import-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.fin-import {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+.fin-import.is-fresh {
+  border-color: var(--brand-400);
+  box-shadow: 0 0 0 3px var(--brand-soft);
+}
+.fin-import-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.fin-import-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  color: var(--text);
+}
+.fin-import-name b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 7.5:1 in both themes. */
+.fin-fresh-tag {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--brand-soft);
+  color: var(--brand-700);
+  font-size: 10.5px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.fin-import-when {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+.fin-import-del {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: background 0.13s ease, color 0.13s ease;
+}
+.fin-import-del:hover {
+  background: var(--danger-bg);
+  color: var(--danger-strong);
+}
+.fin-import-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+}
+.fin-import-stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.fin-import-stat b {
+  font-size: 14.5px;
+  color: var(--text);
+}
+/* A zero is a real answer — "nothing was quarantined" is worth reading — so it
+   stays printed, just without the emphasis of a count that wants attention. */
+.fin-import-stat.is-zero b {
+  color: var(--text-2);
+}
+.fin-import-stat.tone-warn b {
+  padding: 0 6px;
+  border-radius: 6px;
+  background: var(--warning-bg);
+  color: var(--text);
+}
+.fin-import-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px 16px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.fin-import-range,
+.fin-import-attr,
+.fin-import-unattr {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+/* ---------- Nothing uploaded yet ---------- */
+.fin-blank {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 20px 16px 26px;
+  text-align: center;
+}
+.fin-blank-ico {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 54px;
+  height: 54px;
+  border-radius: 16px;
+  background: var(--brand-soft);
+  color: var(--brand-700);
+}
+.fin-blank h3 {
+  font-size: 16px;
+}
+.fin-blank p {
+  margin: 0;
+  max-width: 62ch;
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--text-2);
+}
+.fin-blank .fin-blank-gate {
+  color: var(--text);
+}
+
+/* ---------- Show more / show fewer ---------- */
+.fin-more {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 9px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--brand-700);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.fin-more:hover {
+  background: var(--surface-3);
+}
+
+.fin-confirm-lead {
+  margin: 0 0 10px;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--text-2);
+}
+.fin-confirm-lead b {
+  color: var(--text);
+}
+
+/* ---------- Unattributed money ---------- */
+/* The most important panel on the screen. Amber, not red: this is work to do,
+   not a fault — and on a fresh import it is routinely a quarter of the money. */
+.fin-unattr {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--warning);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+.fin-unattr.is-clear {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 14px;
+  /* 4.9:1 light, 6.4:1 dark for --success-strong on --success-bg. */
+  border-color: var(--success);
+  background: var(--success-bg);
+}
+.fin-unattr-clear {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--success-strong);
+}
+.fin-unattr-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+.fin-unattr-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  background: var(--warning-bg);
+  color: var(--text);
+}
+.fin-unattr-headline {
+  min-width: 0;
+}
+.fin-unattr-headline h3 {
+  font-size: 16px;
+}
+.fin-unattr-headline p {
+  margin: 2px 0 0;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.fin-unattr-figure {
+  margin-left: auto;
+  text-align: right;
+}
+.fin-unattr-figure .fin-money {
+  font-size: 26px;
+  font-weight: 700;
+}
+.fin-unattr-sub {
+  display: block;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.fin-unattr-buckets {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 8px;
+}
+.fin-unattr-bucket {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.fin-unattr-bucket .fin-money {
+  margin-left: auto;
+  font-size: 13px;
+}
+.fin-unattr-bucket em {
+  font-style: normal;
+  font-size: 11.5px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+.fin-cluster-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.fin-cluster-lead {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-2);
+}
+.fin-clusters {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.fin-cluster {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: 13px;
+}
+.fin-cluster-when {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+}
+.fin-cluster-rows {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+.fin-cluster .fin-money {
+  min-width: 104px;
+  text-align: right;
+}
+/* 7.5:1 in both themes. */
+.fin-plus {
+  padding: 1px 5px;
+  border-radius: 6px;
+  background: var(--brand-soft);
+  color: var(--brand-700);
+  font-size: 10px;
+  font-weight: 700;
+}
+.fin-unattr-acts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.fin-unattr-note {
+  flex: 1 1 280px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+
+/* ---------- Day by day ---------- */
+.fin-days-scope {
+  font-size: 12px;
+  color: var(--text-2);
+}
+.fin-days {
+  display: flex;
+  flex-direction: column;
+}
+/* The table is wider than the page at 900px and that is fine — it scrolls in
+   here, so the app itself never scrolls sideways. */
+.fin-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.fin-table {
+  width: 100%;
+  min-width: 1040px;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 13px;
+}
+.fin-table th,
+.fin-table td {
+  padding: 9px 12px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border);
+}
+.fin-table thead th {
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border-strong);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+.fin-table .fin-num {
+  text-align: right;
+  white-space: nowrap;
+}
+.fin-table tbody th {
+  font-weight: 600;
+}
+/* Pinned so the date stays readable while the money columns scroll under it.
+   Each variant carries its own ground, or the numbers would show through. */
+.fin-table .fin-c-day {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  min-width: 176px;
+  background: var(--surface);
+  box-shadow: 1px 0 0 var(--border);
+}
+.fin-table thead .fin-c-day,
+.fin-table tfoot .fin-c-day {
+  z-index: 2;
+  background: var(--surface-2);
+}
+.fin-table .fin-c-shows,
+.fin-table .fin-c-dur {
+  white-space: nowrap;
+  color: var(--text-2);
+}
+.fin-table .fin-c-net {
+  border-left: 1px solid var(--border);
+}
+.fin-day-row:hover td,
+.fin-day-row:hover .fin-c-day {
+  background: var(--surface-2);
+}
+.fin-day-row.is-open td,
+.fin-day-row.is-open .fin-c-day {
+  background: var(--brand-soft);
+}
+.fin-day-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-weight: 600;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+.fin-day-toggle:hover {
+  color: var(--brand-700);
+}
+.fin-foot-label {
+  font-weight: 700;
+  color: var(--text);
+}
+.fin-table tfoot th,
+.fin-table tfoot td {
+  background: var(--surface-2);
+  border-top: 2px solid var(--border-strong);
+  border-bottom: 0;
+  font-weight: 700;
+}
+
+/* The carried-back marker: deliberately quiet. A settlement row landing on the
+   show that caused it is the CORRECT outcome, so the minus glyph carries the
+   sign here and the danger ink is dropped — this is an explanation, not an
+   alarm. */
+.fin-carry {
+  /* Block-level so it drops under the date rather than trailing it. */
+  display: flex;
+  width: fit-content;
+  align-items: center;
+  gap: 5px;
+  margin-top: 3px;
+  padding-left: 20px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+.fin-carry .fin-money,
+.fin-carry .fin-money.neg {
+  color: var(--text-2);
+  font-weight: 600;
+}
+.fin-legend {
+  margin: 10px 2px 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-2);
+}
+.fin-legend b {
+  color: var(--text);
+}
+.fin-legend svg {
+  vertical-align: -2px;
+  margin-right: 3px;
+}
+
+/* ---------- One day, expanded ---------- */
+.fin-detail-row > td {
+  padding: 0;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border-strong);
+}
+.fin-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+}
+.fin-detail-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.fin-detail-date {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+.fin-detail-shows {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.fin-show-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--brand-soft);
+  color: var(--brand-700);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.fin-detail-stock {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-2);
+}
+.fin-detail-stock svg {
+  vertical-align: -2px;
+  margin-right: 4px;
+}
+.fin-detail-stock b {
+  color: var(--text);
+}
+.fin-detail-stock em {
+  font-style: normal;
+}
+.fin-detail-empty {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 11px 13px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-2);
+}
+.fin-detail-empty b {
+  color: var(--text);
+}
+.fin-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 430px;
+  overflow-y: auto;
+}
+.fin-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  font-size: 12.5px;
+}
+.fin-row:nth-child(odd) {
+  background: var(--surface);
+}
+.fin-row-time {
+  min-width: 68px;
+  color: var(--text-2);
+}
+.fin-row-msg {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-2);
+}
+.fin-row .fin-money {
+  min-width: 92px;
+  text-align: right;
+}
+.fin-row-break,
+.fin-row-flag,
+.fin-row-carry {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--text-2);
+  font-size: 10.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.fin-detail-foot {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+
+/* 5.0:1 light, 8.3:1 dark on the page ground. */
+.fin-reconciled {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--success-strong);
+}
+
+/* ---------- Tabs that are honestly not built ---------- */
+.fin-soon {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 11px;
+  padding: 48px 24px 52px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  text-align: center;
+}
+.fin-soon-ico {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 60px;
+  height: 60px;
+  border-radius: 18px;
+  background: var(--brand-soft);
+  color: var(--brand-700);
+}
+.fin-soon h2 {
+  font-size: 19px;
+}
+.fin-soon p {
+  margin: 0;
+  max-width: 62ch;
+  font-size: 13.5px;
+  line-height: 1.65;
+  color: var(--text-2);
+}
+.fin-soon .fin-soon-detail {
+  font-size: 12.5px;
+}
+.fin-soon-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  padding: 4px 11px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* ---------- Responsive ---------- */
+@media (max-width: 900px) {
+  .fin-stats {
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  }
+  .fin-unattr-figure {
+    margin-left: 0;
+    width: 100%;
+    text-align: left;
+  }
+  .fin-unattr-figure .fin-money {
+    font-size: 22px;
+  }
+  .fin-cluster-rows {
+    margin-left: 0;
+  }
+  .fin-cluster .fin-money {
+    margin-left: auto;
+  }
+}
+@media (max-width: 640px) {
+  .fin-imports,
+  .fin-days-section,
+  .fin-unattr {
+    padding: 13px;
+  }
+  .fin-import-when {
+    display: none;
+  }
+  .fin-row-msg {
+    display: none;
+  }
+}

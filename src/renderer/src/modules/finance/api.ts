@@ -41,13 +41,11 @@ export interface FinanceApi {
 }
 
 /**
- * The bridge is read through a structural view of `api` because the preload key
- * lands in a separate change to this one. The assertion is not a shrug: if the
- * preload ever declares `finance` with a shape that is not comparable to
- * `FinanceApi`, this line stops compiling, which is exactly the drift signal we
- * want at the boundary.
+ * The annotation is the point: if the preload bridge ever stops satisfying the
+ * interface above, this line fails to compile instead of the drift surfacing as
+ * an undefined at runtime, halfway through reading a day's takings.
  */
-export const finance: FinanceApi = (api as unknown as { finance: FinanceApi }).finance
+export const finance: FinanceApi = api.finance
 
 /**
  * False when the renderer is running against a packaged preload that predates

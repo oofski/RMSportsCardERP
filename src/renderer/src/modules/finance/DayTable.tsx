@@ -69,7 +69,11 @@ export function DayTable({
               <th scope="col" className="fin-c-dur">
                 On air
               </th>
-              <th scope="col" className="fin-num" title="Seller earnings on sold items and break spots">
+              <th
+                scope="col"
+                className="fin-num"
+                title="Seller earnings on sold items and break spots"
+              >
                 Sales
               </th>
               <th scope="col" className="fin-num" title="Whatnot's contribution toward postage">
@@ -83,10 +87,18 @@ export function DayTable({
                   Reversals
                 </th>
               )}
-              <th scope="col" className="fin-num" title="What it cost to mail giveaways won on stream">
+              <th
+                scope="col"
+                className="fin-num"
+                title="What it cost to mail giveaways won on stream"
+              >
                 Giveaway postage
               </th>
-              <th scope="col" className="fin-num" title="Postage Whatnot charged back to the seller">
+              <th
+                scope="col"
+                className="fin-num"
+                title="Postage Whatnot charged back to the seller"
+              >
                 Shipping charges
               </th>
               {cols.refundShipping && (
@@ -97,7 +109,11 @@ export function DayTable({
               <th scope="col" className="fin-num" title="Paid promotion of a show">
                 Show Boost
               </th>
-              <th scope="col" className="fin-num fin-c-net" title="Revenue after the costs to its left">
+              <th
+                scope="col"
+                className="fin-num fin-c-net"
+                title="Revenue after the costs to its left"
+              >
                 Net revenue
               </th>
             </tr>

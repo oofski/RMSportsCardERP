@@ -278,7 +278,11 @@ export function ledgerFingerprintSource(
     (orderId || '').trim(),
     (message || '').trim(),
     (txnType || '').trim().toUpperCase()
-  ].join('')
+    // Joined on the ASCII unit separator, which cannot occur in any of these
+    // fields. An empty join would leave the boundaries ambiguous — ("ab","cdef")
+    // and ("abc","def") would hash identically — and the failure mode is a real
+    // row silently swallowed as a duplicate: money gone, no error anywhere.
+  ].join('\u001F')
 }
 
 /** "Break #18" → 18. Present on break-spot sales, absent on direct sales. */
