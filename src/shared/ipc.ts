@@ -188,6 +188,19 @@ export const IPC = {
   qboMappingSave: 'qbo:mapping:save',
   qboSyncLog: 'qbo:sync-log',
 
+  // Streaming — live show sessions, breaks and giveaways
+  streamActive: 'stream:active',
+  streamCalendar: 'stream:calendar',
+  streamList: 'stream:list',
+  streamGet: 'stream:get',
+  streamStart: 'stream:start',
+  streamEnd: 'stream:end',
+  streamCreate: 'stream:create',
+  streamUpdate: 'stream:update',
+  streamDelete: 'stream:delete',
+  streamItemAdd: 'stream:item:add',
+  streamItemRemove: 'stream:item:remove',
+
   // Email
   emailComposeInvite: 'email:compose-invite',
   emailOpenExternal: 'email:open-external',

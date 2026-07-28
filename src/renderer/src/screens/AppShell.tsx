@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { MODULES } from '@shared/modules'
+import { StreamingModule } from '../modules/streaming/StreamingModule'
 import { useSession } from '../lib/session'
 import { useTheme } from '../lib/theme'
 import { api } from '../lib/api'
@@ -317,6 +318,8 @@ export function AppShell(): JSX.Element {
               <TimePayrollModule />
             ) : activeModule?.id === 'inventory' ? (
               <InventoryModule />
+            ) : activeModule?.id === 'streaming' ? (
+              <StreamingModule />
             ) : activeModule?.id === 'invoicing' ? (
               <InvoicingModule />
             ) : activeModule?.id === 'fulfillment' ? (

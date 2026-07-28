@@ -1,0 +1,799 @@
+import type { Database } from 'better-sqlite3'
+import type { Result } from '@shared/types'
+import type {
+  NewStreamItem,
+  NewStreamSession,
+  StreamCalendarDay,
+  StreamCalendarMonth,
+  StreamItem,
+  StreamItemKind,
+  StreamSession,
+  StreamSessionDetail,
+  StreamStatus,
+  StreamTotals,
+  UpdateStreamSession
+} from '@shared/streaming'
+import { durationMinutes, sessionsOverlap, streamDateOf } from '@shared/streaming'
+import { isLocation } from '@shared/inventory'
+import { getDb } from './database'
+import { consumeFifo, restoreFifo, slicesCost, syncProductAvgCost, type LotSlice } from './lots'
+// Shared with db/inventory.ts rather than reimplemented: a stream line moves
+// stock the same way a sale does, and one implementation is the only way that
+// stays true.
+import { bumpStock, insertTxn, productThumbnail, stockQty } from './inventory'
+import { newId, nowIso } from '../util'
+
+/**
+ * Streaming — show sessions and the stock they consumed.
+ *
+ * Two rules run through everything here.
+ *
+ * A session is an absolute time window that belongs to ONE business day: the
+ * local calendar date it STARTED on. Shows run past midnight, so the day a sale
+ * landed is not the day the show belongs to, and every grouping in this file is
+ * on `stream_date` rather than on a timestamp. See @shared/streaming.
+ *
+ * Sessions may not overlap. An overlap makes a sale's owning show ambiguous and
+ * there is no correct way to resolve it afterwards, so it is refused at entry —
+ * on create AND on edit — naming the show it collides with.
+ *
+ * A break or a giveaway is the same operation against inventory as a sale (pull
+ * N units out of a location at their real FIFO cost) and takes the SAME path in
+ * the same order as recordSale, so the two can never value a movement
+ * differently. What it additionally records is the exact cost layers it took, in
+ * stream_item_lots, which is what makes removing a line able to give back
+ * precisely what it took instead of re-lotting at today's average.
+ */
+
+const cents = (n: number): number => Math.round(n * 100) / 100
+
+/** A stream line is visible in inventory history like every other movement, and
+ * says which of the two things it was. */
+function txnType(kind: StreamItemKind): string {
+  return kind === 'break' ? 'stream_break' : 'stream_giveaway'
+}
+
+// ---------------------------------------------------------------------------
+// Rows → contract types
+// ---------------------------------------------------------------------------
+
+interface SessionRow {
+  id: string
+  title: string
+  started_at: string
+  ended_at: string | null
+  stream_date: string
+  status: string
+  source: string
+  host_id: string | null
+  host_name: string | null
+  note: string | null
+  created_at: string
+  updated_at: string
+  created_by: string | null
+}
+
+interface ItemRow {
+  id: string
+  session_id: string
+  kind: string
+  product_id: string | null
+  product_name: string
+  sku: string
+  category: string
+  break_number: number | null
+  recipient: string | null
+  quantity: number
+  location: string
+  unit_cost: number
+  cost_total: number
+  note: string | null
+  created_at: string
+  created_by: string | null
+}
+
+const SESSION_SELECT = `
+  SELECT s.id, s.title, s.started_at, s.ended_at, s.stream_date, s.status, s.source,
+         s.host_id, (e.first_name || ' ' || e.last_name) AS host_name,
+         s.note, s.created_at, s.updated_at, s.created_by
+  FROM stream_sessions s
+  LEFT JOIN employees e ON e.id = s.host_id
+`
+
+function toSession(row: SessionRow): StreamSession {
+  return {
+    id: row.id,
+    title: row.title,
+    startedAt: row.started_at,
+    endedAt: row.ended_at,
+    streamDate: row.stream_date,
+    status: row.status === 'ended' ? 'ended' : 'live',
+    source: row.source === 'manual' ? 'manual' : 'live',
+    hostId: row.host_id,
+    // NULL when the employee record is gone; the id is kept either way so the
+    // line still says a host was set.
+    hostName: row.host_name?.trim() || null,
+    note: row.note,
+    durationMinutes: durationMinutes(row.started_at, row.ended_at),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    createdBy: row.created_by
+  }
+}
+
+/** Thumbnails are resolved through a per-call cache: a session usually breaks
+ * the same product repeatedly, and each miss reads an image off disk. */
+function toItem(row: ItemRow, thumbs: Map<string, string | null>): StreamItem {
+  let image: string | null = null
+  if (row.product_id) {
+    if (!thumbs.has(row.product_id)) thumbs.set(row.product_id, productThumbnail(row.product_id))
+    image = thumbs.get(row.product_id) ?? null
+  }
+  return {
+    id: row.id,
+    sessionId: row.session_id,
+    kind: row.kind === 'giveaway' ? 'giveaway' : 'break',
+    productId: row.product_id,
+    productName: row.product_name,
+    sku: row.sku,
+    category: row.category,
+    image,
+    breakNumber: row.break_number,
+    recipient: row.recipient,
+    quantity: row.quantity,
+    location: row.location,
+    unitCost: row.unit_cost,
+    costTotal: row.cost_total,
+    note: row.note,
+    createdAt: row.created_at,
+    createdBy: row.created_by
+  }
+}
+
+function emptyTotals(): StreamTotals {
+  return {
+    breakLines: 0,
+    breakUnits: 0,
+    breakCost: 0,
+    giveawayLines: 0,
+    giveawayUnits: 0,
+    giveawayCost: 0,
+    totalCost: 0
+  }
+}
+
+function totalsOf(items: StreamItem[]): StreamTotals {
+  const t = emptyTotals()
+  for (const item of items) {
+    if (item.kind === 'break') {
+      t.breakLines += 1
+      t.breakUnits += item.quantity
+      t.breakCost += item.costTotal
+    } else {
+      t.giveawayLines += 1
+      t.giveawayUnits += item.quantity
+      t.giveawayCost += item.costTotal
+    }
+  }
+  t.breakCost = cents(t.breakCost)
+  t.giveawayCost = cents(t.giveawayCost)
+  t.totalCost = cents(t.breakCost + t.giveawayCost)
+  return t
+}
+
+// ---------------------------------------------------------------------------
+// Validation
+// ---------------------------------------------------------------------------
+
+function validInstant(iso: string): boolean {
+  return !!iso && !Number.isNaN(new Date(iso).getTime())
+}
+
+function fail(err: unknown): Result<never> {
+  return { ok: false, error: err instanceof Error ? err.message : String(err) }
+}
+
+interface OverlapRow {
+  id: string
+  title: string
+  started_at: string
+  ended_at: string | null
+}
+
+/** "Monday Night Rip" (Jul 27, 9:00 PM–2:00 AM) — enough for the operator to
+ * recognise which show is in the way without opening the calendar. */
+function describeSession(row: OverlapRow): string {
+  const title = row.title.trim() || 'an untitled stream'
+  const start = new Date(row.started_at)
+  if (Number.isNaN(start.getTime())) return `"${title}"`
+  const time = (d: Date): string => d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+  const day = start.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+  if (!row.ended_at) return `"${title}" (${day} ${time(start)}, still live)`
+  const end = new Date(row.ended_at)
+  if (Number.isNaN(end.getTime())) return `"${title}" (${day} ${time(start)})`
+  return `"${title}" (${day} ${time(start)}–${time(end)})`
+}
+
+/**
+ * THE validation of this module. Checked against every other session, on create
+ * and on edit alike, because an overlap introduced by an edit is exactly as
+ * ambiguous as one introduced by a create.
+ *
+ * Session count is tiny (a few hundred a year) so the scan is cheap and, unlike
+ * a SQL range predicate, it uses the same sessionsOverlap() the renderer does —
+ * main and renderer can never disagree about what a conflict is.
+ */
+function overlapError(
+  db: Database,
+  startedAt: string,
+  endedAt: string | null,
+  exceptId: string | null
+): string | null {
+  const rows = (
+    exceptId
+      ? db.prepare('SELECT id, title, started_at, ended_at FROM stream_sessions WHERE id <> ?').all(exceptId)
+      : db.prepare('SELECT id, title, started_at, ended_at FROM stream_sessions').all()
+  ) as OverlapRow[]
+  for (const row of rows) {
+    if (sessionsOverlap(startedAt, endedAt, row.started_at, row.ended_at)) {
+      return `That overlaps ${describeSession(row)}. Two shows cannot share the same minute — a sale inside the overlap would have no single owner.`
+    }
+  }
+  return null
+}
+
+/** Shared start/end sanity for both the manual create and the edit. */
+function timeError(startedAt: string, endedAt: string | null): string | null {
+  if (!validInstant(startedAt)) return 'Enter a valid start time.'
+  if (endedAt !== null) {
+    if (!validInstant(endedAt)) return 'Enter a valid end time.'
+    if (new Date(endedAt).getTime() <= new Date(startedAt).getTime()) {
+      return 'The end time has to be after the start time.'
+    }
+  }
+  return null
+}
+
+// ---------------------------------------------------------------------------
+// Sessions — reads
+// ---------------------------------------------------------------------------
+
+function getSession(id: string): StreamSession | null {
+  const row = getDb().prepare(`${SESSION_SELECT} WHERE s.id = ?`).get(id) as SessionRow | undefined
+  return row ? toSession(row) : null
+}
+
+/**
+ * The show currently on air. At most one can exist — two open-ended sessions
+ * both run to the end of time and therefore always overlap, so the overlap
+ * check has already refused the second. LIMIT 1 is belt-and-braces for a
+ * database that predates that guarantee.
+ */
+export function getActiveSession(): StreamSession | null {
+  const row = getDb()
+    .prepare(`${SESSION_SELECT} WHERE s.status = 'live' ORDER BY s.started_at DESC LIMIT 1`)
+    .get() as SessionRow | undefined
+  return row ? toSession(row) : null
+}
+
+/** Sessions whose BUSINESS DAY falls in [from, to], newest first. Deliberately
+ * ranged on stream_date, never on started_at: a 1am session belongs to the
+ * previous evening and has to come back with it. */
+export function listSessions(from: string, to: string): StreamSession[] {
+  const rows = getDb()
+    .prepare(
+      `${SESSION_SELECT}
+       WHERE s.stream_date >= ? AND s.stream_date <= ?
+       ORDER BY s.stream_date DESC, s.started_at DESC`
+    )
+    .all(from, to) as SessionRow[]
+  return rows.map(toSession)
+}
+
+export function getSessionDetail(id: string): StreamSessionDetail | null {
+  const session = getSession(id)
+  if (!session) return null
+  const rows = getDb()
+    .prepare(
+      `SELECT id, session_id, kind, product_id, product_name, sku, category, break_number,
+              recipient, quantity, location, unit_cost, cost_total, note, created_at, created_by
+       FROM stream_items WHERE session_id = ? ORDER BY created_at ASC, rowid ASC`
+    )
+    .all(id) as ItemRow[]
+  const thumbs = new Map<string, string | null>()
+  const items = rows.map((r) => toItem(r, thumbs))
+  return { session, items, totals: totalsOf(items) }
+}
+
+// ---------------------------------------------------------------------------
+// Sessions — writes
+// ---------------------------------------------------------------------------
+
+/**
+ * Clock a show on air. The start is NOW, so the only thing that can be entered
+ * wrongly is the title — which is the whole point of this path existing beside
+ * the manual one.
+ */
+export function startSession(
+  input: { title: string; hostId: string | null; note: string | null },
+  actorId: string | null
+): Result<StreamSession> {
+  const db = getDb()
+  if (getActiveSession()) return { ok: false, error: 'A stream is already live — end it first.' }
+  const startedAt = nowIso()
+  // A live session runs to the end of time, so it can still collide with a
+  // window already typed in for tonight. Say which one rather than creating an
+  // overlap that no later report could untangle.
+  const clash = overlapError(db, startedAt, null, null)
+  if (clash) return { ok: false, error: clash }
+
+  const id = newId()
+  db.prepare(
+    `INSERT INTO stream_sessions
+       (id, title, started_at, ended_at, stream_date, status, source, host_id, note,
+        created_at, updated_at, created_by)
+     VALUES (@id, @title, @started_at, NULL, @stream_date, 'live', 'live', @host_id, @note,
+             @ts, @ts, @created_by)`
+  ).run({
+    id,
+    title: (input?.title ?? '').trim(),
+    started_at: startedAt,
+    stream_date: streamDateOf(startedAt),
+    host_id: input?.hostId || null,
+    note: input?.note?.trim() || null,
+    ts: startedAt,
+    created_by: actorId
+  })
+  return { ok: true, data: getSession(id) as StreamSession }
+}
+
+export function endSession(id: string, actorId: string | null): Result<StreamSession> {
+  void actorId
+  const db = getDb()
+  const row = db.prepare('SELECT id, status FROM stream_sessions WHERE id = ?').get(id) as
+    | { id: string; status: StreamStatus }
+    | undefined
+  if (!row) return { ok: false, error: 'That stream session no longer exists.' }
+  if (row.status !== 'live') return { ok: false, error: 'That stream has already ended.' }
+  const ts = nowIso()
+  db.prepare(
+    "UPDATE stream_sessions SET ended_at = ?, status = 'ended', updated_at = ? WHERE id = ?"
+  ).run(ts, ts, id)
+  return { ok: true, data: getSession(id) as StreamSession }
+}
+
+/**
+ * Type in a show that was never clocked — the common case, because Start stream
+ * gets forgotten. Identical to a clocked session for every downstream purpose;
+ * `source` records only that the times were recalled rather than measured.
+ *
+ * An open-ended manual session is allowed (the show is on air and nobody
+ * clocked it), and reads as live, which is what it is.
+ */
+export function createSession(input: NewStreamSession, actorId: string | null): Result<StreamSession> {
+  const db = getDb()
+  const startedAt = (input?.startedAt ?? '').trim()
+  const endedAt = input?.endedAt ? String(input.endedAt).trim() : null
+
+  const bad = timeError(startedAt, endedAt)
+  if (bad) return { ok: false, error: bad }
+  const clash = overlapError(db, startedAt, endedAt, null)
+  if (clash) return { ok: false, error: clash }
+
+  const id = newId()
+  const ts = nowIso()
+  db.prepare(
+    `INSERT INTO stream_sessions
+       (id, title, started_at, ended_at, stream_date, status, source, host_id, note,
+        created_at, updated_at, created_by)
+     VALUES (@id, @title, @started_at, @ended_at, @stream_date, @status, 'manual', @host_id, @note,
+             @ts, @ts, @created_by)`
+  ).run({
+    id,
+    title: (input?.title ?? '').trim(),
+    started_at: startedAt,
+    ended_at: endedAt,
+    stream_date: streamDateOf(startedAt),
+    status: endedAt ? 'ended' : 'live',
+    host_id: input?.hostId || null,
+    note: input?.note?.trim() || null,
+    ts,
+    created_by: actorId
+  })
+  return { ok: true, data: getSession(id) as StreamSession }
+}
+
+/**
+ * Correct a session. Every field is optional; anything omitted keeps its
+ * current value, so the caller never has to round-trip a whole record to fix
+ * one time.
+ */
+export function updateSession(input: UpdateStreamSession, actorId: string | null): Result<StreamSession> {
+  void actorId
+  const db = getDb()
+  const existing = getSession((input?.id ?? '').trim())
+  if (!existing) return { ok: false, error: 'That stream session no longer exists.' }
+
+  const startedAt = input.startedAt !== undefined ? String(input.startedAt).trim() : existing.startedAt
+  const endedAt =
+    input.endedAt !== undefined ? (input.endedAt ? String(input.endedAt).trim() : null) : existing.endedAt
+
+  const bad = timeError(startedAt, endedAt)
+  if (bad) return { ok: false, error: bad }
+  // Excluding this session is what makes an edit that changes nothing about the
+  // times succeed — it would otherwise always collide with itself.
+  const clash = overlapError(db, startedAt, endedAt, existing.id)
+  if (clash) return { ok: false, error: clash }
+
+  db.prepare(
+    `UPDATE stream_sessions
+        SET title = @title, started_at = @started_at, ended_at = @ended_at,
+            stream_date = @stream_date, status = @status, host_id = @host_id,
+            note = @note, updated_at = @updated_at
+      WHERE id = @id`
+  ).run({
+    id: existing.id,
+    title: input.title !== undefined ? input.title.trim() : existing.title,
+    started_at: startedAt,
+    ended_at: endedAt,
+    // Recomputed on every write because the business day IS the local date the
+    // show started on: moving the start by an hour across midnight moves the
+    // whole session — and everything attributed to it — to the other day.
+    stream_date: streamDateOf(startedAt),
+    // Status follows the end time rather than being edited on its own: a
+    // session with an end is off air, one without is on it. Clearing an end
+    // therefore puts a show back on air, which is safe only because two
+    // open-ended sessions always overlap — so the check above has already
+    // refused it if another stream is live.
+    status: endedAt ? 'ended' : 'live',
+    host_id: input.hostId !== undefined ? input.hostId || null : existing.hostId,
+    note: input.note !== undefined ? input.note?.trim() || null : existing.note,
+    updated_at: nowIso()
+  })
+  return { ok: true, data: getSession(existing.id) as StreamSession }
+}
+
+/**
+ * Delete a session and everything it consumed. The stock its lines took comes
+ * back through the SAME path removeItem uses, so a stream deleted whole and a
+ * stream emptied line by line leave inventory in identical states.
+ *
+ * One transaction: a session whose rows are gone but whose stock never returned
+ * would be silently unrecoverable.
+ */
+export function deleteSession(id: string, actorId: string | null): Result {
+  const db = getDb()
+  const run = db.transaction((): Result => {
+    const header = db.prepare('SELECT id, title FROM stream_sessions WHERE id = ?').get(id) as
+      | { id: string; title: string }
+      | undefined
+    if (!header) return { ok: false, error: 'That stream session no longer exists.' }
+    const note = `Deleted stream ${header.title.trim() || '(untitled)'}`
+    // Newest line first, mirroring the PO cancel path: unwinding in reverse
+    // order of consumption never leaves a lot half-restored behind a later one.
+    const items = db
+      .prepare('SELECT id FROM stream_items WHERE session_id = ? ORDER BY created_at DESC, rowid DESC')
+      .all(id) as Array<{ id: string }>
+    for (const item of items) restoreItemStock(db, item.id, note, actorId)
+    db.prepare('DELETE FROM stream_sessions WHERE id = ?').run(id)
+    return { ok: true }
+  })
+  try {
+    return run()
+  } catch (err) {
+    return fail(err)
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Calendar
+// ---------------------------------------------------------------------------
+
+/** Half-open [from, to) bounds for a 'YYYY-MM' month; null when unparseable. */
+function monthBounds(month: string): { from: string; to: string } | null {
+  const m = /^(\d{4})-(\d{2})$/.exec(month.trim())
+  if (!m) return null
+  const year = Number(m[1])
+  const mon = Number(m[2])
+  if (mon < 1 || mon > 12) return null
+  const nextYear = mon === 12 ? year + 1 : year
+  const nextMon = mon === 12 ? 1 : mon + 1
+  return { from: `${m[1]}-${m[2]}-01`, to: `${nextYear}-${String(nextMon).padStart(2, '0')}-01` }
+}
+
+/**
+ * A month of activity, one entry per day that HAS any — the renderer builds the
+ * grid, so emitting empty cells here would only be data it has to filter back
+ * out.
+ *
+ * Grouped on stream_date, NEVER on the date a session ended. That single choice
+ * is the module: a Monday show that ends at 2am is entirely Monday's, and
+ * bucketing it by its end would put half of RM's shows on the wrong day.
+ */
+export function calendarMonth(month: string): StreamCalendarMonth {
+  const key = month.trim()
+  const bounds = monthBounds(key)
+  const totals = { ...emptyTotals(), sessionCount: 0, minutes: 0 }
+  if (!bounds) return { month: key, days: [], totals }
+
+  const db = getDb()
+  const sessions = db
+    .prepare(
+      `SELECT stream_date, status, started_at, ended_at FROM stream_sessions
+       WHERE stream_date >= ? AND stream_date < ?`
+    )
+    .all(bounds.from, bounds.to) as Array<{
+    stream_date: string
+    status: string
+    started_at: string
+    ended_at: string | null
+  }>
+
+  const itemRows = db
+    .prepare(
+      `SELECT s.stream_date AS d, i.kind AS kind, COUNT(*) AS lines,
+              COALESCE(SUM(i.quantity), 0) AS units, COALESCE(SUM(i.cost_total), 0) AS cost
+       FROM stream_items i
+       JOIN stream_sessions s ON s.id = i.session_id
+       WHERE s.stream_date >= ? AND s.stream_date < ?
+       GROUP BY s.stream_date, i.kind`
+    )
+    .all(bounds.from, bounds.to) as Array<{
+    d: string
+    kind: string
+    lines: number
+    units: number
+    cost: number
+  }>
+
+  const byDay = new Map<string, StreamCalendarDay>()
+  const dayFor = (date: string): StreamCalendarDay => {
+    let cell = byDay.get(date)
+    if (!cell) {
+      cell = { date, sessionCount: 0, liveCount: 0, minutes: 0, breakUnits: 0, giveawayUnits: 0, cost: 0 }
+      byDay.set(date, cell)
+    }
+    return cell
+  }
+
+  for (const s of sessions) {
+    const cell = dayFor(s.stream_date)
+    cell.sessionCount += 1
+    if (s.status === 'live') cell.liveCount += 1
+    // A live show contributes nothing yet: its duration is not a fact until it
+    // ends, and guessing "so far" would make yesterday's total change overnight.
+    cell.minutes += durationMinutes(s.started_at, s.ended_at) ?? 0
+  }
+
+  for (const r of itemRows) {
+    const cell = dayFor(r.d)
+    if (r.kind === 'giveaway') {
+      cell.giveawayUnits += r.units
+      totals.giveawayLines += r.lines
+      totals.giveawayUnits += r.units
+      totals.giveawayCost += r.cost
+    } else {
+      cell.breakUnits += r.units
+      totals.breakLines += r.lines
+      totals.breakUnits += r.units
+      totals.breakCost += r.cost
+    }
+    cell.cost = cents(cell.cost + r.cost)
+  }
+
+  const days = [...byDay.values()].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
+  totals.sessionCount = sessions.length
+  totals.minutes = days.reduce((sum, d) => sum + d.minutes, 0)
+  totals.breakCost = cents(totals.breakCost)
+  totals.giveawayCost = cents(totals.giveawayCost)
+  totals.totalCost = cents(totals.breakCost + totals.giveawayCost)
+  return { month: key, days, totals }
+}
+
+// ---------------------------------------------------------------------------
+// Items — the stock path
+// ---------------------------------------------------------------------------
+
+function normalizeBreakNumber(value: number | null | undefined): number | null {
+  const n = Math.round(Number(value))
+  return Number.isFinite(n) && n > 0 ? n : null
+}
+
+/** What the movement reads as in inventory history, where the reader has no
+ * stream context — so it has to name the show itself. */
+function ledgerNote(
+  title: string,
+  kind: StreamItemKind,
+  breakNumber: number | null,
+  recipient: string | null
+): string {
+  const show = title.trim() || 'Stream'
+  if (kind === 'break') return breakNumber ? `${show} — Break #${breakNumber}` : `${show} — break`
+  return recipient ? `${show} — giveaway to ${recipient}` : `${show} — giveaway`
+}
+
+/**
+ * Record something opened or given away on a show, taking its stock out at the
+ * real FIFO cost.
+ *
+ * One transaction covering stock, cost lots, the ledger row, the line and the
+ * layers it consumed — a line that exists without its stock movement (or the
+ * reverse) is not something a later reconciliation could detect, let alone fix.
+ */
+export function addItem(input: NewStreamItem, actorId: string | null): Result<StreamSessionDetail> {
+  const db = getDb()
+  const sessionId = (input?.sessionId ?? '').trim()
+  const productId = (input?.productId ?? '').trim()
+  const kind: StreamItemKind = input?.kind === 'giveaway' ? 'giveaway' : 'break'
+  const qty = Math.round(Number(input?.quantity))
+  const location = input?.location ?? ''
+
+  const run = db.transaction((): Result<StreamSessionDetail> => {
+    const session = db.prepare('SELECT id, title FROM stream_sessions WHERE id = ?').get(sessionId) as
+      | { id: string; title: string }
+      | undefined
+    if (!session) return { ok: false, error: 'That stream session no longer exists.' }
+    if (!Number.isFinite(qty) || qty < 1) return { ok: false, error: 'Quantity must be at least 1.' }
+    if (!isLocation(location)) return { ok: false, error: 'Pick a stock location.' }
+    const product = db
+      .prepare('SELECT id, name, sku, category FROM inventory_products WHERE id = ?')
+      .get(productId) as { id: string; name: string; sku: string; category: string } | undefined
+    if (!product) return { ok: false, error: 'Product not found.' }
+    const have = stockQty(productId, location)
+    if (qty > have) return { ok: false, error: `Only ${have} in ${location}.` }
+
+    const breakNumber = kind === 'break' ? normalizeBreakNumber(input.breakNumber) : null
+    const recipient = kind === 'giveaway' ? input.recipient?.trim() || null : null
+    const note = input.note?.trim() || null
+
+    // The exact sequence recordSale uses: drop the count, consume the oldest
+    // cost layers, re-average what is left, then write the ledger row. A stream
+    // line and a sale are the same movement and must be valued identically.
+    bumpStock(productId, location, -qty)
+    const slices = consumeFifo(db, productId, location, qty)
+    const costTotal = slicesCost(slices)
+    syncProductAvgCost(db, productId)
+    insertTxn(
+      productId,
+      txnType(kind),
+      -qty,
+      null,
+      recipient,
+      ledgerNote(session.title, kind, breakNumber, recipient),
+      actorId,
+      location,
+      costTotal
+    )
+
+    const id = newId()
+    const ts = nowIso()
+    db.prepare(
+      `INSERT INTO stream_items
+         (id, session_id, kind, product_id, product_name, sku, category, break_number, recipient,
+          quantity, location, unit_cost, cost_total, note, created_at, created_by)
+       VALUES (@id, @session_id, @kind, @product_id, @product_name, @sku, @category, @break_number,
+               @recipient, @quantity, @location, @unit_cost, @cost_total, @note, @ts, @created_by)`
+    ).run({
+      id,
+      session_id: sessionId,
+      kind,
+      product_id: productId,
+      // Snapshotted, not joined: this line has to still say what was opened
+      // after the catalog entry is deleted.
+      product_name: product.name,
+      sku: product.sku,
+      category: product.category,
+      break_number: breakNumber,
+      recipient,
+      quantity: qty,
+      location,
+      unit_cost: cents(costTotal / qty),
+      cost_total: costTotal,
+      note,
+      ts,
+      created_by: actorId
+    })
+
+    const insertLot = db.prepare(
+      `INSERT INTO stream_item_lots (id, item_id, lot_id, quantity, unit_cost, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    )
+    for (const slice of slices) insertLot.run(newId(), id, slice.lotId, slice.qty, slice.unitCost, ts)
+
+    return { ok: true, data: getSessionDetail(sessionId) as StreamSessionDetail }
+  })
+  try {
+    return run()
+  } catch (err) {
+    return fail(err)
+  }
+}
+
+interface ItemStockRow {
+  id: string
+  session_id: string
+  kind: string
+  product_id: string | null
+  quantity: number
+  location: string
+  cost_total: number
+}
+
+/**
+ * Give back exactly what one line took — the same cost layers, at the same
+ * costs — and drop the line. The single restore path, shared by removeItem and
+ * deleteSession.
+ *
+ * MUST be called inside the caller's db.transaction(); throws to roll it back.
+ */
+function restoreItemStock(db: Database, itemId: string, note: string, actorId: string | null): string {
+  const item = db
+    .prepare(
+      'SELECT id, session_id, kind, product_id, quantity, location, cost_total FROM stream_items WHERE id = ?'
+    )
+    .get(itemId) as ItemStockRow | undefined
+  if (!item) throw new Error('That line no longer exists.')
+
+  const slices: LotSlice[] = (
+    db
+      .prepare('SELECT lot_id, quantity, unit_cost FROM stream_item_lots WHERE item_id = ? ORDER BY rowid')
+      .all(itemId) as Array<{ lot_id: string; quantity: number; unit_cost: number }>
+  ).map((r) => ({ lotId: r.lot_id, qty: r.quantity, unitCost: r.unit_cost }))
+
+  // The product was deleted after this line was recorded: its stock row and its
+  // cost lots cascaded away with it, so there is nothing left to restore into.
+  // The line is dropped and inventory is left alone — putting units back for a
+  // product that no longer exists would invent stock nobody can sell.
+  const productId = item.product_id
+  const stillCataloged =
+    !!productId && !!db.prepare('SELECT 1 FROM inventory_products WHERE id = ?').get(productId)
+
+  if (productId && stillCataloged) {
+    restoreFifo(db, slices)
+    bumpStock(productId, item.location, item.quantity)
+    syncProductAvgCost(db, productId)
+    // Reverses the consumption row addItem wrote — same type, opposite sign on
+    // BOTH the quantity and the cost, so either column sums to zero over a
+    // removed line. The original entry is never deleted; the ledger stays
+    // append-only, as it is everywhere else in the app.
+    insertTxn(
+      productId,
+      txnType(item.kind === 'giveaway' ? 'giveaway' : 'break'),
+      item.quantity,
+      null,
+      null,
+      note,
+      actorId,
+      item.location,
+      item.cost_total === 0 ? 0 : -item.cost_total
+    )
+  }
+
+  // stream_item_lots cascades with the line.
+  db.prepare('DELETE FROM stream_items WHERE id = ?').run(itemId)
+  return item.session_id
+}
+
+/** Undo one line: the stock goes back where it came from and the line is gone.
+ * ONE transaction — a line removed without its stock returning is a silent
+ * shrinkage nobody would think to look for. */
+export function removeItem(id: string, actorId: string | null): Result<StreamSessionDetail> {
+  const db = getDb()
+  const run = db.transaction((): Result<StreamSessionDetail> => {
+    const row = db
+      .prepare(
+        `SELECT i.id, i.session_id, s.title
+           FROM stream_items i JOIN stream_sessions s ON s.id = i.session_id
+          WHERE i.id = ?`
+      )
+      .get(id) as { id: string; session_id: string; title: string } | undefined
+    if (!row) return { ok: false, error: 'That line no longer exists.' }
+    restoreItemStock(db, id, `Removed from ${row.title.trim() || 'stream'}`, actorId)
+    return { ok: true, data: getSessionDetail(row.session_id) as StreamSessionDetail }
+  })
+  try {
+    return run()
+  } catch (err) {
+    return fail(err)
+  }
+}

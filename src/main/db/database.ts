@@ -592,6 +592,85 @@ function migrate(database: Database.Database): void {
       ON qbo_sync_log (realm_id, entity, local_id);
     CREATE INDEX IF NOT EXISTS idx_qbo_sync_status
       ON qbo_sync_log (status);
+
+    -- ===================================================================
+    -- v22: Streaming — live show sessions, what was broken on them, and what
+    -- was given away.
+    --
+    -- A session is an absolute time WINDOW. It also carries stream_date: the
+    -- LOCAL calendar date it STARTED on, which is its business day. RM's shows
+    -- routinely run past midnight, so a Monday-night show ending at 2am
+    -- produces Tuesday-stamped sales; grouping those by the instant splits one
+    -- show across two days and makes both wrong. The date is STORED rather than
+    -- derived so the calendar never redoes timezone maths per query, and so a
+    -- session keeps its own day if the machine's timezone later changes.
+    -- ===================================================================
+    CREATE TABLE IF NOT EXISTS stream_sessions (
+      id          TEXT PRIMARY KEY,
+      title       TEXT NOT NULL DEFAULT '',
+      started_at  TEXT NOT NULL,
+      ended_at    TEXT,
+      stream_date TEXT NOT NULL,
+      status      TEXT NOT NULL DEFAULT 'live',
+      -- 'live' was clocked with Start stream; 'manual' was typed in afterwards
+      -- because nobody remembered to. Both count identically in the P&L — the
+      -- distinction only records which times were measured and which recalled.
+      source      TEXT NOT NULL DEFAULT 'live',
+      host_id     TEXT,
+      note        TEXT,
+      created_at  TEXT NOT NULL,
+      updated_at  TEXT NOT NULL,
+      created_by  TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_stream_sessions_date
+      ON stream_sessions (stream_date);
+    CREATE INDEX IF NOT EXISTS idx_stream_sessions_status
+      ON stream_sessions (status);
+
+    -- One thing consumed on a show. product_name / sku / category are
+    -- DENORMALISED snapshots for the same reason inventory_scans denormalises
+    -- them: this row records what happened and has to stay readable after the
+    -- catalog product is deleted — which is also why product_id is SET NULL
+    -- rather than CASCADE.
+    CREATE TABLE IF NOT EXISTS stream_items (
+      id           TEXT PRIMARY KEY,
+      session_id   TEXT NOT NULL,
+      kind         TEXT NOT NULL,
+      product_id   TEXT,
+      product_name TEXT NOT NULL,
+      sku          TEXT NOT NULL DEFAULT '',
+      category     TEXT NOT NULL DEFAULT '',
+      break_number INTEGER,
+      recipient    TEXT,
+      quantity     INTEGER NOT NULL,
+      location     TEXT NOT NULL,
+      unit_cost    REAL NOT NULL DEFAULT 0,
+      cost_total   REAL NOT NULL DEFAULT 0,
+      note         TEXT,
+      created_at   TEXT NOT NULL,
+      created_by   TEXT,
+      FOREIGN KEY (session_id) REFERENCES stream_sessions (id) ON DELETE CASCADE,
+      FOREIGN KEY (product_id) REFERENCES inventory_products (id) ON DELETE SET NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_stream_items_session
+      ON stream_items (session_id);
+
+    -- The exact FIFO layers one line consumed. This is what makes the recorded
+    -- cost the REAL cost rather than a moving average, and it is the only thing
+    -- that lets a deleted line put back exactly what it took — those layers, at
+    -- those costs. lot_id is deliberately NOT a foreign key: lots cascade away
+    -- with their product and this row has to outlive that (see stream_items).
+    CREATE TABLE IF NOT EXISTS stream_item_lots (
+      id         TEXT PRIMARY KEY,
+      item_id    TEXT NOT NULL,
+      lot_id     TEXT NOT NULL,
+      quantity   INTEGER NOT NULL,
+      unit_cost  REAL NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (item_id) REFERENCES stream_items (id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_stream_item_lots_item
+      ON stream_item_lots (item_id);
   `)
 
   if (getMeta(database, 'schema_version') === null) {
@@ -722,7 +801,22 @@ function migrate(database: Database.Database): void {
   // v21: qbo_sync_log, created idempotently in the schema-init block above.
   // Purely additive — an upgrading database gains the table empty, and an empty
   // sync log means "nothing has been pushed to QuickBooks", which is true.
-  setMeta(database, 'schema_version', '21')
+  //
+  // v22: streaming (stream_sessions / stream_items / stream_item_lots), also
+  // created idempotently above. Purely additive — no existing table changes.
+  //
+  // The table that earns its keep is stream_item_lots. Opening a case on a
+  // break costs whatever the SPECIFIC cases pulled off the shelf cost, not the
+  // product's average, which drifts every time anything is bought. Naming the
+  // consumed layers is also the only way a mis-typed line can be undone: the
+  // units go back into the same lots at the same cost, whereas re-lotting them
+  // at today's average would restate the basis of everything still on hand.
+  //
+  // Sessions may not overlap. That is enforced in db/streaming.ts rather than
+  // by a constraint (SQLite has no exclusion constraints), and it is not a
+  // nicety: an overlap leaves a sale with two candidate shows and no correct
+  // way to pick one, which is exactly the attribution the module exists to fix.
+  setMeta(database, 'schema_version', '22')
 
   // Seed the product catalog once, then apply the on-hand snapshot once.
   seedCatalogIfNeeded(database)

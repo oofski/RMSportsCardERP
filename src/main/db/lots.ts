@@ -107,6 +107,40 @@ export function consumeFifo(db: Database, productId: string, location: string, q
   return slices
 }
 
+/**
+ * Put consumed quantity BACK into the exact lots it came from — the inverse of
+ * consumeFifo, and deliberately NOT the same thing as reverseLotReceipt (which
+ * undoes a RECEIPT by shrinking qty_received as well).
+ *
+ * It exists because a caller that recorded which slices it consumed can undo
+ * itself precisely. Handing the units back through createLot instead would open
+ * a fresh layer at today's average: the FIFO order would change, and the cost
+ * basis of everything still on the shelf would silently move. Restoring the
+ * original layers leaves the engine exactly as it was before the consumption.
+ *
+ * Refuses rather than clamps when a restore would push qty_remaining past
+ * qty_received (that can only mean the same consumption is being undone twice)
+ * or when the lot is gone, so `Σ lot.qty_remaining == inventory_stock.quantity`
+ * per (product, location) cannot be broken by a partial restore. Both throws
+ * roll the caller back.
+ *
+ * MUST be called inside the caller's db.transaction().
+ */
+export function restoreFifo(db: Database, slices: LotSlice[]): void {
+  const read = db.prepare('SELECT qty_received, qty_remaining FROM inventory_lots WHERE id = ?')
+  const upd = db.prepare('UPDATE inventory_lots SET qty_remaining = ? WHERE id = ?')
+  for (const slice of slices) {
+    const q = Math.round(slice.qty)
+    if (q <= 0) continue
+    const lot = read.get(slice.lotId) as { qty_received: number; qty_remaining: number } | undefined
+    if (!lot) throw new Error('The cost layer that stock came from no longer exists.')
+    if (lot.qty_remaining + q > lot.qty_received) {
+      throw new Error('That stock has already been put back.')
+    }
+    upd.run(lot.qty_remaining + q, slice.lotId)
+  }
+}
+
 /** Weighted average cost of the remaining lots across all locations (0 if none). */
 export function lotWeightedAvgCost(db: Database, productId: string): number {
   const row = db

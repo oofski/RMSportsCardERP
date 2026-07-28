@@ -77,11 +77,15 @@ export function productMetrics(
   }
 }
 
+// Record<> rather than a partial map on purpose: adding a transaction type
+// without a label here becomes a type error instead of a blank badge.
 const TXN_LABEL: Record<InventoryTxnType, string> = {
   sale: 'Sale',
   purchase: 'Purchase',
   restock: 'Restock',
-  adjustment: 'Adjustment'
+  adjustment: 'Adjustment',
+  stream_break: 'Break',
+  stream_giveaway: 'Giveaway'
 }
 
 export function TxnBadge({ type }: { type: InventoryTxnType }): JSX.Element {

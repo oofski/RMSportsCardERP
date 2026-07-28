@@ -168,7 +168,19 @@ export type UpdateInventoryProduct = Partial<Omit<NewInventoryProduct, 'openingQ
   id: string
 }
 
-export type InventoryTxnType = 'purchase' | 'sale' | 'restock' | 'adjustment'
+/**
+ * Every way stock moves. 'stream_break' and 'stream_giveaway' are the Streaming
+ * module opening a box on air or giving one away — both consume stock at real
+ * FIFO cost, and both are recorded here so the inventory history stays the one
+ * complete account of what happened to a product.
+ */
+export type InventoryTxnType =
+  | 'purchase'
+  | 'sale'
+  | 'restock'
+  | 'adjustment'
+  | 'stream_break'
+  | 'stream_giveaway'
 
 export interface InventoryTransaction {
   id: string

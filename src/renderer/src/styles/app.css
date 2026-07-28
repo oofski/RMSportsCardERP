@@ -2345,6 +2345,16 @@ table.data tfoot .data-total td {
   background: var(--warning-bg);
   color: var(--warning);
 }
+/* Stock consumed on a live show. Distinct from a sale: the money for a break
+   arrives through Whatnot's ledger, not through this movement. */
+.badge.txn-stream_break {
+  background: var(--brand-soft);
+  color: var(--brand-600);
+}
+.badge.txn-stream_giveaway {
+  background: var(--warning-bg);
+  color: var(--warning);
+}
 .stock-low {
   color: var(--warning);
   font-weight: 700;

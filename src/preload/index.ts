@@ -97,6 +97,14 @@ import type {
   ShipSlotUpdate,
   ShipWorkspaceSummary
 } from '@shared/shippingViews'
+import type {
+  NewStreamItem,
+  NewStreamSession,
+  StreamCalendarMonth,
+  StreamSession,
+  StreamSessionDetail,
+  UpdateStreamSession
+} from '@shared/streaming'
 
 const api = {
   app: {
@@ -440,6 +448,43 @@ const api = {
     settings: (): Promise<Record<string, string>> => ipcRenderer.invoke(IPC.shipSettingsGet),
     saveSettings: (patch: Record<string, string | null>): Promise<Result<Record<string, string>>> =>
       ipcRenderer.invoke(IPC.shipSettingsPatch, patch)
+  },
+  /**
+   * Streaming — show sessions, breaks and giveaways. Reads resolve to an empty
+   * value without `module.streaming`; every mutation needs `streaming.manage`
+   * (each one moves real stock) and returns `Result<T>` carrying the freshly
+   * derived session or detail, so a screen can reconcile without a refetch.
+   */
+  streaming: {
+    /** The show currently on air, if any. */
+    active: (): Promise<StreamSession | null> => ipcRenderer.invoke(IPC.streamActive),
+    /** One entry per day that HAS activity — the caller builds the grid. */
+    calendar: (month: string): Promise<StreamCalendarMonth> =>
+      ipcRenderer.invoke(IPC.streamCalendar, month),
+    /** Ranged on the session's business day (stream_date), newest first. */
+    list: (from: string, to: string): Promise<StreamSession[]> =>
+      ipcRenderer.invoke(IPC.streamList, { from, to }),
+    get: (id: string): Promise<StreamSessionDetail | null> => ipcRenderer.invoke(IPC.streamGet, id),
+    start: (input: {
+      title: string
+      hostId: string | null
+      note: string | null
+    }): Promise<Result<StreamSession>> => ipcRenderer.invoke(IPC.streamStart, input),
+    end: (id: string): Promise<Result<StreamSession>> => ipcRenderer.invoke(IPC.streamEnd, id),
+    /** Type in a show nobody clocked. Refused if it overlaps another session. */
+    create: (input: NewStreamSession): Promise<Result<StreamSession>> =>
+      ipcRenderer.invoke(IPC.streamCreate, input),
+    /** Partial: an omitted field keeps its value, an explicit null clears it. */
+    update: (input: UpdateStreamSession): Promise<Result<StreamSession>> =>
+      ipcRenderer.invoke(IPC.streamUpdate, input),
+    /** Deletes the session AND returns the stock its lines consumed. */
+    remove: (id: string): Promise<Result> => ipcRenderer.invoke(IPC.streamDelete, id),
+    /** Consumes stock at its real FIFO cost. */
+    addItem: (input: NewStreamItem): Promise<Result<StreamSessionDetail>> =>
+      ipcRenderer.invoke(IPC.streamItemAdd, input),
+    /** Puts back exactly the cost layers the line took. */
+    removeItem: (id: string): Promise<Result<StreamSessionDetail>> =>
+      ipcRenderer.invoke(IPC.streamItemRemove, id)
   },
   email: {
     composeInvite: (

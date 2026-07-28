@@ -74,6 +74,8 @@ export type Permission =
   | 'module.invoicing'
   | 'module.finance'
   | 'module.sops'
+  | 'module.streaming'
+  | 'streaming.manage'
 
 export interface PermissionDefinition {
   key: Permission
@@ -138,6 +140,18 @@ export const PERMISSIONS: PermissionDefinition[] = [
     group: 'Modules'
   },
   {
+    key: 'module.streaming',
+    label: 'Streaming',
+    description: 'Open the Streaming module — show sessions, breaks and giveaways.',
+    group: 'Modules'
+  },
+  {
+    key: 'streaming.manage',
+    label: 'Manage streams',
+    description: 'Start and end streams, add stream times, and record breaks and giveaways (which consume stock).',
+    group: 'Modules'
+  },
+  {
     key: 'module.fulfillment',
     label: 'Shipping',
     description: 'Open the Shipping workspace — orders, pick lists and shipment tracking.',
@@ -184,7 +198,9 @@ const OPERATIONS_PERMISSIONS: Permission[] = [
   'shipping.manage',
   'module.invoicing',
   'module.finance',
-  'module.sops'
+  'module.sops',
+  'module.streaming',
+  'streaming.manage'
 ]
 
 const STAFF_PERMISSIONS: Permission[] = [

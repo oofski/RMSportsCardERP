@@ -158,7 +158,13 @@ export function findProductsByUpc(normalized: string | null): InventoryProduct[]
 
 /** Returns the new transaction's id so a caller can point an audit row at the
  * exact ledger entry it wrote. */
-function insertTxn(
+/**
+ * Shared with db/streaming.ts, which moves stock the same way a sale does.
+ * Exported rather than duplicated on purpose: two copies of a stock mutation
+ * are two things that must be changed together forever, and the day they drift
+ * is the day the cost basis quietly stops adding up.
+ */
+export function insertTxn(
   productId: string,
   type: string,
   quantityChange: number,
@@ -181,7 +187,7 @@ function insertTxn(
 }
 
 /** Add `delta` to a product's stock at a location (delta may be negative). */
-function bumpStock(productId: string, location: string, delta: number): void {
+export function bumpStock(productId: string, location: string, delta: number): void {
   getDb()
     .prepare(
       `INSERT INTO inventory_stock (id, product_id, location, quantity)
@@ -191,7 +197,7 @@ function bumpStock(productId: string, location: string, delta: number): void {
     .run(newId(), productId, location, delta)
 }
 
-function stockQty(productId: string, location: string): number {
+export function stockQty(productId: string, location: string): number {
   const row = getDb()
     .prepare('SELECT quantity FROM inventory_stock WHERE product_id = ? AND location = ?')
     .get(productId, location) as { quantity: number } | undefined

@@ -59,6 +59,15 @@ export const MODULES: AppModule[] = [
     workspace: 'shipping'
   },
   {
+    id: 'streaming',
+    name: 'Streaming',
+    shortName: 'Streaming',
+    description: 'Show sessions, what was broken on them, and giveaways.',
+    icon: 'CircleDot',
+    permission: 'module.streaming',
+    status: 'active'
+  },
+  {
     id: 'invoicing',
     name: 'Invoicing & POs',
     shortName: 'Invoices',
