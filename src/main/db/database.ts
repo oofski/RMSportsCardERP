@@ -556,6 +556,42 @@ function migrate(database: Database.Database): void {
     -- instead of stacking duplicates on the card.
     CREATE UNIQUE INDEX IF NOT EXISTS idx_ship_break_assign_pair
       ON ship_break_assignments (break_id, employee_id);
+
+    -- v21: what has been pushed to QuickBooks, and as what.
+    --
+    -- This table is the entire double-post defence. QuickBooks has no bulk undo
+    -- and no natural idempotency key on Bill/Purchase/SalesReceipt, so "did we
+    -- already send this?" can only be answered locally. A retry after a network
+    -- timeout is the common case and must not create a second bill.
+    --
+    -- realm_id is part of the unique key ON PURPOSE: the same purchase order
+    -- pushed to a sandbox company has NOT been pushed to the real one, and
+    -- collapsing those would silently skip every record the day production is
+    -- connected.
+    --
+    -- payload_hash is what we last sent. A PO edited after syncing hashes
+    -- differently, which is how an update is told apart from a no-op — rather
+    -- than diffing against QuickBooks on every run.
+    CREATE TABLE IF NOT EXISTS qbo_sync_log (
+      id           TEXT PRIMARY KEY,
+      entity       TEXT NOT NULL,
+      local_id     TEXT NOT NULL,
+      realm_id     TEXT NOT NULL,
+      qbo_type     TEXT NOT NULL,
+      qbo_id       TEXT,
+      doc_number   TEXT,
+      amount       REAL NOT NULL DEFAULT 0,
+      status       TEXT NOT NULL DEFAULT 'pending',
+      error        TEXT,
+      payload_hash TEXT,
+      created_at   TEXT NOT NULL,
+      updated_at   TEXT NOT NULL,
+      synced_at    TEXT
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_qbo_sync_key
+      ON qbo_sync_log (realm_id, entity, local_id);
+    CREATE INDEX IF NOT EXISTS idx_qbo_sync_status
+      ON qbo_sync_log (status);
   `)
 
   if (getMeta(database, 'schema_version') === null) {
@@ -682,7 +718,11 @@ function migrate(database: Database.Database): void {
   // reason ("already sold"). Receipts are 1:N and are now stored that way.
   // lot_id is kept, and read as a single-receipt fallback for the brief window
   // where it was the only record.
-  setMeta(database, 'schema_version', '20')
+  //
+  // v21: qbo_sync_log, created idempotently in the schema-init block above.
+  // Purely additive — an upgrading database gains the table empty, and an empty
+  // sync log means "nothing has been pushed to QuickBooks", which is true.
+  setMeta(database, 'schema_version', '21')
 
   // Seed the product catalog once, then apply the on-hand snapshot once.
   seedCatalogIfNeeded(database)

@@ -1,7 +1,13 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC, type AppInfo } from '@shared/ipc'
 import type { Permission } from '@shared/permissions'
-import type { QboEnvironment, QboStatus } from '@shared/quickbooks'
+import type {
+  QboAccount,
+  QboAccountMap,
+  QboEnvironment,
+  QboStatus,
+  QboSyncRow
+} from '@shared/quickbooks'
 import type {
   AddStockInput,
   AdjustStockInput,
@@ -261,7 +267,14 @@ const api = {
       refreshToken: string,
       realmId: string
     ): Promise<Result<QboStatus>> =>
-      ipcRenderer.invoke(IPC.qboPasteTokens, { accessToken, refreshToken, realmId })
+      ipcRenderer.invoke(IPC.qboPasteTokens, { accessToken, refreshToken, realmId }),
+    accounts: (): Promise<Result<{ accounts: QboAccount[]; suggested: QboAccountMap }>> =>
+      ipcRenderer.invoke(IPC.qboAccounts),
+    getMapping: (): Promise<Result<{ realmId: string; map: QboAccountMap }>> =>
+      ipcRenderer.invoke(IPC.qboMappingGet),
+    saveMapping: (map: QboAccountMap): Promise<Result<{ map: QboAccountMap }>> =>
+      ipcRenderer.invoke(IPC.qboMappingSave, { map }),
+    syncLog: (): Promise<Result<QboSyncRow[]>> => ipcRenderer.invoke(IPC.qboSyncLog)
   },
 
   purchaseOrders: {

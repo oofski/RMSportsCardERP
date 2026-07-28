@@ -6,6 +6,7 @@ import { Button, CenterLoader, Field, Input, Select } from '../../components/ui'
 import { Icon } from '../../components/Icon'
 import { useToast } from '../../components/Toast'
 import { formatDateTime } from '../../lib/format'
+import { QboAccountMapping } from './QboAccountMapping'
 
 /**
  * QuickBooks Online connection.
@@ -363,6 +364,8 @@ export function QuickBooksTab(): JSX.Element {
           </Button>
         </div>
       )}
+
+      <QboAccountMapping connected={status.connected} />
     </div>
   )
 }

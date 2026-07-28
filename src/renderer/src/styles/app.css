@@ -9759,3 +9759,106 @@ button.sor-team:focus-visible {
 .qbo-manual .qbo-form > *:first-child {
   grid-column: auto;
 }
+
+/* ---- Account mapping ---------------------------------------------------- */
+/* Separated from the connection block by a rule rather than another card: the
+   page is already a stack of bordered boxes and one more would read as an
+   unrelated feature instead of the next step. */
+.qbo-map {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+.qbo-map-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.qbo-map-head b {
+  display: block;
+  font-size: 14px;
+  color: var(--text);
+}
+.qbo-map-head p {
+  margin: 4px 0 0;
+  max-width: 58ch;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-2);
+}
+.qbo-map-acts {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+/* Readiness per flow. Three across on desktop, stacking on narrow — each is a
+   sentence, so they must not be squeezed into unreadable columns. */
+.qbo-flows {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 10px;
+}
+.qbo-flow {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 11px 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+.qbo-flow[data-ready='true'] {
+  border-color: var(--success);
+  background: var(--success-bg);
+}
+.qbo-flow svg {
+  color: var(--text-3);
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.qbo-flow[data-ready='true'] svg {
+  color: var(--success-strong);
+}
+.qbo-flow b {
+  display: block;
+  font-size: 12.5px;
+  color: var(--text);
+}
+.qbo-flow span {
+  display: block;
+  margin-top: 2px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-2);
+}
+.qbo-map-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px 16px;
+}
+@media (max-width: 780px) {
+  .qbo-map-grid {
+    grid-template-columns: 1fr;
+  }
+}
+/* Louder than a hint: an empty slot here is a blocked flow, not a preference. */
+.qbo-slot-warn {
+  display: block;
+  margin-top: 4px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--danger-strong);
+}
+.qbo-map-save {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.qbo-map-dirty {
+  font-size: 12.5px;
+  color: var(--text-2);
+}

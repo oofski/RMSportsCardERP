@@ -11,11 +11,14 @@
 import { ipcMain } from 'electron'
 import { IPC } from '@shared/ipc'
 import type { Result } from '@shared/types'
-import type { QboEnvironment, QboStatus } from '@shared/quickbooks'
+import type { QboAccount, QboAccountMap, QboEnvironment, QboStatus, QboSyncRow } from '@shared/quickbooks'
 import { getQboConfig, setQboConfig, clearQboConfig, getQboTokens, setQboTokens, clearQboTokens } from './quickbooks/store'
 import { authorize, exchangeCode, revokeTokens } from './quickbooks/oauth'
 import { QBO_REDIRECT_URI, buildAuthorizeUrl } from '@shared/quickbooks'
 import { fetchCompanyInfo } from './quickbooks/client'
+import { fetchAccounts } from './quickbooks/accounts'
+import { getAccountMap, setAccountMap, suggestMap, validateMap } from './quickbooks/mapping'
+import { listSyncRows } from './db/qboSync'
 import { currentUser } from './services/auth'
 import { getDb, getMeta, setMeta } from './db/database'
 
@@ -229,6 +232,85 @@ export function registerQuickBooksIpc(): void {
       }
     }
   )
+
+  /**
+   * The chart of accounts, plus a suggested mapping. Read-only against
+   * QuickBooks — this is the call to make first against a live company,
+   * because it proves the connection works without writing anything.
+   */
+  ipcMain.handle(
+    IPC.qboAccounts,
+    async (): Promise<Result<{ accounts: QboAccount[]; suggested: QboAccountMap }>> => {
+      try {
+        requireAdmin()
+        const accounts = await fetchAccounts()
+        noteError(null)
+        return { ok: true, data: { accounts, suggested: suggestMap(accounts) } }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        noteError(message)
+        return { ok: false, error: message }
+      }
+    }
+  )
+
+  ipcMain.handle(IPC.qboMappingGet, (): Result<{ realmId: string; map: QboAccountMap }> => {
+    try {
+      requireAdmin()
+      const tokens = getQboTokens()
+      if (!tokens) return { ok: false, error: 'Connect QuickBooks first.' }
+      return { ok: true, data: { realmId: tokens.realmId, map: getAccountMap(tokens.realmId) } }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
+  /**
+   * Save the mapping, but only after checking every chosen account against the
+   * live chart of accounts. The fetch is deliberately not optional: an
+   * unverified mapping is how inventory ends up posted to an income account,
+   * and that error is invisible until it is expensive.
+   */
+  ipcMain.handle(
+    IPC.qboMappingSave,
+    async (_e, input: { map: QboAccountMap }): Promise<Result<{ map: QboAccountMap }>> => {
+      try {
+        requireAdmin()
+        const tokens = getQboTokens()
+        if (!tokens) return { ok: false, error: 'Connect QuickBooks first.' }
+        const map = input?.map ?? {}
+
+        let accounts: QboAccount[]
+        try {
+          accounts = await fetchAccounts()
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err)
+          return { ok: false, error: `Could not verify the accounts against QuickBooks: ${message}` }
+        }
+
+        const check = validateMap(map, accounts)
+        if (!check.ok) return { ok: false, error: check.error }
+
+        setAccountMap(tokens.realmId, map)
+        noteError(null)
+        return { ok: true, data: { map: getAccountMap(tokens.realmId) } }
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      }
+    }
+  )
+
+  /** What has been pushed to the connected company, and as what. */
+  ipcMain.handle(IPC.qboSyncLog, (): Result<QboSyncRow[]> => {
+    try {
+      requireAdmin()
+      const tokens = getQboTokens()
+      if (!tokens) return { ok: false, error: 'Connect QuickBooks first.' }
+      return { ok: true, data: listSyncRows(getDb(), tokens.realmId) }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
 
   /** Live round-trip against the API, so "connected" can be trusted. */
   ipcMain.handle(IPC.qboTest, async (): Promise<Result<{ companyName: string; realmId: string }>> => {
