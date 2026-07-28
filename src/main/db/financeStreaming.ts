@@ -13,11 +13,15 @@
  *
  * THREE THINGS THIS FILE REFUSES TO DO
  *
- * 1. Drop a line. Whatnot's export is not valid RFC4180 — it wraps Show Boost
- *    titles in unescaped double quotes — so some lines need repairing, and a
- *    line that still cannot be read is written to `ledger_quarantine` with its
- *    raw text. A vanished row is money with no trace, which is strictly worse
- *    than a loud error.
+ * 1. Drop a line. Whatnot has shipped TWO export formats — the original quotes
+ *    every field, writes negatives as "-$4.15" and is not valid RFC4180 (it
+ *    wraps Show Boost titles in unescaped double quotes); the current one quotes
+ *    minimally, writes negatives as "($4.15)" and is valid. ONE import path
+ *    reads both, auto-detected, because asking the operator which format a file
+ *    is would be asking them to guess. A line the correct parse rejects goes
+ *    through the anchored repair; a line that still cannot be read is written to
+ *    `ledger_quarantine` with its raw text. A vanished row is money with no
+ *    trace, which is strictly worse than a loud error.
  * 2. Guess an owner for a SALE. There is no nearest-session match, no ±N minute
  *    tolerance and no "before 4am means yesterday". A sale is inside a session
  *    window or it is not; if it is not, it stays unattributed and is SHOWN as
@@ -41,9 +45,20 @@
  *    because 154 platform charges are identical -$4.15 rows and whole batches of
  *    $0.00 shipping subsidies share one timestamp.
  *
- * Everything about classification, date parsing, identity and the attribution
- * predicate lives in @shared/financeStreaming and is USED here, never restated:
- * main and the renderer must never be able to disagree about what a row is.
+ * WHAT A DAY IS WORTH, AND WHERE THAT IS DECIDED
+ *
+ * The ledger's sale figure is GROSS. Whatnot's commission (6%) and processing
+ * (2.9% plus 30c a transaction, both on the gross) come off it, on SALES ONLY —
+ * `computeFees` in the contract owns that arithmetic and it is never inlined.
+ * Fees are computed once, ON A DAY, and weeks, months and the grand total are
+ * built by SUMMING day rows. Nothing re-derives a fee from a period's gross: the
+ * flat 30c is per sale row, so a period that recomputed it would depend on how
+ * it was sliced and would eventually contradict the days inside it.
+ *
+ * Everything about classification, date parsing, identity, fees and the
+ * attribution predicate lives in @shared/financeStreaming and is USED here,
+ * never restated: main and the renderer must never be able to disagree about
+ * what a row is or what it is worth.
  */
 import { createHash } from 'crypto'
 import { readFileSync } from 'fs'
@@ -542,8 +557,8 @@ function fail(err: unknown): Result<never> {
   return { ok: false, error: err instanceof Error ? err.message : String(err) }
 }
 
-function fingerprintOf(
-  createdRaw: string,
+export function fingerprintOf(
+  occurredAtIso: string,
   amount: number,
   listingId: string,
   orderId: string,
@@ -551,7 +566,7 @@ function fingerprintOf(
   txnType: string
 ): string {
   return createHash('sha256')
-    .update(ledgerFingerprintSource(createdRaw, amount, listingId, orderId, message, txnType))
+    .update(ledgerFingerprintSource(occurredAtIso, amount, listingId, orderId, message, txnType))
     .digest('hex')
 }
 
@@ -680,7 +695,7 @@ export function importLedger(filePath: string, actorId: string | null): Result<L
         txnType,
         bucket: classifyLedgerRow(txnType, message),
         breakNumber: parseBreakNumber(message),
-        fingerprint: fingerprintOf(createdRaw, amount, listingId, orderId, message, txnType),
+        fingerprint: fingerprintOf(occurredAt, amount, listingId, orderId, message, txnType),
         repaired: row.repaired
       })
     }
@@ -1437,8 +1452,6 @@ function monthLabel(streamDate: string): string {
 interface PeriodPlan {
   key: string
   label: string
-  /** Sorts periods; the earliest day the period could contain. */
-  order: string
 }
 
 /**
@@ -1448,17 +1461,15 @@ interface PeriodPlan {
  */
 function weekOf(streamDate: string): PeriodPlan {
   const ms = dayUtcMs(streamDate)
-  if (ms === null) return { key: streamDate, label: streamDate, order: streamDate }
+  if (ms === null) return { key: streamDate, label: streamDate }
   const monday = mondayOf(ms)
-  const iso = new Date(monday).toISOString().slice(0, 10)
-  return { key: isoWeekKey(monday), label: weekLabel(monday), order: iso }
+  return { key: isoWeekKey(monday), label: weekLabel(monday) }
 }
 
 function monthOf(streamDate: string): PeriodPlan {
   const ms = dayUtcMs(streamDate)
-  if (ms === null) return { key: streamDate, label: streamDate, order: streamDate }
-  const key = streamDate.slice(0, 7)
-  return { key, label: monthLabel(streamDate), order: `${key}-01` }
+  if (ms === null) return { key: streamDate, label: streamDate }
+  return { key: streamDate.slice(0, 7), label: monthLabel(streamDate) }
 }
 
 /**

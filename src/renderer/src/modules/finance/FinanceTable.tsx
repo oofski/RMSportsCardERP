@@ -296,7 +296,7 @@ function MoneyCells({
         </td>
       )}
       <td className="fin-num fin-edge">
-        <Money value={row.totalRevenue} strong />
+        <Money value={row.totalRevenue} strong dash={dash} />
       </td>
 
       {/* The fee fields arrive NEGATIVE from the contract. They are printed as
@@ -309,7 +309,7 @@ function MoneyCells({
         <Money value={row.processingFee} dash={dash} />
       </td>
       <td className="fin-num fin-edge">
-        <Money value={row.netRevenue} strong />
+        <Money value={row.netRevenue} strong dash={dash} />
       </td>
 
       <td className="fin-num">
@@ -319,7 +319,12 @@ function MoneyCells({
         <Money value={postageOut(row)} cost dash={dash} title={postageTitle(row)} />
       </td>
       <td className="fin-num fin-edge">
-        <Money value={row.netShipping} strong />
+        <Money
+          value={row.netShipping}
+          strong
+          dash={dash}
+          title="Subsidy in less all postage out. Positive means shipping paid for itself."
+        />
       </td>
 
       {cols.showBoost && (
@@ -333,7 +338,7 @@ function MoneyCells({
         </td>
       )}
       <td className="fin-num fin-c-net">
-        <Money value={row.netAfterCosts} strong />
+        <Money value={row.netAfterCosts} strong dash={dash} />
       </td>
     </>
   )

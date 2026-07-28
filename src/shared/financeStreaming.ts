@@ -263,6 +263,28 @@ export function parseLedgerAmount(value: string): number | null {
 }
 
 /**
+ * A ledger timestamp reduced to its wall-clock components: YYYYMMDDHHMMSS.
+ *
+ * Identity must not depend on how Whatnot happens to FORMAT a date. They have
+ * already changed the amount format once ("-$4.15" became "($4.15)"), and the
+ * same class of change to the timestamp — zero-padding an hour, a different
+ * month abbreviation — would make every stored row look new and silently
+ * double the archive on the next upload.
+ *
+ * Built from local wall-clock parts rather than the instant, so a machine that
+ * changes timezone does not re-identify every row it already has.
+ */
+export function canonicalLedgerTimestamp(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  const p = (n: number, w = 2): string => String(n).padStart(w, '0')
+  return (
+    p(d.getFullYear(), 4) + p(d.getMonth() + 1) + p(d.getDate()) +
+    p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds())
+  )
+}
+
+/**
  * The canonical identity of a ledger row, for de-duplicating re-uploads.
  *
  * SIX fields, and every one is load-bearing. Anything smaller collides on real
@@ -275,13 +297,13 @@ export function parseLedgerAmount(value: string): number | null {
  * pending to completed between two exports, and including them would make the
  * same row look new and double-count it.
  *
- * Takes the RAW created-date string rather than the parsed instant so identity
- * never depends on the machine's timezone. The amount is normalised to cents so
- * the same row exported as "-$4.15" and as "($4.15)" hashes identically —
- * without that, the format change would have made every historic row look new.
+ * Both the timestamp and the amount are normalised — to wall-clock digits and
+ * to integer cents — so identity survives a change in how Whatnot formats
+ * either. That is what let the parenthesised-negative format change land
+ * without doubling anybody's ledger.
  */
 export function ledgerFingerprintSource(
-  createdDateRaw: string,
+  occurredAtIso: string,
   amount: number,
   listingId: string,
   orderId: string,
@@ -294,7 +316,7 @@ export function ledgerFingerprintSource(
   // and ("abc","def") would hash identically — and the failure mode is a real
   // row silently swallowed as a duplicate: money gone, no error anywhere.
   return [
-    (createdDateRaw || '').trim(),
+    canonicalLedgerTimestamp(occurredAtIso),
     String(c),
     (listingId || '').trim(),
     (orderId || '').trim(),

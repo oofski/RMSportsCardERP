@@ -150,9 +150,13 @@ export function StreamingTab(): JSX.Element {
             {rowCount === 0 ? (
               <p className="fin-detail-empty">
                 <Icon name="Info" size={14} />
-                {period === 'day'
-                  ? 'The ledger is loaded, but no row matched a logged show, so there are no days to show. Add the sessions listed above in Streaming and re-attribute.'
-                  : `There are no ${grainWord}s to show yet — weeks and months are built from the days above, so a day has to land first.`}
+                {view.days.length === 0
+                  ? 'The ledger is loaded, but no row matched a logged show, so there is nothing to group yet. Add the sessions listed above in Streaming and re-attribute.'
+                  : // Days exist but this rollup does not, which can only mean the
+                    // app is running against a version that does not produce it.
+                    // Saying so beats "no data", which would read as a real
+                    // finding and send someone looking for missing money.
+                    `There are days above, but this build produced no ${grainWord} rollup for them. Switch back to Day; ${grainWord}s appear once the app is updated.`}
               </p>
             ) : (
               <FinanceTable view={view} period={period} totals={totals} />
@@ -184,67 +188,79 @@ export function StreamingTab(): JSX.Element {
  * would be a different, equally true number.
  */
 function SummaryStrip({ totals }: { totals: StreamFinanceTotals }): JSX.Element {
-  const rate = totals.totalRevenue > 0 ? Math.abs(totals.totalFees) / totals.totalRevenue : null
+  // Denominator is SALES, not total revenue. Fees are only ever charged on
+  // sales — tips and bonuses arrive whole — so dividing by total revenue would
+  // quietly dilute the rate on any day with a tip and understate what Whatnot
+  // actually costs. The caption names the base so the number can be checked.
+  const rate = totals.sales > 0 ? Math.abs(totals.totalFees) / totals.sales : null
 
   return (
     <section className="fin-summary" aria-label="Streaming revenue summary">
-      <div className="fin-sum">
-        <span className="fin-sum-label">Total revenue</span>
-        <span className="fin-sum-value">
-          <Money value={totals.totalRevenue} strong />
+      {/* The three cells of the subtraction are wrapped together so they wrap as
+          a unit. Split across two lines they would still be readable, but the
+          "−" and "=" between them would not be, and those glyphs are the whole
+          point of laying the strip out this way. */}
+      <div className="fin-sum-flow">
+        <div className="fin-sum">
+          <span className="fin-sum-label">Total revenue</span>
+          <span className="fin-sum-value">
+            <Money value={totals.totalRevenue} strong />
+          </span>
+          <em className="fin-sum-hint">sales, tips and bonuses, before any deduction</em>
+        </div>
+
+        <span className="fin-sum-op" aria-hidden="true">
+          −
         </span>
-        <em className="fin-sum-hint">sales, tips and bonuses, before any deduction</em>
+
+        <div className="fin-sum">
+          <span className="fin-sum-label">
+            Fees
+            {rate !== null && (
+              <b className="fin-rate" title="Total fees as a share of sales — fees are charged on sales only">
+                {(rate * 100).toFixed(2)}% of sales
+              </b>
+            )}
+          </span>
+          <span className="fin-sum-value">
+            <Money value={totals.totalFees} strong />
+          </span>
+          <em className="fin-sum-hint">6% Whatnot, plus 2.9% and 30¢ a transaction</em>
+        </div>
+
+        <span className="fin-sum-op" aria-hidden="true">
+          =
+        </span>
+
+        <div className="fin-sum is-net">
+          <span className="fin-sum-label">Net revenue</span>
+          <span className="fin-sum-value">
+            <Money value={totals.netRevenue} strong />
+          </span>
+          <em className="fin-sum-hint">what Whatnot actually keeps for you</em>
+        </div>
       </div>
 
-      <span className="fin-sum-op" aria-hidden="true">
-        −
-      </span>
-
-      <div className="fin-sum">
-        <span className="fin-sum-label">
-          Fees
-          {rate !== null && (
-            <b className="fin-rate" title="Total fees as a share of total revenue">
-              {(rate * 100).toFixed(2)}%
-            </b>
-          )}
-        </span>
-        <span className="fin-sum-value">
-          <Money value={totals.totalFees} strong />
-        </span>
-        <em className="fin-sum-hint">6% Whatnot, plus 2.9% and 30¢ a transaction</em>
-      </div>
-
-      <span className="fin-sum-op" aria-hidden="true">
-        =
-      </span>
-
-      <div className="fin-sum is-net">
-        <span className="fin-sum-label">Net revenue</span>
-        <span className="fin-sum-value">
-          <Money value={totals.netRevenue} strong />
-        </span>
-        <em className="fin-sum-hint">what Whatnot actually keeps for you</em>
-      </div>
-
-      {/* Shipping sits the other side of a rule, not behind an operator: it is
-          not part of the fee subtraction and must never look like it is. */}
+      {/* Shipping sits the other side of a rule, never behind an operator: it is
+          not part of the fee subtraction and must not look like it is. */}
       <span className="fin-sum-rule" aria-hidden="true" />
 
-      <div className="fin-sum">
-        <span className="fin-sum-label">Net shipping</span>
-        <span className="fin-sum-value">
-          <Money value={totals.netShipping} strong />
-        </span>
-        <em className="fin-sum-hint">subsidy in, postage out — tracked on its own</em>
-      </div>
+      <div className="fin-sum-side">
+        <div className="fin-sum">
+          <span className="fin-sum-label">Net shipping</span>
+          <span className="fin-sum-value">
+            <Money value={totals.netShipping} strong />
+          </span>
+          <em className="fin-sum-hint">subsidy in, postage out — tracked on its own</em>
+        </div>
 
-      <div className="fin-sum">
-        <span className="fin-sum-label">Streamed</span>
-        <span className="fin-sum-value mono">{plural(totals.dayCount, 'day')}</span>
-        <em className="fin-sum-hint">
-          {plural(totals.sessionCount, 'show')} · {formatDuration(totals.minutes)} on air
-        </em>
+        <div className="fin-sum">
+          <span className="fin-sum-label">Streamed</span>
+          <span className="fin-sum-value mono">{plural(totals.dayCount, 'day')}</span>
+          <em className="fin-sum-hint">
+            {plural(totals.sessionCount, 'show')} · {formatDuration(totals.minutes)} on air
+          </em>
+        </div>
       </div>
     </section>
   )

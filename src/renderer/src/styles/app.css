@@ -11247,15 +11247,32 @@ button.sor-team:focus-visible {
   display: flex;
   flex-wrap: wrap;
   align-items: stretch;
-  gap: 10px 14px;
+  gap: 12px 14px;
   padding: 14px 16px;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--surface);
   box-shadow: var(--shadow-sm);
 }
+/* The subtraction wraps as one unit. Broken across two lines the cells still
+   read, but the operators between them do not — and they are the reason the
+   strip is laid out as a line rather than as tiles. */
+.fin-sum-flow {
+  flex: 3 1 430px;
+  display: flex;
+  align-items: stretch;
+  gap: 10px 12px;
+  min-width: 0;
+}
+.fin-sum-side {
+  flex: 2 1 288px;
+  display: flex;
+  align-items: stretch;
+  gap: 14px;
+  min-width: 0;
+}
 .fin-sum {
-  flex: 1 1 152px;
+  flex: 1 1 130px;
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -11786,7 +11803,10 @@ button.sor-team:focus-visible {
   z-index: 1;
   min-width: 190px;
   background: var(--surface);
-  box-shadow: 1px 0 0 var(--border);
+  /* --border-strong, not --border: this hairline is the only thing separating a
+     pinned label from money sliding underneath it, and at --border it is
+     invisible against --surface-2 rows. */
+  box-shadow: 1px 0 0 var(--border-strong);
 }
 .fin-table thead .fin-c-day,
 .fin-table tfoot .fin-c-day {
@@ -12077,23 +12097,17 @@ button.sor-team:focus-visible {
 }
 
 /* ---------- Responsive ---------- */
-@media (max-width: 900px) {
-  /* The strip stops being one line of arithmetic and becomes a grid of tiles.
-     A "−" stranded at the end of a wrapped line reads as a typo, so the
-     operators go rather than dangle; the labels still say Total revenue, Fees,
-     Net revenue in that order, which is the same sentence. */
-  .fin-summary {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
-    gap: 12px;
-  }
-  .fin-sum-op,
-  .fin-sum-rule {
-    display: none;
+@media (max-width: 1040px) {
+  /* Below this the three cells of the subtraction are narrower than the figures
+     they hold, so the type steps down rather than the layout breaking up. */
+  .fin-sum-value {
+    font-size: 18px;
   }
   .fin-sum.is-net .fin-sum-value {
     font-size: 21px;
   }
+}
+@media (max-width: 900px) {
   .fin-unattr-figure {
     margin-left: 0;
     width: 100%;
@@ -12107,6 +12121,21 @@ button.sor-team:focus-visible {
   }
   .fin-cluster .fin-money {
     margin-left: auto;
+  }
+}
+@media (max-width: 720px) {
+  /* The subtraction itself has to wrap now. A "−" stranded at the end of a line
+     reads as a typo, so the operators go rather than dangle — the labels still
+     say Total revenue, Fees, Net revenue in that order, which is the same
+     sentence. The rule goes with them: a lone vertical hairline at the start of
+     a wrapped row divides nothing. */
+  .fin-sum-flow,
+  .fin-sum-side {
+    flex-wrap: wrap;
+  }
+  .fin-sum-op,
+  .fin-sum-rule {
+    display: none;
   }
 }
 @media (max-width: 640px) {

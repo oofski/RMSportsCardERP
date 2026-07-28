@@ -8,6 +8,7 @@ import { seedSnapshot } from './inventorySnapshot'
 import { seedCatalogExpansion } from './inventoryCatalogV2'
 import { dedupeProducts } from './dedupe'
 import { backfillLots } from './lots'
+import { fingerprintOf } from './financeStreaming'
 
 let db: Database.Database | null = null
 
@@ -965,7 +966,17 @@ function migrate(database: Database.Database): void {
   database.exec(
     `CREATE INDEX IF NOT EXISTS idx_ledger_rows_attribution ON ledger_rows (attribution)`
   )
-  setMeta(database, 'schema_version', '23')
+  // v24: re-key every ledger row.
+  //
+  // The de-dup fingerprint used to hash the RAW "Created Date" text. Whatnot has
+  // already changed one column's formatting under us — negatives went from
+  // "-$4.15" to "($4.15)" — and the same change to the timestamp would have made
+  // every stored row look new and doubled the archive on the next upload. The
+  // fingerprint now normalises the timestamp to wall-clock digits, so this pass
+  // recomputes the stored hashes to match. Without it, the first import after
+  // upgrading would re-insert every row it already had.
+  runOnce(database, 'ledger_fingerprint_v2', () => reFingerprintLedger(database))
+  setMeta(database, 'schema_version', '24')
 
   // Seed the product catalog once, then apply the on-hand snapshot once.
   seedCatalogIfNeeded(database)
@@ -1026,6 +1037,42 @@ function backfillUpcNorm(database: Database.Database, all: boolean): void {
   const upd = database.prepare('UPDATE inventory_products SET upc_norm = ? WHERE id = ?')
   database.transaction(() => {
     for (const r of rows) upd.run(normalizeUpc(r.upc), r.id)
+  })()
+}
+
+
+/**
+ * Recompute `ledger_rows.fingerprint` under the current rules.
+ *
+ * Deliberately reuses the SAME function the importer calls, rather than a
+ * migration-local copy — two implementations of an identity hash drift, and the
+ * day they do, every row looks new.
+ *
+ * Wrapped in a transaction: a half-rekeyed table would de-duplicate against
+ * itself inconsistently, and the runOnce flag stays unset so a crash retries.
+ */
+function reFingerprintLedger(database: Database.Database): void {
+  const has = database
+    .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='ledger_rows'")
+    .all()
+  if (has.length === 0) return
+  const rows = database
+    .prepare('SELECT id, occurred_at, amount, listing_id, order_id, message, txn_type FROM ledger_rows')
+    .all() as Array<{
+      id: string; occurred_at: string; amount: number
+      listing_id: string | null; order_id: string | null; message: string; txn_type: string
+    }>
+  if (rows.length === 0) return
+  const upd = database.prepare('UPDATE ledger_rows SET fingerprint = ? WHERE id = ?')
+  database.transaction(() => {
+    for (const r of rows) {
+      upd.run(
+        fingerprintOf(
+          r.occurred_at, r.amount, r.listing_id ?? '', r.order_id ?? '', r.message, r.txn_type
+        ),
+        r.id
+      )
+    }
   })()
 }
 
