@@ -49,7 +49,7 @@ interface PoLineRow {
 /** Round to whole cents so line totals never carry float drift. */
 const cents = (n: number): number => Math.round(n * 100) / 100
 
-function toSummary(row: PoRow & { line_count: number; received_line_count: number }): PurchaseOrder {
+function toSummary(row: PoHeaderRow): PurchaseOrder {
   return {
     id: row.id,
     poNumber: row.po_number,
@@ -60,6 +60,7 @@ function toSummary(row: PoRow & { line_count: number; received_line_count: numbe
     total: row.total,
     lineCount: row.line_count,
     receivedLineCount: row.received_line_count,
+    receivedUnits: row.received_units,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     orderedAt: row.ordered_at,
@@ -92,7 +93,9 @@ const PO_SELECT = `
          po.ordered_at, po.paid_at, po.received_at, po.cancelled_at, po.scanned_at,
          (SELECT COUNT(*) FROM purchase_order_lines l WHERE l.po_id = po.id) AS line_count,
          (SELECT COUNT(*) FROM purchase_order_lines l
-           WHERE l.po_id = po.id AND l.qty_received >= l.quantity) AS received_line_count
+           WHERE l.po_id = po.id AND l.qty_received >= l.quantity) AS received_line_count,
+         (SELECT COALESCE(SUM(l.qty_received), 0) FROM purchase_order_lines l
+           WHERE l.po_id = po.id) AS received_units
   FROM purchase_orders po
 `
 
@@ -106,7 +109,11 @@ const LINE_SELECT = `
   ORDER BY l.position ASC, l.created_at ASC
 `
 
-type PoHeaderRow = PoRow & { line_count: number; received_line_count: number }
+type PoHeaderRow = PoRow & {
+  line_count: number
+  received_line_count: number
+  received_units: number
+}
 
 export function listPurchaseOrders(): PurchaseOrder[] {
   const rows = getDb().prepare(`${PO_SELECT} ORDER BY po.created_at DESC`).all() as PoHeaderRow[]
@@ -613,8 +620,13 @@ function reverseReceivedLines(
           : []
 
     if (plan.length === 0) {
+      // The old wording ended "Adjust the stock down by hand, then delete the
+      // PO", which does not work and cost somebody a hunt: adjusting stock in
+      // Inventory does not touch qty_received on the line, so delete still
+      // refuses afterwards and the PO cannot be removed at all. Say what is
+      // actually true rather than send the operator after a fix that isn't one.
       throw new Error(
-        `${poNumber} was received before this version could track its cost layers, so cancelling it cannot return the stock automatically. Adjust the stock down by hand, then delete the PO.`
+        `${poNumber} was received before this version recorded which cost layer each receipt opened, so cancelling it cannot return the stock safely. Adjust the stock by hand in Inventory if the boxes are not really there — but this PO cannot be cancelled or deleted in this version, and will stay on the board.`
       )
     }
 

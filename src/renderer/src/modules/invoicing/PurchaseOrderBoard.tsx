@@ -55,6 +55,7 @@ export function PurchaseOrderBoard({
   canManageSupplies,
   onMove,
   onOpen,
+  onDeletePo,
   onMoveSupply,
   onDeleteSupply
 }: {
@@ -67,6 +68,9 @@ export function PurchaseOrderBoard({
   thumbnails: Record<string, string>
   onMove: (id: string, to: PurchaseOrderStatus) => void
   onOpen: (id: string) => void
+  /** Undefined without the manage permission — the button is then not rendered
+   *  at all rather than rendered and refused. */
+  onDeletePo?: (id: string, poNumber: string) => void
   onMoveSupply: (order: SupplyOrder, to: SupplyOrderStatus) => void
   onDeleteSupply: (order: SupplyOrder) => void
 }): JSX.Element {
@@ -129,6 +133,7 @@ export function PurchaseOrderBoard({
                       po={po}
                       onMove={onMove}
                       onOpen={onOpen}
+                      onDelete={onDeletePo}
                       dragging={dragId === po.id}
                       onDragStart={setDragId}
                       onDragEnd={() => {
@@ -160,6 +165,7 @@ function PoCard({
   po,
   onMove,
   onOpen,
+  onDelete,
   dragging,
   onDragStart,
   onDragEnd
@@ -167,11 +173,30 @@ function PoCard({
   po: PurchaseOrder
   onMove: (id: string, to: PurchaseOrderStatus) => void
   onOpen: (id: string) => void
+  onDelete?: (id: string, poNumber: string) => void
   dragging: boolean
   onDragStart: (id: string) => void
   onDragEnd: () => void
 }): JSX.Element {
   const moves = PO_TRANSITIONS[po.status] ?? []
+
+  /**
+   * DELETE LIVES ON THE CARD NOW, and only where it can succeed.
+   *
+   * It was reachable in exactly one place before — open the PO, scroll the
+   * receipt modal, Delete in the footer beside "Open as PDF" — so from the board
+   * there was no way to remove a purchase order at all, which reads as the app
+   * refusing to let you. A cancelled PO in particular has no moves left and
+   * nothing to open it for; it just sits there.
+   *
+   * Shown only while NOTHING has been checked in, because that is the exact
+   * condition `deletePurchaseOrder` enforces. A button whose only outcome is a
+   * refusal toast is worse than no button: it teaches the operator that delete
+   * is broken rather than that this PO has stock behind it. When units have
+   * landed, Cancel is already in `moves` for every non-terminal status — which
+   * is the correct next step, and the one the refusal used to have to explain.
+   */
+  const deletable = onDelete !== undefined && po.receivedUnits === 0
   return (
     <div
       className={`po-card${dragging ? ' po-card-dragging' : ''}`}
@@ -205,7 +230,7 @@ function PoCard({
           {po.lineCount} {po.lineCount === 1 ? 'item' : 'items'}
         </span>
       </div>
-      {moves.length > 0 && (
+      {(moves.length > 0 || deletable) && (
         <div className="po-card-foot" onClick={(e) => e.stopPropagation()}>
           {moves.map((to) => (
             <button
@@ -217,6 +242,16 @@ function PoCard({
               {PO_MOVE_LABEL[to]}
             </button>
           ))}
+          {deletable && (
+            <button
+              type="button"
+              className="btn po-move po-move-remove"
+              title={`Delete ${po.poNumber} and its lines. Nothing has been checked in, so no stock is affected.`}
+              onClick={() => onDelete?.(po.id, po.poNumber)}
+            >
+              Delete
+            </button>
+          )}
         </div>
       )}
     </div>

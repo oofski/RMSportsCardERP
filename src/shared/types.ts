@@ -602,6 +602,16 @@ export interface PurchaseOrder {
   lineCount: number
   /** How many of those lines are fully received (partial-receipt progress). */
   receivedLineCount: number
+  /**
+   * Total UNITS checked in across every line, however partially.
+   *
+   * Distinct from receivedLineCount, which only counts lines received in full —
+   * a PO with one line half-received has receivedLineCount 0 and receivedUnits
+   * greater than 0. Deletion is refused on exactly this figure, so the board
+   * needs it to decide whether to offer Delete at all rather than offering a
+   * button whose only outcome is a refusal.
+   */
+  receivedUnits: number
   createdAt: string
   updatedAt: string
   orderedAt: string | null

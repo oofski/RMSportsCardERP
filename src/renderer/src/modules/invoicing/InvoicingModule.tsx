@@ -207,6 +207,7 @@ export function InvoicingModule(): JSX.Element {
             pos={pos}
             supplyOrders={supplyOrders}
             canManageSupplies={canManageSupplies}
+            onDeletePo={canManage ? removePo : undefined}
             thumbnails={thumbnails}
             onMove={move}
             onOpen={(id) => setReceiptId(id)}
