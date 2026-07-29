@@ -11532,8 +11532,11 @@ button.sor-team:focus-visible {
   gap: 10px 12px;
   min-width: 0;
 }
+/* Three cells now, not two — cost of goods and net profit joined it when the
+   statement stopped ending at net revenue. The basis grew with the cell count so
+   it still wraps as one block rather than orphaning a single figure. */
 .fin-sum-side {
-  flex: 2 1 288px;
+  flex: 3 1 400px;
   display: flex;
   align-items: stretch;
   gap: 14px;
@@ -11562,10 +11565,12 @@ button.sor-team:focus-visible {
   font-weight: 700;
   color: var(--text);
 }
-.fin-sum-value .fin-money {
+.fin-sum-value .fin-money,
+.fin-sum-value .fin-profit {
   font-size: inherit;
 }
-/* The answer to the subtraction, so it outweighs its own inputs. */
+/* The end of the statement, so it outweighs every input to it — including net
+   revenue, which used to carry this and is now one step on the way. */
 .fin-sum.is-net .fin-sum-value {
   font-size: 26px;
 }
@@ -11992,7 +11997,28 @@ button.sor-team:focus-visible {
   outline-offset: 1px;
 }
 
-/* ---------- The table ---------- */
+/* ---------- The calendar, the statement, the period list ----------
+   The wide horizontal table is gone. It answered "what are all the columns
+   worth on this day", which nobody asks; the calendar answers "which days made
+   money", and the statement answers "why". Two shapes, each doing one job,
+   and neither of them scrolls sideways.
+
+   Contrast, computed on the real tokens (light / dark):
+
+     --success-strong on --surface       5.43 / 7.61   profit, on a cell
+     --danger-strong  on --surface       5.62 / 6.03   loss, on a cell
+     --success-strong on --surface-3     4.89 / 6.24   profit, on a milestone
+     --danger-strong  on --surface-3     5.06 / 4.94   loss, on a milestone
+     --success-strong on --surface-2     5.16 / 7.12   profit, on a period row
+     --danger-strong  on --surface-2     5.34 / 5.63   loss, on a period row
+     --text-2         on --surface       6.26 / 8.25
+     --text-2         on --surface-2     5.94 / 7.71
+     --text-2         on --surface-3     5.63 / 6.77
+
+   --success itself is NOT used for any of this: it is 3.37:1 on white, which is
+   the whole reason --success-strong exists. Nor is colour ever the only signal —
+   `Profit` prints an explicit + or U+2212 on every figure. */
+
 /* Its own line: the scope note is a sentence, and letting it share a row with
    the title and the toggle squeezes all three. */
 .fin-days-scope {
@@ -12001,142 +12027,603 @@ button.sor-team:focus-visible {
   font-size: 12px;
   color: var(--text-2);
 }
-.fin-days {
+
+/* ---------- The bottom line, wherever it appears ---------- */
+/* The ONE place green means something. Everywhere else in Finance a negative is
+   red because it is an outflow; here red means the day lost money, so the two
+   ramps are opposed rather than one-sided. The sign glyph carries it without
+   colour — see `Profit` in bits.tsx. */
+.fin-profit {
+  font-weight: 700;
+  white-space: nowrap;
+  letter-spacing: -0.005em;
+}
+.fin-profit.is-up {
+  color: var(--success-strong);
+}
+.fin-profit.is-down {
+  color: var(--danger-strong);
+}
+/* Broke exactly even. Neither ramp, because it is neither — and a $0.00 tinted
+   green would claim a win that did not happen. */
+.fin-profit.is-flat {
+  color: var(--text-2);
+}
+
+/* ---------- Month grid ---------- */
+/* Structure, spacing and controls deliberately mirror .stm-cal in Streaming: it
+   is the same month seen twice, once as shows and once as what they earned, and
+   two calendars that felt different would read as two products.
+
+   The nav buttons are RESTATED here rather than borrowing .stm-nav-btn. Sharing
+   the class would be less code and a worse boundary — Finance would then be
+   restyled by an edit made in the Streaming block, silently. The values are
+   copied on purpose; if the two ever need to diverge, they can. */
+.fin-cal-section {
   display: flex;
   flex-direction: column;
+  gap: 12px;
+  min-width: 0;
 }
-/* The table is wider than the page at 900px and that is fine — it scrolls in
-   here, so the app itself never scrolls sideways. */
-.fin-table-wrap {
-  overflow-x: auto;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
+.fin-cal-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
-/* A floor, not a target: the headers are nowrap, so real content sets the width
-   whenever more columns are showing than the minimum. */
-.fin-table {
-  width: 100%;
-  min-width: 1120px;
-  border-collapse: separate;
-  border-spacing: 0;
-  font-size: 13px;
-}
-.fin-table th,
-.fin-table td {
-  padding: 9px 11px;
-  text-align: left;
-  vertical-align: top;
-  border-bottom: 1px solid var(--border);
-}
-.fin-table thead th {
-  background: var(--surface-2);
-  border-bottom: 1px solid var(--border-strong);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  /* 5.94:1 light, 7.71:1 dark. */
-  color: var(--text-2);
-  white-space: nowrap;
-}
-/* The group band. This is the row that turns twelve money columns into a P&L:
-   "− Whatnot's cut" over three columns is what makes the two fee cells read as
-   deductions rather than as more revenue. */
-.fin-grp-row .fin-grp {
-  background: var(--surface-3);
-  border-bottom: 1px solid var(--border);
-  text-align: center;
-  letter-spacing: 0.07em;
-  /* 5.63:1 light, 6.77:1 dark on --surface-3. */
-  color: var(--text-2);
-}
-/* Closes each group. On the group band and on that group's result column, so
-   the two rules line up into one continuous vertical rule down the table. */
-.fin-table .fin-edge {
-  border-right: 1px solid var(--border-strong);
-}
-.fin-table .fin-num {
-  text-align: right;
-  white-space: nowrap;
-}
-.fin-table tbody th {
-  font-weight: 600;
-}
-/* Pinned so the label stays readable while the money columns scroll under it.
-   Each variant carries its own ground, or the numbers would show through. */
-.fin-table .fin-c-day {
-  position: sticky;
-  left: 0;
-  z-index: 1;
-  min-width: 190px;
-  background: var(--surface);
-  /* --border-strong, not --border: this hairline is the only thing separating a
-     pinned label from money sliding underneath it, and at --border it is
-     invisible against --surface-2 rows. */
-  box-shadow: 1px 0 0 var(--border-strong);
-}
-.fin-table thead .fin-c-day,
-.fin-table tfoot .fin-c-day {
-  z-index: 2;
-  background: var(--surface-2);
-}
-.fin-table .fin-c-net .fin-money {
-  font-size: 13.5px;
-}
-.fin-day-row:hover td,
-.fin-day-row:hover .fin-c-day {
-  background: var(--surface-2);
-}
-.fin-day-row.is-open td,
-.fin-day-row.is-open .fin-c-day {
-  background: var(--brand-soft);
-}
-.fin-day-toggle {
+.fin-cal-nav {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 0;
-  border: 0;
-  background: none;
-  font: inherit;
-  font-weight: 600;
+}
+.fin-cal-month {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 150px;
+  font-size: 13.5px;
+  font-weight: 700;
   color: var(--text);
+}
+.fin-nav-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  /* 6.26:1 light, 8.25:1 dark. */
+  color: var(--text-2);
   cursor: pointer;
-  text-align: left;
+  transition:
+    border-color 0.13s ease,
+    color 0.13s ease;
 }
-.fin-day-toggle:hover {
-  color: var(--brand-700);
+.fin-today-btn {
+  height: 30px;
+  padding: 0 11px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
 }
-/* A week or a month has nothing to expand into, so it gets no affordance — but
-   it keeps the chevron's indent so every label in the column starts on the same
-   vertical, and the sub-lines below line up with it. */
-.fin-period-label {
-  display: inline-block;
-  padding-left: 20px;
-  font-weight: 600;
+/* --brand-600 is 7.12:1 light / 6.57:1 dark on --surface. */
+.fin-nav-btn:hover,
+.fin-today-btn:hover:not(:disabled) {
+  border-color: var(--brand-400);
+  color: var(--brand-600);
+}
+.fin-today-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* The month's answer, beside the month's name. */
+.fin-cal-total {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 20px;
+  padding: 8px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.fin-cal-total.is-quiet {
+  border-style: dashed;
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+.fin-cal-total em,
+.fin-cal-total i {
+  display: block;
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+.fin-cal-total i {
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.fin-cal-total-main .fin-profit {
+  font-size: 22px;
+}
+.fin-cal-total-side .fin-money,
+.fin-cal-total-side b {
+  font-size: 15px;
+  font-weight: 700;
   color: var(--text);
 }
-.fin-row-meta {
-  display: block;
-  padding-left: 20px;
-  font-size: 11px;
+
+.fin-cal {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.fin-cal-week,
+.fin-cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+}
+.fin-wd {
+  padding: 0 2px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  /* --text-3 would be 3.09:1 on --surface at this size; structural chrome still
+     has to be readable. --text-2 is 6.26:1 light / 8.25:1 dark. */
+  color: var(--text-2);
+}
+
+.fin-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  min-height: 104px;
+  padding: 7px 8px;
+  overflow: hidden;
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  transition:
+    border-color 0.13s ease,
+    transform 0.13s ease;
+}
+.fin-cell.pad {
+  border-color: transparent;
+  background: transparent;
+  cursor: default;
+}
+/* A quiet day keeps its edge, so the month's shape stays readable, and prints
+   nothing else at all. It is also not a button you can press: there is no
+   statement behind it, and 20-odd dead tab stops between the days that matter
+   is its own kind of noise. */
+.fin-cell.quiet {
+  background: var(--surface-2);
+  cursor: default;
+}
+.fin-cell.quiet .fin-cell-num {
+  color: var(--text-2);
+  font-weight: 600;
+}
+.fin-cell.has-activity {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-sm);
+}
+.fin-cell.has-activity:hover {
+  border-color: var(--brand-400);
+  transform: translateY(-1px);
+}
+.fin-cell.today {
+  border-color: var(--brand-400);
+}
+/* The edge tint is a THIRD signal — after the sign glyph and the ink on the
+   figure itself — so nothing is lost if it is not seen. It is written last and
+   at two-class specificity on purpose: hover and today both set border-color,
+   and a cell that lost its profit edge the moment the pointer crossed it would
+   flicker between two meanings. The padding gives back the 2px the wider border
+   takes, so numbers stay on the same vertical as every other cell. */
+.fin-cell.is-up,
+.fin-cell.is-down {
+  border-left-width: 3px;
+  padding-left: 6px;
+}
+.fin-cell.has-activity.is-up {
+  border-left-color: var(--success-strong);
+}
+.fin-cell.has-activity.is-down {
+  border-left-color: var(--danger-strong);
+}
+.fin-cell.selected,
+.fin-cell:focus-visible {
+  outline: 2px solid var(--brand-500);
+  outline-offset: -2px;
+}
+.fin-cell-top {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.fin-cell-num {
+  font-size: 12.5px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--text);
+}
+/* 7.52:1 light, 7.35:1 dark. */
+.fin-cell-today {
+  margin-left: auto;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--brand-soft);
+  color: var(--brand-700);
+  font-size: 9.5px;
+  font-weight: 700;
+}
+.fin-cell-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  min-width: 0;
+}
+/* THE HEADLINE. Everything else on the cell is deliberately smaller than half
+   its size, because the cell exists to answer one question and the rest is
+   context for it. */
+.fin-cell-body .fin-profit {
+  font-size: 16px;
+  line-height: 1.15;
+}
+.fin-cell-unknown {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-2);
+}
+.fin-cell-sub {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 10.5px;
+  color: var(--text-2);
+}
+.fin-cell-shows {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-weight: 650;
+}
+.fin-cell-shows svg {
+  flex: none;
+  color: var(--text-3);
+}
+.fin-cell-rev {
+  margin-left: auto;
+  font-weight: 650;
+}
+.fin-cell-quiet {
+  flex: 1;
+}
+
+.fin-cal-empty {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 11px 13px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-2);
+}
+.fin-cal-empty b {
+  color: var(--text);
+}
+
+/* ---------- The statement ---------- */
+.fin-stmt {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+/* Nested inside an already-bordered period row, so it drops its own frame
+   rather than drawing a box inside a box. */
+.fin-stmt.is-period {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+}
+.fin-stmt-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.fin-stmt-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  min-width: 0;
+}
+.fin-stmt-title h3 {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 15px;
+  font-weight: 700;
+}
+.fin-stmt-title h3 svg {
+  color: var(--text-3);
+}
+.fin-stmt-meta {
+  font-size: 12px;
+  color: var(--text-2);
+}
+.fin-stmt-shows {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+/* The carried-back marker sits under the heading here rather than trailing it,
+   which is what it did in the pinned table cell. */
+.fin-stmt-title .fin-carry {
+  flex: 1 0 100%;
+  margin-top: 0;
+  padding-left: 0;
+}
+.fin-stmt-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  margin-left: auto;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-2);
+  cursor: pointer;
+}
+.fin-stmt-close:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.fin-stmt-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+
+/* ---------- The P&L itself ---------- */
+.fin-pnl-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+/* ONE table for the whole statement, so there is ONE amount column: a section
+   subtotal lands on exactly the same right edge as the lines above it, which is
+   the only way to check by eye that it belongs to them. Two columns and a
+   wrapping label mean it fits any width — this is the layout that made the old
+   1120px-minimum table unnecessary. */
+.fin-pnl {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 13px;
+  table-layout: auto;
+}
+.fin-pnl th,
+.fin-pnl td {
+  padding: 5px 0;
+  text-align: left;
+  font-weight: 400;
+  vertical-align: baseline;
+}
+.fin-pnl td {
+  width: 1%;
+  padding-left: 16px;
+  text-align: right;
+  white-space: nowrap;
+}
+/* Section heading. Small caps rather than a big label: the section names are
+   scaffolding, the figures are the content. */
+.fin-pnl-head th {
+  padding: 14px 0 4px;
+  border-bottom: 1px solid var(--border);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  /* 6.26:1 light, 8.25:1 dark. */
+  color: var(--text-2);
+}
+.fin-pnl-sec:first-child .fin-pnl-head th {
+  padding-top: 0;
+}
+.fin-pnl-line th {
+  color: var(--text);
   font-weight: 500;
-  /* 6.26:1 light, 8.25:1 dark on --surface; 5.94 / 7.71 on the hover and footer
-     ground; 5.56 / 7.28 on --brand-soft when the day is open. */
+}
+.fin-pnl-line.is-empty th,
+.fin-pnl-line.is-empty td .fin-money {
+  color: var(--text-2);
+}
+.fin-pnl-line.is-none td {
+  width: auto;
+  padding-left: 0;
+  text-align: left;
+  font-size: 12px;
+  font-style: italic;
+  color: var(--text-2);
+}
+/* The detail is the arithmetic written out — "2.9% + 30c x 1029". It sits
+   beside the label, never in a tooltip: nobody hovers a number they already
+   believe, and this is the thing that makes the number checkable. */
+.fin-pnl-detail {
+  margin-left: 8px;
+  font-style: normal;
+  font-size: 11px;
   color: var(--text-2);
   white-space: nowrap;
 }
-.fin-foot-label {
+/* Section subtotal: a rule above it, the way a statement is ruled on paper. */
+.fin-pnl-sub th,
+.fin-pnl-sub td {
+  padding-top: 6px;
+  border-top: 1px solid var(--border-strong);
   font-weight: 700;
   color: var(--text);
 }
-.fin-table tfoot th,
-.fin-table tfoot td {
-  background: var(--surface-2);
+/* A milestone — gross profit, net profit. No lines, because it is not a section
+   of its own: it is everything above it, carried down. It gets a full-width
+   band so it reads as a horizontal rule through the statement rather than as
+   another subtotal in the same rhythm. */
+.fin-pnl-mile th,
+.fin-pnl-mile td {
+  padding: 11px 12px;
   border-top: 2px solid var(--border-strong);
-  border-bottom: 0;
+  border-bottom: 2px solid var(--border-strong);
+  background: var(--surface-3);
+  font-size: 14px;
   font-weight: 700;
+  color: var(--text);
+}
+.fin-pnl-mile td {
+  padding-left: 16px;
+}
+.fin-pnl-mile .fin-profit {
+  font-size: 16px;
+}
+/* The last line of the statement outweighs the one in the middle of it. */
+.fin-pnl-mile.is-bottom th {
+  font-size: 15px;
+}
+.fin-pnl-mile.is-bottom .fin-profit {
+  font-size: 21px;
+}
+.fin-pnl-sec.is-running + .fin-pnl-sec .fin-pnl-head th {
+  padding-top: 16px;
+}
+
+/* ---------- Weeks and months ---------- */
+.fin-plist {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.fin-plist-item {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+}
+.fin-plist-item.is-open {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-sm);
+}
+.fin-plist-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+  padding: 11px 13px;
+  border: 0;
+  background: var(--surface);
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.13s ease;
+}
+.fin-plist-row:hover {
+  background: var(--surface-2);
+}
+.fin-plist-item.is-open .fin-plist-row {
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+.fin-plist-row > svg {
+  flex: none;
+  color: var(--text-3);
+}
+.fin-plist-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  margin-right: auto;
+}
+.fin-plist-main b {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--text);
+}
+.fin-plist-main em {
+  font-style: normal;
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+.fin-plist-figs {
+  display: flex;
+  align-items: baseline;
+  gap: 20px;
+}
+.fin-plist-figs em {
+  display: block;
+  font-style: normal;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+.fin-plist-rev,
+.fin-plist-net {
+  text-align: right;
+}
+.fin-plist-rev .fin-money {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.fin-plist-net .fin-profit {
+  font-size: 16px;
+}
+.fin-plist-body {
+  padding: 12px 13px 14px;
+  background: var(--surface);
 }
 
 /* The carried-back marker: deliberately quiet. A settlement row landing on the
@@ -12144,13 +12631,11 @@ button.sor-team:focus-visible {
    sign here and the danger ink is dropped — this is an explanation, not an
    alarm. */
 .fin-carry {
-  /* Block-level so it drops under the date rather than trailing it. */
   display: flex;
   width: fit-content;
   align-items: center;
   gap: 5px;
   margin-top: 3px;
-  padding-left: 20px;
   font-size: 11px;
   font-weight: 500;
   color: var(--text-2);
@@ -12175,37 +12660,9 @@ button.sor-team:focus-visible {
   margin-right: 3px;
 }
 
-/* ---------- One day, expanded ---------- */
-.fin-detail-row > td {
-  padding: 0;
-  background: var(--surface-2);
-  border-bottom: 1px solid var(--border-strong);
-}
-.fin-detail {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 12px 14px;
-}
-.fin-detail-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
-}
-.fin-detail-date {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--text);
-}
-.fin-detail-shows {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
+/* ---------- The ledger rows behind a day ---------- */
+/* The end of the trail: calendar to day, day to statement, statement to the
+   rows it was summed from. */
 .fin-show-tag {
   display: inline-flex;
   align-items: center;
@@ -12216,22 +12673,6 @@ button.sor-team:focus-visible {
   color: var(--brand-700);
   font-size: 11.5px;
   font-weight: 600;
-}
-.fin-detail-stock {
-  margin: 0;
-  font-size: 12.5px;
-  line-height: 1.55;
-  color: var(--text-2);
-}
-.fin-detail-stock svg {
-  vertical-align: -2px;
-  margin-right: 4px;
-}
-.fin-detail-stock b {
-  color: var(--text);
-}
-.fin-detail-stock em {
-  font-style: normal;
 }
 .fin-detail-empty {
   display: flex;
@@ -12266,8 +12707,10 @@ button.sor-team:focus-visible {
   border-radius: 6px;
   font-size: 12.5px;
 }
+/* Zebra against the statement's own ground, which is --surface. It used to be
+   the other way round because the rows sat in a --surface-2 table drawer. */
 .fin-row:nth-child(odd) {
-  background: var(--surface);
+  background: var(--surface-2);
 }
 .fin-row-time {
   min-width: 68px;
@@ -12375,6 +12818,15 @@ button.sor-team:focus-visible {
     font-size: 21px;
   }
 }
+@media (max-width: 1040px) {
+  /* Seven columns of a narrowing container: the profit figure steps down before
+     it can reach the cell's edge. It is nowrap and the cell clips, so there is
+     no graceful failure to fall back on — the size has to lead the width. */
+  .fin-cell-body .fin-profit,
+  .fin-cell-unknown {
+    font-size: 14px;
+  }
+}
 @media (max-width: 900px) {
   .fin-unattr-figure {
     margin-left: 0;
@@ -12389,6 +12841,37 @@ button.sor-team:focus-visible {
   }
   .fin-cluster .fin-money {
     margin-left: auto;
+  }
+  /* The cells shed height and secondary text rather than letting the grid
+     scroll sideways — a calendar that moves horizontally stops being one. Same
+     rule the Streaming calendar follows at this width. */
+  .fin-cell {
+    min-height: 86px;
+    padding: 6px;
+  }
+  .fin-cell-body .fin-profit,
+  .fin-cell-unknown {
+    font-size: 12.5px;
+  }
+  .fin-cell-rev {
+    display: none;
+  }
+  .fin-cal-total {
+    width: 100%;
+  }
+  /* The detail wraps under its label instead of pushing the amount column off
+     the page. It is the one thing on the statement that is genuinely optional
+     at this width — but it moves, it does not go. */
+  .fin-pnl-detail {
+    display: block;
+    margin-left: 0;
+    white-space: normal;
+  }
+  /* Revenue and net profit stack, so the two figures keep their right edge
+     rather than competing with the label for the same line. */
+  .fin-plist-figs {
+    flex-direction: column;
+    gap: 4px;
   }
 }
 @media (max-width: 720px) {
@@ -12427,5 +12910,35 @@ button.sor-team:focus-visible {
   }
   .fin-row-msg {
     display: none;
+  }
+  .fin-cal-week,
+  .fin-cal-grid {
+    gap: 4px;
+  }
+  .fin-cell {
+    min-height: 72px;
+  }
+  .fin-cell-body .fin-profit,
+  .fin-cell-unknown {
+    font-size: 11.5px;
+  }
+  /* The day number and the figure are what a calendar cell is. Everything else
+     goes before either of them does. */
+  .fin-cell-sub {
+    display: none;
+  }
+  .fin-cell-today {
+    font-size: 0;
+    padding: 4px;
+  }
+  .fin-stmt {
+    padding: 12px;
+  }
+  .fin-pnl-mile th,
+  .fin-pnl-mile td {
+    padding: 9px 8px;
+  }
+  .fin-pnl-mile.is-bottom .fin-profit {
+    font-size: 18px;
   }
 }

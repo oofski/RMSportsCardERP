@@ -641,9 +641,33 @@ export interface StreamDayFinance {
    */
   giveawayLoss: number
 
-  /** netRevenue + netShipping + showBoost + reversals + giveawayLoss. The day's
-   *  bottom line before cost of goods. */
+  /** netRevenue + netShipping + showBoost + reversals + giveawayLoss. Every
+   *  cost the LEDGER knows about, but not what the stock cost. */
   netAfterCosts: number
+
+  // --- Cost of goods ------------------------------------------------------
+  /**
+   * What the stock opened on this show cost, at the FIFO layers actually
+   * consumed. NEGATIVE.
+   *
+   * This is the other half of cost of goods and for three releases it sat on
+   * the day as information the bottom line ignored — which made every "net"
+   * figure a gross margin wearing a net label. Breaking a case to sell spots is
+   * the single largest cost of running a show; a P&L that omits it is not
+   * conservative, it is wrong.
+   */
+  breakCost: number
+  /** Stock given away, valued at pack cost. NEGATIVE. */
+  giveawayCost: number
+  /** breakCost + giveawayCost. NEGATIVE. */
+  cogs: number
+  /** totalRevenue + cogs. What the show made before the platform took its cut. */
+  grossProfit: number
+  /**
+   * The bottom line: grossProfit + fees + shipping + show costs + adjustments.
+   * This is the number that goes on the calendar in green or red.
+   */
+  netProfit: number
 
   rowCount: number
   /** How many of those rows settled after the show rather than during it. Shown
@@ -651,11 +675,148 @@ export interface StreamDayFinance {
    *  like they appeared from nowhere hours after it ended. */
   carriedBackRows: number
   carriedBackAmount: number
+}
 
-  /** From the Streaming module: cost of stock consumed that day. Informational
-   *  here — the full COGS treatment belongs to the complete P&L tab. */
-  breakCost: number
-  giveawayCost: number
+// ---------------------------------------------------------------------------
+// The statement
+// ---------------------------------------------------------------------------
+
+/**
+ * A P&L rendered as sections, built in ONE place.
+ *
+ * The alternative — letting the screen decide which fields go in which section
+ * and add up to what — is how a statement ends up with sections that each look
+ * right and a total that does not match any of them. Here the arithmetic and
+ * the layout come from the same function, so a section subtotal cannot drift
+ * from the fields inside it and the final figure is the sum of the subtotals by
+ * construction.
+ */
+export interface PnlLine {
+  key: string
+  label: string
+  amount: number
+  /** Shown small beside the label — a count, a rate, a caveat. */
+  detail?: string
+  /** True for a line that is zero and only present to keep the shape stable. */
+  empty?: boolean
+}
+
+export interface PnlSection {
+  key: string
+  label: string
+  lines: PnlLine[]
+  subtotal: number
+  subtotalLabel: string
+  /** A running figure carried down the statement (gross profit, net profit). */
+  running?: boolean
+}
+
+const c2 = (n: number): number => Math.round(n * 100) / 100
+
+/**
+ * Build the statement for one day (or any rolled-up period — the shapes match).
+ *
+ * Order is deliberate and follows how the money actually moves: what came in,
+ * what the goods cost, what the platform took, what shipping did, what else the
+ * show cost, then the exceptions. Fees sit AFTER cost of goods because they are
+ * charged on the sale, not on the margin.
+ */
+export function buildPnl(d: {
+  sales: number; saleCount: number; tips: number; bonuses: number; totalRevenue: number
+  breakCost: number; giveawayCost: number; cogs: number; grossProfit: number
+  whatnotFee: number; processingFee: number; totalFees: number
+  shippingSubsidy: number; shippingCharges: number; giveawayShipping: number
+  refundShipping: number; netShipping: number
+  showBoost: number; reversals: number; netProfit: number
+}): PnlSection[] {
+  const line = (key: string, label: string, amount: number, detail?: string): PnlLine => ({
+    key, label, amount: c2(amount), detail, empty: c2(amount) === 0
+  })
+
+  return [
+    {
+      key: 'revenue',
+      label: 'Revenue',
+      lines: [
+        line('sales', 'Sales', d.sales, `${d.saleCount} transaction${d.saleCount === 1 ? '' : 's'}`),
+        line('tips', 'Tips', d.tips),
+        line('bonuses', 'Seller bonuses', d.bonuses)
+      ],
+      subtotal: c2(d.totalRevenue),
+      subtotalLabel: 'Total revenue'
+    },
+    {
+      key: 'cogs',
+      label: 'Cost of goods',
+      lines: [
+        line('breakCost', 'Stock broken', d.breakCost),
+        line('giveawayCost', 'Stock given away', d.giveawayCost)
+      ],
+      subtotal: c2(d.cogs),
+      subtotalLabel: 'Cost of goods'
+    },
+    {
+      key: 'grossProfit',
+      label: 'Gross profit',
+      lines: [],
+      subtotal: c2(d.grossProfit),
+      subtotalLabel: 'Gross profit',
+      running: true
+    },
+    {
+      key: 'fees',
+      label: 'Platform fees',
+      lines: [
+        line('whatnotFee', "Whatnot commission", d.whatnotFee, '6% of sales'),
+        line('processingFee', 'Payment processing', d.processingFee, `2.9% + 30c x ${d.saleCount}`)
+      ],
+      subtotal: c2(d.totalFees),
+      subtotalLabel: 'Total fees'
+    },
+    {
+      key: 'shipping',
+      label: 'Shipping',
+      lines: [
+        line('shippingSubsidy', 'Subsidy received', d.shippingSubsidy),
+        line('shippingCharges', 'Postage charged back', d.shippingCharges),
+        line('giveawayShipping', 'Giveaway postage', d.giveawayShipping),
+        line('refundShipping', 'Refund postage', d.refundShipping)
+      ],
+      subtotal: c2(d.netShipping),
+      subtotalLabel: 'Net shipping'
+    },
+    {
+      key: 'showCosts',
+      label: 'Other show costs',
+      lines: [line('showBoost', 'Show Boost', d.showBoost)],
+      subtotal: c2(d.showBoost),
+      subtotalLabel: 'Show costs'
+    },
+    {
+      key: 'adjustments',
+      label: 'Adjustments and exceptions',
+      lines: [line('reversals', 'Refunded orders', d.reversals)],
+      subtotal: c2(d.reversals),
+      subtotalLabel: 'Adjustments'
+    },
+    {
+      key: 'netProfit',
+      label: 'Net profit',
+      lines: [],
+      subtotal: c2(d.netProfit),
+      subtotalLabel: 'Net profit',
+      running: true
+    }
+  ]
+}
+
+/**
+ * Every section subtotal that is NOT a running total, summed. Must equal
+ * netProfit — exported so the UI and the tests can both assert it rather than
+ * trusting it.
+ */
+export function pnlChecksum(sections: PnlSection[]): number {
+  return c2(sections.filter((s) => !s.running).reduce((a, s) => a + s.subtotal, 0))
 }
 
 /** How the day rows are rolled up. Days always exist underneath; a period is

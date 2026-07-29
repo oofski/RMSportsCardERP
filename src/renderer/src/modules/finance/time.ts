@@ -25,6 +25,58 @@ export function dayKeyOf(d: Date): string {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
 }
 
+/** Local YYYY-MM for a Date. */
+export function monthKeyOf(d: Date): string {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`
+}
+
+export function todayKey(): string {
+  return dayKeyOf(new Date())
+}
+
+export function thisMonthKey(): string {
+  return monthKeyOf(new Date())
+}
+
+/**
+ * The month a business day belongs to, taken as a STRING SLICE.
+ *
+ * A day key is already local wall-clock, so re-parsing it into a Date only to
+ * format it again would put it back through the timezone that `parseDayKey`
+ * exists to avoid. The first seven characters are the answer.
+ */
+export function monthKeyOfDayKey(key: string): string {
+  return (key || '').slice(0, 7)
+}
+
+/** `{ year, month }` with month 1-12; null on anything malformed. */
+export function parseMonthKey(key: string): { year: number; month: number } | null {
+  const m = /^(\d{4})-(\d{2})$/.exec(key || '')
+  if (!m) return null
+  return { year: Number(m[1]), month: Number(m[2]) }
+}
+
+export function shiftMonth(key: string, delta: number): string {
+  const parsed = parseMonthKey(key)
+  if (!parsed) return thisMonthKey()
+  return monthKeyOf(new Date(parsed.year, parsed.month - 1 + delta, 1))
+}
+
+/** "July 2026" — the calendar's heading. */
+export function monthLabel(key: string): string {
+  const parsed = parseMonthKey(key)
+  if (!parsed) return key || '—'
+  return new Date(parsed.year, parsed.month - 1, 1).toLocaleDateString(undefined, {
+    month: 'long',
+    year: 'numeric'
+  })
+}
+
+/** The number printed in the corner of a calendar cell. */
+export function dayNumberOf(key: string): number {
+  return Number((key || '').slice(8, 10))
+}
+
 /** "Fri, Jul 24" — the compact form for table rows and cluster headings. */
 export function shortDayLabel(key: string): string {
   const d = parseDayKey(key)

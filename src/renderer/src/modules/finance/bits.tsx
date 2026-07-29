@@ -64,6 +64,35 @@ export function Money({
   )
 }
 
+/**
+ * The bottom line, and the only place green is allowed to mean anything.
+ *
+ * Every other money figure in Finance is neutral-or-red, because a cost is not
+ * a loss: `Money` reds a negative because it is an outflow. Here the question is
+ * different — did the day KEEP money — so a positive earns the success ramp and
+ * a negative the danger one.
+ *
+ * COLOUR IS NEVER THE ONLY SIGNAL. The sign is printed explicitly on both
+ * sides: U+2212 for a loss, and a real "+" for a profit rather than leaving the
+ * reader to infer it from an absent glyph. Greyscale-render this and a profit
+ * and a loss are still one character apart.
+ *
+ * Exact zero is neither, so it takes neither ramp — a day that broke even is a
+ * finding, not a near miss in one direction.
+ */
+export function Profit({ value, title }: { value: number; title?: string }): JSX.Element {
+  const zero = isZero(value)
+  const tone = zero ? 'is-flat' : value > 0 ? 'is-up' : 'is-down'
+  // formatMoney already emits the ASCII hyphen for a negative; swapping it for
+  // U+2212 keeps the glyph a digit wide so a column of figures stays aligned.
+  const text = formatMoney(zero ? 0 : value).replace('-', '−')
+  return (
+    <span className={`fin-profit mono ${tone}`} title={title}>
+      {!zero && value > 0 ? `+${text}` : text}
+    </span>
+  )
+}
+
 const BUCKET_ICON: Record<LedgerBucket, string> = {
   sale: 'ShoppingCart',
   shipping_subsidy: 'Truck',

@@ -55,6 +55,27 @@
  * flat 30c is per sale row, so a period that recomputed it would depend on how
  * it was sliced and would eventually contradict the days inside it.
  *
+ * COST OF GOODS IS NOT IN THE LEDGER, AND IT IS THE BIGGEST COST THERE IS
+ *
+ * Whatnot's export knows what a show EARNED. It has no idea what the case that
+ * was broken to sell those spots cost, because that stock was bought months
+ * earlier from somebody else. That figure comes from the Streaming module —
+ * `stream_items`, at the FIFO layers those lines actually consumed — and for
+ * three releases it rode along on the day as information the bottom line
+ * ignored, which made every "net" figure a gross margin wearing a net label.
+ *
+ * So a day now carries TWO cost-of-goods lines, both NEGATIVE:
+ *   breakCost     what the stock opened on the show cost (`cost_total`)
+ *   giveawayCost  what the stock given away was worth  (`loss_value`)
+ * and `cogs` is their sum. `grossProfit` is revenue plus cogs; `netProfit` is
+ * gross profit after fees, shipping, show costs and adjustments.
+ *
+ * TWO GIVEAWAY COSTS, AND THEY ARE NOT THE SAME COST. `giveaway_shipping` is a
+ * LEDGER row — the postage Whatnot charged to mail a prize — and it stays in
+ * Shipping. `giveawayCost` is the prize itself and is cost of goods. Folding
+ * either into the other loses a real cost while every total still looks
+ * plausible, so the two are counted from different sources and asserted apart.
+ *
  * Everything about classification, date parsing, identity, fees and the
  * attribution predicate lives in @shared/financeStreaming and is USED here,
  * never restated: main and the renderer must never be able to disagree about
@@ -83,6 +104,7 @@ import {
   LEDGER_BUCKETS,
   LEDGER_CLASSIFIER_VERSION,
   SESSION_VACUUM_SHARE,
+  buildPnl,
   carryBackEligible,
   classifyLedgerRow,
   computeFees,
@@ -91,6 +113,7 @@ import {
   parseBreakNumber,
   parseLedgerAmount,
   parseLedgerDate,
+  pnlChecksum,
   rowInSession
 } from '@shared/financeStreaming'
 import type { StreamSession } from '@shared/streaming'
@@ -1256,15 +1279,22 @@ const MONEY_FIELDS = [
   'netShipping',
   'showBoost',
   'reversals',
-  // From the Streaming module, not the ledger, and part of netAfterCosts. Listed
-  // here so weeks and months roll it through the SAME accumulator as every other
-  // figure — a period that summed differently from the days inside it would be
-  // worse than no period at all.
+  // From the Streaming module, not the ledger, and part of netAfterCosts. Kept
+  // equal to `giveawayCost` — it is the same money under the name the ledger
+  // view has always used for it — so nothing that reads it changes meaning.
   'giveawayLoss',
   'netAfterCosts',
   'carriedBackAmount',
+  // Cost of goods, all NEGATIVE, and all from stream_items rather than the
+  // ledger. Listed here so weeks and months roll them through the SAME
+  // accumulator as every other figure: a period that summed the biggest cost of
+  // running a show differently from the days inside it would be worse than no
+  // period at all.
   'breakCost',
-  'giveawayCost'
+  'giveawayCost',
+  'cogs',
+  'grossProfit',
+  'netProfit'
 ] as const
 
 /** Counts, which add as plain integers. */
@@ -1307,7 +1337,10 @@ function emptyDay(streamDate: string): StreamDayFinance {
     carriedBackRows: 0,
     carriedBackAmount: 0,
     breakCost: 0,
-    giveawayCost: 0
+    giveawayCost: 0,
+    cogs: 0,
+    grossProfit: 0,
+    netProfit: 0
   }
 }
 
@@ -1622,10 +1655,18 @@ function buildView(db: Database): StreamingFinanceView {
     day.minutes += durationMinutes(s.started_at, s.ended_at) ?? 0
   }
 
-  // Stock consumed by the shows on each business day, from the Streaming
-  // module's own lines. `loss` is the giveaway value the operator ENTERED in the
-  // stream — deliberately not inferred from the ledger, whose giveaway_shipping
-  // rows are the POSTAGE for mailing a prize and remain exactly that, untouched.
+  // --- cost of goods, from the Streaming module rather than the ledger --------
+  //
+  // Stock consumed by the shows on each business day, from the operator's own
+  // stream lines. Whatnot's export cannot supply this: it knows what a show
+  // earned, not what the case that was broken to fill it cost.
+  //
+  // `cents` is `cost_total` — the FIFO layers a break actually consumed. `loss`
+  // is `loss_value`, the value of the stock GIVEN AWAY, valued at pack cost
+  // where packs were entered. Deliberately NOT inferred from the ledger, whose
+  // giveaway_shipping rows are the POSTAGE for mailing a prize and remain
+  // exactly that, in Shipping, untouched. Two different real costs; the mistake
+  // this comment exists to prevent is folding one into the other.
   const itemRows = db
     .prepare(
       `SELECT s.stream_date AS d, i.kind AS kind,
@@ -1635,16 +1676,24 @@ function buildView(db: Database): StreamingFinanceView {
         GROUP BY s.stream_date, i.kind`
     )
     .all() as Array<{ d: string; kind: string; cents: number; loss: number }>
+  // Both are stored POSITIVE on the line and reported NEGATIVE here: every
+  // figure that feeds a bottom line is a signed number, so the total is a plain
+  // sum and no screen has to remember which way to apply it. Getting this sign
+  // wrong does not fail anywhere — it silently ADDS the cost of a broken case to
+  // the profit of the show that broke it.
   for (const r of itemRows) {
     const day = dayFor(r.d)
     if (r.kind === 'giveaway') {
-      day.giveawayCost = toDollars(toCents(day.giveawayCost) + r.cents)
-      // Stored positive on the line, reported NEGATIVE here: every figure that
-      // feeds netAfterCosts is a signed number so the bottom line is a plain
-      // sum and no screen has to remember which way to apply it.
-      day.giveawayLoss = toDollars(toCents(day.giveawayLoss) - r.loss)
+      // ONE cost-of-goods line for given-away stock, not two. `cost_total` is
+      // the balance-sheet movement (stock left the shelf); `loss_value` is what
+      // that stock was worth as a cost of the show, valued at pack cost when
+      // packs went out. Booking both would count the same prize twice.
+      day.giveawayCost = toDollars(toCents(day.giveawayCost) - r.loss)
+      // The same money under the name this view has always used for it, kept so
+      // netAfterCosts and everything reading it keep meaning what they meant.
+      day.giveawayLoss = day.giveawayCost
     } else {
-      day.breakCost = toDollars(toCents(day.breakCost) + r.cents)
+      day.breakCost = toDollars(toCents(day.breakCost) - r.cents)
     }
   }
 
@@ -1745,16 +1794,33 @@ function buildView(db: Database): StreamingFinanceView {
         toCents(day.refundShipping)
     )
 
-    // giveawayLoss sits here beside showBoost because it is the same kind of
-    // thing: money spent to run the show. It is the only term that is not a
-    // ledger row, which is exactly why the reconciliation below strips it out
-    // again before comparing this breakdown to the rows.
+    // Everything the LEDGER knows about, plus the giveaway loss that has always
+    // sat beside showBoost here because it is the same kind of thing: money
+    // spent to run the show. It deliberately does NOT include what the broken
+    // stock cost, which is what makes it a different figure from netProfit and
+    // still a useful one — it is the show's ledger economics on their own.
     day.netAfterCosts = toDollars(
       toCents(day.netRevenue) +
         toCents(day.netShipping) +
         toCents(day.showBoost) +
         toCents(day.reversals) +
         toCents(day.giveawayLoss)
+    )
+
+    // --- the statement -------------------------------------------------------
+    //
+    // Both cost-of-goods terms are already negative, so every line here is a
+    // plain sum. Order follows how the money actually moves and matches
+    // `buildPnl` in the contract exactly — asserted below, per day and per
+    // period, rather than trusted.
+    day.cogs = toDollars(toCents(day.breakCost) + toCents(day.giveawayCost))
+    day.grossProfit = toDollars(toCents(day.totalRevenue) + toCents(day.cogs))
+    day.netProfit = toDollars(
+      toCents(day.grossProfit) +
+        toCents(day.totalFees) +
+        toCents(day.netShipping) +
+        toCents(day.showBoost) +
+        toCents(day.reversals)
     )
   }
 
@@ -1822,18 +1888,52 @@ function buildView(db: Database): StreamingFinanceView {
   for (const [, c] of dayNetCents) daysCents += c
   for (const day of days) daysRows += day.rowCount
 
-  // The day fields must decompose the SAME money the rows carry. Fees and the
-  // giveaway loss are the only two figures on a day that are not ledger rows —
-  // fees are derived, the loss comes from the Streaming module — so stripping
-  // both back out has to land exactly on the raw net:
-  //     netAfterCosts − totalFees − giveawayLoss == Σ(attributed non-payout rows)
+  // The day fields must decompose the SAME money the rows carry. THREE figures
+  // on a day are not ledger rows — the fees, which are derived, and both
+  // cost-of-goods terms, which come from the Streaming module — so stripping all
+  // of them back out has to land exactly on the raw net:
+  //     netProfit − totalFees − cogs == Σ(attributed non-payout rows)
+  // Subtracting the fees alone was right until the bottom line started carrying
+  // stock cost; leaving `cogs` in would report every day with a break as
+  // unreconciled, which is exactly the kind of false alarm that teaches an
+  // operator to ignore the flag.
+  //
   // This is what catches a future bucket that classification learns to produce
   // but the day shape has no field for. Without it that money would vanish from
   // every screen while the row-level reconciliation above still said "fine",
   // because the rows themselves would all still be present and counted.
   let fieldCents = 0
+  // The same test for the OTHER published bottom line. netAfterCosts carries the
+  // giveaway loss and no break cost, so it strips differently — and a figure
+  // nobody checks is a figure that drifts.
+  let ledgerFieldCents = 0
   for (const day of days) {
-    fieldCents += toCents(day.netAfterCosts) - toCents(day.totalFees) - toCents(day.giveawayLoss)
+    fieldCents += toCents(day.netProfit) - toCents(day.totalFees) - toCents(day.cogs)
+    ledgerFieldCents +=
+      toCents(day.netAfterCosts) - toCents(day.totalFees) - toCents(day.giveawayLoss)
+  }
+
+  /**
+   * Every section subtotal of the statement, summed, must BE the bottom line.
+   *
+   * `buildPnl` and `pnlChecksum` are the contract's, used here rather than
+   * restated: the screen renders those same sections, so if the arithmetic on
+   * this side ever stops agreeing with the layout on that side, the operator
+   * would be shown a statement whose parts do not add to its own total. Checked
+   * for every day AND every period, because a rollup that dropped a field would
+   * pass on the days and fail here.
+   */
+  const statementBreak = (
+    label: string,
+    row: Omit<StreamDayFinance, 'streamDate' | 'sessionTitles'>
+  ): string | null => {
+    const stated = toCents(pnlChecksum(buildPnl(row)))
+    const bottom = toCents(row.netProfit)
+    if (stated === bottom) return null
+    return (
+      `The ${label} statement adds to ${money(stated)} but its net profit says ${money(bottom)}. ` +
+      `A line is landing in no section — these totals are incomplete, do not book from them.`
+    )
   }
 
   let reconciled = true
@@ -1852,9 +1952,30 @@ function buildView(db: Database): StreamingFinanceView {
   } else if (fieldCents !== daysCents) {
     reconciled = false
     reconcileNote =
-      `The day breakdown adds to ${money(fieldCents)} before fees but ${money(daysCents)} of ledger money ` +
-      `is attributed to those days. A bucket is landing in no column — these totals are incomplete, ` +
+      `The day breakdown adds to ${money(fieldCents)} before fees and stock cost but ${money(daysCents)} ` +
+      `of ledger money is attributed to those days. A bucket is landing in no column — these totals are ` +
+      `incomplete, do not book from them.`
+  } else if (ledgerFieldCents !== daysCents) {
+    reconciled = false
+    reconcileNote =
+      `Net after costs adds to ${money(ledgerFieldCents)} before fees and the giveaway loss but ` +
+      `${money(daysCents)} of ledger money is attributed to those days. These totals are incomplete, ` +
       `do not book from them.`
+  } else {
+    const rows: Array<[string, Omit<StreamDayFinance, 'streamDate' | 'sessionTitles'>]> = [
+      ...days.map((d): [string, StreamDayFinance] => [d.streamDate, d]),
+      ...weeks.map((w): [string, FinancePeriodRow] => [w.label, w]),
+      ...months.map((m): [string, FinancePeriodRow] => [m.label, m]),
+      ['all-time', totals]
+    ]
+    for (const [label, row] of rows) {
+      const broken = statementBreak(label, row)
+      if (broken) {
+        reconciled = false
+        reconcileNote = broken
+        break
+      }
+    }
   }
 
   return {

@@ -4,14 +4,24 @@ import { formatDuration } from '@shared/streaming'
 import { Icon } from '../../components/Icon'
 import { Button, CenterLoader } from '../../components/ui'
 import { useSession } from '../../lib/session'
-import { Money, Note, plural } from './bits'
-import { FinanceTable } from './FinanceTable'
+import { Money, Note, Profit, plural } from './bits'
+import { FinanceCalendar } from './FinanceCalendar'
 import { ImportPanel } from './ImportPanel'
+import { PeriodList } from './PeriodList'
 import { UnattributedPanel } from './UnattributedPanel'
 import { finance } from './api'
 
+/**
+ * `day` still means "the day grain" in the contract; on screen it is the
+ * CALENDAR, because at day grain a month of dates laid out as a month is
+ * strictly more readable than the same dates in a list.
+ */
 const PERIODS: Array<{ id: FinancePeriod; label: string; hint: string }> = [
-  { id: 'day', label: 'Day', hint: 'One row per business day — the grain everything else is built from' },
+  {
+    id: 'day',
+    label: 'Calendar',
+    hint: 'Every business day on a month grid, with its net profit — click a day for its full statement'
+  },
   { id: 'week', label: 'Week', hint: 'The same days summed by week' },
   { id: 'month', label: 'Month', hint: 'The same days summed by calendar month' }
 ]
@@ -23,13 +33,21 @@ const PERIODS: Array<{ id: FinancePeriod; label: string; hint: string }> = [
  * and monthly rollups, the totals, the unattributed pile and the reconciliation
  * verdict in a single pass, so every write here (import, delete, re-attribute)
  * hands back the whole view and this screen replaces its state with it.
- * Refetching the pieces separately would let the table and the unattributed
+ * Refetching the pieces separately would let the calendar and the unattributed
  * panel disagree about the same money — which is precisely the bug the
  * reconciliation flag exists to catch.
  *
- * Scope note, stated on screen as well: this is REVENUE. The only costs shown
- * are the ones the platform charged for running the show. Cost of goods is a
- * later step and belongs to the complete P&L.
+ * The shape of the screen follows the shape of the question. "Did we make money
+ * on the 24th" is a calendar question, so the calendar is the front door and
+ * carries one figure per day: net profit, green or red. "Why" is a statement
+ * question, so a day opens into a vertical P&L — revenue, cost of goods, gross
+ * profit, fees, shipping, other costs, adjustments, net profit — built by
+ * `buildPnl` in the contract rather than laid out here.
+ *
+ * Cost of goods IS in these figures now. It was not for three releases, which
+ * made every "net" number a gross margin wearing a net label; the captions on
+ * this screen were rewritten with the arithmetic, because a stale caption on a
+ * correct number is its own kind of wrong answer.
  */
 export function StreamingTab(): JSX.Element {
   const { can } = useSession()
@@ -89,6 +107,7 @@ export function StreamingTab(): JSX.Element {
   const { totals, imports } = view
   const hasLedger = imports.length > 0
   const grainWord = period === 'day' ? 'day' : period === 'week' ? 'week' : 'month'
+  const periodRows = period === 'week' ? view.weeks : view.months
 
   return (
     <div className="fin-stream">
@@ -121,7 +140,7 @@ export function StreamingTab(): JSX.Element {
             <div className="fin-days-head">
               <span className="fin-section-title">
                 <Icon name="CalendarDays" size={15} />
-                The ledger, by {grainWord}
+                {period === 'day' ? 'Profit by day' : `Profit by ${grainWord}`}
                 <span className="fin-count">{rowCount}</span>
               </span>
 
@@ -142,12 +161,17 @@ export function StreamingTab(): JSX.Element {
                 ))}
               </div>
 
-              {/* Was "revenue only". Giveaway loss makes that untrue: stock
-                  given away is now a cost in the table. Stock that was SOLD
-                  still is not, and that is the distinction the caption has to
-                  carry now. */}
+              {/* This caption said "the cost of stock that was sold is not in
+                  these figures" for three releases. It is now false in both
+                  halves: breaking a case IS the largest cost of running a show
+                  and it is booked here, and the bottom line is net profit
+                  rather than a revenue figure. A caption that lags the
+                  arithmetic is how somebody reads a correct number as the wrong
+                  quantity. */}
               <span className="fin-days-scope">
-                Revenue and show costs — the cost of stock that was sold is not in these figures.
+                A full statement: revenue in, the cost of the stock broken and given away,
+                Whatnot&rsquo;s fees, shipping both ways, show costs and refunds — down to net
+                profit.
               </span>
             </div>
 
@@ -155,15 +179,17 @@ export function StreamingTab(): JSX.Element {
               <p className="fin-detail-empty">
                 <Icon name="Info" size={14} />
                 {view.days.length === 0
-                  ? 'The ledger is loaded, but no row matched a logged show, so there is nothing to group yet. Add the sessions listed above in Streaming and re-attribute.'
+                  ? 'The ledger is loaded, but no row matched a logged show, so there is nothing to report yet. Add the sessions listed above in Streaming and re-attribute.'
                   : // Days exist but this rollup does not, which can only mean the
                     // app is running against a version that does not produce it.
                     // Saying so beats "no data", which would read as a real
                     // finding and send someone looking for missing money.
-                    `There are days above, but this build produced no ${grainWord} rollup for them. Switch back to Day; ${grainWord}s appear once the app is updated.`}
+                    `There are days in the calendar, but this build produced no ${grainWord} rollup for them. Switch back to Calendar; ${grainWord}s appear once the app is updated.`}
               </p>
+            ) : period === 'day' ? (
+              <FinanceCalendar days={view.days} />
             ) : (
-              <FinanceTable view={view} period={period} totals={totals} />
+              <PeriodList rows={periodRows} period={period} />
             )}
           </section>
         </>
@@ -180,9 +206,17 @@ export function StreamingTab(): JSX.Element {
 }
 
 /**
- * The owner's revenue model in one line, laid out as the arithmetic he states
- * it as: total revenue, less the two fees, equals net revenue — with shipping
- * beside it rather than inside it.
+ * Everything, in one line of arithmetic.
+ *
+ * The left of the rule is the owner's fee model stated the way he states it:
+ * total revenue, less the two fees, equals net revenue. It is kept intact
+ * because it is the one part of the P&L he checks by eye against Whatnot.
+ *
+ * The right of the rule is now where the statement ENDS — cost of goods, then
+ * net profit as the largest figure on the screen. Net shipping used to sit
+ * there and no longer does: it is one section of every statement below and was
+ * never the bottom line, whereas net profit was missing entirely from a screen
+ * whose whole subject it is.
  *
  * The effective fee rate is the number that gets sanity-checked, so it is
  * printed to two decimals and captioned with its own denominator. A rate whose
@@ -236,7 +270,11 @@ function SummaryStrip({ totals }: { totals: StreamFinanceTotals }): JSX.Element 
           =
         </span>
 
-        <div className="fin-sum is-net">
+        {/* No longer `is-net`. It is still the answer to THIS subtraction, but
+            it stopped being the bottom line of the screen the moment cost of
+            goods landed, and two 26px figures would say the statement ends in
+            two places. */}
+        <div className="fin-sum">
           <span className="fin-sum-label">Net revenue</span>
           <span className="fin-sum-value">
             <Money value={totals.netRevenue} strong />
@@ -251,11 +289,19 @@ function SummaryStrip({ totals }: { totals: StreamFinanceTotals }): JSX.Element 
 
       <div className="fin-sum-side">
         <div className="fin-sum">
-          <span className="fin-sum-label">Net shipping</span>
+          <span className="fin-sum-label">Cost of goods</span>
           <span className="fin-sum-value">
-            <Money value={totals.netShipping} strong />
+            <Money value={totals.cogs} strong />
           </span>
-          <em className="fin-sum-hint">subsidy in, postage out — tracked on its own</em>
+          <em className="fin-sum-hint">the stock broken and given away, at what it cost</em>
+        </div>
+
+        <div className="fin-sum is-net">
+          <span className="fin-sum-label">Net profit</span>
+          <span className="fin-sum-value">
+            <Profit value={totals.netProfit} />
+          </span>
+          <em className="fin-sum-hint">after goods, fees, shipping and every show cost</em>
         </div>
 
         <div className="fin-sum">
