@@ -144,7 +144,7 @@ export function StreamingTab(): JSX.Element {
                 <span className="fin-count">{rowCount}</span>
               </span>
 
-              <div className="fin-period" role="group" aria-label="Group the table by">
+              <div className="fin-period" role="group" aria-label="Show the profit by">
                 {PERIODS.map((p) => (
                   <button
                     key={p.id}

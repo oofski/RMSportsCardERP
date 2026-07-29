@@ -11311,36 +11311,41 @@ button.sor-team:focus-visible {
 }
 
 /* ==========================================================================
-   Finance — Streaming revenue: ledger imports, day-by-day, unattributed money
+   Finance — the streaming P&L: a calendar of daily profit, and the statement
+   behind each day
    --------------------------------------------------------------------------
    Appended below the Streaming block; nothing above this line is modified.
 
-   Five things drive every choice below.
+   Six things drive every choice below.
 
    1. A NEGATIVE number must read as negative without colour. Money renders the
       U+2212 minus rather than Intl's ASCII hyphen — it is a digit wide, so it
       holds the column — and the danger ink is a second signal, never the only
-      one.
-   2. The table is a P&L, so it is grouped like one: revenue in, then the fee
-      stack as a visible subtraction, then SHIPPING FENCED OFF ON ITS OWN, then
-      show costs. The group boundaries are real rules (.fin-edge), not spacing,
-      because "is this number inside the subtraction or beside it" is the
-      question the whole layout exists to answer.
-   3. The UNATTRIBUTED panel is deliberately NOT an alarm. Money waiting for a
+      one. The bottom line goes further: `Profit` prints an explicit "+" as well,
+      so profit and loss differ by a character, not by a hue.
+   2. GREEN MEANS ONE THING AND ONLY ONE THING: the period kept money. Every
+      other figure on the screen is neutral-or-red, because a cost is not a
+      loss — a red fee line and a red net profit would otherwise be the same
+      signal for two different facts.
+   3. The statement is VERTICAL and lives in ONE table, so there is one amount
+      column: a section subtotal lands on exactly the same right edge as the
+      lines above it. That is what makes a subtotal checkable by eye, and it is
+      why the layout fits any width instead of scrolling sideways the way the
+      old twelve-column table had to.
+   4. The UNATTRIBUTED panel is deliberately NOT an alarm. Money waiting for a
       show is information: a stream that was never in the schedule has nothing
       to attach to, and that is expected. The panel is a neutral surface; the
       only thing carrying emphasis inside it is the cluster list, because that
       is the part you can act on. Reconciliation failure IS the danger ramp,
       because then the numbers genuinely cannot be trusted.
-   4. Amber grounds take --text ink. --warning on --warning-bg is 2.90:1 in
+   5. Amber grounds take --text ink. --warning on --warning-bg is 2.90:1 in
       light; --text on it is 14.25:1 light / 12.36:1 dark. Red grounds take
       --danger-strong, not --danger: 4.83:1 light / 5.46:1 dark against
-      --danger-bg, where --danger itself manages only ~3.5:1 in light.
-   5. The table is wider than the page. It scrolls inside its own container with
-      the day/week/month label pinned, rather than pushing the whole app
-      sideways. Shows and time on air live INSIDE that pinned cell, so the
-      context you need to read a money column stays on screen while you scroll
-      to it.
+      --danger-bg, where --danger itself manages only ~3.5:1 in light. Green ink
+      takes --success-strong for the same reason: --success is 3.37:1 on white.
+   6. A quiet day prints NOTHING. Not a dash, not $0.00. A month with three
+      shows in it must not look like a month that lost money on twenty-eight
+      days.
 
    Contrast is noted inline wherever a pair was actually computed.
    ========================================================================== */
@@ -11958,8 +11963,8 @@ button.sor-team:focus-visible {
   color: var(--text-2);
 }
 
-/* ---------- Day · Week · Month ---------- */
-/* Buttons in a group, not tabs: they re-grain one table rather than swap
+/* ---------- Calendar · Week · Month ---------- */
+/* Buttons in a group, not tabs: they re-grain one report rather than swap
    panels, so they carry aria-pressed and look like a segmented control. */
 .fin-period {
   display: inline-flex;
@@ -12125,7 +12130,9 @@ button.sor-team:focus-visible {
   cursor: default;
 }
 
-/* The month's answer, beside the month's name. */
+/* The month's answer, beside the month's name. Recessed onto --surface-2
+   because the section around it is already a --surface card: a --surface strip
+   on a --surface card is a border and nothing else. */
 .fin-cal-total {
   display: flex;
   flex-wrap: wrap;
@@ -12134,7 +12141,7 @@ button.sor-team:focus-visible {
   padding: 8px 14px;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius);
-  background: var(--surface);
+  background: var(--surface-2);
 }
 .fin-cal-total.is-quiet {
   border-style: dashed;
@@ -12895,7 +12902,7 @@ button.sor-team:focus-visible {
   .fin-unattr {
     padding: 13px;
   }
-  /* The toggle is the control that decides what the table below IS, so it gets
+  /* The toggle is the control that decides what the report below IS, so it gets
      the full width rather than being squeezed beside the heading. */
   .fin-period {
     flex: 1 0 100%;

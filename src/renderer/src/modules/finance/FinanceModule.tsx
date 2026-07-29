@@ -65,8 +65,12 @@ export function FinanceModule(): JSX.Element {
         <NotBuiltYet
           icon="BarChart3"
           title="The complete P&L is not built yet"
-          lead="This is where streaming and wholesale revenue meet the cost of the goods that produced them, plus everything else the business spends."
-          detail="It needs the two tabs beside it finished first, and it needs cost of goods, which the Streaming tab deliberately leaves out today. Until all of that is real, showing a profit figure here would be a guess dressed up as an answer."
+          lead="This is where streaming and wholesale profit meet everything else the business spends — rent, wages, supplies, the costs no show is responsible for."
+          // Streaming's own statement is now complete down to net profit,
+          // including cost of goods, so the old reason this tab was empty no
+          // longer holds. The remaining reason is the honest one and it is
+          // stated: Wholesale has no numbers at all yet.
+          detail="Streaming already runs its own full P&L, cost of goods included. What is missing is the other half — Wholesale is not built, and no overhead is recorded anywhere yet. Adding those two up while one of them is empty would produce a profit figure that is simply too high."
         />
       )}
     </div>

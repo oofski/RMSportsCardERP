@@ -89,8 +89,8 @@ export function PnlStatement({ money }: { money: PnlMoney }): JSX.Element {
         <Note tone="danger" icon="AlertTriangle" role="alert">
           <b>This statement does not add up — do not use it.</b>
           <p>
-            The sections below total <Money value={checksum} strong />, but the day was stored with
-            a net profit of <Money value={stated} strong />, a difference of{' '}
+            The sections below total <Money value={checksum} strong />, but this period was stored
+            with a net profit of <Money value={stated} strong />, a difference of{' '}
             <Money value={drift} strong />. That can only happen if the app and its data engine were
             built from different versions of the P&amp;L. Update the app and re-import before
             trusting any figure here.
@@ -138,7 +138,7 @@ function SectionBody({
   if (section.running) {
     return (
       <tbody className="fin-pnl-sec is-running">
-        <tr className={`fin-pnl-mile ${section.key === 'netProfit' ? 'is-bottom' : ''}`}>
+        <tr className={`fin-pnl-mile${section.key === 'netProfit' ? ' is-bottom' : ''}`}>
           <th scope="row">{section.subtotalLabel}</th>
           <td>
             <Profit value={section.subtotal} />

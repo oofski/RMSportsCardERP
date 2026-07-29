@@ -9,3 +9,6 @@ release/
 *.local
 coverage/
 .vite/
+
+# Scratch render harnesses — bundled output, never part of the app.
+.harness.*
