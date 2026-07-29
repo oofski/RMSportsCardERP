@@ -601,6 +601,14 @@ interface ImportStats {
   carriedBackCents: number
   unattributedRows: number
   unattributedCents: number
+  /**
+   * Which LOCAL days the unattributed money happened on, and how much on each.
+   *
+   * The count and the dollar total say there is a problem; only the dates say
+   * what to do about it. "272 rows, $24,616.92" sends the operator hunting;
+   * "Jul 26 and Jul 27 have no stream logged" is the whole task.
+   */
+  unattributedByDay: Map<string, { rows: number; cents: number }>
   unclassified: number
   unclassifiedExample: string | null
   firstOccurredAt: string | null
@@ -731,6 +739,7 @@ export function importLedger(filePath: string, actorId: string | null): Result<L
       carriedBackCents: 0,
       unattributedRows: 0,
       unattributedCents: 0,
+      unattributedByDay: new Map(),
       unclassified: 0,
       unclassifiedExample: null,
       firstOccurredAt: null,
@@ -816,6 +825,13 @@ export function importLedger(filePath: string, actorId: string | null): Result<L
       } else {
         stats.unattributedRows += 1
         stats.unattributedCents += toCents(s.amount)
+        // Keyed on the row's OWN local date — it has no session to borrow one
+        // from, and its own day is exactly the day a session is missing.
+        const key = streamDateOf(s.occurredAt)
+        const bucketDay = stats.unattributedByDay.get(key) ?? { rows: 0, cents: 0 }
+        bucketDay.rows += 1
+        bucketDay.cents += toCents(s.amount)
+        stats.unattributedByDay.set(key, bucketDay)
       }
     }
 
@@ -861,6 +877,18 @@ export function importLedger(filePath: string, actorId: string | null): Result<L
  * next week's shows, batched shipping subsidies, everything — producing a
  * plausible, precisely wrong day total that nothing else flags.
  */
+/** "2026-07-26" -> "Sun 26 Jul". Short enough to list several, explicit
+ *  enough that nobody has to work out which July the 26th belongs to. */
+function shortDay(dayKey: string): string {
+  const [y, m, d] = (dayKey || '').split('-').map(Number)
+  if (!y || !m || !d) return dayKey
+  const dt = new Date(y, m - 1, d)
+  if (Number.isNaN(dt.getTime())) return dayKey
+  const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+  const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+  return `${DAYS[dt.getDay()]} ${d} ${MON[m - 1]}`
+}
+
 function buildWarnings(
   stats: ImportStats,
   sessionById: Map<string, SessionWindow>,
@@ -914,22 +942,67 @@ function buildWarnings(
   // these rows onto it; never adding it leaves them visible here forever, which
   // is a fine end state.
   if (stats.unattributedRows > 0) {
-    warnings.push(
-      `${stats.unattributedRows} row${stats.unattributedRows === 1 ? '' : 's'} (${money(stats.unattributedCents)}) are not ` +
-        `inside any logged show. That is fine — they are stored, counted and listed under "outside every show". ` +
-        `If one of them was a real stream, add the session and re-run attribution and they will move onto it.`
-    )
+    // TWO different problems wearing the same number, and they have different
+    // fixes — so they get different sentences.
+    //
+    //   no session at all on that day  -> a show was never logged
+    //   a session exists, money outside -> a SECOND show that day, or the times
+    //                                      on the logged one are wrong
+    //
+    // RM runs two shows most days, so the second case is the common one, and
+    // telling somebody "no stream is logged for Sunday" when they logged one
+    // sends them looking for a bug that is not there.
+    const logged = new Set<string>()
+    for (const w of sessionById.values()) if (w.streamDate) logged.add(w.streamDate)
+
+    const missing: Array<[string, number]> = []
+    const outside: Array<[string, number]> = []
+    for (const [day, v] of stats.unattributedByDay) {
+      if (!day) continue
+      ;(logged.has(day) ? outside : missing).push([day, v.cents])
+    }
+    const byDay = (a: [string, number], b: [string, number]): number => (a[0] < b[0] ? -1 : 1)
+    missing.sort(byDay)
+    outside.sort(byDay)
+
+    const phrase = (days: Array<[string, number]>): string => {
+      const shown = days.slice(0, 5).map(([d]) => shortDay(d))
+      const more = days.length - shown.length
+      const list =
+        shown.length === 1
+          ? shown[0]
+          : `${shown.slice(0, -1).join(', ')} and ${shown[shown.length - 1]}`
+      return more > 0 ? `${list} (+${more} more)` : list
+    }
+    const sum = (days: Array<[string, number]>): number => days.reduce((a, [, c]) => a + c, 0)
+
+    if (missing.length > 0) {
+      warnings.push(
+        `No stream is logged for ${phrase(missing)}. ${money(sum(missing))} came in on ` +
+          `${missing.length === 1 ? 'that day' : 'those days'} — add the show in Streaming, then press Re-attribute.`
+      )
+    }
+    if (outside.length > 0) {
+      warnings.push(
+        `${phrase(outside)} ${outside.length === 1 ? 'has' : 'have'} a show logged, but ${money(sum(outside))} came in ` +
+          `outside its hours. Usually a second show that day, or the start/end times need widening.`
+      )
+    }
+    if (missing.length === 0 && outside.length === 0) {
+      warnings.push(
+        `${money(stats.unattributedCents)} is not inside any logged show. It is listed under "outside every show".`
+      )
+    }
   }
 
-  // Stated plainly rather than left implicit: a day's shipping costs otherwise
-  // look like they appeared from nowhere hours after the show ended, and an
-  // unexplained number in an accounting screen is one nobody trusts twice.
   if (stats.carriedBackRows > 0) {
+    // Previously this explained the mechanism and the design rationale. The
+    // operator does not need either — they need to know their shipping numbers
+    // landed on the right day and that nothing is missing.
     warnings.push(
-      `${stats.carriedBackRows} settlement row${stats.carriedBackRows === 1 ? '' : 's'} (${money(stats.carriedBackCents)}) ` +
-        `posted after the show that caused them — shipping subsidies, platform charges and giveaway postage — and were ` +
-        `carried back to it. Sales are never carried back: a sale outside every window stays unattributed so a missing ` +
-        `show cannot hide inside the previous one.`
+      `Whatnot posted ${stats.carriedBackRows} shipping and fee row${stats.carriedBackRows === 1 ? '' : 's'} ` +
+        `(${money(stats.carriedBackCents)}) hours after the shows that caused them. ` +
+        `${stats.carriedBackRows === 1 ? 'It has' : 'They have'} been counted on the right show's day.`
     )
   }
 
