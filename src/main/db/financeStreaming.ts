@@ -1256,6 +1256,11 @@ const MONEY_FIELDS = [
   'netShipping',
   'showBoost',
   'reversals',
+  // From the Streaming module, not the ledger, and part of netAfterCosts. Listed
+  // here so weeks and months roll it through the SAME accumulator as every other
+  // figure — a period that summed differently from the days inside it would be
+  // worse than no period at all.
+  'giveawayLoss',
   'netAfterCosts',
   'carriedBackAmount',
   'breakCost',
@@ -1296,6 +1301,7 @@ function emptyDay(streamDate: string): StreamDayFinance {
     netShipping: 0,
     showBoost: 0,
     reversals: 0,
+    giveawayLoss: 0,
     netAfterCosts: 0,
     rowCount: 0,
     carriedBackRows: 0,
@@ -1616,18 +1622,30 @@ function buildView(db: Database): StreamingFinanceView {
     day.minutes += durationMinutes(s.started_at, s.ended_at) ?? 0
   }
 
+  // Stock consumed by the shows on each business day, from the Streaming
+  // module's own lines. `loss` is the giveaway value the operator ENTERED in the
+  // stream — deliberately not inferred from the ledger, whose giveaway_shipping
+  // rows are the POSTAGE for mailing a prize and remain exactly that, untouched.
   const itemRows = db
     .prepare(
       `SELECT s.stream_date AS d, i.kind AS kind,
-              COALESCE(SUM(CAST(ROUND(i.cost_total * 100) AS INTEGER)), 0) AS cents
+              COALESCE(SUM(CAST(ROUND(i.cost_total * 100) AS INTEGER)), 0) AS cents,
+              COALESCE(SUM(CAST(ROUND(i.loss_value * 100) AS INTEGER)), 0) AS loss
          FROM stream_items i JOIN stream_sessions s ON s.id = i.session_id
         GROUP BY s.stream_date, i.kind`
     )
-    .all() as Array<{ d: string; kind: string; cents: number }>
+    .all() as Array<{ d: string; kind: string; cents: number; loss: number }>
   for (const r of itemRows) {
     const day = dayFor(r.d)
-    if (r.kind === 'giveaway') day.giveawayCost = toDollars(toCents(day.giveawayCost) + r.cents)
-    else day.breakCost = toDollars(toCents(day.breakCost) + r.cents)
+    if (r.kind === 'giveaway') {
+      day.giveawayCost = toDollars(toCents(day.giveawayCost) + r.cents)
+      // Stored positive on the line, reported NEGATIVE here: every figure that
+      // feeds netAfterCosts is a signed number so the bottom line is a plain
+      // sum and no screen has to remember which way to apply it.
+      day.giveawayLoss = toDollars(toCents(day.giveawayLoss) - r.loss)
+    } else {
+      day.breakCost = toDollars(toCents(day.breakCost) + r.cents)
+    }
   }
 
   // ATTRIBUTED money only — `session_id IS NOT NULL` rather than `stream_date IS
@@ -1727,11 +1745,16 @@ function buildView(db: Database): StreamingFinanceView {
         toCents(day.refundShipping)
     )
 
+    // giveawayLoss sits here beside showBoost because it is the same kind of
+    // thing: money spent to run the show. It is the only term that is not a
+    // ledger row, which is exactly why the reconciliation below strips it out
+    // again before comparing this breakdown to the rows.
     day.netAfterCosts = toDollars(
       toCents(day.netRevenue) +
         toCents(day.netShipping) +
         toCents(day.showBoost) +
-        toCents(day.reversals)
+        toCents(day.reversals) +
+        toCents(day.giveawayLoss)
     )
   }
 
@@ -1799,16 +1822,19 @@ function buildView(db: Database): StreamingFinanceView {
   for (const [, c] of dayNetCents) daysCents += c
   for (const day of days) daysRows += day.rowCount
 
-  // The day fields must decompose the SAME money the rows carry. Fees are the
-  // only figure on a day that is not a row, so stripping them back out has to
-  // land exactly on the raw net:
-  //     netAfterCosts − totalFees == Σ(every attributed non-payout row)
+  // The day fields must decompose the SAME money the rows carry. Fees and the
+  // giveaway loss are the only two figures on a day that are not ledger rows —
+  // fees are derived, the loss comes from the Streaming module — so stripping
+  // both back out has to land exactly on the raw net:
+  //     netAfterCosts − totalFees − giveawayLoss == Σ(attributed non-payout rows)
   // This is what catches a future bucket that classification learns to produce
   // but the day shape has no field for. Without it that money would vanish from
   // every screen while the row-level reconciliation above still said "fine",
   // because the rows themselves would all still be present and counted.
   let fieldCents = 0
-  for (const day of days) fieldCents += toCents(day.netAfterCosts) - toCents(day.totalFees)
+  for (const day of days) {
+    fieldCents += toCents(day.netAfterCosts) - toCents(day.totalFees) - toCents(day.giveawayLoss)
+  }
 
   let reconciled = true
   let reconcileNote: string | null = null

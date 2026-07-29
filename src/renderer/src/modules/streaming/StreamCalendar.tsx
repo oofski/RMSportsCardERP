@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { StreamCalendarDay, StreamCalendarMonth, StreamSession } from '@shared/streaming'
 import { formatDuration } from '@shared/streaming'
 import { formatMoney } from '../../lib/format'
+import { formatUnitCount } from '../../lib/productUnits'
 import { Icon } from '../../components/Icon'
 import { Button } from '../../components/ui'
 import { LiveChip, SourceChip, TimeSpan } from './bits'
@@ -196,8 +197,8 @@ export function StreamCalendar({
           <div className="stm-sum">
             <SumItem icon="CircleDot" value={String(month.totals.sessionCount)} label="streams" />
             <SumItem icon="Timer" value={formatDuration(month.totals.minutes)} label="on air" />
-            <SumItem icon="Layers" value={String(month.totals.breakUnits)} label="units broken" />
-            <SumItem icon="Gift" value={String(month.totals.giveawayUnits)} label="units given" />
+            <SumItem icon="Layers" value={formatUnitCount(month.totals.breakUnits)} label="stock units broken" />
+            <SumItem icon="Gift" value={formatUnitCount(month.totals.giveawayUnits)} label="stock units given" />
             <SumItem
               icon="DollarSign"
               value={formatMoney(month.totals.totalCost)}
@@ -336,15 +337,15 @@ function DayCell({
           <span className="stm-cell-dur mono">{formatDuration(day.minutes)}</span>
           <span className="stm-cell-units">
             {day.breakUnits > 0 && (
-              <em title={`${day.breakUnits} units broken`}>
+              <em title={`${formatUnitCount(day.breakUnits)} stock units broken`}>
                 <Icon name="Layers" size={10} />
-                {day.breakUnits}
+                {formatUnitCount(day.breakUnits)}
               </em>
             )}
             {day.giveawayUnits > 0 && (
-              <em title={`${day.giveawayUnits} units given away`}>
+              <em title={`${formatUnitCount(day.giveawayUnits)} stock units given away`}>
                 <Icon name="Gift" size={10} />
-                {day.giveawayUnits}
+                {formatUnitCount(day.giveawayUnits)}
               </em>
             )}
           </span>

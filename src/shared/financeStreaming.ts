@@ -625,9 +625,24 @@ export interface StreamDayFinance {
   showBoost: number
   /** Refunded orders. Negative. */
   reversals: number
+  /**
+   * NEGATIVE. The value of stock GIVEN AWAY on the shows that day, taken from
+   * the giveaway lines the operator entered in Streaming — never inferred from
+   * ledger rows.
+   *
+   * It is a cost of running the show, exactly like `showBoost`, and it is a
+   * DIFFERENT cost from `giveawayShipping`: that is the postage Whatnot charged
+   * to mail the prize, this is the prize. Both belong, and neither replaces the
+   * other.
+   *
+   * It is also the only figure on a day that comes from outside the ledger, so
+   * the reconciliation strips it back out along with the fees before comparing
+   * the day breakdown to the rows.
+   */
+  giveawayLoss: number
 
-  /** netRevenue + netShipping + showBoost + reversals. The day's bottom line
-   *  before cost of goods. */
+  /** netRevenue + netShipping + showBoost + reversals + giveawayLoss. The day's
+   *  bottom line before cost of goods. */
   netAfterCosts: number
 
   rowCount: number

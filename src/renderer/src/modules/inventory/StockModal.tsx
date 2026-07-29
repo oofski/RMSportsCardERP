@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { InventoryProduct } from '@shared/types'
 import { LOCATIONS, type Location } from '@shared/inventory'
 import { api } from '../../lib/api'
+import { formatUnitCount } from '../../lib/productUnits'
 import { useToast } from '../../components/Toast'
 import { Button, Field, Input, Modal } from '../../components/ui'
 import { structureLabel } from './helpers'
@@ -134,7 +135,7 @@ export function StockModal({
                   onClick={() => setLocation(l.id)}
                 >
                   {l.label}
-                  <div className="lp-sub">{selected.quantityByLocation[l.id] ?? 0} on hand</div>
+                  <div className="lp-sub">{formatUnitCount(selected.quantityByLocation[l.id] ?? 0)} on hand</div>
                 </button>
               ))}
             </div>

@@ -80,11 +80,46 @@ export interface StreamItem {
   breakNumber: number | null
   /** Who received it. Giveaways only. */
   recipient: string | null
+  /**
+   * The stock this line took out, in the PRODUCT'S OWN stock unit — cases for a
+   * case-stocked product, boxes for a box-stocked one. This is the number
+   * inventory moved by, and it is what every cost figure is derived from.
+   *
+   * It may be fractional, but only for a product flagged `giveawayItem`: three
+   * packs out of a twelve-pack box is a quarter of a box. See @shared/units.
+   */
   quantity: number
+  /**
+   * What the operator actually TYPED, kept so a line reads back the way it was
+   * entered rather than as the converted number.
+   *
+   * A break is entered as cases + loose boxes; a giveaway as boxes + loose
+   * packs. All three are null on a line entered directly in stock units, and on
+   * every line recorded before v25.
+   */
+  enteredCases: number | null
+  enteredBoxes: number | null
+  enteredPacks: number | null
   location: string
   /** Cost of the exact FIFO layers this line consumed, per unit and in total. */
   unitCost: number
   costTotal: number
+  /**
+   * Giveaways only. What ONE pack of this product cost, divided down from the
+   * cost of the layers this line consumed. Null when a divisor is missing —
+   * never a guess, because a zero here would understate the loss silently.
+   */
+  packCost: number | null
+  /**
+   * Giveaways only, POSITIVE. The value of the stock given away: packs × pack
+   * cost when packs were entered, otherwise the FIFO cost of what was consumed.
+   *
+   * This is the P&L side and is NOT double counting against the FIFO
+   * consumption: the consumption is the balance-sheet movement (stock left the
+   * shelf), this is the cost of running the show. Zero on a break — a break is
+   * stock opened to sell, not stock lost.
+   */
+  lossValue: number
   note: string | null
   createdAt: string
   createdBy: string | null
@@ -97,6 +132,9 @@ export interface StreamTotals {
   giveawayLines: number
   giveawayUnits: number
   giveawayCost: number
+  /** Σ of the giveaway lines' `lossValue`. POSITIVE — the finance view is where
+   *  it becomes a negative on the day's bottom line. */
+  giveawayLoss: number
   totalCost: number
 }
 
@@ -146,11 +184,34 @@ export interface UpdateStreamSession {
   note?: string | null
 }
 
+/**
+ * A line being added to a show.
+ *
+ * TWO ways to say how much, and only one of them is the one operators use.
+ *
+ * `cases` + `boxes` (a break) or `boxes` + `packs` (a giveaway) is how the work
+ * is actually described — "two cases and three boxes", "four packs to a
+ * winner". Main converts those to the product's own stock unit through
+ * `breakToStock` / `giveawayToStock` in @shared/units, which is also where a
+ * missing boxes-per-case or packs-per-box is REFUSED rather than treated as
+ * zero.
+ *
+ * `quantity` is the raw escape hatch: a number already in the product's stock
+ * unit. It is used when no entered-unit field is supplied, which keeps every
+ * pre-v25 caller working unchanged.
+ */
 export interface NewStreamItem {
   sessionId: string
   kind: StreamItemKind
   productId: string
-  quantity: number
+  /** Already in the product's stock unit. Ignored when cases/boxes/packs are given. */
+  quantity?: number
+  /** Break entry: whole cases. */
+  cases?: number | null
+  /** Break entry: loose boxes. Giveaway entry: whole boxes. */
+  boxes?: number | null
+  /** Giveaway entry: loose packs. */
+  packs?: number | null
   location: string
   breakNumber?: number | null
   recipient?: string | null

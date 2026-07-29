@@ -117,6 +117,8 @@ import {
   // --- Break assignments ---
   UserCheck,
   UserMinus,
+  // --- Case / box / pack unit economics ---
+  Calculator,
   type LucideIcon
 } from 'lucide-react'
 
@@ -238,7 +240,9 @@ const MAP: Record<string, LucideIcon> = {
   Flame,
   // --- Break assignments ---
   UserCheck,
-  UserMinus
+  UserMinus,
+  // --- Case / box / pack unit economics ---
+  Calculator
 }
 
 export function Icon({

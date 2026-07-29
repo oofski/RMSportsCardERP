@@ -2681,6 +2681,20 @@ table.data tfoot .data-total td {
   color: var(--text-3);
   margin-right: 4px;
 }
+/* Only this flag makes a fractional on-hand legal, so it is named beside the
+   numbers it explains. 7.52:1 light, 7.35:1 dark. */
+.cd-giveaway-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  padding: 1px 9px;
+  border-radius: 999px;
+  background: var(--brand-soft);
+  color: var(--brand-700);
+  font-size: 11.5px;
+  font-weight: 700;
+}
 .cd-actions {
   display: flex;
   align-items: center;
@@ -2863,7 +2877,10 @@ table.data tfoot .data-total td {
 }
 .ta-item .ta-sub {
   font-size: 12px;
-  color: var(--text-3);
+  /* Was --text-3 (3.09:1 light). It now carries the on-hand count AND its unit,
+     which is what the operator picks a product on. 6.26:1 light, 8.25:1 dark
+     on --surface; 5.63 / 6.77 on the --surface-3 hover. */
+  color: var(--text-2);
   margin-top: 1px;
 }
 .ta-empty {
@@ -2889,7 +2906,10 @@ table.data tfoot .data-total td {
 }
 .selected-product .sp-meta {
   font-size: 12.5px;
-  color: var(--text-3);
+  /* Was --text-3 (2.94:1 light). This strip now carries the product's stock
+     unit, which is load-bearing rather than decorative. 5.94:1 light,
+     7.71:1 dark on --surface-2. */
+  color: var(--text-2);
   margin-top: 3px;
   display: flex;
   gap: 10px;
@@ -2920,11 +2940,161 @@ table.data tfoot .data-total td {
 .loc-pill .lp-sub {
   font-size: 11px;
   font-weight: 500;
-  color: var(--text-3);
+  /* Was --text-3 (3.09:1 light). It now names the unit the on-hand count is in,
+     which is the difference between 3 boxes and 3 cases. 6.26:1 light,
+     8.25:1 dark on --surface. */
+  color: var(--text-2);
   margin-top: 2px;
 }
 .loc-pill.active .lp-sub {
   color: var(--brand-600);
+}
+
+/* ---------- Case / box / pack economics on the product form ----------
+   One switch and two derived numbers. Between them they decide what a pack of
+   this product is worth, which is what values a giveaway as a loss in the P&L —
+   so they are grouped where they can be checked against each other while they
+   are being typed, rather than left to be discovered as a wrong figure weeks
+   later. */
+.inv-giveaway-toggle {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+  padding: 11px 13px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+.inv-giveaway-toggle.is-on {
+  border-color: var(--brand-500);
+  background: var(--brand-soft);
+}
+/* The shared .checkbox carries --text-2, which is right for a remember-me and
+   too quiet for the one control that changes how a product is counted.
+   15.25:1 light / 13.59:1 dark on --surface-2; 14.28 / 12.82 on --brand-soft. */
+.inv-giveaway-toggle .checkbox {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.igt-body {
+  margin: 0;
+  /* Clears the 18px box plus its 9px gap, so the explanation hangs under the
+     label rather than under the tick. */
+  padding-left: 27px;
+  font-size: 12px;
+  line-height: 1.5;
+  /* 5.94:1 light, 7.71:1 dark on --surface-2; 5.56 / 7.28 on --brand-soft. */
+  color: var(--text-2);
+}
+
+.inv-unit-econ {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 14px;
+  padding: 11px 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+.iue-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  /* 5.94:1 light, 7.71:1 dark. */
+  color: var(--text-2);
+}
+.iue-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.iue-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+/* Pack cost is the number a giveaway books at, so on a giveaway item it is not
+   one of two equally interesting figures. */
+.iue-cell.is-key {
+  border-color: var(--brand-400);
+}
+.iue-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  /* 6.26:1 light, 8.25:1 dark on --surface. */
+  color: var(--text-2);
+}
+.iue-value {
+  font-size: 16px;
+  font-weight: 700;
+  /* 16.07:1 light, 14.53:1 dark. */
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+/* Not a number but an instruction — it drops to text weight so it never reads
+   as a figure, and keeps ink that passes at 12px. 6.26:1 light, 8.25:1 dark. */
+.iue-value.is-missing {
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--text-2);
+}
+.iue-workings {
+  font-size: 11.5px;
+  font-style: normal;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+/* A giveaway item that cannot cost a pack would book a loss of nothing, which
+   looks exactly like a working feature. --danger-strong, not --danger: the
+   latter is only 3.5:1 on its own tint in light. 4.83:1 light, 5.46:1 dark. */
+.iue-warn {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-sm);
+  background: var(--danger-bg);
+  color: var(--danger-strong);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.iue-warn svg {
+  flex: none;
+  margin-top: 2px;
+}
+.iue-none {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  font-size: 12px;
+  /* 5.94:1 light, 7.71:1 dark. */
+  color: var(--text-2);
+}
+.iue-none svg {
+  flex: none;
+}
+/* Inside a modal the two cells are already narrow; below this they stop being
+   readable side by side and the workings start wrapping mid-division. */
+@media (max-width: 620px) {
+  .iue-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* ---------- Top-bar user menu ---------- */
@@ -10675,6 +10845,14 @@ button.sor-team:focus-visible {
   font-size: 11.5px;
   color: var(--text-2);
 }
+/* The only figure on this card that leaves the module — it is what Finance
+   books against the day. It gets the emphatic ink because it is a claim about
+   the P&L, not another way of stating the same cost. 16.07:1 light,
+   14.53:1 dark on --surface. */
+.stm-total-card .stm-total-extra {
+  font-weight: 700;
+  color: var(--text);
+}
 .stm-total-card.strong {
   border-color: var(--brand-300);
   background: var(--brand-soft);
@@ -10783,6 +10961,14 @@ button.sor-team:focus-visible {
   font-size: 10.5px;
   font-weight: 700;
 }
+/* The line as it was TYPED — "2 cases + 3 boxes". It reads stronger than the
+   neutral tags beside it because it is the only one that says what the operator
+   actually did; the ×N column beside it is the converted figure.
+   7.52:1 light, 7.35:1 dark. */
+.stm-line-tag.is-entry {
+  background: var(--brand-soft);
+  color: var(--brand-700);
+}
 .stm-line-note {
   font-size: 11.5px;
   color: var(--text-2);
@@ -10804,6 +10990,16 @@ button.sor-team:focus-visible {
   font-weight: 700;
   color: var(--text);
   white-space: nowrap;
+}
+/* Under the line's FIFO cost, not beside it: on a giveaway these are two
+   different answers and a reader has to be able to tell which is which.
+   5.94:1 light, 7.71:1 dark on --surface-2. */
+.stm-line-loss {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-2);
 }
 .stm-line-remove {
   display: inline-flex;
@@ -10860,9 +11056,74 @@ button.sor-team:focus-visible {
   font-size: 12.5px;
   line-height: 1.5;
 }
-.stm-consume svg {
+.stm-consume > svg {
   flex: none;
   margin-top: 1px;
+}
+/* Before anything is typed there is nothing to warn about, so the amber is
+   dropped. --surface, not --surface-2, because the panel around it is already
+   --surface-2 and a note has to be visibly a note. 6.26:1 light, 8.25:1 dark. */
+.stm-consume.is-idle {
+  border-color: var(--border-strong);
+  background: var(--surface);
+  color: var(--text-2);
+}
+/* A refusal replaces the preview rather than sitting beside it: there is
+   nothing to preview, and two coloured panels arguing is worse than one that
+   says which field to go and fill in. --danger-strong, because --danger is only
+   3.5:1 on its own tint in light. 4.83:1 light, 5.46:1 dark. */
+.stm-consume.is-error {
+  border-color: var(--danger);
+  background: var(--danger-bg);
+  color: var(--danger-strong);
+}
+.stm-consume-body {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+/* Inherit rather than re-pick: this block sits on three different grounds and
+   the rule that chose each one already picked ink that passes on it. */
+.stm-consume-body > span,
+.stm-consume-body > b {
+  color: inherit;
+}
+.stm-consume-qty {
+  white-space: nowrap;
+}
+.stm-consume-short,
+.stm-consume-loss {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.45;
+}
+.stm-consume-short svg,
+.stm-consume-loss svg {
+  flex: none;
+  margin-top: 1px;
+}
+/* A giveaway that cannot be costed books no loss at all, which is a silent
+   wrong answer rather than a missing one — so it breaks out of the amber
+   block's ink. 4.99:1 light, 5.12:1 dark on --warning-bg. */
+.stm-consume-loss.is-missing {
+  color: var(--danger-strong);
+}
+/* Which unit the numbers beside it are in. Without it a bare "3" next to a
+   product is ambiguous by a factor of twelve. 5.63:1 light, 6.77:1 dark. */
+.stm-unit-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--text-2);
+  font-size: 10.5px;
+  font-weight: 700;
 }
 
 /* ---------- Forms, notes, empties ---------- */

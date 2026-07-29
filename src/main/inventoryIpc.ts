@@ -674,6 +674,9 @@ function validateProduct(input: NewInventoryProduct): string | null {
   if (input.highBid != null && (!Number.isFinite(input.highBid) || input.highBid < 0)) {
     return 'High bid must be 0 or more.'
   }
+  // Whole numbers only — these are divisors. A blank (null) is legitimate and
+  // means "unknown"; @shared/units then refuses the conversion by name instead
+  // of dividing by a guess, which is the behaviour the owner asked for.
   for (const [label, value] of [
     ['Boxes per case', input.boxesPerCase],
     ['Packs per box', input.packsPerBox]

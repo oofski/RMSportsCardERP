@@ -1,9 +1,13 @@
 import { useState } from 'react'
 import type { InventoryProduct, UnitType } from '@shared/types'
 import { LOCATIONS, type Location } from '@shared/inventory'
+import { boxCost, packCost, type ProductUnits } from '@shared/units'
 import { api } from '../../lib/api'
+import { formatMoney } from '../../lib/format'
+import { stockUnitOf, stockUnitWord } from '../../lib/productUnits'
+import { Icon } from '../../components/Icon'
 import { useToast } from '../../components/Toast'
-import { Button, Field, Input, Modal, Select, Textarea } from '../../components/ui'
+import { Button, Checkbox, Field, Input, Modal, Select, Textarea } from '../../components/ui'
 import { UNIT_TYPES } from './helpers'
 
 function numOrNull(v: string): number | null {
@@ -37,6 +41,7 @@ export function ProductFormModal({
     unitType: (product?.unitType ?? 'box') as UnitType,
     boxesPerCase: product?.boxesPerCase != null ? String(product.boxesPerCase) : '',
     packsPerBox: product?.packsPerBox != null ? String(product.packsPerBox) : '',
+    giveawayItem: product?.giveawayItem === true,
     unitCost: product ? String(product.unitCost) : '',
     highBid: product?.highBid != null ? String(product.highBid) : '',
     salePrice: product?.salePrice != null ? String(product.salePrice) : '',
@@ -69,6 +74,11 @@ export function ProductFormModal({
         unitType: form.unitType,
         boxesPerCase: numOrNull(form.boxesPerCase),
         packsPerBox: numOrNull(form.packsPerBox),
+        // Saved alongside the two divisors it depends on. The flag only means
+        // anything in combination with them, so letting them be saved apart
+        // would let a product claim it allows part-packs while carrying no
+        // packs-per-box to split with.
+        giveawayItem: form.giveawayItem,
         unitCost: numOrNull(form.unitCost) ?? 0,
         highBid: numOrNull(form.highBid),
         salePrice: numOrNull(form.salePrice),
@@ -92,6 +102,8 @@ export function ProductFormModal({
       setBusy(false)
     }
   }
+
+  const stockUnit = stockUnitOf(form.unitType)
 
   return (
     <Modal
@@ -129,7 +141,14 @@ export function ProductFormModal({
           <Field label="Category">
             <Input value={form.category} onChange={set('category')} placeholder="Baseball" />
           </Field>
-          <Field label="Unit type">
+          <Field
+            label="Stock unit"
+            hint={
+              stockUnit
+                ? `On-hand counts ${stockUnitWord(stockUnit, 2)} of this product`
+                : 'Breaks and giveaways are entered as a plain count for this unit'
+            }
+          >
             <Select value={form.unitType} onChange={set('unitType')}>
               {UNIT_TYPES.map((u) => (
                 <option key={u.value} value={u.value}>
@@ -150,22 +169,57 @@ export function ProductFormModal({
         </div>
 
         <div className="field-row">
-          <Field label="Boxes per case" hint="e.g. 12">
-            <Input type="number" min={0} value={form.boxesPerCase} onChange={set('boxesPerCase')} placeholder="—" />
+          <Field
+            label="Boxes per case"
+            hint={
+              form.unitType === 'case'
+                ? 'Divides a case into boxes — a break of loose boxes needs it'
+                : 'How many boxes came in a case, e.g. 12'
+            }
+          >
+            <Input
+              type="number"
+              min={1}
+              step={1}
+              value={form.boxesPerCase}
+              onChange={set('boxesPerCase')}
+              placeholder="—"
+            />
           </Field>
-          <Field label="Packs per box" hint="Optional">
-            <Input type="number" min={0} value={form.packsPerBox} onChange={set('packsPerBox')} placeholder="—" />
+          <Field label="Packs per box" hint="Nothing can value a giveaway of packs without it">
+            <Input
+              type="number"
+              min={1}
+              step={1}
+              value={form.packsPerBox}
+              onChange={set('packsPerBox')}
+              placeholder="—"
+            />
           </Field>
         </div>
 
+        <GiveawayToggle
+          checked={form.giveawayItem}
+          unitWord={stockUnit ? stockUnitWord(stockUnit) : 'unit'}
+          onChange={(giveawayItem) => setForm((f) => ({ ...f, giveawayItem }))}
+        />
+
         <div className="field-row">
-          <Field label="Average cost" hint="Average cost per unit">
+          <Field label="Average cost" hint={`Average cost of one ${stockUnit ?? 'unit'} (what we paid)`}>
             <Input type="number" min={0} step="0.01" value={form.unitCost} onChange={set('unitCost')} placeholder="0.00" />
           </Field>
           <Field label="High bid" hint="Current top bid / market value per unit">
             <Input type="number" min={0} step="0.01" value={form.highBid} onChange={set('highBid')} placeholder="0.00" />
           </Field>
         </div>
+
+        <UnitEconomics
+          unitType={form.unitType}
+          boxesPerCase={numOrNull(form.boxesPerCase)}
+          packsPerBox={numOrNull(form.packsPerBox)}
+          giveawayItem={form.giveawayItem}
+          unitCost={numOrNull(form.unitCost)}
+        />
 
         <Field label="Default sale price" hint="Optional">
           <Input type="number" min={0} step="0.01" value={form.salePrice} onChange={set('salePrice')} placeholder="0.00" />
@@ -199,5 +253,175 @@ export function ProductFormModal({
         <button type="submit" style={{ display: 'none' }} aria-hidden />
       </form>
     </Modal>
+  )
+}
+
+/**
+ * The one switch that lets a product hold a part-unit.
+ *
+ * Named for its consequence rather than its field name, and it states what
+ * happens to everything else in the same breath — the risk with a lone toggle
+ * is that it reads as a harmless tag, gets flipped on the whole catalog, and
+ * rounding dust starts accumulating in the cost basis of stock nobody is giving
+ * away.
+ */
+function GiveawayToggle({
+  checked,
+  unitWord,
+  onChange
+}: {
+  checked: boolean
+  /** "case" or "box" — the unit that stays whole for every other product. */
+  unitWord: string
+  onChange: (checked: boolean) => void
+}): JSX.Element {
+  return (
+    <div className={`inv-giveaway-toggle${checked ? ' is-on' : ''}`}>
+      <Checkbox
+        checked={checked}
+        onChange={onChange}
+        label="Giveaway item — may be held in part boxes and packs"
+      />
+      <p className="igt-body">
+        {checked ? (
+          <>
+            Giving away 3 packs out of a 12-pack box leaves a quarter of a box on the shelf, and this
+            product is allowed to carry that. On-hand can be a fraction of a {unitWord}.
+          </>
+        ) : (
+          <>
+            Off, so this product stays a whole number of {unitWord}s — a break or giveaway that would
+            leave a part-{unitWord} is refused rather than rounded. Turn it on only for stock
+            deliberately kept for giving packs away.
+          </>
+        )}
+      </p>
+    </div>
+  )
+}
+
+/**
+ * Cost per box and cost per pack, derived live from what is being typed.
+ *
+ * This is the number that values a giveaway as a loss in the P&L, and it is
+ * downstream of three fields that are easy to fat-finger. Seeing "$0.83 a pack"
+ * turn into "$8.33 a pack" while the divisor is being typed is how a wrong
+ * boxes-per-case gets caught here, rather than as an unexplainable loss on a
+ * day's P&L weeks later.
+ *
+ * A missing figure names the field that is missing. "—" would be true and
+ * useless: the whole value of this panel is that it says what to go and fix.
+ */
+function UnitEconomics({
+  unitType,
+  boxesPerCase,
+  packsPerBox,
+  giveawayItem,
+  unitCost
+}: {
+  unitType: UnitType
+  boxesPerCase: number | null
+  packsPerBox: number | null
+  giveawayItem: boolean
+  unitCost: number | null
+}): JSX.Element {
+  const stockUnit = stockUnitOf(unitType)
+
+  if (!stockUnit) {
+    return (
+      <div className="inv-unit-econ">
+        <p className="iue-none">
+          <Icon name="Info" size={13} />
+          Box and pack economics only apply to products stocked in cases or boxes.
+        </p>
+      </div>
+    )
+  }
+
+  const units: ProductUnits = { unitType: stockUnit, boxesPerCase, packsPerBox, giveawayItem }
+  const cost = unitCost ?? 0
+  const perBox = boxCost(units, cost)
+  const perPack = packCost(units, cost)
+
+  // The contract returns null for every failure alike; the operator needs to
+  // know WHICH one, so the same preconditions are read back here in the order
+  // they would be fixed in.
+  const noCost = cost <= 0
+  const boxWhy = noCost
+    ? 'Enter an average cost first.'
+    : stockUnit === 'case' && !boxesPerCase
+      ? 'Set boxes per case.'
+      : null
+  const packWhy = boxWhy ?? (!packsPerBox ? 'Set packs per box.' : null)
+
+  return (
+    <div className="inv-unit-econ">
+      <span className="iue-head">
+        <Icon name="Calculator" size={13} />
+        Derived from {stockUnit === 'case' ? 'the case cost' : 'the box cost'}
+      </span>
+
+      <div className="iue-grid">
+        <EconCell
+          label="Cost per box"
+          value={perBox}
+          why={boxWhy}
+          workings={
+            stockUnit === 'case' && boxesPerCase && !noCost
+              ? `${formatMoney(cost)} ÷ ${boxesPerCase} boxes`
+              : stockUnit === 'box' && !noCost
+                ? 'the stock unit is already a box'
+                : null
+          }
+        />
+        <EconCell
+          label="Cost per pack"
+          value={perPack}
+          why={packWhy}
+          workings={
+            perBox !== null && packsPerBox ? `${formatMoney(perBox)} ÷ ${packsPerBox} packs` : null
+          }
+          /* Pack cost is what a giveaway is booked at, so on a giveaway item a
+             missing one is a real gap rather than a nicety. */
+          emphasis={giveawayItem}
+        />
+      </div>
+
+      {giveawayItem && perPack === null && (
+        <p className="iue-warn">
+          <Icon name="AlertTriangle" size={13} />
+          This is flagged as a giveaway item but a pack cannot be costed yet, so a giveaway of packs
+          would book no loss at all.
+        </p>
+      )}
+    </div>
+  )
+}
+
+function EconCell({
+  label,
+  value,
+  why,
+  workings,
+  emphasis = false
+}: {
+  label: string
+  value: number | null
+  /** Why there is no number — names the field to go and fill in. */
+  why: string | null
+  /** The arithmetic, so a wrong divisor is visible as a wrong divisor. */
+  workings: string | null
+  emphasis?: boolean
+}): JSX.Element {
+  return (
+    <div className={`iue-cell${emphasis ? ' is-key' : ''}`}>
+      <span className="iue-label">{label}</span>
+      {value !== null ? (
+        <b className="iue-value mono">{formatMoney(value)}</b>
+      ) : (
+        <b className="iue-value is-missing">{why ?? 'Not available'}</b>
+      )}
+      {value !== null && workings && <em className="iue-workings">{workings}</em>}
+    </div>
   )
 }

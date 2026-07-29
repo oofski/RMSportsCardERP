@@ -22,6 +22,7 @@ import { Button, CenterLoader, EmptyState } from '../../components/ui'
 import { useToast } from '../../components/Toast'
 import { api } from '../../lib/api'
 import { formatDate, formatMoney } from '../../lib/format'
+import { formatUnitCount } from '../../lib/productUnits'
 import { UnitBadge, productMetrics } from './helpers'
 import { CategoryLogo } from './CategoryLogo'
 import { IncomingModal } from './IncomingModal'
@@ -1076,10 +1077,10 @@ function InventoryDetail({
                   </td>
                   {LOCATIONS.map((l) => (
                     <td key={l.id} style={{ textAlign: 'center' }} className="mono">
-                      {p.quantityByLocation[l.id] ?? 0}
+                      {formatUnitCount(p.quantityByLocation[l.id] ?? 0)}
                     </td>
                   ))}
-                  <td style={{ fontWeight: 700, textAlign: 'center' }}>{p.quantity}</td>
+                  <td style={{ fontWeight: 700, textAlign: 'center' }}>{formatUnitCount(p.quantity)}</td>
                   <td className="money">{m.hasBid ? formatMoney(m.marketUnit) : dash}</td>
                   <td className="money">{p.quantity > 0 ? formatMoney(m.invValue) : dash}</td>
                   <td className="money">{m.hasCost ? formatMoney(m.avgCost) : dash}</td>

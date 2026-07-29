@@ -3,6 +3,7 @@ import { join } from 'path'
 import { existsSync, mkdirSync } from 'fs'
 import Database from 'better-sqlite3'
 import { normalizeUpc } from '@shared/upc'
+import { boxesPerCaseFromName } from '@shared/units'
 import { seedCatalog } from './inventorySeed'
 import { seedSnapshot } from './inventorySnapshot'
 import { seedCatalogExpansion } from './inventoryCatalogV2'
@@ -99,6 +100,9 @@ function migrate(database: Database.Database): void {
       unit_type      TEXT NOT NULL DEFAULT 'box',
       boxes_per_case INTEGER,
       packs_per_box  INTEGER,
+      -- v25: may this product be held in FRACTIONAL units? Only ever set for
+      -- product deliberately kept as giveaway material — see the v25 note below.
+      giveaway_item  INTEGER NOT NULL DEFAULT 0,
       unit_cost      REAL NOT NULL DEFAULT 0,
       high_bid       REAL,
       sale_price     REAL,
@@ -109,6 +113,13 @@ function migrate(database: Database.Database): void {
     );
 
     -- On-hand quantity per product per location (RM / AM).
+    --
+    -- quantity is declared INTEGER and is one for almost every product. SQLite
+    -- is dynamically typed, and INTEGER affinity keeps a whole value an integer
+    -- while storing a genuinely fractional one as a REAL — which is exactly the
+    -- behaviour v25 needs, because a giveaway-flagged product may sit at 9.75
+    -- boxes. The gate is in the CODE (db/lots.ts roundQty), not here: nothing
+    -- but a giveaway-flagged product can ever produce a fraction.
     CREATE TABLE IF NOT EXISTS inventory_stock (
       id         TEXT PRIMARY KEY,
       product_id TEXT NOT NULL,
@@ -644,9 +655,22 @@ function migrate(database: Database.Database): void {
       break_number INTEGER,
       recipient    TEXT,
       quantity     INTEGER NOT NULL,
+      -- v25: what the operator TYPED, kept beside the converted quantity so a
+      -- line reads back as "2 cases + 3 boxes" instead of as 2.375. NULL on a
+      -- line entered directly in stock units and on every pre-v25 row.
+      entered_cases REAL,
+      entered_boxes REAL,
+      entered_packs REAL,
       location     TEXT NOT NULL,
       unit_cost    REAL NOT NULL DEFAULT 0,
       cost_total   REAL NOT NULL DEFAULT 0,
+      -- v25, giveaways only. pack_cost is what ONE pack cost, divided down from
+      -- the layers this line consumed (NULL when a divisor is missing — never a
+      -- guess). loss_value is POSITIVE and is the P&L cost of the prize; it is
+      -- not double counting against cost_total, which is the balance-sheet
+      -- movement. Zero on a break.
+      pack_cost    REAL,
+      loss_value   REAL NOT NULL DEFAULT 0,
       note         TEXT,
       created_at   TEXT NOT NULL,
       created_by   TEXT,
@@ -976,7 +1000,42 @@ function migrate(database: Database.Database): void {
   // recomputes the stored hashes to match. Without it, the first import after
   // upgrading would re-insert every row it already had.
   runOnce(database, 'ledger_fingerprint_v2', () => reFingerprintLedger(database))
-  setMeta(database, 'schema_version', '24')
+
+  // v25: cases, boxes and packs — the unit model reaches inventory and streaming.
+  //
+  // THE ONE COLUMN THAT MATTERS is inventory_products.giveaway_item.
+  //
+  // RM gives packs away on stream. A giveaway of three packs out of a
+  // twelve-pack box genuinely leaves three quarters of a box on the shelf, so
+  // stock has to be able to hold a fraction. Letting EVERY product do that would
+  // be the wrong trade: rounding dust would accumulate across a 120-product
+  // catalog and quietly move the cost basis of stock nobody is giving away, and
+  // nothing on screen would look wrong. So the fractional path is opt-in per
+  // product, defaults to 0, and every conversion in @shared/units refuses a
+  // part-unit on a product that has not opted in — naming the field to fill in
+  // rather than silently rounding.
+  //
+  // The fractional gate is in the CODE, not the schema. inventory_stock.quantity
+  // and inventory_lots.qty_* are declared INTEGER, but SQLite's INTEGER affinity
+  // stores a whole value as an integer and a genuine fraction as a REAL, which is
+  // precisely what is wanted. What used to make fractions impossible was
+  // Math.round() on every quantity in db/lots.ts and db/inventory.ts; those now
+  // round to 4dp for a giveaway-flagged product and to a whole number for
+  // everything else (see roundQty in db/lots.ts).
+  //
+  // stream_items gains the entered units (entered_cases / entered_boxes /
+  // entered_packs) so a line reads back the way it was typed, plus pack_cost and
+  // loss_value: the P&L value of a prize, which is a DIFFERENT cost from the
+  // giveaway_shipping ledger rows (that is the postage, this is the prize). Both
+  // belong on the day, and the ledger's treatment of giveaway_shipping is
+  // unchanged.
+  addColumnIfMissing(database, 'inventory_products', 'giveaway_item', 'INTEGER NOT NULL DEFAULT 0')
+  addColumnIfMissing(database, 'stream_items', 'entered_cases', 'REAL')
+  addColumnIfMissing(database, 'stream_items', 'entered_boxes', 'REAL')
+  addColumnIfMissing(database, 'stream_items', 'entered_packs', 'REAL')
+  addColumnIfMissing(database, 'stream_items', 'pack_cost', 'REAL')
+  addColumnIfMissing(database, 'stream_items', 'loss_value', 'REAL NOT NULL DEFAULT 0')
+  setMeta(database, 'schema_version', '25')
 
   // Seed the product catalog once, then apply the on-hand snapshot once.
   seedCatalogIfNeeded(database)
@@ -1018,6 +1077,53 @@ function migrate(database: Database.Database): void {
   // Cheap self-heal (normally zero rows): any product whose upc was written by a
   // future seed batch that forgets upc_norm would otherwise never scan.
   backfillUpcNorm(database, false)
+
+  // v25: read boxes_per_case out of the product NAME.
+  //
+  // The number has always been in the name ("…Hobby 8-Box Case") and never in
+  // the field, and `blank_template_fields_v1` above nulled the column outright.
+  // Every break entered in loose boxes is refused until it is filled in, so a
+  // catalog-wide manual pass would be the alternative.
+  //
+  // Deliberately placed AFTER the seeds, the catalog expansion, the dedupe and
+  // blank_template_fields_v1 — all of which write names or blank this column
+  // with raw SQL — so it sees the settled catalog. It only ever fills a NULL,
+  // and only from the explicit "N-Box" form; packs_per_box is NOT guessed at all
+  // and stays NULL for the owner, because a wrong divisor there silently
+  // distorts every giveaway valuation.
+  runOnce(database, 'boxes_per_case_from_name_v1', () => {
+    const filled = backfillBoxesPerCase(database)
+    setMeta(database, 'boxes_per_case_from_name_count', String(filled))
+  })
+}
+
+/**
+ * Fill `boxes_per_case` from the product name for every product that has no
+ * value and whose name yields one. Returns how many rows it set.
+ *
+ * Uses `boxesPerCaseFromName` from the unit contract rather than a local regex:
+ * the number this writes divides every break cost and giveaway valuation for
+ * that product, and two implementations of it would eventually disagree.
+ */
+export function backfillBoxesPerCase(database: Database.Database): number {
+  const rows = database
+    .prepare(
+      `SELECT id, name FROM inventory_products
+        WHERE boxes_per_case IS NULL AND name IS NOT NULL AND TRIM(name) <> ''`
+    )
+    .all() as Array<{ id: string; name: string }>
+  if (rows.length === 0) return 0
+  const upd = database.prepare('UPDATE inventory_products SET boxes_per_case = ? WHERE id = ?')
+  let filled = 0
+  database.transaction(() => {
+    for (const r of rows) {
+      const n = boxesPerCaseFromName(r.name)
+      if (n === null) continue
+      upd.run(n, r.id)
+      filled++
+    }
+  })()
+  return filled
 }
 
 /**

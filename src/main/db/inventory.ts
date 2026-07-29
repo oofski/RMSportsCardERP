@@ -12,10 +12,20 @@ import type {
   UpdateInventoryProduct
 } from '@shared/types'
 import type { Database } from 'better-sqlite3'
+import type { ProductUnits, StockUnit } from '@shared/units'
 import { LOCATION_IDS } from '@shared/inventory'
 import { normalizeUpc } from '@shared/upc'
 import { getDb } from './database'
-import { consumeFifo, createLot, reverseLotReceipt, slicesCost, syncProductAvgCost } from './lots'
+import {
+  QTY_EPS,
+  allowsFractionalQty,
+  consumeFifo,
+  createLot,
+  reverseLotReceipt,
+  roundQty,
+  slicesCost,
+  syncProductAvgCost
+} from './lots'
 import { deleteImageFile, imageDataUrl, importImageFile } from '../services/media'
 import { newId, nowIso } from '../util'
 
@@ -31,6 +41,7 @@ interface ProductRow {
   unit_type: string
   boxes_per_case: number | null
   packs_per_box: number | null
+  giveaway_item: number
   unit_cost: number
   high_bid: number | null
   sale_price: number | null
@@ -81,6 +92,7 @@ function toProduct(row: ProductRow, byLoc: Record<string, number>): InventoryPro
     unitType: (UNIT_TYPES.includes(row.unit_type as UnitType) ? row.unit_type : 'other') as UnitType,
     boxesPerCase: row.boxes_per_case,
     packsPerBox: row.packs_per_box,
+    giveawayItem: Number(row.giveaway_item) === 1,
     unitCost: row.unit_cost,
     highBid: row.high_bid,
     salePrice: row.sale_price,
@@ -90,6 +102,42 @@ function toProduct(row: ProductRow, byLoc: Record<string, number>): InventoryPro
     quantity,
     createdAt: row.created_at,
     updatedAt: row.updated_at
+  }
+}
+
+/**
+ * The stock unit a `unitType` counts in, or null when it counts in neither.
+ *
+ * The unit contract only knows 'case' and 'box' because those are the only two
+ * things a break or a giveaway can be converted against. A product stocked in
+ * 'pack' / 'single' / 'other' has no cases-to-boxes relationship to divide by,
+ * so this returns null and the caller REFUSES rather than defaulting to 'box' —
+ * defaulting is the order-of-magnitude error @shared/units exists to prevent.
+ */
+export function stockUnitOf(unitType: string): StockUnit | null {
+  return unitType === 'case' ? 'case' : unitType === 'box' ? 'box' : null
+}
+
+/**
+ * Everything @shared/units needs to convert for one product, read straight off
+ * its row. Null when the product is gone or is not stocked in cases or boxes.
+ */
+export function productUnits(productId: string): ProductUnits | null {
+  const row = getDb()
+    .prepare(
+      'SELECT unit_type, boxes_per_case, packs_per_box, giveaway_item FROM inventory_products WHERE id = ?'
+    )
+    .get(productId) as
+    | { unit_type: string; boxes_per_case: number | null; packs_per_box: number | null; giveaway_item: number }
+    | undefined
+  if (!row) return null
+  const unitType = stockUnitOf(row.unit_type)
+  if (!unitType) return null
+  return {
+    unitType,
+    boxesPerCase: row.boxes_per_case,
+    packsPerBox: row.packs_per_box,
+    giveawayItem: Number(row.giveaway_item) === 1
   }
 }
 
@@ -186,13 +234,23 @@ export function insertTxn(
   return id
 }
 
-/** Add `delta` to a product's stock at a location (delta may be negative). */
+/**
+ * Add `delta` to a product's stock at a location (delta may be negative).
+ *
+ * The sum is ROUNDed to 4dp in SQL. For the whole catalog that is a no-op — a
+ * sum of integers is already exact — and it is what keeps a giveaway-flagged
+ * product's balance at 9.75 instead of drifting to 9.749999999999998 over a
+ * season of pack-sized movements. INTEGER affinity then stores a whole result as
+ * an integer and a genuine fraction as a REAL, so nothing else in the app sees a
+ * change.
+ */
 export function bumpStock(productId: string, location: string, delta: number): void {
   getDb()
     .prepare(
       `INSERT INTO inventory_stock (id, product_id, location, quantity)
        VALUES (?, ?, ?, ?)
-       ON CONFLICT(product_id, location) DO UPDATE SET quantity = quantity + excluded.quantity`
+       ON CONFLICT(product_id, location) DO UPDATE
+         SET quantity = ROUND(quantity + excluded.quantity, 4)`
     )
     .run(newId(), productId, location, delta)
 }
@@ -213,12 +271,12 @@ export function createProduct(input: NewInventoryProduct, actorId: string | null
     db.prepare(
       `INSERT INTO inventory_products
          (id, sku, upc, upc_norm, name, category, brand, set_name, year, unit_type,
-          boxes_per_case, packs_per_box, unit_cost, high_bid, high_bid_at, sale_price, reorder_point,
-          notes, created_at, updated_at)
+          boxes_per_case, packs_per_box, giveaway_item, unit_cost, high_bid, high_bid_at, sale_price,
+          reorder_point, notes, created_at, updated_at)
        VALUES
          (@id, @sku, @upc, @upc_norm, @name, @category, @brand, @set_name, @year, @unit_type,
-          @boxes_per_case, @packs_per_box, @unit_cost, @high_bid, @high_bid_at, @sale_price, @reorder_point,
-          @notes, @ts, @ts)`
+          @boxes_per_case, @packs_per_box, @giveaway_item, @unit_cost, @high_bid, @high_bid_at, @sale_price,
+          @reorder_point, @notes, @ts, @ts)`
     ).run({
       id,
       sku: input.sku.trim(),
@@ -232,8 +290,12 @@ export function createProduct(input: NewInventoryProduct, actorId: string | null
       set_name: input.setName.trim(),
       year: input.year.trim(),
       unit_type: input.unitType,
-      boxes_per_case: input.boxesPerCase,
-      packs_per_box: input.packsPerBox,
+      // First-class, editable, and load-bearing: every cases↔boxes↔packs
+      // conversion divides by these. Null stays null — a missing divisor makes
+      // the conversion refuse, which is the point.
+      boxes_per_case: normalizeDivisor(input.boxesPerCase),
+      packs_per_box: normalizeDivisor(input.packsPerBox),
+      giveaway_item: input.giveawayItem ? 1 : 0,
       unit_cost: Math.max(0, input.unitCost),
       high_bid: normalizeHighBid(input.highBid),
       high_bid_at: normalizeHighBid(input.highBid) != null ? ts : null,
@@ -243,7 +305,10 @@ export function createProduct(input: NewInventoryProduct, actorId: string | null
       ts
     })
 
-    const openQty = Math.round(input.openingQuantity ?? 0)
+    // Opening stock follows the same gate as every later movement, read from the
+    // flag this very insert just wrote — a giveaway item can open at 4.5 boxes,
+    // everything else opens whole.
+    const openQty = roundQty(input.openingQuantity ?? 0, !!input.giveawayItem)
     if (openQty > 0) {
       const loc = LOCATION_IDS.includes((input.openingLocation ?? '') as never)
         ? (input.openingLocation as string)
@@ -264,6 +329,20 @@ function normalizeHighBid(highBid: number | null | undefined): number | null {
   return Math.max(0, highBid)
 }
 
+/**
+ * Normalize a boxes-per-case / packs-per-box divisor.
+ *
+ * Zero, negative and non-finite all become NULL rather than being stored: they
+ * are not "no boxes in a case", they are "unknown", and NULL is the value every
+ * conversion in @shared/units checks for before refusing. Storing 0 would divide
+ * a cost by zero and hand back Infinity.
+ */
+function normalizeDivisor(value: number | null | undefined): number | null {
+  if (value == null || !Number.isFinite(value)) return null
+  const n = Math.round(value)
+  return n > 0 ? n : null
+}
+
 export function updateProduct(input: UpdateInventoryProduct): InventoryProduct | null {
   const existing = getProduct(input.id)
   if (!existing) return null
@@ -279,8 +358,12 @@ export function updateProduct(input: UpdateInventoryProduct): InventoryProduct |
     set_name: (input.setName ?? existing.setName).trim(),
     year: (input.year ?? existing.year).trim(),
     unit_type: input.unitType ?? existing.unitType,
-    boxes_per_case: input.boxesPerCase !== undefined ? input.boxesPerCase : existing.boxesPerCase,
-    packs_per_box: input.packsPerBox !== undefined ? input.packsPerBox : existing.packsPerBox,
+    boxes_per_case:
+      input.boxesPerCase !== undefined ? normalizeDivisor(input.boxesPerCase) : existing.boxesPerCase,
+    packs_per_box:
+      input.packsPerBox !== undefined ? normalizeDivisor(input.packsPerBox) : existing.packsPerBox,
+    giveaway_item:
+      input.giveawayItem !== undefined ? (input.giveawayItem ? 1 : 0) : existing.giveawayItem ? 1 : 0,
     unit_cost: input.unitCost != null ? Math.max(0, input.unitCost) : existing.unitCost,
     high_bid: input.highBid !== undefined ? normalizeHighBid(input.highBid) : existing.highBid,
     sale_price: input.salePrice !== undefined ? input.salePrice : existing.salePrice,
@@ -296,6 +379,7 @@ export function updateProduct(input: UpdateInventoryProduct): InventoryProduct |
          sku=@sku, upc=@upc, upc_norm=@upc_norm, name=@name, category=@category, brand=@brand,
          set_name=@set_name, year=@year, unit_type=@unit_type,
          boxes_per_case=@boxes_per_case, packs_per_box=@packs_per_box,
+         giveaway_item=@giveaway_item,
          unit_cost=@unit_cost, high_bid=@high_bid, sale_price=@sale_price,
          reorder_point=@reorder_point, notes=@notes, updated_at=@updated_at
        WHERE id=@id`
@@ -511,13 +595,23 @@ export function addStock(
   actorId: string | null
 ): StockResult {
   const db = getDb()
-  const qty = Math.round(quantity)
   const run = db.transaction((): StockResult => {
     const row = db.prepare('SELECT unit_cost FROM inventory_products WHERE id = ?').get(productId) as
       | { unit_cost: number }
       | undefined
     if (!row) return { product: null, error: 'Product not found.' }
-    if (qty <= 0) return { product: getProduct(productId), error: 'Quantity must be at least 1.' }
+    // Whole units for the whole catalog, exactly as before v25. A receipt only
+    // keeps decimals for a product explicitly flagged for fractions, which no PO
+    // receipt or scan-in ever is unless the owner marked that product a giveaway
+    // item on purpose.
+    const fractional = allowsFractionalQty(db, productId)
+    const qty = roundQty(quantity, fractional)
+    if (!(qty > 0)) {
+      return {
+        product: getProduct(productId),
+        error: fractional ? 'Enter a quantity greater than zero.' : 'Quantity must be at least 1.'
+      }
+    }
 
     bumpStock(productId, location, qty)
 
@@ -557,8 +651,10 @@ export function reverseStockReceipt(
     actorId: string | null
   }
 ): string {
-  const qty = Math.round(args.quantity)
-  if (qty <= 0) throw new Error('There is nothing to reverse for that scan.')
+  // Same gate as the receipt it reverses, so an undo hands back exactly the
+  // number the receipt took in — including a fractional one.
+  const qty = roundQty(args.quantity, allowsFractionalQty(db, args.productId))
+  if (!(qty > 0)) throw new Error('There is nothing to reverse for that scan.')
   reverseLotReceipt(db, args.lotId, qty)
   bumpStock(args.productId, args.location, -qty)
   syncProductAvgCost(db, args.productId)
@@ -574,12 +670,16 @@ export function adjustStock(
   actorId: string | null
 ): StockResult {
   const db = getDb()
-  const delta = Math.round(quantityChange)
   const run = db.transaction((): StockResult => {
     const exists = db.prepare('SELECT id FROM inventory_products WHERE id = ?').get(productId)
     if (!exists) return { product: null, error: 'Product not found.' }
-    if (delta === 0) return { product: getProduct(productId), error: 'Enter a non-zero quantity.' }
-    if (stockQty(productId, location) + delta < 0) {
+    const delta = roundQty(quantityChange, allowsFractionalQty(db, productId))
+    if (!Number.isFinite(delta) || delta === 0) {
+      return { product: getProduct(productId), error: 'Enter a non-zero quantity.' }
+    }
+    // Slack, so a correction down to exactly zero on a fractional balance is not
+    // refused by a dust-width overshoot.
+    if (stockQty(productId, location) + delta < -QTY_EPS) {
       return { product: getProduct(productId), error: 'Adjustment would make stock negative.' }
     }
     bumpStock(productId, location, delta)
@@ -611,13 +711,22 @@ export function recordSale(
   actorId: string | null
 ): StockResult {
   const db = getDb()
-  const qty = Math.round(quantity)
   const run = db.transaction((): StockResult => {
     const exists = db.prepare('SELECT id FROM inventory_products WHERE id = ?').get(productId)
     if (!exists) return { product: null, error: 'Product not found.' }
-    if (qty <= 0) return { product: getProduct(productId), error: 'Quantity must be at least 1.' }
+    const fractional = allowsFractionalQty(db, productId)
+    const qty = roundQty(quantity, fractional)
+    if (!(qty > 0)) {
+      return {
+        product: getProduct(productId),
+        error: fractional ? 'Enter a quantity greater than zero.' : 'Quantity must be at least 1.'
+      }
+    }
     const have = stockQty(productId, location)
-    if (qty > have) return { product: getProduct(productId), error: `Only ${have} in ${location}.` }
+    // Slack: selling the exact fractional balance must not be refused by dust.
+    if (qty > have + QTY_EPS) {
+      return { product: getProduct(productId), error: `Only ${have} in ${location}.` }
+    }
     bumpStock(productId, location, -qty)
     // Consume the oldest cost lots first (FIFO); the consumed cost is the COGS.
     const cogs = slicesCost(consumeFifo(db, productId, location, qty))

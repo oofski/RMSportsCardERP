@@ -142,8 +142,12 @@ export function StreamingTab(): JSX.Element {
                 ))}
               </div>
 
+              {/* Was "revenue only". Giveaway loss makes that untrue: stock
+                  given away is now a cost in the table. Stock that was SOLD
+                  still is not, and that is the distinction the caption has to
+                  carry now. */}
               <span className="fin-days-scope">
-                Revenue only — stock cost is not in these figures.
+                Revenue and show costs — the cost of stock that was sold is not in these figures.
               </span>
             </div>
 

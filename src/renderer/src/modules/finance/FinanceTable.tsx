@@ -77,9 +77,27 @@ function postageOut(row: FinanceMoney): number {
 function postageTitle(row: FinanceMoney): string {
   const parts: string[] = []
   if (!isZero(row.shippingCharges)) parts.push(`platform charges ${formatMoney(row.shippingCharges)}`)
-  if (!isZero(row.giveawayShipping)) parts.push(`giveaway postage ${formatMoney(row.giveawayShipping)}`)
+  if (!isZero(row.giveawayShipping)) {
+    // Spelled out because there is now a second giveaway cost on this table and
+    // the two are easy to read as one. This one is postage.
+    parts.push(`giveaway postage ${formatMoney(row.giveawayShipping)} (mailing them, not their value)`)
+  }
   if (!isZero(row.refundShipping)) parts.push(`refund postage ${formatMoney(row.refundShipping)}`)
   return parts.length > 0 ? `Postage out — ${parts.join(', ')}` : 'No postage charged'
+}
+
+/**
+ * What the cards given away on stream were worth — already NEGATIVE from the
+ * contract, like every other cost on this table.
+ *
+ * Read through a guard because main and the renderer ship as separate artifacts:
+ * the same skew the `Array.isArray(view.weeks)` guard above exists for. A
+ * packaged main that predates the field sends rows without it, and zero is the
+ * correct reading — the column then hides itself, exactly as it does on a period
+ * that gave nothing away, rather than printing NaN down the Show costs group.
+ */
+function giveawayLoss(row: FinanceMoney): number {
+  return Number.isFinite(row.giveawayLoss) ? row.giveawayLoss : 0
 }
 
 /**
@@ -127,13 +145,15 @@ export function FinanceTable({
     () => ({
       extras: rows.some((r) => !isZero(r.tips) || !isZero(r.bonuses)),
       showBoost: rows.some((r) => !isZero(r.showBoost)),
+      giveawayLoss: rows.some((r) => !isZero(giveawayLoss(r))),
       reversals: rows.some((r) => !isZero(r.reversals))
     }),
     [rows]
   )
 
   const revenueSpan = cols.extras ? 3 : 2
-  const costSpan = 1 + (cols.showBoost ? 1 : 0) + (cols.reversals ? 1 : 0)
+  const costSpan =
+    1 + (cols.showBoost ? 1 : 0) + (cols.giveawayLoss ? 1 : 0) + (cols.reversals ? 1 : 0)
   const columnCount = 1 + revenueSpan + 3 + 3 + costSpan
   const anyCarried = rows.some((r) => r.carriedBackRows > 0)
 
@@ -194,7 +214,15 @@ export function FinanceTable({
               <th scope="col" className="fin-num" title="Whatnot's contribution toward postage — money in">
                 Subsidy in
               </th>
-              <th scope="col" className="fin-num" title="Platform shipping charges, giveaway postage and refund postage — money out">
+              {/* "Giveaway postage" is named in this header because the giveaway
+                  column two groups over is the OTHER giveaway cost. Whichever of
+                  the two you land on first, the label tells you which one it is
+                  and implies the other exists. */}
+              <th
+                scope="col"
+                className="fin-num"
+                title="Platform shipping charges, giveaway postage and refund postage — money out. Giveaway postage is what it cost to MAIL a giveaway; what the cards were worth is the separate Giveaway loss column."
+              >
                 Postage out
               </th>
               <th scope="col" className="fin-num fin-edge" title="Subsidy less all postage. Either side of zero: it says whether shipping paid for itself.">
@@ -206,12 +234,21 @@ export function FinanceTable({
                   Show Boost
                 </th>
               )}
+              {cols.giveawayLoss && (
+                <th
+                  scope="col"
+                  className="fin-num"
+                  title="What the cards given away on stream were worth — stock consumed at cost. This is NOT the giveaway postage inside Postage out: that is what it cost to mail them."
+                >
+                  Giveaway loss
+                </th>
+              )}
               {cols.reversals && (
                 <th scope="col" className="fin-num" title="Refunded orders — revenue reversed">
                   Reversals
                 </th>
               )}
-              <th scope="col" className="fin-num fin-c-net" title="Net revenue, plus net shipping, less show costs. The bottom line before cost of goods.">
+              <th scope="col" className="fin-num fin-c-net" title="Net revenue, plus net shipping, less show costs. The bottom line before cost of goods sold on air.">
                 <span aria-hidden="true">= </span>Net after costs
               </th>
             </tr>
@@ -265,6 +302,22 @@ export function FinanceTable({
           </>
         )}
       </p>
+
+      {/* Only shown when both giveaway costs are actually on screen. Two columns
+          with "giveaway" in them, one inside a shipping group and one inside a
+          costs group, is the one thing on this table a reader can get exactly
+          backwards — so it is spelled out where they can see both at once. */}
+      {cols.giveawayLoss && (
+        <p className="fin-legend">
+          <Icon name="Gift" size={13} />
+          <span>
+            A giveaway costs twice. <b>Giveaway loss</b> is what the cards were worth — stock
+            consumed at cost, and part of Show costs. The postage to mail them is a different
+            payment and sits inside <b>Postage out</b>, under Shipping. Neither one contains the
+            other.
+          </span>
+        </p>
+      )}
     </div>
   )
 }
@@ -280,7 +333,7 @@ function MoneyCells({
   dash = false
 }: {
   row: FinanceMoney
-  cols: { extras: boolean; showBoost: boolean; reversals: boolean }
+  cols: { extras: boolean; showBoost: boolean; giveawayLoss: boolean; reversals: boolean }
   /** Body rows print an em dash for an empty bucket; a footer zero is a real
    *  answer and prints as $0.00. */
   dash?: boolean
@@ -332,6 +385,16 @@ function MoneyCells({
           <Money value={row.showBoost} cost dash={dash} />
         </td>
       )}
+      {cols.giveawayLoss && (
+        <td className="fin-num">
+          <Money
+            value={giveawayLoss(row)}
+            cost
+            dash={dash}
+            title="Cost of the stock given away on air. The postage to mail it is in Postage out."
+          />
+        </td>
+      )}
       {cols.reversals && (
         <td className="fin-num">
           <Money value={row.reversals} cost dash={dash} />
@@ -368,7 +431,7 @@ function TableRow({
   onToggle
 }: {
   row: FinanceRow
-  cols: { extras: boolean; showBoost: boolean; reversals: boolean }
+  cols: { extras: boolean; showBoost: boolean; giveawayLoss: boolean; reversals: boolean }
   columnCount: number
   open: boolean
   onToggle: () => void
@@ -474,7 +537,18 @@ function DayDetail({ row, streamDate }: { row: FinanceRow; streamDate: string })
           <Icon name="Layers" size={13} />
           Stock consumed on air that day cost <b>{formatMoney(stockCost)}</b> — breaks{' '}
           {formatMoney(row.breakCost)}, giveaways {formatMoney(row.giveawayCost)}.{' '}
-          <em>Not in any figure above: cost of goods lands in the complete P&amp;L.</em>
+          {/* The two halves are no longer treated alike, so "not counted" would
+              now be false of one of them — but only when the day actually booked
+              a giveaway loss. Read off the row rather than assumed, so this
+              sentence cannot claim a figure that is not in the table. */}
+          {isZero(giveawayLoss(row)) ? (
+            <em>Not in any figure above: cost of goods lands in the complete P&amp;L.</em>
+          ) : (
+            <em>
+              The giveaway side is booked above as Giveaway loss ({formatMoney(giveawayLoss(row))}).
+              The break side is not — cost of goods on what was sold lands in the complete P&amp;L.
+            </em>
+          )}
         </p>
       )}
 

@@ -45,6 +45,24 @@ export interface ConversionResult {
 
 export type Conversion = { ok: true; value: ConversionResult } | { ok: false; error: string }
 
+/**
+ * How close to a whole number still counts as whole. Matches the tolerance the
+ * stock path uses, so the two agree about when a quantity has been fully
+ * consumed rather than leaving float dust behind.
+ */
+export const QTY_EPS = 1e-6
+
+/**
+ * Display rounding ONLY. Never applied to a quantity that will be stored or
+ * consumed.
+ *
+ * Rounding a conversion to 4dp looks harmless and is not: giving away three
+ * 1-pack lots from a 3-pack box consumes 0.3333 three times, leaving 0.0001 of
+ * a box on the shelf forever. That residue is a hundred times LARGER than the
+ * epsilon the stock path uses to snap near-zero remainders, so it never clears
+ * — it just sits there as a fraction of a box nobody owns. At full precision
+ * the same three giveaways leave exactly zero.
+ */
 const round4 = (n: number): number => Math.round(n * 10000) / 10000
 
 /**
@@ -66,8 +84,8 @@ export function breakToStock(units: ProductUnits, cases: number, boxes: number):
           error: 'This product is stocked in cases and has no boxes-per-case set, so loose boxes cannot be converted. Set boxes per case in Inventory.'
         }
       }
-      const q = round4(cases + boxes / units.boxesPerCase)
-      const fractional = q !== Math.round(q)
+      const q = cases + boxes / units.boxesPerCase
+      const fractional = Math.abs(q - Math.round(q)) > QTY_EPS
       if (fractional && !units.giveawayItem) {
         return {
           ok: false,
@@ -112,7 +130,7 @@ export function giveawayToStock(units: ProductUnits, boxes: number, packs: numbe
 
   let q: number
   if (units.unitType === 'box') {
-    q = round4(inBoxes)
+    q = inBoxes
   } else {
     if (!units.boxesPerCase) {
       return {
@@ -120,10 +138,10 @@ export function giveawayToStock(units: ProductUnits, boxes: number, packs: numbe
         error: 'This product is stocked in cases and has no boxes-per-case set. Set it in Inventory.'
       }
     }
-    q = round4(inBoxes / units.boxesPerCase)
+    q = inBoxes / units.boxesPerCase
   }
 
-  const fractional = q !== Math.round(q)
+  const fractional = Math.abs(q - Math.round(q)) > QTY_EPS
   if (fractional && !units.giveawayItem) {
     return {
       ok: false,

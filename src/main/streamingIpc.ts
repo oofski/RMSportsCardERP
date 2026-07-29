@@ -63,6 +63,12 @@ function str(v: unknown): string {
   return typeof v === 'string' ? v : v == null ? '' : String(v)
 }
 
+/** NaN rather than 0 for junk: the db layer refuses a non-finite quantity by
+ *  name, whereas a silent 0 would look like a deliberate empty entry. */
+function num(v: unknown): number {
+  return typeof v === 'number' ? v : Number(v)
+}
+
 /** A month with no activity, which is also what "you may not see this" looks
  * like — the renderer draws the same empty grid either way. */
 function emptyMonth(month: string): StreamCalendarMonth {
@@ -76,6 +82,7 @@ function emptyMonth(month: string): StreamCalendarMonth {
       giveawayLines: 0,
       giveawayUnits: 0,
       giveawayCost: 0,
+      giveawayLoss: 0,
       totalCost: 0,
       sessionCount: 0,
       minutes: 0
@@ -182,10 +189,33 @@ export function registerStreamingIpc(): void {
     }
   })
 
+  /**
+   * Add a line. Quantity arrives EITHER as entered units (cases + boxes for a
+   * break, boxes + packs for a giveaway) OR as a raw stock-unit `quantity`.
+   *
+   * `undefined` and a number are kept apart deliberately: an omitted `cases` is
+   * "not entered" and a `cases: 0` is "zero cases", and collapsing them would
+   * turn a giveaway of four packs into a break of nothing. The conversion, and
+   * every refusal, happen in db/streaming.ts against @shared/units — none of it
+   * is restated here.
+   */
   ipcMain.handle(IPC.streamItemAdd, (_e, input: NewStreamItem): Result<StreamSessionDetail> => {
     try {
       const actor = requireManage()
-      return addItem(input, actor.id)
+      const payload: NewStreamItem = {
+        sessionId: str(input?.sessionId).trim(),
+        kind: input?.kind === 'giveaway' ? 'giveaway' : 'break',
+        productId: str(input?.productId).trim(),
+        location: str(input?.location).trim(),
+        breakNumber: input?.breakNumber ?? null,
+        recipient: input?.recipient ?? null,
+        note: input?.note ?? null
+      }
+      if (input?.quantity !== undefined) payload.quantity = num(input.quantity)
+      if (input?.cases !== undefined && input.cases !== null) payload.cases = num(input.cases)
+      if (input?.boxes !== undefined && input.boxes !== null) payload.boxes = num(input.boxes)
+      if (input?.packs !== undefined && input.packs !== null) payload.packs = num(input.packs)
+      return addItem(payload, actor.id)
     } catch (err) {
       return fail(err)
     }

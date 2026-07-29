@@ -3,6 +3,7 @@ import type { Employee } from '@shared/types'
 import type { StreamItem, StreamItemKind, StreamSessionDetail } from '@shared/streaming'
 import { formatDuration, isSuspiciouslyLong } from '@shared/streaming'
 import { formatMoney } from '../../lib/format'
+import { formatUnitCount, typedEntryLabel } from '../../lib/productUnits'
 import { Icon } from '../../components/Icon'
 import { useToast } from '../../components/Toast'
 import { Button, CenterLoader, EmptyState, Modal } from '../../components/ui'
@@ -87,7 +88,11 @@ export function SessionDetail({
         toast.error(resultError(res, 'Could not remove that line.'))
         return
       }
-      toast.success(`${removing.quantity} × ${removing.productName} back into ${removing.location}.`)
+      toast.success(
+        `${typedEntryLabel(removing) ?? `${formatUnitCount(removing.quantity)} ×`} ${
+          removing.productName
+        } back into ${removing.location}.`
+      )
       setRemoving(null)
       await applyDetail(res.data)
     } finally {
@@ -201,6 +206,14 @@ export function SessionDetail({
           units={totals.giveawayUnits}
           lines={totals.giveawayLines}
           cost={totals.giveawayCost}
+          /* The one figure on this screen that reaches the P&L. Named here so
+             the number on the day's Giveaway loss column can be traced back to
+             the lines that produced it. */
+          extra={
+            totals.giveawayLoss > 0
+              ? `${formatMoney(totals.giveawayLoss)} booked as a loss`
+              : undefined
+          }
         />
         <div className="stm-total-card strong">
           <span className="stm-total-label">
@@ -263,13 +276,23 @@ export function SessionDetail({
             </>
           }
         >
+          {/* Named the way it was recorded, so the operator can match this
+              against the line they clicked rather than against a converted
+              number they never typed. */}
           <p className="stm-confirm-lead">
             <b>
-              {removing.quantity} × {removing.productName}
+              {typedEntryLabel(removing) ?? `${formatUnitCount(removing.quantity)} ×`}{' '}
+              {removing.productName}
             </b>{' '}
             goes back into <b>{removing.location}</b> at the cost it came out at (
             {formatMoney(removing.costTotal)}), and this show stops carrying it.
           </p>
+          {typedEntryLabel(removing) && (
+            <p className="stm-confirm-lead">
+              That is {formatUnitCount(removing.quantity)} in stock units — the amount that was
+              taken off the shelf and the amount that goes back on it.
+            </p>
+          )}
         </Modal>
       )}
 
@@ -300,7 +323,7 @@ export function SessionDetail({
             <p className="stm-confirm-lead">
               Its {totals.breakLines + totals.giveawayLines} line
               {totals.breakLines + totals.giveawayLines === 1 ? '' : 's'} —{' '}
-              {totals.breakUnits + totals.giveawayUnits} units worth{' '}
+              {formatUnitCount(totals.breakUnits + totals.giveawayUnits)} stock units worth{' '}
               {formatMoney(totals.totalCost)} — are reversed, and that stock goes back where it came
               from.
             </p>
@@ -352,25 +375,32 @@ function TotalCard({
   label,
   units,
   lines,
-  cost
+  cost,
+  extra
 }: {
   icon: string
   label: string
   units: number
   lines: number
   cost: number
+  /** An extra line under the caption, when there is one worth saying. */
+  extra?: string
 }): JSX.Element {
   return (
     <div className="stm-total-card">
       <span className="stm-total-label">
         <Icon name={icon} size={14} /> {label}
       </span>
+      {/* "stock units" rather than a unit noun: a show mixes case-stocked and
+          box-stocked products, so there is no single word that is true of the
+          sum. The per-line rows below say which is which. */}
       <b className="mono">
-        {units} <span className="stm-total-unit">units</span>
+        {formatUnitCount(units)} <span className="stm-total-unit">stock units</span>
       </b>
       <em>
         {lines} line{lines === 1 ? '' : 's'} · {formatMoney(cost)}
       </em>
+      {extra && <em className="stm-total-extra">{extra}</em>}
     </div>
   )
 }
@@ -414,7 +444,7 @@ function ItemSection({
           <Icon name={icon} size={15} /> {title}
           {items.length > 0 && (
             <span className="stm-count mono">
-              {units} units · {formatMoney(cost)}
+              {formatUnitCount(units)} stock units · {formatMoney(cost)}
             </span>
           )}
         </span>
@@ -460,6 +490,12 @@ function ItemRow({
   canManage: boolean
   onRemove: (item: StreamItem) => void
 }): JSX.Element {
+  // How the line was TYPED. A break of 2 cases + 3 boxes on a box-stocked
+  // product is stored as 27 boxes, and 27 is the number that moved stock — but
+  // it is not the number anybody entered, and a line nobody recognises is a line
+  // nobody will correct. Both are shown; the entry leads.
+  const entry = typedEntryLabel(item)
+
   return (
     <div className="stm-line">
       <span className="stm-line-thumb">
@@ -476,6 +512,12 @@ function ItemRow({
           <span className="mono">{item.sku}</span>
           <span>{item.category || 'Uncategorized'}</span>
           <span className="stm-loc">{item.location}</span>
+          {entry && (
+            <span className="stm-line-tag is-entry" title="Recorded as">
+              <Icon name="Boxes" size={10} />
+              {entry}
+            </span>
+          )}
           {item.breakNumber !== null && (
             <span className="stm-line-tag">
               <Icon name="Hash" size={10} />
@@ -492,14 +534,37 @@ function ItemRow({
         {item.note && <span className="stm-line-note">{item.note}</span>}
       </span>
 
-      <span className="stm-line-qty mono" title="Units consumed">
-        ×{item.quantity}
+      <span
+        className="stm-line-qty mono"
+        title={
+          entry
+            ? `${entry} — ${formatUnitCount(item.quantity)} in this product's stock unit`
+            : 'Stock units consumed'
+        }
+      >
+        ×{formatUnitCount(item.quantity)}
       </span>
-      <span className="stm-line-unit mono" title="Cost per unit">
+      <span className="stm-line-unit mono" title="Cost per stock unit">
         {formatMoney(item.unitCost)}
       </span>
       <span className="stm-line-total mono" title="Total cost of this line">
         {formatMoney(item.costTotal)}
+        {/* Giveaways carry a second figure: what the stock was worth, which is
+            what the P&L books. It sits under the FIFO cost rather than replacing
+            it because the two answer different questions and are usually — but
+            not always — the same number. */}
+        {item.kind === 'giveaway' && item.lossValue > 0 && (
+          <span
+            className="stm-line-loss"
+            title={
+              item.packCost !== null
+                ? `Booked as a giveaway loss. One pack of this cost ${formatMoney(item.packCost)}.`
+                : 'Booked as a giveaway loss.'
+            }
+          >
+            {formatMoney(item.lossValue)} loss
+          </span>
+        )}
       </span>
 
       {canManage ? (
@@ -507,7 +572,7 @@ function ItemRow({
           type="button"
           className="stm-line-remove"
           onClick={() => onRemove(item)}
-          aria-label={`Remove ${item.quantity} × ${item.productName}`}
+          aria-label={`Remove ${entry ?? `${formatUnitCount(item.quantity)} ×`} ${item.productName}`}
           title="Remove and return the stock"
         >
           <Icon name="Trash2" size={14} />

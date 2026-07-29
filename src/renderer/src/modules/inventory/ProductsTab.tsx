@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import type { InventoryProduct, ProductImage, UpdateInventoryProduct } from '@shared/types'
 import { CATEGORY_ORDER, LOCATIONS, categoryColor } from '@shared/inventory'
 import { api } from '../../lib/api'
+import { formatUnitCount } from '../../lib/productUnits'
 import { useToast } from '../../components/Toast'
 import { Button, EmptyState, Field, Input, Modal, Select } from '../../components/ui'
 import { Icon } from '../../components/Icon'
@@ -314,11 +315,11 @@ export function ProductsTab({
                     <span className="cr-stock">
                       {LOCATIONS.map((l) => (
                         <span key={l.id} className="crs-loc">
-                          <em>{l.label}</em> {p.quantityByLocation[l.id] ?? 0}
+                          <em>{l.label}</em> {formatUnitCount(p.quantityByLocation[l.id] ?? 0)}
                         </span>
                       ))}
                       <span className={`crs-total ${low ? 'stock-low' : ''}`}>
-                        {p.quantity}
+                        {formatUnitCount(p.quantity)}
                         {low && <Icon name="AlertTriangle" size={12} strokeWidth={2.5} />}
                       </span>
                     </span>
@@ -563,12 +564,20 @@ function ProductDetail({
         </span>
         {LOCATIONS.map((l) => (
           <span key={l.id}>
-            <em>{l.label}</em> {product.quantityByLocation[l.id] ?? 0}
+            <em>{l.label}</em> {formatUnitCount(product.quantityByLocation[l.id] ?? 0)}
           </span>
         ))}
         <span>
-          <em>Total</em> {product.quantity}
+          <em>Total</em> {formatUnitCount(product.quantity)}
         </span>
+        {/* Only this flag makes a fractional on-hand legal, so it is named where
+            the fraction is read. Without it "2.25" here looks like a bug. */}
+        {product.giveawayItem && (
+          <span className="cd-giveaway-flag" title="Part boxes and packs are allowed on this product">
+            <Icon name="Gift" size={11} />
+            Giveaway item — part units allowed
+          </span>
+        )}
       </div>
 
       {product.quantity > 0 && (

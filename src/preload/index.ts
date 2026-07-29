@@ -485,7 +485,18 @@ const api = {
       ipcRenderer.invoke(IPC.streamUpdate, input),
     /** Deletes the session AND returns the stock its lines consumed. */
     remove: (id: string): Promise<Result> => ipcRenderer.invoke(IPC.streamDelete, id),
-    /** Consumes stock at its real FIFO cost. */
+    /**
+     * Consumes stock at its real FIFO cost.
+     *
+     * Send it in the units the work is described in — `cases` + `boxes` for a
+     * break, `boxes` + `packs` for a giveaway — and main converts to whatever
+     * unit THAT product is stocked in. `quantity` is the raw stock-unit escape
+     * hatch and is ignored when any of the three are present.
+     *
+     * A refused conversion comes back as `Result.error` and is safe to show
+     * verbatim: every one of those messages names the field to go and fill in
+     * (boxes per case, packs per box, or the giveaway-item flag).
+     */
     addItem: (input: NewStreamItem): Promise<Result<StreamSessionDetail>> =>
       ipcRenderer.invoke(IPC.streamItemAdd, input),
     /** Puts back exactly the cost layers the line took. */

@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import type { InventoryProduct } from '@shared/types'
 import { LOCATIONS, type Location } from '@shared/inventory'
 import { api } from '../../lib/api'
+import { formatUnitCount } from '../../lib/productUnits'
 import { useToast } from '../../components/Toast'
 import { Button, Field, Input, Modal, Select } from '../../components/ui'
 import { formatMoney } from '../../lib/format'
@@ -116,7 +117,7 @@ export function RecordSaleModal({
                     onClick={() => setLocation(l.id)}
                   >
                     {l.label}
-                    <div className="lp-sub">{have} on hand</div>
+                    <div className="lp-sub">{formatUnitCount(have)} on hand</div>
                   </button>
                 )
               })}
@@ -124,7 +125,7 @@ export function RecordSaleModal({
           </Field>
 
           <div className="field-row">
-            <Field label="Quantity" hint={`${available} available in ${location}`}>
+            <Field label="Quantity" hint={`${formatUnitCount(available)} available in ${location}`}>
               <Input type="number" min={1} max={available} value={quantity} onChange={(e) => setQuantity(e.target.value)} />
             </Field>
             <Field label="Sale price (each)">

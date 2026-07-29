@@ -122,10 +122,30 @@ export interface InventoryProduct {
   setName: string
   year: string
   unitType: UnitType
-  /** Informational: how many boxes make up a case. */
+  /**
+   * How many boxes make up a case. NOT informational — every cases↔boxes
+   * conversion in @shared/units divides by it, and a break entered in loose
+   * boxes is refused outright while it is null rather than valued by a guess.
+   */
   boxesPerCase: number | null
-  /** Informational: how many packs make up a box. */
+  /**
+   * How many packs make up a box. Same contract as `boxesPerCase`: a giveaway
+   * entered in packs cannot be valued without it and is refused, because a
+   * giveaway silently valued at zero would understate the loss and still look
+   * like a working feature.
+   */
   packsPerBox: number | null
+  /**
+   * Whether this product may be held in FRACTIONAL stock units.
+   *
+   * True only for product deliberately kept as giveaway material. Giving away
+   * three packs out of a twelve-pack box really does leave a quarter box on the
+   * shelf — but allowing that catalog-wide would let rounding dust accumulate
+   * and quietly corrupt the cost basis of stock nobody is giving away. So the
+   * fractional path is opt-in per product and everything else stays whole.
+   * See `ProductUnits.giveawayItem` in @shared/units.
+   */
+  giveawayItem: boolean
   /** Average cost per unit (what we paid). */
   unitCost: number
   /** Current top bid / market value per unit. Drives inventory value + spread. */
@@ -152,8 +172,12 @@ export interface NewInventoryProduct {
   setName: string
   year: string
   unitType: UnitType
+  /** Boxes in one case. Null when unknown — conversions refuse rather than guess. */
   boxesPerCase: number | null
+  /** Packs in one box. Null when unknown. */
   packsPerBox: number | null
+  /** Opt in to fractional stock. Omitted means false — whole units only. */
+  giveawayItem?: boolean
   unitCost: number
   highBid: number | null
   salePrice: number | null

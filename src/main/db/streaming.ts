@@ -15,12 +15,24 @@ import type {
 } from '@shared/streaming'
 import { durationMinutes, sessionsOverlap, streamDateOf } from '@shared/streaming'
 import { isLocation } from '@shared/inventory'
+// The unit contract. Never reimplemented here: what one unit of stock MEANS
+// varies per product, and a second copy of that arithmetic is an
+// order-of-magnitude error waiting to happen.
+import { boxCost, breakToStock, giveawayToStock, packCost, type ProductUnits } from '@shared/units'
 import { getDb } from './database'
-import { consumeFifo, restoreFifo, slicesCost, syncProductAvgCost, type LotSlice } from './lots'
+import {
+  QTY_EPS,
+  consumeFifo,
+  restoreFifo,
+  roundQty,
+  slicesCost,
+  syncProductAvgCost,
+  type LotSlice
+} from './lots'
 // Shared with db/inventory.ts rather than reimplemented: a stream line moves
 // stock the same way a sale does, and one implementation is the only way that
 // stays true.
-import { bumpStock, insertTxn, productThumbnail, stockQty } from './inventory'
+import { bumpStock, insertTxn, productThumbnail, stockQty, stockUnitOf } from './inventory'
 import { newId, nowIso } from '../util'
 
 /**
@@ -84,9 +96,14 @@ interface ItemRow {
   break_number: number | null
   recipient: string | null
   quantity: number
+  entered_cases: number | null
+  entered_boxes: number | null
+  entered_packs: number | null
   location: string
   unit_cost: number
   cost_total: number
+  pack_cost: number | null
+  loss_value: number
   note: string | null
   created_at: string
   created_by: string | null
@@ -141,9 +158,14 @@ function toItem(row: ItemRow, thumbs: Map<string, string | null>): StreamItem {
     breakNumber: row.break_number,
     recipient: row.recipient,
     quantity: row.quantity,
+    enteredCases: row.entered_cases,
+    enteredBoxes: row.entered_boxes,
+    enteredPacks: row.entered_packs,
     location: row.location,
     unitCost: row.unit_cost,
     costTotal: row.cost_total,
+    packCost: row.pack_cost,
+    lossValue: row.loss_value ?? 0,
     note: row.note,
     createdAt: row.created_at,
     createdBy: row.created_by
@@ -158,6 +180,7 @@ function emptyTotals(): StreamTotals {
     giveawayLines: 0,
     giveawayUnits: 0,
     giveawayCost: 0,
+    giveawayLoss: 0,
     totalCost: 0
   }
 }
@@ -173,13 +196,21 @@ function totalsOf(items: StreamItem[]): StreamTotals {
       t.giveawayLines += 1
       t.giveawayUnits += item.quantity
       t.giveawayCost += item.costTotal
+      t.giveawayLoss += item.lossValue
     }
   }
+  // Units can be fractional on a giveaway-flagged product, so the sums are
+  // re-rounded rather than left as a float trail.
+  t.breakUnits = qtySum(t.breakUnits)
+  t.giveawayUnits = qtySum(t.giveawayUnits)
   t.breakCost = cents(t.breakCost)
   t.giveawayCost = cents(t.giveawayCost)
+  t.giveawayLoss = cents(t.giveawayLoss)
   t.totalCost = cents(t.breakCost + t.giveawayCost)
   return t
 }
+
+const qtySum = (n: number): number => Math.round(n * 10000) / 10000
 
 // ---------------------------------------------------------------------------
 // Validation
@@ -296,7 +327,8 @@ export function getSessionDetail(id: string): StreamSessionDetail | null {
   const rows = getDb()
     .prepare(
       `SELECT id, session_id, kind, product_id, product_name, sku, category, break_number,
-              recipient, quantity, location, unit_cost, cost_total, note, created_at, created_by
+              recipient, quantity, entered_cases, entered_boxes, entered_packs, location,
+              unit_cost, cost_total, pack_cost, loss_value, note, created_at, created_by
        FROM stream_items WHERE session_id = ? ORDER BY created_at ASC, rowid ASC`
     )
     .all(id) as ItemRow[]
@@ -532,7 +564,8 @@ export function calendarMonth(month: string): StreamCalendarMonth {
   const itemRows = db
     .prepare(
       `SELECT s.stream_date AS d, i.kind AS kind, COUNT(*) AS lines,
-              COALESCE(SUM(i.quantity), 0) AS units, COALESCE(SUM(i.cost_total), 0) AS cost
+              COALESCE(SUM(i.quantity), 0) AS units, COALESCE(SUM(i.cost_total), 0) AS cost,
+              COALESCE(SUM(i.loss_value), 0) AS loss
        FROM stream_items i
        JOIN stream_sessions s ON s.id = i.session_id
        WHERE s.stream_date >= ? AND s.stream_date < ?
@@ -544,6 +577,7 @@ export function calendarMonth(month: string): StreamCalendarMonth {
     lines: number
     units: number
     cost: number
+    loss: number
   }>
 
   const byDay = new Map<string, StreamCalendarDay>()
@@ -572,6 +606,7 @@ export function calendarMonth(month: string): StreamCalendarMonth {
       totals.giveawayLines += r.lines
       totals.giveawayUnits += r.units
       totals.giveawayCost += r.cost
+      totals.giveawayLoss += r.loss
     } else {
       cell.breakUnits += r.units
       totals.breakLines += r.lines
@@ -584,8 +619,11 @@ export function calendarMonth(month: string): StreamCalendarMonth {
   const days = [...byDay.values()].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
   totals.sessionCount = sessions.length
   totals.minutes = days.reduce((sum, d) => sum + d.minutes, 0)
+  totals.breakUnits = qtySum(totals.breakUnits)
+  totals.giveawayUnits = qtySum(totals.giveawayUnits)
   totals.breakCost = cents(totals.breakCost)
   totals.giveawayCost = cents(totals.giveawayCost)
+  totals.giveawayLoss = cents(totals.giveawayLoss)
   totals.totalCost = cents(totals.breakCost + totals.giveawayCost)
   return { month: key, days, totals }
 }
@@ -612,9 +650,26 @@ function ledgerNote(
   return recipient ? `${show} — giveaway to ${recipient}` : `${show} — giveaway`
 }
 
+/** A supplied entered-unit field, or null when the caller omitted it. Anything
+ *  non-numeric is null rather than 0 — "not entered" and "zero" are different
+ *  answers and the unit contract treats them differently. */
+function enteredUnit(value: number | null | undefined): number | null {
+  if (value == null) return null
+  const n = Number(value)
+  return Number.isFinite(n) ? n : null
+}
+
 /**
  * Record something opened or given away on a show, taking its stock out at the
  * real FIFO cost.
+ *
+ * HOW MUCH is entered the way the work is described — a break in CASES + BOXES,
+ * a giveaway in BOXES + PACKS — and converted to the product's own stock unit by
+ * @shared/units. What one unit of stock means varies per product, so the
+ * conversion needs the product and refuses rather than assuming: a missing
+ * boxes-per-case, a part-case on a product that is not stocked fractionally, a
+ * giveaway in packs with no packs-per-box. Those refusals are surfaced VERBATIM
+ * because each one names the exact field to go and fill in.
  *
  * One transaction covering stock, cost lots, the ledger row, the line and the
  * layers it consumed — a line that exists without its stock movement (or the
@@ -625,22 +680,80 @@ export function addItem(input: NewStreamItem, actorId: string | null): Result<St
   const sessionId = (input?.sessionId ?? '').trim()
   const productId = (input?.productId ?? '').trim()
   const kind: StreamItemKind = input?.kind === 'giveaway' ? 'giveaway' : 'break'
-  const qty = Math.round(Number(input?.quantity))
   const location = input?.location ?? ''
+  const inCases = enteredUnit(input?.cases)
+  const inBoxes = enteredUnit(input?.boxes)
+  const inPacks = enteredUnit(input?.packs)
+  // Which way the caller said how much. Entered units win when ANY of them is
+  // present; `quantity` is the raw stock-unit escape hatch that keeps every
+  // pre-v25 caller working.
+  const byUnits = inCases !== null || inBoxes !== null || inPacks !== null
 
   const run = db.transaction((): Result<StreamSessionDetail> => {
     const session = db.prepare('SELECT id, title FROM stream_sessions WHERE id = ?').get(sessionId) as
       | { id: string; title: string }
       | undefined
     if (!session) return { ok: false, error: 'That stream session no longer exists.' }
-    if (!Number.isFinite(qty) || qty < 1) return { ok: false, error: 'Quantity must be at least 1.' }
     if (!isLocation(location)) return { ok: false, error: 'Pick a stock location.' }
     const product = db
-      .prepare('SELECT id, name, sku, category FROM inventory_products WHERE id = ?')
-      .get(productId) as { id: string; name: string; sku: string; category: string } | undefined
+      .prepare(
+        `SELECT id, name, sku, category, unit_type, boxes_per_case, packs_per_box, giveaway_item
+           FROM inventory_products WHERE id = ?`
+      )
+      .get(productId) as
+      | {
+          id: string
+          name: string
+          sku: string
+          category: string
+          unit_type: string
+          boxes_per_case: number | null
+          packs_per_box: number | null
+          giveaway_item: number
+        }
+      | undefined
     if (!product) return { ok: false, error: 'Product not found.' }
+
+    const stockUnit = stockUnitOf(product.unit_type)
+    const units: ProductUnits | null = stockUnit
+      ? {
+          unitType: stockUnit,
+          boxesPerCase: product.boxes_per_case,
+          packsPerBox: product.packs_per_box,
+          giveawayItem: Number(product.giveaway_item) === 1
+        }
+      : null
+    const fractional = Number(product.giveaway_item) === 1
+
+    let qty: number
+    if (byUnits) {
+      if (!units) {
+        return {
+          ok: false,
+          error: `This product is stocked in ${product.unit_type}, not cases or boxes, so a case/box/pack entry cannot be converted. Set its unit type to case or box in Inventory.`
+        }
+      }
+      const conv =
+        kind === 'break'
+          ? breakToStock(units, inCases ?? 0, inBoxes ?? 0)
+          : giveawayToStock(units, inBoxes ?? 0, inPacks ?? 0)
+      // Verbatim: the contract's messages name the field to fill in, and
+      // rewording them here would lose that.
+      if (!conv.ok) return { ok: false, error: conv.error }
+      qty = conv.value.quantity
+    } else {
+      qty = roundQty(Number(input?.quantity), fractional)
+    }
+    if (!Number.isFinite(qty) || !(qty > 0)) {
+      return {
+        ok: false,
+        error: fractional ? 'Enter a quantity greater than zero.' : 'Quantity must be at least 1.'
+      }
+    }
+
     const have = stockQty(productId, location)
-    if (qty > have) return { ok: false, error: `Only ${have} in ${location}.` }
+    // Slack so consuming the exact fractional balance is not refused by dust.
+    if (qty > have + QTY_EPS) return { ok: false, error: `Only ${have} in ${location}.` }
 
     const breakNumber = kind === 'break' ? normalizeBreakNumber(input.breakNumber) : null
     const recipient = kind === 'giveaway' ? input.recipient?.trim() || null : null
@@ -665,14 +778,44 @@ export function addItem(input: NewStreamItem, actorId: string | null): Result<St
       costTotal
     )
 
+    // What this line cost per STOCK unit, from the layers it actually took —
+    // not the product's moving average, which drifts with every purchase.
+    const perStockUnit = cents(costTotal / qty)
+
+    // --- the giveaway loss ---------------------------------------------------
+    //
+    // The P&L side. FIFO consumption above is the balance-sheet side (stock left
+    // the shelf at what it cost); this is what running the show cost in prizes.
+    // They are not double counting — one moves inventory, the other is reported
+    // as a cost of the day alongside Show Boost.
+    //
+    // Valued at PACK cost when packs were given away, because that is the unit
+    // that left: `packCost` divides the cost of a stock unit down through boxes
+    // to packs and returns null rather than a guess when a divisor is missing.
+    // Otherwise it is simply the FIFO cost of the whole boxes that went out.
+    let packCostVal: number | null = null
+    let lossValue = 0
+    if (kind === 'giveaway') {
+      lossValue = costTotal
+      if (units) {
+        packCostVal = packCost(units, perStockUnit)
+        const perBox = boxCost(units, perStockUnit)
+        if ((inPacks ?? 0) > 0 && packCostVal !== null && perBox !== null) {
+          lossValue = cents((inBoxes ?? 0) * perBox + (inPacks as number) * packCostVal)
+        }
+      }
+    }
+
     const id = newId()
     const ts = nowIso()
     db.prepare(
       `INSERT INTO stream_items
          (id, session_id, kind, product_id, product_name, sku, category, break_number, recipient,
-          quantity, location, unit_cost, cost_total, note, created_at, created_by)
+          quantity, entered_cases, entered_boxes, entered_packs, location, unit_cost, cost_total,
+          pack_cost, loss_value, note, created_at, created_by)
        VALUES (@id, @session_id, @kind, @product_id, @product_name, @sku, @category, @break_number,
-               @recipient, @quantity, @location, @unit_cost, @cost_total, @note, @ts, @created_by)`
+               @recipient, @quantity, @entered_cases, @entered_boxes, @entered_packs, @location,
+               @unit_cost, @cost_total, @pack_cost, @loss_value, @note, @ts, @created_by)`
     ).run({
       id,
       session_id: sessionId,
@@ -686,9 +829,16 @@ export function addItem(input: NewStreamItem, actorId: string | null): Result<St
       break_number: breakNumber,
       recipient,
       quantity: qty,
+      // Stored beside the converted quantity so the line can be read back the
+      // way it was typed. NULL when it was entered in stock units directly.
+      entered_cases: byUnits ? (kind === 'break' ? (inCases ?? 0) : null) : null,
+      entered_boxes: byUnits ? (inBoxes ?? 0) : null,
+      entered_packs: byUnits ? (kind === 'giveaway' ? (inPacks ?? 0) : null) : null,
       location,
-      unit_cost: cents(costTotal / qty),
+      unit_cost: perStockUnit,
       cost_total: costTotal,
+      pack_cost: packCostVal,
+      loss_value: lossValue,
       note,
       ts,
       created_by: actorId
