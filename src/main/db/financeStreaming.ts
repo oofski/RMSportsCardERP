@@ -92,6 +92,8 @@ import type {
   LedgerImport,
   LedgerImportResult,
   LedgerRow,
+  PnlCountField,
+  PnlMoneyField,
   StreamDayFinance,
   StreamFinanceTotals,
   StreamingFinanceView,
@@ -103,11 +105,14 @@ import {
   CLUSTER_GAP_MINUTES,
   LEDGER_BUCKETS,
   LEDGER_CLASSIFIER_VERSION,
+  PNL_COUNT_FIELDS,
+  PNL_MONEY_FIELDS,
   SESSION_VACUUM_SHARE,
   buildPnl,
   carryBackEligible,
   classifyLedgerRow,
   computeFees,
+  emptyDayFinance,
   findCarryBackSession,
   ledgerFingerprintSource,
   parseBreakNumber,
@@ -1331,91 +1336,28 @@ export function listRows(filter: LedgerRowFilter): LedgerRow[] {
 // ---------------------------------------------------------------------------
 
 /**
- * Every money field a day carries, in one list, used by the day builder AND by
- * every rollup. Adding a field to the contract and forgetting it here would make
- * a week quietly disagree with the days inside it, so the list is the single
- * place it has to be named.
+ * Every money field a day carries, and the empty day they start from.
+ *
+ * BOTH COME FROM THE CONTRACT. They used to be declared here, which was fine
+ * while main was the only thing that summed days; the renderer now sums an
+ * arbitrary calendar range, and a second copy of this list is a range total
+ * that disagrees with the week it sits inside. Named once, in the one file
+ * both sides already import.
+ *
+ * The fields worth knowing about while reading the rollups below:
+ * `giveawayLoss` comes from the Streaming module rather than the ledger and is
+ * kept equal to `giveawayCost`; the cost-of-goods fields are all NEGATIVE and
+ * also come from `stream_items`, and they roll up through the same accumulator
+ * as everything else because a period that summed the biggest cost of running
+ * a show differently from its own days would be worse than no period at all.
  */
-const MONEY_FIELDS = [
-  'sales',
-  'tips',
-  'bonuses',
-  'totalRevenue',
-  'whatnotFee',
-  'processingFee',
-  'totalFees',
-  'netRevenue',
-  'shippingSubsidy',
-  'shippingCharges',
-  'giveawayShipping',
-  'refundShipping',
-  'netShipping',
-  'showBoost',
-  'reversals',
-  // From the Streaming module, not the ledger, and part of netAfterCosts. Kept
-  // equal to `giveawayCost` — it is the same money under the name the ledger
-  // view has always used for it — so nothing that reads it changes meaning.
-  'giveawayLoss',
-  'netAfterCosts',
-  'carriedBackAmount',
-  // Cost of goods, all NEGATIVE, and all from stream_items rather than the
-  // ledger. Listed here so weeks and months roll them through the SAME
-  // accumulator as every other figure: a period that summed the biggest cost of
-  // running a show differently from the days inside it would be worse than no
-  // period at all.
-  'breakCost',
-  'giveawayCost',
-  'cogs',
-  'grossProfit',
-  'netProfit'
-] as const
+const MONEY_FIELDS = PNL_MONEY_FIELDS
+const COUNT_FIELDS = PNL_COUNT_FIELDS
 
-/** Counts, which add as plain integers. */
-const COUNT_FIELDS = [
-  'sessionCount',
-  'minutes',
-  'saleCount',
-  'rowCount',
-  'carriedBackRows'
-] as const
+type MoneyField = PnlMoneyField
+type CountField = PnlCountField
 
-type MoneyField = (typeof MONEY_FIELDS)[number]
-type CountField = (typeof COUNT_FIELDS)[number]
-
-function emptyDay(streamDate: string): StreamDayFinance {
-  return {
-    streamDate,
-    sessionCount: 0,
-    sessionTitles: [],
-    minutes: 0,
-    sales: 0,
-    saleCount: 0,
-    tips: 0,
-    bonuses: 0,
-    totalRevenue: 0,
-    whatnotFee: 0,
-    processingFee: 0,
-    totalFees: 0,
-    netRevenue: 0,
-    shippingSubsidy: 0,
-    shippingCharges: 0,
-    giveawayShipping: 0,
-    refundShipping: 0,
-    netShipping: 0,
-    showBoost: 0,
-    reversals: 0,
-    giveawayLoss: 0,
-    netAfterCosts: 0,
-    rowCount: 0,
-    carriedBackRows: 0,
-    carriedBackAmount: 0,
-    breakCost: 0,
-    giveawayCost: 0,
-    cogs: 0,
-    grossProfit: 0,
-    netProfit: 0
-  }
-}
+const emptyDay = emptyDayFinance
 
 /**
  * A rollup in progress. Money accumulates in INTEGER CENTS and converts back to

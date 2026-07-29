@@ -30,6 +30,26 @@ export function monthKeyOf(d: Date): string {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`
 }
 
+/**
+ * A day key moved by whole days, through a local Date so month and year ends
+ * are handled by the calendar rather than by string arithmetic.
+ */
+export function shiftDayKey(key: string, delta: number): string {
+  const d = parseDayKey(key)
+  if (!d) return key
+  d.setDate(d.getDate() + delta)
+  return dayKeyOf(d)
+}
+
+/** How many calendar days a range spans, both ends INCLUSIVE — Jul 1 to Jul 1
+ *  is one day, which is what "the last 7 days" has to mean to be checkable. */
+export function daySpan(from: string, to: string): number {
+  const a = parseDayKey(from)
+  const b = parseDayKey(to)
+  if (!a || !b) return 0
+  return Math.round((b.getTime() - a.getTime()) / 86_400_000) + 1
+}
+
 export function todayKey(): string {
   return dayKeyOf(new Date())
 }

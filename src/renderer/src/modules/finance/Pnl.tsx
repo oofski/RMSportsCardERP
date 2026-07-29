@@ -95,10 +95,29 @@ export function pnlDrift(sections: PnlSection[], statedNetProfit: number): {
   return { checksum, stated, drift, ok: isZero(drift) }
 }
 
+/**
+ * THE STATEMENT AS DISCLOSURES.
+ *
+ * Every section now carries its own subtotal ON THE HEADING ROW and opens to
+ * show the lines that make it. That is one row per section closed — Revenue,
+ * Cost of goods, Gross profit, Platform fees, Shipping, Show costs,
+ * Adjustments, Net profit — which is the whole P&L in eight lines, and the
+ * detail is one click from whichever line raised the question.
+ *
+ * It closed by default because the previous layout put roughly twenty rows on
+ * screen whether or not anyone was reading them, under a summary that already
+ * answered the top-level question. A statement nobody can take in at a glance
+ * gets skipped, and a skipped statement is worse than a short one.
+ */
 export function PnlStatement({ money }: { money: PnlMoney }): JSX.Element {
+  const [open, setOpen] = useState<Record<string, boolean>>({})
   const [showAll, setShowAll] = useState(false)
 
   const sections = useMemo(() => buildStatement(money), [money])
+
+  const expandable = useMemo(() => sections.filter((s) => !s.running), [sections])
+  const openCount = expandable.filter((s) => open[s.key]).length
+  const allOpen = openCount === expandable.length && expandable.length > 0
 
   // Counted across the whole statement rather than per section, because the
   // toggle is one control: "5 zero lines hidden" is the promise it has to keep.
@@ -111,6 +130,17 @@ export function PnlStatement({ money }: { money: PnlMoney }): JSX.Element {
   // not running totals; that sum IS net profit by construction, so any drift
   // means the day was built by arithmetic this build does not agree with.
   const check = useMemo(() => pnlDrift(sections, money.netProfit), [sections, money.netProfit])
+
+  // The denominator for the share column. Zero revenue means no column at all
+  // rather than a column of dashes or, worse, of divisions by nothing.
+  const revenue = sections.find((s) => s.key === 'revenue')?.subtotal ?? 0
+  const withShare = revenue > 0
+
+  const toggleAll = (): void => {
+    const next: Record<string, boolean> = {}
+    for (const s of expandable) next[s.key] = !allOpen
+    setOpen(next)
+  }
 
   return (
     <div className="fin-pnl-wrap">
@@ -131,85 +161,157 @@ export function PnlStatement({ money }: { money: PnlMoney }): JSX.Element {
           section subtotal is guaranteed to sit on the same right edge as the
           lines above it. That alignment is the only way to eyeball whether a
           subtotal belongs to the lines it follows. */}
-      <table className="fin-pnl">
+      <table className={`fin-pnl${withShare ? ' has-share' : ''}`}>
+        <thead>
+          <tr>
+            <th scope="col">Account</th>
+            <th scope="col" className="is-num">
+              Amount
+            </th>
+            {withShare && (
+              <th scope="col" className="is-num" title="Share of total revenue for this period">
+                % rev
+              </th>
+            )}
+          </tr>
+        </thead>
+
         {sections.map((section) => (
-          <SectionBody key={section.key} section={section} showAll={showAll} />
+          <SectionBody
+            key={section.key}
+            section={section}
+            open={!!open[section.key]}
+            onToggle={() => setOpen((prev) => ({ ...prev, [section.key]: !prev[section.key] }))}
+            showAll={showAll}
+            revenue={withShare ? revenue : null}
+          />
         ))}
       </table>
 
-      {zeroLines > 0 && (
-        <button
-          type="button"
-          className="fin-more"
-          aria-pressed={showAll}
-          onClick={() => setShowAll((v) => !v)}
-        >
-          <Icon name={showAll ? 'ChevronUp' : 'ChevronDown'} size={14} />
-          {showAll
-            ? `Hide the ${plural(zeroLines, 'empty line')}`
-            : `Show ${plural(zeroLines, 'line')} sitting at zero`}
-        </button>
-      )}
+      <div className="fin-pnl-foot">
+        {expandable.length > 0 && (
+          <button type="button" className="fin-more" aria-pressed={allOpen} onClick={toggleAll}>
+            <Icon name={allOpen ? 'ChevronsDownUp' : 'ChevronsUpDown'} size={14} />
+            {allOpen ? 'Collapse all' : 'Expand all'}
+          </button>
+        )}
+
+        {zeroLines > 0 && openCount > 0 && (
+          <button
+            type="button"
+            className="fin-more"
+            aria-pressed={showAll}
+            onClick={() => setShowAll((v) => !v)}
+          >
+            <Icon name={showAll ? 'EyeOff' : 'Eye'} size={14} />
+            {showAll
+              ? `Hide the ${plural(zeroLines, 'empty line')}`
+              : `Show ${plural(zeroLines, 'line')} sitting at zero`}
+          </button>
+        )}
+      </div>
     </div>
+  )
+}
+
+/** A section's share of revenue, as the statement's own column prints it.
+ *  Magnitude, not sign: the sign is already on the figure beside it, and
+ *  "−16.8%" of revenue reads as a negative share of something. */
+function ShareCell({ amount, revenue }: { amount: number; revenue: number | null }): JSX.Element | null {
+  if (revenue === null) return null
+  if (isZero(amount)) {
+    return (
+      <td className="is-num fin-pnl-share">
+        <span className="fin-money zero mono">—</span>
+      </td>
+    )
+  }
+  return (
+    <td className="is-num fin-pnl-share">
+      <span className="mono">{((Math.abs(amount) / revenue) * 100).toFixed(1)}%</span>
+    </td>
   )
 }
 
 function SectionBody({
   section,
-  showAll
+  open,
+  onToggle,
+  showAll,
+  revenue
 }: {
   section: PnlSection
+  open: boolean
+  onToggle: () => void
   showAll: boolean
+  revenue: number | null
 }): JSX.Element {
+  const cols = revenue === null ? 2 : 3
+
   // A running section is a milestone: it has no lines of its own, it is a
-  // figure carried down from everything above it. Rendering it as a heading
-  // plus a subtotal would make it look like a section with its contents hidden.
+  // figure carried down from everything above it. Rendering it with a caret
+  // would promise a disclosure that has nothing inside it.
   if (section.running) {
     return (
       <tbody className="fin-pnl-sec is-running">
         <tr className={`fin-pnl-mile${section.key === 'netProfit' ? ' is-bottom' : ''}`}>
           <th scope="row">{section.subtotalLabel}</th>
-          <td>
+          <td className="is-num">
             <Profit value={section.subtotal} />
           </td>
+          <ShareCell amount={section.subtotal} revenue={revenue} />
         </tr>
       </tbody>
     )
   }
 
   const visible = showAll ? section.lines : section.lines.filter((l) => !l.empty)
+  const bodyId = `fin-pnl-${section.key}`
 
   return (
-    <tbody className="fin-pnl-sec">
-      <tr className="fin-pnl-head">
-        <th scope="colgroup" colSpan={2}>
-          {section.label}
+    <tbody className="fin-pnl-sec" id={bodyId}>
+      <tr className={`fin-pnl-head${open ? ' is-open' : ''}`}>
+        <th scope="row">
+          {/* The whole heading is the control. A caret-sized hit target on a
+              row this wide is a miss waiting to happen, and there is nothing
+              else on the row to click. */}
+          <button
+            type="button"
+            className="fin-pnl-toggle"
+            aria-expanded={open}
+            aria-controls={bodyId}
+            onClick={onToggle}
+          >
+            <Icon name={open ? 'ChevronDown' : 'ChevronRight'} size={14} />
+            <span>{section.label}</span>
+            {!open && visible.length > 0 && (
+              <em className="fin-pnl-count">{plural(visible.length, 'line')}</em>
+            )}
+          </button>
         </th>
-      </tr>
-
-      {visible.length === 0 ? (
-        // Never let the section itself disappear. Its subtotal is part of the
-        // sum that has to reconcile on screen, and a heading followed straight
-        // by a zero total reads as a rendering fault rather than as "nothing
-        // happened here".
-        <tr className="fin-pnl-line is-none">
-          <td colSpan={2}>Nothing in this section.</td>
-        </tr>
-      ) : (
-        visible.map((line) => <LineRow key={line.key} line={line} />)
-      )}
-
-      <tr className="fin-pnl-sub">
-        <th scope="row">{section.subtotalLabel}</th>
-        <td>
+        <td className="is-num">
           <Money value={section.subtotal} strong />
         </td>
+        <ShareCell amount={section.subtotal} revenue={revenue} />
       </tr>
+
+      {open &&
+        (visible.length === 0 ? (
+          // Never let the section itself disappear. Its subtotal is part of the
+          // sum that has to reconcile on screen, and a heading followed by
+          // nothing at all reads as a rendering fault rather than as "nothing
+          // happened here".
+          <tr className="fin-pnl-line is-none">
+            <td colSpan={cols}>Nothing in this section.</td>
+          </tr>
+        ) : (
+          visible.map((line) => <LineRow key={line.key} line={line} revenue={revenue} />)
+        ))}
     </tbody>
   )
 }
 
-function LineRow({ line }: { line: PnlLine }): JSX.Element {
+function LineRow({ line, revenue }: { line: PnlLine; revenue: number | null }): JSX.Element {
   return (
     <tr className={`fin-pnl-line${line.empty ? ' is-empty' : ''}`}>
       <th scope="row">
@@ -222,9 +324,10 @@ function LineRow({ line }: { line: PnlLine }): JSX.Element {
             same sentence in the app. */}
         {line.detail && <em className="fin-pnl-detail">{line.detail}</em>}
       </th>
-      <td>
+      <td className="is-num">
         <Money value={line.amount} dash />
       </td>
+      <ShareCell amount={line.amount} revenue={revenue} />
     </tr>
   )
 }

@@ -139,6 +139,7 @@ export function UnattributedPanel({
               variant="primary"
               icon="RefreshCw"
               loading={busy}
+              title="Re-check every stored row against the logged sessions. It only ever matches what a session already covers — it never moves money on its own."
               onClick={() => void reattribute()}
             >
               Re-attribute
@@ -147,12 +148,16 @@ export function UnattributedPanel({
         </span>
       </div>
 
+      {/* One sentence. The paragraph this replaced said the same thing four
+          ways — that nothing is lost, that a row matches only inside a logged
+          session, that logging one fixes it, and that re-attribution never
+          invents a match. All true, and all of it read as reassurance for a
+          problem the reader had not yet decided they had. The fix is the two
+          buttons above; the caveat about what re-attribution will and will not
+          do belongs on the button that does it. */}
       <p className="fin-unattr-lead">
-        A sale is matched only when a logged session covers the moment it happened, so an afternoon
-        show nobody clocked sits here in full. Nothing is lost — every row is stored. Log the
-        session in <b>Streaming</b>, press <b>Re-attribute</b>, and it lands on the right day.
-        Re-attribution only ever matches what a session already covers; it never moves money on its
-        own.
+        A row lands on a day only when a logged show covers the moment it happened — so an
+        afternoon nobody clocked sits here in full, stored and counted, until the show is logged.
       </p>
 
       {unattributed.byBucket.length > 0 && (

@@ -931,3 +931,136 @@ export function sumTreatment(
   }
   return Math.round(total * 100) / 100
 }
+
+// ---------------------------------------------------------------------------
+// Adding days up
+// ---------------------------------------------------------------------------
+
+/**
+ * Every money field a day carries, named once.
+ *
+ * This list lives in the CONTRACT rather than in main because both sides now
+ * sum days: main builds the weeks, the months and the grand total from it, and
+ * the renderer builds whatever range the operator dragged out on the calendar.
+ * Two lists would mean a range total that quietly disagreed with the week it
+ * sits inside — the exact failure the rest of this module is arranged to make
+ * impossible.
+ */
+export const PNL_MONEY_FIELDS = [
+  'sales',
+  'tips',
+  'bonuses',
+  'totalRevenue',
+  'whatnotFee',
+  'processingFee',
+  'totalFees',
+  'netRevenue',
+  'shippingSubsidy',
+  'shippingCharges',
+  'giveawayShipping',
+  'refundShipping',
+  'netShipping',
+  'showBoost',
+  'reversals',
+  'giveawayLoss',
+  'netAfterCosts',
+  'carriedBackAmount',
+  'breakCost',
+  'giveawayCost',
+  'cogs',
+  'grossProfit',
+  'netProfit'
+] as const
+
+/** Counts, which add as plain integers. */
+export const PNL_COUNT_FIELDS = [
+  'sessionCount',
+  'minutes',
+  'saleCount',
+  'rowCount',
+  'carriedBackRows'
+] as const
+
+export type PnlMoneyField = (typeof PNL_MONEY_FIELDS)[number]
+export type PnlCountField = (typeof PNL_COUNT_FIELDS)[number]
+
+/** A day with every figure at zero. The shape every sum starts from, so a field
+ *  added to `StreamDayFinance` and forgotten here is a type error rather than a
+ *  silently absent number. */
+export function emptyDayFinance(streamDate: string): StreamDayFinance {
+  return {
+    streamDate,
+    sessionCount: 0,
+    sessionTitles: [],
+    minutes: 0,
+    sales: 0,
+    saleCount: 0,
+    tips: 0,
+    bonuses: 0,
+    totalRevenue: 0,
+    whatnotFee: 0,
+    processingFee: 0,
+    totalFees: 0,
+    netRevenue: 0,
+    shippingSubsidy: 0,
+    shippingCharges: 0,
+    giveawayShipping: 0,
+    refundShipping: 0,
+    netShipping: 0,
+    showBoost: 0,
+    reversals: 0,
+    giveawayLoss: 0,
+    netAfterCosts: 0,
+    rowCount: 0,
+    carriedBackRows: 0,
+    carriedBackAmount: 0,
+    breakCost: 0,
+    giveawayCost: 0,
+    cogs: 0,
+    grossProfit: 0,
+    netProfit: 0
+  }
+}
+
+/**
+ * Add a set of days into one statement-shaped total.
+ *
+ * In INTEGER CENTS, converted back exactly once at the end. Twenty-eight day
+ * figures added as floats and then compared to another float sum is how a
+ * reconciliation check reports a phantom cent.
+ *
+ * Every field is SUMMED, including the fees — never re-derived from the range's
+ * gross. The 30c is charged per sale ROW, so recomputing it from a range total
+ * would give the right percentage and the wrong flat fee, and it would land
+ * differently depending on how the operator happened to slice the calendar.
+ *
+ * A non-finite figure counts as zero rather than poisoning the whole range: an
+ * older packaged main can send days without the cost-of-goods keys, and one
+ * NaN would otherwise turn every widget on the screen into NaN. The statement's
+ * own checksum then fails loudly, which is the correct outcome — on that build
+ * the numbers genuinely do not add up.
+ */
+export function sumDayFinance(days: StreamDayFinance[]): StreamFinanceTotals {
+  const money = new Map<PnlMoneyField, number>()
+  const counts = new Map<PnlCountField, number>()
+
+  for (const day of days) {
+    const fields = day as unknown as Record<string, number>
+    for (const f of PNL_MONEY_FIELDS) {
+      const v = fields[f]
+      money.set(f, (money.get(f) ?? 0) + Math.round((Number.isFinite(v) ? v : 0) * 100))
+    }
+    for (const f of PNL_COUNT_FIELDS) {
+      const v = fields[f]
+      counts.set(f, (counts.get(f) ?? 0) + (Number.isFinite(v) ? v : 0))
+    }
+  }
+
+  const out = emptyDayFinance('') as unknown as Record<string, unknown>
+  for (const f of PNL_MONEY_FIELDS) out[f] = Math.round(money.get(f) ?? 0) / 100
+  for (const f of PNL_COUNT_FIELDS) out[f] = counts.get(f) ?? 0
+  delete out.streamDate
+  delete out.sessionTitles
+  return { ...(out as unknown as Omit<StreamDayFinance, 'streamDate' | 'sessionTitles'>),
+    dayCount: days.length }
+}

@@ -1,10 +1,9 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { useMemo, useState } from 'react'
 import type { StreamDayFinance } from '@shared/financeStreaming'
-import { formatDuration } from '@shared/streaming'
 import { formatMoney } from '../../lib/format'
 import { Icon } from '../../components/Icon'
-import { Money, Profit, plural } from './bits'
-import { DayStatement } from './Statement'
+import { plural } from './bits'
+import { type DayRange, rangeOf } from './range'
 import {
   dayKeyOf,
   dayNumberOf,
@@ -18,11 +17,18 @@ import {
 } from './time'
 
 /**
- * The month view — the front door of Finance → Streaming.
+ * The month view — the navigator for the whole Streaming tab.
  *
- * WHAT IT IS FOR: one glance answers "did we make money, and on which days".
- * The headline on every cell is NET PROFIT, the whole statement collapsed to one
- * figure, and clicking it opens the statement it came from.
+ * WHAT IT IS FOR: one glance answers "did we make money, and on which days",
+ * and one drag answers "what did that stretch make". The headline on every cell
+ * is NET PROFIT, the whole statement collapsed to one figure.
+ *
+ * IT SELECTS A RANGE, NOT A DAY. Clicking once starts a range on that day and
+ * everything above updates to it; clicking a second day closes the range across
+ * the span. That is the whole reason the widgets and the statement can be
+ * "dynamic to a date range" — there is one selection on this screen and it is
+ * this one. A single day is just a range whose ends match, so nothing was lost
+ * in the change: the day statement is what a one-day range renders.
  *
  * The grid is built from the month's own shape and the days are joined onto it,
  * exactly as `StreamCalendar` does in Streaming — the two calendars are the same
@@ -34,10 +40,9 @@ import {
  * Cells are keyed by `streamDate` — the day a show STARTED — so a Friday show
  * that sold until 2am appears once, on Friday, with all of its money.
  *
- * WHICH MONTH IS OPEN AND WHICH DAY IS SELECTED ARE PROPS, not state. They used
- * to live here, which meant switching the grain to Week and back destroyed this
- * component and with it the operator's place in the month — a whole navigation
- * undone by pressing a button that was supposed to change one number's grain.
+ * WHICH MONTH IS OPEN AND WHAT IS SELECTED ARE PROPS, not state, so navigating
+ * away from Finance and back does not throw the operator out of the month they
+ * were reading.
  */
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
@@ -46,31 +51,30 @@ type Cell =
   | { kind: 'pad'; key: string }
   | { kind: 'day'; key: string; day: StreamDayFinance | null }
 
-/** What a month's cells add up to. Summed from the DAYS on screen rather than
- *  read from a rollup, so the strip can never claim a total the grid beneath it
- *  does not show. */
-interface MonthTotals {
-  netProfit: number
-  totalRevenue: number
-  dayCount: number
-  sessionCount: number
-  minutes: number
-}
-
 export function FinanceCalendar({
   days,
   month,
-  selected,
+  range,
   onMonth,
-  onSelect
+  onRange
 }: {
   days: StreamDayFinance[]
   /** null means "follow the latest month with money in it". */
   month: string | null
-  selected: string | null
+  /** null means all time — no cell is highlighted. */
+  range: DayRange | null
   onMonth: (key: string) => void
-  onSelect: (key: string | null) => void
+  onRange: (range: DayRange | null) => void
 }): JSX.Element {
+  /**
+   * The first click of a two-click range. While it is set, hovering previews
+   * what the second click would select — without it, the first click looks like
+   * it selected one day and the second like it moved the selection, and nobody
+   * discovers that ranges exist.
+   */
+  const [anchor, setAnchor] = useState<string | null>(null)
+  const [hover, setHover] = useState<string | null>(null)
+
   const byDate = useMemo(() => {
     const m = new Map<string, StreamDayFinance>()
     for (const d of days) m.set(d.streamDate, d)
@@ -83,13 +87,6 @@ export function FinanceCalendar({
    * The ledger is a file somebody uploaded; it is normal for the most recent
    * export to stop weeks before today. Opening on an empty August, with July
    * full of shows one click away, would read as "the import did not work".
-   *
-   * Derived, never stored, and there is deliberately NO effect here that snaps
-   * back to it. This component unmounts every time the grain changes to Week,
-   * so a "follow the newest month" effect would fire on remount and throw the
-   * operator back to July every time they came back from a weekly view — which
-   * is exactly the lost place this refactor exists to stop. Following a fresh
-   * import is the parent's job, because the parent stays mounted.
    */
   const latestMonth = useMemo(() => {
     let best = ''
@@ -120,45 +117,40 @@ export function FinanceCalendar({
     return out
   }, [monthKey, byDate])
 
-  const totals = useMemo<MonthTotals>(() => {
-    const t: MonthTotals = {
-      netProfit: 0,
-      totalRevenue: 0,
-      dayCount: 0,
-      sessionCount: 0,
-      minutes: 0
-    }
-    for (const cell of cells) {
-      if (cell.kind !== 'day' || !cell.day) continue
-      const d = cell.day
-      t.netProfit += Number.isFinite(d.netProfit) ? d.netProfit : 0
-      t.totalRevenue += d.totalRevenue
-      t.dayCount += 1
-      t.sessionCount += d.sessionCount
-      t.minutes += d.minutes
-    }
-    // Rounded once, at the end. Twenty-eight float additions left unrounded
-    // print a month total a cent away from the days it was summed from.
-    t.netProfit = Math.round(t.netProfit * 100) / 100
-    t.totalRevenue = Math.round(t.totalRevenue * 100) / 100
-    return t
-  }, [cells])
+  /** How many days on this month's grid carry a show — used only to explain an
+   *  empty month, never to summarise one. The figures live in the widgets. */
+  const activeInMonth = useMemo(
+    () => cells.filter((c) => c.kind === 'day' && c.day).length,
+    [cells]
+  )
 
   const today = todayKey()
   const isThisMonth = monthKey === thisMonthKey()
-  const selectedDay = selected ? (byDate.get(selected) ?? null) : null
 
-  const panelRef = useRef<HTMLDivElement | null>(null)
-  useEffect(() => {
-    if (!selectedDay) return
-    const id = requestAnimationFrame(() =>
-      panelRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
-    )
-    return () => cancelAnimationFrame(id)
-  }, [selectedDay])
+  /**
+   * What is painted as selected right now: the live range while a second click
+   * is pending, otherwise the committed one. Derived rather than stored, so the
+   * preview cannot survive the click that ends it.
+   */
+  const painted: DayRange | null = anchor ? rangeOf(anchor, hover ?? anchor) : range
+
+  const click = (key: string): void => {
+    if (anchor === null) {
+      setAnchor(key)
+      // Commit the single day immediately. Waiting for a second click would
+      // leave the widgets showing the previous range while the calendar showed
+      // a new selection — a screen briefly describing two different periods.
+      onRange({ from: key, to: key })
+      return
+    }
+    setAnchor(null)
+    setHover(null)
+    onRange(rangeOf(anchor, key))
+  }
 
   const go = (delta: number): void => {
-    onSelect(null)
+    setAnchor(null)
+    setHover(null)
     onMonth(shiftMonth(monthKey, delta))
   }
 
@@ -176,7 +168,7 @@ export function FinanceCalendar({
           <button
             className="fin-today-btn"
             onClick={() => {
-              onSelect(null)
+              setAnchor(null)
               onMonth(thisMonthKey())
             }}
             disabled={isThisMonth}
@@ -185,7 +177,22 @@ export function FinanceCalendar({
           </button>
         </div>
 
-        <MonthTotalsStrip totals={totals} label={monthLabel(monthKey)} />
+        <span className="fin-cal-hint">
+          {anchor ? (
+            <>
+              <Icon name="CalendarRange" size={13} />
+              Now click the other end of the range
+              <button type="button" className="fin-cal-cancel" onClick={() => setAnchor(null)}>
+                Cancel
+              </button>
+            </>
+          ) : (
+            <>
+              <Icon name="MousePointerClick" size={13} />
+              Click a day, then a second day for a range
+            </>
+          )}
+        </span>
       </div>
 
       <div className="fin-cal">
@@ -196,7 +203,7 @@ export function FinanceCalendar({
             </span>
           ))}
         </div>
-        <div className="fin-cal-grid">
+        <div className="fin-cal-grid" onMouseLeave={() => setHover(null)}>
           {cells.map((cell) =>
             cell.kind === 'pad' ? (
               <span className="fin-cell pad" key={cell.key} aria-hidden="true" />
@@ -206,15 +213,17 @@ export function FinanceCalendar({
                 dateKey={cell.key}
                 day={cell.day}
                 isToday={cell.key === today}
-                selected={selected === cell.key}
-                onSelect={() => onSelect(selected === cell.key ? null : cell.key)}
+                selected={inPainted(painted, cell.key)}
+                pending={anchor !== null}
+                onClick={() => click(cell.key)}
+                onHover={() => anchor && setHover(cell.key)}
               />
             )
           )}
         </div>
       </div>
 
-      {totals.dayCount === 0 && (
+      {activeInMonth === 0 && (
         <div className="fin-cal-empty">
           <Icon name="Moon" size={15} />
           <span>
@@ -231,7 +240,7 @@ export function FinanceCalendar({
               type="button"
               className="fin-more"
               onClick={() => {
-                onSelect(null)
+                setAnchor(null)
                 onMonth(latestMonth)
               }}
             >
@@ -241,73 +250,15 @@ export function FinanceCalendar({
           )}
         </div>
       )}
-
-      {selectedDay && (
-        <div ref={panelRef}>
-          <DayStatement day={selectedDay} onClose={() => onSelect(null)} />
-        </div>
-      )}
-
-      {/* Selected a day the ledger has nothing on. Saying so beats silently
-          doing nothing, which reads as a click that did not register. */}
-      {selected && !selectedDay && (
-        <div className="fin-cal-empty">
-          <Icon name="Moon" size={15} />
-          <span>
-            Nothing was streamed on {longDayLabel(selected)}, so there is no statement for it.
-          </span>
-          <button type="button" className="fin-more" onClick={() => onSelect(null)}>
-            <Icon name="X" size={14} />
-            Close
-          </button>
-        </div>
-      )}
     </div>
   )
 }
 
-/**
- * The month's bottom line, beside the month's name.
- *
- * Net profit is the strong figure here for the same reason it is the headline on
- * every cell: it is the question. Revenue and time on air sit beside it as the
- * two things that make a profit figure interpretable — $400 on one show and $400
- * on nine are not the same month.
- *
- * No box around it. It sits inside a card already, and a bordered strip on a
- * bordered card is a frame drawn twice; a hairline on its left does the same
- * separating job with a tenth of the ink.
- */
-function MonthTotalsStrip({
-  totals,
-  label
-}: {
-  totals: MonthTotals
-  label: string
-}): JSX.Element {
-  if (totals.dayCount === 0) {
-    return <span className="fin-cal-total is-quiet">No activity in {label}</span>
-  }
-
-  return (
-    <div className="fin-cal-total">
-      <span className="fin-cal-fig is-main">
-        <em>Net profit</em>
-        <Profit value={totals.netProfit} />
-      </span>
-      <span className="fin-cal-fig">
-        <em>Revenue</em>
-        <Money value={totals.totalRevenue} strong />
-      </span>
-      <span className="fin-cal-fig">
-        <em>Streamed</em>
-        <b className="mono">{plural(totals.dayCount, 'day')}</b>
-        <i>
-          {plural(totals.sessionCount, 'show')} · {formatDuration(totals.minutes)}
-        </i>
-      </span>
-    </div>
-  )
+/** Whether a day is inside the painted range. Every day in it is marked the
+ *  same way — see the .fin-cell.in-range note in app.css for why the ends are
+ *  no longer drawn differently from the middle. */
+function inPainted(range: DayRange | null, key: string): boolean {
+  return range !== null && key >= range.from && key <= range.to
 }
 
 function DayCell({
@@ -315,16 +266,20 @@ function DayCell({
   day,
   isToday,
   selected,
-  onSelect
+  pending,
+  onClick,
+  onHover
 }: {
   dateKey: string
   /** null when no show landed on this day — i.e. it was quiet. */
   day: StreamDayFinance | null
   isToday: boolean
   selected: boolean
-  onSelect: () => void
+  pending: boolean
+  onClick: () => void
+  onHover: () => void
 }): JSX.Element {
-  // Guarded for the same main/renderer skew `Pnl.tsx` guards: a build without
+  // Guarded for the main/renderer skew `Pnl.tsx` guards: a build without
   // netProfit must not print a confident $0.00 on a day that sold thousands.
   const known = day !== null && Number.isFinite(day.netProfit)
   const net = day && Number.isFinite(day.netProfit) ? day.netProfit : 0
@@ -347,7 +302,7 @@ function DayCell({
         'fin-cell',
         day ? 'has-activity' : 'quiet',
         tone,
-        selected ? 'selected' : '',
+        selected ? 'in-range' : '',
         isToday ? 'today' : ''
       ]
         .filter(Boolean)
@@ -355,8 +310,13 @@ function DayCell({
       aria-pressed={selected}
       aria-current={isToday ? 'date' : undefined}
       aria-label={label}
-      disabled={!day}
-      onClick={onSelect}
+      // EVERY day is clickable now, including quiet ones. A range from the 1st
+      // to the 31st has to be selectable whether or not a show ran on either
+      // end, and a disabled cell in the middle of a month is a hole the drag
+      // falls into.
+      onClick={onClick}
+      onMouseEnter={onHover}
+      onFocus={pending ? onHover : undefined}
     >
       <span className="fin-cell-top">
         <span className="fin-cell-num">{dayNumberOf(dateKey)}</span>
@@ -366,7 +326,7 @@ function DayCell({
       {day ? (
         <span className="fin-cell-body">
           {known ? (
-            <Profit value={net} />
+            <span className={`fin-cell-net mono ${tone}`}>{compactMoney(net)}</span>
           ) : (
             <span className="fin-cell-unknown mono" title="This build did not send a profit figure">
               —
@@ -374,7 +334,7 @@ function DayCell({
           )}
           <span className="fin-cell-sub">
             <span className="fin-cell-shows">
-              <Icon name="CircleDot" size={10} />
+              <Icon name="CircleDot" size={9} />
               {day.sessionCount}
             </span>
             <span className="fin-cell-rev mono" title="Revenue before any deduction">
@@ -392,12 +352,11 @@ function DayCell({
 }
 
 /**
- * Revenue on a cell, at cell width.
+ * Money on a cell, at cell width.
  *
- * Compact ("$4.2K") because it is the SECONDARY figure — its job is to say
- * whether the profit above it came off a big day or a small one, and a second
- * exact figure would compete with the headline for the same 100px. The exact
- * number is one click away in the statement.
+ * Compact ("$4.2K") because seven of these sit across the grid and an exact
+ * figure at that width either wraps or truncates. The exact number is in the
+ * widgets the moment the day is clicked.
  *
  * One decimal ALWAYS above a thousand, so a column of cells reads $4.2K, $1.0K,
  * $12.5K rather than mixing $4.2K with $1K — the eye lines those up on the wrong

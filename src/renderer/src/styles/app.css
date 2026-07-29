@@ -11512,29 +11512,23 @@ button.sor-team:focus-visible {
   background: currentColor;
   vertical-align: 0.32em;
 }
-/* Scaled once, for the biggest figure on the screen. A 7px triangle beside a
-   28px numeral reads as a speck; the shape has to be legible for it to be the
-   fallback it exists to be. */
-.fin-eq-result .fin-profit-mark {
+/* Scaled once, for the biggest figure on the screen — the net profit milestone
+   at the foot of a statement. A 7px triangle beside a 22px numeral reads as a
+   speck; the shape has to be legible for it to be the fallback it exists to be. */
+.fin-pnl-mile.is-bottom .fin-profit-mark {
   margin-right: 7px;
-  border-left-width: 5.5px;
-  border-right-width: 5.5px;
+  border-left-width: 5px;
+  border-right-width: 5px;
 }
-.fin-eq-result .fin-profit.is-up .fin-profit-mark {
-  border-bottom-width: 9.5px;
+.fin-pnl-mile.is-bottom .fin-profit.is-up .fin-profit-mark {
+  border-bottom-width: 8.5px;
 }
-.fin-eq-result .fin-profit.is-down .fin-profit-mark {
-  border-top-width: 9.5px;
+.fin-pnl-mile.is-bottom .fin-profit.is-down .fin-profit-mark {
+  border-top-width: 8.5px;
 }
-.fin-eq-result .fin-profit.is-flat .fin-profit-mark {
-  width: 11px;
+.fin-pnl-mile.is-bottom .fin-profit.is-flat .fin-profit-mark {
+  width: 10px;
   height: 3px;
-}
-/* Seven columns at 640px leave a cell about 72px of usable width and the figure
-   is nowrap, so the mark is the one thing that goes. The explicit + or U+2212
-   still separates profit from loss without colour. */
-.fin-cell .fin-profit-mark {
-  display: none;
 }
 
 /* ---------- Bucket chips ---------- */
@@ -11624,192 +11618,20 @@ button.sor-team:focus-visible {
 }
 
 /* ==========================================================================
-   The headline: one line of arithmetic that closes
+   The head: a range, and the five figures over it
    --------------------------------------------------------------------------
-   The strip this replaces printed revenue, fees, net revenue, cost of goods and
-   net profit and did NOT add up — net shipping moved the bottom line by $243.73
-   and appeared nowhere on the line. A reader who tries to check five figures and
-   fails does not conclude they misread.
-
-   So every term that moves the number is a cell, the operator between the cells
-   comes from the term's own sign, and the figure is printed as a magnitude. One
-   sign per term, never two.
+   This replaced an equation strip — revenue − fees − cost of goods − shipping =
+   net profit, laid out horizontally so the arithmetic could be checked by eye.
+   It closed, and it was still the wrong object: it described the WHOLE ledger
+   and nothing else, so "what did last week make" meant scrolling past it to a
+   panel answering a different question. The equation now lives in the statement
+   below, laid out vertically where an equation belongs, and this is what an
+   operator glances at — tied to a range they chose.
    ========================================================================== */
-.fin-topline {
+.fin-head {
   display: flex;
   flex-direction: column;
-  gap: 18px;
-  padding: 20px 24px 16px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--surface);
-  box-shadow: var(--shadow-sm);
-  min-width: 0;
-}
-.fin-topline-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 4px 16px;
-}
-.fin-topline-head h2 {
-  font-size: 15px;
-  font-weight: 700;
-}
-/* 6.26:1 light, 8.25:1 dark. */
-.fin-topline-scope {
-  font-size: 12px;
-  color: var(--text-2);
-  font-variant-numeric: tabular-nums;
-}
-
-/* Terms on the left, the answer on the right of a hairline. auto-fit rather
-   than a fixed count because the number of terms depends on the data: a month
-   with no Show Boost and no refunds prints four cells, a month with both prints
-   six, and either has to fit without a figure ever meeting the cell edge. */
-.fin-eq {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: stretch;
-  gap: 22px;
-  min-width: 0;
-}
-.fin-eq-terms {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
-  gap: 16px 18px;
-  min-width: 0;
-}
-/* Label above, operator beside the FIGURE, note below. The operator has to sit
-   on the figure's row — level with the labels it would read as part of the
-   heading rather than as arithmetic. */
-.fin-eq-cell {
-  display: grid;
-  grid-template-columns: 13px minmax(0, 1fr);
-  grid-template-rows: auto auto auto;
-  align-items: baseline;
-  /* Rows pack at the TOP. The result cell is stretched to the full height of
-     the terms beside it so its dividing hairline runs the whole way down; left
-     to distribute, auto rows would absorb that slack and float the label away
-     from the figure it belongs to. */
-  align-content: start;
-  column-gap: 9px;
-  row-gap: 2px;
-  min-width: 0;
-}
-.fin-eq-label {
-  grid-column: 2;
-  grid-row: 1;
-  font-size: 12px;
-  font-weight: 600;
-  /* 6.26:1 light, 8.25:1 dark. */
-  color: var(--text-2);
-}
-.fin-eq-op {
-  grid-column: 1;
-  grid-row: 2;
-  font-size: 17px;
-  font-weight: 500;
-  line-height: 1.25;
-  color: var(--text-2);
-  text-align: center;
-}
-.fin-eq-value {
-  grid-column: 2;
-  grid-row: 2;
-  font-size: 20px;
-  font-weight: 700;
-  line-height: 1.25;
-  /* 16.07:1 light, 14.53:1 dark. */
-  color: var(--text);
-}
-.fin-eq-value .fin-money,
-.fin-eq-value .fin-profit {
-  font-size: inherit;
-}
-.fin-eq-note {
-  grid-column: 2;
-  grid-row: 3;
-  margin-top: 2px;
-  font-size: 11.5px;
-  line-height: 1.45;
-  color: var(--text-2);
-}
-/* The end of the statement, so it outweighs every input to it — and it is the
-   one cell that never wraps into the term grid, because an answer that lands
-   between two of its own inputs is not an answer. */
-.fin-eq-result {
-  padding-left: 22px;
-  border-left: 1px solid var(--border-strong);
-}
-.fin-eq-result .fin-eq-value {
-  font-size: 28px;
-}
-.fin-eq-result .fin-eq-op {
-  font-size: 19px;
-}
-.fin-eq-result .fin-eq-note {
-  font-size: 12.5px;
-}
-
-.fin-topline-foot {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px 16px;
-  padding-top: 13px;
-  border-top: 1px solid var(--border);
-}
-.fin-topline-meta {
-  display: inline-flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 5px;
-  font-size: 12px;
-  /* 6.26:1 light, 8.25:1 dark — the separators included, so nothing on the line
-     falls under the threshold on a technicality about punctuation. */
-  color: var(--text-2);
-}
-.fin-topline-meta b {
-  font-weight: 700;
-  color: var(--text);
-}
-/* The caveat on everything above: money the ledger holds that no day has
-   claimed. A button, because it goes somewhere — pressing it scrolls to the
-   panel that explains it, which beats a caption telling you to look further
-   down. 7.52:1 light, 7.35:1 dark. */
-.fin-topline-waiting {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 11px;
-  border: 0;
-  border-radius: 999px;
-  background: var(--brand-soft);
-  color: var(--brand-700);
-  font: inherit;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.13s ease;
-}
-.fin-topline-waiting:hover {
-  background: var(--brand-soft-2);
-}
-.fin-topline-waiting:focus-visible {
-  outline: 2px solid var(--brand-500);
-  outline-offset: 2px;
-}
-
-/* ==========================================================================
-   Profit by day, week or month
-   ========================================================================== */
-.fin-days-section {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
+  gap: 14px;
   padding: 18px 20px 20px;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -11817,51 +11639,287 @@ button.sor-team:focus-visible {
   box-shadow: var(--shadow-sm);
   min-width: 0;
 }
-.fin-days-head {
+.fin-head-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 16px;
+}
+.fin-head-top h2 {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+/* 6.26:1 light, 8.25:1 dark. */
+.fin-head-scope {
+  font-size: 12px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- The range bar ---------- */
+/* One row of controls, all of which set the same piece of state. They wrap
+   rather than scroll: a control that has scrolled out of sight on a narrow
+   window is a control nobody knows exists. */
+.fin-rangebar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  gap: 6px;
+  padding-bottom: 2px;
+  min-width: 0;
 }
-
-/* Buttons in a group, not tabs: they re-grain one report rather than swap
-   panels, so they carry aria-pressed and look like a segmented control. */
-.fin-period {
-  display: inline-flex;
-  gap: 2px;
-  padding: 2px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius);
+.fin-range-btn {
+  padding: 5px 11px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
   background: var(--surface-2);
-}
-.fin-period-btn {
-  padding: 5px 14px;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
   /* 5.94:1 light, 7.71:1 dark on --surface-2. */
   color: var(--text-2);
   font: inherit;
-  font-size: 12.5px;
+  font-size: 12px;
   font-weight: 600;
+  white-space: nowrap;
   cursor: pointer;
-  transition: background 0.13s ease, color 0.13s ease;
+  transition: background 0.13s ease, color 0.13s ease, border-color 0.13s ease;
 }
-.fin-period-btn:hover {
+.fin-range-btn:hover {
   color: var(--text);
+  border-color: var(--border-strong);
 }
 /* 8.04:1 light, 7.79:1 dark. The ground carries the state as well as the ink,
    so it survives a grey-scale render. */
-.fin-period-btn.is-on {
+.fin-range-btn.is-on {
   background: var(--brand-soft);
+  border-color: var(--brand-500);
   color: var(--brand-700);
-  box-shadow: var(--shadow-sm);
 }
-.fin-period-btn:focus-visible {
+.fin-range-btn:focus-visible,
+.fin-range-select:focus-within {
   outline: 2px solid var(--brand-500);
   outline-offset: 1px;
 }
+
+/* A native select wearing the same pill as the buttons beside it. The chevron
+   is ours and the platform's is suppressed, so the row reads as one control
+   set rather than as four buttons and a form field. */
+.fin-range-select {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px 0 11px;
+  height: 27px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.fin-range-select:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+.fin-range-select.is-on {
+  background: var(--brand-soft);
+  border-color: var(--brand-500);
+  color: var(--brand-700);
+}
+.fin-range-select select {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  padding: 0;
+  cursor: pointer;
+  max-width: 148px;
+}
+.fin-range-select select:focus {
+  outline: none;
+}
+.fin-range-select > svg {
+  flex: none;
+  opacity: 0.65;
+  pointer-events: none;
+}
+
+/* What is selected, in words, at the end of the row. It is a readout rather
+   than a control — except for the clear, which is the only way back to all
+   time once a preset has been pressed twice and nothing looks selected. */
+.fin-range-now {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  padding-left: 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.fin-range-now > svg {
+  flex: none;
+  opacity: 0.7;
+}
+.fin-range-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--surface-3);
+  color: var(--text-2);
+  cursor: pointer;
+  transition: background 0.13s ease, color 0.13s ease;
+}
+.fin-range-clear:hover {
+  background: var(--danger-bg);
+  color: var(--danger-strong);
+}
+.fin-range-clear:focus-visible {
+  outline: 2px solid var(--brand-500);
+  outline-offset: 1px;
+}
+
+/* ---------- The five widgets ---------- */
+/* auto-fit rather than a fixed five: at 1400px they sit in a row, at 900px in
+   a three-and-two, and at phone width they stack — without a breakpoint that
+   has to be kept in step with the number of widgets. The minimum is 172px
+   because "$160,250.90" at 22px is 148px of glyphs and a figure that meets its
+   own cell edge looks truncated whether or not it is. */
+.fin-widgets {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(172px, 1fr));
+  /* Four named bands — label, figure, note, delta — shared by every widget via
+     subgrid below. Without it the five figures sit on five different baselines
+     the moment one label wraps to two lines or one note does not, and a row of
+     KPIs whose numbers do not line up looks broken however correct it is. */
+  grid-template-rows: auto auto auto auto;
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  min-width: 0;
+}
+.fin-widget {
+  display: grid;
+  grid-template-rows: subgrid;
+  grid-row: span 4;
+  row-gap: 3px;
+  padding: 13px 14px 12px;
+  background: var(--surface);
+  min-width: 0;
+}
+/* The bottom line gets a ground of its own. It is the answer; the four before
+   it are the working, and at equal weight the eye has to read all five to find
+   out which is which. */
+.fin-widget.is-bottom {
+  background: var(--surface-2);
+}
+/* 6.26:1 light, 8.25:1 dark.
+   WRAPS. It used to ellipsis, and at 900px the five widgets are ~148px wide
+   while "COST OF GOODS SOLD" needs ~135px of glyphs — so the one label on the
+   row that names the biggest cost in the business rendered as "COST OF GOODS
+   SO…". A second line costs nothing: the widgets are grid cells and all five
+   take the height of the tallest either way. */
+.fin-widget-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-2);
+  line-height: 1.3;
+}
+.fin-widget-value {
+  display: block;
+  min-width: 0;
+}
+/* Sized down a step from the old headline. 22px is still unmistakably the
+   figure on the card and it lets "$160,250.90" fit a 172px column without
+   the shrink-to-fit that made the old strip's figures different sizes on the
+   same row. */
+.fin-widget-figure {
+  display: block;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fin-widget-figure.is-up {
+  color: var(--success-strong);
+}
+.fin-widget-figure.is-down {
+  color: var(--danger-strong);
+}
+/* 4.61:1 light, 5.9:1 dark — small text, so --text-2 rather than --text-3. */
+.fin-widget-sub {
+  font-size: 11.5px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.35;
+}
+.fin-widget-delta {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-top: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  /* Neutral by default and on purpose: fees rising because sales rose is not a
+     regression, and an arrow that called it one would train the operator to
+     ignore the arrows that do mean something. */
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.fin-widget-delta > svg {
+  flex: none;
+}
+.fin-widget-delta.is-good {
+  color: var(--success-strong);
+}
+.fin-widget-delta.is-bad {
+  color: var(--danger-strong);
+}
+.fin-widget-delta.is-flat {
+  opacity: 0.75;
+}
+/* The checksum failure. It spans the whole grid because it invalidates every
+   cell in it, not one. */
+.fin-widgets-drift {
+  grid-column: 1 / -1;
+  grid-row: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 0;
+  padding: 10px 14px;
+  background: var(--danger-bg);
+  color: var(--danger-strong);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.fin-widgets-drift > svg {
+  flex: none;
+  margin-top: 1px;
+}
+.fin-widgets-drift .fin-money {
+  color: inherit;
+}
+
 
 /* ---------- Month grid ---------- */
 /* Structure, spacing and controls deliberately mirror .stm-cal in Streaming: it
@@ -11871,10 +11929,19 @@ button.sor-team:focus-visible {
    The nav buttons are RESTATED here rather than borrowing .stm-nav-btn. Sharing
    the class would be less code and a worse boundary — Finance would then be
    restyled by an edit made in the Streaming block, silently. */
+/* A card in its own right now. It used to sit inside a "Profit by day/week/
+   month" panel that supplied the border; that panel existed to hold the grain
+   switch, the grain switch became the range bar, and a calendar floating on the
+   page background between two cards read as a hole in the layout. */
 .fin-cal-section {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  padding: 16px 20px 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
   min-width: 0;
 }
 .fin-cal-head {
@@ -11935,46 +12002,44 @@ button.sor-team:focus-visible {
   cursor: default;
 }
 
-/* The month's answer, beside the month's name — and NOT in a box. It sits
-   inside a card already; a bordered strip on a bordered card is a frame drawn
-   twice, and the figures are the only thing anybody was reading in it. */
-.fin-cal-total {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 10px 24px;
+/* The month's figures used to sit here. They have moved to the widgets, where
+   they answer for whatever range is selected rather than for whichever month
+   happens to be on screen — the two disagreed constantly, and a month total
+   beside a range total is two answers to one question. What is left is the
+   instruction, because a calendar that selects a RANGE looks exactly like one
+   that selects a day until you have accidentally discovered otherwise. */
+.fin-cal-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   margin-left: auto;
-}
-.fin-cal-total.is-quiet {
-  font-size: 12.5px;
-  font-style: italic;
+  font-size: 11.5px;
+  font-weight: 500;
+  /* 4.61:1 light, 5.9:1 dark. */
   color: var(--text-2);
 }
-.fin-cal-fig {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
+.fin-cal-hint > svg {
+  flex: none;
+  opacity: 0.7;
 }
-.fin-cal-fig em,
-.fin-cal-fig i {
-  font-style: normal;
+.fin-cal-cancel {
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  font: inherit;
   font-size: 11px;
   font-weight: 600;
-  /* 6.26:1 light, 8.25:1 dark. */
-  color: var(--text-2);
+  cursor: pointer;
 }
-.fin-cal-fig i {
-  font-weight: 500;
-}
-.fin-cal-fig .fin-money,
-.fin-cal-fig b {
-  font-size: 15px;
-  font-weight: 700;
+.fin-cal-cancel:hover {
   color: var(--text);
+  border-color: var(--border-strong);
 }
-.fin-cal-fig.is-main .fin-profit {
-  font-size: 22px;
+.fin-cal-cancel:focus-visible {
+  outline: 2px solid var(--brand-500);
+  outline-offset: 1px;
 }
 
 .fin-cal {
@@ -12024,12 +12089,16 @@ button.sor-team:focus-visible {
 }
 /* A quiet day keeps its footprint, so the month's shape stays readable, and
    prints nothing else at all. No border either: twenty-odd empty frames are
-   what made the grid look busier than the days that matter. It is also not a
-   button you can press — there is no statement behind it. */
+   what made the grid look busier than the days that matter.
+   It IS pressable now, unlike before. A range from the 1st to the 31st has to
+   be selectable whether or not a show ran on either end, and a disabled cell in
+   the middle of a month is a hole the selection falls into. */
 .fin-cell.quiet {
   border-color: transparent;
   background: var(--surface-2);
-  cursor: default;
+}
+.fin-cell.quiet:hover {
+  background: var(--surface-3);
 }
 .fin-cell.quiet .fin-cell-num {
   color: var(--text-2);
@@ -12062,10 +12131,42 @@ button.sor-team:focus-visible {
 .fin-cell.has-activity.is-down {
   border-left-color: var(--danger-strong);
 }
-.fin-cell.selected,
+/* ---------- The selected range ---------- */
+/* EVERY selected cell is ringed, not just the ends.
+   The first attempt drew a continuous tinted band and rounded only the first
+   and last day, on the theory that one shape reads as one selection. Rendered,
+   it did not: the grid has a 6px gutter, so there is no continuous band to
+   draw, and a four-day range showed two ringed ends with two near-white cells
+   between them — indistinguishable from unselected days at a glance. Whichever
+   is prettier in principle, the one that survives the gutter is the ring.
+
+   Three signals, because one is never enough: the ground, the ring, and the day
+   number in brand ink. --brand-soft keeps --text at 8:1 or better in both
+   themes, so nothing inside a selected cell loses contrast. */
+.fin-cell.in-range {
+  background: var(--brand-soft);
+  box-shadow: inset 0 0 0 2px var(--brand-500);
+}
+.fin-cell.in-range:hover {
+  background: var(--brand-soft);
+}
+.fin-cell.in-range .fin-cell-num {
+  color: var(--brand-700);
+  font-weight: 700;
+}
+/* The profit edge survives selection — it is the cell's own fact, not a
+   selection state, and losing it would make a selected month lose the up/down
+   read that is the whole point of the grid. */
+.fin-cell.in-range.is-up {
+  border-left-color: var(--success-strong);
+}
+.fin-cell.in-range.is-down {
+  border-left-color: var(--danger-strong);
+}
 .fin-cell:focus-visible {
   outline: 2px solid var(--brand-500);
   outline-offset: -2px;
+  z-index: 1;
 }
 .fin-cell-top {
   display: flex;
@@ -12099,10 +12200,26 @@ button.sor-team:focus-visible {
 }
 /* THE HEADLINE. Everything else on the cell is deliberately smaller than half
    its size, because the cell exists to answer one question and the rest is
-   context for it. */
-.fin-cell-body .fin-profit {
+   context for it.
+
+   Compact currency, not the full `Profit` component. Seven of these sit across
+   the grid and an exact figure at that width either wraps or clips; the exact
+   number is in the widgets the moment the day is clicked. The sign glyph is
+   still carried by the number itself — U+2212 for a loss — so colour is never
+   the only signal. */
+.fin-cell-net {
   font-size: 15.5px;
+  font-weight: 700;
   line-height: 1.15;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  white-space: nowrap;
+}
+.fin-cell-net.is-up {
+  color: var(--success-strong);
+}
+.fin-cell-net.is-down {
+  color: var(--danger-strong);
 }
 .fin-cell-unknown {
   font-size: 15.5px;
@@ -12158,19 +12275,20 @@ button.sor-team:focus-visible {
    there was a box in a box; a rule and a heading do the separating, which is
    how a printed report separates a section.
    ========================================================================== */
+/* A card of its own. It used to be nested — inside a calendar that had opened
+   a day, or inside a period row — and took its top rule from whatever was above
+   it. It now reports on the SELECTED RANGE and is always on screen, so it is a
+   sibling of the calendar rather than something the calendar contains. */
 .fin-stmt {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  padding-top: 18px;
-  border-top: 1px solid var(--border-strong);
+  padding: 18px 20px 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
   min-width: 0;
-}
-/* Nested inside an already-ruled period row, which has just supplied the line
-   above it. */
-.fin-stmt.is-period {
-  padding-top: 0;
-  border-top: 0;
 }
 .fin-stmt-head {
   display: flex;
@@ -12202,24 +12320,6 @@ button.sor-team:focus-visible {
 .fin-stmt-title .fin-carry {
   flex: 1 0 100%;
   margin-top: 2px;
-}
-.fin-stmt-close {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: none;
-  margin-left: auto;
-  width: 28px;
-  height: 28px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--text-2);
-  cursor: pointer;
-}
-.fin-stmt-close:hover {
-  border-color: var(--border-strong);
-  color: var(--text);
 }
 .fin-stmt-rows {
   display: flex;
@@ -12262,18 +12362,96 @@ button.sor-team:focus-visible {
   text-align: right;
   white-space: nowrap;
 }
-/* Section heading. Small caps rather than a big label: the section names are
-   scaffolding, the figures are the content. 6.26:1 light, 8.25:1 dark. */
+/* ---------- Section heading, which is also the disclosure ---------- */
+/* The heading row now CARRIES ITS SUBTOTAL and opens to show the lines under
+   it. Closed, the statement is eight rows — Revenue, Cost of goods, Gross
+   profit, Fees, Shipping, Show costs, Adjustments, Net profit — which is the
+   whole P&L at a glance. The previous layout put a small-caps heading at the
+   top of each section and its subtotal at the bottom, twenty-odd rows deep
+   whether or not anyone was reading them, under a summary that had already
+   answered the top-level question. */
 .fin-pnl-head th {
-  padding: 20px 0 6px;
+  padding: 0;
+}
+.fin-pnl-head > th,
+.fin-pnl-head > td {
+  padding-top: 9px;
+  padding-bottom: 9px;
+  border-top: 1px solid var(--border);
+  font-weight: 700;
+  color: var(--text);
+}
+.fin-pnl-sec:first-of-type .fin-pnl-head > th,
+.fin-pnl-sec:first-of-type .fin-pnl-head > td {
+  border-top: 0;
+}
+/* The whole heading is the hit target. A caret-sized one on a row this wide is
+   a miss waiting to happen, and there is nothing else on the row to click. */
+.fin-pnl-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.fin-pnl-toggle > svg {
+  flex: none;
+  color: var(--text-2);
+  transition: color 0.13s ease;
+}
+.fin-pnl-toggle:hover,
+.fin-pnl-toggle:hover > svg {
+  color: var(--brand-600);
+}
+.fin-pnl-toggle:focus-visible {
+  outline: 2px solid var(--brand-500);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+/* How many lines are behind the caret, so a closed section says whether it is
+   worth opening. 4.61:1 light, 5.9:1 dark. */
+.fin-pnl-count {
+  font-style: normal;
   font-size: 10.5px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+.fin-pnl-head.is-open .fin-pnl-toggle > svg {
+  color: var(--brand-600);
+}
+
+/* ---------- The column head and the share column ---------- */
+.fin-pnl thead th {
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--border-strong);
+  font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.09em;
   text-transform: uppercase;
+  /* 6.26:1 light, 8.25:1 dark. */
   color: var(--text-2);
 }
-.fin-pnl-sec:first-child .fin-pnl-head th {
-  padding-top: 0;
+.fin-pnl thead th.is-num {
+  text-align: right;
+}
+/* Fixed and narrow, so the amount column does not move between a statement
+   with a share column and one without. */
+.fin-pnl.has-share thead th:last-child {
+  width: 62px;
+}
+.fin-pnl-share {
+  padding-left: 16px;
+  /* 4.61:1 light, 5.9:1 dark — supporting, never competing with the amount. */
+  color: var(--text-2);
+  font-size: 12px;
 }
 .fin-pnl-line th {
   color: var(--text);
@@ -12304,15 +12482,12 @@ button.sor-team:focus-visible {
   color: var(--text-2);
   white-space: nowrap;
 }
-/* A subtotal is RULED, not boxed — the way a statement is ruled on paper. The
-   rule is --text-2 rather than a hairline because it is doing arithmetic, not
-   decoration: 6.26:1 light, 8.25:1 dark, so it survives a low-contrast screen. */
-.fin-pnl-sub th,
-.fin-pnl-sub td {
-  padding-top: 7px;
-  border-top: 1px solid var(--border-strong);
-  font-weight: 700;
-  color: var(--text);
+/* Lines sit INDENTED under the heading they belong to. It is the only thing
+   distinguishing a constituent line from a section subtotal now that both are
+   rows in the same table, and it is the indent a paper statement uses. */
+.fin-pnl-line th,
+.fin-pnl-line.is-none td {
+  padding-left: 21px;
 }
 /* A milestone — gross profit, net profit. No lines of its own: it is everything
    above it, carried down. A single heavy rule for gross profit, a DOUBLE rule
@@ -12344,101 +12519,22 @@ button.sor-team:focus-visible {
 .fin-pnl-mile.is-bottom .fin-profit {
   font-size: 22px;
 }
-.fin-pnl-sec.is-running + .fin-pnl-sec .fin-pnl-head th {
-  padding-top: 20px;
+/* A milestone has just drawn a heavy rule of its own, so the section after it
+   drops the hairline it would otherwise add and takes the space instead. Two
+   rules a few pixels apart read as a rendering fault, not as emphasis. */
+.fin-pnl-sec.is-running + .fin-pnl-sec .fin-pnl-head > th,
+.fin-pnl-sec.is-running + .fin-pnl-sec .fin-pnl-head > td {
+  border-top: 0;
+  padding-top: 16px;
 }
 
-/* ---------- Weeks and months ---------- */
-.fin-plist {
+/* The two controls under the statement, on one line. Both are toggles rather
+   than links, and neither is ever the primary thing on the screen. */
+.fin-pnl-foot {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 0;
-}
-/* The two figure columns are FIXED widths, on the legend and on every row, so
-   they form one ruler-straight column down the list. Content-sized columns
-   would align only by luck — each row is its own grid. */
-.fin-plist-legend {
-  display: flex;
-  justify-content: flex-end;
-  padding: 0 13px 2px;
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-  color: var(--text-2);
-}
-.fin-plist-figs {
-  display: grid;
-  grid-template-columns: 120px 152px;
-  gap: 18px;
-  align-items: baseline;
-  text-align: right;
-}
-.fin-plist-item {
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
-  overflow: hidden;
-}
-.fin-plist-item.is-open {
-  border-color: var(--border-strong);
-  box-shadow: var(--shadow-sm);
-}
-.fin-plist-row {
-  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
-  width: 100%;
-  min-width: 0;
-  padding: 11px 13px;
-  border: 0;
-  background: var(--surface);
-  font: inherit;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-  transition: background 0.13s ease;
-}
-.fin-plist-row:hover {
-  background: var(--surface-2);
-}
-.fin-plist-item.is-open .fin-plist-row {
-  background: var(--surface-2);
-  border-bottom: 1px solid var(--border-strong);
-}
-/* 6.26:1 light, 8.25:1 dark — not --text-3, which is 3.09:1. */
-.fin-plist-row > svg {
-  flex: none;
-  color: var(--text-2);
-}
-.fin-plist-main {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-  margin-right: auto;
-}
-.fin-plist-main b {
-  font-size: 13.5px;
-  font-weight: 700;
-  color: var(--text);
-}
-.fin-plist-main em {
-  font-style: normal;
-  font-size: 11.5px;
-  color: var(--text-2);
-}
-.fin-plist-rev .fin-money {
-  font-size: 13.5px;
-  color: var(--text);
-}
-.fin-plist-net .fin-profit {
-  font-size: 16px;
-}
-.fin-plist-body {
-  padding: 14px 13px;
-  background: var(--surface);
+  gap: 6px 18px;
 }
 
 /* The carried-back marker: deliberately quiet. A settlement row landing on the
@@ -12578,15 +12674,54 @@ button.sor-team:focus-visible {
    from" rather than as two more reports. Neither carries a frame of its own; a
    hairline separates them.
    ========================================================================== */
+/* ---------- Provenance, folded ---------- */
+/* This region used to open flat: the unattributed panel with its paragraph and
+   cluster table, then the import list with its counts and warnings, all of it
+   on screen at once under the P&L. It was accurate and it was too much — on a
+   normal week nothing here needs doing, and file bookkeeping shown at the same
+   weight as the profit figure teaches the operator to scroll past both.
+
+   NOTHING IS HIDDEN, only folded: every fact anyone acts on is on the summary
+   bar, and the bar is the trigger. */
 .fin-source {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding: 16px 20px 18px;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--surface-2);
   min-width: 0;
+  overflow: hidden;
+}
+.fin-source-bar {
+  display: flex;
+  min-width: 0;
+}
+.fin-source-toggle {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 16px;
+  width: 100%;
+  padding: 12px 18px;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+  transition: background 0.13s ease;
+}
+.fin-source-toggle:hover {
+  background: var(--surface-3);
+}
+.fin-source-toggle:focus-visible {
+  outline: 2px solid var(--brand-500);
+  outline-offset: -2px;
+}
+.fin-source-toggle > svg {
+  flex: none;
+  color: var(--text-2);
 }
 .fin-source-title {
   font-size: 10.5px;
@@ -12595,6 +12730,55 @@ button.sor-team:focus-visible {
   text-transform: uppercase;
   /* 5.94:1 light, 7.71:1 dark on --surface-2. */
   color: var(--text-2);
+  white-space: nowrap;
+}
+/* The facts that make the fold safe to leave closed. They wrap rather than
+   truncate: a count that has been cut off is worse than one on a second line. */
+.fin-source-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 16px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.fin-source-facts b {
+  color: var(--text);
+  font-weight: 700;
+}
+.fin-source-waiting .fin-money {
+  color: var(--text);
+}
+/* The one thing here that can be urgent. Amber GROUND with --text ink and an
+   amber edge, exactly as .fin-note.tone-warn does it — --warning as ink is only
+   2.9:1 on its own tint in light, so the hue identifies the chip and the ink is
+   what makes it readable (16.1:1 light). */
+.fin-source-warn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  padding: 3px 9px;
+  border: 1px solid var(--warning);
+  border-radius: 999px;
+  background: var(--warning-bg);
+  color: var(--text);
+  font-size: 11.5px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.fin-source-warn > svg {
+  flex: none;
+  color: var(--warning);
+}
+.fin-source-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 4px 18px 18px;
+  border-top: 1px solid var(--border);
+  min-width: 0;
 }
 
 /* ---------- Money waiting for a show ---------- */
@@ -13024,93 +13208,43 @@ button.sor-team:focus-visible {
 /* ==========================================================================
    Responsive
    --------------------------------------------------------------------------
-   Nothing here scrolls sideways at any width. The equation turns from a row
-   into a column, the calendar sheds secondary text rather than cells, and the
-   statement's detail moves under its label rather than pushing the amount
-   column off the page.
+   Nothing here scrolls sideways at any width. The widgets reflow on their own
+   (auto-fit, so no breakpoint has to be kept in step with how many there are),
+   the calendar sheds secondary text rather than cells, and the statement's
+   detail moves under its label rather than pushing the amount column off the
+   page.
    ========================================================================== */
 @media (max-width: 1180px) {
-  /* The terms are narrower than the figures they hold before the layout itself
-     breaks, so the type steps down first. */
-  .fin-eq-value {
-    font-size: 18px;
-  }
-  .fin-eq-result .fin-eq-value {
-    font-size: 24px;
+  /* The figure is wider than its cell before the grid itself breaks, so the
+     type steps down first. */
+  .fin-widget-figure {
+    font-size: 20px;
   }
 }
 @media (max-width: 1040px) {
   /* Seven columns of a narrowing container: the profit figure steps down before
      it can reach the cell's edge. It is nowrap and the cell clips, so there is
      no graceful failure to fall back on — the size has to lead the width. */
-  .fin-cell-body .fin-profit,
+  .fin-cell-net,
   .fin-cell-unknown {
     font-size: 14px;
   }
-  .fin-plist-figs {
-    grid-template-columns: 108px 136px;
-    gap: 14px;
-  }
 }
 @media (max-width: 900px) {
-  /* THE EQUATION BECOMES A STATEMENT. Term per line, operator in the left
-     margin, figure on a common right edge — which is the shape this arithmetic
-     has had on paper for four hundred years, and it needs no horizontal room at
-     all. The operators do NOT disappear: they are the reason the line closes. */
-  .fin-eq {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 0;
+  /* Widgets at two-and-a-bit a row rather than five, and the share column
+     comes off the statement before the amount column does — the amount is the
+     point, the share is the gloss. */
+  .fin-widgets {
+    grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
   }
-  .fin-eq-terms {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 0;
+  .fin-widget-figure {
+    font-size: 18px;
   }
-  .fin-eq-cell {
-    grid-template-columns: 14px minmax(0, 1fr) auto;
-    grid-template-rows: auto auto;
-    column-gap: 8px;
-    padding: 9px 0;
-    border-bottom: 1px solid var(--border);
+  .fin-pnl-share,
+  .fin-pnl thead th:last-child {
+    display: none;
   }
-  .fin-eq-label {
-    grid-column: 2;
-    grid-row: 1;
-    font-size: 13px;
-    color: var(--text);
-  }
-  .fin-eq-op {
-    grid-column: 1;
-    grid-row: 1;
-    font-size: 15px;
-  }
-  .fin-eq-value {
-    grid-column: 3;
-    grid-row: 1;
-    font-size: 16px;
-    text-align: right;
-  }
-  .fin-eq-note {
-    grid-column: 2 / 4;
-    grid-row: 2;
-    margin-top: 1px;
-  }
-  .fin-eq-result {
-    padding: 12px 0 0;
-    border-left: 0;
-    border-top: 4px double var(--text-2);
-  }
-  .fin-eq-result .fin-eq-label {
-    font-size: 14px;
-    font-weight: 700;
-  }
-  .fin-eq-result .fin-eq-value {
-    font-size: 21px;
-  }
-  .fin-eq-result .fin-eq-note {
-    font-size: 12px;
-  }
-
-  .fin-cal-total {
+  .fin-cal-hint {
     margin-left: 0;
     width: 100%;
   }
@@ -13120,7 +13254,7 @@ button.sor-team:focus-visible {
     min-height: 84px;
     padding: 6px;
   }
-  .fin-cell-body .fin-profit,
+  .fin-cell-net,
   .fin-cell-unknown {
     font-size: 12.5px;
   }
@@ -13135,31 +13269,33 @@ button.sor-team:focus-visible {
     margin-left: 0;
     white-space: normal;
   }
-  .fin-plist-figs {
-    grid-template-columns: 96px 128px;
-    gap: 12px;
-  }
   .fin-unattr-figure {
     margin-right: 0;
     width: 100%;
   }
 }
 @media (max-width: 640px) {
-  .fin-topline {
-    padding: 16px 14px 12px;
+  .fin-head,
+  .fin-cal-section,
+  .fin-stmt {
+    padding: 16px 14px;
   }
-  .fin-days-section,
-  .fin-source {
-    padding: 14px;
+  .fin-source-toggle,
+  .fin-source-body {
+    padding-left: 14px;
+    padding-right: 14px;
   }
-  /* The toggle is the control that decides what the report below IS, so it gets
-     the full width rather than being squeezed beside the heading. */
-  .fin-period {
+  /* One widget a row at phone width. Two columns of 148px need 296px plus the
+     gutters, which a 640px viewport has and a 380px one does not — and a figure
+     shrunk to fit half of 380px is not a figure anyone reads. */
+  .fin-widgets {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  /* The range readout drops below its buttons rather than squeezing them. */
+  .fin-range-now {
+    margin-left: 0;
+    padding-left: 0;
     flex: 1 0 100%;
-  }
-  .fin-period-btn {
-    flex: 1;
-    padding: 6px 8px;
   }
   .fin-cal-month {
     min-width: 0;
@@ -13178,7 +13314,7 @@ button.sor-team:focus-visible {
   .fin-cell {
     min-height: 68px;
   }
-  .fin-cell-body .fin-profit,
+  .fin-cell-net,
   .fin-cell-unknown {
     font-size: 11px;
   }
@@ -13190,16 +13326,6 @@ button.sor-team:focus-visible {
   .fin-cell-today {
     font-size: 0;
     padding: 4px;
-  }
-  /* Two figures on a 640px row leave the label nothing. The period list keeps
-     both — they are why the row exists — and stacks them on the right edge they
-     already share. */
-  .fin-plist-legend {
-    display: none;
-  }
-  .fin-plist-figs {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 2px;
   }
   .fin-clusters th,
   .fin-clusters td {
