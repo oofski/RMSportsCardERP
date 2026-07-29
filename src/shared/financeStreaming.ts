@@ -811,6 +811,23 @@ export function buildPnl(d: {
 }
 
 /**
+ * Net profit as a share of total revenue.
+ *
+ * The denominator is TOTAL REVENUE, not sales — this is "of every dollar that
+ * came in, how much did we keep", which is the question a margin answers. (The
+ * fee rate elsewhere divides by sales instead, because fees are only charged on
+ * sales; the two denominators are different on purpose and each is labelled.)
+ *
+ * Null rather than zero when nothing came in: a 0% margin on no revenue is a
+ * statement about nothing, and printing it invites the reader to compare it to
+ * a real one.
+ */
+export function profitMargin(totalRevenue: number, netProfit: number): number | null {
+  if (!Number.isFinite(totalRevenue) || totalRevenue <= 0) return null
+  return Math.round((netProfit / totalRevenue) * 1000) / 10
+}
+
+/**
  * Every section subtotal that is NOT a running total, summed. Must equal
  * netProfit — exported so the UI and the tests can both assert it rather than
  * trusting it.
