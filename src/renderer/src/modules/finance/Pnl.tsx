@@ -53,7 +53,16 @@ export type PnlMoney = Omit<StreamDayFinance, 'streamDate' | 'sessionTitles'>
  */
 const finite = (n: number): number => (Number.isFinite(n) ? n : 0)
 
-function buildStatement(m: PnlMoney): PnlSection[] {
+/**
+ * Exported because the SUMMARY EQUATION at the top of the tab is built from the
+ * same sections this statement is.
+ *
+ * That is not a convenience. The strip's whole job is to be checkable by eye
+ * against the statements below it, and the only way two screens cannot disagree
+ * about what "fees" or "shipping" contains is for both to read the same
+ * `buildPnl` output — including the same guards on the same fields.
+ */
+export function buildStatement(m: PnlMoney): PnlSection[] {
   return buildPnl({
     ...m,
     breakCost: finite(m.breakCost),
@@ -62,6 +71,28 @@ function buildStatement(m: PnlMoney): PnlSection[] {
     grossProfit: finite(m.grossProfit),
     netProfit: finite(m.netProfit)
   })
+}
+
+/** The subtotal of one section, by key. Zero for a section this build's
+ *  contract does not produce, which the checksum then catches. */
+export function sectionSubtotal(sections: PnlSection[], key: string): number {
+  return sections.find((s) => s.key === key)?.subtotal ?? 0
+}
+
+/**
+ * The statement's own assertion, in the one shape every caller needs: what the
+ * sections add up to, what the period claims, and the gap between them.
+ */
+export function pnlDrift(sections: PnlSection[], statedNetProfit: number): {
+  checksum: number
+  stated: number
+  drift: number
+  ok: boolean
+} {
+  const checksum = pnlChecksum(sections)
+  const stated = Math.round(finite(statedNetProfit) * 100) / 100
+  const drift = Math.round((checksum - stated) * 100) / 100
+  return { checksum, stated, drift, ok: isZero(drift) }
 }
 
 export function PnlStatement({ money }: { money: PnlMoney }): JSX.Element {
@@ -79,21 +110,19 @@ export function PnlStatement({ money }: { money: PnlMoney }): JSX.Element {
   // The assertion, run on every paint. `pnlChecksum` sums the sections that are
   // not running totals; that sum IS net profit by construction, so any drift
   // means the day was built by arithmetic this build does not agree with.
-  const checksum = useMemo(() => pnlChecksum(sections), [sections])
-  const stated = Math.round(finite(money.netProfit) * 100) / 100
-  const drift = Math.round((checksum - stated) * 100) / 100
+  const check = useMemo(() => pnlDrift(sections, money.netProfit), [sections, money.netProfit])
 
   return (
     <div className="fin-pnl-wrap">
-      {!isZero(drift) && (
+      {!check.ok && (
         <Note tone="danger" icon="AlertTriangle" role="alert">
           <b>This statement does not add up — do not use it.</b>
           <p>
-            The sections below total <Money value={checksum} strong />, but this period was stored
-            with a net profit of <Money value={stated} strong />, a difference of{' '}
-            <Money value={drift} strong />. That can only happen if the app and its data engine were
-            built from different versions of the P&amp;L. Update the app and re-import before
-            trusting any figure here.
+            The sections below total <Money value={check.checksum} strong />, but this period was
+            stored with a net profit of <Money value={check.stated} strong />, a difference of{' '}
+            <Money value={check.drift} strong />. That can only happen if the app and its data
+            engine were built from different versions of the P&amp;L. Update the app and re-import
+            before trusting any figure here.
           </p>
         </Note>
       )}
@@ -118,7 +147,7 @@ export function PnlStatement({ money }: { money: PnlMoney }): JSX.Element {
           <Icon name={showAll ? 'ChevronUp' : 'ChevronDown'} size={14} />
           {showAll
             ? `Hide the ${plural(zeroLines, 'empty line')}`
-            : `Show all lines (${plural(zeroLines, 'line')} at zero)`}
+            : `Show ${plural(zeroLines, 'line')} sitting at zero`}
         </button>
       )}
     </div>
@@ -184,11 +213,13 @@ function LineRow({ line }: { line: PnlLine }): JSX.Element {
   return (
     <tr className={`fin-pnl-line${line.empty ? ' is-empty' : ''}`}>
       <th scope="row">
-        {line.label}
+        <span className="fin-pnl-label">{line.label}</span>
         {/* The detail is what makes the figure checkable — "2.9% + 30c x 1029"
             is the sum, written out. It stays beside the label rather than in a
             tooltip precisely because nobody hovers a number they already
-            believe. */}
+            believe. It is printed verbatim from the contract: rewriting the
+            builder's own words in the renderer would put two versions of the
+            same sentence in the app. */}
         {line.detail && <em className="fin-pnl-detail">{line.detail}</em>}
       </th>
       <td>

@@ -16,9 +16,24 @@ import { Icon } from '../../components/Icon'
 /** Anything below half a cent is zero; float sums arrive as -0 and 1e-13. */
 const isZero = (n: number): boolean => Math.abs(n) < 0.005
 
+/**
+ * Money as text, with U+2212 MINUS SIGN in place of the ASCII hyphen Intl
+ * emits.
+ *
+ * The hyphen is roughly half a digit wide, so a column containing one negative
+ * loses its right edge; U+2212 is drawn to digit width and holds it. Every
+ * money string on this screen goes through here — including the ones that end
+ * up inside a `title` attribute, which is why it is exported rather than being
+ * a private detail of `Money`.
+ */
+export function moneyText(value: number): string {
+  return formatMoney(value).replace('-', '−')
+}
+
 export function Money({
   value,
   cost = false,
+  abs = false,
   dash = false,
   strong = false,
   title
@@ -31,12 +46,20 @@ export function Money({
    * being explainable from the row you are looking at.
    */
   cost?: boolean
+  /**
+   * Print the MAGNITUDE only, because something beside it already carries the
+   * sign. The summary equation is the case: it prints its own "−" between the
+   * terms, and a signed figure there would render "− −$243.73", which is either
+   * a double negative or a typo depending on who is reading it.
+   */
+  abs?: boolean
   /** Exact zero prints an em dash. A grid of $0.00 reads as a broken screen. */
   dash?: boolean
   strong?: boolean
   title?: string
 }): JSX.Element {
-  const raw = cost ? -Math.abs(value) : value
+  const signed = cost ? -Math.abs(value) : value
+  const raw = abs ? Math.abs(signed) : signed
   const zero = isZero(raw)
 
   if (zero && dash) {
@@ -47,11 +70,9 @@ export function Money({
     )
   }
 
-  // U+2212 MINUS SIGN, not the ASCII hyphen Intl emits: it is the width of a
-  // digit, so it holds the column and stays legible at 13px. Colour marks the
-  // negative too, but the glyph is what carries it for anyone who cannot use
-  // the colour.
-  const text = formatMoney(zero ? 0 : raw).replace('-', '−')
+  // Colour marks the negative too, but the glyph is what carries it for anyone
+  // who cannot use the colour.
+  const text = moneyText(zero ? 0 : raw)
   const negative = !zero && raw < 0
 
   return (
@@ -69,13 +90,17 @@ export function Money({
  *
  * Every other money figure in Finance is neutral-or-red, because a cost is not
  * a loss: `Money` reds a negative because it is an outflow. Here the question is
- * different — did the day KEEP money — so a positive earns the success ramp and
- * a negative the danger one.
+ * different — did the period KEEP money — so a positive earns the success ramp
+ * and a negative the danger one.
  *
- * COLOUR IS NEVER THE ONLY SIGNAL. The sign is printed explicitly on both
- * sides: U+2212 for a loss, and a real "+" for a profit rather than leaving the
- * reader to infer it from an absent glyph. Greyscale-render this and a profit
- * and a loss are still one character apart.
+ * COLOUR IS NEVER THE ONLY SIGNAL, and there are now two fallbacks rather than
+ * one. The sign is printed explicitly on both sides — U+2212 for a loss, a real
+ * "+" for a profit rather than leaving the reader to infer it from an absent
+ * glyph — and a mark is drawn ahead of it: a triangle up, a triangle down, a bar
+ * for flat. The mark is built from CSS borders rather than a character so it
+ * cannot fall back to a missing glyph in some other font, and it is hidden
+ * inside a calendar cell, where at 640px the seven columns leave no room for it
+ * and the sign alone still separates the two cases.
  *
  * Exact zero is neither, so it takes neither ramp — a day that broke even is a
  * finding, not a near miss in one direction.
@@ -83,12 +108,40 @@ export function Money({
 export function Profit({ value, title }: { value: number; title?: string }): JSX.Element {
   const zero = isZero(value)
   const tone = zero ? 'is-flat' : value > 0 ? 'is-up' : 'is-down'
-  // formatMoney already emits the ASCII hyphen for a negative; swapping it for
-  // U+2212 keeps the glyph a digit wide so a column of figures stays aligned.
-  const text = formatMoney(zero ? 0 : value).replace('-', '−')
+  const text = moneyText(zero ? 0 : value)
   return (
     <span className={`fin-profit mono ${tone}`} title={title}>
+      <i className="fin-profit-mark" aria-hidden="true" />
       {!zero && value > 0 ? `+${text}` : text}
+    </span>
+  )
+}
+
+/**
+ * A percentage that names its own base.
+ *
+ * A bare "9.22%" on a finance screen is not a fact, it is half of one: the fee
+ * rate divides by SALES because fees are only charged on sales, while the profit
+ * margin divides by TOTAL REVENUE because the question is what share of
+ * everything that came in was kept. The two are different numbers on the same
+ * data, so neither is ever printed without the denominator it belongs to.
+ */
+export function Pct({
+  value,
+  base,
+  digits = 1,
+  title
+}: {
+  /** Already a percentage — 73.8, not 0.738. */
+  value: number
+  /** The denominator, in words: "of revenue", "of sales". */
+  base: string
+  digits?: number
+  title?: string
+}): JSX.Element {
+  return (
+    <span className="fin-pct" title={title}>
+      <b className="mono">{value.toFixed(digits)}%</b> {base}
     </span>
   )
 }

@@ -1,15 +1,22 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { FinancePeriod, StreamFinanceTotals, StreamingFinanceView } from '@shared/financeStreaming'
+import type {
+  FinancePeriod,
+  StreamFinanceTotals,
+  StreamingFinanceView
+} from '@shared/financeStreaming'
+import { profitMargin } from '@shared/financeStreaming'
 import { formatDuration } from '@shared/streaming'
 import { Icon } from '../../components/Icon'
 import { Button, CenterLoader } from '../../components/ui'
 import { useSession } from '../../lib/session'
-import { Money, Note, Profit, plural } from './bits'
+import { Money, Note, Pct, Profit, plural } from './bits'
 import { FinanceCalendar } from './FinanceCalendar'
 import { ImportPanel } from './ImportPanel'
 import { PeriodList } from './PeriodList'
 import { UnattributedPanel } from './UnattributedPanel'
+import { buildStatement, pnlDrift, sectionSubtotal } from './Pnl'
 import { finance } from './api'
+import { dayRangeLabel } from './time'
 
 /**
  * `day` still means "the day grain" in the contract; on screen it is the
@@ -37,17 +44,24 @@ const PERIODS: Array<{ id: FinancePeriod; label: string; hint: string }> = [
  * panel disagree about the same money — which is precisely the bug the
  * reconciliation flag exists to catch.
  *
- * The shape of the screen follows the shape of the question. "Did we make money
- * on the 24th" is a calendar question, so the calendar is the front door and
- * carries one figure per day: net profit, green or red. "Why" is a statement
- * question, so a day opens into a vertical P&L — revenue, cost of goods, gross
- * profit, fees, shipping, other costs, adjustments, net profit — built by
- * `buildPnl` in the contract rather than laid out here.
+ * THE ORDER OF THE PAGE IS THE ORDER OF THE QUESTIONS.
  *
- * Cost of goods IS in these figures now. It was not for three releases, which
- * made every "net" number a gross margin wearing a net label; the captions on
- * this screen were rewritten with the arithmetic, because a stale caption on a
- * correct number is its own kind of wrong answer.
+ *   1. Can I trust this at all?  — the reconciliation banner, if it fails.
+ *   2. What did we make?         — the equation, closing on net profit.
+ *   3. When did we make it?      — the calendar, or weeks, or months.
+ *   4. Where did it come from?   — the ledger: what is imported, what is still
+ *                                  waiting for a show.
+ *
+ * That ordering is why the imports moved to the BOTTOM. They used to open the
+ * screen, which put file bookkeeping ahead of the P&L on a page whose whole
+ * subject is the P&L. They are provenance, and provenance belongs under the
+ * thing it backs — except when there is no ledger at all, when the upload is
+ * the only thing to do and gets the whole screen.
+ *
+ * Position within the page is HELD HERE, not inside the calendar and the period
+ * list, so switching Calendar → Week → Calendar returns to the same month with
+ * the same day still open. State that lives in a component that unmounts is
+ * state the user loses for pressing a grain button.
  */
 export function StreamingTab(): JSX.Element {
   const { can } = useSession()
@@ -58,6 +72,13 @@ export function StreamingTab(): JSX.Element {
   const [error, setError] = useState<string | null>(null)
   const [attempt, setAttempt] = useState(0)
   const [period, setPeriod] = useState<FinancePeriod>('day')
+
+  // null means "follow the latest month with money in it" — the calendar's own
+  // default. It only becomes a concrete key once the user navigates.
+  const [calMonth, setCalMonth] = useState<string | null>(null)
+  const [calDay, setCalDay] = useState<string | null>(null)
+  // Keyed by grain, so an open week survives a trip through Month and back.
+  const [openPeriod, setOpenPeriod] = useState<Partial<Record<FinancePeriod, string | null>>>({})
 
   useEffect(() => {
     let alive = true
@@ -82,6 +103,31 @@ export function StreamingTab(): JSX.Element {
 
   const applyView = useCallback((next: StreamingFinanceView) => setView(next), [])
 
+  /**
+   * The newest business month the ledger holds.
+   *
+   * Watched HERE rather than inside the calendar. A fresh import can land
+   * months that did not exist a moment ago and following them is right — the
+   * operator uploaded a file to look at what is in it — but the calendar
+   * unmounts every time the grain changes, so the same effect living there
+   * fired on remount and dragged the view back to the newest month every time
+   * anyone glanced at Week and returned. This component never unmounts, so the
+   * effect fires when the DATA changes and at no other time.
+   */
+  const latestMonth = useMemo(() => {
+    let best = ''
+    for (const d of view?.days ?? []) {
+      const k = d.streamDate.slice(0, 7)
+      if (k > best) best = k
+    }
+    return best
+  }, [view])
+
+  useEffect(() => {
+    setCalMonth(null)
+    setCalDay(null)
+  }, [latestMonth])
+
   // Only used for the caption, so an older main that returns no rollups shows
   // "0 weeks" rather than throwing on first paint.
   const rowCount = useMemo(() => {
@@ -89,6 +135,21 @@ export function StreamingTab(): JSX.Element {
     const src = period === 'day' ? view.days : period === 'week' ? view.weeks : view.months
     return Array.isArray(src) ? src.length : 0
   }, [view, period])
+
+  // The stretch of business days the figures above actually cover. Taken from
+  // the days rather than from the imports' instants: an import can carry rows
+  // that matched no show, and a P&L must not claim to cover a day it has
+  // nothing on.
+  const covered = useMemo(() => {
+    if (!view || view.days.length === 0) return null
+    let from = view.days[0].streamDate
+    let to = from
+    for (const d of view.days) {
+      if (d.streamDate < from) from = d.streamDate
+      if (d.streamDate > to) to = d.streamDate
+    }
+    return { from, to }
+  }, [view])
 
   if (loading) return <CenterLoader />
 
@@ -104,10 +165,21 @@ export function StreamingTab(): JSX.Element {
     )
   }
 
-  const { totals, imports } = view
+  const { imports } = view
   const hasLedger = imports.length > 0
   const grainWord = period === 'day' ? 'day' : period === 'week' ? 'week' : 'month'
   const periodRows = period === 'week' ? view.weeks : view.months
+
+  // Nothing has ever been uploaded. The upload is the only thing anyone can do
+  // here, so it gets the page to itself rather than sitting under four empty
+  // panels explaining what they would say if it had.
+  if (!hasLedger) {
+    return (
+      <div className="fin-stream">
+        <ImportPanel imports={imports} canManage={canManage} onView={applyView} />
+      </div>
+    )
+  }
 
   return (
     <div className="fin-stream">
@@ -128,190 +200,340 @@ export function StreamingTab(): JSX.Element {
         </Note>
       )}
 
-      <ImportPanel imports={imports} canManage={canManage} onView={applyView} />
+      <Topline view={view} covered={covered} />
 
-      {hasLedger && (
-        <>
-          <UnattributedPanel view={view} canManage={canManage} onView={applyView} />
+      <section className="fin-days-section">
+        <div className="fin-days-head">
+          <span className="fin-section-title">
+            <Icon name="CalendarDays" size={15} />
+            {period === 'day' ? 'Profit by day' : `Profit by ${grainWord}`}
+            <span className="fin-count">{rowCount}</span>
+          </span>
 
-          <SummaryStrip totals={totals} />
+          <div className="fin-period" role="group" aria-label="Show the profit by">
+            {PERIODS.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                className={`fin-period-btn${period === p.id ? ' is-on' : ''}`}
+                // aria-pressed, not aria-selected: these are toggle buttons
+                // in a group, not tabs controlling separate panels.
+                aria-pressed={period === p.id}
+                title={p.hint}
+                onClick={() => setPeriod(p.id)}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+        </div>
 
-          <section className="fin-days-section">
-            <div className="fin-days-head">
-              <span className="fin-section-title">
-                <Icon name="CalendarDays" size={15} />
-                {period === 'day' ? 'Profit by day' : `Profit by ${grainWord}`}
-                <span className="fin-count">{rowCount}</span>
-              </span>
+        {rowCount === 0 ? (
+          <p className="fin-detail-empty">
+            <Icon name="Info" size={14} />
+            {view.days.length === 0
+              ? 'The ledger is loaded, but no row matched a logged show, so there is nothing to report yet. Add the sessions listed below in Streaming and re-attribute.'
+              : // Days exist but this rollup does not, which can only mean the
+                // app is running against a version that does not produce it.
+                // Saying so beats "no data", which would read as a real
+                // finding and send someone looking for missing money.
+                `There are days in the calendar, but this build produced no ${grainWord} rollup for them. Switch back to Calendar; ${grainWord}s appear once the app is updated.`}
+          </p>
+        ) : period === 'day' ? (
+          <FinanceCalendar
+            days={view.days}
+            month={calMonth}
+            selected={calDay}
+            onMonth={setCalMonth}
+            onSelect={setCalDay}
+          />
+        ) : (
+          <PeriodList
+            rows={periodRows}
+            period={period}
+            open={openPeriod[period] ?? null}
+            onOpen={(key) => setOpenPeriod((prev) => ({ ...prev, [period]: key }))}
+          />
+        )}
+      </section>
 
-              <div className="fin-period" role="group" aria-label="Show the profit by">
-                {PERIODS.map((p) => (
-                  <button
-                    key={p.id}
-                    type="button"
-                    className={`fin-period-btn${period === p.id ? ' is-on' : ''}`}
-                    // aria-pressed, not aria-selected: these are toggle buttons
-                    // in a group, not tabs controlling separate panels.
-                    aria-pressed={period === p.id}
-                    title={p.hint}
-                    onClick={() => setPeriod(p.id)}
-                  >
-                    {p.label}
-                  </button>
-                ))}
-              </div>
+      {/* Provenance, in one region rather than as two more equal-weight cards.
+          Everything above is derived; everything here is what it was derived
+          FROM, and the heading says so. */}
+      <section className="fin-source" aria-label="Where these numbers come from">
+        <h2 className="fin-source-title">Behind these numbers</h2>
 
-              {/* This caption said "the cost of stock that was sold is not in
-                  these figures" for three releases. It is now false in both
-                  halves: breaking a case IS the largest cost of running a show
-                  and it is booked here, and the bottom line is net profit
-                  rather than a revenue figure. A caption that lags the
-                  arithmetic is how somebody reads a correct number as the wrong
-                  quantity. */}
-              <span className="fin-days-scope">
-                A full statement: revenue in, the cost of the stock broken and given away,
-                Whatnot&rsquo;s fees, shipping both ways, show costs and refunds — down to net
-                profit.
-              </span>
-            </div>
+        <UnattributedPanel view={view} canManage={canManage} onView={applyView} />
+        <ImportPanel imports={imports} canManage={canManage} onView={applyView} />
 
-            {rowCount === 0 ? (
-              <p className="fin-detail-empty">
-                <Icon name="Info" size={14} />
-                {view.days.length === 0
-                  ? 'The ledger is loaded, but no row matched a logged show, so there is nothing to report yet. Add the sessions listed above in Streaming and re-attribute.'
-                  : // Days exist but this rollup does not, which can only mean the
-                    // app is running against a version that does not produce it.
-                    // Saying so beats "no data", which would read as a real
-                    // finding and send someone looking for missing money.
-                    `There are days in the calendar, but this build produced no ${grainWord} rollup for them. Switch back to Calendar; ${grainWord}s appear once the app is updated.`}
-              </p>
-            ) : period === 'day' ? (
-              <FinanceCalendar days={view.days} />
-            ) : (
-              <PeriodList rows={periodRows} period={period} />
-            )}
-          </section>
-        </>
-      )}
-
-      {view.reconciled && hasLedger && (
-        <p className="fin-reconciled">
-          <Icon name="CheckCircle2" size={14} />
-          Every row is accounted for: each one is on a day above or in the unattributed list.
-        </p>
-      )}
+        {view.reconciled && (
+          <p className="fin-reconciled">
+            <Icon name="CheckCircle2" size={14} />
+            Every row is accounted for: each one is on a day above, or waiting for a show here.
+          </p>
+        )}
+      </section>
     </div>
   )
 }
 
 /**
- * Everything, in one line of arithmetic.
+ * The headline block: what the shows made, as one line of arithmetic that
+ * CLOSES.
  *
- * The left of the rule is the owner's fee model stated the way he states it:
- * total revenue, less the two fees, equals net revenue. It is kept intact
- * because it is the one part of the P&L he checks by eye against Whatnot.
+ * The strip this replaces printed total revenue, fees, net revenue, cost of
+ * goods and net profit — and on real data the last figure was $243.73 away from
+ * the four before it, because net shipping moved the number and was nowhere on
+ * the line. A reader who tries to check the arithmetic and fails does not
+ * conclude they misread; they conclude the app is wrong, and on the evidence in
+ * front of them they are right to.
  *
- * The right of the rule is now where the statement ENDS — cost of goods, then
- * net profit as the largest figure on the screen. Net shipping used to sit
- * there and no longer does: it is one section of every statement below and was
- * never the bottom line, whereas net profit was missing entirely from a screen
- * whose whole subject it is.
- *
- * The effective fee rate is the number that gets sanity-checked, so it is
- * printed to two decimals and captioned with its own denominator. A rate whose
- * base is ambiguous is worse than no rate: 6% + 2.9% + 30c a transaction lands
- * near 9.2% of the top line on real data, but only because the flat 30c is
- * charged thousands of times, and the same fees expressed against sales alone
- * would be a different, equally true number.
+ * So every term that moves the number is printed. The terms are not written out
+ * by hand either: they are the SECTION SUBTOTALS from `buildPnl`, the same ones
+ * every statement below is built from, which is what makes it impossible for
+ * this line and those statements to mean different things by "fees". Their sum
+ * is net profit by the contract's own `pnlChecksum`, so the equation closes by
+ * construction — and when it does not, it says so instead of printing five
+ * figures that quietly refuse to add up.
  */
-function SummaryStrip({ totals }: { totals: StreamFinanceTotals }): JSX.Element {
+function Topline({
+  view,
+  covered
+}: {
+  view: StreamingFinanceView
+  covered: { from: string; to: string } | null
+}): JSX.Element {
+  const { totals, unattributed } = view
+  const sections = useMemo(() => buildStatement(totals), [totals])
+
+  const revenue = sectionSubtotal(sections, 'revenue')
+  const net = sectionSubtotal(sections, 'netProfit')
+  const check = pnlDrift(sections, totals.netProfit)
+  const margin = profitMargin(revenue, net)
+
+  return (
+    <section className="fin-topline" aria-label="Streaming profit and loss">
+      <div className="fin-topline-head">
+        <h2>Streaming profit and loss</h2>
+        {covered && (
+          <span className="fin-topline-scope">{dayRangeLabel(covered.from, covered.to)}</span>
+        )}
+      </div>
+
+      {!check.ok && (
+        <Note tone="danger" icon="AlertTriangle" role="alert">
+          <b>This total does not add up — do not use it.</b>
+          <p>
+            The terms below come to <Money value={check.checksum} strong />, but net profit is
+            stored as <Money value={check.stated} strong />, a difference of{' '}
+            <Money value={check.drift} strong />. The app and its data engine were built from
+            different versions of the P&amp;L. Update the app and re-import before trusting any
+            figure on this screen.
+          </p>
+        </Note>
+      )}
+
+      <Equation totals={totals} sections={sections} net={net} margin={margin} />
+
+      <div className="fin-topline-foot">
+        <span className="fin-topline-meta">
+          <b className="mono">{totals.dayCount.toLocaleString()}</b>{' '}
+          {totals.dayCount === 1 ? 'day' : 'days'} streamed
+          <span aria-hidden="true">·</span>
+          <b className="mono">{totals.sessionCount.toLocaleString()}</b>{' '}
+          {totals.sessionCount === 1 ? 'show' : 'shows'}
+          <span aria-hidden="true">·</span>
+          <b className="mono">{formatDuration(totals.minutes)}</b> on air
+          <span aria-hidden="true">·</span>
+          <b className="mono">{totals.saleCount.toLocaleString()}</b>{' '}
+          {totals.saleCount === 1 ? 'sale' : 'sales'}
+        </span>
+
+        {unattributed.rowCount > 0 && (
+          <button
+            type="button"
+            className="fin-topline-waiting"
+            onClick={() =>
+              document
+                .getElementById('fin-unattributed')
+                ?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+            }
+          >
+            <Icon name="CalendarRange" size={13} />
+            <Money value={unattributed.amount} /> across{' '}
+            {plural(unattributed.rowCount, 'row')} is not on any day yet
+            <Icon name="ArrowDown" size={13} />
+          </button>
+        )}
+      </div>
+    </section>
+  )
+}
+
+/**
+ * One term of the equation.
+ *
+ * `amount` stays SIGNED, exactly as the statement books it, and the operator is
+ * derived from that sign while the figure prints as a magnitude. That is the
+ * whole reason shipping cannot render as "− −$243.73": there is only ever one
+ * sign on screen and it is the one the operator glyph carries. Shipping is the
+ * term that proves it — subsidy less postage lands either side of zero from one
+ * month to the next.
+ */
+interface EqTerm {
+  key: string
+  label: string
+  amount: number
+  note?: JSX.Element | string
+  /** Printed even at zero. Fees, cost of goods and shipping are the SHAPE of
+   *  this business's P&L; a line missing because it happened to be zero reads
+   *  as a line somebody forgot. The occasional ones — show costs, refunds —
+   *  appear only when they moved the number, so a quiet month is not padded
+   *  with two dashes. */
+  structural?: boolean
+}
+
+function Equation({
+  totals,
+  sections,
+  net,
+  margin
+}: {
+  totals: StreamFinanceTotals
+  sections: ReturnType<typeof buildStatement>
+  net: number
+  margin: number | null
+}): JSX.Element {
   // Denominator is SALES, not total revenue. Fees are only ever charged on
   // sales — tips and bonuses arrive whole — so dividing by total revenue would
   // quietly dilute the rate on any day with a tip and understate what Whatnot
-  // actually costs. The caption names the base so the number can be checked.
-  const rate = totals.sales > 0 ? Math.abs(totals.totalFees) / totals.sales : null
+  // actually costs. `Pct` prints the base beside it so the number is checkable.
+  const fees = sectionSubtotal(sections, 'fees')
+  const feeRate = totals.sales > 0 ? (Math.abs(fees) / totals.sales) * 100 : null
+
+  const terms: EqTerm[] = [
+    {
+      key: 'fees',
+      label: 'Platform fees',
+      amount: fees,
+      structural: true,
+      note: (
+        <>
+          {feeRate !== null && (
+            <>
+              <Pct
+                value={feeRate}
+                base="of sales"
+                digits={2}
+                title="Total fees as a share of sales — fees are charged on sales only, never on tips or bonuses. The statements below break it into commission and processing."
+              />
+              {' — '}
+            </>
+          )}
+          Whatnot&rsquo;s commission and card processing
+        </>
+      )
+    },
+    {
+      key: 'cogs',
+      label: 'Cost of goods',
+      amount: sectionSubtotal(sections, 'cogs'),
+      structural: true,
+      note: 'the stock broken and given away, at what it cost'
+    },
+    {
+      key: 'shipping',
+      label: 'Shipping',
+      amount: sectionSubtotal(sections, 'shipping'),
+      structural: true,
+      note: 'subsidy received, less all postage'
+    },
+    {
+      key: 'showCosts',
+      label: 'Show costs',
+      amount: sectionSubtotal(sections, 'showCosts'),
+      note: 'paid promotion of a show'
+    },
+    {
+      key: 'adjustments',
+      label: 'Refunds',
+      amount: sectionSubtotal(sections, 'adjustments'),
+      note: 'orders reversed after the sale'
+    }
+  ].filter((t) => t.structural || Math.abs(t.amount) >= 0.005)
 
   return (
-    <section className="fin-summary" aria-label="Streaming revenue summary">
-      {/* The three cells of the subtraction are wrapped together so they wrap as
-          a unit. Split across two lines they would still be readable, but the
-          "−" and "=" between them would not be, and those glyphs are the whole
-          point of laying the strip out this way. */}
-      <div className="fin-sum-flow">
-        <div className="fin-sum">
-          <span className="fin-sum-label">Total revenue</span>
-          <span className="fin-sum-value">
-            <Money value={totals.totalRevenue} strong />
-          </span>
-          <em className="fin-sum-hint">sales, tips and bonuses, before any deduction</em>
-        </div>
-
-        <span className="fin-sum-op" aria-hidden="true">
-          −
-        </span>
-
-        <div className="fin-sum">
-          <span className="fin-sum-label">
-            Fees
-            {rate !== null && (
-              <b className="fin-rate" title="Total fees as a share of sales — fees are charged on sales only">
-                {(rate * 100).toFixed(2)}% of sales
-              </b>
-            )}
-          </span>
-          <span className="fin-sum-value">
-            <Money value={totals.totalFees} strong />
-          </span>
-          <em className="fin-sum-hint">6% Whatnot, plus 2.9% and 30¢ a transaction</em>
-        </div>
-
-        <span className="fin-sum-op" aria-hidden="true">
-          =
-        </span>
-
-        {/* No longer `is-net`. It is still the answer to THIS subtraction, but
-            it stopped being the bottom line of the screen the moment cost of
-            goods landed, and two 26px figures would say the statement ends in
-            two places. */}
-        <div className="fin-sum">
-          <span className="fin-sum-label">Net revenue</span>
-          <span className="fin-sum-value">
-            <Money value={totals.netRevenue} strong />
-          </span>
-          <em className="fin-sum-hint">what Whatnot actually keeps for you</em>
-        </div>
+    <div className="fin-eq">
+      <div className="fin-eq-terms">
+        <EqCell
+          label="Total revenue"
+          value={<Money value={sectionSubtotal(sections, 'revenue')} strong />}
+          note="sales, tips and bonuses, before any deduction"
+        />
+        {terms.map((t) => (
+          <EqCell
+            key={t.key}
+            op={t.amount < 0 ? 'minus' : 'plus'}
+            label={t.label}
+            value={<Money value={t.amount} abs strong />}
+            note={t.note}
+          />
+        ))}
       </div>
 
-      {/* Shipping sits the other side of a rule, never behind an operator: it is
-          not part of the fee subtraction and must not look like it is. */}
-      <span className="fin-sum-rule" aria-hidden="true" />
+      <EqCell
+        className="fin-eq-result"
+        op="equals"
+        label="Net profit"
+        value={<Profit value={net} />}
+        // profitMargin returns null on no revenue. Printing "0.0% of revenue"
+        // there would be a statement about nothing that invites comparison with
+        // a real margin, so nothing is printed at all.
+        note={margin === null ? undefined : <Pct value={margin} base="of total revenue" />}
+      />
+    </div>
+  )
+}
 
-      <div className="fin-sum-side">
-        <div className="fin-sum">
-          <span className="fin-sum-label">Cost of goods</span>
-          <span className="fin-sum-value">
-            <Money value={totals.cogs} strong />
-          </span>
-          <em className="fin-sum-hint">the stock broken and given away, at what it cost</em>
-        </div>
+/** The three operators, as the glyph on screen and the word a screen reader
+ *  hears. U+2212 and U+002B are a digit wide and unmistakable at 18px; the
+ *  words are what make the line an equation rather than four figures in a row
+ *  when it is read aloud. */
+const OPS = {
+  minus: { glyph: '−', word: 'less ' },
+  plus: { glyph: '+', word: 'plus ' },
+  equals: { glyph: '=', word: 'equals ' }
+} as const
 
-        <div className="fin-sum is-net">
-          <span className="fin-sum-label">Net profit</span>
-          <span className="fin-sum-value">
-            <Profit value={totals.netProfit} />
-          </span>
-          <em className="fin-sum-hint">after goods, fees, shipping and every show cost</em>
-        </div>
-
-        <div className="fin-sum">
-          <span className="fin-sum-label">Streamed</span>
-          <span className="fin-sum-value mono">{plural(totals.dayCount, 'day')}</span>
-          <em className="fin-sum-hint">
-            {plural(totals.sessionCount, 'show')} · {formatDuration(totals.minutes)} on air
-          </em>
-        </div>
-      </div>
-    </section>
+function EqCell({
+  op,
+  label,
+  value,
+  note,
+  className = ''
+}: {
+  op?: keyof typeof OPS
+  label: string
+  value: JSX.Element
+  note?: JSX.Element | string
+  className?: string
+}): JSX.Element {
+  const o = op ? OPS[op] : null
+  // Four flat children, not an operator beside a stacked block: the cell is a
+  // grid, and the operator has to sit on the FIGURE's row rather than on the
+  // label's. Nesting the label, figure and note inside a wrapper would put them
+  // in one grid cell and there would be nothing for the operator to align to.
+  return (
+    <div className={`fin-eq-cell${className ? ` ${className}` : ''}`}>
+      <span className="fin-eq-label">
+        {o && <span className="fin-sr">{o.word}</span>}
+        {label}
+      </span>
+      <span className="fin-eq-op" aria-hidden="true">
+        {o?.glyph}
+      </span>
+      <span className="fin-eq-value">{value}</span>
+      {note ? <span className="fin-eq-note">{note}</span> : null}
+    </div>
   )
 }

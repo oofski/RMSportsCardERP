@@ -117,12 +117,33 @@ export function timeLabel(iso: string | null): string {
   return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
 }
 
-/** "Jul 24" — the ends of an import's coverage range. */
+/** "Jul 24, 2026" — the ends of an import's coverage range. */
 export function shortInstantDate(iso: string | null): string {
   if (!iso) return '—'
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return '—'
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+}
+
+/**
+ * "Jul 24, 2026, 3:07 PM" — when a file was uploaded.
+ *
+ * Carries the YEAR, unlike the app-wide `formatDateTime`. This is the only
+ * place an operator distinguishes last Tuesday's upload from the one twelve
+ * months ago, and a weekly ledger habit fills this list with entries that are
+ * otherwise identical to the minute.
+ */
+export function instantLabel(iso: string | null): string {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return '—'
+  return d.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit'
+  })
 }
 
 /**
@@ -137,4 +158,32 @@ export function crossedDays(fromIso: string, toIso: string): number {
   const b = parseDayKey(dayKeyOf(new Date(toIso)))
   if (!a || !b) return 0
   return Math.round((b.getTime() - a.getTime()) / 86_400_000)
+}
+
+/**
+ * "Jul 1 – Jul 31, 2026" — the stretch a report covers.
+ *
+ * The year is printed ONCE when both ends share it, which is the normal case
+ * and the only way the range stays short enough to sit beside a heading. A
+ * range that crosses new year prints both, because "Dec 28 – Jan 4, 2027" is
+ * genuinely ambiguous about which December it means.
+ */
+export function dayRangeLabel(from: string, to: string): string {
+  const a = parseDayKey(from)
+  const b = parseDayKey(to)
+  if (!a || !b) return `${from || '—'} – ${to || '—'}`
+  if (from === to) return longDayLabel(from)
+  const sameYear = a.getFullYear() === b.getFullYear()
+  const left = a.toLocaleDateString(
+    undefined,
+    sameYear
+      ? { month: 'short', day: 'numeric' }
+      : { month: 'short', day: 'numeric', year: 'numeric' }
+  )
+  const right = b.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric'
+  })
+  return `${left} – ${right}`
 }

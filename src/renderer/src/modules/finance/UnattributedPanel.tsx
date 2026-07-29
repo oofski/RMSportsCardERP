@@ -6,12 +6,13 @@ import { useToast } from '../../components/Toast'
 import { Button } from '../../components/ui'
 import { useChrome } from '../../lib/chrome'
 import { useSession } from '../../lib/session'
-import { BucketChip, Money, Note, plural } from './bits'
+import { BucketChip, Money, Pct, plural } from './bits'
 import { finance, resultError } from './api'
 import { crossedDays, shortDayLabel, timeLabel } from './time'
 
-/** How many clusters show before the list asks to be expanded. */
-const CLUSTER_PREVIEW = 6
+/** How many clusters show before the list asks to be expanded. Eight covers a
+ *  normal week of missed afternoon shows without a click. */
+const CLUSTER_PREVIEW = 8
 
 /**
  * Money that matched no show.
@@ -24,10 +25,13 @@ const CLUSTER_PREVIEW = 6
  * of the business. Nothing is lost and nothing is wrong — the money is stored,
  * counted, and waiting for a session to claim it.
  *
- * So the panel is neutral: a plain surface and a plain heading. What stays loud
- * is the CLUSTERS, because they are the only thing here that is actionable —
- * each one names a time window where a show almost certainly ran, and adding it
- * is a two-minute job nobody does if they cannot see it.
+ * So the panel is neutral, and it is now FLAT: one heading, one sentence, the
+ * buckets, and the clusters. It used to nest a banner and a bordered sub-panel
+ * inside a bordered panel to say all of that, which drew four frames around
+ * three facts. What stays emphatic is the CLUSTER TABLE, because it is the only
+ * thing here anyone can act on — each row names a window where a show almost
+ * certainly ran, and adding it is a two-minute job nobody does if they cannot
+ * see it.
  */
 export function UnattributedPanel({
   view,
@@ -57,7 +61,7 @@ export function UnattributedPanel({
   // is a raw sum of ledger rows with no fees taken off it, so comparing it to
   // net revenue would overstate the share against a smaller denominator.
   const pool = totals.totalRevenue + unattributed.amount
-  const share = pool > 0 ? unattributed.amount / pool : 0
+  const share = pool > 0 ? (unattributed.amount / pool) * 100 : null
 
   const reattribute = async (): Promise<void> => {
     setBusy(true)
@@ -84,11 +88,10 @@ export function UnattributedPanel({
 
   if (unattributed.rowCount === 0) {
     return (
-      <section className="fin-unattr is-clear">
+      <section className="fin-unattr is-clear" id="fin-unattributed">
         <span className="fin-unattr-clear">
-          <Icon name="CheckCircle2" size={16} />
-          <b>Every ledger row landed on a show.</b> Nothing is sitting outside a session, so the
-          days below account for all of it.
+          <Icon name="CheckCircle2" size={15} />
+          Every ledger row landed on a show — nothing is sitting outside a session.
         </span>
         {canManage && (
           <Button size="sm" icon="RefreshCw" loading={busy} onClick={() => void reattribute()}>
@@ -102,103 +105,103 @@ export function UnattributedPanel({
   const visible = showAll ? clusters : clusters.slice(0, CLUSTER_PREVIEW)
 
   return (
-    <section className="fin-unattr">
+    <section className="fin-unattr" id="fin-unattributed">
       <div className="fin-unattr-head">
-        <span className="fin-unattr-icon" aria-hidden="true">
-          <Icon name="CalendarRange" size={18} />
+        <span className="fin-section-title">
+          <Icon name="CalendarRange" size={15} />
+          Waiting for a show
         </span>
-        <div className="fin-unattr-headline">
-          <h3>Waiting for a show</h3>
-          <p>
-            These rows happened outside every logged session, so they are not on any day yet. That
-            is expected — a stream that was never in the schedule simply has nothing to attach to.
-          </p>
-        </div>
-        <div className="fin-unattr-figure">
+        <span className="fin-unattr-figure">
           <Money value={unattributed.amount} strong />
-          <span className="fin-unattr-sub">
+          <em>
             {plural(unattributed.rowCount, 'row')}
-            {share > 0 && ` · ${Math.round(share * 100)}% of everything imported`}
-          </span>
-        </div>
+            {share !== null && (
+              <>
+                {' · '}
+                <Pct
+                  value={share}
+                  base="of everything imported"
+                  title="This pile, as a share of it plus the revenue already booked to days. Both sides are raw ledger sums, before fees."
+                />
+              </>
+            )}
+          </em>
+        </span>
+        <span className="fin-unattr-acts">
+          {can('module.streaming') && (
+            <Button size="sm" icon="ArrowRight" onClick={() => navigate('streaming')}>
+              Log a missing show
+            </Button>
+          )}
+          {canManage && (
+            <Button
+              size="sm"
+              variant="primary"
+              icon="RefreshCw"
+              loading={busy}
+              onClick={() => void reattribute()}
+            >
+              Re-attribute
+            </Button>
+          )}
+        </span>
       </div>
 
-      <Note tone="info" icon="Info">
-        A sale is matched only when a session covers the moment it happened. RM often runs two shows
-        a day and only the evening one gets clocked, so an afternoon block sits here in full.
-        Settlement costs that post after a show — shipping, subsidies, giveaway postage — are booked
-        back to the show that caused them, so what waits here is mostly real sales from shows nobody
-        logged. Nothing is lost: every row is stored. Log the missing session in <b>Streaming</b>,
-        press <b>Re-attribute</b>, and it lands on the right day.
-      </Note>
+      <p className="fin-unattr-lead">
+        A sale is matched only when a logged session covers the moment it happened, so an afternoon
+        show nobody clocked sits here in full. Nothing is lost — every row is stored. Log the
+        session in <b>Streaming</b>, press <b>Re-attribute</b>, and it lands on the right day.
+        Re-attribution only ever matches what a session already covers; it never moves money on its
+        own.
+      </p>
 
       {unattributed.byBucket.length > 0 && (
         <div className="fin-unattr-buckets">
           {unattributed.byBucket.map((b) => (
-            <div className="fin-unattr-bucket" key={b.bucket}>
+            <span className="fin-unattr-bucket" key={b.bucket}>
               <BucketChip bucket={b.bucket} />
-              <Money
-                value={b.amount}
-                cost={bucketDef(b.bucket).treatment === 'expense'}
-                strong
-              />
+              <Money value={b.amount} cost={bucketDef(b.bucket).treatment === 'expense'} strong />
               <em>{plural(b.rowCount, 'row')}</em>
-            </div>
+            </span>
           ))}
         </div>
       )}
 
-      {/* The clusters keep the emphasis the panel as a whole gave up. They are
-          the only actionable thing here: each one is a show you can go and log. */}
-      <div className="fin-cluster-block">
-        <span className="fin-section-title">
-          <Icon name="CalendarDays" size={15} />
-          Probably unlogged shows
-          <span className="fin-count">{clusters.length}</span>
-        </span>
-        <p className="fin-cluster-lead">
-          Each block below is a run of activity with a gap either side of it — which is what a show
-          looks like in the ledger. Add a session covering the times shown and its money moves onto
-          that day.
-        </p>
-
-        <ul className="fin-clusters">
+      {/* A table, so the four columns line up down the list. Scanning for the
+          biggest block is the whole use of it, and ragged figures make that a
+          reading job rather than a glance. */}
+      <table className="fin-clusters">
+        <caption>
+          Probably unlogged shows — {plural(clusters.length, 'block')} of activity with a gap either
+          side, which is what a show looks like in the ledger.
+        </caption>
+        <thead>
+          <tr>
+            <th scope="col">Day</th>
+            <th scope="col">On air</th>
+            <th scope="col" className="is-num">
+              Rows
+            </th>
+            <th scope="col" className="is-num">
+              Amount
+            </th>
+          </tr>
+        </thead>
+        <tbody>
           {visible.map((c) => (
             <ClusterRow key={`${c.from}-${c.to}`} cluster={c} />
           ))}
-        </ul>
+        </tbody>
+      </table>
 
-        {clusters.length > CLUSTER_PREVIEW && (
-          <button type="button" className="fin-more" onClick={() => setShowAll((v) => !v)}>
-            <Icon name={showAll ? 'ChevronUp' : 'ChevronDown'} size={14} />
-            {showAll
-              ? 'Show fewer'
-              : `Show all ${clusters.length} blocks (${clusters.length - CLUSTER_PREVIEW} more)`}
-          </button>
-        )}
-      </div>
-
-      <div className="fin-unattr-acts">
-        {can('module.streaming') && (
-          <Button icon="ArrowRight" onClick={() => navigate('streaming')}>
-            Log a missing show
-          </Button>
-        )}
-        {canManage && (
-          <Button
-            variant="primary"
-            icon="RefreshCw"
-            loading={busy}
-            onClick={() => void reattribute()}
-          >
-            Re-attribute
-          </Button>
-        )}
-        <span className="fin-unattr-note">
-          Re-attribution re-checks every stored row against the sessions as they are now. It never
-          moves money on its own — it only matches what a session already covers.
-        </span>
-      </div>
+      {clusters.length > CLUSTER_PREVIEW && (
+        <button type="button" className="fin-more" onClick={() => setShowAll((v) => !v)}>
+          <Icon name={showAll ? 'ChevronUp' : 'ChevronDown'} size={14} />
+          {showAll
+            ? `Show only the largest ${CLUSTER_PREVIEW}`
+            : `Show ${plural(clusters.length - CLUSTER_PREVIEW, 'smaller block')}`}
+        </button>
+      )}
     </section>
   )
 }
@@ -206,9 +209,9 @@ export function UnattributedPanel({
 function ClusterRow({ cluster }: { cluster: UnattributedCluster }): JSX.Element {
   const days = crossedDays(cluster.from, cluster.to)
   return (
-    <li className="fin-cluster">
-      <span className="fin-cluster-when">
-        <b>{shortDayLabel(cluster.localDate)}</b>
+    <tr>
+      <th scope="row">{shortDayLabel(cluster.localDate)}</th>
+      <td className="fin-cluster-when">
         <span className="mono">
           {timeLabel(cluster.from)}–{timeLabel(cluster.to)}
         </span>
@@ -220,9 +223,11 @@ function ClusterRow({ cluster }: { cluster: UnattributedCluster }): JSX.Element 
             +{days}d
           </span>
         )}
-      </span>
-      <span className="fin-cluster-rows">{plural(cluster.rowCount, 'row')}</span>
-      <Money value={cluster.amount} strong />
-    </li>
+      </td>
+      <td className="is-num mono">{cluster.rowCount.toLocaleString()}</td>
+      <td className="is-num">
+        <Money value={cluster.amount} strong />
+      </td>
+    </tr>
   )
 }

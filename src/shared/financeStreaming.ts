@@ -711,6 +711,15 @@ export interface PnlSection {
   running?: boolean
 }
 
+/**
+ * Group a count for reading: 1029 -> "1,029".
+ *
+ * Pinned to en-US rather than the host locale. These strings are half of a
+ * sentence the app writes elsewhere in English, and a separator that changed
+ * with the machine would make the same statement render two ways on two desks.
+ */
+const count = (n: number): string => n.toLocaleString('en-US')
+
 const c2 = (n: number): number => Math.round(n * 100) / 100
 
 /**
@@ -738,7 +747,7 @@ export function buildPnl(d: {
       key: 'revenue',
       label: 'Revenue',
       lines: [
-        line('sales', 'Sales', d.sales, `${d.saleCount} transaction${d.saleCount === 1 ? '' : 's'}`),
+        line('sales', 'Sales', d.sales, `${count(d.saleCount)} transaction${d.saleCount === 1 ? '' : 's'}`),
         line('tips', 'Tips', d.tips),
         line('bonuses', 'Seller bonuses', d.bonuses)
       ],
@@ -768,7 +777,12 @@ export function buildPnl(d: {
       label: 'Platform fees',
       lines: [
         line('whatnotFee', "Whatnot commission", d.whatnotFee, '6% of sales'),
-        line('processingFee', 'Payment processing', d.processingFee, `2.9% + 30c x ${d.saleCount}`)
+        line(
+          'processingFee',
+          'Payment processing',
+          d.processingFee,
+          `2.9% + 30\u00A2 \u00D7 ${count(d.saleCount)}`
+        )
       ],
       subtotal: c2(d.totalFees),
       subtotalLabel: 'Total fees'

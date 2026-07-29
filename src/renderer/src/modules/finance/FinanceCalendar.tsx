@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import type { StreamDayFinance } from '@shared/financeStreaming'
 import { formatDuration } from '@shared/streaming'
 import { formatMoney } from '../../lib/format'
@@ -33,6 +33,11 @@ import {
  *
  * Cells are keyed by `streamDate` — the day a show STARTED — so a Friday show
  * that sold until 2am appears once, on Friday, with all of its money.
+ *
+ * WHICH MONTH IS OPEN AND WHICH DAY IS SELECTED ARE PROPS, not state. They used
+ * to live here, which meant switching the grain to Week and back destroyed this
+ * component and with it the operator's place in the month — a whole navigation
+ * undone by pressing a button that was supposed to change one number's grain.
  */
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
@@ -52,7 +57,20 @@ interface MonthTotals {
   minutes: number
 }
 
-export function FinanceCalendar({ days }: { days: StreamDayFinance[] }): JSX.Element {
+export function FinanceCalendar({
+  days,
+  month,
+  selected,
+  onMonth,
+  onSelect
+}: {
+  days: StreamDayFinance[]
+  /** null means "follow the latest month with money in it". */
+  month: string | null
+  selected: string | null
+  onMonth: (key: string) => void
+  onSelect: (key: string | null) => void
+}): JSX.Element {
   const byDate = useMemo(() => {
     const m = new Map<string, StreamDayFinance>()
     for (const d of days) m.set(d.streamDate, d)
@@ -65,6 +83,13 @@ export function FinanceCalendar({ days }: { days: StreamDayFinance[] }): JSX.Ele
    * The ledger is a file somebody uploaded; it is normal for the most recent
    * export to stop weeks before today. Opening on an empty August, with July
    * full of shows one click away, would read as "the import did not work".
+   *
+   * Derived, never stored, and there is deliberately NO effect here that snaps
+   * back to it. This component unmounts every time the grain changes to Week,
+   * so a "follow the newest month" effect would fire on remount and throw the
+   * operator back to July every time they came back from a weekly view — which
+   * is exactly the lost place this refactor exists to stop. Following a fresh
+   * import is the parent's job, because the parent stays mounted.
    */
   const latestMonth = useMemo(() => {
     let best = ''
@@ -75,16 +100,7 @@ export function FinanceCalendar({ days }: { days: StreamDayFinance[] }): JSX.Ele
     return best || thisMonthKey()
   }, [days])
 
-  const [monthKey, setMonthKey] = useState(latestMonth)
-  const [selected, setSelected] = useState<string | null>(null)
-
-  // A fresh import can land months that did not exist a moment ago. Following
-  // the newest data is right here: the operator uploaded a file to look at what
-  // is in it.
-  useEffect(() => {
-    setMonthKey(latestMonth)
-    setSelected(null)
-  }, [latestMonth])
+  const monthKey = month ?? latestMonth
 
   const cells = useMemo<Cell[]>(() => {
     const parsed = parseMonthKey(monthKey)
@@ -142,8 +158,8 @@ export function FinanceCalendar({ days }: { days: StreamDayFinance[] }): JSX.Ele
   }, [selectedDay])
 
   const go = (delta: number): void => {
-    setSelected(null)
-    setMonthKey((k) => shiftMonth(k, delta))
+    onSelect(null)
+    onMonth(shiftMonth(monthKey, delta))
   }
 
   return (
@@ -160,8 +176,8 @@ export function FinanceCalendar({ days }: { days: StreamDayFinance[] }): JSX.Ele
           <button
             className="fin-today-btn"
             onClick={() => {
-              setSelected(null)
-              setMonthKey(thisMonthKey())
+              onSelect(null)
+              onMonth(thisMonthKey())
             }}
             disabled={isThisMonth}
           >
@@ -191,7 +207,7 @@ export function FinanceCalendar({ days }: { days: StreamDayFinance[] }): JSX.Ele
                 day={cell.day}
                 isToday={cell.key === today}
                 selected={selected === cell.key}
-                onSelect={() => setSelected((s) => (s === cell.key ? null : cell.key))}
+                onSelect={() => onSelect(selected === cell.key ? null : cell.key)}
               />
             )
           )}
@@ -215,8 +231,8 @@ export function FinanceCalendar({ days }: { days: StreamDayFinance[] }): JSX.Ele
               type="button"
               className="fin-more"
               onClick={() => {
-                setSelected(null)
-                setMonthKey(latestMonth)
+                onSelect(null)
+                onMonth(latestMonth)
               }}
             >
               <Icon name="ArrowRight" size={14} />
@@ -228,7 +244,7 @@ export function FinanceCalendar({ days }: { days: StreamDayFinance[] }): JSX.Ele
 
       {selectedDay && (
         <div ref={panelRef}>
-          <DayStatement day={selectedDay} onClose={() => setSelected(null)} />
+          <DayStatement day={selectedDay} onClose={() => onSelect(null)} />
         </div>
       )}
 
@@ -240,7 +256,7 @@ export function FinanceCalendar({ days }: { days: StreamDayFinance[] }): JSX.Ele
           <span>
             Nothing was streamed on {longDayLabel(selected)}, so there is no statement for it.
           </span>
-          <button type="button" className="fin-more" onClick={() => setSelected(null)}>
+          <button type="button" className="fin-more" onClick={() => onSelect(null)}>
             <Icon name="X" size={14} />
             Close
           </button>
@@ -257,6 +273,10 @@ export function FinanceCalendar({ days }: { days: StreamDayFinance[] }): JSX.Ele
  * every cell: it is the question. Revenue and time on air sit beside it as the
  * two things that make a profit figure interpretable — $400 on one show and $400
  * on nine are not the same month.
+ *
+ * No box around it. It sits inside a card already, and a bordered strip on a
+ * bordered card is a frame drawn twice; a hairline on its left does the same
+ * separating job with a tenth of the ink.
  */
 function MonthTotalsStrip({
   totals,
@@ -266,24 +286,20 @@ function MonthTotalsStrip({
   label: string
 }): JSX.Element {
   if (totals.dayCount === 0) {
-    return (
-      <span className="fin-cal-total is-quiet">
-        <em>No activity in {label}</em>
-      </span>
-    )
+    return <span className="fin-cal-total is-quiet">No activity in {label}</span>
   }
 
   return (
     <div className="fin-cal-total">
-      <span className="fin-cal-total-main">
-        <em>Net profit, {label}</em>
+      <span className="fin-cal-fig is-main">
+        <em>Net profit</em>
         <Profit value={totals.netProfit} />
       </span>
-      <span className="fin-cal-total-side">
+      <span className="fin-cal-fig">
         <em>Revenue</em>
         <Money value={totals.totalRevenue} strong />
       </span>
-      <span className="fin-cal-total-side">
+      <span className="fin-cal-fig">
         <em>Streamed</em>
         <b className="mono">{plural(totals.dayCount, 'day')}</b>
         <i>
@@ -362,7 +378,7 @@ function DayCell({
               {day.sessionCount}
             </span>
             <span className="fin-cell-rev mono" title="Revenue before any deduction">
-              {formatCompactRevenue(day.totalRevenue)}
+              {compactMoney(day.totalRevenue)}
             </span>
           </span>
         </span>
@@ -382,12 +398,26 @@ function DayCell({
  * whether the profit above it came off a big day or a small one, and a second
  * exact figure would compete with the headline for the same 100px. The exact
  * number is one click away in the statement.
+ *
+ * One decimal ALWAYS above a thousand, so a column of cells reads $4.2K, $1.0K,
+ * $12.5K rather than mixing $4.2K with $1K — the eye lines those up on the wrong
+ * digit. And the minus is swapped for U+2212 like every other figure on the
+ * screen, because a compact number is still a number.
+ *
+ * The threshold is 999.50, not 1000: Intl decides the K suffix from the value
+ * AFTER rounding to the digits it was given, so $999.99 with no decimals prints
+ * "$1K" while $1,000.00 prints "$1.0K" — one cent apart and formatted two
+ * different ways.
  */
-function formatCompactRevenue(value: number): string {
+function compactMoney(value: number): string {
+  const big = Math.abs(value) >= 999.5
   return new Intl.NumberFormat(undefined, {
     style: 'currency',
     currency: 'USD',
     notation: 'compact',
-    maximumFractionDigits: Math.abs(value) >= 1000 ? 1 : 0
-  }).format(value)
+    minimumFractionDigits: big ? 1 : 0,
+    maximumFractionDigits: big ? 1 : 0
+  })
+    .format(value)
+    .replace('-', '−')
 }

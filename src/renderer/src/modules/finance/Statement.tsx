@@ -1,9 +1,8 @@
 import { useState } from 'react'
 import type { FinancePeriodRow, StreamDayFinance } from '@shared/financeStreaming'
 import { formatDuration } from '@shared/streaming'
-import { formatMoney } from '../../lib/format'
 import { Icon } from '../../components/Icon'
-import { Money, plural } from './bits'
+import { Money, moneyText, plural } from './bits'
 import { LedgerRows } from './LedgerRows'
 import { PnlStatement } from './Pnl'
 import { compactDayLabel, longDayLabel } from './time'
@@ -25,12 +24,12 @@ export function CarriedMark({ rows, amount }: { rows: number; amount: number }):
   return (
     <span
       className="fin-carry"
-      title={`${plural(rows, 'row')} worth ${formatMoney(
+      title={`${plural(rows, 'row')} worth ${moneyText(
         amount
       )} settled after the show ended and were booked back to it — Whatnot posts shipping economics hours later.`}
     >
       <Icon name="Undo2" size={10} />
-      {rows.toLocaleString()} settled later
+      {plural(rows, 'row')} settled later
       <Money value={amount} />
     </span>
   )
@@ -43,19 +42,22 @@ export function DayStatement({
   day: StreamDayFinance
   onClose: () => void
 }): JSX.Element {
-  // Closed by default. The statement is the answer; the rows are the evidence,
-  // and pulling several hundred of them for every day anyone glances at would
-  // make the calendar feel broken.
-  const [rowsOpen, setRowsOpen] = useState(false)
+  /**
+   * OPEN. The rows used to be closed behind a button, on the reasoning that
+   * pulling several hundred of them for every day anyone glances at would make
+   * the calendar feel slow — but a day is only ever opened by clicking it, so
+   * that is one local read per deliberate click, not a read per glance. What it
+   * cost instead was a second click on the one question the statement always
+   * raises: what is this made of. It is still collapsible, because a day with
+   * four hundred rows is a long scroll once you have your answer.
+   */
+  const [rowsOpen, setRowsOpen] = useState(true)
 
   return (
     <section className="fin-stmt" aria-label={`Profit and loss for ${longDayLabel(day.streamDate)}`}>
       <header className="fin-stmt-head">
         <div className="fin-stmt-title">
-          <h3>
-            <Icon name="CalendarDays" size={15} />
-            {longDayLabel(day.streamDate)}
-          </h3>
+          <h3>{longDayLabel(day.streamDate)}</h3>
           <span className="fin-stmt-meta">
             {plural(day.sessionCount, 'show')} · {formatDuration(day.minutes)} on air ·{' '}
             {plural(day.rowCount, 'ledger row')}
@@ -109,10 +111,7 @@ export function PeriodStatement({ row }: { row: FinancePeriodRow }): JSX.Element
     <section className="fin-stmt is-period" aria-label={`Profit and loss for ${row.label}`}>
       <header className="fin-stmt-head">
         <div className="fin-stmt-title">
-          <h3>
-            <Icon name="CalendarRange" size={15} />
-            {row.label}
-          </h3>
+          <h3>{row.label}</h3>
           <span className="fin-stmt-meta">
             {compactDayLabel(row.from)} – {compactDayLabel(row.to)} ·{' '}
             {plural(row.dayCount, 'day')} streamed · {plural(row.sessionCount, 'show')} ·{' '}

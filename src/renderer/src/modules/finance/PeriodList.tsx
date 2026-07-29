@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import type { FinancePeriod, FinancePeriodRow } from '@shared/financeStreaming'
 import { formatDuration } from '@shared/streaming'
 import { Icon } from '../../components/Icon'
@@ -15,22 +14,36 @@ import { compactDayLabel } from './time'
  * honest about what these are — periods, in order, each one openable.
  *
  * The bottom line sits on the closed row, so the list answers "which week was
- * bad" without opening anything.
+ * bad" without opening anything. Revenue and net profit are two fixed columns
+ * rather than two labelled clumps, so every row's figures land on the same two
+ * right edges and the column can be read straight down.
+ *
+ * WHICH ROW IS OPEN IS A PROP. It used to be state in here, which meant a trip
+ * through Calendar and back closed whatever you had been reading.
  */
 export function PeriodList({
   rows,
-  period
+  period,
+  open,
+  onOpen
 }: {
   rows: FinancePeriodRow[]
   period: FinancePeriod
+  /** One open at a time. Two statements a page apart is not a comparison
+   *  anybody can actually make, and the closed rows already carry the figure
+   *  you would be comparing. */
+  open: string | null
+  onOpen: (key: string | null) => void
 }): JSX.Element {
-  // One open at a time. Two statements a page apart is not a comparison anybody
-  // can actually make, and the closed rows already carry the figure you would
-  // be comparing.
-  const [open, setOpen] = useState<string | null>(null)
-
   return (
     <div className="fin-plist">
+      <div className="fin-plist-legend" aria-hidden="true">
+        <span className="fin-plist-figs">
+          <span className="fin-plist-rev">Revenue</span>
+          <span className="fin-plist-net">Net profit</span>
+        </span>
+      </div>
+
       {rows.map((row) => {
         const isOpen = open === row.key
         const net = Number.isFinite(row.netProfit) ? row.netProfit : 0
@@ -40,7 +53,7 @@ export function PeriodList({
               type="button"
               className="fin-plist-row"
               aria-expanded={isOpen}
-              onClick={() => setOpen((cur) => (cur === row.key ? null : row.key))}
+              onClick={() => onOpen(isOpen ? null : row.key)}
             >
               <Icon name={isOpen ? 'ChevronDown' : 'ChevronRight'} size={15} />
               <span className="fin-plist-main">
@@ -53,11 +66,9 @@ export function PeriodList({
               </span>
               <span className="fin-plist-figs">
                 <span className="fin-plist-rev">
-                  <em>Revenue</em>
-                  <Money value={row.totalRevenue} />
+                  <Money value={row.totalRevenue} strong />
                 </span>
                 <span className="fin-plist-net">
-                  <em>Net profit</em>
                   <Profit value={net} />
                 </span>
               </span>
