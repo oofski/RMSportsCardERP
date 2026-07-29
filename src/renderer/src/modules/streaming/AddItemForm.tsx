@@ -298,9 +298,11 @@ export function AddItemForm({
                   onClick={() => setLocation(l.id)}
                 >
                   {l.label}
+                  {/* The unit, not just the number: "3 on hand" is ambiguous by
+                      a factor of twelve between a case product and a box one. */}
                   <div className="lp-sub">
                     {formatUnitCount(product.quantityByLocation[l.id] ?? 0)}{' '}
-                    {units ? stockUnitWord(units.unitType, 2) : 'on hand'}
+                    {units ? `${stockUnitWord(units.unitType, 2)} on hand` : 'on hand'}
                   </div>
                 </button>
               ))}
