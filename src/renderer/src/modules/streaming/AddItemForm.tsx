@@ -3,11 +3,12 @@ import type { InventoryProduct } from '@shared/types'
 import type { NewStreamItem, StreamItemKind, StreamSessionDetail } from '@shared/streaming'
 import { LOCATIONS, type Location } from '@shared/inventory'
 import {
+  QTY_EPS,
+  boxCost,
   breakToStock,
   describeQuantity,
   giveawayToStock,
   packCost,
-  boxCost,
   type Conversion,
   type ProductUnits
 } from '@shared/units'
@@ -136,7 +137,10 @@ export function AddItemForm({
       : null
 
   const onHand = product ? (product.quantityByLocation[location] ?? 0) : 0
-  const short = quantity !== null && quantity > onHand
+  // Same slack main uses when it checks stock: a giveaway that consumes the
+  // exact fractional balance leaves float dust, and warning "only 0.25 on hand"
+  // about a line that will succeed is worse than not warning at all.
+  const short = quantity !== null && quantity > onHand + QTY_EPS
 
   const choose = (p: InventoryProduct): void => {
     setProduct(p)

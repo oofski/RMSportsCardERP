@@ -11092,6 +11092,13 @@ button.sor-team:focus-visible {
 .stm-consume-qty {
   white-space: nowrap;
 }
+/* A refusal shares this class but is a sentence, not a quantity. The contract's
+   errors are long on purpose — they name the exact field to go and fill in — so
+   nowrap clips them mid-word against the panel edge, hiding the half that says
+   what to do about it. */
+.stm-consume.is-error .stm-consume-qty {
+  white-space: normal;
+}
 .stm-consume-short,
 .stm-consume-loss {
   display: flex;
