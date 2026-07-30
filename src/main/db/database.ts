@@ -776,6 +776,28 @@ function migrate(database: Database.Database): void {
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_rows_fingerprint
       ON ledger_rows (fingerprint);
+
+    -- v26: EVERY import that has seen a row, not just the one that saw it first.
+    --
+    -- ledger_rows.import_id names the first import to insert a fingerprint;
+    -- de-dup means a later overlapping export skips it and leaves no trace that
+    -- it covered the same money. Deleting the older import then cascaded those
+    -- rows away even though a file still sitting in the list contained them, and
+    -- that file's card went on looking complete with its first days now empty.
+    --
+    -- With coverage recorded, deleting an import re-points anything another
+    -- import still covers and only removes what nothing covers any more. The
+    -- delete stays a real delete; it just stops taking rows that were never
+    -- only its.
+    CREATE TABLE IF NOT EXISTS ledger_row_imports (
+      row_id    TEXT NOT NULL,
+      import_id TEXT NOT NULL,
+      PRIMARY KEY (row_id, import_id),
+      FOREIGN KEY (row_id)    REFERENCES ledger_rows (id)     ON DELETE CASCADE,
+      FOREIGN KEY (import_id) REFERENCES ledger_imports (id)  ON DELETE CASCADE
+    ) WITHOUT ROWID;
+    CREATE INDEX IF NOT EXISTS idx_ledger_row_imports_import
+      ON ledger_row_imports (import_id);
     CREATE INDEX IF NOT EXISTS idx_ledger_rows_stream_date
       ON ledger_rows (stream_date);
     CREATE INDEX IF NOT EXISTS idx_ledger_rows_session
@@ -1036,6 +1058,22 @@ function migrate(database: Database.Database): void {
   addColumnIfMissing(database, 'stream_items', 'pack_cost', 'REAL')
   addColumnIfMissing(database, 'stream_items', 'loss_value', 'REAL NOT NULL DEFAULT 0')
   setMeta(database, 'schema_version', '25')
+
+  // v26: backfill row coverage from what we know.
+  //
+  // Only the FIRST importer of each row was ever recorded, so that is all this
+  // can seed — the historical duplicate observations were never stored and
+  // cannot be recovered here. Overlap from before this version therefore stays
+  // at risk until the overlapping file is uploaded again, which re-registers its
+  // coverage. Everything imported from now on is protected from the first
+  // upload.
+  database
+    .prepare(
+      `INSERT OR IGNORE INTO ledger_row_imports (row_id, import_id)
+       SELECT id, import_id FROM ledger_rows`
+    )
+    .run()
+  setMeta(database, 'schema_version', '26')
 
   // Seed the product catalog once, then apply the on-hand snapshot once.
   seedCatalogIfNeeded(database)

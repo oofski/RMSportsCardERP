@@ -1,5 +1,9 @@
-import { useState } from 'react'
-import type { LedgerImport, StreamingFinanceView } from '@shared/financeStreaming'
+import { useEffect, useState } from 'react'
+import type {
+  ImportDeleteImpact,
+  LedgerImport,
+  StreamingFinanceView
+} from '@shared/financeStreaming'
 import { Icon } from '../../components/Icon'
 import { useToast } from '../../components/Toast'
 import { Button, Modal } from '../../components/ui'
@@ -40,6 +44,30 @@ export function ImportPanel({
   const toast = useToast()
   const [busy, setBusy] = useState(false)
   const [deleting, setDeleting] = useState<LedgerImport | null>(null)
+  /**
+   * What that delete would really cost, read from main when the dialog opens.
+   *
+   * Not the import's own rowsImported: a row belongs to whichever import first
+   * saw it, so an older overlapping export "owns" rows a newer file also
+   * contains. Those now survive by being re-pointed, and quoting the file's row
+   * count would overstate the loss by hundreds of rows on consecutive weekly
+   * pulls. null while the read is in flight.
+   */
+  const [impact, setImpact] = useState<ImportDeleteImpact | null>(null)
+
+  useEffect(() => {
+    if (!deleting) {
+      setImpact(null)
+      return
+    }
+    let alive = true
+    void finance.importImpact(deleting.id).then((i) => {
+      if (alive) setImpact(i)
+    })
+    return () => {
+      alive = false
+    }
+  }, [deleting])
   const [showAll, setShowAll] = useState(false)
   // Which import this session just added — it is called out in the list,
   // because the counts matter most in the seconds after an upload.
@@ -99,18 +127,44 @@ export function ImportPanel({
         </>
       }
     >
-      <p className="fin-confirm-lead">
-        <b>{deleting.filename}</b> and every one of its{' '}
-        {plural(deleting.rowsImported, 'ledger row')} are removed for good.
-      </p>
-      <p className="fin-confirm-lead">
-        The stretch it covered —{' '}
-        <b>
-          {shortInstantDate(deleting.firstOccurredAt)} to {shortInstantDate(deleting.lastOccurredAt)}
-        </b>{' '}
-        — falls back to whatever the remaining imports hold, which may be nothing at all.
-        Re-uploading the same file brings it all back; no session or stock record is touched.
-      </p>
+      {impact === null ? (
+        <p className="fin-confirm-lead">Working out what this would remove&hellip;</p>
+      ) : (
+        <>
+          <p className="fin-confirm-lead">
+            <b>{deleting.filename}</b> goes, and with it{' '}
+            <b>{plural(impact.losing, 'ledger row')}</b>
+            {impact.losing > 0 && (
+              <>
+                {' '}
+                worth <Money value={impact.losingAmount} strong />
+              </>
+            )}
+            .
+          </p>
+
+          {/* The reassurance that matters, and only when it applies. Silence here
+              would leave the operator assuming the whole file's worth of money is
+              about to disappear, which was true before rows were re-pointed. */}
+          {impact.covered > 0 && (
+            <p className="fin-confirm-lead">
+              <b>{plural(impact.covered, 'row')} stay.</b> Another import also contains them, so they
+              move onto that file instead of being removed — nothing in the P&amp;L changes for those
+              days.
+            </p>
+          )}
+
+          <p className="fin-confirm-lead">
+            The stretch it covered —{' '}
+            <b>
+              {shortInstantDate(deleting.firstOccurredAt)} to{' '}
+              {shortInstantDate(deleting.lastOccurredAt)}
+            </b>{' '}
+            — falls back to whatever the remaining imports hold. Re-uploading the same file brings
+            everything back; no session or stock record is touched.
+          </p>
+        </>
+      )}
     </Modal>
   )
 

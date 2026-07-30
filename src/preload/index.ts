@@ -106,6 +106,7 @@ import type {
   UpdateStreamSession
 } from '@shared/streaming'
 import type {
+  ImportDeleteImpact,
   LedgerImport,
   LedgerImportResult,
   LedgerRow,
@@ -531,9 +532,13 @@ const api = {
     importLedger: (): Promise<Result<LedgerImportResult>> =>
       ipcRenderer.invoke(IPC.finLedgerImport),
     imports: (): Promise<LedgerImport[]> => ipcRenderer.invoke(IPC.finLedgerImports),
-    /** Removes the upload AND the rows it brought in — a correction. */
+    /** Removes the upload and the rows NOTHING ELSE covers — a correction.
+     *  Rows another import also contains are re-pointed to it and survive. */
     deleteImport: (id: string): Promise<Result<StreamingFinanceView>> =>
       ipcRenderer.invoke(IPC.finLedgerDeleteImport, id),
+    /** What that delete would cost, for the confirmation to quote. */
+    importImpact: (id: string): Promise<ImportDeleteImpact> =>
+      ipcRenderer.invoke(IPC.finLedgerImportImpact, id),
     rows: (filter: {
       streamDate?: string
       sessionId?: string

@@ -910,6 +910,23 @@ export interface StreamingFinanceView {
   reconcileNote: string | null
 }
 
+/**
+ * What deleting one import would actually cost, read BEFORE the confirmation.
+ *
+ * `owned` is the file's rows; `covered` is how many of those another import
+ * also contains, which now survive by being re-pointed to it. `losing` is the
+ * difference — the only money that really leaves. A confirmation quoting the
+ * file's own row count would overstate the loss by whatever the overlap is,
+ * which on consecutive weekly exports is hundreds of rows.
+ */
+export interface ImportDeleteImpact {
+  exists: boolean
+  owned: number
+  covered: number
+  losing: number
+  losingAmount: number
+}
+
 export interface LedgerImportResult {
   import: LedgerImport
   view: StreamingFinanceView

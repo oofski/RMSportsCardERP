@@ -207,6 +207,7 @@ export const IPC = {
   finLedgerImport: 'finance:ledger:import',
   finLedgerImports: 'finance:ledger:imports',
   finLedgerDeleteImport: 'finance:ledger:import:delete',
+  finLedgerImportImpact: 'finance:ledger:import:impact',
   finLedgerRows: 'finance:ledger:rows',
   finLedgerReattribute: 'finance:ledger:reattribute',
 

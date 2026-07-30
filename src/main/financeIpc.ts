@@ -20,6 +20,7 @@ import { IPC } from '@shared/ipc'
 import type { Result } from '@shared/types'
 import type { Permission } from '@shared/permissions'
 import type {
+  ImportDeleteImpact,
   LedgerImport,
   LedgerImportResult,
   LedgerRow,
@@ -28,6 +29,7 @@ import type {
 import {
   deleteImport,
   emptyView,
+  importDeleteImpact,
   importLedger,
   listImports,
   listRows,
@@ -117,6 +119,18 @@ export function registerFinanceIpc(): void {
    * Remove an upload and the rows it brought in. A correction, not a deletion of
    * history: that money leaves the P&L because it should never have been in it.
    */
+  /**
+   * What that removal would cost. A read, so it is gated like a read — and it is
+   * called by the confirmation dialog rather than by the delete, which means the
+   * operator sees the real number before committing rather than after.
+   */
+  ipcMain.handle(IPC.finLedgerImportImpact, (_e, id: string): ImportDeleteImpact => {
+    if (!can('module.finance')) {
+      return { exists: false, owned: 0, covered: 0, losing: 0, losingAmount: 0 }
+    }
+    return importDeleteImpact(str(id).trim())
+  })
+
   ipcMain.handle(IPC.finLedgerDeleteImport, (_e, id: string): Result<StreamingFinanceView> => {
     try {
       const actor = requireManage()

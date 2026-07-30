@@ -1,5 +1,6 @@
 import type { Result } from '@shared/types'
 import type {
+  ImportDeleteImpact,
   LedgerImport,
   LedgerImportResult,
   LedgerRow,
@@ -34,6 +35,10 @@ export interface FinanceApi {
   importLedger(): Promise<Result<LedgerImportResult>>
   imports(): Promise<LedgerImport[]>
   deleteImport(id: string): Promise<Result<StreamingFinanceView>>
+  /** What deleting that import would actually cost. Read before confirming, so
+   *  the dialog quotes the money that really leaves rather than the file's own
+   *  row count — which overstates it by whatever another import also covers. */
+  importImpact(id: string): Promise<ImportDeleteImpact>
   rows(filter: LedgerRowFilter): Promise<LedgerRow[]>
   /** Re-runs attribution over every stored row against the current sessions —
    *  what you press after logging a show that was missing. */

@@ -779,11 +779,27 @@ export function importLedger(filePath: string, actorId: string | null): Result<L
        ON CONFLICT(fingerprint) DO NOTHING`
     )
 
+    /**
+     * COVERAGE, recorded for every row in the file — the ones it inserted AND
+     * the ones it found already stored.
+     *
+     * This is what stops a delete from taking money a file still in the list
+     * contains. Without it the only record is "who inserted it first", so
+     * removing an older overlapping export cascaded away rows the newer one
+     * covered, leaving that newer card looking complete with its first days
+     * empty and nothing on screen to say so.
+     */
+    const cover = db.prepare(
+      'INSERT OR IGNORE INTO ledger_row_imports (row_id, import_id) VALUES (?, ?)'
+    )
+    const idOfFingerprint = db.prepare('SELECT id FROM ledger_rows WHERE fingerprint = ?')
+
     for (const s of staged) {
       const found = attributeRow(s.bucket, s.instantMs, sessions)
       const match = found.session
+      const rowId = newId()
       const info = insert.run({
-        id: newId(),
+        id: rowId,
         import_id: importId,
         occurred_at: s.occurredAt,
         amount: s.amount,
@@ -803,10 +819,16 @@ export function importLedger(filePath: string, actorId: string | null): Result<L
       })
       if (info.changes === 0) {
         // Already imported — an overlapping week re-uploaded, which must be a
-        // no-op rather than an error or a second copy of the money.
+        // no-op rather than an error or a second copy of the money. It is NOT a
+        // no-op for coverage though: this file demonstrably contains that row,
+        // and saying so here is what protects the row when the import that first
+        // saw it is deleted.
         stats.duplicate += 1
+        const existing = idOfFingerprint.get(s.fingerprint) as { id: string } | undefined
+        if (existing) cover.run(existing.id, importId)
         continue
       }
+      cover.run(rowId, importId)
       stats.inserted += 1
       if (!stats.firstOccurredAt || s.occurredAt < stats.firstOccurredAt) {
         stats.firstOccurredAt = s.occurredAt
@@ -860,6 +882,45 @@ export function importLedger(filePath: string, actorId: string | null): Result<L
       last: stats.lastOccurredAt,
       warnings: JSON.stringify(warnings)
     })
+
+    /**
+     * A RE-UPLOAD OF THE SAME FILE LEAVES NO SECOND ENTRY.
+     *
+     * Uploading a file twice — easy to do, and safe, since every row de-dupes —
+     * used to add an import that owned nothing. The list then filled with
+     * identical-looking cards, only one of which held any rows, and deleting the
+     * wrong one looked like it did nothing while deleting the right one emptied
+     * a file that appeared to still be there.
+     *
+     * So: nothing new AND a file of this name already imported means the
+     * existing entry absorbs it. Its COVERAGE is merged first, which is the part
+     * that matters — the observations recorded above are the row's protection,
+     * and they must not vanish with the record they were attached to. Quarantine
+     * rows go with it; the earlier import already holds the same ones.
+     *
+     * A file with a DIFFERENT name that added nothing new still gets its entry.
+     * It is not clutter: it demonstrably covers rows, and that coverage is now
+     * load-bearing when another import is deleted.
+     */
+    if (stats.inserted === 0) {
+      const prior = db
+        .prepare(
+          `SELECT id FROM ledger_imports
+            WHERE filename = @filename AND id <> @id
+            ORDER BY created_at ASC LIMIT 1`
+        )
+        .get({ filename, id: importId }) as { id: string } | undefined
+      if (prior) {
+        db.prepare(
+          `INSERT OR IGNORE INTO ledger_row_imports (row_id, import_id)
+           SELECT row_id, @prior FROM ledger_row_imports WHERE import_id = @id`
+        ).run({ prior: prior.id, id: importId })
+        db.prepare('DELETE FROM ledger_imports WHERE id = ?').run(importId)
+        const kept = getImport(db, prior.id)
+        if (!kept) return { ok: false, error: 'The import record could not be read back.' }
+        return { ok: true, data: { import: kept, view: buildView(db) } }
+      }
+    }
 
     const record = getImport(db, importId)
     if (!record) return { ok: false, error: 'The import record could not be read back.' }
@@ -1215,19 +1276,85 @@ export function listImports(): LedgerImport[] {
 }
 
 /**
- * Undo an upload. Its rows go with it (ON DELETE CASCADE) — that money leaves
- * the P&L, which is the point: this is a correction, not data loss.
+ * How much of an import is only in that import.
  *
- * Note the consequence of fingerprint de-dup: a row is owned by the import that
- * FIRST saw it, so deleting import #1 also removes rows that a later,
- * overlapping import #2 skipped as duplicates. Re-uploading #2 puts them back.
+ * Read before the confirmation is shown, so "delete this file" can say what
+ * will actually leave the P&L rather than quoting the file's own row count and
+ * being wrong by however much another export also covers.
+ */
+export function importDeleteImpact(id: string): {
+  exists: boolean
+  /** Rows currently owned by this import. */
+  owned: number
+  /** Of those, how many another import also covers — these SURVIVE, re-pointed. */
+  covered: number
+  /** owned − covered. The money that genuinely leaves. */
+  losing: number
+  /** Signed sum of the rows that leave. */
+  losingAmount: number
+} {
+  const db = getDb()
+  const exists = !!db.prepare('SELECT 1 FROM ledger_imports WHERE id = ?').get(id)
+  if (!exists) return { exists: false, owned: 0, covered: 0, losing: 0, losingAmount: 0 }
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS owned,
+              COALESCE(SUM(CASE WHEN EXISTS (
+                SELECT 1 FROM ledger_row_imports o
+                 WHERE o.row_id = r.id AND o.import_id <> @id
+              ) THEN 1 ELSE 0 END), 0) AS covered,
+              COALESCE(SUM(CASE WHEN EXISTS (
+                SELECT 1 FROM ledger_row_imports o
+                 WHERE o.row_id = r.id AND o.import_id <> @id
+              ) THEN 0 ELSE r.amount END), 0) AS losing_amount
+         FROM ledger_rows r
+        WHERE r.import_id = @id`
+    )
+    .get({ id }) as { owned: number; covered: number; losing_amount: number }
+  return {
+    exists: true,
+    owned: row.owned,
+    covered: row.covered,
+    losing: row.owned - row.covered,
+    losingAmount: toDollars(toCents(row.losing_amount))
+  }
+}
+
+/**
+ * Undo an upload.
+ *
+ * A row leaves the P&L only when NOTHING still covers it. Anything another
+ * import also contains is re-pointed to that import first and survives.
+ *
+ * That re-point is the whole change. Before it, a row belonged to the import
+ * that FIRST inserted it and the cascade took it regardless — so deleting an
+ * older overlapping export removed rows that a file still sitting in the list
+ * contained, and that file's card went on reporting its full row count with its
+ * first days now empty. The money came back only if you happened to know to
+ * re-upload it.
+ *
+ * Order matters: re-point survivors, THEN delete the import. Whatever still
+ * points at it afterwards is by definition covered by nothing else, and the
+ * cascade is exactly right for those.
  */
 export function deleteImport(id: string, actorId: string | null): Result<StreamingFinanceView> {
   void actorId
   const db = getDb()
   const run = db.transaction((): Result<StreamingFinanceView> => {
-    const info = db.prepare('DELETE FROM ledger_imports WHERE id = ?').run(id)
-    if (info.changes === 0) return { ok: false, error: 'That import no longer exists.' }
+    if (!db.prepare('SELECT 1 FROM ledger_imports WHERE id = ?').get(id)) {
+      return { ok: false, error: 'That import no longer exists.' }
+    }
+    db.prepare(
+      `UPDATE ledger_rows
+          SET import_id = (
+                SELECT o.import_id FROM ledger_row_imports o
+                 WHERE o.row_id = ledger_rows.id AND o.import_id <> @id
+                 LIMIT 1)
+        WHERE import_id = @id
+          AND EXISTS (SELECT 1 FROM ledger_row_imports o
+                       WHERE o.row_id = ledger_rows.id AND o.import_id <> @id)`
+    ).run({ id })
+    db.prepare('DELETE FROM ledger_imports WHERE id = ?').run(id)
     return { ok: true, data: buildView(db) }
   })
   try {
