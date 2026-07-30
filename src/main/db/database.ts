@@ -204,6 +204,35 @@ function migrate(database: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_inv_lots_product
       ON inventory_lots (product_id);
 
+    -- v27: the record of one mass re-adjustment (Admin → Inventory reset).
+    --
+    -- Every individual movement a reset makes is already an ordinary row in
+    -- inventory_transactions, so the stock ledger needs nothing from this table.
+    -- What it adds is the RUN: which count sheet, on what date, moved the whole
+    -- warehouse from these totals to those. A weekly reset is a periodic control,
+    -- and a control nobody can look back at is not one.
+    CREATE TABLE IF NOT EXISTS inventory_resets (
+      id               TEXT PRIMARY KEY,
+      source           TEXT NOT NULL DEFAULT '',
+      rows_total       INTEGER NOT NULL DEFAULT 0,
+      rows_applied     INTEGER NOT NULL DEFAULT 0,
+      rows_skipped     INTEGER NOT NULL DEFAULT 0,
+      products_created INTEGER NOT NULL DEFAULT 0,
+      shelves_zeroed   INTEGER NOT NULL DEFAULT 0,
+      units_before     REAL NOT NULL DEFAULT 0,
+      units_after      REAL NOT NULL DEFAULT 0,
+      cost_before      REAL NOT NULL DEFAULT 0,
+      cost_after       REAL NOT NULL DEFAULT 0,
+      market_before    REAL NOT NULL DEFAULT 0,
+      market_after     REAL NOT NULL DEFAULT 0,
+      options_json     TEXT NOT NULL DEFAULT '{}',
+      detail_json      TEXT NOT NULL DEFAULT '[]',
+      created_at       TEXT NOT NULL,
+      created_by       TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_inv_resets_created
+      ON inventory_resets (created_at DESC);
+
     -- Purchase orders (buy-side). A PO moves through a deal pipeline
     -- (ordered -> paid -> received, or cancelled). total is a stored snapshot
     -- of Σ(line qty × unit_price) at creation. Receiving a PO does NOT yet write
@@ -1074,6 +1103,10 @@ function migrate(database: Database.Database): void {
     )
     .run()
   setMeta(database, 'schema_version', '26')
+
+  // v27: inventory_resets, created by the schema block above. Nothing to
+  // backfill — a reset that happened before the table existed did not happen.
+  setMeta(database, 'schema_version', '27')
 
   // Seed the product catalog once, then apply the on-hand snapshot once.
   seedCatalogIfNeeded(database)

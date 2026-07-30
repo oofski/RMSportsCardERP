@@ -2,6 +2,14 @@ import { contextBridge, ipcRenderer } from 'electron'
 import { IPC, type AppInfo } from '@shared/ipc'
 import type { Permission } from '@shared/permissions'
 import type {
+  ParsedSheet,
+  ResetApplyResult,
+  ResetField,
+  ResetOptions,
+  ResetPlan,
+  ResetRunSummary
+} from '@shared/inventoryReset'
+import type {
   QboAccount,
   QboAccountMap,
   QboEnvironment,
@@ -234,7 +242,32 @@ const api = {
       ipcRenderer.invoke(IPC.invScanLogMiss, { rawCode, mode }),
     scanHistory: (limit?: number): Promise<ScanRecord[]> =>
       ipcRenderer.invoke(IPC.invScanHistory, limit),
-    scanUndo: (id: string): Promise<Result<ScanRecord>> => ipcRenderer.invoke(IPC.invScanUndo, { id })
+    scanUndo: (id: string): Promise<Result<ScanRecord>> => ipcRenderer.invoke(IPC.invScanUndo, { id }),
+
+    // Mass re-adjustment from a count sheet. The renderer holds the sheet TEXT
+    // and sends it with every preview; main holds no draft state, so a reload
+    // mid-review loses nothing but the paste itself and there is no half-built
+    // import sitting in the database waiting to be finished.
+    resetPreview: (input: {
+      text: string
+      mapping: ResetField[] | null
+      options?: Partial<ResetOptions>
+      defaultLocation?: string
+    }): Promise<{ sheet: ParsedSheet; plan: ResetPlan; guessed: boolean } | null> =>
+      ipcRenderer.invoke(IPC.invResetPreview, input),
+    resetPickFile: (): Promise<Result<{ text: string; filename: string }>> =>
+      ipcRenderer.invoke(IPC.invResetPickFile),
+    resetApply: (input: {
+      text: string
+      mapping: ResetField[]
+      options?: Partial<ResetOptions>
+      defaultLocation?: string
+      source?: string
+    }): Promise<Result<ResetApplyResult>> => ipcRenderer.invoke(IPC.invResetApply, input),
+    resetHistory: (limit?: number): Promise<ResetRunSummary[]> =>
+      ipcRenderer.invoke(IPC.invResetHistory, limit),
+    resetRunDetail: (id: string): Promise<string[]> => ipcRenderer.invoke(IPC.invResetRunDetail, id),
+    resetExport: (): Promise<Result<{ path: string }>> => ipcRenderer.invoke(IPC.invResetExport)
   },
   supplies: {
     list: (): Promise<Supply[]> => ipcRenderer.invoke(IPC.suppliesList),

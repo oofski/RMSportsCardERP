@@ -10,8 +10,16 @@ import { RolesTab } from './RolesTab'
 import { ActivityTab } from './ActivityTab'
 import { BreakAssignmentsTab } from './BreakAssignmentsTab'
 import { QuickBooksTab } from './QuickBooksTab'
+import { InventoryResetTab } from './InventoryResetTab'
 
-type TabId = 'employees' | 'hours' | 'roles' | 'breaks' | 'activity' | 'quickbooks'
+type TabId =
+  | 'employees'
+  | 'hours'
+  | 'roles'
+  | 'breaks'
+  | 'activity'
+  | 'reset'
+  | 'quickbooks'
 
 interface TabDef {
   id: TabId
@@ -56,6 +64,14 @@ export function AdminModule(): JSX.Element {
       visible: can('shipping.manage')
     },
     { id: 'activity', label: 'Inventory activity', icon: 'Layers', visible: can('module.inventory') },
+    // Gated on the write permission, not on module access: this tab rewrites
+    // stock and cost for the whole catalog in one action.
+    {
+      id: 'reset',
+      label: 'Inventory reset',
+      icon: 'ClipboardList',
+      visible: can('inventory.manage')
+    },
     { id: 'quickbooks', label: 'QuickBooks', icon: 'Wallet', visible: can('admin.access') }
   ]
   const visibleTabs = tabs.filter((t) => t.visible)
@@ -85,6 +101,7 @@ export function AdminModule(): JSX.Element {
       {tab === 'roles' && <RolesTab employees={employees} onChanged={loadEmployees} />}
       {tab === 'breaks' && <BreakAssignmentsTab />}
       {tab === 'activity' && <ActivityTab />}
+      {tab === 'reset' && <InventoryResetTab />}
       {tab === 'quickbooks' && <QuickBooksTab />}
     </div>
   )

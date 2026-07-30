@@ -1,5 +1,17 @@
-import { BrowserWindow, dialog, ipcMain, type OpenDialogOptions } from 'electron'
+import {
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  type OpenDialogOptions,
+  type SaveDialogOptions
+} from 'electron'
+import { writeFileSync } from 'node:fs'
 import { IPC } from '@shared/ipc'
+import type {
+  ResetApplyResult,
+  ResetField,
+  ResetRunSummary
+} from '@shared/inventoryReset'
 import type {
   AddStockInput,
   AdjustStockInput,
@@ -66,6 +78,15 @@ import {
 } from './db/inventory'
 import { addIncoming, cancelIncoming, listIncoming, receiveIncoming } from './db/incoming'
 import { commitScan, listScans, logScanMiss, resolveScan, undoScan } from './db/scanning'
+import type { ResetApplyInput, ResetPreview, ResetPreviewInput } from './db/inventoryReset'
+import {
+  applyReset,
+  buildResetExport,
+  listResetRuns,
+  previewReset,
+  readSheetFile,
+  resetRunDetail
+} from './db/inventoryReset'
 import {
   SUPPLY_UNITS,
   adjustSupply,
@@ -238,6 +259,92 @@ export function registerInventoryIpc(): void {
       if (!payload?.id) return { ok: false, error: 'No scan specified.' }
       const res = undoScan(String(payload.id), actor.id)
       return res.error ? { ok: false, error: res.error } : { ok: true, data: res.record as ScanRecord }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  // ---- Mass re-adjustment (Admin → Inventory reset) ------------------------
+  //
+  // Preview is a READ: it parses the sheet, matches it against the catalog and
+  // works out the before→after, touching nothing. It is gated on the same
+  // 'inventory.manage' as the apply anyway — the plan names every product and
+  // its cost, which is not something a view-only account should be able to
+  // assemble by pasting a guess.
+  ipcMain.handle(IPC.invResetPreview, (_e, input: ResetPreviewInput): ResetPreview | null => {
+    if (!can('inventory.manage')) return null
+    return previewReset({
+      text: String(input?.text ?? ''),
+      mapping: Array.isArray(input?.mapping) ? (input.mapping as ResetField[]) : null,
+      options: input?.options,
+      defaultLocation: input?.defaultLocation
+    })
+  })
+
+  ipcMain.handle(
+    IPC.invResetPickFile,
+    async (e): Promise<Result<{ text: string; filename: string }>> => {
+      try {
+        requireManage()
+        const win = BrowserWindow.fromWebContents(e.sender) ?? BrowserWindow.getFocusedWindow()
+        const opts: OpenDialogOptions = {
+          title: 'Choose the count sheet',
+          properties: ['openFile'],
+          filters: [
+            { name: 'Spreadsheet export', extensions: ['csv', 'tsv', 'txt'] },
+            { name: 'All files', extensions: ['*'] }
+          ]
+        }
+        const picked = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts)
+        if (picked.canceled || !picked.filePaths[0]) return { ok: false, error: 'No file selected.' }
+        return readSheetFile(picked.filePaths[0])
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  ipcMain.handle(IPC.invResetApply, (_e, input: ResetApplyInput): Result<ResetApplyResult> => {
+    try {
+      const actor = requireManage()
+      if (!Array.isArray(input?.mapping)) return { ok: false, error: 'No column mapping supplied.' }
+      return applyReset(
+        {
+          text: String(input.text ?? ''),
+          mapping: input.mapping as ResetField[],
+          options: input.options,
+          defaultLocation: input.defaultLocation,
+          source: input.source
+        },
+        actor.id
+      )
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle(IPC.invResetHistory, (_e, limit?: number): ResetRunSummary[] =>
+    can('inventory.manage') ? listResetRuns(limit ?? 12) : []
+  )
+
+  ipcMain.handle(IPC.invResetRunDetail, (_e, id: string): string[] =>
+    can('inventory.manage') ? resetRunDetail(String(id ?? '')) : []
+  )
+
+  ipcMain.handle(IPC.invResetExport, async (e): Promise<Result<{ path: string }>> => {
+    try {
+      requireManage()
+      const win = BrowserWindow.fromWebContents(e.sender) ?? BrowserWindow.getFocusedWindow()
+      const stamp = new Date().toISOString().slice(0, 10)
+      const opts: SaveDialogOptions = {
+        title: 'Export the current count',
+        defaultPath: `rm-inventory-count-${stamp}.tsv`,
+        filters: [{ name: 'Tab-separated', extensions: ['tsv'] }]
+      }
+      const picked = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts)
+      if (picked.canceled || !picked.filePath) return { ok: false, error: 'Export cancelled.' }
+      writeFileSync(picked.filePath, buildResetExport(), 'utf8')
+      return { ok: true, data: { path: picked.filePath } }
     } catch (err) {
       return fail(err)
     }

@@ -73,6 +73,14 @@ export const IPC = {
   invScanLogMiss: 'inventory:scan:log-miss',
   invScanHistory: 'inventory:scan:history',
   invScanUndo: 'inventory:scan:undo',
+  // Mass re-adjustment from a count sheet. preview/history/export are reads;
+  // apply is the one write, and it is the whole run in a single transaction.
+  invResetPreview: 'inventory:reset:preview',
+  invResetPickFile: 'inventory:reset:pick-file',
+  invResetApply: 'inventory:reset:apply',
+  invResetHistory: 'inventory:reset:history',
+  invResetRunDetail: 'inventory:reset:run-detail',
+  invResetExport: 'inventory:reset:export',
 
   // Supplies (operating consumables)
   suppliesList: 'supplies:list',

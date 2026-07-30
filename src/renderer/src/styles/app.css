@@ -13392,3 +13392,683 @@ button.sor-team:focus-visible {
     margin-left: 0;
   }
 }
+
+/* ==========================================================================
+   Admin → Inventory reset (mass re-adjustment from a count sheet)
+   ========================================================================== */
+.inv-reset {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding-bottom: 28px;
+}
+.inv-reset-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+.inv-reset-head h3 {
+  margin: 0 0 5px;
+  font-size: 16px;
+  font-weight: 650;
+  color: var(--text);
+}
+.inv-reset-head p {
+  margin: 0;
+  max-width: 62ch;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-2);
+}
+.inv-reset-head-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* ---------- Paste box ---------- */
+.inv-reset-paste {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.inv-reset-paste > label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+.inv-reset-paste > label em {
+  font-style: normal;
+  font-weight: 400;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+.inv-reset-textarea {
+  width: 100%;
+  min-height: 132px;
+  max-height: 320px;
+  resize: vertical;
+  padding: 11px 13px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 11.5px;
+  line-height: 1.65;
+  /* A count sheet is columnar. Wrapping it turns the paste into porridge and
+     hides which row is which, so it scrolls sideways instead. */
+  white-space: pre;
+  overflow-wrap: normal;
+  overflow-x: auto;
+  tab-size: 12;
+}
+.inv-reset-textarea:focus {
+  outline: none;
+  border-color: var(--brand-400);
+  box-shadow: 0 0 0 3px var(--brand-soft);
+}
+.inv-reset-textarea::placeholder {
+  color: var(--text-3);
+}
+.inv-reset-paste-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+/* ---------- Column mapper ---------- */
+.inv-reset-map {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+}
+.inv-reset-map-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.inv-reset-map-head h4 {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--text);
+}
+.inv-reset-map-head span {
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+/* What was read, in words — the check that does not need a scroll. */
+.inv-reset-map-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.inv-reset-map-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  max-width: 100%;
+  padding: 4px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface-2);
+  font-size: 11px;
+  min-width: 0;
+}
+.inv-reset-map-chip b {
+  font-weight: 650;
+  color: var(--text);
+  white-space: nowrap;
+}
+.inv-reset-map-chip i {
+  font-style: normal;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.inv-reset-map-chip.is-off {
+  opacity: 0.5;
+  border-style: dashed;
+  background: transparent;
+}
+
+/* A real sheet is wider than this pane. It scrolls in its own box so the page
+   itself never scrolls sideways. */
+.inv-reset-map-scroll {
+  overflow-x: auto;
+}
+.inv-reset-maptable {
+  border-collapse: collapse;
+  width: max-content;
+  min-width: 100%;
+}
+.inv-reset-maptable th {
+  vertical-align: top;
+  padding: 9px 8px;
+  border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+  min-width: 148px;
+}
+.inv-reset-maptable th .select {
+  width: 100%;
+  min-width: 132px;
+  height: 32px;
+  font-size: 12px;
+}
+.inv-reset-maptable th em {
+  display: block;
+  margin-top: 4px;
+  font-style: normal;
+  font-size: 10.5px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 180px;
+}
+.inv-reset-maptable td {
+  padding: 6px 9px;
+  border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  font-size: 11.5px;
+  color: var(--text-2);
+  white-space: nowrap;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.inv-reset-maptable th.is-ignored,
+.inv-reset-maptable td.is-ignored {
+  background: var(--surface-3);
+  color: var(--text-3);
+}
+/* A column with no data anywhere in the sheet. Collapsed so the columns that DO
+   carry data — the money ones especially — stay on screen. */
+.inv-reset-maptable th.is-empty,
+.inv-reset-maptable td.is-empty {
+  min-width: 0;
+  width: 26px;
+  padding-left: 0;
+  padding-right: 0;
+  text-align: center;
+  background: var(--surface-3);
+  color: var(--text-3);
+}
+.inv-reset-map-empty {
+  display: block;
+  font-size: 12px;
+  color: var(--text-3);
+  line-height: 32px;
+}
+.inv-reset-map-foot {
+  padding: 8px 14px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-3);
+  background: var(--surface-2);
+}
+
+/* ---------- Options ---------- */
+.inv-reset-options {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.inv-reset-options-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(258px, 1fr));
+  gap: 12px 22px;
+}
+.inv-reset-default-loc {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding-top: 11px;
+  border-top: 1px solid var(--border);
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.inv-reset-default-loc select {
+  height: 32px;
+  width: auto;
+  min-width: 78px;
+}
+
+/* ---------- Blocking problems ---------- */
+.inv-reset-block {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius);
+  background: var(--danger-bg);
+  color: var(--danger-strong);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+.inv-reset-block svg {
+  flex: none;
+  margin-top: 1px;
+}
+.inv-reset-block ul {
+  margin: 0;
+  padding-left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* ---------- Before → after totals ---------- */
+.inv-reset-totals {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px;
+}
+.inv-reset-total {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 13px 15px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.inv-reset-total.is-up {
+  border-left-color: var(--success);
+}
+.inv-reset-total.is-down {
+  border-left-color: var(--danger);
+}
+.inv-reset-total-label {
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.inv-reset-total-figure {
+  font-size: 20px;
+  font-weight: 650;
+  line-height: 1.15;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.inv-reset-total-from {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  font-size: 11.5px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.inv-reset-total-from em {
+  font-style: normal;
+  font-weight: 650;
+}
+.inv-reset-total.is-up .inv-reset-total-from em {
+  color: var(--success-strong);
+}
+.inv-reset-total.is-down .inv-reset-total-from em {
+  color: var(--danger-strong);
+}
+
+/* ---------- Row tallies ---------- */
+.inv-reset-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.inv-reset-tally {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  padding: 7px 13px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: 12px;
+  color: var(--text-2);
+}
+.inv-reset-tally strong {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.inv-reset-tally.is-accent strong {
+  color: var(--brand-500);
+}
+.inv-reset-tally.is-warn:not(.is-zero) {
+  border-color: var(--warning);
+  background: var(--warning-bg);
+  color: var(--text);
+}
+.inv-reset-tally.is-warn:not(.is-zero) strong {
+  color: var(--text);
+}
+.inv-reset-tally.is-bad:not(.is-zero) {
+  border-color: var(--danger);
+  background: var(--danger-bg);
+  color: var(--danger-strong);
+}
+.inv-reset-tally.is-bad:not(.is-zero) strong {
+  color: var(--danger-strong);
+}
+.inv-reset-tally.is-zero {
+  opacity: 0.55;
+}
+
+/* ---------- Sections (details/summary and the open change list) ---------- */
+.inv-reset-section {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+}
+.inv-reset-section > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 14px;
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  list-style: none;
+  user-select: none;
+}
+.inv-reset-section > summary::-webkit-details-marker {
+  display: none;
+}
+.inv-reset-section > summary::after {
+  content: '';
+  margin-left: auto;
+  width: 7px;
+  height: 7px;
+  border-right: 1.6px solid var(--text-3);
+  border-bottom: 1.6px solid var(--text-3);
+  transform: rotate(45deg) translate(-2px, -2px);
+  transition: transform 0.15s ease;
+}
+.inv-reset-section[open] > summary::after {
+  transform: rotate(225deg) translate(-2px, -2px);
+}
+.inv-reset-section > summary:hover {
+  background: var(--surface-2);
+}
+.inv-reset-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.inv-reset-section-head h4 {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--text);
+}
+
+/* ---------- Tables ---------- */
+.inv-reset-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.inv-reset-table th {
+  padding: 8px 14px;
+  text-align: left;
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.inv-reset-table td {
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-2);
+  vertical-align: top;
+}
+.inv-reset-table tbody tr:last-child td {
+  border-bottom: none;
+}
+.inv-reset-table tbody tr:hover td {
+  background: var(--surface-2);
+}
+.inv-reset-table td strong {
+  display: block;
+  font-weight: 600;
+  color: var(--text);
+}
+.inv-reset-table td em {
+  display: block;
+  margin-top: 2px;
+  font-style: normal;
+  font-size: 11px;
+  color: var(--text-3);
+}
+.inv-reset-table th.num,
+.inv-reset-table td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.inv-reset-hint {
+  display: block;
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+.inv-reset-new {
+  display: inline-block;
+  margin-top: 3px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--brand-soft);
+  color: var(--brand-700);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+.inv-reset-details span {
+  display: block;
+  font-size: 11px;
+}
+
+/* before → after inside a cell */
+.inv-reset-delta {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+}
+.inv-reset-delta s {
+  color: var(--text-3);
+  text-decoration-thickness: 1px;
+}
+.inv-reset-delta b {
+  font-weight: 650;
+}
+.inv-reset-delta.is-up b {
+  color: var(--success-strong);
+}
+.inv-reset-delta.is-down b {
+  color: var(--danger-strong);
+}
+.inv-reset-delta.is-flat {
+  color: var(--text-3);
+}
+
+/* ---------- Warnings list ---------- */
+.inv-reset-warnlist {
+  margin: 0;
+  padding: 4px 14px 12px;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.inv-reset-warnlist li {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--warning-bg);
+  font-size: 11.5px;
+  /* --warning is too weak to read as ink on its own tint; --text on
+     --warning-bg measures 16.1:1. */
+  color: var(--text);
+}
+.inv-reset-warnlist li strong {
+  font-size: 12px;
+  font-weight: 650;
+}
+
+/* ---------- Apply ---------- */
+.inv-reset-apply {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.inv-reset-apply-note {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+/* ---------- History ---------- */
+.inv-reset-history {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  /* Seven columns of figures do not fit a narrow pane. The table scrolls inside
+     this box so the page itself never scrolls sideways. */
+  overflow-x: auto;
+}
+.inv-reset-history h4 {
+  margin: 0;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--text);
+}
+.inv-reset-history .inv-reset-table {
+  min-width: 720px;
+}
+
+/* ---------- Confirm + run detail ---------- */
+.inv-reset-confirm p {
+  margin: 0 0 14px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-2);
+}
+.inv-reset-confirm-figures {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+.inv-reset-confirm-figures > div {
+  padding: 11px 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.inv-reset-confirm-figures dt {
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.inv-reset-confirm-figures dd {
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.inv-reset-confirm-figures dd strong {
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--text);
+}
+.inv-reset-confirm-skip {
+  margin: 14px 0 0 !important;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--warning-bg);
+  color: var(--text);
+  font-size: 12px !important;
+}
+.inv-reset-rundetail p {
+  margin: 0 0 12px;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.inv-reset-rundetail ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 380px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.inv-reset-rundetail li {
+  padding: 7px 11px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+
+@media (max-width: 900px) {
+  .inv-reset-head-actions {
+    width: 100%;
+  }
+  .inv-reset-head-actions .btn {
+    flex: 1;
+  }
+  .inv-reset-totals {
+    grid-template-columns: 1fr;
+  }
+}
