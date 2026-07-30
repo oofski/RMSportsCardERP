@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import type { StreamDayFinance } from '@shared/financeStreaming'
+import type { StreamDayFinance, UnattributedDay } from '@shared/financeStreaming'
 import { formatMoney } from '../../lib/format'
 import { Icon } from '../../components/Icon'
 import { plural } from './bits'
@@ -49,16 +49,33 @@ const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
 type Cell =
   | { kind: 'pad'; key: string }
-  | { kind: 'day'; key: string; day: StreamDayFinance | null }
+  | {
+      kind: 'day'
+      key: string
+      day: StreamDayFinance | null
+      /** Money on this day that no logged show covers, or null if none. */
+      waiting: UnattributedDay | null
+    }
 
 export function FinanceCalendar({
   days,
+  waiting,
   month,
   range,
   onMonth,
   onRange
 }: {
   days: StreamDayFinance[]
+  /**
+   * Days with money no logged show covers.
+   *
+   * ON THE GRID, because that is where the operator is already looking. It used
+   * to be one $24,616.92 figure and a flat table below the P&L, so the answer to
+   * "which days am I missing" was a list you had to cross-reference against the
+   * calendar of those very days. A day that earned money with no show logged is
+   * now a cell you can see and click.
+   */
+  waiting: UnattributedDay[]
   /** null means "follow the latest month with money in it". */
   month: string | null
   /** null means all time — no cell is highlighted. */
@@ -81,12 +98,22 @@ export function FinanceCalendar({
     return m
   }, [days])
 
+  const waitingByDate = useMemo(() => {
+    const m = new Map<string, UnattributedDay>()
+    for (const w of waiting) m.set(w.localDate, w)
+    return m
+  }, [waiting])
+
   /**
    * Open on the LATEST month that has money in it, not on the current month.
    *
    * The ledger is a file somebody uploaded; it is normal for the most recent
    * export to stop weeks before today. Opening on an empty August, with July
    * full of shows one click away, would read as "the import did not work".
+   *
+   * WAITING DAYS COUNT as money in a month. A month whose only activity is
+   * unlogged is exactly the month worth opening on — skipping to an earlier one
+   * would hide the thing most in need of attention.
    */
   const latestMonth = useMemo(() => {
     let best = ''
@@ -94,8 +121,12 @@ export function FinanceCalendar({
       const k = monthKeyOfDayKey(d.streamDate)
       if (k > best) best = k
     }
+    for (const w of waiting) {
+      const k = monthKeyOfDayKey(w.localDate)
+      if (k > best) best = k
+    }
     return best || thisMonthKey()
-  }, [days])
+  }, [days, waiting])
 
   const monthKey = month ?? latestMonth
 
@@ -111,16 +142,22 @@ export function FinanceCalendar({
     for (let i = 0; i < first.getDay(); i++) out.push({ kind: 'pad', key: `lead-${i}` })
     for (let d = 1; d <= daysInMonth; d++) {
       const key = dayKeyOf(new Date(parsed.year, parsed.month - 1, d))
-      out.push({ kind: 'day', key, day: byDate.get(key) ?? null })
+      out.push({
+        kind: 'day',
+        key,
+        day: byDate.get(key) ?? null,
+        waiting: waitingByDate.get(key) ?? null
+      })
     }
     while (out.length % 7 !== 0) out.push({ kind: 'pad', key: `trail-${out.length}` })
     return out
-  }, [monthKey, byDate])
+  }, [monthKey, byDate, waitingByDate])
 
-  /** How many days on this month's grid carry a show — used only to explain an
-   *  empty month, never to summarise one. The figures live in the widgets. */
+  /** How many days on this month's grid carry anything at all — a show or money
+   *  waiting for one. Used only to explain an empty month, never to summarise
+   *  one; the figures live in the widgets. */
   const activeInMonth = useMemo(
-    () => cells.filter((c) => c.kind === 'day' && c.day).length,
+    () => cells.filter((c) => c.kind === 'day' && (c.day || c.waiting)).length,
     [cells]
   )
 
@@ -212,6 +249,7 @@ export function FinanceCalendar({
                 key={cell.key}
                 dateKey={cell.key}
                 day={cell.day}
+                waiting={cell.waiting}
                 isToday={cell.key === today}
                 selected={inPainted(painted, cell.key)}
                 pending={anchor !== null}
@@ -264,6 +302,7 @@ function inPainted(range: DayRange | null, key: string): boolean {
 function DayCell({
   dateKey,
   day,
+  waiting,
   isToday,
   selected,
   pending,
@@ -273,6 +312,8 @@ function DayCell({
   dateKey: string
   /** null when no show landed on this day — i.e. it was quiet. */
   day: StreamDayFinance | null
+  /** Money on this day that no logged show covers. */
+  waiting: UnattributedDay | null
   isToday: boolean
   selected: boolean
   pending: boolean
@@ -285,22 +326,38 @@ function DayCell({
   const net = day && Number.isFinite(day.netProfit) ? day.netProfit : 0
   const tone = !known ? '' : net > 0.005 ? 'is-up' : net < -0.005 ? 'is-down' : 'is-flat'
 
-  // Spelled out in words: a screen reader gets "made" or "lost", not a colour
-  // and a glyph it has no way to convey.
-  const label = !day
-    ? `${longDayLabel(dateKey)} — nothing streamed`
-    : known
-      ? `${longDayLabel(dateKey)} — ${net < 0 ? 'lost' : 'made'} ${formatMoney(
-          Math.abs(net)
-        )}, ${plural(day.sessionCount, 'show')}`
-      : `${longDayLabel(dateKey)} — ${plural(day.sessionCount, 'show')}, net profit unavailable`
+  /**
+   * A day that earned but has NO show logged.
+   *
+   * It printed as blank before — the ledger held thousands of dollars on it and
+   * the calendar said nothing, because a cell only existed for a logged session.
+   * That is the one state on this grid somebody has to act on, so it is the one
+   * state that cannot be silent. It shows the money and says no show.
+   */
+  const unlogged = !day && waiting !== null
+
+  // Spelled out in words: a screen reader gets "made", "lost" or "no show
+  // logged", not a colour and a glyph it has no way to convey.
+  const label = unlogged
+    ? `${longDayLabel(dateKey)} — ${formatMoney(
+        Math.abs(waiting.amount)
+      )} in the ledger with no show logged, ${plural(waiting.rowCount, 'row')}`
+    : !day
+      ? `${longDayLabel(dateKey)} — nothing streamed`
+      : known
+        ? `${longDayLabel(dateKey)} — ${net < 0 ? 'lost' : 'made'} ${formatMoney(
+            Math.abs(net)
+          )}, ${plural(day.sessionCount, 'show')}${
+            waiting ? `, plus ${formatMoney(Math.abs(waiting.amount))} outside its hours` : ''
+          }`
+        : `${longDayLabel(dateKey)} — ${plural(day.sessionCount, 'show')}, net profit unavailable`
 
   return (
     <button
       type="button"
       className={[
         'fin-cell',
-        day ? 'has-activity' : 'quiet',
+        day ? 'has-activity' : unlogged ? 'is-unlogged' : 'quiet',
         tone,
         selected ? 'in-range' : '',
         isToday ? 'today' : ''
@@ -310,10 +367,9 @@ function DayCell({
       aria-pressed={selected}
       aria-current={isToday ? 'date' : undefined}
       aria-label={label}
-      // EVERY day is clickable now, including quiet ones. A range from the 1st
-      // to the 31st has to be selectable whether or not a show ran on either
-      // end, and a disabled cell in the middle of a month is a hole the drag
-      // falls into.
+      // EVERY day is clickable, including quiet ones. A range from the 1st to the
+      // 31st has to be selectable whether or not a show ran on either end, and a
+      // disabled cell in the middle of a month is a hole the drag falls into.
       onClick={onClick}
       onMouseEnter={onHover}
       onFocus={pending ? onHover : undefined}
@@ -321,6 +377,17 @@ function DayCell({
       <span className="fin-cell-top">
         <span className="fin-cell-num">{dayNumberOf(dateKey)}</span>
         {isToday && <span className="fin-cell-today">Today</span>}
+        {/* On a day that DOES have a show, this is the second-show marker: money
+            arrived outside the hours that were logged. Silent on an unlogged day,
+            where the whole cell already says it. */}
+        {day && waiting && (
+          <span
+            className="fin-cell-flag"
+            title={`${formatMoney(Math.abs(waiting.amount))} arrived outside the logged hours — probably a second show. Click the day for the detail.`}
+          >
+            <Icon name="AlertTriangle" size={10} />
+          </span>
+        )}
       </span>
 
       {day ? (
@@ -340,6 +407,13 @@ function DayCell({
             <span className="fin-cell-rev mono" title="Revenue before any deduction">
               {compactMoney(day.totalRevenue)}
             </span>
+          </span>
+        </span>
+      ) : unlogged ? (
+        <span className="fin-cell-body">
+          <span className="fin-cell-waiting mono">{compactMoney(waiting.amount)}</span>
+          <span className="fin-cell-sub">
+            <span className="fin-cell-noshow">no show logged</span>
           </span>
         </span>
       ) : (

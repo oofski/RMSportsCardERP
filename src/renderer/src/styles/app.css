@@ -12106,6 +12106,48 @@ button.sor-team:focus-visible {
 .fin-cell.quiet:hover {
   background: var(--surface-3);
 }
+/* A day the ledger earned on with NO show logged. It printed as blank before —
+   thousands of dollars in the ledger and an empty cell — which is the one state
+   on this grid somebody has to act on and so the one that cannot be silent.
+   Amber, dashed: dashed because the day is INCOMPLETE rather than wrong, and
+   amber because it wants attention without claiming a loss. */
+.fin-cell.is-unlogged {
+  border-style: dashed;
+  border-color: var(--warning);
+  background: var(--warning-bg);
+}
+.fin-cell.is-unlogged:hover {
+  border-style: solid;
+}
+.fin-cell.is-unlogged .fin-cell-num {
+  color: var(--text);
+  font-weight: 700;
+}
+/* 16.1:1 on --warning-bg in light — the same ink .fin-note.tone-warn uses, for
+   the same reason: --warning as text on its own tint is only 2.9:1. */
+.fin-cell-waiting {
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  white-space: nowrap;
+}
+.fin-cell-noshow {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+/* The second-show marker, on a day that DOES have a show: money arrived outside
+   the hours that were logged. Corner-mounted and tiny, because the day's own
+   profit figure is still the headline. */
+.fin-cell-flag {
+  display: inline-flex;
+  margin-left: auto;
+  color: var(--warning);
+}
 .fin-cell.quiet .fin-cell-num {
   color: var(--text-2);
   font-weight: 600;
@@ -12787,171 +12829,6 @@ button.sor-team:focus-visible {
   min-width: 0;
 }
 
-/* ---------- Money waiting for a show ---------- */
-/* Neutral on purpose. This used to be amber; it is not a warning ramp and never
-   was one. A stream that was never in the schedule has nothing to attach to, so
-   its money sitting here is the system working, not failing. */
-.fin-unattr {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid var(--border-strong);
-  min-width: 0;
-}
-.fin-unattr.is-clear {
-  flex-direction: row;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px 16px;
-}
-/* 5.16:1 light, 7.12:1 dark on --surface-2. */
-.fin-unattr-clear {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--success-strong);
-}
-.fin-unattr-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px 20px;
-}
-.fin-unattr-figure {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  margin-right: auto;
-  min-width: 0;
-}
-.fin-unattr-figure .fin-money {
-  font-size: 22px;
-  font-weight: 700;
-  color: var(--text);
-}
-.fin-unattr-figure em {
-  font-style: normal;
-  font-size: 11.5px;
-  color: var(--text-2);
-}
-.fin-unattr-acts {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-.fin-unattr-lead {
-  margin: 0;
-  max-width: 96ch;
-  font-size: 12.5px;
-  line-height: 1.6;
-  color: var(--text-2);
-}
-.fin-unattr-lead b {
-  color: var(--text);
-}
-/* Chips, not cards. Each one is three short facts; a bordered box around every
-   trio drew nine frames to hold twenty words. */
-.fin-unattr-buckets {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 7px 20px;
-}
-.fin-unattr-bucket {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 12px;
-}
-.fin-unattr-bucket .fin-money {
-  color: var(--text);
-}
-.fin-unattr-bucket em {
-  font-style: normal;
-  color: var(--text-2);
-}
-
-/* The clusters: the one actionable thing on this panel, so they get the one
-   piece of real structure. A TABLE, because scanning for the biggest missing
-   show is the entire use of the list and ragged figures make that a reading job
-   rather than a glance. */
-.fin-clusters {
-  width: 100%;
-  /* Capped, because the four columns hold about forty characters between them.
-     Let it span a 1400px panel and the eye has to cross 500px of nothing to get
-     from the day to its amount, which is exactly the job the table was
-     introduced to remove. */
-  max-width: 780px;
-  border-collapse: collapse;
-  font-size: 12.5px;
-  font-variant-numeric: tabular-nums;
-}
-.fin-clusters caption {
-  caption-side: top;
-  margin-bottom: 8px;
-  text-align: left;
-  font-size: 12.5px;
-  line-height: 1.55;
-  color: var(--text-2);
-}
-.fin-clusters th,
-.fin-clusters td {
-  padding: 7px 12px;
-  text-align: left;
-}
-.fin-clusters th:first-child,
-.fin-clusters td:first-child {
-  padding-left: 0;
-}
-.fin-clusters th:last-child,
-.fin-clusters td:last-child {
-  padding-right: 0;
-}
-.fin-clusters thead th {
-  padding-bottom: 5px;
-  border-bottom: 1px solid var(--border-strong);
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-  color: var(--text-2);
-}
-.fin-clusters tbody th {
-  font-weight: 600;
-  color: var(--text);
-  white-space: nowrap;
-}
-.fin-clusters tbody tr + tr th,
-.fin-clusters tbody tr + tr td {
-  border-top: 1px solid var(--border);
-}
-.fin-clusters .is-num {
-  text-align: right;
-}
-.fin-clusters td.is-num {
-  color: var(--text-2);
-}
-.fin-clusters .fin-money {
-  color: var(--text);
-}
-.fin-cluster-when {
-  white-space: nowrap;
-  color: var(--text-2);
-}
-/* 7.52:1 light, 7.35:1 dark. */
-.fin-plus {
-  margin-left: 6px;
-  padding: 1px 5px;
-  border-radius: 6px;
-  background: var(--brand-soft);
-  color: var(--brand-700);
-  font-size: 10px;
-  font-weight: 700;
-}
-
 /* ---------- Ledger imports ---------- */
 .fin-imports {
   display: flex;
@@ -13275,10 +13152,6 @@ button.sor-team:focus-visible {
     margin-left: 0;
     white-space: normal;
   }
-  .fin-unattr-figure {
-    margin-right: 0;
-    width: 100%;
-  }
 }
 @media (max-width: 640px) {
   .fin-head,
@@ -13333,10 +13206,6 @@ button.sor-team:focus-visible {
     font-size: 0;
     padding: 4px;
   }
-  .fin-clusters th,
-  .fin-clusters td {
-    padding: 7px 8px;
-  }
   .fin-pnl-mile.is-bottom .fin-profit {
     font-size: 18px;
   }
@@ -13358,4 +13227,133 @@ button.sor-team:focus-visible {
 }
 .inv-stuck-list b {
   color: var(--text);
+}
+
+/* ==========================================================================
+   Waiting for a show — inside the statement, per day
+   --------------------------------------------------------------------------
+   This replaced a panel below the whole P&L that printed one total, a paragraph,
+   a row of bucket chips and a table of every burst in the ledger. The figures
+   were right and the shape was wrong: it answered "how much is unmatched
+   overall" while the operator was looking at a calendar of days.
+
+   Neutral ground, not amber. A show that was never in the schedule has nothing
+   to attach to, so its money sitting here is the system working — the AMBER is
+   on the calendar cell, where it is a prompt to act; here it is a readout.
+   ========================================================================== */
+.fin-waiting {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  min-width: 0;
+}
+.fin-waiting-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+}
+.fin-waiting-figure {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 7px;
+}
+.fin-waiting-figure .fin-money {
+  font-size: 15px;
+}
+.fin-waiting-figure em {
+  font-style: normal;
+  font-size: 11.5px;
+  /* 6.26:1 light, 8.25:1 dark. */
+  color: var(--text-2);
+}
+.fin-waiting-acts {
+  display: inline-flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+/* One row per day. A BUTTON, because its job is to narrow the screen to that
+   day — at all-time this list is every show worth logging, and reading a date
+   then hunting for it on the grid is the step this removes. */
+.fin-waiting-day {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.13s ease, background 0.13s ease;
+}
+.fin-waiting-day:hover {
+  border-color: var(--brand-400);
+  background: var(--surface-3);
+}
+.fin-waiting-day:focus-visible {
+  outline: 2px solid var(--brand-500);
+  outline-offset: 1px;
+}
+/* A single day needs no date and no total — the heading above it already is
+   that day's figure, and repeating it beside itself reads as two numbers. So the
+   row stops being a chooser and becomes a plain readout. */
+.fin-waiting-day.is-single {
+  border-color: transparent;
+  background: transparent;
+  padding: 0;
+  cursor: default;
+}
+.fin-waiting-day.is-single:hover {
+  border-color: transparent;
+  background: transparent;
+}
+.fin-waiting-date {
+  min-width: 84px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text);
+}
+.fin-waiting-when {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-size: 12px;
+  /* 6.26:1 light, 8.25:1 dark. */
+  color: var(--text-2);
+}
+.fin-waiting-window {
+  white-space: nowrap;
+}
+.fin-waiting-buckets {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px 12px;
+  min-width: 0;
+}
+.fin-waiting-bucket {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+}
+.fin-waiting-day > .fin-money {
+  margin-left: auto;
+}
+@media (max-width: 640px) {
+  .fin-waiting-acts {
+    margin-left: 0;
+    flex: 1 0 100%;
+  }
+  .fin-waiting-day > .fin-money {
+    margin-left: 0;
+  }
 }

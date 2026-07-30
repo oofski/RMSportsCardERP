@@ -883,6 +883,37 @@ export interface UnattributedCluster {
   localDate: string
 }
 
+/** One burst of unattributed activity, as an on-air window. */
+export interface UnattributedWindow {
+  from: string
+  to: string
+  rowCount: number
+  amount: number
+}
+
+/**
+ * Everything waiting for a show ON ONE DAY.
+ *
+ * Keyed by the day each burst BEGAN, not by each row's own date, so a block that
+ * ran past midnight counts entirely on the evening it started — the same rule
+ * that governs a logged show's revenue. Keying rows individually would split one
+ * unlogged evening across two calendar days and show two half-shows where there
+ * was one.
+ *
+ * This is what puts the money on the calendar. It used to exist only as one
+ * total plus a flat table of every burst, which meant the operator read a
+ * $24,616.92 figure and a list, and then had to work out for themselves which
+ * days it belonged to — while looking at a calendar of those very days.
+ */
+export interface UnattributedDay {
+  localDate: string
+  rowCount: number
+  amount: number
+  byBucket: Array<{ bucket: LedgerBucket; rowCount: number; amount: number }>
+  /** The bursts that make up the day, in time order. */
+  windows: UnattributedWindow[]
+}
+
 export interface UnattributedSummary {
   rowCount: number
   amount: number
@@ -890,6 +921,8 @@ export interface UnattributedSummary {
   lastOccurredAt: string | null
   byBucket: Array<{ bucket: LedgerBucket; rowCount: number; amount: number }>
   clusters: UnattributedCluster[]
+  /** The same money, per business day, biggest day first. */
+  byDay: UnattributedDay[]
 }
 
 export interface StreamingFinanceView {

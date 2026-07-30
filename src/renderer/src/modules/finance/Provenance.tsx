@@ -3,7 +3,6 @@ import type { StreamingFinanceView } from '@shared/financeStreaming'
 import { Icon } from '../../components/Icon'
 import { Money, plural } from './bits'
 import { ImportPanel } from './ImportPanel'
-import { UnattributedPanel } from './UnattributedPanel'
 
 /**
  * Where the numbers came from — folded away until asked for.
@@ -71,9 +70,10 @@ export function Provenance({
             {unattributed.rowCount > 0 && (
               <span
                 className="fin-source-waiting"
-                title="Money in the ledger that no logged session covers. Nothing is lost — log the show and re-attribute."
+                title="Money in the ledger that no logged show covers. It is on those days in the calendar above, and listed under the statement."
               >
-                <Money value={unattributed.amount} strong /> waiting for a show
+                <Money value={unattributed.amount} strong /> waiting on{' '}
+                {plural(unattributed.byDay.length, 'day')}
               </span>
             )}
           </span>
@@ -89,13 +89,17 @@ export function Provenance({
 
       {open && (
         <div className="fin-source-body" id="fin-source-body">
-          <UnattributedPanel view={view} canManage={canManage} onView={onView} />
+          {/* The unattributed panel used to open here — a total, a paragraph, a
+              row of chips and a table of every burst in the ledger. It has moved
+              onto the calendar and into the statement, where the money is
+              attached to the day it belongs to instead of being one figure the
+              reader had to map onto the days themselves. */}
           <ImportPanel imports={imports} canManage={canManage} onView={onView} />
 
           {view.reconciled && (
             <p className="fin-reconciled">
               <Icon name="CheckCircle2" size={14} />
-              Every row is accounted for: each one is on a day above, or waiting for a show here.
+              Every row is accounted for — on a day in the calendar, or waiting for a show on one.
             </p>
           )}
         </div>

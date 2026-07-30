@@ -98,7 +98,9 @@ import type {
   StreamFinanceTotals,
   StreamingFinanceView,
   UnattributedCluster,
-  UnattributedSummary
+  UnattributedDay,
+  UnattributedSummary,
+  UnattributedWindow
 } from '@shared/financeStreaming'
 import {
   CARRY_BACK_MAX_HOURS,
@@ -994,19 +996,23 @@ function buildWarnings(
 
   if (stats.unclassified > 0) {
     warnings.push(
-      `${stats.unclassified} row${stats.unclassified === 1 ? '' : 's'} carry a message shape this version does not ` +
-        `recognise (for example: "${(stats.unclassifiedExample ?? '').slice(0, 160)}"). ` +
-        `They are counted at face value, not dropped.`
+      `${stats.unclassified} row${stats.unclassified === 1 ? '' : 's'} had an unrecognised message and ` +
+        `${stats.unclassified === 1 ? 'was' : 'were'} counted at face value: ` +
+        `"${(stats.unclassifiedExample ?? '').slice(0, 90)}".`
     )
   }
 
-  // NOT an error, and deliberately worded so it does not read like one. The
-  // owner's instruction is explicit: "if a stream isn't in the streaming
-  // schedule, don't worry about that ledger row, just let it be — it'll show up
-  // empty." So the money is kept, counted, clustered and stated, the import
-  // succeeds, and nothing waits on the operator. Adding the session later moves
-  // these rows onto it; never adding it leaves them visible here forever, which
-  // is a fine end state.
+  // NOT an error, and worded so it does not read like one. The owner's
+  // instruction is explicit: "if a stream isn't in the streaming schedule, don't
+  // worry about that ledger row, just let it be." So the money is kept, counted
+  // and shown, the import succeeds, and nothing waits on the operator.
+  //
+  // EVERY WARNING HERE IS ONE SENTENCE: what happened, then what to do about it.
+  // They used to explain the mechanism and the reasoning too — why sales are
+  // never carried back, what "outside every show" means, that rows are stored
+  // rather than dropped — which is all true and none of it is what someone
+  // reading a yellow box wants. The reasoning lives in the code; the box gets
+  // the finding and the fix.
   if (stats.unattributedRows > 0) {
     // TWO different problems wearing the same number, and they have different
     // fixes — so they get different sentences.
@@ -1044,20 +1050,18 @@ function buildWarnings(
 
     if (missing.length > 0) {
       warnings.push(
-        `No stream is logged for ${phrase(missing)}. ${money(sum(missing))} came in on ` +
-          `${missing.length === 1 ? 'that day' : 'those days'} — add the show in Streaming, then press Re-attribute.`
+        `${money(sum(missing))} on ${phrase(missing)} has no show logged. ` +
+          `Add ${missing.length === 1 ? 'it' : 'them'} in Streaming, then Re-attribute.`
       )
     }
     if (outside.length > 0) {
       warnings.push(
-        `${phrase(outside)} ${outside.length === 1 ? 'has' : 'have'} a show logged, but ${money(sum(outside))} came in ` +
-          `outside its hours. Usually a second show that day, or the start/end times need widening.`
+        `${money(sum(outside))} on ${phrase(outside)} fell outside the logged hours. ` +
+          `Add the second show, or widen the times.`
       )
     }
     if (missing.length === 0 && outside.length === 0) {
-      warnings.push(
-        `${money(stats.unattributedCents)} is not inside any logged show. It is listed under "outside every show".`
-      )
+      warnings.push(`${money(stats.unattributedCents)} is not inside any logged show.`)
     }
   }
 
@@ -1066,16 +1070,16 @@ function buildWarnings(
     // operator does not need either — they need to know their shipping numbers
     // landed on the right day and that nothing is missing.
     warnings.push(
-      `Whatnot posted ${stats.carriedBackRows} shipping and fee row${stats.carriedBackRows === 1 ? '' : 's'} ` +
-        `(${money(stats.carriedBackCents)}) hours after the shows that caused them. ` +
-        `${stats.carriedBackRows === 1 ? 'It has' : 'They have'} been counted on the right show's day.`
+      `${stats.carriedBackRows} late shipping and fee row${stats.carriedBackRows === 1 ? '' : 's'} ` +
+        `(${money(stats.carriedBackCents)}) ${stats.carriedBackRows === 1 ? 'was' : 'were'} counted on ` +
+        `the show that caused ${stats.carriedBackRows === 1 ? 'it' : 'them'}. Nothing to do.`
     )
   }
 
   if (rowsRepaired > 0) {
     warnings.push(
-      `${rowsRepaired} line${rowsRepaired === 1 ? '' : 's'} needed repairing (Whatnot writes show titles with ` +
-        `unescaped quotes). They were recovered whole and are flagged as repaired.`
+      `${rowsRepaired} line${rowsRepaired === 1 ? '' : 's'} ${rowsRepaired === 1 ? 'was' : 'were'} repaired — ` +
+        `Whatnot writes titles with unescaped quotes. Nothing was lost.`
     )
   }
 
@@ -1548,7 +1552,8 @@ function emptyUnattributed(): UnattributedSummary {
     firstOccurredAt: null,
     lastOccurredAt: null,
     byBucket: [],
-    clusters: []
+    clusters: [],
+    byDay: []
   }
 }
 
@@ -1721,10 +1726,30 @@ const BUCKET_FIELD: Partial<Record<LedgerBucket, keyof StreamDayFinance>> = {
  * start time, an end time, a row count and a dollar total is something they can
  * recognise and type in. A single "N rows unattributed" number is not.
  */
-function clusterOf(rows: Array<{ occurredAt: string; cents: number }>): UnattributedCluster[] {
+/** A burst of unattributed activity while it is being accumulated, carrying the
+ *  bucket split the per-day view needs. */
+interface RawCluster {
+  from: string
+  to: string
+  rowCount: number
+  cents: number
+  lastMs: number
+  buckets: Map<LedgerBucket, { rowCount: number; cents: number }>
+}
+
+function clusterRows(
+  rows: Array<{ occurredAt: string; bucket: LedgerBucket; cents: number }>
+): RawCluster[] {
   const gapMs = CLUSTER_GAP_MINUTES * 60_000
-  const out: UnattributedCluster[] = []
-  let current: { from: string; to: string; rowCount: number; cents: number; lastMs: number } | null = null
+  const out: RawCluster[] = []
+  let current: RawCluster | null = null
+
+  const add = (c: RawCluster, bucket: LedgerBucket, cents: number): void => {
+    const e = c.buckets.get(bucket) ?? { rowCount: 0, cents: 0 }
+    e.rowCount += 1
+    e.cents += cents
+    c.buckets.set(bucket, e)
+  }
 
   for (const r of rows) {
     const ms = new Date(r.occurredAt).getTime()
@@ -1734,29 +1759,91 @@ function clusterOf(rows: Array<{ occurredAt: string; cents: number }>): Unattrib
       current.rowCount += 1
       current.cents += r.cents
       current.lastMs = ms
+      add(current, r.bucket, r.cents)
       continue
     }
-    if (current) {
-      out.push({
-        from: current.from,
-        to: current.to,
-        rowCount: current.rowCount,
-        amount: toDollars(current.cents),
-        localDate: streamDateOf(current.from)
-      })
+    if (current) out.push(current)
+    current = {
+      from: r.occurredAt,
+      to: r.occurredAt,
+      rowCount: 1,
+      cents: r.cents,
+      lastMs: ms,
+      buckets: new Map()
     }
-    current = { from: r.occurredAt, to: r.occurredAt, rowCount: 1, cents: r.cents, lastMs: ms }
+    add(current, r.bucket, r.cents)
   }
-  if (current) {
+  if (current) out.push(current)
+  return out
+}
+
+function toClusters(raw: RawCluster[]): UnattributedCluster[] {
+  const out = raw.map((c) => ({
+    from: c.from,
+    to: c.to,
+    rowCount: c.rowCount,
+    amount: toDollars(c.cents),
+    localDate: streamDateOf(c.from)
+  }))
+  // Biggest money first: that is the show most worth logging.
+  out.sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount))
+  return out
+}
+
+/**
+ * The same bursts, folded onto business days.
+ *
+ * A cluster counts on the day it BEGAN — `streamDateOf(from)` — which is the
+ * governing rule of this whole module applied to money that has no session to
+ * take a date from. Keying each ROW by its own date instead would cut an
+ * unlogged 11pm–2am evening in half and put two partial shows on two days,
+ * which is precisely the error the module exists to avoid.
+ */
+function daysOf(raw: RawCluster[]): UnattributedDay[] {
+  interface DayAcc {
+    rowCount: number
+    cents: number
+    buckets: Map<LedgerBucket, { rowCount: number; cents: number }>
+    windows: UnattributedWindow[]
+  }
+  const byDate = new Map<string, DayAcc>()
+
+  for (const c of raw) {
+    const key = streamDateOf(c.from)
+    const day: DayAcc =
+      byDate.get(key) ?? { rowCount: 0, cents: 0, buckets: new Map(), windows: [] }
+    day.rowCount += c.rowCount
+    day.cents += c.cents
+    for (const [bucket, e] of c.buckets) {
+      const acc = day.buckets.get(bucket) ?? { rowCount: 0, cents: 0 }
+      acc.rowCount += e.rowCount
+      acc.cents += e.cents
+      day.buckets.set(bucket, acc)
+    }
+    day.windows.push({
+      from: c.from,
+      to: c.to,
+      rowCount: c.rowCount,
+      amount: toDollars(c.cents)
+    })
+    byDate.set(key, day)
+  }
+
+  const out: UnattributedDay[] = []
+  for (const [localDate, day] of byDate) {
+    day.windows.sort((a, b) => a.from.localeCompare(b.from))
     out.push({
-      from: current.from,
-      to: current.to,
-      rowCount: current.rowCount,
-      amount: toDollars(current.cents),
-      localDate: streamDateOf(current.from)
+      localDate,
+      rowCount: day.rowCount,
+      amount: toDollars(day.cents),
+      byBucket: LEDGER_BUCKETS.filter((b) => day.buckets.has(b.key)).map((b) => {
+        const e = day.buckets.get(b.key) as { rowCount: number; cents: number }
+        return { bucket: b.key, rowCount: e.rowCount, amount: toDollars(e.cents) }
+      }),
+      windows: day.windows
     })
   }
-  // Biggest money first: that is the show most worth logging.
+  // Biggest day first — the one most worth logging a show for.
   out.sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount))
   return out
 }
@@ -2009,9 +2096,15 @@ function buildView(db: Database): StreamingFinanceView {
     const entry = byBucket.get(b.key) as { rowCount: number; cents: number }
     return { bucket: b.key, rowCount: entry.rowCount, amount: toDollars(entry.cents) }
   })
-  unattributed.clusters = clusterOf(
-    unRows.map((r) => ({ occurredAt: r.occurred_at, cents: r.cents }))
+  const rawClusters = clusterRows(
+    unRows.map((r) => ({
+      occurredAt: r.occurred_at,
+      bucket: r.bucket as LedgerBucket,
+      cents: r.cents
+    }))
   )
+  unattributed.clusters = toClusters(rawClusters)
+  unattributed.byDay = daysOf(rawClusters)
 
   // --- reconciliation -------------------------------------------------------
   // Every non-payout row is on exactly one day or in `unattributed`. Asserted in

@@ -9,7 +9,8 @@ import { Provenance } from './Provenance'
 import { RangeBar } from './RangeBar'
 import { RangeStatement } from './Statement'
 import { RangeWidgets } from './Widgets'
-import { finance } from './api'
+import { useToast } from '../../components/Toast'
+import { finance, resultError } from './api'
 import {
   type DayRange,
   coveredRange,
@@ -51,6 +52,7 @@ import { dayRangeLabel, daySpan, monthKeyOfDayKey } from './time'
 export function StreamingTab(): JSX.Element {
   const { can } = useSession()
   const canManage = can('finance.manage')
+  const toast = useToast()
 
   const [view, setView] = useState<StreamingFinanceView | null>(null)
   const [loading, setLoading] = useState(true)
@@ -84,6 +86,35 @@ export function StreamingTab(): JSX.Element {
   }, [attempt])
 
   const applyView = useCallback((next: StreamingFinanceView) => setView(next), [])
+
+  /**
+   * Re-run attribution over every stored row.
+   *
+   * Lives HERE rather than in the panel that offers the button, because the
+   * button now sits inside the statement — and the statement is rebuilt from the
+   * view this component owns. Attribution changes which day money is on, so the
+   * whole view has to be replaced at once; refreshing only the panel would leave
+   * the calendar and the widgets describing the arrangement from before.
+   */
+  const reattribute = useCallback(async () => {
+    try {
+      const res = await finance.reattribute()
+      if (!res.ok || !res.data) {
+        toast.error(resultError(res, 'Re-attribution did not run.'))
+        return
+      }
+      const before = view?.unattributed.rowCount ?? 0
+      const claimed = before - res.data.unattributed.rowCount
+      applyView(res.data)
+      toast.success(
+        claimed > 0
+          ? `${claimed.toLocaleString()} row${claimed === 1 ? '' : 's'} moved onto a show.`
+          : 'Every row re-checked. Nothing new matched — the missing shows still need logging.'
+      )
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Re-attribution did not run.')
+    }
+  }, [applyView, toast, view])
 
   /**
    * The newest business month the ledger holds.
@@ -141,6 +172,19 @@ export function StreamingTab(): JSX.Element {
   const singleDay = range && range.from === range.to ? (inRange[0] ?? null) : null
 
   const covered = useMemo(() => coveredRange(view?.days ?? []), [view])
+
+  /**
+   * The waiting days inside the selected range.
+   *
+   * At all-time this is every one of them, which makes the panel the complete
+   * list of shows worth logging — nothing is stranded in a month nobody thought
+   * to page to. Narrow to a day and it is that day alone.
+   */
+  const waitingInRange = useMemo(() => {
+    const all = view?.unattributed.byDay ?? []
+    if (!range) return all
+    return all.filter((d) => d.localDate >= range.from && d.localDate <= range.to)
+  }, [view, range])
 
   const rangeLabel = range
     ? dayRangeLabel(range.from, range.to)
@@ -213,6 +257,7 @@ export function StreamingTab(): JSX.Element {
 
       <FinanceCalendar
         days={view.days}
+        waiting={view.unattributed.byDay}
         month={calMonth}
         range={range}
         onMonth={setCalMonth}
@@ -224,6 +269,9 @@ export function StreamingTab(): JSX.Element {
         label={rangeLabel}
         spanDays={range ? daySpan(range.from, range.to) : null}
         day={singleDay}
+        waiting={waitingInRange}
+        onReattribute={reattribute}
+        onPickDay={(key) => setRange({ from: key, to: key })}
       />
 
       <Provenance view={view} canManage={canManage} onView={applyView} />
