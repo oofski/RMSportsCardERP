@@ -307,6 +307,13 @@ const api = {
       ipcRenderer.invoke(IPC.poScanIn, { id }),
     cogsList: (): Promise<CogsEntry[]> => ipcRenderer.invoke(IPC.poCogsList),
     remove: (id: string): Promise<Result<null>> => ipcRenderer.invoke(IPC.poDelete, id),
+    /** Delete a PO the ordinary path refuses. `removeStock` decides whether its
+     *  received units come back out of inventory or stay on the shelf. */
+    forceRemove: (
+      id: string,
+      removeStock: boolean
+    ): Promise<Result<{ removedUnits: number; soldUnits: number }>> =>
+      ipcRenderer.invoke(IPC.poForceDelete, { id, removeStock }),
     openPdf: (id: string): Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }> =>
       ipcRenderer.invoke(IPC.poOpenPdf, id),
     savePdf: (id: string): Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }> =>

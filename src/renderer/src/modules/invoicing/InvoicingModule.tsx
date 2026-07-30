@@ -9,7 +9,7 @@ import type {
 import { useSession } from '../../lib/session'
 import { api } from '../../lib/api'
 import { useToast } from '../../components/Toast'
-import { Button, CenterLoader } from '../../components/ui'
+import { Button, CenterLoader, Modal } from '../../components/ui'
 import { Icon } from '../../components/Icon'
 import { formatMoney } from '../../lib/format'
 import { PurchaseOrderBoard } from './PurchaseOrderBoard'
@@ -50,6 +50,17 @@ export function InvoicingModule(): JSX.Element {
   const [loading, setLoading] = useState(true)
   const [showCreate, setShowCreate] = useState(false)
   const [receiptId, setReceiptId] = useState<string | null>(null)
+  /**
+   * A PO the ordinary delete refused, held so the operator can decide what to do
+   * about it instead of just being told no.
+   *
+   * The refusal used to be a toast and nothing else, which was the whole problem:
+   * a PO received before this app tracked its cost layers cannot be cancelled
+   * either, so the two messages sent you in a circle and the card stayed on the
+   * board for good.
+   */
+  const [stuck, setStuck] = useState<{ id: string; poNumber: string; reason: string } | null>(null)
+  const [forcing, setForcing] = useState(false)
 
   const reload = useCallback(async () => {
     // One board, so both halves are refetched together — a stale supply column
@@ -138,7 +149,11 @@ export function InvoicingModule(): JSX.Element {
       if (!window.confirm(`Delete ${poNumber}? This cannot be undone.`)) return
       const res = await api.purchaseOrders.remove(id)
       if (!res.ok) {
-        toast.error(res.error ?? 'Could not delete the purchase order.')
+        // Not a dead end any more. The backend's reason is shown as-is inside a
+        // dialog that offers the two ways forward, because the reason is always
+        // "stock has been checked in" and the only open question is whether those
+        // boxes are physically there.
+        setStuck({ id, poNumber, reason: res.error ?? 'This purchase order could not be deleted.' })
         return
       }
       toast.success(`${poNumber} deleted.`)
@@ -146,6 +161,34 @@ export function InvoicingModule(): JSX.Element {
       await reload()
     },
     [reload, toast]
+  )
+
+  const forceRemovePo = useCallback(
+    async (removeStock: boolean) => {
+      if (!stuck) return
+      setForcing(true)
+      try {
+        const res = await api.purchaseOrders.forceRemove(stuck.id, removeStock)
+        if (!res.ok || !res.data) {
+          toast.error(res.error ?? 'Could not delete the purchase order.')
+          return
+        }
+        const { removedUnits, soldUnits } = res.data
+        toast.success(
+          !removeStock
+            ? `${stuck.poNumber} deleted. Its stock was left on the shelf.`
+            : soldUnits > 0
+              ? `${stuck.poNumber} deleted. ${removedUnits} unit(s) came out of stock; ${soldUnits} had already been sold and stayed.`
+              : `${stuck.poNumber} deleted. ${removedUnits} unit(s) came out of stock.`
+        )
+        setStuck(null)
+        setReceiptId(null)
+        await reload()
+      } finally {
+        setForcing(false)
+      }
+    },
+    [reload, stuck, toast]
   )
 
   const openPos = useMemo(
@@ -230,6 +273,13 @@ export function InvoicingModule(): JSX.Element {
           onClose={() => setReceiptId(null)}
         />
       )}
+      {stuck && <StuckPoModal
+        stuck={stuck}
+        units={pos.find((p) => p.id === stuck.id)?.receivedUnits ?? 0}
+        busy={forcing}
+        onClose={() => setStuck(null)}
+        onForce={forceRemovePo}
+      />}
       {newSupplyOpen && (
         <SupplyOrderModal
           supplies={supplies}
@@ -238,5 +288,79 @@ export function InvoicingModule(): JSX.Element {
         />
       )}
     </div>
+  )
+}
+
+/**
+ * What to do with a purchase order that will not delete.
+ *
+ * ONE question, asked once: are the boxes actually there? Everything else
+ * follows from the answer, and neither answer is presented as the safe default
+ * because neither is — leaving stock that never arrived overstates inventory,
+ * and removing stock that is on the shelf understates it. The operator is the
+ * only one who knows.
+ *
+ * The backend's own refusal is printed verbatim rather than paraphrased. It
+ * names the PO and says what is blocking it, and rewriting that here would put
+ * two versions of the same sentence in the app.
+ */
+function StuckPoModal({
+  stuck,
+  units,
+  busy,
+  onClose,
+  onForce
+}: {
+  stuck: { id: string; poNumber: string; reason: string }
+  /** Units checked in across every line — what "remove the stock" would remove. */
+  units: number
+  busy: boolean
+  onClose: () => void
+  onForce: (removeStock: boolean) => void | Promise<void>
+}): JSX.Element {
+  return (
+    <Modal
+      title={`${stuck.poNumber} will not delete`}
+      subtitle="Its stock has been checked in, so the ordinary delete refuses"
+      onClose={() => (busy ? undefined : onClose())}
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose} disabled={busy}>
+            Leave it alone
+          </Button>
+          <Button
+            variant="secondary"
+            icon="Trash2"
+            loading={busy}
+            onClick={() => void onForce(false)}
+          >
+            Delete, keep the stock
+          </Button>
+          <Button variant="danger" icon="Trash2" loading={busy} onClick={() => void onForce(true)}>
+            Delete and remove {units > 0 ? `${units.toLocaleString()} unit${units === 1 ? '' : 's'}` : 'the stock'}
+          </Button>
+        </>
+      }
+    >
+      <p className="fin-confirm-lead">{stuck.reason}</p>
+      <p className="fin-confirm-lead">
+        <b>Are those boxes physically on the shelf?</b>
+      </p>
+      <ul className="inv-stuck-list">
+        <li>
+          <b>No, they never arrived</b> — this was a test or a mistake. Choose{' '}
+          <b>Delete and remove the stock</b>. The units come out of inventory, each one against its
+          own cost layer where that layer is known and as an ordinary correction down where it is
+          not. Every removal is recorded in the product&rsquo;s history naming {stuck.poNumber}.
+          Anything already sold cannot come back and is left alone.
+        </li>
+        <li>
+          <b>Yes, they are here</b> — choose <b>Delete, keep the stock</b>. Only the paperwork goes.
+          The stock keeps its cost, so what it is worth does not change; what is lost is this
+          purchase&rsquo;s row in the cost ledger and the link from the scan history to this order.
+        </li>
+      </ul>
+      <p className="fin-confirm-lead">Either way the purchase order is gone for good.</p>
+    </Modal>
   )
 }

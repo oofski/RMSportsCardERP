@@ -16,6 +16,7 @@ import { openPoPdf, savePoPdf } from './poPdf'
 import {
   createPurchaseOrder,
   deletePurchaseOrder,
+  forceDeletePurchaseOrder,
   getPurchaseOrder,
   listActivePurchaseOrderBoxes,
   listPurchaseOrders,
@@ -134,6 +135,31 @@ export function registerPurchaseOrdersIpc(): void {
       return fail(err)
     }
   })
+
+  /**
+   * The escape hatch for a PO that can be neither cancelled nor deleted.
+   *
+   * Gated exactly like poDelete — same permission, no extra ceremony — because
+   * it is the same intent ("this order should not exist"), just for an order the
+   * ordinary path cannot reach. What makes it safe is not a stricter gate but
+   * that the CALLER states what happens to the stock, and the UI makes that
+   * choice explicit before it is sent.
+   */
+  ipcMain.handle(
+    IPC.poForceDelete,
+    (_e, args: { id: string; removeStock: boolean }): Result<{ removedUnits: number; soldUnits: number }> => {
+      try {
+        const actor = requireInvoicing()
+        if (!args?.id) return { ok: false, error: 'No purchase order specified.' }
+        const res = forceDeletePurchaseOrder(args.id, !!args.removeStock, actor.id)
+        return res.ok
+          ? { ok: true, data: { removedUnits: res.removedUnits ?? 0, soldUnits: res.soldUnits ?? 0 } }
+          : { ok: false, error: res.error }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
 
   // Both PDF paths are READS of a PO — they change nothing — so they are gated
   // like poGet rather than like a write.

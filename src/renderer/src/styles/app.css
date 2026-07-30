@@ -1916,10 +1916,16 @@ table.data tfoot .data-total td {
   padding: 22px 24px;
   overflow-y: auto;
 }
+/* WRAPS. Buttons are nowrap and the panel is capped at 520px, so a footer with
+   three real labels in it — "Leave it alone", "Delete, keep the stock", "Delete
+   and remove 5 units" — overflowed to the LEFT of the panel and rendered on the
+   backdrop. Nothing clipped it, so it looked like a stray control belonging to
+   the page behind. Wrapping only engages when the row genuinely does not fit. */
 .modal-foot {
   padding: 16px 24px;
   border-top: 1px solid var(--border);
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 10px;
 }
@@ -13334,4 +13340,22 @@ button.sor-team:focus-visible {
   .fin-pnl-mile.is-bottom .fin-profit {
     font-size: 18px;
   }
+}
+
+/* The two ways out of a stuck purchase order. A list rather than prose because
+   the operator is choosing between them, and a choice buried in a paragraph is
+   a choice nobody reads before clicking. */
+.inv-stuck-list {
+  margin: 0 0 12px;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  font-size: 13px;
+  line-height: 1.5;
+  /* 6.26:1 light, 8.25:1 dark. */
+  color: var(--text-2);
+}
+.inv-stuck-list b {
+  color: var(--text);
 }

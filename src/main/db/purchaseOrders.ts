@@ -10,7 +10,7 @@ import type {
 import { canTransition } from '@shared/purchaseOrders'
 import { LOCATION_IDS, isLocation } from '@shared/inventory'
 import { getDb, getMeta, setMeta } from './database'
-import { addStock, reverseStockReceipt } from './inventory'
+import { addStock, adjustStock, reverseStockReceipt } from './inventory'
 import { recordPoCogs, voidPoCogs } from './finance'
 import { newId, nowIso } from '../util'
 
@@ -657,6 +657,152 @@ function reverseReceivedLines(
       WHERE po_id = ?`
   ).run(poId)
   db.prepare('UPDATE purchase_orders SET received_at = NULL, scanned_at = NULL WHERE id = ?').run(poId)
+}
+
+/**
+ * THE WAY OUT of a purchase order that cannot be cancelled and cannot be
+ * deleted.
+ *
+ * A PO received before this app recorded which FIFO layer each receipt opened
+ * has no traceable cost layers, so `reverseReceivedLines` refuses and Cancel
+ * fails; its lines still carry qty_received, so Delete refuses too. The old
+ * advice — "adjust the stock down by hand, then delete the PO" — does not
+ * work, because a manual adjustment in Inventory does not touch qty_received.
+ * The order was stuck on the board with no in-app remedy.
+ *
+ * So this does the remedy properly, and the CALLER chooses what happens to the
+ * stock, because only a human knows whether the boxes are physically there:
+ *
+ *   removeStock: true   the units were never really received (a test order, a
+ *                       mis-click). They come out of inventory. Each unit is
+ *                       reversed against its own FIFO layer where that layer is
+ *                       known, and where it is not, it is taken out as an
+ *                       ordinary correction down — consuming oldest-first,
+ *                       exactly what a hand adjustment would have done, and
+ *                       recorded in the product's history naming this PO.
+ *
+ *   removeStock: false  the boxes are on the shelf and stay there. Only the
+ *                       paperwork goes. The FIFO layers keep their own
+ *                       unit_cost — nothing in inventory_lots points at a PO —
+ *                       so the cost basis of that stock survives intact; what
+ *                       is lost is the purchase's row in the COGS ledger and
+ *                       the link from the scan history to this order.
+ *
+ * Stock already SOLD cannot come back out, and this does not pretend otherwise:
+ * that quantity is skipped and reported in `soldUnits` so the caller can say so
+ * rather than silently deleting less than it claimed.
+ */
+export function forceDeletePurchaseOrder(
+  id: string,
+  removeStock: boolean,
+  actorId: string | null
+): { ok: boolean; error?: string; removedUnits?: number; soldUnits?: number } {
+  const db = getDb()
+  const row = db
+    .prepare('SELECT id, po_number FROM purchase_orders WHERE id = ?')
+    .get(id) as { id: string; po_number: string } | undefined
+  if (!row) return { ok: false, error: 'Purchase order not found.' }
+
+  let removed = 0
+  let sold = 0
+
+  const run = db.transaction((): void => {
+    if (removeStock) {
+      const lines = db
+        .prepare(
+          `SELECT l.id, l.product_id, l.qty_received, l.lot_id, p.location
+             FROM purchase_order_lines l
+             JOIN purchase_orders p ON p.id = l.po_id
+            WHERE l.po_id = ? AND l.qty_received > 0`
+        )
+        .all(id) as Array<{
+        id: string
+        product_id: string
+        qty_received: number
+        lot_id: string | null
+        location: string
+      }>
+
+      for (const line of lines) {
+        const receipts = db
+          .prepare(
+            'SELECT lot_id, quantity FROM po_line_receipts WHERE po_line_id = ? ORDER BY created_at DESC, rowid DESC'
+          )
+          .all(line.id) as Array<{ lot_id: string; quantity: number }>
+        const plan =
+          receipts.length > 0
+            ? receipts
+            : line.lot_id
+              ? [{ lot_id: line.lot_id, quantity: line.qty_received }]
+              : []
+
+        let outstanding = line.qty_received
+
+        // Prefer the EXACT layer wherever it is known — same reasoning as
+        // cancelling: the cost layer that came in is the one that should go out,
+        // never the FIFO-oldest, which would cannibalise a different and
+        // possibly cheaper layer and quietly move the average.
+        for (const r of plan) {
+          if (outstanding <= 0) break
+          const take = Math.min(r.quantity, outstanding)
+          try {
+            reverseStockReceipt(db, {
+              productId: line.product_id,
+              location: line.location,
+              quantity: take,
+              lotId: r.lot_id,
+              note: `Force-deleted ${row.po_number}`,
+              actorId
+            })
+            outstanding -= take
+            removed += take
+          } catch {
+            // That layer is gone or partly sold. Fall through to the correction
+            // below rather than abandoning the whole operation.
+          }
+        }
+
+        // Whatever is left has no traceable layer (or its layer would not give
+        // the units back). Take it out the way a person would have by hand.
+        if (outstanding > 0) {
+          const res = adjustStock(
+            line.product_id,
+            line.location,
+            -outstanding,
+            `Force-deleted ${row.po_number} — received stock removed`,
+            actorId
+          )
+          if (res.error) {
+            // Only ever "would make stock negative", i.e. the units have since
+            // been sold. Not a failure of the delete: the paperwork still goes,
+            // and the caller is told how much could not come back.
+            sold += outstanding
+          } else {
+            removed += outstanding
+          }
+        }
+      }
+
+      db.prepare('DELETE FROM po_line_receipts WHERE po_id = ?').run(id)
+      db.prepare(
+        `UPDATE purchase_order_lines
+            SET qty_received = 0, received_at = NULL, lot_id = NULL
+          WHERE po_id = ?`
+      ).run(id)
+    }
+
+    // Same two statements the ordinary delete runs. Lines cascade; the scan
+    // history keeps its rows with po_id set to NULL.
+    voidPoCogs(db, id)
+    db.prepare('DELETE FROM purchase_orders WHERE id = ?').run(id)
+  })
+
+  try {
+    run()
+    return { ok: true, removedUnits: removed, soldUnits: sold }
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+  }
 }
 
 /** Read + increment the shared PO sequence counter, returning "PO-0001" etc.

@@ -101,6 +101,7 @@ export const IPC = {
   poScanIn: 'po:scan-in',
   poCogsList: 'po:cogs-list',
   poDelete: 'po:delete',
+  poForceDelete: 'po:forceDelete',
   // Render the PO as a standalone PDF document (not a screen print).
   poOpenPdf: 'po:pdf:open',
   poSavePdf: 'po:pdf:save',
