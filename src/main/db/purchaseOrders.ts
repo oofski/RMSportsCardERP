@@ -10,7 +10,7 @@ import type {
 import { canTransition } from '@shared/purchaseOrders'
 import { LOCATION_IDS, isLocation } from '@shared/inventory'
 import { getDb, getMeta, setMeta } from './database'
-import { addStock, adjustStock, reverseStockReceipt } from './inventory'
+import { addStock, adjustStock, reverseStockReceipt, stockQty } from './inventory'
 import { recordPoCogs, voidPoCogs } from './finance'
 import { newId, nowIso } from '../util'
 
@@ -738,13 +738,24 @@ export function forceDeletePurchaseOrder(
 
         let outstanding = line.qty_received
 
-        // Prefer the EXACT layer wherever it is known — same reasoning as
-        // cancelling: the cost layer that came in is the one that should go out,
-        // never the FIFO-oldest, which would cannibalise a different and
-        // possibly cheaper layer and quietly move the average.
+        /**
+         * Prefer the EXACT layer wherever it is known — same reasoning as
+         * cancelling: the cost layer that came in is the one that should go out,
+         * never the FIFO-oldest, which would cannibalise a different and
+         * possibly cheaper layer and quietly move the average.
+         *
+         * CLAMPED TO WHAT THE LAYER STILL HOLDS. Asking for the whole receipt
+         * makes `reverseLotReceipt` throw the moment any of it has been sold,
+         * and the throw abandoned every unit on that line — including the ones
+         * still sitting on the shelf. 10 received with 4 sold reversed nothing.
+         */
         for (const r of plan) {
           if (outstanding <= 0) break
-          const take = Math.min(r.quantity, outstanding)
+          const lot = db
+            .prepare('SELECT qty_remaining FROM inventory_lots WHERE id = ?')
+            .get(r.lot_id) as { qty_remaining: number } | undefined
+          const take = Math.min(r.quantity, outstanding, lot?.qty_remaining ?? 0)
+          if (take <= 0) continue
           try {
             reverseStockReceipt(db, {
               productId: line.product_id,
@@ -757,29 +768,43 @@ export function forceDeletePurchaseOrder(
             outstanding -= take
             removed += take
           } catch {
-            // That layer is gone or partly sold. Fall through to the correction
-            // below rather than abandoning the whole operation.
+            // The layer will not give these units back. Fall through to the
+            // correction below rather than abandoning the whole operation.
           }
         }
 
-        // Whatever is left has no traceable layer (or its layer would not give
-        // the units back). Take it out the way a person would have by hand.
+        /**
+         * Whatever is left has no traceable layer, or its layer would not give
+         * the units back. Take it out the way a person would have by hand —
+         * but only as much as is ACTUALLY ON THE SHELF.
+         *
+         * `adjustStock` refuses an ask that would drive stock negative, and it
+         * refuses the WHOLE ask: one unit short and nothing moved, while the
+         * error path counted every unit as already sold. So the remainder is
+         * split against the real on-hand figure, and only the genuine shortfall
+         * is reported as sold.
+         */
         if (outstanding > 0) {
-          const res = adjustStock(
-            line.product_id,
-            line.location,
-            -outstanding,
-            `Force-deleted ${row.po_number} — received stock removed`,
-            actorId
-          )
-          if (res.error) {
-            // Only ever "would make stock negative", i.e. the units have since
-            // been sold. Not a failure of the delete: the paperwork still goes,
-            // and the caller is told how much could not come back.
-            sold += outstanding
-          } else {
-            removed += outstanding
+          const have = stockQty(line.product_id, line.location)
+          const take = Math.min(outstanding, Math.max(0, have))
+          if (take > 0) {
+            const res = adjustStock(
+              line.product_id,
+              line.location,
+              -take,
+              `Force-deleted ${row.po_number} — received stock removed`,
+              actorId
+            )
+            if (!res.error) {
+              removed += take
+              outstanding -= take
+            }
           }
+          // Anything still outstanding genuinely cannot come back out. Every
+          // unit of the line is now accounted for exactly once, so
+          // removed + sold always equals what was received.
+          sold += outstanding
+          outstanding = 0
         }
       }
 

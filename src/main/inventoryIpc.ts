@@ -301,7 +301,9 @@ export function registerInventoryIpc(): void {
   ipcMain.handle(IPC.invProductDelete, (_e, payload: { id: string }): Result => {
     try {
       requireManage()
-      return deleteProduct(payload.id) ? { ok: true } : { ok: false, error: 'Product not found.' }
+      // deleteProduct owns the refusal reason now — it knows which purchase
+      // orders are blocking, and "Product not found" would hide that.
+      return deleteProduct(payload.id)
     } catch (err) {
       return fail(err)
     }

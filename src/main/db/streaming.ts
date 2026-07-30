@@ -457,6 +457,21 @@ export function updateSession(input: UpdateStreamSession, actorId: string | null
   const clash = overlapError(db, startedAt, endedAt, existing.id)
   if (clash) return { ok: false, error: clash }
 
+  const streamDate = streamDateOf(startedAt)
+
+  /**
+   * ONE TRANSACTION, because two rows now have to agree about the business day.
+   *
+   * The session's own `stream_date` used to be rewritten alone, and the comment
+   * below claimed that moved "everything attributed to it" with it. It did not:
+   * `ledger_rows.stream_date` is written at import and re-attribution and
+   * nowhere else, so correcting a show's start across midnight left its revenue
+   * and fees on the old day while the show and its cost of goods moved to the
+   * new one. Finance then reported one night as two half-days — the first with
+   * all the money and no show, the second with the show and no money — and
+   * neither figure was the show's real net.
+   */
+  const run = db.transaction((): void => {
   db.prepare(
     `UPDATE stream_sessions
         SET title = @title, started_at = @started_at, ended_at = @ended_at,
@@ -469,9 +484,9 @@ export function updateSession(input: UpdateStreamSession, actorId: string | null
     started_at: startedAt,
     ended_at: endedAt,
     // Recomputed on every write because the business day IS the local date the
-    // show started on: moving the start by an hour across midnight moves the
-    // whole session — and everything attributed to it — to the other day.
-    stream_date: streamDateOf(startedAt),
+    // show started on. The ledger rows attributed to this session are moved to
+    // match, below — the two must never disagree.
+    stream_date: streamDate,
     // Status follows the end time rather than being edited on its own: a
     // session with an end is off air, one without is on it. Clearing an end
     // therefore puts a show back on air, which is safe only because two
@@ -482,6 +497,24 @@ export function updateSession(input: UpdateStreamSession, actorId: string | null
     note: input.note !== undefined ? input.note?.trim() || null : existing.note,
     updated_at: nowIso()
   })
+
+    /**
+     * Re-home the rows already booked to this session.
+     *
+     * This moves the DAY, which is what the edit actually changed. It does not
+     * re-decide WHICH rows belong to the session: if the window also shrank,
+     * rows now outside it stay attached until the operator presses Re-attribute
+     * in Finance, exactly as they always have. Re-running attribution from here
+     * would mean this module reaching into the ledger engine, and the honest
+     * fix for that case is the button — which is why it is no longer hidden
+     * behind "there is unattributed money".
+     */
+    db.prepare('UPDATE ledger_rows SET stream_date = @d WHERE session_id = @id').run({
+      d: streamDate,
+      id: existing.id
+    })
+  })
+  run()
   return { ok: true, data: getSession(existing.id) as StreamSession }
 }
 

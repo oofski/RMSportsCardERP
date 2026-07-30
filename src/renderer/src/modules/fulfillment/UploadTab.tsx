@@ -102,7 +102,12 @@ export function UploadTab({ summary, canManage, onChanged, onGoTo }: ShipTabProp
         if (found.status !== 'running') localStorage.removeItem(JOB_KEY)
       })
       .catch(() => localStorage.removeItem(JOB_KEY))
-    // Auto-name the import as "[Sport] - [Pack] - [Date]". The sport comes from the
+    return () => {
+      active = false
+    }
+  }, [])
+
+  // Auto-name the import as "[Sport] - [Pack] - [Date]". The sport comes from the
   // League selector (or whatever the parse detected), the pack type from the
   // product title the slips carry, and the date defaults to today. Anything the
   // operator has typed themselves is never overwritten.
@@ -136,11 +141,6 @@ export function UploadTab({ summary, canManage, onChanged, onGoTo }: ShipTabProp
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sport, eventDate, nameTouched])
-
-  return () => {
-      active = false
-    }
-  }, [])
 
   // One subscription for the life of the tab; the main process throttles pushes.
   useEffect(() => {

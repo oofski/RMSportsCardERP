@@ -483,15 +483,59 @@ export function pricingList(): PricingRow[] {
   })
 }
 
-export function deleteProduct(id: string): boolean {
+/**
+ * Remove a product from the catalog.
+ *
+ * REFUSED while a live purchase order still names it. `purchase_order_lines`
+ * has ON DELETE CASCADE on product_id and `PRAGMA foreign_keys` is on, so
+ * deleting a product silently took its PO lines with it — while the order kept
+ * its stored `total`. The card then showed the full dollar amount with zero
+ * items, the receipt and its PDF printed an empty order, and Invoicing went on
+ * counting that money as committed. A PO already Received was left unremovable
+ * too: delete refuses on a received PO, and Cancel found no lines to reverse.
+ *
+ * Cancelled orders are historical and do not block — nothing is owed on them,
+ * and their lines cascading away costs only a record of what was never bought.
+ *
+ * Streaming solved the same problem the other way (stream_items.product_id is
+ * ON DELETE SET NULL with the name and sku snapshotted onto the line, so a
+ * deleted product leaves the break intact). Purchase orders never got that, and
+ * retrofitting it is a schema change; refusing is the honest guard until then.
+ */
+export function deleteProduct(id: string): { ok: boolean; error?: string } {
+  const db = getDb()
+  const blocking = db
+    .prepare(
+      `SELECT DISTINCT po.po_number
+         FROM purchase_order_lines l
+         JOIN purchase_orders po ON po.id = l.po_id
+        WHERE l.product_id = ? AND po.status <> 'cancelled'
+        ORDER BY po.po_number`
+    )
+    .all(id) as Array<{ po_number: string }>
+  if (blocking.length > 0) {
+    const names = blocking.map((b) => b.po_number)
+    const shown = names.slice(0, 4).join(', ')
+    const more = names.length - Math.min(4, names.length)
+    return {
+      ok: false,
+      error:
+        `This product is on ${names.length === 1 ? 'purchase order' : 'purchase orders'} ` +
+        `${shown}${more > 0 ? ` (+${more} more)` : ''}. Cancel or delete ` +
+        `${names.length === 1 ? 'that order' : 'those orders'} first — deleting the product now ` +
+        `would strip their line items and leave the totals pointing at nothing.`
+    }
+  }
+
   const files = (
-    getDb().prepare('SELECT filename FROM inventory_product_images WHERE product_id = ?').all(id) as Array<{
+    db.prepare('SELECT filename FROM inventory_product_images WHERE product_id = ?').all(id) as Array<{
       filename: string
     }>
   ).map((r) => r.filename)
-  const info = getDb().prepare('DELETE FROM inventory_products WHERE id = ?').run(id)
-  if (info.changes > 0) files.forEach(deleteImageFile)
-  return info.changes > 0
+  const info = db.prepare('DELETE FROM inventory_products WHERE id = ?').run(id)
+  if (info.changes === 0) return { ok: false, error: 'Product not found.' }
+  files.forEach(deleteImageFile)
+  return { ok: true }
 }
 
 // ---------------------------------------------------------------------------

@@ -137,9 +137,7 @@ export function RangeStatement({
         <PnlStatement money={totals} />
       )}
 
-      {waiting.length > 0 && (
-        <WaitingPanel days={waiting} onReattribute={onReattribute} onPickDay={onPickDay} />
-      )}
+      <WaitingPanel days={waiting} onReattribute={onReattribute} onPickDay={onPickDay} />
 
       {day && day.rowCount > 0 && (
         <div className="fin-stmt-rows">
@@ -175,6 +173,14 @@ export function RangeStatement({
  * never in the schedule has nothing to attach to, so its money sitting here is
  * the system working. What it does carry is the two things you can act on — log
  * the show, then re-attribute.
+ *
+ * IT RENDERS EVEN WHEN NOTHING IS WAITING, reduced to a green line and the
+ * Re-attribute button. Hiding the whole panel on `waiting.length === 0` made
+ * the app's ONLY Re-attribute control disappear exactly when it was needed for
+ * the other repair it performs: correcting a logged show's times leaves rows
+ * attributed but on the wrong day or outside the new window, and nothing is
+ * unattributed in that state — so the fix was on screen only while a different
+ * problem happened to be present.
  */
 function WaitingPanel({
   days,
@@ -193,20 +199,23 @@ function WaitingPanel({
   // One day needs no date column and no per-day total: the heading figure IS
   // that day's figure, and repeating it beside itself reads as two numbers.
   const single = days.length === 1
+  const clear = days.length === 0
 
   return (
-    <section className="fin-waiting" id="fin-unattributed">
+    <section className={`fin-waiting${clear ? ' is-clear' : ''}`} id="fin-unattributed">
       <div className="fin-waiting-head">
         <span className="fin-section-title">
-          <Icon name="CalendarRange" size={14} />
-          Waiting for a show
+          <Icon name={clear ? 'CheckCircle2' : 'CalendarRange'} size={14} />
+          {clear ? 'Every row is on a show' : 'Waiting for a show'}
         </span>
-        <span className="fin-waiting-figure">
-          <Money value={amount} strong />
-          <em>{plural(rows, 'row')}</em>
-        </span>
+        {!clear && (
+          <span className="fin-waiting-figure">
+            <Money value={amount} strong />
+            <em>{plural(rows, 'row')}</em>
+          </span>
+        )}
         <span className="fin-waiting-acts">
-          {can('module.streaming') && (
+          {!clear && can('module.streaming') && (
             <Button size="sm" icon="ArrowRight" onClick={() => navigate('streaming')}>
               Log the show
             </Button>

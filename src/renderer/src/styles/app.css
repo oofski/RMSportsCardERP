@@ -13315,6 +13315,15 @@ button.sor-team:focus-visible {
   border-color: transparent;
   background: transparent;
 }
+/* Nothing waiting: the panel stays, because it also carries the only
+   Re-attribute control in the app — but it reduces to one green line, so a
+   clean range does not grow a section announcing that nothing is wrong. */
+.fin-waiting.is-clear .fin-section-title {
+  color: var(--success-strong);
+}
+.fin-waiting.is-clear .fin-section-title svg {
+  color: var(--success-strong);
+}
 .fin-waiting-date {
   min-width: 84px;
   font-size: 12.5px;
