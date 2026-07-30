@@ -216,8 +216,14 @@ export function setTemporaryPassword(id: string, temporaryPassword: string): boo
   const hash = bcrypt.hashSync(temporaryPassword, BCRYPT_ROUNDS)
   const info = db
     .prepare(
+      // A DISABLED employee keeps that status. Resetting a password is about
+      // credentials; it is not a rehire, and unconditionally writing 'invited'
+      // erased the only record that someone had been deactivated — they came
+      // back with their original role and permissions intact.
       `UPDATE employees
-         SET password_hash = ?, must_change_password = 1, status = 'invited', updated_at = ?
+         SET password_hash = ?, must_change_password = 1,
+             status = CASE WHEN status = 'disabled' THEN 'disabled' ELSE 'invited' END,
+             updated_at = ?
        WHERE id = ?`
     )
     .run(hash, nowIso(), id)
@@ -230,8 +236,12 @@ export function setChosenPassword(id: string, newPassword: string): boolean {
   const hash = bcrypt.hashSync(newPassword, BCRYPT_ROUNDS)
   const info = db
     .prepare(
+      // Same rule as setTemporaryPassword: choosing a password does not
+      // reactivate a disabled account.
       `UPDATE employees
-         SET password_hash = ?, must_change_password = 0, status = 'active', updated_at = ?
+         SET password_hash = ?, must_change_password = 0,
+             status = CASE WHEN status = 'disabled' THEN 'disabled' ELSE 'active' END,
+             updated_at = ?
        WHERE id = ?`
     )
     .run(hash, nowIso(), id)

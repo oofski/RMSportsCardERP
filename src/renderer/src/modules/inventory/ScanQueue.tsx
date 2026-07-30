@@ -73,7 +73,11 @@ export function ScanQueue({
           variant={out ? 'danger' : 'primary'}
           icon={out ? 'PackageMinus' : 'PackageCheck'}
           loading={busy}
-          disabled={totals.units < 1}
+          // Gated on the LINES, not the summed units. A remove_stock line
+          // pinned to 0 by a location switch left the total looking fine while
+          // the commit loop threw on that line and stopped before the rest — the
+          // button was enabled, said how many units would move, and moved none.
+          disabled={lines.length === 0 || lines.some((l) => l.quantity < 1)}
           onClick={onConfirm}
         >
           {out

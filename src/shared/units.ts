@@ -53,6 +53,55 @@ export type Conversion = { ok: true; value: ConversionResult } | { ok: false; er
 export const QTY_EPS = 1e-6
 
 /**
+ * Decimal places a stored quantity is held to. Mirrors QTY_DP in
+ * src/main/db/lots.ts and the `ROUND(..., 4)` in bumpStock's SQL — the number is
+ * restated here because this file has to reason about the error that rounding
+ * introduces, and the renderer cannot import from main.
+ */
+export const QTY_STORED_DP = 4
+
+/**
+ * How far a STORED balance may legitimately fall short of a full-precision ask
+ * of the same size.
+ *
+ * Why this exists. A conversion returns 1/N at full precision — 1/6 is
+ * 0.16666666666666666 — but every stored balance is re-rounded to four places.
+ * Break a 6-box case one box at a time and the balance goes 0.8333, 0.6666,
+ * 0.4999, 0.3332, 0.1665: each step loses up to half a quantization step, in the
+ * same direction. By the last box the shelf holds 0.1665 while the ask is still
+ * 0.16666…, and a fixed QTY_EPS of 1e-6 is 33x too small to bridge it — so the
+ * sixth box could never be recorded at all. The mirror case (divisors like 12,
+ * where 1/N rounds DOWN) left a permanent 0.0001 residue instead, keeping an
+ * empty product on the shelf forever.
+ *
+ * The bound is the number of pieces a whole unit divides into — at most 1/qty —
+ * times half a quantization step. Capped, so a nonsense-small qty cannot ask for
+ * unlimited slack.
+ */
+/**
+ * A stored balance at or below this is EXACTLY ZERO.
+ *
+ * The companion to `quantizationSlack`, for the other side of the same problem.
+ * Where 1/N rounds DOWN at four places (3, 9, 11, 12, 30), taking all N pieces
+ * of a unit leaves 0.0001–0.001 behind: an open cost layer and a product still
+ * reporting stock it does not have, permanently, with no UI able to enter a
+ * fraction to clear it.
+ *
+ * 0.002 is chosen to sit far above that dust (the worst case is ~1.8e-3, at
+ * N=36) and far below any quantity that can physically exist: the smallest real
+ * holding is one pack, and even a 6-box case of 12-pack boxes makes a pack
+ * 1/72 = 0.0139 of a case — seven times this threshold. Nothing a warehouse can
+ * hold is ever mistaken for dust.
+ */
+export const QTY_SNAP = 0.002
+
+export function quantizationSlack(qty: number): number {
+  if (!Number.isFinite(qty) || qty <= 0) return QTY_EPS
+  const steps = Math.min(2000, Math.ceil(1 / qty))
+  return Math.max(QTY_EPS, steps * 0.5 * 10 ** -QTY_STORED_DP)
+}
+
+/**
  * Display rounding ONLY. Never applied to a quantity that will be stored or
  * consumed.
  *

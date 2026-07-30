@@ -405,6 +405,17 @@ export interface ShipParseRequest {
   name?: string | null
   /** Optional pre-chosen path — omit and the main process opens a file dialog. */
   filePath?: string | null
+  /**
+   * Keep the pick/pack progress from the dataset this import replaces.
+   *
+   * OFF unless the operator asks. Carry-forward used to be inferred from the
+   * event name and date matching, which two shows on the same day satisfy by
+   * coincidence — especially once the name is auto-generated as
+   * "[Sport] - [Date]". The second show then arrived with the first show's
+   * packages already stamped packed, already carrying its holds, notes and
+   * manual statuses, and left the To Pick queue without anyone touching them.
+   */
+  carryForward?: boolean
 }
 
 export type ShipParseJobStatus = 'running' | 'done' | 'error'

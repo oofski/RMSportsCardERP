@@ -210,19 +210,33 @@ export function Avatar({
 export function Checkbox({
   checked,
   onChange,
-  label
+  label,
+  hint,
+  disabled
 }: {
   checked: boolean
   onChange: (checked: boolean) => void
   label: string
+  /** Shown under the label. For a choice whose consequence is not obvious from
+   *  its name — which is most choices worth putting a checkbox on. */
+  hint?: string
+  disabled?: boolean
 }): JSX.Element {
   return (
-    <label className="checkbox">
-      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+    <label className={`checkbox${disabled ? ' is-disabled' : ''}${hint ? ' has-hint' : ''}`}>
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.checked)}
+      />
       <span className="box">
         <Icon name="Check" size={13} strokeWidth={3} />
       </span>
-      {label}
+      <span className="checkbox-text">
+        {label}
+        {hint && <em>{hint}</em>}
+      </span>
     </label>
   )
 }

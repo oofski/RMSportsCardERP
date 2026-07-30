@@ -13,6 +13,7 @@ import type {
 } from '@shared/types'
 import type { Database } from 'better-sqlite3'
 import type { ProductUnits, StockUnit } from '@shared/units'
+import { QTY_SNAP } from '@shared/units'
 import { LOCATION_IDS } from '@shared/inventory'
 import { normalizeUpc } from '@shared/upc'
 import { getDb } from './database'
@@ -247,10 +248,18 @@ export function insertTxn(
 export function bumpStock(productId: string, location: string, delta: number): void {
   getDb()
     .prepare(
+      // The CASE snaps a balance that is only rounding dust to exactly zero —
+      // consumeFifo does the same to the cost layer, and the two must land on
+      // zero together or assertStockLotsConsistent reports a divergence that is
+      // really just 0.0004 of a case. See QTY_SNAP in @shared/units.
       `INSERT INTO inventory_stock (id, product_id, location, quantity)
        VALUES (?, ?, ?, ?)
        ON CONFLICT(product_id, location) DO UPDATE
-         SET quantity = ROUND(quantity + excluded.quantity, 4)`
+         SET quantity = CASE
+               WHEN ABS(ROUND(quantity + excluded.quantity, 4)) < ${QTY_SNAP}
+                 THEN 0
+               ELSE ROUND(quantity + excluded.quantity, 4)
+             END`
     )
     .run(newId(), productId, location, delta)
 }

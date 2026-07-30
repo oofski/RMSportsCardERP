@@ -185,6 +185,8 @@ interface ParseJobOptions {
   eventName: string | null
   eventDate: string | null
   name: string | null
+  /** Keep the outgoing dataset's pick/pack progress. Off unless asked. */
+  carryForward: boolean
 }
 
 /**
@@ -219,7 +221,8 @@ async function runParseJob(
     // throw anywhere inside leaves the previous dataset untouched.
     const result = importDataset(dataset, {
       filename: job.filename,
-      name: opts.name ?? job.filename
+      name: opts.name ?? job.filename,
+      carryForward: opts.carryForward
     })
 
     job.status = 'done'
@@ -408,6 +411,7 @@ export function registerShippingIpc(): void {
           sport: validSport(request?.sport),
           eventName: str(request?.eventName).trim() || null,
           eventDate: str(request?.eventDate).trim() || null,
+          carryForward: request?.carryForward === true,
           name: str(request?.name).trim() || null
         })
 

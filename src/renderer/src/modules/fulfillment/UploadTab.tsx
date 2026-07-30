@@ -58,6 +58,16 @@ export function UploadTab({ summary, canManage, onChanged, onGoTo }: ShipTabProp
   // Suppress the auto-name once the operator types their own.
   const [nameTouched, setNameTouched] = useState(false)
   const [eventTouched, setEventTouched] = useState(false)
+  /**
+   * Keep the pick/pack progress of the dataset this import replaces.
+   *
+   * OFF by default, and only offered when a dataset is actually loaded. The
+   * backend used to infer it from the event name and date matching, which two
+   * shows on the same day satisfy by coincidence — so the second import arrived
+   * with the first show's packages already stamped packed and already carrying
+   * its holds and notes. It is a decision now, and the default is the safe one.
+   */
+  const [carryForward, setCarryForward] = useState(false)
   const [starting, setStarting] = useState(false)
   const [job, setJob] = useState<ShipParseJob | null>(null)
   const [confirmClear, setConfirmClear] = useState(false)
@@ -78,10 +88,25 @@ export function UploadTab({ summary, canManage, onChanged, onGoTo }: ShipTabProp
   const event = summary?.event
   const hasDataset = !!summary?.hasDataset
 
-  // Keep the event editor in step with whatever dataset is loaded.
+  /**
+   * Keep the event editor in step with whatever dataset is loaded.
+   *
+   * The DATE SEED LIVES HERE, not in a separate mount-once effect. It used to
+   * sit in its own `useEffect(..., [])`, whose closure permanently held the
+   * first-render `eventDate === ''` — so `if (!eventDate) setEventDate(today)`
+   * was unconditionally true on every mount, and because this effect is
+   * declared first, today's date won the write queue and replaced the loaded
+   * dataset's date. Switching tabs was enough to do it. Pressing "Save event"
+   * then wrote today over the real show date, and a corrected re-export stopped
+   * matching the stored event at all.
+   *
+   * `||` rather than `??`: getShipEvent returns '' for a fresh workspace, never
+   * undefined, so `??` would never reach the fallback and the field would stay
+   * empty.
+   */
   useEffect(() => {
     setEventName(event?.name ?? '')
-    setEventDate(event?.date ?? '')
+    setEventDate(event?.date || todayIso())
   }, [event?.name, event?.date, event?.updatedAt])
 
   // Re-attach to a job that was still running when this tab last unmounted.
@@ -125,22 +150,25 @@ export function UploadTab({ summary, canManage, onChanged, onGoTo }: ShipTabProp
     [sport, eventDate]
   )
 
-  // Seed the date once so the field is never empty on a fresh workspace.
-  useEffect(() => {
-    if (!eventDate) setEventDate(todayIso())
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  // Keep the suggestion in step with the League picker until it is edited.
+  /**
+   * Keep the IMPORT NAME suggestion in step with the League picker until it is
+   * edited.
+   *
+   * It no longer touches the EVENT name when the loaded dataset already has
+   * one. It used to overwrite it with the generated string on every mount, so an
+   * event the operator had named "Sunday Night Football Rip" showed as
+   * "Football - 07/30" the next time the tab opened — and "Save event" renamed
+   * the real thing to match. The suggestion is for a NEW event; an existing one
+   * already has a name and it is not ours to replace.
+   */
   useEffect(() => {
     if (nameTouched) return
     const suggested = autoName()
-    if (suggested) {
-      setImportName(suggested)
-      if (!eventTouched) setEventName(suggested)
-    }
+    if (!suggested) return
+    setImportName(suggested)
+    if (!eventTouched && !event?.name) setEventName(suggested)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sport, eventDate, nameTouched])
+  }, [sport, eventDate, nameTouched, event?.name])
 
   // One subscription for the life of the tab; the main process throttles pushes.
   useEffect(() => {
@@ -169,7 +197,8 @@ export function UploadTab({ summary, canManage, onChanged, onGoTo }: ShipTabProp
         sport,
         eventName: eventName.trim() || null,
         eventDate: eventDate.trim() || null,
-        name: importName.trim() || null
+        name: importName.trim() || null,
+        carryForward
       })
       if (!res.ok || !res.data) {
         // Cancelling the file dialog is not an error worth shouting about.
@@ -311,6 +340,16 @@ export function UploadTab({ summary, canManage, onChanged, onGoTo }: ShipTabProp
             />
           </Field>
         </div>
+
+        {hasDataset && canManage && (
+          <Checkbox
+            checked={carryForward}
+            disabled={running}
+            onChange={setCarryForward}
+            label="Keep my pick/pack progress from the loaded dataset"
+            hint="For a corrected re-export of the SAME show — packed marks, holds, notes, manual statuses and team check-offs carry over onto matching packages. Leave this off for a different show, or its packages arrive already marked done."
+          />
+        )}
 
         <div className="ship-upload-actions">
           <Button

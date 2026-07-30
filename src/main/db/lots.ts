@@ -1,4 +1,5 @@
 import type { Database } from 'better-sqlite3'
+import { QTY_SNAP, quantizationSlack } from '@shared/units'
 import { newId, nowIso } from '../util'
 
 /**
@@ -188,13 +189,31 @@ export function consumeFifo(db: Database, productId: string, location: string, q
     if (need <= QTY_EPS) break
     const take = normQty(Math.min(need, lot.qty_remaining))
     if (!(take > 0)) continue
-    set.run(normQty(lot.qty_remaining - take), lot.id)
+    /**
+     * SNAP TO ZERO once the layer is within rounding dust of empty.
+     *
+     * For divisors whose 1/N rounds DOWN at four places (3, 9, 11, 12, 30),
+     * taking all N pieces left the lot holding 0.0001 to 0.001 forever: an open
+     * cost layer, and a product still showing stock it does not have, with no UI
+     * able to enter a fraction to clear it. The layer is empty; the arithmetic
+     * just cannot say so in four decimal places.
+     */
+    const left = normQty(lot.qty_remaining - take)
+    set.run(left > QTY_SNAP ? left : 0, lot.id)
     slices.push({ lotId: lot.id, qty: take, unitCost: lot.unit_cost })
     need = normQty(need - take)
   }
-  // Slack, not `> 0`: the remainder of a fractional walk is dust, and refusing on
-  // 2.7e-16 would roll back a consumption that had actually completed.
-  if (need > QTY_EPS) {
+  /**
+   * Slack, not `> 0`: the remainder of a fractional walk is dust, and refusing
+   * on 2.7e-16 would roll back a consumption that had actually completed.
+   *
+   * The slack is the accumulated QUANTIZATION error, not a fixed 1e-6. Every
+   * balance here is re-rounded to QTY_DP on every step, so taking a unit one
+   * 1/N piece at a time leaves the layers a few ten-thousandths short of the
+   * full-precision ask by the last piece — and a 1e-6 threshold turned that into
+   * a throw that rolled back a break the caller had already accepted.
+   */
+  if (need > quantizationSlack(qty)) {
     throw new Error(`Not enough cost lots to consume ${qty} at ${location} (short ${need}).`)
   }
   return slices

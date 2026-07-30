@@ -1307,20 +1307,31 @@ export function importDeleteImpact(id: string): {
                 SELECT 1 FROM ledger_row_imports o
                  WHERE o.row_id = r.id AND o.import_id <> @id
               ) THEN 1 ELSE 0 END), 0) AS covered,
-              COALESCE(SUM(CASE WHEN EXISTS (
-                SELECT 1 FROM ledger_row_imports o
-                 WHERE o.row_id = r.id AND o.import_id <> @id
-              ) THEN 0 ELSE r.amount END), 0) AS losing_amount
+              -- Payouts EXCLUDED, and summed in integer cents like every other
+              -- aggregate in this file. A payout is the negative mirror of the
+              -- week's earnings, so including them collapsed this figure toward
+              -- zero: the confirmation offered to delete "1,200 ledger rows worth
+              -- $9.94" when the money actually leaving was tens of thousands.
+              -- The ROW COUNT still counts every row, payouts included — the
+              -- modal's "N ledger rows" is legitimately about all of them.
+              COALESCE(SUM(CASE
+                WHEN r.bucket = 'payout' THEN 0
+                WHEN EXISTS (
+                  SELECT 1 FROM ledger_row_imports o
+                   WHERE o.row_id = r.id AND o.import_id <> @id
+                ) THEN 0
+                ELSE CAST(ROUND(r.amount * 100) AS INTEGER)
+              END), 0) AS losing_cents
          FROM ledger_rows r
         WHERE r.import_id = @id`
     )
-    .get({ id }) as { owned: number; covered: number; losing_amount: number }
+    .get({ id }) as { owned: number; covered: number; losing_cents: number }
   return {
     exists: true,
     owned: row.owned,
     covered: row.covered,
     losing: row.owned - row.covered,
-    losingAmount: toDollars(toCents(row.losing_amount))
+    losingAmount: toDollars(row.losing_cents)
   }
 }
 
@@ -2001,6 +2012,9 @@ function buildView(db: Database): StreamingFinanceView {
     const cents = dayCents.get(date) ?? {}
     const salesCents = toCents(day.sales)
     const unknownCents = cents.unclassified ?? 0
+    // Carried as its own field as well as into the top line, so the statement
+    // has a line to print for it rather than a subtotal that exceeds its lines.
+    day.unclassified = toDollars(unknownCents)
 
     // `unclassified` has no field of its own in the day shape, so its money is
     // carried at FACE VALUE in totalRevenue and flagged in the import warnings.

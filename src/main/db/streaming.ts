@@ -18,7 +18,7 @@ import { isLocation } from '@shared/inventory'
 // The unit contract. Never reimplemented here: what one unit of stock MEANS
 // varies per product, and a second copy of that arithmetic is an
 // order-of-magnitude error waiting to happen.
-import { boxCost, breakToStock, giveawayToStock, packCost, type ProductUnits } from '@shared/units'
+import { boxCost, breakToStock, giveawayToStock, packCost, quantizationSlack, type ProductUnits } from '@shared/units'
 import { getDb } from './database'
 import {
   QTY_EPS,
@@ -785,8 +785,26 @@ export function addItem(input: NewStreamItem, actorId: string | null): Result<St
     }
 
     const have = stockQty(productId, location)
-    // Slack so consuming the exact fractional balance is not refused by dust.
-    if (qty > have + QTY_EPS) return { ok: false, error: `Only ${have} in ${location}.` }
+    /**
+     * The last piece of a unit taken piece by piece.
+     *
+     * The stored balance is re-rounded to four places on every step, so after
+     * N-1 pieces it sits just BELOW (N-1)/N while the ask is still a
+     * full-precision 1/N. On a 6-box case the shelf reads 0.1665 and the sixth
+     * box asks for 0.16666… — refused forever with "Only 0.1665 in RM", so that
+     * box's cost never reached the show and the fraction stayed on the books
+     * with no way to clear it (the adjust-stock form parses with parseInt).
+     *
+     * Within the accumulated rounding error the ask IS the remaining balance, so
+     * it is clamped to it and consumes the shelf to exactly zero.
+     */
+    if (qty > have + QTY_EPS) {
+      if (fractional && have > 0 && qty - have <= quantizationSlack(qty)) {
+        qty = have
+      } else {
+        return { ok: false, error: `Only ${have} in ${location}.` }
+      }
+    }
 
     const breakNumber = kind === 'break' ? normalizeBreakNumber(input.breakNumber) : null
     const recipient = kind === 'giveaway' ? input.recipient?.trim() || null : null

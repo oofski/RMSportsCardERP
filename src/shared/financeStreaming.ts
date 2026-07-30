@@ -598,7 +598,18 @@ export interface StreamDayFinance {
   saleCount: number
   tips: number
   bonuses: number
-  /** sales + tips + bonuses. What came in before fees. */
+  /**
+   * Money on a row whose message shape this version does not recognise.
+   *
+   * Counted at FACE VALUE as revenue — never dropped — and now carried as its
+   * own field so the statement can show it. It used to be folded straight into
+   * `totalRevenue` with no line of its own, which made the Revenue subtotal
+   * larger than the sum of the lines printed under it, with the difference
+   * appearing nowhere. `pnlChecksum` still reconciled, so nothing flagged the
+   * gap: the statement simply did not explain itself.
+   */
+  unclassified: number
+  /** sales + tips + bonuses + unclassified. What came in before fees. */
   totalRevenue: number
 
   // --- Fees (all negative) ------------------------------------------------
@@ -732,6 +743,7 @@ const c2 = (n: number): number => Math.round(n * 100) / 100
  */
 export function buildPnl(d: {
   sales: number; saleCount: number; tips: number; bonuses: number; totalRevenue: number
+  unclassified?: number
   breakCost: number; giveawayCost: number; cogs: number; grossProfit: number
   whatnotFee: number; processingFee: number; totalFees: number
   shippingSubsidy: number; shippingCharges: number; giveawayShipping: number
@@ -749,7 +761,16 @@ export function buildPnl(d: {
       lines: [
         line('sales', 'Sales', d.sales, `${count(d.saleCount)} transaction${d.saleCount === 1 ? '' : 's'}`),
         line('tips', 'Tips', d.tips),
-        line('bonuses', 'Seller bonuses', d.bonuses)
+        line('bonuses', 'Seller bonuses', d.bonuses),
+        // Present so the subtotal always equals the lines above it. Optional on
+        // the input for one release, because a packaged main that predates the
+        // field would otherwise print NaN here.
+        line(
+          'unclassified',
+          'Unrecognised rows',
+          d.unclassified ?? 0,
+          'a message shape this version does not know, counted at face value'
+        )
       ],
       subtotal: c2(d.totalRevenue),
       subtotalLabel: 'Total revenue'
@@ -1000,6 +1021,7 @@ export const PNL_MONEY_FIELDS = [
   'sales',
   'tips',
   'bonuses',
+  'unclassified',
   'totalRevenue',
   'whatnotFee',
   'processingFee',
@@ -1047,6 +1069,7 @@ export function emptyDayFinance(streamDate: string): StreamDayFinance {
     saleCount: 0,
     tips: 0,
     bonuses: 0,
+    unclassified: 0,
     totalRevenue: 0,
     whatnotFee: 0,
     processingFee: 0,

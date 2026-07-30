@@ -887,6 +887,9 @@ export interface ImportDatasetOptions {
   /** Human label for the import-history row; defaults to the filename. */
   name?: string
   sourceKind?: ShipImportKind
+  /** The operator asked to keep the outgoing dataset's pick/pack progress. The
+   *  identity check below still has to agree — this only permits it. */
+  carryForward?: boolean
 }
 
 /**
@@ -1060,10 +1063,24 @@ export function importDataset(
       insWarning.run(`warn_${i + 1}`, w.page ?? null, str(w.message), w.rawText ?? null)
     })
 
-    // --- 3. carry operator state forward, but only on a confirmed re-import
+    /**
+     * --- 3. carry operator state forward, but only when ASKED and only when it
+     * really is the same event.
+     *
+     * The name-and-date match alone was not evidence. RM runs two shows most
+     * days, the event name is auto-suggested as "[Sport] - [Date]", and an
+     * operator who does not retype it imports the second show under a string
+     * identical to the first — so every repeat customer arrived already stamped
+     * packed, already holding the earlier show's notes, holds and manual
+     * statuses, and skipped the To Pick queue entirely. Silent, and exactly
+     * wrong. The flag comes from a checkbox that is off by default.
+     */
     const prevName = str(prevEvent.name).trim()
     const sameEvent =
-      prevName !== '' && prevName === eventName && str(prevEvent.date).trim() === eventDate
+      opts.carryForward === true &&
+      prevName !== '' &&
+      prevName === eventName &&
+      str(prevEvent.date).trim() === eventDate
     if (sameEvent) {
       carryForwardOperatorState(database, prevShipments, prevSlots, prevBreaks)
     }
