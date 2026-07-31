@@ -17,6 +17,15 @@ import type {
   QboSyncRow
 } from '@shared/quickbooks'
 import type {
+  IntakeLink,
+  IntakeLinkInput,
+  IntakeStatus,
+  IntakeSubmission,
+  SyncConfig,
+  SyncReject,
+  SyncStatus
+} from '@shared/sync'
+import type {
   AddStockInput,
   AdjustStockInput,
   AuthResult,
@@ -592,6 +601,51 @@ const api = {
     ): Promise<Result<ComposedEmail>> =>
       ipcRenderer.invoke(IPC.emailComposeInvite, { employeeId, temporaryPassword }),
     openExternal: (url: string): Promise<Result> => ipcRenderer.invoke(IPC.emailOpenExternal, url)
+  },
+  /**
+   * Cloud sync — the relay that keeps every laptop showing the same data.
+   *
+   * `onChanged` is the live half: it fires when rows from another machine have
+   * landed locally, carrying only which KINDS of record moved. A screen refetches
+   * through its normal, permission-checked call rather than being handed data
+   * over the event, so this can never surface something the viewer may not see.
+   */
+  sync: {
+    status: (): Promise<SyncStatus> => ipcRenderer.invoke(IPC.syncStatus),
+    configure: (update: Partial<SyncConfig> & { key?: string }): Promise<Result<SyncStatus>> =>
+      ipcRenderer.invoke(IPC.syncConfigure, update),
+    test: (): Promise<Result<{ rows: number }>> => ipcRenderer.invoke(IPC.syncTest),
+    now: (): Promise<Result<{ pushed: number; pulled: number; applied: number; rejected: number }>> =>
+      ipcRenderer.invoke(IPC.syncNow),
+    seed: (): Promise<Result<{ queued: number }>> => ipcRenderer.invoke(IPC.syncSeed),
+    rejects: (): Promise<SyncReject[]> => ipcRenderer.invoke(IPC.syncRejects),
+    clearRejects: (): Promise<Result<{ cleared: number }>> =>
+      ipcRenderer.invoke(IPC.syncClearRejects),
+    drift: (): Promise<Array<{ productId: string; location: string; stock: number; lots: number }>> =>
+      ipcRenderer.invoke(IPC.syncDrift),
+    onStatus: (callback: (status: SyncStatus) => void): (() => void) => {
+      const listener = (_e: unknown, status: SyncStatus): void => callback(status)
+      ipcRenderer.on(IPC.syncStatusEvent, listener)
+      return () => ipcRenderer.removeListener(IPC.syncStatusEvent, listener)
+    },
+    onChanged: (callback: (event: { kinds: string[] }) => void): (() => void) => {
+      const listener = (_e: unknown, payload: { kinds: string[] }): void => callback(payload)
+      ipcRenderer.on(IPC.syncChangedEvent, listener)
+      return () => ipcRenderer.removeListener(IPC.syncChangedEvent, listener)
+    }
+  },
+  intake: {
+    links: (): Promise<IntakeLink[]> => ipcRenderer.invoke(IPC.intakeLinks),
+    createLink: (input: IntakeLinkInput): Promise<Result<IntakeLink>> =>
+      ipcRenderer.invoke(IPC.intakeLinkCreate, input),
+    setLinkActive: (id: string, active: boolean): Promise<Result<{ id: string }>> =>
+      ipcRenderer.invoke(IPC.intakeLinkSetActive, { id, active }),
+    submissions: (status?: IntakeStatus): Promise<IntakeSubmission[]> =>
+      ipcRenderer.invoke(IPC.intakeSubmissions, status),
+    accept: (id: string): Promise<Result<IntakeSubmission>> =>
+      ipcRenderer.invoke(IPC.intakeAccept, id),
+    reject: (id: string, note: string): Promise<Result<IntakeSubmission>> =>
+      ipcRenderer.invoke(IPC.intakeReject, { id, note })
   },
   updates: {
     getStatus: (): Promise<UpdateStatus> => ipcRenderer.invoke(IPC.updatesGetStatus),

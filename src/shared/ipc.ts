@@ -231,6 +231,28 @@ export const IPC = {
   updatesGetStatus: 'updates:get-status',
   updatesStatusEvent: 'updates:status-event',
 
+  // Cloud sync
+  syncStatus: 'sync:status',
+  syncConfigure: 'sync:configure',
+  syncTest: 'sync:test',
+  syncNow: 'sync:now',
+  syncSeed: 'sync:seed',
+  syncRejects: 'sync:rejects',
+  syncClearRejects: 'sync:rejects:clear',
+  syncDrift: 'sync:drift',
+  /** Push: the sync loop's own state changed (started, finished, failed). */
+  syncStatusEvent: 'sync:status-event',
+  /** Push: rows landed from another machine — screens showing them are stale. */
+  syncChangedEvent: 'sync:changed-event',
+
+  // Public intake form
+  intakeLinks: 'intake:links',
+  intakeLinkCreate: 'intake:link:create',
+  intakeLinkSetActive: 'intake:link:set-active',
+  intakeSubmissions: 'intake:submissions',
+  intakeAccept: 'intake:accept',
+  intakeReject: 'intake:reject',
+
   // App meta
   appInfo: 'app:info'
 } as const

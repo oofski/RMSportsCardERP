@@ -9,6 +9,7 @@ import { seedSnapshot } from './inventorySnapshot'
 import { seedCatalogExpansion } from './inventoryCatalogV2'
 import { dedupeProducts } from './dedupe'
 import { backfillLots } from './lots'
+import { installSyncTriggers } from './syncTriggers'
 import { fingerprintOf } from './financeStreaming'
 
 let db: Database.Database | null = null
@@ -85,6 +86,31 @@ function migrate(database: Database.Database): void {
       detail     TEXT,
       created_at TEXT NOT NULL
     );
+
+    -- v28: sessions for the shared-database server.
+    --
+    -- The desktop app keeps its signed-in user in memory, which is correct for
+    -- one person at one computer. A server answering ten people needs a session
+    -- each, and needs them to survive a restart — otherwise every deploy signs
+    -- the whole warehouse out mid-count. Stored here rather than in memory for
+    -- exactly that reason.
+    --
+    -- Only the token HASH is kept. A stolen database backup should not hand the
+    -- thief a set of live sessions, and nothing ever needs the original value
+    -- again: it is compared by hashing what the client presents.
+    CREATE TABLE IF NOT EXISTS server_sessions (
+      token_hash   TEXT PRIMARY KEY,
+      employee_id  TEXT NOT NULL,
+      created_at   TEXT NOT NULL,
+      last_seen_at TEXT NOT NULL,
+      expires_at   TEXT NOT NULL,
+      client       TEXT,
+      FOREIGN KEY (employee_id) REFERENCES employees (id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_server_sessions_employee
+      ON server_sessions (employee_id);
+    CREATE INDEX IF NOT EXISTS idx_server_sessions_expiry
+      ON server_sessions (expires_at);
 
     -- Catalog of every product ever carried. SKU is a short (often shared)
     -- abbreviation, so it is NOT unique; the UPC barcode is the natural key.
@@ -854,6 +880,107 @@ function migrate(database: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_ledger_quarantine_import
       ON ledger_quarantine (import_id);
+
+    -- =====================================================================
+    -- v29: cloud sync
+    -- =====================================================================
+
+    -- Rows waiting to go up.
+    --
+    -- A coalescing queue, not a log: one row per record, holding only its
+    -- latest state. Editing the same product forty times leaves ONE entry, so
+    -- a laptop that has been offline all week comes back with a queue the size
+    -- of what it changed rather than of what it did.
+    CREATE TABLE IF NOT EXISTS sync_outbox (
+      kind       TEXT NOT NULL,
+      id         TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      deleted    INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (kind, id)
+    ) WITHOUT ROWID;
+
+    -- Local sync bookkeeping: cursor, device id, shared key, last error.
+    CREATE TABLE IF NOT EXISTS sync_state (
+      key   TEXT PRIMARY KEY,
+      value TEXT
+    );
+
+    -- The echo brake.
+    --
+    -- Applying a pulled row is still an ordinary INSERT/UPDATE, so without this
+    -- the capture triggers would queue it straight back up and two laptops
+    -- would bounce the same row between them forever. Every trigger is guarded
+    -- on applying = 0, and the apply path sets it to 1 for the duration of
+    -- the batch. A table rather than a variable because SQLite triggers can
+    -- only read tables.
+    CREATE TABLE IF NOT EXISTS sync_control (
+      id       INTEGER PRIMARY KEY CHECK (id = 1),
+      applying INTEGER NOT NULL DEFAULT 0
+    );
+    INSERT OR IGNORE INTO sync_control (id, applying) VALUES (1, 0);
+
+    -- Rows the relay sent that this database would not accept.
+    --
+    -- Kept rather than dropped, and surfaced in the UI. A rejected row is
+    -- almost always a genuine collision (two laptops inventing the same UPC
+    -- offline), which is a business problem needing a person — not something to
+    -- swallow. Keeping them also means one bad row can never wedge the queue.
+    CREATE TABLE IF NOT EXISTS sync_rejects (
+      kind   TEXT NOT NULL,
+      id     TEXT NOT NULL,
+      seq    INTEGER NOT NULL,
+      reason TEXT NOT NULL,
+      data   TEXT,
+      at     TEXT NOT NULL,
+      PRIMARY KEY (kind, id)
+    ) WITHOUT ROWID;
+
+    -- A public pre-registration link. One per event, revocable, unguessable.
+    CREATE TABLE IF NOT EXISTS intake_links (
+      id         TEXT PRIMARY KEY,
+      token      TEXT NOT NULL UNIQUE,
+      label      TEXT NOT NULL DEFAULT '',
+      event_name TEXT NOT NULL DEFAULT '',
+      event_date TEXT,
+      active     INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      created_by TEXT,
+      updated_at TEXT NOT NULL
+    );
+
+    -- What a customer typed into that form.
+    --
+    -- No foreign key to intake_links on purpose: a submission and its link
+    -- travel as independent rows, and a submission that lands one round before
+    -- its link must not be refused. It carries the token so it can be matched
+    -- either way.
+    CREATE TABLE IF NOT EXISTS intake_submissions (
+      id          TEXT PRIMARY KEY,
+      link_id     TEXT NOT NULL DEFAULT '',
+      token       TEXT NOT NULL DEFAULT '',
+      handle      TEXT NOT NULL DEFAULT '',
+      real_name   TEXT NOT NULL DEFAULT '',
+      email       TEXT NOT NULL DEFAULT '',
+      phone       TEXT NOT NULL DEFAULT '',
+      address1    TEXT NOT NULL DEFAULT '',
+      address2    TEXT NOT NULL DEFAULT '',
+      city        TEXT NOT NULL DEFAULT '',
+      state       TEXT NOT NULL DEFAULT '',
+      postal_code TEXT NOT NULL DEFAULT '',
+      country     TEXT NOT NULL DEFAULT 'US',
+      request     TEXT NOT NULL DEFAULT '',
+      status      TEXT NOT NULL DEFAULT 'new',
+      status_note TEXT,
+      customer_id TEXT,
+      reviewed_at TEXT,
+      reviewed_by TEXT,
+      created_at  TEXT NOT NULL,
+      updated_at  TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_intake_sub_link
+      ON intake_submissions (link_id);
+    CREATE INDEX IF NOT EXISTS idx_intake_sub_status
+      ON intake_submissions (status, created_at DESC);
   `)
 
   if (getMeta(database, 'schema_version') === null) {
@@ -1108,6 +1235,14 @@ function migrate(database: Database.Database): void {
   // backfill — a reset that happened before the table existed did not happen.
   setMeta(database, 'schema_version', '27')
 
+  // v28: server_sessions, likewise created above. Nothing to backfill — before
+  // this version there was no server and therefore no sessions.
+  setMeta(database, 'schema_version', '28')
+
+  // v29: cloud sync. The tables came from the block above; the capture triggers
+  // are installed at the very END of this function — see the note there.
+  setMeta(database, 'schema_version', '29')
+
   // Seed the product catalog once, then apply the on-hand snapshot once.
   seedCatalogIfNeeded(database)
   seedSnapshotIfNeeded(database)
@@ -1166,6 +1301,21 @@ function migrate(database: Database.Database): void {
     const filled = backfillBoxesPerCase(database)
     setMeta(database, 'boxes_per_case_from_name_count', String(filled))
   })
+
+  // v29: install the sync capture triggers LAST, after every seed, backfill and
+  // one-time fixup above.
+  //
+  // Placement is the point. Installed earlier, a fresh install's starter catalog
+  // and every migration touch-up would be captured as "changes this machine
+  // made" and queued for upload — so the second laptop would try to publish 160
+  // rows of boilerplate it invented locally, under ids nobody else has. What
+  // travels should be work someone did, and the one deliberate exception is
+  // seedRelay(), which queues the whole database on purpose from the machine
+  // that holds the real data.
+  //
+  // Re-applied on every launch rather than once: a new app version can add a
+  // synced table, and these triggers are generated from the manifest.
+  installSyncTriggers(database)
 }
 
 /**

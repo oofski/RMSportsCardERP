@@ -21,7 +21,9 @@
     "build:win": "npm run build && electron-builder --win",
     "build:mac": "npm run build && electron-builder --mac",
     "build:linux": "npm run build && electron-builder --linux",
-    "check:feed": "node scripts/check-update-feed.mjs"
+    "check:feed": "node scripts/check-update-feed.mjs",
+    "build:server": "esbuild src/server/index.ts --bundle --platform=node --target=node20 --format=cjs --alias:@shared=./src/shared --alias:electron=./src/server/electron-stub.ts --alias:electron-updater=./src/server/electron-updater-stub.ts --external:better-sqlite3 --outfile=out/server/index.cjs",
+    "server": "npm run build:server && node out/server/index.cjs"
   },
   "dependencies": {
     "@electron-toolkit/utils": "^3.0.0",
@@ -46,6 +48,7 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "typescript": "^5.7.2",
-    "vite": "^5.4.11"
+    "vite": "^5.4.11",
+    "esbuild": "^0.21.5"
   }
 }

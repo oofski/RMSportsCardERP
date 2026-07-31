@@ -10,8 +10,10 @@ import { registerShippingIpc } from './shippingIpc'
 import { registerStreamingIpc } from './streamingIpc'
 import { registerQuickBooksIpc } from './quickbooksIpc'
 import { registerFinanceIpc } from './financeIpc'
+import { registerSyncIpc } from './syncIpc'
 import { getDb, closeDb } from './db/database'
 import { initUpdater } from './services/updater'
+import { initCloudSync, stopCloudSync } from './services/cloudSync'
 
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
@@ -87,7 +89,11 @@ app.whenReady().then(() => {
   registerStreamingIpc()
   registerQuickBooksIpc()
   registerFinanceIpc()
+  registerSyncIpc()
   initUpdater()
+  // Starts the push/pull loop only if sync has been switched on; a standalone
+  // install never opens a socket.
+  initCloudSync()
 
   createWindow()
 
@@ -103,5 +109,6 @@ app.on('window-all-closed', () => {
 })
 
 app.on('will-quit', () => {
+  stopCloudSync()
   closeDb()
 })
