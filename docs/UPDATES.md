@@ -27,15 +27,64 @@ The feed lives wherever you point it. We're moving it from GitHub Releases to a
 
 ## One-time Cloudflare setup
 
-1. **Create an R2 bucket** (Cloudflare dashboard → R2 → *Create bucket*), e.g.
-   `rmops-updates`.
-2. **Give it a public domain.** In the bucket → *Settings* → *Public access* →
-   *Connect a custom domain*, add `updates.rmcardz.com` (Cloudflare manages the
-   DNS if `rmcardz.com` is on Cloudflare). This is the base URL clients read.
-3. **Create an R2 API token** (R2 → *Manage API Tokens* → *Create*, Object
-   Read & Write for the bucket). Note the **Access Key ID**, **Secret Access
-   Key**, and your account's **S3 endpoint**
-   `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`.
+All of this is dashboard clicking — there is nothing to install and no
+`wrangler`. **You do not need a Worker.** An R2 bucket with a custom domain
+serves the files directly over HTTPS; a Worker only earns its place if you want
+the downloads to be private (see *Locking downloads down* at the end).
+
+### Prerequisite: is `rmcardz.com` on Cloudflare?
+
+Check dash.cloudflare.com → **Websites**. If the domain is not listed, add it
+first (*Add a site* → follow the nameserver change at your registrar). That can
+take anywhere from minutes to a few hours to go active, so start it before
+anything else.
+
+Not ready, or want to test the pipeline today? Skip to *Testing without a
+domain* below — R2 gives every bucket a free `r2.dev` URL that works
+immediately.
+
+### 1. Create the bucket
+
+1. dash.cloudflare.com → **R2 Object Storage** in the left sidebar.
+2. First time only: R2 asks for a payment method before it will enable, even on
+   the free tier. The free tier is 10 GB of storage and generous operation
+   limits — this app's releases sit well inside it.
+3. **Create bucket** → name it `rmops-updates` → Location: *Automatic* →
+   **Create bucket**.
+
+### 2. Put it on your domain
+
+1. Open the bucket → **Settings** tab.
+2. Find **Public access** → **Custom Domains** → **Connect Domain**.
+3. Enter `updates.rmcardz.com` → **Continue** → **Connect domain**.
+   Because the zone is already on Cloudflare, it creates the DNS record itself.
+4. Wait for the status to read **Active** (usually under a minute).
+5. Do **not** add a Cache Rule for this hostname. R2 honours the per-file
+   `Cache-Control` that CI sets — installers cached hard, feed files never
+   cached — and a blanket rule would override exactly the part that must stay
+   fresh.
+
+### 3. Create an API token for CI
+
+1. On the R2 overview page, note your **Account ID** (right-hand side). Your S3
+   endpoint is `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`.
+2. **Manage API tokens** (top right of the R2 overview) → **Create API token**.
+3. Permission: **Object Read & Write**. Scope it to the `rmops-updates` bucket
+   rather than all buckets. TTL: forever.
+4. **Create API token**, then copy the **Access Key ID** and **Secret Access
+   Key**. The secret is shown once — if you lose it, delete the token and make
+   another.
+
+### Testing without a domain
+
+In the bucket → **Settings** → **Public access** → **R2.dev subdomain** →
+*Allow Access*. You get a `https://pub-<hash>.r2.dev` URL that works straight
+away. Use it as `CF_UPDATES_URL` to prove the whole release pipeline end to end,
+then switch to the custom domain when DNS is ready.
+
+Cloudflare rate-limits `r2.dev` and says outright it is not for production, so
+do not point the app's `UPDATE_FEED_URL` at it — it is for testing the CI job
+only.
 
 ## Point the app + CI at your domain
 
@@ -101,6 +150,32 @@ release), you can delete the `github` entry from `publish:` in
 `electron-builder.yml` to stop publishing to GitHub entirely.
 
 ---
+
+## Locking downloads down (optional — this is the only reason to add a Worker)
+
+A custom domain on R2 is **public**. Anyone who knows
+`updates.rmcardz.com/RM-Operations-App-Setup-0.0.51.exe` can download it. For an
+internal tool that already requires a login before it does anything, that is
+usually an acceptable trade — it is the installer, not the data.
+
+If you would rather it were not public, that is the one job a Worker does here:
+
+1. Bucket → **Settings** → turn **Public access** OFF (remove the custom domain).
+2. **Workers & Pages** → **Create** → **Worker** → name it `rmops-updates` →
+   **Deploy** (the default hello-world is fine; you edit it in the browser).
+3. Worker → **Settings** → **Bindings** → **Add** → **R2 bucket** → variable
+   name `BUCKET`, bucket `rmops-updates`.
+4. Worker → **Settings** → **Variables** → add a secret, e.g. `FEED_KEY`.
+5. **Edit code** in the dashboard and have it read the key from a header or
+   query string, return 404 without it, and otherwise stream the object from
+   `env.BUCKET.get(...)`.
+6. Worker → **Settings** → **Domains & Routes** → **Add** → *Custom domain* →
+   `updates.rmcardz.com`.
+
+The app would then need that key on its feed requests, which means a change to
+`services/updater.ts`. Worth doing if the installers should not be world-
+readable; skip it otherwise — it is a real amount of extra moving parts for a
+file that contains no customer data.
 
 ## Why Mac can't silently auto-update (yet)
 
