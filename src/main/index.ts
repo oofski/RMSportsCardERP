@@ -1,7 +1,8 @@
-import { app, shell, BrowserWindow, nativeTheme, session } from 'electron'
+import { app, shell, BrowserWindow, nativeTheme, session, ipcMain as electronIpcMain } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { APP_NAME } from '@shared/config'
+import { setRegistrationSink } from './ipcRegistry'
 import { registerIpcHandlers } from './ipc'
 import { registerInventoryIpc } from './inventoryIpc'
 import { registerPurchaseOrdersIpc } from './purchaseOrdersIpc'
@@ -66,6 +67,16 @@ app.whenReady().then(() => {
   // handlers stay — saying no — rather than being deleted.
   session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false))
   session.defaultSession.setPermissionCheckHandler(() => false)
+
+  // Send every operation the modules below register on to Electron's real
+  // ipcMain. They register with the transport-agnostic registry instead of
+  // importing ipcMain directly, so the identical handlers can also be served
+  // over a network by a shared-database server — see ipcRegistry.ts. Installed
+  // BEFORE the register* calls, though the registry replays anything earlier
+  // anyway rather than depending on the order.
+  setRegistrationSink((channel, handler) => {
+    electronIpcMain.handle(channel, handler as Parameters<typeof electronIpcMain.handle>[1])
+  })
 
   // Initialise the database up front so a failure surfaces early.
   getDb()

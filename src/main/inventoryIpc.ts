@@ -1,10 +1,10 @@
 import {
   BrowserWindow,
   dialog,
-  ipcMain,
   type OpenDialogOptions,
   type SaveDialogOptions
 } from 'electron'
+import { ipcMain } from './ipcRegistry'
 import { writeFileSync } from 'node:fs'
 import { IPC } from '@shared/ipc'
 import type {

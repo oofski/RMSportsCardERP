@@ -8,7 +8,7 @@
  * hands it back to the renderer. Status carries the last four of the client id
  * only, which is enough to tell two app registrations apart.
  */
-import { ipcMain } from 'electron'
+import { ipcMain } from './ipcRegistry'
 import { IPC } from '@shared/ipc'
 import type { Result } from '@shared/types'
 import type { QboAccount, QboAccountMap, QboEnvironment, QboStatus, QboSyncRow } from '@shared/quickbooks'

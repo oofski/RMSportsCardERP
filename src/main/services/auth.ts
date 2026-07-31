@@ -12,13 +12,30 @@ import {
   emailExists
 } from '../db/employees'
 import { isValidEmail } from '../util'
+import { contextUserId } from './session'
 
 /**
- * The desktop app has a single signed-in user at a time. The session lives in
- * main-process memory only — never written to disk — and is cleared on logout
- * or quit.
+ * The signed-in user of a LOCAL desktop session. Lives in main-process memory
+ * only — never written to disk — and is cleared on logout or quit.
+ *
+ * When the app is talking to a shared server instead, this is not consulted:
+ * each request carries its own user (see services/session.ts) and
+ * `activeUserId()` prefers that. One variable cannot be ten people.
  */
 let currentUserId: string | null = null
+
+/**
+ * Whose request is this?
+ *
+ * A request context always wins, INCLUDING when it says nobody — an
+ * unauthenticated server request must never be answered as whoever happens to
+ * be signed in locally. Only the genuine absence of a context (the desktop app)
+ * falls back to the local session.
+ */
+function activeUserId(): string | null {
+  const fromRequest = contextUserId()
+  return fromRequest !== undefined ? fromRequest : currentUserId
+}
 
 function sessionUserFor(id: string): SessionUser | null {
   const employee = getEmployeeById(id)
@@ -114,16 +131,17 @@ export function logout(): void {
 }
 
 export function currentUser(): SessionUser | null {
-  if (!currentUserId) return null
-  return sessionUserFor(currentUserId)
+  const id = activeUserId()
+  return id ? sessionUserFor(id) : null
 }
 
 export function currentUserId_(): string | null {
-  return currentUserId
+  return activeUserId()
 }
 
 /** Change the signed-in user's own password (used to satisfy must-change). */
 export function changeOwnPassword(currentPassword: string, newPassword: string): Result {
+  const currentUserId = activeUserId()
   if (!currentUserId) return { ok: false, error: 'Not signed in.' }
   if (newPassword.length < 8) {
     return { ok: false, error: 'New password must be at least 8 characters.' }

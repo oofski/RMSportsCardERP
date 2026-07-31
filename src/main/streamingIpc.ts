@@ -13,7 +13,7 @@
  * The mutations that touch a session return the freshly derived session (or its
  * detail), so a screen can reconcile without a refetch.
  */
-import { ipcMain } from 'electron'
+import { ipcMain } from './ipcRegistry'
 import { IPC } from '@shared/ipc'
 import type { Result } from '@shared/types'
 import type { Permission } from '@shared/permissions'

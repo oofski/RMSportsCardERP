@@ -15,7 +15,8 @@
  * flag and the warnings from the SAME derivation that just ran, not from a
  * second read that might disagree with it.
  */
-import { BrowserWindow, dialog, ipcMain, type OpenDialogOptions } from 'electron'
+import { BrowserWindow, dialog, type OpenDialogOptions } from 'electron'
+import { ipcMain } from './ipcRegistry'
 import { IPC } from '@shared/ipc'
 import type { Result } from '@shared/types'
 import type { Permission } from '@shared/permissions'

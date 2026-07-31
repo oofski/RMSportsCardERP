@@ -1,4 +1,4 @@
-import { ipcMain } from 'electron'
+import { ipcMain } from './ipcRegistry'
 import { IPC } from '@shared/ipc'
 import type {
   CogsEntry,

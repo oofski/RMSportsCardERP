@@ -1,4 +1,5 @@
-import { ipcMain, shell, app, dialog, nativeTheme, BrowserWindow, type OpenDialogOptions } from 'electron'
+import { shell, app, dialog, nativeTheme, BrowserWindow, type OpenDialogOptions } from 'electron'
+import { ipcMain } from './ipcRegistry'
 import { writeFileSync } from 'fs'
 import { IPC, type AppInfo } from '@shared/ipc'
 import type {

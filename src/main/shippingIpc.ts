@@ -16,7 +16,8 @@
  * renderer that mounted late.
  */
 
-import { BrowserWindow, dialog, ipcMain, shell, type OpenDialogOptions } from 'electron'
+import { BrowserWindow, dialog, shell, type OpenDialogOptions } from 'electron'
+import { ipcMain } from './ipcRegistry'
 import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { writeFileSync } from 'node:fs'
