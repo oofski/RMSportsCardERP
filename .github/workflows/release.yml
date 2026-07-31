@@ -86,7 +86,7 @@ jobs:
         shell: bash
         run: |
           n=0
-          until npm run build:${{ matrix.platform }} -- --publish always; do
+          until npm run build:${{ matrix.platform }} -- --publish always $MAC_NOTARIZE_FLAG; do
             n=$((n+1))
             if [ "$n" -ge 3 ]; then
               echo "::error::build:${{ matrix.platform }} failed after $n attempts"; exit 1
@@ -96,8 +96,27 @@ jobs:
           done
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # macOS builds are unsigned for now (Windows-only auto-install).
-          CSC_IDENTITY_AUTO_DISCOVERY: false
+          # ---- macOS code signing -------------------------------------------
+          # OFF until the repo variable MAC_SIGNING is set to 'true' AND the five
+          # Apple secrets below exist. Until then every value here is empty and
+          # CSC_IDENTITY_AUTO_DISCOVERY is false, which is exactly the unsigned
+          # build we ship today — so adding this cannot change the current
+          # release.
+          #
+          # When it IS on, electron-builder signs with the Developer ID cert from
+          # CSC_LINK and then notarizes with the Apple ID credentials. That is
+          # what lets Squirrel.Mac replace the app in place; flip MAC_AUTO_UPDATE
+          # in src/shared/config.ts in the same change. See docs/UPDATES.md.
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ vars.MAC_SIGNING == 'true' }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Notarization is a CLI override rather than a line in
+          # electron-builder.yml, so the default (local, unsigned) build never
+          # tries to reach Apple.
+          MAC_NOTARIZE_FLAG: ${{ (matrix.platform == 'mac' && vars.MAC_SIGNING == 'true') && '--config.mac.notarize=true' || '' }}
 
   # Attach a cross-platform update.json to the GitHub release so the macOS/Linux
   # in-app "Check for updates" (which reads update.json) works while GitHub is
@@ -207,3 +226,10 @@ jobs:
                 --content-type "$ct" --cache-control "no-cache"
             fi
           done
+
+      # A feed that publishes but does not SERVE is the failure mode with no
+      # symptom: the app keeps working and simply never finds another update.
+      # Prove it is readable, fresh and pointing at real files before the job is
+      # allowed to go green.
+      - name: Verify the published feed
+        run: node scripts/check-update-feed.mjs "$CF_UPDATES_URL" --expect "${{ steps.v.outputs.version }}"

@@ -2,29 +2,42 @@ import { app, BrowserWindow } from 'electron'
 import pkg from 'electron-updater'
 import type { UpdateStatus } from '@shared/types'
 import { IPC } from '@shared/ipc'
-import { UPDATE_FEED_URL } from '@shared/config'
+import { MAC_AUTO_UPDATE, UPDATE_FEED_URL } from '@shared/config'
 
 // electron-updater ships as CommonJS; destructure the default export.
 const { autoUpdater } = pkg
 
 /**
- * Auto-update wiring, delivered from the Cloudflare-hosted feed.
+ * Auto-update wiring, delivered from the update feed.
  *
- * - Windows: electron-updater (generic provider → Cloudflare) downloads and
- *   installs the new version automatically.
- * - macOS: because unsigned Mac apps cannot self-install (an Apple / Gatekeeper
- *   requirement, independent of where the files are hosted), the app instead
- *   checks a small `update.json` on the feed and, when a newer version exists,
- *   offers a direct download of the .dmg for the user to reinstall. Once the
- *   app is code-signed + notarized this can be switched to true auto-update.
+ * Two paths, and which one a platform takes is decided by ONE question: can
+ * this build replace itself in place?
+ *
+ *  · MANAGED (electron-updater): downloads and installs on its own. Always the
+ *    case on Windows. On macOS only when the build is signed and notarized —
+ *    Squirrel.Mac checks the signature before swapping the bundle, and rejects
+ *    an unsigned one. See MAC_AUTO_UPDATE in @shared/config.
+ *
+ *  · MANUAL (`update.json` + a download link): the app reports that a newer
+ *    version exists and hands over a .dmg to reinstall. Used on an unsigned
+ *    macOS build and on Linux.
+ *
+ * That is an Apple rule enforced on the client, so it is unaffected by where
+ * the files are hosted — moving the feed from GitHub to Cloudflare changes the
+ * URL and nothing else about it.
  */
 const platform = process.platform
 const isWindows = platform === 'win32'
+const isMac = platform === 'darwin'
+
+/** Can this build install its own update, or must a human reinstall it? */
+const selfUpdating = isWindows || (isMac && MAC_AUTO_UPDATE)
 
 let status: UpdateStatus = {
   phase: 'idle',
   currentVersion: app.getVersion(),
-  platform
+  platform,
+  selfUpdating
 }
 
 let initialised = false
@@ -36,14 +49,15 @@ function broadcast(): void {
 }
 
 function setStatus(patch: Partial<UpdateStatus>): void {
-  status = { ...status, ...patch, currentVersion: app.getVersion(), platform }
+  status = { ...status, ...patch, currentVersion: app.getVersion(), platform, selfUpdating }
   broadcast()
 }
 
 export function initUpdater(): void {
   if (initialised) return
   initialised = true
-  if (!isWindows) return // macOS/Linux use the JSON check below, no listeners needed
+  // A manual-path platform has nothing to listen to — it polls update.json.
+  if (!selfUpdating) return
 
   // Auto-sync: on launch the app quietly pulls a newer version in the background
   // (delta download) and installs it on the next quit — or the user can restart
@@ -166,7 +180,7 @@ async function checkViaJson(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 export async function checkForUpdates(): Promise<UpdateStatus> {
-  if (isWindows) {
+  if (selfUpdating) {
     try {
       await autoUpdater.checkForUpdates()
     } catch (err) {
@@ -179,8 +193,8 @@ export async function checkForUpdates(): Promise<UpdateStatus> {
 }
 
 export async function downloadUpdate(): Promise<UpdateStatus> {
-  // Only Windows performs an in-app download+install; macOS uses openDownload().
-  if (!isWindows) return getUpdateStatus()
+  // Only a self-updating build downloads in-app; the rest use openDownload().
+  if (!selfUpdating) return getUpdateStatus()
   if (status.phase !== 'available' && status.phase !== 'error') return getUpdateStatus()
   try {
     setStatus({ phase: 'downloading', percent: 0, message: 'Starting download…' })
@@ -192,7 +206,7 @@ export async function downloadUpdate(): Promise<UpdateStatus> {
 }
 
 export function installUpdate(): void {
-  if (!isWindows) return
+  if (!selfUpdating) return
   if (status.phase !== 'downloaded') return
   setImmediate(() => autoUpdater.quitAndInstall(false, true))
 }

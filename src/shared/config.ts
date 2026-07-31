@@ -23,6 +23,25 @@ export const UPDATE_FEED_URL =
   'https://github.com/oofski/rmsportscarderp/releases/latest/download'
 
 /**
+ * Does the macOS build carry an Apple Developer ID signature?
+ *
+ * This is the single switch that decides how Macs update, and it exists because
+ * the answer is a property of the BUILD, not of the machine running it.
+ *
+ * Squirrel.Mac — the mechanism electron-updater uses on macOS — refuses to
+ * replace an app in place unless the app is code-signed and notarized. That is
+ * enforced by macOS on the client, so no amount of hosting changes it. While
+ * this is false the app checks `update.json` and offers a .dmg to download and
+ * reinstall by hand; flip it to true in the SAME change that turns on signing
+ * in CI (see docs/UPDATES.md) and Macs update silently, exactly like Windows.
+ *
+ * Flipping it without signing the build is the one dangerous combination: every
+ * Mac would attempt a silent update, Squirrel would reject the unsigned bundle,
+ * and the operator would see a recurring failure with no way to act on it.
+ */
+export const MAC_AUTO_UPDATE = false
+
+/**
  * Where employees download the desktop app manually. Point this at your
  * Cloudflare downloads page once it exists; falls back to GitHub Releases.
  */

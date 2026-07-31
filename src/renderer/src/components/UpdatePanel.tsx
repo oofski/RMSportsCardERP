@@ -60,7 +60,9 @@ export function UpdatePanel({ onClose }: { onClose: () => void }): JSX.Element {
 
   const phase = status?.phase ?? 'idle'
   const version = status?.currentVersion ?? '—'
-  const isWin = status?.platform === 'win32'
+  // Whether the app can install its own update — decided by main, because on
+  // macOS it depends on whether the build was signed, not on the OS.
+  const isWin = status?.selfUpdating ?? status?.platform === 'win32'
 
   let tone = ''
   let icon = 'RefreshCw'
@@ -99,8 +101,10 @@ export function UpdatePanel({ onClose }: { onClose: () => void }): JSX.Element {
     case 'unsupported':
       tone = 'warn'
       icon = 'Info'
-      title = 'Windows only for now'
-      message = status?.message ?? 'Automatic updates are available on Windows.'
+      title = 'Automatic install not available'
+      message =
+        status?.message ??
+        'This build cannot install its own update — download the new version instead.'
       break
     case 'error':
       tone = 'warn'
@@ -186,8 +190,9 @@ export function UpdatePanel({ onClose }: { onClose: () => void }): JSX.Element {
       )}
 
       <p className="muted text-sm mt-16">
-        Updates are delivered from the RM Cardz release channel. On Windows the app downloads and
-        installs the update automatically; on Mac it downloads the new version for you to reinstall.
+        {isWin
+          ? 'Updates are delivered from the RM Cardz release channel and install automatically.'
+          : 'Updates are delivered from the RM Cardz release channel. This build downloads the new version for you to reinstall — macOS only allows an app to replace itself when it is code-signed by Apple.'}
       </p>
     </Modal>
   )

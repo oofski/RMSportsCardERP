@@ -61,6 +61,32 @@ Settings → Secrets and variables → Actions:
 - `R2_ENDPOINT` = `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`
 - `R2_BUCKET` = `rmops-updates`
 
+## Verify BEFORE you switch
+
+Pointing the app at a feed that does not serve correctly is the one change that
+breaks every installed copy at once and shows no symptom — the app keeps working
+and simply never finds another update again. So prove the feed first:
+
+```bash
+npm run check:feed -- https://updates.rmcardz.com
+```
+
+It checks that `update.json`, `latest.yml` and `latest-mac.yml` are readable and
+parse, that they are **not** served with a long `max-age` (the classic R2
+mistake — the right policy for the 100 MB installer beside them is the exact
+opposite), and that every download URL they advertise resolves to something
+installer-sized rather than an error page with a 200 on it.
+
+Run it against the current GitHub feed any time to see what a healthy one looks
+like:
+
+```bash
+npm run check:feed -- https://github.com/oofski/rmsportscarderp/releases/latest/download
+```
+
+The same check runs in CI after every Cloudflare sync, so a broken feed fails
+the release instead of shipping quietly.
+
 ## Cutting a release (through Cloudflare)
 
 1. Bump `version` in `package.json`.
@@ -86,18 +112,44 @@ Cloudflare. macOS Gatekeeper only lets an app replace itself when the app is
 - **cannot** be updated in place by Squirrel.Mac — hence the download-and-
   reinstall flow the app uses today.
 
-### Enabling true Mac auto-update later
+### Enabling true Mac auto-update
 
-1. Enrol in the **Apple Developer Program** ($99/yr) and create a **Developer ID
-   Application** certificate.
-2. Add signing + notarization secrets to CI: `CSC_LINK` (base64 .p12),
-   `CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`.
-3. In the Mac build, set `CSC_IDENTITY_AUTO_DISCOVERY: true` and add
-   `mac.notarize: true` (electron-builder) / an `afterSign` notarize step.
-4. Switch the macOS path in `src/main/services/updater.ts` from the
-   download-link flow back to `electron-updater` (it already reads the same
-   generic Cloudflare feed) — Macs will then download + install automatically,
-   just like Windows.
+The CI wiring for this is already in place and **off**. Turning it on is four
+steps, and steps 1 and 2 are the only ones that take real time.
+
+1. **Enrol in the Apple Developer Program** ($99/yr, apple.com/developer).
+   Approval is usually a day or two for an individual, longer for a company
+   (they verify the entity).
+2. **Create a Developer ID Application certificate** and export it as a `.p12`
+   with a password. Then create an **app-specific password** for your Apple ID
+   at appleid.apple.com → Sign-In and Security. Note your **Team ID** from the
+   membership page.
+3. **Add to GitHub** → Settings → Secrets and variables → Actions:
+
+   | Kind | Name | Value |
+   |------|------|-------|
+   | Variable | `MAC_SIGNING` | `true` |
+   | Secret | `CSC_LINK` | the `.p12`, base64-encoded (`base64 -i cert.p12 \| pbcopy`) |
+   | Secret | `CSC_KEY_PASSWORD` | the password you set on the `.p12` |
+   | Secret | `APPLE_ID` | your Apple ID email |
+   | Secret | `APPLE_APP_SPECIFIC_PASSWORD` | the app-specific password |
+   | Secret | `APPLE_TEAM_ID` | your 10-character Team ID |
+
+   The release workflow already reads all six. With `MAC_SIGNING` unset the
+   values are empty and the Mac build stays unsigned exactly as it is today, so
+   adding the secrets early is harmless.
+
+4. **Flip `MAC_AUTO_UPDATE` to `true`** in `src/shared/config.ts` and release.
+   That one constant switches the Mac path in `services/updater.ts` from the
+   download-and-reinstall flow to `electron-updater`, and the Update panel's
+   buttons and wording follow it automatically.
+
+> **Do step 4 only after a signed build has actually shipped.** Flipping it on an
+> unsigned build makes every Mac attempt a silent update that Squirrel then
+> rejects — a recurring failure the operator can do nothing about. The safe order
+> is: turn on signing, cut a release, download it on a Mac and confirm it opens
+> with no Gatekeeper warning, *then* flip the constant.
 
 Until then, the Cloudflare move still gives you: your own branded download
-domain, full control of the files, and seamless Windows auto-update.
+domain, full control of the files, no GitHub account needed to download, and
+seamless Windows auto-update.

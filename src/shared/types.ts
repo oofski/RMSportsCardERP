@@ -857,8 +857,17 @@ export interface UpdateStatus {
   percent?: number
   bytesPerSecond?: number
   message?: string
-  /** Platform for which auto-install applies (windows) vs manual download (mac). */
   platform?: NodeJS.Platform
-  /** On platforms without auto-install (macOS unsigned), the direct download link. */
+  /**
+   * Can this build install its own update?
+   *
+   * Decided in main (see services/updater.ts) and sent down, rather than
+   * re-derived in the renderer from the platform. The answer is not "is this
+   * Windows" — it is "is this build allowed to replace itself", which on macOS
+   * depends on whether it was code-signed. Two places deriving that separately
+   * is two places to forget when signing is turned on.
+   */
+  selfUpdating?: boolean
+  /** When it cannot self-install, the direct download link to reinstall from. */
   downloadUrl?: string
 }
