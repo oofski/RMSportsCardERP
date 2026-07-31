@@ -14072,3 +14072,147 @@ button.sor-team:focus-visible {
     grid-template-columns: 1fr;
   }
 }
+
+/* ==========================================================================
+   Inventory — zero-cost stock banner, inline add-product, cost gate
+   ========================================================================== */
+
+/* Stock on the shelf carried at $0.00. Spread reports its whole market value as
+   profit, so this names the products rather than leaving the tile to lie. */
+.zerocost-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  padding: 13px 15px;
+  border: 1px solid var(--warning);
+  border-radius: var(--radius);
+  background: var(--warning-bg);
+  /* --warning is too weak to read as ink on its own tint; --text on
+     --warning-bg measures 16.1:1. */
+  color: var(--text);
+}
+.zerocost-banner > svg {
+  flex: none;
+  margin-top: 1px;
+  color: var(--text);
+}
+.zerocost-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.zerocost-main > strong {
+  font-size: 13px;
+  font-weight: 650;
+}
+.zerocost-main > span {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+.zerocost-main ul {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.zerocost-main li {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+.zerocost-main li em {
+  font-style: normal;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+.zerocost-more {
+  color: var(--text-2);
+}
+
+/* ---------- Inline add-product, inside the scan station ---------- */
+.scan-newproduct {
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+}
+.scan-newproduct-head {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+.scan-newproduct-head > svg {
+  flex: none;
+  color: var(--brand-500);
+}
+.scan-newproduct-code {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.scan-newproduct-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+  gap: 11px 13px;
+  align-items: end;
+}
+/* The name is the field that identifies the item; it gets the full width so a
+   long product name is readable while it is being typed. */
+.scan-np-name {
+  grid-column: 1 / -1;
+}
+.scan-newproduct-grid .field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.scan-newproduct-grid .field > span {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+.scan-np-loc .loc-pills {
+  display: flex;
+  gap: 6px;
+}
+.scan-newproduct-hint {
+  text-align: center;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+/* ---------- The cost gate on the pending list ---------- */
+.scan-queue-cost-req {
+  font-style: normal;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--danger-strong);
+}
+.scan-banner-warn {
+  border-color: var(--warning);
+  background: var(--warning-bg);
+  color: var(--text);
+}
+.scan-banner-warn > svg {
+  color: var(--text);
+}
+.scan-queue-blocked {
+  margin-top: 4px;
+}
+/* The "required" badge sits beside the label, not welded to it. */
+.scan-queue-cost > label {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}

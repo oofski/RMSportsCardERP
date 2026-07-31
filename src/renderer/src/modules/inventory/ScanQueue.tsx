@@ -5,7 +5,7 @@ import { Button } from '../../components/ui'
 import { Icon } from '../../components/Icon'
 import { formatMoney } from '../../lib/format'
 import { CategoryLogo } from './CategoryLogo'
-import { queueTotals, type PendingLine } from './scanLines'
+import { commitBlockedReason, queueTotals, type PendingLine } from './scanLines'
 
 /**
  * The pending list: what the next confirmation will do, one row per item.
@@ -42,6 +42,7 @@ export function ScanQueue({
 }): JSX.Element {
   const totals = queueTotals(lines)
   const out = direction === 'out'
+  const blocked = commitBlockedReason(lines)
   return (
     <div className={`scan-result scan-queue scan-queue-${direction}`}>
       <div className="scan-hist-head scan-queue-head">
@@ -65,6 +66,13 @@ export function ScanQueue({
         />
       ))}
 
+      {blocked && (
+        <div className="scan-banner scan-banner-warn scan-queue-blocked">
+          <Icon name="AlertCircle" size={16} />
+          <span>{blocked}</span>
+        </div>
+      )}
+
       <div className="scan-actions scan-queue-actions">
         <Button variant="ghost" onClick={onClear} disabled={busy}>
           Clear the list
@@ -77,7 +85,9 @@ export function ScanQueue({
           // pinned to 0 by a location switch left the total looking fine while
           // the commit loop threw on that line and stopped before the rest — the
           // button was enabled, said how many units would move, and moved none.
-          disabled={lines.length === 0 || lines.some((l) => l.quantity < 1)}
+          // A missing cost blocks it the same way, and the banner above says so
+          // rather than leaving a dead grey button.
+          disabled={lines.length === 0 || blocked != null}
           onClick={onConfirm}
         >
           {out
@@ -111,6 +121,7 @@ function QueueRow({
   useEffect(() => setQty(String(line.quantity)), [line.quantity, line.bumpedAt])
 
   const [cost, setCost] = useState(line.unitCost != null ? String(line.unitCost) : '')
+  const needsCost = line.costRequired && line.unitCost == null
   useEffect(() => setCost(line.unitCost != null ? String(line.unitCost) : ''), [line.unitCost])
 
   const out = line.kind === 'remove_stock'
@@ -164,13 +175,20 @@ function QueueRow({
             </span>
             {!out && (
               <span className="field scan-queue-cost">
-                <label>Unit cost</label>
+                <label>
+                  Unit cost
+                  {needsCost && <em className="scan-queue-cost-req">required</em>}
+                </label>
                 <input
-                  className="input"
+                  className={`input${needsCost ? ' field-error' : ''}`}
                   type="number"
                   min={0}
                   step="0.01"
-                  placeholder="keep average"
+                  // The placeholder is the honest description of what a blank
+                  // does. "keep average" is right only when there IS an average;
+                  // with no cost on record a blank books the stock at nothing,
+                  // and the field says so instead.
+                  placeholder={line.costRequired ? 'cost required' : 'keep average'}
                   value={cost}
                   disabled={busy}
                   style={{ width: 132 }}

@@ -890,6 +890,21 @@ export function inventoryStats(): InventoryStats {
   for (const loc of LOCATION_IDS) unitsByLocation[loc] = 0
   for (const r of locRows) unitsByLocation[r.location] = r.qty
 
+  // Stock carried at nothing. `market` in PRODUCT_TOTALS already falls back to
+  // unit_cost, so for these rows it IS the high bid — and every cent of it is
+  // spread the business never earned. Ordered by how much damage each is doing.
+  const zeroCost = (
+    db
+      .prepare(
+        `SELECT t.id, p.name, t.qty, t.qty * t.market AS market_value
+           FROM (${PRODUCT_TOTALS}) t
+           JOIN inventory_products p ON p.id = t.id
+          WHERE t.qty > 0 AND t.unit_cost <= 0
+          ORDER BY market_value DESC`
+      )
+      .all() as Array<{ id: string; name: string; qty: number; market_value: number }>
+  ).map((r) => ({ id: r.id, name: r.name, quantity: r.qty, marketValue: r.market_value }))
+
   return {
     totalValue: p.total_value,
     totalCost: p.total_cost,
@@ -903,7 +918,8 @@ export function inventoryStats(): InventoryStats {
     lowStockCount: p.low_stock,
     salesRevenue: s.revenue,
     salesCount: s.cnt,
-    unitsByLocation
+    unitsByLocation,
+    zeroCost
   }
 }
 

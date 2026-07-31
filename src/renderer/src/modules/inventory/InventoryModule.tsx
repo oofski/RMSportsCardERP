@@ -8,7 +8,6 @@ import { InventoryOverview } from './InventoryOverview'
 import { ProductsTab } from './ProductsTab'
 import { SuppliesTab } from './SuppliesTab'
 import { DailyPricingTab } from './DailyPricingTab'
-import { ProductFormModal } from './ProductFormModal'
 import { ScanStation } from './ScanStation'
 import { productMatches } from './helpers'
 
@@ -27,7 +26,8 @@ const EMPTY_STATS: InventoryStats = {
   lowStockCount: 0,
   salesRevenue: 0,
   salesCount: 0,
-  unitsByLocation: {}
+  unitsByLocation: {},
+  zeroCost: []
 }
 
 export function InventoryModule(): JSX.Element {
@@ -49,9 +49,6 @@ export function InventoryModule(): JSX.Element {
   const [query, setQuery] = useState('')
   const [category, setCategory] = useState('')
   const [scanning, setScanning] = useState(false)
-  // Set from the scan station's "not recognised" state so the new product opens
-  // with the barcode that was just scanned already filled in.
-  const [newProductUpc, setNewProductUpc] = useState<string | null>(null)
 
   // Product/catalog data — refetched after edits (does NOT re-read images).
   const reload = useCallback(async () => {
@@ -131,6 +128,11 @@ export function InventoryModule(): JSX.Element {
             canManage={canManage}
             onChanged={reload}
             onScan={() => setScanning(true)}
+            onOpenProduct={(name) => {
+              setQuery(name)
+              setCategory('')
+              setTab('products')
+            }}
             refreshKey={dataVersion}
           />
         )}
@@ -156,28 +158,6 @@ export function InventoryModule(): JSX.Element {
           canManage={canManage}
           onClose={() => setScanning(false)}
           onChanged={reload}
-          onSearchCatalog={(code) => {
-            setScanning(false)
-            setCategory('')
-            setQuery(code)
-            setTab('products')
-          }}
-          onCreateProduct={(upc) => {
-            setScanning(false)
-            setNewProductUpc(upc)
-          }}
-        />
-      )}
-
-      {newProductUpc !== null && (
-        <ProductFormModal
-          product={null}
-          presetUpc={newProductUpc}
-          onClose={() => setNewProductUpc(null)}
-          onSaved={async () => {
-            setNewProductUpc(null)
-            await reload()
-          }}
         />
       )}
     </div>

@@ -38,6 +38,7 @@ export function InventoryOverview({
   canManage,
   onChanged,
   onScan,
+  onOpenProduct,
   refreshKey = 0
 }: {
   stats: InventoryStats
@@ -46,6 +47,9 @@ export function InventoryOverview({
   onChanged: () => Promise<void>
   /** Opens the scan station (owned by InventoryModule). */
   onScan?: () => void
+  /** Jump to the Catalog filtered to this product, so a zero-cost item named in
+   *  the banner is one click from the field that fixes it. */
+  onOpenProduct: (name: string) => void
   /** Bumped on every module reload so panels holding their OWN data (the
    * Incoming panel, the drill-down table) re-read too. */
   refreshKey?: number
@@ -145,6 +149,42 @@ export function InventoryOverview({
         />
         <Stat icon="Boxes" value={String(stats.cases)} label="Cases on hand" onClick={() => openDetail({ kind: 'cases', label: 'Cases on hand' })} />
       </div>
+
+      {/* Spread is value minus cost, so stock carried at nothing reports its
+          whole market value as profit. Naming the products is the difference
+          between a figure the operator distrusts and a short list they can go
+          and fix. */}
+      {stats.zeroCost.length > 0 && (
+        <div className="zerocost-banner">
+          <Icon name="AlertTriangle" size={17} />
+          <div className="zerocost-main">
+            <strong>
+              {formatMoney(stats.zeroCost.reduce((n, z) => n + z.marketValue, 0))} of the Spread
+              above is stock with no cost recorded.
+            </strong>
+            <span>
+              {stats.zeroCost.length} product{stats.zeroCost.length === 1 ? '' : 's'} sits on the
+              shelf at $0.00, so its full market value counts as profit. Set the real cost on each
+              to correct it.
+            </span>
+            <ul>
+              {stats.zeroCost.slice(0, 6).map((z) => (
+                <li key={z.id}>
+                  <button type="button" className="link-btn" onClick={() => onOpenProduct(z.name)}>
+                    {z.name}
+                  </button>
+                  <em>
+                    {z.quantity} on hand · {formatMoney(z.marketValue)}
+                  </em>
+                </li>
+              ))}
+              {stats.zeroCost.length > 6 && (
+                <li className="zerocost-more">and {stats.zeroCost.length - 6} more</li>
+              )}
+            </ul>
+          </div>
+        </div>
+      )}
 
       {stats.lowStockCount > 0 && (
         <div className="lowstock-banner">

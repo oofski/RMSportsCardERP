@@ -269,6 +269,26 @@ export interface InventoryStats {
   salesCount: number
   /** Total on-hand units per location. */
   unitsByLocation: Record<string, number>
+  /**
+   * Stock on the shelf carried at NO cost, worst first.
+   *
+   * These are the reason a Spread figure can be nonsense. A product with stock
+   * and a zero cost basis contributes its ENTIRE market value to spread, because
+   * spread is value − cost and its cost is nothing. Seven such products were
+   * enough to make 48% of a real Spread number fictional. They are surfaced
+   * beside the tile rather than silently folded into it, because the fix (put
+   * the real cost on the product) is one the operator can act on and nobody can
+   * act on a number they cannot see inside.
+   */
+  zeroCost: ZeroCostStock[]
+}
+
+export interface ZeroCostStock {
+  id: string
+  name: string
+  quantity: number
+  /** What it is being valued at — i.e. how much fake spread it is creating. */
+  marketValue: number
 }
 
 export type IncomingStatus = 'expected' | 'received' | 'cancelled'

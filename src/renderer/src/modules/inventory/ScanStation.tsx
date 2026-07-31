@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
   InventoryProduct,
   ScanCommitResult,
@@ -6,13 +6,14 @@ import type {
   ScanMode,
   ScanResolution
 } from '@shared/types'
+import { CATEGORY_ORDER, LOCATION_IDS } from '@shared/inventory'
 import { normalizeUpc } from '@shared/upc'
 import { api } from '../../lib/api'
 import { Icon } from '../../components/Icon'
 import { Modal } from '../../components/ui'
 import { useToast } from '../../components/Toast'
-import { CameraScanner } from './CameraScanner'
 import { ScanHistory } from './ScanHistory'
+import { ScanNewProduct } from './ScanNewProduct'
 import { ScanPreview, type ScanPick } from './ScanPreview'
 import { ScanQueue } from './ScanQueue'
 import {
@@ -28,17 +29,17 @@ import {
 } from './scanLines'
 import { useScanInput } from './useScanInput'
 
-type InputMode = 'wedge' | 'camera'
-
 /**
  * The scan surface.
  *
- * Two inputs feed one flow: a handheld keyboard-wedge scanner (the primary path,
- * captured by useScanInput) and the webcam (CameraScanner). Both hand their raw
- * characters to the same resolve → list → confirm sequence, so there is one
- * behaviour to reason about and a future phone client can join the same contract.
+ * ONE input: the handheld keyboard-wedge scanner, captured by useScanInput. The
+ * webcam decoder was removed — it was a second way to be wrong about a barcode
+ * on a station that always has a real scanner attached, and it dragged two
+ * decoding libraries and a camera permission along with it. The small type-in
+ * field stays, because a torn label still has to be receivable and it is also
+ * where the wedge's characters land.
  *
- * TWO things shape that flow:
+ * THREE things shape the flow:
  *
  *  · DIRECTION is a session mode, chosen before scanning and on screen at all
  *    times. Every beep in the session moves stock the same way, so an operator
@@ -57,21 +58,14 @@ export function ScanStation({
   products,
   canManage,
   onClose,
-  onChanged,
-  onSearchCatalog,
-  onCreateProduct
+  onChanged
 }: {
   products: InventoryProduct[]
   canManage: boolean
   onClose: () => void
   onChanged: () => void | Promise<void>
-  /** Escape hatch from the "not recognised" state: open the Catalog on this code. */
-  onSearchCatalog: (code: string) => void
-  /** Escape hatch: open the new-product form with this UPC prefilled. */
-  onCreateProduct: (upc: string) => void
 }): JSX.Element {
   const toast = useToast()
-  const [mode, setMode] = useState<InputMode>('wedge')
   const [direction, setDirection] = useState<ScanDirection>('in')
   const [manual, setManual] = useState('')
   const [pending, setPending] = useState<PendingLine[]>([])
@@ -88,6 +82,8 @@ export function ScanStation({
   const [scanError, setScanError] = useState<string | null>(null)
   // Bumped per decision so ScanPreview remounts with fresh field state.
   const [seq, setSeq] = useState(0)
+  /** The unrecognised code the inline add-product form is open on, if any. */
+  const [adding, setAdding] = useState<string | null>(null)
 
   const inputRef = useRef<HTMLInputElement | null>(null)
   const previewRef = useRef<HTMLDivElement | null>(null)
@@ -115,6 +111,13 @@ export function ScanStation({
 
   const out = direction === 'out'
   const totals = queueTotals(pending)
+  // Categories already in use, so a new item joins one rather than inventing a
+  // near-duplicate. CATEGORY_ORDER backfills an empty catalog.
+  const categoryOptions = useMemo(() => {
+    const seen = new Set(products.map((p) => p.category).filter(Boolean))
+    for (const c of CATEGORY_ORDER) seen.add(c)
+    return [...seen].sort()
+  }, [products])
   // The direction is a SESSION mode: it may only change while nothing is
   // half-decided — no pending list, and no unanswered question.
   const dirLocked = pending.length > 0 || !!resolution
@@ -246,9 +249,8 @@ export function ScanStation({
   )
 
   // The handheld scanner. Listens on window (capture phase) so it works whether
-  // or not the field below has focus, and stays armed in camera mode too — the
-  // hardware scanner must keep working even when the webcam is up. It also stays
-  // armed while a lookup or a commit is running: the buffer absorbs the burst.
+  // or not the field below has focus, and stays armed while a lookup or a commit
+  // is running: the buffer absorbs the burst.
   useScanInput({
     enabled: !denied,
     onScan: (raw) => feed(raw, 'wedge')
@@ -257,18 +259,51 @@ export function ScanStation({
   // Give the wedge somewhere visible to type, and the user somewhere to key a
   // code by hand. Re-focused after each decision clears.
   useEffect(() => {
-    if (armed && mode === 'wedge') inputRef.current?.focus()
-  }, [armed, mode, seq, pending.length])
+    if (armed) inputRef.current?.focus()
+  }, [armed, seq, pending.length])
 
-  // A question the operator must answer has to be SEEN. In camera mode it could
-  // otherwise sit below the fold at the app's default window size.
+  // A question the operator must answer has to be SEEN — with a list already on
+  // screen it could otherwise sit below the fold at the default window size.
   useEffect(() => {
     if (resolution) previewRef.current?.scrollIntoView({ block: 'nearest' })
   }, [resolution, seq])
 
   const dismiss = (): void => {
     setResolution(null)
+    setAdding(null)
     setManual('')
+  }
+
+  /**
+   * The operator filled in the inline form. The new product joins the pending
+   * list exactly as a recognised scan would — same lineFromScan, same commit —
+   * so there is no second way for stock to arrive, and the list they had before
+   * the unknown code appeared is still sitting right there underneath.
+   */
+  const acceptNewProduct = (
+    product: InventoryProduct,
+    unitCost: number,
+    quantity: number,
+    location: string
+  ): void => {
+    const res = resolution
+    setAdding(null)
+    setResolution(null)
+    setManual('')
+    if (!res) return
+    const line = lineFromScan({
+      resolution: { ...res, suggestedLocation: location, suggestedUnitCost: unitCost },
+      // The product was just created with zero stock, so its on-hand map has to
+      // say so — lineFromScan reads it for the location pills and the ceiling.
+      product,
+      direction: 'in',
+      mode: scanMode
+    })
+    setPending((lines) => mergeScan(lines, { ...line, quantity, unitCost, location }))
+    setLast([])
+    // The catalog behind the station is now one product out of date; refreshing
+    // keeps the next scan of this same box resolving to it.
+    void onChanged()
   }
 
   /** The operator answered a question: put the answer on the list. */
@@ -353,7 +388,7 @@ export function ScanStation({
       subtitle={
         out
           ? 'Taking stock off the shelf — scan each item, or scan one item repeatedly to count it up'
-          : 'Point the handheld scanner at a barcode, or use the camera'
+          : 'Scan each box with the handheld scanner — scan one repeatedly to count it up'
       }
       wide
       onClose={onClose}
@@ -399,29 +434,6 @@ export function ScanStation({
               </button>
             </div>
 
-            <div className="scan-modes">
-              <button
-                type="button"
-                className={`scan-mode-btn ${mode === 'wedge' ? 'active' : ''}`}
-                onClick={() => setMode('wedge')}
-              >
-                <Icon name="ScanBarcode" size={16} />
-                Handheld scanner
-              </button>
-              <button
-                type="button"
-                className={`scan-mode-btn ${mode === 'camera' ? 'active' : ''}`}
-                onClick={() => setMode('camera')}
-              >
-                <Icon name="Camera" size={16} />
-                Camera
-              </button>
-            </div>
-
-            {mode === 'camera' && (
-              <CameraScanner active={mode === 'camera'} onDecode={(raw) => feed(raw, 'camera')} />
-            )}
-
             <div className={`scan-target ${armed ? 'ready' : 'held'}`}>
               <span className="scan-pulse" aria-hidden />
               {/* The direction is repeated here because this strip is what the
@@ -439,9 +451,7 @@ export function ScanStation({
                       ? 'Answer the question below to carry on scanning'
                       : pending.length > 0
                         ? `${totals.units} counted — keep scanning`
-                        : mode === 'camera'
-                          ? 'Ready — hold a barcode up to the camera'
-                          : 'Ready — scan a barcode'}
+                        : 'Ready — scan a barcode'}
               </span>
               <input
                 ref={inputRef}
@@ -496,21 +506,24 @@ export function ScanStation({
 
             {resolution && (
               <div ref={previewRef}>
-                <ScanPreview
-                  key={seq}
-                  resolution={resolution}
-                  products={products}
-                  onPick={pick}
-                  onDismiss={dismiss}
-                  onSearchCatalog={(code) => {
-                    dismiss()
-                    onSearchCatalog(code)
-                  }}
-                  onCreateProduct={(upc) => {
-                    dismiss()
-                    onCreateProduct(upc)
-                  }}
-                />
+                {adding ? (
+                  <ScanNewProduct
+                    code={adding}
+                    defaultLocation={resolution.suggestedLocation || LOCATION_IDS[0]}
+                    categories={categoryOptions}
+                    onCancel={() => setAdding(null)}
+                    onCreated={acceptNewProduct}
+                  />
+                ) : (
+                  <ScanPreview
+                    key={seq}
+                    resolution={resolution}
+                    products={products}
+                    onPick={pick}
+                    onDismiss={dismiss}
+                    onAdd={(code) => setAdding(code)}
+                  />
+                )}
               </div>
             )}
           </>

@@ -476,6 +476,25 @@ export function commitScan(
     if (unitCost != null && (!Number.isFinite(unitCost) || unitCost < 0)) {
       throw new Error('Enter a valid unit cost.')
     }
+    // A blank cost means "keep the running average" — which is only meaningful
+    // when there IS one. For a product carrying no cost basis, addStock would
+    // value the receipt at zero: the units go on the shelf for nothing, their
+    // entire market value is booked as spread, and the zero cost layer is
+    // permanent (a later correct receipt only averages against it, it never
+    // washes out). The renderer blocks this too; the guard lives here as well
+    // because this is the money path and the renderer is not the authority on
+    // what may be written.
+    if (unitCost == null) {
+      const basis = db
+        .prepare('SELECT unit_cost FROM inventory_products WHERE id = ?')
+        .get(productId) as { unit_cost: number } | undefined
+      if (!(basis && basis.unit_cost > 0)) {
+        throw new Error(
+          'This product has no cost on record, so there is nothing to fall back on — ' +
+            'enter what it cost before scanning it in.'
+        )
+      }
+    }
     const res = addStock(productId, location, quantity, unitCost, input.note ?? 'Scanned in', actorId)
     // A product deleted between resolve and commit lands here; throwing rolls
     // the transaction back so no scan row is written either.

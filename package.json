@@ -1,6 +1,6 @@
 {
   "name": "rm-operations-app",
-  "version": "0.0.50",
+  "version": "0.0.51",
   "description": "RM Operations App \u2014 the internal operations platform for RM Cardz.",
   "author": {
     "name": "RM Cardz"
@@ -24,8 +24,6 @@
   },
   "dependencies": {
     "@electron-toolkit/utils": "^3.0.0",
-    "@zxing/browser": "^0.2.1",
-    "@zxing/library": "^0.23.0",
     "bcryptjs": "^2.4.3",
     "better-sqlite3": "^11.7.0",
     "electron-updater": "^6.3.9",

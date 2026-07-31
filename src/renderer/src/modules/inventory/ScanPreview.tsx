@@ -28,8 +28,7 @@ export function ScanPreview({
   products,
   onPick,
   onDismiss,
-  onSearchCatalog,
-  onCreateProduct
+  onAdd
 }: {
   resolution: ScanResolution
   /** The catalog the module already holds — used to fill in a product chosen
@@ -37,8 +36,8 @@ export function ScanPreview({
   products: InventoryProduct[]
   onPick: (pick: ScanPick) => void
   onDismiss: () => void
-  onSearchCatalog: (code: string) => void
-  onCreateProduct: (upc: string) => void
+  /** Open the inline add-product form on this code, inside the station. */
+  onAdd: (code: string) => void
 }): JSX.Element {
   // Which of several colliding products the user picked (ambiguous state only).
   const [picked, setPicked] = useState<string | null>(null)
@@ -48,8 +47,7 @@ export function ScanPreview({
       <UnknownResult
         resolution={resolution}
         onDismiss={onDismiss}
-        onSearchCatalog={onSearchCatalog}
-        onCreateProduct={onCreateProduct}
+        onAdd={onAdd}
       />
     )
   }
@@ -246,13 +244,12 @@ function PlanBlock({ candidate }: { candidate: ScanPoCandidate }): JSX.Element {
 function UnknownResult({
   resolution,
   onDismiss,
-  onSearchCatalog,
-  onCreateProduct
+  onAdd
 }: {
   resolution: ScanResolution
   onDismiss: () => void
-  onSearchCatalog: (code: string) => void
-  onCreateProduct: (upc: string) => void
+  /** Open the inline add-product form on this code, inside the station. */
+  onAdd: (code: string) => void
 }): JSX.Element {
   const code = resolution.cleanedCode
   // "Nothing was scanned" (empty / a bare terminator) has no code to act on.
@@ -272,17 +269,15 @@ function UnknownResult({
           ? 'No product in the catalog carries this barcode.'
           : 'Try the scan again, or type the barcode and press Enter.'}
       </div>
+      {/* Both actions stay INSIDE the station. The old pair of buttons closed
+          it, and the pending list lives in its state — one unknown box part-way
+          through a pallet silently binned everything already counted. */}
       <div className="scan-actions scan-actions-center">
         {actionable ? (
           <>
-            <Button variant="secondary" icon="Search" onClick={() => onSearchCatalog(code)}>
-              Search the catalog
+            <Button variant="primary" icon="Plus" onClick={() => onAdd(code)}>
+              Add this item
             </Button>
-            <Button variant="primary" icon="Plus" onClick={() => onCreateProduct(code)}>
-              Add a product with this UPC
-            </Button>
-            {/* Without this, one uncatalogued item in a shipment forces the
-                operator to abandon the whole receiving session. */}
             <Button variant="ghost" onClick={onDismiss}>
               Skip and keep scanning
             </Button>

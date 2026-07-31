@@ -58,14 +58,14 @@ app.whenReady().then(() => {
     optimizer.watchWindowShortcuts(window)
   })
 
-  // Camera access for in-app barcode scanning: grant only 'media' (getUserMedia)
-  // to our own window and deny every other permission class outright. Both
-  // handlers are needed — Chromium asks the check handler before it even offers
-  // the device list.
-  session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) =>
-    callback(permission === 'media')
-  )
-  session.defaultSession.setPermissionCheckHandler((_wc, permission) => permission === 'media')
+  // Deny EVERY permission class. The webcam barcode decoder was the only thing
+  // that ever needed one ('media' for getUserMedia); scanning is now the
+  // handheld wedge only, which is plain keyboard input and asks for nothing. An
+  // operations app that reads local files and talks to one API has no business
+  // holding a camera, microphone, geolocation or notification grant, so the
+  // handlers stay — saying no — rather than being deleted.
+  session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false))
+  session.defaultSession.setPermissionCheckHandler(() => false)
 
   // Initialise the database up front so a failure surfaces early.
   getDb()

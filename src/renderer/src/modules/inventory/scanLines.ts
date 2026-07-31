@@ -50,6 +50,18 @@ export interface PendingLine {
   /** Inbound only. On a PO line this is the order's price and is not editable. */
   unitCost: number | null
   costLocked: boolean
+  /**
+   * The line cannot commit until a cost is entered.
+   *
+   * Set for an inbound line whose product has NO cost basis to fall back on.
+   * addStock(unitCost = null) values the receipt at the product's running
+   * average, which for such a product is zero — so the units land on the shelf
+   * at $0.00, their whole market value is booked as spread, and the zero cost
+   * layer never washes out (a later correct receipt only averages against it).
+   * That is where fabricated spread comes from, so the cost stops being
+   * optional exactly when it stops being knowable.
+   */
+  costRequired: boolean
   /** The first scan's raw code / latest scan's input mode, for the audit row. */
   rawCode: string
   mode: ScanMode
@@ -141,6 +153,10 @@ export function lineFromScan(args: {
     scans: 1,
     unitCost: candidate ? candidate.unitPrice : direction === 'out' ? null : resolution.suggestedUnitCost,
     costLocked: !!candidate,
+    // A PO line carries the order's price and outbound never touches cost, so
+    // only a bare inbound scan can be missing one — and only when the product
+    // has no average to inherit.
+    costRequired: !candidate && direction === 'in' && !(product.unitCost > 0),
     rawCode: resolution.rawCode,
     mode,
     lineId: candidate?.lineId,
@@ -183,6 +199,7 @@ export function mergeScan(lines: PendingLine[], incoming: PendingLine): PendingL
     max,
     onHand: incoming.onHand,
     completesPo: incoming.completesPo ?? prev.completesPo,
+    costRequired: incoming.costRequired,
     rawCode: prev.rawCode,
     mode: incoming.mode,
     overflow: max != null && wanted > max,
@@ -224,6 +241,28 @@ export function removeLine(lines: PendingLine[], key: string): PendingLine[] {
 /** What the header shows: how many lines and how many units are waiting. */
 export function queueTotals(lines: PendingLine[]): { lines: number; units: number } {
   return { lines: lines.length, units: lines.reduce((n, l) => n + l.quantity, 0) }
+}
+
+/** Lines that still need a unit cost before the list can be confirmed. */
+export function linesNeedingCost(lines: PendingLine[]): PendingLine[] {
+  return lines.filter((l) => l.costRequired && l.unitCost == null)
+}
+
+/**
+ * Why the list cannot be confirmed yet, or null when it can.
+ *
+ * Kept here rather than in the button so the rule is testable and so the reason
+ * can be SHOWN — a Confirm that is merely greyed out with no explanation is the
+ * same dead end as one that silently books stock at nothing.
+ */
+export function commitBlockedReason(lines: PendingLine[]): string | null {
+  if (lines.length === 0) return null
+  if (lines.some((l) => l.quantity < 1)) return 'Every line needs a count of at least 1.'
+  const needCost = linesNeedingCost(lines)
+  if (needCost.length === 0) return null
+  return needCost.length === 1
+    ? `Enter what ${needCost[0].productName} cost — it has no cost on record, so it would go on the shelf at $0.00.`
+    : `${needCost.length} items have no cost on record. Enter what they cost, or they go on the shelf at $0.00.`
 }
 
 /**
