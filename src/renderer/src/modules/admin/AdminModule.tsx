@@ -11,6 +11,7 @@ import { ActivityTab } from './ActivityTab'
 import { BreakAssignmentsTab } from './BreakAssignmentsTab'
 import { QuickBooksTab } from './QuickBooksTab'
 import { InventoryResetTab } from './InventoryResetTab'
+import { CloudSyncTab } from './CloudSyncTab'
 
 type TabId =
   | 'employees'
@@ -20,6 +21,7 @@ type TabId =
   | 'activity'
   | 'reset'
   | 'quickbooks'
+  | 'sync'
 
 interface TabDef {
   id: TabId
@@ -72,7 +74,16 @@ export function AdminModule(): JSX.Element {
       icon: 'ClipboardList',
       visible: can('inventory.manage')
     },
-    { id: 'quickbooks', label: 'QuickBooks', icon: 'Wallet', visible: can('admin.access') }
+    { id: 'quickbooks', label: 'QuickBooks', icon: 'Wallet', visible: can('admin.access') },
+    // Anyone who runs breaks needs the customer form links and the submissions
+    // waiting on them; the connection settings inside are separately gated on
+    // admin.access by the handlers.
+    {
+      id: 'sync',
+      label: 'Cloud sync',
+      icon: 'Cloud',
+      visible: can('admin.access') || can('shipping.manage')
+    }
   ]
   const visibleTabs = tabs.filter((t) => t.visible)
   const [tab, setTab] = useState<TabId>(visibleTabs[0]?.id ?? 'employees')
@@ -103,6 +114,7 @@ export function AdminModule(): JSX.Element {
       {tab === 'activity' && <ActivityTab />}
       {tab === 'reset' && <InventoryResetTab />}
       {tab === 'quickbooks' && <QuickBooksTab />}
+      {tab === 'sync' && <CloudSyncTab />}
     </div>
   )
 }

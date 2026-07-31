@@ -19,8 +19,11 @@
  * Deployed from the dashboard (Workers & Pages → Create → paste this file).
  * Bindings it expects:
  *   DB          D1 database binding
- *   CLINIC_KEY  secret; the shared key every laptop sends
+ *   SHARED_KEY  secret; the shared key every laptop sends
  *   BRAND       optional plain-text var; company name shown on the public form
+ *
+ * No R2. R2 stores files, and nothing here is a file — the rows travel as JSON
+ * in D1. R2 only becomes necessary the day product photos should travel too.
  */
 
 const MAX_BODY_BYTES = 8 * 1024 * 1024
@@ -92,7 +95,10 @@ function safeEqual(a, b) {
 }
 
 function authorized(request, env) {
-  const expected = env.CLINIC_KEY
+  // SHARED_KEY is the name to use. CLINIC_KEY is accepted too, so a Worker set
+  // up from the earlier project's habits works without anyone hunting for why
+  // every request is a 401.
+  const expected = env.SHARED_KEY || env.CLINIC_KEY
   if (!expected) return false
   const header = request.headers.get('authorization') || ''
   const bearer = header.toLowerCase().startsWith('bearer ') ? header.slice(7).trim() : ''
