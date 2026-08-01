@@ -57,9 +57,21 @@ export function TodayTab({ summary, onGoTo }: ShipTabProps): JSX.Element {
     [breaks]
   )
 
-  const cardsLeft = breaks.reduce((a, b) => a + (b.totalTeams - b.checkedTeams), 0)
-  const cardsTotal = breaks.reduce((a, b) => a + b.totalTeams, 0)
-  const found = cardsTotal - cardsLeft
+  // Every card in the show, breaks AND the break-less giveaways.
+  //
+  // These used to be summed over `breaks` alone, which cannot see a giveaway
+  // that came with no break number — 29 of them on a real July import. The Find
+  // badge counts every slot, so the badge said 29 cards were still out while
+  // this board said everything was found, and there was no screen anywhere that
+  // reconciled the two.
+  const boardTotal = breaks.reduce((a, b) => a + b.totalTeams, 0)
+  const boardFound = breaks.reduce((a, b) => a + b.checkedTeams, 0)
+  const looseTotal = summary?.looseCards ?? 0
+  const looseFound = summary?.looseChecked ?? 0
+  const cardsTotal = boardTotal + looseTotal
+  const found = boardFound + looseFound
+  const cardsLeft = cardsTotal - found
+  const looseLeft = looseTotal - looseFound
 
   if (loading) return <CenterLoader />
 
@@ -126,6 +138,19 @@ export function TodayTab({ summary, onGoTo }: ShipTabProps): JSX.Element {
           tone={cardsLeft > 0 ? 'busy' : 'ok'}
           onClick={() => onGoTo('find')}
         />
+        {looseLeft > 0 && (
+          <Blocker
+            icon="Gift"
+            value={looseLeft}
+            label={
+              looseLeft === 1
+                ? 'giveaway in no break'
+                : 'giveaways in no break'
+            }
+            tone="warn"
+            onClick={() => onGoTo('find')}
+          />
+        )}
         <Blocker
           icon="UserX"
           value={unassigned.length}
@@ -155,6 +180,12 @@ export function TodayTab({ summary, onGoTo }: ShipTabProps): JSX.Element {
           <Icon name="LayoutGrid" size={17} />
           <h3>
             {breaks.length} breaks · {found} of {cardsTotal} cards found
+            {looseTotal > 0 && (
+              <em className="today-loose-note">
+                {' '}
+                incl. {looseTotal} in no break
+              </em>
+            )}
           </h3>
           <span className="today-value">{formatMoney(summary.value ?? 0)}</span>
         </header>
@@ -192,9 +223,15 @@ export function TodayTab({ summary, onGoTo }: ShipTabProps): JSX.Element {
             )
           })}
         </div>
-        {unfinished.length === 0 && (
+        {unfinished.length === 0 && looseLeft === 0 && (
           <p className="today-note today-done">
             Every card is found. Packing can run to the end.
+          </p>
+        )}
+        {unfinished.length === 0 && looseLeft > 0 && (
+          <p className="today-note">
+            Every break is picked, but {looseLeft} giveaway{looseLeft === 1 ? '' : 's'} belonging to
+            no break {looseLeft === 1 ? 'is' : 'are'} still out — they are at the bottom of Find.
           </p>
         )}
       </section>

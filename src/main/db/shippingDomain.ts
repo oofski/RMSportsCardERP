@@ -1276,6 +1276,19 @@ export function getWorkspaceSummary(): ShipWorkspaceSummary {
   const audit = listShipBreakAudit()
   const imports = listShipImports()
 
+  // Break-less giveaways. `listBreaks()` cannot see them — they have no
+  // `ship_breaks` row on purpose, so they never show up as a phantom break —
+  // which is exactly why the count has to travel separately instead of a screen
+  // quietly leaving them out of its total.
+  const realBreakIds = new Set(listShipBreaks().map((b) => b.id))
+  let looseCards = 0
+  let looseChecked = 0
+  for (const s of listShipTeamSlots()) {
+    if (realBreakIds.has(s.breakId)) continue
+    looseCards += 1
+    if (s.checkedOff) looseChecked += 1
+  }
+
   return {
     hasDataset: hasShipDataset(),
     event: getShipEvent(),
@@ -1283,6 +1296,8 @@ export function getWorkspaceSummary(): ShipWorkspaceSummary {
     stageCounts,
     breakStatusCounts,
     value: cents(value),
+    looseCards,
+    looseChecked,
     trackingCount,
     onHoldCount,
     specialRequestCount,

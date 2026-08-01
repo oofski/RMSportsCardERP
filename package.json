@@ -1,6 +1,6 @@
 {
   "name": "rm-operations-app",
-  "version": "0.0.60",
+  "version": "0.0.61",
   "description": "RM Operations App — the internal operations platform for RM Cardz.",
   "author": {
     "name": "RM Cardz"
@@ -26,7 +26,8 @@
     "server": "npm run build:server && node out/server/index.cjs",
     "test:parser": "esbuild tests/shippingParser.test.ts --bundle --platform=node --format=cjs --alias:@shared=./src/shared --outfile=out/tests/shippingParser.cjs --log-level=warning && node out/tests/shippingParser.cjs",
     "test:labels": "node tests/build.mjs tests/shippingLabels.test.ts out/tests/shippingLabels.cjs && node out/tests/shippingLabels.cjs",
-    "test": "npm run test:parser && npm run test:labels"
+    "test": "npm run test:parser && npm run test:labels && npm run test:board",
+    "test:board": "node tests/build.mjs tests/shippingBoard.test.ts out/tests/shippingBoard.cjs && node out/tests/shippingBoard.cjs"
   },
   "dependencies": {
     "@electron-toolkit/utils": "^3.0.0",

@@ -641,7 +641,11 @@ export function getShipDataCounts(): ShipDataCounts {
     teamSlots: countOf(database, 'ship_team_slots'),
     orders: countOf(database, 'ship_orders'),
     shipments: countOf(database, 'ship_shipments'),
-    warnings: countOf(database, 'ship_warnings'),
+    // OPEN flags only. The badge and the Today tile both say "to look at", and
+    // counting handled ones meant clearing every flag on the list left the
+    // badge sitting at its original number forever — which is how a badge stops
+    // meaning anything and people stop opening the tab.
+    warnings: countOf(database, 'ship_warnings', "WHERE status != 'handled'"),
     checkedSlots: countOf(database, 'ship_team_slots', 'WHERE checked_off = 1')
   }
 }
@@ -879,8 +883,50 @@ export function deleteShipBreakAssignmentFor(breakId: string, employeeId: string
  * re-import (break ids are stable), so pruning is what stops a break that
  * genuinely went away from leaving a ghost on the Admin board.
  */
+/**
+ * Drop assignments whose break is gone — but re-home the ones that only LOOK
+ * gone first.
+ *
+ * A break's id is `break_<label>`, so the day a show's "#11" was read as the
+ * "#11A" it was actually printed as, every assignment on it pointed at an id
+ * that no longer existed and was deleted without a word. The person sorting
+ * that break simply vanished from it, and the board read "nobody on this one"
+ * for a break somebody was standing over.
+ *
+ * So: an orphan whose break_number matches exactly ONE break in the new dataset
+ * is moved onto it. Exactly one, because two breaks sharing a number (#11 and
+ * #11A both running) is precisely the case where guessing would put someone on
+ * the wrong pile — there the orphan is dropped and the lead re-assigns, which
+ * is visible. Anything that matches nothing is genuinely gone and goes too.
+ */
 export function pruneShipBreakAssignments(database?: Database.Database): number {
-  return (database ?? getDb())
+  const db = database ?? getDb()
+
+  const orphans = db
+    .prepare(
+      `SELECT id, break_id, break_number, employee_id FROM ship_break_assignments
+        WHERE break_id NOT IN (SELECT id FROM ship_breaks)`
+    )
+    .all() as Array<{ id: string; break_id: string; break_number: number | null; employee_id: string }>
+
+  if (orphans.length > 0) {
+    const candidates = db.prepare(`SELECT id FROM ship_breaks WHERE break_number = ?`)
+    const taken = db.prepare(
+      `SELECT 1 FROM ship_break_assignments WHERE break_id = ? AND employee_id = ?`
+    )
+    const rehome = db.prepare(`UPDATE ship_break_assignments SET break_id = ? WHERE id = ?`)
+    for (const o of orphans) {
+      if (o.break_number === null) continue
+      const matches = candidates.all(o.break_number) as Array<{ id: string }>
+      if (matches.length !== 1) continue
+      // UNIQUE(break_id, employee_id): if they are already on the new break,
+      // leave the orphan to be deleted rather than failing the whole import.
+      if (taken.get(matches[0].id, o.employee_id)) continue
+      rehome.run(matches[0].id, o.id)
+    }
+  }
+
+  return db
     .prepare(
       `DELETE FROM ship_break_assignments
         WHERE break_id NOT IN (SELECT id FROM ship_breaks)`

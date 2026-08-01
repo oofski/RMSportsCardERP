@@ -7598,6 +7598,12 @@ tr.hoverable-row:hover {
   flex-shrink: 0;
 }
 
+.today-loose-note {
+  font-style: normal;
+  font-weight: 500;
+  color: var(--text-3);
+}
+
 /* ---- "Where are @someone's cards" — one answer across every break ---- */
 .chk-people {
   display: flex;

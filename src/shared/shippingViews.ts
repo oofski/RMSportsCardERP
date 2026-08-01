@@ -389,6 +389,14 @@ export interface ShipWorkspaceSummary {
   stageCounts: Record<ShipFulfillmentStage, number>
   breakStatusCounts: Record<ShipBreakStatus, number>
   value: number
+  /**
+   * Cards that belong to NO break — a promo rider with no break number on the
+   * slip. Real, checkable work that lives in Find's "Loose giveaways" section
+   * and appears in no break's pick list, so any screen totalling "cards" off
+   * the breaks alone is short by exactly this many.
+   */
+  looseCards: number
+  looseChecked: number
   trackingCount: number
   onHoldCount: number
   specialRequestCount: number
