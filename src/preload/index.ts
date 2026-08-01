@@ -374,6 +374,12 @@ const api = {
     setEvent: (name: string, date: string): Promise<Result<ShipEvent>> =>
       ipcRenderer.invoke(IPC.shipSetEvent, { name, date }),
     warnings: (): Promise<ShipWarning[]> => ipcRenderer.invoke(IPC.shipWarnings),
+    setWarningStatus: (
+      id: string,
+      status: 'open' | 'handled',
+      note?: string | null
+    ): Promise<Result<ShipWarning>> =>
+      ipcRenderer.invoke(IPC.shipWarningStatus, { id, status, note: note ?? null }),
     audit: (): Promise<ShipBreakAudit[]> => ipcRenderer.invoke(IPC.shipAudit),
     customers: (): Promise<ShipCustomerRow[]> => ipcRenderer.invoke(IPC.shipCustomers),
     clearDataset: (): Promise<Result<ShipWorkspaceSummary>> =>

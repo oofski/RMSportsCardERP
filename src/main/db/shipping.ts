@@ -144,6 +144,10 @@ interface WarningRow {
   page: number | null
   message: string | null
   raw_text: string | null
+  status: string | null
+  note: string | null
+  resolved_at: string | null
+  resolved_by: string | null
 }
 
 interface ImportRow {
@@ -299,7 +303,11 @@ function toWarning(r: WarningRow): ShipWarning {
     id: r.id,
     page: r.page ?? null,
     message: str(r.message),
-    rawText: r.raw_text ?? null
+    rawText: r.raw_text ?? null,
+    status: r.status === 'handled' ? 'handled' : 'open',
+    note: r.note ?? null,
+    handledAt: r.resolved_at ?? null,
+    handledBy: r.resolved_by ?? null
   }
 }
 
@@ -556,9 +564,54 @@ export function getShipBreakAudit(breakNumber: number): ShipBreakAudit | null {
 
 export function listShipWarnings(): ShipWarning[] {
   const rows = getDb()
-    .prepare(`SELECT id, page, message, raw_text FROM ship_warnings ORDER BY page ASC, rowid ASC`)
+    .prepare(
+      `SELECT id, page, message, raw_text, status, note, resolved_at, resolved_by
+       FROM ship_warnings
+       ORDER BY CASE WHEN status = 'handled' THEN 1 ELSE 0 END, page ASC, rowid ASC`
+    )
     .all() as WarningRow[]
   return rows.map(toWarning)
+}
+
+/**
+ * Mark a flag handled, or put it back.
+ *
+ * Reversible on purpose: "handled" is somebody's judgement, and the person who
+ * clears the wrong one at 1am needs to be able to undo it.
+ */
+export function setShipWarningStatus(
+  id: string,
+  status: 'open' | 'handled',
+  note: string | null,
+  actorId: string | null
+): ShipWarning | null {
+  const db = getDb()
+  db.prepare(
+    `UPDATE ship_warnings
+       SET status = ?, note = ?, resolved_at = ?, resolved_by = ?
+     WHERE id = ?`
+  ).run(
+    status,
+    note?.trim() ? note.trim().slice(0, 500) : null,
+    status === 'handled' ? new Date().toISOString() : null,
+    status === 'handled' ? actorId : null,
+    id
+  )
+  const row = db
+    .prepare(
+      `SELECT id, page, message, raw_text, status, note, resolved_at, resolved_by
+       FROM ship_warnings WHERE id = ?`
+    )
+    .get(id) as WarningRow | undefined
+  return row ? toWarning(row) : null
+}
+
+/** How many flags still want a human. Drives the tab badge. */
+export function openShipWarningCount(): number {
+  const row = getDb()
+    .prepare(`SELECT COUNT(*) AS n FROM ship_warnings WHERE status <> 'handled'`)
+    .get() as { n: number }
+  return row.n
 }
 
 // ---------------------------------------------------------------------------

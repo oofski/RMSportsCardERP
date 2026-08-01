@@ -89,6 +89,7 @@ import {
   listShipTeamSlotsByCustomer,
   listShipTrackingNumbers,
   listShipWarnings,
+  setShipWarningStatus,
   recomputeBreakStatus,
   resetShipQueueOrder,
   setBreakSlotsChecked,
@@ -1285,6 +1286,22 @@ export function getWorkspaceSummary(): ShipWorkspaceSummary {
 
 export function listWarnings(): ShipWarning[] {
   return listShipWarnings()
+}
+
+/**
+ * Clear a flag, or put it back.
+ *
+ * A flag never blocks the floor — it is a note that a person should look at
+ * something. Being able to clear one is what keeps the list readable; without
+ * it every flag from every import accumulates until nobody reads any of them.
+ */
+export function setWarningStatus(
+  id: string,
+  status: 'open' | 'handled',
+  note: string | null,
+  actorId: string | null
+): ShipWarning | null {
+  return setShipWarningStatus(id, status, note, actorId)
 }
 
 export function listBreakAudit(): ShipBreakAudit[] {

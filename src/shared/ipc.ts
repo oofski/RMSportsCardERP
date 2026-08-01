@@ -120,6 +120,7 @@ export const IPC = {
   shipEvent: 'shipping:event',
   shipSetEvent: 'shipping:event:set',
   shipWarnings: 'shipping:warnings',
+  shipWarningStatus: 'shipping:warning:status',
   shipAudit: 'shipping:audit',
   shipCustomers: 'shipping:customers',
   // Parse runs as a background job — startParse returns a jobId immediately.

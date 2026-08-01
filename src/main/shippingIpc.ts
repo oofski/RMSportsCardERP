@@ -105,6 +105,7 @@ import {
   listShipments,
   listTrackingNumbers,
   listWarnings,
+  setWarningStatus,
   markBreakPacked,
   moveOrder,
   resetOrderQueue,
@@ -305,6 +306,36 @@ export function registerShippingIpc(): void {
   )
   ipcMain.handle(IPC.shipWarnings, (): ShipWarning[] =>
     can('module.fulfillment') ? listWarnings() : []
+  )
+
+  /**
+   * Clear a flag, or put it back.
+   *
+   * Gated on doing the work rather than running the show. The person who
+   * notices that "#30" is a randomiser spot and not a team is the one holding
+   * the card, and making them fetch a manager to dismiss a note is how a flag
+   * list stops being read.
+   */
+  ipcMain.handle(
+    IPC.shipWarningStatus,
+    (
+      _e,
+      payload: { id: string; status: 'open' | 'handled'; note?: string | null }
+    ): Result<ShipWarning> => {
+      try {
+        const actor = requireAny(
+          ['shipping.find', 'shipping.pack', 'shipping.manage'],
+          'clear flags'
+        )
+        const id = requireId(payload?.id, 'flag')
+        const status = payload?.status === 'handled' ? 'handled' : 'open'
+        const next = setWarningStatus(id, status, payload?.note ?? null, actor.id)
+        if (!next) return { ok: false, error: 'That flag no longer exists.' }
+        return { ok: true, data: next }
+      } catch (err) {
+        return fail(err)
+      }
+    }
   )
   ipcMain.handle(IPC.shipAudit, (): ShipBreakAudit[] =>
     can('module.fulfillment') ? listBreakAudit() : []

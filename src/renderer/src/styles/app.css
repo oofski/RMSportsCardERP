@@ -14645,3 +14645,109 @@ button.sor-team:focus-visible {
     animation: none;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Flags — the things a person should look at, none of which block the floor
+   ------------------------------------------------------------------------ */
+.flags-page {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.flags-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.flags-bar .topsearch {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.flags-count {
+  font-size: 12.5px;
+  color: var(--text-2);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.flags-note {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text-2);
+  max-width: 78ch;
+}
+.flags-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.flags-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--warning);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+/* Handled recedes rather than disappearing: the record that somebody looked is
+   itself worth keeping, and a cleared flag has to be findable to be reopened. */
+.flags-list li[data-status='handled'] {
+  border-left-color: var(--border);
+  background: var(--surface-2);
+  opacity: 0.62;
+}
+.flags-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.flags-msg {
+  font-size: 13px;
+  color: var(--text);
+  line-height: 1.45;
+}
+.flags-raw {
+  font-size: 11.5px;
+  color: var(--text-2);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 7px;
+  align-self: flex-start;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.flags-meta {
+  display: flex;
+  gap: 10px;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+.flags-done {
+  color: var(--text-2);
+}
+.flags-noting {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-shrink: 0;
+}
+.flags-noting .input {
+  width: 220px;
+}
+@media (max-width: 900px) {
+  .flags-list li {
+    flex-direction: column;
+  }
+  .flags-noting .input {
+    width: 100%;
+  }
+}

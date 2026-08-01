@@ -1239,6 +1239,20 @@ function migrate(database: Database.Database): void {
   // this version there was no server and therefore no sessions.
   setMeta(database, 'schema_version', '28')
 
+  // v30: a flag can be marked handled.
+  //
+  // Warnings were write-once and read-only: the parser produced them, the Upload
+  // tab listed them, and there was no way to say "I looked at this". So a slot
+  // titled "#30" instead of a team — a real thing that happens, and correctly
+  // NOT a blocker — stayed on the screen forever alongside every other flag from
+  // every import, which is how a warning list becomes wallpaper nobody reads.
+  addColumnIfMissing(database, 'ship_warnings', 'kind', "TEXT NOT NULL DEFAULT 'parse'")
+  addColumnIfMissing(database, 'ship_warnings', 'status', "TEXT NOT NULL DEFAULT 'open'")
+  addColumnIfMissing(database, 'ship_warnings', 'resolved_at', 'TEXT')
+  addColumnIfMissing(database, 'ship_warnings', 'resolved_by', 'TEXT')
+  addColumnIfMissing(database, 'ship_warnings', 'note', 'TEXT')
+  setMeta(database, 'schema_version', '30')
+
   // v29: cloud sync. The tables came from the block above; the capture triggers
   // are installed at the very END of this function — see the note there.
   setMeta(database, 'schema_version', '29')

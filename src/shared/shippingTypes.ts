@@ -290,6 +290,18 @@ export interface ShipWarningInput {
 
 export interface ShipWarning extends ShipWarningInput {
   id: string
+  /**
+   * Open until somebody says otherwise.
+   *
+   * A flag is a thing for a person to look at, never a thing that stops work —
+   * a slot titled "#30" instead of a team is a real occurrence and the card
+   * still has to be found and shipped. Being able to clear one is what stops
+   * the list turning into wallpaper.
+   */
+  status: 'open' | 'handled'
+  note: string | null
+  handledAt: string | null
+  handledBy: string | null
 }
 
 // ---------------------------------------------------------------------------

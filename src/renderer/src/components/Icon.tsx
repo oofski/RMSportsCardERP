@@ -1,5 +1,6 @@
 import {
   ShieldCheck,
+  Flag,
   PackageCheck,
   Truck,
   BookOpen,
@@ -129,6 +130,7 @@ import {
 
 const MAP: Record<string, LucideIcon> = {
   ShieldCheck,
+  Flag,
   PackageCheck,
   Truck,
   BookOpen,

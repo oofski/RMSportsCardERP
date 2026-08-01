@@ -11,6 +11,7 @@ import { OrdersTab } from './OrdersTab'
 import { CheckerTab } from './CheckerTab'
 import { ShippingTab } from './ShippingTab'
 import { HistoryTab } from './HistoryTab'
+import { FlagsTab } from './FlagsTab'
 
 /**
  * RM Cardz Shipping Workspace — the module shell.
@@ -24,7 +25,7 @@ import { HistoryTab } from './HistoryTab'
  * tab badges and the header strip — and hands every tab `onChanged`, which
  * refetches it after a mutation so badges never drift from the rows.
  */
-export type ShipTabId = 'upload' | 'orders' | 'checker' | 'shipping' | 'history'
+export type ShipTabId = 'upload' | 'orders' | 'checker' | 'flags' | 'shipping' | 'history'
 
 /**
  * The prop contract every tab in this workspace takes. FRONTEND-2's Checker /
@@ -152,6 +153,16 @@ export function ShippingModule(): JSX.Element {
     },
     { id: 'orders', label: 'Orders', icon: 'ClipboardList', badge: counts?.shipments ?? 0 },
     { id: 'checker', label: 'Checker', icon: 'ListChecks', badge: counts?.breaks ?? 0 },
+    // Flags sits next to the work, not on the import screen. An oddity the
+    // parser noticed is something a person deals with DURING a show, and
+    // nobody opens Upload once the PDF is in.
+    {
+      id: 'flags',
+      label: 'Flags',
+      icon: 'Flag',
+      badge: warningCount,
+      tone: 'warning'
+    },
     { id: 'shipping', label: 'Shipping', icon: 'Truck', badge: summary?.trackingCount ?? 0 },
     { id: 'history', label: 'History', icon: 'History', badge: 0 }
   ]
@@ -227,6 +238,7 @@ export function ShippingModule(): JSX.Element {
         {tab === 'orders' && <OrdersTab {...tabProps} />}
         {tab === 'checker' && <CheckerTab {...tabProps} />}
         {tab === 'shipping' && <ShippingTab {...tabProps} />}
+        {tab === 'flags' && <FlagsTab {...tabProps} />}
         {tab === 'history' && <HistoryTab {...tabProps} />}
       </div>
     </div>
