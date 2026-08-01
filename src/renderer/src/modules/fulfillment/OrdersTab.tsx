@@ -63,7 +63,7 @@ interface EditorState {
   row: ShipOrderRow
 }
 
-export function OrdersTab({ canManage, onChanged, onGoTo }: ShipTabProps): JSX.Element {
+export function OrdersTab({ canManage, canFind, canPack, onChanged, onGoTo }: ShipTabProps): JSX.Element {
   const toast = useToast()
 
   const [rows, setRows] = useState<ShipOrderRow[]>([])
@@ -527,6 +527,8 @@ export function OrdersTab({ canManage, onChanged, onGoTo }: ShipTabProps): JSX.E
               vip={isVip(row)}
               pinning={pinning}
               canManage={canManage}
+              canFind={canFind}
+              canPack={canPack}
               busy={busyId === row.id}
               expanded={expanded.has(row.id)}
               onToggle={() => toggleExpanded(row.id)}
@@ -608,6 +610,8 @@ function OrderRow({
   vip,
   pinning,
   canManage,
+  canFind,
+  canPack,
   busy,
   expanded,
   onToggle,
@@ -623,6 +627,10 @@ function OrderRow({
   vip: boolean
   pinning: boolean
   canManage: boolean
+  /** Tick a card off inside the package — the same act the Checker performs. */
+  canFind: boolean
+  /** Advance the package through its fulfilment stages. */
+  canPack: boolean
   busy: boolean
   expanded: boolean
   onToggle: () => void
@@ -769,7 +777,7 @@ function OrderRow({
               Once it IS put together the button flips to the next step (Sent), so
               the row always offers the obvious next action without hunting in the
               dropdown. */}
-          {canManage && (row.stage === 'to_pick' || row.stage === 'put_together') && (
+          {canPack && (row.stage === 'to_pick' || row.stage === 'put_together') && (
             <button
               type="button"
               className={`sor-advance ${row.stage === 'put_together' ? 'next' : ''}`}
@@ -791,7 +799,7 @@ function OrderRow({
             className="ship-stage-select"
             data-stage={row.stage}
             value={row.stage}
-            disabled={!canManage || busy}
+            disabled={!canPack || busy}
             onChange={(e) => onStage(e.target.value as ShipFulfillmentStage)}
           >
             {SHIP_STAGES.map((s) => (
@@ -863,10 +871,10 @@ function OrderRow({
                       type="button"
                       className={`sor-team ${t.checkedOff ? 'checked' : ''}`}
                       key={t.slotId}
-                      disabled={!canManage || slotBusy === t.slotId}
+                      disabled={!canFind || slotBusy === t.slotId}
                       aria-pressed={t.checkedOff}
                       title={
-                        canManage
+                        canFind
                           ? t.checkedOff
                             ? `Uncheck ${t.teamName}`
                             : `Check off ${t.teamName}`

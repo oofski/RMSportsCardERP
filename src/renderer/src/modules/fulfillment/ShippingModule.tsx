@@ -32,7 +32,12 @@ export type ShipTabId = 'upload' | 'orders' | 'checker' | 'shipping' | 'history'
  */
 export interface ShipTabProps {
   summary: ShipWorkspaceSummary | null
+  /** Run the show: import, assign, set statuses, clear the dataset. */
   canManage: boolean
+  /** Do the finding — check cards off a break. Staff has this. */
+  canFind: boolean
+  /** Do the packing — move a package through its stages. Staff has this. */
+  canPack: boolean
   onChanged: () => Promise<void>
   onGoTo: (tab: ShipTabId) => void
 }
@@ -49,6 +54,10 @@ interface TabDef {
 export function ShippingModule(): JSX.Element {
   const { can } = useSession()
   const canManage = can('shipping.manage')
+  // shipping.manage implies both, so nothing an existing account could do
+  // stops working; these only ADD the floor to people who could not act before.
+  const canFind = canManage || can('shipping.find')
+  const canPack = canManage || can('shipping.pack')
 
   const [summary, setSummary] = useState<ShipWorkspaceSummary | null>(null)
   const [loading, setLoading] = useState(true)
@@ -147,7 +156,7 @@ export function ShippingModule(): JSX.Element {
     { id: 'history', label: 'History', icon: 'History', badge: 0 }
   ]
 
-  const tabProps: ShipTabProps = { summary, canManage, onChanged: reload, onGoTo: setTab }
+  const tabProps: ShipTabProps = { summary, canManage, canFind, canPack, onChanged: reload, onGoTo: setTab }
   const event = summary?.event
   const eventLabel = event?.name
     ? `${event.name}${event.date ? ` · ${event.date}` : ''}`

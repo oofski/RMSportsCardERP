@@ -93,7 +93,7 @@ interface LooseGiveaway {
   checked: number
 }
 
-export function CheckerTab({ canManage, onChanged, onGoTo }: ShipTabProps): JSX.Element {
+export function CheckerTab({ canManage, canFind, onChanged, onGoTo }: ShipTabProps): JSX.Element {
   const toast = useToast()
 
   const [breaks, setBreaks] = useState<ShipBreakSummary[]>([])
@@ -339,6 +339,7 @@ export function CheckerTab({ canManage, onChanged, onGoTo }: ShipTabProps): JSX.
           key={detail.id}
           detail={detail}
           canManage={canManage}
+          canFind={canFind}
           busy={busy}
           onBack={() => setDetail(null)}
           onToggleSlot={toggleSlot}
@@ -533,9 +534,9 @@ export function CheckerTab({ canManage, onChanged, onGoTo }: ShipTabProps): JSX.
                     <button
                       key={t.slotId}
                       className={`chk-loose-team ${t.checkedOff ? 'checked' : ''}`}
-                      disabled={!canManage}
+                      disabled={!canFind}
                       title={
-                        canManage
+                        canFind
                           ? t.checkedOff
                             ? 'Un-check this giveaway'
                             : 'Check this giveaway off'
@@ -709,6 +710,7 @@ function BreakCard({
 function BreakDetailView({
   detail,
   canManage,
+  canFind,
   busy,
   onBack,
   onToggleSlot,
@@ -721,7 +723,10 @@ function BreakDetailView({
   onClear
 }: {
   detail: ShipBreakDetail
+  /** Run the break: mark it packed, clear it, change its status. */
   canManage: boolean
+  /** Do the finding: tick individual cards off. */
+  canFind: boolean
   busy: boolean
   onBack: () => void
   onToggleSlot: (slotId: string, checked: boolean) => void
@@ -896,7 +901,7 @@ function BreakDetailView({
         <Button
           size="sm"
           icon="CheckCheck"
-          disabled={!canManage || busy || done || detail.slots.length === 0}
+          disabled={!canFind || busy || done || detail.slots.length === 0}
           onClick={() => onCheckAll(true)}
         >
           Check all
@@ -904,7 +909,7 @@ function BreakDetailView({
         <Button
           size="sm"
           icon="Circle"
-          disabled={!canManage || busy || detail.checkedTeams === 0}
+          disabled={!canFind || busy || detail.checkedTeams === 0}
           onClick={() => onCheckAll(false)}
         >
           Un-check all
@@ -912,7 +917,7 @@ function BreakDetailView({
         <Button
           size="sm"
           icon="Sticker"
-          disabled={!canManage || busy || detail.slots.length === 0}
+          disabled={!canFind || busy || detail.slots.length === 0}
           onClick={() => onSleeve(!allSleeved)}
         >
           {allSleeved ? 'Remove top sleeves' : 'Top-sleeve all'}
@@ -1105,7 +1110,7 @@ function BreakDetailView({
               <PickPack
                 key={p.key}
                 pack={p}
-                canManage={canManage}
+                canFind={canFind}
                 open={!collapsed.has(p.key)}
                 onToggleOpen={() => toggleCollapsed(p.key)}
                 onToggleSlot={onToggleSlot}
@@ -1120,7 +1125,7 @@ function BreakDetailView({
                   key={s.id}
                   slot={s}
                   showCustomer
-                  canManage={canManage}
+                  canFind={canFind}
                   onToggle={() => onToggleSlot(s.id, !s.checkedOff)}
                   onSleeve={() => onToggleSleeve(s.id, !s.topSleeved)}
                 />
@@ -1140,7 +1145,7 @@ function BreakDetailView({
 
 function PickPack({
   pack,
-  canManage,
+  canFind,
   open,
   onToggleOpen,
   onToggleSlot,
@@ -1148,7 +1153,7 @@ function PickPack({
   onCheckSlots
 }: {
   pack: PickPackData
-  canManage: boolean
+  canFind: boolean
   open: boolean
   onToggleOpen: () => void
   onToggleSlot: (slotId: string, checked: boolean) => void
@@ -1227,7 +1232,7 @@ function PickPack({
           </span>
         </span>
 
-        {canManage && (
+        {canFind && (
           <button
             type="button"
             className={`chk-pack-done ${done ? 'undo' : ''}`}
@@ -1263,7 +1268,7 @@ function PickPack({
               label="Cards"
               slots={pack.cards}
               stats={runStats(pack.slots, false)}
-              canManage={canManage}
+              canFind={canFind}
               onToggleSlot={onToggleSlot}
               onToggleSleeve={onToggleSleeve}
             />
@@ -1274,7 +1279,7 @@ function PickPack({
               label="Giveaway"
               slots={pack.giveaways}
               stats={runStats(pack.slots, true)}
-              canManage={canManage}
+              canFind={canFind}
               onToggleSlot={onToggleSlot}
               onToggleSleeve={onToggleSleeve}
             />
@@ -1326,7 +1331,7 @@ function PackRun({
   label,
   slots,
   stats,
-  canManage,
+  canFind,
   onToggleSlot,
   onToggleSleeve
 }: {
@@ -1336,7 +1341,7 @@ function PackRun({
   slots: ShipBreakSlotRow[]
   /** The run's real totals, filter or no filter. */
   stats: RunStats
-  canManage: boolean
+  canFind: boolean
   onToggleSlot: (slotId: string, checked: boolean) => void
   onToggleSleeve: (slotId: string, topSleeved: boolean) => void
 }): JSX.Element {
@@ -1358,7 +1363,7 @@ function PackRun({
             key={s.id}
             slot={s}
             showCustomer={false}
-            canManage={canManage}
+            canFind={canFind}
             onToggle={() => onToggleSlot(s.id, !s.checkedOff)}
             onSleeve={() => onToggleSleeve(s.id, !s.topSleeved)}
           />
@@ -1376,13 +1381,13 @@ function PackRun({
 function PickTile({
   slot,
   showCustomer,
-  canManage,
+  canFind,
   onToggle,
   onSleeve
 }: {
   slot: ShipBreakSlotRow
   showCustomer: boolean
-  canManage: boolean
+  canFind: boolean
   onToggle: () => void
   onSleeve: () => void
 }): JSX.Element {
@@ -1391,10 +1396,10 @@ function PickTile({
       <button
         type="button"
         className="chk-tile-main"
-        disabled={!canManage}
+        disabled={!canFind}
         aria-pressed={slot.checkedOff}
         title={
-          canManage
+          canFind
             ? slot.checkedOff
               ? `Un-check ${slot.teamName}`
               : `Check off ${slot.teamName}`
@@ -1456,7 +1461,7 @@ function PickTile({
       <button
         type="button"
         className={`chk-tile-sleeve ${slot.topSleeved ? 'on' : ''}`}
-        disabled={!canManage}
+        disabled={!canFind}
         title={slot.topSleeved ? 'Remove the top sleeve' : 'Mark this card top-sleeved'}
         onClick={onSleeve}
       >

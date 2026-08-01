@@ -71,6 +71,8 @@ export type Permission =
   | 'inventory.pricing'
   | 'module.fulfillment'
   | 'shipping.manage'
+  | 'shipping.find'
+  | 'shipping.pack'
   | 'module.invoicing'
   | 'module.finance'
   | 'finance.manage'
@@ -162,7 +164,20 @@ export const PERMISSIONS: PermissionDefinition[] = [
     key: 'shipping.manage',
     label: 'Manage shipping',
     description:
-      'Upload packing-slip PDFs, check cards off, move the queue and set shipment statuses.',
+      'Upload packing-slip PDFs, assign breaks, move the queue and set shipment statuses. Implies the two below.',
+    group: 'Modules'
+  },
+  {
+    key: 'shipping.find',
+    label: 'Find cards',
+    description:
+      'Work a break: check cards off as they are pulled and sorted into customer piles.',
+    group: 'Modules'
+  },
+  {
+    key: 'shipping.pack',
+    label: 'Pack orders',
+    description: 'Work the packing queue: assemble a customer package and mark it packed.',
     group: 'Modules'
   },
   {
@@ -203,6 +218,8 @@ const OPERATIONS_PERMISSIONS: Permission[] = [
   'inventory.manage',
   'module.fulfillment',
   'shipping.manage',
+  'shipping.find',
+  'shipping.pack',
   'module.invoicing',
   'module.finance',
   'module.sops',
@@ -211,10 +228,17 @@ const OPERATIONS_PERMISSIONS: Permission[] = [
   'finance.manage'
 ]
 
+// The floor. A sorter hired to pull and pack cards has to be able to check them
+// off — before this, Staff could open the Shipping workspace and change nothing
+// in it, because every write in shippingIpc.ts required shipping.manage. They
+// still cannot import a PDF, assign work, or set a shipment's status; those stay
+// with whoever runs the show.
 const STAFF_PERMISSIONS: Permission[] = [
   'updates.check',
   'module.inventory',
   'module.fulfillment',
+  'shipping.find',
+  'shipping.pack',
   'module.sops'
 ]
 

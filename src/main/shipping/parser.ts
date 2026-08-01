@@ -57,6 +57,28 @@ const RE_ORDER_ANY = /Order\s+(\d+)/i
 const RE_ORDER_GLOBAL = /Order\s+(\d+)/gi
 /** 1–3 digits only: an order id (10 digits) must never read as a break number. */
 const RE_BREAK_NUMBER = /Break\s*#\s*(\d{1,3})(?!\d)/i
+
+/**
+ * The same header, but keeping any letter that follows the number.
+ *
+ * Real labels include "Break #11A" — the July 2026 Finest Baseball show ran one.
+ * RE_BREAK_NUMBER reads that as 11 and drops the A, so a document containing
+ * both #11A and #11B would silently fold 60 cards into a single "Break 11":
+ * every team would appear twice, the audit would report 30 collisions that are
+ * not collisions, and a finder would be handed a break that cannot be worked.
+ *
+ * Break identity is numeric everywhere downstream (break_<n> ids, ship_breaks,
+ * assignments), so this does not fix that — it makes it impossible for the loss
+ * to happen quietly. Carrying the suffix properly is a schema change.
+ */
+const RE_BREAK_LABEL = /Break\s*#\s*(\d{1,3})([A-Za-z])(?![A-Za-z0-9])/i
+
+/** Any lettered break label in this text, e.g. "11A". */
+export function letteredBreakLabels(text: string): string[] {
+  const out: string[] = []
+  for (const m of text.matchAll(new RegExp(RE_BREAK_LABEL, 'gi'))) out.push(`${m[1]}${m[2]}`)
+  return out
+}
 const RE_CHECKBOX = /^(?:_{2,}|\[[ xX]?\]|[☐☑✓✔❑▢◻◼□■•·])\s+(.+)$/
 const RE_ITEMS_NOISE = /^\d+\s*x?\s*items?$/i
 const RE_TOTAL_LINE = /^Total\s*:/i
@@ -802,6 +824,17 @@ export function parsePackingSlip(
     // break number (rule 2's `{1,3}` cap applies here too)
     const breakMatch = fullWindow.match(RE_BREAK_NUMBER)
     const breakNumber = breakMatch ? Number(breakMatch[1]) : null
+    // A lettered label loses its letter here. Say so loudly rather than let two
+    // real breaks quietly become one — see RE_BREAK_LABEL.
+    for (const label of letteredBreakLabels(fullWindow)) {
+      warnings.push({
+        page: lines[pos.lineIndex].page,
+        message:
+          `Break #${label} was read as break ${breakNumber ?? '?'} — the "${label.slice(-1)}" is dropped. ` +
+          `If this show also ran a different Break #${label.slice(0, -1)}, their cards are now in one break and must be separated by hand.`,
+        rawText: null
+      })
+    }
 
     // team — two real layouts; prefer whichever resolves canonically.
     const candidates: string[] = []
@@ -1128,7 +1161,20 @@ function emitCustomerRecords(
       // THAT slot as the giveaway instead of emitting a duplicate — so every
       // giveaway is exactly one checkable card, never zero, never two.
       if (canonical) {
-        const existing = slots.find((s) => s.teamName === canonical && !s.isGiveaway)
+        // `s.price === 0` is load-bearing, not defensive.
+        //
+        // The slot this is allowed to claim is one the breaking slip listed and
+        // the packing slip never priced — pushSlot leaves those at $0 ("still
+        // pickable at $0", warned about above). Without the price guard this
+        // find() reaches ANY slot with the same team, in ANY break, including
+        // one already paired with a paid packing line: buy the Cowboys in break
+        // #3 for $50, receive a separate $0 Cowboys giveaway, and the $50 slot
+        // is silently rewritten to a giveaway at $0. The revenue disappears from
+        // sales and the ledger, and the second physical card never becomes
+        // pickable, so it is never found and never shipped.
+        const existing = slots.find(
+          (s) => s.teamName === canonical && !s.isGiveaway && s.price === 0
+        )
         if (existing) {
           existing.isGiveaway = true
           existing.price = 0

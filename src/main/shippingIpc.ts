@@ -143,6 +143,37 @@ function requireManage(): { id: string } {
   return { id: user.id }
 }
 
+/**
+ * The floor guards.
+ *
+ * Doing the work is not the same as running the show. A sorter has to be able to
+ * check a card off; they have no business importing a PDF, reassigning breaks or
+ * setting a shipment's status. Before this split every write here required
+ * shipping.manage, which Staff does not have — so a hired sorter could open the
+ * Shipping workspace and change nothing in it.
+ *
+ * shipping.manage still implies both, so every existing account keeps working
+ * exactly as it did.
+ */
+function requireAny(permissions: Permission[], what: string): { id: string } {
+  const user = currentUser()
+  if (!user) throw new Error('You are not signed in.')
+  if (!permissions.some((p) => user.permissions.includes(p))) {
+    throw new Error(`You do not have permission to ${what}.`)
+  }
+  return { id: user.id }
+}
+
+/** Pulling cards for a break. */
+function requireFind(): { id: string } {
+  return requireAny(['shipping.find', 'shipping.manage'], 'check cards off')
+}
+
+/** Assembling and closing a customer package. */
+function requirePack(): { id: string } {
+  return requireAny(['shipping.pack', 'shipping.manage'], 'pack orders')
+}
+
 function fail(err: unknown): Result<never> {
   return { ok: false, error: err instanceof Error ? err.message : String(err) }
 }
@@ -450,7 +481,7 @@ export function registerShippingIpc(): void {
     IPC.shipOrderStage,
     (_e, payload: { id: string; stage: ShipFulfillmentStage }): Result<ShipOrderRow> => {
       try {
-        const actor = requireManage()
+        const actor = requirePack()
         const id = requireId(payload?.id, 'order')
         if (!SHIP_STAGES.includes(payload?.stage)) return { ok: false, error: 'Unknown stage.' }
         return { ok: true, data: setOrderStage(id, payload.stage, actor.id) }
@@ -506,7 +537,7 @@ export function registerShippingIpc(): void {
     IPC.shipOrderNotes,
     (_e, payload: { id: string; notes: string }): Result<ShipOrderRow> => {
       try {
-        requireManage()
+        requirePack()
         const id = requireId(payload?.id, 'order')
         return { ok: true, data: setOrderNotes(id, str(payload?.notes)) }
       } catch (err) {
@@ -529,7 +560,7 @@ export function registerShippingIpc(): void {
     IPC.shipSlotChecked,
     (_e, payload: { id: string; checked: boolean }): Result<ShipSlotUpdate> => {
       try {
-        const actor = requireManage()
+        const actor = requireFind()
         const id = requireId(payload?.id, 'card')
         return { ok: true, data: setTeamSlotChecked(id, !!payload?.checked, actor.id) }
       } catch (err) {
@@ -542,7 +573,7 @@ export function registerShippingIpc(): void {
     IPC.shipSlotTopSleeved,
     (_e, payload: { id: string; topSleeved: boolean }): Result<ShipSlotUpdate> => {
       try {
-        requireManage()
+        requireFind()
         const id = requireId(payload?.id, 'card')
         return { ok: true, data: setTeamSlotTopSleeved(id, !!payload?.topSleeved) }
       } catch (err) {
@@ -555,7 +586,7 @@ export function registerShippingIpc(): void {
     IPC.shipBreakCheckAll,
     (_e, payload: { id: string; checked: boolean }): Result<ShipBreakDetail> => {
       try {
-        const actor = requireManage()
+        const actor = requireFind()
         const id = requireId(payload?.id, 'break')
         return { ok: true, data: setBreakChecked(id, !!payload?.checked, actor.id) }
       } catch (err) {

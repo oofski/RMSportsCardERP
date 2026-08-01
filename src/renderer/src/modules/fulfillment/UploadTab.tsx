@@ -225,7 +225,12 @@ export function UploadTab({ summary, canManage, onChanged, onGoTo }: ShipTabProp
     } finally {
       setStarting(false)
     }
-  }, [sport, eventName, eventDate, importName, toast])
+    // carryForward belongs here. Without it the memoised callback keeps the
+    // value from the render in which it was created — normally false — so
+    // ticking "keep my pick/pack progress" sent carryForward: false and every
+    // package came back as To pick. That flag exists because inferring it
+    // caused a real data incident (see importDataset in db/shipping.ts).
+  }, [sport, eventName, eventDate, importName, carryForward, toast])
 
   const saveEvent = useCallback(async () => {
     setSavingEvent(true)
