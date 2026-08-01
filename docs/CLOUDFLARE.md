@@ -45,24 +45,26 @@ on and no monthly bill on Cloudflare's free plan at this size.
 
 1. Open the `rm-operations` database you just made.
 2. Click the **Console** tab.
-3. Open `cloud/schema.sql` from this repository, copy all of it, paste it into
-   the console, and **Execute**.
+3. Paste the four statements below and **Execute**.
 4. Click **Tables**. You should now see `sync_rows` and `sync_seq`.
 
-If you would rather not open the repo, the whole thing is:
-
 ```sql
-CREATE TABLE IF NOT EXISTS sync_rows (
-  kind TEXT NOT NULL, id TEXT NOT NULL, seq INTEGER NOT NULL,
-  updated_at TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
-  device TEXT, data TEXT, PRIMARY KEY (kind, id)
-);
+CREATE TABLE IF NOT EXISTS sync_rows (kind TEXT NOT NULL, id TEXT NOT NULL, seq INTEGER NOT NULL, updated_at TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0, device TEXT, data TEXT, PRIMARY KEY (kind, id));
 CREATE INDEX IF NOT EXISTS idx_sync_rows_seq ON sync_rows (seq);
-CREATE TABLE IF NOT EXISTS sync_seq (
-  id INTEGER PRIMARY KEY CHECK (id = 1), value INTEGER NOT NULL DEFAULT 0
-);
+CREATE TABLE IF NOT EXISTS sync_seq (id INTEGER PRIMARY KEY CHECK (id = 1), value INTEGER NOT NULL DEFAULT 0);
 INSERT OR IGNORE INTO sync_seq (id, value) VALUES (1, 0);
 ```
+
+This is also `cloud/schema.d1.sql` in the repo, and it has no comments in it on
+purpose. Copying SQL out of a rendered file often flattens the line breaks, and
+the moment that happens a leading `--` comments out everything after it on what
+is now a single line. The console then gets nothing but a comment and says
+**"Requests without any query are not supported"** — which reads like a
+Cloudflare problem and is really just a lost newline. `cloud/schema.sql` is the
+same statements with the reasoning written out, for reading rather than pasting.
+
+If the console refuses four statements at once, run them one at a time, in
+order. Each one stands alone.
 
 ## Step 3 — Create the Worker
 
@@ -72,8 +74,19 @@ INSERT OR IGNORE INTO sync_seq (id, value) VALUES (1, 0);
 4. Once it deploys, click **Edit code** (or **</> Edit code** on the Worker's
    page).
 5. Select everything in the editor and delete it.
-6. Open `cloud/worker.js` from this repository, copy **all** of it, paste it in.
+6. Copy **all** of `cloud/worker.js` and paste it in. Copy it from the **Raw**
+   view, not from the rendered file:
+
+   <https://raw.githubusercontent.com/oofski/RMSportsCardERP/claude/rm-operations-app-initial-3sml0r/cloud/worker.js>
+
+   The raw view keeps the line breaks. This matters more here than it did for
+   the SQL: the file is several hundred lines of JavaScript with `//` comments,
+   and if the line breaks are lost the whole thing becomes one comment. The
+   Worker would deploy successfully and then answer nothing.
 7. **Deploy**.
+
+Sanity check before you leave the editor: the last line should be a single `}`,
+and the editor should show hundreds of lines, not one.
 
 Write down the URL it gives you. It looks like:
 

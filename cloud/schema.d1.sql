@@ -1,0 +1,4 @@
+CREATE TABLE IF NOT EXISTS sync_rows (kind TEXT NOT NULL, id TEXT NOT NULL, seq INTEGER NOT NULL, updated_at TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0, device TEXT, data TEXT, PRIMARY KEY (kind, id));
+CREATE INDEX IF NOT EXISTS idx_sync_rows_seq ON sync_rows (seq);
+CREATE TABLE IF NOT EXISTS sync_seq (id INTEGER PRIMARY KEY CHECK (id = 1), value INTEGER NOT NULL DEFAULT 0);
+INSERT OR IGNORE INTO sync_seq (id, value) VALUES (1, 0);

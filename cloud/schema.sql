@@ -1,8 +1,14 @@
--- RM Operations relay — D1 schema.
+-- RM Operations relay — D1 schema, with the reasoning.
 --
--- Run this ONCE against the D1 database, in the dashboard's console
--- (Storage & Databases -> your database -> Console). Two tables, and that is
--- the whole cloud-side data model.
+-- DO NOT PASTE THIS FILE INTO THE D1 CONSOLE. Paste `schema.d1.sql` instead —
+-- same statements, no comments. Copying from a rendered file (a browser, a
+-- chat window) often flattens the line breaks, and once that happens the first
+-- `--` comments out everything after it on what is now a single line. The
+-- console then receives nothing but a comment and answers "Requests without any
+-- query are not supported", which sounds like a Cloudflare fault and is not.
+--
+-- This copy is for reading. Two tables, and that is the whole cloud-side data
+-- model.
 --
 -- The relay stores rows as opaque JSON keyed by (kind, id). It deliberately
 -- does NOT mirror the app's forty tables: a schema here would need migrating in
