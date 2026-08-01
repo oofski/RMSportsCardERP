@@ -59,6 +59,22 @@
   --info-bg: #eef1ff;
 
   /* Radii & shadows */
+  /* --- Break identity -----------------------------------------------------
+     Ten hues, ordered so ADJACENT break numbers are maximally different: the
+     case that matters is telling #3 from #4 with two piles side by side, never
+     #3 from #9. Beyond ten, break 11+ reuses the hue as a hollow chip, and the
+     number is always printed — colour is never the only signal. */
+  --brk-1: #1e63d0;
+  --brk-2: #12a150;
+  --brk-3: #b7860b;
+  --brk-4: #d4426b;
+  --brk-5: #7c4dcc;
+  --brk-6: #0d9488;
+  --brk-7: #c2571b;
+  --brk-8: #4a6fa5;
+  --brk-9: #6b8e23;
+  --brk-10: #5b6270;
+
   --radius-sm: 8px;
   --radius: 10px;
   --radius-lg: 16px;
@@ -77,6 +93,17 @@
 /* Dark theme — activated when the root carries data-theme="dark". The theme
    attribute is always set by the app, so these overrides drive dark mode. */
 :root[data-theme='dark'] {
+  /* Lighter, less saturated inks for dark — same order, same meaning. */
+  --brk-1: #5b96f5;
+  --brk-2: #38c47d;
+  --brk-3: #e2ac3e;
+  --brk-4: #f07098;
+  --brk-5: #a884f0;
+  --brk-6: #3ec9bb;
+  --brk-7: #f0894f;
+  --brk-8: #7ba0d4;
+  --brk-9: #a3c257;
+  --brk-10: #9aa3b4;
   --brand-700: #9db2ff;
   --brand-600: #829bff;
   --brand-500: #4f6dff;

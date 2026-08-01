@@ -14751,3 +14751,303 @@ button.sor-team:focus-visible {
     width: 100%;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Break chip — one break, one colour, everywhere
+   ------------------------------------------------------------------------ */
+.brk-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+  line-height: 1.5;
+  flex-shrink: 0;
+  /* Text sits on a tint of the same hue, so contrast holds in both themes
+     without a second "-strong" ink per colour. */
+  color: var(--brk-ink, var(--text));
+  background: color-mix(in srgb, var(--brk-ink, var(--text-3)) 15%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--brk-ink, var(--text-3)) 38%, transparent);
+}
+.brk-chip.sm {
+  min-width: 28px;
+  padding: 1px 6px;
+  font-size: 11px;
+}
+/* Hollow marks the second lap round the palette: #11 shares #1's hue but is
+   never mistaken for it. */
+.brk-chip[data-hollow='true'] {
+  background: transparent;
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--brk-ink, var(--text-3)) 65%, transparent);
+}
+.brk-chip[data-hue='1'] { --brk-ink: var(--brk-1); }
+.brk-chip[data-hue='2'] { --brk-ink: var(--brk-2); }
+.brk-chip[data-hue='3'] { --brk-ink: var(--brk-3); }
+.brk-chip[data-hue='4'] { --brk-ink: var(--brk-4); }
+.brk-chip[data-hue='5'] { --brk-ink: var(--brk-5); }
+.brk-chip[data-hue='6'] { --brk-ink: var(--brk-6); }
+.brk-chip[data-hue='7'] { --brk-ink: var(--brk-7); }
+.brk-chip[data-hue='8'] { --brk-ink: var(--brk-8); }
+.brk-chip[data-hue='9'] { --brk-ink: var(--brk-9); }
+.brk-chip[data-hue='10'] { --brk-ink: var(--brk-10); }
+.brk-chip.brk-none {
+  color: var(--text-3);
+  background: var(--surface-2);
+  border-color: var(--border);
+  font-weight: 600;
+}
+
+/* ---------------------------------------------------------------------------
+   Today — the show-day board
+   ------------------------------------------------------------------------ */
+.today-page {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.today-mine {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.today-mine[data-empty='true'] {
+  background: var(--surface-2);
+}
+.today-mine > header,
+.today-board > header {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.today-mine > header h3,
+.today-board > header h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+  flex: 1 1 auto;
+}
+.today-mine > header svg,
+.today-board > header svg {
+  color: var(--text-2);
+}
+.today-value {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+.today-note {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.today-done {
+  color: var(--success-strong, var(--success));
+  font-weight: 600;
+}
+.today-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.today-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+}
+.today-chip:hover {
+  border-color: var(--brand-500);
+}
+.today-chip-prog {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.today-chip-bar,
+.today-break-bar {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 3px;
+  width: var(--p, 0%);
+  background: var(--brand-500);
+  transition: width 200ms ease;
+}
+.today-break-bar[data-done='true'],
+.today-chip-bar[data-done='true'] {
+  background: var(--success);
+}
+
+.today-blockers {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+.today-blocker {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 13px 15px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  cursor: pointer;
+  text-align: left;
+  min-width: 0;
+}
+.today-blocker:hover {
+  border-color: var(--brand-500);
+}
+.today-blocker svg {
+  color: var(--text-3);
+}
+/* A zero here is good news and should look calm; anything above it is a thing
+   somebody has to go and do. */
+.today-blocker[data-tone='warn'] {
+  border-color: var(--warning);
+  background: var(--warning-bg);
+}
+.today-blocker[data-tone='warn'] svg,
+.today-blocker[data-tone='busy'] svg {
+  color: var(--text);
+}
+.today-blocker-value {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.15;
+}
+.today-blocker-label {
+  font-size: 11.5px;
+  color: var(--text-2);
+  line-height: 1.35;
+}
+.today-blocker[data-tone='warn'] .today-blocker-label {
+  color: var(--text);
+}
+
+.today-board {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.today-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 10px;
+}
+.today-break {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 11px 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  cursor: pointer;
+  text-align: left;
+  min-width: 0;
+}
+.today-break:hover {
+  border-color: var(--brand-500);
+}
+.today-break[data-done='true'] {
+  background: var(--success-bg);
+  border-color: color-mix(in srgb, var(--success) 45%, transparent);
+}
+.today-break[data-orphan='true'] {
+  border-style: dashed;
+}
+.today-break-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.today-break-count {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.today-break-who {
+  font-size: 11.5px;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.today-nobody {
+  color: var(--warning);
+  font-weight: 600;
+}
+
+@media (max-width: 1000px) {
+  .today-blockers {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* Setup — two jobs that happen once at the start of a night. */
+.setup-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.setup-switch {
+  display: inline-flex;
+  align-self: flex-start;
+  padding: 3px;
+  gap: 2px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+}
+.setup-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 14px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12.5px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.setup-seg.active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.08);
+}
+.setup-seg svg {
+  color: currentColor;
+}

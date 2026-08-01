@@ -6,12 +6,13 @@ import { LIVE, useLiveRefresh } from '../../lib/live'
 import { formatMoney } from '../../lib/format'
 import { Icon } from '../../components/Icon'
 import { Button, CenterLoader, EmptyState } from '../../components/ui'
-import { UploadTab } from './UploadTab'
+import { SetupTab } from './SetupTab'
 import { OrdersTab } from './OrdersTab'
 import { CheckerTab } from './CheckerTab'
 import { ShippingTab } from './ShippingTab'
 import { HistoryTab } from './HistoryTab'
 import { FlagsTab } from './FlagsTab'
+import { TodayTab } from './TodayTab'
 
 /**
  * RM Cardz Shipping Workspace — the module shell.
@@ -25,7 +26,25 @@ import { FlagsTab } from './FlagsTab'
  * tab badges and the header strip — and hands every tab `onChanged`, which
  * refetches it after a mutation so badges never drift from the rows.
  */
-export type ShipTabId = 'upload' | 'orders' | 'checker' | 'flags' | 'shipping' | 'history'
+/**
+ * The workspace, named after the jobs rather than after the documents.
+ *
+ * Today  the show-day board — what is mine, what is blocking the room
+ * Find    one break at a time: pull the cards and sort them into piles
+ * Pack    one customer at a time: everything they won, in one box
+ * Flags   what the import noticed that a person should look at
+ * Ship    tracking numbers and statuses, after the box is sealed
+ * Setup   import the slips, assign the breaks (running the show)
+ * History imports, snapshots, exports
+ */
+export type ShipTabId =
+  | 'today'
+  | 'find'
+  | 'pack'
+  | 'flags'
+  | 'ship'
+  | 'setup'
+  | 'history'
 
 /**
  * The prop contract every tab in this workspace takes. FRONTEND-2's Checker /
@@ -63,7 +82,7 @@ export function ShippingModule(): JSX.Element {
   const [summary, setSummary] = useState<ShipWorkspaceSummary | null>(null)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
-  const [tab, setTab] = useState<ShipTabId>('upload')
+  const [tab, setTab] = useState<ShipTabId>('today')
   // The landing tab is chosen once, on the first load: a workspace that already
   // holds a dataset opens on Orders (the daily driver), an empty one on Upload.
   const landed = useRef(false)
@@ -73,7 +92,7 @@ export function ShippingModule(): JSX.Element {
     setSummary(next)
     if (!landed.current) {
       landed.current = true
-      if (next?.hasDataset) setTab('orders')
+      if (next?.hasDataset) setTab('today')
     }
   }, [])
 
@@ -139,31 +158,23 @@ export function ShippingModule(): JSX.Element {
   }
 
   const counts = summary?.counts
+  // Cards still to find. The Find badge, and the thing that gates packing: a
+  // package cannot close while any break it touches still has cards out.
+  const cardsLeft = Math.max(0, (counts?.teamSlots ?? 0) - (counts?.checkedSlots ?? 0))
   const hasDataset = !!summary?.hasDataset
   const warningCount = counts?.warnings ?? 0
   const collisions = summary?.hasCollisions ?? false
 
   const tabs: TabDef[] = [
-    {
-      id: 'upload',
-      label: 'Upload',
-      icon: 'UploadCloud',
-      badge: collisions ? 0 : warningCount,
-      tone: collisions ? 'danger' : 'warning'
-    },
-    { id: 'orders', label: 'Orders', icon: 'ClipboardList', badge: counts?.shipments ?? 0 },
-    { id: 'checker', label: 'Checker', icon: 'ListChecks', badge: counts?.breaks ?? 0 },
-    // Flags sits next to the work, not on the import screen. An oddity the
-    // parser noticed is something a person deals with DURING a show, and
-    // nobody opens Upload once the PDF is in.
-    {
-      id: 'flags',
-      label: 'Flags',
-      icon: 'Flag',
-      badge: warningCount,
-      tone: 'warning'
-    },
-    { id: 'shipping', label: 'Shipping', icon: 'Truck', badge: summary?.trackingCount ?? 0 },
+    { id: 'today', label: 'Today', icon: 'LayoutGrid', badge: 0 },
+    { id: 'find', label: 'Find', icon: 'ListChecks', badge: cardsLeft, tone: 'warning' },
+    { id: 'pack', label: 'Pack', icon: 'Package', badge: counts?.shipments ?? 0 },
+    { id: 'flags', label: 'Flags', icon: 'Flag', badge: warningCount, tone: 'warning' },
+    { id: 'ship', label: 'Ship', icon: 'Truck', badge: summary?.trackingCount ?? 0 },
+    // Running the show, not doing it — hidden from people who cannot.
+    ...(canManage
+      ? [{ id: 'setup' as const, label: 'Setup', icon: 'UploadCloud', badge: 0 }]
+      : []),
     { id: 'history', label: 'History', icon: 'History', badge: 0 }
   ]
 
@@ -185,7 +196,7 @@ export function ShippingModule(): JSX.Element {
             >
               <Icon name={t.icon} size={16} />
               {t.label}
-              {t.id === 'upload' && collisions ? (
+              {t.id === 'flags' && collisions ? (
                 <span className="ship-tab-badge danger">
                   <Icon name="Siren" size={11} strokeWidth={2.6} />
                 </span>
@@ -219,9 +230,9 @@ export function ShippingModule(): JSX.Element {
 
       {/* The safety net follows you around: a team claimed by two customers in
           the same break is a real data error, so it stays visible on every tab
-          until it is reviewed on Upload. */}
-      {collisions && tab !== 'upload' && (
-        <button className="ship-collision-strip" onClick={() => setTab('upload')}>
+          until somebody has looked at it in Flags. */}
+      {collisions && tab !== 'flags' && (
+        <button className="ship-collision-strip" onClick={() => setTab('flags')}>
           <Icon name="Siren" size={16} />
           <span>
             <b>Team collisions detected.</b> One or more teams were captured for two
@@ -234,11 +245,12 @@ export function ShippingModule(): JSX.Element {
       )}
 
       <div className="ship-scroll">
-        {tab === 'upload' && <UploadTab {...tabProps} />}
-        {tab === 'orders' && <OrdersTab {...tabProps} />}
-        {tab === 'checker' && <CheckerTab {...tabProps} />}
-        {tab === 'shipping' && <ShippingTab {...tabProps} />}
+        {tab === 'today' && <TodayTab {...tabProps} />}
+        {tab === 'find' && <CheckerTab {...tabProps} />}
+        {tab === 'pack' && <OrdersTab {...tabProps} />}
         {tab === 'flags' && <FlagsTab {...tabProps} />}
+        {tab === 'ship' && <ShippingTab {...tabProps} />}
+        {tab === 'setup' && <SetupTab {...tabProps} />}
         {tab === 'history' && <HistoryTab {...tabProps} />}
       </div>
     </div>

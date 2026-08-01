@@ -365,7 +365,7 @@ export function ShippingTab({ canManage, onChanged, onGoTo }: ShipTabProps): JSX
         title="Nothing to ship yet"
         message="Import a Whatnot packing-slip PDF — every package with a label shows up here with its tracking number."
         action={
-          <Button variant="primary" icon="UploadCloud" onClick={() => onGoTo('upload')}>
+          <Button variant="primary" icon="UploadCloud" onClick={() => onGoTo('setup')}>
             Go to Upload
           </Button>
         }

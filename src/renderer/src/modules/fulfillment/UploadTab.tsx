@@ -465,7 +465,7 @@ export function UploadTab({ summary, canManage, onChanged, onGoTo }: ShipTabProp
                     ? 'Operator progress carried forward (same event)'
                     : 'Fresh import — every package starts at To pick'}
                 </span>
-                <Button size="sm" icon="ArrowRight" onClick={() => onGoTo('orders')}>
+                <Button size="sm" icon="ArrowRight" onClick={() => onGoTo('pack')}>
                   Go to Orders
                 </Button>
               </div>

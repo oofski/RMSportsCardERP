@@ -383,7 +383,7 @@ export function OrdersTab({ canManage, canFind, canPack, onChanged, onGoTo }: Sh
         title="No packages yet"
         message="Import a Whatnot packing-slip PDF and every customer's package shows up here as one row."
         action={
-          <Button variant="primary" icon="UploadCloud" onClick={() => onGoTo('upload')}>
+          <Button variant="primary" icon="UploadCloud" onClick={() => onGoTo('setup')}>
             Go to Upload
           </Button>
         }

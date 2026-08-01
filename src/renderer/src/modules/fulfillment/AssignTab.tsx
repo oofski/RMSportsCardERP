@@ -90,7 +90,7 @@ interface RosterRow {
   breaks: ShipBreakSummary[]
 }
 
-export function BreakAssignmentsTab(): JSX.Element {
+export function AssignTab(): JSX.Element {
   const { navigate } = useChrome()
   const toast = useToast()
 

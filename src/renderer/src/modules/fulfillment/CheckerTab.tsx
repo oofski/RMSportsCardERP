@@ -403,7 +403,7 @@ export function CheckerTab({ canManage, canFind, onChanged, onGoTo }: ShipTabPro
         title="No breaks to pick"
         message="Import a Whatnot packing-slip PDF and every break becomes a pick list here."
         action={
-          <Button variant="primary" icon="UploadCloud" onClick={() => onGoTo('upload')}>
+          <Button variant="primary" icon="UploadCloud" onClick={() => onGoTo('setup')}>
             Go to Upload
           </Button>
         }

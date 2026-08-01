@@ -380,7 +380,7 @@ export function HistoryTab({ summary, canManage, onChanged, onGoTo }: ShipTabPro
             title="No dataset to export"
             message="Import a Whatnot packing-slip PDF first."
             action={
-              <Button variant="primary" icon="UploadCloud" onClick={() => onGoTo('upload')}>
+              <Button variant="primary" icon="UploadCloud" onClick={() => onGoTo('setup')}>
                 Go to Upload
               </Button>
             }

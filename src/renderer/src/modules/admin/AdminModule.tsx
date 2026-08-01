@@ -9,7 +9,6 @@ import { EmployeesTab } from './EmployeesTab'
 import { HoursTab } from './HoursTab'
 import { RolesTab } from './RolesTab'
 import { ActivityTab } from './ActivityTab'
-import { BreakAssignmentsTab } from './BreakAssignmentsTab'
 import { QuickBooksTab } from './QuickBooksTab'
 import { InventoryResetTab } from './InventoryResetTab'
 import { CloudSyncTab } from './CloudSyncTab'
@@ -18,7 +17,6 @@ type TabId =
   | 'employees'
   | 'hours'
   | 'roles'
-  | 'breaks'
   | 'activity'
   | 'reset'
   | 'quickbooks'
@@ -63,12 +61,6 @@ export function AdminModule(): JSX.Element {
     { id: 'employees', label: 'Employees', icon: 'Users', visible: can('admin.employees.view') },
     { id: 'hours', label: 'Hours', icon: 'Clock', visible: can('admin.hours.view') },
     { id: 'roles', label: 'Roles & Permissions', icon: 'ShieldCheck', visible: can('admin.access') },
-    {
-      id: 'breaks',
-      label: 'Break assignments',
-      icon: 'UserCheck',
-      visible: can('shipping.manage')
-    },
     { id: 'activity', label: 'Inventory activity', icon: 'Layers', visible: can('module.inventory') },
     // Gated on the write permission, not on module access: this tab rewrites
     // stock and cost for the whole catalog in one action.
@@ -114,7 +106,6 @@ export function AdminModule(): JSX.Element {
       )}
       {tab === 'hours' && <HoursTab />}
       {tab === 'roles' && <RolesTab employees={employees} onChanged={loadEmployees} />}
-      {tab === 'breaks' && <BreakAssignmentsTab />}
       {tab === 'activity' && <ActivityTab />}
       {tab === 'reset' && <InventoryResetTab />}
       {tab === 'quickbooks' && <QuickBooksTab />}
