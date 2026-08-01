@@ -57,6 +57,14 @@ export const SHIP_BREAK_STATUSES: ShipBreakStatus[] = ['pending', 'picking', 'pa
 
 export interface ShipBreak {
   id: string
+  /**
+   * The label as printed on the slip — "11A" is a DIFFERENT break from "11".
+   *
+   * `breakNumber` is kept alongside it purely for ordering; two breaks can share
+   * a number and differ only by their letter, and both are real breaks with a
+   * full slate of their own.
+   */
+  breakLabel: string
   breakNumber: number
   eventName: string
   eventDate: string
@@ -66,6 +74,13 @@ export interface ShipBreak {
 /** What the parser emits — status defaults to 'pending'. */
 export interface ShipBreakDraft {
   id: string
+  /**
+   * The label as printed — "11A" is a different break from "11".
+   *
+   * breakNumber is kept alongside it purely for ordering; two breaks can share
+   * a number and differ only by their letter.
+   */
+  breakLabel: string
   breakNumber: number
   eventName?: string | null
   eventDate?: string | null
@@ -92,6 +107,10 @@ export interface ShipCustomer {
 export interface ShipTeamSlot {
   id: string
   breakId: string
+  /** The printed label of the break this card came out of ("11A"). Null for a
+   * break-less giveaway. Prefer this over `breakNumber` for anything a person
+   * reads — the number alone cannot tell #11 from #11A. */
+  breakLabel: string | null
   /** null for a break-less giveaway (a promo rider with no break). */
   breakNumber: number | null
   teamName: string
@@ -109,6 +128,7 @@ export interface ShipTeamSlot {
 export interface ShipTeamSlotDraft {
   id: string
   breakId: string
+  breakLabel?: string | null
   breakNumber: number | null
   teamName: string
   customerId: string
@@ -270,6 +290,14 @@ export interface ShipBreakCollision {
 }
 
 export interface ShipBreakAudit {
+  /**
+   * The audit is keyed by the printed LABEL, not the number.
+   *
+   * Auditing by number folds #11 and #11A into one 60-card pile measured
+   * against a 30-team slate: every team appears twice, so the screen reports
+   * thirty collisions that never happened and a break nobody can trust.
+   */
+  breakLabel: string
   breakNumber: number
   teamCount: number
   distinctTeamCount: number

@@ -62,7 +62,7 @@ export const SYNCED_TABLES: SyncedTable[] = [
   { table: 'ship_customers', key: ['id'], tier: 0 },
   { table: 'ship_settings', key: ['key'], tier: 0 },
   { table: 'ship_batch_urls', key: ['batch_number'], tier: 0 },
-  { table: 'ship_break_audit', key: ['break_number'], tier: 0 },
+  { table: 'ship_break_audit', key: ['break_label'], tier: 0 },
   { table: 'ship_imports', key: ['id'], tier: 0 },
   { table: 'ship_snapshots', key: ['id'], tier: 0 },
   { table: 'ledger_imports', key: ['id'], tier: 0 },

@@ -8,6 +8,7 @@ import type {
   ShipBreakSummary
 } from '@shared/shippingViews'
 import { api } from '../../lib/api'
+import { BreakChip } from './BreakChip'
 import { useChrome } from '../../lib/chrome'
 import { useToast } from '../../components/Toast'
 import { Avatar, Button, CenterLoader, EmptyState, Select } from '../../components/ui'
@@ -171,7 +172,7 @@ export function AssignTab(): JSX.Element {
   }, [])
 
   const assign = useCallback(
-    async (breakId: string, employeeId: string, employeeName: string, breakNumber: number) => {
+    async (breakId: string, employeeId: string, employeeName: string, breakLabel: string) => {
       setBusyBreakId(breakId)
       try {
         const res = await api.shipping.assignBreak(breakId, employeeId)
@@ -180,7 +181,7 @@ export function AssignTab(): JSX.Element {
           return
         }
         applyUpdate(res.data)
-        toast.success(`${employeeName} is sorting break #${breakNumber}.`)
+        toast.success(`${employeeName} is sorting break #${breakLabel}.`)
       } catch (err) {
         toast.error(err instanceof Error ? err.message : 'Could not assign that employee.')
       } finally {
@@ -245,8 +246,8 @@ export function AssignTab(): JSX.Element {
       if (!q) return true
       return (
         (loose !== '' &&
-          b.breakNumber !== null &&
-          `break${b.breakNumber}`.includes(loose)) ||
+          b.breakLabel !== null &&
+          `break${b.breakLabel}`.toLowerCase().includes(loose)) ||
         b.assignees.some((a) => a.name.toLowerCase().includes(q))
       )
     })
@@ -345,7 +346,7 @@ export function AssignTab(): JSX.Element {
                   <span className="ba-person-name">{assigneeLabel(r)}</span>
                   <span className="ba-person-breaks">
                     {r.breaks
-                      .map((b) => `#${b.breakNumber}`)
+                      .map((b) => `#${b.breakLabel}`)
                       .join(' · ')}
                   </span>
                 </div>
@@ -453,7 +454,7 @@ function BreakAssignCard({
     breakId: string,
     employeeId: string,
     employeeName: string,
-    breakNumber: number
+    breakLabel: string
   ) => void | Promise<void>
   onUnassign: (assignment: ShipBreakAssignee) => void | Promise<void>
 }): JSX.Element {
@@ -466,7 +467,7 @@ function BreakAssignCard({
     <div className={`ba-card ${busy ? 'busy' : ''}`} data-bstatus={summary.status}>
       <div className="ba-card-head">
         <span className="ba-num">
-          <Icon name="Layers" size={14} />#{summary.breakNumber}
+          <BreakChip label={summary.breakLabel} size="sm" />
         </span>
         <span className={`chk-status ${summary.status}`}>
           <Icon name={STATUS_ICONS[summary.status]} size={12} />
@@ -520,7 +521,7 @@ function BreakAssignCard({
                 <button
                   className="ba-chip-x"
                   disabled={busy}
-                  aria-label={`Unassign ${assigneeLabel(a)} from break #${summary.breakNumber}`}
+                  aria-label={`Unassign ${assigneeLabel(a)} from break #${summary.breakLabel}`}
                   title={`Unassign ${assigneeLabel(a)}`}
                   onClick={() => void onUnassign(a)}
                 >
@@ -540,13 +541,13 @@ function BreakAssignCard({
             // snaps back to the placeholder.
             value=""
             disabled={busy || available.length === 0}
-            aria-label={`Assign someone to break #${summary.breakNumber}`}
+            aria-label={`Assign someone to break #${summary.breakLabel}`}
             onChange={(e) => {
               const id = e.target.value
               if (!id) return
               const person = available.find((p) => p.id === id)
               if (!person) return
-              void onAssign(summary.id, person.id, person.name, summary.breakNumber)
+              void onAssign(summary.id, person.id, person.name, summary.breakLabel)
             }}
           >
             <option value="">

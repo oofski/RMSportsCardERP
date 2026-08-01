@@ -42,7 +42,6 @@ import {
   createNullTeamMatcher,
   createTeamMatcher,
   detectSport,
-  normalizeTeamKey,
   type TeamMatcher
 } from './teams'
 
@@ -51,39 +50,28 @@ import {
 // ---------------------------------------------------------------------------
 
 const RE_PACKING_HEADER = /Whatnot\s+Packing\s+Slip/i
-const RE_BREAKING_HEADER = /Whatnot\s*[-–—]?\s*Break(?:ing)?\s+Slip/i
 const RE_TO_HANDLE = /To:\s*(\S+)/
 const RE_ORDER_ANY = /Order\s+(\d+)/i
 const RE_ORDER_GLOBAL = /Order\s+(\d+)/gi
-/** 1–3 digits only: an order id (10 digits) must never read as a break number. */
-const RE_BREAK_NUMBER = /Break\s*#\s*(\d{1,3})(?!\d)/i
-
 /**
- * The same header, but keeping any letter that follows the number.
+ * A break label: 1–3 digits and an OPTIONAL letter.
  *
- * Real labels include "Break #11A" — the July 2026 Finest Baseball show ran one.
- * RE_BREAK_NUMBER reads that as 11 and drops the A, so a document containing
- * both #11A and #11B would silently fold 60 cards into a single "Break 11":
- * every team would appear twice, the audit would report 30 collisions that are
- * not collisions, and a finder would be handed a break that cannot be worked.
- *
- * Break identity is numeric everywhere downstream (break_<n> ids, ship_breaks,
- * assignments), so this does not fix that — it makes it impossible for the loss
- * to happen quietly. Carrying the suffix properly is a schema change.
+ * The digit cap is load-bearing — an order id is 10 digits and must never read
+ * as a break number. The letter is equally load-bearing: shows really do run a
+ * "Break #11A", and reading that as 11 means a document containing both #11A and
+ * #11B folds 60 cards into one break where every team appears twice.
  */
-const RE_BREAK_LABEL = /Break\s*#\s*(\d{1,3})([A-Za-z])(?![A-Za-z0-9])/i
+const RE_BREAK_NUMBER = /Break\s*#\s*(\d{1,3})([A-Za-z]?)(?![A-Za-z0-9])/i
 
-/** Any lettered break label in this text, e.g. "11A". */
-export function letteredBreakLabels(text: string): string[] {
-  const out: string[] = []
-  for (const m of text.matchAll(new RegExp(RE_BREAK_LABEL, 'gi'))) out.push(`${m[1]}${m[2]}`)
-  return out
+/** The printed label ("11A", "3") and its numeric part, for ordering. */
+export function readBreakLabel(text: string): { label: string; number: number } | null {
+  const m = text.match(RE_BREAK_NUMBER)
+  if (!m) return null
+  const suffix = (m[2] ?? '').toUpperCase()
+  return { label: `${Number(m[1])}${suffix}`, number: Number(m[1]) }
 }
-const RE_CHECKBOX = /^(?:_{2,}|\[[ xX]?\]|[☐☑✓✔❑▢◻◼□■•·])\s+(.+)$/
+
 const RE_ITEMS_NOISE = /^\d+\s*x?\s*items?$/i
-const RE_TOTAL_LINE = /^Total\s*:/i
-const RE_ORDERS_LINE = /\bOrders?\s*:\s*(.+)$/i
-const RE_ORDER_ID_TOKEN = /#\s*(\d+)/g
 /**
  * USPS prints tracking in 4-digit groups (`#9400 1118 9922 3197 4284 90`), so the
  * SPACED form must be tried first: the strict pattern's language is a superset and
@@ -165,7 +153,6 @@ interface PageLine {
 export interface CustomerGroup {
   handle: string
   packingPages: PageRef[]
-  breakingPages: PageRef[]
 }
 
 export interface GroupResult {
@@ -173,25 +160,10 @@ export interface GroupResult {
   warnings: ShipWarningInput[]
 }
 
-export interface BreakingTeam {
-  raw: string
-  page: number
-}
-
-export interface BreakingBreak {
-  breakNumber: number
-  orderIds: Set<string>
-  teams: BreakingTeam[]
-}
-
-export interface BreakingSlip {
-  realName: string
-  breaks: BreakingBreak[]
-  warnings: ShipWarningInput[]
-}
-
 export interface PackingOrder {
   orderId: string
+  /** The printed label — "11A" is NOT "11". Break identity keys on this. */
+  breakLabel: string | null
   breakNumber: number | null
   /** Canonical team when it resolved, otherwise the best raw candidate. */
   team: string | null
@@ -423,27 +395,6 @@ export function buildBatchUrls(trackingNumbers: string[], batchSize = USPS_BATCH
 // §2.1 — group pages into per-customer blocks
 // ---------------------------------------------------------------------------
 
-/**
- * The handle a breaking slip claims for itself: `Whatnot - Breaking Slip
- * (handle)` wins over the carried-over one.
- */
-function breakingHandle(text: string): string | null {
-  const to = text.match(RE_TO_HANDLE)
-  if (to) {
-    const handle = cleanHandle(to[1])
-    if (handle) return handle
-  }
-  // `Real Name (handle)` under the header. Whatnot handles are lowercase, which
-  // is what keeps an all-caps product title — `(GIVEAWAY RELEASE)` — from being
-  // mistaken for a handle.
-  for (const m of text.matchAll(/\(\s*@?([A-Za-z0-9._-]{2,})\s*\)/g)) {
-    if (!/^[a-z0-9][a-z0-9._-]*$/.test(m[1])) continue
-    if (!/[a-z]/.test(m[1])) continue
-    const handle = cleanHandle(m[1])
-    if (handle) return handle
-  }
-  return null
-}
 
 /**
  * Bucket pages by customer handle, carrying `currentHandle` / `currentSlip`
@@ -463,7 +414,7 @@ export function groupByCustomer(pages: string[]): GroupResult {
   const ensure = (handle: string): CustomerGroup => {
     let g = byHandle.get(handle)
     if (!g) {
-      g = { handle, packingPages: [], breakingPages: [] }
+      g = { handle, packingPages: [] }
       byHandle.set(handle, g)
       groups.push(g)
     }
@@ -471,19 +422,19 @@ export function groupByCustomer(pages: string[]): GroupResult {
   }
 
   let currentHandle: string | null = null
-  let currentSlip: 'packing' | 'breaking' | null = null
+  /** Whether we are inside a slip at all — continuation pages carry no header. */
+  let inSlip = false
 
   pages.forEach((text, index) => {
     const page = index + 1
     if (!text || !text.trim()) return // blank page: skip, keep the carried state
 
     const isPacking = RE_PACKING_HEADER.test(text)
-    const isBreaking = RE_BREAKING_HEADER.test(text)
 
     if (isPacking) {
       const handle = cleanHandle(text.match(RE_TO_HANDLE)?.[1])
       if (handle) currentHandle = handle
-      currentSlip = 'packing'
+      inSlip = true
       if (!currentHandle) {
         warnings.push({
           page,
@@ -496,31 +447,8 @@ export function groupByCustomer(pages: string[]): GroupResult {
       return
     }
 
-    if (isBreaking) {
-      const handle = breakingHandle(text) ?? currentHandle
-      currentSlip = 'breaking'
-      if (!handle) {
-        warnings.push({
-          page,
-          message: 'Breaking slip page has no handle and no preceding packing slip — the page was skipped.',
-          rawText: firstLines(text)
-        })
-        return
-      }
-      currentHandle = handle
-      ensure(handle).breakingPages.push({ page, text })
-      return
-    }
-
     // Header-less page: a continuation, or a stray shipping label.
-    if (currentSlip === 'breaking' && currentHandle) {
-      // Breaking slips do NOT repeat their header on continuation pages — a page
-      // can start with `Total:` / `Orders:` / a bare `__ Team`. Attach it or
-      // every break after page 1 is lost.
-      ensure(currentHandle).breakingPages.push({ page, text })
-      return
-    }
-    if (currentSlip === 'packing' && currentHandle && RE_ORDER_ANY.test(text)) {
+    if (inSlip && currentHandle && RE_ORDER_ANY.test(text)) {
       // Real item continuation only. Packing slips repeat their header, so a
       // genuine 2/2 page is caught by `isPacking` above.
       ensure(currentHandle).packingPages.push({ page, text })
@@ -564,119 +492,9 @@ export function stitchWrappedBreakHeaders(lines: PageLine[]): PageLine[] {
   return out
 }
 
-function isStructuralLine(text: string): boolean {
-  return (
-    RE_BREAK_NUMBER.test(text) ||
-    RE_TOTAL_LINE.test(text) ||
-    RE_ORDERS_LINE.test(text) ||
-    RE_ORDER_ANY.test(text) ||
-    /Whatnot|Packing\s+Slip|Breaking\s+Slip|USPS|Tracking/i.test(text) ||
-    /\$/.test(text)
-  )
-}
 
-/**
- * The glyph-loss fallback: some exports drop the checkbox glyph entirely. A
- * short, non-structural line inside a break that RESOLVES to a known team is a
- * purchased slot. Kept deliberately narrow (short line, few words, no digits
- * beyond a team name) so an all-caps product title never sneaks in.
- */
-function isPlausibleBareTeamLine(text: string): boolean {
-  if (text.length < 3 || text.length > 40) return false
-  if (isStructuralLine(text)) return false
-  if (/[#$:@]/.test(text)) return false
-  if (RE_ITEMS_NOISE.test(text)) return false
-  const words = text.split(/\s+/)
-  if (words.length > 5) return false
-  return /[A-Za-z]/.test(text)
-}
 
-function guessBreakingRealName(text: string): string | null {
-  const m = text.match(/^([A-Z][a-zA-Z.'-]*(?:\s+[A-Z][a-zA-Z.'-]*)+)\s*\(\s*@?[a-z0-9][a-z0-9._-]*\s*\)/)
-  return m ? m[1].trim() : null
-}
 
-export function parseBreakingSlip(pages: PageRef[], matcher: TeamMatcher): BreakingSlip {
-  const warnings: ShipWarningInput[] = []
-  const lines = stitchWrappedBreakHeaders(toLines(pages))
-
-  const byNumber = new Map<number, BreakingBreak>()
-  const breaks: BreakingBreak[] = []
-  const ensureBreak = (n: number): BreakingBreak => {
-    let b = byNumber.get(n)
-    if (!b) {
-      b = { breakNumber: n, orderIds: new Set<string>(), teams: [] }
-      byNumber.set(n, b)
-      breaks.push(b)
-    }
-    return b
-  }
-
-  // The current-break pointer is carried ACROSS pages — never reset per page.
-  let current: BreakingBreak | null = null
-  let realName = ''
-  let orphanTeams = 0
-
-  for (const line of lines) {
-    const text = line.text
-
-    if (!realName) {
-      const guess = guessBreakingRealName(text)
-      // Same defensive trim as the packing side — the breaking slip's
-      // `Real Name (handle)` capture has no digit guard at all.
-      if (guess) realName = sanitizeRealName(guess) || guess
-    }
-
-    const header = text.match(RE_BREAK_NUMBER)
-    if (header) {
-      current = ensureBreak(Number(header[1]))
-      continue
-    }
-
-    if (RE_TOTAL_LINE.test(text)) {
-      current = null
-      continue
-    }
-
-    const ordersLine = text.match(RE_ORDERS_LINE)
-    if (ordersLine) {
-      if (current) {
-        for (const m of ordersLine[1].matchAll(RE_ORDER_ID_TOKEN)) current.orderIds.add(m[1])
-      }
-      continue
-    }
-    if (current && /^#\s*\d{4,}/.test(text)) {
-      for (const m of text.matchAll(RE_ORDER_ID_TOKEN)) current.orderIds.add(m[1])
-      continue
-    }
-
-    const checkbox = text.match(RE_CHECKBOX)
-    if (checkbox) {
-      const team = cleanTeamText(checkbox[1])
-      if (!team || RE_ITEMS_NOISE.test(team)) continue // rule 4: `N Items` is noise
-      if (!current) {
-        orphanTeams++
-        continue
-      }
-      current.teams.push({ raw: team, page: line.page })
-      continue
-    }
-
-    if (current && isPlausibleBareTeamLine(text) && matcher.matchTeam(text).team) {
-      current.teams.push({ raw: cleanTeamText(text), page: line.page })
-    }
-  }
-
-  if (orphanTeams > 0) {
-    warnings.push({
-      page: lines[0]?.page ?? null,
-      message: `${orphanTeams} checkbox team${orphanTeams === 1 ? '' : 's'} on the breaking slip sat outside any "Break #N" section and were skipped.`,
-      rawText: null
-    })
-  }
-
-  return { realName, breaks, warnings }
-}
 
 // ---------------------------------------------------------------------------
 // §2.3 — the packing slip (identity, price, tracking)
@@ -821,20 +639,11 @@ export function parsePackingSlip(
     const windowText = [lineText.slice(pos.start, sliceEnd), ...tail].join('\n')
     const fullWindow = `${beforeOrder}\n${windowText}`
 
-    // break number (rule 2's `{1,3}` cap applies here too)
+    // break label (rule 2's `{1,3}` cap applies here too)
     const breakMatch = fullWindow.match(RE_BREAK_NUMBER)
-    const breakNumber = breakMatch ? Number(breakMatch[1]) : null
-    // A lettered label loses its letter here. Say so loudly rather than let two
-    // real breaks quietly become one — see RE_BREAK_LABEL.
-    for (const label of letteredBreakLabels(fullWindow)) {
-      warnings.push({
-        page: lines[pos.lineIndex].page,
-        message:
-          `Break #${label} was read as break ${breakNumber ?? '?'} — the "${label.slice(-1)}" is dropped. ` +
-          `If this show also ran a different Break #${label.slice(0, -1)}, their cards are now in one break and must be separated by hand.`,
-        rawText: null
-      })
-    }
+    const parsedBreak = readBreakLabel(fullWindow)
+    const breakLabel = parsedBreak?.label ?? null
+    const breakNumber = parsedBreak?.number ?? null
 
     // team — two real layouts; prefer whichever resolves canonically.
     const candidates: string[] = []
@@ -886,6 +695,7 @@ export function parsePackingSlip(
 
     slip.orders.push({
       orderId: pos.id,
+      breakLabel,
       breakNumber,
       team,
       teamRaw,
@@ -903,78 +713,7 @@ export function parsePackingSlip(
   return slip
 }
 
-// ---------------------------------------------------------------------------
-// §2.4 — reconcile a corrupted break NUMBER against the packing slip
-// ---------------------------------------------------------------------------
 
-export interface ReconcileResult {
-  breaks: BreakingBreak[]
-  changed: boolean
-  notes: ShipWarningInput[]
-}
-
-/**
- * Some compressed exports corrupt the DIGITS in the breaking slip's font while
- * the packing slip stays clean. The breaking slip is still ground truth for
- * which teams go together — only its number is wrong. Vote on ORDER IDS ONLY:
- * a team can legitimately be owned in two breaks, so team-name voting would
- * silently FUSE two distinct breaks. An order id belongs to exactly one break.
- *
- * Only a strict-majority, unambiguous winner overrides, so a clean PDF is
- * always a no-op.
- */
-export function reconcileBreakNumbers(
-  breaks: BreakingBreak[],
-  packingOrders: PackingOrder[],
-  handle = ''
-): ReconcileResult {
-  const notes: ShipWarningInput[] = []
-  const packOrderBreak = new Map<string, number>()
-  for (const o of packingOrders) {
-    if (o.breakNumber != null) packOrderBreak.set(o.orderId, o.breakNumber)
-  }
-  if (!packOrderBreak.size) return { breaks, changed: false, notes }
-
-  let changed = false
-  for (const b of breaks) {
-    const votes = new Map<number, number>()
-    for (const oid of b.orderIds) {
-      const bn = packOrderBreak.get(oid)
-      if (bn == null) continue
-      votes.set(bn, (votes.get(bn) ?? 0) + 1)
-    }
-    if (!votes.size) continue // no evidence -> trust the breaking slip
-    const ranked = [...votes.entries()].sort((a, c) => c[1] - a[1] || a[0] - c[0])
-    const [topBn, topVotes] = ranked[0]
-    const secondVotes = ranked[1]?.[1] ?? 0
-    if (topBn !== b.breakNumber && topVotes > secondVotes && topVotes * 2 > b.orderIds.size) {
-      notes.push({
-        page: null,
-        message: `Break #${b.breakNumber}${handle ? ` on @${handle}'s breaking slip` : ''} was re-read as Break #${topBn} from the packing slip order ids (${topVotes}/${b.orderIds.size} agree).`,
-        rawText: null
-      })
-      b.breakNumber = topBn
-      changed = true
-    }
-  }
-
-  if (!changed) return { breaks, changed, notes }
-
-  // Merge the breaks that now share a number.
-  const merged = new Map<number, BreakingBreak>()
-  const out: BreakingBreak[] = []
-  for (const b of breaks) {
-    const existing = merged.get(b.breakNumber)
-    if (!existing) {
-      merged.set(b.breakNumber, b)
-      out.push(b)
-      continue
-    }
-    for (const oid of b.orderIds) existing.orderIds.add(oid)
-    existing.teams.push(...b.teams)
-  }
-  return { breaks: out, changed, notes }
-}
 
 // ---------------------------------------------------------------------------
 // §2.5 — emit breaks, team slots, mirror orders + the giveaway sweep
@@ -986,14 +725,9 @@ interface CustomerEmit {
   warnings: ShipWarningInput[]
 }
 
-function packCanonical(pack: PackingOrder, matcher: TeamMatcher): string {
-  if (!pack.team) return ''
-  return matcher.canonical(pack.team) ?? normalizeTeamKey(pack.team)
-}
 
 function emitCustomerRecords(
   handle: string,
-  breaking: BreakingSlip | null,
   packing: PackingSlip | null,
   matcher: TeamMatcher
 ): CustomerEmit {
@@ -1007,18 +741,20 @@ function emitCustomerRecords(
   let counter = 0
 
   const pushSlot = (
+    breakLabel: string | null,
     breakNumber: number | null,
     breakId: string,
     teamName: string,
     pack: PackingOrder | null,
     forceGiveaway = false
   ): ShipTeamSlotDraft => {
-    const id = `slot_${breakNumber ?? 'na'}_${handle}_${counter++}`
+    const id = `slot_${breakLabel ?? 'na'}_${handle}_${counter++}`
     const price = forceGiveaway ? 0 : pack?.price ?? 0
     const isGiveaway = forceGiveaway || (pack?.isGiveaway ?? false)
     const slot: ShipTeamSlotDraft = {
       id,
       breakId,
+      breakLabel,
       breakNumber,
       teamName,
       customerId: handle,
@@ -1041,114 +777,47 @@ function emitCustomerRecords(
     return slot
   }
 
-  // Choose the break spec: the breaking slip when we have one, otherwise fall
-  // back to grouping the packing orders by break number.
-  const fromBreaking = Boolean(breaking && breaking.breaks.length)
-  const spec: { breakNumber: number; teams: BreakingTeam[] }[] = fromBreaking
-    ? breaking!.breaks.map((b) => ({ breakNumber: b.breakNumber, teams: b.teams }))
-    : [
-        ...new Set(
-          packOrders.filter((o) => o.breakNumber != null).map((o) => o.breakNumber as number)
-        )
-      ]
-        .sort((a, b) => a - b)
-        .map((breakNumber) => ({ breakNumber, teams: [] as BreakingTeam[] }))
+  // The breaks this customer bought into, keyed by the PRINTED LABEL.
+  //
+  // Keying on the number would merge "#11" and "#11A" into one break holding two
+  // of every team — the label is the identity, the number is only for ordering.
+  const labels = new Map<string, number>()
+  for (const o of packOrders) {
+    if (o.breakLabel != null && o.breakNumber != null) labels.set(o.breakLabel, o.breakNumber)
+  }
+  const spec = [...labels.entries()]
+    .sort((a, b) => a[1] - b[1] || a[0].localeCompare(b[0]))
+    .map(([label, number]) => ({ label, number }))
 
-  for (const entry of spec) {
-    const breakNumber = entry.breakNumber
-    const breakId = `break_${breakNumber}`
-    const packsForBreak = packOrders.filter((o) => o.breakNumber === breakNumber)
-    const usedInBreak = new Set<PackingOrder>()
+  for (const { label, number: breakNumber } of spec) {
+    const breakId = `break_${label}`
+    const packsForBreak = packOrders.filter((o) => o.breakLabel === label)
     const teamsSeen = new Set<string>()
 
-    if (!fromBreaking) {
-      // Packing-only fallback: every packing line in this break is a card.
-      for (const pack of packsForBreak) {
-        usedInBreak.add(pack)
-        consumedPacks.add(pack)
+    // Every packing line in this break is one card.
+    for (const pack of packsForBreak) {
+      consumedPacks.add(pack)
         const hit = pack.team ? matcher.matchTeam(pack.team) : null
         const teamName = hit?.team || cleanTeamText(pack.team) || 'Unknown team'
         if (!hit?.team && pack.team) {
           warnings.push({
             page: pack.page,
-            message: `Could not match “${pack.team}” (@${handle}, break #${breakNumber}) to a ${matcher.sport.toUpperCase()} team — kept as printed.`,
+            message: `Could not match “${pack.team}” (@${handle}, break #${label}) to a ${matcher.sport.toUpperCase()} team — kept as printed.`,
             rawText: pack.team
           })
         }
         if (teamsSeen.has(teamName)) {
           warnings.push({
             page: pack.page,
-            message: `@${handle} has ${teamName} twice in break #${breakNumber} — both cards kept, please verify.`,
+            message: `@${handle} has ${teamName} twice in break #${label} — both cards kept, please verify.`,
             rawText: null
           })
         }
         teamsSeen.add(teamName)
-        pushSlot(breakNumber, breakId, teamName, pack)
-      }
-      continue
-    }
-
-    // Pair each breaking-slip team with a packing order: FIRST by canonical
-    // team across the whole break, THEN hand the leftovers to whichever teams
-    // are still unpaired, in order. Resolving the canonical matches globally
-    // (rather than greedily, team by team) stops an unmatched team from
-    // swallowing the pack that belongs by name to a later team.
-    const resolved = entry.teams.map((team) => {
-      const hit = matcher.matchTeam(team.raw)
-      return {
-        team,
-        hit,
-        teamName: hit.team || cleanTeamText(team.raw) || 'Unknown team',
-        wanted: hit.team ?? normalizeTeamKey(team.raw),
-        pack: null as PackingOrder | null
-      }
-    })
-    for (const item of resolved) {
-      if (!item.wanted) continue
-      const pack = packsForBreak.find(
-        (p) => !usedInBreak.has(p) && packCanonical(p, matcher) === item.wanted
-      )
-      if (pack) {
-        item.pack = pack
-        usedInBreak.add(pack)
-        consumedPacks.add(pack)
-      }
-    }
-    for (const item of resolved) {
-      if (item.pack) continue
-      const pack = packsForBreak.find((p) => !usedInBreak.has(p))
-      if (!pack) continue
-      item.pack = pack
-      usedInBreak.add(pack)
-      consumedPacks.add(pack)
-    }
-
-    for (const item of resolved) {
-      if (!item.hit.team) {
-        warnings.push({
-          page: item.team.page,
-          message: `Could not match “${item.team.raw}” (@${handle}, break #${breakNumber}) to a ${matcher.sport.toUpperCase()} team — kept as printed.`,
-          rawText: item.team.raw
-        })
-      }
-      if (!item.pack) {
-        warnings.push({
-          page: item.team.page,
-          message: `${item.teamName} in break #${breakNumber} (@${handle}) has no matching line on the packing slip — the card is still pickable at $0.`,
-          rawText: null
-        })
-      }
-      if (teamsSeen.has(item.teamName)) {
-        warnings.push({
-          page: item.team.page,
-          message: `@${handle} has ${item.teamName} twice in break #${breakNumber} — both cards kept, please verify.`,
-          rawText: null
-        })
-      }
-      teamsSeen.add(item.teamName)
-      pushSlot(breakNumber, breakId, item.teamName, item.pack)
+        pushSlot(label, breakNumber, breakId, teamName, pack)
     }
   }
+
 
   // --- the sweep: nothing on the packing slip is allowed to vanish ---------
   for (const pack of packOrders) {
@@ -1189,23 +858,23 @@ function emitCustomerRecords(
       }
       // Rule 9: a break-less giveaway keeps breakNumber null and lives under
       // `giveaway_<handle>` — NEVER fabricate a phantom Break record for it.
-      const breakId = pack.breakNumber != null ? `break_${pack.breakNumber}` : `giveaway_${handle}`
+      const breakId = pack.breakLabel != null ? `break_${pack.breakLabel}` : `giveaway_${handle}`
       const teamName = canonical || cleanTeamText(pack.team) || 'Giveaway'
-      pushSlot(pack.breakNumber, breakId, teamName, pack, true)
+      pushSlot(pack.breakLabel, pack.breakNumber, breakId, teamName, pack, true)
       consumedPacks.add(pack)
       continue
     }
 
     // A PAID packing line the breaking slip never listed. Emit it too (a card
     // that exists must be pickable) and flag it for the operator.
-    const breakId = pack.breakNumber != null ? `break_${pack.breakNumber}` : `nobreak_${handle}`
+    const breakId = pack.breakLabel != null ? `break_${pack.breakLabel}` : `nobreak_${handle}`
     const teamName = canonical || cleanTeamText(pack.team) || 'Unknown team'
     warnings.push({
       page: pack.page,
-      message: `Order ${pack.orderId} (@${handle}, ${teamName}) is on the packing slip but not on the breaking slip — added as a loose card.`,
+      message: `Order ${pack.orderId} (@${handle}, ${teamName}) sits outside any break on the packing slip — added as a loose card.`,
       rawText: null
     })
-    pushSlot(pack.breakNumber, breakId, teamName, pack)
+    pushSlot(pack.breakLabel, pack.breakNumber, breakId, teamName, pack)
     consumedPacks.add(pack)
   }
 
@@ -1216,15 +885,23 @@ function emitCustomerRecords(
 // §2.6 — materialize breaks + the fidelity audit
 // ---------------------------------------------------------------------------
 
+/**
+ * The slate audit, one per PRINTED LABEL.
+ *
+ * Auditing by number would measure #11 and #11A as a single sixty-card pile
+ * against a thirty-team slate: every team read as claimed twice, thirty
+ * collisions reported that never happened, and `hasAll` meaningless. Each
+ * lettered break is its own full slate and is measured as one.
+ */
 function buildBreakAudit(
   teamSlots: ShipTeamSlotDraft[],
-  breakNumbers: number[],
+  breakSpecs: { label: string; number: number }[],
   matcher: TeamMatcher
 ): ShipBreakAudit[] {
   const slate = new Set(matcher.teams)
   const audits: ShipBreakAudit[] = []
-  for (const breakNumber of breakNumbers) {
-    const slots = teamSlots.filter((s) => s.breakNumber === breakNumber)
+  for (const { label: breakLabel, number: breakNumber } of breakSpecs) {
+    const slots = teamSlots.filter((s) => s.breakLabel === breakLabel)
     const byTeam = new Map<string, Set<string>>()
     for (const slot of slots) {
       let handles = byTeam.get(slot.teamName)
@@ -1246,6 +923,7 @@ function buildBreakAudit(
     }
     collisions.sort((a, b) => a.teamName.localeCompare(b.teamName))
     audits.push({
+      breakLabel,
       breakNumber,
       teamCount: slots.length,
       distinctTeamCount: byTeam.size,
@@ -1272,14 +950,6 @@ export function collectTeamCandidates(groups: CustomerGroup[]): string[] {
   const out: string[] = []
   const nullMatcher = createNullTeamMatcher()
   for (const group of groups) {
-    for (const page of group.breakingPages) {
-      for (const raw of page.text.split('\n')) {
-        const checkbox = raw.trim().match(RE_CHECKBOX)
-        if (!checkbox) continue
-        const team = cleanTeamText(checkbox[1])
-        if (team && !RE_ITEMS_NOISE.test(team)) out.push(team)
-      }
-    }
     if (group.packingPages.length) {
       const packing = parsePackingSlip(group.handle, group.packingPages, nullMatcher)
       for (const order of packing.orders) if (order.team) out.push(order.team)
@@ -1380,7 +1050,7 @@ export function parsePages(pages: string[], options: ParsePagesOptions = {}): Sh
 
   let processedPages = 0
   groups.forEach((group, index) => {
-    processedPages += group.packingPages.length + group.breakingPages.length
+    processedPages += group.packingPages.length
     onProgress?.({
       phase: 'parse',
       page: Math.min(processedPages, totalPages),
@@ -1391,22 +1061,10 @@ export function parsePages(pages: string[], options: ParsePagesOptions = {}): Sh
     const packing = group.packingPages.length
       ? parsePackingSlip(group.handle, group.packingPages, matcher)
       : null
-    const breaking = group.breakingPages.length
-      ? parseBreakingSlip(group.breakingPages, matcher)
-      : null
-
     if (packing) warnings.push(...packing.warnings)
-    if (breaking) warnings.push(...breaking.warnings)
     if (packing?.packTitle) seenPackTitles.push(packing.packTitle)
 
-    // §2.4 — fix a corrupted break NUMBER before anything is emitted.
-    if (breaking && breaking.breaks.length && packing) {
-      const reconciled = reconcileBreakNumbers(breaking.breaks, packing.orders, group.handle)
-      breaking.breaks = reconciled.breaks
-      warnings.push(...reconciled.notes)
-    }
-
-    const emitted = emitCustomerRecords(group.handle, breaking, packing, matcher)
+    const emitted = emitCustomerRecords(group.handle, packing, matcher)
     teamSlots.push(...emitted.slots)
     orders.push(...emitted.orders)
     warnings.push(...emitted.warnings)
@@ -1416,7 +1074,7 @@ export function parsePages(pages: string[], options: ParsePagesOptions = {}): Sh
     customers.push({
       id: group.handle,
       whatnotHandle: group.handle,
-      realName: packing?.realName || breaking?.realName || '',
+      realName: packing?.realName || '',
       address: packing?.address ?? '',
       isNew: packing?.isNew ?? false
     })
@@ -1433,18 +1091,28 @@ export function parsePages(pages: string[], options: ParsePagesOptions = {}): Sh
 
   // §2.6 — one break record per DISTINCT break number that appeared. A
   // break-less giveaway's `giveaway_<handle>` id intentionally has no record.
-  const breakNumbers = [
-    ...new Set(teamSlots.filter((s) => s.breakNumber != null).map((s) => s.breakNumber as number))
-  ].sort((a, b) => a - b)
-  const breaks: ShipBreakDraft[] = breakNumbers.map((breakNumber) => ({
-    id: `break_${breakNumber}`,
+  // Keyed by the break ID, which already carries the printed label, so a show
+  // that ran both #11 and #11A produces two records rather than one merged one.
+  const byBreakId = new Map<string, { label: string; number: number }>()
+  for (const slot of teamSlots) {
+    if (slot.breakNumber == null || !slot.breakId.startsWith('break_')) continue
+    byBreakId.set(slot.breakId, {
+      label: slot.breakId.slice('break_'.length),
+      number: slot.breakNumber
+    })
+  }
+  const breakSpecs = [...byBreakId.entries()]
+    .sort((a, b) => a[1].number - b[1].number || a[1].label.localeCompare(b[1].label))
+  const breaks: ShipBreakDraft[] = breakSpecs.map(([id, { label, number: breakNumber }]) => ({
+    id,
+    breakLabel: label,
     breakNumber,
     eventName,
     eventDate,
     status: 'pending'
   }))
 
-  const breakAudit = buildBreakAudit(teamSlots, breakNumbers, matcher)
+  const breakAudit = buildBreakAudit(teamSlots, breakSpecs.map(([, v]) => v), matcher)
   const batchUrls = buildBatchUrls(
     shipments.map((s) => s.trackingNumber ?? '').filter((t): t is string => Boolean(t))
   )
@@ -1453,7 +1121,7 @@ export function parsePages(pages: string[], options: ParsePagesOptions = {}): Sh
     for (const collision of audit.collisions) {
       warnings.push({
         page: null,
-        message: `Break #${audit.breakNumber}: ${collision.teamName} is assigned to ${collision.handles.length} customers (${collision.handles.map((h) => `@${h}`).join(', ')}).`,
+        message: `Break #${audit.breakLabel}: ${collision.teamName} is assigned to ${collision.handles.length} customers (${collision.handles.map((h) => `@${h}`).join(', ')}).`,
         rawText: null
       })
     }

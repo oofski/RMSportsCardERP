@@ -3,6 +3,7 @@ import type { ShipFulfillmentStage, ShipOrderRow } from '@shared/shippingViews'
 import { SHIP_STAGES, SHIP_STAGE_LABELS } from '@shared/shippingViews'
 import type { ShipTabProps } from './ShippingModule'
 import { api } from '../../lib/api'
+import { BreakChip } from './BreakChip'
 import { formatDateTime, formatMoney } from '../../lib/format'
 import { Icon } from '../../components/Icon'
 import { useToast } from '../../components/Toast'
@@ -181,7 +182,7 @@ export function OrdersTab({ canManage, canFind, canPack, onChanged, onGoTo }: Sh
         r.orderIds.some((id) => id.toLowerCase().includes(q)) ||
         r.breaks.some(
           (b) =>
-            `break #${b.breakNumber ?? ''}`.includes(q) ||
+            `break #${b.breakLabel ?? ''}`.toLowerCase().includes(q) ||
             b.teams.some((t) => t.teamName.toLowerCase().includes(q))
         )
       )
@@ -750,12 +751,13 @@ function OrderRow({
               {row.breaks.length === 0 ? (
                 <span className="muted">No cards</span>
               ) : (
-                // data-accent is the break's position WITHIN this package, so two
-                // breaks on one row can never be confused. It deliberately does
-                // not mean the same colour across packages.
-                row.breaks.map((b, i) => (
-                  <span className="sor-break-chip" data-accent={String(i % 6)} key={b.breakId}>
-                    {b.breakNumber == null ? 'Giveaway' : `#${b.breakNumber}`}
+                // One colour per BREAK, not per position in this package. The
+                // packer and the finder are looking at the same breaks from two
+                // benches, and "the orange one" has to mean the same thing on
+                // both screens or it is worse than no colour at all.
+                row.breaks.map((b) => (
+                  <span className="sor-break-chip" key={b.breakId}>
+                    <BreakChip label={b.breakLabel} size="sm" />
                     <em className="mono">{b.total}</em>
                   </span>
                 ))
@@ -855,9 +857,7 @@ function OrderRow({
                         <Icon name="Gift" size={14} /> Giveaway (no break)
                       </>
                     ) : (
-                      <>
-                        <Icon name="Layers" size={14} /> Break #{b.breakNumber}
-                      </>
+                      <BreakChip label={b.breakLabel} size="sm" />
                     )}
                   </span>
                   <span className="sor-break-prog mono">

@@ -550,8 +550,12 @@ function migrate(database: Database.Database): void {
     -- collisions (one team claimed by two customers in the same break — a real
     -- data error worth surfacing instead of silently guessing).
     -- missing_teams / collisions are JSON arrays.
+    -- Keyed by the printed LABEL, not the number: a show that ran both #11 and
+    -- #11A has two independent slates to measure, and a number PK would let the
+    -- second overwrite the first.
     CREATE TABLE IF NOT EXISTS ship_break_audit (
-      break_number       INTEGER PRIMARY KEY,
+      break_label        TEXT PRIMARY KEY,
+      break_number       INTEGER,
       team_count         INTEGER,
       distinct_team_count INTEGER,
       max_teams          INTEGER,
@@ -1256,6 +1260,60 @@ function migrate(database: Database.Database): void {
   // v29: cloud sync. The tables came from the block above; the capture triggers
   // are installed at the very END of this function — see the note there.
   setMeta(database, 'schema_version', '29')
+
+  // v31: a break is identified by its printed LABEL, not by its number.
+  //
+  // Shows really do run a "Break #11A". Reading that as 11 means a document
+  // containing both #11 and #11A folds sixty cards into one break where every
+  // team appears twice — thirty collisions that never happened, and a break
+  // nobody can work. The number stays for ordering; two breaks may share it and
+  // differ only by their letter.
+  addColumnIfMissing(database, 'ship_breaks', 'break_label', 'TEXT')
+  addColumnIfMissing(database, 'ship_team_slots', 'break_label', 'TEXT')
+  database
+    .prepare(
+      `UPDATE ship_breaks SET break_label = CAST(break_number AS TEXT) WHERE break_label IS NULL`
+    )
+    .run()
+  database
+    .prepare(
+      `UPDATE ship_team_slots
+          SET break_label = (SELECT b.break_label FROM ship_breaks b WHERE b.id = ship_team_slots.break_id)
+        WHERE break_label IS NULL`
+    )
+    .run()
+  // The audit's PRIMARY KEY moves from the number to the label, which SQLite
+  // cannot do in place. Rebuilt rather than dropped so the dataset currently on
+  // the floor keeps its slate counts instead of going blank until the next
+  // import. Guarded on the column, so a fresh database (created label-keyed by
+  // the schema block above) skips it.
+  const auditCols = database.prepare(`PRAGMA table_info(ship_break_audit)`).all() as Array<{
+    name: string
+  }>
+  if (!auditCols.some((c) => c.name === 'break_label')) {
+    database.exec(`
+      ALTER TABLE ship_break_audit RENAME TO ship_break_audit_v30;
+      CREATE TABLE ship_break_audit (
+        break_label        TEXT PRIMARY KEY,
+        break_number       INTEGER,
+        team_count         INTEGER,
+        distinct_team_count INTEGER,
+        max_teams          INTEGER,
+        missing_count      INTEGER,
+        missing_teams      TEXT,
+        has_all            INTEGER,
+        collisions         TEXT
+      );
+      INSERT INTO ship_break_audit
+        (break_label, break_number, team_count, distinct_team_count, max_teams,
+         missing_count, missing_teams, has_all, collisions)
+      SELECT CAST(break_number AS TEXT), break_number, team_count, distinct_team_count,
+             max_teams, missing_count, missing_teams, has_all, collisions
+        FROM ship_break_audit_v30;
+      DROP TABLE ship_break_audit_v30;
+    `)
+  }
+  setMeta(database, 'schema_version', '31')
 
   // Seed the product catalog once, then apply the on-hand snapshot once.
   seedCatalogIfNeeded(database)

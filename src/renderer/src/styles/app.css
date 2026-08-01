@@ -6313,9 +6313,8 @@ tr.hoverable-row:hover {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 10px;
-  border-left: 3px solid var(--border-strong);
-  border-radius: 4px 8px 8px 4px;
+  padding: 3px 9px 3px 4px;
+  border-radius: 8px;
   background: var(--surface-3);
   color: var(--text-2);
   font-size: 12.5px;
@@ -7597,6 +7596,113 @@ tr.hoverable-row:hover {
 .chk-pack-foot svg {
   color: var(--text-3);
   flex-shrink: 0;
+}
+
+/* ---- "Where are @someone's cards" — one answer across every break ---- */
+.chk-people {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+.chk-people-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 2px;
+  color: var(--text-3);
+}
+.chk-people-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+.chk-people-note {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-3);
+}
+.chk-person {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.chk-person-who {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 240px;
+  font-size: 13px;
+  color: var(--text);
+}
+.chk-person-handle {
+  color: var(--text-3);
+  font-size: 12.5px;
+}
+.chk-person-breaks {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.chk-person-break {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px 3px 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+.chk-person-break:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--surface-3);
+}
+.chk-person-break:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+.chk-person-break[data-done='true'] {
+  border-color: var(--success);
+  background: var(--success-bg);
+}
+
+/* ---- A team in the slate nobody bought. Present, but not work. ---- */
+.chk-tile.unsold {
+  border-style: dashed;
+  background: var(--surface-2);
+  opacity: 0.72;
+}
+.chk-tile.unsold:hover {
+  border-color: var(--border);
+}
+.chk-tile.unsold .chk-tile-main {
+  cursor: default;
+  color: var(--text-3);
+}
+.chk-tile.unsold .chk-tile-team {
+  color: var(--text-3);
+  font-weight: 500;
+}
+.chk-tile.unsold .chk-tile-check {
+  color: var(--text-3);
+}
+.chk-unsold-note {
+  color: var(--text-3);
+  font-size: 12px;
 }
 
 /* ---- The flat by-team list: same tiles, one column, no pack chrome ---- */

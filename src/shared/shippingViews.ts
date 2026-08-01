@@ -100,6 +100,7 @@ export interface ShipOrderTeam {
  * break-less giveaway (its `breakId` is `giveaway_<handle>`). */
 export interface ShipOrderBreak {
   breakId: string
+  breakLabel: string | null
   breakNumber: number | null
   teams: ShipOrderTeam[]
   value: number
@@ -210,6 +211,9 @@ export interface ShipBreakAssignmentUpdate {
 
 export interface ShipBreakSummary {
   id: string
+  /** The printed label — "11A". What every screen shows. */
+  breakLabel: string
+  /** Ordering only. Two summaries can share it and differ by their letter. */
   breakNumber: number
   eventName: string
   eventDate: string
@@ -304,6 +308,7 @@ export interface ShipBulkStatusResult {
 
 export interface ShipSalesBreakRow {
   breakId: string
+  breakLabel: string | null
   breakNumber: number | null
   cards: number
   paidCards: number
@@ -334,6 +339,7 @@ export interface ShipLedgerRow {
   handle: string
   realName: string
   breakId: string
+  breakLabel: string | null
   breakNumber: number | null
   teamName: string
   orderId: string | null

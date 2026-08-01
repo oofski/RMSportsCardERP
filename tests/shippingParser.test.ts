@@ -43,31 +43,62 @@ ok(paid.length === 1, 'the $50 card is still paid and still pickable',
 ok(free.length === 1, 'the giveaway is still a giveaway', `free=${free.length}`)
 ok(res.teamSlots.reduce((a, s) => a + s.price, 0) === 50, 'total revenue is $50, not $0')
 
-// --- 2. A lettered break label must not vanish quietly --------------------
-const lettered = [
+// --- 2. #11 and #11A are two breaks, not one -----------------------------
+// A show that runs a lettered break really does run two independent slates.
+// Reading the letter off and keying on the number folds them into one 4-card
+// pile in which every team looks claimed twice — thirty fabricated collisions
+// on a real MLB break, and a break nobody can work.
+const twoBreaks = [
   'Whatnot Packing Slip 1/1',
   'To: someone From: rm_cardz',
   'Person Name',
   '5 Oak Ave. Reno, NV. 89501. US',
   'QTY Name & Description Attributes Subtotal',
   '1 Boston Red Sox Order 3333333333 $20.00',
+  '1x 2026 FINEST BASEBALL HOBBY BOX (NEW RELEASE!)- Break #11',
+  '1 New York Yankees Order 3333333334 $25.00',
+  '1x 2026 FINEST BASEBALL HOBBY BOX (NEW RELEASE!)- Break #11',
+  '1 Boston Red Sox Order 3333333335 $30.00',
   '1x 2026 FINEST BASEBALL HOBBY BOX (NEW RELEASE!)- Break #11A',
-  '1 Item $20.00',
+  '1 New York Yankees Order 3333333336 $35.00',
+  '1x 2026 FINEST BASEBALL HOBBY BOX (NEW RELEASE!)- Break #11A',
+  '4 Items $110.00',
   'USPS Ground Advantage #9300120762602315706746 3.0 oz'
 ].join('\n')
-const res2 = parsePages([lettered], { sport: 'mlb' })
-const warned = res2.warnings.filter((w) => /11A/.test(w.message))
-ok(warned.length >= 1, 'a lettered break label raises a warning',
-   JSON.stringify(res2.warnings.map(w => w.message).slice(0, 3)))
-ok(res2.teamSlots.length === 1 && res2.teamSlots[0].breakNumber === 11,
-   'the card still lands in break 11 rather than being dropped')
+const res2 = parsePages([twoBreaks], { sport: 'mlb' })
+
+const labels2 = res2.breaks.map((b) => b.breakLabel).sort()
+ok(labels2.length === 2 && labels2[0] === '11' && labels2[1] === '11A',
+   'a show running #11 and #11A produces TWO breaks', JSON.stringify(labels2))
+ok(res2.breaks.every((b) => b.breakNumber === 11),
+   'both order under the number 11', JSON.stringify(res2.breaks.map((b) => b.breakNumber)))
+
+const in11 = res2.teamSlots.filter((s) => s.breakLabel === '11')
+const in11a = res2.teamSlots.filter((s) => s.breakLabel === '11A')
+ok(in11.length === 2 && in11a.length === 2,
+   'the cards split two and two', `11=${in11.length} 11A=${in11a.length}`)
+ok(new Set(res2.teamSlots.map((s) => s.breakId)).size === 2,
+   'and land under two distinct break ids',
+   JSON.stringify([...new Set(res2.teamSlots.map((s) => s.breakId))]))
+
+// The audit is per-slate. Keyed by number it would see one 4-card break holding
+// Red Sox twice and Yankees twice.
+const collisions2 = res2.breakAudit.flatMap((a) => a.collisions)
+ok(collisions2.length === 0,
+   'neither break reports a phantom collision', JSON.stringify(collisions2))
+ok(res2.breakAudit.length === 2 && res2.breakAudit.every((a) => a.teamCount === 2),
+   'each break is audited as its own 2-card slate',
+   JSON.stringify(res2.breakAudit.map((a) => ({ l: a.breakLabel, n: a.teamCount }))))
+ok(res2.teamSlots.reduce((a, s) => a + s.price, 0) === 110, 'and all $110 survives')
 
 // --- 3. control: an ordinary break is untouched ---------------------------
-const plain = lettered.replace('Break #11A', 'Break #12')
+const plain = twoBreaks.replace(/Break #11A/g, 'Break #12')
 const res3 = parsePages([plain], { sport: 'mlb' })
-ok(res3.warnings.filter((w) => /is dropped/.test(w.message)).length === 0,
-   'a normal label raises no suffix warning')
-ok(res3.teamSlots[0]?.breakNumber === 12, 'and parses as break 12')
+ok(res3.breaks.map((b) => b.breakLabel).sort().join(',') === '11,12',
+   'plain numbers still read as plain numbers',
+   JSON.stringify(res3.breaks.map((b) => b.breakLabel)))
+ok(res3.breaks.every((b) => b.breakLabel === String(b.breakNumber)),
+   'and their label is exactly their number')
 
 // ---------------------------------------------------------------------------
 // 4. The line grouper: a row set in two sizes is still ONE row

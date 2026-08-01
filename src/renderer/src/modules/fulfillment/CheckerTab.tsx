@@ -11,6 +11,7 @@ import type {
   ShipOrderTeam
 } from '@shared/shippingViews'
 import { SHIP_STAGE_LABELS } from '@shared/shippingViews'
+import { BreakChip } from './BreakChip'
 import type { ShipTabProps } from './ShippingModule'
 import { api } from '../../lib/api'
 import { formatDateTime, formatMoney } from '../../lib/format'
@@ -43,6 +44,14 @@ import { Avatar, Button, CenterLoader, EmptyState, Modal, Select } from '../../c
 
 type StatusFilter = 'all' | ShipBreakStatus
 type GroupMode = 'team' | 'customer'
+
+/**
+ * One line of the by-team list: either a card somebody bought, or a team in the
+ * league slate that nobody did. Both are physically in the box.
+ */
+type SlateRow =
+  | { kind: 'slot'; key: string; teamName: string; slot: ShipBreakSlotRow }
+  | { kind: 'unsold'; key: string; teamName: string }
 
 const STATUS_LABELS: Record<ShipBreakStatus, string> = {
   pending: 'Pending',
@@ -286,14 +295,39 @@ export function CheckerTab({ canManage, canFind, onChanged, onGoTo }: ShipTabPro
     return counts
   }, [breaks])
 
+  /**
+   * Who, across every break.
+   *
+   * The question the floor actually asks is not "show me break 12", it is
+   * "@someone messaged, where are their cards". That answer was only reachable
+   * by opening each break in turn and searching inside it, because the one
+   * search box on this screen filtered breaks by number and nothing else. Here
+   * one query over the packages says which breaks a person is in, how far each
+   * has got, and opens the right one in a click.
+   */
+  const people = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    // Two characters: one letter matches most of the room and is never the
+    // question somebody meant to ask.
+    if (q.length < 2) return []
+    return orders
+      .filter(
+        (o) =>
+          o.customer.handle.toLowerCase().includes(q) ||
+          o.customer.realName.toLowerCase().includes(q)
+      )
+      .sort((a, b) => a.customer.handle.localeCompare(b.customer.handle))
+      .slice(0, 12)
+  }, [orders, query])
+
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase()
     return breaks.filter((b) => {
       if (statusFilter !== 'all' && b.status !== statusFilter) return false
       if (!q) return true
       return (
-        String(b.breakNumber).includes(q) ||
-        `break #${b.breakNumber}`.includes(q) ||
+        b.breakLabel.toLowerCase().includes(q) ||
+        `break #${b.breakLabel}`.toLowerCase().includes(q) ||
         b.eventName.toLowerCase().includes(q)
       )
     })
@@ -361,7 +395,7 @@ export function CheckerTab({ canManage, canFind, onChanged, onGoTo }: ShipTabPro
         />
         {confirmClear && (
           <Modal
-            title={`Clear break #${confirmClear.breakNumber}?`}
+            title={`Clear break #${confirmClear.breakLabel}?`}
             subtitle="This is the deliberate un-pack."
             onClose={() => setConfirmClear(null)}
             footer={
@@ -419,7 +453,7 @@ export function CheckerTab({ canManage, canFind, onChanged, onGoTo }: ShipTabPro
         <div className="topsearch ship-search">
           <Icon name="Search" size={16} />
           <input
-            placeholder="Find a break by number…"
+            placeholder="Find a break, a username or a name…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
@@ -470,23 +504,70 @@ export function CheckerTab({ canManage, canFind, onChanged, onGoTo }: ShipTabPro
         </span>
       </div>
 
+      {people.length > 0 && (
+        <div className="chk-people">
+          <div className="chk-people-head">
+            <Icon name="User" size={15} />
+            <span className="chk-people-title">
+              {people.length === 1 ? '1 person matches' : `${people.length} people match`} “
+              {query.trim()}”
+            </span>
+            <span className="chk-people-note">Click a break to open it at their cards.</span>
+          </div>
+          {people.map((o) => (
+            <div className="chk-person" key={o.id}>
+              <span className="chk-person-who">
+                <b>{o.customer.realName || '—'}</b>
+                <span className="chk-person-handle">@{o.customer.handle}</span>
+                {o.customer.isNew && <span className="ship-chip info mini">NEW</span>}
+              </span>
+              <span className="chk-person-breaks">
+                {o.breaks.map((b) => (
+                  <button
+                    key={b.breakId}
+                    className="chk-person-break"
+                    data-done={b.checked >= b.total ? 'true' : 'false'}
+                    // A break-less giveaway has no break to open; its cards live
+                    // in the Loose giveaways section below.
+                    disabled={b.breakLabel == null || openingId === b.breakId}
+                    title={
+                      b.breakLabel == null
+                        ? 'A giveaway with no break — see Loose giveaways below'
+                        : `Open break #${b.breakLabel}`
+                    }
+                    onClick={() => void open(b.breakId)}
+                  >
+                    <BreakChip label={b.breakLabel} size="sm" />
+                    <span className="mono">
+                      {b.checked}/{b.total}
+                    </span>
+                  </button>
+                ))}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
       {visible.length === 0 ? (
-        <EmptyState
-          icon="Search"
-          title="No breaks match"
-          message="Nothing matches the current search and status filter."
-          action={
-            <Button
-              icon="X"
-              onClick={() => {
-                setQuery('')
-                setStatusFilter('all')
-              }}
-            >
-              Clear filters
-            </Button>
-          }
-        />
+        people.length > 0 ? null : (
+          <EmptyState
+            icon="Search"
+            title="Nothing matches"
+            message="No break, username or name matches the current search and status filter."
+            action={
+              <Button
+                icon="X"
+                onClick={() => {
+                  setQuery('')
+                  setStatusFilter('all')
+                }}
+              >
+                Clear filters
+              </Button>
+            }
+          />
+        )
       ) : (
         <div className="chk-grid">
           {visible.map((b) => (
@@ -609,7 +690,7 @@ function BreakCard({
     >
       <div className="chk-card-head">
         <span className="chk-num">
-          <Icon name="Layers" size={14} />#{summary.breakNumber}
+          <BreakChip label={summary.breakLabel} size="sm" />
         </span>
         <span className={`chk-status ${summary.status}`}>
           <Icon name={STATUS_ICONS[summary.status]} size={12} />
@@ -739,9 +820,13 @@ function BreakDetailView({
   onStatus: (status: ShipBreakStatus) => void
   onClear: () => void
 }): JSX.Element {
-  // Packs by default: the picker is building one pile per customer, and that
-  // view carries far more of the story than a flat list of team names.
-  const [group, setGroup] = useState<GroupMode>('customer')
+  // By team by default.
+  //
+  // Find and Pack are different jobs on different benches: the finder has one
+  // break's thirty cards in a stack and works down the slate; the packer has one
+  // customer's box. Landing Find on the per-customer view made it a second copy
+  // of Pack, and left the finder re-sorting a customer list in their head.
+  const [group, setGroup] = useState<GroupMode>('team')
   const [hideChecked, setHideChecked] = useState(false)
   const [find, setFind] = useState('')
 
@@ -767,14 +852,36 @@ function BreakDetailView({
     })
   }, [detail.slots, hideChecked, find])
 
-  /** Flat team order — one pile of cards to work straight down. */
-  const flat = useMemo(
-    () =>
-      [...filtered].sort(
-        (a, b) => a.teamName.localeCompare(b.teamName) || a.handle.localeCompare(b.handle)
-      ),
-    [filtered]
-  )
+  /**
+   * The FULL slate, in team order — what is physically in the finder's hands.
+   *
+   * A break is thirty (or thirty-two) cards whether or not all thirty sold. The
+   * list used to hold only the sold ones, so a finder holding the Yankees in a
+   * break that sold twenty-nine had no way to tell "nobody bought this, it goes
+   * to the house" from "the slip did not read and this card belongs to someone".
+   * Those need completely different actions, and the screen said nothing.
+   *
+   * So the unsold teams are drawn too — greyed, un-checkable, and named. The
+   * slate comes from the import's own audit, which is now measured per printed
+   * label, so #11 and #11A each get their own thirty.
+   */
+  const slate = useMemo<SlateRow[]>(() => {
+    const rows: SlateRow[] = filtered.map((slot) => ({ kind: 'slot', key: slot.id, teamName: slot.teamName, slot }))
+    // "Hide picked" means "show me what is left". An unsold team is not left to
+    // do, so it goes with the picked ones.
+    if (!hideChecked) {
+      const q = find.trim().toLowerCase()
+      for (const teamName of detail.audit?.missingTeams ?? []) {
+        if (q && !teamName.toLowerCase().includes(q)) continue
+        rows.push({ kind: 'unsold', key: `unsold_${teamName}`, teamName })
+      }
+    }
+    return rows.sort(
+      (a, b) =>
+        a.teamName.localeCompare(b.teamName) ||
+        (a.kind === 'slot' ? a.slot.handle : '').localeCompare(b.kind === 'slot' ? b.slot.handle : '')
+    )
+  }, [filtered, detail.audit, hideChecked, find])
 
   /**
    * One pack per customer, carrying its own totals so the header can state the
@@ -849,8 +956,7 @@ function BreakDetailView({
           All breaks
         </button>
         <span className="chk-detail-title">
-          <Icon name="Layers" size={18} />
-          Break #{detail.breakNumber}
+          <BreakChip label={detail.breakLabel} />
         </span>
         <span className={`chk-status ${detail.status}`}>
           <Icon name={STATUS_ICONS[detail.status]} size={12} />
@@ -1018,19 +1124,29 @@ function BreakDetailView({
               </em>
             )}
           </span>
-          {audit.missingCount > 0 && (
-            <span className="chk-missing">
-              <span className="chk-missing-label">{audit.missingCount} not sold / not captured:</span>
-              {audit.missingTeams.slice(0, 14).map((t) => (
-                <span className="ship-team-chip" key={t}>
-                  {t}
+          {audit.missingCount > 0 &&
+            (group === 'team' ? (
+              // In the by-team list every one of these is already drawn in place,
+              // greyed and in slate order. Repeating them here as chips would say
+              // the same thing twice and push the actual work down the page.
+              <span className="chk-missing">
+                <span className="chk-missing-label">
+                  {audit.missingCount} not sold — shown greyed in the list below
                 </span>
-              ))}
-              {audit.missingTeams.length > 14 && (
-                <span className="ship-more">+{audit.missingTeams.length - 14} more</span>
-              )}
-            </span>
-          )}
+              </span>
+            ) : (
+              <span className="chk-missing">
+                <span className="chk-missing-label">{audit.missingCount} not sold:</span>
+                {audit.missingTeams.slice(0, 14).map((t) => (
+                  <span className="ship-team-chip" key={t}>
+                    {t}
+                  </span>
+                ))}
+                {audit.missingTeams.length > 14 && (
+                  <span className="ship-more">+{audit.missingTeams.length - 14} more</span>
+                )}
+              </span>
+            ))}
         </div>
       )}
 
@@ -1060,7 +1176,7 @@ function BreakDetailView({
             <button
               className={group === 'team' ? 'active' : ''}
               onClick={() => setGroup('team')}
-              title="One flat list in team order — fastest when you have the break's cards in hand"
+              title="The whole slate in team order, including the teams nobody bought — matches the stack in your hand"
             >
               <Icon name="ListChecks" size={14} /> By team
             </button>
@@ -1082,7 +1198,7 @@ function BreakDetailView({
           title="This break has no cards"
           message="No customer won a team in this break, or the slips could not be read."
         />
-      ) : filtered.length === 0 ? (
+      ) : filtered.length === 0 && !(group === 'team' && slate.length > 0) ? (
         <EmptyState
           icon="CheckCircle2"
           title={hideChecked && find.trim() === '' ? 'Everything here is picked' : 'Nothing matches'}
@@ -1120,16 +1236,20 @@ function BreakDetailView({
             ))
           ) : (
             <div className="chk-flat">
-              {flat.map((s) => (
-                <PickTile
-                  key={s.id}
-                  slot={s}
-                  showCustomer
-                  canFind={canFind}
-                  onToggle={() => onToggleSlot(s.id, !s.checkedOff)}
-                  onSleeve={() => onToggleSleeve(s.id, !s.topSleeved)}
-                />
-              ))}
+              {slate.map((r) =>
+                r.kind === 'unsold' ? (
+                  <UnsoldTile key={r.key} teamName={r.teamName} />
+                ) : (
+                  <PickTile
+                    key={r.key}
+                    slot={r.slot}
+                    showCustomer
+                    canFind={canFind}
+                    onToggle={() => onToggleSlot(r.slot.id, !r.slot.checkedOff)}
+                    onSleeve={() => onToggleSleeve(r.slot.id, !r.slot.topSleeved)}
+                  />
+                )
+              )}
             </div>
           )}
         </div>
@@ -1368,6 +1488,37 @@ function PackRun({
             onSleeve={() => onToggleSleeve(s.id, !s.topSleeved)}
           />
         ))}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * A team in this break's slate that nobody bought.
+ *
+ * Deliberately inert: there is no customer, so there is nothing to check off and
+ * nothing to sleeve. It exists so the finder can account for every card in their
+ * hand — this one goes to the house — instead of being left to wonder whether
+ * the slip failed to read. Not a flag: nothing went wrong, a team just did not
+ * sell, which happens in most breaks.
+ */
+function UnsoldTile({ teamName }: { teamName: string }): JSX.Element {
+  return (
+    <div className="chk-tile unsold wide" aria-disabled="true">
+      <div className="chk-tile-main">
+        <span className="chk-tile-check">
+          <Icon name="Minus" size={20} strokeWidth={1.9} />
+        </span>
+        <span className="chk-tile-body">
+          <span className="chk-tile-team">{teamName}</span>
+          <span className="chk-tile-owner">
+            <span className="chk-unsold-note">Nobody bought this one — it goes to the house</span>
+          </span>
+        </span>
+        <span className="chk-tile-flags">
+          <span className="ship-chip mini">Not sold</span>
+        </span>
+        <span className="chk-tile-price mono">—</span>
       </div>
     </div>
   )

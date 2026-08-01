@@ -496,8 +496,8 @@ export function UploadTab({ summary, canManage, onChanged, onGoTo }: ShipTabProp
           <div className="ship-collision-list">
             {collisionAudits.map((a) =>
               a.collisions.map((c) => (
-                <div className="ship-collision-row" key={`${a.breakNumber}-${c.teamName}`}>
-                  <span className="ship-collision-break">Break #{a.breakNumber}</span>
+                <div className="ship-collision-row" key={`${a.breakLabel}-${c.teamName}`}>
+                  <span className="ship-collision-break">Break #{a.breakLabel}</span>
                   <span className="ship-collision-team">{c.teamName}</span>
                   <span className="ship-collision-handles">
                     {c.handles.map((h) => (
@@ -536,7 +536,7 @@ export function UploadTab({ summary, canManage, onChanged, onGoTo }: ShipTabProp
           </div>
           <div className="ship-audit-list">
             {(showAllAudit ? audit : incomplete).map((a) => (
-              <AuditRow key={a.breakNumber} audit={a} />
+              <AuditRow key={a.breakLabel} audit={a} />
             ))}
             {!showAllAudit && incomplete.length === 0 && (
               <div className="ship-audit-clean">
@@ -683,7 +683,7 @@ function AuditRow({ audit }: { audit: ShipBreakAudit }): JSX.Element {
   return (
     <div className={`ship-audit-row ${hasCollisions ? 'danger' : audit.hasAll ? 'ok' : 'warn'}`}>
       <button className="ship-audit-head" onClick={() => setOpen((v) => !v)}>
-        <span className="ship-audit-num">Break #{audit.breakNumber}</span>
+        <span className="ship-audit-num">Break #{audit.breakLabel}</span>
         <span className="ship-audit-bar">
           <span className="ship-audit-fill" style={{ width: `${pct}%` }} />
         </span>

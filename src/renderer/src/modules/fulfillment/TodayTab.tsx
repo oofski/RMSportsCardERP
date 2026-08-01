@@ -101,7 +101,7 @@ export function TodayTab({ summary, onGoTo }: ShipTabProps): JSX.Element {
           <div className="today-chips">
             {mine.map((b) => (
               <button key={b.id} className="today-chip" onClick={() => onGoTo('find')}>
-                <BreakChip n={b.breakNumber} />
+                <BreakChip label={b.breakLabel} />
                 <span className="today-chip-prog">
                   {b.checkedTeams}/{b.totalTeams}
                 </span>
@@ -171,7 +171,7 @@ export function TodayTab({ summary, onGoTo }: ShipTabProps): JSX.Element {
                 onClick={() => onGoTo('find')}
               >
                 <div className="today-break-top">
-                  <BreakChip n={b.breakNumber} />
+                  <BreakChip label={b.breakLabel} />
                   <span className="today-break-count">
                     {b.checkedTeams}/{b.totalTeams}
                   </span>

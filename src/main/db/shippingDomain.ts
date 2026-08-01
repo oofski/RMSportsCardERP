@@ -199,6 +199,7 @@ function orderBreaksFor(slots: ShipTeamSlot[]): ShipOrderBreak[] {
     if (!g) {
       g = {
         breakId: s.breakId,
+        breakLabel: s.breakLabel,
         breakNumber: s.breakNumber,
         teams: [],
         value: 0,
@@ -228,7 +229,8 @@ function orderBreaksFor(slots: ShipTeamSlot[]): ShipOrderBreak[] {
     if (a.breakNumber === null && b.breakNumber === null) return a.breakId.localeCompare(b.breakId)
     if (a.breakNumber === null) return 1
     if (b.breakNumber === null) return -1
-    return a.breakNumber - b.breakNumber
+    // Same number, different letter — #11 before #11A, stable everywhere.
+    return a.breakNumber - b.breakNumber || (a.breakLabel ?? '').localeCompare(b.breakLabel ?? '')
   })
 }
 
@@ -694,6 +696,7 @@ function summarizeBreak(
   }
   return {
     id: br.id,
+    breakLabel: br.breakLabel,
     breakNumber: br.breakNumber,
     eventName: br.eventName,
     eventDate: br.eventDate,
@@ -716,8 +719,8 @@ export function listBreaks(): ShipBreakSummary[] {
     if (list) list.push(s)
     else slotsByBreak.set(s.breakId, [s])
   }
-  const auditByNumber = new Map<number, ShipBreakAudit>()
-  for (const a of listShipBreakAudit()) auditByNumber.set(a.breakNumber, a)
+  const auditByLabel = new Map<string, ShipBreakAudit>()
+  for (const a of listShipBreakAudit()) auditByLabel.set(a.breakLabel, a)
   const assignees = assigneesByBreak()
 
   // Only real breaks appear: a break-less giveaway's `giveaway_<handle>` id has
@@ -726,7 +729,7 @@ export function listBreaks(): ShipBreakSummary[] {
     summarizeBreak(
       br,
       slotsByBreak.get(br.id) ?? [],
-      auditByNumber.get(br.breakNumber) ?? null,
+      auditByLabel.get(br.breakLabel) ?? null,
       assignees.get(br.id) ?? []
     )
   )
@@ -739,7 +742,7 @@ export function getBreakSummary(id: string): ShipBreakSummary | null {
   return summarizeBreak(
     br,
     listShipTeamSlotsByBreak(id),
-    getShipBreakAudit(br.breakNumber),
+    getShipBreakAudit(br.breakLabel),
     listBreakAssignees(id)
   )
 }
@@ -748,7 +751,7 @@ export function getBreak(id: string): ShipBreakDetail | null {
   const br = getShipBreak(id)
   if (!br) return null
   const slots = listShipTeamSlotsByBreak(id)
-  const summary = summarizeBreak(br, slots, getShipBreakAudit(br.breakNumber), listBreakAssignees(id))
+  const summary = summarizeBreak(br, slots, getShipBreakAudit(br.breakLabel), listBreakAssignees(id))
 
   const customers = new Map<string, ShipCustomer>()
   const shipments = new Map<string, ShipShipment>()
@@ -1103,6 +1106,7 @@ export function getSales(): ShipSalesSummary {
       if (!row) {
         row = {
           breakId: s.breakId,
+          breakLabel: s.breakLabel,
           breakNumber: s.breakNumber,
           cards: 0,
           paidCards: 0,
@@ -1145,6 +1149,7 @@ export function getSales(): ShipSalesSummary {
   const byBreak: ShipSalesBreakRow[] = [...breakAgg.values()]
     .map((r) => ({
       breakId: r.breakId,
+      breakLabel: r.breakLabel,
       breakNumber: r.breakNumber,
       cards: r.cards,
       paidCards: r.paidCards,
@@ -1157,7 +1162,7 @@ export function getSales(): ShipSalesSummary {
       if (a.breakNumber === null && b.breakNumber === null) return a.breakId.localeCompare(b.breakId)
       if (a.breakNumber === null) return 1
       if (b.breakNumber === null) return -1
-      return a.breakNumber - b.breakNumber
+      return a.breakNumber - b.breakNumber || (a.breakLabel ?? '').localeCompare(b.breakLabel ?? '')
     })
 
   const sortedCustomers = [...byCustomer].sort((a, b) => b.revenue - a.revenue)
@@ -1197,6 +1202,7 @@ export function getLedger(): ShipLedgerRow[] {
       handle: customer.whatnotHandle || customer.id,
       realName: customer.realName,
       breakId: slot.breakId,
+      breakLabel: slot.breakLabel,
       breakNumber: slot.breakNumber,
       teamName: slot.teamName,
       orderId: slot.orderId,
@@ -1214,7 +1220,10 @@ export function getLedger(): ShipLedgerRow[] {
     if (a.breakNumber !== null && b.breakNumber !== null && a.breakNumber !== b.breakNumber) {
       return a.breakNumber - b.breakNumber
     }
-    return a.teamName.localeCompare(b.teamName)
+    // Same number: #11 before #11A. Two breaks, so their cards must not
+    // interleave in the export somebody reconciles against.
+    const byLabel = (a.breakLabel ?? '').localeCompare(b.breakLabel ?? '')
+    return byLabel !== 0 ? byLabel : a.teamName.localeCompare(b.teamName)
   })
 }
 
@@ -1481,7 +1490,7 @@ export function buildCsv(kind: ShipExportKind): { csv: string; filename: string 
 
     case 'ledger': {
       const rows = getLedger().map((l) => [
-        l.breakNumber ?? '',
+        l.breakLabel ?? '',
         l.teamName,
         l.handle,
         l.realName,
@@ -1517,7 +1526,7 @@ export function buildCsv(kind: ShipExportKind): { csv: string; filename: string 
     case 'sales': {
       const sales = getSales()
       const rows = sales.byBreak.map((b) => [
-        b.breakNumber ?? 'Giveaway',
+        b.breakLabel ?? 'Giveaway',
         b.cards,
         b.paidCards,
         b.giveaways,

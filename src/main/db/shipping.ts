@@ -60,6 +60,7 @@ interface EventRow {
 
 interface BreakRow {
   id: string
+  break_label: string | null
   break_number: number | null
   event_name: string | null
   event_date: string | null
@@ -77,6 +78,7 @@ interface CustomerRow {
 interface TeamSlotRow {
   id: string
   break_id: string | null
+  break_label: string | null
   break_number: number | null
   team_name: string | null
   customer_id: string | null
@@ -129,6 +131,7 @@ interface BatchUrlRow {
 }
 
 interface BreakAuditRow {
+  break_label: string | null
   break_number: number
   team_count: number | null
   distinct_team_count: number | null
@@ -205,6 +208,8 @@ const cents = (n: number): number => Math.round(num(n) * 100) / 100
 function toBreak(r: BreakRow): ShipBreak {
   return {
     id: r.id,
+    // A row written before v31 has no label; its number IS its label.
+    breakLabel: str(r.break_label) || String(num(r.break_number)),
     breakNumber: num(r.break_number),
     eventName: str(r.event_name),
     eventDate: str(r.event_date),
@@ -226,6 +231,7 @@ function toTeamSlot(r: TeamSlotRow): ShipTeamSlot {
   return {
     id: r.id,
     breakId: str(r.break_id),
+    breakLabel: r.break_label ?? (r.break_number === null || r.break_number === undefined ? null : String(r.break_number)),
     breakNumber: r.break_number === null || r.break_number === undefined ? null : r.break_number,
     teamName: str(r.team_name),
     customerId: str(r.customer_id),
@@ -287,6 +293,7 @@ function toBatchUrl(r: BatchUrlRow): ShipBatchUrl {
 
 function toBreakAudit(r: BreakAuditRow): ShipBreakAudit {
   return {
+    breakLabel: str(r.break_label) || String(r.break_number),
     breakNumber: r.break_number,
     teamCount: num(r.team_count),
     distinctTeamCount: num(r.distinct_team_count),
@@ -399,11 +406,11 @@ export function setShipEvent(name: string, date: string): ShipEvent {
 // Reads — breaks
 // ---------------------------------------------------------------------------
 
-const BREAK_SELECT = `SELECT id, break_number, event_name, event_date, status FROM ship_breaks`
+const BREAK_SELECT = `SELECT id, break_label, break_number, event_name, event_date, status FROM ship_breaks`
 
 export function listShipBreaks(): ShipBreak[] {
   const rows = getDb()
-    .prepare(`${BREAK_SELECT} ORDER BY break_number ASC, id ASC`)
+    .prepare(`${BREAK_SELECT} ORDER BY break_number ASC, break_label ASC, id ASC`)
     .all() as BreakRow[]
   return rows.map(toBreak)
 }
@@ -443,7 +450,7 @@ export function getShipCustomer(id: string): ShipCustomer | null {
 // ---------------------------------------------------------------------------
 
 const SLOT_SELECT = `
-  SELECT id, break_id, break_number, team_name, customer_id, order_id, price,
+  SELECT id, break_id, break_label, break_number, team_name, customer_id, order_id, price,
          is_giveaway, top_sleeved, checked_off, checked_off_at, checked_off_by
   FROM ship_team_slots
 `
@@ -468,7 +475,7 @@ export function listShipTeamSlotsByBreak(breakId: string): ShipTeamSlot[] {
 
 export function listShipTeamSlotsByCustomer(customerId: string): ShipTeamSlot[] {
   const rows = getDb()
-    .prepare(`${SLOT_SELECT} WHERE customer_id = ? ORDER BY break_number ASC, rowid ASC`)
+    .prepare(`${SLOT_SELECT} WHERE customer_id = ? ORDER BY break_number ASC, break_label ASC, rowid ASC`)
     .all(customerId) as TeamSlotRow[]
   return rows.map(toTeamSlot)
 }
@@ -545,18 +552,21 @@ export function listShipBatchUrls(): ShipBatchUrl[] {
 }
 
 const AUDIT_SELECT = `
-  SELECT break_number, team_count, distinct_team_count, max_teams, missing_count,
+  SELECT break_label, break_number, team_count, distinct_team_count, max_teams, missing_count,
          missing_teams, has_all, collisions
   FROM ship_break_audit
 `
 
 export function listShipBreakAudit(): ShipBreakAudit[] {
-  const rows = getDb().prepare(`${AUDIT_SELECT} ORDER BY break_number ASC`).all() as BreakAuditRow[]
+  const rows = getDb()
+    .prepare(`${AUDIT_SELECT} ORDER BY break_number ASC, break_label ASC`)
+    .all() as BreakAuditRow[]
   return rows.map(toBreakAudit)
 }
 
-export function getShipBreakAudit(breakNumber: number): ShipBreakAudit | null {
-  const row = getDb().prepare(`${AUDIT_SELECT} WHERE break_number = ?`).get(breakNumber) as
+/** By the PRINTED LABEL — "11" and "11A" have separate slates. */
+export function getShipBreakAudit(breakLabel: string): ShipBreakAudit | null {
+  const row = getDb().prepare(`${AUDIT_SELECT} WHERE break_label = ?`).get(breakLabel) as
     | BreakAuditRow
     | undefined
   return row ? toBreakAudit(row) : null
@@ -911,9 +921,17 @@ export function clearShipDataset(): void {
 }
 
 /** Carry-forward key for a team slot: `handle|breakNumber|teamName`. */
-function slotKey(customerId: string, breakNumber: number | null, teamName: string): string {
-  const bn = breakNumber === null || breakNumber === undefined ? '' : String(breakNumber)
-  return `${customerId}|${bn}|${str(teamName).trim().toLowerCase()}`
+/**
+ * The carry-forward identity of one card across a re-import.
+ *
+ * Keyed on the printed LABEL, not the number: re-importing a show that ran both
+ * #11 and #11A would otherwise let a Yankees card picked in #11 hand its tick to
+ * the Yankees card in #11A, and the floor would be told a card was found that
+ * nobody has touched.
+ */
+function slotKey(customerId: string, breakLabel: string | null, teamName: string): string {
+  const bl = breakLabel === null || breakLabel === undefined ? '' : String(breakLabel).trim()
+  return `${customerId}|${bl}|${str(teamName).trim().toLowerCase()}`
 }
 
 function datasetCounts(dataset: ShippingDataset): ShipImportCounts {
@@ -990,12 +1008,13 @@ export function importDataset(
       .run(eventName, eventDate, createdAt)
 
     const insBreak = database.prepare(
-      `INSERT INTO ship_breaks (id, break_number, event_name, event_date, status)
-       VALUES (?, ?, ?, ?, ?)`
+      `INSERT INTO ship_breaks (id, break_label, break_number, event_name, event_date, status)
+       VALUES (?, ?, ?, ?, ?, ?)`
     )
     for (const b of dataset.breaks) {
       insBreak.run(
         b.id,
+        b.breakLabel || String(b.breakNumber),
         b.breakNumber,
         str(b.eventName) || eventName,
         str(b.eventDate) || eventDate,
@@ -1013,14 +1032,15 @@ export function importDataset(
 
     const insSlot = database.prepare(
       `INSERT INTO ship_team_slots
-         (id, break_id, break_number, team_name, customer_id, order_id, price,
+         (id, break_id, break_label, break_number, team_name, customer_id, order_id, price,
           is_giveaway, top_sleeved, checked_off, checked_off_at, checked_off_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     for (const s of dataset.teamSlots) {
       insSlot.run(
         s.id,
         s.breakId,
+        s.breakLabel ?? (s.breakNumber === null || s.breakNumber === undefined ? null : String(s.breakNumber)),
         s.breakNumber ?? null,
         str(s.teamName),
         s.customerId,
@@ -1092,12 +1112,13 @@ export function importDataset(
 
     const insAudit = database.prepare(
       `INSERT INTO ship_break_audit
-         (break_number, team_count, distinct_team_count, max_teams, missing_count,
+         (break_label, break_number, team_count, distinct_team_count, max_teams, missing_count,
           missing_teams, has_all, collisions)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     for (const a of dataset.breakAudit) {
       insAudit.run(
+        a.breakLabel || String(a.breakNumber),
         a.breakNumber,
         num(a.teamCount),
         num(a.distinctTeamCount),
@@ -1227,7 +1248,7 @@ function carryForwardOperatorState(
   for (const s of prevSlots) {
     // Nothing to carry for a slot that was never touched.
     if (!s.checkedOff && !s.topSleeved) continue
-    const key = slotKey(s.customerId, s.breakNumber, s.teamName)
+    const key = slotKey(s.customerId, s.breakLabel, s.teamName)
     const list = queues.get(key)
     if (list) list.push(s)
     else queues.set(key, [s])
@@ -1241,16 +1262,16 @@ function carryForwardOperatorState(
     const cursor = new Map<string, number>()
     const currentSlots = database
       .prepare(
-        `SELECT id, customer_id, break_number, team_name FROM ship_team_slots ORDER BY rowid ASC`
+        `SELECT id, customer_id, break_label, team_name FROM ship_team_slots ORDER BY rowid ASC`
       )
       .all() as Array<{
       id: string
       customer_id: string | null
-      break_number: number | null
+      break_label: string | null
       team_name: string | null
     }>
     for (const row of currentSlots) {
-      const key = slotKey(str(row.customer_id), row.break_number ?? null, str(row.team_name))
+      const key = slotKey(str(row.customer_id), row.break_label ?? null, str(row.team_name))
       const list = queues.get(key)
       if (!list) continue
       const i = cursor.get(key) ?? 0
@@ -1268,8 +1289,9 @@ function carryForwardOperatorState(
   }
 
   // --- break status: explicit packed/shipped is sticky ---------------------
-  const prevStatusByNumber = new Map<number, ShipBreakStatus>()
-  for (const b of prevBreaks) prevStatusByNumber.set(b.breakNumber, b.status)
+  // By label — a "#11A packed" must not mark #11 packed when both ran.
+  const prevStatusByLabel = new Map<string, ShipBreakStatus>()
+  for (const b of prevBreaks) prevStatusByLabel.set(b.breakLabel, b.status)
   const updBreak = database.prepare(`UPDATE ship_breaks SET status = ? WHERE id = ?`)
   const checkedByBreak = new Map<string, number>()
   const checkedRows = database
@@ -1279,10 +1301,10 @@ function carryForwardOperatorState(
     .all() as Array<{ break_id: string | null; n: number }>
   for (const r of checkedRows) checkedByBreak.set(str(r.break_id), r.n)
   const breakRows = database
-    .prepare(`SELECT id, break_number FROM ship_breaks`)
-    .all() as Array<{ id: string; break_number: number | null }>
+    .prepare(`SELECT id, break_label FROM ship_breaks`)
+    .all() as Array<{ id: string; break_label: string | null }>
   for (const b of breakRows) {
-    const prevStatus = b.break_number === null ? undefined : prevStatusByNumber.get(b.break_number)
+    const prevStatus = b.break_label === null ? undefined : prevStatusByLabel.get(b.break_label)
     const next: ShipBreakStatus =
       prevStatus === 'packed' || prevStatus === 'shipped'
         ? prevStatus
