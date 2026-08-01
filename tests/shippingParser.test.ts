@@ -8,6 +8,7 @@
  * Run: npm run test:parser
  */
 import { parsePages } from '../src/main/shipping/parser'
+import { groupIntoLines } from '../src/main/shipping/pdf'
 
 let pass = 0, fail = 0
 const ok = (c: boolean, label: string, extra = ''): void => {
@@ -67,6 +68,43 @@ const res3 = parsePages([plain], { sport: 'mlb' })
 ok(res3.warnings.filter((w) => /is dropped/.test(w.message)).length === 0,
    'a normal label raises no suffix warning')
 ok(res3.teamSlots[0]?.breakNumber === 12, 'and parses as break 12')
+
+// ---------------------------------------------------------------------------
+// 4. The line grouper: a row set in two sizes is still ONE row
+// ---------------------------------------------------------------------------
+// Real geometry from the July 2026 Finest Baseball export, page A7: the qty,
+// order id and price sit at y=498.57 (11pt) and the team name at y=498.27
+// (12pt). Math.round puts them on different lines; clustering does not.
+
+const row = groupIntoLines([
+  { y: 498.57, x: 23.81, s: '1' },
+  { y: 498.27, x: 63.5, s: 'Washington Nationals' },
+  { y: 498.57, x: 349.8, s: 'Order 1181185826' },
+  { y: 498.57, x: 543.19, s: '$15.00' }
+])
+ok(row.length === 1, 'a two-size row groups as one line', JSON.stringify(row))
+ok(
+  row[0] === '1 Washington Nationals Order 1181185826 $15.00',
+  'and reads in column order',
+  row[0]
+)
+
+// The badge sits 0.95–0.96pt off its row and must come with it...
+const badged = groupIntoLines([
+  { y: 726.9, x: 23.81, s: 'To: davkaylem' },
+  { y: 725.95, x: 120, s: 'NEW' },
+  { y: 726.9, x: 349.8, s: 'From: rm_cardz' }
+])
+ok(badged.length === 1, 'the NEW badge stays on the To: line', JSON.stringify(badged))
+
+// ...while genuinely separate rows stay separate. The smallest real gap between
+// two rows in the corpus is 12.47pt.
+const twoRows = groupIntoLines([
+  { y: 498.57, x: 23.81, s: '1' },
+  { y: 498.27, x: 63.5, s: 'Washington Nationals' },
+  { y: 486.1, x: 349.8, s: '1x 2026 FINEST BASEBALL' }
+])
+ok(twoRows.length === 2, 'a 12.47pt gap is still two lines', JSON.stringify(twoRows))
 
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

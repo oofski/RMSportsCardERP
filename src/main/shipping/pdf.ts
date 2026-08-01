@@ -67,6 +67,55 @@ async function loadPdfjs(): Promise<PdfJsLike> {
 /**
  * Extract one text string per page, in visual reading order.
  */
+/** One positioned run of text from the PDF. */
+export interface TextItem {
+  y: number
+  x: number
+  s: string
+}
+
+/**
+ * Group positioned text into visual lines by CLUSTERING the baseline, not by
+ * rounding it.
+ *
+ * Rounding looks equivalent and is not. A packing-slip row is set in two sizes —
+ * the qty, order id and price at 11pt, the team name at 12pt — so the team's
+ * baseline sits 0.30pt below the rest of its own row. Whenever that row straddles
+ * a .5 boundary the two values round to different integers and the team name is
+ * torn onto a line of its own.
+ *
+ * On the July 2026 Finest Baseball export that hit 105 of 391 rows (27%), and the
+ * cost was not cosmetic. Those names stopped resolving to MLB teams, collapsed to
+ * the literal string "Unknown team", and two unreadable rows in one break then
+ * registered as the same team claimed by two customers — so all 13 breaks
+ * reported missing teams and a collision that did not exist. Clustering takes
+ * that document from 106 unmatched names to 1 (a slot genuinely titled "#30")
+ * and from 13 phantom collisions to none.
+ *
+ * The tolerance is safe by a wide margin: the largest offset WITHIN a row is
+ * 0.96pt (the NEW and GIVEAWAY badges) and the smallest gap BETWEEN two real rows
+ * is 12.47pt.
+ */
+export const LINE_TOLERANCE = 2
+
+export function groupIntoLines(items: TextItem[]): string[] {
+  const sorted = [...items].sort((a, b) => b.y - a.y)
+  const buckets: { y: number; row: TextItem[] }[] = []
+  for (const item of sorted) {
+    const last = buckets[buckets.length - 1]
+    if (last && Math.abs(last.y - item.y) <= LINE_TOLERANCE) last.row.push(item)
+    else buckets.push({ y: item.y, row: [item] })
+  }
+  return buckets.map(({ row }) =>
+    row
+      .sort((a, b) => a.x - b.x)
+      .map((i) => i.s)
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+  )
+}
+
 export async function extractPages(
   buffer: Uint8Array | ArrayBuffer | Buffer,
   options: ExtractPagesOptions = {}
@@ -85,29 +134,12 @@ export async function extractPages(
     for (let i = 1; i <= doc.numPages; i++) {
       const page = await doc.getPage(i)
       const tc = await page.getTextContent()
-      const buckets = new Map<number, { x: number; s: string }[]>()
+      const items: TextItem[] = []
       for (const it of tc.items) {
-        if (!it.str) continue
-        const transform = it.transform
-        if (!transform) continue
-        const y = Math.round(transform[5])
-        let bucket = buckets.get(y)
-        if (!bucket) {
-          bucket = []
-          buckets.set(y, bucket)
-        }
-        bucket.push({ x: transform[4], s: it.str })
+        if (!it.str || !it.transform) continue
+        items.push({ y: it.transform[5], x: it.transform[4], s: it.str })
       }
-      const lines = [...buckets.entries()]
-        .sort((a, b) => b[0] - a[0])
-        .map(([, items]) =>
-          items
-            .sort((a, b) => a.x - b.x)
-            .map((i) => i.s)
-            .join(' ')
-            .replace(/\s+/g, ' ')
-            .trim()
-        )
+      const lines = groupIntoLines(items)
       pages.push(lines.join('\n'))
       page.cleanup?.()
       options.onProgress?.(i, doc.numPages)
