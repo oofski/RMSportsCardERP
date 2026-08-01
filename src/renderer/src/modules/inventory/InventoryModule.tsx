@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { CategorySummary, InventoryProduct, InventoryStats } from '@shared/types'
 import { useSession } from '../../lib/session'
 import { api } from '../../lib/api'
+import { LIVE, useLiveRefresh } from '../../lib/live'
 import { Icon } from '../../components/Icon'
 import { Button, CenterLoader } from '../../components/ui'
 import { InventoryOverview } from './InventoryOverview'
@@ -65,6 +66,10 @@ export function InventoryModule(): JSX.Element {
 
   // Thumbnails are comparatively expensive (base64), so load them on their own
   // cadence — only on mount and when an image is actually added/removed.
+  // Stock, cost and the catalog all move under this screen while somebody is
+  // reading it — a case received at the other bench changes what is on the shelf.
+  useLiveRefresh(LIVE.inventory, reload)
+
   useEffect(() => {
     api.inventory.thumbnails().then(setThumbnails)
   }, [thumbVersion])

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { IntakeLink, IntakeSubmission, SyncReject, SyncStatus } from '@shared/sync'
 import { api } from '../../lib/api'
+import { LIVE, useLiveRefresh } from '../../lib/live'
 import { Button, CenterLoader, EmptyState, Field, Input, Textarea } from '../../components/ui'
 import { Icon } from '../../components/Icon'
 import { useToast } from '../../components/Toast'
@@ -49,6 +50,10 @@ export function CloudSyncTab(): JSX.Element {
     setUrl(s.config.url)
     setDevice(s.config.device)
   }, [])
+
+  // Customer submissions land through sync like anything else; this is the
+  // screen someone sits on waiting for them.
+  useLiveRefresh(LIVE.intake, load)
 
   useEffect(() => {
     let active = true

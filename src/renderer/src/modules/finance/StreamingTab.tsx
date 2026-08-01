@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { LIVE, useLiveRefresh } from '../../lib/live'
 import type { StreamingFinanceView } from '@shared/financeStreaming'
 import { Button, CenterLoader } from '../../components/ui'
 import { useSession } from '../../lib/session'
@@ -84,6 +85,10 @@ export function StreamingTab(): JSX.Element {
       alive = false
     }
   }, [attempt])
+
+  // A ledger import run on another machine changes every number on this screen.
+  // Reuses the existing retry counter rather than adding a second way to reload.
+  useLiveRefresh(LIVE.finance, () => setAttempt((n) => n + 1))
 
   const applyView = useCallback((next: StreamingFinanceView) => setView(next), [])
 

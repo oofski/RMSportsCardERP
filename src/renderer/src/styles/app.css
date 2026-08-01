@@ -14572,3 +14572,76 @@ button.sor-team:focus-visible {
   background: var(--surface-2);
   border: 1px solid var(--border);
 }
+
+/* ---------------------------------------------------------------------------
+   Live badge — "is what I am looking at current?", in the chrome, every screen
+   ------------------------------------------------------------------------ */
+.live-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px 4px 8px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-2);
+  white-space: nowrap;
+  user-select: none;
+  transition: background 160ms ease, color 160ms ease, border-color 160ms ease;
+}
+.live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-3);
+  flex-shrink: 0;
+}
+.live-badge[data-tone='live'] .live-dot {
+  background: var(--success);
+}
+.live-badge[data-tone='busy'] .live-dot {
+  background: var(--info);
+  /* Movement, because "Sending" is a state that ends — a static dot reads as a
+     stuck one. */
+  animation: live-pulse 1.1s ease-in-out infinite;
+}
+.live-badge[data-tone='paused'] {
+  border-color: var(--warning);
+  background: var(--warning-bg);
+  color: var(--text);
+}
+.live-badge[data-tone='paused'] .live-dot {
+  background: var(--warning);
+}
+.live-badge[data-tone='offline'] {
+  border-color: var(--danger);
+  background: var(--danger-bg);
+  color: var(--text);
+}
+.live-badge[data-tone='offline'] .live-dot {
+  background: var(--danger);
+}
+/* The moment data lands. Brief and gentle: an acknowledgement that a colleague
+   changed something, not an alert demanding attention. */
+.live-badge[data-flash='true'] {
+  border-color: var(--success);
+  background: var(--success-bg);
+  color: var(--text);
+}
+@keyframes live-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .live-badge[data-tone='busy'] .live-dot {
+    animation: none;
+  }
+}

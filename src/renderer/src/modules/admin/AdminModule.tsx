@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import type { Employee } from '@shared/types'
 import { useSession } from '../../lib/session'
 import { api } from '../../lib/api'
+import { LIVE, useLiveRefresh } from '../../lib/live'
 import { Icon } from '../../components/Icon'
 import { CenterLoader } from '../../components/ui'
 import { EmployeesTab } from './EmployeesTab'
@@ -39,6 +40,9 @@ export function AdminModule(): JSX.Element {
     const list = await api.employees.list()
     setEmployees(list)
   }, [])
+
+  // The roster is shared, so somebody added on another machine belongs here now.
+  useLiveRefresh(LIVE.people, loadEmployees)
 
   useEffect(() => {
     ;(async () => {

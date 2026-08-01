@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ShipWorkspaceSummary } from '@shared/shippingViews'
 import { useSession } from '../../lib/session'
 import { api } from '../../lib/api'
+import { LIVE, useLiveRefresh } from '../../lib/live'
 import { formatMoney } from '../../lib/format'
 import { Icon } from '../../components/Icon'
 import { Button, CenterLoader, EmptyState } from '../../components/ui'
@@ -65,6 +66,10 @@ export function ShippingModule(): JSX.Element {
       if (next?.hasDataset) setTab('orders')
     }
   }, [])
+
+  // Two people pack the same event from two benches. Whoever checks a slip off
+  // must stop being work for the other one, without either of them refreshing.
+  useLiveRefresh(LIVE.shipping, reload)
 
   useEffect(() => {
     let active = true

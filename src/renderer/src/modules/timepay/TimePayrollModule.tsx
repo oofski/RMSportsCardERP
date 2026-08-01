@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { Employee, EmployeeHoursSummary } from '@shared/types'
 import { useSession } from '../../lib/session'
 import { api } from '../../lib/api'
+import { LIVE, useLiveRefresh } from '../../lib/live'
 import { useToast } from '../../components/Toast'
 import { Avatar, Button, CenterLoader, EmptyState, Field, Input, Modal, Select } from '../../components/ui'
 import { Icon } from '../../components/Icon'
@@ -51,6 +52,10 @@ export function TimePayrollModule(): JSX.Element {
     setEmployees(emp)
     setSummary(sum)
   }, [])
+
+  // Somebody clocking in on the warehouse machine belongs on this timesheet now,
+  // not whenever an admin happens to reopen the tab.
+  useLiveRefresh(LIVE.people, load)
 
   useEffect(() => {
     ;(async () => {

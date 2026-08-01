@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import type { InventoryTransaction } from '@shared/types'
 import { api } from '../../lib/api'
+import { LIVE, useLiveRefresh } from '../../lib/live'
 import { CenterLoader, EmptyState } from '../../components/ui'
 import { formatMoney, formatDateTime } from '../../lib/format'
 import { TxnBadge, LocBadge } from '../inventory/helpers'
@@ -12,6 +13,11 @@ import { TxnBadge, LocBadge } from '../inventory/helpers'
 export function ActivityTab(): JSX.Element {
   const [txns, setTxns] = useState<InventoryTransaction[]>([])
   const [loading, setLoading] = useState(true)
+
+  const load = useCallback(async () => {
+    const list = await api.inventory.transactions(300)
+    setTxns(list)
+  }, [])
 
   useEffect(() => {
     let mounted = true
@@ -25,6 +31,10 @@ export function ActivityTab(): JSX.Element {
       mounted = false
     }
   }, [])
+
+  // This tab exists to answer "what has been happening" — the one screen where
+  // showing yesterday's answer defeats the purpose.
+  useLiveRefresh(LIVE.activity, load)
 
   if (loading) return <CenterLoader />
   if (txns.length === 0) {

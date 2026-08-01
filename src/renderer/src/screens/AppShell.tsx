@@ -8,6 +8,7 @@ import { api } from '../lib/api'
 import { ChromeContext } from '../lib/chrome'
 import { Brand } from '../components/Brand'
 import { Icon } from '../components/Icon'
+import { LiveBadge } from '../components/LiveBadge'
 import { Avatar } from '../components/ui'
 import { UpdatePanel } from '../components/UpdatePanel'
 import { useToast } from '../components/Toast'
@@ -226,6 +227,7 @@ export function AppShell(): JSX.Element {
             </div>
 
             <div className="topbar-actions">
+              <LiveBadge />
               <button
                 className="icon-btn"
                 onClick={toggle}

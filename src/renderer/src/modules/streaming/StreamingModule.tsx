@@ -3,6 +3,7 @@ import type { Employee } from '@shared/types'
 import type { StreamSession } from '@shared/streaming'
 import { useSession } from '../../lib/session'
 import { api } from '../../lib/api'
+import { LIVE, useLiveRefresh } from '../../lib/live'
 import { Icon } from '../../components/Icon'
 import { EmptyState } from '../../components/ui'
 import { LiveBar } from './LiveBar'
@@ -55,6 +56,9 @@ export function StreamingModule(): JSX.Element {
       setActiveLoading(false)
     }
   }, [])
+
+  // The stream board is watched during a break while items are added elsewhere.
+  useLiveRefresh(LIVE.streaming, reloadActive)
 
   useEffect(() => {
     if (!streamingReady) {

@@ -8,6 +8,7 @@ import type {
 } from '@shared/types'
 import { useSession } from '../../lib/session'
 import { api } from '../../lib/api'
+import { LIVE, useLiveRefresh } from '../../lib/live'
 import { useToast } from '../../components/Toast'
 import { Button, CenterLoader, Modal } from '../../components/ui'
 import { Icon } from '../../components/Icon'
@@ -74,6 +75,9 @@ export function InvoicingModule(): JSX.Element {
     setSupplyOrders(orders)
     setSupplies(sup)
   }, [])
+
+  // A PO received on another machine has to leave this list here too.
+  useLiveRefresh(LIVE.purchasing, reload)
 
   useEffect(() => {
     let active = true
