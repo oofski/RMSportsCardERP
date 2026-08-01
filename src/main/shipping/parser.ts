@@ -61,14 +61,62 @@ const RE_ORDER_GLOBAL = /Order\s+(\d+)/gi
  * "Break #11A", and reading that as 11 means a document containing both #11A and
  * #11B folds 60 cards into one break where every team appears twice.
  */
-const RE_BREAK_NUMBER = /Break\s*#\s*(\d{1,3})([A-Za-z]?)(?![A-Za-z0-9])/i
+/**
+ * Reading a break's printed label.
+ *
+ * The label IS the break's identity — "#11A" is a different break from "#11",
+ * with a full slate of its own — so this has to survive however the person
+ * running the show happened to type it that night. All of these are one break:
+ *
+ *     Break #11A    Break #11a    Break # 11A
+ *     Break #11-A   Break #11 A   Break 11A
+ *
+ * and every one of them normalises to `11A`. That normalisation is the load-
+ * bearing part: the break id is `break_<label>`, so a slip that writes it two
+ * ways would otherwise split one break into two half-empty ones and scatter a
+ * customer's cards across both.
+ *
+ * The number is captured separately, and only ever used for ordering.
+ */
+const RE_BREAK_HEAD = /Break\s*#?\s*(\d{1,3})/i
 
-/** The printed label ("11A", "3") and its numeric part, for ordering. */
-export function readBreakLabel(text: string): { label: string; number: number } | null {
-  const m = text.match(RE_BREAK_NUMBER)
-  if (!m) return null
-  const suffix = (m[2] ?? '').toUpperCase()
-  return { label: `${Number(m[1])}${suffix}`, number: Number(m[1]) }
+/**
+ * A suffix written against the number, or joined to it by a dash or a dot.
+ * Up to two letters, because "#11AA" is a thing a tired person types and the
+ * old single-letter pattern matched NOTHING on it — the card fell out of every
+ * break and turned up as a loose order.
+ *
+ * The apostrophe in the lookahead is Oakland: "Break #3 A's" must read as break
+ * 3 with the A's as the team, never as break "3A".
+ */
+const RE_SUFFIX_JOINED = /^(?:[ \t]*[-–—.][ \t]*|)([A-Za-z]{1,2})(?![A-Za-z0-9'’])/
+
+/**
+ * A suffix separated by nothing but a space.
+ *
+ * Only ONE letter, and only when the label ends the line — which it always does
+ * on a real slip ("…HOBBY BOX- Break #11A"). Without that anchor "Break #3 x
+ * 2026 FINEST" reads as break "3X", and "Break #12 Boston Red Sox" would have
+ * to be defended against one team name at a time.
+ */
+const RE_SUFFIX_SPACED = /^[ \t]+([A-Za-z])[ \t]*(?=$|\n)/
+
+/** The printed label ("11A", "3"), its numeric part, and where it ends. */
+export function readBreakLabel(
+  text: string
+): { label: string; number: number; end: number } | null {
+  const head = RE_BREAK_HEAD.exec(text)
+  if (!head) return null
+  const number = Number(head[1])
+  const headEnd = (head.index ?? 0) + head[0].length
+  const tail = text.slice(headEnd)
+  const m = RE_SUFFIX_JOINED.exec(tail) ?? RE_SUFFIX_SPACED.exec(tail)
+  const suffix = m ? m[1].toUpperCase() : ''
+  return {
+    label: `${number}${suffix}`,
+    number,
+    end: headEnd + (m ? m[0].length : 0)
+  }
 }
 
 const RE_ITEMS_NOISE = /^\d+\s*x?\s*items?$/i
@@ -91,7 +139,7 @@ const RE_PRICE_GLOBAL = /\$\s*[0-9][0-9,]*(?:\.[0-9]{1,2})?/g
 /** `NEW` badge — but never the `NEW` of a city name. */
 const RE_NEW_BADGE = /(?:^|\s)NEW(?!\s+(?:YORK|ORLEANS|ENGLAND|JERSEY|MEXICO|HAMPSHIRE))(?:\s|$|!|\*)/
 const RE_ADDRESS_STOP =
-  /(?:Order\s+\d+|USPS|Break\s*#|\d+(?:\.\d+)?\s*oz\b|\$|\d{1,2}\/\d{1,2}\/\d{2,4}|^Total\b|^Subtotal\b|^Items?\b|^Qty\b|Whatnot|Packing\s+Slip|Breaking\s+Slip|Tracking)/i
+  /(?:Order\s+\d+|USPS|Break\s*#?\s*\d|\d+(?:\.\d+)?\s*oz\b|\$|\d{1,2}\/\d{1,2}\/\d{2,4}|^Total\b|^Subtotal\b|^Items?\b|^Qty\b|Whatnot|Packing\s+Slip|Breaking\s+Slip|Tracking)/i
 
 const NAME_STOPWORDS = new Set([
   'NEW',
@@ -640,16 +688,16 @@ export function parsePackingSlip(
     const fullWindow = `${beforeOrder}\n${windowText}`
 
     // break label (rule 2's `{1,3}` cap applies here too)
-    const breakMatch = fullWindow.match(RE_BREAK_NUMBER)
     const parsedBreak = readBreakLabel(fullWindow)
     const breakLabel = parsedBreak?.label ?? null
     const breakNumber = parsedBreak?.number ?? null
 
     // team — two real layouts; prefer whichever resolves canonically.
     const candidates: string[] = []
-    if (breakMatch) {
-      const after = fullWindow.slice((breakMatch.index ?? 0) + breakMatch[0].length)
-      const candidate = truncateCandidate(after)
+    if (parsedBreak) {
+      // From the END of the label, not the end of the number: on "#11A" the
+      // team candidate must not start with the stray "A".
+      const candidate = truncateCandidate(fullWindow.slice(parsedBreak.end))
       if (candidate) candidates.push(candidate)
     }
     // Test the noise guard BEFORE stripQty: it anchors on the leading digits
@@ -1117,11 +1165,55 @@ export function parsePages(pages: string[], options: ParsePagesOptions = {}): Sh
     shipments.map((s) => s.trackingNumber ?? '').filter((t): t is string => Boolean(t))
   )
 
+  // ---- The league is the check on the labels ------------------------------
+  //
+  // Once the sport is known the slate size is known — 30 for MLB and the NBA, 32
+  // for the NFL and NHL — and that turns "did the labelling go wrong" into
+  // arithmetic. None of this ever moves a card or refuses one: every card stays
+  // exactly where the slip put it and stays pickable. The numbers only ever
+  // produce a flag, because the machine cannot know which of two plausible
+  // mistakes was actually made, and a person can.
+  const slate = matcher.maxTeams
   for (const audit of breakAudit) {
     for (const collision of audit.collisions) {
       warnings.push({
         page: null,
         message: `Break #${audit.breakLabel}: ${collision.teamName} is assigned to ${collision.handles.length} customers (${collision.handles.map((h) => `@${h}`).join(', ')}).`,
+        rawText: null
+      })
+    }
+
+    // More cards than the league has teams. Usually two breaks that got the
+    // same label typed on them, occasionally a line that read as a team when it
+    // was not one.
+    if (slate > 0 && audit.teamCount > slate) {
+      warnings.push({
+        page: null,
+        message: `Break #${audit.breakLabel} holds ${audit.teamCount} cards but ${matcher.sport.toUpperCase()} only has ${slate} teams — every card is kept and pickable. Check whether two breaks were labelled the same.`,
+        rawText: null
+      })
+    }
+  }
+
+  // Breaks that share a number and differ only by a letter. Two full slates is
+  // a show that genuinely ran #11 and #11A. Two part-slates that add up to ONE
+  // is the other thing: one break, written two ways. Both are kept as separate
+  // breaks either way — merging them would move cards on a guess — but the
+  // second case is worth a person's eye before the show closes.
+  const siblingsByNumber = new Map<number, typeof breakAudit>()
+  for (const a of breakAudit) {
+    const list = siblingsByNumber.get(a.breakNumber)
+    if (list) list.push(a)
+    else siblingsByNumber.set(a.breakNumber, [a])
+  }
+  for (const [number, siblings] of siblingsByNumber) {
+    if (siblings.length < 2) continue
+    const labels = siblings.map((a) => `#${a.breakLabel}`).join(' and ')
+    const together = siblings.reduce((n, a) => n + a.distinctTeamCount, 0)
+    if (slate > 0 && together <= slate && siblings.every((a) => a.distinctTeamCount < slate)) {
+      warnings.push({
+        page: null,
+        message: `${labels} together hold ${together} of the ${slate} ${matcher.sport.toUpperCase()} teams and neither is a full slate on its own — they may be one break #${number} labelled two ways. Both are kept as separate breaks; nothing is blocked.`,
         rawText: null
       })
     }

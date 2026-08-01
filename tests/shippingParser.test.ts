@@ -91,6 +91,70 @@ ok(res2.breakAudit.length === 2 && res2.breakAudit.every((a) => a.teamCount === 
    JSON.stringify(res2.breakAudit.map((a) => ({ l: a.breakLabel, n: a.teamCount }))))
 ok(res2.teamSlots.reduce((a, s) => a + s.price, 0) === 110, 'and all $110 survives')
 
+// --- 2b. however the label was typed, it is the SAME break ---------------
+// The break id is `break_<label>`, so a slip that writes it two ways would
+// split one break in half and scatter a customer's cards across both.
+const labelSlip = (marker: string): string =>
+  [
+    'Whatnot Packing Slip 1/1',
+    'To: someone From: rm_cardz',
+    'Person Name',
+    '5 Oak Ave. Reno, NV. 89501. US',
+    'QTY Name & Description Attributes Subtotal',
+    '1 Boston Red Sox Order 3333333333 $20.00',
+    `1x 2026 FINEST BASEBALL HOBBY BOX (NEW RELEASE!)- ${marker}`,
+    '1 Item $20.00',
+    'USPS Ground Advantage #9300120762602315706746 3.0 oz'
+  ].join('\n')
+
+const labelOf = (marker: string): string | null => {
+  const r = parsePages([labelSlip(marker)], { sport: 'mlb' })
+  return r.breaks[0]?.breakLabel ?? null
+}
+
+for (const marker of ['Break #11A', 'Break #11a', 'Break # 11A', 'Break #11-A', 'Break #11 A', 'Break 11A']) {
+  ok(labelOf(marker) === '11A', `“${marker}” reads as break 11A`, String(labelOf(marker)))
+}
+ok(labelOf('Break #11AA') === '11AA', 'a two-letter suffix is a break, not a dropped card', String(labelOf('Break #11AA')))
+ok(labelOf('Break #11B') === '11B', 'and #11B is its own break', String(labelOf('Break #11B')))
+ok(labelOf('Break #11') === '11', 'a plain number stays plain', String(labelOf('Break #11')))
+
+// The two things a greedy suffix would eat.
+const apos = parsePages(
+  [labelSlip('Break #3 A’s')],
+  { sport: 'mlb' }
+)
+ok(apos.breaks[0]?.breakLabel === '3', 'an apostrophe after the number is a team, not a suffix',
+   String(apos.breaks[0]?.breakLabel))
+const trailing = parsePages([labelSlip('Break #12 Boston Red Sox')], { sport: 'mlb' })
+ok(trailing.breaks[0]?.breakLabel === '12', 'a team name after the number is not a suffix',
+   String(trailing.breaks[0]?.breakLabel))
+
+// --- 2c. the league is the check on the labels ---------------------------
+// Two part-slates sharing a number: kept as two breaks, but flagged, because
+// one break written two ways looks exactly like this.
+const splitSlip = [
+  'Whatnot Packing Slip 1/1',
+  'To: someone From: rm_cardz',
+  'Person Name',
+  '5 Oak Ave. Reno, NV. 89501. US',
+  'QTY Name & Description Attributes Subtotal',
+  '1 Boston Red Sox Order 4444444441 $20.00',
+  '1x 2026 FINEST BASEBALL HOBBY BOX- Break #7',
+  '1 New York Yankees Order 4444444442 $20.00',
+  '1x 2026 FINEST BASEBALL HOBBY BOX- Break #7B',
+  '2 Items $40.00',
+  'USPS Ground Advantage #9300120762602315706748 3.0 oz'
+].join('\n')
+const split = parsePages([splitSlip], { sport: 'mlb' })
+ok(split.breaks.length === 2, 'a part-slate pair is still two breaks', String(split.breaks.length))
+ok(split.teamSlots.length === 2, 'and every card is kept', String(split.teamSlots.length))
+ok(
+  split.warnings.some((w) => /may be one break #7 labelled two ways/.test(w.message)),
+  'and the arithmetic flags it for a person',
+  JSON.stringify(split.warnings.map((w) => w.message))
+)
+
 // --- 3. control: an ordinary break is untouched ---------------------------
 const plain = twoBreaks.replace(/Break #11A/g, 'Break #12')
 const res3 = parsePages([plain], { sport: 'mlb' })
