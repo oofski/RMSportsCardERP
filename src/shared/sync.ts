@@ -39,6 +39,13 @@ export interface SyncConfigView extends SyncConfig {
   keySet: boolean
   /** Last 4 characters, so someone can tell two keys apart without seeing either. */
   keyHint: string
+  /**
+   * This build came already wired to a relay, and nobody has overridden it.
+   *
+   * Lets the screen say "this is handled" rather than presenting two empty
+   * fields, which read as a chore somebody is supposed to complete.
+   */
+  builtIn: boolean
 }
 
 export type SyncPhase = 'off' | 'idle' | 'pushing' | 'pulling' | 'error' | 'unconfigured'

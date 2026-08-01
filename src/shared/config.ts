@@ -55,3 +55,37 @@ export const WEB_APP_URL = 'https://rmcardz.com/app'
 
 /** Support contact surfaced in invite emails. */
 export const SUPPORT_EMAIL = 'support@rmcardz.com'
+
+// ---------------------------------------------------------------------------
+// Cloud sync — built in, not configured
+// ---------------------------------------------------------------------------
+
+/**
+ * The relay this app talks to, and the key it presents.
+ *
+ * Both are baked into the build rather than typed in by each person. Ten people
+ * pasting a URL and a key into ten copies of a settings screen is ten chances to
+ * get it wrong, and the one who fudges it is silently working on their own
+ * private copy of the business — which looks exactly like working normally right
+ * up until the numbers disagree.
+ *
+ * They are INJECTED AT BUILD TIME (see electron.vite.config.ts) rather than
+ * written here, because this repository is public. A URL and a bearer token
+ * committed side by side get found: scanning GitHub for exactly that pair is
+ * automated, and it takes hours, not months. The values live as repository
+ * secrets, reach the bundle only inside CI, and never touch a commit.
+ *
+ * A build made without them (a local `npm run dev`, a fork) falls back to empty.
+ * That build is standalone and opens no connection — the settings fields in
+ * Admin → Cloud sync are still there so it can be pointed somewhere by hand.
+ */
+declare const __CLOUD_SYNC_URL__: string | undefined
+declare const __CLOUD_SYNC_KEY__: string | undefined
+
+export const CLOUD_SYNC_URL: string =
+  typeof __CLOUD_SYNC_URL__ === 'string' ? __CLOUD_SYNC_URL__ : ''
+export const CLOUD_SYNC_KEY: string =
+  typeof __CLOUD_SYNC_KEY__ === 'string' ? __CLOUD_SYNC_KEY__ : ''
+
+/** Is this build wired to a relay out of the box? */
+export const CLOUD_SYNC_BUILT_IN = CLOUD_SYNC_URL.length > 0 && CLOUD_SYNC_KEY.length > 0

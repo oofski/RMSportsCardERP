@@ -139,37 +139,54 @@ that is correct, it means the key is being enforced.
 
 ---
 
-## Step 7 — Connect the computer that holds the real data
+## Step 7 — Give the build the address and the key
 
-Do this on **one** computer first — the one whose numbers are correct today.
+Do this **once**, in GitHub, not on any laptop. It is what makes the app arrive
+already connected, so nobody types a URL or a key on ten machines — and nobody
+mistypes one and quietly spends a week working on their own private copy of the
+business, which looks exactly like working normally until the numbers disagree.
 
-1. Open RM Operations → **Admin** → **Cloud sync**.
-2. Open **Connection** → **Show**.
-3. Relay address: the Worker URL from step 3.
-4. Shared key: the key from step 5.
-5. Name for this computer: something you will recognise in the log.
-6. **Save**, then **Test connection**. It should report how many records the
-   relay holds (0 the first time).
-7. Click **Publish everything**. This queues the whole database for upload —
-   run it **once**, and only here.
-8. **Turn on**.
+1. <https://github.com/oofski/RMSportsCardERP/settings/secrets/actions>
+2. **New repository secret**
+   - Name: `RMOPS_SYNC_URL`
+   - Value: your Worker URL, no trailing slash
+3. **New repository secret**
+   - Name: `RMOPS_SYNC_KEY`
+   - Value: the shared key from step 5
+4. Cut a release. Every build from then on carries them.
 
-Watch "Waiting to go up" count down to 0. That is your data going up.
+They are secrets rather than lines in a source file because this repository is
+public, and a relay URL committed next to its bearer token is exactly the pair
+automated scanners hunt for. Injected at build time they reach the installer and
+never a commit.
 
-## Step 8 — Connect everyone else
+A build made before these exist still works — it is simply standalone, with the
+fields under **Admin → Cloud sync → Connection** available to point it somewhere
+by hand.
 
-On each other computer:
+## Step 8 — Install it
 
-1. Install the app.
-2. **Do not** create an owner account or set anything up. Go straight to
-   **Admin → Cloud sync → Connection**.
-3. Enter the same relay address and the same key. Save. **Turn on**.
-4. Wait. The catalog, the roster, the stock and the history arrive on their own.
-5. Sign in with the account that was created on the first computer.
+On the computer that holds the real numbers, first:
 
-Do **not** press "Publish everything" on these machines. They pull what is
-already there; publishing again would push their empty starter catalog at
-everyone.
+1. Install the release.
+2. Open it and sign in as normal.
+
+That is the whole procedure. It connects on its own, notices the relay is empty,
+and publishes what it holds — you can watch "Waiting to go up" count down under
+**Admin → Cloud sync**. Nothing to press.
+
+On every other computer:
+
+1. Install the release.
+2. Open it. **Do not** create an owner account — leave the setup screen alone.
+3. Wait. The catalog, the roster, the stock, the history and the logins arrive
+   on their own, usually inside a minute.
+4. Sign in with an account created on the first computer.
+
+A machine nobody has set up recognises that it is joining rather than starting,
+discards the placeholder catalog every install seeds for itself, and takes the
+shared one. A machine that already has data publishes instead. Only the first
+one to arrive at an empty relay publishes; the rest pull.
 
 ---
 

@@ -1,5 +1,6 @@
 import { BrowserWindow } from 'electron'
 import { IPC } from '@shared/ipc'
+import { CLOUD_SYNC_BUILT_IN, CLOUD_SYNC_KEY, CLOUD_SYNC_URL } from '@shared/config'
 import type { SyncConfig, SyncConfigView, SyncStatus, SyncPhase } from '@shared/sync'
 import { getDb } from '../db/database'
 import { queueEverything } from '../db/syncTriggers'
@@ -49,17 +50,29 @@ let remoteCursor: number | null = null
 // Configuration
 // ---------------------------------------------------------------------------
 
+/**
+ * Where this machine syncs to.
+ *
+ * The built-in values win unless somebody has deliberately typed something
+ * else. That is the whole point of baking them in: a person installs the app
+ * and it is already talking to the rest of the company, with nothing to enter
+ * and nothing to get wrong.
+ */
 export function getSyncConfig(): SyncConfig {
+  const storedUrl = (syncStateGet('url') ?? '').trim()
+  const stored = syncStateGet('enabled')
   return {
-    url: (syncStateGet('url') ?? '').trim(),
+    url: storedUrl || CLOUD_SYNC_URL,
     device: (syncStateGet('device') ?? '').trim() || defaultDeviceName(),
     intervalSeconds: Number(syncStateGet('interval') ?? DEFAULT_INTERVAL_SECONDS) || DEFAULT_INTERVAL_SECONDS,
-    enabled: syncStateGet('enabled') === '1'
+    // Never touched means ON for a build that ships a relay. Somebody who
+    // pauses it has said so explicitly, and that choice sticks.
+    enabled: stored === null ? CLOUD_SYNC_BUILT_IN : stored === '1'
   }
 }
 
 function sharedKey(): string {
-  return syncStateGet('key') ?? ''
+  return (syncStateGet('key') ?? '').trim() || CLOUD_SYNC_KEY
 }
 
 function defaultDeviceName(): string {
@@ -69,7 +82,14 @@ function defaultDeviceName(): string {
 export function syncConfigView(): SyncConfigView {
   const config = getSyncConfig()
   const key = sharedKey()
-  return { ...config, keySet: key.length > 0, keyHint: key ? key.slice(-4) : '' }
+  return {
+    ...config,
+    keySet: key.length > 0,
+    keyHint: key ? key.slice(-4) : '',
+    // True when this build came wired up, so the screen can say "nothing to do
+    // here" instead of presenting empty fields that look like a task.
+    builtIn: CLOUD_SYNC_BUILT_IN && !(syncStateGet('url') ?? '').trim()
+  }
 }
 
 export interface SyncConfigUpdate extends Partial<SyncConfig> {
@@ -230,6 +250,25 @@ export async function syncOnce(): Promise<RoundResult> {
     if (removed > 0) {
       console.log(`Sync: joining an existing installation — cleared ${removed} placeholder rows.`)
     }
+  } else if (syncStateGet('published_at') === null) {
+    // First run on a machine that already has a business on it.
+    //
+    // The capture triggers only see changes made from now on, so without this
+    // the relay would stay empty and everyone else would join to nothing —
+    // clearing their own starter catalog on the way in and ending up with a
+    // blank app. Somebody has to publish what already exists, once.
+    //
+    // Asking the relay first is what makes it safe to do automatically: only a
+    // machine that finds the relay EMPTY publishes. The second machine to reach
+    // this point sees rows already there, records that it looked, and just
+    // syncs normally.
+    const state = await call('/v1/state', { method: 'GET' })
+    const rows = typeof state.rows === 'number' ? state.rows : 0
+    if (rows === 0) {
+      const queued = queueEverything(getDb())
+      console.log(`Sync: relay is empty — publishing ${queued} records from this machine.`)
+    }
+    syncStateSet('published_at', new Date().toISOString())
   }
 
   // ---- push -------------------------------------------------------------

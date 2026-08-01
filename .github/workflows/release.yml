@@ -96,6 +96,20 @@ jobs:
           done
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # ---- Cloud sync ---------------------------------------------------
+          # Baked into the main bundle at build time so the app ships already
+          # connected — nobody types a URL or a key on ten machines, and nobody
+          # gets it wrong and quietly works on their own private copy.
+          #
+          # Secrets rather than source because this repository is PUBLIC. A relay
+          # URL and its bearer token committed side by side are exactly what
+          # automated scanners look for, and they are found in hours.
+          #
+          # If the secrets are absent the build still succeeds: both values are
+          # empty, and that build is standalone with the fields in
+          # Admin -> Cloud sync available to point it somewhere by hand.
+          RMOPS_SYNC_URL: ${{ secrets.RMOPS_SYNC_URL }}
+          RMOPS_SYNC_KEY: ${{ secrets.RMOPS_SYNC_KEY }}
           # ---- macOS code signing -------------------------------------------
           # OFF until the repo variable MAC_SIGNING is set to 'true' AND the five
           # Apple secrets below exist. Until then every value here is empty and

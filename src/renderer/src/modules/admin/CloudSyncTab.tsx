@@ -97,16 +97,18 @@ export function CloudSyncTab(): JSX.Element {
   const state = ((): { tone: string; title: string; detail: string } => {
     if (!status.config.enabled) {
       return {
-        tone: 'off',
-        title: 'Sync is off',
-        detail: 'This computer is working on its own copy. Nothing is shared.'
+        tone: 'warn',
+        title: 'Sync is paused',
+        detail:
+          'This computer is working on its own copy and nobody else can see it. Press Resume.'
       }
     }
     if (!configured) {
       return {
         tone: 'warn',
-        title: 'Not set up yet',
-        detail: 'Add the relay address and the shared key below.'
+        title: 'This build has no relay',
+        detail:
+          'It runs standalone. Enter an address and key under Connection to point it at one.'
       }
     }
     if (status.phase === 'error') {
@@ -149,7 +151,7 @@ export function CloudSyncTab(): JSX.Element {
               )
             }
           >
-            {status.config.enabled ? 'Pause' : 'Turn on'}
+            {status.config.enabled ? 'Pause' : 'Resume'}
           </Button>
           <Button
             icon="RefreshCw"
@@ -409,12 +411,25 @@ export function CloudSyncTab(): JSX.Element {
         <header>
           <Icon name="Settings" size={17} />
           <h3>Connection</h3>
+          {status.config.builtIn && <span className="sync-builtin">Built in</span>}
           <button className="link-btn" onClick={() => setShowSetup((v) => !v)}>
             {showSetup ? 'Hide' : 'Show'}
           </button>
         </header>
+        {status.config.builtIn && !showSetup && (
+          <p className="sync-note">
+            Nothing to set up. This copy of the app came already connected to RM Cardz and starts
+            syncing on its own.
+          </p>
+        )}
         {showSetup && (
           <>
+            {status.config.builtIn && (
+              <p className="sync-note">
+                These are already filled in by the app itself. Only change them to point this
+                computer at a different relay — leave them blank to go back to the built-in one.
+              </p>
+            )}
             <div className="sync-setup">
               <Field
                 label="Relay address"
@@ -494,9 +509,9 @@ export function CloudSyncTab(): JSX.Element {
               <div>
                 <strong>Publish everything on this computer</strong>
                 <p className="sync-note">
-                  Run this once, on the computer that holds the real data, right after you connect
-                  it. It queues the whole database so everyone else receives it. On any other
-                  computer you do not need this — it pulls what is already there.
+                  Normally you never touch this. The first computer to connect publishes what it
+                  holds automatically, and every other one pulls it. Use this only to force a
+                  re-publish — for example after the relay has been wiped.
                 </p>
               </div>
               <Button
