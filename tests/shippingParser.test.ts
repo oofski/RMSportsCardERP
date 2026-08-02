@@ -9,6 +9,7 @@
  */
 import { learnBannerTail, parsePages } from '../src/main/shipping/parser'
 import { groupIntoLines } from '../src/main/shipping/pdf'
+import { pageRangeLabel } from '../src/shared/shippingViews'
 
 let pass = 0, fail = 0
 const ok = (c: boolean, label: string, extra = ''): void => {
@@ -222,6 +223,82 @@ ok(learnBannerTail([
 ]) === 'RANDOM TEAMS + $1 STARTS', 'the banner is learned from the document, not hard-coded',
   learnBannerTail(['x RANDOM TEAMS + $1 STARTS\u25A0', 'y RANDOM TEAMS + $1 STARTS\u25A0']))
 ok(learnBannerTail(['only one sample\u25A0']) === '', 'one sample is not enough to call something a banner')
+
+// --- 3c. an order that runs onto more pages keeps all of them --------------
+// Nine of the July show's 122 orders did, and one buyer's 47 cards took five
+// pages. The pages travel on the customer so the slip pane can show the whole
+// run: showing only the first is worse than showing none, because a short list
+// that looks complete gets agreed with and the package sealed.
+const runOn = parsePages(
+  [
+    [
+      'Whatnot Packing Slip 1/3',
+      'To: moomoomayne NEW From: rm_cardz',
+      'Joseph Drewer',
+      '701 Breeze Hill Rd. Vista, CA. 92081-4324. US',
+      'QTY Name & Description Attributes Subtotal',
+      '1 New York Mets Order 1181773001 $45.00',
+      '2x 2026 FINEST BASEBALL HOBBY BOX (NEW RELEASE!)- Break #6'
+    ].join('\n'),
+    // Continuation: the header repeats, the buyer block does not.
+    [
+      'Whatnot Packing Slip 2/3',
+      '1 Baltimore Orioles Order 1181774687 $45.00',
+      '2x 2026 FINEST BASEBALL HOBBY BOX (NEW RELEASE!)- Break #6'
+    ].join('\n'),
+    [
+      'Whatnot Packing Slip 3/3',
+      '1 San Francisco Giants Order 1181821631 $44.00',
+      '1x 2026 Finest Delight BOX (NEW RELEASE!)- Break #17',
+      '3 Items $134.00',
+      'USPS Ground Advantage #9300120762602315706700 8.0 oz'
+    ].join('\n')
+  ],
+  { sport: 'mlb' }
+)
+const runOnCustomer = runOn.customers.find((c) => c.id === 'moomoomayne')
+ok(
+  JSON.stringify(runOnCustomer?.pages) === '[1,2,3]',
+  'a three-page order carries all three page numbers',
+  JSON.stringify(runOnCustomer?.pages)
+)
+ok(runOn.teamSlots.length === 3, 'and every card across them is kept', String(runOn.teamSlots.length))
+ok(
+  runOn.teamSlots.filter((s) => s.breakLabel === '6').length === 2 &&
+    runOn.teamSlots.filter((s) => s.breakLabel === '17').length === 1,
+  'each landing in the break its own page named',
+  JSON.stringify(runOn.teamSlots.map((s) => s.breakLabel))
+)
+ok(runOnCustomer?.realName === 'Joseph Drewer', 'the buyer is read off page one only')
+
+// A one-page order is exactly one page — the pane must not invent a run.
+const single = parsePages(
+  [
+    [
+      'Whatnot Packing Slip 1/1',
+      'To: solo99 From: rm_cardz',
+      'Solo Buyer',
+      '1 Main St. Reno, NV. 89501. US',
+      'QTY Name & Description Attributes Subtotal',
+      '1 New York Mets Order 1181773999 $10.00',
+      '1x 2026 FINEST BASEBALL HOBBY BOX- Break #6',
+      '1 Item $10.00',
+      'USPS Ground Advantage #9300120762602315706701 3.0 oz'
+    ].join('\n')
+  ],
+  { sport: 'mlb' }
+)
+ok(
+  JSON.stringify(single.customers[0]?.pages) === '[1]',
+  'a one-page order carries exactly one page',
+  JSON.stringify(single.customers[0]?.pages)
+)
+
+// The label the pane prints over the run.
+ok(pageRangeLabel([27, 28, 29, 30, 31]) === '27–31', 'a contiguous run reads as a range', pageRangeLabel([27, 28, 29, 30, 31]))
+ok(pageRangeLabel([15]) === '15', 'a single page reads as itself')
+ok(pageRangeLabel([4, 9]) === '4, 9', 'a gap is never described as a range', pageRangeLabel([4, 9]))
+ok(pageRangeLabel([]) === '', 'no pages, nothing to say')
 
 // ---------------------------------------------------------------------------
 // 4. The line grouper: a row set in two sizes is still ONE row

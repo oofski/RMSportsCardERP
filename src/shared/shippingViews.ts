@@ -304,6 +304,20 @@ export interface ShipBulkStatusResult {
   rows: ShipShipmentRow[]
 }
 
+/**
+ * How a run of slip pages is written: "27–31", or "15", or "4, 9" when the run
+ * has a hole in it. Lives here rather than beside the viewer so it can be tested
+ * without pulling a PDF engine into a Node test.
+ */
+export function pageRangeLabel(pages: number[]): string {
+  if (pages.length === 0) return ''
+  if (pages.length === 1) return String(pages[0])
+  const contiguous = pages.every((p, i) => i === 0 || p === pages[i - 1] + 1)
+  // A gap must never be described as a range — that would claim pages the
+  // order does not own.
+  return contiguous ? `${pages[0]}–${pages[pages.length - 1]}` : pages.join(', ')
+}
+
 // ---------------------------------------------------------------------------
 // Sales / ledger derivation
 // ---------------------------------------------------------------------------

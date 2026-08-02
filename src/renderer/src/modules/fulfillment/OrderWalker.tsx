@@ -30,6 +30,9 @@ import { SlipPane } from './SlipPane'
  */
 export type WalkerMode = 'pick' | 'mail'
 
+/** Stable identity, so an order with no known pages does not re-trigger draws. */
+const EMPTY_PAGES: number[] = []
+
 export function OrderWalker({
   mode,
   canAct,
@@ -151,9 +154,10 @@ export function OrderWalker({
   }
 
   const done = order ? order.pick.checked >= order.pick.total : false
-  // A customer's slip can run to several pages; the first is the one with the
-  // header, the address and the order lines on it.
-  const slipPage = order?.customer.pages?.[0] ?? null
+  // EVERY page of this order's slip. A big order runs on — one buyer's 47 cards
+  // took five pages — and showing only the first is worse than showing none,
+  // because a short list that looks complete gets agreed with and sealed.
+  const slipPages = order?.customer.pages ?? EMPTY_PAGES
 
   return (
     <div className="walk-page">
@@ -243,6 +247,14 @@ export function OrderWalker({
               <span className="ship-chip mini" data-stage={order.stage}>
                 {SHIP_STAGE_LABELS[order.stage]}
               </span>
+              {order.customer.pages && order.customer.pages.length > 1 && (
+                <span
+                  className="ship-chip mini"
+                  title="This order's slip runs onto more than one page — the whole run is on the right"
+                >
+                  <Icon name="Copy" size={11} /> {order.customer.pages.length}-page slip
+                </span>
+              )}
               <span className={`walk-prog mono ${done ? 'done' : ''}`}>
                 {order.pick.checked}/{order.pick.total} picked
               </span>
@@ -320,7 +332,7 @@ export function OrderWalker({
             </div>
           </div>
 
-          <SlipPane page={slipPage} label={`@${order.customer.handle}`} />
+          <SlipPane pages={slipPages} label={`@${order.customer.handle}`} />
         </div>
       )}
     </div>

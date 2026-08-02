@@ -7976,6 +7976,27 @@ tr.hoverable-row:hover {
   padding: 10px;
   background: var(--surface-3);
 }
+.slip-sheet {
+  position: relative;
+}
+.slip-sheet + .slip-sheet {
+  margin-top: 12px;
+}
+/* Which sheet of the run this is, so a long order cannot be mistaken for a
+   short one halfway down. */
+.slip-sheet-tag {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 1;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgb(0 0 0 / 0.62);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
 .slip-canvas {
   display: block;
   width: 100%;
@@ -7983,6 +8004,17 @@ tr.hoverable-row:hover {
   border-radius: 4px;
   background: #fff;
   box-shadow: 0 1px 6px rgb(0 0 0 / 0.14);
+}
+.slip-multi {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--brand-50, var(--surface-3));
+  color: var(--brand-600, var(--text-2));
+  font-size: 11px;
+  font-weight: 700;
 }
 .slip-error {
   display: flex;
