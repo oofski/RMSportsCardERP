@@ -113,7 +113,9 @@ import {
   Archive,
   Save,
   FileDown,
+  FileCheck,
   FileText,
+  FileX,
   User,
   Scale,
   // --- History calendar ---
@@ -243,7 +245,9 @@ const MAP: Record<string, LucideIcon> = {
   Archive,
   Save,
   FileDown,
+  FileCheck,
   FileText,
+  FileX,
   User,
   Scale,
   // --- History calendar ---

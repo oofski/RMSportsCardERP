@@ -9,6 +9,7 @@ import { Icon } from '../../components/Icon'
 import { Donut, AreaChart } from '../../components/charts'
 import { CenterLoader } from '../../components/ui'
 import { TimeClock } from '../../components/TimeClock'
+import { ShowCard } from './ShowCard'
 import { formatHours } from '../../lib/format'
 
 function greetingWord(): string {
@@ -107,6 +108,13 @@ export function HomeModule(): JSX.Element {
 
       <div style={{ marginBottom: 16 }}>
         <TimeClock />
+      </div>
+
+      {/* The night's show, before anything else on the page: whoever runs the
+          floor opens here, and "is it loaded, and what day is it" is the first
+          thing they need. Renders nothing for someone without the module. */}
+      <div style={{ marginBottom: 16 }}>
+        <ShowCard />
       </div>
 
       {canEmployees && (
