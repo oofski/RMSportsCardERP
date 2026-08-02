@@ -148,6 +148,7 @@ export function Pct({
 
 const BUCKET_ICON: Record<LedgerBucket, string> = {
   sale: 'ShoppingCart',
+  product_sale: 'Package',
   shipping_subsidy: 'Truck',
   tip: 'Sparkles',
   seller_bonus: 'Crown',

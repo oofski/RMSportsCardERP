@@ -44,6 +44,7 @@
  */
 export type LedgerBucket =
   | 'sale'
+  | 'product_sale'
   | 'tip'
   | 'seller_bonus'
   | 'shipping_subsidy'
@@ -74,9 +75,15 @@ export interface LedgerBucketDef {
 export const LEDGER_BUCKETS: readonly LedgerBucketDef[] = [
   {
     key: 'sale',
-    label: 'Sales',
+    label: 'Break spots',
     treatment: 'revenue',
-    hint: 'Seller earnings on a sold item or break spot.'
+    hint: 'A spot in a break — one team, one buyer.'
+  },
+  {
+    key: 'product_sale',
+    label: 'Whole products',
+    treatment: 'revenue',
+    hint: 'A sealed box or case sold outright, off a listing rather than a break.'
   },
   {
     key: 'shipping_subsidy',
@@ -150,7 +157,62 @@ export function bucketTreatment(bucket: LedgerBucket): LedgerTreatment {
  * can find rows classified by an older ruleset and re-run them, rather than
  * leaving a database with two generations of answers silently mixed together.
  */
-export const LEDGER_CLASSIFIER_VERSION = 1
+export const LEDGER_CLASSIFIER_VERSION = 2
+
+/**
+ * A break marker in a listing title.
+ *
+ * `=` is in there because it is in the real data: "TIER ONE BASEBALL HOBBY BOX
+ * - NEW RELEASE!! BREAK #=7" appears 30 times in one export, and without the
+ * `=` every one of those spots would be read as a whole-product sale — thirty
+ * break spots misfiled as marketplace revenue, and a phantom product to match.
+ */
+const RE_LEDGER_BREAK = /break\s*#?\s*=?\s*\d/i
+
+/**
+ * A numbered lot at the END of a listing title — "... (Fresh From Box) #12".
+ *
+ * That is one of twelve packs out of a box somebody is selling a pack at a time,
+ * not a sealed product. It carries no break number and no team, so nothing else
+ * here would catch it, and on real data there are 24 of them in two months: two
+ * boxes broken into individual packs. Booking those as whole-product sales would
+ * match each one to the BOX in the catalog and take twelve boxes out of stock
+ * for a box that was opened once.
+ *
+ * Anchored to the end, and digits only. A sealed-product listing does not end in
+ * "#7"; a spot in a numbered lot always does.
+ */
+const RE_TRAILING_LOT = /#\s*\d+\s*$/
+
+/** "Earnings for selling a|an|the X" -> "X". */
+const RE_EARNINGS_HEAD = /^Earnings for selling\s+(?:a|an|the)\s+/i
+
+/**
+ * The product name out of a whole-product sale line.
+ *
+ * Returns '' for anything that is not one, so a caller cannot accidentally hand
+ * a break-spot title to the catalog matcher and get a confident wrong answer.
+ */
+export function parseProductSaleName(message: string): string {
+  const msg = (message || '').trim()
+  if (!RE_EARNINGS_HEAD.test(msg)) return ''
+  return msg.replace(RE_EARNINGS_HEAD, '').replace(/\s+/g, ' ').trim()
+}
+
+/**
+ * Does this sale line end in a team, i.e. is it one spot in a break?
+ *
+ * The tail after the LAST " - " is the candidate. Whatnot builds a break-spot
+ * title as "<listing title> - <team>", and the listing title itself is full of
+ * hyphens ("HOBBY BOX- CHASE PLANETARY PURSUIT", "2025-26", "12-Box"), so only
+ * a separator with spaces around it counts and only the last one is considered.
+ */
+function endsWithTeam(message: string, isTeamName: (s: string) => boolean): boolean {
+  const at = message.lastIndexOf(' - ')
+  if (at < 0) return false
+  const tail = message.slice(at + 3).trim()
+  return tail.length > 0 && isTeamName(tail)
+}
 
 /**
  * Classify one row. Precedence is top to bottom — first match wins.
@@ -160,7 +222,19 @@ export const LEDGER_CLASSIFIER_VERSION = 1
  * row. Matching the stable leading phrase is what makes this survive contact
  * with real data.
  */
-export function classifyLedgerRow(txnType: string, message: string): LedgerBucket {
+export function classifyLedgerRow(
+  txnType: string,
+  message: string,
+  /**
+   * Is this string the name of a real team, in any league?
+   *
+   * Injected rather than imported: the canonical slates live with the shipping
+   * parser, and this module is the shared contract that both the main process
+   * and the tests read. Without it the split still works on structure alone —
+   * see below — but with it, it works on evidence.
+   */
+  isTeamName?: (s: string) => boolean
+): LedgerBucket {
   const type = (txnType || '').trim().toUpperCase()
   const msg = (message || '').trim()
 
@@ -168,7 +242,34 @@ export function classifyLedgerRow(txnType: string, message: string): LedgerBucke
   if (type === 'TIP') return 'tip'
 
   if (type === 'SALES') {
-    if (msg.startsWith('Earnings for selling')) return 'sale'
+    if (msg.startsWith('Earnings for selling')) {
+      // TWO KINDS OF SALE, and until now they were one.
+      //
+      // A break spot is one team out of a box somebody else paid to open. A
+      // whole-product sale is a sealed box or case bought outright off a
+      // listing — different money, different cost of goods, and the only one of
+      // the two that should reduce inventory.
+      //
+      // Whatnot's message does not label them, so the split is read off the
+      // shape it does have: a break spot carries a break number, or ends in the
+      // team the buyer bought. Anything else is the product itself.
+      //
+      // Erring toward `sale` is deliberate. Calling a break spot a product sale
+      // sends the catalog matcher hunting for "COSMIC CHROME FOOTBALL HOBBY
+      // BOX ... - Dallas Cowboys" and books stock movement against a box that
+      // was already opened; the reverse merely leaves a real product sale in
+      // the bucket everything used to be in.
+      if (RE_LEDGER_BREAK.test(msg)) return 'sale'
+      if (RE_TRAILING_LOT.test(msg)) return 'sale'
+      if (isTeamName) {
+        if (endsWithTeam(msg, isTeamName)) return 'sale'
+      } else if (msg.lastIndexOf(' - ') >= 0) {
+        // No team list to consult: treat any " - <tail>" as a spot rather than
+        // guess a product out of it.
+        return 'sale'
+      }
+      return 'product_sale'
+    }
     // Negative SALES rows are NOT refunds. Every one is the postage Whatnot
     // charged for mailing a giveaway won on stream — a cost of running the
     // show. Booking them as refunds would understate both revenue and shipping
@@ -379,9 +480,30 @@ export const SESSION_VACUUM_SHARE = 0.4
  * How a row found its day.
  * - in_window    : its instant fell inside a session. The strong case.
  * - carried_back : it settled after the show that caused it (see below).
+ * - own_day      : it belongs to no show BY NATURE, so it books to its own date.
  * - unattributed : nothing owns it, and the app says so rather than guessing.
  */
-export type LedgerAttribution = 'in_window' | 'carried_back' | 'unattributed'
+export type LedgerAttribution = 'in_window' | 'carried_back' | 'own_day' | 'unattributed'
+
+/**
+ * Buckets that book to their OWN calendar day when no session contains them.
+ *
+ * Only whole-product sales. A sealed box bought off a listing at 2pm on a
+ * Tuesday is not a show sale that lost its show — there was never a show. The
+ * question "which stream earned this" has no answer because it is the wrong
+ * question, and leaving it unattributed was reporting a missing session that
+ * does not exist while keeping real revenue out of every day of the P&L.
+ *
+ * This is precisely why `sale` cannot join it, and the distinction only became
+ * safe once the two were told apart. A break spot outside every window IS a
+ * missing session — RM runs two shows most days — and giving it a day of its
+ * own would hide exactly the gap the operator needs to see.
+ */
+const OWN_DAY_BUCKETS = new Set<LedgerBucket>(['product_sale'])
+
+export function booksToOwnDay(bucket: LedgerBucket): boolean {
+  return OWN_DAY_BUCKETS.has(bucket)
+}
 
 /**
  * CARRY-BACK: settlement rows belong to the show that caused them.
@@ -602,10 +724,22 @@ export interface StreamDayFinance {
   minutes: number
 
   // --- Revenue ------------------------------------------------------------
-  /** Gross sales, before Whatnot's cut. */
+  /** Gross sales, before Whatnot's cut. Break spots AND whole products. */
   sales: number
-  /** Sale rows — the per-transaction fee is charged this many times. */
+  /** Sale rows behind `sales`. Reported; the fee is a flat percentage. */
   saleCount: number
+  /**
+   * The whole-product share of `sales` — sealed boxes and cases sold outright
+   * rather than as break spots.
+   *
+   * A SUBSET of `sales`, not an addition to it: the two are the same money and
+   * carry the same 8.9%, and giving them separate top lines would mean every
+   * subtotal and every reconciliation had to learn about both. It rides along so
+   * a screen can say how much of a day was marketplace without re-querying the
+   * ledger, and so the statement can show the split.
+   */
+  productSales: number
+  productSaleCount: number
   tips: number
   bonuses: number
   /**
@@ -1049,6 +1183,7 @@ export function sumTreatment(
  */
 export const PNL_MONEY_FIELDS = [
   'sales',
+  'productSales',
   'tips',
   'bonuses',
   'unclassified',
@@ -1080,6 +1215,7 @@ export const PNL_COUNT_FIELDS = [
   'sessionCount',
   'minutes',
   'saleCount',
+  'productSaleCount',
   'rowCount',
   'carriedBackRows'
 ] as const
@@ -1098,6 +1234,8 @@ export function emptyDayFinance(streamDate: string): StreamDayFinance {
     minutes: 0,
     sales: 0,
     saleCount: 0,
+    productSales: 0,
+    productSaleCount: 0,
     tips: 0,
     bonuses: 0,
     unclassified: 0,

@@ -113,8 +113,10 @@ import {
   PNL_MONEY_FIELDS,
   SESSION_VACUUM_SHARE,
   buildPnl,
+  booksToOwnDay,
   carryBackEligible,
   classifyLedgerRow,
+  parseProductSaleName,
   computeFees,
   emptyDayFinance,
   findCarryBackSession,
@@ -129,6 +131,8 @@ import type { StreamSession } from '@shared/streaming'
 import { durationMinutes, isSuspiciouslyLong, streamDateOf } from '@shared/streaming'
 import { getDb } from './database'
 import { packingCostByDay } from './shipSop'
+import { isAnyLeagueTeam } from '../shipping/teams'
+import { matchProductByName } from './inventory'
 import { newId, nowIso } from '../util'
 
 // ---------------------------------------------------------------------------
@@ -541,6 +545,14 @@ interface RowAttribution {
 }
 
 const UNATTRIBUTED: RowAttribution = { session: null, attribution: 'unattributed' }
+/**
+ * No session, but a day of its own. `session_id` stays NULL — there is no show
+ * to point at — while `stream_date` is filled from the row's own local date, and
+ * `attribution` says which of those two states this is. That distinction
+ * matters: a row orphaned by a DELETED session also has a null session_id and a
+ * leftover stream_date, and counting the two the same way would double it.
+ */
+const OWN_DAY: RowAttribution = { session: null, attribution: 'own_day' }
 
 /**
  * The TWO passes, in this order, and the order is the whole design.
@@ -575,6 +587,11 @@ function attributeRow(
   if (bucket === 'payout' || Number.isNaN(instantMs)) return UNATTRIBUTED
   const inWindow = matchSession(sessions, instantMs)
   if (inWindow) return { session: inWindow, attribution: 'in_window' }
+  // A whole-product sale that fell in no window has not lost its show — it never
+  // had one. It books to the day it happened on, which is the only day it could
+  // honestly belong to. Still checked AFTER the in-window pass: a box sold live
+  // on stream is that show's, and the show is the better answer when there is one.
+  if (booksToOwnDay(bucket)) return OWN_DAY
   if (!carryBackEligible(bucket)) return UNATTRIBUTED
   const settled = findCarryBackSession(instantMs, sessions)
   return settled ? { session: settled, attribution: 'carried_back' } : UNATTRIBUTED
@@ -611,6 +628,9 @@ interface ImportStats {
   carriedBackCents: number
   unattributedRows: number
   unattributedCents: number
+  /** Whole-product sales booked to their own calendar day. */
+  ownDayRows: number
+  ownDayCents: number
   /**
    * Which LOCAL days the unattributed money happened on, and how much on each.
    *
@@ -681,6 +701,10 @@ export function importLedger(filePath: string, actorId: string | null): Result<L
       txnType: string
       bucket: LedgerBucket
       breakNumber: number | null
+      /** The listing title, for a whole-product sale. '' for anything else. */
+      productName: string
+      /** The catalog product it resolved to, or '' when nothing confident. */
+      productId: string
       fingerprint: string
       repaired: boolean
     }
@@ -726,6 +750,12 @@ export function importLedger(filePath: string, actorId: string | null): Result<L
       const txnType = row.fields[COL_TYPE]
       const listingId = row.fields[COL_LISTING]
       const orderId = row.fields[COL_ORDER]
+      const bucket = classifyLedgerRow(txnType, message, isAnyLeagueTeam)
+      // Only a whole-product sale names a product. Handing a break-spot title to
+      // the matcher would find the box the break was cut from and book a sale
+      // against stock that was opened days ago.
+      const productName = bucket === 'product_sale' ? parseProductSaleName(message) : ''
+      const matched = productName ? matchProductByName(productName) : null
       staged.push({
         occurredAt,
         instantMs: new Date(occurredAt).getTime(),
@@ -734,8 +764,12 @@ export function importLedger(filePath: string, actorId: string | null): Result<L
         orderId,
         message,
         txnType,
-        bucket: classifyLedgerRow(txnType, message),
+        bucket,
         breakNumber: parseBreakNumber(message),
+        productName,
+        // An ambiguous match is left unresolved rather than guessed. Two boxes
+        // the app cannot tell apart is a fact for a person to settle.
+        productId: matched && !matched.ambiguous ? matched.product.id : '',
         fingerprint: fingerprintOf(occurredAt, amount, listingId, orderId, message, txnType),
         repaired: row.repaired
       })
@@ -749,6 +783,8 @@ export function importLedger(filePath: string, actorId: string | null): Result<L
       carriedBackCents: 0,
       unattributedRows: 0,
       unattributedCents: 0,
+      ownDayRows: 0,
+      ownDayCents: 0,
       unattributedByDay: new Map(),
       unclassified: 0,
       unclassifiedExample: null,
@@ -777,10 +813,11 @@ export function importLedger(filePath: string, actorId: string | null): Result<L
       `INSERT INTO ledger_rows
          (id, import_id, occurred_at, amount, order_id, listing_id, message, txn_type,
           bucket, session_id, stream_date, attribution, break_number, fingerprint, repaired,
-          classifier_version, created_at)
+          classifier_version, product_name, product_id, created_at)
        VALUES (@id, @import_id, @occurred_at, @amount, @order_id, @listing_id, @message,
                @txn_type, @bucket, @session_id, @stream_date, @attribution, @break_number,
-               @fingerprint, @repaired, @classifier_version, @created_at)
+               @fingerprint, @repaired, @classifier_version, @product_name, @product_id,
+               @created_at)
        ON CONFLICT(fingerprint) DO NOTHING`
     )
 
@@ -814,12 +851,24 @@ export function importLedger(filePath: string, actorId: string | null): Result<L
         txn_type: s.txnType,
         bucket: s.bucket,
         session_id: match ? match.id : null,
-        stream_date: match ? match.streamDate : null,
+        // A day WITHOUT a session: own-day rows carry a stream_date and no
+        // session_id, which is the pair that tells them apart from a row whose
+        // session was later deleted.
+        stream_date: match
+          ? match.streamDate
+          : found.attribution === 'own_day'
+            ? streamDateOf(s.occurredAt)
+            : null,
         attribution: found.attribution,
         break_number: s.breakNumber,
         fingerprint: s.fingerprint,
         repaired: s.repaired ? 1 : 0,
         classifier_version: LEDGER_CLASSIFIER_VERSION,
+        // The product name is kept whether or not it matched. A catalog that
+        // gains the box next week can re-run the match; a name thrown away at
+        // import cannot be recovered from anything.
+        product_name: s.productName || null,
+        product_id: s.productId || null,
         created_at: ts
       })
       if (info.changes === 0) {
@@ -854,6 +903,12 @@ export function importLedger(filePath: string, actorId: string | null): Result<L
           stats.carriedBackRows += 1
           stats.carriedBackCents += toCents(s.amount)
         }
+      } else if (found.attribution === 'own_day') {
+        // Attributed, just not to a show. Counting it as unattributed would put
+        // real revenue in the "you forgot to log a stream" pile forever.
+        stats.attributed += 1
+        stats.ownDayRows += 1
+        stats.ownDayCents += toCents(s.amount)
       } else {
         stats.unattributedRows += 1
         stats.unattributedCents += toCents(s.amount)
@@ -1157,7 +1212,9 @@ export function reattributeAll(actorId: string | null): Result<ReattributeSummar
       // fields rather than trusted. A database holding two generations of
       // answers at once is one whose totals change between versions with no
       // explanation.
-      const bucket = stale ? classifyLedgerRow(r.txn_type, r.message) : (r.bucket as LedgerBucket)
+      const bucket = stale
+        ? classifyLedgerRow(r.txn_type, r.message, isAnyLeagueTeam)
+        : (r.bucket as LedgerBucket)
       const instantMs = new Date(r.occurred_at).getTime()
       // BOTH passes, exactly as an import runs them — otherwise adding a session
       // would re-home in-window rows while leaving that show's own settlement
@@ -1721,6 +1778,12 @@ function rollPeriods(
  */
 const BUCKET_FIELD: Partial<Record<LedgerBucket, keyof StreamDayFinance>> = {
   sale: 'sales',
+  // Whole-product sales land in the SAME top line as break spots. They are the
+  // same kind of money and carry the same 8.9%, so splitting them here would
+  // mean every fee, subtotal and reconciliation had to learn about two revenue
+  // fields. They stay separable where it matters — the bucket is on the row, so
+  // the split can be shown and the product matched — without a second `sales`.
+  product_sale: 'sales',
   shipping_subsidy: 'shippingSubsidy',
   tip: 'tips',
   seller_bonus: 'bonuses',
@@ -1982,7 +2045,8 @@ function buildView(db: Database): StreamingFinanceView {
       `SELECT stream_date AS d, bucket, COUNT(*) AS rows,
               COALESCE(SUM(CAST(ROUND(amount * 100) AS INTEGER)), 0) AS cents
          FROM ledger_rows
-        WHERE session_id IS NOT NULL AND stream_date IS NOT NULL AND bucket <> 'payout'
+        WHERE stream_date IS NOT NULL AND bucket <> 'payout'
+          AND (session_id IS NOT NULL OR attribution = 'own_day')
         GROUP BY stream_date, bucket`
     )
     .all() as Array<{ d: string; bucket: string; rows: number; cents: number }>
@@ -1995,7 +2059,11 @@ function buildView(db: Database): StreamingFinanceView {
     // average ticket price can recover it. It no longer feeds the fee (that is a
     // flat percentage now), but it is what "8.9% across 1,029 orders" is checked
     // against, and it is the only honest source for the number.
-    if (bucket === 'sale') day.saleCount += r.rows
+    if (bucket === 'sale' || bucket === 'product_sale') day.saleCount += r.rows
+    if (bucket === 'product_sale') {
+      day.productSales = toDollars(toCents(day.productSales) + r.cents)
+      day.productSaleCount += r.rows
+    }
     const amounts = dayCents.get(r.d) as Partial<Record<LedgerBucket, number>>
     amounts[bucket] = (amounts[bucket] ?? 0) + r.cents
     dayNetCents.set(r.d, (dayNetCents.get(r.d) ?? 0) + r.cents)
@@ -2127,7 +2195,7 @@ function buildView(db: Database): StreamingFinanceView {
     .prepare(
       `SELECT occurred_at, bucket, CAST(ROUND(amount * 100) AS INTEGER) AS cents
          FROM ledger_rows
-        WHERE session_id IS NULL AND bucket <> 'payout'
+        WHERE session_id IS NULL AND bucket <> 'payout' AND attribution <> 'own_day'
         ORDER BY occurred_at ASC, rowid ASC`
     )
     .all() as Array<{ occurred_at: string; bucket: string; cents: number }>

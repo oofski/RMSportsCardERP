@@ -1426,6 +1426,25 @@ function migrate(database: Database.Database): void {
   addColumnIfMissing(database, 'ship_supply_usage', 'event_name', 'TEXT')
   setMeta(database, 'schema_version', '35')
 
+  // v36: which catalog product a whole-product sale was.
+  //
+  // A sale that is a sealed box rather than a break spot names the product in
+  // its message — "2025-26 Topps Chrome Cactus Jack Basketball Hobby Box" — and
+  // that is a row in the catalog. Resolving it at import time and storing the id
+  // is what lets the sale be costed against what the box actually cost, instead
+  // of being revenue with no cost of goods behind it.
+  //
+  // Nullable and unconstrained on purpose. A product that is not in the catalog
+  // yet, or a name nobody can match, must leave the sale intact and unmatched
+  // rather than refuse the import — and a product later deleted must not take
+  // the sale with it, which is why there is no foreign key.
+  addColumnIfMissing(database, 'ledger_rows', 'product_id', 'TEXT')
+  addColumnIfMissing(database, 'ledger_rows', 'product_name', 'TEXT')
+  database.exec(
+    `CREATE INDEX IF NOT EXISTS idx_ledger_rows_product ON ledger_rows (product_id)`
+  )
+  setMeta(database, 'schema_version', '36')
+
   // Seed the product catalog once, then apply the on-hand snapshot once.
   seedCatalogIfNeeded(database)
   seedSnapshotIfNeeded(database)

@@ -173,6 +173,50 @@ export const SHIP_TEAM_LISTS: Record<ShipSport, readonly string[]> = {
   nhl: NHL_TEAMS
 }
 
+/**
+ * Every team in every league, by normalized key. Built on FIRST USE, not at
+ * module load.
+ *
+ * `ALIASES` is a `const` declared further down this file, so touching it from a
+ * top-level initializer here throws on its temporal dead zone — and it throws at
+ * import time, which takes the whole main process with it. Deferring costs one
+ * branch per call and removes the ordering question entirely.
+ */
+let allTeamKeys: ReadonlySet<string> | null = null
+
+function teamKeySet(): ReadonlySet<string> {
+  if (!allTeamKeys) {
+    allTeamKeys = new Set([
+      ...Object.values(SHIP_TEAM_LISTS).flatMap((list) => list.map((t) => normalizeTeamKey(t))),
+      // The ALIASES are not optional politeness here, they are most of the real
+      // data. On two months of RM's ledger the canonical-only set missed every
+      // "Oakland Athletics" (the club moved), every "LA Lakers" and every
+      // "Philadelphia Sixers" — and each miss read as a marketplace sale, which
+      // is a break spot booked as a sealed box and a phantom product to match.
+      ...Object.values(ALIASES).flatMap((m) => Object.keys(m))
+    ])
+  }
+  return allTeamKeys
+}
+
+/**
+ * Is this the name of a real team, in any league?
+ *
+ * Canonical names and aliases, on the normalized key. Deliberately NOT fuzzy and
+ * NOT mascot-alone: the caller is deciding whether a sale is a break spot, and a
+ * product legitimately named after a place or an animal ("Cactus Jack",
+ * "Cosmic") must not be dragged into the wrong bucket by a near-miss.
+ *
+ * League-blind, which is the opposite of what `createTeamMatcher` wants and
+ * exactly right here. The matcher places a card in a slot, so it must refuse to
+ * read "New York Mets" as a Jet. This only answers "is that a team at all", for
+ * a ledger line whose league nobody declared.
+ */
+export function isAnyLeagueTeam(raw: string): boolean {
+  const key = normalizeTeamKey(raw)
+  return key.length > 0 && teamKeySet().has(key)
+}
+
 /** The full slate size used by the fidelity audit (32 NFL/NHL, 30 MLB/NBA). */
 export const SHIP_TEAM_SLATE_SIZE: Record<ShipSport, number> = {
   nfl: NFL_TEAMS.length,

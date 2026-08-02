@@ -181,6 +181,97 @@ export function searchCatalog(query: string, limit = 25): InventoryProduct[] {
 }
 
 /**
+ * Find the catalog product a Whatnot listing title is describing.
+ *
+ * Whatnot titles are typed by hand into a listing form, so they are close to a
+ * catalog name and rarely equal to one: "2025-26 Topps Chrome Cactus Jack
+ * Basketball Hobby Box" against a catalog row of "2025-26 Topps Chrome Cactus
+ * Jack Basketball Hobby Box (12 Box)". Matching has to tolerate that without
+ * tolerating so much that it confidently returns the wrong box.
+ *
+ * SCORED, NOT FUZZY. Every significant word in the catalog name must appear in
+ * the title — that is the floor, and it is what stops "Topps Chrome Baseball"
+ * matching "Topps Chrome Football". The score then rewards how much of the
+ * TITLE the name accounts for, so between two products that both fit, the more
+ * specific one wins. A tie is refused rather than broken arbitrarily: two
+ * products the app cannot tell apart is a fact for a person, not a coin flip.
+ *
+ * The year is treated as decisive when the title has one. "2020-21 Panini Prizm
+ * Basketball Hobby Box" and its 2024-25 namesake differ in nothing else, and
+ * booking a sale against the wrong year's cost is worse than not booking it.
+ */
+export interface ProductNameMatch {
+  product: InventoryProduct
+  /** 0-1. How much of the listing title the catalog name accounted for. */
+  score: number
+  /** True when a second product scored the same — caller must not auto-apply. */
+  ambiguous: boolean
+}
+
+/** Words that carry no identifying weight in a card-product name. */
+const STOPWORDS = new Set([
+  'a', 'an', 'the', 'of', 'and', 'new', 'release', 'box', 'hobby', 'sealed', 'x'
+])
+
+function tokens(s: string): string[] {
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .split(' ')
+    .filter((t) => t.length > 0)
+}
+
+/** "2025-26" and "2025" both reduce to the leading year. */
+function yearsIn(s: string): Set<string> {
+  return new Set((s.match(/\b(19|20)\d{2}\b/g) ?? []).map((y) => y))
+}
+
+export function matchProductByName(rawTitle: string): ProductNameMatch | null {
+  const title = (rawTitle || '').trim()
+  if (!title) return null
+  const titleTokens = tokens(title)
+  if (titleTokens.length === 0) return null
+  const titleSet = new Set(titleTokens)
+  const titleYears = yearsIn(title)
+
+  const rows = getDb().prepare('SELECT * FROM inventory_products').all() as ProductRow[]
+  let best: { row: ProductRow; score: number } | null = null
+  let tied = false
+
+  for (const row of rows) {
+    const nameTokens = tokens(row.name)
+    const significant = nameTokens.filter((t) => !STOPWORDS.has(t))
+    if (significant.length === 0) continue
+    // The floor: every significant word of the catalog name is in the title.
+    if (!significant.every((t) => titleSet.has(t))) continue
+
+    // A year in both that does not agree is a different product, full stop.
+    const nameYears = yearsIn(row.name)
+    if (titleYears.size > 0 && nameYears.size > 0) {
+      let shared = false
+      for (const y of nameYears) if (titleYears.has(y)) shared = true
+      if (!shared) continue
+    }
+
+    const covered = titleTokens.filter((t) => nameTokens.includes(t)).length
+    const score = covered / titleTokens.length
+    if (!best || score > best.score) {
+      best = { row, score }
+      tied = false
+    } else if (score === best.score) {
+      tied = true
+    }
+  }
+
+  if (!best) return null
+  return {
+    product: toProduct(best.row, stockFor(best.row.id)),
+    score: Math.round(best.score * 1000) / 1000,
+    ambiguous: tied
+  }
+}
+
+/**
  * Is this UPC already in the catalog? Compares on the CANONICAL form, so
  * "0012345678905" is correctly rejected when "012345678905" already exists —
  * which is what keeps newly-entered data out of the ambiguous-scan state.
