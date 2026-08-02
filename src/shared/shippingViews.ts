@@ -397,6 +397,15 @@ export interface ShipWorkspaceSummary {
    */
   looseCards: number
   looseChecked: number
+  /**
+   * How many of `looseCards` are giveaways — which is nearly always all of
+   * them, because a promo rider having no break number is what a giveaway IS,
+   * not a fault. The split exists so a screen can say "29 giveaways" (normal,
+   * say it plainly) instead of "29 cards outside any break" (alarming, and
+   * wrong). A PAID card with no break is the unusual one, and the import
+   * already raises a flag for it.
+   */
+  looseGiveawayCards: number
   trackingCount: number
   onHoldCount: number
   specialRequestCount: number

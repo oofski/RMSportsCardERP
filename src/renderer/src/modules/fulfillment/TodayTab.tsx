@@ -52,6 +52,8 @@ export function TodayTab({ summary, onGoTo }: ShipTabProps): JSX.Element {
     [breaks, user?.id]
   )
   const unassigned = useMemo(() => breaks.filter((b) => b.assignees.length === 0), [breaks])
+  /** Somebody has begun handing the show out — so a gap in it is a real gap. */
+  const handoutStarted = useMemo(() => breaks.some((b) => b.assignees.length > 0), [breaks])
   const unfinished = useMemo(
     () => breaks.filter((b) => b.checkedTeams < b.totalTeams),
     [breaks]
@@ -72,6 +74,9 @@ export function TodayTab({ summary, onGoTo }: ShipTabProps): JSX.Element {
   const found = boardFound + looseFound
   const cardsLeft = cardsTotal - found
   const looseLeft = looseTotal - looseFound
+  // Nearly always true: a promo rider comes with no break number by nature. A
+  // PAID card outside every break is the odd one, and the import flags it.
+  const looseGiveawaysOnly = looseTotal > 0 && (summary?.looseGiveawayCards ?? 0) === looseTotal
 
   if (loading) return <CenterLoader />
 
@@ -129,7 +134,20 @@ export function TodayTab({ summary, onGoTo }: ShipTabProps): JSX.Element {
         )}
       </section>
 
-      {/* ---- What is stopping the room. */}
+      {/*
+        What is stopping the room.
+
+        Amber means A PERSON HAS TO DO SOMETHING they would not otherwise know
+        about. It does not mean "this number is above zero" — that is the trap
+        this row fell into, and it lit three tiles amber on a perfectly healthy
+        import: every break present, every giveaway normal, nobody assigned yet
+        because the night had not started. Once the board cries wolf on a clean
+        show, the one tile that matters stops being read.
+
+        So: work left is busy, not alarming. The normal shape of a show is never
+        amber. Only a flag nobody has looked at, a package somebody stopped, and
+        a hand-out that was started and left half-done get the colour.
+      */}
       <div className="today-blockers">
         <Blocker
           icon="Layers"
@@ -142,20 +160,39 @@ export function TodayTab({ summary, onGoTo }: ShipTabProps): JSX.Element {
           <Blocker
             icon="Gift"
             value={looseLeft}
+            // A giveaway having no break number is what a giveaway IS. Calling
+            // it "in no break" described the data model, not the job, and read
+            // as though something had gone wrong with 29 cards.
             label={
-              looseLeft === 1
-                ? 'giveaway in no break'
-                : 'giveaways in no break'
+              looseGiveawaysOnly
+                ? looseLeft === 1
+                  ? 'giveaway to find'
+                  : 'giveaways to find'
+                : looseLeft === 1
+                  ? 'card outside any break'
+                  : 'cards outside any break'
             }
-            tone="warn"
+            tone="busy"
             onClick={() => onGoTo('find')}
           />
         )}
         <Blocker
           icon="UserX"
           value={unassigned.length}
-          label={unassigned.length === 1 ? 'break with nobody on it' : 'breaks with nobody on them'}
-          tone={unassigned.length > 0 ? 'warn' : 'ok'}
+          // Nobody assigned to ANYTHING is a show that has not been handed out
+          // yet — the state every import starts in, and not a fault. A hand-out
+          // that covered some breaks and missed others is the real miss, and
+          // that is the only version worth the colour.
+          label={
+            handoutStarted
+              ? unassigned.length === 1
+                ? 'break missed in the hand-out'
+                : 'breaks missed in the hand-out'
+              : unassigned.length === 1
+                ? 'break not handed out yet'
+                : 'breaks not handed out yet'
+          }
+          tone={handoutStarted && unassigned.length > 0 ? 'warn' : 'ok'}
           onClick={() => onGoTo('setup')}
         />
         <Blocker
@@ -183,7 +220,7 @@ export function TodayTab({ summary, onGoTo }: ShipTabProps): JSX.Element {
             {looseTotal > 0 && (
               <em className="today-loose-note">
                 {' '}
-                incl. {looseTotal} in no break
+                incl. {looseTotal} {looseGiveawaysOnly ? 'giveaways' : 'outside a break'}
               </em>
             )}
           </h3>
@@ -230,8 +267,9 @@ export function TodayTab({ summary, onGoTo }: ShipTabProps): JSX.Element {
         )}
         {unfinished.length === 0 && looseLeft > 0 && (
           <p className="today-note">
-            Every break is picked, but {looseLeft} giveaway{looseLeft === 1 ? '' : 's'} belonging to
-            no break {looseLeft === 1 ? 'is' : 'are'} still out — they are at the bottom of Find.
+            Every break is picked. {looseLeft} {looseGiveawaysOnly ? 'giveaway' : 'card'}
+            {looseLeft === 1 ? '' : 's'} {looseLeft === 1 ? 'is' : 'are'} still to find at the bottom
+            of Find — they belong to no break, so no break can show them.
           </p>
         )}
       </section>

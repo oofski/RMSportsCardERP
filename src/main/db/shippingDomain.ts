@@ -1283,10 +1283,12 @@ export function getWorkspaceSummary(): ShipWorkspaceSummary {
   const realBreakIds = new Set(listShipBreaks().map((b) => b.id))
   let looseCards = 0
   let looseChecked = 0
+  let looseGiveawayCards = 0
   for (const s of listShipTeamSlots()) {
     if (realBreakIds.has(s.breakId)) continue
     looseCards += 1
     if (s.checkedOff) looseChecked += 1
+    if (s.isGiveaway) looseGiveawayCards += 1
   }
 
   return {
@@ -1298,6 +1300,7 @@ export function getWorkspaceSummary(): ShipWorkspaceSummary {
     value: cents(value),
     looseCards,
     looseChecked,
+    looseGiveawayCards,
     trackingCount,
     onHoldCount,
     specialRequestCount,
