@@ -13,6 +13,8 @@ import {
   isBlankJoiner,
   pendingCount,
   rebuildDerivedStock,
+  rebuildDerivedSupplyStock,
+  retryRejects,
   rejectCount,
   setCursor,
   syncStateGet,
@@ -289,6 +291,7 @@ export async function syncOnce(): Promise<RoundResult> {
   phase = 'pulling'
   broadcast()
   const changedKinds = new Set<string>()
+  const touchedSupplies = new Set<string>()
   for (;;) {
     const since = cursor()
     const reply = await call(
@@ -304,6 +307,7 @@ export async function syncOnce(): Promise<RoundResult> {
       result.rejected += applied.rejected
       result.pulled += rows.length
       for (const kind of applied.kinds) changedKinds.add(kind)
+      for (const id of applied.touchedSupplies) touchedSupplies.add(id)
       if (applied.touchedProducts.length > 0) {
         // Quantities and average costs are recomputed from the lots that just
         // landed rather than trusted as they arrived — see rebuildDerivedStock.
@@ -319,6 +323,22 @@ export async function syncOnce(): Promise<RoundResult> {
     if (nextCursor > since) setCursor(nextCursor)
     syncStateSet('last_pull_at', new Date().toISOString())
     if (reply.more !== true || nextCursor <= since) break
+  }
+
+  // ---- settle -----------------------------------------------------------
+  //
+  // Everything below runs ONCE, after the pull has fully drained, and the timing
+  // is the point. Tier ordering holds inside a batch, not across them, so a
+  // supply that arrived in one batch with its purchases still in the next has an
+  // incomplete history until here. Rebuilding per batch would settle it on a
+  // negative count and leave it there until the next completed pull.
+  if (touchedSupplies.size > 0) {
+    // A quarantined movement is a permanently wrong number once a count is
+    // derived from movements, so give the rejects a chance to land before
+    // deriving anything from them. Most are a child that beat its parent.
+    const { recovered } = retryRejects()
+    if (recovered > 0) changedKinds.add('supplies')
+    if (rebuildDerivedSupplyStock([...touchedSupplies]) > 0) changedKinds.add('supplies')
   }
 
   lastPulledRows = result.applied

@@ -1,6 +1,6 @@
 {
   "name": "rm-operations-app",
-  "version": "0.0.71",
+  "version": "0.0.72",
   "description": "RM Operations App — the internal operations platform for RM Cardz.",
   "author": {
     "name": "RM Cardz"
@@ -26,12 +26,13 @@
     "server": "npm run build:server && node out/server/index.cjs",
     "test:parser": "esbuild tests/shippingParser.test.ts --bundle --platform=node --format=cjs --alias:@shared=./src/shared --outfile=out/tests/shippingParser.cjs --log-level=warning && node out/tests/shippingParser.cjs",
     "test:labels": "node tests/build.mjs tests/shippingLabels.test.ts out/tests/shippingLabels.cjs && node out/tests/shippingLabels.cjs",
-    "test": "npm run test:parser && npm run test:labels && npm run test:board && npm run test:supplies && npm run test:pnl && npm run test:sop && npm run test:sop-hazards",
+    "test": "npm run test:parser && npm run test:labels && npm run test:board && npm run test:supplies && npm run test:pnl && npm run test:sop && npm run test:sop-hazards && npm run test:fees-sync",
     "test:board": "node tests/build.mjs tests/shippingBoard.test.ts out/tests/shippingBoard.cjs && node out/tests/shippingBoard.cjs",
     "test:supplies": "esbuild tests/shippingSupplies.test.ts --bundle --platform=node --format=cjs --outfile=out/tests/shippingSupplies.cjs --log-level=warning && node out/tests/shippingSupplies.cjs",
     "test:pnl": "node tests/build.mjs tests/pnlPacking.test.ts out/tests/pnlPacking.cjs && node out/tests/pnlPacking.cjs",
     "test:sop": "node tests/build.mjs tests/shipSop.test.ts out/tests/shipSop.cjs && node out/tests/shipSop.cjs",
-    "test:sop-hazards": "node tests/build.mjs tests/shipSopHazards.test.ts out/tests/shipSopHazards.cjs && node out/tests/shipSopHazards.cjs"
+    "test:sop-hazards": "node tests/build.mjs tests/shipSopHazards.test.ts out/tests/shipSopHazards.cjs && node out/tests/shipSopHazards.cjs",
+    "test:fees-sync": "node tests/build.mjs tests/feesAndSync.test.ts out/tests/feesAndSync.cjs && node out/tests/feesAndSync.cjs"
   },
   "dependencies": {
     "@electron-toolkit/utils": "^3.0.0",

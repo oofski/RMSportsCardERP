@@ -316,8 +316,8 @@ function LineRow({ line, revenue }: { line: PnlLine; revenue: number | null }): 
     <tr className={`fin-pnl-line${line.empty ? ' is-empty' : ''}`}>
       <th scope="row">
         <span className="fin-pnl-label">{line.label}</span>
-        {/* The detail is what makes the figure checkable — "2.9% + 30c x 1029"
-            is the sum, written out. It stays beside the label rather than in a
+        {/* The detail is what makes the figure checkable — "2.9% of sales ·
+            1,029 orders" is the sum, written out. It stays beside the label rather than in a
             tooltip precisely because nobody hovers a number they already
             believe. It is printed verbatim from the contract: rewriting the
             builder's own words in the renderer would put two versions of the

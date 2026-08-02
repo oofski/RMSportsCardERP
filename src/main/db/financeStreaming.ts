@@ -48,12 +48,14 @@
  * WHAT A DAY IS WORTH, AND WHERE THAT IS DECIDED
  *
  * The ledger's sale figure is GROSS. Whatnot's commission (6%) and processing
- * (2.9% plus 30c a transaction, both on the gross) come off it, on SALES ONLY —
- * `computeFees` in the contract owns that arithmetic and it is never inlined.
+ * (2.9%), both on the gross, come off it, on SALES ONLY — `computeFees` in the
+ * contract owns that arithmetic and it is never inlined.
  * Fees are computed once, ON A DAY, and weeks, months and the grand total are
- * built by SUMMING day rows. Nothing re-derives a fee from a period's gross: the
- * flat 30c is per sale row, so a period that recomputed it would depend on how
- * it was sliced and would eventually contradict the days inside it.
+ * built by SUMMING day rows. Both charges are now pure percentages, so a period
+ * COULD re-derive them and get the same answer — but it still does not. Two
+ * numbers that must agree and are produced two different ways eventually
+ * disagree, and rounding alone would do it: 8.9% of each of thirty days, summed,
+ * is not always 8.9% of their total to the cent.
  *
  * COST OF GOODS IS NOT IN THE LEDGER, AND IT IS THE BIGGEST COST THERE IS
  *
@@ -1522,13 +1524,12 @@ function newRollup(): Rollup {
  * Add ONE day to a rollup — the only way a week, a month or the grand total is
  * ever built.
  *
- * Every field is SUMMED, including the fees. Recomputing `computeFees` on the
- * period's gross would give the right percentages and the WRONG flat fee: the
- * $0.30 is charged per sale row, so re-deriving it from a period's total gross
- * would silently drop it or re-add it depending on how the period was sliced.
- * Two numbers that must agree and are derived two different ways will eventually
- * disagree, and a week that contradicts the days inside it is worse than no week
- * at all.
+ * Every field is SUMMED, including the fees. Now that both charges are flat
+ * percentages, recomputing `computeFees` on the period's gross would ALMOST
+ * agree — and almost is the problem. Each day's fee is rounded to the cent, so
+ * thirty rounded days need not add up to one rounding of the total, and a week
+ * that contradicts the days inside it is worse than no week at all. One
+ * derivation, in one place, summed everywhere else.
  */
 function addDay(roll: Rollup, day: StreamDayFinance): void {
   const fields = day as unknown as Record<string, number>
@@ -1990,9 +1991,10 @@ function buildView(db: Database): StreamingFinanceView {
     const day = dayFor(r.d)
     day.rowCount += r.rows
     const bucket = r.bucket as LedgerBucket
-    // ONE sale row is ONE transaction, and that is what the flat 30c processing
-    // fee is charged on. It is counted here, from the row table, rather than
-    // inferred from a dollar total — no average ticket price can recover it.
+    // Counted from the row table rather than inferred from a dollar total — no
+    // average ticket price can recover it. It no longer feeds the fee (that is a
+    // flat percentage now), but it is what "8.9% across 1,029 orders" is checked
+    // against, and it is the only honest source for the number.
     if (bucket === 'sale') day.saleCount += r.rows
     const amounts = dayCents.get(r.d) as Partial<Record<LedgerBucket, number>>
     amounts[bucket] = (amounts[bucket] ?? 0) + r.cents
@@ -2029,20 +2031,21 @@ function buildView(db: Database): StreamingFinanceView {
   // anything (confirmed by the owner; the file itself has no commission line, so
   // this could not be settled from the data). Two charges come off it:
   //   commission  6%   of gross
-  //   processing  2.9% of gross PLUS 30c on every sale row
+  //   processing  2.9% of gross
   // Both on the GROSS amount, not one after the other, and on SALES ONLY —
   // shipping subsidies, tips and bonuses arrive whole.
   //
+  // There is no per-transaction flat fee. Earlier versions charged the card
+  // industry's usual 30c per sale row, which on a week selling 1,929 small break
+  // spots invented $578 of fees nobody ever took. RM's rate is a straight
+  // percentage, so the number of transactions cannot change what a day costs.
+  //
   // The arithmetic is `computeFees` in the contract and is never restated here.
-  // A blended "8.9%" would be wrong in exactly the direction that matters: RM
-  // sells break spots at small ticket prices, so the flat 30c lands 1,929 times
-  // in a single week and is worth another 1.5% on a $20 spot. Modelling it as a
-  // percentage understates fees most on the shows that sell the most spots.
   //
   // A DAY IS WHERE FEES ARE COMPUTED, AND THE ONLY PLACE. Weeks, months and the
-  // grand total SUM these numbers (see `addDay`); none of them re-derive fees
-  // from their own gross, because the flat-fee component would then depend on
-  // how the period was sliced and two views of the same money would drift.
+  // grand total SUM these numbers (see `addDay`) rather than re-deriving from
+  // their own gross, so per-day rounding can never make a week disagree with the
+  // days inside it.
   for (const [date, day] of dayMap) {
     const cents = dayCents.get(date) ?? {}
     const salesCents = toCents(day.sales)

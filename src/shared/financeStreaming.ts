@@ -537,29 +537,41 @@ export interface LedgerQuarantine {
  * before Whatnot takes anything. Two charges come off it:
  *
  *   commission  6%   of the sale
- *   processing  2.9% of the sale, plus 30c on every single transaction
+ *   processing  2.9% of the sale
  *
- * Both are computed on the GROSS amount, not one after the other. The flat 30c
- * is what makes this worth modelling properly rather than applying a blended
- * 8.9%: a show that sells 1,900 break spots at small ticket prices pays that
- * 30c 1,900 times, and on a $20 spot the flat fee is another 1.5% on top. A
- * percentage-only model quietly understates fees on exactly the shows that sell
- * the most spots.
+ * Both are computed on the GROSS amount, not one after the other, so the two
+ * rates simply add: 8.9% of gross, and nothing else.
+ *
+ * There is NO per-transaction flat fee. Earlier versions modelled the card
+ * industry's usual "2.9% + 30c" and charged that 30c once per sale row, which
+ * on a show selling 1,900 small break spots invented $570 of fees that were
+ * never taken. On RM's rate the flat component does not exist, so a count of
+ * transactions cannot change what a day costs — which is also why `saleCount`
+ * survives here for display only.
  *
  * Fees apply to SALES ONLY. Shipping subsidies, tips and bonuses arrive whole.
  */
 export const WHATNOT_COMMISSION_RATE = 0.06
 export const PROCESSING_RATE = 0.029
-export const PROCESSING_PER_TRANSACTION = 0.3
+/** Both charges land on the same gross, so the effective rate is their sum. */
+export const TOTAL_FEE_RATE = WHATNOT_COMMISSION_RATE + PROCESSING_RATE
 
 export interface FeeBreakdown {
   /** Gross sales the fees were computed on. */
   grossSales: number
-  /** Number of chargeable transactions — one per sale row. */
+  /**
+   * Sale rows behind the figure.
+   *
+   * Reported, not charged. Nothing in the arithmetic depends on it now that the
+   * flat per-transaction fee is gone; it stays because "8.9% of $12,840 across
+   * 1,029 sales" is a sentence somebody can check against a Whatnot statement,
+   * and because dropping it from the shape would silently blank the count on
+   * every screen that shows it.
+   */
   saleCount: number
   /** Negative. */
   whatnotFee: number
-  /** Negative. Percentage plus the per-transaction flat fee. */
+  /** Negative. */
   processingFee: number
   /** Negative. whatnotFee + processingFee. */
   totalFees: number
@@ -571,9 +583,7 @@ const cents = (n: number): number => Math.round(n * 100) / 100
  *  screen has to remember which way to apply them. */
 export function computeFees(grossSales: number, saleCount: number): FeeBreakdown {
   const whatnotFee = -cents(grossSales * WHATNOT_COMMISSION_RATE)
-  const processingFee = -cents(
-    grossSales * PROCESSING_RATE + saleCount * PROCESSING_PER_TRANSACTION
-  )
+  const processingFee = -cents(grossSales * PROCESSING_RATE)
   return {
     grossSales: cents(grossSales),
     saleCount,
@@ -814,11 +824,14 @@ export function buildPnl(d: {
       label: 'Platform fees',
       lines: [
         line('whatnotFee', "Whatnot commission", d.whatnotFee, '6% of sales'),
+        // The sale count is context, not a multiplier \u2014 the fee is a flat
+        // percentage. Saying "across N sales" rather than "x N" keeps the line
+        // checkable without implying arithmetic that is not happening.
         line(
           'processingFee',
           'Payment processing',
           d.processingFee,
-          `2.9% + 30\u00A2 \u00D7 ${count(d.saleCount)}`
+          `2.9% of sales \u00B7 ${count(d.saleCount)} orders`
         )
       ],
       subtotal: c2(d.totalFees),
@@ -1122,9 +1135,10 @@ export function emptyDayFinance(streamDate: string): StreamDayFinance {
  * reconciliation check reports a phantom cent.
  *
  * Every field is SUMMED, including the fees — never re-derived from the range's
- * gross. The 30c is charged per sale ROW, so recomputing it from a range total
- * would give the right percentage and the wrong flat fee, and it would land
- * differently depending on how the operator happened to slice the calendar.
+ * gross. Both charges are flat percentages, so a re-derivation would come close;
+ * it would not come out equal. Each day's fee is already rounded to the cent,
+ * and a sum of roundings is not the rounding of a sum. One derivation, on a day,
+ * summed everywhere else.
  *
  * A non-finite figure counts as zero rather than poisoning the whole range: an
  * older packaged main can send days without the cost-of-goods keys, and one

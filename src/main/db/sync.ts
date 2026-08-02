@@ -180,6 +180,24 @@ function columnsOf(db: Database, table: string): Set<string> {
 }
 
 /**
+ * Columns that travel but are never allowed to LAND on an existing row.
+ *
+ * `supplies.quantity` is a count, and a count must not be arbitrated. Whoever
+ * wrote the supply row last would otherwise decide how many team bags exist —
+ * so a rename typed offline carries that machine's stale number and lands on top
+ * of a deduction somebody else made an hour ago, putting the stock back.
+ *
+ * The number still arrives on an INSERT, because a supply this machine has never
+ * seen has to start somewhere and the sender's figure is the best guess
+ * available. From then on it is maintained the way inventory_stock is: derived
+ * from the movement rows, which have their own ids, never collide, and are the
+ * actual record of what happened. See rebuildDerivedSupplyStock.
+ */
+const NEVER_OVERWRITE: Record<string, ReadonlySet<string>> = {
+  supplies: new Set(['quantity'])
+}
+
+/**
  * Build the upsert for one incoming row.
  *
  * Only columns this database actually has are used. A laptop on a newer version
@@ -202,7 +220,8 @@ function upsertFor(db: Database, spec: SyncedTable, data: Record<string, unknown
   for (const k of spec.key) {
     if (!cols.includes(k)) throw new Error(`missing key column ${k}`)
   }
-  const assignable = cols.filter((c) => !spec.key.includes(c))
+  const keep = NEVER_OVERWRITE[spec.table]
+  const assignable = cols.filter((c) => !spec.key.includes(c) && !keep?.has(c))
   const sql =
     `INSERT INTO ${spec.table} (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')}) ` +
     `ON CONFLICT (${spec.key.join(', ')}) DO UPDATE SET ` +
@@ -481,9 +500,19 @@ export function applyRows(rows: IncomingRow[]): ApplyResult {
   } catch {
     // Reset the counters the failed attempt inflated; the transaction rolled
     // back, so nothing it counted actually happened.
+    //
+    // `landed` included. It is not a counter — it is the list used below to
+    // clear the quarantine, and leaving the rolled-back attempt's entries in it
+    // meant a row that failed BOTH passes had its quarantine record deleted the
+    // instant it was written. The reject was counted in the result and then
+    // vanished from the store, so the Sync screen under-reported and nothing
+    // could ever be retried. It matters more now that a count is derived from
+    // these rows: a movement that quietly disappears is a wrong number on a
+    // shelf that nobody can trace.
     result.applied = 0
     result.deleted = 0
     result.duplicates = 0
+    landed.length = 0
     kinds.clear()
     for (const row of ordered) {
       try {
@@ -638,6 +667,93 @@ export function rebuildDerivedStock(productIds: string[]): number {
   })
   run()
   return changed
+}
+
+/**
+ * Recompute a supply's on-hand from its own movements.
+ *
+ * `supplies.quantity` cannot be arbitrated between machines — see NEVER_OVERWRITE
+ * above. The movements can: every purchase, use and adjustment is a row with its
+ * own id, they all sync, and none of them collide. So the count is recovered by
+ * adding them up, exactly as inventory_stock is recovered from its lots.
+ * `createSupply` logs its opening quantity as a purchase precisely so this
+ * identity holds from the first row.
+ *
+ * TIMING IS PART OF THE CORRECTNESS. This must run only when a pull has fully
+ * drained, never per batch: tier ordering holds INSIDE a batch, not across them,
+ * so a supply landing in one batch with its purchases still in the next would
+ * rebuild against half a history and settle on a negative count. Call it once,
+ * at the end, when there is no more to come.
+ *
+ * A supply with no movements at all is left alone. That is not the same as "it
+ * holds zero" — it is a row nobody has recorded anything for on any machine, and
+ * rewriting its count to zero would be inventing a fact.
+ */
+export function rebuildDerivedSupplyStock(supplyIds: string[]): number {
+  if (supplyIds.length === 0) return 0
+  const db = getDb()
+  let changed = 0
+
+  const run = db.transaction(() => {
+    setApplying(db, true)
+    try {
+      for (const id of supplyIds) {
+        const row = db.prepare('SELECT quantity FROM supplies WHERE id = ?').get(id) as
+          | { quantity: number }
+          | undefined
+        if (!row) continue
+        const agg = db
+          .prepare(
+            `SELECT COUNT(*) AS n, COALESCE(SUM(quantity_change), 0) AS q
+               FROM supply_transactions WHERE supply_id = ?`
+          )
+          .get(id) as { n: number; q: number }
+        if (agg.n === 0) continue
+        const target = Math.round(agg.q)
+        if (target !== row.quantity) {
+          db.prepare('UPDATE supplies SET quantity = ? WHERE id = ?').run(target, id)
+          changed += 1
+        }
+      }
+    } finally {
+      setApplying(db, false)
+    }
+  })
+  run()
+  return changed
+}
+
+/**
+ * Re-attempt everything currently quarantined.
+ *
+ * A rejected row used to be rejected forever: the cursor advances past it, and
+ * nothing ever fetches it again. That is survivable when the row is merely
+ * missing from a screen — and not survivable once a COUNT is derived from those
+ * rows, because one quarantined movement becomes a permanently wrong number on
+ * the shelf.
+ *
+ * Most rejections are a child arriving before its parent, which fixes itself the
+ * moment the parent lands. Replaying costs nothing when the quarantine is empty
+ * and clears itself when it is not; a row that still fails simply stays put with
+ * its reason updated.
+ */
+export function retryRejects(): { retried: number; recovered: number } {
+  const rows = getDb()
+    .prepare(`SELECT kind, id, seq, data FROM sync_rejects WHERE data IS NOT NULL ORDER BY seq ASC`)
+    .all() as Array<{ kind: string; id: string; seq: number; data: string | null }>
+  if (rows.length === 0) return { retried: 0, recovered: 0 }
+  const before = rejectCount()
+  applyRows(
+    rows.map((r) => ({
+      kind: r.kind,
+      id: r.id,
+      seq: r.seq,
+      updated_at: '',
+      deleted: 0 as const,
+      data: r.data
+    }))
+  )
+  return { retried: rows.length, recovered: Math.max(0, before - rejectCount()) }
 }
 
 /**
