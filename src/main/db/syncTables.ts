@@ -73,6 +73,11 @@ export const SYNCED_TABLES: SyncedTable[] = [
   { table: 'ship_break_audit', key: ['break_label'], tier: 0 },
   { table: 'ship_imports', key: ['id'], tier: 0 },
   { table: 'ship_snapshots', key: ['id'], tier: 0 },
+  // Both carry DERIVED ids ('date|step', 'date|step|role') and ABSOLUTE
+  // quantities, so two benches ticking the same step off the same show land on
+  // one row holding one number rather than two rows holding the night twice.
+  { table: 'ship_sop_steps', key: ['id'], tier: 0 },
+  { table: 'ship_supply_usage', key: ['id'], tier: 0 },
   { table: 'ledger_imports', key: ['id'], tier: 0 },
   { table: 'stream_sessions', key: ['id'], tier: 0 },
   { table: 'purchase_orders', key: ['id'], tier: 0 },

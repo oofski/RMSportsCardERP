@@ -126,8 +126,7 @@ import {
 import type { StreamSession } from '@shared/streaming'
 import { durationMinutes, isSuspiciouslyLong, streamDateOf } from '@shared/streaming'
 import { getDb } from './database'
-import { getShipEvent } from './shipping'
-import { getSupplyPlanCosted } from './shippingDomain'
+import { packingCostByDay } from './shipSop'
 import { newId, nowIso } from '../util'
 
 // ---------------------------------------------------------------------------
@@ -1949,17 +1948,15 @@ function buildView(db: Database): StreamingFinanceView {
   // unassigned show has nowhere to book its packing, so it books nowhere rather
   // than guessing at today.
   //
-  // Known limit, stated rather than hidden: only the ACTIVE shipping dataset is
-  // costed, because that is the only show whose packing slips are still loaded.
-  // Historical days show no packing until consumption is recorded per show —
-  // which is the same piece of work as actually deducting the stock.
+  // Read from what the floor RECORDED — the SOP checklist's usage rows — not
+  // from recomputing tonight's plan. That is the difference between "the packing
+  // cost of whichever show's slips happen to still be loaded" and "the packing
+  // cost of that day", and only the second one survives the next import. A day
+  // whose steps were never ticked books nothing, which is correct: nothing was
+  // reported as used.
   const packingByDay = new Map<string, number>()
   try {
-    const showDate = String(getShipEvent().date ?? '').trim()
-    if (showDate) {
-      const plan = getSupplyPlanCosted()
-      if (plan.totalCost > 0) packingByDay.set(showDate, toCents(plan.totalCost))
-    }
+    for (const [d, cost] of packingCostByDay()) packingByDay.set(d, toCents(cost))
   } catch {
     // Shipping having no dataset, or Supplies being empty, is not a finance
     // error — the P&L simply has no packing to show for that day.

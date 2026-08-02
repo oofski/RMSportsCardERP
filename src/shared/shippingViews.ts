@@ -430,6 +430,13 @@ export interface ShipWorkspaceSummary {
   /** True when any break audit reported a team owned by two customers. */
   hasCollisions: boolean
   lastImport: ShipImportRecord | null
+  /**
+   * SOP steps ticked for this show's day, out of seven. Zero when the show has
+   * no day assigned — which is also the state in which nothing CAN be ticked,
+   * since supplies leaving stock have to book to a date.
+   */
+  sopDone: number
+  sopTotal: number
 }
 
 // ---------------------------------------------------------------------------

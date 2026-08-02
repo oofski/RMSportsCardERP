@@ -17,6 +17,7 @@ rmSync(DIR, { recursive: true, force: true }); mkdirSync(DIR, { recursive: true 
 const { getDb } = require('../src/main/db/database')
 const ship = require('../src/main/db/shipping')
 const domain = require('../src/main/db/shippingDomain')
+const sop = require('../src/main/db/shipSop')
 const supplies = require('../src/main/db/supplies')
 const fin = require('../src/main/db/financeStreaming')
 const { buildPnl, pnlChecksum } = require('../src/shared/financeStreaming')
@@ -81,6 +82,16 @@ const costed = domain.getSupplyPlanCosted()
 console.log(`   plan total $${costed.totalCost.toFixed(2)}  unmapped ${costed.unmappedRoles.length}`)
 ok(Math.abs(costed.totalCost - 2.6) < 0.005, 'the costed plan totals $2.60', String(costed.totalCost))
 
+// The PLAN is not the P&L. Nothing is booked until the floor says the work
+// happened — which is the whole point of the checklist being the trigger.
+view = fin.streamingFinanceView()
+ok(dayOf(view, '2026-07-12') === null || dayOf(view, '2026-07-12').packingSupplies === 0,
+   'a plan alone books nothing — the steps have to be ticked')
+
+console.log('\n=== tick the two steps that consume the linked roles ===')
+sop.setShipSopStep('team_bag', true, null) //  35 bags  × 0.02 = 0.70
+sop.setShipSopStep('ship', true, null) //       3 mailers × 0.30 + 2 labels × 0.50 = 1.90
+
 view = fin.streamingFinanceView()
 const day = dayOf(view, '2026-07-12')
 ok(!!day, 'the show day exists in the P&L', String(view.days.length))
@@ -103,14 +114,39 @@ ok(shipSec.subtotalLabel === 'Net shipping & packing', 'renamed to say what it n
 ok(Math.abs(shipSec.subtotal - day.netShipping) < 0.005,
    'the section subtotal is netShipping', `${shipSec.subtotal} vs ${day.netShipping}`)
 
-// An unassigned show has nowhere to book packing — and must not invent a day.
-console.log('\n=== an unassigned show ===')
+// Unticking gives the money back as well as the stock: the same code path, so
+// the two can never drift.
+console.log('\n=== untick ===')
+sop.setShipSopStep('ship', false, null)
+const view3 = fin.streamingFinanceView()
+ok(Math.abs(dayOf(view3, '2026-07-12').packingSupplies + 0.7) < 0.005,
+   'unticking Shipping leaves only the team bags booked',
+   String(dayOf(view3, '2026-07-12').packingSupplies))
+ok(view3.reconciled === true, 'and it still reconciles')
+sop.setShipSopStep('ship', true, null)
+
+// THE FIX this release carries: what was consumed on a day stays booked to that
+// day. Under the old model the figure was recomputed from whichever dataset
+// happened to still be loaded, so last week's packing vanished at the next
+// import — every historical day silently understated.
+console.log('\n=== the show moves on ===')
 ship.setShipEvent('Finest Baseball', '')
 const view2 = fin.streamingFinanceView()
-ok(view2.reconciled === true, 'still reconciles with the day cleared')
-ok(view2.days.every((d: any) => d.packingSupplies === 0),
-   'and no day carries packing when the show has no day',
-   JSON.stringify(view2.days.filter((d: any) => d.packingSupplies !== 0).map((d: any) => d.streamDate)))
+ok(view2.reconciled === true, 'still reconciles once the show has moved on')
+ok(Math.abs(dayOf(view2, '2026-07-12').packingSupplies + 2.6) < 0.005,
+   'and the packing STAYS booked to the day it was consumed',
+   String(dayOf(view2, '2026-07-12')?.packingSupplies))
+
+// A show with no day cannot be ticked at all — there is nowhere to book it.
+console.log('\n=== a show with no day ===')
+let threw = ''
+try {
+  sop.setShipSopStep('sleeve', true, null)
+} catch (err: any) {
+  threw = String(err?.message ?? err)
+}
+ok(threw.includes('day'), 'ticking is refused until the show has a day', threw || '(no error)')
+ok(fin.streamingFinanceView().reconciled === true, 'and the refusal changed nothing')
 
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

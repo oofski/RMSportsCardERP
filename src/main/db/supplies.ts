@@ -322,6 +322,97 @@ export function useSupply(id: string, input: SupplyUseInput, actorId: string | n
   return run()
 }
 
+/**
+ * Set how much of one supply a shipping step has consumed, as an ABSOLUTE
+ * total, and move stock by the difference.
+ *
+ * Three things make this different from `useSupply`, and each is deliberate.
+ *
+ * **It is absolute, not a delta.** Ticking a step twice, or ticking it after a
+ * corrected re-import raised the pack count, must land on the right number
+ * rather than deducting again. Callers say "this step has now used 390"; the
+ * arithmetic here works out that 90 more need to leave. Untick passes 0 and the
+ * stock comes back.
+ *
+ * **The transaction row's id is the caller's key.** One row per
+ * (show, step, supply), upserted. Two benches ticking the same step off the
+ * same show write the same id, so the relay merges them instead of logging the
+ * night twice — which is exactly what a stream of delta rows could not do.
+ *
+ * **It is allowed to go negative.** `useSupply` refuses, correctly: somebody
+ * typing a number into a form should be stopped. This is not that. The cards
+ * were sleeved; the sleeves are gone whether or not the count on the screen
+ * agreed. Blocking the tick would leave the floor unable to record work it has
+ * already done, and would quietly make the P&L understate the show. So the
+ * stock goes where the work says it went, the shortfall is returned to the
+ * caller, and the screen says so loudly.
+ */
+export interface ShipUsageResult {
+  ok: boolean
+  error?: string
+  /** Items that moved. Negative = left the shelf, positive = came back. */
+  delta: number
+  onHand: number
+  wentNegative: boolean
+}
+
+export function setShipSupplyUsage(
+  db: Database.Database,
+  args: {
+    supplyId: string
+    /** Stable per (show, step, supply). Becomes the transaction row's id. */
+    txnId: string
+    /** The absolute total this step has consumed. 0 releases it all. */
+    quantity: number
+    note: string
+    actorId: string | null
+  }
+): ShipUsageResult {
+  const want = Math.max(0, Math.round(args.quantity))
+  const row = db.prepare('SELECT quantity FROM supplies WHERE id = ?').get(args.supplyId) as
+    | { quantity: number }
+    | undefined
+  if (!row) return { ok: false, error: 'Supply not found.', delta: 0, onHand: 0, wentNegative: false }
+
+  const prev = db.prepare('SELECT quantity_change FROM supply_transactions WHERE id = ?').get(args.txnId) as
+    | { quantity_change: number }
+    | undefined
+  // Stored negative (stock leaving), so the previous total is its magnitude.
+  const already = prev ? Math.abs(prev.quantity_change) : 0
+  const delta = already - want // +ve = coming back, -ve = leaving
+
+  if (delta === 0) {
+    return { ok: true, delta: 0, onHand: row.quantity, wentNegative: row.quantity < 0 }
+  }
+
+  const ts = nowIso()
+  const onHand = row.quantity + delta
+  db.prepare('UPDATE supplies SET quantity = ?, updated_at = ? WHERE id = ?').run(onHand, ts, args.supplyId)
+
+  if (want === 0) {
+    db.prepare('DELETE FROM supply_transactions WHERE id = ?').run(args.txnId)
+  } else {
+    db.prepare(
+      `INSERT INTO supply_transactions
+         (id, supply_id, type, quantity_change, unit_cost, total_cost, note, actor_id, units, items_per_unit, created_at)
+       VALUES (@id, @supply_id, 'use', @qc, NULL, NULL, @note, @actor, NULL, NULL, @ts)
+       ON CONFLICT (id) DO UPDATE SET
+         quantity_change = excluded.quantity_change,
+         note            = excluded.note,
+         actor_id        = excluded.actor_id`
+    ).run({
+      id: args.txnId,
+      supply_id: args.supplyId,
+      qc: -want,
+      note: args.note,
+      actor: args.actorId,
+      ts
+    })
+  }
+
+  return { ok: true, delta, onHand, wentNegative: onHand < 0 }
+}
+
 /** Correct an on-hand count up or down (+/−). Never goes below zero. */
 export function adjustSupply(
   id: string,

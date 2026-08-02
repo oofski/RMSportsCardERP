@@ -13,9 +13,11 @@ import { formatMoney } from '../../lib/format'
  * What tonight's show costs in supplies, and which product is which.
  *
  * Read only where stock is concerned: nothing on this screen decrements
- * anything. The one thing it writes is the LINK — saying that this row in the
- * supplies list is the team bags — because that mapping has to exist before any
- * of the arithmetic can find a real product to cost against.
+ * anything — that happens on the Steps tab, when somebody ticks the step whose
+ * work consumed it. The one thing this screen writes is the LINK — saying that
+ * this row in the supplies list is the team bags — because that mapping has to
+ * exist before any of the arithmetic can find a real product to cost against,
+ * and before a tick has anywhere to take stock from.
  *
  * Role-first on purpose. The alternative is a field buried on each supply,
  * which means opening six products to answer one question and no way to see
@@ -201,8 +203,8 @@ export function SupplyPlanTab(): JSX.Element {
       <div className="splan-foot">
         <Icon name="Info" size={14} />
         <span>
-          Nothing here has come out of stock. Say when it should — at import, as each package is
-          finished, or on a button somebody presses — and it gets wired to Supplies.
+          This screen is the forecast and the wiring — nothing on it moves stock. Supplies come out
+          on the <b>Steps</b> tab, when the floor ticks the step that used them.
         </span>
       </div>
     </div>

@@ -1364,6 +1364,52 @@ function migrate(database: Database.Database): void {
   )
   setMeta(database, 'schema_version', '33')
 
+  // v34: the floor's checklist, and the stock it actually moved.
+  //
+  // Two tables, because they answer two different questions and only one of them
+  // is allowed to be forgotten.
+  //
+  // ship_sop_steps is WHERE THE NIGHT IS UP TO — seven ticks against a show.
+  // ship_supply_usage is WHAT LEFT THE SHELF — the immutable half. It is what the
+  // P&L reads, which is why it is keyed by the show's DATE rather than tied to
+  // the active dataset: the day after the next import, last week's packing cost
+  // still has to be there.
+  //
+  // Both ids are DERIVED, not random: 'date|step' and 'date|step|role'. Two
+  // laptops ticking the same step off the same show produce the same row id, so
+  // the relay merges them into one instead of double-booking the night. The
+  // quantity stored is the ABSOLUTE total for that step, never a delta, for the
+  // same reason — an absolute converges under last-write-wins, a delta does not.
+  database.exec(
+    `CREATE TABLE IF NOT EXISTS ship_sop_steps (
+       id         TEXT PRIMARY KEY,
+       event_date TEXT NOT NULL,
+       step       TEXT NOT NULL,
+       done       INTEGER NOT NULL DEFAULT 0,
+       done_at    TEXT,
+       done_by    TEXT,
+       updated_at TEXT NOT NULL
+     );
+     CREATE INDEX IF NOT EXISTS idx_ship_sop_steps_date ON ship_sop_steps (event_date);
+
+     CREATE TABLE IF NOT EXISTS ship_supply_usage (
+       id          TEXT PRIMARY KEY,
+       event_date  TEXT NOT NULL,
+       step        TEXT NOT NULL,
+       role        TEXT NOT NULL,
+       supply_id   TEXT,
+       supply_name TEXT,
+       quantity    INTEGER NOT NULL DEFAULT 0,
+       unit_cost   REAL NOT NULL DEFAULT 0,
+       total_cost  REAL NOT NULL DEFAULT 0,
+       actor_id    TEXT,
+       created_at  TEXT NOT NULL,
+       updated_at  TEXT NOT NULL
+     );
+     CREATE INDEX IF NOT EXISTS idx_ship_supply_usage_date ON ship_supply_usage (event_date);`
+  )
+  setMeta(database, 'schema_version', '34')
+
   // Seed the product catalog once, then apply the on-hand snapshot once.
   seedCatalogIfNeeded(database)
   seedSnapshotIfNeeded(database)

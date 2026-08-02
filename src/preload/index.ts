@@ -1,7 +1,13 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC, type AppInfo } from '@shared/ipc'
 import type { Permission } from '@shared/permissions'
-import type { ShipSupplyPlan, ShipSupplyPlanCosted } from '@shared/shippingSupplies'
+import type {
+  ShipSopResult,
+  ShipSopState,
+  ShipSopStep,
+  ShipSupplyPlan,
+  ShipSupplyPlanCosted
+} from '@shared/shippingSupplies'
 import type {
   ParsedSheet,
   ResetApplyResult,
@@ -406,6 +412,12 @@ const api = {
     /** The same plan costed against the supplies list. Needs Inventory too. */
     supplyPlanCosted: (): Promise<ShipSupplyPlanCosted | null> =>
       ipcRenderer.invoke(IPC.shipSupplyPlanCosted),
+
+    /** The SOP checklist: where the night is up to, and what it has consumed. */
+    sop: (): Promise<ShipSopState | null> => ipcRenderer.invoke(IPC.shipSop),
+    /** Tick a step off — or take it back. This MOVES STOCK. */
+    sopSetStep: (step: ShipSopStep, done: boolean): Promise<Result<ShipSopResult>> =>
+      ipcRenderer.invoke(IPC.shipSopSetStep, { step, done }),
 
     // ---- The uploaded slip -------------------------------------------------
     /** Metadata only — cheap enough for any screen to ask on mount. */

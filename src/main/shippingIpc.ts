@@ -132,7 +132,15 @@ import {
   bulkSetShipmentStatusByTracking
 } from './db/shippingDomain'
 import { getShipCalendarDay, listShipCalendar } from './db/shippingCalendar'
-import type { ShipSupplyPlan, ShipSupplyPlanCosted } from '@shared/shippingSupplies'
+import type {
+  ShipSopResult,
+  ShipSopState,
+  ShipSopStep,
+  ShipSupplyPlan,
+  ShipSupplyPlanCosted
+} from '@shared/shippingSupplies'
+import { SHIP_SOP_STEPS } from '@shared/shippingSupplies'
+import { getShipSop, setShipSopStep } from './db/shipSop'
 
 // ---------------------------------------------------------------------------
 // Guards
@@ -573,6 +581,53 @@ export function registerShippingIpc(): void {
    */
   ipcMain.handle(IPC.shipSupplyPlanCosted, (): ShipSupplyPlanCosted | null =>
     can('module.fulfillment') && can('module.inventory') ? getSupplyPlanCosted() : null
+  )
+
+  /**
+   * The SOP checklist.
+   *
+   * Readable by anyone in the module — knowing where the night is up to is not
+   * privileged information, and a picker who cannot see whether sorting is done
+   * cannot decide what to do next. Costs are the exception and are stripped for
+   * anyone without Inventory, matching the plan handler above.
+   */
+  ipcMain.handle(IPC.shipSop, (): ShipSopState | null => {
+    if (!can('module.fulfillment')) return null
+    const state = getShipSop()
+    if (can('module.inventory')) return state
+    return {
+      ...state,
+      plannedCost: 0,
+      bookedCost: 0,
+      steps: state.steps.map((s) => ({
+        ...s,
+        cost: 0,
+        lines: s.lines.map((l) => ({ ...l, unitCost: 0, lineCost: 0, usedCost: 0 }))
+      }))
+    }
+  })
+
+  /**
+   * Tick a step — which is a STOCK MOVEMENT, so it is a write.
+   *
+   * Gated on packing rather than on Inventory. The person who just finished
+   * sleeving is the only one who knows the sleeving is finished, and making them
+   * fetch somebody with an Inventory permission to record it is how a checklist
+   * stops being ticked at all. What moves is the app's own count of its own
+   * consumables, off a plan they cannot edit from this screen.
+   */
+  ipcMain.handle(
+    IPC.shipSopSetStep,
+    (_e, payload: { step?: unknown; done?: unknown }): Result<ShipSopResult> => {
+      try {
+        const actor = requirePack()
+        const step = str(payload?.step).trim() as ShipSopStep
+        if (!SHIP_SOP_STEPS.includes(step)) throw new Error('Unknown step.')
+        return { ok: true, data: setShipSopStep(step, payload?.done !== false, actor.id) }
+      } catch (err) {
+        return fail(err)
+      }
+    }
   )
 
   // ---- The uploaded slip -------------------------------------------------

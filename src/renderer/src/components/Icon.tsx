@@ -128,6 +128,11 @@ import {
   UserMinus,
   // --- Case / box / pack unit economics ---
   Calculator,
+  // --- The shipping SOP checklist ---
+  ListTodo,
+  CheckSquare,
+  CalendarX,
+  FileQuestion,
   type LucideIcon
 } from 'lucide-react'
 
@@ -260,7 +265,12 @@ const MAP: Record<string, LucideIcon> = {
   UserCheck,
   UserMinus,
   // --- Case / box / pack unit economics ---
-  Calculator
+  Calculator,
+  // --- The shipping SOP checklist ---
+  ListTodo,
+  CheckSquare,
+  CalendarX,
+  FileQuestion
 }
 
 export function Icon({

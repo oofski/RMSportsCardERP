@@ -102,6 +102,7 @@ import {
   updateShipment
 } from './shipping'
 import {
+  SHIP_SOP_STEPS,
   computeSupplyPlan,
   costSupplyPlan,
   type ShipSupplyPlan,
@@ -1341,6 +1342,23 @@ export function listCustomerRows(): ShipCustomerRow[] {
 // Workspace summary
 // ---------------------------------------------------------------------------
 
+/**
+ * How much of the SOP is ticked for the show's day.
+ *
+ * Queried here rather than imported from shipSop, which reads the costed plan
+ * from this file — a cycle for the sake of one COUNT(*). The seven steps are the
+ * shared constant, so the two cannot drift on what "all done" means.
+ */
+function sopCounts(): { sopDone: number; sopTotal: number } {
+  const total = SHIP_SOP_STEPS.length
+  const date = getShipEvent().date.trim()
+  if (!date) return { sopDone: 0, sopTotal: total }
+  const row = getDb()
+    .prepare(`SELECT COUNT(*) AS n FROM ship_sop_steps WHERE event_date = ? AND done = 1`)
+    .get(date) as { n: number }
+  return { sopDone: Math.min(total, row?.n ?? 0), sopTotal: total }
+}
+
 export function getWorkspaceSummary(): ShipWorkspaceSummary {
   const ctx = buildContext()
   const shipments = listShipShipments()
@@ -1400,7 +1418,8 @@ export function getWorkspaceSummary(): ShipWorkspaceSummary {
     warnings: listShipWarnings(),
     audit,
     hasCollisions: audit.some((a) => a.collisions.length > 0),
-    lastImport: imports[0] ?? null
+    lastImport: imports[0] ?? null,
+    ...sopCounts()
   }
 }
 

@@ -11,6 +11,7 @@ import { CheckerTab } from './CheckerTab'
 import { HistoryTab } from './HistoryTab'
 import { FlagsTab } from './FlagsTab'
 import { TodayTab } from './TodayTab'
+import { SopTab } from './SopTab'
 import { WithSlipMode } from './WithSlipMode'
 
 /**
@@ -32,6 +33,7 @@ import { WithSlipMode } from './WithSlipMode'
  * Orders  ONE order at a time with the customer's slip beside it, which is how
  *         both picking and mailing are really done. The whole-night list is
  *         still here, one click away, for a lead scanning what is left.
+ * Steps   the SOP, seven ticks — and the only place supplies leave stock
  * Flags   what the import noticed that a person should look at
  * Setup   import the slips, assign the breaks (running the show)
  * History imports, snapshots, exports — on its way to the admin home page
@@ -43,6 +45,7 @@ import { WithSlipMode } from './WithSlipMode'
 export type ShipTabId =
   | 'today'
   | 'find'
+  | 'sop'
   | 'flags'
   | 'setup'
   | 'history'
@@ -165,10 +168,20 @@ export function ShippingModule(): JSX.Element {
   const hasDataset = !!summary?.hasDataset
   const warningCount = counts?.warnings ?? 0
   const collisions = summary?.hasCollisions ?? false
+  // Amber means somebody has to act. With no show loaded there is no night to
+  // work, so seven outstanding steps is noise rather than news — the same rule
+  // the rest of this row follows.
+  const stepsLeft = hasDataset
+    ? Math.max(0, (summary?.sopTotal ?? 0) - (summary?.sopDone ?? 0))
+    : 0
 
   const tabs: TabDef[] = [
     { id: 'today', label: 'Today', icon: 'LayoutGrid', badge: 0 },
     { id: 'find', label: 'Orders', icon: 'ListChecks', badge: cardsLeft, tone: 'warning' },
+    // The badge counts what is LEFT, like Orders does — seven minus what is
+    // ticked. A count of steps done would read as work outstanding and mean the
+    // opposite of what every other badge in this row means.
+    { id: 'sop', label: 'Steps', icon: 'ListTodo', badge: stepsLeft, tone: 'warning' },
     { id: 'flags', label: 'Flags', icon: 'Flag', badge: warningCount, tone: 'warning' },
     // Running the show, not doing it — hidden from people who cannot.
     ...(canManage
@@ -250,6 +263,7 @@ export function ShippingModule(): JSX.Element {
             <CheckerTab {...tabProps} />
           </WithSlipMode>
         )}
+        {tab === 'sop' && <SopTab {...tabProps} />}
         {tab === 'flags' && <FlagsTab {...tabProps} />}
         {tab === 'setup' && <SetupTab {...tabProps} />}
         {tab === 'history' && <HistoryTab {...tabProps} />}

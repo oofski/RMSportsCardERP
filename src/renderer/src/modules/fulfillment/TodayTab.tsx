@@ -77,6 +77,11 @@ export function TodayTab({ summary, onGoTo }: ShipTabProps): JSX.Element {
   // Nearly always true: a promo rider comes with no break number by nature. A
   // PAID card outside every break is the odd one, and the import flags it.
   const looseGiveawaysOnly = looseTotal > 0 && (summary?.looseGiveawayCards ?? 0) === looseTotal
+  const stepsLeft = Math.max(0, (summary?.sopTotal ?? 0) - (summary?.sopDone ?? 0))
+  // Supplies that leave the shelf have to book to a date, so a show with no day
+  // cannot be ticked off at all — and that is a person's job to fix, not a
+  // number that will come down on its own.
+  const noShowDay = !(summary?.event?.date ?? '').trim()
 
   if (loading) return <CenterLoader />
 
@@ -208,6 +213,23 @@ export function TodayTab({ summary, onGoTo }: ShipTabProps): JSX.Element {
           label={summary.onHoldCount === 1 ? 'package on hold' : 'packages on hold'}
           tone={summary.onHoldCount > 0 ? 'warn' : 'ok'}
           onClick={() => onGoTo('find')}
+        />
+        {/* Steps outstanding is BUSY, not amber — a show that has not been
+            worked yet is the normal state of every import. The exception is a
+            show with no day: nothing can be ticked at all until somebody fixes
+            that, which is precisely what amber is for. */}
+        <Blocker
+          icon="ListTodo"
+          value={stepsLeft}
+          label={
+            noShowDay
+              ? 'steps blocked — no day set'
+              : stepsLeft === 1
+                ? 'SOP step left'
+                : 'SOP steps left'
+          }
+          tone={noShowDay ? 'warn' : stepsLeft > 0 ? 'busy' : 'ok'}
+          onClick={() => onGoTo(noShowDay ? 'setup' : 'sop')}
         />
       </div>
 
