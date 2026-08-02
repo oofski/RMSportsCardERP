@@ -23,6 +23,20 @@ import { SlipPane } from './SlipPane'
  * move both together, which is the entire point — the operator never hunts for
  * a page number, and the paper can never drift out of step with the list.
  *
+ * ## Moving on IS the confirmation
+ *
+ * Somebody at a bench has the customer's cards in front of them, the slip beside
+ * them, and the whole order in hand. Asking them to tick forty-seven boxes and
+ * THEN press Next asks them to do the job twice, and the second time is the one
+ * that gets skipped — after which the board says cards are still out that are
+ * already in a box.
+ *
+ * So the primary button picks the order and moves on, in that order, and says
+ * so. Already-ticked cards keep their attribution and timestamp: walking past a
+ * package never rewrites who found what. Skip is there for the times the answer
+ * is "not this one" — a card missing, a hold, a question — and it moves without
+ * claiming anything.
+ *
  * `mode` decides what the pane is FOR, not how it looks:
  *   pick  — the cards are check targets, and "still to pick" is the default run
  *   mail  — the cards are a manifest to verify against the box, and the address
@@ -126,6 +140,38 @@ export function OrderWalker({
     return () => window.removeEventListener('keydown', onKey)
   }, [step])
 
+  /**
+   * Pick everything in this package, then move on.
+   *
+   * `onlyUnchecked` is what makes this repeatable and safe: a card somebody else
+   * already found keeps their name and their timestamp on it.
+   */
+  const pickAllAndAdvance = async (): Promise<void> => {
+    if (!order) return
+    const left = order.pick.total - order.pick.checked
+    setBusy('order')
+    try {
+      if (left > 0) {
+        const res = await api.shipping.setOrderChecked(order.customerId, true, true)
+        if (!res.ok) {
+          toast.error(res.error ?? 'Could not mark that package picked.')
+          return
+        }
+        toast.success(
+          `@${order.customer.handle}: ${left} card${left === 1 ? '' : 's'} picked.`
+        )
+      }
+      await load()
+      await onChanged()
+      // AFTER the reload, so "only orders with cards left" has already dropped
+      // this one and stepping lands on the next thing to do rather than skipping
+      // over it.
+      step(1)
+    } finally {
+      setBusy(null)
+    }
+  }
+
   const toggleSlot = async (slotId: string, checked: boolean): Promise<void> => {
     setBusy(slotId)
     try {
@@ -196,15 +242,38 @@ export function OrderWalker({
           <Button size="sm" icon="ChevronLeft" onClick={() => step(-1)} disabled={run.length < 2}>
             Previous
           </Button>
-          <Button
-            size="sm"
-            variant="primary"
-            icon="ChevronRight"
-            onClick={() => step(1)}
-            disabled={run.length < 2}
-          >
-            Next order
+          {/* Skip moves without claiming anything — for a card that is missing,
+              a hold, or a question somebody has to come back to. */}
+          <Button size="sm" onClick={() => step(1)} disabled={run.length < 2}>
+            Skip
           </Button>
+          {mode === 'pick' ? (
+            <Button
+              size="sm"
+              variant="primary"
+              icon="CheckCheck"
+              loading={busy === 'order'}
+              disabled={!order || !canAct}
+              title={
+                canAct
+                  ? 'Mark every card in this package picked, then go to the next order'
+                  : 'You do not have permission to check cards off.'
+              }
+              onClick={() => void pickAllAndAdvance()}
+            >
+              Picked · next order
+            </Button>
+          ) : (
+            <Button
+              size="sm"
+              variant="primary"
+              icon="ChevronRight"
+              onClick={() => step(1)}
+              disabled={run.length < 2}
+            >
+              Next order
+            </Button>
+          )}
         </div>
       </div>
 

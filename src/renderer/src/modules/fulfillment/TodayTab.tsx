@@ -207,7 +207,7 @@ export function TodayTab({ summary, onGoTo }: ShipTabProps): JSX.Element {
           value={summary.onHoldCount}
           label={summary.onHoldCount === 1 ? 'package on hold' : 'packages on hold'}
           tone={summary.onHoldCount > 0 ? 'warn' : 'ok'}
-          onClick={() => onGoTo('pack')}
+          onClick={() => onGoTo('find')}
         />
       </div>
 

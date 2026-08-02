@@ -762,6 +762,41 @@ export function setBreakSlotsChecked(breakId: string, checked: boolean, by: stri
     .run(flag(checked), checked ? nowIso() : null, checked ? by : null, breakId).changes
 }
 
+/**
+ * Check off (or un-check) every card in ONE customer's package.
+ *
+ * A single statement rather than a loop of round trips: an order can hold
+ * forty-seven cards, and forty-seven separate writes is forty-seven chances to
+ * be interrupted half way and leave a package that is neither picked nor not.
+ *
+ * `onlyUnchecked` is what makes this safe to fire from "Next order": it leaves
+ * a card that was already ticked exactly as it was, attribution and timestamp
+ * intact, so walking past a package does not rewrite who found what.
+ */
+export function setCustomerSlotsChecked(
+  customerId: string,
+  checked: boolean,
+  by: string | null,
+  onlyUnchecked = false
+): number {
+  const guard = onlyUnchecked ? ` AND checked_off = ${checked ? 0 : 1}` : ''
+  return getDb()
+    .prepare(
+      `UPDATE ship_team_slots
+          SET checked_off = ?, checked_off_at = ?, checked_off_by = ?
+        WHERE customer_id = ?${guard}`
+    )
+    .run(flag(checked), checked ? nowIso() : null, checked ? by : null, customerId).changes
+}
+
+/** The breaks a customer's cards sit in — what has to be re-derived after. */
+export function listBreakIdsForCustomer(customerId: string): string[] {
+  const rows = getDb()
+    .prepare(`SELECT DISTINCT break_id FROM ship_team_slots WHERE customer_id = ?`)
+    .all(customerId) as Array<{ break_id: string | null }>
+  return rows.map((r) => str(r.break_id)).filter(Boolean)
+}
+
 /** Top-sleeve (or un-sleeve) every slot in a break. Returns the rows touched. */
 export function setBreakSlotsTopSleeved(breakId: string, on: boolean): number {
   return getDb()

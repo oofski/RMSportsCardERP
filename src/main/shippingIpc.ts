@@ -120,6 +120,7 @@ import {
   setOrderHold,
   setOrderNotes,
   setOrderSpecialRequest,
+  setOrderChecked,
   setOrderStage,
   setShipmentNotes,
   setShipmentStatus,
@@ -531,6 +532,33 @@ export function registerShippingIpc(): void {
       return fail(err)
     }
   })
+
+  /**
+   * Mark a whole package picked. The floor guard, not the manage one: this is
+   * the finding job done in one press instead of forty-seven.
+   */
+  ipcMain.handle(
+    IPC.shipOrderCheckAll,
+    (
+      _e,
+      payload: { customerId?: unknown; checked?: unknown; onlyUnchecked?: unknown }
+    ): Result<ShipOrderRow> => {
+      try {
+        const actor = requireFind()
+        return {
+          ok: true,
+          data: setOrderChecked(
+            requireId(payload?.customerId, 'package'),
+            payload?.checked !== false,
+            actor.id,
+            payload?.onlyUnchecked === true
+          )
+        }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
 
   // ---- The uploaded slip -------------------------------------------------
   //

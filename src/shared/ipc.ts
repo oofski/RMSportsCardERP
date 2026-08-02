@@ -149,6 +149,8 @@ export const IPC = {
   shipBreakClear: 'shipping:breaks:clear',
   shipBreakSleeveAll: 'shipping:breaks:sleeve-all',
   shipBreakCheckAll: 'shipping:breaks:check-all',
+  // Every card in ONE package at once — what "Next order" means.
+  shipOrderCheckAll: 'shipping:orders:check-all',
   shipBreakSetStatus: 'shipping:breaks:set-status',
   shipSlotChecked: 'shipping:teamslot:checked',
   shipSlotTopSleeved: 'shipping:teamslot:top-sleeved',

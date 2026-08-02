@@ -92,7 +92,9 @@ import {
   setShipWarningStatus,
   recomputeBreakStatus,
   resetShipQueueOrder,
+  listBreakIdsForCustomer,
   setBreakSlotsChecked,
+  setCustomerSlotsChecked,
   setBreakSlotsTopSleeved,
   setBreakStatus,
   setTeamSlotChecked as storeSetTeamSlotChecked,
@@ -840,6 +842,37 @@ export function setBreakChecked(
   setBreakSlotsChecked(breakId, checked, userId)
   _recomputeBreakStatus(breakId)
   return getBreak(breakId) as ShipBreakDetail
+}
+
+/**
+ * Mark an entire package picked (or un-picked) and re-derive everything it
+ * touched.
+ *
+ * This is what "Next order" means. Somebody at a bench has the customer's cards
+ * in front of them, the slip beside them, and the whole order in hand — asking
+ * them to tick forty-seven boxes and THEN press Next is asking them to do the
+ * job twice. Pressing Next IS the confirmation.
+ *
+ * A package spans several breaks, so every one of them has to be re-derived:
+ * the break's own progress, and its pending/picking status. Missing that is how
+ * the Find board ends up claiming cards are still out that somebody is already
+ * holding.
+ */
+export function setOrderChecked(
+  customerId: string,
+  checked: boolean,
+  userId: string | null,
+  /** Leave already-ticked cards alone, attribution intact. */
+  onlyUnchecked = false
+): ShipOrderRow {
+  const shipment = getShipShipmentByCustomer(customerId)
+  if (!shipment) throw new Error('That package is no longer there.')
+  // Read the breaks BEFORE the write: they do not change, but reading after
+  // would depend on the update having landed, which is a needless coupling.
+  const breakIds = listBreakIdsForCustomer(customerId)
+  setCustomerSlotsChecked(customerId, checked, userId, onlyUnchecked)
+  for (const id of breakIds) _recomputeBreakStatus(id)
+  return _orderRow(shipment)
 }
 
 export function markBreakPacked(breakId: string): ShipBreakDetail {

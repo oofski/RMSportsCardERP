@@ -386,6 +386,17 @@ const api = {
     clearDataset: (): Promise<Result<ShipWorkspaceSummary>> =>
       ipcRenderer.invoke(IPC.shipDatasetClear),
 
+    /**
+     * Mark every card in one package picked (or un-picked). `onlyUnchecked`
+     * leaves already-ticked cards — and whoever ticked them — alone.
+     */
+    setOrderChecked: (
+      customerId: string,
+      checked: boolean,
+      onlyUnchecked = false
+    ): Promise<Result<ShipOrderRow>> =>
+      ipcRenderer.invoke(IPC.shipOrderCheckAll, { customerId, checked, onlyUnchecked }),
+
     // ---- The uploaded slip -------------------------------------------------
     /** Metadata only — cheap enough for any screen to ask on mount. */
     document: (): Promise<ShipDocument | null> => ipcRenderer.invoke(IPC.shipDocument),

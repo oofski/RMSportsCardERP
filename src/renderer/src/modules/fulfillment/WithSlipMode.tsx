@@ -31,18 +31,21 @@ export function WithSlipMode({
   /** The existing list view for this tab. */
   children: JSX.Element
 }): JSX.Element {
-  const [slip, setSlip] = useState(false)
+  // One order at a time is the default. It is the screen the work is actually
+  // done on; the whole-night list is what you open when you are looking for
+  // something, which is the rarer job and one click away.
+  const [slip, setSlip] = useState(true)
 
   return (
     <div className="slipmode">
       <div className="slipmode-switch">
-        <button className={slip ? '' : 'active'} onClick={() => setSlip(false)}>
-          <Icon name="LayoutGrid" size={14} />
-          {mode === 'pick' ? 'All breaks' : 'All packages'}
-        </button>
         <button className={slip ? 'active' : ''} onClick={() => setSlip(true)}>
           <Icon name="FileText" size={14} />
           One order at a time
+        </button>
+        <button className={slip ? '' : 'active'} onClick={() => setSlip(false)}>
+          <Icon name="LayoutGrid" size={14} />
+          {mode === 'pick' ? 'All breaks' : 'All packages'}
         </button>
       </div>
       {slip ? (

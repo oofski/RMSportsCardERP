@@ -7,9 +7,7 @@ import { formatMoney } from '../../lib/format'
 import { Icon } from '../../components/Icon'
 import { Button, CenterLoader, EmptyState } from '../../components/ui'
 import { SetupTab } from './SetupTab'
-import { OrdersTab } from './OrdersTab'
 import { CheckerTab } from './CheckerTab'
-import { ShippingTab } from './ShippingTab'
 import { HistoryTab } from './HistoryTab'
 import { FlagsTab } from './FlagsTab'
 import { TodayTab } from './TodayTab'
@@ -28,22 +26,24 @@ import { WithSlipMode } from './WithSlipMode'
  * refetches it after a mutation so badges never drift from the rows.
  */
 /**
- * The workspace, named after the jobs rather than after the documents.
+ * The workspace, down to the screens the floor actually stands in front of.
  *
- * Today  the show-day board — what is mine, what is blocking the room
- * Find    one break at a time: pull the cards and sort them into piles
- * Pack    one customer at a time: everything they won, in one box
+ * Today   the show-day board — what is mine, what is blocking the room
+ * Orders  ONE order at a time with the customer's slip beside it, which is how
+ *         both picking and mailing are really done. The whole-night list is
+ *         still here, one click away, for a lead scanning what is left.
  * Flags   what the import noticed that a person should look at
- * Ship    tracking numbers and statuses, after the box is sealed
  * Setup   import the slips, assign the breaks (running the show)
- * History imports, snapshots, exports
+ * History imports, snapshots, exports — on its way to the admin home page
+ *
+ * Pack and Ship are gone. Pack was the same packages as a queue rather than one
+ * at a time, and Ship was tracking numbers arriving from USPS — both of which
+ * belong to the order in front of you, not to a tab of their own.
  */
 export type ShipTabId =
   | 'today'
   | 'find'
-  | 'pack'
   | 'flags'
-  | 'ship'
   | 'setup'
   | 'history'
 
@@ -168,10 +168,8 @@ export function ShippingModule(): JSX.Element {
 
   const tabs: TabDef[] = [
     { id: 'today', label: 'Today', icon: 'LayoutGrid', badge: 0 },
-    { id: 'find', label: 'Find', icon: 'ListChecks', badge: cardsLeft, tone: 'warning' },
-    { id: 'pack', label: 'Pack', icon: 'Package', badge: counts?.shipments ?? 0 },
+    { id: 'find', label: 'Orders', icon: 'ListChecks', badge: cardsLeft, tone: 'warning' },
     { id: 'flags', label: 'Flags', icon: 'Flag', badge: warningCount, tone: 'warning' },
-    { id: 'ship', label: 'Ship', icon: 'Truck', badge: summary?.trackingCount ?? 0 },
     // Running the show, not doing it — hidden from people who cannot.
     ...(canManage
       ? [{ id: 'setup' as const, label: 'Setup', icon: 'UploadCloud', badge: 0 }]
@@ -252,13 +250,7 @@ export function ShippingModule(): JSX.Element {
             <CheckerTab {...tabProps} />
           </WithSlipMode>
         )}
-        {tab === 'pack' && (
-          <WithSlipMode mode="mail" canAct={canPack} props={tabProps}>
-            <OrdersTab {...tabProps} />
-          </WithSlipMode>
-        )}
         {tab === 'flags' && <FlagsTab {...tabProps} />}
-        {tab === 'ship' && <ShippingTab {...tabProps} />}
         {tab === 'setup' && <SetupTab {...tabProps} />}
         {tab === 'history' && <HistoryTab {...tabProps} />}
       </div>

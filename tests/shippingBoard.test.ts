@@ -198,5 +198,75 @@ ok(
   'and the ambiguous assignment is dropped rather than put on the wrong pile'
 )
 
+// ---------------------------------------------------------------------------
+// 6. "Picked · next order" — one press finishes a package
+// ---------------------------------------------------------------------------
+//
+// The bench has the customer's cards in hand and the slip beside them. Ticking
+// every card AND THEN pressing next is doing the job twice, and the second time
+// is the one that gets skipped — after which the board claims cards are out that
+// are already in a box. So moving on IS the confirmation.
+console.log('\n=== 6. marking a whole package picked ===')
+ship.importDataset(parsePages(PAGES, opts), { filename: 'board.pdf' })
+
+const alphaBefore = domain
+  .listOrders()
+  .find((o: { customerId: string }) => o.customerId === 'alpha')
+ok(alphaBefore?.pick.total === 3, "alpha's package holds three cards", String(alphaBefore?.pick.total))
+ok(alphaBefore?.pick.checked === 0, 'none of them picked yet')
+
+// One of them is already found, by somebody else — that must survive.
+const firstSlot = alphaBefore.breaks[0].teams[0].slotId
+domain.setTeamSlotChecked(firstSlot, true, 'maya')
+const beforeWho = domain
+  .listOrders()
+  .find((o: { customerId: string }) => o.customerId === 'alpha')
+  .breaks.flatMap((b: { teams: unknown[] }) => b.teams)
+  .find((t: { slotId: string }) => t.slotId === firstSlot)
+ok(beforeWho.checkedOffBy === 'maya', 'and it carries her name', String(beforeWho.checkedOffBy))
+
+const after = domain.setOrderChecked('alpha', true, 'sam', true)
+ok(after.pick.checked === after.pick.total, 'one press picks the whole package',
+  `${after.pick.checked}/${after.pick.total}`)
+const keptWho = after.breaks
+  .flatMap((b: { teams: unknown[] }) => b.teams)
+  .find((t: { slotId: string }) => t.slotId === firstSlot)
+ok(keptWho.checkedOffBy === 'maya',
+  "a card somebody else found keeps THEIR name, not the person walking past",
+  String(keptWho.checkedOffBy))
+
+// The part that matters beyond this one screen: the breaks it touched.
+const breaksAfter = domain.listBreaks()
+const b4 = breaksAfter.find((b: { breakLabel: string }) => b.breakLabel === '4')
+const b5 = breaksAfter.find((b: { breakLabel: string }) => b.breakLabel === '5')
+ok(b4.checkedTeams === 1, "break #4's progress moved with it", String(b4.checkedTeams))
+ok(b5.checkedTeams === 1, "and so did break #5's", String(b5.checkedTeams))
+ok(b4.status === 'picking' && b5.status === 'picking',
+  'and both breaks are picking rather than pending',
+  `${b4.status}/${b5.status}`)
+
+// The break-less giveaway on the same package counts too.
+const summaryAfter = domain.getWorkspaceSummary()
+ok(summaryAfter.looseChecked === 1,
+  "the package's break-less giveaway is picked as well", String(summaryAfter.looseChecked))
+ok(summaryAfter.counts.checkedSlots === 3,
+  'three cards picked across the whole show', String(summaryAfter.counts.checkedSlots))
+
+// Idempotent: pressing it again on a finished package changes nothing.
+const again = domain.setOrderChecked('alpha', true, 'sam', true)
+ok(again.pick.checked === again.pick.total, 'pressing it again is harmless')
+ok(
+  again.breaks
+    .flatMap((b: { teams: unknown[] }) => b.teams)
+    .find((t: { slotId: string }) => t.slotId === firstSlot).checkedOffBy === 'maya',
+  'and still does not steal attribution'
+)
+
+// Bravo is untouched — one package at a time means one package.
+const bravo = domain
+  .listOrders()
+  .find((o: { customerId: string }) => o.customerId === 'bravo')
+ok(bravo.pick.checked === 0, 'the next package is untouched', String(bravo.pick.checked))
+
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)
