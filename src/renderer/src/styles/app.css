@@ -7967,20 +7967,49 @@ tr.hoverable-row:hover {
 .slip-page {
   margin-left: auto;
 }
-/* The page is drawn to a canvas, so the pane scrolls the IMAGE rather than a
-   document viewer the operator can lose their place in. */
+/* Every sheet of the order at once.
+   One page fills the pane. Several tile, so a five-page order is five sheets in
+   one look rather than five scroll positions — and any of them opens full size
+   for reading. Capped at two columns: past that a packing slip is a grey
+   rectangle, which helps nobody. */
 .slip-body {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
   padding: 10px;
   background: var(--surface-3);
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  grid-template-columns: 1fr;
+}
+.slip-body[data-sheets='2'],
+.slip-body[data-sheets='3'],
+.slip-body[data-sheets='4'] {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+@media (max-width: 1500px) {
+  .slip-body[data-sheets='2'],
+  .slip-body[data-sheets='3'],
+  .slip-body[data-sheets='4'] {
+    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  }
 }
 .slip-sheet {
   position: relative;
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  cursor: zoom-in;
+  transition: outline-color 0.12s ease;
+  outline: 2px solid transparent;
+  outline-offset: 2px;
 }
-.slip-sheet + .slip-sheet {
-  margin-top: 12px;
+.slip-sheet:hover {
+  outline-color: var(--brand-500, #3b6ef5);
 }
 /* Which sheet of the run this is, so a long order cannot be mistaken for a
    short one halfway down. */
@@ -8005,6 +8034,64 @@ tr.hoverable-row:hover {
   background: #fff;
   box-shadow: 0 1px 6px rgb(0 0 0 / 0.14);
 }
+/* ---- One sheet, opened to be read ---- */
+.slip-zoom {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  background: rgb(0 0 0 / 0.72);
+}
+.slip-zoom-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+}
+.slip-zoom-bar > span {
+  margin-right: auto;
+}
+.slip-zoom-step,
+.slip-zoom-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid rgb(255 255 255 / 0.28);
+  border-radius: 8px;
+  background: rgb(255 255 255 / 0.1);
+  color: #fff;
+  cursor: pointer;
+}
+.slip-zoom-step:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.slip-zoom-step:hover:not(:disabled),
+.slip-zoom-close:hover {
+  background: rgb(255 255 255 / 0.22);
+}
+.slip-zoom-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 16px 16px;
+  text-align: center;
+}
+.slip-zoom-canvas {
+  display: inline-block;
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+  background: #fff;
+  box-shadow: 0 6px 30px rgb(0 0 0 / 0.5);
+}
+
 .slip-multi {
   display: inline-flex;
   align-items: center;

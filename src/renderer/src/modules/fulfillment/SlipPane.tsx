@@ -22,9 +22,15 @@ import { CenterLoader, EmptyState } from '../../components/ui'
  * box against page 27 of 27–31 sees a short list, agrees with it, and seals the
  * package.
  *
- * So the pane draws the whole run, stacked, and says how many there are. No
- * pager: a pager is one more thing to be on the wrong page of, and scrolling a
- * two-page order is not a feature anybody needs taught.
+ * So the pane draws the whole run AT ONCE, laid out side by side, and says how
+ * many there are. A five-page order is five sheets on screen together, not five
+ * scroll positions — somebody deciding whether a box is complete needs to see
+ * the whole order in one look, and a pager or a tall stack makes them hold four
+ * pages in their head to do it.
+ *
+ * Sheets shrink to fit, so any one of them can be clicked to fill the window at
+ * a size meant for reading. That is the trade the layout makes: all of it at a
+ * glance, one of it in detail, and never a page you did not know was there.
  *
  * ## Why this draws the pages itself
  *
@@ -50,8 +56,15 @@ import pdfWorkerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url'
 
 pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl
 
-/** Rendered width. Enough to read an address without a 200-page memory bill. */
+/**
+ * Rendered width of a sheet in the grid. Generous on purpose: the sheets are
+ * displayed small, and a canvas rendered at display size turns to mush the
+ * moment the pane is on a big monitor.
+ */
 const RENDER_WIDTH = 900
+
+/** Reading width for the one sheet somebody has opened. */
+const ZOOM_WIDTH = 1500
 
 export function SlipPane({
   pages,
@@ -68,6 +81,9 @@ export function SlipPane({
   const [error, setError] = useState<string | null>(null)
   const bodyRef = useRef<HTMLDivElement | null>(null)
   const canvasRefs = useRef<Array<HTMLCanvasElement | null>>([])
+  /** Index into `pages` of the sheet blown up for reading, or null. */
+  const [zoom, setZoom] = useState<number | null>(null)
+  const zoomCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const pdfRef = useRef<{ numPages: number; getPage: (n: number) => Promise<unknown> } | null>(null)
 
   // The identity of the run, so the draw effect re-fires when the order changes
@@ -167,6 +183,60 @@ export function SlipPane({
     }
   }, [key, ready, pages])
 
+  // --- the blown-up sheet ---------------------------------------------------
+  // Drawn fresh at reading width rather than scaling the thumbnail up: a
+  // stretched canvas is exactly as unreadable as the small one it came from.
+  useEffect(() => {
+    const pdf = pdfRef.current
+    const canvas = zoomCanvasRef.current
+    if (!pdf || canvas == null || zoom == null) return
+    const target = pages[zoom]
+    if (!target) return
+    let cancelled = false
+    let job: { cancel: () => void } | null = null
+    void (async () => {
+      try {
+        const p = (await pdf.getPage(Math.min(target, pdf.numPages))) as {
+          getViewport: (o: { scale: number }) => { width: number; height: number }
+          render: (o: unknown) => { promise: Promise<void>; cancel: () => void }
+        }
+        if (cancelled) return
+        const base = p.getViewport({ scale: 1 })
+        const viewport = p.getViewport({ scale: ZOOM_WIDTH / base.width })
+        const ctx = canvas.getContext('2d')
+        if (!ctx) return
+        canvas.width = Math.floor(viewport.width)
+        canvas.height = Math.floor(viewport.height)
+        const render = p.render({ canvasContext: ctx, viewport, canvas })
+        job = render
+        await render.promise
+      } catch {
+        /* closing the overlay cancels this; nothing to report */
+      }
+    })()
+    return () => {
+      cancelled = true
+      try {
+        job?.cancel()
+      } catch {
+        /* already finished */
+      }
+    }
+  }, [zoom, pages, ready])
+
+  // Escape closes the blown-up sheet before the walker's arrow keys see it.
+  useEffect(() => {
+    if (zoom == null) return
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') {
+        e.stopPropagation()
+        setZoom(null)
+      }
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [zoom])
+
   if (loading) {
     return (
       <div className="slip-pane">
@@ -195,7 +265,10 @@ export function SlipPane({
         <Icon name="FileText" size={14} />
         <span className="slip-title">{label}</span>
         {many && (
-          <span className="slip-multi" title="This order runs onto more than one page — scroll for the rest">
+          <span
+            className="slip-multi"
+            title="This order runs onto more than one page — all of them are shown; click any one to read it"
+          >
             <Icon name="Copy" size={11} />
             {pages.length} pages
           </span>
@@ -207,19 +280,25 @@ export function SlipPane({
           </span>
         )}
       </div>
-      <div className="slip-body" ref={bodyRef}>
-        {error ? (
-          <div className="slip-error">
-            <Icon name="AlertTriangle" size={15} />
-            <span>Could not draw this page — {error}</span>
-          </div>
-        ) : null}
+      {error ? (
+        <div className="slip-error">
+          <Icon name="AlertTriangle" size={15} />
+          <span>Could not draw this page — {error}</span>
+        </div>
+      ) : null}
+      <div className="slip-body" ref={bodyRef} data-sheets={Math.min(pages.length, 4)}>
         {pages.map((p, i) => (
-          <div className="slip-sheet" key={`${p}-${i}`}>
+          <button
+            type="button"
+            className="slip-sheet"
+            key={`${p}-${i}`}
+            title={`Page ${p} — click to read it full size`}
+            onClick={() => setZoom(i)}
+          >
             {many && (
-              <div className="slip-sheet-tag">
+              <span className="slip-sheet-tag">
                 {i + 1} of {pages.length}
-              </div>
+              </span>
             )}
             <canvas
               ref={(el) => {
@@ -227,9 +306,46 @@ export function SlipPane({
               }}
               className="slip-canvas"
             />
-          </div>
+          </button>
         ))}
       </div>
+
+      {zoom != null && (
+        <div className="slip-zoom" onClick={() => setZoom(null)}>
+          <div className="slip-zoom-bar">
+            <span>
+              {label} · page {pages[zoom]}
+              {many ? ` (${zoom + 1} of ${pages.length})` : ''}
+            </span>
+            <button
+              className="slip-zoom-step"
+              disabled={zoom === 0}
+              onClick={(e) => {
+                e.stopPropagation()
+                setZoom((z) => (z == null ? null : Math.max(0, z - 1)))
+              }}
+            >
+              <Icon name="ChevronLeft" size={15} />
+            </button>
+            <button
+              className="slip-zoom-step"
+              disabled={zoom >= pages.length - 1}
+              onClick={(e) => {
+                e.stopPropagation()
+                setZoom((z) => (z == null ? null : Math.min(pages.length - 1, z + 1)))
+              }}
+            >
+              <Icon name="ChevronRight" size={15} />
+            </button>
+            <button className="slip-zoom-close" onClick={() => setZoom(null)}>
+              <Icon name="X" size={16} />
+            </button>
+          </div>
+          <div className="slip-zoom-body" onClick={(e) => e.stopPropagation()}>
+            <canvas ref={zoomCanvasRef} className="slip-zoom-canvas" />
+          </div>
+        </div>
+      )}
     </div>
   )
 }
