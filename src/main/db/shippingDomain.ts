@@ -101,6 +101,7 @@ import {
   setTeamSlotTopSleeved as storeSetTeamSlotTopSleeved,
   updateShipment
 } from './shipping'
+import { computeSupplyPlan, type ShipSupplyPlan } from '@shared/shippingSupplies'
 import { getEmployeeById, listEmployees } from './employees'
 import { getDb } from './database'
 import type { Employee } from '@shared/types'
@@ -873,6 +874,34 @@ export function setOrderChecked(
   setCustomerSlotsChecked(customerId, checked, userId, onlyUnchecked)
   for (const id of breakIds) _recomputeBreakStatus(id)
   return _orderRow(shipment)
+}
+
+/**
+ * What tonight's show will consume in supplies.
+ *
+ * READ ONLY. Nothing here moves stock — see the note on the trigger below.
+ *
+ * The slate size comes from each break's own audit (`maxTeams`), which is the
+ * league's real roster size, so a show is costed against every team that was
+ * pulled rather than only the ones that sold. A break with no audit row falls
+ * back to the cards it actually holds; that under-counts, but inventing a slate
+ * for a break we could not measure would be worse.
+ */
+export function getSupplyPlan(): ShipSupplyPlan {
+  const auditByLabel = new Map<string, ShipBreakAudit>()
+  for (const a of listShipBreakAudit()) auditByLabel.set(a.breakLabel, a)
+
+  const breaks = listBreaks().map((b) => ({
+    label: b.breakLabel,
+    slateSize: auditByLabel.get(b.breakLabel)?.maxTeams || b.totalTeams
+  }))
+
+  const orders = listOrders().map((o) => ({
+    cardCount: o.cardCount,
+    giveawayCount: o.giveawayCount
+  }))
+
+  return computeSupplyPlan({ breaks, orders })
 }
 
 export function markBreakPacked(breakId: string): ShipBreakDetail {

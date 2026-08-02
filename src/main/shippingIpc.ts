@@ -120,6 +120,7 @@ import {
   setOrderHold,
   setOrderNotes,
   setOrderSpecialRequest,
+  getSupplyPlan,
   setOrderChecked,
   setOrderStage,
   setShipmentNotes,
@@ -130,6 +131,7 @@ import {
   bulkSetShipmentStatusByTracking
 } from './db/shippingDomain'
 import { getShipCalendarDay, listShipCalendar } from './db/shippingCalendar'
+import type { ShipSupplyPlan } from '@shared/shippingSupplies'
 
 // ---------------------------------------------------------------------------
 // Guards
@@ -558,6 +560,10 @@ export function registerShippingIpc(): void {
         return fail(err)
       }
     }
+  )
+
+  ipcMain.handle(IPC.shipSupplyPlan, (): ShipSupplyPlan | null =>
+    can('module.fulfillment') ? getSupplyPlan() : null
   )
 
   // ---- The uploaded slip -------------------------------------------------

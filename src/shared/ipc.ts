@@ -130,6 +130,9 @@ export const IPC = {
   shipDatasetClear: 'shipping:dataset:clear',
   // The uploaded PDF: metadata is cheap and always available; the bytes are
   // fetched once, only by a screen that is about to render them.
+  // What tonight's show will consume in supplies. READ ONLY — nothing here
+  // moves stock; see getSupplyPlan().
+  shipSupplyPlan: 'shipping:supplies:plan',
   shipDocument: 'shipping:document',
   shipDocumentBytes: 'shipping:document:bytes',
   shipDocumentClear: 'shipping:document:clear',

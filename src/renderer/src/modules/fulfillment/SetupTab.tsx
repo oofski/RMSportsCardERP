@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Icon } from '../../components/Icon'
 import { UploadTab } from './UploadTab'
 import { AssignTab } from './AssignTab'
+import { SupplyPlanTab } from './SupplyPlanTab'
 import type { ShipTabProps } from './ShippingModule'
 
 /**
@@ -17,7 +18,7 @@ import type { ShipTabProps } from './ShippingModule'
  * the people who most needed to see who was on what — the floor — could not
  * reach it at all.
  */
-type Section = 'import' | 'assign'
+type Section = 'import' | 'assign' | 'supplies'
 
 export function SetupTab(props: ShipTabProps): JSX.Element {
   const [section, setSection] = useState<Section>('import')
@@ -39,9 +40,18 @@ export function SetupTab(props: ShipTabProps): JSX.Element {
           <Icon name="UserCheck" size={15} />
           Who is on what
         </button>
+        <button
+          className={`setup-seg ${section === 'supplies' ? 'active' : ''}`}
+          onClick={() => setSection('supplies')}
+        >
+          <Icon name="Boxes" size={15} />
+          What it takes
+        </button>
       </div>
 
-      {section === 'import' ? <UploadTab {...props} /> : <AssignTab />}
+      {section === 'import' && <UploadTab {...props} />}
+      {section === 'assign' && <AssignTab />}
+      {section === 'supplies' && <SupplyPlanTab />}
     </div>
   )
 }

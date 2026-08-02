@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC, type AppInfo } from '@shared/ipc'
 import type { Permission } from '@shared/permissions'
+import type { ShipSupplyPlan } from '@shared/shippingSupplies'
 import type {
   ParsedSheet,
   ResetApplyResult,
@@ -396,6 +397,9 @@ const api = {
       onlyUnchecked = false
     ): Promise<Result<ShipOrderRow>> =>
       ipcRenderer.invoke(IPC.shipOrderCheckAll, { customerId, checked, onlyUnchecked }),
+
+    /** What tonight's show will consume in supplies. Read only. */
+    supplyPlan: (): Promise<ShipSupplyPlan | null> => ipcRenderer.invoke(IPC.shipSupplyPlan),
 
     // ---- The uploaded slip -------------------------------------------------
     /** Metadata only — cheap enough for any screen to ask on mount. */
