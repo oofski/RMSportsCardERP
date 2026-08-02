@@ -26,6 +26,7 @@ import { IPC } from '@shared/ipc'
 import type { ExportResult, Result } from '@shared/types'
 import type { Permission } from '@shared/permissions'
 import {
+  type ShipDocument,
   SHIP_BREAK_STATUSES,
   SHIP_SPORTS,
   SHIP_STATUS_CODES,
@@ -70,6 +71,7 @@ import { currentUser } from './services/auth'
 import { parsePdf } from './shipping/pdf'
 import {
   clearShipDataset,
+  clearShipDocument,
   deleteShipImport,
   deleteShipSnapshot,
   getShipSettings,
@@ -78,6 +80,9 @@ import {
   listShipImports,
   listShipSnapshots,
   renameShipImport,
+  getShipDocument,
+  getShipDocumentBytes,
+  putShipDocument,
   renameShipSnapshot,
   setShipEvent,
   setShipSettings
@@ -257,6 +262,24 @@ async function runParseJob(
       name: opts.name ?? job.filename,
       carryForward: opts.carryForward
     })
+
+    // Keep the file itself, now that the dataset it produced has landed.
+    //
+    // After the import, not before: a parse that throws must leave the previous
+    // show — dataset AND slip — exactly as it was, so nobody is left holding a
+    // pick list and a document that describe different nights.
+    try {
+      putShipDocument({
+        importId: result.record?.id ?? null,
+        name: job.filename,
+        pageCount: job.totalPages,
+        bytes: buffer
+      })
+    } catch (err) {
+      // The slip is a convenience; the dataset is the job. Never fail an import
+      // that already succeeded because the paper could not be filed.
+      job.documentError = err instanceof Error ? err.message : String(err)
+    }
 
     job.status = 'done'
     job.phase = 'done'
@@ -501,7 +524,40 @@ export function registerShippingIpc(): void {
     try {
       requireManage()
       clearShipDataset()
+      // The slip describes the dataset that just went away.
+      clearShipDocument()
       return { ok: true, data: getWorkspaceSummary() }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  // ---- The uploaded slip -------------------------------------------------
+  //
+  // Readable by anyone who can open the module: a picker who cannot see the
+  // paper cannot do the job the paper is for. Only clearing it needs manage.
+  ipcMain.handle(IPC.shipDocument, (): ShipDocument | null =>
+    can('module.fulfillment') ? getShipDocument() : null
+  )
+
+  /**
+   * The file, once, as raw bytes.
+   *
+   * Sent whole rather than page by page because the renderer's PDF view wants a
+   * blob URL it can page around inside instantly — a picker moving down a
+   * hundred orders cannot wait for a round trip per page. ~1MB for a 136-page
+   * export, fetched once when the view opens.
+   */
+  ipcMain.handle(IPC.shipDocumentBytes, (): Uint8Array | null => {
+    if (!can('module.fulfillment')) return null
+    const bytes = getShipDocumentBytes()
+    return bytes ? new Uint8Array(bytes) : null
+  })
+
+  ipcMain.handle(IPC.shipDocumentClear, (): Result<{ cleared: number }> => {
+    try {
+      requireManage()
+      return { ok: true, data: { cleared: clearShipDocument() } }
     } catch (err) {
       return fail(err)
     }

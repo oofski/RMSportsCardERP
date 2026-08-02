@@ -81,6 +81,8 @@ export interface ShipOrderCustomer {
   realName: string
   address: string
   isNew: boolean
+  /** Where this customer's slip sits in the uploaded PDF. Empty if unknown. */
+  pages: number[]
 }
 
 /** One physical card inside an order's break group. */
@@ -458,6 +460,12 @@ export interface ShipParseJob {
   counts: ShipImportCounts | null
   carriedForward: boolean
   event: ShipEvent | null
+  /**
+   * Set only when the dataset imported fine but the PDF could not be filed
+   * alongside it. The import still succeeded — this is "you will not have the
+   * slip to look at", not "the show did not load".
+   */
+  documentError?: string | null
 }
 
 /** `startParse` either began a job or the operator cancelled the file dialog. */

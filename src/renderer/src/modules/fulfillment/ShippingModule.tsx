@@ -13,6 +13,7 @@ import { ShippingTab } from './ShippingTab'
 import { HistoryTab } from './HistoryTab'
 import { FlagsTab } from './FlagsTab'
 import { TodayTab } from './TodayTab'
+import { WithSlipMode } from './WithSlipMode'
 
 /**
  * RM Cardz Shipping Workspace — the module shell.
@@ -246,8 +247,16 @@ export function ShippingModule(): JSX.Element {
 
       <div className="ship-scroll">
         {tab === 'today' && <TodayTab {...tabProps} />}
-        {tab === 'find' && <CheckerTab {...tabProps} />}
-        {tab === 'pack' && <OrdersTab {...tabProps} />}
+        {tab === 'find' && (
+          <WithSlipMode mode="pick" canAct={canFind} props={tabProps}>
+            <CheckerTab {...tabProps} />
+          </WithSlipMode>
+        )}
+        {tab === 'pack' && (
+          <WithSlipMode mode="mail" canAct={canPack} props={tabProps}>
+            <OrdersTab {...tabProps} />
+          </WithSlipMode>
+        )}
         {tab === 'flags' && <FlagsTab {...tabProps} />}
         {tab === 'ship' && <ShippingTab {...tabProps} />}
         {tab === 'setup' && <SetupTab {...tabProps} />}

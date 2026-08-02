@@ -41,6 +41,7 @@ import type {
   ShipSnapshotSummary,
   ShipSpecialRequest,
   ShipStatusCode,
+  ShipDocument,
   ShipTeamSlot,
   ShipWarning,
   ShippingDataset
@@ -73,6 +74,7 @@ interface CustomerRow {
   real_name: string | null
   address: string | null
   is_new: number
+  pages: string | null
 }
 
 interface TeamSlotRow {
@@ -223,7 +225,8 @@ function toCustomer(r: CustomerRow): ShipCustomer {
     whatnotHandle: str(r.whatnot_handle) || r.id,
     realName: str(r.real_name),
     address: str(r.address),
-    isNew: bool(r.is_new)
+    isNew: bool(r.is_new),
+    pages: parseJson<number[]>(r.pages, [])
   }
 }
 
@@ -431,7 +434,7 @@ export function getShipBreakByNumber(breakNumber: number): ShipBreak | null {
 // Reads — customers
 // ---------------------------------------------------------------------------
 
-const CUSTOMER_SELECT = `SELECT id, whatnot_handle, real_name, address, is_new FROM ship_customers`
+const CUSTOMER_SELECT = `SELECT id, whatnot_handle, real_name, address, is_new, pages FROM ship_customers`
 
 export function listShipCustomers(): ShipCustomer[] {
   const rows = getDb()
@@ -1069,11 +1072,18 @@ export function importDataset(
     }
 
     const insCustomer = database.prepare(
-      `INSERT INTO ship_customers (id, whatnot_handle, real_name, address, is_new)
-       VALUES (?, ?, ?, ?, ?)`
+      `INSERT INTO ship_customers (id, whatnot_handle, real_name, address, is_new, pages)
+       VALUES (?, ?, ?, ?, ?, ?)`
     )
     for (const c of dataset.customers) {
-      insCustomer.run(c.id, str(c.whatnotHandle) || c.id, str(c.realName), str(c.address), flag(c.isNew))
+      insCustomer.run(
+        c.id,
+        str(c.whatnotHandle) || c.id,
+        str(c.realName),
+        str(c.address),
+        flag(c.isNew),
+        JSON.stringify(Array.isArray(c.pages) ? c.pages : [])
+      )
     }
 
     const insSlot = database.prepare(
@@ -1471,4 +1481,94 @@ export function setShipSettings(patch: Record<string, string | null>): Record<st
     for (const [key, value] of Object.entries(patch)) setShipSetting(key, value)
   })()
   return getShipSettings()
+}
+
+// ---------------------------------------------------------------------------
+// The uploaded document
+// ---------------------------------------------------------------------------
+
+/**
+ * The PDF the show was imported from.
+ *
+ * There is at most ONE at a time, for the same reason there is at most one
+ * dataset: the floor is working tonight's show, and a picker who can reach last
+ * week's slip by accident is a picker who will. Storing a new one replaces the
+ * old, which is also the "offload it when it is done" behaviour — the file stops
+ * taking up room the moment it stops being the thing being worked.
+ */
+export function putShipDocument(input: {
+  importId: string | null
+  name: string
+  pageCount: number
+  bytes: Buffer
+}): ShipDocument {
+  const database = getDb()
+  const id = newId()
+  const createdAt = nowIso()
+  database.transaction(() => {
+    database.prepare(`DELETE FROM ship_documents`).run()
+    database
+      .prepare(
+        `INSERT INTO ship_documents (id, import_id, name, page_count, byte_size, bytes, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        id,
+        input.importId,
+        str(input.name) || 'packing-slips.pdf',
+        Math.max(0, Math.trunc(num(input.pageCount))),
+        input.bytes.byteLength,
+        input.bytes,
+        createdAt
+      )
+  })()
+  return {
+    id,
+    importId: input.importId,
+    name: str(input.name) || 'packing-slips.pdf',
+    pageCount: Math.max(0, Math.trunc(num(input.pageCount))),
+    byteSize: input.bytes.byteLength,
+    createdAt
+  }
+}
+
+/** The document's metadata — cheap, and safe to put in every summary. */
+export function getShipDocument(): ShipDocument | null {
+  const row = getDb()
+    .prepare(
+      `SELECT id, import_id, name, page_count, byte_size, created_at
+       FROM ship_documents ORDER BY created_at DESC LIMIT 1`
+    )
+    .get() as
+    | {
+        id: string
+        import_id: string | null
+        name: string | null
+        page_count: number | null
+        byte_size: number | null
+        created_at: string | null
+      }
+    | undefined
+  if (!row) return null
+  return {
+    id: row.id,
+    importId: row.import_id ?? null,
+    name: str(row.name) || 'packing-slips.pdf',
+    pageCount: num(row.page_count),
+    byteSize: num(row.byte_size),
+    createdAt: str(row.created_at)
+  }
+}
+
+/** The file itself. Only read when a screen is about to render it. */
+export function getShipDocumentBytes(): Buffer | null {
+  const row = getDb()
+    .prepare(`SELECT bytes FROM ship_documents ORDER BY created_at DESC LIMIT 1`)
+    .get() as { bytes: Buffer | null } | undefined
+  return row?.bytes ?? null
+}
+
+/** Drop the stored file. The dataset — the actual work — is untouched. */
+export function clearShipDocument(): number {
+  return getDb().prepare(`DELETE FROM ship_documents`).run().changes
 }

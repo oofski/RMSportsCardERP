@@ -128,6 +128,11 @@ export const IPC = {
   shipParseJob: 'shipping:parse:job',
   shipParseEvent: 'shipping:parse:event',
   shipDatasetClear: 'shipping:dataset:clear',
+  // The uploaded PDF: metadata is cheap and always available; the bytes are
+  // fetched once, only by a screen that is about to render them.
+  shipDocument: 'shipping:document',
+  shipDocumentBytes: 'shipping:document:bytes',
+  shipDocumentClear: 'shipping:document:clear',
   // Orders
   shipOrdersList: 'shipping:orders:list',
   shipOrderGet: 'shipping:orders:get',

@@ -120,7 +120,8 @@ const EMPTY_CUSTOMER: ShipCustomer = {
   whatnotHandle: '',
   realName: '',
   address: '',
-  isNew: false
+  isNew: false,
+  pages: []
 }
 
 /** A missing customer row must never crash a screen — fall back to the handle. */
@@ -269,7 +270,9 @@ export function _orderRow(sh: ShipShipment, ctx?: DerivationContext): ShipOrderR
       handle: customer.whatnotHandle || customer.id,
       realName: customer.realName,
       address: customer.address,
-      isNew: customer.isNew
+      isNew: customer.isNew,
+      // So a screen can turn to this customer's page in the uploaded slip.
+      pages: customer.pages ?? []
     },
     trackingNumber: sh.trackingNumber,
     carrier: sh.carrier,
@@ -890,7 +893,9 @@ function shipmentRow(sh: ShipShipment, ctx: DerivationContext): ShipShipmentRow 
       handle: customer.whatnotHandle || customer.id,
       realName: customer.realName,
       address: customer.address,
-      isNew: customer.isNew
+      isNew: customer.isNew,
+      // So a screen can turn to this customer's page in the uploaded slip.
+      pages: customer.pages ?? []
     },
     trackingNumber: sh.trackingNumber,
     carrier: sh.carrier,

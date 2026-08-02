@@ -565,6 +565,27 @@ function migrate(database: Database.Database): void {
       collisions         TEXT
     );
 
+    -- The uploaded PDF itself.
+    --
+    -- Kept so the floor can work against the ORIGINAL paper: a picker with the
+    -- slip open beside the pick list can see what the customer actually bought,
+    -- in the layout they are used to reading. One row per import; the bytes are
+    -- the file verbatim, which is ~1MB for a 136-page export.
+    --
+    -- Deliberately NOT in the cloud-sync manifest (see syncTables.ts): a
+    -- multi-megabyte blob does not belong in a row-at-a-time relay. The parsed
+    -- dataset — which is what the work is actually done against — syncs as
+    -- normal, so a machine without the document loses the paper, not the job.
+    CREATE TABLE IF NOT EXISTS ship_documents (
+      id          TEXT PRIMARY KEY,
+      import_id   TEXT,
+      name        TEXT NOT NULL,
+      page_count  INTEGER NOT NULL DEFAULT 0,
+      byte_size   INTEGER NOT NULL DEFAULT 0,
+      bytes       BLOB,
+      created_at  TEXT NOT NULL
+    );
+
     -- Parse-time warnings (unmatched team names, duplicate slots, ...).
     CREATE TABLE IF NOT EXISTS ship_warnings (
       id       TEXT PRIMARY KEY,
@@ -1314,6 +1335,16 @@ function migrate(database: Database.Database): void {
     `)
   }
   setMeta(database, 'schema_version', '31')
+
+  // v32: the slip stays with the show.
+  //
+  // Everything needed to work a break was in the database except the one thing
+  // the floor actually reads — the printed slip. Two columns make that possible:
+  // which pages of the upload belong to which customer, and the file itself.
+  // Without the page map there is nothing to turn to when somebody hits "next
+  // order", which is the whole point of having the document at all.
+  addColumnIfMissing(database, 'ship_customers', 'pages', 'TEXT')
+  setMeta(database, 'schema_version', '32')
 
   // Seed the product catalog once, then apply the on-hand snapshot once.
   seedCatalogIfNeeded(database)

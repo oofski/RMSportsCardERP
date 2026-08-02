@@ -98,6 +98,16 @@ export interface ShipCustomer {
   realName: string
   address: string
   isNew: boolean
+  /**
+   * The 1-based PDF pages this customer's packing slip occupies, in order.
+   *
+   * This is what lets a picker keep the original slip open beside the pick list
+   * and have "next order" move the paper as well as the cards. Empty for a
+   * dataset imported before the pages were recorded, or restored from a
+   * snapshot — every screen treats that as "no document to show", never as an
+   * error.
+   */
+  pages: number[]
 }
 
 // ---------------------------------------------------------------------------
@@ -376,6 +386,21 @@ export interface ShipImportRecord {
   counts: ShipImportCounts
   /** True when this import carried operator state forward (same named event). */
   carriedForward: boolean
+}
+
+/**
+ * The uploaded PDF, kept so the floor can work against the original paper.
+ * `bytes` is deliberately absent here — the metadata is small and travels with
+ * every summary; the file itself is fetched only when a screen is about to show
+ * it.
+ */
+export interface ShipDocument {
+  id: string
+  importId: string | null
+  name: string
+  pageCount: number
+  byteSize: number
+  createdAt: string
 }
 
 /** What `importDataset` hands back to the caller. */

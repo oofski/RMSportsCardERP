@@ -83,6 +83,7 @@ import type {
   ShipBatchUrl,
   ShipBreakAudit,
   ShipBreakStatus,
+  ShipDocument,
   ShipEvent,
   ShipImportRecord,
   ShipSnapshot,
@@ -384,6 +385,17 @@ const api = {
     customers: (): Promise<ShipCustomerRow[]> => ipcRenderer.invoke(IPC.shipCustomers),
     clearDataset: (): Promise<Result<ShipWorkspaceSummary>> =>
       ipcRenderer.invoke(IPC.shipDatasetClear),
+
+    // ---- The uploaded slip -------------------------------------------------
+    /** Metadata only — cheap enough for any screen to ask on mount. */
+    document: (): Promise<ShipDocument | null> => ipcRenderer.invoke(IPC.shipDocument),
+    /**
+     * The file itself, once. The caller turns it into a blob URL and pages
+     * around inside it locally, so moving between orders costs nothing.
+     */
+    documentBytes: (): Promise<Uint8Array | null> => ipcRenderer.invoke(IPC.shipDocumentBytes),
+    clearDocument: (): Promise<Result<{ cleared: number }>> =>
+      ipcRenderer.invoke(IPC.shipDocumentClear),
 
     // ---- Upload: the parse runs as a background job ------------------------
     /** Opens a PDF picker (unless `filePath` is given) and starts the job. */

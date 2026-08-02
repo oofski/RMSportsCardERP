@@ -49,6 +49,14 @@ export interface SyncedTable {
  *                            with their own ids, which never collide) and the
  *                            quantity is recomputed from them after every pull.
  *                            See rebuildDerivedStock() in sync.ts.
+ *   ship_documents           The uploaded packing-slip PDF, verbatim. A megabyte
+ *                            of BLOB does not belong in a row-at-a-time relay
+ *                            that batches whole rows into one JSON body. The
+ *                            parsed dataset — every card, every break, every
+ *                            address, which is what the work is actually done
+ *                            against — syncs as normal, so a laptop without the
+ *                            document loses the paper, not the job. Needs
+ *                            object storage (R2) before it can travel.
  *   sync_*                   The plumbing itself.
  */
 export const SYNCED_TABLES: SyncedTable[] = [

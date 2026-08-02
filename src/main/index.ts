@@ -30,7 +30,12 @@ function createWindow(): BrowserWindow {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      // Chromium's built-in PDF viewer. The picker works with the original
+      // packing slip open beside the pick list, and it has to page around a
+      // 200-page document instantly — that is a job for the engine's own viewer
+      // rather than something rendered a page at a time over IPC.
+      plugins: true
     }
   })
 

@@ -1124,7 +1124,11 @@ export function parsePages(pages: string[], options: ParsePagesOptions = {}): Sh
       whatnotHandle: group.handle,
       realName: packing?.realName || '',
       address: packing?.address ?? '',
-      isNew: packing?.isNew ?? false
+      isNew: packing?.isNew ?? false,
+      // Where this customer's slip is in the uploaded PDF. Already known — the
+      // grouper works page by page — it just never travelled with the data,
+      // which is why nothing could show the operator the original paper.
+      pages: group.packingPages.map((p) => p.page)
     })
     shipments.push({
       id: `ship_${group.handle}`,

@@ -7604,6 +7604,264 @@ tr.hoverable-row:hover {
   color: var(--text-3);
 }
 
+/* ===========================================================================
+   One order at a time, with the customer's own slip open beside it
+   =========================================================================== */
+
+.slipmode {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+.slipmode-switch {
+  display: inline-flex;
+  align-self: flex-start;
+  gap: 2px;
+  margin-bottom: 12px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+.slipmode-switch button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: none;
+  border-radius: 7px;
+  background: none;
+  color: var(--text-3);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.slipmode-switch button.active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-sm, 0 1px 2px rgb(0 0 0 / 0.08));
+}
+
+.walk-page {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+.walk-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.walk-count {
+  color: var(--text-3);
+  font-size: 13px;
+  font-weight: 600;
+}
+.walk-nav {
+  display: inline-flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+/* Cards left, paper right. The slip is the reference, not the work — so it
+   takes the smaller half and never grows past what a page needs. */
+.walk-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 0.85fr);
+  gap: 14px;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+@media (max-width: 1100px) {
+  .walk-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .slip-pane {
+    min-height: 480px;
+  }
+}
+
+.walk-order {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow-y: auto;
+}
+.walk-order[data-done='true'] {
+  border-color: var(--success);
+}
+.walk-order-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.walk-who {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  color: var(--text);
+}
+.walk-handle {
+  color: var(--text-3);
+  font-size: 13px;
+}
+.walk-prog {
+  margin-left: auto;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-2);
+}
+.walk-prog.done {
+  color: var(--success);
+}
+.walk-value {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+}
+.walk-meta {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+.walk-meta span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.walk-breaks {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.walk-break {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.walk-break-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+.walk-break-count {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-2);
+}
+.walk-break-val {
+  font-size: 12px;
+  color: var(--text-3);
+}
+.walk-teams {
+  display: flex;
+  flex-direction: column;
+}
+.walk-team {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 11px;
+  border: none;
+  border-top: 1px solid var(--border);
+  background: none;
+  font: inherit;
+  text-align: left;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.walk-teams .walk-team:first-child {
+  border-top: none;
+}
+.walk-team:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+.walk-team:disabled {
+  cursor: default;
+}
+.walk-team.checked {
+  background: var(--success-bg);
+  color: var(--text-3);
+}
+.walk-team.checked .walk-team-name {
+  text-decoration: line-through;
+}
+.walk-team.checked svg {
+  color: var(--success);
+}
+.walk-team-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: 600;
+  color: var(--text);
+}
+.walk-team.checked .walk-team-name {
+  color: var(--text-3);
+}
+.walk-team-price {
+  flex-shrink: 0;
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+
+/* ---- The embedded slip ---- */
+.slip-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.slip-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-3);
+  font-size: 12.5px;
+}
+.slip-title {
+  font-weight: 700;
+  color: var(--text-2);
+}
+.slip-page {
+  margin-left: auto;
+}
+.slip-frame {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 520px;
+  border: none;
+  background: var(--surface-3);
+}
+
 /* ---- "Where are @someone's cards" — one answer across every break ---- */
 .chk-people {
   display: flex;
