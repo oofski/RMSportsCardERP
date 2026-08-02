@@ -119,6 +119,87 @@ export function readBreakLabel(
   }
 }
 
+/**
+ * The right-hand column of the slip header, glued on by the line grouper.
+ *
+ * Whatnot brackets the show banner in a block glyph, so everything from the
+ * first one onwards belongs to the other column.
+ */
+const RE_COLUMN_MARK = /[\u25A0\u25AA\u25FC\u25FE\u2588\u25A1\u25AB]/
+
+function stripGluedColumn(line: string, bannerTail = ''): string {
+  let out = line
+  // A line ENDING in the glyph carries the banner's tail, not its start.
+  if (bannerTail && RE_COLUMN_MARK.test(out.slice(-1))) {
+    const body = out.slice(0, -1).trimEnd()
+    if (body.endsWith(bannerTail)) out = body.slice(0, body.length - bannerTail.length)
+  }
+  const at = out.search(RE_COLUMN_MARK)
+  return (at >= 0 ? out.slice(0, at) : out).replace(/\s+/g, ' ').trim()
+}
+
+/**
+ * Cut an address at its country token when print from the other column runs on
+ * past it. Only when something FOLLOWS it — an address that simply ends in "US"
+ * is left exactly as printed.
+ */
+function trimGluedAddress(line: string): string {
+  // A short wrap puts the country at the START of its own line, with the
+  // banner's date behind it: "US 12 July, 2026".
+  const lead = /^(US|USA)\b\s*\S/i.exec(line)
+  if (lead) return lead[1]
+  // `[.,]` because a wrapped address joins as "…60614-3169., US 12 July, 2026"
+  // — a comma before the country, not the full stop the single-line form has.
+  const m = /^(.*?[.,]\s*(?:US|USA)\b)\s*\S/i.exec(line)
+  return m ? m[1].trim() : line
+}
+
+/**
+ * The seller banner's SECOND line, learned from the document rather than
+ * guessed at.
+ *
+ * A long address wraps, so the banner lands in the MIDDLE of it:
+ *
+ *     26602 Shakespeare Ln. Stevenson Ranch, CA. RANDOM TEAMS + $1 STARTS■
+ *     91381-1465. US  12 July, 2026
+ *
+ * Cutting at the block glyph does not help — it is at the end of the line, not
+ * the start of the banner. But the banner is the SAME on every slip in a show,
+ * so the longest ending shared by all of those lines IS the banner, whatever
+ * this particular show happened to call itself. No phrase list to maintain, and
+ * nothing to go stale when the next show is named something else.
+ */
+export function learnBannerTail(pages: string[]): string {
+  const tails: string[] = []
+  for (const text of pages) {
+    for (const raw of text.split('\n')) {
+      const line = raw.trimEnd()
+      if (!RE_COLUMN_MARK.test(line.slice(-1))) continue
+      const body = line.slice(0, -1).trimEnd()
+      // A line that is ONLY the banner (short slips) tells us nothing about
+      // where an address ends, but it is still a valid sample.
+      if (body) tails.push(body)
+    }
+  }
+  if (tails.length < 2) return ''
+
+  // Longest common suffix across every sample.
+  let common = tails[0]
+  for (let i = 1; i < tails.length && common; i++) {
+    const other = tails[i]
+    let n = 0
+    while (n < common.length && n < other.length && common[common.length - 1 - n] === other[other.length - 1 - n]) n++
+    common = common.slice(common.length - n)
+  }
+  // Trim to a word boundary so a partial word is never removed.
+  const trimmed = common.replace(/^\S*\s+/, '').trim()
+  // Two characters of coincidence is not a banner.
+  return trimmed.length >= 6 ? trimmed : ''
+}
+
+/** The banner's own date line ("12 July, 2026") — never part of an address. */
+const RE_DATE_ONLY = /^\d{1,2}\s+[A-Za-z]{3,9},?\s+\d{4}$/
+
 const RE_ITEMS_NOISE = /^\d+\s*x?\s*items?$/i
 /**
  * USPS prints tracking in 4-digit groups (`#9400 1118 9922 3197 4284 90`), so the
@@ -558,7 +639,9 @@ interface OrderPosition {
 export function parsePackingSlip(
   handle: string,
   pages: PageRef[],
-  matcher: TeamMatcher | null
+  matcher: TeamMatcher | null,
+  /** The seller banner's second line, so it can be cut out of an address. */
+  bannerTail = ''
 ): PackingSlip {
   const warnings: ShipWarningInput[] = []
   const slip: PackingSlip = {
@@ -577,6 +660,21 @@ export function parsePackingSlip(
   if (!pages.length) return slip
 
   // --- identity + address (first page only) -------------------------------
+  //
+  // The slip header is TWO columns — buyer on the left, seller and the show
+  // banner on the right — and the line grouper joins everything sharing a row,
+  // because that is exactly what it has to do for the order lines further down.
+  // So the buyer's name arrives as "Rick Layman ■ FINEST BASEBALL RELEASE
+  // WEEK!" and the street as "…46975. US RANDOM TEAMS + $1 STARTS■".
+  //
+  // The consequence was not cosmetic: the glued line stopped looking like a
+  // person's name, so the name was never captured at all and the pick screen
+  // showed a dash where the customer should be. Somebody holding a package has
+  // no way to check it against a dash.
+  //
+  // Both halves are recoverable from the print itself. The banner is delimited
+  // by the block glyph Whatnot brackets it with, and a US address ends at its
+  // country token — so a line is cut at whichever comes first.
   const firstLinesOfSlip = pages[0].text
     .split('\n')
     .map((l) => l.trim())
@@ -592,7 +690,15 @@ export function parsePackingSlip(
     // has no proper-case buyer name at all.
     const beforeName: string[] = []
     for (let i = anchor + 1; i < firstLinesOfSlip.length; i++) {
-      const line = firstLinesOfSlip[i]
+      // Clean BEFORE deciding whether this line ends the address. The banner
+      // reads "RANDOM TEAMS + $1 STARTS", and that dollar sign is one of the
+      // stop tokens — so testing the raw line ended the address at the buyer's
+      // street every time and left it blank.
+      const line = trimGluedAddress(stripGluedColumn(firstLinesOfSlip[i], bannerTail))
+      if (!line) continue
+      // The banner's date sits on its own row, so nothing glued it to the
+      // address — it simply follows it, and would read as a second line.
+      if (RE_DATE_ONLY.test(line)) continue
       if (RE_ADDRESS_STOP.test(line)) break
       if (!slip.realName) {
         // Skip the badge / blank filler that can sit between To: and the name.
@@ -612,7 +718,7 @@ export function parsePackingSlip(
         packTitles.push(line.replace(/\s+/g, ' ').trim())
         continue
       }
-      addressLines.push(line)
+      addressLines.push(trimGluedAddress(line))
       if (addressLines.length >= 3) break
     }
     slip.address = (addressLines.length ? addressLines : beforeName).slice(0, 3).join(', ')
@@ -1062,6 +1168,8 @@ export function parsePages(pages: string[], options: ParsePagesOptions = {}): Sh
   onProgress?.({ phase: 'parse', page: 0, totalPages, message: 'Grouping pages by customer…' })
 
   const { groups, warnings: groupWarnings } = groupByCustomer(pages)
+  // Learned once, from every slip at once — see learnBannerTail.
+  const bannerTail = learnBannerTail(pages)
   if (!groups.length) {
     onProgress?.({
       phase: 'done',
@@ -1107,7 +1215,7 @@ export function parsePages(pages: string[], options: ParsePagesOptions = {}): Sh
     })
 
     const packing = group.packingPages.length
-      ? parsePackingSlip(group.handle, group.packingPages, matcher)
+      ? parsePackingSlip(group.handle, group.packingPages, matcher, bannerTail)
       : null
     if (packing) warnings.push(...packing.warnings)
     if (packing?.packTitle) seenPackTitles.push(packing.packTitle)

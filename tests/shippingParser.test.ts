@@ -7,7 +7,7 @@
  *
  * Run: npm run test:parser
  */
-import { parsePages } from '../src/main/shipping/parser'
+import { learnBannerTail, parsePages } from '../src/main/shipping/parser'
 import { groupIntoLines } from '../src/main/shipping/pdf'
 
 let pass = 0, fail = 0
@@ -163,6 +163,65 @@ ok(res3.breaks.map((b) => b.breakLabel).sort().join(',') === '11,12',
    JSON.stringify(res3.breaks.map((b) => b.breakLabel)))
 ok(res3.breaks.every((b) => b.breakLabel === String(b.breakNumber)),
    'and their label is exactly their number')
+
+// --- 3b. the two-column header: name and address, not the seller's banner ---
+// The slip header is two columns, and the line grouper joins whatever shares a
+// row — as it must for the order lines. So the buyer's name arrives welded to
+// the show banner. The name then stopped looking like a name, was never
+// captured, and the pick screen showed a dash where the customer should be.
+const banner = (lines: string[]): string =>
+  [
+    'Whatnot Packing Slip 1/1',
+    'To: buyer99 NEW From: rm_cardz',
+    ...lines,
+    'QTY Name & Description Attributes Subtotal',
+    '1 Boston Red Sox Order 7000000001 $20.00',
+    '1x 2026 FINEST BASEBALL HOBBY BOX- Break #3',
+    '1 Item $20.00',
+    'USPS Ground Advantage #9300120762602315706799 3.0 oz'
+  ].join('\n')
+
+// Both real wrap shapes from the July export, in one document so the banner is
+// learnable (it needs more than one sample, exactly as a real show has).
+const twoCol = parsePages(
+  [
+    banner([
+      'Rick Layman \u25A0 FINEST BASEBALL RELEASE WEEK!',
+      '4556 MCCARTY LN. ROCHESTER, IN. 46975. US RANDOM TEAMS + $1 STARTS\u25A0',
+      '12 July, 2026'
+    ]),
+    banner([
+      'Nate Hoeft \u25A0 FINEST BASEBALL RELEASE WEEK!',
+      '26602 Shakespeare Ln. Stevenson Ranch, CA. RANDOM TEAMS + $1 STARTS\u25A0',
+      '91381-1465. US 12 July, 2026'
+    ]).replace('To: buyer99', 'To: buyer98')
+  ],
+  { sport: 'mlb' }
+)
+const c1 = twoCol.customers.find((c) => c.id === 'buyer99')
+const c2 = twoCol.customers.find((c) => c.id === 'buyer98')
+ok(c1?.realName === 'Rick Layman', 'the buyer name survives the glued banner', String(c1?.realName))
+ok(c2?.realName === 'Nate Hoeft', 'including on a slip whose address wraps', String(c2?.realName))
+ok(
+  c1?.address === '4556 MCCARTY LN. ROCHESTER, IN. 46975. US',
+  'a single-line address ends at the country, not in the banner',
+  String(c1?.address)
+)
+ok(
+  c2?.address === '26602 Shakespeare Ln. Stevenson Ranch, CA., 91381-1465. US',
+  'a wrapped address keeps both halves and drops the banner between them',
+  String(c2?.address)
+)
+ok(
+  !/RANDOM TEAMS|RELEASE WEEK|\u25A0|July/.test(`${c1?.realName} ${c1?.address} ${c2?.realName} ${c2?.address}`),
+  'and no banner text or banner date is left anywhere'
+)
+ok(learnBannerTail([
+  'x RANDOM TEAMS + $1 STARTS\u25A0',
+  'y RANDOM TEAMS + $1 STARTS\u25A0'
+]) === 'RANDOM TEAMS + $1 STARTS', 'the banner is learned from the document, not hard-coded',
+  learnBannerTail(['x RANDOM TEAMS + $1 STARTS\u25A0', 'y RANDOM TEAMS + $1 STARTS\u25A0']))
+ok(learnBannerTail(['only one sample\u25A0']) === '', 'one sample is not enough to call something a banner')
 
 // ---------------------------------------------------------------------------
 // 4. The line grouper: a row set in two sizes is still ONE row
