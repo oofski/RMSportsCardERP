@@ -1410,6 +1410,22 @@ function migrate(database: Database.Database): void {
   )
   setMeta(database, 'schema_version', '34')
 
+  // v35: which SHOW a checklist row belongs to, not just which day.
+  //
+  // Both tables key on the date, which is what the P&L needs. It is not enough
+  // to say whose night it was. Two shows on one date share every row id, so the
+  // second one's ticks overwrite the first's and hand back stock the first show
+  // physically used — and correcting a mistyped date strands the old rows where
+  // no screen can reach them, so the same night gets deducted twice.
+  //
+  // The name lets both be caught: a re-key on a date change knows what it is
+  // moving, and a second show on an occupied day is refused instead of silently
+  // eating the first one. Nullable, because rows written by v0.0.69 have no name
+  // and must not lock anybody out of a night they have already half-ticked.
+  addColumnIfMissing(database, 'ship_sop_steps', 'event_name', 'TEXT')
+  addColumnIfMissing(database, 'ship_supply_usage', 'event_name', 'TEXT')
+  setMeta(database, 'schema_version', '35')
+
   // Seed the product catalog once, then apply the on-hand snapshot once.
   seedCatalogIfNeeded(database)
   seedSnapshotIfNeeded(database)

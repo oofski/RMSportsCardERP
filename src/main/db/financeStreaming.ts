@@ -1955,11 +1955,16 @@ function buildView(db: Database): StreamingFinanceView {
   // whose steps were never ticked books nothing, which is correct: nothing was
   // reported as used.
   const packingByDay = new Map<string, number>()
+  let packingError: string | null = null
   try {
     for (const [d, cost] of packingCostByDay()) packingByDay.set(d, toCents(cost))
-  } catch {
-    // Shipping having no dataset, or Supplies being empty, is not a finance
-    // error — the P&L simply has no packing to show for that day.
+  } catch (err) {
+    // Swallowing this used to make "packing failed to load" and "nothing was
+    // packed" render identically — on the one screen whose entire promise is
+    // that it says so when the numbers do not add up. An empty read is a normal
+    // day; a THROWN read is a statement that is quietly missing a cost, and it
+    // has to come out as unreconciled.
+    packingError = err instanceof Error ? err.message : String(err)
   }
   for (const [d, cents] of packingByDay) {
     const day = dayFor(d)
@@ -2230,7 +2235,16 @@ function buildView(db: Database): StreamingFinanceView {
 
   let reconciled = true
   let reconcileNote: string | null = null
-  if (daysRows + unattributed.rowCount !== all.rows) {
+  if (packingError) {
+    // First, and deliberately: every other check below is about the LEDGER
+    // adding up, and it will, because the money that went missing was never in
+    // the ledger. A statement that is knowingly short a cost must not print
+    // "reconciled" next to it.
+    reconciled = false
+    reconcileNote =
+      `Packing supplies could not be read (${packingError}), so any packing cost is missing from ` +
+      `every day below. The rest of these totals are complete — this one column is not.`
+  } else if (daysRows + unattributed.rowCount !== all.rows) {
     reconciled = false
     reconcileNote =
       `${daysRows} rows on shows + ${unattributed.rowCount} unattributed = ` +

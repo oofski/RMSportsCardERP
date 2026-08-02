@@ -23,6 +23,24 @@ import type { ShipTabProps } from './ShippingModule'
  * product, what is on hand, what it costs. A button that quietly moves four
  * hundred units of anything is a button people learn to be afraid of.
  */
+/**
+ * Is the product's name just the role's name typed out again?
+ *
+ * If so, printing both is a stutter. An exact compare is too strict for this:
+ * the role reads "4×6 shipping labels" with a real multiplication sign, and
+ * somebody naming the product typed an ASCII x. Same words, and showing them
+ * side by side looks like a bug rather than like extra information.
+ *
+ * The × has to become an x BEFORE punctuation is dropped, not with it. Strip it
+ * as punctuation and "4×6" collapses to "46" while "4x6" stays "4x6" — the two
+ * spellings this exists to reconcile end up further apart than they started.
+ */
+function sameName(a: string, b: string): boolean {
+  const key = (s: string): string =>
+    s.toLowerCase().replace(/[×✕✖]/g, 'x').replace(/[^a-z0-9]+/g, '')
+  return key(a) === key(b)
+}
+
 export function SopTab({ canPack, canManage, onChanged }: ShipTabProps): JSX.Element {
   const { can } = useSession()
   const toast = useToast()
@@ -74,8 +92,22 @@ export function SopTab({ canPack, canManage, onChanged }: ShipTabProps): JSX.Ele
         toast.error(res.error ?? 'Could not update that step.')
         return
       }
-      const { state: next, wentNegative, skippedRoles } = res.data
+      const { state: next, wentNegative, skippedRoles, released, stranded } = res.data
       setState(next)
+      // Units that could not be put back because the product they came from has
+      // been deleted. Nothing can fix this on its own, so it has to be said.
+      for (const s of stranded) {
+        toast.error(
+          `${s.quantity.toLocaleString()} ${(SHIP_SUPPLY_ROLE_LABELS[s.role] ?? s.role).toLowerCase()} could not go back — that product no longer exists. Correct the count in Inventory.`
+        )
+      }
+      // The role was pointed at a different product since it was ticked. Say
+      // that the old one was paid back, or it reads as stock appearing.
+      for (const r of released) {
+        toast.toast(
+          `${r.quantity.toLocaleString()} ${(SHIP_SUPPLY_ROLE_LABELS[r.role] ?? r.role).toLowerCase()} went back to the product this role used to point at.`
+        )
+      }
       // Loud, as agreed: a supply that just went below zero means somebody's
       // count is wrong, and the tick is the only moment anyone is looking.
       for (const n of wentNegative) {
@@ -249,7 +281,7 @@ export function SopTab({ canPack, canManage, onChanged }: ShipTabProps): JSX.Ele
                                 the product is the part somebody would want to
                                 check. It is also what the toast names a second
                                 later, so the two have to agree. */}
-                            {l.supplyName && l.supplyName !== l.label && (
+                            {l.supplyName && !sameName(l.supplyName, l.label) && (
                               <em className="sop-line-product">{l.supplyName}</em>
                             )}
                           </span>

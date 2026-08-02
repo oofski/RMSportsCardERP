@@ -47,6 +47,35 @@ import { nowIso } from '../util'
  * than on twice the night.
  */
 
+/** A day the statement can key on. Free text would become a day named "TBD". */
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
+
+/** How a show identifies itself on its checklist rows. */
+function showName(event: { name: string; date: string }): string {
+  return event.name.trim() || `Show ${event.date.trim()}`
+}
+
+/**
+ * Which show already owns this day's checklist, or null if nobody does.
+ *
+ * Rows written before this column existed carry NULL, and those must not lock
+ * anyone out of their own night — an upgrade that bricks a half-ticked show is
+ * worse than the collision it is guarding against.
+ */
+function dayOwner(date: string): string | null {
+  const row = getDb()
+    .prepare(
+      `SELECT event_name FROM ship_supply_usage
+        WHERE event_date = ? AND event_name IS NOT NULL AND event_name <> ''
+        UNION
+       SELECT event_name FROM ship_sop_steps
+        WHERE event_date = ? AND event_name IS NOT NULL AND event_name <> ''
+        LIMIT 1`
+    )
+    .get(date, date) as { event_name: string } | undefined
+  return row?.event_name ?? null
+}
+
 /** The usage row's identity: one per (show, step, consumable). */
 function usageId(date: string, step: string, role: string): string {
   return `${date}|${step}|${role}`
@@ -117,7 +146,11 @@ export function getShipSop(): ShipSopState {
   const names = employeeNames()
 
   let plannedCost = 0
-  let bookedCost = 0
+  // Summed over the USAGE ROWS, not over the steps that say `done = 1`. The two
+  // tables sync independently, so a pull that lands one and not the other would
+  // otherwise have the screen report nothing booked while the P&L books money —
+  // and the screen would be the one that is wrong. Same source, same answer.
+  const bookedCost = usageRows.reduce((n, r) => n + (r.total_cost || 0), 0)
   let doneCount = 0
   const unmappedRoles: ShipSupplyRole[] = []
   const negatives: ShipSopState['negatives'] = []
@@ -171,7 +204,6 @@ export function getShipSop(): ShipSopState {
     })
 
     plannedCost += cost
-    if (done) bookedCost += lines.reduce((n, l) => n + l.usedCost, 0)
 
     return {
       step: def.step,
@@ -221,6 +253,22 @@ export function setShipSopStep(step: ShipSopStep, done: boolean, userId: string 
   if (!date) {
     throw new Error('Assign this show to a day before ticking steps off — the supplies have to book somewhere.')
   }
+  // A day the P&L can key on. "TBD" or "Friday" would sail through as a literal
+  // and turn into a day, a week and a month in the statement, all named TBD.
+  if (!ISO_DATE.test(date)) {
+    throw new Error(
+      `"${date}" is not a date the books can use. Set the show's day as YYYY-MM-DD before ticking steps off.`
+    )
+  }
+  // Two shows on one day would share every row id, so the second one's ticks
+  // would overwrite the first's and hand back stock the first show really used.
+  // Refusing is not the eventual answer, but it is the honest one.
+  const owner = dayOwner(date)
+  if (owner !== null && owner !== showName(event)) {
+    throw new Error(
+      `${date} already has a checklist for "${owner}". Two shows cannot both book supplies to one day yet — finish and clear that one first, or give this show its own date.`
+    )
+  }
 
   const plan = getSupplyPlanCosted()
   const planByRole = new Map(plan.lines.map((l) => [l.role, l]))
@@ -229,12 +277,16 @@ export function setShipSopStep(step: ShipSopStep, done: boolean, userId: string 
 
   const wentNegative: ShipSopResult['wentNegative'] = []
   const skippedRoles: ShipSupplyRole[] = []
+  const released: ShipSopResult['released'] = []
+  const stranded: ShipSopResult['stranded'] = []
 
   const run = db.transaction(() => {
     db.prepare(
-      `INSERT INTO ship_sop_steps (id, event_date, step, done, done_at, done_by, updated_at)
-       VALUES (@id, @date, @step, @done, @at, @by, @ts)
+      `INSERT INTO ship_sop_steps (id, event_date, event_name, step, done, done_at, done_by, updated_at)
+       VALUES (@id, @date, @name, @step, @done, @at, @by, @ts)
        ON CONFLICT (id) DO UPDATE SET
+         event_date = excluded.event_date,
+         event_name = excluded.event_name,
          done       = excluded.done,
          done_at    = excluded.done_at,
          done_by    = excluded.done_by,
@@ -242,6 +294,7 @@ export function setShipSopStep(step: ShipSopStep, done: boolean, userId: string 
     ).run({
       id: `${date}|${step}`,
       date,
+      name: showName(event),
       step,
       done: done ? 1 : 0,
       at: done ? ts : null,
@@ -249,53 +302,75 @@ export function setShipSopStep(step: ShipSopStep, done: boolean, userId: string 
       ts
     })
 
+    // What this step has on record RIGHT NOW, per role. This — not the supply
+    // ledger — is what the reversal is driven from, because it is the only row
+    // that survives the product being re-pointed or deleted.
+    const prevRows = db
+      .prepare(
+        `SELECT role, supply_id, quantity, total_cost FROM ship_supply_usage
+          WHERE event_date = ? AND step = ?`
+      )
+      .all(date, step) as Array<{
+      role: string
+      supply_id: string | null
+      quantity: number
+      total_cost: number
+    }>
+    const prevByRole = new Map(prevRows.map((r) => [r.role, r]))
+
     for (const role of def.consumes) {
       const line = planByRole.get(role)
-      const want = done ? (line?.quantity ?? 0) : 0
+      const supplyId = line?.supplyId ?? null
+      const want = done && supplyId ? (line?.quantity ?? 0) : done ? (line?.quantity ?? 0) : 0
       const id = usageId(date, step, role)
+      const prevRow = prevByRole.get(role) ?? null
+      const prev = prevRow ? { supplyId: prevRow.supply_id, quantity: prevRow.quantity } : null
 
-      if (!line?.supplyId) {
-        // Nothing to move stock in. The count is still worth remembering — it is
-        // what the step called for — but it costs nothing, because a guessed
-        // unit price in a P&L is worse than a missing one.
-        skippedRoles.push(role)
-        if (want > 0) {
-          db.prepare(
-            `INSERT INTO ship_supply_usage
-               (id, event_date, step, role, supply_id, supply_name, quantity, unit_cost, total_cost, actor_id, created_at, updated_at)
-             VALUES (@id, @date, @step, @role, NULL, NULL, @qty, 0, 0, @by, @ts, @ts)
-             ON CONFLICT (id) DO UPDATE SET
-               supply_id = NULL, supply_name = NULL, quantity = excluded.quantity,
-               unit_cost = 0, total_cost = 0, actor_id = excluded.actor_id,
-               updated_at = excluded.updated_at`
-          ).run({ id, date, step, role, qty: want, by: userId, ts })
-        } else {
-          db.prepare(`DELETE FROM ship_supply_usage WHERE id = ?`).run(id)
-        }
-        continue
-      }
+      if (!supplyId) skippedRoles.push(role)
 
+      // Called even when the role is now unlinked: the stock it took while it
+      // WAS linked still has to go back, and only the usage row remembers where
+      // from. Skipping this branch is what let an unlink strand real units.
       const res = setShipSupplyUsage(db, {
-        supplyId: line.supplyId,
+        supplyId,
         txnId: usageTxnId(date, step, role),
         quantity: want,
+        prev,
         note: `${def.title} · ${event.name || 'show'} ${date}`,
         actorId: userId
       })
       if (!res.ok) throw new Error(res.error ?? 'Could not move that supply.')
       if (res.wentNegative) {
-        wentNegative.push({ role, supplyName: line.supplyName ?? role, onHand: res.onHand })
+        wentNegative.push({ role, supplyName: line?.supplyName ?? role, onHand: res.onHand })
+      }
+      if (res.releasedFrom) {
+        released.push({ role, quantity: res.releasedFrom.quantity })
+      }
+      if (res.strandedFrom) {
+        stranded.push({ role, quantity: res.strandedFrom.quantity })
       }
 
       if (want > 0) {
-        // Cost is frozen at the unit price of the moment the work happened.
-        // Re-pricing a past show because the next case of sleeves cost more
-        // would rewrite a P&L that has already been read.
+        // Cost accumulates at the rate of the moment each unit LEFT, not at
+        // today's average applied to the whole night. Re-ticking after a case
+        // arrives at a higher price must not restate a P&L day that has already
+        // been read — which is exactly what `want × today's unitCost` did.
+        const carried = prevRow && prevRow.supply_id === supplyId ? prevRow.total_cost : 0
+        const already = prev?.supplyId === supplyId ? prev.quantity : 0
+        const unitCost = line?.unitCost ?? 0
+        const total =
+          already === 0
+            ? money(want * unitCost)
+            : want >= already
+              ? money(carried + (want - already) * unitCost)
+              : // Fewer than before: give back the same share that is leaving.
+                money(carried * (want / already))
         db.prepare(
           `INSERT INTO ship_supply_usage
-             (id, event_date, step, role, supply_id, supply_name, quantity, unit_cost, total_cost, actor_id, created_at, updated_at)
-           VALUES (@id, @date, @step, @role, @sid, @sname, @qty, @unit, @total, @by, @ts, @ts)
+             (id, event_date, event_name, step, role, supply_id, supply_name, quantity, unit_cost, total_cost, actor_id, created_at, updated_at)
+           VALUES (@id, @date, @name, @step, @role, @sid, @sname, @qty, @unit, @total, @by, @ts, @ts)
            ON CONFLICT (id) DO UPDATE SET
+             event_date = excluded.event_date, event_name = excluded.event_name,
              supply_id = excluded.supply_id, supply_name = excluded.supply_name,
              quantity = excluded.quantity, unit_cost = excluded.unit_cost,
              total_cost = excluded.total_cost, actor_id = excluded.actor_id,
@@ -303,13 +378,15 @@ export function setShipSopStep(step: ShipSopStep, done: boolean, userId: string 
         ).run({
           id,
           date,
+          name: showName(event),
           step,
           role,
-          sid: line.supplyId,
-          sname: line.supplyName,
+          sid: supplyId,
+          sname: line?.supplyName ?? null,
           qty: want,
-          unit: line.unitCost,
-          total: money(want * line.unitCost),
+          // The blended rate this quantity actually went out at.
+          unit: want > 0 ? Math.round((total / want) * 1e6) / 1e6 : 0,
+          total,
           by: userId,
           ts
         })
@@ -320,7 +397,7 @@ export function setShipSopStep(step: ShipSopStep, done: boolean, userId: string 
   })
   run()
 
-  return { state: getShipSop(), wentNegative, skippedRoles }
+  return { state: getShipSop(), wentNegative, skippedRoles, released, stranded }
 }
 
 /**
@@ -342,7 +419,14 @@ export function packingCostByDay(): Map<string, number> {
     .all() as Array<{ d: string; cost: number }>
   const out = new Map<string, number>()
   for (const r of rows) {
-    if (r.cost > 0) out.set(r.d, money(r.cost))
+    // Round FIRST. A day that comes to a third of a cent is not a day worth
+    // opening in the statement, and testing the unrounded figure creates one —
+    // a P&L row with no session, no sales and $0.00 of packing on it.
+    const cost = money(r.cost)
+    // Guard the key as well as the value: a show whose date was typed as "TBD"
+    // before that was refused would otherwise become a day, a week AND a month
+    // named TBD in a statement that then claims to reconcile.
+    if (cost > 0 && ISO_DATE.test(r.d)) out.set(r.d, cost)
   }
   return out
 }

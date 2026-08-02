@@ -339,6 +339,8 @@ export interface ApplyResult {
   duplicates: number
   /** Products whose lots moved, so the caller knows the numbers changed. */
   touchedProducts: string[]
+  /** Supplies whose row or movements arrived — their on-hand needs recomputing. */
+  touchedSupplies: string[]
   /** Kinds that actually changed something — what the UI refetches on. */
   kinds: string[]
 }
@@ -363,6 +365,7 @@ export function applyRows(rows: IncomingRow[]): ApplyResult {
     rejected: 0,
     duplicates: 0,
     touchedProducts: [],
+    touchedSupplies: [],
     kinds: []
   }
   if (rows.length === 0) return result
@@ -371,6 +374,7 @@ export function applyRows(rows: IncomingRow[]): ApplyResult {
   const ordered = [...rows].sort((a, b) => tierOf(a.kind) - tierOf(b.kind) || a.seq - b.seq)
   const kinds = new Set<string>()
   const products = new Set<string>()
+  const supplies = new Set<string>()
   const landed: Array<[string, string]> = []
 
   const landOne = (row: IncomingRow): void => {
@@ -418,6 +422,14 @@ export function applyRows(rows: IncomingRow[]): ApplyResult {
       products.add(data.product_id)
     }
     if (spec.table === 'inventory_products') products.add(row.id)
+    // A supply row arriving carries the sender's on-hand count, and a supply
+    // MOVEMENT arriving means that count is already stale. Either way the number
+    // has to be recomputed from the movements rather than arbitrated between two
+    // machines — see rebuildDerivedSupplyStock.
+    if (spec.table === 'supplies') supplies.add(row.id)
+    if (spec.table === 'supply_transactions' && typeof data.supply_id === 'string') {
+      supplies.add(data.supply_id)
+    }
   }
 
   // A lot row being deleted has no payload to read product_id from, so note the
@@ -484,6 +496,7 @@ export function applyRows(rows: IncomingRow[]): ApplyResult {
 
   result.kinds = [...kinds]
   result.touchedProducts = [...products]
+  result.touchedSupplies = [...supplies]
   return result
 }
 
@@ -597,6 +610,64 @@ export function rebuildDerivedStock(productIds: string[]): number {
             lotWeightedAvgCost(db, productId),
             productId
           )
+        }
+      }
+    } finally {
+      setApplying(db, false)
+    }
+  })
+  run()
+  return changed
+}
+
+/**
+ * Recompute a supply's on-hand from its own movements, after a pull.
+ *
+ * `supplies.quantity` is a stored, synced column, which makes it a number two
+ * laptops arbitrate by last-write-wins — and a count is the one kind of value
+ * that must never be arbitrated. Somebody renaming a supply offline carries
+ * their stale `quantity` along with the rename, and it lands on top of a tick
+ * that correctly took 65 team bags out an hour earlier. The bags come back from
+ * nowhere; the next untick then adds them a second time.
+ *
+ * The movements do not have that problem. Every purchase, use and adjustment is
+ * its own row with its own id, they all sync, and none of them collide — so the
+ * count is recovered by adding them up, exactly as `inventory_stock` is
+ * recovered from its lots. `createSupply` logs its opening quantity as a
+ * purchase precisely so this identity holds for every row from the first.
+ *
+ * Only supplies touched by the batch, so a rebuild never wanders into rows the
+ * pull did not mention.
+ */
+export function rebuildDerivedSupplyStock(supplyIds: string[]): number {
+  if (supplyIds.length === 0) return 0
+  const db = getDb()
+  let changed = 0
+
+  const run = db.transaction(() => {
+    setApplying(db, true)
+    try {
+      for (const id of supplyIds) {
+        const row = db.prepare('SELECT quantity FROM supplies WHERE id = ?').get(id) as
+          | { quantity: number }
+          | undefined
+        if (!row) continue
+        const sum = db
+          .prepare(
+            'SELECT COALESCE(SUM(quantity_change), 0) AS q FROM supply_transactions WHERE supply_id = ?'
+          )
+          .get(id) as { q: number }
+        // No movements at all means nothing has been recorded for this supply on
+        // any machine — which is not the same as "it holds zero". Leaving the
+        // stored count alone is the only safe reading.
+        const anyMovement = db
+          .prepare('SELECT 1 FROM supply_transactions WHERE supply_id = ? LIMIT 1')
+          .get(id)
+        if (!anyMovement) continue
+        const target = Math.round(sum.q)
+        if (target !== row.quantity) {
+          db.prepare('UPDATE supplies SET quantity = ? WHERE id = ?').run(target, id)
+          changed += 1
         }
       }
     } finally {

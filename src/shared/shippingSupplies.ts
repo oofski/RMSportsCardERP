@@ -467,4 +467,15 @@ export interface ShipSopResult {
   wentNegative: Array<{ role: ShipSupplyRole; supplyName: string; onHand: number }>
   /** Roles this step consumes that no supply is linked to, so nothing moved. */
   skippedRoles: ShipSupplyRole[]
+  /**
+   * Roles whose product changed since the step was ticked. The old product got
+   * its units back before the new one gave any up — worth saying, because the
+   * operator's mental model is "I fixed a link", not "I moved stock twice".
+   */
+  released: Array<{ role: ShipSupplyRole; quantity: number }>
+  /**
+   * Units that could NOT be given back because the product they came from has
+   * been deleted. Nothing can fix this automatically; somebody has to know.
+   */
+  stranded: Array<{ role: ShipSupplyRole; quantity: number }>
 }

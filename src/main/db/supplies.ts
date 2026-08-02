@@ -350,44 +350,116 @@ export function useSupply(id: string, input: SupplyUseInput, actorId: string | n
 export interface ShipUsageResult {
   ok: boolean
   error?: string
-  /** Items that moved. Negative = left the shelf, positive = came back. */
+  /** Items that moved on the CURRENT supply. Negative = left, positive = back. */
   delta: number
   onHand: number
   wentNegative: boolean
+  /** Set when the role moved products and the old one was paid back. */
+  releasedFrom?: { supplyId: string; quantity: number }
+  /**
+   * The old product is gone, so its units could not be returned. The caller has
+   * to say so — silently losing them is how a shelf count stops matching.
+   */
+  strandedFrom?: { supplyId: string; quantity: number }
 }
 
 export function setShipSupplyUsage(
   db: Database.Database,
   args: {
-    supplyId: string
-    /** Stable per (show, step, supply). Becomes the transaction row's id. */
+    /** Which product to consume from now. Null when the role is unlinked. */
+    supplyId: string | null
+    /** Stable per (show, step, role). Becomes the transaction row's id. */
     txnId: string
     /** The absolute total this step has consumed. 0 releases it all. */
     quantity: number
+    /**
+     * What this key already consumed and FROM WHICH PRODUCT — read from the
+     * usage row, never from the transaction row.
+     *
+     * This distinction is the whole correctness of the function. The txn id is
+     * keyed by ROLE, so re-pointing "team bags" at a different product, or
+     * deleting the product (which cascades the txn away), leaves the txn either
+     * describing the wrong supply or gone entirely. Both make the reversal miss:
+     * one pays a product back stock it never gave up, the other pays nobody. The
+     * usage row has no foreign key and carries its own supply_id, so it still
+     * knows what actually happened.
+     */
+    prev: { supplyId: string | null; quantity: number } | null
     note: string
     actorId: string | null
   }
 ): ShipUsageResult {
-  const want = Math.max(0, Math.round(args.quantity))
+  const want = args.supplyId ? Math.max(0, Math.round(args.quantity)) : 0
+  const ts = nowIso()
+
+  const prevSupply = args.prev?.supplyId ?? null
+  const prevQty = Math.max(0, Math.round(args.prev?.quantity ?? 0))
+
+  let releasedFrom: ShipUsageResult['releasedFrom']
+  let strandedFrom: ShipUsageResult['strandedFrom']
+
+  // The role moved products (or lost its product) since it was ticked. Pay the
+  // old one back first, THEN treat the new one as starting from nothing.
+  if (prevSupply && prevSupply !== args.supplyId && prevQty > 0) {
+    const old = db.prepare('SELECT quantity FROM supplies WHERE id = ?').get(prevSupply) as
+      | { quantity: number }
+      | undefined
+    if (old) {
+      db.prepare('UPDATE supplies SET quantity = ?, updated_at = ? WHERE id = ?').run(
+        old.quantity + prevQty,
+        ts,
+        prevSupply
+      )
+      releasedFrom = { supplyId: prevSupply, quantity: prevQty }
+    } else {
+      // Deleted product. There is nowhere to put the units back, so say so
+      // rather than pretending the books balance.
+      strandedFrom = { supplyId: prevSupply, quantity: prevQty }
+    }
+    db.prepare('DELETE FROM supply_transactions WHERE id = ?').run(args.txnId)
+  }
+
+  if (!args.supplyId) {
+    return { ok: true, delta: 0, onHand: 0, wentNegative: false, releasedFrom, strandedFrom }
+  }
+
   const row = db.prepare('SELECT quantity FROM supplies WHERE id = ?').get(args.supplyId) as
     | { quantity: number }
     | undefined
-  if (!row) return { ok: false, error: 'Supply not found.', delta: 0, onHand: 0, wentNegative: false }
-
-  const prev = db.prepare('SELECT quantity_change FROM supply_transactions WHERE id = ?').get(args.txnId) as
-    | { quantity_change: number }
-    | undefined
-  // Stored negative (stock leaving), so the previous total is its magnitude.
-  const already = prev ? Math.abs(prev.quantity_change) : 0
-  const delta = already - want // +ve = coming back, -ve = leaving
-
-  if (delta === 0) {
-    return { ok: true, delta: 0, onHand: row.quantity, wentNegative: row.quantity < 0 }
+  if (!row) {
+    return {
+      ok: false,
+      error: 'Supply not found.',
+      delta: 0,
+      onHand: 0,
+      wentNegative: false,
+      releasedFrom,
+      strandedFrom
+    }
   }
 
-  const ts = nowIso()
+  const already = prevSupply === args.supplyId ? prevQty : 0
+  const delta = already - want // +ve = coming back, -ve = leaving
+
+  if (delta === 0 && want > 0) {
+    return {
+      ok: true,
+      delta: 0,
+      onHand: row.quantity,
+      wentNegative: row.quantity < 0,
+      releasedFrom,
+      strandedFrom
+    }
+  }
+
   const onHand = row.quantity + delta
-  db.prepare('UPDATE supplies SET quantity = ?, updated_at = ? WHERE id = ?').run(onHand, ts, args.supplyId)
+  if (delta !== 0) {
+    db.prepare('UPDATE supplies SET quantity = ?, updated_at = ? WHERE id = ?').run(
+      onHand,
+      ts,
+      args.supplyId
+    )
+  }
 
   if (want === 0) {
     db.prepare('DELETE FROM supply_transactions WHERE id = ?').run(args.txnId)
@@ -397,6 +469,7 @@ export function setShipSupplyUsage(
          (id, supply_id, type, quantity_change, unit_cost, total_cost, note, actor_id, units, items_per_unit, created_at)
        VALUES (@id, @supply_id, 'use', @qc, NULL, NULL, @note, @actor, NULL, NULL, @ts)
        ON CONFLICT (id) DO UPDATE SET
+         supply_id       = excluded.supply_id,
          quantity_change = excluded.quantity_change,
          note            = excluded.note,
          actor_id        = excluded.actor_id`
@@ -410,7 +483,7 @@ export function setShipSupplyUsage(
     })
   }
 
-  return { ok: true, delta, onHand, wentNegative: onHand < 0 }
+  return { ok: true, delta, onHand, wentNegative: onHand < 0, releasedFrom, strandedFrom }
 }
 
 /** Correct an on-hand count up or down (+/−). Never goes below zero. */
