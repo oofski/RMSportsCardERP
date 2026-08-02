@@ -61,11 +61,20 @@ export interface SyncedTable {
  */
 export const SYNCED_TABLES: SyncedTable[] = [
   // Tier 0 — roots nothing else points at, or that everything points at.
-  // NOTE: `supplies.quantity` travels, but is NOT arbitrated — it is recomputed
-  // from supply_transactions after every pull, the same way inventory_stock is
-  // recomputed from its lots. See rebuildDerivedSupplyStock() in sync.ts. Without
-  // that, a rename made offline carries a stale count that lands on top of a
-  // checklist tick and puts the stock back.
+  // KNOWN LIMIT — `supplies.quantity` is a COUNT arbitrated by last-write-wins.
+  //
+  // Two laptops ticking the same checklist step converge correctly (the usage
+  // rows carry derived ids and absolute quantities, so they merge into one). But
+  // an unrelated edit to the same supply made offline — a rename, a reorder
+  // point — carries that machine's stale `quantity` along with it and can land
+  // on top of a deduction, putting the stock back.
+  //
+  // inventory_stock solves this by not travelling at all and being rebuilt from
+  // its lots. The equivalent here is to apply each incoming movement's delta
+  // once on first sight, making the number a counter rather than a value. See
+  // the note on ApplyResult.touchedSupplies in sync.ts for why the obvious
+  // shortcut — recomputing from supply_transactions after a pull — is worse than
+  // the problem it fixes.
   { table: 'employees', key: ['id'], tier: 0 },
   { table: 'audit_log', key: ['id'], tier: 0 },
   { table: 'inventory_products', key: ['id'], tier: 0 },

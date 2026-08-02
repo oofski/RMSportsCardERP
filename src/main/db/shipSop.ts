@@ -76,6 +76,13 @@ function dayOwner(date: string): string | null {
   return row?.event_name ?? null
 }
 
+/** What is already on record for one step, whoever put it there. */
+function existingUsage(date: string, step: string): Array<{ role: string; quantity: number }> {
+  return getDb()
+    .prepare(`SELECT role, quantity FROM ship_supply_usage WHERE event_date = ? AND step = ?`)
+    .all(date, step) as Array<{ role: string; quantity: number }>
+}
+
 /** The usage row's identity: one per (show, step, consumable). */
 function usageId(date: string, step: string, role: string): string {
   return `${date}|${step}|${role}`
@@ -260,18 +267,39 @@ export function setShipSopStep(step: ShipSopStep, done: boolean, userId: string 
       `"${date}" is not a date the books can use. Set the show's day as YYYY-MM-DD before ticking steps off.`
     )
   }
-  // Two shows on one day would share every row id, so the second one's ticks
-  // would overwrite the first's and hand back stock the first show really used.
-  // Refusing is not the eventual answer, but it is the honest one.
+  const plan = getSupplyPlanCosted()
+  const planByRole = new Map(plan.lines.map((l) => [l.role, l]))
+
+  // Two shows on one day share every row id, so the second one's tick would
+  // overwrite the first's and hand back stock the first show really used.
+  //
+  // TWO guards, because neither is sufficient alone.
+  //
+  // The name catches the ordinary case and can say who owns the day. It cannot
+  // catch two shows that are both unnamed — which is most of them, since these
+  // slips rarely carry a name — because both would be called "Show <date>".
   const owner = dayOwner(date)
-  if (owner !== null && owner !== showName(event)) {
+  if (done && owner !== null && owner !== showName(event)) {
     throw new Error(
       `${date} already has a checklist for "${owner}". Two shows cannot both book supplies to one day yet — finish and clear that one first, or give this show its own date.`
     )
   }
-
-  const plan = getSupplyPlanCosted()
-  const planByRole = new Map(plan.lines.map((l) => [l.role, l]))
+  // So the second guard needs no identity at all: a tick may not REDUCE what is
+  // already on record. Recorded usage bigger than this show's whole plan did not
+  // come from this show, and quietly reducing it is precisely the handing-back
+  // of another night's stock. Only an explicit untick may take a number down,
+  // which keeps a genuinely smaller re-import workable — untick, then tick.
+  if (done) {
+    const over = existingUsage(date, step).filter(
+      (u) => u.quantity > (planByRole.get(u.role as ShipSupplyRole)?.quantity ?? 0)
+    )
+    if (over.length > 0) {
+      const worst = over[0]
+      throw new Error(
+        `${date} already records ${worst.quantity.toLocaleString()} ${worst.role.replace(/_/g, ' ')} for this step, more than this show needs (${planByRole.get(worst.role as ShipSupplyRole)?.quantity ?? 0}). Ticking would hand that stock back. Untick the step first if this really is the same night.`
+      )
+    }
+  }
   const db = getDb()
   const ts = nowIso()
 

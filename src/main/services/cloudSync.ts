@@ -13,7 +13,6 @@ import {
   isBlankJoiner,
   pendingCount,
   rebuildDerivedStock,
-  rebuildDerivedSupplyStock,
   rejectCount,
   setCursor,
   syncStateGet,
@@ -310,14 +309,6 @@ export async function syncOnce(): Promise<RoundResult> {
         // landed rather than trusted as they arrived — see rebuildDerivedStock.
         if (rebuildDerivedStock(applied.touchedProducts) > 0) {
           changedKinds.add('inventory_stock')
-        }
-      }
-      if (applied.touchedSupplies.length > 0) {
-        // Same rule for consumables: on-hand comes back from the movements, not
-        // from whichever laptop wrote the supply row last. Without this a
-        // rename made offline can undo a checklist tick's deduction.
-        if (rebuildDerivedSupplyStock(applied.touchedSupplies) > 0) {
-          changedKinds.add('supplies')
         }
       }
     }

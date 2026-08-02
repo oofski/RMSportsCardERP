@@ -406,15 +406,15 @@ export function getShipEvent(): ShipEvent {
  * shows' worth of consumption under one set of ids cannot be told apart
  * afterwards, and a silent merge is the version of that with no way back.
  */
-function rekeyShipSopDate(db: Database.Database, from: string, to: string): void {
-  if (!from || !to || from === to) return
+function rekeyShipSopDate(db: Database.Database, from: string, to: string): boolean {
+  if (!from || !to || from === to) return false
   const taken = db
     .prepare(
       `SELECT 1 FROM ship_supply_usage WHERE event_date = ?
         UNION SELECT 1 FROM ship_sop_steps WHERE event_date = ? LIMIT 1`
     )
     .get(to, to)
-  if (taken) return
+  if (taken) return false
   // The id embeds the date, so both have to move together.
   db.prepare(
     `UPDATE ship_sop_steps
@@ -435,6 +435,7 @@ function rekeyShipSopDate(db: Database.Database, from: string, to: string): void
         SET id = 'shipsop|' || ? || substr(id, length(?) + 9)
       WHERE id LIKE 'shipsop|' || ? || '|%'`
   ).run(to, from, from)
+  return true
 }
 
 /** Overwrite the single event row. */
@@ -456,8 +457,12 @@ export function setShipEvent(name: string, date: string): ShipEvent {
     ).run(nextName, nextDate, nowIso())
     // Only a real move. Clearing the date leaves the history where it happened —
     // the stock went out that day whether or not the show still names one.
-    const moved = beforeDate !== nextDate
-    rekeyShipSopDate(db, beforeDate, nextDate)
+    // Whether the rows ACTUALLY moved, not whether the date changed. The rekey
+    // declines when the target day is occupied — which is exactly the collision
+    // the owner name exists to catch — so trusting "the date changed" here let
+    // the relabel below adopt the other show's rows and switch the guard off on
+    // the one path it was written for.
+    const moved = rekeyShipSopDate(db, beforeDate, nextDate)
 
     // Keep the owner name current so the two-shows-on-one-day guard checks what
     // this show is called NOW, not what it was called at import.

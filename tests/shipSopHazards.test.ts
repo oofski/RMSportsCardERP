@@ -248,6 +248,75 @@ ok(
 )
 
 // ---------------------------------------------------------------------------
+console.log('\n=== 9b. the two-show guard, on the paths that got past it ===')
+// ---------------------------------------------------------------------------
+// The first version of this guard was defeated four ways. Each is a separate
+// route to the same corruption: a second show reduces the first show's recorded
+// usage, and the difference is handed back to a shelf that never received it.
+
+const bagsG = mk('Team bags guard', 5000, 0.02, 'team_bag')
+const gday = '2027-07-03'
+
+// (a) BOTH SHOWS UNNAMED — the common case, since these slips rarely carry a
+// name. Both would answer to "Show <date>", so a name check cannot see them.
+load(TWO, '', gday) // 60 packs -> 65 bags
+sop.setShipSopStep('team_bag', true, null)
+const afterBig = onHand(bagsG)
+const costBig = packing(gday)
+ok(afterBig === 5000 - 65, 'the big show took 65', String(afterBig))
+load(ONE, '', gday) // 30 packs -> 35 bags, same day, no name
+threw = ''
+try {
+  sop.setShipSopStep('team_bag', true, null)
+} catch (err: any) {
+  threw = String(err?.message ?? err)
+}
+ok(threw !== '', 'an unnamed second show is refused', threw || '(no error)')
+ok(onHand(bagsG) === afterBig, 'no stock handed back', String(onHand(bagsG)))
+ok(packing(gday) === costBig, "and the first show's cost is intact", String(packing(gday)))
+
+// (b) TWO SHOWS THAT SHARE A REAL NAME — same hole, with a name in it.
+load(ONE, 'Finest Baseball', gday)
+threw = ''
+try {
+  sop.setShipSopStep('team_bag', true, null)
+} catch (err: any) {
+  threw = String(err?.message ?? err)
+}
+ok(threw !== '', 'a same-named second show is refused too', threw || '(no error)')
+ok(onHand(bagsG) === afterBig, 'still no stock handed back', String(onHand(bagsG)))
+
+// (c) A SHOW MOVED ONTO AN OCCUPIED DAY. The re-key declines when the target is
+// taken — which used to leave "the date changed" true, so the relabel adopted
+// the sitting show's rows and switched the guard off on its own trigger case.
+load(ONE, 'Latecomer', '2027-07-10')
+ship.setShipEvent('Latecomer', gday) // move it onto the occupied day
+const ownerRow = getDb()
+  .prepare(`SELECT event_name FROM ship_supply_usage WHERE event_date = ? LIMIT 1`)
+  .get(gday) as { event_name: string | null }
+ok(
+  ownerRow.event_name !== 'Latecomer',
+  'the sitting show keeps its own name on its rows',
+  String(ownerRow.event_name)
+)
+threw = ''
+try {
+  sop.setShipSopStep('team_bag', true, null)
+} catch (err: any) {
+  threw = String(err?.message ?? err)
+}
+ok(threw !== '', 'and the arrival is refused', threw || '(no error)')
+ok(onHand(bagsG) === afterBig, 'nothing moved', String(onHand(bagsG)))
+ok(packing(gday) === costBig, 'and the cost never changed', String(packing(gday)))
+
+// (d) A GENUINELY SMALLER RE-IMPORT is not deadlocked by the guard: untick puts
+// it all back, then the smaller number ticks cleanly.
+sop.setShipSopStep('team_bag', false, null)
+ok(onHand(bagsG) === 5000, 'unticking still returns everything', String(onHand(bagsG)))
+sop.setShipSopStep('team_bag', true, null)
+ok(onHand(bagsG) === 5000 - 35, 'and the smaller show can then tick', String(onHand(bagsG)))
+
+// ---------------------------------------------------------------------------
 console.log('\n=== 10. on-hand IS the sum of the movements ===')
 // ---------------------------------------------------------------------------
 // The load-bearing assumption behind rebuildDerivedSupplyStock, which runs on
