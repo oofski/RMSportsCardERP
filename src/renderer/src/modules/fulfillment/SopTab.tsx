@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { ShipSopState, ShipSopStep, ShipSopStepView } from '@shared/shippingSupplies'
+import { SHIP_SUPPLY_ROLE_LABELS } from '@shared/shippingSupplies'
 import { api } from '../../lib/api'
 import { useSession } from '../../lib/session'
 import { LIVE, useLiveRefresh } from '../../lib/live'
@@ -81,8 +82,11 @@ export function SopTab({ canPack, canManage, onChanged }: ShipTabProps): JSX.Ele
         toast.error(`${n.supplyName} is now ${n.onHand} — the count was short. Recount and correct it.`)
       }
       if (skippedRoles.length > 0) {
+        // Name them. "1 of this step's supplies" tells somebody a thing is
+        // wrong and nothing about which thing, which is the same as not saying.
+        const names = skippedRoles.map((r) => SHIP_SUPPLY_ROLE_LABELS[r] ?? r).join(', ')
         toast.toast(
-          `${skippedRoles.length} of this step's supplies are not linked to a product, so nothing came out of stock for them.`
+          `${names} ${skippedRoles.length === 1 ? 'is' : 'are'} not linked to a product, so nothing came out of stock for ${skippedRoles.length === 1 ? 'it' : 'them'}. Link ${skippedRoles.length === 1 ? 'it' : 'them'} in Setup → What it takes.`
         )
       }
       await onChanged()
@@ -145,9 +149,12 @@ export function SopTab({ canPack, canManage, onChanged }: ShipTabProps): JSX.Ele
         <div className="sop-warn">
           <Icon name="Link2Off" size={15} />
           <span>
-            <b>{state.unmappedRoles.length} consumables</b> are not linked to a product yet, so
-            ticking their step records the count and moves no stock. Setup → What it takes is where
-            the link is made.
+            <b>
+              {state.unmappedRoles.length}{' '}
+              {state.unmappedRoles.length === 1 ? 'consumable is' : 'consumables are'}
+            </b>{' '}
+            not linked to a product yet, so ticking their step records the count and moves no stock.
+            Setup → What it takes is where the link is made.
           </span>
         </div>
       )}
@@ -167,8 +174,15 @@ export function SopTab({ canPack, canManage, onChanged }: ShipTabProps): JSX.Ele
         {state.steps.map((s, i) => {
           const expanded = open === s.step
           const hasLines = s.lines.length > 0
+          // What this step actually took. Empty when the step is done but every
+          // quantity was zero — a show with no slips loaded, which the banner
+          // above already explains. The list decides whether the separator is
+          // written at all, so a done step never trails a lone middot.
+          const took = s.lines
+            .filter((l) => l.used > 0)
+            .map((l) => `${l.used.toLocaleString()} ${l.label.toLowerCase()}`)
           return (
-            <li key={s.step} className={`sop-step ${s.done ? 'done' : ''}`}>
+            <li key={s.step} className={s.done ? 'sop-step done' : 'sop-step'}>
               <button
                 className="sop-tick"
                 disabled={!canTick || blocked || busy !== null}
@@ -201,7 +215,7 @@ export function SopTab({ canPack, canManage, onChanged }: ShipTabProps): JSX.Ele
                       aria-expanded={expanded}
                     >
                       <Icon name={expanded ? 'ChevronUp' : 'ChevronDown'} size={14} />
-                      {s.lines.length} supplies
+                      {s.lines.length} {s.lines.length === 1 ? 'supply' : 'supplies'}
                       {showCosts && s.cost > 0 && ` · ${formatMoney(s.cost)}`}
                     </button>
                   )}
@@ -215,11 +229,7 @@ export function SopTab({ canPack, canManage, onChanged }: ShipTabProps): JSX.Ele
                     <Icon name="Check" size={12} />
                     {s.doneByName ? `${s.doneByName} · ` : ''}
                     {s.doneAt ? new Date(s.doneAt).toLocaleString() : 'done'}
-                    {hasLines &&
-                      ` · ${s.lines
-                        .filter((l) => l.used > 0)
-                        .map((l) => `${l.used.toLocaleString()} ${l.label.toLowerCase()}`)
-                        .join(', ')}`}
+                    {took.length > 0 && ` · ${took.join(', ')}`}
                   </p>
                 )}
 
@@ -231,13 +241,32 @@ export function SopTab({ canPack, canManage, onChanged }: ShipTabProps): JSX.Ele
                           {(s.done ? l.used : l.quantity).toLocaleString()}
                         </span>
                         <div className="sop-line-mid">
-                          <span className="sop-line-name">{l.label}</span>
+                          <span className="sop-line-name">
+                            {l.label}
+                            {/* WHICH product loses the stock, not just which
+                                role. This panel exists so that everything a
+                                tick will do is visible before it is ticked, and
+                                the product is the part somebody would want to
+                                check. It is also what the toast names a second
+                                later, so the two have to agree. */}
+                            {l.supplyName && l.supplyName !== l.label && (
+                              <em className="sop-line-product">{l.supplyName}</em>
+                            )}
+                          </span>
                           <span className="sop-line-basis">{l.basis}</span>
                         </div>
                         <div className="sop-line-nums">
                           {l.supplyId ? (
                             <>
-                              <span className={`sop-onhand ${l.onHand < 0 ? 'neg' : l.shortBy > 0 ? 'short' : ''}`}>
+                              <span
+                                className={
+                                  l.onHand < 0
+                                    ? 'sop-onhand neg'
+                                    : l.shortBy > 0
+                                      ? 'sop-onhand short'
+                                      : 'sop-onhand'
+                                }
+                              >
                                 {l.onHand.toLocaleString()} on hand
                                 {l.shortBy > 0 && ` · ${l.shortBy.toLocaleString()} short`}
                               </span>

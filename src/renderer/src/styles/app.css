@@ -8131,9 +8131,22 @@ tr.hoverable-row:hover {
   min-width: 180px;
 }
 .sop-line-name {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  flex-wrap: wrap;
   font-size: 12.5px;
   font-weight: 600;
   color: var(--text-2);
+}
+/* The actual product the tick will take stock from. Quieter than the role it
+   plays, because the role is what the step is about and the product is the
+   thing you check. */
+.sop-line-product {
+  font-style: normal;
+  font-weight: 500;
+  font-size: 11.5px;
+  color: var(--text-3);
 }
 .sop-line-basis {
   font-size: 11.5px;
