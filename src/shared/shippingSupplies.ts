@@ -200,3 +200,93 @@ export function computeSupplyPlan(input: {
     lines
   }
 }
+
+// ---------------------------------------------------------------------------
+// Costed: the plan with real supply rows behind it
+// ---------------------------------------------------------------------------
+
+/**
+ * A plan line once it has been matched to an actual row in the supplies list.
+ *
+ * `supplyId` is null when nobody has said which product plays this role yet.
+ * That is a normal state on a fresh install, not an error — the quantity is
+ * still correct and still worth showing; it just cannot be costed or deducted.
+ */
+export interface ShipSupplyLineCosted extends ShipSupplyLine {
+  supplyId: string | null
+  supplyName: string | null
+  /** Items on hand right now. 0 when unmapped. */
+  onHand: number
+  /** Moving weighted-average cost per item. 0 when unmapped. */
+  unitCost: number
+  /** quantity × unitCost. 0 when unmapped — never a guess. */
+  lineCost: number
+  /** How many short the show would run. 0 when there is enough, or unmapped. */
+  shortBy: number
+}
+
+export interface ShipSupplyPlanCosted extends Omit<ShipSupplyPlan, 'lines'> {
+  lines: ShipSupplyLineCosted[]
+  /** Sum of every costed line. Unmapped roles contribute nothing. */
+  totalCost: number
+  /** Roles with no supply behind them — what still needs linking. */
+  unmappedRoles: ShipSupplyRole[]
+  /** Roles the show would run short on, at current on-hand. */
+  shortRoles: ShipSupplyRole[]
+}
+
+/** Round money the way the rest of the app does. */
+function money(n: number): number {
+  return Math.round((Number.isFinite(n) ? n : 0) * 100) / 100
+}
+
+/**
+ * Attach real supplies to a plan.
+ *
+ * Pure, so the costing can be checked without a database: the caller looks the
+ * rows up, this decides what they mean.
+ */
+export function costSupplyPlan(
+  plan: ShipSupplyPlan,
+  bySupplyRole: (role: ShipSupplyRole) => {
+    id: string
+    name: string
+    quantity: number
+    unitCost: number
+  } | null
+): ShipSupplyPlanCosted {
+  const unmappedRoles: ShipSupplyRole[] = []
+  const shortRoles: ShipSupplyRole[] = []
+  let totalCost = 0
+
+  const lines: ShipSupplyLineCosted[] = plan.lines.map((line) => {
+    const supply = bySupplyRole(line.role)
+    if (!supply) {
+      unmappedRoles.push(line.role)
+      return {
+        ...line,
+        supplyId: null,
+        supplyName: null,
+        onHand: 0,
+        unitCost: 0,
+        lineCost: 0,
+        shortBy: 0
+      }
+    }
+    const lineCost = money(line.quantity * supply.unitCost)
+    totalCost += lineCost
+    const shortBy = Math.max(0, line.quantity - supply.quantity)
+    if (shortBy > 0) shortRoles.push(line.role)
+    return {
+      ...line,
+      supplyId: supply.id,
+      supplyName: supply.name,
+      onHand: supply.quantity,
+      unitCost: supply.unitCost,
+      lineCost,
+      shortBy
+    }
+  })
+
+  return { ...plan, lines, totalCost: money(totalCost), unmappedRoles, shortRoles }
+}

@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC, type AppInfo } from '@shared/ipc'
 import type { Permission } from '@shared/permissions'
-import type { ShipSupplyPlan } from '@shared/shippingSupplies'
+import type { ShipSupplyPlan, ShipSupplyPlanCosted } from '@shared/shippingSupplies'
 import type {
   ParsedSheet,
   ResetApplyResult,
@@ -294,6 +294,9 @@ const api = {
       ipcRenderer.invoke(IPC.supplyUse, { id, ...input }),
     adjust: (id: string, quantityChange: number, note?: string | null): Promise<Result<Supply>> =>
       ipcRenderer.invoke(IPC.supplyAdjust, { id, quantityChange, note: note ?? null }),
+    /** Say which consumable this row IS when a show is costed. Null unlinks. */
+    setShipRole: (id: string, role: string | null): Promise<Result<Supply>> =>
+      ipcRenderer.invoke(IPC.supplySetShipRole, { id, role }),
     setImage: (id: string): Promise<Result<Supply>> =>
       ipcRenderer.invoke(IPC.supplySetImage, { id }),
     removeImage: (id: string): Promise<Result<Supply>> =>
@@ -400,6 +403,9 @@ const api = {
 
     /** What tonight's show will consume in supplies. Read only. */
     supplyPlan: (): Promise<ShipSupplyPlan | null> => ipcRenderer.invoke(IPC.shipSupplyPlan),
+    /** The same plan costed against the supplies list. Needs Inventory too. */
+    supplyPlanCosted: (): Promise<ShipSupplyPlanCosted | null> =>
+      ipcRenderer.invoke(IPC.shipSupplyPlanCosted),
 
     // ---- The uploaded slip -------------------------------------------------
     /** Metadata only — cheap enough for any screen to ask on mount. */

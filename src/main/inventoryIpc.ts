@@ -1,3 +1,4 @@
+import { SHIP_SUPPLY_ROLES } from '@shared/shippingSupplies'
 import {
   BrowserWindow,
   dialog,
@@ -90,6 +91,7 @@ import {
 import {
   SUPPLY_UNITS,
   adjustSupply,
+  setSupplyShipRole,
   clearSupplyImage,
   createSupply,
   createSupplyOrder,
@@ -702,6 +704,30 @@ export function registerInventoryIpc(): void {
       return fail(err)
     }
   })
+
+  /**
+   * Link a supply row to the job it does when a show is costed — or clear it.
+   *
+   * A write, so it needs inventory.manage: deciding which product IS the team
+   * bags moves money once the P&L reads it.
+   */
+  ipcMain.handle(
+    IPC.supplySetShipRole,
+    (_e, payload: { id: string; role: string | null }): Result<Supply> => {
+      try {
+        requireManage()
+        if (!payload?.id) return { ok: false, error: 'No supply specified.' }
+        const role = payload.role ?? null
+        if (role !== null && !SHIP_SUPPLY_ROLES.includes(role as never)) {
+          return { ok: false, error: 'That is not a supply role.' }
+        }
+        const supply = setSupplyShipRole(payload.id, role)
+        return supply ? { ok: true, data: supply } : { ok: false, error: 'Supply not found.' }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
 
   ipcMain.handle(
     IPC.supplyAdjust,

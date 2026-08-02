@@ -628,7 +628,21 @@ export interface StreamDayFinance {
   giveawayShipping: number
   /** Postage on a refunded order. Negative. */
   refundShipping: number
-  /** Subsidy less all postage. Can land either side of zero. */
+  /**
+   * NEGATIVE. What the packing materials cost — mailers, labels, sleeves,
+   * toploaders, team bags — priced at the moving average unit cost in Supplies.
+   *
+   * Postage and packing are different money and the P&L never had the second
+   * one. Four hundred bubble mailers is real spend that used to show up only as
+   * a supplies purchase weeks earlier, in a month that had nothing to do with
+   * the show that consumed them.
+   *
+   * Like `giveawayLoss`, this comes from OUTSIDE the ledger, so the
+   * reconciliation strips it back out before comparing the day to its rows.
+   * A role nobody has linked to a product contributes nothing — never a guess.
+   */
+  packingSupplies: number
+  /** Subsidy less all postage AND packing. Can land either side of zero. */
   netShipping: number
 
   // --- Other show costs ---------------------------------------------------
@@ -748,6 +762,8 @@ export function buildPnl(d: {
   whatnotFee: number; processingFee: number; totalFees: number
   shippingSubsidy: number; shippingCharges: number; giveawayShipping: number
   refundShipping: number; netShipping: number
+  /** Optional so a caller built before packing existed still type-checks. */
+  packingSupplies?: number
   showBoost: number; reversals: number; netProfit: number
 }): PnlSection[] {
   const line = (key: string, label: string, amount: number, detail?: string): PnlLine => ({
@@ -815,10 +831,11 @@ export function buildPnl(d: {
         line('shippingSubsidy', 'Subsidy received', d.shippingSubsidy),
         line('shippingCharges', 'Postage charged back', d.shippingCharges),
         line('giveawayShipping', 'Giveaway postage', d.giveawayShipping),
-        line('refundShipping', 'Refund postage', d.refundShipping)
+        line('refundShipping', 'Refund postage', d.refundShipping),
+        line('packingSupplies', 'Packing supplies', d.packingSupplies ?? 0)
       ],
       subtotal: c2(d.netShipping),
-      subtotalLabel: 'Net shipping'
+      subtotalLabel: 'Net shipping & packing'
     },
     {
       key: 'showCosts',
@@ -1031,6 +1048,7 @@ export const PNL_MONEY_FIELDS = [
   'shippingCharges',
   'giveawayShipping',
   'refundShipping',
+  'packingSupplies',
   'netShipping',
   'showBoost',
   'reversals',
@@ -1079,6 +1097,7 @@ export function emptyDayFinance(streamDate: string): StreamDayFinance {
     shippingCharges: 0,
     giveawayShipping: 0,
     refundShipping: 0,
+    packingSupplies: 0,
     netShipping: 0,
     showBoost: 0,
     reversals: 0,

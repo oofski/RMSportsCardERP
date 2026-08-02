@@ -10,6 +10,7 @@
  */
 import {
   computeSupplyPlan,
+  costSupplyPlan,
   MAILERS_PER_CARDED_ORDER,
   MAILERS_PER_GIVEAWAY_ORDER,
   SHIP_SUPPLY_ROLES,
@@ -210,6 +211,43 @@ ok(
   july.lines.every((l) => l.basis.trim().length > 0),
   'every line states the arithmetic that produced it'
 )
+
+// ---------------------------------------------------------------------------
+// 9. Costing against real supply rows
+// ---------------------------------------------------------------------------
+console.log('\n=== 9. costing ===')
+const plan = computeSupplyPlan({
+  breaks: mlbBreaks(1), // 30 packs
+  orders: [{ cardCount: 2, giveawayCount: 0 }]
+})
+const linked = costSupplyPlan(plan, (role) => {
+  if (role === 'team_bag') return { id: 'sup_bag', name: 'Team bags', quantity: 1000, unitCost: 0.02 }
+  if (role === 'bubble_mailer') return { id: 'sup_mail', name: 'Mailers', quantity: 1, unitCost: 0.35 }
+  return null
+})
+ok(linked.lines.length === plan.lines.length, 'every line survives costing')
+const bag = linked.lines.find((l) => l.role === 'team_bag')!
+ok(bag.quantity === 35 && bag.lineCost === 0.7, '35 team bags at 2c = $0.70', `${bag.quantity}/${bag.lineCost}`)
+ok(bag.shortBy === 0, 'and 1000 on hand is not short')
+
+const mail = linked.lines.find((l) => l.role === 'bubble_mailer')!
+ok(mail.quantity === 2 && mail.lineCost === 0.7, '2 mailers at 35c = $0.70', String(mail.lineCost))
+ok(mail.shortBy === 1, 'with 1 on hand the show is 1 short', String(mail.shortBy))
+ok(linked.shortRoles.includes('bubble_mailer'), 'and the role is named as short')
+
+const sleeves = linked.lines.find((l) => l.role === 'top_sleeve')!
+ok(sleeves.supplyId === null, 'an unlinked role has no supply')
+ok(sleeves.quantity === 29, 'but keeps its quantity — 95% of 30, rounded up', String(sleeves.quantity))
+ok(sleeves.lineCost === 0, 'and costs nothing rather than being guessed at', String(sleeves.lineCost))
+ok(linked.unmappedRoles.length === 4, 'four roles still need linking', String(linked.unmappedRoles.length))
+ok(linked.totalCost === 1.4, 'the total is only what is actually linked', String(linked.totalCost))
+
+// Nothing linked at all is the fresh-install state: quantities, no cost.
+const bare = costSupplyPlan(plan, () => null)
+ok(bare.totalCost === 0, 'nothing linked costs nothing')
+ok(bare.unmappedRoles.length === SHIP_SUPPLY_ROLES.length, 'and every role is reported unlinked')
+ok(bare.lines.every((l) => l.quantity === plan.lines.find((p) => p.role === l.role)!.quantity),
+  'while every quantity is untouched')
 
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

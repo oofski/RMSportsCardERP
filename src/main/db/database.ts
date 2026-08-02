@@ -1346,6 +1346,24 @@ function migrate(database: Database.Database): void {
   addColumnIfMissing(database, 'ship_customers', 'pages', 'TEXT')
   setMeta(database, 'schema_version', '32')
 
+  // v33: a supply can say WHICH consumable it is.
+  //
+  // Costing a show produces quantities per role — 390 team bags, 371 top
+  // sleeves — and until now nothing connected a role to a row in the supplies
+  // list. Matching on the name would be the obvious shortcut and the wrong one:
+  // somebody renames "Top sleeves (1000ct)" and the link silently dies.
+  //
+  // Nullable, because most supplies (tape, boxes, printer ink) are not part of
+  // a show's per-pack arithmetic and must stay unlinked. The unique index is
+  // partial for the same reason: any number of rows may have no role, but two
+  // rows cannot both claim to be the team bags.
+  addColumnIfMissing(database, 'supplies', 'ship_role', 'TEXT')
+  database.exec(
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_supplies_ship_role
+       ON supplies (ship_role) WHERE ship_role IS NOT NULL`
+  )
+  setMeta(database, 'schema_version', '33')
+
   // Seed the product catalog once, then apply the on-hand snapshot once.
   seedCatalogIfNeeded(database)
   seedSnapshotIfNeeded(database)

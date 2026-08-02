@@ -133,6 +133,10 @@ export const IPC = {
   // What tonight's show will consume in supplies. READ ONLY — nothing here
   // moves stock; see getSupplyPlan().
   shipSupplyPlan: 'shipping:supplies:plan',
+  // The same plan with the supplies list behind it: cost, on-hand, shortfalls.
+  shipSupplyPlanCosted: 'shipping:supplies:plan-costed',
+  // Say which supply row plays a role in a show's arithmetic.
+  supplySetShipRole: 'supplies:ship-role',
   shipDocument: 'shipping:document',
   shipDocumentBytes: 'shipping:document:bytes',
   shipDocumentClear: 'shipping:document:clear',

@@ -352,6 +352,12 @@ export interface Supply {
   reorderUrl: string | null
   /** Photo of the supply, as a ready-to-use data URL (null when none). */
   imageUrl: string | null
+  /**
+   * Which consumable this row IS, for costing a show — 'team_bag', 'toploader'
+   * and so on (see ShipSupplyRole). Null for anything a show's arithmetic does
+   * not touch, which is most of the list. At most one supply may hold a role.
+   */
+  shipRole: string | null
   /** quantity × unitCost (items × per-item cost). */
   stockValue: number
   /** reorderPoint > 0 && quantity <= reorderPoint. */

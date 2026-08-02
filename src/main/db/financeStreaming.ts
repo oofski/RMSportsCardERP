@@ -126,6 +126,8 @@ import {
 import type { StreamSession } from '@shared/streaming'
 import { durationMinutes, isSuspiciouslyLong, streamDateOf } from '@shared/streaming'
 import { getDb } from './database'
+import { getShipEvent } from './shipping'
+import { getSupplyPlanCosted } from './shippingDomain'
 import { newId, nowIso } from '../util'
 
 // ---------------------------------------------------------------------------
@@ -1937,6 +1939,37 @@ function buildView(db: Database): StreamingFinanceView {
     }
   }
 
+  // --- packing materials, from Shipping + Supplies rather than the ledger -----
+  //
+  // What the mailers, labels, sleeves, toploaders and team bags cost, priced at
+  // the moving average unit cost in Supplies. Postage and packing are different
+  // money; the ledger only ever knew the first.
+  //
+  // Keyed on the SHOW's assigned day, which is why assigning a day matters: an
+  // unassigned show has nowhere to book its packing, so it books nowhere rather
+  // than guessing at today.
+  //
+  // Known limit, stated rather than hidden: only the ACTIVE shipping dataset is
+  // costed, because that is the only show whose packing slips are still loaded.
+  // Historical days show no packing until consumption is recorded per show —
+  // which is the same piece of work as actually deducting the stock.
+  const packingByDay = new Map<string, number>()
+  try {
+    const showDate = String(getShipEvent().date ?? '').trim()
+    if (showDate) {
+      const plan = getSupplyPlanCosted()
+      if (plan.totalCost > 0) packingByDay.set(showDate, toCents(plan.totalCost))
+    }
+  } catch {
+    // Shipping having no dataset, or Supplies being empty, is not a finance
+    // error — the P&L simply has no packing to show for that day.
+  }
+  for (const [d, cents] of packingByDay) {
+    const day = dayFor(d)
+    // Negative, like every other cost that feeds a bottom line.
+    day.packingSupplies = toDollars(toCents(day.packingSupplies) - cents)
+  }
+
   // ATTRIBUTED money only — `session_id IS NOT NULL` rather than `stream_date IS
   // NOT NULL`. Deleting a session orphans its rows (ON DELETE SET NULL) and
   // leaves stream_date behind; counting those here AND in `unattributed` would
@@ -2030,11 +2063,13 @@ function buildView(db: Database): StreamingFinanceView {
     day.totalFees = fees.totalFees
     day.netRevenue = toDollars(toCents(day.totalRevenue) + toCents(day.totalFees))
 
+    // Postage AND packing. `packingSupplies` is already negative.
     day.netShipping = toDollars(
       toCents(day.shippingSubsidy) +
         toCents(day.shippingCharges) +
         toCents(day.giveawayShipping) +
-        toCents(day.refundShipping)
+        toCents(day.refundShipping) +
+        toCents(day.packingSupplies)
     )
 
     // Everything the LEDGER knows about, plus the giveaway loss that has always
@@ -2157,9 +2192,20 @@ function buildView(db: Database): StreamingFinanceView {
   // nobody checks is a figure that drifts.
   let ledgerFieldCents = 0
   for (const day of days) {
-    fieldCents += toCents(day.netProfit) - toCents(day.totalFees) - toCents(day.cogs)
+    // `packingSupplies` comes from Supplies, not the ledger, so it strips out
+    // exactly like the fees, the stock cost and the giveaway loss. Forgetting
+    // it here does not fail loudly — it flags EVERY day unreconciled, which is
+    // how an operator learns to ignore the one flag that matters.
+    fieldCents +=
+      toCents(day.netProfit) -
+      toCents(day.totalFees) -
+      toCents(day.cogs) -
+      toCents(day.packingSupplies)
     ledgerFieldCents +=
-      toCents(day.netAfterCosts) - toCents(day.totalFees) - toCents(day.giveawayLoss)
+      toCents(day.netAfterCosts) -
+      toCents(day.totalFees) -
+      toCents(day.giveawayLoss) -
+      toCents(day.packingSupplies)
   }
 
   /**

@@ -101,7 +101,14 @@ import {
   setTeamSlotTopSleeved as storeSetTeamSlotTopSleeved,
   updateShipment
 } from './shipping'
-import { computeSupplyPlan, type ShipSupplyPlan } from '@shared/shippingSupplies'
+import {
+  computeSupplyPlan,
+  costSupplyPlan,
+  type ShipSupplyPlan,
+  type ShipSupplyPlanCosted
+} from '@shared/shippingSupplies'
+import { listSupplies } from './supplies'
+import type { Supply } from '@shared/types'
 import { getEmployeeById, listEmployees } from './employees'
 import { getDb } from './database'
 import type { Employee } from '@shared/types'
@@ -902,6 +909,25 @@ export function getSupplyPlan(): ShipSupplyPlan {
   }))
 
   return computeSupplyPlan({ breaks, orders })
+}
+
+/**
+ * The same plan, with the supplies list behind it: what each line costs at
+ * today's average unit cost, and where the show would run short.
+ *
+ * Still read only. A role nobody has linked yet contributes a quantity and no
+ * cost — never a guessed one, because a made-up number in a P&L is worse than a
+ * missing one.
+ */
+export function getSupplyPlanCosted(): ShipSupplyPlanCosted {
+  const byRole = new Map<string, Supply>()
+  for (const s of listSupplies()) {
+    if (s.shipRole) byRole.set(s.shipRole, s)
+  }
+  return costSupplyPlan(getSupplyPlan(), (role) => {
+    const s = byRole.get(role)
+    return s ? { id: s.id, name: s.name, quantity: s.quantity, unitCost: s.unitCost } : null
+  })
 }
 
 export function markBreakPacked(breakId: string): ShipBreakDetail {

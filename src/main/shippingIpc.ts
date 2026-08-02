@@ -121,6 +121,7 @@ import {
   setOrderNotes,
   setOrderSpecialRequest,
   getSupplyPlan,
+  getSupplyPlanCosted,
   setOrderChecked,
   setOrderStage,
   setShipmentNotes,
@@ -131,7 +132,7 @@ import {
   bulkSetShipmentStatusByTracking
 } from './db/shippingDomain'
 import { getShipCalendarDay, listShipCalendar } from './db/shippingCalendar'
-import type { ShipSupplyPlan } from '@shared/shippingSupplies'
+import type { ShipSupplyPlan, ShipSupplyPlanCosted } from '@shared/shippingSupplies'
 
 // ---------------------------------------------------------------------------
 // Guards
@@ -564,6 +565,14 @@ export function registerShippingIpc(): void {
 
   ipcMain.handle(IPC.shipSupplyPlan, (): ShipSupplyPlan | null =>
     can('module.fulfillment') ? getSupplyPlan() : null
+  )
+
+  /**
+   * The costed plan needs the supplies list, so it is gated on BOTH modules —
+   * somebody who cannot see Inventory does not get unit costs by another door.
+   */
+  ipcMain.handle(IPC.shipSupplyPlanCosted, (): ShipSupplyPlanCosted | null =>
+    can('module.fulfillment') && can('module.inventory') ? getSupplyPlanCosted() : null
   )
 
   // ---- The uploaded slip -------------------------------------------------

@@ -37,6 +37,7 @@ interface SupplyRow {
   notes: string | null
   reorder_url: string | null
   image: string | null
+  ship_role: string | null
   created_at: string
   updated_at: string
 }
@@ -55,11 +56,49 @@ function toSupply(r: SupplyRow): Supply {
     notes: r.notes,
     reorderUrl: r.reorder_url,
     imageUrl: r.image ? imageDataUrl(r.image) : null,
+    shipRole: r.ship_role ?? null,
     stockValue: r.quantity * r.unit_cost,
     lowStock: r.reorder_point > 0 && r.quantity <= r.reorder_point,
     createdAt: r.created_at,
     updatedAt: r.updated_at
   }
+}
+
+/**
+ * Say which consumable a supply row IS — or clear it.
+ *
+ * At most one row per role, enforced by a partial unique index. Rather than
+ * letting the write fail with a constraint error, the previous holder is
+ * released first: somebody re-pointing "top sleeves" at a new product means
+ * exactly that, and making them go and unset the old one first would be
+ * ceremony with no purpose.
+ */
+export function setSupplyShipRole(supplyId: string, role: string | null): Supply | null {
+  const db = getDb()
+  const next = role && role.trim() ? role.trim() : null
+  const apply = db.transaction(() => {
+    if (next) {
+      db.prepare(`UPDATE supplies SET ship_role = NULL WHERE ship_role = ? AND id <> ?`).run(
+        next,
+        supplyId
+      )
+    }
+    db.prepare(`UPDATE supplies SET ship_role = ?, updated_at = ? WHERE id = ?`).run(
+      next,
+      nowIso(),
+      supplyId
+    )
+  })
+  apply()
+  return getSupply(supplyId)
+}
+
+/** The supply standing in for one role, or null when nothing is linked yet. */
+export function getSupplyByShipRole(role: string): Supply | null {
+  const row = getDb().prepare(`SELECT * FROM supplies WHERE ship_role = ?`).get(role) as
+    | SupplyRow
+    | undefined
+  return row ? toSupply(row) : null
 }
 
 export function listSupplies(): Supply[] {
