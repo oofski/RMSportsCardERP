@@ -11,6 +11,7 @@ import { registerStreamingIpc } from './streamingIpc'
 import { registerQuickBooksIpc } from './quickbooksIpc'
 import { registerFinanceIpc } from './financeIpc'
 import { registerSyncIpc } from './syncIpc'
+import { registerOwnerIpc } from './ownerIpc'
 import { getDb, closeDb } from './db/database'
 import { initUpdater } from './services/updater'
 import { initCloudSync, stopCloudSync } from './services/cloudSync'
@@ -95,6 +96,7 @@ app.whenReady().then(() => {
   registerQuickBooksIpc()
   registerFinanceIpc()
   registerSyncIpc()
+  registerOwnerIpc()
   initUpdater()
   // Starts the push/pull loop only if sync has been switched on; a standalone
   // install never opens a socket.

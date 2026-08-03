@@ -10,6 +10,7 @@ import { Donut, AreaChart } from '../../components/charts'
 import { CenterLoader } from '../../components/ui'
 import { TimeClock } from '../../components/TimeClock'
 import { ShowCard } from './ShowCard'
+import { OwnerBoard, SendReminder } from './OwnerBoard'
 import { formatHours } from '../../lib/format'
 
 function greetingWord(): string {
@@ -116,6 +117,11 @@ export function HomeModule(): JSX.Element {
       <div style={{ marginBottom: 16 }}>
         <ShowCard />
       </div>
+
+      {/* Every side of the business, for whoever can see all of it. Renders
+          nothing for somebody whose permissions cover none of its sections, so
+          the floor's home page is unchanged. */}
+      <OwnerBoard />
 
       {canEmployees && (
         <div className="stat-grid">
@@ -247,6 +253,10 @@ export function HomeModule(): JSX.Element {
             </div>
           </div>
 
+          {/* Anybody can write one, so this sits on the ORDINARY home page
+              rather than inside the owner's board — a box the floor cannot see
+              is a box nobody writes into. */}
+          <SendReminder />
         </div>
       </div>
 

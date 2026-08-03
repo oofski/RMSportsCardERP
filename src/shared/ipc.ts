@@ -140,6 +140,13 @@ export const IPC = {
   shipSopSetStep: 'shipping:sop:set-step',
   // Say which supply row plays a role in a show's arithmetic.
   supplySetShipRole: 'supplies:ship-role',
+  // The owner's home board — every module's headline in one read.
+  ownerBoard: 'owner:board',
+  // The owner's inbox. Anyone signed in may WRITE one; only the owner reads.
+  remindersList: 'reminders:list',
+  remindersCreate: 'reminders:create',
+  remindersSetStatus: 'reminders:set-status',
+  remindersDelete: 'reminders:delete',
   shipDocument: 'shipping:document',
   shipDocumentBytes: 'shipping:document:bytes',
   shipDocumentClear: 'shipping:document:clear',

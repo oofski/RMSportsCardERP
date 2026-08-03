@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC, type AppInfo } from '@shared/ipc'
 import type { Permission } from '@shared/permissions'
+import type { NewReminder, OwnerBoard, Reminder } from '@shared/ownerDashboard'
 import type {
   ShipSopResult,
   ShipSopState,
@@ -697,6 +698,23 @@ const api = {
       ipcRenderer.invoke(IPC.intakeAccept, id),
     reject: (id: string, note: string): Promise<Result<IntakeSubmission>> =>
       ipcRenderer.invoke(IPC.intakeReject, { id, note })
+  },
+  /**
+   * The owner's home board and inbox.
+   *
+   * `board` returns whichever sections the caller's own module permissions
+   * already cover, so this is a vantage point rather than a new door.
+   */
+  owner: {
+    board: (): Promise<OwnerBoard | null> => ipcRenderer.invoke(IPC.ownerBoard),
+    reminders: (): Promise<Reminder[]> => ipcRenderer.invoke(IPC.remindersList),
+    /** Anyone signed in may send one — see the note in ownerIpc.ts. */
+    sendReminder: (input: NewReminder): Promise<Result<Reminder>> =>
+      ipcRenderer.invoke(IPC.remindersCreate, input),
+    setReminderStatus: (id: string, status: 'open' | 'done'): Promise<Result<Reminder>> =>
+      ipcRenderer.invoke(IPC.remindersSetStatus, { id, status }),
+    deleteReminder: (id: string): Promise<Result<boolean>> =>
+      ipcRenderer.invoke(IPC.remindersDelete, id)
   },
   updates: {
     getStatus: (): Promise<UpdateStatus> => ipcRenderer.invoke(IPC.updatesGetStatus),

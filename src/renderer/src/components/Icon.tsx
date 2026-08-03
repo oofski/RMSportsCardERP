@@ -131,6 +131,8 @@ import {
   Calculator,
   // --- The shipping SOP checklist ---
   ListTodo,
+  Radio,
+  Inbox,
   CheckSquare,
   CalendarX,
   FileQuestion,
@@ -270,6 +272,8 @@ const MAP: Record<string, LucideIcon> = {
   Calculator,
   // --- The shipping SOP checklist ---
   ListTodo,
+  Radio,
+  Inbox,
   CheckSquare,
   CalendarX,
   FileQuestion

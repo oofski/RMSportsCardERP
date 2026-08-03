@@ -1445,6 +1445,33 @@ function migrate(database: Database.Database): void {
   )
   setMeta(database, 'schema_version', '36')
 
+  // v37: notes the floor sends to the owner.
+  //
+  // The one thing on the owner's board that is not a view of something else.
+  // Kept as small as it can be on purpose: a body, who sent it, and whether it
+  // has been dealt with. No threads and no replies — the ask was an inbox, and
+  // the first schema that carries a `parent_id` is a messaging product nobody
+  // asked for.
+  //
+  // `from_id` is unconstrained for the same reason every other actor column in
+  // this database is: an employee leaving must not delete what they told
+  // somebody, it should just stop naming them.
+  database.exec(
+    `CREATE TABLE IF NOT EXISTS reminders (
+       id         TEXT PRIMARY KEY,
+       body       TEXT NOT NULL,
+       from_id    TEXT,
+       status     TEXT NOT NULL DEFAULT 'open',
+       due_date   TEXT,
+       urgent     INTEGER NOT NULL DEFAULT 0,
+       created_at TEXT NOT NULL,
+       done_at    TEXT,
+       done_by    TEXT
+     );
+     CREATE INDEX IF NOT EXISTS idx_reminders_status ON reminders (status, created_at);`
+  )
+  setMeta(database, 'schema_version', '37')
+
   // Seed the product catalog once, then apply the on-hand snapshot once.
   seedCatalogIfNeeded(database)
   seedSnapshotIfNeeded(database)
