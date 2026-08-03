@@ -170,6 +170,10 @@
   background: var(--surface-3);
   color: var(--text-2);
 }
+.badge-shipping {
+  background: var(--surface-3);
+  color: var(--text-2);
+}
 .badge-active {
   background: var(--success-bg);
   color: var(--success);
@@ -954,6 +958,16 @@ table.data tbody tr:hover {
   color: var(--brand-700);
   background: var(--surface);
   box-shadow: var(--shadow-sm);
+}
+/* A hairline inside the pill group, for a strip that carries two kinds of tab —
+   Admin's own screens, and the shipping ones that moved off the packing bench.
+   Same pills, same spacing; only a rule saying where one group ends. */
+.tab-rule {
+  flex: none;
+  align-self: stretch;
+  width: 1px;
+  margin: 5px 6px;
+  background: var(--border);
 }
 
 /* ---------- Section header ---------- */

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { Employee, EmployeeInvite, EmployeeStatus } from '@shared/types'
-import { assignableRoles, ROLES, type Role } from '@shared/permissions'
+import { assignableRoles, roleLabel, ROLES, type Role } from '@shared/permissions'
 import { useSession } from '../../lib/session'
 import { api } from '../../lib/api'
 import { initials } from '../../lib/format'
@@ -85,9 +85,19 @@ export function EmployeeFormModal({
   if (employee) allowed.add(employee.role)
   const roleOptions = ROLES.filter((r) => allowed.has(r.id))
 
+  // The packing floor is staffed by people who have no company address, so for
+  // that role alone the box is optional — they sign in with their Company ID.
+  const emailOptional = form.role === 'shipping'
+
   const submit = async (e: React.FormEvent): Promise<void> => {
     e.preventDefault()
     setError('')
+    // Switching the role back with the box left empty has to say so. The Save
+    // button calls this directly, so the input's own `required` never fires.
+    if (!emailOptional && !form.email.trim()) {
+      setError(`An email address is required for the ${roleLabel(form.role)} role.`)
+      return
+    }
     setBusy(true)
     try {
       if (isEdit && employee) {
@@ -196,8 +206,16 @@ export function EmployeeFormModal({
           </Field>
         </div>
 
-        <Field label="Email">
-          <Input type="email" value={form.email} onChange={set('email')} required />
+        <Field
+          label={emailOptional ? 'Email (optional)' : 'Email'}
+          hint={emailOptional ? 'Leave it blank — they’ll sign in with their Company ID.' : undefined}
+        >
+          <Input
+            type="email"
+            value={form.email}
+            onChange={set('email')}
+            required={!emailOptional}
+          />
         </Field>
 
         <div className={isEdit ? 'field-row' : ''}>

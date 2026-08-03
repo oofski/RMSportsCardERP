@@ -1,5 +1,5 @@
 import type { AuthResult, Result, SessionUser } from '@shared/types'
-import { effectivePermissions } from '@shared/permissions'
+import { effectivePermissions, type Role } from '@shared/permissions'
 import {
   countEmployees,
   getEmployeeById,
@@ -155,13 +155,26 @@ export function changeOwnPassword(currentPassword: string, newPassword: string):
   return { ok: true }
 }
 
-/** Guards used by IPC handlers to enforce validation before writing. */
+/**
+ * Guards used by IPC handlers to enforce validation before writing.
+ *
+ * Shipping is the one role allowed to arrive without an address: the floor is
+ * staffed by people who have no company email, and they sign in with the
+ * Company ID they were given. Every other role still needs somewhere the invite
+ * can go. The form relaxes the same rule, but the form is not the boundary.
+ */
 export function validateNewEmployee(input: {
   companyId: string
   email: string
+  role: Role
 }): string | null {
-  if (!isValidEmail(input.email)) return 'A valid email address is required.'
+  const email = (input.email ?? '').trim()
+  if (!email) {
+    if (input.role !== 'shipping') return 'A valid email address is required.'
+  } else if (!isValidEmail(email)) {
+    return 'A valid email address is required.'
+  }
   if (companyIdExists(input.companyId)) return 'That Company ID is already in use.'
-  if (emailExists(input.email)) return 'That email address is already in use.'
+  if (emailExists(email)) return 'That email address is already in use.'
   return null
 }

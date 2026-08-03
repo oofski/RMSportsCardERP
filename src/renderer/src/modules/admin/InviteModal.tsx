@@ -10,6 +10,11 @@ import { fullName } from '../../lib/format'
  * Shown right after an employee is created or re-invited. Presents the
  * temporary credentials and a ready-to-send invite email explaining how to
  * download / access the app and set a password.
+ *
+ * Shipping staff often have no company address, and for them this is the whole
+ * handover: the credentials on screen get read out at the bench. There is no
+ * email to compose, so the modal drops that half of itself rather than offering
+ * a Send button that opens a mail client addressed to nobody.
  */
 export function InviteModal({
   invite,
@@ -20,14 +25,16 @@ export function InviteModal({
 }): JSX.Element {
   const toast = useToast()
   const { employee, temporaryPassword } = invite
+  const hasEmail = !!employee.email
   const [email, setEmail] = useState<ComposedEmail | null>(null)
   const [sending, setSending] = useState(false)
 
   useEffect(() => {
+    if (!hasEmail) return
     api.email.composeInvite(employee.id, temporaryPassword).then((res) => {
       if (res.ok && res.data) setEmail(res.data)
     })
-  }, [employee.id, temporaryPassword])
+  }, [employee.id, temporaryPassword, hasEmail])
 
   const copy = async (value: string, label: string): Promise<void> => {
     try {

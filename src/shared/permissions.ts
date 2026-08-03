@@ -1,13 +1,13 @@
 /**
  * Role-based access control (RBAC) for the RM Operations App.
  *
- * There are three roles to begin with — Owner, Operations, and Staff. Each role
- * grants a set of permissions. As new modules are built, add their permission
- * keys here and grant them to the appropriate roles; the UI reads exclusively
- * from this file, so access rules stay in one place.
+ * Owner, Operations, Staff and Shipping. Each role grants a set of permissions.
+ * As new modules are built, add their permission keys here and grant them to the
+ * appropriate roles; the UI reads exclusively from this file, so access rules
+ * stay in one place.
  */
 
-export type Role = 'owner' | 'operations' | 'staff'
+export type Role = 'owner' | 'operations' | 'staff' | 'shipping'
 
 export interface RoleDefinition {
   id: Role
@@ -35,13 +35,26 @@ export const ROLES: RoleDefinition[] = [
     label: 'Staff',
     description: 'Access to assigned modules and their own information.',
     rank: 1
+  },
+  // A sibling of Staff, not a rung below it — same rank, a different job. The
+  // people at the packing computers do the shipping SOP and work the bench, and
+  // that is the whole of it; ranking them lower would only mean Staff could
+  // assign the role, which they have no business doing either way.
+  {
+    id: 'shipping',
+    label: 'Shipping',
+    description: 'Works the packing floor: the shipping SOP and the picking/packing bench.',
+    rank: 1
   }
 ]
 
 export function getRole(role: Role): RoleDefinition {
   const found = ROLES.find((r) => r.id === role)
   if (!found) {
-    // Fall back to the least-privileged role for unknown values.
+    // Unknown values get the lowest rank there is, and a label that reads as a
+    // person rather than a job. (Rank is what this is consulted for; what an
+    // unknown role may *do* is decided by permissionsForRole, which is
+    // deliberately stricter — see there.)
     return ROLES.find((r) => r.id === 'staff') as RoleDefinition
   }
   return found
@@ -242,16 +255,36 @@ const STAFF_PERMISSIONS: Permission[] = [
   'module.sops'
 ]
 
+// The packing bench, and nothing else. Someone hired to ship gets the seven-step
+// SOP and the pick/pack screens; they do not get Inventory, and they pointedly
+// do not get shipping.manage, which is what gates the exports carrying customer
+// names and addresses. That boundary was closed on purpose and this role does
+// not reopen it.
+const SHIPPING_PERMISSIONS: Permission[] = [
+  'updates.check',
+  'module.fulfillment',
+  'shipping.find',
+  'shipping.pack',
+  'module.sops'
+]
+
 /** The permissions granted by each role. */
 export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   owner: ALL_PERMISSIONS,
   operations: OPERATIONS_PERMISSIONS,
-  staff: STAFF_PERMISSIONS
+  staff: STAFF_PERMISSIONS,
+  shipping: SHIPPING_PERMISSIONS
 }
 
-/** Resolve the effective permission set for a role. */
+/**
+ * Resolve the effective permission set for a role.
+ *
+ * The fallback is the narrowest set in the file, which is no longer Staff's —
+ * a role string this build does not recognise is stale or corrupt data, and the
+ * safe reading of it is the least access, not the least *seniority*.
+ */
 export function permissionsForRole(role: Role): Permission[] {
-  return ROLE_PERMISSIONS[role] ?? STAFF_PERMISSIONS
+  return ROLE_PERMISSIONS[role] ?? SHIPPING_PERMISSIONS
 }
 
 const KNOWN_PERMISSIONS = new Set<Permission>(PERMISSIONS.map((p) => p.key))

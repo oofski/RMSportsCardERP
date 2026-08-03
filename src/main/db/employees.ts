@@ -49,7 +49,11 @@ function toEmployee(row: EmployeeRow): Employee {
     lastName: row.last_name,
     companyId: row.company_id,
     title: row.title,
-    email: row.email,
+    // Scrubbed at the boundary, not at each screen. An account with no address
+    // still holds a synthetic one in the column (see placeholderEmailFor), and
+    // a rule that every list, CSV and invite has to remember to apply is a rule
+    // the next screen forgets. Nothing outside this file sees the raw value.
+    email: isPlaceholderEmail(row.email) ? '' : row.email,
     role: row.role as Role,
     status: row.status as EmployeeStatus,
     mustChangePassword: row.must_change_password === 1,
@@ -92,12 +96,35 @@ export function getEmployeeById(id: string): Employee | null {
   return row ? toEmployee(row) : null
 }
 
-/** Look up by company ID or email (used for login). Case-insensitive. */
+/**
+ * Look up by company ID or email (used for login). Case-insensitive.
+ *
+ * Two things this must never do, both of which the old single OR could.
+ *
+ * A blank identifier must match nobody. The OR spanned two columns, so an empty
+ * string was a live query for whichever row ever ended up with an empty one —
+ * and callers do reach here with a default of '' (changeOwnPassword does).
+ *
+ * And a synthetic address must not be a second way in. Accounts with no email
+ * hold `no-email:<company id>` or `station:<code>` in the column; both are
+ * derived from values that are public within the shop and trivially guessable.
+ * They identify nobody, so they authenticate nobody. Those accounts sign in
+ * with their Company ID, which is what they were given. The email branch alone
+ * is dropped rather than the whole lookup: a Company ID is whatever an
+ * administrator typed, and it is not this function's place to rule one out.
+ */
 function getRowByLogin(identifier: string): EmployeeRow | undefined {
   const value = identifier.trim()
-  return getDb()
-    .prepare('SELECT * FROM employees WHERE company_id = ? COLLATE NOCASE OR email = ? COLLATE NOCASE')
-    .get(value, value) as EmployeeRow | undefined
+  if (!value) return undefined
+  const db = getDb()
+  const byCompanyId = db
+    .prepare('SELECT * FROM employees WHERE company_id = ? COLLATE NOCASE')
+    .get(value) as EmployeeRow | undefined
+  if (byCompanyId) return byCompanyId
+  if (isPlaceholderEmail(value)) return undefined
+  return db.prepare('SELECT * FROM employees WHERE email = ? COLLATE NOCASE').get(value) as
+    | EmployeeRow
+    | undefined
 }
 
 export function getEmployeeRowForAuth(identifier: string): EmployeeRow | undefined {
@@ -124,6 +151,7 @@ export function insertEmployee(
   const id = newId()
   const ts = nowIso()
   const passwordHash = temporaryPassword ? bcrypt.hashSync(temporaryPassword, BCRYPT_ROUNDS) : null
+  const email = input.email.trim()
 
   db.prepare(
     `INSERT INTO employees
@@ -138,13 +166,19 @@ export function insertEmployee(
     last_name: input.lastName.trim(),
     company_id: input.companyId.trim(),
     title: input.title.trim(),
-    email: input.email.trim(),
+    email: email || placeholderEmailFor(input.companyId),
     role: input.role,
-    status: input.status ?? 'invited',
+    // Nobody is waiting on an invite that was never sent. An employee with no
+    // address is handed their temporary password across the bench, so they are
+    // usable the moment they exist; leaving them 'invited' would park a Resend
+    // button in the directory that can never do anything.
+    status: input.status ?? (email ? 'invited' : 'active'),
     password_hash: passwordHash,
     // A station never has a password to change: nobody owns it, so there is
     // nobody to prompt. Forcing the change would strand the bench behind a
-    // screen the first person to sit down cannot get past.
+    // screen the first person to sit down cannot get past. A person with no
+    // email is the opposite case — somebody does own it, and the prompt never
+    // needed an address — so they still choose their own on first sign-in.
     must_change_password: input.accountKind === 'station' ? 0 : temporaryPassword ? 1 : 0,
     account_kind: input.accountKind === 'station' ? 'station' : 'person',
     created_at: ts,
@@ -160,17 +194,29 @@ export function insertEmployee(
 
 export function updateEmployee(input: UpdateEmployeeInput): Employee | null {
   const db = getDb()
-  const existing = getEmployeeById(input.id)
+  // The raw row, not getEmployeeById: that one hands back a blank email for a
+  // synthetic address, and writing the blank back would breach NOT NULL's
+  // intent and collide the moment a second employee had none either.
+  const existing = db.prepare('SELECT * FROM employees WHERE id = ?').get(input.id) as
+    | EmployeeRow
+    | undefined
   if (!existing) return null
 
+  const companyId = input.companyId?.trim() ?? existing.company_id
+  const suppliedEmail = input.email?.trim()
+
   const next = {
-    first_name: input.firstName?.trim() ?? existing.firstName,
-    last_name: input.lastName?.trim() ?? existing.lastName,
-    company_id: input.companyId?.trim() ?? existing.companyId,
+    first_name: input.firstName?.trim() ?? existing.first_name,
+    last_name: input.lastName?.trim() ?? existing.last_name,
+    company_id: companyId,
     title: input.title?.trim() ?? existing.title,
-    email: input.email?.trim() ?? existing.email,
-    role: input.role ?? existing.role,
-    status: input.status ?? existing.status,
+    // An emptied box is not an erasure — the column is NOT NULL — it is the
+    // same synthetic value a no-email employee is created with. It is rebuilt
+    // from the (possibly new) Company ID rather than carried over, because a
+    // stale one would collide with whoever is given that ID next.
+    email: emailToStore(suppliedEmail, existing.email, companyId),
+    role: input.role ?? (existing.role as Role),
+    status: input.status ?? (existing.status as EmployeeStatus),
     updated_at: nowIso(),
     id: input.id
   }
@@ -222,7 +268,15 @@ export function clearEmployeeAvatar(id: string): Employee | null {
 /** Set a fresh temporary password (invite reset). Returns nothing sensitive. */
 export function setTemporaryPassword(id: string, temporaryPassword: string): boolean {
   const db = getDb()
+  const row = db.prepare('SELECT email FROM employees WHERE id = ?').get(id) as
+    | { email: string }
+    | undefined
+  if (!row) return false
   const hash = bcrypt.hashSync(temporaryPassword, BCRYPT_ROUNDS)
+  // Where the reset leaves them. An account with no address is not waiting on
+  // an invite — the same reasoning as insertEmployee — so it goes straight back
+  // to active with the new password read out to them.
+  const reset: EmployeeStatus = isPlaceholderEmail(row.email) ? 'active' : 'invited'
   const info = db
     .prepare(
       // A DISABLED employee keeps that status. Resetting a password is about
@@ -231,11 +285,11 @@ export function setTemporaryPassword(id: string, temporaryPassword: string): boo
       // back with their original role and permissions intact.
       `UPDATE employees
          SET password_hash = ?, must_change_password = 1,
-             status = CASE WHEN status = 'disabled' THEN 'disabled' ELSE 'invited' END,
+             status = CASE WHEN status = 'disabled' THEN 'disabled' ELSE ? END,
              updated_at = ?
        WHERE id = ?`
     )
-    .run(hash, nowIso(), id)
+    .run(hash, reset, nowIso(), id)
   return info.changes > 0
 }
 
@@ -270,20 +324,46 @@ export function companyIdExists(companyId: string, exceptId?: string): boolean {
   return !!row && row.id !== exceptId
 }
 
-export function emailExists(email: string, exceptId?: string): boolean {
-  const db = getDb()
-  const row = db
+function emailRowId(email: string): string | undefined {
+  const row = getDb()
     .prepare('SELECT id FROM employees WHERE email = ? COLLATE NOCASE')
     .get(email.trim()) as { id: string } | undefined
-  return !!row && row.id !== exceptId
+  return row?.id
+}
+
+/**
+ * Is this address already somebody else's?
+ *
+ * Asked of what a human typed, so it answers no for the two things a human
+ * cannot have typed meaningfully: nothing at all, and a synthetic address. A
+ * placeholder is not an address anybody can claim, and calling one "in use"
+ * would block the very accounts that carry it.
+ */
+export function emailExists(email: string, exceptId?: string): boolean {
+  const value = email.trim()
+  if (!value || isPlaceholderEmail(value)) return false
+  const id = emailRowId(value)
+  return !!id && id !== exceptId
+}
+
+/**
+ * Is this synthetic address already on a row? Asked by the station path, where
+ * the address IS the identifier and so the question is a real one — emailExists
+ * deliberately declines to answer it.
+ */
+export function syntheticEmailTaken(email: string): boolean {
+  return emailRowId(email) !== undefined
 }
 
 export type { EmployeeRow }
 export { toEmployee, type Database }
 
 // ---------------------------------------------------------------------------
-// Stations — a bench computer that signs in, rather than a person
+// Accounts with no email address
 // ---------------------------------------------------------------------------
+
+const STATION_PREFIX = 'station:'
+const NO_EMAIL_PREFIX = 'no-email:'
 
 /**
  * The synthetic address a station carries.
@@ -295,7 +375,42 @@ export { toEmployee, type Database }
  * is what the UI reads to decide what it is looking at.
  */
 export function stationEmailFor(code: string): string {
-  return `station:${code.trim().toLowerCase()}`
+  return `${STATION_PREFIX}${code.trim().toLowerCase()}`
+}
+
+/**
+ * The same trade, for a person who simply has no company address.
+ *
+ * Most of the shipping floor does not have one, and the alternative to this is
+ * the table rebuild the comment above declined. `company_id` is already UNIQUE
+ * COLLATE NOCASE, so deriving from it is unique by construction and needs no
+ * lookup to prove it.
+ */
+export function placeholderEmailFor(companyId: string): string {
+  return `${NO_EMAIL_PREFIX}${companyId.trim().toLowerCase()}`
+}
+
+/**
+ * Is this one of the two synthetic forms rather than something a person could
+ * actually be written to?
+ *
+ * The one gate everything passes through: `toEmployee` strips these before any
+ * record leaves this file, `emailExists` refuses to call one taken, and the
+ * login lookup refuses to accept one as an identifier.
+ */
+export function isPlaceholderEmail(email: string): boolean {
+  const value = email.trim().toLowerCase()
+  return value.startsWith(STATION_PREFIX) || value.startsWith(NO_EMAIL_PREFIX)
+}
+
+/** What the email column should hold after an edit. See updateEmployee. */
+function emailToStore(supplied: string | undefined, stored: string, companyId: string): string {
+  if (supplied !== undefined) return supplied || placeholderEmailFor(companyId)
+  // Untouched by this edit: keep a real address as it is, but re-derive a
+  // no-email placeholder in case the Company ID it was built from just moved.
+  // A station's is left alone — its code cannot change, and its prefix is what
+  // marks the row as a computer.
+  return stored.toLowerCase().startsWith(NO_EMAIL_PREFIX) ? placeholderEmailFor(companyId) : stored
 }
 
 export function listStations(): Employee[] {

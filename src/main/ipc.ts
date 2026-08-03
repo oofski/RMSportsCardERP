@@ -22,7 +22,7 @@ import type {
   UpdateEmployeeInput,
   UpdateStatus
 } from '@shared/types'
-import { assignableRoles, sanitizePermissions, type Permission } from '@shared/permissions'
+import { assignableRoles, roleLabel, sanitizePermissions, type Permission } from '@shared/permissions'
 import {
   changeOwnPassword,
   createOwner,
@@ -43,6 +43,7 @@ import {
   setStationPassword,
   setStationStatus,
   stationEmailFor,
+  syntheticEmailTaken,
   listEmployees,
   setEmployeeAvatar,
   setEmployeePermissions,
@@ -195,12 +196,11 @@ export function registerIpcHandlers(): void {
         if (!input.companyId?.trim()) {
           return { ok: false, error: 'A Company ID is required.' }
         }
-        if (!isValidEmail(input.email)) {
-          return { ok: false, error: 'A valid email address is required.' }
-        }
         if (!assignableRoles(actor.role).includes(input.role)) {
           return { ok: false, error: `You cannot assign the ${input.role} role.` }
         }
+        // Whether an address is required at all depends on the role, so the
+        // whole email rule lives in one place rather than half here.
         const dupeError = validateNewEmployee(input)
         if (dupeError) return { ok: false, error: dupeError }
 
@@ -245,7 +245,7 @@ export function registerIpcHandlers(): void {
           return { ok: false, error: 'Give the station a password of at least 4 characters.' }
         }
         if (companyIdExists(code)) return { ok: false, error: 'That sign-in code is already in use.' }
-        if (emailExists(stationEmailFor(code))) {
+        if (syntheticEmailTaken(stationEmailFor(code))) {
           return { ok: false, error: 'That sign-in code is already in use.' }
         }
 
@@ -319,15 +319,30 @@ export function registerIpcHandlers(): void {
         if (input.role && !assignableRoles(actor.role).includes(input.role)) {
           return { ok: false, error: `You cannot assign the ${input.role} role.` }
         }
+        if (input.companyId !== undefined && !str(input.companyId).trim()) {
+          return { ok: false, error: 'A Company ID is required.' }
+        }
         if (input.companyId && companyIdExists(input.companyId, input.id)) {
           return { ok: false, error: 'That Company ID is already in use.' }
         }
-        if (input.email) {
-          if (!isValidEmail(input.email)) {
+        // Judge the address the account will END UP with against the role it
+        // will end up with. Clearing the box and switching Shipping to Staff in
+        // the same save is the case that has to be caught, and checking either
+        // field on its own misses it. `existing.email` is already blank when
+        // there is only a placeholder behind it.
+        const nextRole = input.role ?? existing.role
+        const nextEmail = input.email !== undefined ? str(input.email).trim() : existing.email
+        if (nextEmail) {
+          if (!isValidEmail(nextEmail)) {
             return { ok: false, error: 'A valid email address is required.' }
           }
-          if (emailExists(input.email, input.id)) {
+          if (emailExists(nextEmail, input.id)) {
             return { ok: false, error: 'That email address is already in use.' }
+          }
+        } else if (nextRole !== 'shipping') {
+          return {
+            ok: false,
+            error: `An email address is required for the ${roleLabel(nextRole)} role.`
           }
         }
         // Guard against removing the last active Owner.
@@ -583,6 +598,12 @@ export function registerIpcHandlers(): void {
         if (!employee) return { ok: false, error: 'Employee not found.' }
         if (!assignableRoles(actor.role).includes(employee.role)) {
           return { ok: false, error: 'You do not have permission to manage that user.' }
+        }
+        // No address, no invite to compose. The screen already knows this and
+        // shows the credentials to read out instead; this is here so a caller
+        // that does not cannot end up with a mailto: pointing nowhere.
+        if (!employee.email) {
+          return { ok: false, error: 'This employee has no email address.' }
         }
         const sender = currentUser()
         const senderName = sender ? `${sender.firstName} ${sender.lastName}` : 'your administrator'
