@@ -407,7 +407,11 @@ bad({ casePrice: '' }, 'a blank price is refused', /as a number/)
 bad({ casePrice: 'abc' }, 'a non-numeric price is refused', /as a number/)
 bad({ casePrice: Number.NaN }, 'a NaN price is refused rather than stored', /as a number/)
 bad({ casePrice: 2400, cases: 0 }, 'zero cases is refused', /at least one case/)
-bad({ casePrice: 2400, cases: 2.5 }, 'a part-case is refused', /whole/)
+// A PART-CASE IS NOT REFUSED, and used to be. A night that went through a case
+// and a quarter cost a case and a quarter, and this is the only field that was
+// ever going to say so. It is safe here and nowhere else because a
+// reconciliation moves no stock — see section 12, which proves the shelf, the
+// average and the cost layers all sit still while 1.25 is recorded.
 bad(
   { casePrice: 2400, cases: 1, boxes: 3 },
   'loose boxes beside a case price are refused rather than silently dropped',
@@ -571,6 +575,73 @@ ok(
 ok(eq(getProduct(CASE_P).unitCost, beforeDelete.avg), 'and the average cost is untouched')
 assertStockLotsConsistent(db)
 ok(true, 'the database is consistent at the end of all of it')
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 12. part of a case, and the shelf still never moves ===')
+// ---------------------------------------------------------------------------
+// A night can go through a case and a quarter. Everywhere else a case count is
+// whole because it moves stock and a shelf cannot hold a quarter of one; a
+// reconciliation moves NO stock, so the rule that protects the shelf has
+// nothing to protect and refusing 1.25 would only force a wrong number into the
+// one field meant to say what really happened.
+{
+  // Its own session: the sections above delete PAST on their way out.
+  const FRAC = mkSession('SR Quarter Case', at(21, 20), at(21, 23))
+  const before = {
+    qty: stockQty(CASE_P, 'RM'),
+    avg: getProduct(CASE_P).unitCost,
+    lots: lotState(CASE_P)
+  }
+  const r = addItem(
+    { sessionId: FRAC, kind: 'break', productId: CASE_P, cases: 1.25, casePrice: 6525, location: 'RM' },
+    null
+  )
+  ok(r.ok, 'a quarter-case reconciliation is accepted', r.ok ? '' : r.error)
+
+  const line = db
+    .prepare('SELECT quantity, cost_total, stated_case_price FROM stream_items WHERE session_id = ? ORDER BY rowid DESC LIMIT 1')
+    .get(FRAC) as { quantity: number; cost_total: number; stated_case_price: number }
+  ok(Math.abs(line.quantity - 1.25) < 1e-9, 'the line records 1.25, not a rounded 1 or 2', String(line.quantity))
+  ok(eq(line.cost_total, 1.25 * 6525), 'and costs it at 1.25 x the stated case price', String(line.cost_total))
+  ok(eq(line.stated_case_price, 6525), 'the stated price is the price per WHOLE case')
+
+  ok(stockQty(CASE_P, 'RM') === before.qty, 'the shelf did not move')
+  ok(eq(getProduct(CASE_P).unitCost, before.avg), 'the average cost did not move')
+  const after = lotState(CASE_P)
+  ok(
+    after.rows === before.lots.rows && after.qty === before.lots.qty && eq(after.value, before.lots.value),
+    'no cost layer was opened or consumed'
+  )
+  const txn = db
+    .prepare("SELECT quantity_change FROM inventory_transactions WHERE product_id = ? ORDER BY rowid DESC LIMIT 1")
+    .get(CASE_P) as { quantity_change: number }
+  ok(txn.quantity_change === 0, 'and the ledger row carries a quantity change of zero')
+  assertStockLotsConsistent(db)
+}
+
+// A live show is a different act and must not have been widened by this. The
+// renderer refuses a fraction there (`count` only allows one when reconciling),
+// which is where the guard has always been for a live entry — breakToStock has
+// never rejected a fractional CASE count on a case-stocked product, before this
+// change or after it. Asserted as the behaviour that actually exists rather
+// than the one that would be tidier, so this reads as a record and not a claim.
+{
+  const shelfBefore = stockQty(CASE_P, 'RM')
+  const r = addItem(
+    { sessionId: TODAY, kind: 'break', productId: CASE_P, cases: 1.25, location: 'RM' },
+    null
+  )
+  ok(
+    r.ok,
+    'a live fraction still reaches the same conversion it always did — the UI is the gate there',
+    r.ok ? '' : (r.error ?? '')
+  )
+  ok(
+    stockQty(CASE_P, 'RM') !== shelfBefore,
+    'and unlike a reconciliation, a live entry DOES move the shelf'
+  )
+}
+
 
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail > 0) process.exit(1)

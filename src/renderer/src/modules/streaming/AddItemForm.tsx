@@ -31,11 +31,22 @@ import { resultError, streaming } from './api'
  * different amount of stock than the field on screen says, which is the one
  * class of bug this whole screen is built to prevent.
  */
-function count(raw: string): number | null {
+/**
+ * A quantity typed into one of the count fields.
+ *
+ * `allowFraction` is for RECONCILING a past show, where 1.25 cases is a real
+ * thing somebody broke. Everywhere else a count is whole, because everywhere
+ * else it moves stock and a shelf cannot hold a quarter of a case unless the
+ * product is flagged for it. A reconciliation moves no stock at all — it
+ * records what a night cost — so the rule that exists to protect the shelf has
+ * nothing to protect here.
+ */
+function count(raw: string, allowFraction = false): number | null {
   const t = raw.trim()
   if (t === '') return 0
   const n = Number(t)
-  if (!Number.isFinite(n) || n < 0 || !Number.isInteger(n)) return null
+  if (!Number.isFinite(n) || n < 0) return null
+  if (!allowFraction && !Number.isInteger(n)) return null
   return n
 }
 
@@ -111,7 +122,7 @@ export function AddItemForm({
    *  A reconciliation is entered in cases alone, whichever kind it is — the
    *  price it carries is per case, and there is no stated price for a box. */
   const entered = useMemo(() => {
-    if (reconcile) return { left: count(cases), right: 0 }
+    if (reconcile) return { left: count(cases, true), right: 0 }
     const left = isBreak ? count(cases) : count(boxes)
     const right = isBreak ? count(boxes) : count(packs)
     return { left, right }
@@ -121,7 +132,7 @@ export function AddItemForm({
   const entryError =
     entered.left === null || entered.right === null
       ? reconcile
-        ? 'Cases are whole — enter 3, not 3.5.'
+        ? 'Enter how many cases were broken — 2, or 1.25 for part of one.'
         : isBreak
           ? 'Cases and boxes are whole numbers — enter 3, not 3.5.'
           : 'Boxes and packs are whole numbers — enter 3, not 3.5.'

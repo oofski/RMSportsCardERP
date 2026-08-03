@@ -879,9 +879,21 @@ export function addItem(input: NewStreamItem, actorId: string | null): Result<St
           error: 'A reconciliation is priced per case, so it is entered in whole cases. Record loose boxes as their own line, at what those boxes cost.'
         }
       }
+      // FRACTIONAL CASES ARE ALLOWED HERE, and only here.
+      //
+      // Everywhere else a case count must be whole, because everywhere else it
+      // moves stock, and a shelf cannot carry a quarter of a case unless the
+      // product is flagged for fractional holding. None of that applies to a
+      // reconciliation: it writes a quantity change of ZERO and opens no cost
+      // layer, so there is no shelf for a fraction to corrupt. What it records
+      // is what a night cost, and a night that went through a case and a quarter
+      // cost a case and a quarter — refusing 1.25 would force a number that is
+      // wrong into the only field that was going to say what really happened.
+      // Zero and negatives are left to breakToStock, which already has the
+      // sentence for them; this only has to stop a value that is not a number.
       const cases = inCases ?? 0
-      if (!Number.isInteger(cases)) {
-        return { ok: false, error: 'Cases are whole — enter 3, not 3.5.' }
+      if (!Number.isFinite(cases)) {
+        return { ok: false, error: 'Enter how many cases were broken — 2, or 1.25 for part of one.' }
       }
       const conv = breakToStock(units, cases, 0)
       if (!conv.ok) return { ok: false, error: conv.error }
