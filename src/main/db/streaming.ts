@@ -13,7 +13,13 @@ import type {
   StreamTotals,
   UpdateStreamSession
 } from '@shared/streaming'
-import { durationMinutes, sessionsOverlap, streamDateOf } from '@shared/streaming'
+import {
+  durationMinutes,
+  isPastDatedSession,
+  parseMoneyInput,
+  sessionsOverlap,
+  streamDateOf
+} from '@shared/streaming'
 import { isLocation } from '@shared/inventory'
 // The unit contract. Never reimplemented here: what one unit of stock MEANS
 // varies per product, and a second copy of that arithmetic is an
@@ -102,6 +108,7 @@ interface ItemRow {
   location: string
   unit_cost: number
   cost_total: number
+  stated_case_price: number | null
   pack_cost: number | null
   loss_value: number
   note: string | null
@@ -164,6 +171,7 @@ function toItem(row: ItemRow, thumbs: Map<string, string | null>): StreamItem {
     location: row.location,
     unitCost: row.unit_cost,
     costTotal: row.cost_total,
+    statedCasePrice: row.stated_case_price,
     packCost: row.pack_cost,
     lossValue: row.loss_value ?? 0,
     note: row.note,
@@ -328,7 +336,8 @@ export function getSessionDetail(id: string): StreamSessionDetail | null {
     .prepare(
       `SELECT id, session_id, kind, product_id, product_name, sku, category, break_number,
               recipient, quantity, entered_cases, entered_boxes, entered_packs, location,
-              unit_cost, cost_total, pack_cost, loss_value, note, created_at, created_by
+              unit_cost, cost_total, stated_case_price, pack_cost, loss_value, note,
+              created_at, created_by
        FROM stream_items WHERE session_id = ? ORDER BY created_at ASC, rowid ASC`
     )
     .all(id) as ItemRow[]
@@ -676,11 +685,22 @@ function ledgerNote(
   title: string,
   kind: StreamItemKind,
   breakNumber: number | null,
-  recipient: string | null
+  recipient: string | null,
+  reconciled = false
 ): string {
   const show = title.trim() || 'Stream'
-  if (kind === 'break') return breakNumber ? `${show} — Break #${breakNumber}` : `${show} — break`
-  return recipient ? `${show} — giveaway to ${recipient}` : `${show} — giveaway`
+  const what =
+    kind === 'break'
+      ? breakNumber
+        ? `${show} — Break #${breakNumber}`
+        : `${show} — break`
+      : recipient
+        ? `${show} — giveaway to ${recipient}`
+        : `${show} — giveaway`
+  // A reconciliation row carries a cost and a quantity change of zero, and
+  // somebody reading inventory history has no other way to tell why. Saying so
+  // on the row is cheaper than their working it out from the arithmetic.
+  return reconciled ? `${what} (reconciled — stock had already gone)` : what
 }
 
 /** A supplied entered-unit field, or null when the caller omitted it. Anything
@@ -693,8 +713,12 @@ function enteredUnit(value: number | null | undefined): number | null {
 }
 
 /**
- * Record something opened or given away on a show, taking its stock out at the
- * real FIFO cost.
+ * Record something opened or given away on a show.
+ *
+ * TWO ACTS SHARE THIS FUNCTION, and which one it is comes from the SESSION,
+ * never from the caller.
+ *
+ * ## A show that is running, or finished today — a stock movement
  *
  * HOW MUCH is entered the way the work is described — a break in CASES + BOXES,
  * a giveaway in BOXES + PACKS — and converted to the product's own stock unit by
@@ -702,7 +726,24 @@ function enteredUnit(value: number | null | undefined): number | null {
  * conversion needs the product and refuses rather than assuming: a missing
  * boxes-per-case, a part-case on a product that is not stocked fractionally, a
  * giveaway in packs with no packs-per-box. Those refusals are surfaced VERBATIM
- * because each one names the exact field to go and fill in.
+ * because each one names the exact field to go and fill in. The stock comes off
+ * the shelf at the real FIFO cost of the layers it takes.
+ *
+ * ## A show that is already history — a RECONCILIATION
+ *
+ * The stock left the shelf weeks ago, and every honest question about it has a
+ * different answer. There is nothing on hand to consume — usually literally
+ * zero — so the ordinary path would refuse outright, and where stock DOES exist
+ * it is stock bought since, which the show never touched: consuming it would
+ * take units the warehouse still has and cost an old show at this month's
+ * prices. Both failures are silent in the P&L.
+ *
+ * So a reconciliation asserts instead of infers. The operator states how many
+ * cases were broken and what one case cost, and the line books exactly that:
+ * `cases × price`. It moves NO stock, opens NO cost lot and consumes NO layer,
+ * because it is a statement about stock that is gone rather than a claim about
+ * stock on hand — and `Σ lot.qty_remaining == inventory_stock.quantity` is an
+ * invariant this module must leave exactly as it found it.
  *
  * One transaction covering stock, cost lots, the ledger row, the line and the
  * layers it consumed — a line that exists without its stock movement (or the
@@ -721,12 +762,59 @@ export function addItem(input: NewStreamItem, actorId: string | null): Result<St
   // present; `quantity` is the raw stock-unit escape hatch that keeps every
   // pre-v25 caller working.
   const byUnits = inCases !== null || inBoxes !== null || inPacks !== null
+  // Whether a price was OFFERED is a separate question from whether it is a
+  // usable one, and the two need separate answers: an omitted price on a past
+  // show and a typo in the field are different mistakes with different fixes.
+  // Re-parsed here rather than trusted — this is the write, and the renderer is
+  // not a trust boundary.
+  const priceGiven = input?.casePrice !== undefined && input?.casePrice !== null
+  const casePrice = priceGiven ? parseMoneyInput(input.casePrice) : NaN
 
   const run = db.transaction((): Result<StreamSessionDetail> => {
-    const session = db.prepare('SELECT id, title FROM stream_sessions WHERE id = ?').get(sessionId) as
-      | { id: string; title: string }
+    const session = db
+      .prepare('SELECT id, title, stream_date, ended_at FROM stream_sessions WHERE id = ?')
+      .get(sessionId) as
+      | { id: string; title: string; stream_date: string; ended_at: string | null }
       | undefined
     if (!session) return { ok: false, error: 'That stream session no longer exists.' }
+
+    /**
+     * WHICH ACT THIS IS, read off the stored session rather than taken from the
+     * caller. The renderer decides which form to draw from the same rule, but a
+     * form drawn before midnight can be submitted after it, and only one of the
+     * two answers may be allowed to move money.
+     *
+     * The mode is then required to MATCH the entry in both directions. A silent
+     * fallback either way is the failure that would not be noticed: a stated
+     * price ignored on tonight's show books the average while the screen showed
+     * $2,400 a case, and a missing price on an old show quietly eats layers
+     * bought since.
+     */
+    const reconcile = isPastDatedSession({
+      streamDate: session.stream_date,
+      endedAt: session.ended_at
+    })
+    if (reconcile && !priceGiven) {
+      return {
+        ok: false,
+        error:
+          'That show is already history, so its stock is long gone and there is nothing left to cost it from. Enter how many cases were broken and what one case cost.'
+      }
+    }
+    if (!reconcile && priceGiven) {
+      return {
+        ok: false,
+        error:
+          'That show is not history yet — its stock is still on the shelf and costs what it cost. Leave the case price out; the line books the real cost of the stock it takes.'
+      }
+    }
+    if (reconcile) {
+      if (!Number.isFinite(casePrice)) {
+        return { ok: false, error: 'Enter what one case cost, as a number — 2400, not a blank or a word.' }
+      }
+      if (casePrice < 0) return { ok: false, error: 'A case cannot have cost less than nothing.' }
+    }
+
     if (!isLocation(location)) return { ok: false, error: 'Pick a stock location.' }
     const product = db
       .prepare(
@@ -759,7 +847,47 @@ export function addItem(input: NewStreamItem, actorId: string | null): Result<St
     const fractional = Number(product.giveaway_item) === 1
 
     let qty: number
-    if (byUnits) {
+    // What the operator TYPED, kept beside the converted quantity so the line
+    // reads back the way it was entered. Which of the three are filled in is
+    // what says how the line was counted, so they are decided in the same place
+    // the quantity is rather than re-derived at the INSERT.
+    let entryCases: number | null = null
+    let entryBoxes: number | null = null
+    let entryPacks: number | null = null
+    if (reconcile) {
+      /**
+       * A reconciliation is counted in CASES, whichever kind of line it is,
+       * because the price is per case and there is no stated price for a loose
+       * box. Refusing the extra fields is better than ignoring them: a typed
+       * number that does nothing is a wrong total waiting to be believed.
+       *
+       * The conversion is the same contract every other entry goes through, so
+       * a case means here exactly what it means on tonight's show. A
+       * case-stocked product needs no divisor (one case IS one stock unit); a
+       * box-stocked one cannot express a case without boxes-per-case, and the
+       * contract says so by name rather than assuming a case holds one box.
+       */
+      if (!units) {
+        return {
+          ok: false,
+          error: `This product is stocked in ${product.unit_type}, not cases or boxes, so a case entry cannot be converted. Set its unit type to case or box in Inventory.`
+        }
+      }
+      if ((inBoxes ?? 0) > 0 || (inPacks ?? 0) > 0) {
+        return {
+          ok: false,
+          error: 'A reconciliation is priced per case, so it is entered in whole cases. Record loose boxes as their own line, at what those boxes cost.'
+        }
+      }
+      const cases = inCases ?? 0
+      if (!Number.isInteger(cases)) {
+        return { ok: false, error: 'Cases are whole — enter 3, not 3.5.' }
+      }
+      const conv = breakToStock(units, cases, 0)
+      if (!conv.ok) return { ok: false, error: conv.error }
+      qty = conv.value.quantity
+      entryCases = cases
+    } else if (byUnits) {
       if (!units) {
         return {
           ok: false,
@@ -774,6 +902,9 @@ export function addItem(input: NewStreamItem, actorId: string | null): Result<St
       // rewording them here would lose that.
       if (!conv.ok) return { ok: false, error: conv.error }
       qty = conv.value.quantity
+      entryCases = kind === 'break' ? (inCases ?? 0) : null
+      entryBoxes = inBoxes ?? 0
+      entryPacks = kind === 'giveaway' ? (inPacks ?? 0) : null
     } else {
       qty = roundQty(Number(input?.quantity), fractional)
     }
@@ -784,25 +915,30 @@ export function addItem(input: NewStreamItem, actorId: string | null): Result<St
       }
     }
 
-    const have = stockQty(productId, location)
-    /**
-     * The last piece of a unit taken piece by piece.
-     *
-     * The stored balance is re-rounded to four places on every step, so after
-     * N-1 pieces it sits just BELOW (N-1)/N while the ask is still a
-     * full-precision 1/N. On a 6-box case the shelf reads 0.1665 and the sixth
-     * box asks for 0.16666… — refused forever with "Only 0.1665 in RM", so that
-     * box's cost never reached the show and the fraction stayed on the books
-     * with no way to clear it (the adjust-stock form parses with parseInt).
-     *
-     * Within the accumulated rounding error the ask IS the remaining balance, so
-     * it is clamped to it and consumes the shelf to exactly zero.
-     */
-    if (qty > have + QTY_EPS) {
-      if (fractional && have > 0 && qty - have <= quantizationSlack(qty)) {
-        qty = have
-      } else {
-        return { ok: false, error: `Only ${have} in ${location}.` }
+    // Only a movement can be short of stock. A reconciliation is not competing
+    // for the shelf — it is describing a shelf that emptied weeks ago — so the
+    // check is skipped rather than passed a number it would always fail.
+    if (!reconcile) {
+      const have = stockQty(productId, location)
+      /**
+       * The last piece of a unit taken piece by piece.
+       *
+       * The stored balance is re-rounded to four places on every step, so after
+       * N-1 pieces it sits just BELOW (N-1)/N while the ask is still a
+       * full-precision 1/N. On a 6-box case the shelf reads 0.1665 and the sixth
+       * box asks for 0.16666… — refused forever with "Only 0.1665 in RM", so that
+       * box's cost never reached the show and the fraction stayed on the books
+       * with no way to clear it (the adjust-stock form parses with parseInt).
+       *
+       * Within the accumulated rounding error the ask IS the remaining balance, so
+       * it is clamped to it and consumes the shelf to exactly zero.
+       */
+      if (qty > have + QTY_EPS) {
+        if (fractional && have > 0 && qty - have <= quantizationSlack(qty)) {
+          qty = have
+        } else {
+          return { ok: false, error: `Only ${have} in ${location}.` }
+        }
       }
     }
 
@@ -810,27 +946,76 @@ export function addItem(input: NewStreamItem, actorId: string | null): Result<St
     const recipient = kind === 'giveaway' ? input.recipient?.trim() || null : null
     const note = input.note?.trim() || null
 
-    // The exact sequence recordSale uses: drop the count, consume the oldest
-    // cost layers, re-average what is left, then write the ledger row. A stream
-    // line and a sale are the same movement and must be valued identically.
-    bumpStock(productId, location, -qty)
-    const slices = consumeFifo(db, productId, location, qty)
-    const costTotal = slicesCost(slices)
-    syncProductAvgCost(db, productId)
-    insertTxn(
-      productId,
-      txnType(kind),
-      -qty,
-      null,
-      recipient,
-      ledgerNote(session.title, kind, breakNumber, recipient),
-      actorId,
-      location,
-      costTotal
-    )
+    let costTotal: number
+    let slices: LotSlice[] = []
+    if (reconcile) {
+      /**
+       * NOTHING MOVES, and that is the feature.
+       *
+       * No bumpStock: the count on the shelf today is a physical fact — it was
+       * counted, or reset from a count sheet, AFTER this show — and those cases
+       * are already absent from it. Deducting them again would take the same
+       * stock off the books twice, and the product would read short by exactly
+       * the amount somebody was trying to be accurate about.
+       *
+       * No consumeFifo and no createLot: a cost lot is a claim about stock ON
+       * HAND, tied to `inventory_stock` by an invariant the whole FIFO engine
+       * rests on. A layer opened for stock that is gone would either sit open —
+       * inflating the shelf's value with cases nobody has — or be a create and
+       * an immediate reversal, which is two writes that cancel and leave the
+       * same nothing this does. What a reconciliation knows is a PRICE, not a
+       * layer, so the price is what it records.
+       *
+       * No syncProductAvgCost: see the note at the transaction below. The layers
+       * on hand did not change, and a price from June must not re-base what
+       * today's shelf is carried at.
+       *
+       * The stated cost is `cases × price`, NOT `qty × per-stock-unit`: the
+       * operator asserted the case price, and dividing it down to a stock unit
+       * and multiplying back would round a 12-box case's cost by a cent or two
+       * against the number they typed.
+       */
+      costTotal = cents((entryCases ?? 0) * casePrice)
+      // Quantity change of ZERO. The row is written for the same reason every
+      // other movement writes one — the ledger is append-only and a cost that
+      // appears in the P&L with no entry behind it is untraceable — but it
+      // carries only the money. A -4 here would make inventory history disagree
+      // with the shelf it is supposed to explain.
+      insertTxn(
+        productId,
+        txnType(kind),
+        0,
+        null,
+        recipient,
+        ledgerNote(session.title, kind, breakNumber, recipient, true),
+        actorId,
+        location,
+        costTotal
+      )
+    } else {
+      // The exact sequence recordSale uses: drop the count, consume the oldest
+      // cost layers, re-average what is left, then write the ledger row. A stream
+      // line and a sale are the same movement and must be valued identically.
+      bumpStock(productId, location, -qty)
+      slices = consumeFifo(db, productId, location, qty)
+      costTotal = slicesCost(slices)
+      syncProductAvgCost(db, productId)
+      insertTxn(
+        productId,
+        txnType(kind),
+        -qty,
+        null,
+        recipient,
+        ledgerNote(session.title, kind, breakNumber, recipient),
+        actorId,
+        location,
+        costTotal
+      )
+    }
 
-    // What this line cost per STOCK unit, from the layers it actually took —
-    // not the product's moving average, which drifts with every purchase.
+    // What this line cost per STOCK unit: from the layers it actually took, or
+    // from the price that was stated for it — never the product's moving
+    // average, which drifts with every purchase and knows nothing about either.
     const perStockUnit = cents(costTotal / qty)
 
     // --- the giveaway loss ---------------------------------------------------
@@ -844,6 +1029,10 @@ export function addItem(input: NewStreamItem, actorId: string | null): Result<St
     // that left: `packCost` divides the cost of a stock unit down through boxes
     // to packs and returns null rather than a guess when a divisor is missing.
     // Otherwise it is simply the FIFO cost of the whole boxes that went out.
+    //
+    // A reconciled giveaway enters no packs, so it lands on that second branch
+    // and the loss is the cost that was stated for it — which is exactly right:
+    // what the prize cost the business is what the business paid for it.
     let packCostVal: number | null = null
     let lossValue = 0
     if (kind === 'giveaway') {
@@ -863,10 +1052,11 @@ export function addItem(input: NewStreamItem, actorId: string | null): Result<St
       `INSERT INTO stream_items
          (id, session_id, kind, product_id, product_name, sku, category, break_number, recipient,
           quantity, entered_cases, entered_boxes, entered_packs, location, unit_cost, cost_total,
-          pack_cost, loss_value, note, created_at, created_by)
+          stated_case_price, pack_cost, loss_value, note, created_at, created_by)
        VALUES (@id, @session_id, @kind, @product_id, @product_name, @sku, @category, @break_number,
                @recipient, @quantity, @entered_cases, @entered_boxes, @entered_packs, @location,
-               @unit_cost, @cost_total, @pack_cost, @loss_value, @note, @ts, @created_by)`
+               @unit_cost, @cost_total, @stated_case_price, @pack_cost, @loss_value, @note, @ts,
+               @created_by)`
     ).run({
       id,
       session_id: sessionId,
@@ -882,12 +1072,16 @@ export function addItem(input: NewStreamItem, actorId: string | null): Result<St
       quantity: qty,
       // Stored beside the converted quantity so the line can be read back the
       // way it was typed. NULL when it was entered in stock units directly.
-      entered_cases: byUnits ? (kind === 'break' ? (inCases ?? 0) : null) : null,
-      entered_boxes: byUnits ? (inBoxes ?? 0) : null,
-      entered_packs: byUnits ? (kind === 'giveaway' ? (inPacks ?? 0) : null) : null,
+      entered_cases: entryCases,
+      entered_boxes: entryBoxes,
+      entered_packs: entryPacks,
       location,
       unit_cost: perStockUnit,
       cost_total: costTotal,
+      // The assertion this line rests on, kept as it was typed. It is also the
+      // switch every reversal reads: a row with a price here moved no stock, so
+      // nothing may be handed back for it.
+      stated_case_price: reconcile ? cents(casePrice) : null,
       pack_cost: packCostVal,
       loss_value: lossValue,
       note,
@@ -895,6 +1089,8 @@ export function addItem(input: NewStreamItem, actorId: string | null): Result<St
       created_by: actorId
     })
 
+    // Empty for a reconciliation, and correctly so: no layer was consumed, so
+    // there is no layer to name and nothing for a later removal to give back.
     const insertLot = db.prepare(
       `INSERT INTO stream_item_lots (id, item_id, lot_id, quantity, unit_cost, created_at)
        VALUES (?, ?, ?, ?, ?, ?)`
@@ -918,6 +1114,7 @@ interface ItemStockRow {
   quantity: number
   location: string
   cost_total: number
+  stated_case_price: number | null
 }
 
 /**
@@ -925,15 +1122,27 @@ interface ItemStockRow {
  * costs — and drop the line. The single restore path, shared by removeItem and
  * deleteSession.
  *
+ * A RECONCILIATION took nothing, so nothing is given back: the units never left
+ * the count and no layer was consumed, and handing units to a shelf that never
+ * lost them would invent stock out of an undo. What the line DOES leave behind
+ * is the cost it booked, so that is what the reversal cancels.
+ *
+ * The decision is read off the LINE (`stated_case_price`), never re-derived from
+ * the session's date. A session can be re-dated after the fact — that is what
+ * updateSession is for — and a line must always reverse the way it was written,
+ * whatever day its show has since been moved to.
+ *
  * MUST be called inside the caller's db.transaction(); throws to roll it back.
  */
 function restoreItemStock(db: Database, itemId: string, note: string, actorId: string | null): string {
   const item = db
     .prepare(
-      'SELECT id, session_id, kind, product_id, quantity, location, cost_total FROM stream_items WHERE id = ?'
+      `SELECT id, session_id, kind, product_id, quantity, location, cost_total, stated_case_price
+         FROM stream_items WHERE id = ?`
     )
     .get(itemId) as ItemStockRow | undefined
   if (!item) throw new Error('That line no longer exists.')
+  const reconciled = item.stated_case_price !== null
 
   const slices: LotSlice[] = (
     db
@@ -950,17 +1159,23 @@ function restoreItemStock(db: Database, itemId: string, note: string, actorId: s
     !!productId && !!db.prepare('SELECT 1 FROM inventory_products WHERE id = ?').get(productId)
 
   if (productId && stillCataloged) {
-    restoreFifo(db, slices)
-    bumpStock(productId, item.location, item.quantity)
-    syncProductAvgCost(db, productId)
-    // Reverses the consumption row addItem wrote — same type, opposite sign on
-    // BOTH the quantity and the cost, so either column sums to zero over a
-    // removed line. The original entry is never deleted; the ledger stays
+    // The stock half, skipped entirely for a reconciliation. `slices` is empty
+    // on one of those anyway, so restoreFifo would be a no-op — it is bumpStock
+    // that would do the damage, adding units to a shelf that never lost them.
+    if (!reconciled) {
+      restoreFifo(db, slices)
+      bumpStock(productId, item.location, item.quantity)
+      syncProductAvgCost(db, productId)
+    }
+    // Reverses the row addItem wrote — same type, opposite sign on BOTH the
+    // quantity and the cost, so either column sums to zero over a removed line.
+    // For a reconciliation both sides of that are zero-quantity, which is
+    // exactly as true. The original entry is never deleted; the ledger stays
     // append-only, as it is everywhere else in the app.
     insertTxn(
       productId,
       txnType(item.kind === 'giveaway' ? 'giveaway' : 'break'),
-      item.quantity,
+      reconciled ? 0 : item.quantity,
       null,
       null,
       note,

@@ -21,7 +21,7 @@ import { Icon } from '../../components/Icon'
 import { Button, CenterLoader, EmptyState } from '../../components/ui'
 import { useToast } from '../../components/Toast'
 import { api } from '../../lib/api'
-import { formatDate, formatMoney } from '../../lib/format'
+import { formatDate, formatMoney, formatUnitMoney } from '../../lib/format'
 import { formatUnitCount } from '../../lib/productUnits'
 import { UnitBadge, productMetrics } from './helpers'
 import { CategoryLogo } from './CategoryLogo'
@@ -180,6 +180,46 @@ export function InventoryOverview({
               ))}
               {stats.zeroCost.length > 6 && (
                 <li className="zerocost-more">and {stats.zeroCost.length - 6} more</li>
+              )}
+            </ul>
+          </div>
+        </div>
+      )}
+
+      {/* Every figure above is summed from the FIFO cost layers, and a shelf
+          whose layers do not account for its count is the one place that money
+          is not a purchase price. The tiles still follow the QUANTITY — a shelf
+          is valued for exactly what is counted on it, so nothing on screen
+          contradicts the count beside it — but a valuation quietly resting on an
+          average, or a cost basis attached to units nobody has, is precisely
+          what goes unnoticed for a quarter. So it is said out loud. */}
+      {stats.layerGaps.length > 0 && (
+        <div className="zerocost-banner">
+          <Icon name="Layers" size={17} />
+          <div className="zerocost-main">
+            <strong>
+              {stats.layerGaps.length} shelf{stats.layerGaps.length === 1 ? '' : 'ves'} does not
+              match its cost layers.
+            </strong>
+            <span>
+              These are valued at the count on the shelf, using the product&rsquo;s average cost
+              where there is no purchase price to read. Re-count them, or adjust the stock, to put
+              the cost basis back on real numbers.
+            </span>
+            <ul>
+              {stats.layerGaps.slice(0, 6).map((g) => (
+                <li key={`${g.id}-${g.location}`}>
+                  <button type="button" className="link-btn" onClick={() => onOpenProduct(g.name)}>
+                    {g.name}
+                  </button>
+                  <em>
+                    {g.location} · {formatUnitCount(g.quantity)} counted,{' '}
+                    {formatUnitCount(g.lotQuantity)} in layers · {formatMoney(g.value)}
+                  </em>
+                </li>
+              ))}
+              {stats.layerGaps.length > 6 && (
+                <li className="zerocost-more">and {stats.layerGaps.length - 6} more</li>
               )}
             </ul>
           </div>
@@ -1010,7 +1050,9 @@ function InventoryDetail({
         unitType: p.unitType,
         quantity: p.quantity,
         unitCost: p.unitCost,
-        highBid: p.highBid
+        highBid: p.highBid,
+        costValue: p.costValue,
+        marketValue: p.marketValue
       },
       style: hoverStyle(rect)
     })
@@ -1123,7 +1165,7 @@ function InventoryDetail({
                   <td style={{ fontWeight: 700, textAlign: 'center' }}>{formatUnitCount(p.quantity)}</td>
                   <td className="money">{m.hasBid ? formatMoney(m.marketUnit) : dash}</td>
                   <td className="money">{p.quantity > 0 ? formatMoney(m.invValue) : dash}</td>
-                  <td className="money">{m.hasCost ? formatMoney(m.avgCost) : dash}</td>
+                  <td className="money">{m.hasCost ? formatUnitMoney(m.avgCost) : dash}</td>
                   <td className="money">{m.hasCost && p.quantity > 0 ? formatMoney(m.totalCost) : dash}</td>
                   <td className={`money ${m.hasCost ? (m.spread < 0 ? 'neg' : m.spread > 0 ? 'pos' : '') : ''}`}>
                     {m.hasCost && p.quantity > 0 ? formatMoney(m.spread) : dash}

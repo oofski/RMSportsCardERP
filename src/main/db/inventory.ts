@@ -25,8 +25,10 @@ import {
   reverseLotReceipt,
   roundQty,
   slicesCost,
-  syncProductAvgCost
+  syncProductAvgCost,
+  unitMoney
 } from './lots'
+import { PRODUCT_BASIS, allCostValues, layerGaps, productCostValue } from './valuation'
 import { deleteImageFile, imageDataUrl, importImageFile } from '../services/media'
 import { newId, nowIso } from '../util'
 
@@ -77,7 +79,23 @@ function stockFor(productId: string): Record<string, number> {
   return entry
 }
 
-function toProduct(row: ProductRow, byLoc: Record<string, number>): InventoryProduct {
+/**
+ * The cost basis carried on a product, straight off its layers.
+ *
+ * Handed to `toProduct` rather than recomputed from unitCost in the renderer,
+ * because on-hand × average is precisely the arithmetic that loses money: the
+ * hover card, the quick view and the product table all derive their totals from
+ * this now, and all three therefore land on the same number as the dashboard.
+ */
+function costValueFor(productId: string): number {
+  return productCostValue(getDb(), productId)
+}
+
+function toProduct(
+  row: ProductRow,
+  byLoc: Record<string, number>,
+  costValue: number
+): InventoryProduct {
   const quantityByLocation: Record<string, number> = {}
   for (const loc of LOCATION_IDS) quantityByLocation[loc] = byLoc[loc] ?? 0
   const quantity = Object.values(quantityByLocation).reduce((a, b) => a + b, 0)
@@ -101,6 +119,8 @@ function toProduct(row: ProductRow, byLoc: Record<string, number>): InventoryPro
     notes: row.notes,
     quantityByLocation,
     quantity,
+    costValue,
+    marketValue: row.high_bid != null && row.high_bid > 0 ? quantity * row.high_bid : costValue,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   }
@@ -147,14 +167,15 @@ export function listProducts(): InventoryProduct[] {
     .prepare('SELECT * FROM inventory_products ORDER BY name COLLATE NOCASE')
     .all() as ProductRow[]
   const stock = allStockMap()
-  return rows.map((r) => toProduct(r, stock.get(r.id) ?? {}))
+  const values = allCostValues(getDb())
+  return rows.map((r) => toProduct(r, stock.get(r.id) ?? {}, values.get(r.id) ?? 0))
 }
 
 export function getProduct(id: string): InventoryProduct | null {
   const row = getDb().prepare('SELECT * FROM inventory_products WHERE id = ?').get(id) as
     | ProductRow
     | undefined
-  return row ? toProduct(row, stockFor(id)) : null
+  return row ? toProduct(row, stockFor(id), costValueFor(id)) : null
 }
 
 /**
@@ -177,7 +198,8 @@ export function searchCatalog(query: string, limit = 25): InventoryProduct[] {
     .prepare(`SELECT * FROM inventory_products WHERE ${where} ORDER BY name COLLATE NOCASE LIMIT ?`)
     .all(...params) as ProductRow[]
   const stock = allStockMap()
-  return rows.map((r) => toProduct(r, stock.get(r.id) ?? {}))
+  const values = allCostValues(getDb())
+  return rows.map((r) => toProduct(r, stock.get(r.id) ?? {}, values.get(r.id) ?? 0))
 }
 
 /**
@@ -265,7 +287,7 @@ export function matchProductByName(rawTitle: string): ProductNameMatch | null {
 
   if (!best) return null
   return {
-    product: toProduct(best.row, stockFor(best.row.id)),
+    product: toProduct(best.row, stockFor(best.row.id), costValueFor(best.row.id)),
     score: Math.round(best.score * 1000) / 1000,
     ambiguous: tied
   }
@@ -293,7 +315,7 @@ export function findProductsByUpc(normalized: string | null): InventoryProduct[]
   const rows = getDb()
     .prepare('SELECT * FROM inventory_products WHERE upc_norm = ? ORDER BY name COLLATE NOCASE')
     .all(normalized) as ProductRow[]
-  return rows.map((r) => toProduct(r, stockFor(r.id)))
+  return rows.map((r) => toProduct(r, stockFor(r.id), costValueFor(r.id)))
 }
 
 /** Returns the new transaction's id so a caller can point an audit row at the
@@ -541,17 +563,27 @@ export function listLots(productId: string): ProductLot[] {
   }))
 }
 
-/** In-stock products with the money needed by the Daily Pricing screen. */
+/**
+ * In-stock products with the money needed by the Daily Pricing screen.
+ *
+ * Reads the layers for the cost side exactly as the dashboard does, so the
+ * column that decides what gets re-priced cannot show a different spread from
+ * the tile that prompted the operator to open the screen. The average cost is
+ * derived back OUT of the exact basis rather than read off the product row: it
+ * is the per-unit view of a total, not the other way round.
+ */
 export function pricingList(): PricingRow[] {
   const rows = getDb()
     .prepare(
       `SELECT p.id, p.name, p.sku, p.category, p.unit_type,
               p.unit_cost, p.high_bid, p.high_bid_at,
-              COALESCE(SUM(s.quantity), 0) AS qty
+              COALESCE(s.qty, 0) AS qty,
+              COALESCE(v.cost_value, 0) AS cost_value
        FROM inventory_products p
-       JOIN inventory_stock s ON s.product_id = p.id
-       GROUP BY p.id
-       HAVING qty > 0
+       JOIN (SELECT product_id, SUM(quantity) AS qty FROM inventory_stock GROUP BY product_id) s
+         ON s.product_id = p.id
+       LEFT JOIN (${PRODUCT_BASIS}) v ON v.product_id = p.id
+       WHERE s.qty > 0
        ORDER BY p.category, p.name COLLATE NOCASE`
     )
     .all() as Array<{
@@ -564,9 +596,11 @@ export function pricingList(): PricingRow[] {
     high_bid: number | null
     high_bid_at: string | null
     qty: number
+    cost_value: number
   }>
   return rows.map((r) => {
-    const market = r.high_bid && r.high_bid > 0 ? r.high_bid : r.unit_cost
+    const priced = r.high_bid != null && r.high_bid > 0
+    const invValue = priced ? r.qty * (r.high_bid as number) : r.cost_value
     return {
       id: r.id,
       name: r.name,
@@ -574,11 +608,12 @@ export function pricingList(): PricingRow[] {
       category: r.category,
       unitType: (UNIT_TYPES.includes(r.unit_type as UnitType) ? r.unit_type : 'other') as UnitType,
       quantity: r.qty,
-      unitCost: r.unit_cost,
+      unitCost: r.qty > 0 ? unitMoney(r.cost_value / r.qty) : r.unit_cost,
+      costValue: r.cost_value,
       highBid: r.high_bid,
       highBidAt: r.high_bid_at,
-      invValue: r.qty * market,
-      spread: r.qty * (market - r.unit_cost)
+      invValue,
+      spread: invValue - r.cost_value
     }
   })
 }
@@ -937,16 +972,31 @@ export function recentSales(limit = 8): InventoryTransaction[] {
 }
 
 /**
- * Per-product total on-hand joined to catalog attributes.
- * `market` is the per-unit value: the high bid when set, else the average cost.
+ * Per-product on-hand, joined to catalog attributes AND to the money the cost
+ * layers say that stock is worth.
+ *
+ * `cost_value` comes from db/valuation.ts — Σ over the product's shelves of what
+ * each shelf holds. It is NOT on-hand × the stored average, and that is the
+ * point: an average is a rounded per-unit rate, and multiplying it back up by
+ * the quantity multiplies its error by the quantity too.
+ *
+ * `market_value` is the same figure priced. A high bid IS a per-unit number the
+ * operator typed, so quantity × bid is exact and stays a multiplication; without
+ * a bid, stock is valued at what it cost, which is `cost_value` — so an unpriced
+ * product contributes exactly zero spread rather than a rounding residue.
  */
 const PRODUCT_TOTALS = `
-  SELECT p.id, p.unit_type, p.unit_cost, p.reorder_point, p.category,
-         COALESCE(NULLIF(p.high_bid, 0), p.unit_cost) AS market,
-         COALESCE(s.qty, 0) AS qty
+  SELECT p.id, p.unit_type, p.unit_cost, p.reorder_point, p.category, p.high_bid,
+         COALESCE(s.qty, 0) AS qty,
+         COALESCE(v.cost_value, 0) AS cost_value,
+         CASE WHEN COALESCE(p.high_bid, 0) > 0
+              THEN COALESCE(s.qty, 0) * p.high_bid
+              ELSE COALESCE(v.cost_value, 0)
+         END AS market_value
   FROM inventory_products p
   LEFT JOIN (SELECT product_id, SUM(quantity) AS qty FROM inventory_stock GROUP BY product_id) s
     ON s.product_id = p.id
+  LEFT JOIN (${PRODUCT_BASIS}) v ON v.product_id = p.id
 `
 
 export function inventoryStats(): InventoryStats {
@@ -954,8 +1004,8 @@ export function inventoryStats(): InventoryStats {
   const p = db
     .prepare(
       `SELECT
-         COALESCE(SUM(t.qty * t.market), 0)                                        AS total_value,
-         COALESCE(SUM(t.qty * t.unit_cost), 0)                                     AS total_cost,
+         COALESCE(SUM(t.market_value), 0)                                          AS total_value,
+         COALESCE(SUM(t.cost_value), 0)                                            AS total_cost,
          COALESCE(SUM(CASE WHEN t.unit_type='case'   THEN t.qty ELSE 0 END), 0)     AS cases,
          COALESCE(SUM(CASE WHEN t.unit_type='box'    THEN t.qty ELSE 0 END), 0)     AS boxes,
          COALESCE(SUM(CASE WHEN t.unit_type='pack'   THEN t.qty ELSE 0 END), 0)     AS packs,
@@ -981,16 +1031,19 @@ export function inventoryStats(): InventoryStats {
   for (const loc of LOCATION_IDS) unitsByLocation[loc] = 0
   for (const r of locRows) unitsByLocation[r.location] = r.qty
 
-  // Stock carried at nothing. `market` in PRODUCT_TOTALS already falls back to
-  // unit_cost, so for these rows it IS the high bid — and every cent of it is
-  // spread the business never earned. Ordered by how much damage each is doing.
+  // Stock carried at nothing. Tested on `cost_value` rather than on the stored
+  // average, because the layers are what a total is built from: a shelf whose
+  // layers are all at zero is carrying no basis whatever the product row says.
+  // `market_value` in PRODUCT_TOTALS already falls back to cost, so for these
+  // rows it IS the high bid — and every cent of it is spread the business never
+  // earned. Ordered by how much damage each is doing.
   const zeroCost = (
     db
       .prepare(
-        `SELECT t.id, p.name, t.qty, t.qty * t.market AS market_value
+        `SELECT t.id, p.name, t.qty, t.market_value AS market_value
            FROM (${PRODUCT_TOTALS}) t
            JOIN inventory_products p ON p.id = t.id
-          WHERE t.qty > 0 AND t.unit_cost <= 0
+          WHERE t.qty > 0 AND t.cost_value <= 0
           ORDER BY market_value DESC`
       )
       .all() as Array<{ id: string; name: string; qty: number; market_value: number }>
@@ -1010,7 +1063,8 @@ export function inventoryStats(): InventoryStats {
     salesRevenue: s.revenue,
     salesCount: s.cnt,
     unitsByLocation,
-    zeroCost
+    zeroCost,
+    layerGaps: layerGaps(db)
   }
 }
 
@@ -1021,9 +1075,11 @@ export function categorySummaries(): CategorySummary[] {
          CASE WHEN TRIM(t.category)='' THEN 'Uncategorized' ELSE t.category END AS category,
          COALESCE(SUM(CASE WHEN t.unit_type='case' THEN t.qty ELSE 0 END),0) AS cases,
          COALESCE(SUM(CASE WHEN t.unit_type='box'  THEN t.qty ELSE 0 END),0) AS boxes,
-         COALESCE(SUM(t.qty),0)          AS units,
-         COALESCE(SUM(t.qty*t.market),0) AS value,
-         COUNT(t.id)                     AS product_count
+         COALESCE(SUM(t.qty),0)            AS units,
+         -- Summed from the same per-product figure the headline tile sums, so
+         -- the bars of the value-by-category chart add up to it exactly.
+         COALESCE(SUM(t.market_value),0)   AS value,
+         COUNT(t.id)                       AS product_count
        FROM (${PRODUCT_TOTALS}) t
        GROUP BY category
        ORDER BY category COLLATE NOCASE`
@@ -1051,7 +1107,8 @@ export function productsByCategory(category: string): InventoryProduct[] {
     .prepare('SELECT * FROM inventory_products WHERE category = ? ORDER BY name COLLATE NOCASE')
     .all(category) as ProductRow[]
   const stock = allStockMap()
-  return rows.map((r) => toProduct(r, stock.get(r.id) ?? {}))
+  const values = allCostValues(getDb())
+  return rows.map((r) => toProduct(r, stock.get(r.id) ?? {}, values.get(r.id) ?? 0))
 }
 
 /** Daily sales revenue for the last `days` days (local day buckets). */

@@ -9,7 +9,7 @@ import { seedSnapshot } from './inventorySnapshot'
 import { seedCatalogExpansion } from './inventoryCatalogV2'
 import { seedCatalogV3 } from './inventoryCatalogV3'
 import { dedupeProducts } from './dedupe'
-import { backfillLots } from './lots'
+import { backfillLots, resyncProductAvgCosts } from './lots'
 import { installSyncTriggers } from './syncTriggers'
 import { fingerprintOf } from './financeStreaming'
 
@@ -1640,6 +1640,27 @@ function migrate(database: Database.Database): void {
   )
   setMeta(database, 'schema_version', '39')
 
+  // v40: what the stock on a RECONCILED show actually cost.
+  //
+  // A line added to a show that is already history is not a stock movement. The
+  // cases were broken weeks ago and left the shelf weeks ago, so there is
+  // nothing on hand to consume and no cost layer to read a price off — the
+  // ordinary path would either drive the count negative or, worse, quietly eat
+  // layers bought since, and cost a two-month-old show at this month's prices.
+  //
+  // What the person entering it DOES know is what those cases were bought at.
+  // They state it, and this column keeps that assertion beside the line, which
+  // makes `cost_total` a fact somebody asserted rather than an average the app
+  // inferred.
+  //
+  // It is also the switch. A row with a price here moved no stock and consumed
+  // no lot, so removing it must hand nothing back; `restoreItemStock` reads
+  // exactly this column to decide. NULL on every ordinary line and on every row
+  // written before this shipped — which is precisely what those lines are, stock
+  // movements valued at the layers they took.
+  addColumnIfMissing(database, 'stream_items', 'stated_case_price', 'REAL')
+  setMeta(database, 'schema_version', '40')
+
   // Seed the product catalog once, then apply the on-hand snapshot once.
   seedCatalogIfNeeded(database)
   seedSnapshotIfNeeded(database)
@@ -1715,6 +1736,22 @@ function migrate(database: Database.Database): void {
     setMeta(database, 'catalog_import_v3_inserted', String(r.inserted))
     setMeta(database, 'catalog_import_v3_skipped', String(r.skippedByName + r.skippedBySku))
   })
+
+  // v41: re-derive every product's average cost from its remaining cost layers.
+  //
+  // The average used to be stored rounded to the cent, back when every total in
+  // the app was reconstructed as on-hand × that number. Totals now come from the
+  // layers (db/valuation.ts) and the average is a per-unit figure kept at
+  // UNIT_DP — but it is still the fallback basis for a shelf that has stock and
+  // no layer, so an old cent-rounded value left in place would keep costing that
+  // stock real money. Reads nothing but the layers, so a catalog whose costs are
+  // all whole cents comes out of it byte-for-byte unchanged.
+  //
+  // Placed after the lot backfill and the catalog import, because it can only be
+  // as right as the layers it reads, and before the sync triggers, because a
+  // migration re-deriving a number from data every machine already has is not
+  // work anyone did on this one.
+  runOnce(database, 'product_avg_cost_unit_dp_v1', () => resyncProductAvgCosts(database))
 
   // v29: install the sync capture triggers LAST, after every seed, backfill and
   // one-time fixup above.

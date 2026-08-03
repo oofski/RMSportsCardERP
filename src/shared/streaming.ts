@@ -105,6 +105,18 @@ export interface StreamItem {
   unitCost: number
   costTotal: number
   /**
+   * RECONCILIATION lines only: what ONE case was stated to have cost.
+   *
+   * Null on every line that moved stock — those are valued at the layers they
+   * actually took, and a second number here would be a disagreeing answer to
+   * the same question.
+   *
+   * Its presence is what MAKES a line a reconciliation, and it changes what the
+   * line is: no stock moved, no cost layer was consumed, and `costTotal` is
+   * `enteredCases × this` rather than the FIFO cost of anything.
+   */
+  statedCasePrice: number | null
+  /**
    * Giveaways only. What ONE pack of this product cost, divided down from the
    * cost of the layers this line consumed. Null when a divisor is missing —
    * never a guess, because a zero here would understate the loss silently.
@@ -212,6 +224,19 @@ export interface NewStreamItem {
   boxes?: number | null
   /** Giveaway entry: loose packs. */
   packs?: number | null
+  /**
+   * RECONCILIATION entry: what ONE case cost. Accepted ONLY on a past-dated
+   * session (see `isPastDatedSession`), and only beside `cases`.
+   *
+   * Per case rather than a total, because the two age differently: a total is
+   * silently wrong the moment the case count is corrected, while "what we paid
+   * for a case" stays true however many of them are being recorded.
+   *
+   * Typed as a number, validated as though it were not — it arrives from a text
+   * field, so main parses it through `parseMoneyInput` and refuses anything
+   * that is not a real, non-negative amount rather than storing a NaN.
+   */
+  casePrice?: number | null
   location: string
   breakNumber?: number | null
   recipient?: string | null
@@ -235,6 +260,61 @@ export function streamDateOf(iso: string): string {
   if (Number.isNaN(d.getTime())) return ''
   const pad = (n: number): string => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+
+/**
+ * Is this session HISTORY — a show being RECONCILED rather than one being run?
+ *
+ * The owner's rule is "a date in the past", and both obvious readings of that
+ * break on the way RM actually streams.
+ *
+ * `streamDate < today` flips at midnight — in the middle of a 9pm-to-2am show,
+ * which is the one moment an operator is certainly still adding breaks to it.
+ * The form would change under their hands mid-show. "It has ended" is no better
+ * on its own: a show that finished ten minutes ago is over, but its stock came
+ * off the shelf tonight and is costed at the layers it took, so there is nothing
+ * to reconcile.
+ *
+ * So both, anchored on the END: a session is history once it has finished AND
+ * the local day it finished on is already behind us. The mode can then only ever
+ * change at a midnight with no show running and none just ended — which is what
+ * stops it flickering while somebody is working.
+ *
+ * `streamDate` is checked as well, even though a valid session's business day
+ * can never be later than the day it ended. A row written before start/end
+ * validation existed could hold them the wrong way round, and for such a row the
+ * conservative answer — both behind us, or it is not history — is the right one.
+ */
+export function isPastDatedSession(
+  session: Pick<StreamSession, 'streamDate' | 'endedAt'>,
+  now: Date = new Date()
+): boolean {
+  if (!session.endedAt) return false
+  const today = streamDateOf(now.toISOString())
+  const ended = streamDateOf(session.endedAt)
+  if (!today || !ended) return false
+  return ended < today && session.streamDate < today
+}
+
+/**
+ * A money amount as a person types it → a number, or NaN when it is not one.
+ *
+ * Lives in the contract so the field on screen, the IPC boundary and the write
+ * cannot disagree about what "2,400" means. Three deliberate refusals:
+ *
+ * - Blank is NaN, never 0. A reconciliation with no price is an unanswered
+ *   question; zero is an answer, and it would book a case of Bowman at nothing.
+ * - Only a plain decimal is accepted. `Number()` reads '0x10', '1e9' and
+ *   'Infinity' quite happily, and none of those is a price anybody typed.
+ * - A leading '-' parses, so the caller can refuse a negative in its own words
+ *   instead of reporting a minus sign as gibberish.
+ */
+export function parseMoneyInput(raw: unknown): number {
+  if (typeof raw === 'number') return Number.isFinite(raw) ? raw : NaN
+  if (typeof raw !== 'string') return NaN
+  const t = raw.trim().replace(/[$,\s]/g, '')
+  if (!/^-?(?:\d+(?:\.\d+)?|\.\d+)$/.test(t)) return NaN
+  return Number(t)
 }
 
 /** Whole minutes between two instants; null when either is missing/invalid. */

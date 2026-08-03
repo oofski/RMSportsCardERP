@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { InventoryProduct } from '@shared/types'
 import type { NewStreamItem, StreamItemKind, StreamSessionDetail } from '@shared/streaming'
+import { parseMoneyInput } from '@shared/streaming'
 import { LOCATIONS, type Location } from '@shared/inventory'
 import {
   QTY_EPS,
@@ -52,11 +53,22 @@ function count(raw: string): number | null {
  * entry, and the result of that conversion is on screen before the button is
  * pressed: adding this TAKES STOCK, and how much it takes is not something the
  * operator should discover from the inventory screen later.
+ *
+ * ## Reconcile mode
+ *
+ * On a show that is already history the form becomes a different one, because
+ * the act is different. There is no stock to take — it went weeks ago — so the
+ * question stops being "how much comes off the shelf" and becomes "how many
+ * cases were broken, and what did a case cost". The whole panel changes with it:
+ * the fields, the preview, the button, and a banner that says so in as many
+ * words. Nobody should ever have to work out which mode they are in from the
+ * shape of the inputs.
  */
 export function AddItemForm({
   sessionId,
   kind,
   canSearchCatalog,
+  reconcile,
   onAdded,
   onCancel
 }: {
@@ -64,6 +76,8 @@ export function AddItemForm({
   kind: StreamItemKind
   /** The catalog search lives behind the Inventory module's permission. */
   canSearchCatalog: boolean
+  /** The session is past-dated: this records history, it does not move stock. */
+  reconcile: boolean
   onAdded: (detail: StreamSessionDetail) => void
   onCancel: () => void
 }): JSX.Element {
@@ -74,6 +88,8 @@ export function AddItemForm({
   const [cases, setCases] = useState('')
   const [boxes, setBoxes] = useState('')
   const [packs, setPacks] = useState('')
+  /** Reconcile mode: what one case was bought at, exactly as typed. */
+  const [casePriceRaw, setCasePriceRaw] = useState('')
   /** Only used for products the unit contract does not model — packs, singles
    *  and "other" have no case/box structure to convert through. */
   const [plainQty, setPlainQty] = useState('1')
@@ -91,20 +107,36 @@ export function AddItemForm({
   )
 
   /** The two fields this kind of line is entered in: cases + boxes for a break,
-   *  boxes + packs for a giveaway. Null means the field is not a whole number. */
+   *  boxes + packs for a giveaway. Null means the field is not a whole number.
+   *  A reconciliation is entered in cases alone, whichever kind it is — the
+   *  price it carries is per case, and there is no stated price for a box. */
   const entered = useMemo(() => {
+    if (reconcile) return { left: count(cases), right: 0 }
     const left = isBreak ? count(cases) : count(boxes)
     const right = isBreak ? count(boxes) : count(packs)
     return { left, right }
-  }, [isBreak, cases, boxes, packs])
+  }, [reconcile, isBreak, cases, boxes, packs])
 
   /** A shape problem in the fields themselves, before the contract is asked. */
   const entryError =
     entered.left === null || entered.right === null
-      ? isBreak
-        ? 'Cases and boxes are whole numbers — enter 3, not 3.5.'
-        : 'Boxes and packs are whole numbers — enter 3, not 3.5.'
+      ? reconcile
+        ? 'Cases are whole — enter 3, not 3.5.'
+        : isBreak
+          ? 'Cases and boxes are whole numbers — enter 3, not 3.5.'
+          : 'Boxes and packs are whole numbers — enter 3, not 3.5.'
       : null
+
+  /**
+   * What one case cost. NaN covers both "nothing typed yet" and "that is not a
+   * number", which is right for the preview — neither can be costed — and the
+   * two are told apart at submit, where they are different mistakes.
+   *
+   * Parsed with the same function main parses it with, so a price this panel
+   * accepts is a price the write accepts.
+   */
+  const casePrice = parseMoneyInput(casePriceRaw)
+  const priceOk = reconcile ? Number.isFinite(casePrice) && casePrice >= 0 : true
 
   /**
    * What the entry converts to, in the product's own stock unit — or the
@@ -122,10 +154,14 @@ export function AddItemForm({
     // rightly rejects an empty entry, but showing that before the operator has
     // touched a field would be an alarm about their not having started.
     if (entered.left === 0 && entered.right === 0) return null
-    return isBreak
+    // Cases go through the break conversion in reconcile mode even for a
+    // giveaway: "what is N cases of this product, in the unit it is stocked in"
+    // is one question with one answer, and asking it twice is how the two get to
+    // disagree. Main converts the same entry the same way.
+    return isBreak || reconcile
       ? breakToStock(units, entered.left, entered.right)
       : giveawayToStock(units, entered.left, entered.right)
-  }, [units, isBreak, entered])
+  }, [units, isBreak, reconcile, entered])
 
   const plain = Number.parseInt(plainQty, 10)
   const quantity = units
@@ -140,7 +176,13 @@ export function AddItemForm({
   // Same slack main uses when it checks stock: a giveaway that consumes the
   // exact fractional balance leaves float dust, and warning "only 0.25 on hand"
   // about a line that will succeed is worse than not warning at all.
-  const short = quantity !== null && quantity > onHand + QTY_EPS
+  //
+  // Never in reconcile mode: nothing is coming off the shelf, so an empty shelf
+  // is not a problem — it is the expected state of a show two months old.
+  const short = !reconcile && quantity !== null && quantity > onHand + QTY_EPS
+
+  /** What the reconciliation asserts, in one number, before it is committed. */
+  const statedTotal = priceOk && entered.left ? entered.left * casePrice : null
 
   const choose = (p: InventoryProduct): void => {
     setProduct(p)
@@ -153,7 +195,18 @@ export function AddItemForm({
     // break — so the usual line is a single click. Giveaways are left blank:
     // seeding a pack there would fire "no packs-per-box set" at an operator who
     // has not typed anything yet.
-    const one = kind === 'break' && p.unitType === 'case' ? 'case' : kind === 'break' ? 'box' : null
+    //
+    // A reconciliation seeds one case for the same reason, and deliberately
+    // leaves the price empty: it is the one number nobody but the operator
+    // knows, and a prefilled figure is one somebody eventually forgets to
+    // change.
+    const one = reconcile
+      ? 'case'
+      : kind === 'break' && p.unitType === 'case'
+        ? 'case'
+        : kind === 'break'
+          ? 'box'
+          : null
     setCases(one === 'case' ? '1' : '')
     setBoxes(one === 'box' ? '1' : '')
     setPacks('')
@@ -177,11 +230,25 @@ export function AddItemForm({
     }
     if (quantity === null || quantity <= 0) {
       setError(
-        units
-          ? isBreak
-            ? 'Enter at least one case or box.'
-            : 'Enter at least one box or pack.'
-          : 'Quantity must be at least 1.'
+        reconcile
+          ? 'Enter at least one case.'
+          : units
+            ? isBreak
+              ? 'Enter at least one case or box.'
+              : 'Enter at least one box or pack.'
+            : 'Quantity must be at least 1.'
+      )
+      return
+    }
+    // "Nothing typed" and "not a number" are the same NaN to the preview and two
+    // different mistakes here, so they get two different sentences.
+    if (reconcile && !priceOk) {
+      setError(
+        casePriceRaw.trim() === ''
+          ? 'Enter what one case cost — that is the whole point of reconciling it.'
+          : Number.isFinite(casePrice)
+            ? 'A case cannot have cost less than nothing.'
+            : 'That is not a price. Enter an amount like 2400 or 2,400.00.'
       )
       return
     }
@@ -199,7 +266,23 @@ export function AddItemForm({
       // of a per-product conversion is exactly what @shared/units exists to
       // prevent. `quantity` is only used for products the contract has no unit
       // for, where there is nothing to convert.
-      const input: NewStreamItem = units
+      const input: NewStreamItem = reconcile
+        ? {
+            sessionId,
+            kind,
+            productId: product.id,
+            cases: entered.left,
+            // Per case, not the total on screen. Main multiplies it back out, so
+            // the number stored is the assertion the operator made rather than a
+            // product of it — and correcting the case count later cannot leave a
+            // stale total behind.
+            casePrice,
+            location,
+            breakNumber: isBreak ? num : null,
+            recipient: !isBreak ? recipient.trim() || null : null,
+            note: note.trim() || null
+          }
+        : units
         ? {
             sessionId,
             kind,
@@ -228,9 +311,13 @@ export function AddItemForm({
         return
       }
       toast.success(
-        `${units ? describeQuantity(units, quantity) : `${quantity} units`} of ${
-          product.name
-        } out of ${location}.`
+        reconcile
+          ? `${entered.left} case${entered.left === 1 ? '' : 's'} of ${product.name} recorded at ${
+              statedTotal !== null ? formatMoney(statedTotal) : formatMoney(0)
+            }.`
+          : `${units ? describeQuantity(units, quantity) : `${quantity} units`} of ${
+              product.name
+            } out of ${location}.`
       )
       onAdded(res.data)
       // A show breaks many boxes in a row, so the form stays open and resets
@@ -241,6 +328,10 @@ export function AddItemForm({
       setBoxes('')
       setPacks('')
       setPlainQty('1')
+      // Cleared with the rest. A reconciliation is usually several different
+      // products at several different prices, and a price left sitting in the
+      // field is the one that gets recorded against the wrong one.
+      setCasePriceRaw('')
       setRecipient('')
       setNote('')
       setBreakNumber(num === null ? '' : String(num + 1))
@@ -250,7 +341,21 @@ export function AddItemForm({
   }
 
   return (
-    <div className={`stm-additem ${kind}`}>
+    <div className={`stm-additem ${kind}${reconcile ? ' reconcile' : ''}`}>
+      {/* First thing in the panel, before the product is even chosen: what this
+          form is going to do. The fields below only make sense once that is
+          known, and finding out afterwards is finding out too late. */}
+      {reconcile && (
+        <div className="stm-recon-banner">
+          <Icon name="History" size={15} />
+          <div>
+            <b>Reconciling a past show.</b> Enter how many cases were broken and what you paid for a
+            case. This records the cost against that night — it does not take anything off
+            today&rsquo;s shelf.
+          </div>
+        </div>
+      )}
+
       {error && <div className="auth-alert">{error}</div>}
 
       {!product ? (
@@ -292,7 +397,11 @@ export function AddItemForm({
             </button>
           </div>
 
-          <Field label="Take it out of">
+          {/* Reconciling records WHERE it came from, not where it comes from —
+              and the on-hand counts are dropped with the change of tense. They
+              are today's numbers, this is not today's stock, and showing them
+              here only invites the reader to subtract one from the other. */}
+          <Field label={reconcile ? 'Which shelf it came off' : 'Take it out of'}>
             <div className="loc-pills">
               {LOCATIONS.map((l) => (
                 <button
@@ -304,17 +413,55 @@ export function AddItemForm({
                   {l.label}
                   {/* The unit, not just the number: "3 on hand" is ambiguous by
                       a factor of twelve between a case product and a box one. */}
-                  <div className="lp-sub">
-                    {formatUnitCount(product.quantityByLocation[l.id] ?? 0)}{' '}
-                    {units ? `${stockUnitWord(units.unitType, 2)} on hand` : 'on hand'}
-                  </div>
+                  {!reconcile && (
+                    <div className="lp-sub">
+                      {formatUnitCount(product.quantityByLocation[l.id] ?? 0)}{' '}
+                      {units ? `${stockUnitWord(units.unitType, 2)} on hand` : 'on hand'}
+                    </div>
+                  )}
                 </button>
               ))}
             </div>
           </Field>
 
           <div className="stm-form-row">
-            {units ? (
+            {reconcile ? (
+              <>
+                <Field
+                  label="Cases broken"
+                  hint={
+                    units?.unitType === 'case'
+                      ? 'Stocked in cases — one case is one unit'
+                      : product.boxesPerCase
+                        ? `1 case = ${product.boxesPerCase} boxes`
+                        : 'Boxes per case is not set'
+                  }
+                >
+                  <Input
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={cases}
+                    onChange={(e) => setCases(e.target.value)}
+                    placeholder="0"
+                    autoFocus
+                  />
+                </Field>
+                <Field label="Price paid per case" hint="What one case cost when you bought it">
+                  {/* A text input, not a number one: money is typed with commas
+                      and dollar signs, and a number input silently discards the
+                      lot — leaving a field that looks empty for a price the
+                      operator is sure they entered. */}
+                  <Input
+                    inputMode="decimal"
+                    value={casePriceRaw}
+                    onChange={(e) => setCasePriceRaw(e.target.value)}
+                    placeholder="2400"
+                    invalid={casePriceRaw.trim() !== '' && !priceOk}
+                  />
+                </Field>
+              </>
+            ) : units ? (
               isBreak ? (
                 <>
                   <Field
@@ -437,19 +584,34 @@ export function AddItemForm({
             </Field>
           </div>
 
-          <DeductionPreview
-            kind={kind}
-            product={product}
-            units={units}
-            entryError={entryError}
-            conversion={conversion}
-            quantity={quantity}
-            location={location}
-            onHand={onHand}
-            short={short}
-            giveawayBoxes={(isBreak ? null : entered.left) ?? 0}
-            giveawayPacks={(isBreak ? null : entered.right) ?? 0}
-          />
+          {reconcile ? (
+            <ReconcilePreview
+              product={product}
+              units={units}
+              entryError={entryError}
+              conversion={conversion}
+              cases={entered.left}
+              quantity={quantity}
+              casePriceRaw={casePriceRaw}
+              casePrice={casePrice}
+              priceOk={priceOk}
+              total={statedTotal}
+            />
+          ) : (
+            <DeductionPreview
+              kind={kind}
+              product={product}
+              units={units}
+              entryError={entryError}
+              conversion={conversion}
+              quantity={quantity}
+              location={location}
+              onHand={onHand}
+              short={short}
+              giveawayBoxes={(isBreak ? null : entered.left) ?? 0}
+              giveawayPacks={(isBreak ? null : entered.right) ?? 0}
+            />
+          )}
         </>
       )}
 
@@ -461,13 +623,135 @@ export function AddItemForm({
         </Button>
         <Button
           variant="primary"
-          icon={isBreak ? 'Layers' : 'Gift'}
+          icon={reconcile ? 'History' : isBreak ? 'Layers' : 'Gift'}
           loading={busy}
-          disabled={!product || quantity === null}
+          disabled={!product || quantity === null || !priceOk}
           onClick={() => void submit()}
         >
-          {isBreak ? 'Record break' : 'Record giveaway'}
+          {reconcile
+            ? isBreak
+              ? 'Record this break'
+              : 'Record this giveaway'
+            : isBreak
+              ? 'Record break'
+              : 'Record giveaway'}
         </Button>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * The arithmetic, spelled out, before the button is pressed: `4 cases × $2,400 =
+ * $9,600`.
+ *
+ * A reconciliation has no shelf to check itself against — the stock is gone, so
+ * "only 2 on hand" cannot catch a mistyped case count and nothing else will
+ * either. The total IS the check: the operator knows what that night cost them,
+ * and a wrong figure is obvious on sight in a way that a wrong case count in a
+ * box beside a price is not.
+ *
+ * It also says the thing that separates this from every other line on the
+ * screen — that no stock moves — because the only place a wrongly-moved case
+ * would show up is a stock count weeks later.
+ */
+function ReconcilePreview({
+  product,
+  units,
+  entryError,
+  conversion,
+  cases,
+  quantity,
+  casePriceRaw,
+  casePrice,
+  priceOk,
+  total
+}: {
+  product: InventoryProduct
+  units: ProductUnits | null
+  entryError: string | null
+  conversion: Conversion | null
+  cases: number | null
+  quantity: number | null
+  casePriceRaw: string
+  casePrice: number
+  priceOk: boolean
+  total: number | null
+}): JSX.Element {
+  // Same order of precedence as the deduction preview: a shape problem in the
+  // fields, then the contract's refusal, and both replace the block rather than
+  // sitting under a total that cannot be computed anyway.
+  const problem =
+    entryError ??
+    (conversion && !conversion.ok ? conversion.error : null) ??
+    (!units
+      ? `${product.name} is stocked in ${product.unitType}s, which have no case to price. Set its unit type to case or box in Inventory.`
+      : null)
+
+  if (problem) {
+    return (
+      <div className="stm-consume is-error" role="alert">
+        <Icon name="AlertTriangle" size={15} />
+        <div className="stm-consume-body">
+          <b>This cannot be recorded yet.</b>
+          <span>{problem}</span>
+        </div>
+      </div>
+    )
+  }
+
+  if (!cases || quantity === null) {
+    return (
+      <div className="stm-consume is-idle">
+        <Icon name="History" size={15} />
+        <div className="stm-consume-body">
+          <span>Enter how many cases were broken, and what one case cost.</span>
+        </div>
+      </div>
+    )
+  }
+
+  if (!priceOk) {
+    return (
+      <div className="stm-consume is-idle">
+        <Icon name="DollarSign" size={15} />
+        <div className="stm-consume-body">
+          <span>
+            {casePriceRaw.trim() === ''
+              ? `${cases} case${cases === 1 ? '' : 's'} of ${product.name}. Now enter what one case cost.`
+              : Number.isFinite(casePrice)
+                ? 'A case cannot have cost less than nothing.'
+                : 'That is not a price. Enter an amount like 2400 or 2,400.00.'}
+          </span>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="stm-consume is-recon">
+      <Icon name="History" size={15} />
+      <div className="stm-consume-body">
+        <span className="stm-recon-sum">
+          <b>{cases}</b> case{cases === 1 ? '' : 's'} × <b>{formatMoney(casePrice)}</b> ={' '}
+          <b className="stm-recon-total">{formatMoney(total ?? 0)}</b>
+        </span>
+        <span>
+          Books {formatMoney(total ?? 0)} of cost to this show
+          {units && units.unitType === 'box'
+            ? // The number that will appear in the line's × column, said here so
+              // it is not a surprise: a case-priced entry is stored in the unit
+              // the product is stocked in.
+              ` — ${formatUnitCount(quantity)} ${stockUnitWord(units.unitType, quantity)}, at ${formatMoney(
+                Math.round((total ?? 0) / quantity * 100) / 100
+              )} each`
+            : ''}
+          .
+        </span>
+        <span className="stm-consume-short">
+          <Icon name="PackageMinus" size={13} />
+          Today&rsquo;s stock is untouched — this stock left the shelf on the night.
+        </span>
       </div>
     </div>
   )

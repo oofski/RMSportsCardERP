@@ -498,13 +498,15 @@ ok(
 )
 
 // ---------------------------------------------------------------------------
-console.log('\n=== 8. where one average cost cannot carry two shelves ===')
+console.log('\n=== 8. two shelves at two costs, and no cents lost between them ===')
 // ---------------------------------------------------------------------------
-// A product stores ONE unit_cost, rounded to the cent, and every widget derives
-// its value as on-hand × that number. 3 @ $10 and 4 @ $20 is $110 on the paper
-// and 7 × $15.71 = $109.97 on the dashboard. The three cents are real; what
-// matters is that the preview predicts them exactly rather than promising a
-// number the write cannot land on, and that the operator is told.
+// 3 @ $10 and 4 @ $20 is $110.00 on the paper. It used to be $109.97 on the
+// dashboard, because the product stores ONE average unit cost — $15.7142…,
+// rounded — and every widget rebuilt its value as on-hand × that number, which
+// multiplies the rounding by the quantity. The layers are now the source of
+// every total, so there is nothing left to round: this reads $110.00 exactly,
+// the preview promises $110.00, and the two are the same arithmetic rather than
+// two that were made to agree.
 const FOX = make({ name: 'TEST Foxtrot Hobby Box', category: 'Soccer', cost: 5, bid: 9, rm: 1 })
 const SHEET_C = [
   HEADER,
@@ -518,13 +520,26 @@ const SHEET_C = [
 const planC = preview(SHEET_C).plan
 const foxRows = planC.rows.filter((r: any) => r.productId === FOX)
 ok(foxRows.length === 2, 'Foxtrot is counted at both locations')
+// This row used to carry a warning saying the dashboard would read three cents
+// under the sheet. It was true, and it is now false — the totals come off the
+// layers, so there is no blend gap left to warn about. A warning that states a
+// discrepancy which no longer occurs is worse than no warning: it teaches the
+// operator to expect the dashboard to be wrong.
 ok(
-  foxRows.every((r: any) => r.warnings.some((w: string) => /different unit costs/i.test(w))),
-  'the blend is called out on the row, in cents',
+  foxRows.every((r: any) => !r.warnings.some((w: string) => /different unit costs/i.test(w))),
+  'no blend warning — there is no longer a blend gap to warn about',
   foxRows.map((r: any) => r.warnings.join('/')).join(' | ')
 )
 ok(applySheet(SHEET_C, planC.mapping).ok === true, 'it applies')
-ok(productRow(FOX).unit_cost === 15.71, 'the stored average is the cent-rounded blend', String(productRow(FOX).unit_cost))
+// The stored average is a PER-UNIT figure now, kept at four places rather than
+// two. It is no longer what any total is built from — but it is still the basis
+// a shelf with no cost layer falls back on, and it is what the Avg cost column
+// shows, so $15.7143 is the honest number and $15.71 was not.
+ok(
+  productRow(FOX).unit_cost === 15.7143,
+  'the stored average is the blend at per-unit precision',
+  String(productRow(FOX).unit_cost)
+)
 const statsC = inventoryStats()
 ok(
   eq(statsC.totalCost, planC.totals.costAfter),
@@ -539,10 +554,18 @@ ok(
   ),
   'and the owner board still reads the same number as the dashboard'
 )
+// Was: within five cents of the sheet, the gap being "the predicted rounding".
+// There is no predicted rounding any more. Foxtrot is worth 3 × $10 + 4 × $20 =
+// $110.00 and the dashboard says so to the cent.
 ok(
-  Math.abs(statsC.totalCost - (SHEET_A_COST + 4.5 * 14 + 110)) < 0.05,
-  'the gap against the sheet is the predicted rounding, not a lost layer',
+  eq(statsC.totalCost, SHEET_A_COST + 4.5 * 14 + 110),
+  'the dashboard is the sheet EXACTLY — 3 @ $10 + 4 @ $20 is $110.00, not $109.97',
   String(statsC.totalCost)
+)
+ok(
+  eq(planC.totals.costAfter, SHEET_A_COST + 4.5 * 14 + 110),
+  'and so is the total the preview promised before anything was written',
+  String(planC.totals.costAfter)
 )
 assertStockLotsConsistent(db)
 ok(true, 'the invariant holds after the multi-shelf revaluation')

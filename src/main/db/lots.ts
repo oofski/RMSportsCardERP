@@ -5,8 +5,12 @@ import { newId, nowIso } from '../util'
 /**
  * FIFO cost-lot engine. Every stock-in creates a dated "lot" (a batch bought at
  * a unit cost); sales and negative adjustments consume the oldest lots first.
- * The product's `unit_cost` is kept as the weighted average of the *remaining*
- * lots, so all existing money queries (value, cost, spread) stay correct.
+ *
+ * The LAYERS are the cost basis — see db/valuation.ts, which is where every
+ * total in the app now reads it from. The product's `unit_cost` is the weighted
+ * average of the remaining layers: a per-unit figure, for display and for
+ * pricing decisions, and the fallback basis for a shelf that has stock but no
+ * layer at all. It is deliberately NOT how a total is reconstructed.
  *
  * All mutating helpers take the `db` handle and MUST be called inside the
  * caller's existing `db.transaction()` so a lot change and its stock change
@@ -23,6 +27,30 @@ export interface LotSlice {
 export type LotSource = 'restock' | 'opening' | 'adjustment' | 'backfill'
 
 const cents = (n: number): number => Math.round(n * 100) / 100
+
+/**
+ * PER-UNIT MONEY PRECISION — four decimals, not two.
+ *
+ * A TOTAL is money and belongs in cents. A per-unit cost is a rate, and a rate
+ * rounded to cents is multiplied back up by the quantity everywhere it is used:
+ * as the basis for a found-stock lot, as the basis for a shelf that has no
+ * layer, and as the average shown beside a seven-box count. At two decimals a
+ * blended average of $15.7142… is stored as $15.71 and every use of it is a cent
+ * per unit out; at four it is $15.7143 and the same use is a hundredth of a cent
+ * out. Nothing downstream reconstructs a total from it any more, so this is not
+ * what makes the totals exact — it is what stops the one place that still has to
+ * fall back on an average (unlayered stock) from being wrong by real money.
+ *
+ * Four, matching QTY_DP, because a unit cost and a unit count are the two halves
+ * of the same multiplication and there is no reason for them to disagree.
+ */
+export const UNIT_DP = 4
+const UNIT_SCALE = 10 ** UNIT_DP
+
+/** Round a PER-UNIT money figure (a cost, an average) to UNIT_DP. */
+export function unitMoney(n: number): number {
+  return Math.round(n * UNIT_SCALE) / UNIT_SCALE
+}
 
 /**
  * QUANTITY PRECISION — the one place fractional stock is allowed in, and the one
@@ -122,11 +150,16 @@ export function createLot(
   const q = roundQty(qty, allowsFractionalQty(db, productId))
   if (!(q > 0)) return ''
   const id = newId()
+  // A layer's unit cost is a per-unit figure, so it is stored at UNIT_DP. A real
+  // purchase price is a cent value and is unaffected; a layer opened at a blended
+  // average (found stock, a backfill, a count sheet's extended total) is the case
+  // this exists for — cent-rounding there would bake the average's error
+  // permanently into the one thing the app treats as the truth.
   db.prepare(
     `INSERT INTO inventory_lots
        (id, product_id, location, qty_received, qty_remaining, unit_cost, received_at, source, note, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(id, productId, location, q, q, cents(Math.max(0, unitCost)), receivedAt, source, note, nowIso())
+  ).run(id, productId, location, q, q, unitMoney(Math.max(0, unitCost)), receivedAt, source, note, nowIso())
   return id
 }
 
@@ -259,7 +292,13 @@ export function restoreFifo(db: Database, slices: LotSlice[]): void {
   }
 }
 
-/** Weighted average cost of the remaining lots across all locations (0 if none). */
+/**
+ * Weighted average cost of the remaining lots across all locations (0 if none).
+ *
+ * A DERIVED PER-UNIT NUMBER. Nothing may multiply this by a quantity to get a
+ * total — that is the whole defect this file's header describes. Rounded to
+ * UNIT_DP rather than to cents because it is a rate, not money.
+ */
 export function lotWeightedAvgCost(db: Database, productId: string): number {
   const row = db
     .prepare(
@@ -267,7 +306,7 @@ export function lotWeightedAvgCost(db: Database, productId: string): number {
        FROM inventory_lots WHERE product_id = ?`
     )
     .get(productId) as { q: number; c: number }
-  return row.q > 0 ? cents(row.c / row.q) : 0
+  return row.q > 0 ? unitMoney(row.c / row.q) : 0
 }
 
 /**
@@ -314,6 +353,25 @@ export function backfillLots(db: Database): void {
       if (hasLot.get(r.pid, r.loc)) continue
       createLot(db, r.pid, r.loc, r.qty, r.cost, r.created, 'backfill', 'Opening balance')
     }
+  })
+  run()
+}
+
+/**
+ * Re-derive every product's stored average from its remaining layers.
+ *
+ * A one-time pass for databases whose averages were written when this was a
+ * cent-rounded figure. It reads nothing but the layers, so it cannot invent a
+ * basis: a product with nothing on hand keeps the average it already had (see
+ * syncProductAvgCost), and a product whose layers all sit at the same cent value
+ * comes back with exactly the number it went in with.
+ */
+export function resyncProductAvgCosts(db: Database): void {
+  const run = db.transaction(() => {
+    const ids = db
+      .prepare('SELECT DISTINCT product_id AS id FROM inventory_lots WHERE qty_remaining > 0')
+      .all() as Array<{ id: string }>
+    for (const r of ids) syncProductAvgCost(db, r.id)
   })
   run()
 }

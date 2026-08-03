@@ -290,6 +290,20 @@ export function money(n: number): number {
   return Math.round(n * CENTS) / CENTS
 }
 
+/**
+ * Round a PER-UNIT figure — matching UNIT_DP in db/lots.ts, which is the
+ * precision a cost layer and a product average are stored at.
+ *
+ * A total is money and belongs in cents; a unit cost is a rate that gets
+ * multiplied by a quantity again. A sheet that states "$110.00 for 7" is stating
+ * $15.7143 each, and cent-rounding that on the way in would write $15.71 to the
+ * layers and make the shelf worth $109.97 the moment it was applied — the exact
+ * arithmetic this whole screen exists to reproduce faithfully.
+ */
+export function unitMoney(n: number): number {
+  return Math.round(n * 10_000) / 10_000
+}
+
 // ---------------------------------------------------------------------------
 // Mapping guess
 // ---------------------------------------------------------------------------
@@ -966,7 +980,7 @@ export function buildResetPlan(
     // A total with no unit price still states the unit price, as long as there
     // is a quantity to divide by.
     if (costEach == null && costTotal != null && quantity > 0) {
-      costEach = money(costTotal / quantity)
+      costEach = unitMoney(costTotal / quantity)
     }
     if (marketEach == null && marketTotal != null && quantity > 0) {
       marketEach = money(marketTotal / quantity)
@@ -1051,8 +1065,11 @@ export function buildResetPlan(
           warnings.push('Cost not applied: nothing on hand to value once this count is applied.')
         }
       } else {
-        plan.shelfCostAfter = money(costEach)
-        projectedShelfCost.set(shelf, money(costEach))
+        // Kept at UNIT_DP, not cents: a cost column that came from an extended
+        // total ("$110.00 for 7") is a rate, and this is the number that gets
+        // written onto the layers and multiplied by the quantity again.
+        plan.shelfCostAfter = unitMoney(costEach)
+        projectedShelfCost.set(shelf, unitMoney(costEach))
       }
     } else if (rounded > 0) {
       // The one hole a baseline can still have: a row that counts stock but
@@ -1116,17 +1133,17 @@ export function buildResetPlan(
   const afterAvgCost = new Map<string, number>()
   const afterQtyTotal = new Map<string, number>()
   /**
-   * Products whose counted value cannot be reproduced from one average cost.
+   * What each product is WORTH after the run, shelf by shelf.
    *
-   * A product stores ONE unit_cost, rounded to the cent, and every widget
-   * derives its value as on-hand × that number. When a product is counted at two
-   * locations at different unit costs the average is a blend, and blend × total
-   * does not always land on the sheet's own extended total — 3 @ $10 and 4 @ $20
-   * is $110 on the paper and 7 × $15.71 = $109.97 on the dashboard. Three cents
-   * is exactly the kind of drift nobody notices, so it is measured here and said
-   * out loud on the row rather than left to be discovered against a paper count.
+   * Accumulated as a sum of per-shelf extensions and kept as a total, never
+   * collapsed to an average and multiplied back up. A product counted at two
+   * locations at different costs — 3 @ $10 and 4 @ $20 — is worth $110.00, and
+   * no single per-unit average can carry that: $15.7142… is not expressible, so
+   * seven of it is not $110. The dashboard reads the same shelves the same way
+   * (db/valuation.ts), which is what makes the number promised here and the
+   * number displayed afterwards the same number rather than two opinions.
    */
-  const blendGap = new Map<string, number>()
+  const afterCostValue = new Map<string, number>()
   for (const p of catalog) {
     let qty = 0
     let value = 0
@@ -1137,28 +1154,18 @@ export function buildResetPlan(
       value += q * afterCostAt(p, location)
     }
     afterQtyTotal.set(p.id, Math.round(qty * 1e4) / 1e4)
+    afterCostValue.set(p.id, value)
     // Nothing left on hand: syncProductAvgCost returns early and the last known
-    // average stays on the product, so that is what is reported here too.
-    const avg = qty > 0 ? money(value / qty) : p.unitCost
-    afterAvgCost.set(p.id, avg)
-    if (qty > 0) {
-      const gap = money(money(value) - money(qty * avg))
-      if (Math.abs(gap) >= 0.01) blendGap.set(p.id, gap)
-    }
+    // average stays on the product, so that is what is reported here too. The
+    // average is reported at UNIT_DP because that is the precision it is stored
+    // at — it is a per-unit rate, and it is used for display only.
+    afterAvgCost.set(p.id, qty > 0 ? unitMoney(value / qty) : p.unitCost)
   }
 
   for (const row of rows) {
     if (row.status === 'invalid' || row.status === 'unmatched' || row.status === 'ambiguous') continue
     if (!row.productId) continue
     row.costAfter = afterAvgCost.get(row.productId) ?? row.costBefore
-    const gap = blendGap.get(row.productId)
-    if (gap != null) {
-      row.warnings.push(
-        `Counted at two locations at different unit costs. One average cost cannot carry both, ` +
-          `so the dashboard reads ${fmt(Math.abs(gap))} ${gap > 0 ? 'under' : 'over'} this sheet ` +
-          `for this product.`
-      )
-    }
     const qtyMoved = (row.quantityAfter ?? 0) !== (row.quantityBefore ?? 0)
     const costMoved = money(row.costAfter ?? 0) !== money(row.costBefore ?? 0)
     const marketMoved = normMarket(row.marketAfter) !== normMarket(row.marketBefore)
@@ -1173,13 +1180,18 @@ export function buildResetPlan(
     for (const [location, quantity] of Object.entries(p.quantityByLocation)) {
       if (!(quantity > 0)) continue
       if (covered.has(key(p.id, location))) continue
+      // THIS shelf's basis, not the product-wide average. A product held at two
+      // locations at two costs loses a different amount depending on which shelf
+      // goes, and the write-off panel has to say which — the product average
+      // would understate one shelf and overstate the other by the same money.
+      const unitCost = p.costByLocation[location] ?? p.unitCost
       missing.push({
         productId: p.id,
         productName: p.name,
         location,
         quantity,
-        unitCost: p.unitCost,
-        unitMarket: p.highBid && p.highBid > 0 ? p.highBid : p.unitCost
+        unitCost,
+        unitMarket: p.highBid && p.highBid > 0 ? p.highBid : unitCost
       })
     }
   }
@@ -1216,21 +1228,33 @@ export function buildResetPlan(
     marketBefore: 0,
     marketAfter: 0
   }
+  //
+  // Both sides are summed SHELF BY SHELF, never as on-hand × an average. That is
+  // what the dashboard does (db/valuation.ts: quantity × the shelf's layer-
+  // weighted unit cost), down to the same division and the same multiplication,
+  // so "what this reset promises" and "what the dashboard reads afterwards" are
+  // one arithmetic evaluated twice rather than two that happen to be close.
   for (const p of catalog) {
     const qtyBefore = totalQty(p)
     const qtyAfter = afterQtyTotal.get(p.id) ?? qtyBefore
-    const costAfterUnit = afterAvgCost.get(p.id) ?? p.unitCost
+    let costBefore = 0
+    for (const [location, quantity] of Object.entries(p.quantityByLocation)) {
+      costBefore += quantity * (p.costByLocation[location] ?? p.unitCost)
+    }
+    const costAfter = afterCostValue.get(p.id) ?? costBefore
     // The dashboard values unpriced stock at cost, and these widgets have to
-    // read the same way or the operator is comparing two different numbers.
-    const marketBeforeUnit = p.highBid && p.highBid > 0 ? p.highBid : p.unitCost
+    // read the same way or the operator is comparing two different numbers. A
+    // high bid IS a per-unit number somebody typed, so the market side of a
+    // priced product stays a multiplication and is exact.
+    const bidBefore = p.highBid && p.highBid > 0 ? p.highBid : null
     const marketAfterRaw = projectedMarket.has(p.id) ? projectedMarket.get(p.id) : p.highBid
-    const marketAfterUnit = marketAfterRaw && marketAfterRaw > 0 ? marketAfterRaw : costAfterUnit
+    const bidAfter = marketAfterRaw && marketAfterRaw > 0 ? marketAfterRaw : null
     totals.unitsBefore += qtyBefore
     totals.unitsAfter += qtyAfter
-    totals.costBefore += qtyBefore * p.unitCost
-    totals.costAfter += qtyAfter * costAfterUnit
-    totals.marketBefore += qtyBefore * marketBeforeUnit
-    totals.marketAfter += qtyAfter * marketAfterUnit
+    totals.costBefore += costBefore
+    totals.costAfter += costAfter
+    totals.marketBefore += bidBefore != null ? qtyBefore * bidBefore : costBefore
+    totals.marketAfter += bidAfter != null ? qtyAfter * bidAfter : costAfter
   }
   totals.costBefore = money(totals.costBefore)
   totals.costAfter = money(totals.costAfter)

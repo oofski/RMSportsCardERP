@@ -15,6 +15,7 @@
  */
 import { ipcMain } from './ipcRegistry'
 import { IPC } from '@shared/ipc'
+import { parseMoneyInput } from '@shared/streaming'
 import type { Result } from '@shared/types'
 import type { Permission } from '@shared/permissions'
 import type {
@@ -198,6 +199,14 @@ export function registerStreamingIpc(): void {
    * turn a giveaway of four packs into a break of nothing. The conversion, and
    * every refusal, happen in db/streaming.ts against @shared/units — none of it
    * is restated here.
+   *
+   * `casePrice` gets the same treatment for the same reason, and is parsed
+   * rather than cast: it comes off a text field, so "2,400" and "$2,400" are
+   * what an operator will type and `Number()` reads neither. Anything that is
+   * not a plain amount becomes NaN and db/streaming.ts refuses it by name —
+   * whereas a silent 0 would book a case of Bowman at nothing and look like a
+   * working feature. Whether a price is ALLOWED at all is not decided here: it
+   * depends on the session's date, which only the write can see.
    */
   ipcMain.handle(IPC.streamItemAdd, (_e, input: NewStreamItem): Result<StreamSessionDetail> => {
     try {
@@ -215,6 +224,9 @@ export function registerStreamingIpc(): void {
       if (input?.cases !== undefined && input.cases !== null) payload.cases = num(input.cases)
       if (input?.boxes !== undefined && input.boxes !== null) payload.boxes = num(input.boxes)
       if (input?.packs !== undefined && input.packs !== null) payload.packs = num(input.packs)
+      if (input?.casePrice !== undefined && input.casePrice !== null) {
+        payload.casePrice = parseMoneyInput(input.casePrice)
+      }
       return addItem(payload, actor.id)
     } catch (err) {
       return fail(err)

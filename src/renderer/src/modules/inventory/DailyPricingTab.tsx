@@ -4,7 +4,7 @@ import { api } from '../../lib/api'
 import { useToast } from '../../components/Toast'
 import { Icon } from '../../components/Icon'
 import { CenterLoader, EmptyState } from '../../components/ui'
-import { formatDate, formatMoney } from '../../lib/format'
+import { formatDate, formatMoney, formatUnitMoney } from '../../lib/format'
 import { ProductQuickView } from './ProductCases'
 
 /**
@@ -61,7 +61,6 @@ export function DailyPricingTab({ onChanged }: { onChanged: () => Promise<void> 
     const res = await api.inventory.updateHighBid(row.id, highBid)
     if (res.ok && res.data) {
       const p = res.data
-      const market = p.highBid != null && p.highBid > 0 ? p.highBid : p.unitCost
       // Mirror the backend: stamp "last priced" only when a bid is set.
       const at = p.highBid != null ? new Date().toISOString() : null
       setRows((prev) =>
@@ -71,9 +70,14 @@ export function DailyPricingTab({ onChanged }: { onChanged: () => Promise<void> 
                 ...r,
                 highBid: p.highBid,
                 highBidAt: at,
-                unitCost: p.unitCost,
-                invValue: p.quantity * market,
-                spread: p.quantity * market - p.quantity * p.unitCost
+                // The cost side is READ from the product's layers, not rebuilt
+                // as quantity × average — same rule as pricingList, so a row
+                // updated in place and a row reloaded from the database show the
+                // same money.
+                unitCost: p.quantity > 0 ? p.costValue / p.quantity : p.unitCost,
+                costValue: p.costValue,
+                invValue: p.marketValue,
+                spread: p.marketValue - p.costValue
               }
             : r
         )
@@ -142,7 +146,7 @@ export function DailyPricingTab({ onChanged }: { onChanged: () => Promise<void> 
                     </button>
                   </td>
                   <td style={{ textAlign: 'center', fontWeight: 700 }}>{r.quantity}</td>
-                  <td className="money">{r.unitCost > 0 ? formatMoney(r.unitCost) : <span className="muted">—</span>}</td>
+                  <td className="money">{r.unitCost > 0 ? formatUnitMoney(r.unitCost) : <span className="muted">—</span>}</td>
                   <td style={{ textAlign: 'right' }}>
                     <BidInput value={r.highBid} onCommit={(raw) => commitBid(r, raw)} />
                   </td>
@@ -166,7 +170,9 @@ export function DailyPricingTab({ onChanged }: { onChanged: () => Promise<void> 
             unitType: quick.unitType,
             quantity: quick.quantity,
             unitCost: quick.unitCost,
-            highBid: quick.highBid
+            highBid: quick.highBid,
+            costValue: quick.costValue,
+            marketValue: quick.invValue
           }}
           onClose={() => setQuick(null)}
         />

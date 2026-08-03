@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ShipImportRecord, ShipSnapshotSummary } from '@shared/shippingTypes'
-import type { ShipExportKind, ShipSnapshotContents } from '@shared/shippingViews'
+import type {
+  ShipExportKind,
+  ShipImportDeletePlan,
+  ShipSnapshotContents
+} from '@shared/shippingViews'
 import { SHIP_EXPORT_KINDS, SHIP_EXPORT_LABELS } from '@shared/shippingViews'
 import type { ShipTabProps } from './ShippingModule'
 import { ShippingCalendar } from './ShippingCalendar'
@@ -8,7 +12,7 @@ import { api } from '../../lib/api'
 import { formatDateTime, formatMoney } from '../../lib/format'
 import { Icon } from '../../components/Icon'
 import { useToast } from '../../components/Toast'
-import { Button, CenterLoader, EmptyState, Field, Input, Modal } from '../../components/ui'
+import { Button, CenterLoader, Checkbox, EmptyState, Field, Input, Modal } from '../../components/ui'
 
 /**
  * History tab — architecture doc section 7.
@@ -30,8 +34,13 @@ import { Button, CenterLoader, EmptyState, Field, Input, Modal } from '../../com
  *  - **Exports** write CSV from the LIVE dataset — nine kinds, plus a per-snapshot
  *    export of that capture's orders.
  *
- * Deleting an import row deletes the log entry, never the active dataset — the
- * copy says so, because that would be a frightening thing to guess at.
+ * Deleting an import row deletes THE SHOW when that import is the active one:
+ * every package, card, claim and break assignment, and the supplies its
+ * checklist already took come back off the shelf. Deleting any earlier row is
+ * nearly inert, because that import's dataset was overwritten long ago. Which of
+ * the two is about to happen — and what it costs — is the whole content of the
+ * confirmation, and it is drawn from the main process rather than guessed at
+ * here.
  */
 
 const EXPORT_ICONS: Record<ShipExportKind, string> = {
@@ -230,17 +239,35 @@ export function HistoryTab({ summary, canManage, onChanged }: ShipTabProps): JSX
   )
 
   const deleteImport = useCallback(
-    async (id: string) => {
+    async (id: string, releaseSupplies: boolean) => {
       setBusy(true)
       try {
-        const res = await api.shipping.deleteImport(id)
-        if (!res.ok) {
-          toast.error(res.error ?? 'Could not delete the import record.')
+        const res = await api.shipping.deleteImport(id, releaseSupplies)
+        if (!res.ok || !res.data) {
+          toast.error(res.error ?? 'Could not delete that import.')
           return
         }
+        const { plan, workspaceCleared, stranded } = res.data
         await reloadAll()
         await onChangedRef.current()
         setEditing(null)
+        // Stranded units are the one outcome nobody asked for: the product a
+        // supply came out of has since been deleted, so there was nowhere to put
+        // it back. Said out loud, because a shelf count that stops matching is
+        // worse than an awkward sentence.
+        if (stranded.length > 0) {
+          toast.error(
+            `${plan.name} deleted, but ${stranded
+              .map((s) => `${s.quantity} ${s.label.toLowerCase()}`)
+              .join(', ')} could not go back — that product no longer exists.`
+          )
+          return
+        }
+        toast.success(
+          workspaceCleared
+            ? `“${plan.name}” deleted. The workspace is empty.`
+            : `“${plan.name}” deleted.`
+        )
       } finally {
         setBusy(false)
       }
@@ -505,8 +532,10 @@ export function HistoryTab({ summary, canManage, onChanged }: ShipTabProps): JSX
             {imports.length > 0 && <span className="hist-count mono">{imports.length}</span>}
           </span>
           <span className="hist-sub">
-            One dataset is active at a time — each import replaces it and logs a row here. Deleting a
-            row removes the log entry only; it never touches the active dataset.
+            One dataset is active at a time — each import replaces it and logs a row here. Deleting
+            the row for the <b>active</b> import deletes the show with it and empties the workspace;
+            deleting any earlier row removes the log entry and the bench records stamped with it. The
+            confirmation says which, with the numbers.
           </span>
           {imports.length > 0 && (
             <span className="hist-total mono">
@@ -560,7 +589,11 @@ export function HistoryTab({ summary, canManage, onChanged }: ShipTabProps): JSX
                       </button>
                       <button
                         className="sor-act danger"
-                        title="Delete this log entry"
+                        title={
+                          r.id === activeImportId
+                            ? 'Delete this show and empty the workspace'
+                            : 'Delete this import'
+                        }
                         onClick={() => setEditing({ kind: 'import-delete', record: r })}
                       >
                         <Icon name="Trash2" size={15} />
@@ -596,18 +629,27 @@ export function HistoryTab({ summary, canManage, onChanged }: ShipTabProps): JSX
         )}
       </section>
 
-      {editing && (
-        <EditModal
+      {editing?.kind === 'import-delete' ? (
+        <ImportDeleteModal
           key={editKey(editing)}
-          editing={editing}
+          record={editing.record}
           busy={busy}
           onClose={() => setEditing(null)}
-          onCreateSnapshot={createSnapshot}
-          onRenameSnapshot={renameSnapshot}
-          onDeleteSnapshot={deleteSnapshot}
-          onRenameImport={renameImport}
-          onDeleteImport={deleteImport}
+          onDelete={deleteImport}
         />
+      ) : (
+        editing && (
+          <EditModal
+            key={editKey(editing)}
+            editing={editing}
+            busy={busy}
+            onClose={() => setEditing(null)}
+            onCreateSnapshot={createSnapshot}
+            onRenameSnapshot={renameSnapshot}
+            onDeleteSnapshot={deleteSnapshot}
+            onRenameImport={renameImport}
+          />
+        )
       )}
     </div>
   )
@@ -709,6 +751,258 @@ function SnapStat({
 // Rename / delete / create
 // ---------------------------------------------------------------------------
 
+/**
+ * Deleting a show, stated in full before it happens.
+ *
+ * Modelled on the inventory reset's confirm rather than on the rename dialogs
+ * beside it, because it belongs to the same category: irreversible, and capable
+ * of destroying much more than the row that was clicked. So it leads with what
+ * goes, prices it, names anyone who is mid-pick, and — the moment stock, live
+ * work or real progress is involved — refuses to arm the button until the
+ * operator has ticked an acknowledgement that says the number out loud.
+ *
+ * The figures are the MAIN PROCESS's, fetched fresh when the dialog opens. The
+ * delete then recomputes them and refuses if the supplies were not agreed to:
+ * this screen states the bargain, it does not enforce it.
+ */
+function ImportDeleteModal({
+  record,
+  busy,
+  onClose,
+  onDelete
+}: {
+  record: ShipImportRecord
+  busy: boolean
+  onClose: () => void
+  onDelete: (id: string, releaseSupplies: boolean) => void
+}): JSX.Element {
+  const [plan, setPlan] = useState<ShipImportDeletePlan | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [acknowledged, setAcknowledged] = useState(false)
+
+  useEffect(() => {
+    let active = true
+    void (async () => {
+      try {
+        const res = await api.shipping.importDeletePlan(record.id)
+        if (!active) return
+        if (!res.ok || !res.data) setError(res.error ?? 'Could not read what this would delete.')
+        else setPlan(res.data)
+      } catch (err) {
+        if (active) setError(err instanceof Error ? err.message : 'Could not read what this would delete.')
+      }
+    })()
+    return () => {
+      active = false
+    }
+  }, [record.id])
+
+  const armed = !!plan && (!plan.needsAcknowledgement || acknowledged)
+
+  return (
+    <Modal
+      title={plan?.isLive ? 'Delete this show?' : 'Delete this import?'}
+      subtitle={record.name}
+      onClose={onClose}
+      footer={
+        <>
+          <Button onClick={onClose}>Cancel</Button>
+          <Button
+            variant="danger"
+            icon="Trash2"
+            loading={busy}
+            disabled={!armed}
+            onClick={() => plan && onDelete(plan.importId, plan.sopSteps > 0)}
+          >
+            {plan?.isLive ? 'Delete the show' : 'Delete the import'}
+          </Button>
+        </>
+      }
+    >
+      {error ? (
+        <p className="ship-confirm-body">{error}</p>
+      ) : !plan ? (
+        <CenterLoader />
+      ) : (
+        <div className="hist-del">
+          <p className="ship-confirm-body">
+            {plan.isLive ? (
+              <>
+                This is the <b>active</b> import, so its rows are the workspace. Deleting it takes
+                the whole show with it and leaves the workspace <b>empty</b> — there is no earlier
+                dataset to fall back to, because this import overwrote it. There is no undo.
+              </>
+            ) : (
+              <>
+                This import no longer owns the workspace — its dataset was replaced or cleared, so
+                no card, package or status changes and no supplies move. What goes is the{' '}
+                <b>log entry</b> and the bench records stamped with it.
+              </>
+            )}
+          </p>
+
+          {plan.isLive && (
+            <dl className="hist-del-figures">
+              <div>
+                <dt>Packages</dt>
+                <dd>
+                  <strong>{plan.packages}</strong>
+                  {plan.packagesPacked > 0 && <span> · {plan.packagesPacked} already packed</span>}
+                </dd>
+              </div>
+              <div>
+                <dt>Cards</dt>
+                <dd>
+                  <strong>{plan.cards}</strong>
+                  {plan.cardsPicked > 0 && <span> · {plan.cardsPicked} already picked</span>}
+                </dd>
+              </div>
+              <div>
+                <dt>Breaks</dt>
+                <dd>
+                  <strong>{plan.breaks}</strong>
+                </dd>
+              </div>
+              <div>
+                <dt>Card value</dt>
+                <dd>
+                  <strong>{formatMoney(plan.value)}</strong>
+                </dd>
+              </div>
+            </dl>
+          )}
+
+          {/* The half that moves real stock, above everything else it does. */}
+          {plan.sopSteps > 0 && (
+            <div className="hist-del-alarm">
+              <Icon name="PackageMinus" size={16} />
+              <div>
+                <strong>
+                  {plan.sopSteps} SOP {plan.sopSteps === 1 ? 'step is' : 'steps are'} ticked off for{' '}
+                  {plan.eventDate}
+                </strong>
+                <span>
+                  Those supplies really left the shelf. Deleting the show puts every one of them
+                  back and takes {formatMoney(plan.sopCost)} off that day&apos;s packing cost in the
+                  P&amp;L.
+                </span>
+                <ul className="hist-del-supplies">
+                  {plan.sopSupplies.map((s) => (
+                    <li key={`${s.role}`}>
+                      <b className="mono">{s.quantity.toLocaleString()}</b> {s.label.toLowerCase()}
+                      {s.supplyName ? ` (${s.supplyName})` : ''}
+                      <em className="mono">{formatMoney(s.cost)}</em>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          )}
+
+          {/* Two shows can share a date. The other one's stock is genuinely
+              gone, so it is left exactly where it is — and said so. */}
+          {plan.sopDayOwner && (
+            <p className="hist-del-note">
+              <Icon name="Info" size={14} />
+              <span>
+                {plan.eventDate}&apos;s checklist belongs to <b>{plan.sopDayOwner}</b>, not this
+                show. Nothing is handed back and that day&apos;s packing cost is untouched.
+              </span>
+            </p>
+          )}
+
+          {plan.working.length > 0 && (
+            <div className="hist-del-alarm">
+              <Icon name="UserMinus" size={16} />
+              <div>
+                <strong>
+                  {plan.working.length}{' '}
+                  {plan.working.length === 1 ? 'person is' : 'people are'} working this show right
+                  now
+                </strong>
+                <span>
+                  {plan.working
+                    .map(
+                      (w) =>
+                        `${w.name ?? 'Somebody'} is ${w.role === 'pack' ? 'packing' : 'picking'} ${
+                          w.handle ? `@${w.handle}` : 'an order'
+                        }`
+                    )
+                    .join(' · ')}
+                  . Their screen will empty the moment this is done.
+                </span>
+              </div>
+            </div>
+          )}
+
+          <ul className="hist-del-list">
+            {plan.carriedToId ? (
+              <li>
+                <Icon name="Repeat" size={13} />
+                <span>
+                  <b>{plan.claims}</b> work {plan.claims === 1 ? 'claim' : 'claims'} and{' '}
+                  <b>{plan.assignments}</b> break{' '}
+                  {plan.assignments === 1 ? 'assignment' : 'assignments'} move to “
+                  {plan.carriedToName || 'the import that carried forward from this one'}”, which is
+                  the same run of work — nobody comes off a break they are standing at.
+                </span>
+              </li>
+            ) : (
+              (plan.claims > 0 || plan.assignments > 0) && (
+                <li>
+                  <Icon name="Users" size={13} />
+                  <span>
+                    <b>{plan.claims}</b> work {plan.claims === 1 ? 'claim' : 'claims'} and{' '}
+                    <b>{plan.assignments}</b> break{' '}
+                    {plan.assignments === 1 ? 'assignment' : 'assignments'} go with it. Nothing
+                    carried forward from this import, so there is nothing to move them to.
+                  </span>
+                </li>
+              )
+            )}
+            <li>
+              <Icon name="Archive" size={13} />
+              <span>
+                {plan.snapshots > 0 ? (
+                  <>
+                    <b>{plan.snapshots}</b>{' '}
+                    {plan.snapshots === 1 ? 'snapshot survives' : 'snapshots survive'} this delete —
+                    a capture is the record that outlives its dataset, and it is never swept by one.
+                  </>
+                ) : (
+                  <>
+                    No snapshot was ever captured from this show, so nothing about it stays
+                    reportable. Capture one first if the numbers might be wanted.
+                  </>
+                )}
+              </span>
+            </li>
+          </ul>
+
+          {plan.needsAcknowledgement && (
+            <div className="hist-del-ack">
+              <Checkbox
+                checked={acknowledged}
+                onChange={setAcknowledged}
+                label={
+                  plan.sopSteps > 0
+                    ? `Yes — delete “${plan.name}” and put ${formatMoney(plan.sopCost)} of supplies back on the shelf`
+                    : `Yes — delete “${plan.name}” and everything shown above`
+                }
+                hint={
+                  plan.cardsPicked > 0 || plan.packagesPacked > 0
+                    ? `${plan.cardsPicked} picked cards and ${plan.packagesPacked} packed packages are thrown away with it.`
+                    : 'This cannot be undone.'
+                }
+              />
+            </div>
+          )}
+        </div>
+      )}
+    </Modal>
+  )
+}
+
 function EditModal({
   editing,
   busy,
@@ -716,17 +1010,15 @@ function EditModal({
   onCreateSnapshot,
   onRenameSnapshot,
   onDeleteSnapshot,
-  onRenameImport,
-  onDeleteImport
+  onRenameImport
 }: {
-  editing: Editing
+  editing: Exclude<Editing, { kind: 'import-delete' }>
   busy: boolean
   onClose: () => void
   onCreateSnapshot: (name: string) => void
   onRenameSnapshot: (id: string, name: string) => void
   onDeleteSnapshot: (id: string) => void
   onRenameImport: (id: string, name: string) => void
-  onDeleteImport: (id: string) => void
 }): JSX.Element {
   const initial =
     editing.kind === 'import-rename'
@@ -735,34 +1027,6 @@ function EditModal({
         ? editing.snapshot.name
         : ''
   const [name, setName] = useState(initial)
-
-  if (editing.kind === 'import-delete') {
-    return (
-      <Modal
-        title="Delete this import record?"
-        subtitle={editing.record.name}
-        onClose={onClose}
-        footer={
-          <>
-            <Button onClick={onClose}>Cancel</Button>
-            <Button
-              variant="danger"
-              icon="Trash2"
-              loading={busy}
-              onClick={() => onDeleteImport(editing.record.id)}
-            >
-              Delete the record
-            </Button>
-          </>
-        }
-      >
-        <p className="ship-confirm-body">
-          This removes the <b>log entry</b> only. The active dataset — every package, card and status
-          you are working on — is untouched.
-        </p>
-      </Modal>
-    )
-  }
 
   if (editing.kind === 'snapshot-delete') {
     return (

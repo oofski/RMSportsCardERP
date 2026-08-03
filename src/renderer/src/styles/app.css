@@ -12357,6 +12357,57 @@ button.sor-team:focus-visible {
 .stm-consume-loss.is-missing {
   color: var(--danger-strong);
 }
+
+/* ---------- Reconciling a past show ----------
+   Blue, not amber. The amber block warns that stock is about to move; this one
+   says the opposite — nothing moves — and wearing the same colour would make
+   the two read as the same event with different words. Ink is --text on the
+   tint for the same reason .stm-inline-note.warn takes --text on --warning-bg:
+   the semantic hue itself does not clear 4.5:1 on its own light tint. */
+.stm-recon-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin-bottom: 12px;
+  padding: 9px 11px;
+  border: 1px solid var(--info);
+  border-radius: var(--radius-sm);
+  background: var(--info-bg);
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.stm-recon-banner > svg {
+  flex: none;
+  margin-top: 1px;
+}
+.stm-inline-note.recon {
+  border-color: var(--info);
+  background: var(--info-bg);
+  color: var(--text);
+}
+.stm-consume.is-recon {
+  border-color: var(--info);
+  background: var(--info-bg);
+  color: var(--text);
+}
+/* The arithmetic, at a size that can be checked at a glance against what the
+   operator remembers the night costing — it is the only check a reconciliation
+   has, since there is no shelf left to disagree with it. */
+.stm-recon-sum {
+  font-size: 14px;
+  line-height: 1.45;
+}
+.stm-recon-total {
+  white-space: nowrap;
+}
+/* The line's own marker in the list: this one asserted a cost rather than
+   moving stock. Distinct from .is-entry beside it, which is how a line was
+   TYPED — a line can and usually does carry both. */
+.stm-line-tag.is-recon {
+  background: var(--info-bg);
+  color: var(--text);
+}
 /* Which unit the numbers beside it are in. Without it a bare "3" next to a
    product is ambiguous by a factor of twelve. 5.63:1 light, 6.77:1 dark. */
 .stm-unit-chip {
@@ -17086,4 +17137,145 @@ button.sor-team:focus-visible {
 }
 .floor-empty span {
   font-size: 13px;
+}
+
+/* ==========================================================================
+   Deleting an import — the confirmation.
+
+   Weighted like the inventory reset's confirm rather than like the rename
+   dialogs beside it, because it belongs to the same category: irreversible,
+   and capable of destroying far more than the row that was clicked. Same
+   tokens, so it is correct in light AND dark.
+   ========================================================================== */
+.hist-del {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.hist-del-figures {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+.hist-del-figures > div {
+  padding: 11px 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.hist-del-figures dt {
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.hist-del-figures dd {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.hist-del-figures dd strong {
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--text);
+}
+
+/* Stock leaving the shelf, and somebody mid-pick. Both are facts the operator
+   cannot be allowed to scroll past, so both are loud and neither collapses. */
+.hist-del-alarm {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 11px 12px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-sm);
+  background: var(--danger-bg);
+  color: var(--danger-strong);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.hist-del-alarm > svg {
+  flex: none;
+  margin-top: 1px;
+}
+.hist-del-alarm > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.hist-del-alarm strong {
+  font-weight: 700;
+}
+.hist-del-supplies {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.hist-del-supplies li {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.hist-del-supplies li em {
+  margin-left: auto;
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+}
+
+.hist-del-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+.hist-del-note > svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--text-3);
+}
+.hist-del-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.hist-del-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--text-2);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+.hist-del-list li > svg {
+  flex: none;
+  margin-top: 3px;
+  color: var(--text-3);
+}
+.hist-del-list b {
+  color: var(--text);
+  font-weight: 700;
+}
+/* Asked for only when stock moves, somebody is working, or real progress is
+   being thrown away — so a mis-import nobody touched is still two clicks. */
+.hist-del-ack {
+  padding: 11px 12px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
 }

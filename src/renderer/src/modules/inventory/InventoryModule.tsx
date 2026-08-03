@@ -28,7 +28,8 @@ const EMPTY_STATS: InventoryStats = {
   salesRevenue: 0,
   salesCount: 0,
   unitsByLocation: {},
-  zeroCost: []
+  zeroCost: [],
+  layerGaps: []
 }
 
 export function InventoryModule(): JSX.Element {

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { Employee } from '@shared/types'
 import type { StreamItem, StreamItemKind, StreamSessionDetail } from '@shared/streaming'
-import { formatDuration, isSuspiciouslyLong } from '@shared/streaming'
+import { formatDuration, isPastDatedSession, isSuspiciouslyLong } from '@shared/streaming'
 import { formatMoney } from '../../lib/format'
 import { formatUnitCount, typedEntryLabel } from '../../lib/productUnits'
 import { Icon } from '../../components/Icon'
@@ -88,10 +88,13 @@ export function SessionDetail({
         toast.error(resultError(res, 'Could not remove that line.'))
         return
       }
+      const entry = typedEntryLabel(removing) ?? `${formatUnitCount(removing.quantity)} ×`
       toast.success(
-        `${typedEntryLabel(removing) ?? `${formatUnitCount(removing.quantity)} ×`} ${
-          removing.productName
-        } back into ${removing.location}.`
+        removing.statedCasePrice !== null
+          ? `${entry} ${removing.productName} off this show — ${formatMoney(
+              removing.costTotal
+            )} no longer booked to it.`
+          : `${entry} ${removing.productName} back into ${removing.location}.`
       )
       setRemoving(null)
       await applyDetail(res.data)
@@ -143,6 +146,9 @@ export function SessionDetail({
   const breaks = items.filter((i) => i.kind === 'break')
   const giveaways = items.filter((i) => i.kind === 'giveaway')
   const runaway = isSuspiciouslyLong(session)
+  // Which act adding a line to THIS show is. The same rule main enforces on the
+  // write, so the form the operator is given is the one that will be accepted.
+  const reconcile = isPastDatedSession(session)
 
   return (
     <section className="stm-detail">
@@ -185,6 +191,20 @@ export function SessionDetail({
         </div>
       )}
 
+      {/* Said once, at the top, and said plainly. Everything below behaves
+          differently on a show that is already history, and an operator who has
+          to work that out from the fields has already been surprised by it. */}
+      {reconcile && (
+        <div className="stm-inline-note recon">
+          <Icon name="History" size={14} />
+          <span>
+            <b>This show is history.</b> Anything added here records what was broken and what it
+            cost — cases and the price you paid per case. It does not move today&rsquo;s stock,
+            because that stock left the shelf on the night.
+          </span>
+        </div>
+      )}
+
       {session.note && (
         <div className="stm-inline-note">
           <Icon name="StickyNote" size={14} />
@@ -220,7 +240,11 @@ export function SessionDetail({
             <Icon name="DollarSign" size={14} /> Cost of this show
           </span>
           <b className="mono">{formatMoney(totals.totalCost)}</b>
-          <em>everything consumed on air, at FIFO cost</em>
+          <em>
+            {reconcile
+              ? 'everything broken on air — reconciled lines at the price entered for them'
+              : 'everything consumed on air, at FIFO cost'}
+          </em>
         </div>
       </div>
 
@@ -232,6 +256,7 @@ export function SessionDetail({
         items={breaks}
         canManage={canManage}
         canSearchCatalog={canSearchCatalog}
+        reconcile={reconcile}
         adding={adding === 'break'}
         onOpenAdd={() => setAdding('break')}
         onCloseAdd={() => setAdding(null)}
@@ -248,6 +273,7 @@ export function SessionDetail({
         items={giveaways}
         canManage={canManage}
         canSearchCatalog={canSearchCatalog}
+        reconcile={reconcile}
         adding={adding === 'giveaway'}
         onOpenAdd={() => setAdding('giveaway')}
         onCloseAdd={() => setAdding(null)}
@@ -271,7 +297,7 @@ export function SessionDetail({
                 loading={busy}
                 onClick={() => void removeLine()}
               >
-                Remove and return stock
+                {removing.statedCasePrice !== null ? 'Remove the line' : 'Remove and return stock'}
               </Button>
             </>
           }
@@ -279,19 +305,35 @@ export function SessionDetail({
           {/* Named the way it was recorded, so the operator can match this
               against the line they clicked rather than against a converted
               number they never typed. */}
-          <p className="stm-confirm-lead">
-            <b>
-              {typedEntryLabel(removing) ?? `${formatUnitCount(removing.quantity)} ×`}{' '}
-              {removing.productName}
-            </b>{' '}
-            goes back into <b>{removing.location}</b> at the cost it came out at (
-            {formatMoney(removing.costTotal)}), and this show stops carrying it.
-          </p>
-          {typedEntryLabel(removing) && (
+          {removing.statedCasePrice !== null ? (
+            /* A reconciliation took no stock, so none comes back. Saying "goes
+               back into RM" here would promise a movement that will not happen
+               and leave the operator looking for it in Inventory. */
             <p className="stm-confirm-lead">
-              That is {formatUnitCount(removing.quantity)} in stock units — the amount that was
-              taken off the shelf and the amount that goes back on it.
+              <b>
+                {typedEntryLabel(removing) ?? `${formatUnitCount(removing.quantity)} ×`}{' '}
+                {removing.productName}
+              </b>{' '}
+              stops being carried by this show, and the {formatMoney(removing.costTotal)} it booked
+              comes off the night. No stock moves — none moved when it was recorded.
             </p>
+          ) : (
+            <>
+              <p className="stm-confirm-lead">
+                <b>
+                  {typedEntryLabel(removing) ?? `${formatUnitCount(removing.quantity)} ×`}{' '}
+                  {removing.productName}
+                </b>{' '}
+                goes back into <b>{removing.location}</b> at the cost it came out at (
+                {formatMoney(removing.costTotal)}), and this show stops carrying it.
+              </p>
+              {typedEntryLabel(removing) && (
+                <p className="stm-confirm-lead">
+                  That is {formatUnitCount(removing.quantity)} in stock units — the amount that was
+                  taken off the shelf and the amount that goes back on it.
+                </p>
+              )}
+            </>
           )}
         </Modal>
       )}
@@ -324,8 +366,14 @@ export function SessionDetail({
               Its {totals.breakLines + totals.giveawayLines} line
               {totals.breakLines + totals.giveawayLines === 1 ? '' : 's'} —{' '}
               {formatUnitCount(totals.breakUnits + totals.giveawayUnits)} stock units worth{' '}
-              {formatMoney(totals.totalCost)} — are reversed, and that stock goes back where it came
-              from.
+              {formatMoney(totals.totalCost)} — are reversed
+              {/* A reconciliation never took stock, so promising its return here
+                  would be a movement the operator then goes looking for. */}
+              {items.every((i) => i.statedCasePrice !== null)
+                ? '. Nothing goes back on the shelf — every line on this show is a reconciliation and moved no stock.'
+                : items.some((i) => i.statedCasePrice !== null)
+                  ? ', and the stock the un-reconciled ones took goes back where it came from.'
+                  : ', and that stock goes back where it came from.'}
             </p>
           ) : (
             <p className="stm-confirm-lead">Nothing was consumed on it, so no stock moves.</p>
@@ -413,6 +461,7 @@ function ItemSection({
   items,
   canManage,
   canSearchCatalog,
+  reconcile,
   adding,
   sessionId,
   onOpenAdd,
@@ -427,6 +476,8 @@ function ItemSection({
   items: StreamItem[]
   canManage: boolean
   canSearchCatalog: boolean
+  /** The show is history: adding to it records what it cost, not what it takes. */
+  reconcile: boolean
   adding: boolean
   sessionId: string
   onOpenAdd: () => void
@@ -449,8 +500,16 @@ function ItemSection({
           )}
         </span>
         {canManage && !adding && (
-          <Button size="sm" icon="Plus" onClick={onOpenAdd}>
-            {kind === 'break' ? 'Add break' : 'Add giveaway'}
+          /* The button says which act it opens, so the mode is known before the
+             form is even on screen. */
+          <Button size="sm" icon={reconcile ? 'History' : 'Plus'} onClick={onOpenAdd}>
+            {reconcile
+              ? kind === 'break'
+                ? 'Reconcile a break'
+                : 'Reconcile a giveaway'
+              : kind === 'break'
+                ? 'Add break'
+                : 'Add giveaway'}
           </Button>
         )}
       </div>
@@ -460,6 +519,7 @@ function ItemSection({
           sessionId={sessionId}
           kind={kind}
           canSearchCatalog={canSearchCatalog}
+          reconcile={reconcile}
           onAdded={onAdded}
           onCancel={onCloseAdd}
         />
@@ -516,6 +576,20 @@ function ItemRow({
             <span className="stm-line-tag is-entry" title="Recorded as">
               <Icon name="Boxes" size={10} />
               {entry}
+            </span>
+          )}
+          {/* This line is a statement about what stock cost, not a record of
+              stock moving. Both are on the same list and they are not the same
+              thing, so the one that moved nothing says so. */}
+          {item.statedCasePrice !== null && (
+            <span
+              className="stm-line-tag is-recon"
+              title={`Reconciled after the show at ${formatMoney(
+                item.statedCasePrice
+              )} a case. No stock moved.`}
+            >
+              <Icon name="History" size={10} />
+              {formatMoney(item.statedCasePrice)}/case
             </span>
           )}
           {item.breakNumber !== null && (

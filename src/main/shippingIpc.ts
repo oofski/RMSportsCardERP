@@ -56,6 +56,8 @@ import {
   type ShipCustomerRow,
   type ShipExportKind,
   type ShipFulfillmentStage,
+  type ShipImportDeletePlan,
+  type ShipImportDeleteResult,
   type ShipLedgerRow,
   type ShipOrderRow,
   type ShipParseJob,
@@ -72,7 +74,6 @@ import { parsePdf } from './shipping/pdf'
 import {
   clearShipDataset,
   clearShipDocument,
-  deleteShipImport,
   deleteShipSnapshot,
   getShipSettings,
   getShipSnapshot,
@@ -132,6 +133,7 @@ import {
   bulkSetShipmentStatusByTracking
 } from './db/shippingDomain'
 import { getShipCalendarDay, listShipCalendar } from './db/shippingCalendar'
+import { deleteShipImport, planShipImportDelete } from './db/shipImportDelete'
 import type {
   ShipSopResult,
   ShipSopState,
@@ -1179,15 +1181,49 @@ export function registerShippingIpc(): void {
     }
   )
 
-  ipcMain.handle(IPC.shipImportDelete, (_e, payload: { id: string }): Result => {
-    try {
-      requireManage()
-      const id = requireId(payload?.id, 'import')
-      return deleteShipImport(id) ? { ok: true } : { ok: false, error: 'Import not found.' }
-    } catch (err) {
-      return fail(err)
+  /**
+   * What deleting this import would destroy. A read, but a lead's read: it
+   * carries the show's value, who is standing at a bench and what the day has
+   * booked in supplies, so it is gated exactly as the delete is.
+   */
+  ipcMain.handle(
+    IPC.shipImportDeletePlan,
+    (_e, payload: { id: string }): Result<ShipImportDeletePlan> => {
+      try {
+        requireManage()
+        const id = requireId(payload?.id, 'import')
+        const plan = planShipImportDelete(id)
+        return plan ? { ok: true, data: plan } : { ok: false, error: 'Import not found.' }
+      } catch (err) {
+        return fail(err)
+      }
     }
-  })
+  )
+
+  /**
+   * `releaseSupplies` is checked HERE, not on the screen that asked for it.
+   * The renderer is not a trust boundary — this IPC is reachable from a second
+   * window and from any future caller — and what is on the other side of it is
+   * real stock and a P&L day.
+   */
+  ipcMain.handle(
+    IPC.shipImportDelete,
+    (_e, payload: { id: string; releaseSupplies?: boolean }): Result<ShipImportDeleteResult> => {
+      try {
+        const user = requireManage()
+        const id = requireId(payload?.id, 'import')
+        return {
+          ok: true,
+          data: deleteShipImport(id, {
+            releaseSupplies: payload?.releaseSupplies === true,
+            userId: user.id
+          })
+        }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
 
   ipcMain.handle(
     IPC.shipSnapshotCreate,

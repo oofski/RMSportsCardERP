@@ -2,9 +2,9 @@ import { useEffect, useState, type CSSProperties } from 'react'
 import type { ProductLot, UnitType } from '@shared/types'
 import { api } from '../../lib/api'
 import { Modal } from '../../components/ui'
-import { formatDate, formatMoney } from '../../lib/format'
+import { formatDate, formatMoney, formatUnitMoney } from '../../lib/format'
 import { CategoryLogo } from './CategoryLogo'
-import { unitLabel } from './helpers'
+import { productMetrics, unitLabel } from './helpers'
 
 interface CaseUnit {
   n: number
@@ -23,6 +23,10 @@ export interface ProductCardData {
   quantity: number
   unitCost: number
   highBid: number | null
+  /** Cost basis on hand, off the FIFO layers — never quantity × unitCost. */
+  costValue: number
+  /** Market value on hand: quantity × high bid when priced, else costValue. */
+  marketValue: number
 }
 
 /** Flatten FIFO lots into one row per physical case, in consumption order. */
@@ -57,7 +61,7 @@ export function CaseList({ lots, unitType }: { lots: ProductLot[]; unitType: Uni
           </span>
           <span className="case-loc">{c.location}</span>
           <span className="case-date">{c.receivedAt ? formatDate(c.receivedAt) : '—'}</span>
-          <span className="case-cost mono">{formatMoney(c.unitCost)}</span>
+          <span className="case-cost mono">{formatUnitMoney(c.unitCost)}</span>
         </div>
       ))}
     </div>
@@ -138,11 +142,12 @@ function ProductImageThumb({
  * the dashboard hover card, so they always show the same thing.
  */
 export function ProductDetailBody({ data }: { data: ProductCardData }): JSX.Element {
-  const { productId, name, category, unitType, quantity, unitCost, highBid } = data
-  const market = highBid != null && highBid > 0 ? highBid : unitCost
-  const invValue = quantity * market
-  const totalCost = quantity * unitCost
-  const spread = invValue - totalCost
+  const { productId, name, category, unitType, quantity, highBid } = data
+  // The same helper the dashboard table uses, rather than a second copy of the
+  // arithmetic. The cases listed underneath this card ARE the cost layers, so
+  // the specs above them have to add up to the same money — and the surest way
+  // for two screens to agree is for there to be one place that decides.
+  const m = productMetrics(data)
   const noun = unitLabel(unitType).toLowerCase()
   return (
     <div className="qv-body">
@@ -152,11 +157,15 @@ export function ProductDetailBody({ data }: { data: ProductCardData }): JSX.Elem
         <ProductImageThumb key={productId} productId={productId} category={category} name={name} />
         <div className="qv-specs">
           <Spec label="On hand" value={`${quantity} ${noun}${quantity === 1 ? '' : 's'}`} />
-          <Spec label="Avg cost" value={formatMoney(unitCost)} />
-          <Spec label="Total cost" value={formatMoney(totalCost)} />
+          <Spec label="Avg cost" value={formatUnitMoney(m.avgCost)} />
+          <Spec label="Total cost" value={formatMoney(m.totalCost)} />
           <Spec label="High bid" value={highBid != null && highBid > 0 ? formatMoney(highBid) : '—'} />
-          <Spec label="Inv. value" value={formatMoney(invValue)} />
-          <Spec label="Spread" value={formatMoney(spread)} tone={spread < 0 ? 'neg' : spread > 0 ? 'pos' : undefined} />
+          <Spec label="Inv. value" value={formatMoney(m.invValue)} />
+          <Spec
+            label="Spread"
+            value={formatMoney(m.spread)}
+            tone={m.spread < 0 ? 'neg' : m.spread > 0 ? 'pos' : undefined}
+          />
         </div>
       </div>
       <div className="qv-cases-head">Cases · FIFO order (sold oldest first)</div>

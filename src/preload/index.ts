@@ -117,6 +117,8 @@ import type {
   ShipCustomerRow,
   ShipExportKind,
   ShipFulfillmentStage,
+  ShipImportDeletePlan,
+  ShipImportDeleteResult,
   ShipLedgerRow,
   ShipOrderRow,
   ShipParseJob,
@@ -582,7 +584,18 @@ const api = {
     imports: (): Promise<ShipImportRecord[]> => ipcRenderer.invoke(IPC.shipImportsList),
     renameImport: (id: string, name: string): Promise<Result<ShipImportRecord>> =>
       ipcRenderer.invoke(IPC.shipImportRename, { id, name }),
-    deleteImport: (id: string): Promise<Result> => ipcRenderer.invoke(IPC.shipImportDelete, { id }),
+    /** What deleting this import would destroy, priced. Nothing is written. */
+    importDeletePlan: (id: string): Promise<Result<ShipImportDeletePlan>> =>
+      ipcRenderer.invoke(IPC.shipImportDeletePlan, { id }),
+    /**
+     * Delete the show, not just its log row.
+     *
+     * `releaseSupplies` says the operator has been shown what that show's ticked
+     * SOP steps took and has agreed to it going back on the shelf. Main refuses
+     * the delete without it when there is anything to hand back.
+     */
+    deleteImport: (id: string, releaseSupplies = false): Promise<Result<ShipImportDeleteResult>> =>
+      ipcRenderer.invoke(IPC.shipImportDelete, { id, releaseSupplies }),
     snapshots: (): Promise<ShipSnapshotSummary[]> => ipcRenderer.invoke(IPC.shipSnapshotsList),
     snapshot: (id: string): Promise<ShipSnapshot | null> =>
       ipcRenderer.invoke(IPC.shipSnapshotGet, id),
@@ -638,6 +651,12 @@ const api = {
      * break, `boxes` + `packs` for a giveaway — and main converts to whatever
      * unit THAT product is stocked in. `quantity` is the raw stock-unit escape
      * hatch and is ignored when any of the three are present.
+     *
+     * On a show that is already history (isPastDatedSession) this is a
+     * RECONCILIATION instead: send `cases` + `casePrice` and the line books what
+     * was actually paid, moving no stock. Main decides which of the two it is
+     * from the stored session and refuses a mismatch either way, so a form drawn
+     * before midnight cannot post the wrong kind of line after it.
      *
      * A refused conversion comes back as `Result.error` and is safe to show
      * verbatim: every one of those messages names the field to go and fill in

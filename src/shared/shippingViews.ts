@@ -27,6 +27,8 @@ import type {
   ShipTeamSlot,
   ShipWarning
 } from './shippingTypes'
+import type { ShipStationRole } from './shipStations'
+import type { ShipSupplyRole } from './shippingSupplies'
 
 // ---------------------------------------------------------------------------
 // Fulfillment stage (architecture doc section 4.1)
@@ -667,4 +669,105 @@ export interface ShipCalendarDayDetail extends ShipCalendarDay {
   snapshotId: string | null
   /** The import whose dataset these numbers describe. */
   importId: string | null
+}
+
+// ---------------------------------------------------------------------------
+// Deleting an import — what goes with it
+// ---------------------------------------------------------------------------
+
+/**
+ * One consumable a delete is about to put back on the shelf.
+ *
+ * Read from `ship_supply_usage`, never recomputed from tonight's plan: the row
+ * is the only record of what actually left and at what it was booked, and it
+ * survives the product being re-pointed or deleted.
+ */
+export interface ShipImportDeleteSupply {
+  role: ShipSupplyRole
+  label: string
+  /** The product it came out of, when that product still exists. */
+  supplyName: string | null
+  quantity: number
+  cost: number
+}
+
+/** Somebody with an order in their hands at the moment the plan was drawn. */
+export interface ShipImportDeleteWorker {
+  name: string | null
+  role: ShipStationRole
+  handle: string | null
+}
+
+/**
+ * Everything a delete would destroy, priced, before anything is written.
+ *
+ * The confirmation is built entirely from this — an operator throwing away a
+ * show's work is owed the actual numbers, not an "are you sure?".
+ */
+export interface ShipImportDeletePlan {
+  importId: string
+  name: string
+  filename: string
+  createdAt: string
+  /**
+   * True when this import is the newest — the one whose rows ARE the workspace.
+   *
+   * Only one dataset exists at a time, so every earlier import's cards and
+   * packages were already overwritten by whatever replaced them. Deleting one
+   * of those removes a log entry and the operator state stamped with it, and
+   * touches no dataset row at all.
+   */
+  isLive: boolean
+  /** The import that carried forward from this one — where its work moves to. */
+  carriedToId: string | null
+  carriedToName: string | null
+
+  // The active dataset. All zero unless `isLive`.
+  packages: number
+  packagesPacked: number
+  cards: number
+  cardsPicked: number
+  breaks: number
+  value: number
+
+  /** Work claims and break assignments stamped with this import. */
+  claims: number
+  assignments: number
+  /** Empty unless somebody is holding an order right now. */
+  working: ShipImportDeleteWorker[]
+
+  /** The show's day, when this import still owns one. */
+  eventName: string | null
+  eventDate: string | null
+  /**
+   * Set when that day's checklist belongs to a DIFFERENT show. Nothing is
+   * handed back in that case — the other show's stock is genuinely gone.
+   */
+  sopDayOwner: string | null
+  /** Ticked steps whose stock the delete puts back. */
+  sopSteps: number
+  sopSupplies: ShipImportDeleteSupply[]
+  /** What comes off that day's packing cost in the P&L. */
+  sopCost: number
+
+  /** Captures of this show that SURVIVE the delete. */
+  snapshots: number
+  /**
+   * True when the confirmation has to be acknowledged in writing: stock moves,
+   * somebody is working, or real progress is being thrown away.
+   */
+  needsAcknowledgement: boolean
+}
+
+export interface ShipImportDeleteResult {
+  /** The plan as it stood when the delete ran. */
+  plan: ShipImportDeletePlan
+  /** True when the workspace is empty afterwards. */
+  workspaceCleared: boolean
+  /**
+   * Units that could not be put back because the product they came from has
+   * been deleted. Never silent — a shelf count that stops matching is worse
+   * than a sentence nobody wanted to read.
+   */
+  stranded: ShipImportDeleteSupply[]
 }

@@ -209,6 +209,10 @@ export const IPC = {
   shipCalendarDay: 'shipping:calendar:day',
   shipImportsList: 'shipping:imports:list',
   shipImportRename: 'shipping:imports:rename',
+  // The plan is a pure read: what a delete would destroy, priced, so the
+  // confirmation can state it. The delete then refuses unless the caller says
+  // it has agreed to the supplies going back on the shelf.
+  shipImportDeletePlan: 'shipping:imports:delete-plan',
   shipImportDelete: 'shipping:imports:delete',
   shipSnapshotsList: 'shipping:snapshots:list',
   shipSnapshotGet: 'shipping:snapshots:get',

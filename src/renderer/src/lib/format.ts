@@ -19,6 +19,25 @@ export function formatMoney(amount: number, opts?: { compact?: boolean }): strin
   }).format(amount)
 }
 
+/**
+ * A PER-UNIT money figure — a cost per box, an average, a lot's unit price.
+ *
+ * Two decimals when that is the whole number, and up to four when it is not.
+ * Costs are stored at four places because a unit cost is a rate rather than a
+ * total (see UNIT_DP in db/lots.ts), and a blended average of $15.7142… shown as
+ * "$15.71" beside a total of $110.00 invites exactly the arithmetic that used to
+ * be wrong: 7 × $15.71 is $109.97, and somebody will check. Ordinary cent-valued
+ * costs are unaffected and still read like money.
+ */
+export function formatUnitMoney(amount: number): string {
+  return new Intl.NumberFormat(undefined, {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 4
+  }).format(amount)
+}
+
 export function fullName(first: string, last: string): string {
   return `${first} ${last}`.trim()
 }

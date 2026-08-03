@@ -37,7 +37,8 @@ import { buildResetPlan, guessMapping, money, parseSheet } from '@shared/invento
 import type { Result } from '@shared/types'
 import { getDb } from './database'
 import { bumpStock, insertTxn, stockQty } from './inventory'
-import { consumeFifo, createLot, roundQty, syncProductAvgCost } from './lots'
+import { consumeFifo, createLot, roundQty, syncProductAvgCost, unitMoney } from './lots'
+import { SHELF_BASIS, shelfBasis } from './valuation'
 import { newId, nowIso } from '../util'
 
 type Database = ReturnType<typeof getDb>
@@ -81,19 +82,13 @@ export function resetCatalog(): ResetCatalogProduct[] {
     location: string
     quantity: number
   }>
-  // Cost per shelf, straight off the remaining FIFO layers — the same weighting
-  // syncProductAvgCost uses, just not collapsed across locations. The planner
-  // needs it to say what a one-location revaluation does to the product-wide
-  // average.
+  // Cost per shelf, straight off the remaining FIFO layers — read from the SAME
+  // fragment the dashboard values stock with, so the totals this planner
+  // promises and the totals the widgets read afterwards are one arithmetic
+  // rather than two that resemble each other.
   const shelfCosts = db
-    .prepare(
-      `SELECT product_id, location,
-              SUM(qty_remaining * unit_cost) / SUM(qty_remaining) AS avg_cost
-         FROM inventory_lots
-        WHERE qty_remaining > 0
-        GROUP BY product_id, location`
-    )
-    .all() as Array<{ product_id: string; location: string; avg_cost: number }>
+    .prepare(`SELECT product_id, location, lot_basis AS avg_cost FROM (${SHELF_BASIS})`)
+    .all() as Array<{ product_id: string; location: string; avg_cost: number | null }>
 
   const byProduct = new Map<string, Record<string, number>>()
   for (const s of stock) {
@@ -103,7 +98,9 @@ export function resetCatalog(): ResetCatalogProduct[] {
   }
   const costs = new Map<string, Record<string, number>>()
   for (const c of shelfCosts) {
-    if (!Number.isFinite(c.avg_cost)) continue
+    // Null / non-finite means the shelf has no open layer; it falls through to
+    // the product average below rather than being recorded as a basis of zero.
+    if (c.avg_cost == null || !Number.isFinite(c.avg_cost)) continue
     const entry = costs.get(c.product_id) ?? {}
     entry[c.location] = c.avg_cost
     costs.set(c.product_id, entry)
@@ -237,10 +234,17 @@ function setShelfQuantity(
   if (delta < 0) {
     consumeFifo(db, args.productId, args.location, -delta)
   } else {
+    // No counted cost: value found stock at what THIS SHELF is already carrying,
+    // falling back to the product average only when the shelf has no layers at
+    // all. The planner projects the shelf's own basis forward (afterCostAt), so
+    // taking the product-wide average here would leave the preview promising one
+    // number and the write producing another for any product held in two places.
+    const shelf = shelfBasis(db, args.productId, args.location)
     const row = db.prepare('SELECT unit_cost FROM inventory_products WHERE id = ?').get(args.productId) as
       | { unit_cost: number }
       | undefined
-    const cost = args.unitCost != null && args.unitCost >= 0 ? args.unitCost : (row?.unit_cost ?? 0)
+    const carried = shelf?.lotBasis ?? row?.unit_cost ?? 0
+    const cost = args.unitCost != null && args.unitCost >= 0 ? args.unitCost : carried
     createLot(db, args.productId, args.location, delta, cost, nowIso(), 'adjustment', args.note)
   }
   syncProductAvgCost(db, args.productId)
@@ -330,7 +334,11 @@ function revalueShelf(
   location: string,
   unitCost: number
 ): boolean {
-  const cost = money(Math.max(0, unitCost))
+  // UNIT_DP, not cents: this is a per-unit rate about to be multiplied back up
+  // by the shelf's quantity. A sheet stating "$110.00 for 7" means $15.7143 a
+  // box, and rounding that to $15.71 on the way in is how the shelf silently
+  // becomes worth $109.97.
+  const cost = unitMoney(Math.max(0, unitCost))
   const info = db
     .prepare(
       `UPDATE inventory_lots SET unit_cost = ?
@@ -584,6 +592,17 @@ const EXPORT_HEADER = [
 ]
 
 /**
+ * A unit cost for the sheet: two decimals when that is the whole number, up to
+ * four when it is not. Trailing zeroes are trimmed back to the cent so the
+ * common case still reads like money and only a genuinely blended shelf carries
+ * the extra digits.
+ */
+function exportUnitCost(cost: number): string {
+  const atUnit = unitMoney(cost)
+  return money(cost) === atUnit ? atUnit.toFixed(2) : atUnit.toFixed(4)
+}
+
+/**
  * The current count, in exactly the shape this screen reads back.
  *
  * That round trip is the point: export, count against it in Excel, paste the
@@ -598,18 +617,16 @@ export function buildResetExport(): string {
       // The cost written out is the SHELF's, not the product-wide average, so a
       // product split across RM and AM exports the two costs it actually
       // carries — and re-importing the file unchanged is a no-op rather than a
-      // quiet revaluation of both shelves to their blend.
-      `SELECT p.name, p.sku, p.category, p.upc, s.location, s.quantity,
-              p.unit_cost, p.high_bid,
-              (SELECT SUM(l.qty_remaining * l.unit_cost) / SUM(l.qty_remaining)
-                 FROM inventory_lots l
-                WHERE l.product_id = s.product_id
-                  AND l.location = s.location
-                  AND l.qty_remaining > 0) AS shelf_cost
-         FROM inventory_stock s
-         JOIN inventory_products p ON p.id = s.product_id
-        WHERE s.quantity <> 0
-        ORDER BY p.category, p.name COLLATE NOCASE, s.location`
+      // quiet revaluation of both shelves to their blend. Read from the same
+      // fragment every valuation reads, so what the file says a shelf is worth
+      // is what the dashboard says it is worth.
+      `SELECT p.name, p.sku, p.category, p.upc,
+              b.location, b.qty AS quantity, b.lot_basis, b.cost_value,
+              p.unit_cost, p.high_bid
+         FROM (${SHELF_BASIS}) b
+         JOIN inventory_products p ON p.id = b.product_id
+        WHERE b.qty <> 0
+        ORDER BY p.category, p.name COLLATE NOCASE, b.location`
     )
     .all() as Array<{
     name: string
@@ -618,9 +635,10 @@ export function buildResetExport(): string {
     upc: string | null
     location: string
     quantity: number
+    lot_basis: number | null
+    cost_value: number
     unit_cost: number
     high_bid: number | null
-    shelf_cost: number | null
   }>
   const lines = [EXPORT_HEADER.join('\t')]
   for (const r of rows) {
@@ -630,8 +648,7 @@ export function buildResetExport(): string {
     // as a market value somebody had supposedly set — inventing priced data out
     // of unpriced data, which is precisely what this screen exists to prevent.
     const market = r.high_bid && r.high_bid > 0 ? r.high_bid : null
-    const cost =
-      r.shelf_cost != null && Number.isFinite(r.shelf_cost) ? r.shelf_cost : r.unit_cost
+    const cost = r.lot_basis ?? r.unit_cost
     lines.push(
       [
         r.name,
@@ -642,8 +659,15 @@ export function buildResetExport(): string {
         String(r.quantity),
         market == null ? '' : market.toFixed(2),
         market == null ? '' : money(market * r.quantity).toFixed(2),
-        cost.toFixed(2),
-        money(cost * r.quantity).toFixed(2)
+        // The unit cost is written at UNIT_DP when it has sub-cent precision.
+        // A shelf holding 3 boxes at $10 and 4 at $20 is worth $110.00 and
+        // carries $15.7142… a box; exporting "15.71" and pasting it back would
+        // revalue the shelf to $109.97 for doing nothing at all, which is the
+        // same three cents coming in through the back door.
+        exportUnitCost(cost),
+        // The extended column is the SHELF's real value off the layers, not the
+        // rounded unit cost multiplied out.
+        money(r.cost_value).toFixed(2)
       ]
         // A tab or newline inside a product name would shift every column to its
         // right by one; there is no quoting in TSV, so they are stripped.

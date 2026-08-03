@@ -1,5 +1,6 @@
 import {
   SHIP_SOP,
+  SHIP_SUPPLY_ROLE_LABELS,
   shipSopTickError,
   shipSopWaitsForPacking,
   type ShipSopLine,
@@ -54,10 +55,18 @@ import { nowIso } from '../util'
 /** A day the statement can key on. Free text would become a day named "TBD". */
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 
-/** How a show identifies itself on its checklist rows. */
-function showName(event: { name: string; date: string }): string {
+/**
+ * How a show identifies itself on its checklist rows.
+ *
+ * Exported because the import delete has to ask "is this day's checklist MINE",
+ * and a second copy of the naming rule is a second copy that drifts — at which
+ * point a delete would hand back a different show's stock.
+ */
+export function shipSopShowName(event: { name: string; date: string }): string {
   return event.name.trim() || `Show ${event.date.trim()}`
 }
+
+const showName = shipSopShowName
 
 /**
  * Which show already owns this day's checklist, or null if nobody does.
@@ -631,6 +640,150 @@ export function completeShipSopStepOnce(
 
   if (!won) return null
   return { state: getShipSop(), ...report }
+}
+
+// ---------------------------------------------------------------------------
+// One day's checklist, and handing it all back
+// ---------------------------------------------------------------------------
+
+/** One consumable this day has on record, as the usage row states it. */
+export interface ShipSopDayLine {
+  step: ShipSopStep
+  role: ShipSupplyRole
+  label: string
+  supplyId: string | null
+  supplyName: string | null
+  quantity: number
+  cost: number
+}
+
+/** What a day has ticked and what that took, without touching anything. */
+export interface ShipSopDay {
+  date: string
+  /** Which show owns the day, or null when nothing here names one. */
+  owner: string | null
+  steps: ShipSopStep[]
+  lines: ShipSopDayLine[]
+  cost: number
+}
+
+const EMPTY_DAY = (date: string): ShipSopDay => ({ date, owner: null, steps: [], lines: [], cost: 0 })
+
+/**
+ * Everything one day's checklist says, read straight from the two tables.
+ *
+ * Both are read, not just the ticks: they sync independently, so a pull that
+ * lands one and not the other would otherwise let a caller conclude that a day
+ * with real stock booked against it has nothing on it — which is exactly the
+ * case where being wrong costs inventory.
+ */
+export function getShipSopDay(date: string): ShipSopDay {
+  const day = date.trim()
+  if (!day) return EMPTY_DAY(day)
+  const rows = getDb()
+    .prepare(
+      `SELECT step, role, supply_id, supply_name, quantity, total_cost
+         FROM ship_supply_usage
+        WHERE event_date = ? AND quantity > 0
+        ORDER BY rowid ASC`
+    )
+    .all(day) as Array<{
+    step: string
+    role: string
+    supply_id: string | null
+    supply_name: string | null
+    quantity: number
+    total_cost: number
+  }>
+  const lines: ShipSopDayLine[] = rows.map((r) => ({
+    step: r.step as ShipSopStep,
+    role: r.role as ShipSupplyRole,
+    label: SHIP_SUPPLY_ROLE_LABELS[r.role as ShipSupplyRole] ?? r.role,
+    supplyId: r.supply_id,
+    supplyName: r.supply_name,
+    quantity: r.quantity,
+    cost: money(r.total_cost)
+  }))
+  return {
+    date: day,
+    owner: dayOwner(day),
+    steps: [...doneSteps(day)],
+    lines,
+    cost: money(lines.reduce((n, l) => n + l.cost, 0))
+  }
+}
+
+/** A unit that left a product which no longer exists to receive it back. */
+export interface ShipSopStrandedLine {
+  role: ShipSupplyRole
+  label: string
+  supplyName: string | null
+  quantity: number
+  cost: number
+}
+
+export interface ShipSopReleaseResult {
+  /** The day exactly as it stood before anything moved. */
+  before: ShipSopDay
+  stranded: ShipSopStrandedLine[]
+}
+
+/**
+ * Put back everything one day's checklist took, and clear the day.
+ *
+ * The reversal is driven ENTIRELY from `ship_supply_usage`, one row at a time,
+ * exactly as `reconcileStepUsage` drives an untick — that row is the only record
+ * of what left and which product it left, and it survives the role being
+ * re-pointed, the plan changing shape, and the dataset being gone by the time
+ * anybody asks. Recomputing tonight's plan instead would hand back what the show
+ * WOULD have used rather than what it did.
+ *
+ * `supplyId: null` with the old product named in `prev` is the "this role no
+ * longer points anywhere" shape `setShipSupplyUsage` already implements: it pays
+ * the old product back, and when that product has since been deleted it reports
+ * the units as stranded instead of failing. A delete must not be blocked by a
+ * consumable somebody retired last month, and it must not lose those units in
+ * silence either.
+ *
+ * The rows themselves go afterwards. Leaving them at zero would keep `dayOwner`
+ * answering with a show that no longer exists, and the next import of that same
+ * day would be refused its own checklist by a ghost.
+ *
+ * Caller supplies the transaction: the stock, the ledger and the rows have to
+ * land together or not at all.
+ */
+export function releaseShipSopDay(date: string, userId: string | null): ShipSopReleaseResult {
+  const before = getShipSopDay(date)
+  const stranded: ShipSopStrandedLine[] = []
+  if (before.lines.length === 0 && before.steps.length === 0) return { before, stranded }
+
+  const db = getDb()
+  const run = db.transaction(() => {
+    for (const line of before.lines) {
+      const res = setShipSupplyUsage(db, {
+        supplyId: null,
+        txnId: usageTxnId(date, line.step, line.role),
+        quantity: 0,
+        prev: { supplyId: line.supplyId, quantity: line.quantity },
+        note: `Import deleted · ${before.owner || 'show'} ${date}`,
+        actorId: userId
+      })
+      if (!res.ok) throw new Error(res.error ?? 'Could not put that supply back.')
+      if (res.strandedFrom) {
+        stranded.push({
+          role: line.role,
+          label: line.label,
+          supplyName: line.supplyName,
+          quantity: res.strandedFrom.quantity,
+          cost: line.cost
+        })
+      }
+    }
+    db.prepare(`DELETE FROM ship_supply_usage WHERE event_date = ?`).run(date)
+    db.prepare(`DELETE FROM ship_sop_steps WHERE event_date = ?`).run(date)
+  })
+  run()
+  return { before, stranded }
 }
 
 /**

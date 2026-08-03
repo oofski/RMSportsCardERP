@@ -200,6 +200,22 @@ export interface InventoryProduct {
   quantityByLocation: Record<string, number>
   /** Total on hand across all locations. */
   quantity: number
+  /**
+   * Cost basis of everything on hand, read from the FIFO cost layers.
+   *
+   * Carried on the product rather than left to be recomputed as quantity ×
+   * unitCost, because that multiplication is where money disappears: unitCost is
+   * a rounded per-unit average, and 3 boxes at $10 plus 4 at $20 is $110.00 of
+   * stock that 7 × $15.7143 cannot express. Every screen showing a total cost
+   * for a product reads this.
+   */
+  costValue: number
+  /**
+   * Market value of everything on hand: quantity × high bid when a bid is set,
+   * and the cost basis when it is not — so unpriced stock carries exactly zero
+   * spread rather than a rounding residue.
+   */
+  marketValue: number
   createdAt: string
   updatedAt: string
 }
@@ -292,9 +308,17 @@ export interface RecordSaleInput {
 }
 
 export interface InventoryStats {
-  /** Market value on hand = Σ (qty × high bid, falling back to unit cost). */
+  /**
+   * Market value on hand = Σ over products of (qty × high bid) where a bid is
+   * set, and of the cost basis where none is.
+   */
   totalValue: number
-  /** Cost basis on hand = Σ (qty × average unit cost). */
+  /**
+   * Cost basis on hand, summed from the FIFO cost layers — Σ over shelves of
+   * what each shelf actually holds. NOT Σ (qty × average unit cost): an average
+   * is a rounded rate and multiplying it back up by the quantity multiplies the
+   * rounding by the quantity too.
+   */
   totalCost: number
   /** totalValue − totalCost. */
   spread: number
@@ -322,6 +346,17 @@ export interface InventoryStats {
    * act on a number they cannot see inside.
    */
   zeroCost: ZeroCostStock[]
+  /**
+   * Shelves whose cost layers do not account for the stock counted on them.
+   *
+   * The valuation always follows the QUANTITY — a shelf is valued for exactly
+   * the units inventory_stock says are on it — so a total can never contradict
+   * the count beside it. But where the layers disagree, part of the money is
+   * coming from the product's average rather than from a real purchase price
+   * (stock above layers), or a cost basis is attached to units nobody has
+   * (layers above stock). Neither is visible in a total, so both are listed.
+   */
+  layerGaps: StockLayerGap[]
 }
 
 export interface ZeroCostStock {
@@ -330,6 +365,21 @@ export interface ZeroCostStock {
   quantity: number
   /** What it is being valued at — i.e. how much fake spread it is creating. */
   marketValue: number
+}
+
+/** One shelf where Σ lot.qty_remaining and inventory_stock.quantity disagree. */
+export interface StockLayerGap {
+  id: string
+  name: string
+  location: string
+  /** On hand there, per inventory_stock — the number the valuation follows. */
+  quantity: number
+  /** What the open cost layers there account for. */
+  lotQuantity: number
+  /** The per-unit basis used for this shelf. */
+  unitBasis: number
+  /** What the shelf contributes to every total. */
+  value: number
 }
 
 export type IncomingStatus = 'expected' | 'received' | 'cancelled'
@@ -544,14 +594,20 @@ export interface PricingRow {
   category: string
   unitType: UnitType
   quantity: number
-  /** Average cost per unit (FIFO remaining-lot weighted average). */
+  /**
+   * Average cost per unit — derived back out of `costValue`, so it is the
+   * per-unit view of the exact basis rather than the number the basis was
+   * (wrongly) reconstructed from.
+   */
   unitCost: number
+  /** Cost basis of everything on hand, from the FIFO cost layers. */
+  costValue: number
   highBid: number | null
   /** ISO timestamp the high bid was last set. */
   highBidAt: string | null
-  /** quantity × (high bid, falling back to average cost). */
+  /** quantity × high bid when priced; the cost basis when not. */
   invValue: number
-  /** invValue − quantity × average cost. */
+  /** invValue − costValue. */
   spread: number
 }
 

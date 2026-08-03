@@ -44,11 +44,11 @@ export function structureLabel(p: Pick<InventoryProduct, 'unitType' | 'boxesPerC
 export interface ProductMetrics {
   /** Per-unit value: high bid when set, else average cost. */
   marketUnit: number
-  /** On-hand market value = quantity × marketUnit. */
+  /** On-hand market value. */
   invValue: number
-  /** Average cost per unit. */
+  /** Average cost per unit — the cost basis divided back down. */
   avgCost: number
-  /** On-hand cost basis = quantity × average cost. */
+  /** On-hand cost basis, from the FIFO cost layers. */
   totalCost: number
   /** invValue − totalCost. */
   spread: number
@@ -58,21 +58,28 @@ export interface ProductMetrics {
   hasBid: boolean
 }
 
-/** The money metrics for a product from its quantity, cost and high bid. */
+/**
+ * The money metrics for a product.
+ *
+ * The totals are READ, not recomputed. `costValue` and `marketValue` come off
+ * the cost layers in the main process; deriving them here as quantity × unitCost
+ * is the defect this whole model exists to remove — 7 boxes averaging $15.7142…
+ * are worth $110.00, and no per-unit number multiplied by 7 says so. The average
+ * runs the other way: it is the basis divided back down, so what is displayed
+ * per unit and what is displayed as a total can never tell different stories.
+ */
 export function productMetrics(
-  p: Pick<InventoryProduct, 'quantity' | 'unitCost' | 'highBid'>
+  p: Pick<InventoryProduct, 'quantity' | 'unitCost' | 'highBid' | 'costValue' | 'marketValue'>
 ): ProductMetrics {
   const hasBid = p.highBid != null && p.highBid > 0
   const marketUnit = hasBid ? (p.highBid as number) : p.unitCost
-  const invValue = p.quantity * marketUnit
-  const totalCost = p.quantity * p.unitCost
   return {
     marketUnit,
-    invValue,
-    avgCost: p.unitCost,
-    totalCost,
-    spread: invValue - totalCost,
-    hasCost: p.unitCost > 0,
+    invValue: p.marketValue,
+    avgCost: p.quantity > 0 ? p.costValue / p.quantity : p.unitCost,
+    totalCost: p.costValue,
+    spread: p.marketValue - p.costValue,
+    hasCost: p.costValue > 0 || p.unitCost > 0,
     hasBid
   }
 }

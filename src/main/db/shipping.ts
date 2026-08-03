@@ -1647,9 +1647,17 @@ export function renameShipImport(id: string, name: string): ShipImportRecord | n
   return getShipImport(id)
 }
 
-export function deleteShipImport(id: string): boolean {
-  return getDb().prepare(`DELETE FROM ship_imports WHERE id = ?`).run(id).changes > 0
-}
+/**
+ * Deleting an import is NOT here.
+ *
+ * It used to be this one line, and the line was a lie the History tab had to
+ * explain away: it removed the log row and left the show — the cards, the
+ * claims, the chain edge, the supplies its checklist had already taken — exactly
+ * where it was. Doing it properly means handing stock back, which means calling
+ * into `shipSop.ts`, which imports this file. So it lives in
+ * `./shipImportDelete.ts`, above all three, for the same reason `shipClaims.ts`
+ * sits below `shipStations.ts`.
+ */
 
 // ---------------------------------------------------------------------------
 // Snapshots — dated captures that deliberately survive a re-import
