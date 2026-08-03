@@ -7,6 +7,7 @@ import { boxesPerCaseFromName } from '@shared/units'
 import { seedCatalog } from './inventorySeed'
 import { seedSnapshot } from './inventorySnapshot'
 import { seedCatalogExpansion } from './inventoryCatalogV2'
+import { seedCatalogV3 } from './inventoryCatalogV3'
 import { dedupeProducts } from './dedupe'
 import { backfillLots } from './lots'
 import { installSyncTriggers } from './syncTriggers'
@@ -1686,6 +1687,23 @@ function migrate(database: Database.Database): void {
   runOnce(database, 'boxes_per_case_from_name_v1', () => {
     const filled = backfillBoxesPerCase(database)
     setMeta(database, 'boxes_per_case_from_name_count', String(filled))
+  })
+
+  // v40: the owner's own product list, 306 rows, added where the catalog is
+  // missing them.
+  //
+  // Placed here on purpose — AFTER `blank_template_fields_v1` (which nulls
+  // boxes_per_case for everything) and after the v1 backfill, so the boxes each
+  // of these cases holds survives instead of being wiped by a migration that
+  // runs later. Placed BEFORE installSyncTriggers for the reason spelled out
+  // below: a starter catalog is not work anyone did on this machine.
+  //
+  // Inserts only. Anything already in the catalog, by name or by a real SKU,
+  // keeps its stock, cost basis, UPC, images and every edit made to it.
+  runOnce(database, 'catalog_import_v3', () => {
+    const r = seedCatalogV3(database)
+    setMeta(database, 'catalog_import_v3_inserted', String(r.inserted))
+    setMeta(database, 'catalog_import_v3_skipped', String(r.skippedByName + r.skippedBySku))
   })
 
   // v29: install the sync capture triggers LAST, after every seed, backfill and

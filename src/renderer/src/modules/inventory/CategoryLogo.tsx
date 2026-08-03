@@ -92,5 +92,19 @@ const LOGOS: Record<string, JSX.Element> = {
       <path d="M16 17h3.6" />
       <ellipse cx="8.5" cy="19" rx="3" ry="1.3" />
     </>
+  ),
+  Racing: (
+    <>
+      <path d="M3 16.5V13l2.5-3.5h5L13 6h5.5L21 9.5v7z" />
+      <circle cx="7.5" cy="16.5" r="2.2" />
+      <circle cx="16.5" cy="16.5" r="2.2" />
+    </>
+  ),
+  Tennis: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M4.4 7.2c4 1.5 6.4 4.6 7 9.6" />
+      <path d="M19.6 7.2c-4 1.5-6.4 4.6-7 9.6" />
+    </>
   )
 }

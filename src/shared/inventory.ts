@@ -20,6 +20,8 @@ export const CATEGORY_ORDER = [
   'Soccer',
   'Hockey',
   'UFC',
+  'Racing',
+  'Tennis',
   'Entertainment',
   'Pokemon'
 ]
@@ -36,6 +38,8 @@ export const CATEGORY_COLORS: Record<string, string> = {
   Soccer: '#33a06f',
   Hockey: '#3f83c9',
   UFC: '#8258c9',
+  Racing: '#c9432f',
+  Tennis: '#8fae35',
   Entertainment: '#cf4d93',
   Pokemon: '#e0a52e'
 }

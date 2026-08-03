@@ -65,9 +65,19 @@ export function brandOf(name: string): string {
   return ''
 }
 
+/**
+ * The season a product name leads with: "2025", or "2025-26" for a season that
+ * spans two years.
+ *
+ * The second year is accepted in either form. Vendors write both — the owner's
+ * list carries "2024-2025 Marvel Studios Chrome…" alongside a hundred rows in
+ * "2025-26" style — and matching only two digits used to read that as "2024-20".
+ * Stored in the short form the rest of the catalog uses.
+ */
 export function yearOf(name: string): string {
-  const m = name.match(/^(\d{4}(?:-\d{2})?)/)
-  return m ? m[1] : ''
+  const m = name.match(/^(\d{4})(?:\s*-\s*(\d{2,4}))?/)
+  if (!m) return ''
+  return m[2] ? `${m[1]}-${m[2].slice(-2)}` : m[1]
 }
 
 /** Insert the catalog rows (skipping any whose UPC already exists). */

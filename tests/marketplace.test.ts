@@ -122,9 +122,12 @@ const REAL: Array<[string, boolean]> = [
   ['2026 Topps Chrome VeeFriends Hobby Box', true],
   ['2020-21 Panini Prizm Basketball Hobby Box', true],
   ['2025 Topps Stadium Club UFC Hobby Box', true],
-  // Not in the catalog. Must come back EMPTY rather than come back wrong — the
-  // whole point of a floor on the match.
-  ['2026 Panini Prizm FIFA World Cup Soccer Hobby Box', false]
+  // Was the standing example of a sale the catalog could not name. The owner's
+  // 306-row list carries it, so the honest assertion now is that it resolves.
+  ['2026 Panini Prizm FIFA World Cup Soccer Hobby Box', true],
+  // Not in the catalog, and not a real product. Must come back EMPTY rather
+  // than come back wrong — the whole point of a floor on the match.
+  ['2031 Topps Chrome Curling Championship Hobby Box', false]
 ]
 for (const [name, shouldMatch] of REAL) {
   const m = inventory.matchProductByName(name)
