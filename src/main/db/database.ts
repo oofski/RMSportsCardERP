@@ -1489,6 +1489,106 @@ function migrate(database: Database.Database): void {
   addColumnIfMissing(database, 'employees', 'account_kind', "TEXT NOT NULL DEFAULT 'person'")
   setMeta(database, 'schema_version', '38')
 
+  // v39: who has which order right now — the pick → pack handoff.
+  //
+  // ## The claim is ADVISORY, and that is the safety property
+  //
+  // Delete every row in `ship_work_claims` and the night is unchanged. The pick
+  // work lives in ship_team_slots.checked_off; the pack work lives in
+  // ship_shipments.packed_at. Both already exist and already sync. A claim only
+  // answers "who has this right now" — so the worst a race can do is two people
+  // briefly on one order, never a card that loses its finder or an order that
+  // vanishes from both queues.
+  //
+  // ## Why not a lock
+  //
+  // The relay has no compare-and-swap: /v1/push is an unconditional upsert
+  // guarded by a timestamp. A lock is not available, and pretending otherwise
+  // is how you get a design that only works on one laptop.
+  //
+  // So: EVERY COLUMN HERE IS WRITTEN BY EXACTLY ONE DEVICE — the station named
+  // in station_id, which created the row. No row is ever written by two
+  // machines, so last-write-wins has nothing to arbitrate; the relay only ever
+  // compares a row against an older copy of itself from the same writer. Who
+  // holds an order is DERIVED from the row set by a pure function every machine
+  // evaluates identically. That is inventory_stock's bargain — publish the
+  // authored facts, derive the contended answer — applied to a lock we cannot
+  // have.
+  //
+  // ## Why the id is random rather than derived
+  //
+  // The SOP tables converge by deriving ids so two benches asserting the same
+  // fact write the SAME row. That works because their fact is shared and
+  // single-valued ("sleeving is done"). A claim is the opposite: two machines
+  // assert mutually exclusive things, so a derived id would make them collide
+  // ON PURPOSE and let two wall clocks pick the winner — with the loser's row
+  // REPLACED, leaving no record it ever existed.
+  //
+  // Keying on (order|role|station) would be collision-free, and is still wrong:
+  // it makes the row mutable in place, and `supersedes` then admits cycles — A
+  // displaced B while B's row still names A — after which two machines disagree
+  // about who is dead, permanently.
+  //
+  // Operator state, NOT dataset rows: an import does not wipe this. A claim is
+  // made INERT by falling off the carry-forward chain, never by a write — see
+  // ship_imports.carried_from below.
+  database.exec(
+    `CREATE TABLE IF NOT EXISTS ship_work_claims (
+       id            TEXT PRIMARY KEY,
+       order_id      TEXT NOT NULL,
+       customer_id   TEXT NOT NULL,
+       import_id     TEXT NOT NULL,
+       role          TEXT NOT NULL,
+       station_id    TEXT NOT NULL,
+       operator_id   TEXT,
+       login_user_id TEXT,
+       claimed_at    TEXT NOT NULL,
+       heartbeat_at  TEXT NOT NULL,
+       finished_at   TEXT,
+       released_at   TEXT,
+       supersedes    TEXT,
+       note          TEXT
+     );
+     CREATE INDEX IF NOT EXISTS idx_ship_claims_order  ON ship_work_claims (order_id, role);
+     CREATE INDEX IF NOT EXISTS idx_ship_claims_import ON ship_work_claims (import_id);
+     CREATE INDEX IF NOT EXISTS idx_ship_claims_station ON ship_work_claims (station_id);
+
+     -- Who is standing at THIS machine, and which job they picked.
+     --
+     -- Deliberately NOT synced — the same category as server_sessions, machine
+     -- local by definition. What travels is the CONSEQUENCE: operator_id
+     -- denormalised onto every claim row and into checked_off_by / packed_by,
+     -- so another laptop still sees "Maria, picking" without this table ever
+     -- leaving the machine and without two stations' choices arbitrating.
+     CREATE TABLE IF NOT EXISTS ship_station_sessions (
+       station_id    TEXT PRIMARY KEY,
+       operator_id   TEXT NOT NULL,
+       role          TEXT NOT NULL,
+       login_user_id TEXT,
+       started_at    TEXT NOT NULL,
+       seen_at       TEXT NOT NULL,
+       ended_at      TEXT
+     );`
+  )
+
+  // Which import an import CARRIED FORWARD FROM.
+  //
+  // `counts` already records carriedForward as a boolean, which says that it
+  // happened and not what it happened FROM. The pipeline needs the edge: a
+  // claim is live only while its import is on the chain of carry-forwards
+  // ending at the import on the floor now.
+  //
+  // That makes "does this in-flight claim survive the import" a walk over
+  // immutable rows rather than a write onto everyone else's claims mid-shift —
+  // and the difference matters, because closing a claim by writing to a row a
+  // station is concurrently heartbeating puts the two in an LWW contest the
+  // close can simply lose.
+  //
+  // Written once, by the machine that imports, in the same transaction as the
+  // row, and never updated. Two machines never mint the same import id.
+  addColumnIfMissing(database, 'ship_imports', 'carried_from', 'TEXT')
+  setMeta(database, 'schema_version', '39')
+
   // Seed the product catalog once, then apply the on-hand snapshot once.
   seedCatalogIfNeeded(database)
   seedSnapshotIfNeeded(database)

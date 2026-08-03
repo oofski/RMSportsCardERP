@@ -1338,10 +1338,28 @@ export function importDataset(
     pruneShipBreakAssignments(database)
 
     // --- 4. append the import-history row ---------------------------------
+    //
+    // `carried_from` is the EDGE, not the flag. `counts.carriedForward` says
+    // that carry-forward happened; the floor pipeline needs to know what it
+    // happened FROM, because a work claim is live only while its import is on
+    // the chain of carry-forwards ending at the import on the floor now.
+    //
+    // Deriving liveness from an immutable chain is what lets an import make
+    // every previous claim inert with ZERO writes to anyone's claim rows —
+    // and that matters, because writing a "closed" flag onto a row a station is
+    // concurrently heartbeating puts the two in a last-write-wins contest that
+    // the close can simply lose.
+    const previousImportId = sameEvent
+      ? ((
+          database
+            .prepare(`SELECT id FROM ship_imports ORDER BY created_at DESC, rowid DESC LIMIT 1`)
+            .get() as { id: string } | undefined
+        )?.id ?? null)
+      : null
     database
       .prepare(
-        `INSERT INTO ship_imports (id, name, filename, kind, created_at, counts)
-         VALUES (?, ?, ?, ?, ?, ?)`
+        `INSERT INTO ship_imports (id, name, filename, kind, created_at, counts, carried_from)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         importId,
@@ -1349,7 +1367,8 @@ export function importDataset(
         str(opts.filename),
         kind,
         createdAt,
-        JSON.stringify({ ...counts, carriedForward: sameEvent })
+        JSON.stringify({ ...counts, carriedForward: sameEvent }),
+        previousImportId
       )
 
     const record = getShipImport(importId)

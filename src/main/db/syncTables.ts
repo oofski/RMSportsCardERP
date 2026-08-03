@@ -114,6 +114,12 @@ export const SYNCED_TABLES: SyncedTable[] = [
   { table: 'ship_orders', key: ['id'], tier: 1 },
   { table: 'ship_warnings', key: ['id'], tier: 1 },
   { table: 'ship_break_assignments', key: ['id'], tier: 1 },
+  // Every column is written by exactly ONE device — the station that created
+  // the row — so last-write-wins arbitrates nothing here: the relay only ever
+  // compares a row against an older copy of itself from the same writer. The
+  // contended answer ("who has this order") is DERIVED from the row set, the
+  // way inventory_stock is derived from its lots.
+  { table: 'ship_work_claims', key: ['id'], tier: 1 },
   { table: 'ledger_rows', key: ['id'], tier: 1 },
   { table: 'ledger_quarantine', key: ['id'], tier: 1 },
   { table: 'stream_items', key: ['id'], tier: 1 },
