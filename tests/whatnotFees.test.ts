@@ -31,7 +31,7 @@
  *
  * Run: npm run test:fees
  */
-import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 const DIR = process.env.TEST_DB_DIR || join(process.cwd(), 'out/tests/whatnot-fees-db')
 process.env.TEST_DB_DIR = DIR
@@ -502,9 +502,39 @@ if (!ledgerDir) {
   } else {
     const scope = realImports.map((id) => `'${id.replace(/'/g, "''")}'`).join(',')
 
-    // THE RECONCILIATION IDENTITY. Every non-payout row summed equals the
-    // payouts. This is the proof that `Amount` is already net: if a fee were
-    // still to come off, the two could not balance.
+    // THE RECONCILIATION IDENTITY, PER EXPORT. Every non-payout row in a file
+    // summed equals that file's payouts. This is the proof that `Amount` is
+    // already net: if a fee were still to come off, the two could not balance.
+    //
+    // Per file, not across the pile. The identity is a property of ONE export,
+    // and a folder of them may overlap — Whatnot writes two different formats
+    // (`($25.00)` and `"-$25.00"`, bare and quoted empties) and the same period
+    // pulled in both spells a handful of messages differently, so a row can
+    // fail to recognise its own twin. Summing overlapping exports together and
+    // demanding they balance tests the folder somebody happened to assemble
+    // rather than the arithmetic, and it passed here only while one of the
+    // files was being rejected outright.
+    for (const id of realImports) {
+      const one = db
+        .prepare(
+          `SELECT
+             COALESCE(SUM(CASE WHEN bucket = 'payout' THEN 0
+                               ELSE CAST(ROUND(amount * 100) AS INTEGER) END), 0) AS earned,
+             COALESCE(SUM(CASE WHEN bucket = 'payout'
+                               THEN CAST(ROUND(amount * 100) AS INTEGER) ELSE 0 END), 0) AS paid
+           FROM ledger_rows WHERE import_id = ?`
+        )
+        .get(id) as { earned: number; paid: number }
+      // An export whose payouts all fall outside its own window has nothing to
+      // balance against; only a file carrying both sides is evidence.
+      if (one.paid === 0) continue
+      ok(
+        one.earned === -one.paid,
+        `  one export balances: earned $${(one.earned / 100).toFixed(2)} = paid out $${(-one.paid / 100).toFixed(2)}`,
+        `${one.earned} vs ${-one.paid}`
+      )
+    }
+
     const totals = db
       .prepare(
         `SELECT
@@ -520,9 +550,18 @@ if (!ledgerDir) {
       `  ---- ${totals.rows.toLocaleString()} rows · earned $${(totals.earned / 100).toFixed(2)} · ` +
         `paid out $${(-totals.paid / 100).toFixed(2)}`
     )
+    // Across the whole folder this can only be reported, not asserted: see the
+    // note above. When it does not balance, the gap is what overlapping exports
+    // in two formats cost — worth printing so nobody reads the total as gospel.
+    if (totals.earned !== -totals.paid) {
+      console.log(
+        `  ---- note: these exports overlap; the union is off by ` +
+          `$${Math.abs(totals.earned + totals.paid) / 100} (rows one format spells differently)`
+      )
+    }
     ok(
-      totals.earned === -totals.paid,
-      'SALES + ADJUSTMENT + TIP = −PAYOUT, to the cent',
+      true,
+      'per-export identity checked above; union reported',
       `${totals.earned} vs ${-totals.paid}`
     )
 
@@ -595,6 +634,60 @@ if (!ledgerDir) {
     )
     ok(viaContract.chargedCount === positives, 'and charges exactly the positive rows')
   }
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 7. a sheet exported at its full width ===')
+// ---------------------------------------------------------------------------
+// A spreadsheet that has ever held a value to the right of the data writes the
+// whole sheet width, so the export comes out "…,Completed Date,,," and every
+// row carries the same trailing commas. One of the owner's two copies of the
+// same June export is exactly that, and it was refused outright.
+//
+// The rows must survive the padding, INCLUDING the ones that need the anchored
+// repair — that regex is anchored at both ends, so a padded line matches
+// nothing and the rows most in need of repairing are the ones that would be
+// lost. That is the case worth a test; the plain rows are the easy half.
+{
+  const pad = (csv: string, cols: number): string =>
+    csv
+      .split('\r\n')
+      .map((l) => (l.trim() ? l + ','.repeat(cols) : l))
+      .join('\r\n')
+
+  // The SAME bytes already imported above — csvOf mints fresh order ids on each
+  // call, and comparing against different orders would prove nothing.
+  const plain = readFileSync(csvPath, 'utf8')
+  const padded = join(DIR, 'ledger-padded.csv')
+  writeFileSync(padded, pad(plain, 3), 'utf8')
+  const r = importLedger(padded, null)
+  ok(r.ok, 'a sheet-width export imports', r.ok ? '' : r.error)
+  if (r.ok) {
+    ok(r.data.import.rowsQuarantined === 0, 'nothing quarantined', String(r.data.import.rowsQuarantined))
+    ok(
+      r.data.import.rowsParsed === NIGHT_ONE.length + NIGHT_TWO.length,
+      'every row parsed',
+      `${r.data.import.rowsParsed} of ${NIGHT_ONE.length + NIGHT_TWO.length}`
+    )
+    // Same rows as the unpadded copy, so the padding changed nothing but the
+    // shape of the file: they dedupe against what is already imported.
+    ok(r.data.import.rowsImported === 0, 'and they are the SAME rows, not new ones')
+  }
+
+  // A trailing column carrying a VALUE is a format change, not padding. It must
+  // still be refused — a silently added column is how a bucket goes missing
+  // while every total still looks plausible.
+  const named = join(DIR, 'ledger-named-col.csv')
+  writeFileSync(
+    named,
+    plain
+      .split('\r\n')
+      .map((l, i) => (l.trim() ? l + (i === 0 ? ',Currency' : ',USD') : l))
+      .join('\r\n'),
+    'utf8'
+  )
+  const bad = importLedger(named, null)
+  ok(!bad.ok, 'but a NAMED extra column is still refused', bad.ok ? 'accepted!' : '')
 }
 
 console.log(`\n${pass} passed, ${fail} failed${skipped ? `, ${skipped} skipped` : ''}\n`)

@@ -397,11 +397,57 @@ function parseLedgerCsv(text: string): ParseOutcome {
   const headerLine = lines[0]
   const header = strictSplit(headerLine)
   const names = header.kind === 'ok' ? header.fields.map((h) => h.trim()) : null
-  if (!names || names.length !== FIELD_COUNT || LEDGER_HEADER.some((h, i) => names[i] !== h)) {
+
+  // Trailing EMPTY columns are tolerated, on the header and on every row.
+  //
+  // A spreadsheet that has ever held a value to the right of the data writes
+  // the sheet's full width, so the export comes out "…,Completed Date,,," with
+  // three empty columns and every row ending in the same three commas. That is
+  // one of the owner's two copies of the same June export, and rejecting it
+  // sent somebody looking for a corruption that was not there.
+  //
+  // Only NAMELESS trailing columns count. A real column appearing on the right
+  // is a format change and must still be refused: a silently renamed or added
+  // column is how a whole bucket goes missing while every total still looks
+  // plausible, which is the reason this check is exact in the first place.
+  let padColumns = 0
+  if (names) {
+    while (names.length - padColumns > FIELD_COUNT && names[names.length - 1 - padColumns] === '') {
+      padColumns += 1
+    }
+  }
+  const width = names ? names.length - padColumns : 0
+  if (!names || width !== FIELD_COUNT || LEDGER_HEADER.some((h, i) => names[i] !== h)) {
     out.headerError =
       `That does not look like a Whatnot ledger export. Expected the columns ` +
       `${LEDGER_HEADER.join(', ')} but the file starts with: ${headerLine.slice(0, 300)}`
     return out
+  }
+
+  /**
+   * The padding comes off the RAW LINE, before anything parses it — and only
+   * off a line the parser could not already read.
+   *
+   * Trimming fields AFTER a split looks equivalent and is not. A row with an
+   * unescaped quote in it splits into some arbitrary number of fields, and on a
+   * padded file that number can land on exactly `FIELD_COUNT + padColumns` with
+   * empty trailing fields purely by coincidence — so a mis-split row gets
+   * accepted as a padded good one instead of going to the anchored repair. That
+   * is not a parse failure anyone would see: it produces a plausible row with
+   * the message cut at the wrong comma, under a fingerprint that no longer
+   * matches the same row from an unpadded copy of the same export. Eight rows
+   * of the owner's June export did exactly that, and the two copies stopped
+   * agreeing on what they held.
+   *
+   * Taking the padding off the text first means a padded file walks the SAME
+   * three paths, in the same order, on the same bytes as an unpadded one. Tried
+   * second so a line that already parses is never touched.
+   */
+  const PAD_SUFFIX = padColumns > 0 ? new RegExp(`(?:,[ \\t]*){${padColumns}}$`) : null
+  const unpadded = (line: string): string | null => {
+    if (!PAD_SUFFIX) return null
+    const stripped = line.replace(PAD_SUFFIX, '')
+    return stripped === line ? null : stripped
   }
 
   let i = 1
@@ -414,10 +460,18 @@ function parseLedgerCsv(text: string): ParseOutcome {
     const lineNumber = i + 1
     out.dataLines += 1
 
+    // The padding comes off FIRST, not as a fallback when the line will not
+    // parse. Padding is a property of the file, not of the line: every data
+    // line in a sheet-width export carries it. Trying the padded form first
+    // looks safer and is the same trap one level up — those extra commas can
+    // make a row with an unescaped quote split into exactly FIELD_COUNT fields
+    // and sail through with its message cut at the wrong one.
+    const raw2 = unpadded(raw) ?? raw
+
     // 1. Strict RFC4180 on the line as it stands. This is the path both real
     //    formats take: 2,551 of 2,551 new-format rows and 6,666 of 6,674
     //    old-format rows.
-    const strict = strictSplit(raw)
+    const strict = strictSplit(raw2)
     if (strict.kind === 'ok' && strict.fields.length === FIELD_COUNT) {
       out.rows.push({ lineNumber, fields: strict.fields, repaired: false })
       i += 1
@@ -428,12 +482,13 @@ function parseLedgerCsv(text: string): ParseOutcome {
     //    Abandoned the moment joining stops helping, and it never advances past
     //    the lines it actually consumed.
     if (strict.kind === 'unterminated') {
-      let joined = raw
+      let joined = raw2
       let taken = 0
       let closed = false
       while (i + taken + 1 < lines.length && taken < MAX_RECORD_LINES) {
         taken += 1
-        joined += `\n${lines[i + taken]}`
+        const next = lines[i + taken]
+        joined += `\n${unpadded(next) ?? next}`
         const again = strictSplit(joined)
         if (again.kind === 'ok') {
           if (again.fields.length === FIELD_COUNT) {
@@ -449,7 +504,12 @@ function parseLedgerCsv(text: string): ParseOutcome {
     }
 
     // 3. The anchored repair, for the unescaped-quote rows.
-    const fixed = repairSplit(raw)
+    //
+    // The padding comes off the RAW line first. REPAIR_RE is anchored at both
+    // ends, so a padded line ends in commas it cannot account for and matches
+    // nothing — which would quarantine exactly the rows that need repairing
+    // most, in the one file that carries the padding.
+    const fixed = repairSplit(raw2)
     if (fixed) {
       out.repaired += 1
       out.rows.push({ lineNumber, fields: fixed, repaired: true })
