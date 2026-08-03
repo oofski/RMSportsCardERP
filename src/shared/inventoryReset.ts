@@ -7,6 +7,19 @@
  * pastes the sheet in and the app works out what would change, shows it, and
  * then applies the whole thing in one transaction.
  *
+ * THE SHEET IS THE WHOLE WAREHOUSE. There is one mode and no toggles: after an
+ * adjust, on-hand equals the sheet exactly, and every catalog product the sheet
+ * does not mention holds nothing. That is the owner's decision and the reason
+ * this screen exists — a partial update that leaves 266 uncounted products
+ * carrying their old numbers reads, correctly, as "it added instead of
+ * replacing", and no amount of arithmetic downstream can make the totals agree
+ * with the paper.
+ *
+ * Because a bad paste can now write off the entire warehouse, a row this file
+ * cannot resolve is a BLOCKING problem rather than a skipped line. Zeroing what
+ * the sheet did not name is only defensible when everything the sheet DID name
+ * was understood; otherwise a naming problem silently becomes a write-off.
+ *
  * EVERYTHING that decides *what would change* lives here, with no database and
  * no Electron: parsing, column mapping, product matching and the before→after
  * plan. db/inventoryReset.ts supplies the catalog snapshot and performs the
@@ -74,37 +87,31 @@ export function resetFieldLabel(field: ResetField): string {
 }
 
 // ---------------------------------------------------------------------------
-// Options
+// What an adjust does, and what it deliberately does not
 // ---------------------------------------------------------------------------
-
-export interface ResetOptions {
-  /** Set each counted (product, location) to the sheet's quantity. */
-  applyQuantity: boolean
-  /** Re-base the counted stock's cost layers to the sheet's unit cost. */
-  applyCost: boolean
-  /** Write the sheet's market value onto the product's high bid. */
-  applyMarket: boolean
-  /** Backfill SKU / UPC / category from the sheet where the product's is blank
-   *  or different. Never blanks a field the sheet leaves empty. */
-  applyDetails: boolean
-  /**
-   * Treat the sheet as a COMPLETE count: anything holding stock that the sheet
-   * never mentions goes to zero. Off by default, because a partial sheet is the
-   * common case and zeroing on a partial sheet writes off the whole warehouse.
-   */
-  zeroMissing: boolean
-  /** Create a catalog product for a row that matches nothing. */
-  createMissing: boolean
-}
-
-export const DEFAULT_RESET_OPTIONS: ResetOptions = {
-  applyQuantity: true,
-  applyCost: true,
-  applyMarket: true,
-  applyDetails: false,
-  zeroMissing: false,
-  createMissing: false
-}
+//
+// These used to be six checkboxes. They are now the definition of the operation,
+// written down here because the two that are OFF are decisions, not omissions.
+//
+//   quantity, cost, market  ON — the three numbers the sheet states, written
+//     exactly as stated, for every row; and zero for every shelf the sheet does
+//     not name. This is the baseline.
+//
+//   catalog details        OFF — SKU, UPC and category are NEVER written back.
+//     This is a stock-and-value operation; the catalog is curated by hand and
+//     an existing product record must not be edited as a side effect of a
+//     count. A sheet whose SKU column has drifted would otherwise rewrite 306
+//     product records on the way past.
+//
+//   create products        OFF — a row matching nothing does not invent a
+//     product. It BLOCKS the whole run instead (see the unresolved-rows check
+//     in buildResetPlan). Creating would let a typo or a mis-mapped name column
+//     quietly grow the catalog, and — worse — it would let the run *succeed*,
+//     which is the silent failure. Refusing is the loud one: the row is named
+//     in the preview, nothing is written, and the fix (correct the sheet, or
+//     add the product deliberately in the catalog screen) is a small, explicit
+//     act. The cost of being wrong in that direction is a re-paste; the cost of
+//     being wrong in the other is a phantom product carrying real money.
 
 // ---------------------------------------------------------------------------
 // Text → grid
@@ -566,8 +573,19 @@ function fieldFromHeader(raw: string): ResetField | null {
   return null
 }
 
-/** A mapping is usable once it can identify a product and say something about it. */
-export function mappingProblems(mapping: ResetField[], options: ResetOptions): string[] {
+/**
+ * A mapping is usable once it can identify a product and state all three of the
+ * numbers a baseline carries.
+ *
+ * Quantity, cost and market are all REQUIRED now that there is no way to turn
+ * any of them off. A sheet missing one of them cannot be the warehouse — it
+ * would set the quantities and leave the money reading whatever it read before,
+ * which is the half-replaced state this screen was rewritten to eliminate. An
+ * individual CELL may still be blank; that is "the sheet did not state this for
+ * this row", it is warned about per row, and it never writes a zero nobody
+ * typed.
+ */
+export function mappingProblems(mapping: ResetField[]): string[] {
   const problems: string[] = []
   const has = (f: ResetField): boolean => mapping.includes(f)
   const count = (f: ResetField): number => mapping.filter((m) => m === f).length
@@ -579,14 +597,14 @@ export function mappingProblems(mapping: ResetField[], options: ResetOptions): s
   if (!has('name') && !has('upc') && !has('sku')) {
     problems.push('Set one column to Product name, UPC or SKU so rows can be matched to products.')
   }
-  if (options.applyQuantity && !has('quantity')) {
-    problems.push('Set a column to Quantity on hand, or turn off “Update quantities”.')
+  if (!has('quantity')) {
+    problems.push('Set a column to Quantity on hand — the count is what this sheet is for.')
   }
-  if (options.applyCost && !has('costEach') && !has('costTotal')) {
-    problems.push('Set a column to Cost, or turn off “Update cost”.')
+  if (!has('costEach') && !has('costTotal')) {
+    problems.push('Set a column to Cost. A baseline states what the stock on hand is worth.')
   }
-  if (options.applyMarket && !has('marketEach') && !has('marketTotal')) {
-    problems.push('Set a column to Market value, or turn off “Update market value”.')
+  if (!has('marketEach') && !has('marketTotal')) {
+    problems.push('Set a column to Market value. A baseline states what the stock would sell for.')
   }
   return problems
 }
@@ -624,13 +642,11 @@ export interface ResetCatalogProduct {
 // The plan
 // ---------------------------------------------------------------------------
 
-export type ResetRowStatus = 'change' | 'same' | 'new' | 'unmatched' | 'ambiguous' | 'invalid'
-
-export interface ResetDetailChange {
-  field: 'sku' | 'upc' | 'category'
-  from: string
-  to: string
-}
+/**
+ * There is no 'new'. A row matching nothing is 'unmatched', and 'unmatched' is
+ * fatal to the whole run — see the header.
+ */
+export type ResetRowStatus = 'change' | 'same' | 'unmatched' | 'ambiguous' | 'invalid'
 
 export interface ResetRowPlan {
   /** 1-based line number within the pasted data rows. */
@@ -666,16 +682,22 @@ export interface ResetRowPlan {
   shelfCostAfter: number | null
   marketBefore: number | null
   marketAfter: number | null
-  detailChanges: ResetDetailChange[]
 }
 
-/** A (product, location) that holds stock the sheet never mentions. */
+/** A (product, location) that holds stock the sheet never mentions — and will
+ *  therefore be written down to zero. */
 export interface ResetMissingRow {
   productId: string
   productName: string
   location: string
   quantity: number
   unitCost: number
+  /**
+   * Valued the way every widget values it: the high bid when there is one, the
+   * cost basis otherwise. So the money the preview says is about to be written
+   * off is the money the dashboard is about to lose, not a second opinion.
+   */
+  unitMarket: number
 }
 
 export interface ResetTotals {
@@ -689,15 +711,13 @@ export interface ResetTotals {
 
 export interface ResetPlan {
   mapping: ResetField[]
-  options: ResetOptions
   rows: ResetRowPlan[]
-  /** Products holding stock the sheet does not mention (zeroed only on request). */
+  /** Shelves holding stock the sheet does not mention. All of them are zeroed. */
   missing: ResetMissingRow[]
   counts: {
     total: number
     change: number
     same: number
-    created: number
     unmatched: number
     ambiguous: number
     invalid: number
@@ -845,10 +865,9 @@ export function buildResetPlan(
   sheet: ParsedSheet,
   mapping: ResetField[],
   catalog: ResetCatalogProduct[],
-  options: ResetOptions,
   defaultLocation: Location = LOCATION_IDS[0]
 ): ResetPlan {
-  const problems = mappingProblems(mapping, options)
+  const problems = mappingProblems(mapping)
   const index = buildIndex(catalog)
   const col = (field: ResetField): number => mapping.indexOf(field)
   const ci = {
@@ -877,7 +896,6 @@ export function buildResetPlan(
 
   const key = (productId: string, location: string): string => `${productId}::${location}`
 
-  let created = 0
   for (let i = 0; i < sheet.rows.length; i++) {
     const raw = sheet.rows[i]
     const sheetName = cellAt(raw, ci.name)
@@ -907,8 +925,7 @@ export function buildResetPlan(
       costAfter: null,
       shelfCostAfter: null,
       marketBefore: null,
-      marketAfter: null,
-      detailChanges: []
+      marketAfter: null
     }
 
     // A row that names nothing is the summary block at the bottom of a paste,
@@ -918,15 +935,23 @@ export function buildResetPlan(
       warnings.push(`“${cellAt(raw, ci.location)}” is not a location — counted at ${location}.`)
     }
 
+    // A row with no readable quantity is REJECTED, not carried through with the
+    // shelf left alone. Under a baseline every row states an on-hand number, so
+    // a blank or unreadable one is a sheet that is not finished — and finishing
+    // it is a great deal cheaper than reconciling a warehouse that was written
+    // from a half-typed count.
     const qtyCell = ci.quantity >= 0 ? cellAt(raw, ci.quantity) : ''
-    let quantity = ci.quantity >= 0 ? parseQty(qtyCell) : null
-    if (options.applyQuantity && ci.quantity >= 0 && qtyCell !== '' && quantity == null) {
+    const quantity = ci.quantity >= 0 ? parseQty(qtyCell) : null
+    if (quantity == null) {
       plan.status = 'invalid'
-      plan.message = `“${qtyCell}” is not a quantity.`
+      plan.message =
+        qtyCell === ''
+          ? 'This row states no quantity. Every row of a baseline count has to say how many.'
+          : `“${qtyCell}” is not a quantity.`
       rows.push(plan)
       continue
     }
-    if (quantity != null && quantity < 0) {
+    if (quantity < 0) {
       plan.status = 'invalid'
       plan.message = 'Quantity cannot be negative.'
       rows.push(plan)
@@ -940,23 +965,23 @@ export function buildResetPlan(
 
     // A total with no unit price still states the unit price, as long as there
     // is a quantity to divide by.
-    if (costEach == null && costTotal != null && quantity != null && quantity > 0) {
+    if (costEach == null && costTotal != null && quantity > 0) {
       costEach = money(costTotal / quantity)
     }
-    if (marketEach == null && marketTotal != null && quantity != null && quantity > 0) {
+    if (marketEach == null && marketTotal != null && quantity > 0) {
       marketEach = money(marketTotal / quantity)
     }
     // Where BOTH are stated, they have to agree. A stale extended column is the
     // single most common thing wrong with a hand-kept sheet, and it means one of
     // the two numbers on the row is not what the operator thinks it is.
-    if (costEach != null && costTotal != null && quantity != null && quantity > 0) {
+    if (costEach != null && costTotal != null && quantity > 0) {
       if (!extendsTo(costEach, quantity, costTotal)) {
         warnings.push(
           `Cost total ${fmt(costTotal)} does not match ${fmt(costEach)} × ${quantity} — using the unit cost.`
         )
       }
     }
-    if (marketEach != null && marketTotal != null && quantity != null && quantity > 0) {
+    if (marketEach != null && marketTotal != null && quantity > 0) {
       if (!extendsTo(marketEach, quantity, marketTotal)) {
         warnings.push(
           `Market total ${fmt(marketTotal)} does not match ${fmt(marketEach)} × ${quantity} — using the unit value.`
@@ -974,24 +999,6 @@ export function buildResetPlan(
 
     const match = matchRow(index, sheetUpc, sheetName, sheetSku)
     if (!match.product) {
-      if (match.status === 'unmatched' && options.createMissing && sheetName) {
-        plan.status = 'new'
-        plan.message = ''
-        plan.productName = sheetName
-        plan.quantityBefore = 0
-        plan.quantityAfter = options.applyQuantity ? (quantity ?? 0) : 0
-        plan.costBefore = 0
-        plan.costAfter = costEach ?? 0
-        plan.shelfCostAfter = costEach ?? null
-        plan.marketBefore = null
-        plan.marketAfter = marketEach ?? null
-        if (sheetSku) plan.detailChanges.push({ field: 'sku', from: '', to: sheetSku })
-        if (sheetUpc) plan.detailChanges.push({ field: 'upc', from: '', to: sheetUpc })
-        if (sheetCategory) plan.detailChanges.push({ field: 'category', from: '', to: sheetCategory })
-        created++
-        rows.push(plan)
-        continue
-      }
       plan.status = match.status === 'ambiguous' ? 'ambiguous' : 'unmatched'
       plan.message = match.message
       // Offered for an ambiguous row too: a row that fell through to a shared
@@ -1023,18 +1030,14 @@ export function buildResetPlan(
       ? (projectedQty.get(shelf) as number)
       : (product.quantityByLocation[location] ?? 0)
     plan.quantityBefore = before
-    if (options.applyQuantity && quantity != null) {
-      const rounded = product.giveawayItem ? Math.round(quantity * 1e4) / 1e4 : Math.round(quantity)
-      if (!product.giveawayItem && rounded !== quantity) {
-        warnings.push(
-          `${quantity} rounded to ${rounded} — this product is not flagged for fractional units.`
-        )
-      }
-      plan.quantityAfter = rounded
-      projectedQty.set(shelf, rounded)
-    } else {
-      plan.quantityAfter = before
+    const rounded = product.giveawayItem ? Math.round(quantity * 1e4) / 1e4 : Math.round(quantity)
+    if (!product.giveawayItem && rounded !== quantity) {
+      warnings.push(
+        `${quantity} rounded to ${rounded} — this product is not flagged for fractional units.`
+      )
     }
+    plan.quantityAfter = rounded
+    projectedQty.set(shelf, rounded)
 
     // Cost ----------------------------------------------------------------
     // Only the SHELF's cost is decided here. The product's resulting average is
@@ -1042,8 +1045,8 @@ export function buildResetPlan(
     // two rows can revalue two locations of the same product, and the average
     // depends on both.
     plan.costBefore = product.unitCost
-    if (options.applyCost && costEach != null) {
-      if ((plan.quantityAfter ?? 0) <= 0) {
+    if (costEach != null) {
+      if (rounded <= 0) {
         if (money(costEach) !== money(product.unitCost)) {
           warnings.push('Cost not applied: nothing on hand to value once this count is applied.')
         }
@@ -1051,34 +1054,30 @@ export function buildResetPlan(
         plan.shelfCostAfter = money(costEach)
         projectedShelfCost.set(shelf, money(costEach))
       }
+    } else if (rounded > 0) {
+      // The one hole a baseline can still have: a row that counts stock but
+      // states no money for it. Nothing is written — a blank cell is never a
+      // zero — so the shelf keeps a basis this sheet did not set, and the
+      // dashboard will not read back what was pasted. Said out loud per row,
+      // because it is invisible in the totals.
+      warnings.push(
+        `The sheet states no cost — this stock keeps its current basis of ` +
+          `${fmt(product.costByLocation[location] ?? product.unitCost)}.`
+      )
     }
 
     // Market value --------------------------------------------------------
     plan.marketBefore = product.highBid
-    if (options.applyMarket && marketEach != null) {
+    if (marketEach != null) {
       const after = money(marketEach)
       plan.marketAfter = after
       projectedMarket.set(product.id, after)
     } else {
       plan.marketAfter = product.highBid
-    }
-
-    // Catalog details -----------------------------------------------------
-    if (options.applyDetails) {
-      if (sheetSku && sheetSku !== product.sku) {
-        plan.detailChanges.push({ field: 'sku', from: product.sku, to: sheetSku })
-      }
-      if (sheetCategory && sheetCategory !== product.category) {
-        plan.detailChanges.push({ field: 'category', from: product.category, to: sheetCategory })
-      }
-      const upcNorm = normalizeUpc(sheetUpc)
-      if (upcNorm && upcNorm !== normalizeUpc(product.upc)) {
-        const clash = (index.byUpc.get(upcNorm) ?? []).filter((p) => p.id !== product.id)
-        if (clash.length > 0) {
-          warnings.push(`UPC ${sheetUpc} already belongs to ${clash[0].name} — not changed.`)
-        } else {
-          plan.detailChanges.push({ field: 'upc', from: product.upc ?? '', to: sheetUpc })
-        }
+      if (rounded > 0 && product.highBid != null && product.highBid > 0) {
+        warnings.push(
+          `The sheet states no market value — the ${fmt(product.highBid)} high bid on file stands.`
+        )
       }
     }
 
@@ -1092,20 +1091,23 @@ export function buildResetPlan(
   // product carrying the weighted blend of RM's new cost and AM's old one. This
   // reproduces that arithmetic exactly, so the number on screen is the number
   // that will be stored.
-  const shelvesOf = (p: ResetCatalogProduct): string[] => {
-    const set = new Set(Object.keys(p.quantityByLocation))
-    for (const shelf of projectedQty.keys()) {
-      const split = shelf.indexOf('::')
-      if (shelf.slice(0, split) === p.id) set.add(shelf.slice(split + 2))
-    }
-    return [...set]
+  // Which shelves a product ends up holding anything on — only the ones the
+  // sheet counted, because every other shelf it owns is going to zero. Indexed
+  // once rather than scanned per product: this plan is rebuilt on every keystroke
+  // and the sheet is now expected to name the whole catalog, not forty rows.
+  const countedShelves = new Map<string, string[]>()
+  for (const shelf of projectedQty.keys()) {
+    const split = shelf.indexOf('::')
+    const id = shelf.slice(0, split)
+    const list = countedShelves.get(id)
+    if (list) list.push(shelf.slice(split + 2))
+    else countedShelves.set(id, [shelf.slice(split + 2)])
   }
-  const afterQtyAt = (p: ResetCatalogProduct, location: string): number => {
-    const shelf = key(p.id, location)
-    if (projectedQty.has(shelf)) return projectedQty.get(shelf) as number
-    if (options.zeroMissing && !covered.has(shelf)) return 0
-    return p.quantityByLocation[location] ?? 0
-  }
+  // The sheet is the whole warehouse, so this is the whole rule: a shelf it
+  // counted holds what it counted, and a shelf it did not name holds nothing.
+  // There is no third case and no condition on it any more — it IS the operation.
+  const afterQtyAt = (p: ResetCatalogProduct, location: string): number =>
+    projectedQty.get(key(p.id, location)) ?? 0
   const afterCostAt = (p: ResetCatalogProduct, location: string): number => {
     const shelf = key(p.id, location)
     if (projectedShelfCost.has(shelf)) return projectedShelfCost.get(shelf) as number
@@ -1113,10 +1115,22 @@ export function buildResetPlan(
   }
   const afterAvgCost = new Map<string, number>()
   const afterQtyTotal = new Map<string, number>()
+  /**
+   * Products whose counted value cannot be reproduced from one average cost.
+   *
+   * A product stores ONE unit_cost, rounded to the cent, and every widget
+   * derives its value as on-hand × that number. When a product is counted at two
+   * locations at different unit costs the average is a blend, and blend × total
+   * does not always land on the sheet's own extended total — 3 @ $10 and 4 @ $20
+   * is $110 on the paper and 7 × $15.71 = $109.97 on the dashboard. Three cents
+   * is exactly the kind of drift nobody notices, so it is measured here and said
+   * out loud on the row rather than left to be discovered against a paper count.
+   */
+  const blendGap = new Map<string, number>()
   for (const p of catalog) {
     let qty = 0
     let value = 0
-    for (const location of shelvesOf(p)) {
+    for (const location of countedShelves.get(p.id) ?? []) {
       const q = afterQtyAt(p, location)
       if (!(q > 0)) continue
       qty += q
@@ -1125,23 +1139,35 @@ export function buildResetPlan(
     afterQtyTotal.set(p.id, Math.round(qty * 1e4) / 1e4)
     // Nothing left on hand: syncProductAvgCost returns early and the last known
     // average stays on the product, so that is what is reported here too.
-    afterAvgCost.set(p.id, qty > 0 ? money(value / qty) : p.unitCost)
+    const avg = qty > 0 ? money(value / qty) : p.unitCost
+    afterAvgCost.set(p.id, avg)
+    if (qty > 0) {
+      const gap = money(money(value) - money(qty * avg))
+      if (Math.abs(gap) >= 0.01) blendGap.set(p.id, gap)
+    }
   }
 
   for (const row of rows) {
     if (row.status === 'invalid' || row.status === 'unmatched' || row.status === 'ambiguous') continue
-    if (row.status === 'new' || !row.productId) continue
+    if (!row.productId) continue
     row.costAfter = afterAvgCost.get(row.productId) ?? row.costBefore
+    const gap = blendGap.get(row.productId)
+    if (gap != null) {
+      row.warnings.push(
+        `Counted at two locations at different unit costs. One average cost cannot carry both, ` +
+          `so the dashboard reads ${fmt(Math.abs(gap))} ${gap > 0 ? 'under' : 'over'} this sheet ` +
+          `for this product.`
+      )
+    }
     const qtyMoved = (row.quantityAfter ?? 0) !== (row.quantityBefore ?? 0)
     const costMoved = money(row.costAfter ?? 0) !== money(row.costBefore ?? 0)
     const marketMoved = normMarket(row.marketAfter) !== normMarket(row.marketBefore)
-    row.status =
-      qtyMoved || costMoved || marketMoved || row.detailChanges.length > 0 ? 'change' : 'same'
+    row.status = qtyMoved || costMoved || marketMoved ? 'change' : 'same'
   }
 
-  // Anything holding stock that the sheet never spoke for. Reported ALWAYS,
-  // zeroed only when the operator says the sheet is a complete count — seeing
-  // the list is what tells them whether it is.
+  // Every shelf holding stock that the sheet never spoke for. All of it is
+  // written off — this list IS the destructive half of the run, and the preview
+  // leads with it rather than filing it at the bottom.
   const missing: ResetMissingRow[] = []
   for (const p of catalog) {
     for (const [location, quantity] of Object.entries(p.quantityByLocation)) {
@@ -1152,29 +1178,33 @@ export function buildResetPlan(
         productName: p.name,
         location,
         quantity,
-        unitCost: p.unitCost
+        unitCost: p.unitCost,
+        unitMarket: p.highBid && p.highBid > 0 ? p.highBid : p.unitCost
       })
     }
   }
-  missing.sort((a, b) => b.quantity * b.unitCost - a.quantity * a.unitCost)
+  missing.sort((a, b) => b.quantity * b.unitMarket - a.quantity * a.unitMarket)
 
-  // Warn on a shelf the sheet skipped for a product it DID count somewhere
-  // else — that is the shape of a location typo, and left alone it doubles the
-  // product's on-hand instead of moving it.
-  if (!options.zeroMissing) {
-    const missingByProduct = new Map<string, ResetMissingRow[]>()
-    for (const m of missing) {
-      const list = missingByProduct.get(m.productId)
-      if (list) list.push(m)
-      else missingByProduct.set(m.productId, [m])
-    }
-    for (const row of rows) {
-      if (!row.productId || row.status === 'unmatched' || row.status === 'ambiguous') continue
-      const others = missingByProduct.get(row.productId)
-      if (!others?.length) continue
-      const where = others.map((o) => `${o.quantity} at ${o.location}`).join(', ')
-      row.warnings.push(`Also holds ${where}, which this sheet does not mention.`)
-    }
+  // A shelf the sheet skipped for a product it DID count somewhere else is the
+  // shape of a location typo — and under a baseline that shelf is written off
+  // rather than left alone, so naming it on the row is the difference between a
+  // corrected typo and a silent write-off of real stock.
+  const missingByProduct = new Map<string, ResetMissingRow[]>()
+  for (const m of missing) {
+    const list = missingByProduct.get(m.productId)
+    if (list) list.push(m)
+    else missingByProduct.set(m.productId, [m])
+  }
+  for (const row of rows) {
+    if (!row.productId || row.status === 'unmatched' || row.status === 'ambiguous') continue
+    const others = missingByProduct.get(row.productId)
+    if (!others?.length) continue
+    const where = others.map((o) => `${o.quantity} at ${o.location}`).join(', ')
+    row.warnings.push(
+      `Also holds ${where} — not on this sheet, so ${
+        others.length === 1 ? 'that shelf goes' : 'those shelves go'
+      } to zero.`
+    )
   }
 
   // Catalog-wide totals, before and after ---------------------------------
@@ -1202,16 +1232,6 @@ export function buildResetPlan(
     totals.marketBefore += qtyBefore * marketBeforeUnit
     totals.marketAfter += qtyAfter * marketAfterUnit
   }
-  // Products the sheet would create carry their own opening value.
-  for (const row of rows) {
-    if (row.status !== 'new') continue
-    const qty = row.quantityAfter ?? 0
-    const cost = row.costAfter ?? 0
-    const market = row.marketAfter && row.marketAfter > 0 ? row.marketAfter : cost
-    totals.unitsAfter += qty
-    totals.costAfter += qty * cost
-    totals.marketAfter += qty * market
-  }
   totals.costBefore = money(totals.costBefore)
   totals.costAfter = money(totals.costAfter)
   totals.marketBefore = money(totals.marketBefore)
@@ -1223,30 +1243,29 @@ export function buildResetPlan(
     total: rows.length,
     change: rows.filter((r) => r.status === 'change').length,
     same: rows.filter((r) => r.status === 'same').length,
-    created,
     unmatched: rows.filter((r) => r.status === 'unmatched').length,
     ambiguous: rows.filter((r) => r.status === 'ambiguous').length,
     invalid: rows.filter((r) => r.status === 'invalid').length,
     warnings: rows.reduce((n, r) => n + r.warnings.length, 0)
   }
 
-  // A complete count writes off everything it did not find. That is only true
-  // if every row on the sheet was actually understood — an unmatched or
-  // ambiguous row is stock the operator DID count, and zeroing it because the
-  // app could not identify it turns a naming problem into a write-off. Blocked
-  // rather than warned: the fix (name the product, add its UPC, or tick
-  // "create products the catalog does not have") is small, and the damage is
-  // not.
-  const unresolved = counts.unmatched + counts.ambiguous
-  if (options.zeroMissing && unresolved > 0) {
+  // A baseline writes off everything it did not find. That is only defensible
+  // if every row on the sheet was actually understood — an unmatched, ambiguous
+  // or rejected row is stock the operator DID count, and zeroing everything
+  // else because the app could not read that row turns a naming problem into a
+  // write-off. BLOCKED, not warned: there is no longer a checkbox to fall back
+  // on, and a partly-understood sheet cannot be the truth about a warehouse.
+  const unresolved = counts.unmatched + counts.ambiguous + counts.invalid
+  if (unresolved > 0) {
     problems.push(
-      `${unresolved} ${unresolved === 1 ? 'row was' : 'rows were'} not matched to a product. ` +
-        'Zeroing everything else would write off stock those rows counted — match them first, ' +
-        'or turn off “this is a complete count”.'
+      `${unresolved} of ${counts.total} rows could not be read as a count. ` +
+        'This sheet replaces the whole warehouse, so applying it would write off the stock those ' +
+        'rows are counting. Fix them on the sheet — or add the product to the catalog first — ' +
+        'and paste again.'
     )
   }
 
-  return { mapping, options, rows, missing, counts, totals, problems }
+  return { mapping, rows, missing, counts, totals, problems }
 }
 
 function normMarket(value: number | null): number | null {
@@ -1259,14 +1278,13 @@ function fmt(n: number): string {
 
 /** Rows this plan would actually write. */
 export function applicableRows(plan: ResetPlan): ResetRowPlan[] {
-  return plan.rows.filter((r) => r.status === 'change' || r.status === 'new')
+  return plan.rows.filter((r) => r.status === 'change')
 }
 
 /** Is there anything at all to do? */
 export function hasWork(plan: ResetPlan): boolean {
   if (plan.problems.length > 0) return false
-  if (applicableRows(plan).length > 0) return true
-  return plan.options.zeroMissing && plan.missing.length > 0
+  return applicableRows(plan).length > 0 || plan.missing.length > 0
 }
 
 // ---------------------------------------------------------------------------

@@ -278,7 +278,6 @@ export function registerInventoryIpc(): void {
     return previewReset({
       text: String(input?.text ?? ''),
       mapping: Array.isArray(input?.mapping) ? (input.mapping as ResetField[]) : null,
-      options: input?.options,
       defaultLocation: input?.defaultLocation
     })
   })
@@ -314,7 +313,6 @@ export function registerInventoryIpc(): void {
         {
           text: String(input.text ?? ''),
           mapping: input.mapping as ResetField[],
-          options: input.options,
           defaultLocation: input.defaultLocation,
           source: input.source
         },

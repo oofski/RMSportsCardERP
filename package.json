@@ -1,6 +1,6 @@
 {
   "name": "rm-operations-app",
-  "version": "0.0.77",
+  "version": "0.0.78",
   "description": "RM Operations App — the internal operations platform for RM Cardz.",
   "author": {
     "name": "RM Cardz"
@@ -26,7 +26,7 @@
     "server": "npm run build:server && node out/server/index.cjs",
     "test:parser": "esbuild tests/shippingParser.test.ts --bundle --platform=node --format=cjs --alias:@shared=./src/shared --outfile=out/tests/shippingParser.cjs --log-level=warning && node out/tests/shippingParser.cjs",
     "test:labels": "node tests/build.mjs tests/shippingLabels.test.ts out/tests/shippingLabels.cjs && node out/tests/shippingLabels.cjs",
-    "test": "npm run test:parser && npm run test:labels && npm run test:board && npm run test:supplies && npm run test:pnl && npm run test:sop && npm run test:sop-hazards && npm run test:fees-sync && npm run test:marketplace && npm run test:owner && npm run test:stations && npm run test:catalog && npm run test:shipping-role",
+    "test": "npm run test:parser && npm run test:labels && npm run test:board && npm run test:supplies && npm run test:pnl && npm run test:sop && npm run test:sop-hazards && npm run test:fees-sync && npm run test:marketplace && npm run test:owner && npm run test:stations && npm run test:catalog && npm run test:shipping-role && npm run test:reset",
     "test:board": "node tests/build.mjs tests/shippingBoard.test.ts out/tests/shippingBoard.cjs && node out/tests/shippingBoard.cjs",
     "test:supplies": "esbuild tests/shippingSupplies.test.ts --bundle --platform=node --format=cjs --outfile=out/tests/shippingSupplies.cjs --log-level=warning && node out/tests/shippingSupplies.cjs",
     "test:pnl": "node tests/build.mjs tests/pnlPacking.test.ts out/tests/pnlPacking.cjs && node out/tests/pnlPacking.cjs",
@@ -37,7 +37,8 @@
     "test:owner": "node tests/build.mjs tests/ownerBoard.test.ts out/tests/ownerBoard.cjs && node out/tests/ownerBoard.cjs",
     "test:stations": "node tests/build.mjs tests/shipStations.test.ts out/tests/shipStations.cjs && node out/tests/shipStations.cjs",
     "test:catalog": "node tests/build.mjs tests/catalogImport.test.ts out/tests/catalogImport.cjs && node out/tests/catalogImport.cjs",
-    "test:shipping-role": "node tests/build.mjs tests/shippingRole.test.ts out/tests/shippingRole.cjs && node out/tests/shippingRole.cjs"
+    "test:shipping-role": "node tests/build.mjs tests/shippingRole.test.ts out/tests/shippingRole.cjs && node out/tests/shippingRole.cjs",
+    "test:reset": "node tests/build.mjs tests/inventoryReset.test.ts out/tests/inventoryReset.cjs && node out/tests/inventoryReset.cjs"
   },
   "dependencies": {
     "@electron-toolkit/utils": "^3.0.0",

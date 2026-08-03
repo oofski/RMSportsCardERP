@@ -14843,10 +14843,26 @@ button.sor-team:focus-visible {
   border-radius: var(--radius);
   background: var(--surface);
 }
-.inv-reset-options-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(258px, 1fr));
-  gap: 12px 22px;
+/* The rule the toggles used to be. Stated once, in words, because it is now the
+   only behaviour this screen has. */
+.inv-reset-rule {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  color: var(--text-2);
+}
+.inv-reset-rule > svg {
+  flex: none;
+  margin-top: 1px;
+}
+.inv-reset-rule p {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+.inv-reset-rule strong {
+  font-weight: 650;
+  color: var(--text);
 }
 .inv-reset-default-loc {
   display: flex;
@@ -14886,6 +14902,85 @@ button.sor-team:focus-visible {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+/* ---------- What the sheet is about to destroy ----------
+   Sits above the totals, not below the fold. A run that clears more of the
+   warehouse than it accounts for escalates from a warning tint to the danger
+   one, so the scale reads before any of the figures do. */
+.inv-reset-wipe {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  padding: 13px 15px;
+  border: 1px solid var(--warning);
+  border-radius: var(--radius);
+  background: var(--warning-bg);
+  /* --warning is too weak to read as ink on its own tint; --text on
+     --warning-bg measures 16.1:1. */
+  color: var(--text);
+}
+.inv-reset-wipe.is-alarming {
+  border-color: var(--danger);
+  background: var(--danger-bg);
+  color: var(--danger-strong);
+}
+.inv-reset-wipe-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+}
+.inv-reset-wipe-head > svg {
+  flex: none;
+  margin-top: 1px;
+}
+.inv-reset-wipe-head strong {
+  display: block;
+  font-size: 13.5px;
+  font-weight: 700;
+}
+.inv-reset-wipe-head span {
+  display: block;
+  margin-top: 3px;
+  font-size: 12px;
+  line-height: 1.55;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.85;
+}
+.inv-reset-wipe-alarm {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.55;
+}
+.inv-reset-wipe-list > summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 650;
+  list-style: none;
+}
+.inv-reset-wipe-list > summary::-webkit-details-marker {
+  display: none;
+}
+.inv-reset-wipe-list > summary::after {
+  content: '▾';
+  margin-left: 6px;
+  font-size: 10px;
+}
+.inv-reset-wipe-list[open] > summary::after {
+  content: '▴';
+}
+/* The list can run to hundreds of rows; it scrolls inside the panel rather than
+   pushing the apply button off the bottom of the page. */
+.inv-reset-wipe-list .inv-reset-table {
+  display: block;
+  margin-top: 9px;
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
 }
 
 /* ---------- Before → after totals ---------- */
@@ -15097,23 +15192,6 @@ button.sor-team:focus-visible {
   font-size: 11px;
   color: var(--text-3);
 }
-.inv-reset-new {
-  display: inline-block;
-  margin-top: 3px;
-  padding: 1px 7px;
-  border-radius: 999px;
-  background: var(--brand-soft);
-  color: var(--brand-700);
-  font-size: 10px;
-  font-weight: 650;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-}
-.inv-reset-details span {
-  display: block;
-  font-size: 11px;
-}
-
 /* before → after inside a cell */
 .inv-reset-delta {
   display: inline-flex;
@@ -15235,13 +15313,34 @@ button.sor-team:focus-visible {
   font-weight: 650;
   color: var(--text);
 }
-.inv-reset-confirm-skip {
+.inv-reset-confirm-wipe {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
   margin: 14px 0 0 !important;
-  padding: 10px 12px;
+  padding: 11px 12px;
+  border: 1px solid var(--danger);
   border-radius: var(--radius-sm);
-  background: var(--warning-bg);
-  color: var(--text);
+  background: var(--danger-bg);
+  color: var(--danger-strong) !important;
   font-size: 12px !important;
+  line-height: 1.55;
+}
+.inv-reset-confirm-wipe > svg {
+  flex: none;
+  margin-top: 1px;
+}
+.inv-reset-confirm-wipe strong {
+  font-weight: 700;
+}
+/* Asked for only when the run clears more than it counts, so the ordinary
+   confirm stays two clicks. */
+.inv-reset-confirm-ack {
+  margin-top: 12px;
+  padding: 11px 12px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
 }
 .inv-reset-rundetail p {
   margin: 0 0 12px;

@@ -19,7 +19,6 @@ import type {
   ParsedSheet,
   ResetApplyResult,
   ResetField,
-  ResetOptions,
   ResetPlan,
   ResetRunSummary
 } from '@shared/inventoryReset'
@@ -275,7 +274,6 @@ const api = {
     resetPreview: (input: {
       text: string
       mapping: ResetField[] | null
-      options?: Partial<ResetOptions>
       defaultLocation?: string
     }): Promise<{ sheet: ParsedSheet; plan: ResetPlan; guessed: boolean } | null> =>
       ipcRenderer.invoke(IPC.invResetPreview, input),
@@ -284,7 +282,6 @@ const api = {
     resetApply: (input: {
       text: string
       mapping: ResetField[]
-      options?: Partial<ResetOptions>
       defaultLocation?: string
       source?: string
     }): Promise<Result<ResetApplyResult>> => ipcRenderer.invoke(IPC.invResetApply, input),

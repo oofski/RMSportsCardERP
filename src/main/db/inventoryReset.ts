@@ -7,6 +7,13 @@
  * freshly-read catalog and writes exactly what it returns, so the preview the
  * operator approved and the transaction that runs cannot disagree.
  *
+ * The sheet is the whole warehouse. Rows land on their counted numbers and
+ * EVERY other shelf in the catalog — every product, at every location — is
+ * emptied. Emptying is a real write, not a quantity of zero: stock goes to nil,
+ * the shelf's cost layers are retired, the product's average is recomputed from
+ * what survives, and a ledger row records the movement. A layer left open on an
+ * empty shelf would resurface in the next valuation as stock nobody has.
+ *
  * Every quantity move goes through the same primitives as a manual adjustment —
  * bumpStock, createLot, consumeFifo, syncProductAvgCost, insertTxn — so a bulk
  * reset leaves the FIFO ledger in the state a hundred hand adjustments would
@@ -23,21 +30,13 @@ import type {
   ResetApplyResult,
   ResetCatalogProduct,
   ResetField,
-  ResetOptions,
   ResetPlan,
   ResetRunSummary
 } from '@shared/inventoryReset'
-import {
-  DEFAULT_RESET_OPTIONS,
-  buildResetPlan,
-  guessMapping,
-  money,
-  parseSheet
-} from '@shared/inventoryReset'
-import type { Result, UnitType } from '@shared/types'
-import { normalizeUpc } from '@shared/upc'
+import { buildResetPlan, guessMapping, money, parseSheet } from '@shared/inventoryReset'
+import type { Result } from '@shared/types'
 import { getDb } from './database'
-import { bumpStock, createProduct, insertTxn, stockQty } from './inventory'
+import { bumpStock, insertTxn, stockQty } from './inventory'
 import { consumeFifo, createLot, roundQty, syncProductAvgCost } from './lots'
 import { newId, nowIso } from '../util'
 
@@ -156,7 +155,6 @@ export interface ResetPreviewInput {
   text: string
   /** Null on the first call: the guess is returned so the UI can show it. */
   mapping: ResetField[] | null
-  options?: Partial<ResetOptions>
   defaultLocation?: string
 }
 
@@ -167,10 +165,6 @@ export interface ResetPreview {
   guessed: boolean
 }
 
-function normalizeOptions(partial: Partial<ResetOptions> | undefined): ResetOptions {
-  return { ...DEFAULT_RESET_OPTIONS, ...(partial ?? {}) }
-}
-
 function normalizeLocation(raw: string | undefined): Location {
   const up = String(raw ?? '').trim().toUpperCase()
   return (LOCATION_IDS as string[]).includes(up) ? (up as Location) : LOCATION_IDS[0]
@@ -178,13 +172,12 @@ function normalizeLocation(raw: string | undefined): Location {
 
 export function previewReset(input: ResetPreviewInput): ResetPreview {
   const sheet = parseSheet(String(input.text ?? ''))
-  const options = normalizeOptions(input.options)
   const catalog = resetCatalog()
   const supplied = Array.isArray(input.mapping) && input.mapping.length > 0
   const mapping = supplied
     ? sizeMapping(input.mapping as ResetField[], sheet.columns)
     : guessMapping(sheet, knownCategories())
-  const plan = buildResetPlan(sheet, mapping, catalog, options, normalizeLocation(input.defaultLocation))
+  const plan = buildResetPlan(sheet, mapping, catalog, normalizeLocation(input.defaultLocation))
   return { sheet, plan, guessed: !supplied }
 }
 
@@ -255,6 +248,68 @@ function setShelfQuantity(
   return delta
 }
 
+/** Open cost quantity sitting on one shelf. */
+function openLotQty(db: Database, productId: string, location: string): number {
+  const row = db
+    .prepare(
+      `SELECT COALESCE(SUM(qty_remaining), 0) AS q FROM inventory_lots
+        WHERE product_id = ? AND location = ? AND qty_remaining > 0`
+    )
+    .get(productId, location) as { q: number }
+  return row.q
+}
+
+/**
+ * Empty one shelf completely — stock, cost layers and ledger.
+ *
+ * This is the destructive half of a baseline count, and it is deliberately NOT
+ * setShelfQuantity(target 0):
+ *
+ *  - The stock move is written as the EXACT negative of what is on the shelf,
+ *    never routed through roundQty. A giveaway product legitimately sits at 9.75
+ *    boxes; a target-and-delta calculation that rounded anywhere would leave a
+ *    tenth of a box behind, or invent one.
+ *
+ *  - The layers are retired outright rather than walked FIFO. consumeFifo THROWS
+ *    when the open layers cannot cover the stock — which is the right answer for
+ *    a sale, and the wrong one here: a single shelf carrying pre-FIFO stock with
+ *    no layer would abort a run that is emptying three hundred products, and
+ *    nothing would be written at all. Emptying is also the one case where FIFO
+ *    order is irrelevant, because every layer is going.
+ *
+ *  - It sweeps a shelf whose stock is ALREADY zero but still carries an open
+ *    layer. That layer is an orphan; left alone it keeps weighting the product's
+ *    average cost and quietly values stock nobody has.
+ *
+ * qty_remaining goes to 0 rather than the row being deleted, exactly as
+ * consumeFifo leaves a spent layer: qty_received survives, so what was once on
+ * this shelf is still readable.
+ *
+ * Returns the quantity that came off (0 when there was nothing to do).
+ */
+function zeroShelf(
+  db: Database,
+  args: { productId: string; location: string; note: string; actorId: string | null }
+): number {
+  const before = stockQty(args.productId, args.location)
+  const open = openLotQty(db, args.productId, args.location)
+  if (before === 0 && open === 0) return 0
+
+  if (before !== 0) bumpStock(args.productId, args.location, -before)
+  db.prepare(
+    `UPDATE inventory_lots SET qty_remaining = 0
+      WHERE product_id = ? AND location = ? AND qty_remaining > 0`
+  ).run(args.productId, args.location)
+  // After the layers, never before: the average has to be recomputed from what
+  // actually survives, and at this point what survives is the product's OTHER
+  // locations only.
+  syncProductAvgCost(db, args.productId)
+  if (before !== 0) {
+    insertTxn(args.productId, 'adjustment', -before, null, null, args.note, args.actorId, args.location)
+  }
+  return before
+}
+
 /**
  * Re-value the cost layers a count says are worth something else.
  *
@@ -266,9 +321,8 @@ function setShelfQuantity(
  * throughout.
  *
  * Scoped to the counted LOCATION. A product also held somewhere the sheet did
- * not count keeps that shelf's basis, and the product's average comes out as the
- * blend of the two — which is the truth, and is why the planner warns about an
- * uncounted shelf rather than silently averaging it away.
+ * not count keeps that shelf's basis until the zero sweep empties it, at which
+ * point the average is recomputed again and lands on the counted cost alone.
  */
 function revalueShelf(
   db: Database,
@@ -276,27 +330,26 @@ function revalueShelf(
   location: string,
   unitCost: number
 ): boolean {
+  const cost = money(Math.max(0, unitCost))
   const info = db
     .prepare(
       `UPDATE inventory_lots SET unit_cost = ?
         WHERE product_id = ? AND location = ? AND qty_remaining > 0`
     )
-    .run(money(Math.max(0, unitCost)), productId, location)
-  if (info.changes === 0) return false
+    .run(cost, productId, location)
+  if (info.changes > 0) {
+    syncProductAvgCost(db, productId)
+    return true
+  }
+  // Stock with no cost layer at all — pre-FIFO stock that predates the backfill.
+  // There is nothing to re-base, so the counted cost BECOMES the layer. Without
+  // this the shelf would keep an invisible basis the sheet just overruled, and
+  // the dashboard would read a number the operator never pasted.
+  const qty = stockQty(productId, location)
+  if (!(qty > 0)) return false
+  createLot(db, productId, location, qty, cost, nowIso(), 'backfill', 'Counted cost — no prior cost layer')
   syncProductAvgCost(db, productId)
   return true
-}
-
-const UNIT_TYPE_HINTS: Array<{ test: RegExp; unit: UnitType }> = [
-  { test: /\bcase\b/i, unit: 'case' },
-  { test: /\bbox\b/i, unit: 'box' },
-  { test: /\bpack\b/i, unit: 'pack' }
-]
-
-/** Best guess at what a newly-created product is counted in, defaulting to box. */
-function unitTypeFor(name: string): UnitType {
-  for (const hint of UNIT_TYPE_HINTS) if (hint.test.test(name)) return hint.unit
-  return 'box'
 }
 
 export function applyReset(input: ResetApplyInput, actorId: string | null): Result<ResetApplyResult> {
@@ -304,7 +357,6 @@ export function applyReset(input: ResetApplyInput, actorId: string | null): Resu
   if (!text.trim()) return { ok: false, error: 'Nothing to apply — paste or choose a sheet first.' }
 
   const sheet = parseSheet(text)
-  const options = normalizeOptions(input.options)
   const defaultLocation = normalizeLocation(input.defaultLocation)
   const mapping = sizeMapping(input.mapping ?? [], sheet.columns)
 
@@ -312,109 +364,60 @@ export function applyReset(input: ResetApplyInput, actorId: string | null): Resu
   const run = db.transaction((): Result<ResetApplyResult> => {
     // Re-plan against the catalog as it is RIGHT NOW, inside the transaction, so
     // nothing that changed between preview and apply is written blind.
-    const plan = buildResetPlan(sheet, mapping, resetCatalog(), options, defaultLocation)
+    const catalog = resetCatalog()
+    const plan = buildResetPlan(sheet, mapping, catalog, defaultLocation)
     if (plan.problems.length > 0) return { ok: false, error: plan.problems[0] }
 
     const applied: string[] = []
     let rowsApplied = 0
-    let productsCreated = 0
     let shelvesZeroed = 0
     const stamp = nowIso()
     const note = `Bulk inventory reset ${stamp.slice(0, 10)}`
+    /** Every (product, location) the sheet spoke for. Everything else empties. */
+    const counted = new Set<string>()
 
     for (const row of plan.rows) {
-      if (row.status === 'new') {
-        if (!options.createMissing) continue
-        const created = createProduct(
-          {
-            sku: row.sheetSku,
-            upc: row.sheetUpc || null,
-            name: row.sheetName,
-            category: row.sheetCategory,
-            brand: '',
-            setName: '',
-            year: '',
-            unitType: unitTypeFor(row.sheetName),
-            // Left unknown on purpose: a divisor nobody has confirmed makes every
-            // cases↔boxes conversion refuse, which is the safe state. Guessing
-            // one here is the order-of-magnitude error @shared/units exists to
-            // prevent.
-            boxesPerCase: null,
-            packsPerBox: null,
-            unitCost: row.costAfter ?? 0,
-            highBid: row.marketAfter ?? null,
-            salePrice: null,
-            reorderPoint: 0,
-            notes: null,
-            openingQuantity: row.quantityAfter ?? 0,
-            openingLocation: row.location
-          },
-          actorId
-        )
-        productsCreated++
-        rowsApplied++
-        applied.push(
-          `Created ${created.name} — ${row.quantityAfter ?? 0} at ${row.location}` +
-            (row.costAfter ? ` @ ${money(row.costAfter)}` : '')
-        )
-        continue
-      }
-      if (row.status !== 'change' || !row.productId) continue
+      if (!row.productId) continue
+      counted.add(`${row.productId}::${row.location}`)
+      if (row.status !== 'change') continue
 
       const parts: string[] = []
-      if (options.applyQuantity && row.quantityAfter != null && row.quantityAfter !== row.quantityBefore) {
-        const delta = setShelfQuantity(db, {
-          productId: row.productId,
-          location: row.location,
-          // The SHELF's counted cost, not the product average: found stock is
-          // valued at what the count says this shelf is worth.
-          unitCost: options.applyCost ? row.shelfCostAfter : null,
-          target: row.quantityAfter,
-          note,
-          actorId
-        })
+      if (row.quantityAfter != null && row.quantityAfter !== row.quantityBefore) {
+        // A row that counts ZERO empties the shelf by the same route an uncounted
+        // one does. Same retirement of the layers, and the same immunity to a
+        // pre-FIFO shelf whose layers cannot cover its stock — a FIFO walk down
+        // to nothing would throw there and take the whole run with it.
+        const delta =
+          row.quantityAfter === 0
+            ? -zeroShelf(db, { productId: row.productId, location: row.location, note, actorId })
+            : setShelfQuantity(db, {
+                productId: row.productId,
+                location: row.location,
+                // The SHELF's counted cost, not the product average: found stock
+                // is valued at what the count says this shelf is worth.
+                unitCost: row.shelfCostAfter,
+                target: row.quantityAfter,
+                note,
+                actorId
+              })
         if (delta !== 0) {
           parts.push(`${row.location} ${row.quantityBefore ?? 0} → ${row.quantityAfter}`)
         }
       }
       // Re-base against the shelf's counted cost; row.costAfter is the product
       // average that results, and is only used for the log line.
-      if (options.applyCost && row.shelfCostAfter != null) {
+      if (row.shelfCostAfter != null) {
         if (revalueShelf(db, row.productId, row.location, row.shelfCostAfter)) {
           if (money(row.costAfter ?? 0) !== money(row.costBefore ?? 0)) {
             parts.push(`cost ${money(row.costBefore ?? 0)} → ${money(row.costAfter ?? 0)}`)
           }
         }
       }
-      if (options.applyMarket && row.marketAfter != null && row.marketAfter !== row.marketBefore) {
+      if (row.marketAfter != null && row.marketAfter !== row.marketBefore) {
         db.prepare(
           'UPDATE inventory_products SET high_bid = ?, high_bid_at = ?, updated_at = ? WHERE id = ?'
         ).run(money(row.marketAfter), stamp, stamp, row.productId)
         parts.push(`market ${money(row.marketBefore ?? 0)} → ${money(row.marketAfter)}`)
-      }
-      if (options.applyDetails && row.detailChanges.length > 0) {
-        for (const change of row.detailChanges) {
-          if (change.field === 'sku') {
-            db.prepare('UPDATE inventory_products SET sku = ?, updated_at = ? WHERE id = ?').run(
-              change.to,
-              stamp,
-              row.productId
-            )
-          } else if (change.field === 'category') {
-            db.prepare('UPDATE inventory_products SET category = ?, updated_at = ? WHERE id = ?').run(
-              change.to,
-              stamp,
-              row.productId
-            )
-          } else if (change.field === 'upc') {
-            // upc_norm is the scan key and must never lag upc — a product whose
-            // normalized form goes stale is permanently unscannable.
-            db.prepare(
-              'UPDATE inventory_products SET upc = ?, upc_norm = ?, updated_at = ? WHERE id = ?'
-            ).run(change.to, normalizeUpc(change.to), stamp, row.productId)
-          }
-          parts.push(`${change.field} ${change.from || '—'} → ${change.to}`)
-        }
       }
       if (parts.length > 0) {
         rowsApplied++
@@ -422,20 +425,29 @@ export function applyReset(input: ResetApplyInput, actorId: string | null): Resu
       }
     }
 
-    // A complete count zeroes what it did not find. Only on request.
-    if (options.zeroMissing) {
-      for (const gone of plan.missing) {
-        const delta = setShelfQuantity(db, {
-          productId: gone.productId,
-          location: gone.location,
-          target: 0,
-          unitCost: null,
-          note: `${note} — not on the count sheet`,
-          actorId
-        })
-        if (delta !== 0) {
+    // ---- The sheet is the whole warehouse -----------------------------------
+    //
+    // Every shelf of every catalog product that this sheet did not name is
+    // emptied. Swept over the FULL location set rather than over plan.missing,
+    // because plan.missing only knows about shelves carrying a positive
+    // quantity: a shelf sitting at zero with an open cost layer still poisons
+    // the product's average cost, and a shelf at a location the catalog snapshot
+    // has never seen still has to be asked about. zeroShelf is a no-op on a
+    // shelf that is already empty in both senses, so the cost of asking is one
+    // indexed lookup per shelf.
+    //
+    // Runs AFTER the counted rows on purpose: found stock valued at "the current
+    // average" is then valued at the average as it stood before the write-off,
+    // and every zeroShelf re-syncs the average behind it, so the last word on
+    // each product's cost is spoken with the final lot state in view.
+    const zeroNote = `${note} — not on the count sheet`
+    for (const product of catalog) {
+      for (const location of Object.keys(product.quantityByLocation)) {
+        if (counted.has(`${product.id}::${location}`)) continue
+        const removed = zeroShelf(db, { productId: product.id, location, note: zeroNote, actorId })
+        if (removed !== 0) {
           shelvesZeroed++
-          applied.push(`${gone.productName}: ${gone.location} ${gone.quantity} → 0 (not counted)`)
+          applied.push(`${product.name}: ${location} ${removed} → 0 (not counted)`)
         }
       }
     }
@@ -445,8 +457,12 @@ export function applyReset(input: ResetApplyInput, actorId: string | null): Resu
       source: String(input.source ?? 'Pasted sheet').slice(0, 200),
       rowsTotal: plan.counts.total,
       rowsApplied,
+      // Always 0 now: a row the planner could not read blocks the run outright,
+      // so nothing reaches this point half-understood. Kept because the history
+      // table shows runs from before that was true.
       rowsSkipped: plan.counts.unmatched + plan.counts.ambiguous + plan.counts.invalid,
-      productsCreated,
+      // Likewise: this operation never creates a product. Historical runs did.
+      productsCreated: 0,
       shelvesZeroed,
       unitsBefore: plan.totals.unitsBefore,
       unitsAfter: plan.totals.unitsAfter,
@@ -481,7 +497,11 @@ export function applyReset(input: ResetApplyInput, actorId: string | null): Resu
       cost_after: summary.costAfter,
       market_before: summary.marketBefore,
       market_after: summary.marketAfter,
-      options_json: JSON.stringify(options),
+      // There are no options left to record. The marker is written anyway so a
+      // run made under the baseline rule is distinguishable in the history from
+      // one made when this screen still had six checkboxes — those rows carry
+      // the flags they ran with, and reading them as a baseline would be wrong.
+      options_json: JSON.stringify({ mode: 'baseline' }),
       // Capped: the record is a summary, not a second copy of the sheet.
       detail_json: JSON.stringify(applied.slice(0, 500)),
       created_at: summary.createdAt,
