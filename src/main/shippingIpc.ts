@@ -399,11 +399,17 @@ export function registerShippingIpc(): void {
   ipcMain.handle(IPC.shipTrackingNumbers, (): string[] =>
     can('module.fulfillment') ? listTrackingNumbers() : []
   )
+  // What the night was WORTH, and every card's price. Lead-level, not floor.
+  //
+  // These were readable by anyone with the module, which was defensible while
+  // every account belonged to a named person. It stops being defensible the
+  // moment a shared bench login sits unattended on a work computer — so the
+  // money moved behind `shipping.manage` at the same time stations arrived.
   ipcMain.handle(IPC.shipSales, (): ShipSalesSummary | null =>
-    can('module.fulfillment') ? getSales() : null
+    can('shipping.manage') ? getSales() : null
   )
   ipcMain.handle(IPC.shipLedger, (): ShipLedgerRow[] =>
-    can('module.fulfillment') ? getLedger() : []
+    can('shipping.manage') ? getLedger() : []
   )
   ipcMain.handle(IPC.shipImportsList, (): ShipImportRecord[] =>
     can('module.fulfillment') ? listShipImports() : []
@@ -1033,7 +1039,10 @@ export function registerShippingIpc(): void {
       payload: { kind?: ShipExportKind; snapshotId?: string | null }
     ): Promise<ExportResult> => {
       try {
-        if (!can('module.fulfillment')) {
+        // The customers and sales CSVs carry every buyer's real name, full
+        // postal address and total spend. Writing that to a file is a lead's
+        // decision, and a shared station must never be able to make it.
+        if (!can('shipping.manage')) {
           return { ok: false, error: 'You do not have permission to export shipping data.' }
         }
 

@@ -1,6 +1,7 @@
 import bcrypt from 'bcryptjs'
 import type { Database } from 'better-sqlite3'
 import type {
+  AccountKind,
   Employee,
   EmployeeStatus,
   NewEmployeeInput,
@@ -26,6 +27,7 @@ interface EmployeeRow {
   must_change_password: number
   permissions_json: string | null
   avatar: string | null
+  account_kind: string | null
   created_at: string
   updated_at: string
   created_by: string | null
@@ -53,6 +55,9 @@ function toEmployee(row: EmployeeRow): Employee {
     mustChangePassword: row.must_change_password === 1,
     extraPermissions: parseExtraPermissions(row.permissions_json),
     avatarUrl: row.avatar ? imageDataUrl(row.avatar) : null,
+    // Anything not explicitly a station is a person — which is also what every
+    // row written before stations existed is.
+    accountKind: row.account_kind === 'station' ? 'station' : 'person',
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     createdBy: row.created_by
@@ -111,7 +116,7 @@ export interface CreateEmployeeResult {
  * placed in the invite email exactly once.
  */
 export function insertEmployee(
-  input: NewEmployeeInput & { status?: EmployeeStatus },
+  input: NewEmployeeInput & { status?: EmployeeStatus; accountKind?: AccountKind },
   createdBy: string | null,
   temporaryPassword: string | null
 ): CreateEmployeeResult {
@@ -123,10 +128,10 @@ export function insertEmployee(
   db.prepare(
     `INSERT INTO employees
        (id, first_name, last_name, company_id, title, email, role, status,
-        password_hash, must_change_password, created_at, updated_at, created_by)
+        password_hash, must_change_password, account_kind, created_at, updated_at, created_by)
      VALUES
        (@id, @first_name, @last_name, @company_id, @title, @email, @role, @status,
-        @password_hash, @must_change_password, @created_at, @updated_at, @created_by)`
+        @password_hash, @must_change_password, @account_kind, @created_at, @updated_at, @created_by)`
   ).run({
     id,
     first_name: input.firstName.trim(),
@@ -137,7 +142,11 @@ export function insertEmployee(
     role: input.role,
     status: input.status ?? 'invited',
     password_hash: passwordHash,
-    must_change_password: temporaryPassword ? 1 : 0,
+    // A station never has a password to change: nobody owns it, so there is
+    // nobody to prompt. Forcing the change would strand the bench behind a
+    // screen the first person to sit down cannot get past.
+    must_change_password: input.accountKind === 'station' ? 0 : temporaryPassword ? 1 : 0,
+    account_kind: input.accountKind === 'station' ? 'station' : 'person',
     created_at: ts,
     updated_at: ts,
     created_by: createdBy
@@ -271,3 +280,46 @@ export function emailExists(email: string, exceptId?: string): boolean {
 
 export type { EmployeeRow }
 export { toEmployee, type Database }
+
+// ---------------------------------------------------------------------------
+// Stations — a bench computer that signs in, rather than a person
+// ---------------------------------------------------------------------------
+
+/**
+ * The synthetic address a station carries.
+ *
+ * `employees.email` is NOT NULL and UNIQUE, and rebuilding the table every
+ * other table points at — to make one column nullable — is a real risk for a
+ * cosmetic gain. So a station stores something that is unmistakably not an
+ * address, is unique by construction, and never reaches a screen: `accountKind`
+ * is what the UI reads to decide what it is looking at.
+ */
+export function stationEmailFor(code: string): string {
+  return `station:${code.trim().toLowerCase()}`
+}
+
+export function listStations(): Employee[] {
+  const rows = getDb()
+    .prepare(`SELECT * FROM employees WHERE account_kind = 'station' ORDER BY first_name COLLATE NOCASE`)
+    .all() as EmployeeRow[]
+  return rows.map(toEmployee)
+}
+
+/** Set (or reset) a station's password. Stations never must-change it. */
+export function setStationPassword(id: string, password: string): boolean {
+  const info = getDb()
+    .prepare(
+      `UPDATE employees
+          SET password_hash = ?, must_change_password = 0, updated_at = ?
+        WHERE id = ? AND account_kind = 'station'`
+    )
+    .run(bcrypt.hashSync(password, BCRYPT_ROUNDS), nowIso(), id)
+  return info.changes > 0
+}
+
+export function setStationStatus(id: string, status: EmployeeStatus): boolean {
+  const info = getDb()
+    .prepare(`UPDATE employees SET status = ?, updated_at = ? WHERE id = ? AND account_kind = 'station'`)
+    .run(status, nowIso(), id)
+  return info.changes > 0
+}

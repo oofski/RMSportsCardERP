@@ -12,6 +12,7 @@ import type {
   ExportRequest,
   ExportResult,
   NewEmployeeInput,
+  NewStationInput,
   NewTimeEntryInput,
   RememberedCredentials,
   Result,
@@ -38,6 +39,10 @@ import {
   emailExists,
   getEmployeeById,
   insertEmployee,
+  listStations,
+  setStationPassword,
+  setStationStatus,
+  stationEmailFor,
   listEmployees,
   setEmployeeAvatar,
   setEmployeePermissions,
@@ -115,6 +120,10 @@ function requirePermission(permission: Permission): SessionUser {
 }
 
 class PermissionError extends Error {}
+
+function str(v: unknown): string {
+  return typeof v === 'string' ? v : v == null ? '' : String(v)
+}
 
 function fail(err: unknown): Result<never> {
   const message = err instanceof Error ? err.message : String(err)
@@ -198,6 +207,95 @@ export function registerIpcHandlers(): void {
         const temporaryPassword = generateTempPassword()
         const { employee } = insertEmployee(input, actor.id, temporaryPassword)
         return { ok: true, data: { employee, temporaryPassword } }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  // ---- Stations: a bench computer signs in, not a person ------------------
+  //
+  // Deliberately NOT the employee form with the email box hidden. A station has
+  // no name to reset a password for, no hours to log and nobody to email a
+  // temporary password to — sharing the employee path would mean every screen
+  // that lists people has to remember to filter the computers out.
+  ipcMain.handle(IPC.stationsList, (): Employee[] => {
+    const user = currentUser()
+    return user && userCan(user, 'admin.employees.view') ? listStations() : []
+  })
+
+  ipcMain.handle(
+    IPC.stationsCreate,
+    (_e, input: NewStationInput): Result<Employee> => {
+      try {
+        const actor = requirePermission('admin.employees.manage')
+        const name = str(input?.name).trim()
+        const code = str(input?.code).trim()
+        const password = str(input?.password)
+        if (!name) return { ok: false, error: 'Give the station a name.' }
+        // The code is what somebody types at a bench, so it has to be typeable:
+        // no spaces to get wrong and no case to remember.
+        if (!/^[a-zA-Z0-9._-]{2,32}$/.test(code)) {
+          return {
+            ok: false,
+            error: 'The sign-in code can only use letters, numbers, dot, dash or underscore (2-32 characters).'
+          }
+        }
+        if (password.length < 4) {
+          return { ok: false, error: 'Give the station a password of at least 4 characters.' }
+        }
+        if (companyIdExists(code)) return { ok: false, error: 'That sign-in code is already in use.' }
+        if (emailExists(stationEmailFor(code))) {
+          return { ok: false, error: 'That sign-in code is already in use.' }
+        }
+
+        const { employee } = insertEmployee(
+          {
+            firstName: name,
+            // A station has no surname, and inventing one ("Station Station")
+            // would show up on every screen that prints a full name.
+            lastName: '',
+            companyId: code,
+            title: 'Shipping station',
+            email: stationEmailFor(code),
+            // The narrowest role there is. A bench needs the floor, nothing else.
+            role: 'staff',
+            status: 'active',
+            accountKind: 'station'
+          },
+          actor.id,
+          password
+        )
+        return { ok: true, data: employee }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  ipcMain.handle(
+    IPC.stationsSetPassword,
+    (_e, payload: { id?: unknown; password?: unknown }): Result<boolean> => {
+      try {
+        requirePermission('admin.employees.manage')
+        const password = str(payload?.password)
+        if (password.length < 4) {
+          return { ok: false, error: 'Use at least 4 characters.' }
+        }
+        return { ok: true, data: setStationPassword(str(payload?.id), password) }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  ipcMain.handle(
+    IPC.stationsSetStatus,
+    (_e, payload: { id?: unknown; status?: unknown }): Result<boolean> => {
+      try {
+        requirePermission('admin.employees.manage')
+        const status = payload?.status === 'disabled' ? 'disabled' : 'active'
+        return { ok: true, data: setStationStatus(str(payload?.id), status) }
       } catch (err) {
         return fail(err)
       }

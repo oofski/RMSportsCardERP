@@ -54,6 +54,7 @@ import type {
   NewIncomingShipment,
   NewInventoryProduct,
   NewPurchaseOrder,
+  NewStationInput,
   NewSupply,
   NewSupplyOrder,
   NewTimeEntryInput,
@@ -174,6 +175,16 @@ const api = {
       ipcRenderer.invoke(IPC.employeesSetAvatar, id),
     removeAvatar: (id: string): Promise<Result<Employee>> =>
       ipcRenderer.invoke(IPC.employeesRemoveAvatar, id)
+  },
+  /** Shared bench logins — a computer signs in, not a person. */
+  stations: {
+    list: (): Promise<Employee[]> => ipcRenderer.invoke(IPC.stationsList),
+    create: (input: NewStationInput): Promise<Result<Employee>> =>
+      ipcRenderer.invoke(IPC.stationsCreate, input),
+    setPassword: (id: string, password: string): Promise<Result<boolean>> =>
+      ipcRenderer.invoke(IPC.stationsSetPassword, { id, password }),
+    setStatus: (id: string, status: 'active' | 'disabled'): Promise<Result<boolean>> =>
+      ipcRenderer.invoke(IPC.stationsSetStatus, { id, status })
   },
   hours: {
     summary: (): Promise<EmployeeHoursSummary[]> => ipcRenderer.invoke(IPC.hoursSummary),

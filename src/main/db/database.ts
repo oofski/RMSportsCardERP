@@ -1472,6 +1472,23 @@ function migrate(database: Database.Database): void {
   )
   setMeta(database, 'schema_version', '37')
 
+  // v38: an account that is a COMPUTER rather than a person.
+  //
+  // The shipping benches share machines. Making each packer an employee row
+  // with an email address they do not have is how a floor ends up with six
+  // people signed in as whoever set the laptop up — so a station is its own
+  // kind of account: a name, a code and a password, no email, and only the
+  // permissions the bench needs.
+  //
+  // The email column stays NOT NULL rather than being rebuilt. Rebuilding the
+  // root table every other table points at, to make one column nullable, is a
+  // real risk taken for a cosmetic gain; a station stores a synthetic
+  // `station:<code>` value that cannot be confused for an address, and
+  // `account_kind` is what any screen actually reads to decide what it is
+  // looking at.
+  addColumnIfMissing(database, 'employees', 'account_kind', "TEXT NOT NULL DEFAULT 'person'")
+  setMeta(database, 'schema_version', '38')
+
   // Seed the product catalog once, then apply the on-hand snapshot once.
   seedCatalogIfNeeded(database)
   seedSnapshotIfNeeded(database)

@@ -17,9 +17,35 @@ export interface Employee {
   extraPermissions: Permission[]
   /** Profile picture as a ready-to-use data URL, or null if none set. */
   avatarUrl: string | null
+  /** A person, or a shared bench computer. See AccountKind. */
+  accountKind: AccountKind
   createdAt: string
   updatedAt: string
   createdBy: string | null
+}
+
+/**
+ * A person, or a computer.
+ *
+ * A station is a shared bench login: no email, no personal identity, and only
+ * the permissions the floor needs. It exists because the alternative — giving
+ * every packer an employee account with an address they do not have — ends with
+ * the whole shift signed in as whoever set the laptop up.
+ */
+export type AccountKind = 'person' | 'station'
+
+/**
+ * A bench computer, not a person.
+ *
+ * `name` is what the floor calls it ("Packing bench 1"). `code` is what gets
+ * typed at sign-in — it becomes the Company ID, because the login already
+ * accepts one of those and a station needs no second mechanism. There is no
+ * email: that is the entire point.
+ */
+export interface NewStationInput {
+  name: string
+  code: string
+  password: string
 }
 
 export interface NewEmployeeInput {

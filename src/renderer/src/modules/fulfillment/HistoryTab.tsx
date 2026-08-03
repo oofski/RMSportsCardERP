@@ -338,7 +338,13 @@ export function HistoryTab({ summary, canManage, onChanged, onGoTo }: ShipTabPro
       {/* ---- The month view over everything below ---- */}
       {calendar}
 
-      {/* ---- Exports from the live dataset ---- */}
+      {/* ---- Exports from the live dataset ----
+           Lead-only. The customers and sales CSVs carry every buyer's real
+           name, full address and total spend, and this module now runs on
+           shared bench logins that sit unattended on work computers. The IPC
+           refuses it too — this only stops the floor being shown a button that
+           would fail. */}
+      {canManage && (
       <section className="hist-section">
         <div className="hist-head">
           <span className="hist-title">
@@ -387,6 +393,7 @@ export function HistoryTab({ summary, canManage, onChanged, onGoTo }: ShipTabPro
           />
         )}
       </section>
+      )}
 
       {/* ---- Snapshots ---- */}
       <section className="hist-section">
