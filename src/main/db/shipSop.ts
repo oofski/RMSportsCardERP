@@ -1,9 +1,11 @@
 import {
   SHIP_SOP,
+  shipSopOrderError,
   type ShipSopLine,
   type ShipSopResult,
   type ShipSopState,
   type ShipSopStep,
+  type ShipSopStepDef,
   type ShipSopStepView,
   type ShipSupplyRole
 } from '@shared/shippingSupplies'
@@ -74,6 +76,14 @@ function dayOwner(date: string): string | null {
     )
     .get(date, date) as { event_name: string } | undefined
   return row?.event_name ?? null
+}
+
+/** Which of the seven this day has ticked off, whoever ticked them. */
+function doneSteps(date: string): Set<ShipSopStep> {
+  const rows = getDb()
+    .prepare(`SELECT step FROM ship_sop_steps WHERE event_date = ? AND done = 1`)
+    .all(date) as Array<{ step: string }>
+  return new Set(rows.map((r) => r.step as ShipSopStep))
 }
 
 /** What is already on record for one step, whoever put it there. */
@@ -240,21 +250,20 @@ export function getShipSop(): ShipSopState {
   }
 }
 
-/**
- * Tick a step, or take the tick back.
- *
- * Ticking sets every consumable under that step to the plan's number and moves
- * the difference out of stock. Unticking sets them all to zero and gives it
- * back — the same code path, which is why the two can never drift.
- *
- * The whole thing is one transaction: seven roles' worth of stock and the tick
- * itself either all land or none do. A half-applied step would leave the floor
- * looking at a checklist that disagrees with the shelf.
- */
-export function setShipSopStep(step: ShipSopStep, done: boolean, userId: string | null): ShipSopResult {
-  const def = SHIP_SOP.find((s) => s.step === step)
-  if (!def) throw new Error('Unknown step.')
+/** What a tick or an untick had to say for itself, filled in as it goes. */
+interface StepReport {
+  wentNegative: ShipSopResult['wentNegative']
+  skippedRoles: ShipSupplyRole[]
+  released: ShipSopResult['released']
+  stranded: ShipSopResult['stranded']
+}
 
+function emptyReport(): StepReport {
+  return { wentNegative: [], skippedRoles: [], released: [], stranded: [] }
+}
+
+/** The show, and a day the books can key on — or the reason there is not one. */
+function bookableDay(): { event: { name: string; date: string }; date: string } {
   const event = getShipEvent()
   const date = event.date.trim()
   if (!date) {
@@ -267,9 +276,38 @@ export function setShipSopStep(step: ShipSopStep, done: boolean, userId: string 
       `"${date}" is not a date the books can use. Set the show's day as YYYY-MM-DD before ticking steps off.`
     )
   }
-  const plan = getSupplyPlanCosted()
-  const planByRole = new Map(plan.lines.map((l) => [l.role, l]))
+  return { event, date }
+}
 
+/**
+ * The list is a line: step N waits for step N-1.
+ *
+ * Ticks only. Unticking is always allowed and never cascades — a step taken
+ * back off leaves a HOLE, and a hole is a legitimate state meaning "we did that,
+ * then realised we had not". Somebody ticks it back on and it closes; the work
+ * above it was really done and is not thrown away to tidy the list up.
+ *
+ * The same sentence greys the control out on the screen, from the same shared
+ * function, so a refusal is never worded two ways.
+ */
+function guardOrder(date: string, step: ShipSopStep): void {
+  const done = doneSteps(date)
+  const outOfOrder = shipSopOrderError((s) => done.has(s), step)
+  if (outOfOrder) throw new Error(outOfOrder)
+}
+
+/**
+ * Whose stock a tick is about to move, and whether it is really this show's.
+ *
+ * Ticks only, like the order gate — an untick hands stock back to the product
+ * the usage row itself names, so it needs nobody's permission.
+ */
+function guardOwnership(
+  date: string,
+  event: { name: string; date: string },
+  step: ShipSopStep,
+  planByRole: Map<ShipSupplyRole, { quantity: number }>
+): void {
   // Two shows on one day share every row id, so the second one's tick would
   // overwrite the first's and hand back stock the first show really used.
   //
@@ -279,7 +317,7 @@ export function setShipSopStep(step: ShipSopStep, done: boolean, userId: string 
   // catch two shows that are both unnamed — which is most of them, since these
   // slips rarely carry a name — because both would be called "Show <date>".
   const owner = dayOwner(date)
-  if (done && owner !== null && owner !== showName(event)) {
+  if (owner !== null && owner !== showName(event)) {
     throw new Error(
       `${date} already has a checklist for "${owner}". Two shows cannot both book supplies to one day yet — finish and clear that one first, or give this show its own date.`
     )
@@ -289,24 +327,175 @@ export function setShipSopStep(step: ShipSopStep, done: boolean, userId: string 
   // come from this show, and quietly reducing it is precisely the handing-back
   // of another night's stock. Only an explicit untick may take a number down,
   // which keeps a genuinely smaller re-import workable — untick, then tick.
-  if (done) {
-    const over = existingUsage(date, step).filter(
-      (u) => u.quantity > (planByRole.get(u.role as ShipSupplyRole)?.quantity ?? 0)
+  const over = existingUsage(date, step).filter(
+    (u) => u.quantity > (planByRole.get(u.role as ShipSupplyRole)?.quantity ?? 0)
+  )
+  if (over.length > 0) {
+    const worst = over[0]
+    throw new Error(
+      `${date} already records ${worst.quantity.toLocaleString()} ${worst.role.replace(/_/g, ' ')} for this step, more than this show needs (${planByRole.get(worst.role as ShipSupplyRole)?.quantity ?? 0}). Ticking would hand that stock back. Untick the step first if this really is the same night.`
     )
-    if (over.length > 0) {
-      const worst = over[0]
-      throw new Error(
-        `${date} already records ${worst.quantity.toLocaleString()} ${worst.role.replace(/_/g, ' ')} for this step, more than this show needs (${planByRole.get(worst.role as ShipSupplyRole)?.quantity ?? 0}). Ticking would hand that stock back. Untick the step first if this really is the same night.`
-      )
+  }
+}
+
+/**
+ * Move this step's consumables to whatever the tick now says they should be.
+ *
+ * Absolute, never a delta: `done` means "this step has taken the plan's number",
+ * `!done` means "it has taken none", and the stock movement is the difference
+ * from what the row already said. That is what makes a second tick free, a
+ * re-import a top-up, and an untick a full refund — and it is why the automatic
+ * completion of step 5 can safely run through exactly this code.
+ *
+ * Caller supplies the transaction; both entry points below need the step row and
+ * the stock to land together or not at all.
+ */
+function reconcileStepUsage(
+  db: ReturnType<typeof getDb>,
+  args: {
+    def: ShipSopStepDef
+    date: string
+    event: { name: string; date: string }
+    planByRole: Map<ShipSupplyRole, ReturnType<typeof getSupplyPlanCosted>['lines'][number]>
+    done: boolean
+    userId: string | null
+    ts: string
+  },
+  report: StepReport
+): void {
+  const { def, date, event, planByRole, done, userId, ts } = args
+  const step = def.step
+
+  // What this step has on record RIGHT NOW, per role. This — not the supply
+  // ledger — is what the reversal is driven from, because it is the only row
+  // that survives the product being re-pointed or deleted.
+  const prevRows = db
+    .prepare(
+      `SELECT role, supply_id, quantity, total_cost FROM ship_supply_usage
+        WHERE event_date = ? AND step = ?`
+    )
+    .all(date, step) as Array<{
+    role: string
+    supply_id: string | null
+    quantity: number
+    total_cost: number
+  }>
+  const prevByRole = new Map(prevRows.map((r) => [r.role, r]))
+
+  for (const role of def.consumes) {
+    const line = planByRole.get(role)
+    const supplyId = line?.supplyId ?? null
+    const want = done && supplyId ? (line?.quantity ?? 0) : done ? (line?.quantity ?? 0) : 0
+    const id = usageId(date, step, role)
+    const prevRow = prevByRole.get(role) ?? null
+    const prev = prevRow ? { supplyId: prevRow.supply_id, quantity: prevRow.quantity } : null
+
+    if (!supplyId) report.skippedRoles.push(role)
+
+    // Called even when the role is now unlinked: the stock it took while it
+    // WAS linked still has to go back, and only the usage row remembers where
+    // from. Skipping this branch is what let an unlink strand real units.
+    const res = setShipSupplyUsage(db, {
+      supplyId,
+      txnId: usageTxnId(date, step, role),
+      quantity: want,
+      prev,
+      note: `${def.title} · ${event.name || 'show'} ${date}`,
+      actorId: userId
+    })
+    if (!res.ok) throw new Error(res.error ?? 'Could not move that supply.')
+    if (res.wentNegative) {
+      report.wentNegative.push({ role, supplyName: line?.supplyName ?? role, onHand: res.onHand })
+    }
+    if (res.releasedFrom) {
+      report.released.push({ role, quantity: res.releasedFrom.quantity })
+    }
+    if (res.strandedFrom) {
+      report.stranded.push({ role, quantity: res.strandedFrom.quantity })
+    }
+
+    if (want > 0) {
+      // Cost accumulates at the rate of the moment each unit LEFT, not at
+      // today's average applied to the whole night. Re-ticking after a case
+      // arrives at a higher price must not restate a P&L day that has already
+      // been read — which is exactly what `want × today's unitCost` did.
+      const carried = prevRow && prevRow.supply_id === supplyId ? prevRow.total_cost : 0
+      const already = prev?.supplyId === supplyId ? prev.quantity : 0
+      const unitCost = line?.unitCost ?? 0
+      const total =
+        already === 0
+          ? money(want * unitCost)
+          : want >= already
+            ? money(carried + (want - already) * unitCost)
+            : // Fewer than before: give back the same share that is leaving.
+              money(carried * (want / already))
+      db.prepare(
+        `INSERT INTO ship_supply_usage
+           (id, event_date, event_name, step, role, supply_id, supply_name, quantity, unit_cost, total_cost, actor_id, created_at, updated_at)
+         VALUES (@id, @date, @name, @step, @role, @sid, @sname, @qty, @unit, @total, @by, @ts, @ts)
+         ON CONFLICT (id) DO UPDATE SET
+           event_date = excluded.event_date, event_name = excluded.event_name,
+           supply_id = excluded.supply_id, supply_name = excluded.supply_name,
+           quantity = excluded.quantity, unit_cost = excluded.unit_cost,
+           total_cost = excluded.total_cost, actor_id = excluded.actor_id,
+           updated_at = excluded.updated_at`
+      ).run({
+        id,
+        date,
+        name: showName(event),
+        step,
+        role,
+        sid: supplyId,
+        sname: line?.supplyName ?? null,
+        qty: want,
+        // The blended rate this quantity actually went out at.
+        unit: want > 0 ? Math.round((total / want) * 1e6) / 1e6 : 0,
+        total,
+        by: userId,
+        ts
+      })
+    } else {
+      db.prepare(`DELETE FROM ship_supply_usage WHERE id = ?`).run(id)
     }
   }
+}
+
+/**
+ * Tick a step, or take the tick back.
+ *
+ * Ticking sets every consumable under that step to the plan's number and moves
+ * the difference out of stock. Unticking sets them all to zero and gives it
+ * back — the same code path, which is why the two can never drift.
+ *
+ * The whole thing is one transaction: seven roles' worth of stock and the tick
+ * itself either all land or none do. A half-applied step would leave the floor
+ * looking at a checklist that disagrees with the shelf.
+ *
+ * The order gate lives HERE and not only on the screen. A checklist whose rule
+ * is enforced by a greyed-out button is a checklist with no rule: the IPC is
+ * reachable from a second window, a replayed message and every future caller,
+ * and the thing being protected is stock.
+ */
+export function setShipSopStep(step: ShipSopStep, done: boolean, userId: string | null): ShipSopResult {
+  const def = SHIP_SOP.find((s) => s.step === step)
+  if (!def) throw new Error('Unknown step.')
+
+  const { event, date } = bookableDay()
+  const plan = getSupplyPlanCosted()
+  const planByRole = new Map(plan.lines.map((l) => [l.role, l]))
+
+  if (done) {
+    // Re-ticking a step that is ALREADY ticked is a reconciliation, not a claim
+    // about order — it is how a corrected re-import tops its quantities up — so
+    // it skips the gate its first tick already passed. A hole below it is
+    // somebody else's line to close, and must not freeze this one's arithmetic.
+    if (!doneSteps(date).has(step)) guardOrder(date, step)
+    guardOwnership(date, event, step, planByRole)
+  }
+
   const db = getDb()
   const ts = nowIso()
-
-  const wentNegative: ShipSopResult['wentNegative'] = []
-  const skippedRoles: ShipSupplyRole[] = []
-  const released: ShipSopResult['released'] = []
-  const stranded: ShipSopResult['stranded'] = []
+  const report = emptyReport()
 
   const run = db.transaction(() => {
     db.prepare(
@@ -329,103 +518,98 @@ export function setShipSopStep(step: ShipSopStep, done: boolean, userId: string 
       by: done ? userId : null,
       ts
     })
-
-    // What this step has on record RIGHT NOW, per role. This — not the supply
-    // ledger — is what the reversal is driven from, because it is the only row
-    // that survives the product being re-pointed or deleted.
-    const prevRows = db
-      .prepare(
-        `SELECT role, supply_id, quantity, total_cost FROM ship_supply_usage
-          WHERE event_date = ? AND step = ?`
-      )
-      .all(date, step) as Array<{
-      role: string
-      supply_id: string | null
-      quantity: number
-      total_cost: number
-    }>
-    const prevByRole = new Map(prevRows.map((r) => [r.role, r]))
-
-    for (const role of def.consumes) {
-      const line = planByRole.get(role)
-      const supplyId = line?.supplyId ?? null
-      const want = done && supplyId ? (line?.quantity ?? 0) : done ? (line?.quantity ?? 0) : 0
-      const id = usageId(date, step, role)
-      const prevRow = prevByRole.get(role) ?? null
-      const prev = prevRow ? { supplyId: prevRow.supply_id, quantity: prevRow.quantity } : null
-
-      if (!supplyId) skippedRoles.push(role)
-
-      // Called even when the role is now unlinked: the stock it took while it
-      // WAS linked still has to go back, and only the usage row remembers where
-      // from. Skipping this branch is what let an unlink strand real units.
-      const res = setShipSupplyUsage(db, {
-        supplyId,
-        txnId: usageTxnId(date, step, role),
-        quantity: want,
-        prev,
-        note: `${def.title} · ${event.name || 'show'} ${date}`,
-        actorId: userId
-      })
-      if (!res.ok) throw new Error(res.error ?? 'Could not move that supply.')
-      if (res.wentNegative) {
-        wentNegative.push({ role, supplyName: line?.supplyName ?? role, onHand: res.onHand })
-      }
-      if (res.releasedFrom) {
-        released.push({ role, quantity: res.releasedFrom.quantity })
-      }
-      if (res.strandedFrom) {
-        stranded.push({ role, quantity: res.strandedFrom.quantity })
-      }
-
-      if (want > 0) {
-        // Cost accumulates at the rate of the moment each unit LEFT, not at
-        // today's average applied to the whole night. Re-ticking after a case
-        // arrives at a higher price must not restate a P&L day that has already
-        // been read — which is exactly what `want × today's unitCost` did.
-        const carried = prevRow && prevRow.supply_id === supplyId ? prevRow.total_cost : 0
-        const already = prev?.supplyId === supplyId ? prev.quantity : 0
-        const unitCost = line?.unitCost ?? 0
-        const total =
-          already === 0
-            ? money(want * unitCost)
-            : want >= already
-              ? money(carried + (want - already) * unitCost)
-              : // Fewer than before: give back the same share that is leaving.
-                money(carried * (want / already))
-        db.prepare(
-          `INSERT INTO ship_supply_usage
-             (id, event_date, event_name, step, role, supply_id, supply_name, quantity, unit_cost, total_cost, actor_id, created_at, updated_at)
-           VALUES (@id, @date, @name, @step, @role, @sid, @sname, @qty, @unit, @total, @by, @ts, @ts)
-           ON CONFLICT (id) DO UPDATE SET
-             event_date = excluded.event_date, event_name = excluded.event_name,
-             supply_id = excluded.supply_id, supply_name = excluded.supply_name,
-             quantity = excluded.quantity, unit_cost = excluded.unit_cost,
-             total_cost = excluded.total_cost, actor_id = excluded.actor_id,
-             updated_at = excluded.updated_at`
-        ).run({
-          id,
-          date,
-          name: showName(event),
-          step,
-          role,
-          sid: supplyId,
-          sname: line?.supplyName ?? null,
-          qty: want,
-          // The blended rate this quantity actually went out at.
-          unit: want > 0 ? Math.round((total / want) * 1e6) / 1e6 : 0,
-          total,
-          by: userId,
-          ts
-        })
-      } else {
-        db.prepare(`DELETE FROM ship_supply_usage WHERE id = ?`).run(id)
-      }
-    }
+    reconcileStepUsage(db, { def, date, event, planByRole, done, userId, ts }, report)
   })
   run()
 
-  return { state: getShipSop(), wentNegative, skippedRoles, released, stranded }
+  return { state: getShipSop(), ...report }
+}
+
+/**
+ * Tick a step off because the WORK finished, and let exactly one caller do it.
+ *
+ * Step 5 is not something anybody ticks. Shipping is done when the last order
+ * has been picked, so the bench completes it — which means the completing
+ * condition is re-evaluated on every single "Picked · next order", by every
+ * bench in the room, all night. Nothing about that may deduct a second mailer.
+ *
+ * Two things make it safe, and both are needed:
+ *
+ *   THE TRANSITION IS CLAIMED. `done = 0 -> 1` is a conditional write; the
+ *   caller who changes a row is the only one that goes on to move stock. A
+ *   second caller — a double-click, two pickers finishing together, a re-render
+ *   — changes nothing, so it moves nothing and is told nothing happened.
+ *
+ *   THE QUANTITIES ARE ABSOLUTE. Even if a claim somehow landed twice, the
+ *   reconciliation writes "this step has taken 3 mailers", not "take 3 more".
+ *   Belt and braces, on the one number in this app that is real inventory.
+ *
+ * It never throws. This runs inside somebody finishing an order, and a show with
+ * no day set, a second show on the day, or a step whose predecessor is still
+ * open are all reasons for the tick not to happen — none of them is a reason for
+ * the pick not to happen. Returns null when it did not fire.
+ */
+export function completeShipSopStepOnce(
+  step: ShipSopStep,
+  userId: string | null
+): ShipSopResult | null {
+  const def = SHIP_SOP.find((s) => s.step === step)
+  if (!def) return null
+
+  let date: string
+  let event: { name: string; date: string }
+  let planByRole: Map<ShipSupplyRole, ReturnType<typeof getSupplyPlanCosted>['lines'][number]>
+  try {
+    const day = bookableDay()
+    date = day.date
+    event = day.event
+    planByRole = new Map(getSupplyPlanCosted().lines.map((l) => [l.role, l]))
+    guardOrder(date, step)
+    guardOwnership(date, event, step, planByRole)
+  } catch {
+    return null
+  }
+
+  const db = getDb()
+  const ts = nowIso()
+  const report = emptyReport()
+
+  const won = db.transaction((): boolean => {
+    // The claim. Whichever statement reports a changed row is the winner, and
+    // nothing below runs for anyone else — so there is nothing to roll back.
+    const row = {
+      id: `${date}|${step}`,
+      date,
+      name: showName(event),
+      step,
+      at: ts,
+      by: userId,
+      ts
+    }
+    const inserted = db
+      .prepare(
+        `INSERT INTO ship_sop_steps (id, event_date, event_name, step, done, done_at, done_by, updated_at)
+         VALUES (@id, @date, @name, @step, 1, @at, @by, @ts)
+         ON CONFLICT (id) DO NOTHING`
+      )
+      .run(row)
+    if (inserted.changes !== 1) {
+      const updated = db
+        .prepare(
+          `UPDATE ship_sop_steps
+              SET done = 1, done_at = @at, done_by = @by, updated_at = @ts,
+                  event_date = @date, event_name = @name
+            WHERE id = @id AND done = 0`
+        )
+        .run(row)
+      if (updated.changes !== 1) return false
+    }
+    reconcileStepUsage(db, { def, date, event, planByRole, done: true, userId, ts }, report)
+    return true
+  })()
+
+  if (!won) return null
+  return { state: getShipSop(), ...report }
 }
 
 /**

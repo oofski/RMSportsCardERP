@@ -3,6 +3,7 @@ import { IPC, type AppInfo } from '@shared/ipc'
 import type { Permission } from '@shared/permissions'
 import type { NewReminder, OwnerBoard, Reminder } from '@shared/ownerDashboard'
 import type {
+  ShipPickAdvanced,
   ShipStationBoard,
   ShipStationOrder,
   ShipStationRole
@@ -451,7 +452,8 @@ const api = {
       ipcRenderer.invoke(IPC.shipStationClaim, { orderId, customerId, role }),
     stationRelease: (claimId: string): Promise<Result<boolean>> =>
       ipcRenderer.invoke(IPC.shipStationRelease, claimId),
-    stationPickAdvance: (customerId: string): Promise<Result<unknown>> =>
+    /** The handoff. Says whether this pick was the one that closed step 5. */
+    stationPickAdvance: (customerId: string): Promise<Result<ShipPickAdvanced>> =>
       ipcRenderer.invoke(IPC.shipStationPickAdvance, customerId),
     stationPickNext: (): Promise<Result<ShipStationOrder | null>> =>
       ipcRenderer.invoke(IPC.shipStationPickNext),

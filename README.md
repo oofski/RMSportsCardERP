@@ -25,8 +25,10 @@ the app foundation, the **Admin** module, and a full **Time & Payroll** module.
     app and set their own password.
   - **Hours** — per-employee totals and a time-entry log (manual entry now;
     automatic clock-in/out arrives with the Time & Payroll module).
-  - **Roles & Permissions** — three roles to start (**Owner**, **Operations**,
-    **Staff**) with a permission matrix that grows as modules ship.
+  - **Roles & Permissions** — four roles (**Owner**, **Operations**, **Staff**
+    and **Shipping**, which is the packing floor and nothing else) with a
+    permission matrix that grows as modules ship. A Shipping employee needs no
+    email address; they sign in with their Company ID.
 - **Check for updates** — available to every role. On **Windows** it checks,
   downloads and installs new versions automatically (via `electron-updater` +
   GitHub Releases). macOS auto-update is a later pass; today it points Mac users

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import type { ShipWorkspaceSummary } from '@shared/shippingViews'
 import { useSession } from '../../lib/session'
 import { api } from '../../lib/api'
@@ -6,10 +6,7 @@ import { LIVE, useLiveRefresh } from '../../lib/live'
 import { formatMoney } from '../../lib/format'
 import { Icon } from '../../components/Icon'
 import { Button, CenterLoader, EmptyState } from '../../components/ui'
-import { SetupTab } from './SetupTab'
 import { CheckerTab } from './CheckerTab'
-import { HistoryTab } from './HistoryTab'
-import { FlagsTab } from './FlagsTab'
 import { TodayTab } from './TodayTab'
 import { SopTab } from './SopTab'
 import { FloorView } from './FloorView'
@@ -18,39 +15,28 @@ import { WithSlipMode } from './WithSlipMode'
 /**
  * RM Cardz Shipping Workspace — the module shell.
  *
- * One Whatnot "combined labels + packing slips" PDF becomes a normalized dataset
- * (Upload), which then drives three operational views that all read the SAME
- * team slots: **Orders** (one row per package), **Checker** (one pick list per
- * break) and **Shipping** (tracking), plus **History** (imports, snapshots, CSV).
- *
  * The shell owns the workspace summary — the single cheap read that feeds the
  * tab badges and the header strip — and hands every tab `onChanged`, which
  * refetches it after a mutation so badges never drift from the rows.
  */
 /**
- * The workspace, down to the screens the floor actually stands in front of.
+ * Four screens, and nothing that is not somebody's next action.
  *
- * Today   the show-day board — what is mine, what is blocking the room
+ * Today   the show-day board, and the button that starts the night
  * Orders  ONE order at a time with the customer's slip beside it, which is how
  *         both picking and mailing are really done. The whole-night list is
  *         still here, one click away, for a lead scanning what is left.
- * Steps   the SOP, seven ticks — and the only place supplies leave stock
- * Flags   what the import noticed that a person should look at
- * Setup   import the slips, assign the breaks (running the show)
- * History imports, snapshots, exports — on its way to the admin home page
+ * Steps   the SOP, seven ticks in order — and the only place supplies leave stock
+ * Bench   picking or packing, one order in front of you, entered from step 5
  *
- * Pack and Ship are gone. Pack was the same packages as a queue rather than one
- * at a time, and Ship was tracking numbers arriving from USPS — both of which
- * belong to the order in front of you, not to a tab of their own.
+ * Flags, Setup and History left for Admin, where a lead already goes to run the
+ * show. None of the three is a thing anybody does with cards in their hands, and
+ * a packing bench that offers seven tabs to somebody with one job is a bench
+ * where the wrong tab gets opened. What LEAVING them costs is answered in two
+ * places rather than deleted: the collision strip below still says a lead has to
+ * look, and Today's empty state says who imports the show.
  */
-export type ShipTabId =
-  | 'today'
-  | 'find'
-  | 'floor'
-  | 'sop'
-  | 'flags'
-  | 'setup'
-  | 'history'
+export type ShipTabId = 'today' | 'find' | 'sop' | 'floor'
 
 /**
  * The prop contract every tab in this workspace takes. FRONTEND-2's Checker /
@@ -88,18 +74,13 @@ export function ShippingModule(): JSX.Element {
   const [summary, setSummary] = useState<ShipWorkspaceSummary | null>(null)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
+  // Everybody lands on Today, loaded show or not. There is nowhere else worth
+  // landing now that importing has moved to Admin — an empty board says who
+  // imports, and a full one says start.
   const [tab, setTab] = useState<ShipTabId>('today')
-  // The landing tab is chosen once, on the first load: a workspace that already
-  // holds a dataset opens on Orders (the daily driver), an empty one on Upload.
-  const landed = useRef(false)
 
   const reload = useCallback(async () => {
-    const next = await api.shipping.summary()
-    setSummary(next)
-    if (!landed.current) {
-      landed.current = true
-      if (next?.hasDataset) setTab('today')
-    }
+    setSummary(await api.shipping.summary())
   }, [])
 
   // Two people pack the same event from two benches. Whoever checks a slip off
@@ -168,7 +149,6 @@ export function ShippingModule(): JSX.Element {
   // package cannot close while any break it touches still has cards out.
   const cardsLeft = Math.max(0, (counts?.teamSlots ?? 0) - (counts?.checkedSlots ?? 0))
   const hasDataset = !!summary?.hasDataset
-  const warningCount = counts?.warnings ?? 0
   const collisions = summary?.hasCollisions ?? false
   // Amber means somebody has to act. With no show loaded there is no night to
   // work, so seven outstanding steps is noise rather than news — the same rule
@@ -187,13 +167,7 @@ export function ShippingModule(): JSX.Element {
     // The bench. Deliberately its own tab rather than a mode of Orders: a
     // picker and a packer are doing different jobs on different screens, and
     // the whole point is that neither is looking at the other's list.
-    { id: 'floor', label: 'Bench', icon: 'Boxes', badge: 0 },
-    { id: 'flags', label: 'Flags', icon: 'Flag', badge: warningCount, tone: 'warning' },
-    // Running the show, not doing it — hidden from people who cannot.
-    ...(canManage
-      ? [{ id: 'setup' as const, label: 'Setup', icon: 'UploadCloud', badge: 0 }]
-      : []),
-    { id: 'history', label: 'History', icon: 'History', badge: 0 }
+    { id: 'floor', label: 'Bench', icon: 'Boxes', badge: 0 }
   ]
 
   const tabProps: ShipTabProps = { summary, canManage, canFind, canPack, onChanged: reload, onGoTo: setTab }
@@ -214,15 +188,11 @@ export function ShippingModule(): JSX.Element {
             >
               <Icon name={t.icon} size={16} />
               {t.label}
-              {t.id === 'flags' && collisions ? (
-                <span className="ship-tab-badge danger">
-                  <Icon name="Siren" size={11} strokeWidth={2.6} />
-                </span>
-              ) : t.badge > 0 ? (
+              {t.badge > 0 && (
                 <span className={`ship-tab-badge ${t.tone === 'warning' ? 'warning' : ''}`}>
                   {t.badge}
                 </span>
-              ) : null}
+              )}
             </button>
           ))}
         </div>

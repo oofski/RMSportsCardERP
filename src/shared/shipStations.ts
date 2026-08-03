@@ -217,6 +217,23 @@ export interface ShipStationOrder {
   sentBackReason: string | null
 }
 
+/**
+ * What one "Picked · next order" did, as the bench needs to read it.
+ *
+ * The main process returns more than this — the finished row, the next order —
+ * but a screen only has to know two things: whether the night's picking just
+ * ended on THIS click, and how much is still stacked up behind it at the mailing
+ * bench. The second matters because the first does not wait for it: picking can
+ * finish with boxes still to pack, and saying so is better than pretending the
+ * bench is empty.
+ */
+export interface ShipPickAdvanced {
+  /** True for the ONE caller whose pick closed SOP step 5. */
+  sopShipCompleted: boolean
+  /** Orders handed over and still waiting for a packer. */
+  queueDepth: number
+}
+
 export interface ShipStationSession {
   stationId: string
   operatorId: string

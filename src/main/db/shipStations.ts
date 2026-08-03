@@ -19,6 +19,7 @@ import { deviceId } from './sync'
 import { listBreakIdsForCustomer, setCustomerSlotsChecked } from './shipping'
 import { _orderRow, _recomputeBreakStatus, listOrders, setOrderStage } from './shippingDomain'
 import { getShipShipmentByCustomer } from './shipping'
+import { completeShipSopStepOnce } from './shipSop'
 import { newId, nowIso } from '../util'
 
 /**
@@ -494,7 +495,35 @@ export interface AdvanceResult {
   finished: ShipOrderRow | null
   next: ShipStationOrder | null
   queueDepth: number
+  /**
+   * This pick was the last one, and it is the one that closed SOP step 5.
+   *
+   * True for exactly one caller ever, which is what makes it safe to act on:
+   * the bench that sees it is the bench that finished the night, so that is the
+   * screen — and only that screen — sent back to the checklist.
+   */
+  sopShipCompleted: boolean
   error?: string
+}
+
+/**
+ * Orders still needing a picker, whoever is currently holding them.
+ *
+ * Deliberately NOT `pickableOrders().length`: that list is what *I* may take,
+ * so it hides the order in somebody else's hands, and the last two pickers in
+ * the room would each see an empty run while the other was still working.
+ *
+ * A sent-back order counts, even though every card in it is ticked. The whole
+ * point of the rejection is that one of those ticks is wrong, so picking is not
+ * finished while one is outstanding.
+ */
+export function pickingRemaining(): number {
+  return listOrders().filter(
+    (o) =>
+      !o.onHold &&
+      !o.packedAt &&
+      (o.pick.checked < o.pick.total || needsRepick(claimsForOrder(o.id, o.customerId)))
+  ).length
 }
 
 /**
@@ -504,14 +533,27 @@ export interface AdvanceResult {
  * somebody else found keeps their name), stamps `finished_at` on MY OWN claim
  * row — which is what puts the order in the pack pool — and claims the next one.
  *
- * It deducts NO supplies. Step 5's tick does that, once, for the whole show;
- * doing it per order as well would double-deduct every mailer and label and
- * leave a P&L day nobody can reconcile by hand.
+ * It deducts NO supplies PER ORDER. Step 5's tick does that, once, for the whole
+ * show; doing it per order as well would double-deduct every mailer and label
+ * and leave a P&L day nobody can reconcile by hand.
+ *
+ * What it does do is notice when this was the LAST order to pick, because that
+ * is what step 5 being finished means — nobody ticks it, the work does. The tick
+ * is claimed rather than written, so of two pickers finishing seconds apart only
+ * one moves the stock and only one gets sent back to the checklist.
  */
 export function pickAdvance(customerId: string, loginUserId: string | null): AdvanceResult {
   const db = getDb()
   const shipment = getShipShipmentByCustomer(customerId)
-  if (!shipment) return { finished: null, next: null, queueDepth: 0, error: 'That package is gone.' }
+  if (!shipment) {
+    return {
+      finished: null,
+      next: null,
+      queueDepth: 0,
+      sopShipCompleted: false,
+      error: 'That package is gone.'
+    }
+  }
   const operator = operatorFor(loginUserId)
   const mine = myClaim('pick')
 
@@ -543,12 +585,24 @@ export function pickAdvance(customerId: string, loginUserId: string | null): Adv
   })
   run()
 
+  // The night's last pick closes step 5. Outside the transaction above on
+  // purpose: the handoff is this station's own row and must land whatever the
+  // checklist decides, and `completeShipSopStepOnce` runs its own transaction
+  // over stock. It never throws — a show with no day set, or a step whose
+  // predecessor is still open, is a reason for the tick not to happen and never
+  // a reason for the pick not to.
+  const sopShipCompleted =
+    pickingRemaining() === 0 && listOrders().length > 0
+      ? completeShipSopStepOnce('ship', loginUserId) !== null
+      : false
+
   const next = pickableOrders()[0] ?? null
   if (next) claimOrder(next.orderId, next.customerId, 'pick', loginUserId)
   return {
     finished: _orderRow(shipment),
     next: next ? toStationOrder(listOrders().find((o) => o.id === next.orderId) as ShipOrderRow, Date.now()) : null,
-    queueDepth: packQueue().length
+    queueDepth: packQueue().length,
+    sopShipCompleted
   }
 }
 
