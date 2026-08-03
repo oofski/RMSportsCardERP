@@ -394,6 +394,68 @@ export function stepForRole(role: ShipSupplyRole): ShipSopStep | null {
 }
 
 // ---------------------------------------------------------------------------
+// The order the seven steps come in
+// ---------------------------------------------------------------------------
+
+/**
+ * The list is a LINE, not a set of boxes.
+ *
+ * You cannot bag a team that has not been sorted, and you cannot sort cards
+ * that are still in packs. The floor already worked this way; the checklist
+ * simply refused to admit it, and a screen that lets somebody tick step six on
+ * an untouched night is a screen that records fiction — and moves the stock to
+ * match.
+ *
+ * ## The rule is about TICKING, and only about the step in front
+ *
+ * A tick may not jump the step immediately before it. That is the whole rule.
+ * It deliberately says nothing about what the finished list is allowed to look
+ * like, because unticking does not cascade: taking step two back off leaves
+ * three, four and five exactly as they were, and the night's work is not undone
+ * by an operator correcting one line. The list is then allowed to have a HOLE in
+ * it — an untidy but perfectly honest state, meaning "we did that, then realised
+ * we had not". Somebody ticks the hole back on and it closes.
+ *
+ * Checking only the previous step rather than every earlier one is what makes
+ * that hole survivable: a gap at step two must not lock the whole night above it.
+ *
+ * ## Pure on purpose
+ *
+ * The renderer greys the control out and the main process refuses the write, and
+ * both of them read this function, so the two can never disagree about what is
+ * allowed or about the sentence they say when it is not.
+ */
+export function shipSopPrevStep(step: ShipSopStep): ShipSopStep | null {
+  const i = SHIP_SOP_STEPS.indexOf(step)
+  return i > 0 ? SHIP_SOP_STEPS[i - 1] : null
+}
+
+/** The step standing in the way of ticking this one, or null if none is. */
+export function shipSopBlockedBy(
+  isDone: (step: ShipSopStep) => boolean,
+  step: ShipSopStep
+): ShipSopStepDef | null {
+  const prev = shipSopPrevStep(step)
+  if (!prev || isDone(prev)) return null
+  return SHIP_SOP_BY_STEP.get(prev) ?? null
+}
+
+/**
+ * One sentence, said in both processes.
+ *
+ * The main process throws it and the renderer shows it, so a refusal never
+ * arrives worded one way in a toast and another way in a tooltip.
+ */
+export function shipSopOrderError(
+  isDone: (step: ShipSopStep) => boolean,
+  step: ShipSopStep
+): string | null {
+  const blocker = shipSopBlockedBy(isDone, step)
+  if (!blocker) return null
+  return `${blocker.title} has to be ticked off first — the checklist runs in order.`
+}
+
+// ---------------------------------------------------------------------------
 // The checklist as a screen sees it
 // ---------------------------------------------------------------------------
 

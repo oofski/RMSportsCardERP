@@ -164,7 +164,7 @@ export function EmployeesTab({
                     <Avatar text={initials(e.firstName, e.lastName)} src={e.avatarUrl} />
                     <div>
                       <div style={{ fontWeight: 600 }}>{fullName(e.firstName, e.lastName)}</div>
-                      <div className="muted text-sm">{e.email}</div>
+                      <div className="muted text-sm">{e.email || '—'}</div>
                     </div>
                   </div>
                 </td>
@@ -188,7 +188,13 @@ export function EmployeesTab({
                         onClick={() =>
                           e.status === 'invited' ? regenerateInvite(e) : setConfirmReset(e)
                         }
-                        title={e.status === 'invited' ? 'Resend invite email' : 'Reset password & invite'}
+                        title={
+                          e.status === 'invited'
+                            ? 'Resend invite email'
+                            : e.email
+                              ? 'Reset password & invite'
+                              : 'Reset password'
+                        }
                       >
                         {e.status === 'invited' ? 'Resend' : 'Reset'}
                       </Button>

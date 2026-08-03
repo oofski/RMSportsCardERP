@@ -261,7 +261,9 @@ export function AppShell(): JSX.Element {
                           <Avatar text={initials(user.firstName, user.lastName)} src={user.avatarUrl} />
                           <div>
                             <div className="um-h-name">{fullName(user.firstName, user.lastName)}</div>
-                            <div className="um-h-email">{user.email}</div>
+                            {/* Whoever has no address is identified by what they
+                                actually signed in with. */}
+                            <div className="um-h-email">{user.email || user.companyId}</div>
                           </div>
                         </div>
                         <div style={{ marginTop: 8 }}>

@@ -59,7 +59,7 @@ export function InviteModal({
 
   return (
     <Modal
-      title="Invite sent-ready"
+      title={hasEmail ? 'Invite sent-ready' : 'Sign-in details'}
       subtitle={`Share these details with ${fullName(employee.firstName, employee.lastName)}.`}
       onClose={onClose}
       wide
@@ -68,17 +68,27 @@ export function InviteModal({
           <Button variant="ghost" onClick={onClose}>
             Done
           </Button>
-          <Button
-            variant="secondary"
-            icon="Copy"
-            onClick={() => email && copy(email.body, 'Email text')}
-            disabled={!email}
-          >
-            Copy email
-          </Button>
-          <Button variant="primary" icon="Send" loading={sending} onClick={sendEmail} disabled={!email}>
-            Send email
-          </Button>
+          {hasEmail && (
+            <>
+              <Button
+                variant="secondary"
+                icon="Copy"
+                onClick={() => email && copy(email.body, 'Email text')}
+                disabled={!email}
+              >
+                Copy email
+              </Button>
+              <Button
+                variant="primary"
+                icon="Send"
+                loading={sending}
+                onClick={sendEmail}
+                disabled={!email}
+              >
+                Send email
+              </Button>
+            </>
+          )}
         </>
       }
     >
@@ -92,15 +102,21 @@ export function InviteModal({
             </button>
           </span>
         </div>
-        <div className="cred-row">
-          <span className="k">Email</span>
-          <span className="v">
-            {employee.email}
-            <button className="modal-close" onClick={() => copy(employee.email, 'Email')} title="Copy">
-              <Icon name="Copy" size={14} />
-            </button>
-          </span>
-        </div>
+        {hasEmail && (
+          <div className="cred-row">
+            <span className="k">Email</span>
+            <span className="v">
+              {employee.email}
+              <button
+                className="modal-close"
+                onClick={() => copy(employee.email, 'Email')}
+                title="Copy"
+              >
+                <Icon name="Copy" size={14} />
+              </button>
+            </span>
+          </div>
+        )}
         <div className="cred-row">
           <span className="k">Temporary password</span>
           <span className="v">
@@ -116,17 +132,26 @@ export function InviteModal({
         </div>
       </div>
 
-      <div className="field">
-        <label>Invite email preview</label>
-        <div className="email-preview">
-          {email ? `Subject: ${email.subject}\n\n${email.body}` : 'Preparing email…'}
-        </div>
-      </div>
+      {hasEmail ? (
+        <>
+          <div className="field">
+            <label>Invite email preview</label>
+            <div className="email-preview">
+              {email ? `Subject: ${email.subject}\n\n${email.body}` : 'Preparing email…'}
+            </div>
+          </div>
 
-      <p className="muted text-sm mt-16">
-        “Send email” opens your default mail app with this message pre-filled — review it and hit
-        send. The employee sets their own password on first sign-in.
-      </p>
+          <p className="muted text-sm mt-16">
+            “Send email” opens your default mail app with this message pre-filled — review it and hit
+            send. The employee sets their own password on first sign-in.
+          </p>
+        </>
+      ) : (
+        <p className="muted text-sm mt-16">
+          This account has no email address, so there is nothing to send — read these out at the
+          bench. They sign in with the Company ID above and set their own password on first sign-in.
+        </p>
+      )}
     </Modal>
   )
 }

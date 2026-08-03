@@ -9,6 +9,13 @@ export interface Employee {
   lastName: string
   companyId: string
   title: string
+  /**
+   * The address, or '' when there is not one — shipping staff and bench
+   * stations sign in with their Company ID instead. The column itself is NOT
+   * NULL UNIQUE and holds a synthetic value for those accounts; it is stripped
+   * before the record leaves the main process, so nothing downstream has to
+   * know that. Treat blank as "no address" and print a dash.
+   */
   email: string
   role: Role
   status: EmployeeStatus
