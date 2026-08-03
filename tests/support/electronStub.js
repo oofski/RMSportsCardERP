@@ -8,7 +8,15 @@ module.exports = {
   },
   ipcMain: { handle: () => {} },
   BrowserWindow: {},
-  dialog: {},
+  // Owner recovery reports the new password through a modal. Capturing the
+  // detail text is what lets a test assert that the password shown is the one
+  // that actually signs in — the property the whole mechanism rests on.
+  dialog: {
+    showMessageBoxSync: (opts) => {
+      global.__lastDialogDetail = opts && opts.detail ? String(opts.detail) : ''
+      return 0
+    }
+  },
   shell: {},
   nativeTheme: {},
   session: {},

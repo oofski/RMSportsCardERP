@@ -4,6 +4,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { APP_NAME } from '@shared/config'
 import { setRegistrationSink } from './ipcRegistry'
 import { registerIpcHandlers } from './ipc'
+import { honourOwnerReset } from './services/ownerRecovery'
 import { registerInventoryIpc } from './inventoryIpc'
 import { registerPurchaseOrdersIpc } from './purchaseOrdersIpc'
 import { registerShippingIpc } from './shippingIpc'
@@ -88,6 +89,9 @@ app.whenReady().then(() => {
 
   // Initialise the database up front so a failure surfaces early.
   getDb()
+  // Before the window opens, so the new password is on screen at the same time
+  // as the login form asking for it. No-op unless the trigger file is present.
+  honourOwnerReset()
   registerIpcHandlers()
   registerInventoryIpc()
   registerPurchaseOrdersIpc()
