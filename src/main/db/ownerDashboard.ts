@@ -10,7 +10,6 @@ import type {
 } from '@shared/ownerDashboard'
 import type { StreamDayFinance } from '@shared/financeStreaming'
 import { deriveSaleFee } from '@shared/financeStreaming'
-import { streamDateOf } from '@shared/streaming'
 import { getDb } from './database'
 import { streamingFinanceView } from './financeStreaming'
 import { rateLookup } from './whatnotRates'
@@ -114,10 +113,11 @@ function whatnotPnl(): OwnerWhatnotPnl | null {
  * The product breakdown goes back to the row table because a day does not carry
  * WHICH boxes sold — and now the windows do too, because a fee cannot be
  * apportioned out of a day's total. The 30c is charged per purchased slot and
- * the commission comes from each row's own date, so the only honest way to price
- * a subset of a day's sales is to price the rows in it. `deriveSaleFee` is the
- * same function the day view uses, so this widget and the Streaming tab cannot
- * disagree about what a box sale cost.
+ * the commission comes from each row's own BUSINESS DAY, so the only honest way
+ * to price a subset of a day's sales is to price the rows in it. `deriveSaleFee`
+ * is the same function the day view uses, AND it is handed the same date — this
+ * widget and the Streaming tab would otherwise report two different costs for
+ * one box the moment a show ran past midnight into a different rate period.
  */
 function wholesalePnl(): OwnerWholesalePnl | null {
   try {
@@ -132,12 +132,11 @@ function wholesalePnl(): OwnerWholesalePnl | null {
   const rateAt = rateLookup()
   const saleRows = getDb()
     .prepare(
-      `SELECT stream_date AS d, occurred_at AS at,
-              CAST(ROUND(amount * 100) AS INTEGER) AS cents
+      `SELECT stream_date AS d, CAST(ROUND(amount * 100) AS INTEGER) AS cents
          FROM ledger_rows
         WHERE bucket = 'product_sale' AND stream_date IS NOT NULL AND stream_date >= ?`
     )
-    .all(monthFrom) as Array<{ d: string; at: string; cents: number }>
+    .all(monthFrom) as Array<{ d: string; cents: number }>
 
   /**
    * A product-sales-only window.
@@ -154,7 +153,10 @@ function wholesalePnl(): OwnerWholesalePnl | null {
     const activeDays = new Set<string>()
     for (const r of saleRows) {
       if (r.d < from) continue
-      const fee = deriveSaleFee(r.cents, rateAt(streamDateOf(r.at)))
+      // The show's business day picks the rate, exactly as `buildView` does —
+      // see the long note there for why a period follows the night rather than
+      // the calendar.
+      const fee = deriveSaleFee(r.cents, rateAt(r.d))
       grossCents += fee.grossCents
       feeCents += fee.whatnotFeeCents + fee.stripeFeeCents
       if (r.cents !== 0) activeDays.add(r.d)

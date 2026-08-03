@@ -109,6 +109,7 @@ import type {
   LedgerRow,
   PnlCountField,
   PnlMoneyField,
+  RateSlice,
   StreamDayFinance,
   StreamFinanceTotals,
   StreamingFinanceView,
@@ -134,6 +135,7 @@ import {
   emptyDayFinance,
   findCarryBackSession,
   ledgerFingerprintSource,
+  mergeRateSlices,
   parseBreakNumber,
   parseLedgerAmount,
   parseLedgerDate,
@@ -1644,11 +1646,13 @@ const emptyDay = emptyDayFinance
 interface Rollup {
   money: Map<MoneyField, number>
   counts: Map<CountField, number>
+  /** Every rate the days inside this period were charged at. */
+  rates: RateSlice[]
   dates: string[]
 }
 
 function newRollup(): Rollup {
-  return { money: new Map(), counts: new Map(), dates: [] }
+  return { money: new Map(), counts: new Map(), rates: [], dates: [] }
 }
 
 /**
@@ -1657,15 +1661,21 @@ function newRollup(): Rollup {
  *
  * Every field is SUMMED, including the fees and the derived gross. A period
  * CANNOT re-derive them: the 30c is charged per ROW and the commission comes
- * from each row's own DATE, and a month's net-sales total has lost both facts.
- * Running `deriveSaleFee` on it would charge one 30c for the month at one rate
- * for the whole span. The derivation happens once, per row; everything above a
- * row adds.
+ * from each row's own BUSINESS DAY, and a month's net-sales total has lost both
+ * facts. Running `deriveSaleFee` on it would charge one 30c for the month at one
+ * rate for the whole span. The derivation happens once, per row; everything
+ * above a row adds.
+ *
+ * The rate breakdown rides along rather than being dropped at the day boundary:
+ * a month is the shape MOST likely to span a rate change, and a month that lost
+ * the slices would go back to printing the very blended quotient the days below
+ * it now refuse to print.
  */
 function addDay(roll: Rollup, day: StreamDayFinance): void {
   const fields = day as unknown as Record<string, number>
   for (const f of MONEY_FIELDS) roll.money.set(f, (roll.money.get(f) ?? 0) + toCents(fields[f]))
   for (const f of COUNT_FIELDS) roll.counts.set(f, (roll.counts.get(f) ?? 0) + fields[f])
+  if (Array.isArray(day.rateBreakdown)) roll.rates.push(...day.rateBreakdown)
   roll.dates.push(day.streamDate)
 }
 
@@ -1680,6 +1690,9 @@ function rollupBody(roll: Rollup): Omit<StreamDayFinance, 'streamDate' | 'sessio
   const out = emptyDay('') as unknown as Record<string, unknown>
   for (const f of MONEY_FIELDS) out[f] = toDollars(roll.money.get(f) ?? 0)
   for (const f of COUNT_FIELDS) out[f] = roll.counts.get(f) ?? 0
+  // Neither money nor a count, so it is carried by hand — the contract's own
+  // merge, in cents, so a month's slices still sum to the month's gross.
+  out.rateBreakdown = mergeRateSlices(roll.rates)
   delete out.streamDate
   delete out.sessionTitles
   return out as unknown as Omit<StreamDayFinance, 'streamDate' | 'sessionTitles'>
@@ -2183,10 +2196,10 @@ function buildView(db: Database): StreamingFinanceView {
   //
   // ROW BY ROW, AND IT HAS TO BE. The 30c is charged once per purchased slot
   // (1,929 sale rows, 1,929 distinct Order IDs) and the commission comes from
-  // the rate in force on THAT ROW'S DATE, so neither survives being aggregated
-  // into a day's dollar total first. Only positive rows are charged: a refund is
-  // not a purchase and a $0.00 sale is not a transaction, and both pass through
-  // at face value.
+  // the rate in force on THAT ROW'S BUSINESS DAY, so neither survives being
+  // aggregated into a day's dollar total first. Only positive rows are charged:
+  // a refund is not a purchase and a $0.00 sale is not a transaction, and both
+  // pass through at face value.
   //
   // `deriveSaleFee` in the contract owns the arithmetic and is never restated;
   // `rateLookup` snapshots the periods once for this whole derivation, so a rate
@@ -2195,39 +2208,73 @@ function buildView(db: Database): StreamingFinanceView {
   // Fees are on SALES ONLY — tips, bonuses, subsidies, postage and Show Boost
   // arrive whole and are untouched by any of this.
   const rateAt = rateLookup()
+  // `occurred_at` is deliberately NOT selected: the business day is the only
+  // thing the derivation below reads a date for, and a column nobody uses is an
+  // invitation to start pricing by it again.
   const saleRows = db
     .prepare(
-      `SELECT stream_date AS d, occurred_at AS at,
-              CAST(ROUND(amount * 100) AS INTEGER) AS cents
+      `SELECT stream_date AS d, CAST(ROUND(amount * 100) AS INTEGER) AS cents
          FROM ledger_rows
         WHERE stream_date IS NOT NULL AND bucket IN ('sale', 'product_sale')
           AND (session_id IS NOT NULL OR attribution = 'own_day')`
     )
-    .all() as Array<{ d: string; at: string; cents: number }>
+    .all() as Array<{ d: string; cents: number }>
 
   interface DayFees {
     grossCents: number
     whatnotCents: number
     stripeCents: number
     charged: number
+    /** Gross cents per rate charged — one entry on an ordinary day. */
+    byRate: Map<number, number>
   }
   const feesByDay = new Map<string, DayFees>()
   for (const r of saleRows) {
-    // The ROW'S OWN date picks the rate, not the show's business day. A show
-    // that runs past midnight books its money to the evening it started, which
-    // is right for the P&L and wrong for a commission: what Whatnot charged is
-    // decided by when the sale happened, and a rate change at a month boundary
-    // must not be back-dated by the carry rule.
-    const fee = deriveSaleFee(r.cents, rateAt(streamDateOf(r.at)))
+    // A RATE PERIOD FOLLOWS THE SHOW, NOT THE CALENDAR. The rate is looked up by
+    // `r.d` — the business day the P&L already groups this row under — so one
+    // show is priced at one rate from its first spot to its last, whatever hour
+    // the last one settled at.
+    //
+    // This used to key off `streamDateOf(r.at)`, the row's own calendar date,
+    // and the argument for that was real: Whatnot charges by when the sale
+    // happened, so a rate change taking effect on the 1st of a month should not
+    // be back-dated onto the tail of a show that began on the 31st. That case
+    // exists. It is also worth roughly one night a year, and it costs a few
+    // hours of one show at the wrong commission.
+    //
+    // What it was traded against is EVERY RM SHOW. All of them run past
+    // midnight, so under the old rule any show that touched a period boundary —
+    // including a period the owner set to end ON the night of a show — split
+    // into two rates and the statement reported the weighted average. A 4%
+    // period ending 20 July produced "5.1%" for the 20 July show: 45% of the
+    // gross before midnight at 4%, the rest after it at the 6% default. The
+    // owner read the period as covering that night's show, which is how a person
+    // reads dates against shows, and no screen said otherwise.
+    //
+    // GIVEN UP, DELIBERATELY: a rate that changes mid-show is applied to the
+    // whole of that show at the rate its opening night falls under. Whatnot's
+    // own invoice for such a night would differ by the post-midnight hours. The
+    // fix when that ever happens is to end the period on the day BEFORE the show
+    // whose night it should stop covering — which is what the dates on the rates
+    // screen now say they mean.
+    const rate = rateAt(r.d)
+    const fee = deriveSaleFee(r.cents, rate)
     const acc = feesByDay.get(r.d) ?? {
       grossCents: 0,
       whatnotCents: 0,
       stripeCents: 0,
-      charged: 0
+      charged: 0,
+      byRate: new Map<number, number>()
     }
     acc.grossCents += fee.grossCents
     acc.whatnotCents += fee.whatnotFeeCents
     acc.stripeCents += fee.stripeFeeCents
+    // Kept per rate as well as in total, so the statement can name what it was
+    // charged instead of dividing one by the other. A day still CAN carry two
+    // rates — two shows on one night with a boundary between them, or a period
+    // edited to end mid-range — and the one thing that must not happen again is
+    // an averaged percentage printed as if it were a configured one.
+    acc.byRate.set(rate, (acc.byRate.get(rate) ?? 0) + fee.grossCents)
     // EITHER fee, not just the commission: a promotional 0% period would leave
     // the commission at zero on rows that still paid Stripe its 2.9% + 30c, and
     // counting on the commission alone would then print "30c x 0 orders" beside
@@ -2247,7 +2294,8 @@ function buildView(db: Database): StreamingFinanceView {
       grossCents: 0,
       whatnotCents: 0,
       stripeCents: 0,
-      charged: 0
+      charged: 0,
+      byRate: new Map<number, number>()
     }
     // grossCents is Sigma(net + fees) over exactly the rows `netSales` was summed
     // from, so `grossSales - totalFees == netSales` to the cent, always. The
@@ -2257,6 +2305,12 @@ function buildView(db: Database): StreamingFinanceView {
     day.processingFee = toDollars(fees.stripeCents)
     day.totalFees = toDollars(fees.whatnotCents + fees.stripeCents)
     day.feeSaleCount = fees.charged
+    // The same rows, split by the rate each was charged at. Built from the same
+    // accumulator as `grossSales`, so the slices sum to it exactly and the
+    // statement's disclosure cannot disagree with the line it is disclosing.
+    day.rateBreakdown = [...fees.byRate.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([rate, cents]) => ({ rate, grossSales: toDollars(cents) }))
 
     // `unclassified` has no field of its own in the day shape, so its money is
     // carried at FACE VALUE in totalRevenue and flagged in the import warnings.

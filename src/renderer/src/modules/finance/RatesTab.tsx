@@ -11,6 +11,7 @@ import {
   effectiveWhatnotRate,
   isDayKey,
   overlappingRatePeriod,
+  ratePct,
   validateRatePeriod
 } from '@shared/financeStreaming'
 import { Icon } from '../../components/Icon'
@@ -83,7 +84,7 @@ export function RatesTab(): JSX.Element {
       }
       setPeriods(res.data)
       setDeleting(null)
-      toast.success('Period removed. Those days fall back to whatever else covers them.')
+      toast.success('Period removed. Those nights fall back to whatever else covers them.')
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'That period could not be removed.')
     } finally {
@@ -136,6 +137,17 @@ export function RatesTab(): JSX.Element {
           written. The Streaming tab works back from that to what buyers actually paid, and this
           rate is the one number that arithmetic needs and the file does not contain.
         </p>
+
+        <Note tone="info" icon="CalendarDays">
+          <b>A period covers the shows that started on those nights.</b>
+          <p>
+            Dates here are <b>show nights</b>, not calendar days. A show that goes on at 9pm and
+            finishes at 2am is one show at one rate, counted on the night it started — so a period
+            ending 20 July includes the whole of the 20 July show, including everything that sold
+            after midnight. To stop a rate before a particular show, end the period on the night
+            before it.
+          </p>
+        </Note>
 
         <Note tone="info" icon="History">
           <b>Changing a rate changes history.</b>
@@ -190,7 +202,7 @@ export function RatesTab(): JSX.Element {
             <b>{spanLabel(deleting)}</b> at <b>{ratePct(deleting.rate)}</b> goes.
           </p>
           <p className="fin-confirm-lead">
-            Those days fall back to whatever other period covers them, and to the{' '}
+            Those show nights fall back to whatever other period covers them, and to the{' '}
             {ratePct(DEFAULT_WHATNOT_RATE)} default if none does. Every show in that stretch is
             re-priced the next time the Streaming tab is opened.
           </p>
@@ -271,12 +283,12 @@ function RateStack({
       <article className="fin-rate is-default">
         <div className="fin-rate-main">
           <b className="fin-rate-figure mono">{ratePct(DEFAULT_WHATNOT_RATE)}</b>
-          <span className="fin-rate-span">Every other day</span>
+          <span className="fin-rate-span">Every other night</span>
           <span className="fin-rate-tag is-muted">Default</span>
         </div>
         <p className="fin-rate-note">
-          What the app uses wherever no period above covers a date. It is not a row and cannot be
-          edited or removed — add a period to override a stretch of days.
+          What the app uses for any show night no period above covers. It is not a row and cannot
+          be edited or removed — add a period to override a stretch of nights.
         </p>
       </article>
 
@@ -298,9 +310,11 @@ function RateStack({
  * actually walks up with: what rate is a particular show being charged at, and
  * which row decided that.
  *
- * It reads the SAME `effectiveWhatnotRate` and `deriveSaleFee` the P&L does, so
- * the worked example under it is not an illustration — it is the arithmetic,
- * running.
+ * It reads the SAME `effectiveWhatnotRate` and `deriveSaleFee` the P&L does, and
+ * — since the statement started pricing a row by its show's business day — it is
+ * asking that function the SAME KIND OF KEY. So the worked example under it is
+ * not an illustration, it is the arithmetic the Streaming tab will run for that
+ * night, running.
  */
 function EffectiveRate({ periods }: { periods: WhatnotRatePeriod[] }): JSX.Element {
   const [day, setDay] = useState(() => todayKey())
@@ -318,11 +332,11 @@ function EffectiveRate({ periods }: { periods: WhatnotRatePeriod[] }): JSX.Eleme
     <section className="fin-rate-check">
       <span className="fin-section-title">
         <Icon name="CalendarSearch" size={15} />
-        The rate on a given day
+        The rate on a given show night
       </span>
 
       <div className="fin-rate-check-row">
-        <Field label="Business day">
+        <Field label="Show night" hint="The night a show started on.">
           <Input
             type="date"
             value={day}
@@ -347,10 +361,11 @@ function EffectiveRate({ periods }: { periods: WhatnotRatePeriod[] }): JSX.Eleme
       </div>
 
       <p className="fin-rate-worked">
-        A spot that paid out <Money value={100} /> on that day was bought for{' '}
+        A spot that paid out <Money value={100} /> on that night was bought for{' '}
         <Money value={example.grossCents / 100} strong />: Whatnot took{' '}
         <Money value={Math.abs(example.whatnotFeeCents) / 100} /> and Stripe took{' '}
-        <Money value={Math.abs(example.stripeFeeCents) / 100} /> (2.9% and 30¢).
+        <Money value={Math.abs(example.stripeFeeCents) / 100} /> (2.9% and 30¢). Every spot on that
+        show is priced this way, including the ones sold after midnight.
       </p>
     </section>
   )
@@ -483,10 +498,13 @@ function RateModal({
       }
     >
       <div className="fin-rate-form">
-        <Field label="From" hint="Inclusive. The first business day at this rate.">
+        <Field label="From" hint="Inclusive. The first show NIGHT at this rate.">
           <Input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
         </Field>
-        <Field label="To" hint="Inclusive. Leave blank for the rate still in force.">
+        <Field
+          label="To"
+          hint="Inclusive — the last show night, all of it. Blank for the rate still in force."
+        >
           <Input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} />
         </Field>
         <Field
@@ -522,8 +540,9 @@ function RateModal({
         </Note>
       ) : (
         <p className="fin-confirm-lead">
-          Saving this re-prices every show between those dates the next time the Streaming tab is
-          read. A $100 payout on one of those days becomes a{' '}
+          Saving this re-prices every show that started on one of those nights — all of it, the
+          after-midnight hours included — the next time the Streaming tab is read. A $100 payout on
+          one of those shows becomes a{' '}
           <Money value={deriveSaleFee(10000, rate).grossCents / 100} strong /> sale.
         </p>
       )}
@@ -532,12 +551,11 @@ function RateModal({
 }
 
 // ---------------------------------------------------------------------------
-
-/** "6%", "6.5%" — two decimals at most, trailing zeros dropped. */
-function ratePct(rate: number): string {
-  const pct = Math.round(rate * 10000) / 100
-  return `${Number.isInteger(pct) ? pct : pct.toFixed(2)}%`
-}
+//
+// `ratePct` used to live here. It is the contract's now, and imported rather
+// than copied, because the P&L's commission line prints the same rates this
+// screen does — "6.25%" here and "6.3%" one tab across is the same "matches
+// nothing configured" complaint the blended-rate disclosure exists for.
 
 function dayLabel(day: string): string {
   const [y, m, d] = (day || '').split('-').map(Number)

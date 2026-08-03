@@ -717,7 +717,14 @@ export const WHATNOT_RATE_MIN = 0
 export const WHATNOT_RATE_MAX = 0.5
 
 /**
- * A stretch of days on which Whatnot's commission was some particular rate.
+ * A stretch of SHOWS on which Whatnot's commission was some particular rate.
+ *
+ * SHOWS, NOT CALENDAR DAYS, and the distinction is the whole of it: both dates
+ * are business days — the `stream_date` a show is booked under — so a period
+ * ending 20 July covers the show that STARTED on the night of the 20th, right
+ * through to the last spot that settled at 2am on the 21st. Every RM show
+ * crosses midnight, so a period read any other way splits almost every show it
+ * touches across two rates.
  *
  * `toDate` null means open-ended — the rate in force until somebody says
  * otherwise. Periods MAY NOT OVERLAP; see `overlappingRatePeriod` for why that
@@ -725,9 +732,9 @@ export const WHATNOT_RATE_MAX = 0.5
  */
 export interface WhatnotRatePeriod {
   id: string
-  /** Inclusive business day, YYYY-MM-DD. */
+  /** Inclusive business day, YYYY-MM-DD — the first NIGHT at this rate. */
   fromDate: string
-  /** Inclusive business day, or null for "and onwards". */
+  /** Inclusive business day — the last NIGHT — or null for "and onwards". */
   toDate: string | null
   /** A fraction: 0.06 is 6%. */
   rate: number
@@ -769,7 +776,9 @@ export function coveringRatePeriod(
   return null
 }
 
-/** What Whatnot took on a given day. `DEFAULT_WHATNOT_RATE` where nothing says. */
+/** What Whatnot took on a given BUSINESS day. `DEFAULT_WHATNOT_RATE` where
+ *  nothing says. Every caller — the statement, the owner widgets and the rates
+ *  preview — passes a `stream_date`, which is what makes them one answer. */
 export function effectiveWhatnotRate(
   periods: readonly WhatnotRatePeriod[],
   day: string
@@ -914,10 +923,10 @@ const cents = (n: number): number => Math.round(n * 100) / 100
  * Add a set of sale rows up.
  *
  * TAKES ROWS, not a total, and that is the signature doing the work: the rate
- * comes from the row's own date and the flat 30c comes from the row existing, so
- * neither can be recovered from a day's dollar figure. A caller that still has
- * only a total is a caller that cannot compute this, and it should fail to
- * compile rather than approximate.
+ * comes from the row's own business day and the flat 30c comes from the row
+ * existing, so neither can be recovered from a day's dollar figure. A caller
+ * that still has only a total is a caller that cannot compute this, and it
+ * should fail to compile rather than approximate.
  *
  * Because every step is linear in the row, summing per-row cents here and
  * summing whole days elsewhere give the SAME answer to the cent. The tests
@@ -948,6 +957,47 @@ export function computeFees(
     processingFee: cents(stripe / 100),
     totalFees: cents((whatnot + stripe) / 100)
   }
+}
+
+/**
+ * One commission rate that some of a period's sales were charged at, and the
+ * derived gross charged at it.
+ *
+ * EXISTS SO A PERCENTAGE IS NEVER A NUMBER NOBODY CONFIGURED. Most days carry
+ * exactly one of these, and the statement prints it plainly. A day CAN carry
+ * two — two shows on one night with a period boundary between them, or a period
+ * edited to end mid-range — and a week or a month routinely does. Before this
+ * existed the statement divided the fee by the gross and printed the quotient,
+ * so a day spanning 4% and 6% reported "5.1%": a rate that appears on no screen,
+ * in no agreement, and that nobody can reproduce.
+ *
+ * The slices are the SALES LINE SPLIT BY RATE — every sale row lands in exactly
+ * one of them, so their grosses sum to `grossSales` to the cent and the reader
+ * can check the split against the line above it.
+ */
+export interface RateSlice {
+  /** A fraction: 0.06 is 6%. The rate as CONFIGURED, never a quotient. */
+  rate: number
+  /** The derived gross of the sale rows charged at it. */
+  grossSales: number
+}
+
+/**
+ * Merge rate slices from several days into one list, biggest-rate-last.
+ *
+ * In INTEGER CENTS for the same reason every other rollup here is: a week is
+ * seven days of floats and a period whose slices did not sum to its own gross
+ * would be a disclosure that needed its own disclosure.
+ */
+export function mergeRateSlices(slices: readonly RateSlice[]): RateSlice[] {
+  const byRate = new Map<number, number>()
+  for (const s of slices) {
+    if (!Number.isFinite(s?.rate) || !Number.isFinite(s?.grossSales)) continue
+    byRate.set(s.rate, (byRate.get(s.rate) ?? 0) + Math.round(s.grossSales * 100))
+  }
+  return [...byRate.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([rate, cents]) => ({ rate, grossSales: cents / 100 }))
 }
 
 export interface StreamDayFinance {
@@ -1009,8 +1059,15 @@ export interface StreamDayFinance {
   totalRevenue: number
 
   // --- Fees (all negative) ------------------------------------------------
-  /** Whatnot's commission, at the rate in force on each row's own date. */
+  /** Whatnot's commission, at the rate in force on this BUSINESS DAY. */
   whatnotFee: number
+  /**
+   * Which rates `whatnotFee` was actually charged at, and the gross at each.
+   *
+   * Normally one entry. More than one means the statement must say so rather
+   * than print an average nobody configured — see `RateSlice`.
+   */
+  rateBreakdown: RateSlice[]
   /** Stripe: 2.9% of gross plus 30c per purchased slot. */
   processingFee: number
   totalFees: number
@@ -1164,7 +1221,8 @@ const usd = (n: number): string =>
   })
 
 /**
- * A rate as the statement prints it: "6%", "6.5%", "6.8%".
+ * A DERIVED rate, as the statement prints it when it has nothing better: "6%",
+ * "6.5%", "6.8%".
  *
  * ONE decimal, trailing zero dropped, and the precision is chosen rather than
  * lazy. This rate is computed back OUT of a fee and a gross that are each
@@ -1174,13 +1232,29 @@ const usd = (n: number): string =>
  * decimal it prints as "6%", and the "of $X gross" beside it is what actually
  * makes the figure reproducible.
  *
- * Derived rather than read off the configured period, because a range that
- * straddles a rate change has no single configured rate and must print the blend
- * it really charged.
+ * The fee line now prefers `ratePct` on the rates a day was really charged at
+ * (`rateBreakdown`), because a quotient is only ever an approximation of a
+ * number somebody agreed to. This is the fallback for a build whose main is old
+ * enough not to send the breakdown at all.
  */
 const pctLabel = (fraction: number): string => {
   const pct = Math.round(fraction * 1000) / 10
   return `${Number.isInteger(pct) ? pct : pct.toFixed(1)}%`
+}
+
+/**
+ * A CONFIGURED rate, as both the statement and the Fees & rates screen print it:
+ * "6%", "6.5%", "6.25%".
+ *
+ * Two decimals rather than one, because this figure is not a quotient — it is
+ * what somebody typed into the rate form, and rounding an agreed 6.25% to "6.3%"
+ * on the statement while the rates screen says "6.25%" is the same "matches
+ * nothing configured" complaint in a smaller font. Exported and used by BOTH so
+ * the two screens cannot spell the same rate two ways.
+ */
+export function ratePct(rate: number): string {
+  const pct = Math.round(rate * 10000) / 100
+  return `${Number.isInteger(pct) ? pct : pct.toFixed(2)}%`
 }
 
 const c2 = (n: number): number => Math.round(n * 100) / 100
@@ -1199,6 +1273,9 @@ export function buildPnl(d: {
   unclassified?: number
   /** Optional so a caller built before the fee rewrite still type-checks. */
   feeSaleCount?: number
+  /** Optional for the same reason: an older packaged main sends no breakdown,
+   *  and the fee line then falls back to the derived rate it always printed. */
+  rateBreakdown?: RateSlice[]
   breakCost: number; giveawayCost: number; cogs: number; grossProfit: number
   whatnotFee: number; processingFee: number; totalFees: number
   shippingSubsidy: number; shippingCharges: number; giveawayShipping: number
@@ -1213,11 +1290,30 @@ export function buildPnl(d: {
 
   const gross = c2(d.grossSales)
   const charged = d.feeSaleCount ?? d.saleCount
-  // Read back OUT of the figures rather than off a setting, so a period that
-  // spans a rate change prints the blend it actually charged instead of a rate
-  // that is right for only part of it.
+  // The LAST RESORT only. Dividing the fee by the gross gives a number that is
+  // arithmetically true and editorially useless: on a span covering two rates it
+  // prints their blend, which matches no period on the rates screen and no
+  // agreement with Whatnot. It is used now only when `rateBreakdown` is absent —
+  // an older packaged main — and the blend is disclosed properly below.
   const whatnotRate = gross > 0 ? Math.abs(d.whatnotFee) / gross : null
   const stripePercentPart = c2(gross * STRIPE_PERCENT_RATE)
+
+  // What was actually charged, at the rates somebody actually configured. One
+  // slice on an ordinary day; more when a day genuinely spans a boundary, or
+  // whenever this is a week or a month wide enough to contain one.
+  const slices = mergeRateSlices(d.rateBreakdown ?? []).filter((s) => c2(s.grossSales) !== 0)
+  const feeDetail =
+    slices.length > 1
+      ? // NAMED, NOT AVERAGED. The owner's complaint was a percentage that
+        // matched nothing on any screen; an average is exactly that however it
+        // is computed, so the parts are printed instead and each one is a rate
+        // that can be found in the rate list.
+        `blended: ${slices.map((s) => `${ratePct(s.rate)} on ${usd(c2(s.grossSales))}`).join(', ')}`
+      : slices.length === 1
+        ? `${ratePct(slices[0].rate)} of ${usd(gross)} gross`
+        : whatnotRate === null
+          ? 'a share of every sale'
+          : `${pctLabel(whatnotRate)} of ${usd(gross)} gross`
 
   return [
     {
@@ -1283,14 +1379,7 @@ export function buildPnl(d: {
         // Whatnot's is negotiable and configurable by date; Stripe's is a
         // published card rate. The owner's ask was to still see what is lost in
         // fees, and "lost to whom" is half of that answer.
-        line(
-          'whatnotFee',
-          'Whatnot commission',
-          d.whatnotFee,
-          whatnotRate === null
-            ? 'a share of every sale'
-            : `${pctLabel(whatnotRate)} of ${usd(gross)} gross`
-        ),
+        line('whatnotFee', 'Whatnot commission', d.whatnotFee, feeDetail),
         // Written as the sum it is, so a person can reproduce it with a
         // calculator: a percentage of the gross above, plus 30c for each slot
         // somebody bought.
@@ -1583,6 +1672,7 @@ export function emptyDayFinance(streamDate: string): StreamDayFinance {
     unclassified: 0,
     totalRevenue: 0,
     whatnotFee: 0,
+    rateBreakdown: [],
     processingFee: 0,
     totalFees: 0,
     netRevenue: 0,
@@ -1616,10 +1706,10 @@ export function emptyDayFinance(streamDate: string): StreamDayFinance {
  *
  * Every field is SUMMED, including the fees and the derived gross — never
  * re-derived from the range's net. A range total cannot be taken apart into the
- * rows it came from: the 30c is per ROW and the rate is per row's DATE, so
- * `deriveSaleFee` on a period's net sales would charge one 30c for a month and
- * one rate for a period that may straddle two. The derivation happens once, per
- * row; a day sums its rows and everything above a day sums days.
+ * rows it came from: the 30c is per ROW and the rate is per row's BUSINESS DAY,
+ * so `deriveSaleFee` on a period's net sales would charge one 30c for a month
+ * and one rate for a period that may straddle two. The derivation happens once,
+ * per row; a day sums its rows and everything above a day sums days.
  *
  * A non-finite figure counts as zero rather than poisoning the whole range: an
  * older packaged main can send days without the cost-of-goods keys, and one
@@ -1646,6 +1736,10 @@ export function sumDayFinance(days: StreamDayFinance[]): StreamFinanceTotals {
   const out = emptyDayFinance('') as unknown as Record<string, unknown>
   for (const f of PNL_MONEY_FIELDS) out[f] = Math.round(money.get(f) ?? 0) / 100
   for (const f of PNL_COUNT_FIELDS) out[f] = counts.get(f) ?? 0
+  // Not a money field and not a count, so it is carried by hand. A range that
+  // dropped it would silently go back to printing the blended quotient — which
+  // is precisely the disclosure a wide range needs most.
+  out.rateBreakdown = mergeRateSlices(days.flatMap((d) => d.rateBreakdown ?? []))
   delete out.streamDate
   delete out.sessionTitles
   return { ...(out as unknown as Omit<StreamDayFinance, 'streamDate' | 'sessionTitles'>),

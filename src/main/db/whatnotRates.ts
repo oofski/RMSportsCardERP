@@ -7,8 +7,15 @@
  * owner can override it for a stretch of dates, because it is a term of a seller
  * agreement rather than a law of nature.
  *
+ * A PERIOD COVERS SHOWS, NOT CALENDAR DAYS. The dates on a period are business
+ * days — the same `stream_date` the P&L groups by — so "15 June to 20 July" is
+ * "the shows that started on those nights", and a show running until 2am is
+ * priced end to end at the rate its opening night falls under. `buildView` in
+ * financeStreaming.ts carries the long argument for that, including what it
+ * gives up.
+ *
  * NOTHING IS STORED ON A ROW. The fee is computed on READ, in `buildView`, from
- * the rate in force on each row's own date. That is what makes a rate change
+ * the rate in force on each row's business day. That is what makes a rate change
  * re-derive history: change the period, reopen Finance, and every show inside it
  * moves — no re-upload, no re-attribution, no migration. The alternative, baking
  * a fee onto each ledger row at import, would leave a database holding two
@@ -72,6 +79,10 @@ export function listRatePeriods(): WhatnotRatePeriod[] {
  * the period list nine thousand times. Snapshotting also means a single
  * derivation cannot see a rate change halfway through and produce a day that
  * disagrees with itself.
+ *
+ * The parameter is named `day` and it means a BUSINESS day. Every caller passes
+ * the row's `stream_date`; passing a calendar date instead is what made one show
+ * report two rates and a blended percentage nobody had configured.
  */
 export function rateLookup(): (day: string) => number {
   const periods = listRatePeriods()
@@ -85,7 +96,14 @@ export function rateLookup(): (day: string) => number {
   }
 }
 
-/** What Whatnot took on one day. The default where nothing is configured. */
+/**
+ * What Whatnot took on one BUSINESS DAY. The default where nothing is configured.
+ *
+ * This is what the Fees & rates preview answers with, and it takes the same kind
+ * of key `rateLookup` is called with in `buildView` — a `stream_date`, not a
+ * calendar date. That is the whole reason the preview and the statement agree:
+ * ask both about 20 July and they are asking the period list the same question.
+ */
 export function rateForDate(day: string): number {
   return effectiveWhatnotRate(listRatePeriods(), day)
 }
