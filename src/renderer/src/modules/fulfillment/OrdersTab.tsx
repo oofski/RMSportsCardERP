@@ -64,7 +64,7 @@ interface EditorState {
   row: ShipOrderRow
 }
 
-export function OrdersTab({ canManage, canFind, canPack, onChanged, onGoTo }: ShipTabProps): JSX.Element {
+export function OrdersTab({ canManage, canFind, canPack, onChanged }: ShipTabProps): JSX.Element {
   const toast = useToast()
 
   const [rows, setRows] = useState<ShipOrderRow[]>([])
@@ -382,12 +382,7 @@ export function OrdersTab({ canManage, canFind, canPack, onChanged, onGoTo }: Sh
       <EmptyState
         icon="ClipboardList"
         title="No packages yet"
-        message="Import a Whatnot packing-slip PDF and every customer's package shows up here as one row."
-        action={
-          <Button variant="primary" icon="UploadCloud" onClick={() => onGoTo('setup')}>
-            Go to Upload
-          </Button>
-        }
+        message="A lead imports the Whatnot packing slips in Admin → Shipping, and every customer's package shows up here as one row."
       />
     )
   }

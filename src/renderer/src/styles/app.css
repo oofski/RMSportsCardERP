@@ -5428,7 +5428,9 @@ tr.hoverable-row:hover {
   padding-top: 24px;
 }
 
-/* The collision alarm rides along on every tab until it is reviewed. */
+/* The collision alarm rides along on every tab. It is a notice rather than a
+   button now — the audit it used to open lives in Admin, and a bench operator
+   cannot follow it — so it does not offer a pointer it cannot honour. */
 .ship-collision-strip {
   display: flex;
   align-items: center;
@@ -5442,7 +5444,7 @@ tr.hoverable-row:hover {
   background: var(--danger-bg);
   color: var(--danger);
   font-size: 13px;
-  cursor: pointer;
+  line-height: 1.45;
 }
 .ship-collision-strip b {
   font-weight: 700;
@@ -5450,13 +5452,8 @@ tr.hoverable-row:hover {
 .ship-collision-strip span {
   color: var(--danger);
 }
-.ship-collision-go {
-  margin-left: auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-weight: 700;
-  white-space: nowrap;
+.ship-collision-strip svg {
+  flex: none;
 }
 
 /* ---------- Shared chips ---------- */
@@ -8036,6 +8033,89 @@ tr.hoverable-row:hover {
 }
 .sop-step.done .sop-tick {
   color: var(--success-strong);
+}
+/* Step 5's control is a DOOR, not a box. It has to be visibly a different kind
+   of thing, or people tick it and wonder why nothing happened. */
+.sop-tick-door {
+  color: var(--brand-500);
+}
+.sop-tick-door:hover {
+  background: var(--brand-soft);
+  color: var(--brand-600, var(--brand-500));
+}
+
+/* The three states a step that is not finished can be in.
+
+   NOW      the one thing to do — the row somebody's eye should land on
+   GAP      ticked, then taken back off. Not the frontier: the work above it
+            still stands, so it reads as a thing to close rather than a
+            beginning. Amber, because it is the only one anybody could forget.
+   WAITING  the step in front of it is not done. Quiet and not clickable, and
+            the row itself says which step — a locked control that will not say
+            why is the thing people click twice and then complain about. */
+.sop-step[data-state='now'] {
+  box-shadow: inset 3px 0 0 var(--brand-500);
+  background: var(--brand-soft);
+}
+.sop-step[data-state='gap'] {
+  box-shadow: inset 3px 0 0 var(--warning);
+  background: var(--warning-bg);
+}
+.sop-step[data-state='waiting'] {
+  opacity: 0.6;
+}
+.sop-step[data-state='now'] .sop-num {
+  background: var(--brand-500);
+  color: #fff;
+}
+.sop-step[data-state='gap'] .sop-num {
+  background: var(--warning);
+  color: var(--text);
+}
+.sop-flag {
+  padding: 1px 8px;
+  border-radius: 99px;
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.sop-flag.now {
+  background: var(--brand-500);
+  color: #fff;
+}
+.sop-flag.gap {
+  background: var(--warning);
+  color: var(--text);
+}
+.sop-wait {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 5px 0 0;
+  font-size: 12px;
+  color: var(--text-3);
+}
+.sop-wait.gap {
+  color: var(--text-2);
+}
+.sop-wait svg {
+  flex: none;
+}
+/* The way through to the bench, and what it will and will not do for you. */
+.sop-bench {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+.sop-bench-note {
+  font-size: 12px;
+  color: var(--text-3);
+  line-height: 1.4;
+  flex: 1 1 220px;
+  min-width: 0;
 }
 .sop-body {
   flex: 1 1 auto;
@@ -15922,25 +16002,51 @@ button.sor-team:focus-visible {
   flex-direction: column;
   gap: 18px;
 }
-.today-mine {
-  border: 1px solid var(--border);
+/* The front door. One action, sized like the only thing on the screen anybody
+   came here to press — which, nine times in ten, it is. */
+.today-start {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+  padding: 20px 22px;
+  border: 1px solid var(--brand-500);
   border-radius: var(--radius);
-  background: var(--surface);
-  padding: 16px 18px;
+  background: var(--brand-soft);
+}
+.today-start-text {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 4px;
+  flex: 1 1 300px;
+  min-width: 0;
 }
-.today-mine[data-empty='true'] {
-  background: var(--surface-2);
+.today-start-text h3 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text);
 }
-.today-mine > header,
+.today-start-text p {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-2);
+}
+/* There is no `lg` button, and there should not be one for a single screen —
+   this is the size the front door wants, applied where it is the front door. */
+.today-start-btn {
+  flex: none;
+  padding: 14px 26px;
+  font-size: 15px;
+  font-weight: 700;
+}
 .today-board > header {
   display: flex;
   align-items: center;
   gap: 9px;
 }
-.today-mine > header h3,
 .today-board > header h3 {
   margin: 0;
   font-size: 14px;
@@ -15948,7 +16054,6 @@ button.sor-team:focus-visible {
   color: var(--text);
   flex: 1 1 auto;
 }
-.today-mine > header svg,
 .today-board > header svg {
   color: var(--text-2);
 }
@@ -15967,33 +16072,6 @@ button.sor-team:focus-visible {
   color: var(--success-strong, var(--success));
   font-weight: 600;
 }
-.today-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-.today-chip {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 12px 9px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface-2);
-  cursor: pointer;
-  position: relative;
-  overflow: hidden;
-}
-.today-chip:hover {
-  border-color: var(--brand-500);
-}
-.today-chip-prog {
-  font-size: 12.5px;
-  font-weight: 700;
-  color: var(--text);
-  font-variant-numeric: tabular-nums;
-}
-.today-chip-bar,
 .today-break-bar {
   position: absolute;
   left: 0;
@@ -16003,8 +16081,7 @@ button.sor-team:focus-visible {
   background: var(--brand-500);
   transition: width 200ms ease;
 }
-.today-break-bar[data-done='true'],
-.today-chip-bar[data-done='true'] {
+.today-break-bar[data-done='true'] {
   background: var(--success);
 }
 
@@ -16028,6 +16105,18 @@ button.sor-team:focus-visible {
 }
 .today-blocker:hover {
   border-color: var(--brand-500);
+}
+/* Some of these are news rather than a door — the flags and the hand-out are a
+   lead's work in Admin. Those render as a plain tile, so they must not offer a
+   pointer or a hover that promises somewhere to go. */
+.today-blocker[data-static='true'] {
+  cursor: default;
+}
+.today-blocker[data-static='true']:hover {
+  border-color: var(--border);
+}
+.today-blocker[data-static='true'][data-tone='warn']:hover {
+  border-color: var(--warning);
 }
 .today-blocker svg {
   color: var(--text-3);
@@ -16673,6 +16762,30 @@ button.sor-team:focus-visible {
   margin: 14px 0 0;
   font-size: 12.5px;
   color: var(--warning);
+}
+/* You get to this screen from step 5, so there has to be a way back off it —
+   including for somebody who opened it and does not want to start after all. */
+.floor-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 18px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.floor-back:hover {
+  color: var(--text);
+}
+.floor-idle-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: center;
 }
 
 .floor-bar {

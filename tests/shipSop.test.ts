@@ -127,6 +127,19 @@ ok(
 // ---------------------------------------------------------------------------
 console.log('\n=== 2. ticking a step moves exactly that step ===')
 // ---------------------------------------------------------------------------
+// The list is a line, so team bagging cannot be reached without sleeving and
+// sorting. Both are ticked here for that reason and nothing else — and sleeving
+// is taken straight back off again, so the money measured below is team
+// bagging's alone. That untick is also the first proof of the rule the rest of
+// this file leans on: taking a step off leaves every other step exactly as it
+// was, which is what makes a hole in the list a survivable state.
+sop.setShipSopStep('sleeve', true, null)
+sop.setShipSopStep('sort', true, null)
+sop.setShipSopStep('sleeve', false, null)
+ok(step('sort').done === true, 'sorting stayed ticked when sleeving came off')
+ok(onHand(SLEEVES) === 40, 'and the sleeves came all the way back', String(onHand(SLEEVES)))
+ok(sop.getShipSop().bookedCost === 0, 'with nothing booked', String(sop.getShipSop().bookedCost))
+
 const bagsBefore = onHand(BAGS)
 const mailersBefore = onHand(MAILERS)
 let res = sop.setShipSopStep('team_bag', true, null)
@@ -239,11 +252,75 @@ ok(step('break_sticker').lines[0].used === 60, 'the count is remembered', String
 ok(step('break_sticker').lines[0].usedCost === 0, 'and it costs nothing rather than being guessed at')
 
 // ---------------------------------------------------------------------------
+console.log('\n=== 7b. the gate: step N waits for step N-1, in the BACKEND ===')
+// ---------------------------------------------------------------------------
+// Not the renderer. This is the db call the IPC makes, and it is the only place
+// the rule can actually live: a greyed-out button is a suggestion, and what is
+// being protected is stock.
+const shipMailers = onHand(MAILERS)
+const shipLabels = onHand(LABELS)
+let refused = ''
+try {
+  sop.setShipSopStep('scan', true, null) // step 6, with step 5 wide open
+} catch (err: any) {
+  refused = String(err?.message ?? err)
+}
+ok(refused.includes('Shipping'), 'scanning is refused, and NAMES the step in the way', refused || '(no error)')
+ok(step('scan').done === false, 'so it did not tick')
+ok(
+  onHand(MAILERS) === shipMailers && onHand(LABELS) === shipLabels,
+  'and the refusal moved no stock at all',
+  `${onHand(MAILERS)}/${onHand(LABELS)}`
+)
+// The step immediately in front is the whole rule. Confirm (7) is two away, and
+// it is refused by its own neighbour rather than by the same one.
+refused = ''
+try {
+  sop.setShipSopStep('confirm', true, null)
+} catch (err: any) {
+  refused = String(err?.message ?? err)
+}
+ok(refused.includes('Scanning'), 'confirm is refused by SCANNING, not by shipping', refused || '(no error)')
+
+// Ticking the step in front opens it. 3 packages now: 2 carded (2 mailers each)
+// + 1 giveaway-only = 5 mailers, and one label per package.
+sop.setShipSopStep('ship', true, null)
+ok(step('ship').done === true, 'shipping ticks once break stickers are done')
+ok(onHand(MAILERS) === shipMailers - 5, 'taking 5 mailers', `${shipMailers} -> ${onHand(MAILERS)}`)
+ok(onHand(LABELS) === shipLabels - 3, 'and 3 labels', `${shipLabels} -> ${onHand(LABELS)}`)
+sop.setShipSopStep('scan', true, null)
+ok(step('scan').done === true, 'and scanning follows it through')
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 7c. unticking leaves a HOLE, and the hole closes ===')
+// ---------------------------------------------------------------------------
+// The owner's rule, stated exactly: "steps to be unticked is fine, but then you
+// have to go and tick the steps that were unticked — and that doesn't mean you
+// have to go through everything on step 5 again."
+const holeMailers = onHand(MAILERS)
+sop.setShipSopStep('break_sticker', false, null) // step 4, with 5 and 6 above it done
+ok(step('break_sticker').done === false, 'break stickers come off')
+ok(step('ship').done && step('scan').done, 'and NOTHING above it is undone — no cascade')
+ok(
+  onHand(MAILERS) === holeMailers,
+  'so step 5 did not hand its mailers back to tidy the list up',
+  `${holeMailers} -> ${onHand(MAILERS)}`
+)
+// Closing the hole is one tick. It does not ask anybody to redo the bench, and
+// it does not re-open step 5 or touch a single thing above it.
+sop.setShipSopStep('break_sticker', true, null)
+ok(step('break_sticker').done === true, 'and it ticks straight back on')
+ok(onHand(MAILERS) === holeMailers, 'still without moving step 5’s stock', String(onHand(MAILERS)))
+// A step ABOVE a hole is still reachable: the gate asks about its own
+// neighbour, so a gap low down must not freeze the rest of the night. Sleeving
+// has been off since section 6 and everything above it carried on regardless.
+ok(step('sleeve').done === false, 'sleeving is still the hole section 6 left')
+sop.setShipSopStep('confirm', true, null)
+ok(step('confirm').done === true, 'and confirm ticks with that hole five steps below it')
+
+// ---------------------------------------------------------------------------
 console.log('\n=== 8. steps with no supplies still tick ===')
 // ---------------------------------------------------------------------------
-sop.setShipSopStep('sort', true, null)
-sop.setShipSopStep('scan', true, null)
-sop.setShipSopStep('confirm', true, null)
 ok(step('sort').done && step('scan').done && step('confirm').done, 'sort, scan and confirm all tick')
 ok(step('sort').lines.length === 0, 'with nothing under them to move')
 

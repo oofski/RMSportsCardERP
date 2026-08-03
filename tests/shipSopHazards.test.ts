@@ -87,6 +87,22 @@ const mk = (name: string, qty: number, cost: number, role: string | null): strin
 const onHand = (id: string): number => supplies.getSupply(id)?.quantity ?? null
 const packing = (d: string): number => sop.packingCostByDay().get(d) ?? 0
 
+const SOP_ORDER = ['sleeve', 'sort', 'team_bag', 'break_sticker', 'ship', 'scan', 'confirm']
+
+/**
+ * Tick everything in front of `step`, so the order gate lets it through.
+ *
+ * The list is a line now, and every hazard below is about STOCK rather than
+ * about order — so each of them opens its own step through the ordinary public
+ * path instead of pretending the gate is not there. Nothing here bypasses it.
+ */
+const openTo = (step: string): void => {
+  for (const s of SOP_ORDER) {
+    if (s === step) return
+    sop.setShipSopStep(s, true, null)
+  }
+}
+
 // ---------------------------------------------------------------------------
 console.log('=== 1. re-pointing a role pays the OLD product back ===')
 // ---------------------------------------------------------------------------
@@ -95,6 +111,7 @@ console.log('=== 1. re-pointing a role pays the OLD product back ===')
 // inventing it on another.
 load(ONE, 'Show A', '2026-09-06')
 const bagsA = mk('Team bags A', 2000, 0.02, 'team_bag')
+openTo('team_bag')
 sop.setShipSopStep('team_bag', true, null)
 ok(onHand(bagsA) === 1965, 'A gave up 35', String(onHand(bagsA)))
 
@@ -119,14 +136,18 @@ console.log('\n=== 2. unlinking a role while ticked still gives the stock back =
 // units were stranded and the ledger row orphaned.
 const mailers = mk('Bubble mailers', 500, 0.3, 'bubble_mailer')
 const labels = mk('4x6 labels', 1000, 0.5, 'shipping_label_4x6')
+openTo('ship')
 sop.setShipSopStep('ship', true, null)
 ok(onHand(mailers) === 497 && onHand(labels) === 998, 'shipping took 3 and 2')
 supplies.setSupplyShipRole(mailers, null)
 sop.setShipSopStep('ship', false, null)
 ok(onHand(mailers) === 500, 'the unlinked product still got its 3 back', String(onHand(mailers)))
 ok(onHand(labels) === 1000, 'and the linked one got its 2 back', String(onHand(labels)))
+// Scoped to THIS step's rows. Opening the gate ticked the four steps in front,
+// and team bagging's ledger row is a live one that belongs to a step nobody has
+// unticked — counting it here would be measuring the wrong thing.
 const orphan = getDb()
-  .prepare(`SELECT COUNT(*) AS n FROM supply_transactions WHERE id LIKE 'shipsop|%'`)
+  .prepare(`SELECT COUNT(*) AS n FROM supply_transactions WHERE id LIKE 'shipsop|%|ship|%'`)
   .get() as { n: number }
 ok(orphan.n === 0, 'no orphaned ledger rows left behind', String(orphan.n))
 supplies.setSupplyShipRole(mailers, 'bubble_mailer')
@@ -207,6 +228,7 @@ console.log('\n=== 7. a mid-show price rise does not restate a published day ===
 // higher price re-priced the entire night retroactively.
 load(ONE, 'Show C', '2026-10-04')
 const bags2 = mk('Team bags C', 5000, 0.02, 'team_bag')
+openTo('team_bag')
 sop.setShipSopStep('team_bag', true, null) // 35 @ 0.02 = 0.70
 ok(Math.abs(packing('2026-10-04') - 0.7) < 0.005, '$0.70 booked', String(packing('2026-10-04')))
 // A case arrives at a much higher price, dragging the moving average up.
@@ -260,6 +282,7 @@ const gday = '2027-07-03'
 // (a) BOTH SHOWS UNNAMED — the common case, since these slips rarely carry a
 // name. Both would answer to "Show <date>", so a name check cannot see them.
 load(TWO, '', gday) // 60 packs -> 65 bags
+openTo('team_bag')
 sop.setShipSopStep('team_bag', true, null)
 const afterBig = onHand(bagsG)
 const costBig = packing(gday)

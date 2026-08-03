@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ShipBreakSummary } from '@shared/shippingViews'
-import { useSession } from '../../lib/session'
 import { api } from '../../lib/api'
 import { LIVE, useLiveRefresh } from '../../lib/live'
 import { Button, CenterLoader, EmptyState } from '../../components/ui'
@@ -12,18 +11,23 @@ import type { ShipTabProps } from './ShippingModule'
 /**
  * Today — the show-day board.
  *
- * Everyone lands here, so it answers the two questions people actually arrive
- * with: *what am I meant to be doing*, and *what is stopping the room*. Nothing
- * on this screen is a place to work; every tile is a door into Find or Pack.
+ * Everyone lands here, so the first thing on it is the answer to the question
+ * nine people in ten arrive with: *where do I start*. One button, always the
+ * same button, going to the same place — the checklist, which then tells them
+ * what is next. There is no decision in it, because there was never really a
+ * decision to make: the seven steps run in order and the first one is the first
+ * one.
  *
- * The blocking numbers matter more than the totals. A break with nobody on it is
- * not a statistic — it is thirty cards nobody is pulling, and every package that
- * touches it cannot be closed. That relationship is the one thing the module
- * could never show before, and it is what a lead needs to decide where the next
- * person goes.
+ * What USED to be here was "your breaks", built on somebody having handed the
+ * show out first. Most nights nobody had, so the screen everybody landed on
+ * opened with "Nothing assigned to you" — a dead end at the front door.
+ *
+ * Below the button, the board. The blocking numbers matter more than the totals:
+ * a break with nobody on it is not a statistic, it is thirty cards nobody is
+ * pulling, and every package that touches it cannot be closed. That is a lead's
+ * screen and it stays exactly as it was.
  */
 export function TodayTab({ summary, onGoTo }: ShipTabProps): JSX.Element {
-  const { user } = useSession()
   const [breaks, setBreaks] = useState<ShipBreakSummary[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -47,10 +51,6 @@ export function TodayTab({ summary, onGoTo }: ShipTabProps): JSX.Element {
     }
   }, [load])
 
-  const mine = useMemo(
-    () => breaks.filter((b) => b.assignees.some((a) => a.employeeId === user?.id)),
-    [breaks, user?.id]
-  )
   const unassigned = useMemo(() => breaks.filter((b) => b.assignees.length === 0), [breaks])
   /** Somebody has begun handing the show out — so a gap in it is a real gap. */
   const handoutStarted = useMemo(() => breaks.some((b) => b.assignees.length > 0), [breaks])
@@ -87,56 +87,41 @@ export function TodayTab({ summary, onGoTo }: ShipTabProps): JSX.Element {
 
   if (!summary?.hasDataset || breaks.length === 0) {
     return (
+      // No button. Importing moved to Admin with the rest of running a show, and
+      // a bench operator cannot do it — so this says what has not happened yet
+      // and who does it, rather than offering a door that is locked.
       <EmptyState
         icon="CalendarDays"
-        title="No show loaded"
-        message="Import tonight's packing slips and the board fills in."
-        action={
-          <Button variant="primary" icon="UploadCloud" onClick={() => onGoTo('setup')}>
-            Go to Setup
-          </Button>
-        }
+        title="Tonight's show has not been imported yet"
+        message="A lead loads the packing slips in Admin → Shipping, and this board fills itself in. Nothing to do at the bench until then."
       />
     )
   }
 
-  const nextMine = mine.find((b) => b.checkedTeams < b.totalTeams)
-
   return (
     <div className="today-page">
-      {/* ---- Yours. First, because most people opening this are here to work. */}
-      <section className="today-mine" data-empty={mine.length === 0 ? 'true' : 'false'}>
-        <header>
-          <Icon name="UserCheck" size={17} />
-          <h3>{mine.length > 0 ? 'Your breaks' : 'Nothing assigned to you'}</h3>
-          {nextMine && (
-            <Button variant="primary" size="sm" icon="ListChecks" onClick={() => onGoTo('find')}>
-              Start finding
-            </Button>
-          )}
-        </header>
-        {mine.length === 0 ? (
-          <p className="today-note">
-            Any break with nobody on it is fair game — open Find and take one.
+      {/* ---- The front door.
+
+          One action, and it is the same one every night: go to the checklist and
+          start at the top. Deliberately the largest thing on the screen — this is
+          what almost everybody who opens this app came here to press, and making
+          them read a board first to find it was the whole complaint. */}
+      <section className="today-start">
+        <div className="today-start-text">
+          <h3>Start fulfillment</h3>
+          <p>
+            The seven steps, in order. Tick one off and the next one opens — nothing to
+            choose, nothing to be assigned first.
           </p>
-        ) : (
-          <div className="today-chips">
-            {mine.map((b) => (
-              <button key={b.id} className="today-chip" onClick={() => onGoTo('find')}>
-                <BreakChip label={b.breakLabel} />
-                <span className="today-chip-prog">
-                  {b.checkedTeams}/{b.totalTeams}
-                </span>
-                <span
-                  className="today-chip-bar"
-                  style={{
-                    ['--p' as string]: `${b.totalTeams ? (b.checkedTeams / b.totalTeams) * 100 : 0}%`
-                  }}
-                />
-              </button>
-            ))}
-          </div>
-        )}
+        </div>
+        <Button
+          className="today-start-btn"
+          variant="primary"
+          icon="PlayCircle"
+          onClick={() => onGoTo('sop')}
+        >
+          Start fulfillment
+        </Button>
       </section>
 
       {/*
@@ -198,14 +183,17 @@ export function TodayTab({ summary, onGoTo }: ShipTabProps): JSX.Element {
                 : 'breaks not handed out yet'
           }
           tone={handoutStarted && unassigned.length > 0 ? 'warn' : 'ok'}
-          onClick={() => onGoTo('setup')}
+          // Handing the show out is a lead's job and it happens in Admin, so
+          // this reports rather than travels. A tile that goes nowhere is worse
+          // than a tile that stays put and says who to ask.
+          note="A lead hands the breaks out in Admin → Shipping."
         />
         <Blocker
           icon="Flag"
           value={summary.counts.warnings}
           label={summary.counts.warnings === 1 ? 'flag to look at' : 'flags to look at'}
           tone={summary.counts.warnings > 0 ? 'warn' : 'ok'}
-          onClick={() => onGoTo('flags')}
+          note="A lead reviews flags in Admin → Shipping."
         />
         <Blocker
           icon="Package"
@@ -229,7 +217,7 @@ export function TodayTab({ summary, onGoTo }: ShipTabProps): JSX.Element {
                 : 'SOP steps left'
           }
           tone={noShowDay ? 'warn' : stepsLeft > 0 ? 'busy' : 'ok'}
-          onClick={() => onGoTo(noShowDay ? 'setup' : 'sop')}
+          onClick={() => onGoTo('sop')}
         />
       </div>
 
@@ -299,24 +287,46 @@ export function TodayTab({ summary, onGoTo }: ShipTabProps): JSX.Element {
   )
 }
 
+/**
+ * One number that might be somebody's next move.
+ *
+ * Some of them are a door and some are only news — the flags and the hand-out
+ * are a lead's work in Admin, and a bench operator pressing them would go
+ * nowhere. Those render as a plain tile carrying the sentence that says where
+ * the work really happens, which is the same answer the collision strip gives.
+ */
 function Blocker({
   icon,
   value,
   label,
   tone,
-  onClick
+  onClick,
+  note
 }: {
   icon: string
   value: number
   label: string
   tone: 'ok' | 'warn' | 'busy'
-  onClick: () => void
+  onClick?: () => void
+  note?: string
 }): JSX.Element {
-  return (
-    <button className="today-blocker" data-tone={tone} onClick={onClick}>
+  const inner = (
+    <>
       <Icon name={icon} size={16} />
       <span className="today-blocker-value">{value.toLocaleString()}</span>
       <span className="today-blocker-label">{label}</span>
+    </>
+  )
+  if (!onClick) {
+    return (
+      <div className="today-blocker" data-tone={tone} data-static="true" title={note}>
+        {inner}
+      </div>
+    )
+  }
+  return (
+    <button className="today-blocker" data-tone={tone} onClick={onClick}>
+      {inner}
     </button>
   )
 }

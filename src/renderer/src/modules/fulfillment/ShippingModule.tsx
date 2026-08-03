@@ -217,19 +217,20 @@ export function ShippingModule(): JSX.Element {
       </div>
 
       {/* The safety net follows you around: a team claimed by two customers in
-          the same break is a real data error, so it stays visible on every tab
-          until somebody has looked at it in Flags. */}
-      {collisions && tab !== 'flags' && (
-        <button className="ship-collision-strip" onClick={() => setTab('flags')}>
+          the same break is a real data error, so it stays visible on every tab.
+          It is a NOTICE now rather than a button, because the audit it used to
+          open lives in Admin and a bench operator cannot act on it. Saying who
+          can is more use than a link nobody standing here may follow — and far
+          more use than removing the warning along with the tab. */}
+      {collisions && (
+        <div className="ship-collision-strip" role="status">
           <Icon name="Siren" size={16} />
           <span>
             <b>Team collisions detected.</b> One or more teams were captured for two
-            customers in the same break — review the audit before picking.
+            customers in the same break. Keep picking — a lead has to review the audit
+            in Admin → Shipping → Flags before these go out.
           </span>
-          <span className="ship-collision-go">
-            Review <Icon name="ArrowRight" size={14} />
-          </span>
-        </button>
+        </div>
       )}
 
       <div className="ship-scroll">
@@ -241,9 +242,6 @@ export function ShippingModule(): JSX.Element {
         )}
         {tab === 'sop' && <SopTab {...tabProps} />}
         {tab === 'floor' && <FloorView {...tabProps} />}
-        {tab === 'flags' && <FlagsTab {...tabProps} />}
-        {tab === 'setup' && <SetupTab {...tabProps} />}
-        {tab === 'history' && <HistoryTab {...tabProps} />}
       </div>
     </div>
   )

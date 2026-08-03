@@ -120,7 +120,7 @@ export function parseBulkLine(raw: string): ParsedBulkLine {
   return { raw: line, trackingNumber, code }
 }
 
-export function ShippingTab({ canManage, onChanged, onGoTo }: ShipTabProps): JSX.Element {
+export function ShippingTab({ canManage, onChanged }: ShipTabProps): JSX.Element {
   const toast = useToast()
 
   const [rows, setRows] = useState<ShipShipmentRow[]>([])
@@ -363,12 +363,7 @@ export function ShippingTab({ canManage, onChanged, onGoTo }: ShipTabProps): JSX
       <EmptyState
         icon="Truck"
         title="Nothing to ship yet"
-        message="Import a Whatnot packing-slip PDF — every package with a label shows up here with its tracking number."
-        action={
-          <Button variant="primary" icon="UploadCloud" onClick={() => onGoTo('setup')}>
-            Go to Upload
-          </Button>
-        }
+        message="A lead imports the Whatnot packing slips in Admin → Shipping — every package with a label shows up here with its tracking number."
       />
     )
   }

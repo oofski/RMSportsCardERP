@@ -25,8 +25,19 @@ import type { ShipTabProps } from './ShippingModule'
  *
  * Three screens, in the order somebody arriving at a bench meets them:
  * who is standing here → picking or packing → the work.
+ *
+ * ## In from step 5, out again when the picking is done
+ *
+ * This is not a place anybody browses to. You arrive from the checklist's fifth
+ * step, and the step is finished when the last order has been picked — so the
+ * picker who finishes it is told, and taken back to the checklist, without ever
+ * having to decide that the night is over. Everyone else's screen is left alone;
+ * a packer mid-box does not get yanked anywhere.
+ *
+ * Every other screen here still carries a plain way back, because leaving early
+ * is normal and being trapped on a bench is not.
  */
-export function FloorView({ canFind, canPack, onChanged }: ShipTabProps): JSX.Element {
+export function FloorView({ canFind, canPack, onGoTo, onChanged }: ShipTabProps): JSX.Element {
   const toast = useToast()
   const [board, setBoard] = useState<ShipStationBoard | null>(null)
   const [roster, setRoster] = useState<Array<{ id: string; name: string }>>([])
@@ -102,6 +113,11 @@ export function FloorView({ canFind, canPack, onChanged }: ShipTabProps): JSX.El
           </div>
         )}
 
+        <button className="floor-back" onClick={() => onGoTo('sop')}>
+          <Icon name="ArrowLeft" size={14} />
+          Back to Steps
+        </button>
+
         {who && (
           <>
             <h3 className="floor-ask">What are you doing?</h3>
@@ -162,6 +178,12 @@ export function FloorView({ canFind, canPack, onChanged }: ShipTabProps): JSX.El
         <Button size="sm" variant="ghost" icon="RotateCcw" disabled={busy} onClick={() => void switchJob()}>
           Switch job
         </Button>
+        {/* The way out. Step 5 closes itself when the picking does, so this is
+            not "I am finished" — it is "I am not standing here any more", which
+            people need at half past nine as much as at the end. */}
+        <Button size="sm" variant="ghost" icon="ListTodo" onClick={() => onGoTo('sop')}>
+          Steps
+        </Button>
       </header>
 
       {/* Somebody piling up work with nobody at the mailing bench. Passive on
@@ -191,7 +213,13 @@ export function FloorView({ canFind, canPack, onChanged }: ShipTabProps): JSX.El
           onAdvance={() => void advance(current)}
         />
       ) : (
-        <Idle role={session.role} board={board} onTake={() => void take()} busy={busy} />
+        <Idle
+          role={session.role}
+          board={board}
+          onTake={() => void take()}
+          onBack={() => onGoTo('sop')}
+          busy={busy}
+        />
       )}
     </div>
   )
@@ -251,6 +279,22 @@ export function FloorView({ canFind, canPack, onChanged }: ShipTabProps): JSX.El
         const res = await api.shipping.stationPickAdvance(order.customerId)
         if (!res.ok) {
           toast.error(res.error ?? 'Could not move on.')
+          return
+        }
+        // That was the last one, and this click is what closed step 5 — the
+        // main process says so for exactly ONE caller, so nobody else's screen
+        // moves and nothing is deducted twice. Refresh before leaving, or the
+        // checklist arrives showing the state from before the tick.
+        if (res.data?.sopShipCompleted) {
+          const waiting = res.data.queueDepth
+          toast.success(
+            waiting > 0
+              ? `Every order is picked — shipping is ticked off. ${waiting} ${waiting === 1 ? 'box is' : 'boxes are'} still to pack.`
+              : 'Every order is picked — shipping is ticked off.'
+          )
+          await load()
+          await onChanged()
+          onGoTo('sop')
           return
         }
       }
@@ -324,22 +368,28 @@ function Idle({
   role,
   board,
   onTake,
+  onBack,
   busy
 }: {
   role: ShipStationRole
   board: ShipStationBoard | null
   onTake: () => void
+  onBack: () => void
   busy: boolean
 }): JSX.Element {
   const done = board?.allDone === true
+  const queue = board?.packQueue ?? 0
   if (done) {
     return (
       <div className="floor-empty big">
         <Icon name="CheckCheck" size={34} />
         <div>
-          <b>Every order is packed.</b>
+          <b>Every order is picked and packed.</b>
           <span>Scanning and Confirm are still to tick on the checklist.</span>
         </div>
+        <Button variant="primary" icon="ListTodo" onClick={onBack}>
+          Back to Steps
+        </Button>
       </div>
     )
   }
@@ -351,12 +401,23 @@ function Idle({
         <span>
           {role === 'pack'
             ? `The pickers are still going — ${board?.toPick ?? 0} orders left to pick.`
-            : 'Every order is either picked or in somebody else’s hands.'}
+            : // Nothing to PICK is not an empty bench. Step 5 follows the
+              // picking, so it can be ticked off with boxes still stacked at the
+              // mailing end, and a screen that stopped at "you are done" would be
+              // the one thing telling anybody the room was clear.
+              queue > 0
+              ? `Every order is either picked or in somebody else’s hands — ${queue} ${queue === 1 ? 'is' : 'are'} still waiting to be packed.`
+              : 'Every order is either picked or in somebody else’s hands.'}
         </span>
       </div>
-      <Button variant="primary" icon="RefreshCw" disabled={busy} onClick={onTake}>
-        Check again
-      </Button>
+      <div className="floor-idle-actions">
+        <Button variant="primary" icon="RefreshCw" disabled={busy} onClick={onTake}>
+          Check again
+        </Button>
+        <Button variant="ghost" icon="ListTodo" onClick={onBack}>
+          Back to Steps
+        </Button>
+      </div>
     </div>
   )
 }

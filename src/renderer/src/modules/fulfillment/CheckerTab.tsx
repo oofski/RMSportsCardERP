@@ -102,7 +102,7 @@ interface LooseGiveaway {
   checked: number
 }
 
-export function CheckerTab({ canManage, canFind, onChanged, onGoTo }: ShipTabProps): JSX.Element {
+export function CheckerTab({ canManage, canFind, onChanged }: ShipTabProps): JSX.Element {
   const toast = useToast()
 
   const [breaks, setBreaks] = useState<ShipBreakSummary[]>([])
@@ -432,15 +432,12 @@ export function CheckerTab({ canManage, canFind, onChanged, onGoTo }: ShipTabPro
   // ---- The break list ------------------------------------------------------
   if (breaks.length === 0 && looseGiveaways.length === 0) {
     return (
+      // No button: importing is a lead's job and it happens in Admin, so the
+      // bench is told what has not happened rather than sent at a locked door.
       <EmptyState
         icon="ListChecks"
         title="No breaks to pick"
-        message="Import a Whatnot packing-slip PDF and every break becomes a pick list here."
-        action={
-          <Button variant="primary" icon="UploadCloud" onClick={() => onGoTo('setup')}>
-            Go to Upload
-          </Button>
-        }
+        message="A lead imports the Whatnot packing slips in Admin → Shipping, and every break becomes a pick list here."
       />
     )
   }

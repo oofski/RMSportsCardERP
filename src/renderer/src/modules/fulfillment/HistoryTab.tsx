@@ -65,7 +65,7 @@ type Editing =
   | { kind: 'snapshot-rename'; snapshot: ShipSnapshotSummary }
   | { kind: 'snapshot-delete'; snapshot: ShipSnapshotSummary }
 
-export function HistoryTab({ summary, canManage, onChanged, onGoTo }: ShipTabProps): JSX.Element {
+export function HistoryTab({ summary, canManage, onChanged }: ShipTabProps): JSX.Element {
   const toast = useToast()
 
   const [imports, setImports] = useState<ShipImportRecord[]>([])
@@ -381,15 +381,12 @@ export function HistoryTab({ summary, canManage, onChanged, onGoTo }: ShipTabPro
             ))}
           </div>
         ) : (
+          // Setup is the tab next door in Admin rather than somewhere to be
+          // sent — naming it beats a button that walks one pill sideways.
           <EmptyState
             icon="FileSpreadsheet"
             title="No dataset to export"
-            message="Import a Whatnot packing-slip PDF first."
-            action={
-              <Button variant="primary" icon="UploadCloud" onClick={() => onGoTo('setup')}>
-                Go to Upload
-              </Button>
-            }
+            message="Import a Whatnot packing-slip PDF on the Setup tab first."
           />
         )}
       </section>
