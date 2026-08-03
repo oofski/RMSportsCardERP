@@ -52,11 +52,15 @@ const {
   DEFAULT_WHATNOT_RATE,
   STRIPE_FLAT_CENTS,
   STRIPE_PERCENT_RATE,
+  buildPnl,
   computeFees,
   deriveSaleFee,
   effectiveWhatnotRate,
+  mergeRateSlices,
   overlappingRatePeriod,
   parseLedgerAmount,
+  ratePct,
+  sumDayFinance,
   validateRatePeriod
 } = require('../src/shared/financeStreaming')
 const { streamDateOf } = require('../src/shared/streaming')
@@ -255,7 +259,13 @@ ok(!!day20 && !!day21, 'both days are present')
  * share `deriveSaleFee` — which is the point, there is one derivation — but not
  * the summing, so a day that dropped a row or double-counted one shows up here.
  */
-function feesFromRows(streamDate: string, rate: (day: string) => number): {
+function feesFromRows(
+  streamDate: string,
+  rate: (day: string) => number,
+  /** Which date to ask `rate` about. The BUSINESS day is what the app uses; the
+   *  row's own calendar date is the rule this file's section 8 pins as wrong. */
+  by: 'business' | 'calendar' = 'business'
+): {
   netCents: number
   grossCents: number
   whatnotCents: number
@@ -272,7 +282,7 @@ function feesFromRows(streamDate: string, rate: (day: string) => number): {
     .all(streamDate) as Array<{ at: string; c: number }>
   const out = { netCents: 0, grossCents: 0, whatnotCents: 0, stripeCents: 0, charged: 0 }
   for (const r of rows) {
-    const f = deriveSaleFee(r.c, rate(streamDateOf(r.at)))
+    const f = deriveSaleFee(r.c, rate(by === 'business' ? streamDate : streamDateOf(r.at)))
     out.netCents += f.netCents
     out.grossCents += f.grossCents
     out.whatnotCents += f.whatnotFeeCents
@@ -689,6 +699,184 @@ console.log('\n=== 7. a sheet exported at its full width ===')
   const bad = importLedger(named, null)
   ok(!bad.ok, 'but a NAMED extra column is still refused', bad.ok ? 'accepted!' : '')
 }
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 8. a rate period follows the SHOW, not the calendar ===')
+// ---------------------------------------------------------------------------
+// THE OWNER'S CASE, EXACTLY. A commission period of 15 June – 20 July at 4%, and
+// a Monday show that went on at 7pm on the 20th and finished at 1am on the 21st.
+// The statement reported 5.1% — a number on no screen and in no agreement —
+// because the rate was looked up by each ROW'S OWN calendar date, so the spots
+// sold before midnight were inside the period at 4% and the ones sold after it
+// were outside at the 6% default, and the fee line printed the blend.
+//
+// The rate is now looked up by the row's BUSINESS DAY, which is the same
+// `stream_date` the P&L already groups by, so a show has ONE rate from its first
+// spot to its last. See the note in buildView for what that trades away.
+for (const p of listRatePeriods()) deleteRatePeriod(p.id)
+ok(listRatePeriods().length === 0, 'the rate list is cleared for this section')
+
+const owners = saveRatePeriod(
+  { fromDate: '2026-06-15', toDate: '2026-07-20', rate: 0.04, note: "the owner's 4% period" },
+  null
+)
+ok(owners.ok, 'the 15 Jun – 20 Jul period at 4% is saved', owners.ok ? '' : owners.error)
+
+// The Fees & rates preview's own answer, for the night the show started on and
+// for the calendar day it finished on. The first is what everything below must
+// agree with; the second is the rate the OLD rule mixed in.
+const nightOf20 = day20.streamDate
+ok(rateForDate(nightOf20) === 0.04, 'the preview says 4% for the night of the 20th', String(rateForDate(nightOf20)))
+ok(
+  rateForDate('2026-07-21') === DEFAULT_WHATNOT_RATE,
+  'and 6% for the 21st, which is where the blend came from'
+)
+
+view = streamingFinanceView()
+const night20 = view.days.find((d: any) => d.streamDate === nightOf20)
+const night21 = view.days.find((d: any) => d.streamDate === day21.streamDate)
+ok(!!night20 && !!night21, 'both nights are still there')
+ok(view.reconciled, 'and the view reconciles under the business-day rule', String(view.reconcileNote))
+
+// ONE RATE FOR THE WHOLE SHOW. The night of the 20th has rows on both sides of
+// midnight — two of the five settled after it — and every one of them is priced
+// at the period's 4%.
+const straddling = db
+  .prepare(
+    `SELECT COUNT(*) AS c FROM ledger_rows
+      WHERE stream_date = ? AND bucket IN ('sale', 'product_sale')
+        AND occurred_at > ?`
+  )
+  .get(nightOf20, at(21, 0).toISOString()) as { c: number }
+ok(straddling.c > 0, `${straddling.c} of the show's sale rows settled after midnight`)
+
+ok(night20.rateBreakdown.length === 1, 'the night reports exactly ONE rate', JSON.stringify(night20.rateBreakdown))
+ok(night20.rateBreakdown[0].rate === 0.04, 'and it is the 4% the period says', String(night20.rateBreakdown[0].rate))
+ok(
+  cents(night20.rateBreakdown[0].grossSales) === cents(night20.grossSales),
+  'the slice accounts for the whole of the gross',
+  `${night20.rateBreakdown[0].grossSales} vs ${night20.grossSales}`
+)
+
+const at4 = feesFromRows(nightOf20, () => 0.04)
+ok(cents(night20.whatnotFee) === at4.whatnotCents, 'every row of the show was charged at 4%', String(night20.whatnotFee))
+ok(cents(night20.grossSales) === at4.grossCents, 'and the gross was derived at 4% throughout')
+ok(
+  cents(night20.grossSales) + cents(night20.totalFees) === cents(night20.netSales),
+  'with the net Whatnot paid still landing exactly'
+)
+
+// 4.0%, not 5.1%. Measured the way the statement measures it — fee over gross —
+// so this is the figure that used to be a blend.
+const derived20 = Math.round((Math.abs(night20.whatnotFee) / night20.grossSales) * 1000) / 10
+ok(derived20 === 4, 'the show reports 4.0%', `${derived20}%`)
+
+// And the old rule, run on the same rows, produces neither 4% nor 6% — which is
+// what a blended figure IS, and why nobody could find it on the rates screen.
+const oldWay = feesFromRows(nightOf20, (d: string) => (d <= '2026-07-20' ? 0.04 : 0.06), 'calendar')
+const oldPct = Math.round((Math.abs(oldWay.whatnotCents) / oldWay.grossCents) * 1000) / 10
+ok(oldPct > 4 && oldPct < 6, `the old row-date rule blended it to ${oldPct}%`, String(oldPct))
+ok(oldPct !== derived20, 'which is a different number from the one the period configures')
+
+// THE STATEMENT AND THE PREVIEW PRINT THE SAME STRING. Not "agree numerically" —
+// the same characters, from the same formatter, because a statement that says
+// "4%" beside a screen that says "4.00%" is the same complaint in a smaller font.
+const sect20 = buildPnl(night20)
+const feeLine20 = sect20
+  .find((s: any) => s.key === 'fees')
+  .lines.find((l: any) => l.key === 'whatnotFee')
+ok(
+  feeLine20.detail.startsWith(`${ratePct(rateForDate(nightOf20))} of `),
+  'the commission line leads with the rate the preview would show for that night',
+  feeLine20.detail
+)
+ok(!/blended/.test(feeLine20.detail), 'and says nothing about a blend, because there is not one')
+
+// The night AFTER the period ends falls back to the default, on its own, whole.
+ok(night21.rateBreakdown.length === 1, 'the 21st also reports one rate')
+ok(
+  night21.rateBreakdown[0].rate === DEFAULT_WHATNOT_RATE,
+  'the 6% default, because no period covers that night',
+  String(night21.rateBreakdown[0].rate)
+)
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 8b. a span that really does cover two rates says so ===')
+// ---------------------------------------------------------------------------
+// A single business day cannot span two rates any more — that is the point of
+// section 8, and it is true by construction now that the rate is a function of
+// `stream_date` alone. A WEEK, a MONTH or any picked range still can, and the
+// statement renders those with the same builder, so the disclosure lives there.
+const span = sumDayFinance([night20, night21])
+ok(span.rateBreakdown.length === 2, 'a range over both nights carries two rates', JSON.stringify(span.rateBreakdown))
+ok(
+  span.rateBreakdown[0].rate === 0.04 && span.rateBreakdown[1].rate === DEFAULT_WHATNOT_RATE,
+  'lowest first, both as configured'
+)
+ok(
+  cents(span.rateBreakdown[0].grossSales + span.rateBreakdown[1].grossSales) === cents(span.grossSales),
+  'and the two slices still add up to the range gross, to the cent',
+  `${span.rateBreakdown[0].grossSales} + ${span.rateBreakdown[1].grossSales} vs ${span.grossSales}`
+)
+
+const spanLine = buildPnl(span)
+  .find((s: any) => s.key === 'fees')
+  .lines.find((l: any) => l.key === 'whatnotFee')
+ok(spanLine.detail.startsWith('blended: '), 'the statement calls it a blend', spanLine.detail)
+ok(spanLine.detail.includes('4% on $'), 'and names the 4% and what was sold at it', spanLine.detail)
+ok(spanLine.detail.includes('6% on $'), 'and the 6% and what was sold at that')
+// The failure this replaces: one averaged percentage, presented as if somebody
+// had configured it.
+const blend = Math.round((Math.abs(span.whatnotFee) / span.grossSales) * 1000) / 10
+ok(blend !== 4 && blend !== 6, `the average would have been ${blend}% — a rate on no screen`, String(blend))
+ok(!spanLine.detail.includes(`${blend}%`), 'and that average appears nowhere on the line', spanLine.detail)
+
+// The same disclosure at the contract, with rates picked so the average is a
+// tidy-looking lie: 4% on $10,000 and 8% on $10,000 averages to exactly 6%, the
+// default — a figure that would look configured and be nothing of the sort.
+const twoRate = buildPnl({
+  netSales: 18600, grossSales: 20000, saleCount: 2,
+  tips: 0, bonuses: 0, totalRevenue: 20000, unclassified: 0, feeSaleCount: 2,
+  rateBreakdown: [
+    { rate: 0.04, grossSales: 10000 },
+    { rate: 0.08, grossSales: 10000 }
+  ],
+  breakCost: 0, giveawayCost: 0, cogs: 0, grossProfit: 20000,
+  whatnotFee: -1200, processingFee: -580, totalFees: -1780,
+  shippingSubsidy: 0, shippingCharges: 0, giveawayShipping: 0, refundShipping: 0,
+  packingSupplies: 0, netShipping: 0, showBoost: 0, reversals: 0, netProfit: 18220
+})
+  .find((s: any) => s.key === 'fees')
+  .lines.find((l: any) => l.key === 'whatnotFee')
+ok(
+  twoRate.detail === 'blended: 4% on $10,000.00, 8% on $10,000.00',
+  'both rates are named with the gross at each, rather than averaged to 6%',
+  twoRate.detail
+)
+
+// A build old enough to send no breakdown at all still prints something true —
+// the derived quotient it always printed — rather than nothing.
+const legacy = buildPnl({
+  netSales: 18600, grossSales: 20000, saleCount: 2,
+  tips: 0, bonuses: 0, totalRevenue: 20000, unclassified: 0, feeSaleCount: 2,
+  breakCost: 0, giveawayCost: 0, cogs: 0, grossProfit: 20000,
+  whatnotFee: -1200, processingFee: -580, totalFees: -1780,
+  shippingSubsidy: 0, shippingCharges: 0, giveawayShipping: 0, refundShipping: 0,
+  packingSupplies: 0, netShipping: 0, showBoost: 0, reversals: 0, netProfit: 18220
+})
+  .find((s: any) => s.key === 'fees')
+  .lines.find((l: any) => l.key === 'whatnotFee')
+ok(legacy.detail === '6% of $20,000.00 gross', 'a breakdown-less day falls back to the old line', legacy.detail)
+
+// The merge itself: same rate from several days is one slice, and the cents add.
+const merged = mergeRateSlices([
+  { rate: 0.06, grossSales: 100.01 },
+  { rate: 0.04, grossSales: 50 },
+  { rate: 0.06, grossSales: 0.02 }
+])
+ok(merged.length === 2, 'merging folds repeats of the same rate together', JSON.stringify(merged))
+ok(merged[0].rate === 0.04 && merged[1].rate === 0.06, 'sorted lowest rate first')
+ok(cents(merged[1].grossSales) === cents(100.03), 'and the money adds in cents, not floats', String(merged[1].grossSales))
 
 console.log(`\n${pass} passed, ${fail} failed${skipped ? `, ${skipped} skipped` : ''}\n`)
 process.exit(fail === 0 ? 0 : 1)

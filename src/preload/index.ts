@@ -45,6 +45,7 @@ import type {
   CategorySummary,
   ClockStatus,
   CogsEntry,
+  CostBasisFix,
   ComposedEmail,
   Employee,
   EmployeeHoursSummary,
@@ -250,6 +251,11 @@ const api = {
     pricingList: (): Promise<PricingRow[]> => ipcRenderer.invoke(IPC.invPricingList),
     updateHighBid: (productId: string, highBid: number | null): Promise<Result<InventoryProduct>> =>
       ipcRenderer.invoke(IPC.invHighBidUpdate, { productId, highBid }),
+    // Not `update({ unitCost })`: this also re-bases the cost layers that are
+    // carrying nothing, because the valuation reads layers first and the average
+    // alone would leave the zero-cost banner exactly where it was.
+    fixCostBasis: (productId: string, unitCost: number): Promise<Result<CostBasisFix>> =>
+      ipcRenderer.invoke(IPC.invCostBasisFix, { productId, unitCost }),
     productLots: (productId: string): Promise<ProductLot[]> =>
       ipcRenderer.invoke(IPC.invProductLots, productId),
     // UPC scanning. resolve is read-only and safe to call repeatedly (the camera

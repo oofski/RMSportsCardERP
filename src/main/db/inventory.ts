@@ -1,5 +1,6 @@
 import type {
   CategorySummary,
+  CostBasisFix,
   InventoryProduct,
   InventoryStats,
   InventoryTransaction,
@@ -516,6 +517,67 @@ export function updateProduct(input: UpdateInventoryProduct): InventoryProduct |
       .run(next.high_bid != null ? nowIso() : null, input.id)
   }
   return getProduct(input.id)
+}
+
+/**
+ * Put a cost basis on stock that is carried at nothing.
+ *
+ * WHY THIS IS NOT `updateProduct({ unitCost })`. The valuation reads the COST
+ * LAYERS first and only falls back to the product's stored average where a shelf
+ * has none (db/valuation.ts). So for the products that actually reach the
+ * zero-cost banner — a catalog import that created them at `unit_cost = 0`,
+ * followed by a count that opened layers at the zero it found — writing the
+ * average alone changes nothing anybody can see: the layers still say zero, the
+ * banner still lists the product, and the operator is left believing they typed
+ * a number into a field that does not work. A cost field that silently fails to
+ * fix the thing it was offered for is worse than no field, so this does the
+ * whole job.
+ *
+ * WHAT IT TOUCHES, AND WHAT IT REFUSES TO. Only layers carrying NOTHING are
+ * re-based. A layer at a real price is a real purchase and this is not the screen
+ * for repricing one — the operation can therefore only ever add basis where there
+ * is none, never overwrite what somebody paid. `syncProductAvgCost` then has the
+ * last word on the average, exactly as it does after every other lot write, so
+ * this cannot be the one path that leaves the average disagreeing with the layers
+ * under it.
+ *
+ * A shelf with stock and NO layer at all is left without one on purpose: the
+ * valuation's documented fallback already values it at the average this writes,
+ * and minting a lot would invent a receipt date and a source for stock whose
+ * history nobody knows.
+ *
+ * `costValue` comes back so the caller can say whether it actually worked rather
+ * than assume it — see the banner in InventoryOverview.
+ */
+export function setZeroCostBasis(productId: string, unitCost: number): CostBasisFix | null {
+  const db = getDb()
+  if (!getProduct(productId)) return null
+  // UNIT_DP, not cents: this is a per-unit rate that gets multiplied by a
+  // quantity again, the same precision a layer and a product average are stored
+  // at everywhere else.
+  const cost = unitMoney(Math.max(0, unitCost))
+  const run = db.transaction((): number => {
+    const info = db
+      .prepare(
+        `UPDATE inventory_lots SET unit_cost = ?
+          WHERE product_id = ? AND qty_remaining > 0 AND unit_cost <= 0`
+      )
+      .run(cost, productId)
+    db.prepare('UPDATE inventory_products SET unit_cost = ?, updated_at = ? WHERE id = ?').run(
+      cost,
+      nowIso(),
+      productId
+    )
+    // Recomputes the average from whatever the layers now say. Where there are
+    // none it returns early and the figure written above stands, which is the
+    // number the valuation will fall back to.
+    syncProductAvgCost(db, productId)
+    return info.changes
+  })
+  const layersRevalued = run()
+  const product = getProduct(productId)
+  if (!product) return null
+  return { product, layersRevalued, costValue: productCostValue(db, productId) }
 }
 
 /** Update only a product's high bid (market value) + when it was set. */

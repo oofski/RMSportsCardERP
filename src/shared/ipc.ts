@@ -66,6 +66,9 @@ export const IPC = {
   invIncomingCancel: 'inventory:incoming:cancel',
   invPricingList: 'inventory:pricing:list',
   invHighBidUpdate: 'inventory:pricing:high-bid',
+  // Puts a cost basis on stock carried at nothing — a WRITE to the cost layers,
+  // not just to the product row, which is why it is not `invProductUpdate`.
+  invCostBasisFix: 'inventory:cost-basis:fix',
   invProductLots: 'inventory:product:lots',
   // UPC scanning. resolve/history are reads; commit/log-miss/undo write stock.
   invScanResolve: 'inventory:scan:resolve',

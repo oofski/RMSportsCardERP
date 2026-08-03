@@ -20,6 +20,13 @@
  * the sheet did not name is only defensible when everything the sheet DID name
  * was understood; otherwise a naming problem silently becomes a write-off.
  *
+ * The other blocker is quieter and does more damage: stock the run would leave
+ * carried at NO cost. A blank quantity has always been fatal — a row naming a
+ * product with no count is an unfinished sheet — and a cost that would leave the
+ * shelf at zero is the same class of problem, except that it fails silently and
+ * manufactures profit out of the whole market value while it does. See the
+ * uncosted-stock check near the end of `buildResetPlan`.
+ *
  * EVERYTHING that decides *what would change* lives here, with no database and
  * no Electron: parsing, column mapping, product matching and the before→after
  * plan. db/inventoryReset.ts supplies the catalog snapshot and performs the
@@ -1084,14 +1091,20 @@ export function buildResetPlan(
         projectedShelfCost.set(shelf, unitMoney(costEach))
       }
     } else if (rounded > 0) {
-      // The one hole a baseline can still have: a row that counts stock but
-      // states no money for it. Nothing is written — a blank cell is never a
-      // zero — so the shelf keeps a basis this sheet did not set, and the
-      // dashboard will not read back what was pasted. Said out loud per row,
-      // because it is invisible in the totals.
+      // A row that counts stock but states no money for it. Nothing is written —
+      // a blank cell is never a zero — so the shelf keeps whatever basis it
+      // already had, and the dashboard will not read back what was pasted. Said
+      // out loud per row, because it is invisible in the totals.
+      //
+      // Whether that is a note or a BLOCKER depends on what the shelf is keeping,
+      // and that cannot be decided here: the answer is the product's basis after
+      // the whole sheet has had its say, including the shelves this run is about
+      // to empty. Decided in the second pass below.
+      const kept = product.costByLocation[location] ?? product.unitCost
       warnings.push(
-        `The sheet states no cost — this stock keeps its current basis of ` +
-          `${fmt(product.costByLocation[location] ?? product.unitCost)}.`
+        kept > 0
+          ? `The sheet states no cost — this stock keeps its current basis of ${fmt(kept)}.`
+          : 'The sheet states no cost and there is none on file — this stock has no cost basis.'
       )
     }
 
@@ -1209,6 +1222,72 @@ export function buildResetPlan(
   }
   missing.sort((a, b) => b.quantity * b.unitMarket - a.quantity * a.unitMarket)
 
+  // ---- Stock this run would leave carried at nothing -----------------------
+  //
+  // A blank cost cell means "the sheet did not state this", so the shelf keeps
+  // what it had. That is right, and harmless, as long as what it had is a real
+  // number. When it is not, the run books counted stock onto a shelf with NO
+  // cost basis, and every dashboard total then reads its whole market value as
+  // profit: on the paste that produced this check, $16,039.93 of invented spread
+  // across four real products with real quantities.
+  //
+  // BLOCKING, like an unmatched row, and for a stronger reason. Under a baseline
+  // the sheet is the truth about the warehouse, so "I did not say" is not a
+  // usable answer to "what is this worth". An unmatched row at least announces
+  // itself; this one succeeds — the counts come out right, the paste reports no
+  // trouble, and the profit is wrong somewhere nobody is looking.
+  //
+  // THE TEST IS THE OUTCOME, NOT THE CELL. A blank cost against a product that
+  // already has a basis passes straight through and keeps it, so an ordinary
+  // recount never makes anybody retype costs that are already set. What is
+  // refused is stock that would END at nothing — which is also why a cell
+  // stating a literal 0 is refused, and why a shelf counted at 0 units is not
+  // (there is nothing on it to value).
+  //
+  // Per PRODUCT rather than per shelf, deliberately, because that is what the
+  // dashboard banner tests: `zeroCost` in db/inventory.ts is `qty > 0 AND
+  // cost_value <= 0` summed over a product's shelves. Testing per shelf here
+  // would refuse sheets the banner would never have complained about; testing
+  // per product means a run that passes this cannot produce a banner row, which
+  // is the whole property this check exists to guarantee.
+  const uncosted: Array<{ id: string; name: string; quantity: number }> = []
+  for (const p of catalog) {
+    const qty = afterQtyTotal.get(p.id) ?? 0
+    // `!(value > 0)` rather than `value <= 0` so a NaN — a cost column that
+    // parsed into something unusable — lands on the refusing side.
+    if (qty > 0 && !((afterCostValue.get(p.id) ?? 0) > 0)) {
+      uncosted.push({ id: p.id, name: p.name, quantity: qty })
+    }
+  }
+  uncosted.sort((a, b) => b.quantity - a.quantity || a.name.localeCompare(b.name))
+
+  if (uncosted.length > 0) {
+    // Named with their counts, exactly like the write-off panel names what it is
+    // about to destroy: a number on its own sends the operator hunting through
+    // three hundred rows for the four that are wrong.
+    const SHOWN = 6
+    const named = uncosted
+      .slice(0, SHOWN)
+      .map((u) => `${u.name} (${qtyLabel(u.quantity)})`)
+      .join(', ')
+    const rest = uncosted.length - SHOWN
+    problems.push(
+      `${uncosted.length} product${uncosted.length === 1 ? '' : 's'} would be left on the shelf ` +
+        `with no cost: ${named}${rest > 0 ? `, and ${rest} more` : ''}. A blank cost cell keeps ` +
+        `whatever the product already had, and these have nothing — so their full market value ` +
+        `would count as profit. State a cost for them on the sheet, or set one in the catalog ` +
+        `first, and paste again.`
+    )
+    // And on the rows themselves, so the operator can see WHICH line of a
+    // three-hundred-row sheet to go and fix.
+    const blocked = new Set(uncosted.map((u) => u.id))
+    for (const row of rows) {
+      if (!row.productId || !blocked.has(row.productId)) continue
+      if (row.status === 'unmatched' || row.status === 'ambiguous' || row.status === 'invalid') continue
+      row.warnings.push('This row is holding the count up: it would leave this stock at $0.00 cost.')
+    }
+  }
+
   // A shelf the sheet skipped for a product it DID count somewhere else is the
   // shape of a location typo — and under a baseline that shelf is written off
   // rather than left alone, so naming it on the row is the difference between a
@@ -1310,6 +1389,12 @@ function normMarket(value: number | null): number | null {
 
 function fmt(n: number): string {
   return `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+}
+
+/** A count for a sentence: "12", or "2.25" for a giveaway product's part boxes.
+ *  Rounded at UNIT_DP so float dust never reads as a fourteen-decimal count. */
+function qtyLabel(n: number): string {
+  return String(Math.round(n * 1e4) / 1e4)
 }
 
 /** Rows this plan would actually write. */

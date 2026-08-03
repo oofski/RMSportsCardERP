@@ -39,7 +39,9 @@ const {
   inventoryStats,
   listLots,
   pricingList,
-  stockQty
+  setZeroCostBasis,
+  stockQty,
+  updateProduct
 } = require('../src/main/db/inventory')
 const { assertStockLotsConsistent } = require('../src/main/db/lots')
 const { applyReset, previewReset, buildResetExport } = require('../src/main/db/inventoryReset')
@@ -647,6 +649,202 @@ ok(
     eq(roundTrip.totals.marketAfter, roundTrip.totals.marketBefore),
   'and the totals do not move by a cent'
 )
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 12. a blank cost that would leave stock at $0.00 blocks the run ===')
+// ---------------------------------------------------------------------------
+// WHAT HAPPENED. A catalog import created 184 products at unit_cost 0. A baseline
+// paste then counted them with the cost column blank, which correctly means "the
+// sheet did not state this" and so left every one of them on the basis it
+// already had — nothing. The run reported no trouble; the dashboard reported
+// $16,039.93 of Spread that was pure fiction, because spread is market − cost
+// and the cost was zero.
+//
+// A blank quantity has always been fatal. A blank cost that leaves the shelf at
+// nothing is the same class of problem and does more damage, because it fails
+// SILENTLY. It now blocks, on exactly one condition: whether the stock ENDS at a
+// zero cost basis. Not whether the cell is empty.
+const GOLF = make({ name: 'TEST Golf Uncosted Box', category: 'Baseball', cost: 0, bid: 200, rm: 0 })
+const HOTEL = make({ name: 'TEST Hotel Uncosted Box', category: 'Baseball', cost: 0, bid: 75, rm: 0 })
+
+/** Everything currently on a shelf, restated so a sheet is the whole warehouse. */
+const heldNow = (): string[] =>
+  (
+    db
+      .prepare(
+        `SELECT p.name AS name, s.location AS loc, s.quantity AS qty,
+                COALESCE(p.high_bid, 0) AS bid, p.unit_cost AS cost
+           FROM inventory_stock s
+           JOIN inventory_products p ON p.id = s.product_id
+          WHERE s.quantity > 0`
+      )
+      .all() as Array<{ name: string; loc: string; qty: number; bid: number; cost: number }>
+  ).map((r) => `${r.name}\t${r.loc}\t${r.qty}\t${(r.bid || r.cost).toFixed(2)}\t${r.cost.toFixed(2)}`)
+
+// -- refused, and it says which products ------------------------------------
+const uncosted = [HEADER, ...heldNow(), 'TEST Golf Uncosted Box\tRM\t6\t200.00\t'].join('\n')
+const planF = preview(uncosted).plan
+ok(planF.counts.invalid === 0, 'the row itself is perfectly readable — it is not a rejected row')
+ok(planF.problems.length > 0, 'but the run is blocked all the same')
+const blockText = planF.problems.join(' | ')
+ok(/no cost/i.test(blockText), 'the problem says what is wrong', blockText)
+ok(blockText.includes('TEST Golf Uncosted Box'), 'and names the product', blockText)
+ok(/\(6\)/.test(blockText), 'with the quantity that would sit there uncosted', blockText)
+ok(
+  applySheet(uncosted, planF.mapping).ok === false,
+  'apply refuses it rather than booking the stock at nothing'
+)
+ok(stockQty(GOLF, 'RM') === 0, 'and nothing was written')
+const golfRow = planF.rows.find((r: any) => r.productId === GOLF)
+ok(
+  golfRow.warnings.some((w: string) => /holding the count up/i.test(w)),
+  'the row itself is flagged too, so the operator knows which line to fix',
+  JSON.stringify(golfRow.warnings)
+)
+
+// A cell stating a literal 0 is the same outcome by a different route, and is
+// refused for the same reason — the test is what the shelf ends up carrying.
+const explicitZero = [HEADER, ...heldNow(), 'TEST Golf Uncosted Box\tRM\t6\t200.00\t0.00'].join('\n')
+ok(preview(explicitZero).plan.problems.length > 0, 'a cost cell stating $0.00 is refused too')
+
+// Several of them are all named, not just the first.
+const twoUncosted = [
+  HEADER,
+  ...heldNow(),
+  'TEST Golf Uncosted Box\tRM\t6\t200.00\t',
+  'TEST Hotel Uncosted Box\tAM\t2\t75.00\t'
+].join('\n')
+const twoText = preview(twoUncosted).plan.problems.join(' | ')
+ok(
+  twoText.includes('TEST Golf Uncosted Box') && twoText.includes('TEST Hotel Uncosted Box'),
+  'both uncosted products are named',
+  twoText
+)
+ok(/^2 products/.test(twoText), 'and counted', twoText)
+
+// -- allowed through when there IS a basis to keep ---------------------------
+// This is the half that stops the check being a nuisance: an ordinary recount
+// leaves the cost column blank on products whose cost is already set, and must
+// not force anybody to retype it.
+const alphaCostBefore = productRow(ALPHA).unit_cost
+ok(alphaCostBefore > 0, 'Alpha already carries a real cost basis', String(alphaCostBefore))
+const recount = [HEADER, ...heldNow()]
+  .map((line) =>
+    line.startsWith('TEST Alpha Hobby Box\t')
+      ? line.split('\t').slice(0, 4).join('\t') + '\t'
+      : line
+  )
+  .join('\n')
+const planG = preview(recount).plan
+ok(planG.problems.length === 0, 'a blank cost on a costed product does NOT block', planG.problems.join(' | '))
+const alphaRow = planG.rows.find((r: any) => r.productId === ALPHA)
+ok(
+  alphaRow.warnings.some((w: string) => /keeps its current basis/i.test(w)),
+  'it is a note on the row rather than a blocker',
+  JSON.stringify(alphaRow.warnings)
+)
+ok(alphaRow.shelfCostAfter === null, 'nothing is written to that shelf’s cost')
+ok(eq(alphaRow.costAfter, alphaCostBefore), 'and the basis it keeps is the one it had', String(alphaRow.costAfter))
+ok(applySheet(recount, planG.mapping).ok === true, 'the recount applies')
+ok(
+  eq(productRow(ALPHA).unit_cost, alphaCostBefore),
+  'Alpha still carries exactly what it did',
+  String(productRow(ALPHA).unit_cost)
+)
+
+// -- THE PROPERTY THE WHOLE CHANGE EXISTS FOR --------------------------------
+// A run that passes cannot leave a row for the dashboard banner to complain
+// about. `zeroCost` is `qty > 0 AND cost_value <= 0` per product, which is the
+// same condition the planner refuses on, and this asserts the two agree on real
+// data rather than by reading.
+ok(
+  inventoryStats().zeroCost.length === 0,
+  'after a run that passed, the zero-cost banner has nothing to say',
+  inventoryStats().zeroCost.map((z: any) => z.name).join(', ')
+)
+
+// And the same, once for every sheet in this file that was allowed to apply: a
+// costed sheet, a fractional one and a counted zero all end with an empty banner.
+for (const [label, text] of [
+  ['a fully costed sheet', [HEADER, ...heldNow()].join('\n')],
+  [
+    'one that also puts stock on a previously uncosted product',
+    [HEADER, ...heldNow(), 'TEST Hotel Uncosted Box\tRM\t3\t75.00\t44.00'].join('\n')
+  ]
+] as Array<[string, string]>) {
+  const p = preview(text).plan
+  ok(p.problems.length === 0, `${label} is accepted`, p.problems.join(' | '))
+  ok(applySheet(text, p.mapping).ok === true, `  ${label} applies`)
+  ok(
+    inventoryStats().zeroCost.length === 0,
+    `  and leaves the banner empty`,
+    inventoryStats().zeroCost.map((z: any) => z.name).join(', ')
+  )
+}
+ok(stockQty(HOTEL, 'RM') === 3, 'the newly costed product is on the shelf', String(stockQty(HOTEL, 'RM')))
+ok(productRow(HOTEL).unit_cost === 44, 'carrying the cost the sheet stated', String(productRow(HOTEL).unit_cost))
+assertStockLotsConsistent(db)
+ok(true, 'and the stock/lot invariant survived all of it')
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 13. fixing a zero cost basis from the banner ===')
+// ---------------------------------------------------------------------------
+// THE CAVEAT THAT MAKES THE INLINE FIELD WORTH HAVING. Setting a product's
+// average cost only clears the banner when its stock has NO cost layers — the
+// valuation reads layers first. A product that reached the banner the usual way
+// (created at zero, then counted by a paste that opened its layers at the zero it
+// found) has layers, all at zero, so writing the average alone changes nothing
+// visible. `setZeroCostBasis` re-bases the layers that carry nothing as well.
+const stuck = make({ name: 'TEST India Zero Layers', category: 'Baseball', cost: 0, bid: 90, rm: 4 })
+ok(
+  openLots(stuck).length > 0 && openLots(stuck).every((l: any) => l.unit_cost === 0),
+  'the fixture has open layers and every one of them carries nothing'
+)
+ok(
+  inventoryStats().zeroCost.some((z: any) => z.id === stuck),
+  'so the banner lists it'
+)
+
+// What the naive fix would have done: the average moves, the layers do not, and
+// the banner is still there.
+updateProduct({ id: stuck, unitCost: 25 })
+ok(productRow(stuck).unit_cost === 25, 'writing the average alone does move the product row')
+ok(
+  openLots(stuck).every((l: any) => l.unit_cost === 0),
+  'but the layers still carry nothing'
+)
+ok(
+  inventoryStats().zeroCost.some((z: any) => z.id === stuck),
+  'and the banner has not moved — which is why the field does more than this'
+)
+
+const fixed = setZeroCostBasis(stuck, 25)
+ok(!!fixed, 'the banner’s field puts a real basis on it')
+ok(fixed.layersRevalued === openLots(stuck).length, 'every layer carrying nothing was re-based', String(fixed.layersRevalued))
+ok(openLots(stuck).every((l: any) => l.unit_cost === 25), 'they now carry the stated cost')
+ok(eq(fixed.costValue, 4 * 25), 'the reported basis is the stock at that cost', String(fixed.costValue))
+ok(fixed.costValue > 0, 'which is what tells the caller the fix actually landed')
+ok(
+  !inventoryStats().zeroCost.some((z: any) => z.id === stuck),
+  'and the banner no longer lists it'
+)
+ok(eq(productRow(stuck).unit_cost, 25), 'the average agrees with the layers under it')
+
+// A layer carrying a REAL price is never touched: this is a screen for stock
+// with no basis, not one for repricing a purchase.
+const priced = make({ name: 'TEST Juliet Half Priced', category: 'Baseball', cost: 30, bid: 90, rm: 2 })
+addStock(priced, 'AM', 2, 0, 'seed a zero layer', null)
+setZeroCostBasis(priced, 11)
+ok(
+  openLots(priced, 'RM').every((l: any) => l.unit_cost === 30),
+  'the RM layer keeps the $30 somebody actually paid'
+)
+ok(
+  openLots(priced, 'AM').every((l: any) => l.unit_cost === 11),
+  'while the AM layer that carried nothing takes the new figure'
+)
+assertStockLotsConsistent(db)
+ok(true, 'and the invariant holds after a revaluation')
 
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail > 0) process.exit(1)

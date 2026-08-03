@@ -17,6 +17,7 @@ import type {
   AddStockInput,
   AdjustStockInput,
   CategorySummary,
+  CostBasisFix,
   IncomingShipment,
   InventoryProduct,
   InventoryStats,
@@ -73,6 +74,7 @@ import {
   removeProductImage,
   salesSeries,
   searchCatalog,
+  setZeroCostBasis,
   updateHighBid,
   updateProduct,
   upcExists
@@ -530,6 +532,29 @@ export function registerInventoryIpc(): void {
         }
         const updated = updateHighBid(input.productId, input.highBid)
         return updated ? { ok: true, data: updated } : { ok: false, error: 'Product not found.' }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  // Behind `inventory.manage`, not `inventory.pricing`: this writes COST, and it
+  // rewrites cost layers to do it. Pricing is what the stock is worth on the
+  // market; this is what it cost, which is the other half of every margin.
+  ipcMain.handle(
+    IPC.invCostBasisFix,
+    (_e, input: { productId: string; unitCost: number }): Result<CostBasisFix> => {
+      try {
+        requireManage()
+        if (!input?.productId) return { ok: false, error: 'Select a product.' }
+        // Zero is refused rather than accepted-and-ignored. The whole point of
+        // this call is to move stock OFF a zero basis, and a form that quietly
+        // accepted a 0 would report success and clear nothing.
+        if (!Number.isFinite(input.unitCost) || input.unitCost <= 0) {
+          return { ok: false, error: 'Enter what one unit cost — more than $0.00.' }
+        }
+        const fixed = setZeroCostBasis(input.productId, input.unitCost)
+        return fixed ? { ok: true, data: fixed } : { ok: false, error: 'Product not found.' }
       } catch (err) {
         return fail(err)
       }

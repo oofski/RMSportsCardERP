@@ -24,6 +24,7 @@ import { api } from '../../lib/api'
 import { formatDate, formatMoney, formatUnitMoney } from '../../lib/format'
 import { formatUnitCount } from '../../lib/productUnits'
 import { UnitBadge, productMetrics } from './helpers'
+import { EditField } from './ProductsTab'
 import { CategoryLogo } from './CategoryLogo'
 import { IncomingModal } from './IncomingModal'
 import { ProductHoverCard, type ProductCardData } from './ProductCases'
@@ -153,37 +154,15 @@ export function InventoryOverview({
       {/* Spread is value minus cost, so stock carried at nothing reports its
           whole market value as profit. Naming the products is the difference
           between a figure the operator distrusts and a short list they can go
-          and fix. */}
+          and fix — and the cost field beside each name is the difference between
+          a list and a fix. */}
       {stats.zeroCost.length > 0 && (
-        <div className="zerocost-banner">
-          <Icon name="AlertTriangle" size={17} />
-          <div className="zerocost-main">
-            <strong>
-              {formatMoney(stats.zeroCost.reduce((n, z) => n + z.marketValue, 0))} of the Spread
-              above is stock with no cost recorded.
-            </strong>
-            <span>
-              {stats.zeroCost.length} product{stats.zeroCost.length === 1 ? '' : 's'} sits on the
-              shelf at $0.00, so its full market value counts as profit. Set the real cost on each
-              to correct it.
-            </span>
-            <ul>
-              {stats.zeroCost.slice(0, 6).map((z) => (
-                <li key={z.id}>
-                  <button type="button" className="link-btn" onClick={() => onOpenProduct(z.name)}>
-                    {z.name}
-                  </button>
-                  <em>
-                    {z.quantity} on hand · {formatMoney(z.marketValue)}
-                  </em>
-                </li>
-              ))}
-              {stats.zeroCost.length > 6 && (
-                <li className="zerocost-more">and {stats.zeroCost.length - 6} more</li>
-              )}
-            </ul>
-          </div>
-        </div>
+        <ZeroCostBanner
+          rows={stats.zeroCost}
+          canManage={canManage}
+          onOpenProduct={onOpenProduct}
+          onChanged={onChanged}
+        />
       )}
 
       {/* Every figure above is summed from the FIFO cost layers, and a shelf
@@ -356,6 +335,126 @@ interface IncomingSummary {
   totalUnits: number
   /** Σ money still committed and undelivered. */
   totalValue: number
+}
+
+/**
+ * Stock carried at nothing — named, and fixable where it stands.
+ *
+ * WHY THE FIELD IS HERE RATHER THAN A LINK TO THE CATALOG. The names have always
+ * been buttons into the Catalog, which is one navigation, one search and one
+ * scroll per product, times however many the import left uncosted (the run that
+ * prompted this left four). The cost is a single number per row and this is
+ * where the operator is already looking at the damage it is doing.
+ *
+ * IT SETS A COST BASIS, NOT AN AVERAGE, AND THAT DISTINCTION IS THE WHOLE POINT.
+ * The valuation reads the FIFO layers first and only falls back to the product's
+ * stored average where a shelf has none. A product that got here the usual way —
+ * created by a catalog import at zero, then counted by a baseline paste that
+ * opened its layers at the zero it found — has layers, all at zero, so writing
+ * the average alone would clear nothing and this banner would still be here on
+ * the next reload. `fixCostBasis` re-bases the layers carrying nothing as well,
+ * and reports back what the product is worth afterwards so this can SAY the fix
+ * landed rather than imply it by disappearing.
+ *
+ * When it somehow does not land — a shape neither of us has thought of — the row
+ * says so and points at the adjust screen, because a field that quietly fails at
+ * the one thing it was offered for is worse than no field.
+ */
+function ZeroCostBanner({
+  rows,
+  canManage,
+  onOpenProduct,
+  onChanged
+}: {
+  rows: InventoryStats['zeroCost']
+  canManage: boolean
+  onOpenProduct: (name: string) => void
+  onChanged: () => Promise<void>
+}): JSX.Element {
+  const toast = useToast()
+  // What each row has been set to in this session, and whether it took. A saved
+  // row usually vanishes on the next reload — it is no longer zero-cost — but it
+  // is still on screen until that lands, and `saved` is also what the field
+  // holds as its committed value, so blurring the same box twice cannot fire the
+  // save twice (EditField only commits when the text differs from `value`).
+  const [settled, setSettled] = useState<
+    Record<string, { saved: string; state: 'fixed' | 'stuck' }>
+  >({})
+
+  const SHOWN = 6
+  const fix = async (id: string, raw: string): Promise<void> => {
+    const cost = Number(raw)
+    if (!Number.isFinite(cost) || cost <= 0) return
+    const res = await api.inventory.fixCostBasis(id, cost)
+    if (!res.ok || !res.data) {
+      toast.error(res.error ?? 'That cost could not be saved.')
+      return
+    }
+    // The returned basis is read the same way the banner is, so this is the
+    // actual answer to "did that work", not an assumption that it did.
+    const worked = res.data.costValue > 0
+    setSettled((s) => ({
+      ...s,
+      [id]: { saved: String(cost), state: worked ? 'fixed' : 'stuck' }
+    }))
+    if (worked) toast.success(`${res.data.product.name} is now carried at cost.`)
+    await onChanged()
+  }
+
+  return (
+    <div className="zerocost-banner">
+      <Icon name="AlertTriangle" size={17} />
+      <div className="zerocost-main">
+        <strong>
+          {formatMoney(rows.reduce((n, z) => n + z.marketValue, 0))} of the Spread above is stock
+          with no cost recorded.
+        </strong>
+        <span>
+          {rows.length} product{rows.length === 1 ? '' : 's'} sits on the shelf at $0.00, so its
+          full market value counts as profit.{' '}
+          {canManage
+            ? 'Type what one unit cost and the stock is carried at that from here on.'
+            : 'Setting the real cost needs the Manage inventory permission.'}
+        </span>
+        <ul>
+          {rows.slice(0, SHOWN).map((z) => (
+            <li key={z.id}>
+              <button type="button" className="link-btn" onClick={() => onOpenProduct(z.name)}>
+                {z.name}
+              </button>
+              <em>
+                {z.quantity} on hand · {formatMoney(z.marketValue)}
+              </em>
+              {canManage && (
+                <span className="zerocost-fix">
+                  <EditField
+                    label="Cost each"
+                    type="number"
+                    value={settled[z.id]?.saved ?? ''}
+                    onCommit={(v) => void fix(z.id, v)}
+                  />
+                </span>
+              )}
+              {settled[z.id]?.state === 'fixed' && (
+                <em className="zerocost-done">
+                  <Icon name="Check" size={12} /> Saved
+                </em>
+              )}
+              {settled[z.id]?.state === 'stuck' && (
+                <em className="zerocost-stuck">
+                  Still at $0.00 — its cost layers cannot be re-based from here. Adjust this
+                  one&rsquo;s stock to put a real basis on it.
+                </em>
+              )}
+            </li>
+          ))}
+          {rows.length > SHOWN && (
+            <li className="zerocost-more">and {rows.length - SHOWN} more</li>
+          )}
+        </ul>
+      </div>
+    </div>
+  )
 }
 
 /**

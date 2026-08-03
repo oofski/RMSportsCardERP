@@ -15504,6 +15504,47 @@ button.sor-team:focus-visible {
   color: var(--text-2);
 }
 
+/* The cost field, inline on the row it fixes. It is the catalog's own EditField,
+   shrunk to sit on one line of a banner: the label rides beside the input rather
+   than above it, because a stacked label would make every row twice as tall and
+   this list is meant to be readable at a glance. */
+.zerocost-fix {
+  display: inline-flex;
+  align-items: center;
+  margin-left: auto;
+}
+.zerocost-fix .field {
+  flex-direction: row;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+}
+.zerocost-fix .field > label {
+  font-size: 11px;
+  color: var(--text-2);
+  margin: 0;
+  white-space: nowrap;
+}
+.zerocost-fix .input {
+  width: 96px;
+  height: 26px;
+  padding: 0 8px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.zerocost-done {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--success);
+}
+/* Said out loud rather than left to a silent no-op: this is the one shape the
+   inline field cannot fix, and the operator has to be told where it can be. */
+.zerocost-stuck {
+  flex-basis: 100%;
+  color: var(--warning);
+}
+
 /* ---------- Inline add-product, inside the scan station ---------- */
 .scan-newproduct {
   display: flex;

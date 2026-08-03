@@ -367,6 +367,23 @@ export interface ZeroCostStock {
   marketValue: number
 }
 
+/**
+ * What happened when a cost basis was put on stock that had none.
+ *
+ * `costValue` is the point of the shape. Setting a product's average cost only
+ * clears the zero-cost banner when the stock has no cost LAYERS — the valuation
+ * reads layers first — so the operation re-bases the layers that are carrying
+ * nothing as well, and then reports what the product is actually worth
+ * afterwards. The caller shows that rather than assuming the fix landed.
+ */
+export interface CostBasisFix {
+  product: InventoryProduct
+  /** Open layers that were carrying nothing and now carry the stated cost. */
+  layersRevalued: number
+  /** The product's cost basis after the write, read the way the banner reads it. */
+  costValue: number
+}
+
 /** One shelf where Σ lot.qty_remaining and inventory_stock.quantity disagree. */
 export interface StockLayerGap {
   id: string

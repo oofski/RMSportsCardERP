@@ -620,7 +620,17 @@ function ProductDetail({
   )
 }
 
-function EditField({
+/**
+ * Commit-on-blur text/number field — the catalog's inline edit.
+ *
+ * EXPORTED for the zero-cost banner on the Overview, which now offers the same
+ * cost field beside each product it names. Same component rather than a second
+ * one: the two are the same interaction (type a cost, look away, it saves) and
+ * the normalising this does — reverting an unreadable number, snapping "10.0" to
+ * "10" so it does not re-fire on every blur — is exactly the fiddly part nobody
+ * would remember to reimplement.
+ */
+export function EditField({
   label,
   value,
   onCommit,
