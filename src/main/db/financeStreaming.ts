@@ -47,15 +47,28 @@
  *
  * WHAT A DAY IS WORTH, AND WHERE THAT IS DECIDED
  *
- * The ledger's sale figure is GROSS. Whatnot's commission (6%) and processing
- * (2.9%), both on the gross, come off it, on SALES ONLY — `computeFees` in the
- * contract owns that arithmetic and it is never inlined.
- * Fees are computed once, ON A DAY, and weeks, months and the grand total are
- * built by SUMMING day rows. Both charges are now pure percentages, so a period
- * COULD re-derive them and get the same answer — but it still does not. Two
- * numbers that must agree and are produced two different ways eventually
- * disagree, and rounding alone would do it: 8.9% of each of thirty days, summed,
- * is not always 8.9% of their total to the cent.
+ * THE LEDGER'S SALE FIGURE IS NET. Whatnot deducts its cut before it writes the
+ * row — proved on real exports, where every non-payout row summed equals the
+ * payouts to the cent — so `amount` is money already received and it is stored
+ * exactly as it arrived. This file used to read it as GROSS and take 8.9% off it
+ * a second time, which understated a ten-day export's revenue by about $35,000
+ * and printed a fee that had already been taken.
+ *
+ * Gross and the two fees are DERIVED, per positive sale ROW, at the commission
+ * rate in force on that row's own date (`deriveSaleFee` in the contract owns the
+ * arithmetic and it is never inlined; `whatnotRates.ts` owns the rate). A row is
+ * one purchased slot — 1,929 sale rows carry 1,929 distinct Order IDs — which is
+ * what makes the flat 30c per row a fact rather than a model.
+ *
+ * PER ROW, then summed onto a day; weeks, months and the grand total then sum
+ * days. Nothing above a row ever re-derives, and it could not: a day's net sales
+ * figure has lost how many 30c charges are inside it and which dates they fell
+ * on. Because every step is linear the two agree to the cent, and the
+ * reconciliation below asserts it rather than trusting it.
+ *
+ * The fee is computed ON READ. That is what makes a rate change re-derive
+ * history: edit the period in Finance, reopen the tab, and every show inside the
+ * range moves. No re-upload, no re-attribution, no stored fee to go stale.
  *
  * COST OF GOODS IS NOT IN THE LEDGER, AND IT IS THE BIGGEST COST THERE IS
  *
@@ -117,7 +130,7 @@ import {
   carryBackEligible,
   classifyLedgerRow,
   parseProductSaleName,
-  computeFees,
+  deriveSaleFee,
   emptyDayFinance,
   findCarryBackSession,
   ledgerFingerprintSource,
@@ -130,6 +143,7 @@ import {
 import type { StreamSession } from '@shared/streaming'
 import { durationMinutes, isSuspiciouslyLong, streamDateOf } from '@shared/streaming'
 import { getDb } from './database'
+import { rateLookup } from './whatnotRates'
 import { packingCostByDay } from './shipSop'
 import { isAnyLeagueTeam } from '../shipping/teams'
 import { matchProductByName } from './inventory'
@@ -1581,12 +1595,12 @@ function newRollup(): Rollup {
  * Add ONE day to a rollup — the only way a week, a month or the grand total is
  * ever built.
  *
- * Every field is SUMMED, including the fees. Now that both charges are flat
- * percentages, recomputing `computeFees` on the period's gross would ALMOST
- * agree — and almost is the problem. Each day's fee is rounded to the cent, so
- * thirty rounded days need not add up to one rounding of the total, and a week
- * that contradicts the days inside it is worse than no week at all. One
- * derivation, in one place, summed everywhere else.
+ * Every field is SUMMED, including the fees and the derived gross. A period
+ * CANNOT re-derive them: the 30c is charged per ROW and the commission comes
+ * from each row's own DATE, and a month's net-sales total has lost both facts.
+ * Running `deriveSaleFee` on it would charge one 30c for the month at one rate
+ * for the whole span. The derivation happens once, per row; everything above a
+ * row adds.
  */
 function addDay(roll: Rollup, day: StreamDayFinance): void {
   const fields = day as unknown as Record<string, number>
@@ -1777,13 +1791,16 @@ function rollPeriods(
  * stays visible instead of falling between two named fields.
  */
 const BUCKET_FIELD: Partial<Record<LedgerBucket, keyof StreamDayFinance>> = {
-  sale: 'sales',
+  // `netSales`, and the name is the point: this is the ledger's own figure,
+  // summed, with nothing derived. The gross and the fees are built separately
+  // from the same rows further down.
+  sale: 'netSales',
   // Whole-product sales land in the SAME top line as break spots. They are the
-  // same kind of money and carry the same 8.9%, so splitting them here would
+  // same kind of money and carry the same fees, so splitting them here would
   // mean every fee, subtotal and reconciliation had to learn about two revenue
   // fields. They stay separable where it matters — the bucket is on the row, so
-  // the split can be shown and the product matched — without a second `sales`.
-  product_sale: 'sales',
+  // the split can be shown and the product matched — without a second top line.
+  product_sale: 'netSales',
   shipping_subsidy: 'shippingSubsidy',
   tip: 'tips',
   seller_bonus: 'bonuses',
@@ -2056,9 +2073,8 @@ function buildView(db: Database): StreamingFinanceView {
     day.rowCount += r.rows
     const bucket = r.bucket as LedgerBucket
     // Counted from the row table rather than inferred from a dollar total — no
-    // average ticket price can recover it. It no longer feeds the fee (that is a
-    // flat percentage now), but it is what "8.9% across 1,029 orders" is checked
-    // against, and it is the only honest source for the number.
+    // average ticket price can recover it, and the flat 30c is charged once per
+    // row, so this count is load-bearing again rather than decoration.
     if (bucket === 'sale' || bucket === 'product_sale') day.saleCount += r.rows
     if (bucket === 'product_sale') {
       day.productSales = toDollars(toCents(day.productSales) + r.cents)
@@ -2093,47 +2109,106 @@ function buildView(db: Database): StreamingFinanceView {
     day.carriedBackAmount = toDollars(toCents(day.carriedBackAmount) + r.cents)
   }
 
-  // --- what Whatnot actually keeps -------------------------------------------
+  // --- what Whatnot already took, taken apart --------------------------------
   //
-  // The ledger's "Earnings for selling" figure is GROSS, before Whatnot takes
-  // anything (confirmed by the owner; the file itself has no commission line, so
-  // this could not be settled from the data). Two charges come off it:
-  //   commission  6%   of gross
-  //   processing  2.9% of gross
-  // Both on the GROSS amount, not one after the other, and on SALES ONLY —
-  // shipping subsidies, tips and bonuses arrive whole.
+  // THE LEDGER'S AMOUNT IS NET. Whatnot deducts its cut before writing the row —
+  // on the owner's real exports every non-payout row summed equals the payouts
+  // to the cent, which could not be true if a fee were still to come off. So
+  // nothing is subtracted here. Gross and the two fees are reverse-engineered
+  // from the net, PER ROW:
   //
-  // There is no per-transaction flat fee. Earlier versions charged the card
-  // industry's usual 30c per sale row, which on a week selling 1,929 small break
-  // spots invented $578 of fees nobody ever took. RM's rate is a straight
-  // percentage, so the number of transactions cannot change what a day costs.
+  //   gross      = (net + 0.30) / (1 - rate - 0.029)
+  //   whatnotFee = gross x rate
+  //   stripeFee  = gross x 0.029 + 0.30
   //
-  // The arithmetic is `computeFees` in the contract and is never restated here.
+  // ROW BY ROW, AND IT HAS TO BE. The 30c is charged once per purchased slot
+  // (1,929 sale rows, 1,929 distinct Order IDs) and the commission comes from
+  // the rate in force on THAT ROW'S DATE, so neither survives being aggregated
+  // into a day's dollar total first. Only positive rows are charged: a refund is
+  // not a purchase and a $0.00 sale is not a transaction, and both pass through
+  // at face value.
   //
-  // A DAY IS WHERE FEES ARE COMPUTED, AND THE ONLY PLACE. Weeks, months and the
-  // grand total SUM these numbers (see `addDay`) rather than re-deriving from
-  // their own gross, so per-day rounding can never make a week disagree with the
-  // days inside it.
+  // `deriveSaleFee` in the contract owns the arithmetic and is never restated;
+  // `rateLookup` snapshots the periods once for this whole derivation, so a rate
+  // edited mid-pass cannot produce a day that disagrees with itself.
+  //
+  // Fees are on SALES ONLY — tips, bonuses, subsidies, postage and Show Boost
+  // arrive whole and are untouched by any of this.
+  const rateAt = rateLookup()
+  const saleRows = db
+    .prepare(
+      `SELECT stream_date AS d, occurred_at AS at,
+              CAST(ROUND(amount * 100) AS INTEGER) AS cents
+         FROM ledger_rows
+        WHERE stream_date IS NOT NULL AND bucket IN ('sale', 'product_sale')
+          AND (session_id IS NOT NULL OR attribution = 'own_day')`
+    )
+    .all() as Array<{ d: string; at: string; cents: number }>
+
+  interface DayFees {
+    grossCents: number
+    whatnotCents: number
+    stripeCents: number
+    charged: number
+  }
+  const feesByDay = new Map<string, DayFees>()
+  for (const r of saleRows) {
+    // The ROW'S OWN date picks the rate, not the show's business day. A show
+    // that runs past midnight books its money to the evening it started, which
+    // is right for the P&L and wrong for a commission: what Whatnot charged is
+    // decided by when the sale happened, and a rate change at a month boundary
+    // must not be back-dated by the carry rule.
+    const fee = deriveSaleFee(r.cents, rateAt(streamDateOf(r.at)))
+    const acc = feesByDay.get(r.d) ?? {
+      grossCents: 0,
+      whatnotCents: 0,
+      stripeCents: 0,
+      charged: 0
+    }
+    acc.grossCents += fee.grossCents
+    acc.whatnotCents += fee.whatnotFeeCents
+    acc.stripeCents += fee.stripeFeeCents
+    // EITHER fee, not just the commission: a promotional 0% period would leave
+    // the commission at zero on rows that still paid Stripe its 2.9% + 30c, and
+    // counting on the commission alone would then print "30c x 0 orders" beside
+    // a real charge.
+    if (fee.whatnotFeeCents !== 0 || fee.stripeFeeCents !== 0) acc.charged += 1
+    feesByDay.set(r.d, acc)
+  }
+
   for (const [date, day] of dayMap) {
     const cents = dayCents.get(date) ?? {}
-    const salesCents = toCents(day.sales)
     const unknownCents = cents.unclassified ?? 0
     // Carried as its own field as well as into the top line, so the statement
     // has a line to print for it rather than a subtotal that exceeds its lines.
     day.unclassified = toDollars(unknownCents)
 
+    const fees = feesByDay.get(date) ?? {
+      grossCents: 0,
+      whatnotCents: 0,
+      stripeCents: 0,
+      charged: 0
+    }
+    // grossCents is Sigma(net + fees) over exactly the rows `netSales` was summed
+    // from, so `grossSales - totalFees == netSales` to the cent, always. The
+    // reconciliation below leans on that identity rather than assuming it.
+    day.grossSales = toDollars(fees.grossCents)
+    day.whatnotFee = toDollars(fees.whatnotCents)
+    day.processingFee = toDollars(fees.stripeCents)
+    day.totalFees = toDollars(fees.whatnotCents + fees.stripeCents)
+    day.feeSaleCount = fees.charged
+
     // `unclassified` has no field of its own in the day shape, so its money is
     // carried at FACE VALUE in totalRevenue and flagged in the import warnings.
-    // It is deliberately NOT added to `sales`: no fee is charged on a shape this
-    // version cannot identify, because charging 8.9% on a guess invents a cost.
+    // It is deliberately NOT put through the fee derivation: no gross is
+    // reverse-engineered from a shape this version cannot identify, because a
+    // guess at what was taken invents a cost AND inflates the top line.
     day.totalRevenue = toDollars(
-      salesCents + toCents(day.tips) + toCents(day.bonuses) + unknownCents
+      fees.grossCents + toCents(day.tips) + toCents(day.bonuses) + unknownCents
     )
 
-    const fees = computeFees(day.sales, day.saleCount)
-    day.whatnotFee = fees.whatnotFee
-    day.processingFee = fees.processingFee
-    day.totalFees = fees.totalFees
+    // What Whatnot actually paid: the gross with the derived fees taken back
+    // off, which lands exactly on netSales + tips + bonuses + unclassified.
     day.netRevenue = toDollars(toCents(day.totalRevenue) + toCents(day.totalFees))
 
     // Postage AND packing. `packingSupplies` is already negative.
@@ -2245,17 +2320,23 @@ function buildView(db: Database): StreamingFinanceView {
   for (const [, c] of dayNetCents) daysCents += c
   for (const day of days) daysRows += day.rowCount
 
-  // The day fields must decompose the SAME money the rows carry. THREE figures
-  // on a day are not ledger rows — the fees, which are derived, and both
-  // cost-of-goods terms, which come from the Streaming module — so stripping all
-  // of them back out has to land exactly on the raw net:
-  //     netProfit − totalFees − cogs == Σ(attributed non-payout rows)
-  // Subtracting the fees alone was right until the bottom line started carrying
-  // stock cost; leaving `cogs` in would report every day with a break as
-  // unreconciled, which is exactly the kind of false alarm that teaches an
-  // operator to ignore the flag.
+  // The day fields must decompose the SAME money the rows carry, and TWO of them
+  // are not ledger rows at all — both cost-of-goods terms, which come from the
+  // Streaming module — so stripping those back out has to land exactly on the
+  // raw net:
+  //     netProfit − cogs − packingSupplies == Σ(attributed non-payout rows)
   //
-  // This is what catches a future bucket that classification learns to produce
+  // THE FEES ARE NOT STRIPPED, AND THAT IS THE ROUND-TRIP ASSERTION. They used
+  // to be, because the top line was the ledger's own figure and the fee was
+  // subtracted from it. Now the top line is a DERIVED gross — netSales with the
+  // fees added back — and netProfit subtracts them again, so the two cancel by
+  // construction. Which means this check no longer merely tolerates the fee: it
+  // FAILS if `grossSales − totalFees` is ever a cent away from `netSales`, on
+  // any day, for any reason. A rounding rule that stopped closing, a row counted
+  // in the gross but not in the net, a rate applied to one and not the other —
+  // all of them surface here, on the screen, rather than as a plausible number.
+  //
+  // It also still catches a future bucket that classification learns to produce
   // but the day shape has no field for. Without it that money would vanish from
   // every screen while the row-level reconciliation above still said "fine",
   // because the rows themselves would all still be present and counted.
@@ -2266,19 +2347,12 @@ function buildView(db: Database): StreamingFinanceView {
   let ledgerFieldCents = 0
   for (const day of days) {
     // `packingSupplies` comes from Supplies, not the ledger, so it strips out
-    // exactly like the fees, the stock cost and the giveaway loss. Forgetting
-    // it here does not fail loudly — it flags EVERY day unreconciled, which is
-    // how an operator learns to ignore the one flag that matters.
-    fieldCents +=
-      toCents(day.netProfit) -
-      toCents(day.totalFees) -
-      toCents(day.cogs) -
-      toCents(day.packingSupplies)
+    // exactly like the stock cost and the giveaway loss. Forgetting it here does
+    // not fail loudly — it flags EVERY day unreconciled, which is how an
+    // operator learns to ignore the one flag that matters.
+    fieldCents += toCents(day.netProfit) - toCents(day.cogs) - toCents(day.packingSupplies)
     ledgerFieldCents +=
-      toCents(day.netAfterCosts) -
-      toCents(day.totalFees) -
-      toCents(day.giveawayLoss) -
-      toCents(day.packingSupplies)
+      toCents(day.netAfterCosts) - toCents(day.giveawayLoss) - toCents(day.packingSupplies)
   }
 
   /**
@@ -2329,13 +2403,14 @@ function buildView(db: Database): StreamingFinanceView {
   } else if (fieldCents !== daysCents) {
     reconciled = false
     reconcileNote =
-      `The day breakdown adds to ${money(fieldCents)} before fees and stock cost but ${money(daysCents)} ` +
-      `of ledger money is attributed to those days. A bucket is landing in no column — these totals are ` +
-      `incomplete, do not book from them.`
+      `The day breakdown adds to ${money(fieldCents)} before stock cost but ${money(daysCents)} ` +
+      `of ledger money is attributed to those days. Either a bucket is landing in no column, or the ` +
+      `derived gross does not fall back to the net Whatnot paid — these totals are incomplete, do ` +
+      `not book from them.`
   } else if (ledgerFieldCents !== daysCents) {
     reconciled = false
     reconcileNote =
-      `Net after costs adds to ${money(ledgerFieldCents)} before fees and the giveaway loss but ` +
+      `Net after costs adds to ${money(ledgerFieldCents)} before the giveaway loss but ` +
       `${money(daysCents)} of ledger money is attributed to those days. These totals are incomplete, ` +
       `do not book from them.`
   } else {

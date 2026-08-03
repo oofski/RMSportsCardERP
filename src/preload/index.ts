@@ -143,7 +143,9 @@ import type {
   LedgerImport,
   LedgerImportResult,
   LedgerRow,
-  StreamingFinanceView
+  RatePeriodInput,
+  StreamingFinanceView,
+  WhatnotRatePeriod
 } from '@shared/financeStreaming'
 
 const api = {
@@ -707,7 +709,21 @@ const api = {
      *  unattributed money moves onto a show after the operator adds the session
      *  they forgot to log — data entry, never a heuristic. */
     reattribute: (): Promise<Result<StreamingFinanceView>> =>
-      ipcRenderer.invoke(IPC.finLedgerReattribute)
+      ipcRenderer.invoke(IPC.finLedgerReattribute),
+    /**
+     * What Whatnot's commission was, by date range. 6% wherever nothing says.
+     *
+     * The fee is DERIVED ON READ from the net figure Whatnot paid, so saving one
+     * of these re-prices every past show it covers the next time the view is
+     * read — no re-upload, no re-attribution. Both writes hand back the whole
+     * list, because these are ranges that constrain each other and a single row
+     * is not a useful answer to "did that save".
+     */
+    rates: (): Promise<WhatnotRatePeriod[]> => ipcRenderer.invoke(IPC.finRatesList),
+    saveRate: (input: RatePeriodInput): Promise<Result<WhatnotRatePeriod[]>> =>
+      ipcRenderer.invoke(IPC.finRateSave, input),
+    deleteRate: (id: string): Promise<Result<WhatnotRatePeriod[]>> =>
+      ipcRenderer.invoke(IPC.finRateDelete, id)
   },
   email: {
     composeInvite: (

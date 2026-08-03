@@ -80,10 +80,12 @@ export function RangeWidgets({
   const fees = sub('fees')
   const net = sub('netProfit')
 
-  // Denominator is SALES, not total revenue: fees are only ever charged on
+  // Denominator is GROSS SALES, not total revenue: fees are only ever charged on
   // sales — tips and bonuses arrive whole — so dividing by total revenue would
-  // dilute the rate on any day with a tip and understate what Whatnot costs.
-  const feeRate = totals.sales > 0 ? (Math.abs(fees) / totals.sales) * 100 : null
+  // dilute the rate on any day with a tip and understate what Whatnot costs. And
+  // gross rather than net, because that is the base the two rates are applied
+  // to; dividing by the net Whatnot paid would report 9.8% for a 8.9% take.
+  const feeRate = totals.grossSales > 0 ? (Math.abs(fees) / totals.grossSales) * 100 : null
   const cogsRate = revenue > 0 ? (Math.abs(sub('cogs')) / revenue) * 100 : null
   const margin = profitMargin(revenue, net)
 
@@ -107,7 +109,21 @@ export function RangeWidgets({
       amount: fees,
       prior: priorSub('fees'),
       magnitude: true,
-      sub: feeRate === null ? "Whatnot's cut and card processing" : `${feeRate.toFixed(2)}% of sales`
+      // THE SPLIT, on the face of the widget. The owner's ask was to still see
+      // what is lost in fees, and the two halves are set by different parties —
+      // Whatnot's commission is a term of the seller agreement and configurable
+      // by date on the Rates tab; Stripe's 2.9% + 30c is a published card rate
+      // nobody here negotiates. One combined figure hides which of those moved.
+      sub:
+        isZero(totals.whatnotFee) && isZero(totals.processingFee) ? (
+          "Whatnot's cut and card processing"
+        ) : (
+          <>
+            {moneyText(Math.abs(totals.whatnotFee))} Whatnot ·{' '}
+            {moneyText(Math.abs(totals.processingFee))} Stripe
+            {feeRate === null ? null : ` · ${feeRate.toFixed(2)}% of gross`}
+          </>
+        )
     },
     {
       key: 'cogs',

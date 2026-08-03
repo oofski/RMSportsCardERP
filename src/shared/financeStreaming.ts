@@ -653,44 +653,253 @@ export interface LedgerQuarantine {
 // ---------------------------------------------------------------------------
 
 /**
- * WHAT WHATNOT ACTUALLY KEEPS
+ * WHAT WHATNOT ALREADY TOOK — AND WHY THE FEE IS DERIVED, NEVER SUBTRACTED
  *
- * The ledger's "Earnings for selling" figure is GROSS — the buyer's price,
- * before Whatnot takes anything. Two charges come off it:
+ * THE LEDGER'S `Amount` IS NET. Whatnot deducts its cut before it writes the
+ * row, and the file contains no fee line anywhere. That is not an assumption:
+ * on the owner's real exports every non-payout row summed equals the payouts, to
+ * the cent — $184,624.09 across 2,551 rows in the ten-day file, $285,333.42
+ * across 6,674 in the month before it. If a fee were still to come off, those
+ * two figures could not balance.
  *
- *   commission  6%   of the sale
- *   processing  2.9% of the sale
+ * This module used to read that net figure as GROSS and take 8.9% off it a
+ * second time. On the ten-day export that understated revenue by roughly
+ * $35,000 and printed a platform fee that had already been taken. Every Whatnot
+ * P&L the owner has ever seen carried the error.
  *
- * Both are computed on the GROSS amount, not one after the other, so the two
- * rates simply add: 8.9% of gross, and nothing else.
+ * So the arithmetic runs the other way now. Net is the STORED TRUTH — it is what
+ * reconciles to the bank — and gross and the two fees are reverse-engineered
+ * from it, PER SALE ROW:
  *
- * There is NO per-transaction flat fee. Earlier versions modelled the card
- * industry's usual "2.9% + 30c" and charged that 30c once per sale row, which
- * on a show selling 1,900 small break spots invented $570 of fees that were
- * never taken. On RM's rate the flat component does not exist, so a count of
- * transactions cannot change what a day costs — which is also why `saleCount`
- * survives here for display only.
+ *   gross      = (net + 0.30) / (1 − whatnotRate − 0.029)
+ *   whatnotFee = gross × whatnotRate
+ *   stripeFee  = gross × 0.029 + 0.30
  *
- * Fees apply to SALES ONLY. Shipping subsidies, tips and bonuses arrive whole.
+ * THE FLAT 30c IS BACK, and the comment this one replaces argued it should
+ * never be. That argument was right about a different mistake: charging 30c ON
+ * TOP of a net figure invents money nobody took, which is exactly what the old
+ * code did on a show selling 1,900 small spots. Reverse-engineering the same 30c
+ * OUT of a net figure invents nothing — the net is unchanged either way, and all
+ * that moves is how much of the buyer's payment is attributed to Stripe. The
+ * charge is per PURCHASED SLOT, and the file settles that one row is one slot:
+ * 1,929 sale rows carry 1,929 distinct Order IDs.
+ *
+ * Stripe is 2.9% + 30c and is NOT configurable — it is a published card rate,
+ * not a term RM negotiates. Whatnot's commission defaults to 6% and IS
+ * configurable by date range (see `WhatnotRatePeriod`), because it is a term of
+ * the seller agreement and terms change.
+ *
+ * A NEGATIVE OR ZERO ROW TAKES NO FEE AND NO 30c. A refund is not a purchase and
+ * a $0.00 sale is not a transaction; both pass through at face value. Applying
+ * the flat charge to them would invent a fee AND get its sign wrong, which is
+ * the same class of error this whole comment exists to prevent.
+ *
+ * Fees apply to SALES ONLY. Tips, seller bonuses, shipping subsidies, shipping
+ * charges, giveaway postage and Show Boost arrive whole, exactly as before.
  */
-export const WHATNOT_COMMISSION_RATE = 0.06
-export const PROCESSING_RATE = 0.029
-/** Both charges land on the same gross, so the effective rate is their sum. */
-export const TOTAL_FEE_RATE = WHATNOT_COMMISSION_RATE + PROCESSING_RATE
+
+/** Stripe's percentage. Never configurable — it is not RM's to negotiate. */
+export const STRIPE_PERCENT_RATE = 0.029
+/** Stripe's flat charge per purchased slot, in CENTS so it never rounds. */
+export const STRIPE_FLAT_CENTS = 30
+/** What Whatnot takes where no period says otherwise. */
+export const DEFAULT_WHATNOT_RATE = 0.06
+
+/**
+ * The sane band for a commission, enforced in main.
+ *
+ * Wide on purpose — the point is to catch a typo (600% from a form that meant
+ * 6%, or a stray minus) rather than to have an opinion about what Whatnot may
+ * charge. The upper bound also keeps `1 − rate − 0.029` safely positive, which
+ * is the divisor every derived gross goes through.
+ */
+export const WHATNOT_RATE_MIN = 0
+export const WHATNOT_RATE_MAX = 0.5
+
+/**
+ * A stretch of days on which Whatnot's commission was some particular rate.
+ *
+ * `toDate` null means open-ended — the rate in force until somebody says
+ * otherwise. Periods MAY NOT OVERLAP; see `overlappingRatePeriod` for why that
+ * is refused on save rather than resolved by precedence.
+ */
+export interface WhatnotRatePeriod {
+  id: string
+  /** Inclusive business day, YYYY-MM-DD. */
+  fromDate: string
+  /** Inclusive business day, or null for "and onwards". */
+  toDate: string | null
+  /** A fraction: 0.06 is 6%. */
+  rate: number
+  /** Why this rate, in the operator's words. */
+  note: string
+  createdAt: string
+  updatedAt: string
+}
+
+/** What an open-ended `toDate` compares AS. Sorts after any real date. */
+const OPEN_ENDED = '9999-12-31'
+
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/
+
+/** A real calendar day, not "2026-02-31" normalised into March. */
+export function isDayKey(value: string): boolean {
+  if (!DAY_RE.test(value || '')) return false
+  const [y, m, d] = value.split('-').map(Number)
+  const dt = new Date(Date.UTC(y, m - 1, d))
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d
+}
+
+export function ratePeriodCovers(period: WhatnotRatePeriod, day: string): boolean {
+  return day >= period.fromDate && day <= (period.toDate ?? OPEN_ENDED)
+}
+
+/**
+ * The period that owns a day, or null when the default applies.
+ *
+ * A plain linear scan. It stops at the FIRST match because a day cannot be
+ * covered twice — that is enforced at the point of writing, and it is the whole
+ * reason this function needs no tie-breaker.
+ */
+export function coveringRatePeriod(
+  periods: readonly WhatnotRatePeriod[],
+  day: string
+): WhatnotRatePeriod | null {
+  for (const p of periods) if (ratePeriodCovers(p, day)) return p
+  return null
+}
+
+/** What Whatnot took on a given day. `DEFAULT_WHATNOT_RATE` where nothing says. */
+export function effectiveWhatnotRate(
+  periods: readonly WhatnotRatePeriod[],
+  day: string
+): number {
+  return coveringRatePeriod(periods, day)?.rate ?? DEFAULT_WHATNOT_RATE
+}
+
+/**
+ * The stored period a candidate would collide with, or null.
+ *
+ * OVERLAP IS REFUSED, NOT RESOLVED. The alternative — a precedence rule, newest
+ * wins or narrowest wins — means the rate for a day depends on something the
+ * screen does not show, so two periods that both claim 12 July would produce a
+ * figure nobody could reproduce by reading the list. Refusing keeps the list
+ * itself the answer: read it top to bottom and every day has exactly one rate or
+ * the default, with no arbitration happening in anyone's head.
+ *
+ * `ignoreId` is the row being edited — a period always overlaps itself.
+ */
+export function overlappingRatePeriod(
+  periods: readonly WhatnotRatePeriod[],
+  candidate: { fromDate: string; toDate: string | null },
+  ignoreId?: string
+): WhatnotRatePeriod | null {
+  const from = candidate.fromDate
+  const to = candidate.toDate ?? OPEN_ENDED
+  for (const p of periods) {
+    if (ignoreId && p.id === ignoreId) continue
+    if (from <= (p.toDate ?? OPEN_ENDED) && to >= p.fromDate) return p
+  }
+  return null
+}
+
+export interface RatePeriodInput {
+  id?: string
+  fromDate: string
+  toDate: string | null
+  /** A fraction, 0.06 for 6%. A form string is coerced BEFORE it gets here. */
+  rate: number
+  note: string
+}
+
+/**
+ * Everything that can be wrong with a period, as a sentence, or null.
+ *
+ * Shared so the form can say it early, but MAIN IS THE TRUST BOUNDARY and calls
+ * this itself — a renderer is a convenience, not a guarantee, and this figure
+ * multiplies every sale the business has ever made.
+ */
+export function validateRatePeriod(input: RatePeriodInput): string | null {
+  if (!isDayKey(input.fromDate)) return 'The start date is not a real date.'
+  if (input.toDate !== null && !isDayKey(input.toDate)) return 'The end date is not a real date.'
+  if (input.toDate !== null && input.toDate < input.fromDate) {
+    return 'The end date is before the start date.'
+  }
+  // Number('') is 0 and Number('6%') is NaN — a form string reaches here as
+  // whatever the coercion made of it, and both must be refused rather than
+  // silently booked as a 0% commission.
+  if (typeof input.rate !== 'number' || !Number.isFinite(input.rate)) {
+    return 'That rate is not a number.'
+  }
+  if (input.rate < WHATNOT_RATE_MIN || input.rate > WHATNOT_RATE_MAX) {
+    return `A commission of ${(input.rate * 100).toFixed(2)}% is outside the ${
+      WHATNOT_RATE_MIN * 100
+    }–${WHATNOT_RATE_MAX * 100}% this app will accept. Enter it as a percentage of the sale.`
+  }
+  return null
+}
+
+/**
+ * One sale row, taken apart.
+ *
+ * INTEGER CENTS throughout, and the identity `grossCents + whatnotFeeCents +
+ * stripeFeeCents === netCents` holds exactly, by construction — the fees are
+ * negative, and gross is DEFINED as net plus them rather than as a rounding of
+ * the division. That is where the rounding decision lives: each fee is an honest
+ * rounding of its rate applied to the exact gross, and the reported gross
+ * absorbs the half-cent, so a derived figure can never fail to reconcile to the
+ * ledger's own net. Rounding the division instead and plugging one fee would
+ * make that fee a residual rather than a rate, which is the one number the
+ * operator wants to check against a statement.
+ */
+export interface SaleFee {
+  netCents: number
+  /** DERIVED — what the buyer paid. Never a figure Whatnot stated. */
+  grossCents: number
+  /** NEGATIVE. */
+  whatnotFeeCents: number
+  /** NEGATIVE. Includes the flat 30c. */
+  stripeFeeCents: number
+}
+
+export function deriveSaleFee(netCents: number, whatnotRate: number): SaleFee {
+  const net = Number.isFinite(netCents) ? Math.round(netCents) : 0
+  // A refund is not a purchase and a $0.00 sale is not a transaction. Face
+  // value, straight through, and no 30c.
+  if (net <= 0) {
+    return { netCents: net, grossCents: net, whatnotFeeCents: 0, stripeFeeCents: 0 }
+  }
+  const rate =
+    Number.isFinite(whatnotRate) && whatnotRate >= WHATNOT_RATE_MIN && whatnotRate <= WHATNOT_RATE_MAX
+      ? whatnotRate
+      : DEFAULT_WHATNOT_RATE
+  const kept = 1 - rate - STRIPE_PERCENT_RATE
+  // Unreachable through validation, and guarded anyway: a divisor at or below
+  // zero would produce an infinite or negative gross and poison every total
+  // downstream of it.
+  if (!(kept > 0)) {
+    return { netCents: net, grossCents: net, whatnotFeeCents: 0, stripeFeeCents: 0 }
+  }
+  const grossExact = (net + STRIPE_FLAT_CENTS) / kept
+  const whatnot = Math.round(grossExact * rate)
+  const stripe = Math.round(grossExact * STRIPE_PERCENT_RATE) + STRIPE_FLAT_CENTS
+  return {
+    netCents: net,
+    grossCents: net + whatnot + stripe,
+    whatnotFeeCents: -whatnot,
+    stripeFeeCents: -stripe
+  }
+}
 
 export interface FeeBreakdown {
-  /** Gross sales the fees were computed on. */
+  /** The ledger's own figure for these rows. The stored truth. */
+  netSales: number
+  /** DERIVED: netSales with both fees added back. */
   grossSales: number
-  /**
-   * Sale rows behind the figure.
-   *
-   * Reported, not charged. Nothing in the arithmetic depends on it now that the
-   * flat per-transaction fee is gone; it stays because "8.9% of $12,840 across
-   * 1,029 sales" is a sentence somebody can check against a Whatnot statement,
-   * and because dropping it from the shape would silently blank the count on
-   * every screen that shows it.
-   */
+  /** Every sale row behind the figure, whatever its sign. */
   saleCount: number
+  /** How many of those actually carried a fee — i.e. were real purchases. */
+  chargedCount: number
   /** Negative. */
   whatnotFee: number
   /** Negative. */
@@ -701,17 +910,43 @@ export interface FeeBreakdown {
 
 const cents = (n: number): number => Math.round(n * 100) / 100
 
-/** Fees are returned NEGATIVE so every downstream total is a plain sum and no
- *  screen has to remember which way to apply them. */
-export function computeFees(grossSales: number, saleCount: number): FeeBreakdown {
-  const whatnotFee = -cents(grossSales * WHATNOT_COMMISSION_RATE)
-  const processingFee = -cents(grossSales * PROCESSING_RATE)
+/**
+ * Add a set of sale rows up.
+ *
+ * TAKES ROWS, not a total, and that is the signature doing the work: the rate
+ * comes from the row's own date and the flat 30c comes from the row existing, so
+ * neither can be recovered from a day's dollar figure. A caller that still has
+ * only a total is a caller that cannot compute this, and it should fail to
+ * compile rather than approximate.
+ *
+ * Because every step is linear in the row, summing per-row cents here and
+ * summing whole days elsewhere give the SAME answer to the cent. The tests
+ * assert exactly that rather than trusting it.
+ */
+export function computeFees(
+  rows: readonly { netCents: number; whatnotRate: number }[]
+): FeeBreakdown {
+  let net = 0
+  let gross = 0
+  let whatnot = 0
+  let stripe = 0
+  let charged = 0
+  for (const row of rows) {
+    const fee = deriveSaleFee(row.netCents, row.whatnotRate)
+    net += fee.netCents
+    gross += fee.grossCents
+    whatnot += fee.whatnotFeeCents
+    stripe += fee.stripeFeeCents
+    if (fee.whatnotFeeCents !== 0 || fee.stripeFeeCents !== 0) charged += 1
+  }
   return {
-    grossSales: cents(grossSales),
-    saleCount,
-    whatnotFee,
-    processingFee,
-    totalFees: cents(whatnotFee + processingFee)
+    netSales: cents(net / 100),
+    grossSales: cents(gross / 100),
+    saleCount: rows.length,
+    chargedCount: charged,
+    whatnotFee: cents(whatnot / 100),
+    processingFee: cents(stripe / 100),
+    totalFees: cents((whatnot + stripe) / 100)
   }
 }
 
@@ -724,19 +959,36 @@ export interface StreamDayFinance {
   minutes: number
 
   // --- Revenue ------------------------------------------------------------
-  /** Gross sales, before Whatnot's cut. Break spots AND whole products. */
-  sales: number
-  /** Sale rows behind `sales`. Reported; the fee is a flat percentage. */
-  saleCount: number
   /**
-   * The whole-product share of `sales` — sealed boxes and cases sold outright
+   * THE STORED TRUTH. What Whatnot actually paid for the sale rows on this day —
+   * the ledger's own `Amount`, summed, already net of everything the platform
+   * took. This is the figure that reconciles to the payouts, and nothing derives
+   * it: it is read straight off the rows. Break spots AND whole products.
+   */
+  netSales: number
+  /**
+   * DERIVED. What the buyers paid, reverse-engineered row by row from `netSales`
+   * at that row's commission rate — see the fee section above.
+   *
+   * WHATNOT NEVER STATES THIS NUMBER. It is `netSales` with `totalFees` added
+   * back, and that identity is exact to the cent by construction. It is the top
+   * line of the statement because a P&L reads gross-down; `netSales` is what it
+   * reads back down to.
+   */
+  grossSales: number
+  /** Sale rows behind the two figures above, whatever their sign. */
+  saleCount: number
+  /** How many of those were real purchases and so carried a fee and a 30c. */
+  feeSaleCount: number
+  /**
+   * The whole-product share of `netSales` — sealed boxes and cases sold outright
    * rather than as break spots.
    *
-   * A SUBSET of `sales`, not an addition to it: the two are the same money and
-   * carry the same 8.9%, and giving them separate top lines would mean every
-   * subtotal and every reconciliation had to learn about both. It rides along so
-   * a screen can say how much of a day was marketplace without re-querying the
-   * ledger, and so the statement can show the split.
+   * NET, like `netSales` it is a subset of, and a subset rather than an addition:
+   * the two are the same money and carry the same fees, and giving them separate
+   * top lines would mean every subtotal and every reconciliation had to learn
+   * about both. It rides along so a screen can say how much of a day was
+   * marketplace without re-querying the ledger.
    */
   productSales: number
   productSaleCount: number
@@ -753,14 +1005,17 @@ export interface StreamDayFinance {
    * gap: the statement simply did not explain itself.
    */
   unclassified: number
-  /** sales + tips + bonuses + unclassified. What came in before fees. */
+  /** grossSales + tips + bonuses + unclassified. What the buyers paid. */
   totalRevenue: number
 
   // --- Fees (all negative) ------------------------------------------------
+  /** Whatnot's commission, at the rate in force on each row's own date. */
   whatnotFee: number
+  /** Stripe: 2.9% of gross plus 30c per purchased slot. */
   processingFee: number
   totalFees: number
-  /** totalRevenue + totalFees. What Whatnot actually keeps for you. */
+  /** totalRevenue + totalFees. What Whatnot actually paid you — and therefore
+   *  netSales + tips + bonuses + unclassified, exactly. */
   netRevenue: number
 
   // --- Shipping, tracked on its own -------------------------------------
@@ -878,6 +1133,16 @@ export interface PnlSection {
   subtotalLabel: string
   /** A running figure carried down the statement (gross profit, net profit). */
   running?: boolean
+  /**
+   * A sentence printed under the section's lines when it is open.
+   *
+   * Exists for exactly one thing: saying, where the fees are, that the gross
+   * above them is DERIVED from the net Whatnot paid rather than stated by
+   * Whatnot. That relationship is the whole point of this rewrite, and a reader
+   * who does not know it will mistake a reverse-engineered figure for something
+   * on a statement somewhere.
+   */
+  note?: string
 }
 
 /**
@@ -888,6 +1153,35 @@ export interface PnlSection {
  * with the machine would make the same statement render two ways on two desks.
  */
 const count = (n: number): string => n.toLocaleString('en-US')
+
+/** "$203,832.85". Pinned to en-US for the same reason `count` is. */
+const usd = (n: number): string =>
+  n.toLocaleString('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  })
+
+/**
+ * A rate as the statement prints it: "6%", "6.5%", "6.8%".
+ *
+ * ONE decimal, trailing zero dropped, and the precision is chosen rather than
+ * lazy. This rate is computed back OUT of a fee and a gross that are each
+ * already rounded to the cent, so on a $14 break spot a half-cent of rounding is
+ * about a hundredth of a percent — at two decimals a 6% commission prints as
+ * "5.99%", which reads as a bug and sends somebody looking for one. At one
+ * decimal it prints as "6%", and the "of $X gross" beside it is what actually
+ * makes the figure reproducible.
+ *
+ * Derived rather than read off the configured period, because a range that
+ * straddles a rate change has no single configured rate and must print the blend
+ * it really charged.
+ */
+const pctLabel = (fraction: number): string => {
+  const pct = Math.round(fraction * 1000) / 10
+  return `${Number.isInteger(pct) ? pct : pct.toFixed(1)}%`
+}
 
 const c2 = (n: number): number => Math.round(n * 100) / 100
 
@@ -900,8 +1194,11 @@ const c2 = (n: number): number => Math.round(n * 100) / 100
  * charged on the sale, not on the margin.
  */
 export function buildPnl(d: {
-  sales: number; saleCount: number; tips: number; bonuses: number; totalRevenue: number
+  netSales: number; grossSales: number; saleCount: number
+  tips: number; bonuses: number; totalRevenue: number
   unclassified?: number
+  /** Optional so a caller built before the fee rewrite still type-checks. */
+  feeSaleCount?: number
   breakCost: number; giveawayCost: number; cogs: number; grossProfit: number
   whatnotFee: number; processingFee: number; totalFees: number
   shippingSubsidy: number; shippingCharges: number; giveawayShipping: number
@@ -914,12 +1211,28 @@ export function buildPnl(d: {
     key, label, amount: c2(amount), detail, empty: c2(amount) === 0
   })
 
+  const gross = c2(d.grossSales)
+  const charged = d.feeSaleCount ?? d.saleCount
+  // Read back OUT of the figures rather than off a setting, so a period that
+  // spans a rate change prints the blend it actually charged instead of a rate
+  // that is right for only part of it.
+  const whatnotRate = gross > 0 ? Math.abs(d.whatnotFee) / gross : null
+  const stripePercentPart = c2(gross * STRIPE_PERCENT_RATE)
+
   return [
     {
       key: 'revenue',
       label: 'Revenue',
       lines: [
-        line('sales', 'Sales', d.sales, `${count(d.saleCount)} transaction${d.saleCount === 1 ? '' : 's'}`),
+        // The count is on the line because it is what the flat 30c multiplies;
+        // the fuller sentence about where this figure comes from is the
+        // section's note below, where it has room to be a sentence.
+        line(
+          'sales',
+          'Sales',
+          gross,
+          `${count(d.saleCount)} transaction${d.saleCount === 1 ? '' : 's'} · what buyers paid`
+        ),
         line('tips', 'Tips', d.tips),
         line('bonuses', 'Seller bonuses', d.bonuses),
         // Present so the subtotal always equals the lines above it. Optional on
@@ -933,7 +1246,16 @@ export function buildPnl(d: {
         )
       ],
       subtotal: c2(d.totalRevenue),
-      subtotalLabel: 'Total revenue'
+      subtotalLabel: 'Total revenue',
+      // THE SENTENCE THAT STOPS A DERIVED FIGURE BEING READ AS A STATED ONE.
+      // Whatnot's export contains the second number, never the first, and
+      // anybody comparing this statement to a Whatnot screen needs to know which
+      // of the two they are looking at.
+      note:
+        `Sales is a DERIVED gross: the ${usd(c2(d.netSales))} Whatnot actually paid out for ` +
+        `these ${count(d.saleCount)} row${d.saleCount === 1 ? '' : 's'}, with the platform fees ` +
+        `below added back on. The net is what reconciles to the bank; the gross is what the ` +
+        `buyers paid. Whatnot states only the net.`
     },
     {
       key: 'cogs',
@@ -957,19 +1279,35 @@ export function buildPnl(d: {
       key: 'fees',
       label: 'Platform fees',
       lines: [
-        line('whatnotFee', "Whatnot commission", d.whatnotFee, '6% of sales'),
-        // The sale count is context, not a multiplier \u2014 the fee is a flat
-        // percentage. Saying "across N sales" rather than "x N" keeps the line
-        // checkable without implying arithmetic that is not happening.
+        // TWO CUTS, SET BY TWO DIFFERENT PARTIES, so they are never one line.
+        // Whatnot's is negotiable and configurable by date; Stripe's is a
+        // published card rate. The owner's ask was to still see what is lost in
+        // fees, and "lost to whom" is half of that answer.
+        line(
+          'whatnotFee',
+          'Whatnot commission',
+          d.whatnotFee,
+          whatnotRate === null
+            ? 'a share of every sale'
+            : `${pctLabel(whatnotRate)} of ${usd(gross)} gross`
+        ),
+        // Written as the sum it is, so a person can reproduce it with a
+        // calculator: a percentage of the gross above, plus 30c for each slot
+        // somebody bought.
         line(
           'processingFee',
           'Payment processing',
           d.processingFee,
-          `2.9% of sales \u00B7 ${count(d.saleCount)} orders`
+          `2.9% of gross + 30\u00A2 \u00D7 ${count(charged)} order${charged === 1 ? '' : 's'}`
         )
       ],
       subtotal: c2(d.totalFees),
-      subtotalLabel: 'Total fees'
+      subtotalLabel: 'Total fees',
+      note:
+        `Whatnot pays NET \u2014 both of these were already gone before the ledger row was ` +
+        `written. Stripe's percentage alone is ${usd(stripePercentPart)}; the rest of that ` +
+        `line is 30\u00A2 a slot. Taking the two off the sales line above lands exactly on what ` +
+        `was paid out, to the cent.`
     },
     {
       key: 'shipping',
@@ -1182,7 +1520,8 @@ export function sumTreatment(
  * impossible.
  */
 export const PNL_MONEY_FIELDS = [
-  'sales',
+  'netSales',
+  'grossSales',
   'productSales',
   'tips',
   'bonuses',
@@ -1215,6 +1554,7 @@ export const PNL_COUNT_FIELDS = [
   'sessionCount',
   'minutes',
   'saleCount',
+  'feeSaleCount',
   'productSaleCount',
   'rowCount',
   'carriedBackRows'
@@ -1232,8 +1572,10 @@ export function emptyDayFinance(streamDate: string): StreamDayFinance {
     sessionCount: 0,
     sessionTitles: [],
     minutes: 0,
-    sales: 0,
+    netSales: 0,
+    grossSales: 0,
     saleCount: 0,
+    feeSaleCount: 0,
     productSales: 0,
     productSaleCount: 0,
     tips: 0,
@@ -1272,11 +1614,12 @@ export function emptyDayFinance(streamDate: string): StreamDayFinance {
  * figures added as floats and then compared to another float sum is how a
  * reconciliation check reports a phantom cent.
  *
- * Every field is SUMMED, including the fees — never re-derived from the range's
- * gross. Both charges are flat percentages, so a re-derivation would come close;
- * it would not come out equal. Each day's fee is already rounded to the cent,
- * and a sum of roundings is not the rounding of a sum. One derivation, on a day,
- * summed everywhere else.
+ * Every field is SUMMED, including the fees and the derived gross — never
+ * re-derived from the range's net. A range total cannot be taken apart into the
+ * rows it came from: the 30c is per ROW and the rate is per row's DATE, so
+ * `deriveSaleFee` on a period's net sales would charge one 30c for a month and
+ * one rate for a period that may straddle two. The derivation happens once, per
+ * row; a day sums its rows and everything above a day sums days.
  *
  * A non-finite figure counts as zero rather than poisoning the whole range: an
  * older packaged main can send days without the cost-of-goods keys, and one

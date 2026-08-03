@@ -1,9 +1,17 @@
 /**
  * Two things that decide numbers nobody can check by eye.
  *
- * PART A — the fee model. RM's processing rate is a flat 2.9%; there is no
- * per-transaction charge. The old model added 30c per sale row, which on shows
- * that sell hundreds of small break spots invented fees that were never taken.
+ * PART A — the fee model, at the CONTRACT's edge: the constants, the shape of a
+ * `FeeBreakdown`, and the fact that the statement still adds up once fees stop
+ * being a subtraction from the ledger's own figure. The arithmetic itself, the
+ * rate periods and the real ledger are `npm run test:fees`; what is here is what
+ * the rest of the app imports.
+ *
+ * These assertions used to encode the OPPOSITE model — that the ledger's amount
+ * was gross, that 8.9% came off it, and that there was no per-transaction
+ * charge. Every one of those was wrong: the ledger pays net, so the old code
+ * charged a fee that had already been taken and understated a ten-day export's
+ * revenue by about $35,000.
  *
  * PART B — supplies on-hand across a sync. A count must never be arbitrated by
  * whoever wrote the row last. These cases are the ones a previous attempt at
@@ -24,9 +32,10 @@ const supplies = require('../src/main/db/supplies')
 const sync = require('../src/main/db/sync')
 const {
   computeFees,
-  WHATNOT_COMMISSION_RATE,
-  PROCESSING_RATE,
-  TOTAL_FEE_RATE,
+  deriveSaleFee,
+  DEFAULT_WHATNOT_RATE,
+  STRIPE_PERCENT_RATE,
+  STRIPE_FLAT_CENTS,
   buildPnl,
   pnlChecksum
 } = require('../src/shared/financeStreaming')
@@ -46,63 +55,95 @@ const ok = (c: boolean, n: string, e = ''): void => {
 const near = (a: number, b: number, t = 0.005): boolean => Math.abs(a - b) < t
 
 // ---------------------------------------------------------------------------
-console.log('=== A1. the rate is a flat percentage ===')
+console.log('=== A1. the two rates, and which of them is negotiable ===')
 // ---------------------------------------------------------------------------
-ok(PROCESSING_RATE === 0.029, 'processing is 2.9%', String(PROCESSING_RATE))
-ok(WHATNOT_COMMISSION_RATE === 0.06, 'commission is 6%', String(WHATNOT_COMMISSION_RATE))
-ok(near(TOTAL_FEE_RATE, 0.089, 1e-9), 'so the whole take is 8.9%', String(TOTAL_FEE_RATE))
-ok(
-  (require('../src/shared/financeStreaming') as Record<string, unknown>)
-    .PROCESSING_PER_TRANSACTION === undefined,
-  'and the per-transaction fee is gone from the contract'
-)
+ok(STRIPE_PERCENT_RATE === 0.029, "Stripe's percentage is 2.9%", String(STRIPE_PERCENT_RATE))
+ok(STRIPE_FLAT_CENTS === 30, 'and it carries a flat 30c per slot', String(STRIPE_FLAT_CENTS))
+ok(DEFAULT_WHATNOT_RATE === 0.06, 'Whatnot defaults to 6%', String(DEFAULT_WHATNOT_RATE))
+// The old contract exported a single blended TOTAL_FEE_RATE and a
+// WHATNOT_COMMISSION_RATE constant, both of which said the take was a fixed
+// 8.9% of a gross the ledger never contained. Anything still importing them
+// would be computing the old, wrong answer, so their absence is asserted.
+const contract = require('../src/shared/financeStreaming') as Record<string, unknown>
+ok(contract.TOTAL_FEE_RATE === undefined, 'the blended 8.9% constant is gone')
+ok(contract.WHATNOT_COMMISSION_RATE === undefined, 'and the fixed 6% constant with it')
 
 // ---------------------------------------------------------------------------
-console.log('\n=== A2. the transaction COUNT cannot change the fee ===')
+console.log('\n=== A2. the transaction count now DOES change the fee ===')
 // ---------------------------------------------------------------------------
-// The whole point. $10,000 of sales costs the same whether it arrived as one
-// order or as two thousand break spots — which is exactly what the old flat 30c
-// got wrong, and it got it wrong worst on RM's biggest shows.
-const one = computeFees(10000, 1)
-const many = computeFees(10000, 2000)
-ok(near(one.totalFees, many.totalFees), 'one sale and 2,000 sales cost the same', `${one.totalFees} vs ${many.totalFees}`)
-ok(near(one.totalFees, -890), '8.9% of $10,000 is $890', String(one.totalFees))
-ok(near(one.whatnotFee, -600), 'commission $600', String(one.whatnotFee))
-ok(near(one.processingFee, -290), 'processing $290', String(one.processingFee))
-// Under the old model the 2,000-sale case would have been $600 heavier.
+// The exact assertion this file used to make in reverse, and the reversal is the
+// point. The flat 30c is real; what was wrong before was charging it ON TOP of a
+// net figure rather than reverse-engineering it OUT of one. $10,000 of payout
+// arriving as 2,000 spots means 2,000 slots were bought, so the buyers paid
+// $600 more than if it had arrived as one order — and the net is $10,000 either
+// way, which is why nothing here invents money.
+const row = (netCents: number): Record<string, number> => ({
+  netCents,
+  whatnotRate: DEFAULT_WHATNOT_RATE
+})
+const one = computeFees([row(1000000)])
+const many = computeFees(Array.from({ length: 2000 }, () => row(500)))
+ok(near(one.netSales, 10000), 'one order, $10,000 net', String(one.netSales))
+ok(near(many.netSales, 10000), '2,000 spots, the same $10,000 net', String(many.netSales))
 ok(
-  near(many.processingFee, -290),
-  'the 2,000-spot show is not charged an extra $600',
-  String(many.processingFee)
+  Math.abs(many.totalFees) > Math.abs(one.totalFees),
+  '2,000 slots cost more to process than one',
+  `${many.totalFees} vs ${one.totalFees}`
 )
-ok(many.saleCount === 2000, 'the count is still reported', String(many.saleCount))
+// And the difference is 1,999 extra flat charges — but NOT 1,999 × 30c. The 30c
+// is reverse-engineered out of a net figure, so each one is itself grossed up:
+// the buyer paid 30c / (1 − 0.06 − 0.029) = 32.9c to leave Whatnot 30c short.
+// Tolerance is half a cent per row across 2,000 rows, which is the most the
+// per-row rounding can ever be.
+const flatEach = 0.3 / (1 - 0.06 - 0.029)
+const extra = Math.abs(many.totalFees) - Math.abs(one.totalFees)
+ok(
+  near(extra, 1999 * flatEach, 2000 * 0.005 + 0.01),
+  'and the difference is 1,999 more 30c charges, grossed up',
+  `${extra} vs ${(1999 * flatEach).toFixed(2)}`
+)
+ok(many.saleCount === 2000 && many.chargedCount === 2000, 'both counts are reported')
 
 // ---------------------------------------------------------------------------
-console.log('\n=== A3. fees are negative, and only on sales ===')
+console.log('\n=== A3. gross is DERIVED, and it falls back to the net exactly ===')
 // ---------------------------------------------------------------------------
-ok(computeFees(0, 0).totalFees === 0, 'no sales, no fee')
-ok(computeFees(1, 1).totalFees < 0, 'a fee is negative')
-const small = computeFees(20, 1)
-ok(near(small.totalFees, -1.78), 'a single $20 spot costs $1.78, not $2.08', String(small.totalFees))
+for (const f of [one, many]) {
+  ok(
+    near(f.grossSales + f.totalFees, f.netSales, 0.0001),
+    `gross ${f.grossSales} less fees lands on the net ${f.netSales}`,
+    String(f.grossSales + f.totalFees)
+  )
+  ok(f.grossSales > f.netSales, 'and the gross is the LARGER number')
+}
+ok(computeFees([]).totalFees === 0, 'no sales, no fee')
+ok(computeFees([row(100)]).totalFees < 0, 'a fee is negative')
+
+// A refund and a $0.00 row are not purchases: face value, no fee, no 30c.
+const refunded = computeFees([row(-5000), row(0)])
+ok(refunded.totalFees === 0, 'a refund and a zero row are charged nothing')
+ok(near(refunded.grossSales, -50), 'and pass through at face value', String(refunded.grossSales))
+ok(refunded.chargedCount === 0, 'neither counts as a charged transaction')
 
 // ---------------------------------------------------------------------------
 console.log('\n=== A4. the statement still adds up ===')
 // ---------------------------------------------------------------------------
-const f = computeFees(12840.55, 1029)
+const f = computeFees(Array.from({ length: 1029 }, () => row(1248)))
 const day: Record<string, unknown> = {
   streamDate: '2026-08-01',
   sessionCount: 1,
   sessionTitles: ['Night'],
   minutes: 200,
-  sales: 12840.55,
+  netSales: f.netSales,
+  grossSales: f.grossSales,
   saleCount: 1029,
+  feeSaleCount: f.chargedCount,
   tips: 0,
   bonuses: 0,
-  totalRevenue: 12840.55,
+  totalRevenue: f.grossSales,
   whatnotFee: f.whatnotFee,
   processingFee: f.processingFee,
   totalFees: f.totalFees,
-  netRevenue: 12840.55 + f.totalFees,
+  netRevenue: f.grossSales + f.totalFees,
   shippingSubsidy: 0,
   shippingCharges: 0,
   giveawayShipping: 0,
@@ -112,24 +153,63 @@ const day: Record<string, unknown> = {
   showBoost: 0,
   reversals: 0,
   giveawayLoss: 0,
-  netAfterCosts: 12840.55 + f.totalFees,
+  netAfterCosts: f.grossSales + f.totalFees,
   breakCost: 0,
   giveawayCost: 0,
   cogs: 0,
-  grossProfit: 12840.55 + f.totalFees,
-  netProfit: 12840.55 + f.totalFees,
+  grossProfit: f.grossSales,
+  netProfit: f.grossSales + f.totalFees,
   rowCount: 1029,
   carriedBackRows: 0,
   carriedBackAmount: 0
 }
 const sections = buildPnl(day)
 ok(near(pnlChecksum(sections), day.netProfit as number), 'the sections sum to netProfit')
-const feeLine = sections
-  .find((s: any) => s.key === 'fees')
-  .lines.find((l: any) => l.key === 'processingFee')
-ok(!feeLine.detail.includes('30'), 'the fee line no longer advertises 30c', feeLine.detail)
-ok(feeLine.detail.includes('2.9%'), 'it still says the rate', feeLine.detail)
-ok(feeLine.detail.includes('1,029'), 'and still shows the order count for checking', feeLine.detail)
+ok(
+  near(sections.find((s: any) => s.key === 'revenue').subtotal, f.grossSales),
+  'the top line is the DERIVED gross, not the ledger figure'
+)
+const fees = sections.find((s: any) => s.key === 'fees')
+const stripeLine = fees.lines.find((l: any) => l.key === 'processingFee')
+const whatnotLine = fees.lines.find((l: any) => l.key === 'whatnotFee')
+// The 30c is back on the line, deliberately: the previous version of this test
+// asserted it was absent, on a model where charging it invented money.
+ok(stripeLine.detail.includes('30¢'), 'the processing line states the 30c again', stripeLine.detail)
+ok(stripeLine.detail.includes('2.9%'), 'and the percentage', stripeLine.detail)
+ok(stripeLine.detail.includes('1,029'), 'and the order count it multiplies', stripeLine.detail)
+ok(whatnotLine.detail.includes('6%'), "Whatnot's line states the rate it charged", whatnotLine.detail)
+ok(
+  Math.abs(whatnotLine.amount) !== Math.abs(stripeLine.amount),
+  'the two cuts are separate lines with separate figures'
+)
+ok(
+  (fees.note || '').includes('NET'),
+  'and the section says the ledger pays net',
+  String(fees.note)
+)
+
+// A single $20 payout, taken apart by hand.
+//
+//   gross  = (2000 + 30) / (1 − 0.06 − 0.029) = 2228.32c
+//   whatnot= round(2228.32 × 0.06)            =  134c
+//   stripe = round(2228.32 × 0.029) + 30      =   95c
+//   gross  = 2000 + 134 + 95                  = 2229c
+//
+// The reported gross is 2229 rather than the 2228 the division rounds to, and
+// that is the rounding decision made deliberately: the two FEES are honest
+// roundings of their own rates — which is what somebody checks against a
+// statement — and the derived gross absorbs the half-cent, so the three always
+// land back on the ledger's own net. Under the old model this same row was
+// reported as $20.00 of revenue costing $1.78 in fees; it was a $22.29 purchase
+// that had already cost $2.29.
+const spot = deriveSaleFee(2000, 0.06)
+ok(spot.grossCents === 2229, 'a $20.00 payout was a $22.29 purchase', String(spot.grossCents))
+ok(spot.whatnotFeeCents === -134, "Whatnot's 6% of that is $1.34", String(spot.whatnotFeeCents))
+ok(spot.stripeFeeCents === -95, "Stripe's 2.9% + 30c is $0.95", String(spot.stripeFeeCents))
+ok(
+  spot.grossCents + spot.whatnotFeeCents + spot.stripeFeeCents === 2000,
+  'and the three land back on the $20.00 exactly'
+)
 
 // ---------------------------------------------------------------------------
 console.log('\n=== B1. a peer cannot overwrite a local on-hand count ===')

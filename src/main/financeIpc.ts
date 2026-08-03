@@ -25,7 +25,9 @@ import type {
   LedgerImport,
   LedgerImportResult,
   LedgerRow,
-  StreamingFinanceView
+  RatePeriodInput,
+  StreamingFinanceView,
+  WhatnotRatePeriod
 } from '@shared/financeStreaming'
 import {
   deleteImport,
@@ -38,6 +40,7 @@ import {
   streamingFinanceView,
   type LedgerRowFilter
 } from './db/financeStreaming'
+import { deleteRatePeriod, listRatePeriods, saveRatePeriod } from './db/whatnotRates'
 import { currentUser } from './services/auth'
 
 function can(permission: Permission): boolean {
@@ -153,6 +156,58 @@ export function registerFinanceIpc(): void {
       const done = reattributeAll(actor.id)
       if (!done.ok) return { ok: false, error: done.error }
       return { ok: true, data: streamingFinanceView() }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  // ---- Whatnot's commission, by date range ---------------------------------
+  //
+  // Read like every other read: without `module.finance` the list comes back
+  // empty and the screen shows its permission state. Writes need
+  // `finance.manage`, because this number decides the top line of every show the
+  // business has ever run.
+  //
+  // VALIDATION IS HERE, in `saveRatePeriod`, not in the form. The renderer
+  // checks too so the operator finds out early, but a renderer is a convenience
+  // and this is the trust boundary — every field is re-coerced and re-checked
+  // against the stored rows inside the write transaction.
+
+  ipcMain.handle(IPC.finRatesList, (): WhatnotRatePeriod[] =>
+    can('module.finance') ? listRatePeriods() : []
+  )
+
+  ipcMain.handle(
+    IPC.finRateSave,
+    (_e, input: RatePeriodInput): Result<WhatnotRatePeriod[]> => {
+      try {
+        const actor = requireManage()
+        // Numbers off the wire are whatever the renderer sent. `Number(...)`
+        // here rather than a cast: a form string that will not parse must arrive
+        // as NaN and be REFUSED by the validator, not land as a 0% commission
+        // that silently doubles the reported gross of every show in the range.
+        return saveRatePeriod(
+          {
+            id: input?.id ? str(input.id).trim() : undefined,
+            fromDate: str(input?.fromDate).trim(),
+            toDate: input?.toDate === null || input?.toDate === undefined
+              ? null
+              : str(input.toDate).trim() || null,
+            rate: Number(input?.rate),
+            note: str(input?.note)
+          },
+          actor.id
+        )
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  ipcMain.handle(IPC.finRateDelete, (_e, id: string): Result<WhatnotRatePeriod[]> => {
+    try {
+      requireManage()
+      return deleteRatePeriod(str(id).trim())
     } catch (err) {
       return fail(err)
     }

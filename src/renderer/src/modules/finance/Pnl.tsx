@@ -65,6 +65,13 @@ const finite = (n: number): number => (Number.isFinite(n) ? n : 0)
 export function buildStatement(m: PnlMoney): PnlSection[] {
   return buildPnl({
     ...m,
+    // `netSales` and `grossSales` replaced a single `sales` field when the fee
+    // model was corrected, and a packaged main that predates that sends neither.
+    // Zero is the only safe reading; the checksum below then fails loudly, which
+    // is right — on that build the top line genuinely is not being reported.
+    netSales: finite(m.netSales),
+    grossSales: finite(m.grossSales),
+    feeSaleCount: finite(m.feeSaleCount),
     breakCost: finite(m.breakCost),
     giveawayCost: finite(m.giveawayCost),
     cogs: finite(m.cogs),
@@ -307,6 +314,17 @@ function SectionBody({
         ) : (
           visible.map((line) => <LineRow key={line.key} line={line} revenue={revenue} />)
         ))}
+
+      {/* The section's own footnote, printed verbatim from the contract for the
+          same reason a line's detail is: rewriting it here would put two
+          versions of the same sentence in the app. Only the fees section has one
+          today, and it is the sentence that stops a derived gross being read as
+          a figure Whatnot stated. */}
+      {open && section.note && (
+        <tr className="fin-pnl-note">
+          <td colSpan={cols}>{section.note}</td>
+        </tr>
+      )}
     </tbody>
   )
 }

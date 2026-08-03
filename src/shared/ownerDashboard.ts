@@ -18,7 +18,14 @@ export interface OwnerPnlWindow {
   label: string
   /** Days the window covers, for the subtitle. */
   days: number
+  /**
+   * What the buyers paid — the DERIVED gross, the same top line the Streaming
+   * statement prints. Whatnot pays net, so `revenue + fees` is the figure that
+   * actually landed in the account.
+   */
   revenue: number
+  /** Negative: Whatnot's commission and Stripe's cut, already deducted by the
+   *  platform before the ledger row was written. */
   fees: number
   cogs: number
   netProfit: number

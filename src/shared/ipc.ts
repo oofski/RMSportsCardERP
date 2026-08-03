@@ -262,6 +262,11 @@ export const IPC = {
   finLedgerImportImpact: 'finance:ledger:import:impact',
   finLedgerRows: 'finance:ledger:rows',
   finLedgerReattribute: 'finance:ledger:reattribute',
+  // What Whatnot's commission was, by date range. The fee is derived on read,
+  // so saving one of these immediately re-prices every past show it covers.
+  finRatesList: 'finance:rates:list',
+  finRateSave: 'finance:rates:save',
+  finRateDelete: 'finance:rates:delete',
 
   // Email
   emailComposeInvite: 'email:compose-invite',

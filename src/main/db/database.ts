@@ -907,6 +907,34 @@ function migrate(database: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_ledger_quarantine_import
       ON ledger_quarantine (import_id);
 
+    -- What Whatnot's commission was, over a stretch of days.
+    --
+    -- The ledger Amount is NET: Whatnot takes its cut before writing the row.
+    -- Gross and the two fees are reverse-engineered from that net on READ, at
+    -- the rate in force on each row's own date, so changing a rate here moves
+    -- every past show inside the range with no re-upload and no migration.
+    --
+    -- Nothing constrains the ranges in SQL. SQLite has no exclusion constraint,
+    -- so non-overlap is enforced in db/whatnotRates.ts inside the write
+    -- transaction -- the same bargain stream_sessions makes, and for the same
+    -- reason: two periods claiming one day would make a show's fee depend on
+    -- which row was read first.
+    --
+    -- to_date NULL means open-ended. An empty table is the ordinary state: 6%
+    -- applies to every day nothing covers.
+    CREATE TABLE IF NOT EXISTS whatnot_fee_periods (
+      id         TEXT PRIMARY KEY,
+      from_date  TEXT NOT NULL,
+      to_date    TEXT,
+      rate       REAL NOT NULL,
+      note       TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      created_by TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_whatnot_fee_periods_from
+      ON whatnot_fee_periods (from_date);
+
     -- =====================================================================
     -- v29: cloud sync
     -- =====================================================================
@@ -1660,6 +1688,23 @@ function migrate(database: Database.Database): void {
   // movements valued at the layers they took.
   addColumnIfMissing(database, 'stream_items', 'stated_case_price', 'REAL')
   setMeta(database, 'schema_version', '40')
+
+  // v42: what Whatnot's commission was, by date range.
+  //
+  // The table is created idempotently above and this version adds nothing else.
+  // There is deliberately NO backfill and no seed row: an empty table means
+  // "6% everywhere", which is what the app assumed before this shipped and what
+  // it still assumes for any day no period covers. Seeding a 6% row spanning
+  // history would look like a decision somebody made and would have to be edited
+  // around the first time a real rate change was entered.
+  //
+  // The correction that came WITH it is not a migration either, because nothing
+  // stored was wrong: the ledger's Amount was always the net figure. What was
+  // wrong was the code reading it as gross and taking 8.9% off it a second time,
+  // which understated a ten-day export's revenue by about $35,000. Fees are
+  // derived on read, so every stored row starts reporting correctly the moment
+  // this build opens the database. Nothing to re-import.
+  setMeta(database, 'schema_version', '42')
 
   // Seed the product catalog once, then apply the on-hand snapshot once.
   seedCatalogIfNeeded(database)

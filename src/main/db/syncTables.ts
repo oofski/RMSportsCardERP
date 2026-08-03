@@ -93,6 +93,18 @@ export const SYNCED_TABLES: SyncedTable[] = [
   { table: 'ship_sop_steps', key: ['id'], tier: 0 },
   { table: 'ship_supply_usage', key: ['id'], tier: 0 },
   { table: 'ledger_imports', key: ['id'], tier: 0 },
+  // Synced, and it has to be. The commission rate is what turns the net figure
+  // Whatnot pays into the gross a P&L reports, so a laptop without a period the
+  // owner entered would show a DIFFERENT profit for the same show off the same
+  // rows — with nothing on either screen to say which one was right. It is
+  // operator-authored, one row per range, keyed by a UUID nobody else mints, and
+  // it changes about once a year; last-write-wins arbitrates only edits to the
+  // same range, which is exactly what it is good at. Overlap is refused on
+  // write, and the write is local, so a pull can in principle land a range that
+  // overlaps one made offline here — the reader takes the first match in date
+  // order, and the rates screen shows both, which is the state somebody has to
+  // resolve rather than one the app should silently pick a winner for.
+  { table: 'whatnot_fee_periods', key: ['id'], tier: 0 },
   { table: 'stream_sessions', key: ['id'], tier: 0 },
   { table: 'purchase_orders', key: ['id'], tier: 0 },
   { table: 'inventory_resets', key: ['id'], tier: 0 },

@@ -1,23 +1,31 @@
 import { useState } from 'react'
 import { Icon } from '../../components/Icon'
 import { EmptyState } from '../../components/ui'
+import { RatesTab } from './RatesTab'
 import { StreamingTab } from './StreamingTab'
 import { financeReady } from './api'
 
 /**
  * Finance — the module shell.
  *
- * Three tabs, one of them real. Streaming is built because it is where the
- * money is: the Whatnot ledger is the only complete record of what the business
- * earns, and until it is attributed to shows there is nothing to build a P&L
- * on. Wholesale and the complete P&L say plainly that they are not here yet
- * rather than showing a plausible-looking zero — a finance screen that invents
- * a number is worse than one that admits it has none.
+ * Four tabs, two of them real. Streaming is built because it is where the money
+ * is: the Whatnot ledger is the only complete record of what the business earns,
+ * and until it is attributed to shows there is nothing to build a P&L on. Fees &
+ * rates is built because Whatnot's ledger pays NET — the gross on the Streaming
+ * tab is derived from it, and the commission rate is the one input that
+ * derivation needs and the export does not carry. It lives here rather than in
+ * Admin on the owner's call: the setting belongs beside the P&L it decides, not
+ * three modules away from it.
+ *
+ * Wholesale and the complete P&L say plainly that they are not here yet rather
+ * than showing a plausible-looking zero — a finance screen that invents a number
+ * is worse than one that admits it has none.
  */
-type FinanceTab = 'streaming' | 'wholesale' | 'pnl'
+type FinanceTab = 'streaming' | 'rates' | 'wholesale' | 'pnl'
 
 const TABS: Array<{ id: FinanceTab; label: string; icon: string }> = [
   { id: 'streaming', label: 'Streaming', icon: 'Activity' },
+  { id: 'rates', label: 'Fees & rates', icon: 'Percent' },
   { id: 'wholesale', label: 'Wholesale', icon: 'Boxes' },
   { id: 'pnl', label: 'Complete P&L', icon: 'BarChart3' }
 ]
@@ -54,6 +62,8 @@ export function FinanceModule(): JSX.Element {
 
       {tab === 'streaming' ? (
         <StreamingTab />
+      ) : tab === 'rates' ? (
+        <RatesTab />
       ) : tab === 'wholesale' ? (
         <NotBuiltYet
           icon="Boxes"

@@ -4,7 +4,9 @@ import type {
   LedgerImport,
   LedgerImportResult,
   LedgerRow,
-  StreamingFinanceView
+  RatePeriodInput,
+  StreamingFinanceView,
+  WhatnotRatePeriod
 } from '@shared/financeStreaming'
 import { api } from '../../lib/api'
 
@@ -43,6 +45,13 @@ export interface FinanceApi {
   /** Re-runs attribution over every stored row against the current sessions —
    *  what you press after logging a show that was missing. */
   reattribute(): Promise<Result<StreamingFinanceView>>
+  /** Whatnot's commission by date range. Empty means 6% everywhere. */
+  rates(): Promise<WhatnotRatePeriod[]>
+  /** Create (no id) or update (id). Rejects a range overlapping another, and
+   *  hands back the whole list either way. Changing a rate re-prices history the
+   *  next time the view is read — there is nothing to re-import. */
+  saveRate(input: RatePeriodInput): Promise<Result<WhatnotRatePeriod[]>>
+  deleteRate(id: string): Promise<Result<WhatnotRatePeriod[]>>
 }
 
 /**

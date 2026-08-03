@@ -86,6 +86,9 @@ import {
   Keyboard,
   Undo2,
   History,
+  Percent,
+  CalendarSearch,
+  CreditCard,
   // --- RM Cardz Shipping workspace (shell / Upload / Orders) ---
   UploadCloud,
   FileUp,
@@ -227,6 +230,9 @@ const MAP: Record<string, LucideIcon> = {
   Keyboard,
   Undo2,
   History,
+  Percent,
+  CalendarSearch,
+  CreditCard,
   // --- RM Cardz Shipping workspace (shell / Upload / Orders) ---
   UploadCloud,
   FileUp,

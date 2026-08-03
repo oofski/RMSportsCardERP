@@ -9,8 +9,11 @@ import type {
   OwnerWhatnotPnl
 } from '@shared/ownerDashboard'
 import type { StreamDayFinance } from '@shared/financeStreaming'
+import { deriveSaleFee } from '@shared/financeStreaming'
+import { streamDateOf } from '@shared/streaming'
 import { getDb } from './database'
 import { streamingFinanceView } from './financeStreaming'
+import { rateLookup } from './whatnotRates'
 import { listPurchaseOrders } from './purchaseOrders'
 import { inventoryStats } from './inventory'
 import { supplyStats } from './supplies'
@@ -108,50 +111,64 @@ function whatnotPnl(): OwnerWhatnotPnl | null {
 /**
  * The off-stream side, from the same ledger.
  *
- * `productSales` rides on every day already (a subset of `sales`), so the
- * windows come from the same rows as the Whatnot ones and the two can never
- * disagree about what a day held. The product breakdown is the only part that
- * goes back to the row table, because a day does not carry WHICH boxes sold.
+ * The product breakdown goes back to the row table because a day does not carry
+ * WHICH boxes sold — and now the windows do too, because a fee cannot be
+ * apportioned out of a day's total. The 30c is charged per purchased slot and
+ * the commission comes from each row's own date, so the only honest way to price
+ * a subset of a day's sales is to price the rows in it. `deriveSaleFee` is the
+ * same function the day view uses, so this widget and the Streaming tab cannot
+ * disagree about what a box sale cost.
  */
 function wholesalePnl(): OwnerWholesalePnl | null {
-  let view: ReturnType<typeof streamingFinanceView>
   try {
-    view = streamingFinanceView()
+    streamingFinanceView()
   } catch {
     return null
   }
   const weekFrom = daysAgo(6)
   const monthFrom = daysAgo(29)
 
+  // Every whole-product sale in the widest window either card needs, priced once.
+  const rateAt = rateLookup()
+  const saleRows = getDb()
+    .prepare(
+      `SELECT stream_date AS d, occurred_at AS at,
+              CAST(ROUND(amount * 100) AS INTEGER) AS cents
+         FROM ledger_rows
+        WHERE bucket = 'product_sale' AND stream_date IS NOT NULL AND stream_date >= ?`
+    )
+    .all(monthFrom) as Array<{ d: string; at: string; cents: number }>
+
   /**
    * A product-sales-only window.
    *
-   * Fees are apportioned at the flat 8.9%, which is exact rather than an
-   * estimate now that there is no per-transaction component — the whole take is
-   * a percentage of gross, so a share of the gross carries a share of the fee.
-   * COGS is left at zero: matching a sale to a product is done, costing it
-   * against that product's lots is not, and a fabricated cost would make this
+   * `revenue` is the DERIVED gross, matching the Streaming tab's top line, and
+   * `fees` is what came off it — the two add back to the net Whatnot paid, to
+   * the cent. COGS is left at zero: matching a sale to a product is done, costing
+   * it against that product's lots is not, and a fabricated cost would make this
    * widget the only place in the app that guesses.
    */
   const win = (from: string, label: string, span: number): OwnerPnlWindow => {
-    let revenue = 0
-    let activeDays = 0
-    for (const d of view.days) {
-      if (d.streamDate < from) continue
-      if (d.productSales > 0) {
-        revenue += d.productSales
-        activeDays += 1
-      }
+    let grossCents = 0
+    let feeCents = 0
+    const activeDays = new Set<string>()
+    for (const r of saleRows) {
+      if (r.d < from) continue
+      const fee = deriveSaleFee(r.cents, rateAt(streamDateOf(r.at)))
+      grossCents += fee.grossCents
+      feeCents += fee.whatnotFeeCents + fee.stripeFeeCents
+      if (r.cents !== 0) activeDays.add(r.d)
     }
-    const fees = -money(revenue * 0.089)
+    const revenue = grossCents / 100
+    const fees = feeCents / 100
     return {
       label,
       days: span,
       revenue: money(revenue),
-      fees,
+      fees: money(fees),
       cogs: 0,
       netProfit: money(revenue + fees),
-      activeDays
+      activeDays: activeDays.size
     }
   }
 
