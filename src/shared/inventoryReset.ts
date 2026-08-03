@@ -705,6 +705,11 @@ export interface ResetMissingRow {
   productName: string
   location: string
   quantity: number
+  /**
+   * THIS shelf's cost basis per unit, off its own cost layers — not the
+   * product-wide average. A product held in two places at two prices loses a
+   * different amount depending on which shelf goes.
+   */
   unitCost: number
   /**
    * Valued the way every widget values it: the high bid when there is one, the
@@ -717,8 +722,15 @@ export interface ResetMissingRow {
 export interface ResetTotals {
   unitsBefore: number
   unitsAfter: number
+  /**
+   * Cost basis across the whole catalog, summed SHELF BY SHELF — the same way
+   * db/valuation.ts sums it for the dashboard. Never on-hand × an average: a
+   * product counted 3 @ $10 and 4 @ $20 is worth $110.00, and no single per-unit
+   * figure multiplied by 7 says so.
+   */
   costBefore: number
   costAfter: number
+  /** Market value: quantity × high bid where priced, the cost basis where not. */
   marketBefore: number
   marketAfter: number
 }
