@@ -22,6 +22,8 @@ const { getDb } = require('../src/main/db/database')
 const ship = require('../src/main/db/shipping')
 const sop = require('../src/main/db/shipSop')
 const supplies = require('../src/main/db/supplies')
+const domain = require('../src/main/db/shippingDomain')
+const stations = require('../src/main/db/shipStations')
 const fin = require('../src/main/db/financeStreaming')
 const { parsePages } = require('../src/main/shipping/parser')
 getDb()
@@ -338,6 +340,80 @@ sop.setShipSopStep('team_bag', false, null)
 ok(onHand(bagsG) === 5000, 'unticking still returns everything', String(onHand(bagsG)))
 sop.setShipSopStep('team_bag', true, null)
 ok(onHand(bagsG) === 5000 - 35, 'and the smaller show can then tick', String(onHand(bagsG)))
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 9c. step 5 closes itself, and pays for itself ONCE ===')
+// ---------------------------------------------------------------------------
+// Nobody ticks the shipping off. It is finished when the last order has been
+// picked, which means the completing condition is re-evaluated on every single
+// "Picked · next order", by every bench in the room, all night. This is the one
+// hazard that pattern creates: a second mailer for the same night.
+//
+// Two things stop it and both are checked here — the transition is CLAIMED with
+// a conditional write, so only one caller ever goes on to move stock; and the
+// quantities are ABSOLUTE, so even a claim landing twice would write the same
+// number rather than add to it.
+const AUTO_DAY = '2027-09-19'
+load(ONE, 'Auto close', AUTO_DAY)
+const autoMailers = mk('Bubble mailers auto', 500, 0.3, 'bubble_mailer')
+const autoLabels = mk('4x6 labels auto', 1000, 0.5, 'shipping_label_4x6')
+openTo('ship') // steps 1-4, the ordinary way
+
+const orders = domain.listOrders()
+ok(orders.length === 2, 'two orders to pick', String(orders.length))
+ok(sop.getShipSop().steps.find((s: any) => s.step === 'ship').done === false, 'shipping is open')
+
+const completions: boolean[] = []
+for (const o of orders) {
+  completions.push(stations.pickAdvance(o.customerId, null).sopShipCompleted === true)
+}
+ok(
+  completions.filter(Boolean).length === 1 && completions[completions.length - 1] === true,
+  'exactly one pick reported closing it — the LAST one',
+  JSON.stringify(completions)
+)
+ok(sop.getShipSop().steps.find((s: any) => s.step === 'ship').done === true, 'and step 5 is ticked')
+// 1 carded package (2 mailers) + 1 giveaway-only (1) = 3; one label per package.
+ok(onHand(autoMailers) === 497, 'three mailers left the shelf', String(onHand(autoMailers)))
+ok(onHand(autoLabels) === 998, 'and two labels', String(onHand(autoLabels)))
+
+// Now hammer the completing condition the way a real night would: a picker
+// re-advancing an order they already finished, a double-click, a second bench
+// arriving at the same moment. Every one of them re-evaluates "is picking done?"
+// and every one of them must find the transition already taken.
+const afterFirst = onHand(autoMailers)
+for (const o of orders) {
+  ok(
+    stations.pickAdvance(o.customerId, null).sopShipCompleted === false,
+    `re-advancing @${o.customer.handle} does not close it a second time`
+  )
+}
+for (let i = 0; i < 5; i++) {
+  ok(sop.completeShipSopStepOnce('ship', null) === null, `direct call ${i + 1} is refused`)
+}
+ok(
+  onHand(autoMailers) === afterFirst && onHand(autoLabels) === 998,
+  'and not one extra mailer or label moved',
+  `${onHand(autoMailers)}/${onHand(autoLabels)}`
+)
+const shipTxns = getDb()
+  .prepare(`SELECT COUNT(*) AS n FROM supply_transactions WHERE supply_id = ? AND type = 'use'`)
+  .get(autoMailers) as { n: number }
+ok(shipTxns.n === 1, 'one use row for the mailers, not a pile', String(shipTxns.n))
+
+// The gate applies to the automatic path too, and refusing is silent: a step 5
+// that cannot be ticked is never a reason for a pick to fail. A fresh show with
+// nothing ticked in front of it proves both halves at once.
+load(ONE, 'Auto blocked', '2027-09-26')
+const blockedOrders = domain.listOrders()
+const blockedResult = stations.pickAdvance(blockedOrders[0].customerId, null)
+ok(!!blockedResult.finished, 'the pick still goes through with step 4 undone')
+ok(blockedResult.sopShipCompleted === false, 'and step 5 quietly does not close')
+stations.pickAdvance(blockedOrders[1].customerId, null)
+ok(
+  sop.getShipSop().steps.find((s: any) => s.step === 'ship').done === false,
+  'even once every order is picked — the order gate holds on the automatic path'
+)
 
 // ---------------------------------------------------------------------------
 console.log('\n=== 10. on-hand IS the sum of the movements ===')

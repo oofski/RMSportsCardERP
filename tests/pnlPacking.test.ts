@@ -89,7 +89,13 @@ ok(dayOf(view, '2026-07-12') === null || dayOf(view, '2026-07-12').packingSuppli
    'a plan alone books nothing — the steps have to be ticked')
 
 console.log('\n=== tick the two steps that consume the linked roles ===')
+// The checklist runs in order, so the night is worked in order. Sleeving,
+// sorting and break stickers consume roles nothing is linked to here, which is
+// exactly why they can be ticked through without changing the money below.
+sop.setShipSopStep('sleeve', true, null)
+sop.setShipSopStep('sort', true, null)
 sop.setShipSopStep('team_bag', true, null) //  35 bags  × 0.02 = 0.70
+sop.setShipSopStep('break_sticker', true, null)
 sop.setShipSopStep('ship', true, null) //       3 mailers × 0.30 + 2 labels × 0.50 = 1.90
 
 view = fin.streamingFinanceView()

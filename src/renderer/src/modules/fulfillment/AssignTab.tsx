@@ -9,7 +9,6 @@ import type {
 } from '@shared/shippingViews'
 import { api } from '../../lib/api'
 import { BreakChip } from './BreakChip'
-import { useChrome } from '../../lib/chrome'
 import { useToast } from '../../components/Toast'
 import { Avatar, Button, CenterLoader, EmptyState, Select } from '../../components/ui'
 import { Icon } from '../../components/Icon'
@@ -92,7 +91,6 @@ interface RosterRow {
 }
 
 export function AssignTab(): JSX.Element {
-  const { navigate } = useChrome()
   const toast = useToast()
 
   const [board, setBoard] = useState<ShipAssignmentBoard | null>(null)
@@ -283,17 +281,16 @@ export function AssignTab(): JSX.Element {
 
   // Assignments hang off breaks, so with no dataset loaded there is nothing to
   // assign anyone to. Point at the import rather than showing an empty grid.
+  //
+  // The import is the Import segment of this same screen, one click away — this
+  // used to send people to the Shipping workspace, which was right when Setup
+  // lived there and is a dead end now that it does not. A bench has no import.
   if (breaks.length === 0) {
     return (
       <EmptyState
         icon="Layers"
         title="No breaks to assign"
-        message="Break assignments need a loaded dataset. Import a Whatnot packing-slip PDF in the Shipping workspace and every break shows up here, ready to be handed out."
-        action={
-          <Button variant="primary" icon="ArrowUpRight" onClick={() => navigate('fulfillment')}>
-            Open the Shipping workspace
-          </Button>
-        }
+        message="Break assignments need a loaded dataset. Import tonight's Whatnot packing-slip PDF on the Import tab above and every break shows up here, ready to be handed out."
       />
     )
   }
