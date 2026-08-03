@@ -201,6 +201,8 @@ export interface ShipStationOrder {
   customerId: string
   handle: string
   realName: string | null
+  /** Where this customer's slip sits in the uploaded PDF. Empty if unknown. */
+  pages: number[]
   cardsTotal: number
   cardsChecked: number
   onHold: boolean

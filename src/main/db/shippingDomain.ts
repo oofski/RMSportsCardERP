@@ -99,6 +99,7 @@ import {
   setBreakStatus,
   setTeamSlotChecked as storeSetTeamSlotChecked,
   setTeamSlotTopSleeved as storeSetTeamSlotTopSleeved,
+  setTeamSlotSleeve as storeSetTeamSlotSleeve,
   updateShipment
 } from './shipping'
 import {
@@ -816,6 +817,23 @@ export function setTeamSlotChecked(
   const slot = storeSetTeamSlotChecked(slotId, checked, userId)
   if (!slot) throw new Error('Card not found.')
   _recomputeBreakStatus(slot.breakId)
+  const shipment = getShipShipmentByCustomer(slot.customerId)
+  return {
+    slot,
+    break: getBreak(slot.breakId),
+    order: shipment ? _orderRow(shipment) : null
+  }
+}
+
+/** Sleeved or top-loaded, per card, with the person who did it. */
+export function setTeamSlotSleeve(
+  slotId: string,
+  which: 'sleeved' | 'top_sleeved',
+  on: boolean,
+  by: string | null
+): ShipSlotUpdate {
+  const slot = storeSetTeamSlotSleeve(slotId, which, on, by)
+  if (!slot) throw new Error('Card not found.')
   const shipment = getShipShipmentByCustomer(slot.customerId)
   return {
     slot,

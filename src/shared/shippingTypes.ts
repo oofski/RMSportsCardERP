@@ -128,7 +128,25 @@ export interface ShipTeamSlot {
   orderId: string | null
   price: number
   isGiveaway: boolean
+  /**
+   * Top-loaded. Kept under its original name because the column is synced and
+   * renaming it would strand every laptop on an older build.
+   *
+   * Implies `sleeved`: a card goes into a sleeve and then into the loader.
+   */
   topSleeved: boolean
+  topSleevedAt: string | null
+  topSleevedBy: string | null
+  /**
+   * Sleeved but not necessarily top-loaded — about half of them are not.
+   *
+   * Split from `topSleeved` because SOP step 1 consumes TWO supplies at two
+   * different rates (95% sleeves, 50% loaders) and one flag could not say which
+   * had happened.
+   */
+  sleeved: boolean
+  sleevedAt: string | null
+  sleevedBy: string | null
   checkedOff: boolean
   checkedOffAt: string | null
   checkedOffBy: string | null

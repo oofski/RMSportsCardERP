@@ -1587,6 +1587,46 @@ function migrate(database: Database.Database): void {
   // Written once, by the machine that imports, in the same transaction as the
   // row, and never updated. Two machines never mint the same import id.
   addColumnIfMissing(database, 'ship_imports', 'carried_from', 'TEXT')
+
+  // The same scoping, applied to a bug that has been live since assignments
+  // shipped.
+  //
+  // Break ids are `break_<label>` and labels RECUR — every show has a break 3,
+  // a break 4, a break 11. The prune only removes an assignment whose break is
+  // ABSENT, so assigning somebody to break 11 tonight and importing next
+  // Tuesday's show, which also has a break 11, silently carries them onto a
+  // different pile of cards. Nobody is told, and the board looks correct.
+  //
+  // Stamping the import an assignment was made against turns "is this still
+  // mine" into the same chain walk the work claims use. Rows written before
+  // this column existed carry NULL and are treated as belonging to the current
+  // show, so an upgrade mid-shift does not wipe the board.
+  addColumnIfMissing(database, 'ship_break_assignments', 'import_id', 'TEXT')
+
+  // One flag was doing two jobs.
+  //
+  // SOP step 1 is "Sleeving and top loading" and consumes TWO supplies at two
+  // different rates — a top sleeve on 95% of packs, a toploader on 50%. There
+  // was a single `top_sleeved` boolean per card, so the floor could record that
+  // a card had been "done" and nothing could say which of the two things had
+  // happened. It also recorded no WHO and no WHEN, unlike checked_off beside
+  // it, so per-card sleeve attribution did not exist at all.
+  //
+  // `top_sleeved` is left in place and keeps its meaning as the toploader flag.
+  // Renaming a column on a synced table to gain a clearer name would strand
+  // every laptop on an older build, and the value already means "top loaded" to
+  // every row that has one.
+  addColumnIfMissing(database, 'ship_team_slots', 'sleeved', 'INTEGER NOT NULL DEFAULT 0')
+  addColumnIfMissing(database, 'ship_team_slots', 'sleeved_at', 'TEXT')
+  addColumnIfMissing(database, 'ship_team_slots', 'sleeved_by', 'TEXT')
+  addColumnIfMissing(database, 'ship_team_slots', 'top_sleeved_at', 'TEXT')
+  addColumnIfMissing(database, 'ship_team_slots', 'top_sleeved_by', 'TEXT')
+  // A card already marked top-loaded was sleeved too — that is what the single
+  // flag meant when it was written. Backfilling keeps the history honest rather
+  // than showing a night's work as half done.
+  runOnce(database, 'sleeved_from_top_sleeved_v1', () =>
+    database.prepare(`UPDATE ship_team_slots SET sleeved = 1 WHERE top_sleeved = 1`).run()
+  )
   setMeta(database, 'schema_version', '39')
 
   // Seed the product catalog once, then apply the on-hand snapshot once.

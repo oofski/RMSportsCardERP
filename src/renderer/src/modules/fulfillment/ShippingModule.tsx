@@ -12,6 +12,7 @@ import { HistoryTab } from './HistoryTab'
 import { FlagsTab } from './FlagsTab'
 import { TodayTab } from './TodayTab'
 import { SopTab } from './SopTab'
+import { FloorView } from './FloorView'
 import { WithSlipMode } from './WithSlipMode'
 
 /**
@@ -45,6 +46,7 @@ import { WithSlipMode } from './WithSlipMode'
 export type ShipTabId =
   | 'today'
   | 'find'
+  | 'floor'
   | 'sop'
   | 'flags'
   | 'setup'
@@ -182,6 +184,10 @@ export function ShippingModule(): JSX.Element {
     // ticked. A count of steps done would read as work outstanding and mean the
     // opposite of what every other badge in this row means.
     { id: 'sop', label: 'Steps', icon: 'ListTodo', badge: stepsLeft, tone: 'warning' },
+    // The bench. Deliberately its own tab rather than a mode of Orders: a
+    // picker and a packer are doing different jobs on different screens, and
+    // the whole point is that neither is looking at the other's list.
+    { id: 'floor', label: 'Bench', icon: 'Boxes', badge: 0 },
     { id: 'flags', label: 'Flags', icon: 'Flag', badge: warningCount, tone: 'warning' },
     // Running the show, not doing it — hidden from people who cannot.
     ...(canManage
@@ -264,6 +270,7 @@ export function ShippingModule(): JSX.Element {
           </WithSlipMode>
         )}
         {tab === 'sop' && <SopTab {...tabProps} />}
+        {tab === 'floor' && <FloorView {...tabProps} />}
         {tab === 'flags' && <FlagsTab {...tabProps} />}
         {tab === 'setup' && <SetupTab {...tabProps} />}
         {tab === 'history' && <HistoryTab {...tabProps} />}

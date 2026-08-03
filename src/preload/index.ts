@@ -3,6 +3,11 @@ import { IPC, type AppInfo } from '@shared/ipc'
 import type { Permission } from '@shared/permissions'
 import type { NewReminder, OwnerBoard, Reminder } from '@shared/ownerDashboard'
 import type {
+  ShipStationBoard,
+  ShipStationOrder,
+  ShipStationRole
+} from '@shared/shipStations'
+import type {
   ShipSopResult,
   ShipSopState,
   ShipSopStep,
@@ -424,6 +429,46 @@ const api = {
     /** The same plan costed against the supplies list. Needs Inventory too. */
     supplyPlanCosted: (): Promise<ShipSupplyPlanCosted | null> =>
       ipcRenderer.invoke(IPC.shipSupplyPlanCosted),
+
+    /**
+     * The floor: who is at this bench, and the pick -> pack handoff.
+     *
+     * `heartbeat` is local and cheap — it keeps this station's claims from
+     * expiring while somebody is genuinely working, and touches no network.
+     */
+    stationBoard: (): Promise<ShipStationBoard | null> =>
+      ipcRenderer.invoke(IPC.shipStationBoard),
+    stationRoster: (): Promise<Array<{ id: string; name: string }>> =>
+      ipcRenderer.invoke(IPC.shipStationRoster),
+    stationStart: (operatorId: string, role: ShipStationRole): Promise<Result<ShipStationBoard>> =>
+      ipcRenderer.invoke(IPC.shipStationStart, { operatorId, role }),
+    stationEnd: (): Promise<Result<ShipStationBoard>> => ipcRenderer.invoke(IPC.shipStationEnd),
+    stationClaim: (
+      orderId: string,
+      customerId: string,
+      role: ShipStationRole
+    ): Promise<Result<unknown>> =>
+      ipcRenderer.invoke(IPC.shipStationClaim, { orderId, customerId, role }),
+    stationRelease: (claimId: string): Promise<Result<boolean>> =>
+      ipcRenderer.invoke(IPC.shipStationRelease, claimId),
+    stationPickAdvance: (customerId: string): Promise<Result<unknown>> =>
+      ipcRenderer.invoke(IPC.shipStationPickAdvance, customerId),
+    stationPickNext: (): Promise<Result<ShipStationOrder | null>> =>
+      ipcRenderer.invoke(IPC.shipStationPickNext),
+    stationPackNext: (): Promise<Result<ShipStationOrder | null>> =>
+      ipcRenderer.invoke(IPC.shipStationPackNext),
+    stationPackDone: (customerId: string): Promise<Result<unknown>> =>
+      ipcRenderer.invoke(IPC.shipStationPackDone, customerId),
+    stationSendBack: (customerId: string, reason: string): Promise<Result<boolean>> =>
+      ipcRenderer.invoke(IPC.shipStationSendBack, { customerId, reason }),
+    stationHeartbeat: (): Promise<number> => ipcRenderer.invoke(IPC.shipStationHeartbeat),
+    /** Sleeved / top-loaded, per card. Moves no stock — step 1's tick does. */
+    setSlotSleeve: (
+      slotId: string,
+      which: 'sleeved' | 'top_sleeved',
+      on: boolean
+    ): Promise<Result<ShipSlotUpdate>> =>
+      ipcRenderer.invoke(IPC.shipSlotSleeve, { slotId, which, on }),
 
     /** The SOP checklist: where the night is up to, and what it has consumed. */
     sop: (): Promise<ShipSopState | null> => ipcRenderer.invoke(IPC.shipSop),

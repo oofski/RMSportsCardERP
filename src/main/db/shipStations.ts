@@ -430,6 +430,7 @@ function toStationOrder(o: ShipOrderRow, now: number): ShipStationOrder {
     customerId: o.customerId,
     handle: o.customer.handle,
     realName: o.customer.realName || null,
+    pages: o.customer.pages ?? [],
     cardsTotal: o.cardCount,
     cardsChecked: o.pick.checked,
     onHold: o.onHold,
@@ -551,6 +552,25 @@ export function pickAdvance(customerId: string, loginUserId: string | null): Adv
   }
 }
 
+/**
+ * Take the next order to pick, or resume the one I already hold.
+ *
+ * Symmetric with packNext, and the reason both exist: arriving at a bench and
+ * pressing nothing should still put work in front of you.
+ */
+export function pickNext(loginUserId: string | null): ShipStationOrder | null {
+  const mine = myClaim('pick')
+  if (mine) {
+    const o = listOrders().find((x) => x.customerId === mine.customerId)
+    return o ? toStationOrder(o, Date.now()) : null
+  }
+  for (const cand of pickableOrders()) {
+    const res = claimOrder(cand.orderId, cand.customerId, 'pick', loginUserId)
+    if (res.ok) return { ...cand, mine: true }
+  }
+  return null
+}
+
 /** Take the next thing waiting to be packed, or resume what I already hold. */
 export function packNext(loginUserId: string | null): ShipStationOrder | null {
   const mine = myClaim('pack')
@@ -636,6 +656,32 @@ export function getStationBoard(): ShipStationBoard {
     others,
     allDone: toPick === 0 && queue.length === 0 && orders.length > 0
   }
+}
+
+/**
+ * Who could be standing at this bench.
+ *
+ * People currently ON THE CLOCK. That is an existing authenticated act —
+ * somebody signed in somewhere to punch in — so a shared station needs no
+ * second password and no PIN, and the list cannot offer somebody who is not at
+ * work. Stations themselves are excluded: a computer does not pick cards.
+ */
+export function stationRoster(): Array<{ id: string; name: string }> {
+  const rows = getDb()
+    .prepare(
+      `SELECT DISTINCT e.id, e.first_name, e.last_name
+         FROM time_entries t
+         JOIN employees e ON e.id = t.employee_id
+        WHERE t.clock_out IS NULL
+          AND e.status = 'active'
+          AND COALESCE(e.account_kind, 'person') <> 'station'
+        ORDER BY e.first_name COLLATE NOCASE`
+    )
+    .all() as Array<{ id: string; first_name: string | null; last_name: string | null }>
+  return rows.map((r) => ({
+    id: r.id,
+    name: `${r.first_name ?? ''} ${r.last_name ?? ''}`.trim() || 'Unnamed'
+  }))
 }
 
 /** How long a claim may sit without a heartbeat. Exposed for the tests. */

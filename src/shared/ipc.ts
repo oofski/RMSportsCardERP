@@ -140,6 +140,21 @@ export const IPC = {
   shipSopSetStep: 'shipping:sop:set-step',
   // Say which supply row plays a role in a show's arithmetic.
   supplySetShipRole: 'supplies:ship-role',
+  // The floor: who is at this bench, and the pick -> pack handoff.
+  shipStationBoard: 'shipping:station:board',
+  shipStationStart: 'shipping:station:start',
+  shipStationEnd: 'shipping:station:end',
+  shipStationRoster: 'shipping:station:roster',
+  shipStationClaim: 'shipping:station:claim',
+  shipStationRelease: 'shipping:station:release',
+  shipStationPickAdvance: 'shipping:station:pick-advance',
+  shipStationPickNext: 'shipping:station:pick-next',
+  shipStationPackNext: 'shipping:station:pack-next',
+  shipStationPackDone: 'shipping:station:pack-done',
+  shipStationSendBack: 'shipping:station:send-back',
+  shipStationHeartbeat: 'shipping:station:heartbeat',
+  // Per-card sleeve capture, split from the single old flag.
+  shipSlotSleeve: 'shipping:teamslot:sleeve',
   // Shared bench logins: a computer signs in, not a person.
   stationsList: 'stations:list',
   stationsCreate: 'stations:create',

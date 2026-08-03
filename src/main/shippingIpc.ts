@@ -141,6 +141,29 @@ import type {
 } from '@shared/shippingSupplies'
 import { SHIP_SOP_STEPS } from '@shared/shippingSupplies'
 import { getShipSop, setShipSopStep } from './db/shipSop'
+import {
+  claimOrder,
+  endStationSession,
+  getStationBoard,
+  heartbeatStation,
+  operatorFor,
+  packDone,
+  packNext,
+  pickAdvance,
+  pickNext,
+  releaseClaim,
+  sendBack,
+  startStationSession,
+  stationRoster,
+  type AdvanceResult,
+  type ClaimOutcome
+} from './db/shipStations'
+import {
+  isShipStationRole,
+  type ShipStationBoard,
+  type ShipStationOrder
+} from '@shared/shipStations'
+import { setTeamSlotSleeve } from './db/shippingDomain'
 
 // ---------------------------------------------------------------------------
 // Guards
@@ -630,6 +653,178 @@ export function registerShippingIpc(): void {
         const step = str(payload?.step).trim() as ShipSopStep
         if (!SHIP_SOP_STEPS.includes(step)) throw new Error('Unknown step.')
         return { ok: true, data: setShipSopStep(step, payload?.done !== false, actor.id) }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  // ---- The floor: stations, and the pick -> pack handoff -------------------
+  //
+  // Reads need the module. Every write needs the floor permission for the job
+  // being done — `requireFind` to pick, `requirePack` to pack — exactly as the
+  // rest of this file already works. What is NEW is that the person stamped on
+  // the work is not necessarily the account that authorised it: a bench login
+  // is shared, so `operatorFor()` resolves the person standing there.
+  //
+  // The operator is never an input to a permission decision. Choosing a name
+  // from the roster grants nothing; it only changes whose name lands on the
+  // card. That line is what keeps this from becoming a second auth system.
+  ipcMain.handle(IPC.shipStationBoard, (): ShipStationBoard | null =>
+    can('module.fulfillment') ? getStationBoard() : null
+  )
+
+  /**
+   * Who could be standing here.
+   *
+   * People currently ON THE CLOCK, which is an existing authenticated act —
+   * somebody signed in somewhere to punch in. So a station needs no second
+   * password and no PIN, and the list cannot name anybody who is not at work.
+   */
+  ipcMain.handle(IPC.shipStationRoster, (): Array<{ id: string; name: string }> =>
+    can('module.fulfillment') ? stationRoster() : []
+  )
+
+  ipcMain.handle(
+    IPC.shipStationStart,
+    (_e, payload: { operatorId?: unknown; role?: unknown }): Result<ShipStationBoard> => {
+      try {
+        const role = str(payload?.role)
+        if (!isShipStationRole(role)) throw new Error('Choose picking or packing.')
+        // Authorise against the job they are about to do, not the module.
+        const actor = role === 'pack' ? requirePack() : requireFind()
+        const operatorId = str(payload?.operatorId).trim()
+        if (!operatorId) throw new Error('Say who is at this bench.')
+        const started = startStationSession(operatorId, role, actor.id)
+        if (!started) throw new Error('That person is not clocked in.')
+        return { ok: true, data: getStationBoard() }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  ipcMain.handle(IPC.shipStationEnd, (): Result<ShipStationBoard> => {
+    try {
+      requireAny(['shipping.find', 'shipping.pack', 'shipping.manage'], 'work the floor')
+      endStationSession()
+      return { ok: true, data: getStationBoard() }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle(
+    IPC.shipStationClaim,
+    (_e, payload: { orderId?: unknown; customerId?: unknown; role?: unknown }): Result<ClaimOutcome> => {
+      try {
+        const role = str(payload?.role)
+        if (!isShipStationRole(role)) throw new Error('Unknown job.')
+        const actor = role === 'pack' ? requirePack() : requireFind()
+        return {
+          ok: true,
+          data: claimOrder(
+            requireId(payload?.orderId, 'order'),
+            requireId(payload?.customerId, 'customer'),
+            role,
+            actor.id
+          )
+        }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  ipcMain.handle(IPC.shipStationRelease, (_e, claimId: unknown): Result<boolean> => {
+    try {
+      requireAny(['shipping.find', 'shipping.pack', 'shipping.manage'], 'work the floor')
+      return { ok: true, data: releaseClaim(requireId(claimId, 'claim'), 'put back') }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle(
+    IPC.shipStationPickAdvance,
+    (_e, customerId: unknown): Result<AdvanceResult> => {
+      try {
+        const actor = requireFind()
+        return { ok: true, data: pickAdvance(requireId(customerId, 'package'), actor.id) }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  ipcMain.handle(IPC.shipStationPickNext, (): Result<ShipStationOrder | null> => {
+    try {
+      const actor = requireFind()
+      return { ok: true, data: pickNext(actor.id) }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle(IPC.shipStationPackNext, (): Result<ShipStationOrder | null> => {
+    try {
+      const actor = requirePack()
+      return { ok: true, data: packNext(actor.id) }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle(IPC.shipStationPackDone, (_e, customerId: unknown): Result<ShipOrderRow | null> => {
+    try {
+      const actor = requirePack()
+      return { ok: true, data: packDone(requireId(customerId, 'package'), actor.id) }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle(
+    IPC.shipStationSendBack,
+    (_e, payload: { customerId?: unknown; reason?: unknown }): Result<boolean> => {
+      try {
+        requirePack()
+        const reason = str(payload?.reason).trim()
+        if (!reason) throw new Error('Say what is wrong with it.')
+        return { ok: true, data: sendBack(requireId(payload?.customerId, 'package'), reason) }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  /** Cheap, local, no network. Keeps this station's claims from expiring. */
+  ipcMain.handle(IPC.shipStationHeartbeat, (): number =>
+    can('module.fulfillment') ? heartbeatStation() : 0
+  )
+
+  /**
+   * Sleeved / top-loaded, per card.
+   *
+   * Two flags, because step 1 consumes two supplies at two different rates and
+   * one boolean could not say which had happened. Recording it does NOT move
+   * stock — step 1's tick still does that, once, for the whole show.
+   */
+  ipcMain.handle(
+    IPC.shipSlotSleeve,
+    (_e, payload: { slotId?: unknown; which?: unknown; on?: unknown }): Result<ShipSlotUpdate> => {
+      try {
+        const actor = requireFind()
+        const which = payload?.which === 'top_sleeved' ? 'top_sleeved' : 'sleeved'
+        return {
+          ok: true,
+          data: setTeamSlotSleeve(
+            requireId(payload?.slotId, 'card'),
+            which,
+            payload?.on !== false,
+            operatorFor(actor.id)
+          )
+        }
       } catch (err) {
         return fail(err)
       }

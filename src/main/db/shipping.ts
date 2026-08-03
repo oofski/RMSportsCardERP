@@ -88,6 +88,11 @@ interface TeamSlotRow {
   price: number
   is_giveaway: number
   top_sleeved: number
+  sleeved: number
+  sleeved_at: string | null
+  sleeved_by: string | null
+  top_sleeved_at: string | null
+  top_sleeved_by: string | null
   checked_off: number
   checked_off_at: string | null
   checked_off_by: string | null
@@ -242,6 +247,11 @@ function toTeamSlot(r: TeamSlotRow): ShipTeamSlot {
     price: num(r.price),
     isGiveaway: bool(r.is_giveaway),
     topSleeved: bool(r.top_sleeved),
+    sleeved: bool(r.sleeved),
+    sleevedAt: r.sleeved_at ?? null,
+    sleevedBy: r.sleeved_by ?? null,
+    topSleevedAt: r.top_sleeved_at ?? null,
+    topSleevedBy: r.top_sleeved_by ?? null,
     checkedOff: bool(r.checked_off),
     checkedOffAt: r.checked_off_at ?? null,
     checkedOffBy: r.checked_off_by ?? null
@@ -826,12 +836,55 @@ export function setTeamSlotChecked(id: string, checked: boolean, by: string | nu
   return getShipTeamSlot(id)
 }
 
-export function setTeamSlotTopSleeved(id: string, on: boolean): ShipTeamSlot | null {
-  const res = getDb()
-    .prepare(`UPDATE ship_team_slots SET top_sleeved = ? WHERE id = ?`)
-    .run(flag(on), id)
+/**
+ * Sleeved, top-loaded, or both — and who did it.
+ *
+ * Two flags because step 1 consumes two supplies at two different rates. A card
+ * can be sleeved without being top-loaded (half of them are); the reverse is
+ * not a real state, so top-loading a card sleeves it.
+ *
+ * Stamps a who and a when, which the single flag never did — a work record with
+ * no name on it cannot answer the only question anybody asks it later.
+ */
+export function setTeamSlotSleeve(
+  id: string,
+  which: 'sleeved' | 'top_sleeved',
+  on: boolean,
+  by: string | null
+): ShipTeamSlot | null {
+  const ts = on ? nowIso() : null
+  const db = getDb()
+  const res =
+    which === 'top_sleeved'
+      ? db
+          .prepare(
+            `UPDATE ship_team_slots
+                SET top_sleeved = ?, top_sleeved_at = ?, top_sleeved_by = ?,
+                    -- Top-loading implies sleeving: the card goes in a sleeve
+                    -- and then into the loader. Leaving the sleeved flag at 0
+                    -- here would report the night as half done.
+                    sleeved = CASE WHEN ? = 1 THEN 1 ELSE sleeved END,
+                    sleeved_at = CASE WHEN ? = 1 AND sleeved = 0 THEN ? ELSE sleeved_at END,
+                    sleeved_by = CASE WHEN ? = 1 AND sleeved = 0 THEN ? ELSE sleeved_by END
+              WHERE id = ?`
+          )
+          .run(flag(on), ts, on ? by : null, flag(on), flag(on), ts, flag(on), by, id)
+      : db
+          .prepare(
+            `UPDATE ship_team_slots
+                SET sleeved = ?, sleeved_at = ?, sleeved_by = ?,
+                    -- Un-sleeving a card cannot leave it top-loaded.
+                    top_sleeved = CASE WHEN ? = 0 THEN 0 ELSE top_sleeved END
+              WHERE id = ?`
+          )
+          .run(flag(on), ts, on ? by : null, flag(on), id)
   if (res.changes === 0) return null
   return getShipTeamSlot(id)
+}
+
+/** Kept for the break-level "sleeve them all" action. */
+export function setTeamSlotTopSleeved(id: string, on: boolean): ShipTeamSlot | null {
+  return setTeamSlotSleeve(id, 'top_sleeved', on, null)
 }
 
 /** Check (or clear) every slot in a break at once. Returns the rows touched. */
@@ -972,15 +1025,27 @@ export function assignShipBreak(
   getDb()
     .prepare(
       `INSERT INTO ship_break_assignments
-         (id, break_id, break_number, employee_id, assigned_at, assigned_by, note)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
+         (id, break_id, break_number, employee_id, assigned_at, assigned_by, note, import_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(break_id, employee_id) DO UPDATE
            SET break_number = excluded.break_number,
                assigned_at  = excluded.assigned_at,
                assigned_by  = excluded.assigned_by,
-               note         = excluded.note`
+               note         = excluded.note,
+               import_id    = excluded.import_id`
     )
-    .run(newId(), breakId, input.breakNumber ?? null, employeeId, nowIso(), input.assignedBy, note)
+    .run(
+      newId(),
+      breakId,
+      input.breakNumber ?? null,
+      employeeId,
+      nowIso(),
+      input.assignedBy,
+      note,
+      // Which show this assignment belongs to. Break labels recur, so without
+      // this an assignment silently follows its number onto the next show.
+      liveImportIds(getDb())[0] ?? null
+    )
   const saved = findShipBreakAssignment(breakId, employeeId)
   if (!saved) throw new Error('The assignment could not be saved.')
   return saved
@@ -1047,12 +1112,62 @@ export function pruneShipBreakAssignments(database?: Database.Database): number 
     }
   }
 
-  return db
-    .prepare(
-      `DELETE FROM ship_break_assignments
-        WHERE break_id NOT IN (SELECT id FROM ship_breaks)`
-    )
-    .run().changes
+  // Assignments made against a show that is no longer on the floor.
+  //
+  // THE BUG THIS FIXES: break ids are `break_<label>` and labels recur — every
+  // show has a break 4 and a break 11. Deleting only ABSENT ids meant an
+  // assignment from last Tuesday survived onto this Tuesday's break of the same
+  // number, silently, with the board looking perfectly correct.
+  //
+  // Liveness is the same chain the work claims use: an assignment survives only
+  // while its import is on the run of carry-forwards ending at the newest one.
+  // A NULL import_id predates the column and is treated as this show's, so
+  // upgrading mid-shift does not clear the board out from under anybody.
+  const chain = liveImportIds(db)
+  const stale =
+    chain.length > 0
+      ? db
+          .prepare(
+            `DELETE FROM ship_break_assignments
+              WHERE import_id IS NOT NULL AND import_id NOT IN (${chain.map(() => '?').join(',')})`
+          )
+          .run(...chain).changes
+      : 0
+
+  return (
+    stale +
+    db
+      .prepare(
+        `DELETE FROM ship_break_assignments
+          WHERE break_id NOT IN (SELECT id FROM ship_breaks)`
+      )
+      .run().changes
+  )
+}
+
+/**
+ * The imports whose operator state is still live — newest, plus every import it
+ * carried forward from. Duplicated from shipStations.ts on purpose: that module
+ * imports this one, and a cycle for six lines of SQL is a bad trade.
+ */
+function liveImportIds(db: Database.Database): string[] {
+  const newest = db
+    .prepare(`SELECT id, carried_from FROM ship_imports ORDER BY created_at DESC, rowid DESC LIMIT 1`)
+    .get() as { id: string; carried_from: string | null } | undefined
+  if (!newest) return []
+  const out: string[] = []
+  const seen = new Set<string>()
+  let cur: { id: string; carried_from: string | null } | undefined = newest
+  while (cur && !seen.has(cur.id) && out.length < 20) {
+    out.push(cur.id)
+    seen.add(cur.id)
+    cur = cur.carried_from
+      ? (db.prepare(`SELECT id, carried_from FROM ship_imports WHERE id = ?`).get(cur.carried_from) as
+          | { id: string; carried_from: string | null }
+          | undefined)
+      : undefined
+  }
+  return out
 }
 
 // ---------------------------------------------------------------------------
