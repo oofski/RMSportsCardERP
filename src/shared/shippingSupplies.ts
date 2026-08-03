@@ -456,6 +456,69 @@ export function shipSopOrderError(
 }
 
 // ---------------------------------------------------------------------------
+// The second condition on the last two steps: the bench has to be clear
+// ---------------------------------------------------------------------------
+
+/**
+ * The steps that wait for the PACKING, not just for the step in front of them.
+ *
+ * Step 5 forks into two jobs at one bench: a picker gathers the team bags for
+ * each order, a packer puts them in a mailer with the label. Picking finishing
+ * is what closes step 5 — that is the picker's line of work ending, and it is
+ * correct — but **picking done does not equal packing done**. In a two-person
+ * night the packer still has a stack when the last order is picked.
+ *
+ * Six and seven are per-order work on the Whatnot app: scan every order in, then
+ * confirm every order is scanned. Both are wrong to start while boxes are still
+ * going into mailers — an order scanned before it is sealed is an order the app
+ * says has shipped and the shelf says has not.
+ *
+ * So they carry a second condition, on top of the line rule above: nothing may
+ * be left to pack. Step 5's own rule does not change.
+ */
+export const SHIP_SOP_AFTER_PACKING: ShipSopStep[] = ['scan', 'confirm']
+
+export function shipSopWaitsForPacking(step: ShipSopStep): boolean {
+  return SHIP_SOP_AFTER_PACKING.includes(step)
+}
+
+/**
+ * The other sentence said in both processes, and the reason it names a number.
+ *
+ * "Finish packing first" tells somebody a thing is in the way and nothing about
+ * how much of it there is. Three boxes is five minutes; thirty is the rest of
+ * the night, and the two deserve different decisions — so the count is in the
+ * sentence, and the greyed-out row and the refused write say it identically.
+ *
+ * Ticks only, like the line rule: `packingRemaining` is never consulted on the
+ * way back off. Un-ticking six or seven is somebody correcting the list, and a
+ * full bench is no reason to refuse a correction.
+ */
+export function shipSopPackingError(step: ShipSopStep, packingRemaining: number): string | null {
+  if (!shipSopWaitsForPacking(step)) return null
+  const n = Math.max(0, Math.trunc(packingRemaining))
+  if (n === 0) return null
+  const title = SHIP_SOP_BY_STEP.get(step)?.title ?? 'This step'
+  return `${n} ${n === 1 ? 'order is' : 'orders are'} still waiting to be packed. ${title} is per-order work on the Whatnot app — it waits until the last box is in a mailer.`
+}
+
+/**
+ * Everything standing between a person and ticking this step, in one call.
+ *
+ * The order the two are asked in matters. A step whose predecessor is open is
+ * not yet anybody's business, so saying "and by the way there are four boxes
+ * left" would be answering a question nobody asked. The line first, then the
+ * bench.
+ */
+export function shipSopTickError(
+  isDone: (step: ShipSopStep) => boolean,
+  step: ShipSopStep,
+  packingRemaining: number
+): string | null {
+  return shipSopOrderError(isDone, step) ?? shipSopPackingError(step, packingRemaining)
+}
+
+// ---------------------------------------------------------------------------
 // The checklist as a screen sees it
 // ---------------------------------------------------------------------------
 

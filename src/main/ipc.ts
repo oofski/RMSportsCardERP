@@ -12,7 +12,6 @@ import type {
   ExportRequest,
   ExportResult,
   NewEmployeeInput,
-  NewStationInput,
   NewTimeEntryInput,
   RememberedCredentials,
   Result,
@@ -39,11 +38,6 @@ import {
   emailExists,
   getEmployeeById,
   insertEmployee,
-  listStations,
-  setStationPassword,
-  setStationStatus,
-  stationEmailFor,
-  syntheticEmailTaken,
   listEmployees,
   setEmployeeAvatar,
   setEmployeePermissions,
@@ -199,103 +193,35 @@ export function registerIpcHandlers(): void {
         if (!assignableRoles(actor.role).includes(input.role)) {
           return { ok: false, error: `You cannot assign the ${input.role} role.` }
         }
-        // Whether an address is required at all depends on the role, so the
-        // whole email rule lives in one place rather than half here.
+        // Whether an address is required, and whether a password has to be
+        // typed, both depend on the role — so the whole rule lives in one place
+        // rather than half here. The form applies the same rule, but a form is
+        // not a trust boundary; this is.
         const dupeError = validateNewEmployee(input)
         if (dupeError) return { ok: false, error: dupeError }
 
-        const temporaryPassword = generateTempPassword()
-        const { employee } = insertEmployee(input, actor.id, temporaryPassword)
-        return { ok: true, data: { employee, temporaryPassword } }
-      } catch (err) {
-        return fail(err)
-      }
-    }
-  )
-
-  // ---- Stations: a bench computer signs in, not a person ------------------
-  //
-  // Deliberately NOT the employee form with the email box hidden. A station has
-  // no name to reset a password for, no hours to log and nobody to email a
-  // temporary password to — sharing the employee path would mean every screen
-  // that lists people has to remember to filter the computers out.
-  ipcMain.handle(IPC.stationsList, (): Employee[] => {
-    const user = currentUser()
-    return user && userCan(user, 'admin.employees.view') ? listStations() : []
-  })
-
-  ipcMain.handle(
-    IPC.stationsCreate,
-    (_e, input: NewStationInput): Result<Employee> => {
-      try {
-        const actor = requirePermission('admin.employees.manage')
-        const name = str(input?.name).trim()
-        const code = str(input?.code).trim()
-        const password = str(input?.password)
-        if (!name) return { ok: false, error: 'Give the station a name.' }
-        // The code is what somebody types at a bench, so it has to be typeable:
-        // no spaces to get wrong and no case to remember.
-        if (!/^[a-zA-Z0-9._-]{2,32}$/.test(code)) {
-          return {
-            ok: false,
-            error: 'The sign-in code can only use letters, numbers, dot, dash or underscore (2-32 characters).'
-          }
-        }
-        if (password.length < 4) {
-          return { ok: false, error: 'Give the station a password of at least 4 characters.' }
-        }
-        if (companyIdExists(code)) return { ok: false, error: 'That sign-in code is already in use.' }
-        if (syntheticEmailTaken(stationEmailFor(code))) {
-          return { ok: false, error: 'That sign-in code is already in use.' }
-        }
-
+        // A packing bench is shared, so nobody owns its password: the
+        // administrator types one and reads it out, the account is usable
+        // immediately, and nothing ever prompts for a change the four people
+        // using the computer cannot agree on. Every other role still gets a
+        // generated password it must replace on first sign-in.
+        //
+        // The plaintext is split off the record here so it can only travel as
+        // the argument that gets hashed, never inside the object the row is
+        // built from — where a column added later could pick it up by name.
+        const { password: typed, ...details } = input
+        const isBench = details.role === 'shipping'
+        const temporaryPassword = isBench ? null : generateTempPassword()
         const { employee } = insertEmployee(
-          {
-            firstName: name,
-            // A station has no surname, and inventing one ("Station Station")
-            // would show up on every screen that prints a full name.
-            lastName: '',
-            companyId: code,
-            title: 'Shipping station',
-            email: stationEmailFor(code),
-            // The narrowest role there is. A bench needs the floor, nothing else.
-            role: 'staff',
-            status: 'active',
-            accountKind: 'station'
-          },
+          { ...details, status: isBench ? 'active' : undefined },
           actor.id,
-          password
+          temporaryPassword ?? str(typed),
+          !isBench
         )
-        return { ok: true, data: employee }
-      } catch (err) {
-        return fail(err)
-      }
-    }
-  )
-
-  ipcMain.handle(
-    IPC.stationsSetPassword,
-    (_e, payload: { id?: unknown; password?: unknown }): Result<boolean> => {
-      try {
-        requirePermission('admin.employees.manage')
-        const password = str(payload?.password)
-        if (password.length < 4) {
-          return { ok: false, error: 'Use at least 4 characters.' }
-        }
-        return { ok: true, data: setStationPassword(str(payload?.id), password) }
-      } catch (err) {
-        return fail(err)
-      }
-    }
-  )
-
-  ipcMain.handle(
-    IPC.stationsSetStatus,
-    (_e, payload: { id?: unknown; status?: unknown }): Result<boolean> => {
-      try {
-        requirePermission('admin.employees.manage')
-        const status = payload?.status === 'disabled' ? 'disabled' : 'active'
-        return { ok: true, data: setStationStatus(str(payload?.id), status) }
+        // `temporaryPassword` is null for a bench account, and deliberately: the
+        // typed password must not travel back out to a modal that would show it,
+        // copy it to a clipboard, or paste it into an invite email.
+        return { ok: true, data: { employee, temporaryPassword } }
       } catch (err) {
         return fail(err)
       }

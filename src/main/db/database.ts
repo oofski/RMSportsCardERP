@@ -1487,6 +1487,16 @@ function migrate(database: Database.Database): void {
   // `station:<code>` value that cannot be confused for an address, and
   // `account_kind` is what any screen actually reads to decide what it is
   // looking at.
+  //
+  // SINCE RETIRED, and the column deliberately kept. The shipping ROLE replaced
+  // this: it gives a person the packing floor and nothing else, which is the
+  // same outcome with one mechanism instead of two, so nothing writes 'station'
+  // any longer. What is left is a column that still reads 'person' for every
+  // new row and 'station' for the handful written while the idea existed — and
+  // dropping it would mean the very table rebuild the paragraph above declined,
+  // for a column that costs nothing. Those rows are not deleted either: they can
+  // own time entries and SOP ticks, and stationRoster() in shipStations.ts still
+  // reads this column to keep a computer out of the picking roster.
   addColumnIfMissing(database, 'employees', 'account_kind', "TEXT NOT NULL DEFAULT 'person'")
   setMeta(database, 'schema_version', '38')
 

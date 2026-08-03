@@ -40,7 +40,12 @@ export function composeInviteEmail(
     lines.push(
       `   Temporary password: ${temporaryPassword}`,
       '',
-      "3. You'll be asked to set your own password the first time you sign in."
+      // Only when a change is actually going to be demanded. A packing bench is
+      // shared and is never prompted, so telling its account to expect a prompt
+      // would be describing a screen it will not see.
+      employee.mustChangePassword
+        ? "3. You'll be asked to set your own password the first time you sign in."
+        : '3. Sign in with that password — you will not be asked to change it.'
     )
   } else {
     lines.push('', '3. Use the password you were given to sign in.')

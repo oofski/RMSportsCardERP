@@ -1,7 +1,6 @@
 import bcrypt from 'bcryptjs'
 import type { Database } from 'better-sqlite3'
 import type {
-  AccountKind,
   Employee,
   EmployeeStatus,
   NewEmployeeInput,
@@ -59,8 +58,11 @@ function toEmployee(row: EmployeeRow): Employee {
     mustChangePassword: row.must_change_password === 1,
     extraPermissions: parseExtraPermissions(row.permissions_json),
     avatarUrl: row.avatar ? imageDataUrl(row.avatar) : null,
-    // Anything not explicitly a station is a person — which is also what every
-    // row written before stations existed is.
+    // Read-only history. Nothing writes 'station' any more — the shipping role
+    // does that job now — but rows created while it did are still here, still
+    // own time entries, and are still excluded from the bench roster by the
+    // same column. Reporting what the row actually says is cheaper than
+    // pretending the distinction never existed.
     accountKind: row.account_kind === 'station' ? 'station' : 'person',
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -106,8 +108,9 @@ export function getEmployeeById(id: string): Employee | null {
  * and callers do reach here with a default of '' (changeOwnPassword does).
  *
  * And a synthetic address must not be a second way in. Accounts with no email
- * hold `no-email:<company id>` or `station:<code>` in the column; both are
- * derived from values that are public within the shop and trivially guessable.
+ * hold `no-email:<company id>` in the column — and older bench rows still hold
+ * `station:<code>` — both derived from values that are public within the shop
+ * and trivially guessable.
  * They identify nobody, so they authenticate nobody. Those accounts sign in
  * with their Company ID, which is what they were given. The email branch alone
  * is dropped rather than the whole lookup: a Company ID is whatever an
@@ -137,20 +140,28 @@ export interface CreateEmployeeResult {
 }
 
 /**
- * Insert a new employee. If a temporary password is supplied it is hashed and
- * the employee is marked as needing to change it on first login. Returns the
- * created record; the plaintext temp password is echoed back so it can be
- * placed in the invite email exactly once.
+ * Insert a new employee. If a password is supplied it is hashed and — unless
+ * the caller says otherwise — the employee is marked as needing to change it on
+ * first login. Returns the created record; the plaintext is echoed back so it
+ * can be placed in the invite email exactly once.
+ *
+ * `mustChangePassword` is the caller's to decide because only the caller knows
+ * whether the password was GENERATED (nobody has seen it yet, so its holder has
+ * to pick their own) or TYPED by an administrator who is about to read it out.
+ * A shared packing computer is the second case: four people use it, so there is
+ * nobody to own a new password, and prompting for one would strand the bench
+ * behind a screen the first person to sit down cannot get past.
  */
 export function insertEmployee(
-  input: NewEmployeeInput & { status?: EmployeeStatus; accountKind?: AccountKind },
+  input: NewEmployeeInput & { status?: EmployeeStatus },
   createdBy: string | null,
-  temporaryPassword: string | null
+  password: string | null,
+  mustChangePassword = true
 ): CreateEmployeeResult {
   const db = getDb()
   const id = newId()
   const ts = nowIso()
-  const passwordHash = temporaryPassword ? bcrypt.hashSync(temporaryPassword, BCRYPT_ROUNDS) : null
+  const passwordHash = password ? bcrypt.hashSync(password, BCRYPT_ROUNDS) : null
   const email = input.email.trim()
 
   db.prepare(
@@ -174,13 +185,10 @@ export function insertEmployee(
     // button in the directory that can never do anything.
     status: input.status ?? (email ? 'invited' : 'active'),
     password_hash: passwordHash,
-    // A station never has a password to change: nobody owns it, so there is
-    // nobody to prompt. Forcing the change would strand the bench behind a
-    // screen the first person to sit down cannot get past. A person with no
-    // email is the opposite case — somebody does own it, and the prompt never
-    // needed an address — so they still choose their own on first sign-in.
-    must_change_password: input.accountKind === 'station' ? 0 : temporaryPassword ? 1 : 0,
-    account_kind: input.accountKind === 'station' ? 'station' : 'person',
+    // No password, nothing to change. Otherwise it is the caller's call — see
+    // the note above the signature.
+    must_change_password: passwordHash && mustChangePassword ? 1 : 0,
+    account_kind: 'person',
     created_at: ts,
     updated_at: ts,
     created_by: createdBy
@@ -188,7 +196,7 @@ export function insertEmployee(
 
   return {
     employee: getEmployeeById(id) as Employee,
-    temporaryPassword
+    temporaryPassword: password
   }
 }
 
@@ -268,8 +276,8 @@ export function clearEmployeeAvatar(id: string): Employee | null {
 /** Set a fresh temporary password (invite reset). Returns nothing sensitive. */
 export function setTemporaryPassword(id: string, temporaryPassword: string): boolean {
   const db = getDb()
-  const row = db.prepare('SELECT email FROM employees WHERE id = ?').get(id) as
-    | { email: string }
+  const row = db.prepare('SELECT email, role FROM employees WHERE id = ?').get(id) as
+    | { email: string; role: string }
     | undefined
   if (!row) return false
   const hash = bcrypt.hashSync(temporaryPassword, BCRYPT_ROUNDS)
@@ -277,6 +285,13 @@ export function setTemporaryPassword(id: string, temporaryPassword: string): boo
   // an invite — the same reasoning as insertEmployee — so it goes straight back
   // to active with the new password read out to them.
   const reset: EmployeeStatus = isPlaceholderEmail(row.email) ? 'active' : 'invited'
+  // Whether they are asked to pick their own afterwards. A packing computer is
+  // shared, so the prompt has nobody to answer it: whoever sits down first
+  // either changes the password out from under the other three or, if they walk
+  // away, leaves the bench stuck on a screen it cannot get past. The
+  // administrator who ran the reset reads the new password out instead —
+  // exactly how the account was set up in the first place.
+  const mustChange = row.role === 'shipping' ? 0 : 1
   const info = db
     .prepare(
       // A DISABLED employee keeps that status. Resetting a password is about
@@ -284,12 +299,12 @@ export function setTemporaryPassword(id: string, temporaryPassword: string): boo
       // erased the only record that someone had been deactivated — they came
       // back with their original role and permissions intact.
       `UPDATE employees
-         SET password_hash = ?, must_change_password = 1,
+         SET password_hash = ?, must_change_password = ?,
              status = CASE WHEN status = 'disabled' THEN 'disabled' ELSE ? END,
              updated_at = ?
        WHERE id = ?`
     )
-    .run(hash, reset, nowIso(), id)
+    .run(hash, mustChange, reset, nowIso(), id)
   return info.changes > 0
 }
 
@@ -324,13 +339,6 @@ export function companyIdExists(companyId: string, exceptId?: string): boolean {
   return !!row && row.id !== exceptId
 }
 
-function emailRowId(email: string): string | undefined {
-  const row = getDb()
-    .prepare('SELECT id FROM employees WHERE email = ? COLLATE NOCASE')
-    .get(email.trim()) as { id: string } | undefined
-  return row?.id
-}
-
 /**
  * Is this address already somebody else's?
  *
@@ -342,17 +350,10 @@ function emailRowId(email: string): string | undefined {
 export function emailExists(email: string, exceptId?: string): boolean {
   const value = email.trim()
   if (!value || isPlaceholderEmail(value)) return false
-  const id = emailRowId(value)
-  return !!id && id !== exceptId
-}
-
-/**
- * Is this synthetic address already on a row? Asked by the station path, where
- * the address IS the identifier and so the question is a real one — emailExists
- * deliberately declines to answer it.
- */
-export function syntheticEmailTaken(email: string): boolean {
-  return emailRowId(email) !== undefined
+  const row = getDb()
+    .prepare('SELECT id FROM employees WHERE email = ? COLLATE NOCASE')
+    .get(value) as { id: string } | undefined
+  return !!row && row.id !== exceptId
 }
 
 export type { EmployeeRow }
@@ -362,29 +363,31 @@ export { toEmployee, type Database }
 // Accounts with no email address
 // ---------------------------------------------------------------------------
 
+/**
+ * The prefix a retired mechanism wrote.
+ *
+ * Station accounts — a bench computer as its own kind of login — were replaced
+ * by the shipping role, which gives a PERSON the packing floor and nothing
+ * else. Nothing creates one any more. But rows created while it existed are
+ * still on the owner's machine, and their email column still says
+ * `station:bench1`; dropping the prefix from the predicate below would put that
+ * string on screen as if it were an address. It stays recognised for as long as
+ * a row can carry it, which is forever.
+ */
 const STATION_PREFIX = 'station:'
+
+/** What an account with no email address carries. See placeholderEmailFor. */
 const NO_EMAIL_PREFIX = 'no-email:'
 
 /**
- * The synthetic address a station carries.
+ * The synthetic address an account with no email carries.
  *
- * `employees.email` is NOT NULL and UNIQUE, and rebuilding the table every
- * other table points at — to make one column nullable — is a real risk for a
- * cosmetic gain. So a station stores something that is unmistakably not an
- * address, is unique by construction, and never reaches a screen: `accountKind`
- * is what the UI reads to decide what it is looking at.
- */
-export function stationEmailFor(code: string): string {
-  return `${STATION_PREFIX}${code.trim().toLowerCase()}`
-}
-
-/**
- * The same trade, for a person who simply has no company address.
- *
- * Most of the shipping floor does not have one, and the alternative to this is
- * the table rebuild the comment above declined. `company_id` is already UNIQUE
- * COLLATE NOCASE, so deriving from it is unique by construction and needs no
- * lookup to prove it.
+ * Most of the shipping floor has no company address, and `employees.email` is
+ * NOT NULL and UNIQUE. Rebuilding the table every other table points at — to
+ * make one column nullable — is a real risk taken for a cosmetic gain, so the
+ * column holds something that is unmistakably not an address instead.
+ * `company_id` is already UNIQUE COLLATE NOCASE, so deriving from it is unique
+ * by construction and needs no lookup to prove it.
  */
 export function placeholderEmailFor(companyId: string): string {
   return `${NO_EMAIL_PREFIX}${companyId.trim().toLowerCase()}`
@@ -396,7 +399,8 @@ export function placeholderEmailFor(companyId: string): string {
  *
  * The one gate everything passes through: `toEmployee` strips these before any
  * record leaves this file, `emailExists` refuses to call one taken, and the
- * login lookup refuses to accept one as an identifier.
+ * login lookup refuses to accept one as an identifier. Both forms are still
+ * checked — see STATION_PREFIX for why the retired one is not dropped.
  */
 export function isPlaceholderEmail(email: string): boolean {
   const value = email.trim().toLowerCase()
@@ -408,33 +412,8 @@ function emailToStore(supplied: string | undefined, stored: string, companyId: s
   if (supplied !== undefined) return supplied || placeholderEmailFor(companyId)
   // Untouched by this edit: keep a real address as it is, but re-derive a
   // no-email placeholder in case the Company ID it was built from just moved.
-  // A station's is left alone — its code cannot change, and its prefix is what
-  // marks the row as a computer.
+  // An old station address is left alone — it was derived from a code that this
+  // build has no way to change, so re-deriving it from something else would
+  // only invent a value nobody wrote.
   return stored.toLowerCase().startsWith(NO_EMAIL_PREFIX) ? placeholderEmailFor(companyId) : stored
-}
-
-export function listStations(): Employee[] {
-  const rows = getDb()
-    .prepare(`SELECT * FROM employees WHERE account_kind = 'station' ORDER BY first_name COLLATE NOCASE`)
-    .all() as EmployeeRow[]
-  return rows.map(toEmployee)
-}
-
-/** Set (or reset) a station's password. Stations never must-change it. */
-export function setStationPassword(id: string, password: string): boolean {
-  const info = getDb()
-    .prepare(
-      `UPDATE employees
-          SET password_hash = ?, must_change_password = 0, updated_at = ?
-        WHERE id = ? AND account_kind = 'station'`
-    )
-    .run(bcrypt.hashSync(password, BCRYPT_ROUNDS), nowIso(), id)
-  return info.changes > 0
-}
-
-export function setStationStatus(id: string, status: EmployeeStatus): boolean {
-  const info = getDb()
-    .prepare(`UPDATE employees SET status = ?, updated_at = ? WHERE id = ? AND account_kind = 'station'`)
-    .run(status, nowIso(), id)
-  return info.changes > 0
 }

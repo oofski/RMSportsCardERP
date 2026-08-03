@@ -163,19 +163,62 @@ export function readyToPackAt(args: {
   cardsChecked: number
   lastCheckedAt: string | null
 }): string | null {
-  const dead = supersededIds(args.claims)
-  const back = sentBackAt(args.claims)
-  const handoffs = args.claims
-    .filter((c) => c.role === 'pick' && c.finishedAt && !c.releasedAt && !dead.has(c.id))
-    .map((c) => c.finishedAt as string)
-    .sort()
-  const handoff = handoffs.length > 0 ? handoffs[0] : null
-
-  // A handoff only counts if it happened AFTER the last rejection.
-  if (handoff && (!back || handoff > back)) return handoff
-  if (back) return null
+  const handoff = handedOverAt(args.claims)
+  if (handoff) return handoff
+  if (sentBackAt(args.claims)) return null
   if (args.cardsTotal > 0 && args.cardsChecked >= args.cardsTotal) return args.lastCheckedAt
   return null
+}
+
+/**
+ * When a picker handed this order to the packing bench, or null.
+ *
+ * The first branch of `readyToPackAt`, split out because two questions need it
+ * and only one of them may fall back to "every card is ticked".
+ *
+ * READINESS may fall back: an order whose cards were all found on the Orders
+ * screen really is ready for whoever is packing, and belongs in the queue.
+ * HAS IT REACHED A BENCH may not — that fallback is true of every fully-picked
+ * order on a night where nobody ever stood at one, and reading it as outstanding
+ * bench work would hold such a night open against a packer who does not exist.
+ *
+ * One implementation rather than two, because a second copy of "a handoff only
+ * counts if it happened after the last rejection" is a second copy that drifts.
+ */
+export function handedOverAt(claims: readonly ShipWorkClaim[]): string | null {
+  const dead = supersededIds(claims)
+  const back = sentBackAt(claims)
+  const handoffs = claims
+    .filter((c) => c.role === 'pick' && c.finishedAt && !c.releasedAt && !dead.has(c.id))
+    .map((c) => c.finishedAt as string)
+    // A handoff only counts if it happened AFTER the last rejection. Filtered
+    // BEFORE the earliest is taken, and that ordering is load-bearing: a packer
+    // only releases its OWN rows, so a rejection at bench B leaves the original
+    // handoff from bench A standing. Taking the earliest first and then testing
+    // it would let that stale row answer for the re-pick that followed — the
+    // order would read as never handed over again, drop out of the pack queue,
+    // and — its repick now done — out of the picking run as well. An order
+    // vanishing from both queues is the one outcome this whole design exists to
+    // prevent.
+    .filter((t) => !back || t > back)
+    .sort()
+  // The EARLIEST of the handoffs that still count, so an order that has been
+  // round twice keeps its place in the queue rather than going to the back.
+  return handoffs.length > 0 ? handoffs[0] : null
+}
+
+/**
+ * Is a packer holding this order right now — or did one walk away with it?
+ *
+ * Deliberately NOT `holderOf('pack')`, which drops an expired claim so that
+ * somebody else may take the order over. That is the right answer to "whose is
+ * it"; it is the wrong answer to "is there work left in it". A bench abandoned
+ * at 8pm leaves a box that is still not in a mailer, and a claim going quiet
+ * must never be what makes the work disappear.
+ */
+export function packUnderway(claims: readonly ShipWorkClaim[]): boolean {
+  const dead = supersededIds(claims)
+  return claims.some((c) => c.role === 'pack' && !c.finishedAt && !c.releasedAt && !dead.has(c.id))
 }
 
 /**
@@ -249,6 +292,14 @@ export interface ShipStationBoard {
   toPick: number
   /** Handed over and waiting for a packer. */
   packQueue: number
+  /**
+   * Orders the bench still owes a mailer, whoever is holding them.
+   *
+   * NOT `packQueue`, which is what a packer standing here may take next and so
+   * hides an order in somebody else's hands. This is the whole room's figure,
+   * and it is what SOP steps 6 and 7 wait for.
+   */
+  packingRemaining: number
   /** The order this station is holding, if any. */
   current: ShipStationOrder | null
   /** Everyone working right now, for the "who else is on" strip. */

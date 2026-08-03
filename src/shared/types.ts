@@ -24,7 +24,7 @@ export interface Employee {
   extraPermissions: Permission[]
   /** Profile picture as a ready-to-use data URL, or null if none set. */
   avatarUrl: string | null
-  /** A person, or a shared bench computer. See AccountKind. */
+  /** A person, or a legacy shared bench computer. See AccountKind. */
   accountKind: AccountKind
   createdAt: string
   updatedAt: string
@@ -34,26 +34,17 @@ export interface Employee {
 /**
  * A person, or a computer.
  *
- * A station is a shared bench login: no email, no personal identity, and only
- * the permissions the floor needs. It exists because the alternative — giving
- * every packer an employee account with an address they do not have — ends with
- * the whole shift signed in as whoever set the laptop up.
+ * 'station' is history. Shared bench logins were once their own kind of account
+ * — no email, no personal identity, only the floor's permissions — and the
+ * shipping ROLE replaced them: it gives a real person the same narrow access,
+ * so the shop has one way to put somebody at a packing computer instead of two.
+ * Nothing creates a station any more, but rows created while it existed are
+ * still on disk (they own time entries and SOP ticks, so deleting them would
+ * throw away work), and the picking bench still excludes them from its roster.
+ * The field reports what a row says; it is never written as anything but
+ * 'person'.
  */
 export type AccountKind = 'person' | 'station'
-
-/**
- * A bench computer, not a person.
- *
- * `name` is what the floor calls it ("Packing bench 1"). `code` is what gets
- * typed at sign-in — it becomes the Company ID, because the login already
- * accepts one of those and a station needs no second mechanism. There is no
- * email: that is the entire point.
- */
-export interface NewStationInput {
-  name: string
-  code: string
-  password: string
-}
 
 export interface NewEmployeeInput {
   firstName: string
@@ -62,6 +53,17 @@ export interface NewEmployeeInput {
   title: string
   email: string
   role: Role
+  /**
+   * The password an administrator types for a SHIPPING account, which is
+   * required for that role and ignored for every other one.
+   *
+   * A packing computer is shared by whoever is on shift, so the usual flow —
+   * generate a temporary password, make them choose their own on first sign-in
+   * — has nobody to address: the first person to sit down would change it out
+   * from under the other three. The administrator sets one and reads it out.
+   * Validated in main (see validateNewEmployee); the form is not the boundary.
+   */
+  password?: string
 }
 
 export interface UpdateEmployeeInput {
@@ -78,7 +80,13 @@ export interface UpdateEmployeeInput {
 /** Returned when an employee is created — carries the one-time temp password. */
 export interface EmployeeInvite {
   employee: Employee
-  temporaryPassword: string
+  /**
+   * The generated temporary password, or null when there is nothing to hand
+   * over: a shipping account is created with a password the administrator
+   * typed and already knows. Echoing it back would only put a live credential
+   * on a screen — and into a clipboard button — for no reason.
+   */
+  temporaryPassword: string | null
 }
 
 /** A rough (city-level) location captured at a punch. */

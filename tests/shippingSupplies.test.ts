@@ -11,6 +11,9 @@
 import {
   computeSupplyPlan,
   costSupplyPlan,
+  shipSopPackingError,
+  shipSopTickError,
+  shipSopWaitsForPacking,
   MAILERS_PER_CARDED_ORDER,
   MAILERS_PER_GIVEAWAY_ORDER,
   SHIP_SUPPLY_ROLES,
@@ -248,6 +251,56 @@ ok(bare.totalCost === 0, 'nothing linked costs nothing')
 ok(bare.unmappedRoles.length === SHIP_SUPPLY_ROLES.length, 'and every role is reported unlinked')
 ok(bare.lines.every((l) => l.quantity === plan.lines.find((p) => p.role === l.role)!.quantity),
   'while every quantity is untouched')
+
+// ---------------------------------------------------------------------------
+// 10. The two gates on a tick, as pure functions
+// ---------------------------------------------------------------------------
+// Both processes read these — the renderer to grey a row out, the main process
+// to refuse the write — so what is checked here is that they say ONE sentence
+// and that the second one only ever applies to the two steps that follow the
+// packing.
+console.log('\n=== 10. the gates on a tick ===')
+const noneDone = (): boolean => false
+const allDone = (): boolean => true
+
+ok(shipSopPackingError('sleeve', 9) === null, 'sleeving does not wait for the bench')
+ok(shipSopPackingError('ship', 9) === null, 'nor does shipping — it follows the PICKING')
+ok(shipSopWaitsForPacking('scan') && shipSopWaitsForPacking('confirm'), 'only 6 and 7 do')
+ok(shipSopPackingError('scan', 0) === null, 'and a clear bench blocks nothing')
+ok(
+  (shipSopPackingError('scan', 1) ?? '').startsWith('1 order is still waiting to be packed.'),
+  'one box is singular, and the sentence leads with the count',
+  String(shipSopPackingError('scan', 1))
+)
+ok(
+  (shipSopPackingError('confirm', 3) ?? '').startsWith('3 orders are still waiting to be packed.'),
+  'three are plural, and named',
+  String(shipSopPackingError('confirm', 3))
+)
+ok(
+  (shipSopPackingError('scan', 2) ?? '').includes('Scanning'),
+  'the sentence says which step it is refusing'
+)
+ok(shipSopPackingError('scan', -4) === null, 'a nonsense count never invents a blocker')
+
+// The line first, then the bench. A step whose predecessor is open is not yet
+// anybody's business, and answering with the pack queue would answer a question
+// nobody asked.
+ok(
+  (shipSopTickError(noneDone, 'scan', 3) ?? '').includes('Shipping has to be ticked off first'),
+  'with step 5 open, the ORDER is what is said',
+  String(shipSopTickError(noneDone, 'scan', 3))
+)
+ok(
+  (shipSopTickError(allDone, 'scan', 3) ?? '').includes('3 orders are still waiting'),
+  'and once it is closed, the bench is',
+  String(shipSopTickError(allDone, 'scan', 3))
+)
+ok(shipSopTickError(allDone, 'scan', 0) === null, 'both satisfied, nothing to say')
+ok(
+  shipSopTickError(allDone, 'scan', 3) === shipSopPackingError('scan', 3),
+  'and the combined gate returns the SAME string, not a paraphrase of it'
+)
 
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

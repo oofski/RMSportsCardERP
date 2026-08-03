@@ -158,21 +158,38 @@ export function changeOwnPassword(currentPassword: string, newPassword: string):
 /**
  * Guards used by IPC handlers to enforce validation before writing.
  *
- * Shipping is the one role allowed to arrive without an address: the floor is
- * staffed by people who have no company email, and they sign in with the
- * Company ID they were given. Every other role still needs somewhere the invite
- * can go. The form relaxes the same rule, but the form is not the boundary.
+ * Shipping is the one role that differs, in two directions at once.
+ *
+ * It is allowed to arrive without an address: the floor is staffed by people
+ * who have no company email, and they sign in with the Company ID they were
+ * given. Every other role still needs somewhere the invite can go.
+ *
+ * And it is the only role that must arrive WITH a password. A packing computer
+ * is shared, so there is no one person to generate a temporary password for and
+ * prompt to replace it; the administrator types one and reads it out. Eight
+ * characters is the same floor the Owner setup and the change-password screen
+ * hold everyone else to — a shared password is not a reason to accept a weaker
+ * one, and a one-character password typed by mistake would be accepted forever.
+ *
+ * The form applies both rules too, and the form is not the boundary. This is.
  */
 export function validateNewEmployee(input: {
   companyId: string
   email: string
   role: Role
+  password?: string
 }): string | null {
   const email = (input.email ?? '').trim()
   if (!email) {
     if (input.role !== 'shipping') return 'A valid email address is required.'
   } else if (!isValidEmail(email)) {
     return 'A valid email address is required.'
+  }
+  // Trimmed, so eight spaces is not a password. The value STORED is the one
+  // that was typed, spaces and all — trimming what gets hashed would silently
+  // change somebody's password out from under them.
+  if (input.role === 'shipping' && (input.password ?? '').trim().length < 8) {
+    return 'Set a password of at least 8 characters for this account.'
   }
   if (companyIdExists(input.companyId)) return 'That Company ID is already in use.'
   if (emailExists(email)) return 'That email address is already in use.'

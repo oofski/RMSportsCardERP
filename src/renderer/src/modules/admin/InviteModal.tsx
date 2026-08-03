@@ -15,6 +15,10 @@ import { fullName } from '../../lib/format'
  * handover: the credentials on screen get read out at the bench. There is no
  * email to compose, so the modal drops that half of itself rather than offering
  * a Send button that opens a mail client addressed to nobody.
+ *
+ * Not shown at all when nothing was generated — a shipping account is created
+ * with a password the administrator typed, and there is no reason to hand one
+ * back. See handleCreated in EmployeesTab.
  */
 export function InviteModal({
   invite,
@@ -29,8 +33,16 @@ export function InviteModal({
   const [email, setEmail] = useState<ComposedEmail | null>(null)
   const [sending, setSending] = useState(false)
 
+  // What happens after they sign in. A shared packing computer is never asked
+  // to change its password — there is nobody to own the new one — so promising
+  // a prompt that will not appear would leave an admin waiting for a change
+  // that never lands.
+  const passwordNote = employee.mustChangePassword
+    ? 'They set their own password on first sign-in.'
+    : 'This password stays as it is — they are not asked to change it.'
+
   useEffect(() => {
-    if (!hasEmail) return
+    if (!hasEmail || !temporaryPassword) return
     api.email.composeInvite(employee.id, temporaryPassword).then((res) => {
       if (res.ok && res.data) setEmail(res.data)
     })
@@ -117,19 +129,21 @@ export function InviteModal({
             </span>
           </div>
         )}
-        <div className="cred-row">
-          <span className="k">Temporary password</span>
-          <span className="v">
-            {temporaryPassword}
-            <button
-              className="modal-close"
-              onClick={() => temporaryPassword && copy(temporaryPassword, 'Temporary password')}
-              title="Copy"
-            >
-              <Icon name="Copy" size={14} />
-            </button>
-          </span>
-        </div>
+        {temporaryPassword && (
+          <div className="cred-row">
+            <span className="k">Temporary password</span>
+            <span className="v">
+              {temporaryPassword}
+              <button
+                className="modal-close"
+                onClick={() => copy(temporaryPassword, 'Temporary password')}
+                title="Copy"
+              >
+                <Icon name="Copy" size={14} />
+              </button>
+            </span>
+          </div>
+        )}
       </div>
 
       {hasEmail ? (
@@ -143,13 +157,13 @@ export function InviteModal({
 
           <p className="muted text-sm mt-16">
             “Send email” opens your default mail app with this message pre-filled — review it and hit
-            send. The employee sets their own password on first sign-in.
+            send. {passwordNote}
           </p>
         </>
       ) : (
         <p className="muted text-sm mt-16">
           This account has no email address, so there is nothing to send — read these out at the
-          bench. They sign in with the Company ID above and set their own password on first sign-in.
+          bench. They sign in with the Company ID above. {passwordNote}
         </p>
       )}
     </Modal>

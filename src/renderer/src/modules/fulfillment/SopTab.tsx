@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { ShipStationBoard } from '@shared/shipStations'
 import type { ShipSopState, ShipSopStep, ShipSopStepView } from '@shared/shippingSupplies'
-import { SHIP_SUPPLY_ROLE_LABELS, shipSopBlockedBy } from '@shared/shippingSupplies'
+import {
+  SHIP_SUPPLY_ROLE_LABELS,
+  shipSopBlockedBy,
+  shipSopPackingError
+} from '@shared/shippingSupplies'
 import { api } from '../../lib/api'
 import { useSession } from '../../lib/session'
 import { LIVE, useLiveRefresh } from '../../lib/live'
@@ -41,6 +45,15 @@ import type { ShipTabProps } from './ShippingModule'
  * Nobody ticks the shipping off. Shipping is finished when the last order has
  * been picked at the bench, and the bench says so — see `pickAdvance`. What this
  * screen offers for step 5 is a door: **Open**, which is where the work is.
+ *
+ * ## Steps 6 and 7 wait for the OTHER person at that bench
+ *
+ * Step 5 forks into two jobs — a picker gathers the bags, a packer boxes them —
+ * and the last pick is what closes it. Picking done is not packing done, so
+ * scanning and confirm carry a second condition: nothing left to pack. That is
+ * a different kind of locked from "the step in front is open", so it gets its
+ * own row state and its own sentence, and the sentence is the shared one the
+ * main process refuses the write with.
  */
 /**
  * Is the product's name just the role's name typed out again?
@@ -63,8 +76,15 @@ function sameName(a: string, b: string): boolean {
 /** The one step the bench closes rather than a person. */
 const BENCH_STEP: ShipSopStep = 'ship'
 
-/** How a row reads: finished, open for work, a gap left behind, or not yet. */
-type RowState = 'done' | 'now' | 'gap' | 'waiting'
+/**
+ * How a row reads: finished, open for work, a gap left behind, or not yet.
+ *
+ * `bench` is the fifth and it is deliberately not `waiting`: the step in front
+ * of it IS done, so "do that one first" would be a lie and a lock icon would
+ * read as broken. What it is waiting for is a person at a bench, and the row
+ * says how many boxes that is.
+ */
+type RowState = 'done' | 'now' | 'gap' | 'waiting' | 'bench'
 
 export function SopTab({ canPack, canManage, onGoTo, onChanged }: ShipTabProps): JSX.Element {
   const { can } = useSession()
@@ -172,7 +192,10 @@ export function SopTab({ canPack, canManage, onGoTo, onChanged }: ShipTabProps):
   const progress = state.steps.length > 0 ? state.doneCount / state.steps.length : 0
   const doneSet = new Set(state.steps.filter((s) => s.done).map((s) => s.step))
   const isDone = (s: ShipSopStep): boolean => doneSet.has(s)
-  const packQueue = board?.packQueue ?? 0
+  // What the ROOM still owes, not what a packer standing at this screen may take
+  // next — the board's `packQueue` hides an order in somebody else's hands, and
+  // this number is the one holding steps 6 and 7 shut.
+  const packingLeft = board?.packingRemaining ?? 0
   // Nothing left for a picker, so nothing at the bench will close step 5 on its
   // own any more. Two ways to get here: the night finished and somebody took the
   // tick back off, or the last card was found in Orders rather than at a bench.
@@ -259,19 +282,29 @@ export function SopTab({ canPack, canManage, onGoTo, onChanged }: ShipTabProps):
           // What is standing in the way of ticking this one — the SAME rule the
           // main process refuses the write with, not a second copy of it.
           const blocker = shipSopBlockedBy(isDone, s.step)
+          // And the second condition on the last two steps, from the same shared
+          // function the main process throws — so the greyed-out reason and the
+          // refusal are one sentence, counted the same way, said once.
+          const packBlock = shipSopPackingError(s.step, packingLeft)
           // A step that is not done with finished work ABOVE it is a hole, not
           // the frontier. Both are actionable; they mean different things, so
           // they do not look the same. Scanning top-down for "the first unticked
           // one" would call the hole the current step and the real frontier
           // nothing at all.
           const laterDone = state.steps.slice(i + 1).some((x) => x.done)
+          // The line first, then the bench: a step whose predecessor is open is
+          // not yet anybody's business, and telling them about the pack queue
+          // instead would answer a question nobody asked. A hole ranks below
+          // both — a step that cannot be ticked yet is not somebody's to close.
           const rowState: RowState = s.done
             ? 'done'
             : blocker
               ? 'waiting'
-              : laterDone
-                ? 'gap'
-                : 'now'
+              : packBlock
+                ? 'bench'
+                : laterDone
+                  ? 'gap'
+                  : 'now'
           const isBench = s.step === BENCH_STEP
           // Step 5 is closed by the bench, so while there is picking left its box
           // is a DOOR rather than a box — there is nothing here for anybody to
@@ -280,8 +313,9 @@ export function SopTab({ canPack, canManage, onGoTo, onChanged }: ShipTabProps):
           // off, and the only way to record a night whose last card was found in
           // Orders rather than at a bench.
           const benchDoor = isBench && !s.done && rowState !== 'waiting' && !pickingOver
-          // Unticking is always allowed. Ticking waits for the step in front.
-          const canTickThis = canTick && !blocked && (s.done || !blocker)
+          // Unticking is always allowed. Ticking waits for the step in front,
+          // and for the bench on the two that follow the packing.
+          const canTickThis = canTick && !blocked && (s.done || (!blocker && !packBlock))
 
           return (
             <li
@@ -307,19 +341,30 @@ export function SopTab({ canPack, canManage, onGoTo, onChanged }: ShipTabProps):
                       ? 'Assign this show to a day first'
                       : !canTick
                         ? 'You do not have permission to work packing'
-                        : blocker
-                          ? `${blocker.title} has to be ticked off first`
-                          : s.done
-                            ? 'Untick — puts the supplies back. Nothing else is undone.'
-                            : 'Tick — takes the supplies out of stock'
+                        : s.done
+                          ? 'Untick — puts the supplies back. Nothing else is undone.'
+                          : blocker
+                            ? `${blocker.title} has to be ticked off first`
+                            : // The refusal, word for word, on the control that
+                              // would earn it. A tooltip that paraphrases the
+                              // error is a second copy of the rule.
+                              (packBlock ?? 'Tick — takes the supplies out of stock')
                   }
                 >
                   {busy === s.step ? (
                     <Icon name="Loader2" size={17} />
                   ) : (
                     <Icon
-                      name={s.done ? 'CheckSquare' : rowState === 'waiting' ? 'Lock' : 'Square'}
-                      size={rowState === 'waiting' ? 15 : 19}
+                      name={
+                        s.done
+                          ? 'CheckSquare'
+                          : rowState === 'waiting'
+                            ? 'Lock'
+                            : rowState === 'bench'
+                              ? 'Boxes'
+                              : 'Square'
+                      }
+                      size={rowState === 'waiting' || rowState === 'bench' ? 15 : 19}
                     />
                   )}
                 </button>
@@ -331,6 +376,7 @@ export function SopTab({ canPack, canManage, onGoTo, onChanged }: ShipTabProps):
                   <b>{s.title}</b>
                   {rowState === 'now' && <span className="sop-flag now">Now</span>}
                   {rowState === 'gap' && <span className="sop-flag gap">Unticked</span>}
+                  {rowState === 'bench' && <span className="sop-flag bench">Packing</span>}
                   {hasLines && (
                     <button
                       className="sop-expand"
@@ -354,6 +400,18 @@ export function SopTab({ canPack, canManage, onGoTo, onChanged }: ShipTabProps):
                   <p className="sop-wait">
                     <Icon name="ArrowUp" size={12} />
                     Not yet — {blocker.title.toLowerCase()} comes first.
+                  </p>
+                )}
+
+                {/* Not locked and not broken: the step in front of this one IS
+                    done, and what it is waiting for is a person at a bench. The
+                    sentence is the shared one — the same words, with the same
+                    count in them, that the main process refuses the write with,
+                    so nobody has to reconcile a tooltip against a toast. */}
+                {rowState === 'bench' && packBlock && (
+                  <p className="sop-wait bench">
+                    <Icon name="Boxes" size={12} />
+                    {packBlock}
                   </p>
                 )}
 
@@ -404,16 +462,20 @@ export function SopTab({ canPack, canManage, onGoTo, onChanged }: ShipTabProps):
                 )}
 
                 {/* Picking finishing is what closes step 5, and picking finishing
-                    is not packing finishing. In a two-person night the packer can
-                    still have a stack when this goes green and steps 6 and 7 come
-                    open. That gap is real; it gets said out loud rather than
-                    hidden, on the row where somebody can act on it. */}
-                {isBench && packQueue > 0 && (
+                    is not packing finishing — so this row can be green while the
+                    packer still has a stack. What changed is what that stack now
+                    MEANS: it is the thing holding scanning and confirm shut, so
+                    the sentence says which steps are waiting on it rather than
+                    just noting the gap. It stays on this row because this is the
+                    row with the door to the bench on it. */}
+                {isBench && packingLeft > 0 && (
                   <p className="sop-wait">
                     <Icon name="Boxes" size={12} />
-                    {packQueue} {packQueue === 1 ? 'order is' : 'orders are'} still waiting to be
+                    {packingLeft} {packingLeft === 1 ? 'order is' : 'orders are'} still waiting to be
                     packed
-                    {s.done ? ' — this step follows the picking, not the packing.' : '.'}
+                    {s.done
+                      ? ' — this step follows the picking, so it is done. Scanning and confirm wait for the last box.'
+                      : ', and scanning and confirm wait for the last box.'}
                   </p>
                 )}
 
@@ -477,8 +539,9 @@ export function SopTab({ canPack, canManage, onGoTo, onChanged }: ShipTabProps):
       <div className="sop-foot">
         <Icon name="Info" size={14} />
         <span>
-          The steps run in order — each one opens when the one before it is ticked. Ticking takes its
-          supplies out of stock at today&apos;s average unit cost and books them to{' '}
+          The steps run in order — each one opens when the one before it is ticked, and the last two
+          also wait for the packing bench to be clear. Ticking takes its supplies out of stock at
+          today&apos;s average unit cost and books them to{' '}
           {state.eventDate ?? 'the show day'} in the Whatnot P&amp;L. Unticking puts them back and
           changes nothing else on the list.
         </span>

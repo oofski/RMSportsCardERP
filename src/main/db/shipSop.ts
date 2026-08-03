@@ -1,6 +1,7 @@
 import {
   SHIP_SOP,
-  shipSopOrderError,
+  shipSopTickError,
+  shipSopWaitsForPacking,
   type ShipSopLine,
   type ShipSopResult,
   type ShipSopState,
@@ -10,6 +11,7 @@ import {
   type ShipSupplyRole
 } from '@shared/shippingSupplies'
 import { getDb } from './database'
+import { packingRemaining } from './shipClaims'
 import { getShipEvent } from './shipping'
 import { getSupplyPlanCosted } from './shippingDomain'
 import { setShipSupplyUsage } from './supplies'
@@ -280,20 +282,36 @@ function bookableDay(): { event: { name: string; date: string }; date: string } 
 }
 
 /**
- * The list is a line: step N waits for step N-1.
+ * Everything a TICK has to satisfy.
  *
- * Ticks only. Unticking is always allowed and never cascades — a step taken
- * back off leaves a HOLE, and a hole is a legitimate state meaning "we did that,
- * then realised we had not". Somebody ticks it back on and it closes; the work
- * above it was really done and is not thrown away to tidy the list up.
+ * TWO conditions, and the second only applies to the last two steps:
  *
- * The same sentence greys the control out on the screen, from the same shared
- * function, so a refusal is never worded two ways.
+ *   THE LIST IS A LINE. Step N waits for step N-1. That rule is about the step
+ *   immediately in front and nothing else, so a hole further down does not
+ *   freeze the night above it.
+ *
+ *   THE BENCH HAS TO BE CLEAR. Scanning and confirm are per-order work on the
+ *   Whatnot app, and starting either while boxes are still going into mailers
+ *   records an order as shipped that is still sitting open on a bench. Picking
+ *   finishing is what closes step 5 — correct, and unchanged — but picking done
+ *   is not packing done, and these two wait for both.
+ *
+ * Ticks only, both of them. Unticking is always allowed and never cascades — a
+ * step taken back off leaves a HOLE, and a hole is a legitimate state meaning
+ * "we did that, then realised we had not". Somebody ticks it back on and it
+ * closes; the work above it was really done and is not thrown away to tidy the
+ * list up. A full pack bench is likewise no reason to refuse a correction.
+ *
+ * The same sentences grey the control out on the screen, from the same shared
+ * functions, so a refusal is never worded two ways.
  */
-function guardOrder(date: string, step: ShipSopStep): void {
+function guardTick(date: string, step: ShipSopStep): void {
   const done = doneSteps(date)
-  const outOfOrder = shipSopOrderError((s) => done.has(s), step)
-  if (outOfOrder) throw new Error(outOfOrder)
+  // The count is a read over every order and its claims, so it is only taken
+  // for the two steps that can be refused by it.
+  const remaining = shipSopWaitsForPacking(step) ? packingRemaining() : 0
+  const refusal = shipSopTickError((s) => done.has(s), step, remaining)
+  if (refusal) throw new Error(refusal)
 }
 
 /**
@@ -471,10 +489,10 @@ function reconcileStepUsage(
  * itself either all land or none do. A half-applied step would leave the floor
  * looking at a checklist that disagrees with the shelf.
  *
- * The order gate lives HERE and not only on the screen. A checklist whose rule
- * is enforced by a greyed-out button is a checklist with no rule: the IPC is
- * reachable from a second window, a replayed message and every future caller,
- * and the thing being protected is stock.
+ * The gate lives HERE and not only on the screen — the line rule and the bench
+ * rule both. A checklist whose rule is enforced by a greyed-out button is a
+ * checklist with no rule: the IPC is reachable from a second window, a replayed
+ * message and every future caller, and the thing being protected is stock.
  */
 export function setShipSopStep(step: ShipSopStep, done: boolean, userId: string | null): ShipSopResult {
   const def = SHIP_SOP.find((s) => s.step === step)
@@ -489,7 +507,10 @@ export function setShipSopStep(step: ShipSopStep, done: boolean, userId: string 
     // about order — it is how a corrected re-import tops its quantities up — so
     // it skips the gate its first tick already passed. A hole below it is
     // somebody else's line to close, and must not freeze this one's arithmetic.
-    if (!doneSteps(date).has(step)) guardOrder(date, step)
+    // The bench condition rides in the same exemption for the same reason: a
+    // re-import must not be blocked by a box that arrived at the bench after
+    // the step it is topping up was legitimately ticked.
+    if (!doneSteps(date).has(step)) guardTick(date, step)
     guardOwnership(date, event, step, planByRole)
   }
 
@@ -564,7 +585,7 @@ export function completeShipSopStepOnce(
     date = day.date
     event = day.event
     planByRole = new Map(getSupplyPlanCosted().lines.map((l) => [l.role, l]))
-    guardOrder(date, step)
+    guardTick(date, step)
     guardOwnership(date, event, step, planByRole)
   } catch {
     return null

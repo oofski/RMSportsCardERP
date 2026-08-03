@@ -37,6 +37,11 @@ await build({
         b.onResolve({ filter: /^electron$/ }, () => ({
           path: join(ROOT, 'tests/support/electronStub.js')
         }))
+        // Same reason as `electron`: it expects a running app at import time,
+        // and a test that reaches src/main/ipc.ts pulls it in transitively.
+        b.onResolve({ filter: /^electron-updater$/ }, () => ({
+          path: join(ROOT, 'tests/support/electronUpdaterStub.js')
+        }))
       }
     }
   ]

@@ -60,6 +60,21 @@ export function EmployeesTab({
   const handleCreated = async (created: EmployeeInvite): Promise<void> => {
     setFormOpen(false)
     await onChanged()
+    // No temporary password means there is nothing to hand over: a shipping
+    // account was created with a password the administrator typed a moment ago
+    // and already knows. The invite modal exists to carry a credential the
+    // admin has not seen yet — showing it here would just repeat one back and
+    // put it on a clipboard button. (Note this does NOT key off `hasEmail`: a
+    // bench account may well have an address, and a person may well have none;
+    // what decides it is whether a secret was generated.)
+    if (!created.temporaryPassword) {
+      toast.success(
+        `${fullName(created.employee.firstName, created.employee.lastName)} can sign in now with ${
+          created.employee.companyId
+        } and the password you set.`
+      )
+      return
+    }
     setInvite(created) // open the invite modal so the admin can send the email
   }
   const handleUpdated = async (): Promise<void> => {
@@ -247,7 +262,11 @@ export function EmployeesTab({
         >
           <p className="muted">
             This immediately invalidates {confirmReset.firstName}&rsquo;s current password. They will
-            need the new temporary password (shown next) to sign in and set a new one.
+            need the new one (shown next) to sign in
+            {confirmReset.role === 'shipping'
+              ? // A shared bench is not asked to change it — see setTemporaryPassword.
+                '. Read it out at the bench; nobody will be prompted to change it.'
+              : ' and set a new one.'}
           </p>
         </Modal>
       )}

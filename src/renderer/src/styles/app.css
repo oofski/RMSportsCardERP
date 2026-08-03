@@ -8044,7 +8044,7 @@ tr.hoverable-row:hover {
   color: var(--brand-600, var(--brand-500));
 }
 
-/* The three states a step that is not finished can be in.
+/* The four states a step that is not finished can be in.
 
    NOW      the one thing to do — the row somebody's eye should land on
    GAP      ticked, then taken back off. Not the frontier: the work above it
@@ -8052,7 +8052,11 @@ tr.hoverable-row:hover {
             beginning. Amber, because it is the only one anybody could forget.
    WAITING  the step in front of it is not done. Quiet and not clickable, and
             the row itself says which step — a locked control that will not say
-            why is the thing people click twice and then complain about. */
+            why is the thing people click twice and then complain about.
+   BENCH    everything in front of it IS done and it still cannot be ticked,
+            because boxes are still going into mailers. Quiet like WAITING but
+            not as far back, and never grey-on-grey: this row is somebody's cue
+            to go and help at the bench, not a dead end. */
 .sop-step[data-state='now'] {
   box-shadow: inset 3px 0 0 var(--brand-500);
   background: var(--brand-soft);
@@ -8063,6 +8067,10 @@ tr.hoverable-row:hover {
 }
 .sop-step[data-state='waiting'] {
   opacity: 0.6;
+}
+.sop-step[data-state='bench'] {
+  opacity: 0.8;
+  box-shadow: inset 3px 0 0 var(--text-3);
 }
 .sop-step[data-state='now'] .sop-num {
   background: var(--brand-500);
@@ -8088,6 +8096,10 @@ tr.hoverable-row:hover {
   background: var(--warning);
   color: var(--text);
 }
+.sop-flag.bench {
+  background: var(--surface-3);
+  color: var(--text-2);
+}
 .sop-wait {
   display: flex;
   align-items: center;
@@ -8097,6 +8109,9 @@ tr.hoverable-row:hover {
   color: var(--text-3);
 }
 .sop-wait.gap {
+  color: var(--text-2);
+}
+.sop-wait.bench {
   color: var(--text-2);
 }
 .sop-wait svg {

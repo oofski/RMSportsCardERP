@@ -416,6 +416,174 @@ ok(
 )
 
 // ---------------------------------------------------------------------------
+console.log('\n=== 9d. steps 6 and 7 wait for the PACKING, not just the picking ===')
+// ---------------------------------------------------------------------------
+// Step 5 forks into two jobs at one bench: a picker gathers the bags, a packer
+// boxes them. The last PICK closes step 5 — that rule does not change — but
+// picking done is not packing done, and scanning and confirm are per-order work
+// on the Whatnot app that is wrong to start while boxes are still open.
+//
+// The hazard this creates is the mirror of 9c's: a gate that can be argued away
+// on the screen, or one that a one-person night cannot get past at all.
+const PACK_DAY = '2027-10-03'
+load(ONE, 'Two benches', PACK_DAY)
+const packMailers = mk('Bubble mailers pack', 500, 0.3, 'bubble_mailer')
+const packLabels = mk('4x6 labels pack', 1000, 0.5, 'shipping_label_4x6')
+openTo('ship') // steps 1-4, the ordinary way
+
+const benchOrders = domain.listOrders()
+for (const o of benchOrders) stations.pickAdvance(o.customerId, null)
+ok(
+  sop.getShipSop().steps.find((s: any) => s.step === 'ship').done === true,
+  'the last pick still closes step 5 — with a full pack bench behind it'
+)
+ok(stations.packingRemaining() === 2, 'and two orders are still to pack', String(stations.packingRemaining()))
+
+// The refusal, and what it costs: nothing.
+const sixBefore = { mailers: onHand(packMailers), labels: onHand(packLabels), cost: packing(PACK_DAY) }
+threw = ''
+try {
+  sop.setShipSopStep('scan', true, null)
+} catch (err: any) {
+  threw = String(err?.message ?? err)
+}
+ok(threw.includes('2 orders are still waiting to be packed'), 'step 6 is refused, and named the count', threw || '(no error)')
+ok(sop.getShipSop().steps.find((s: any) => s.step === 'scan').done === false, 'step 6 is not ticked')
+ok(
+  onHand(packMailers) === sixBefore.mailers && onHand(packLabels) === sixBefore.labels,
+  'not one unit moved on the refusal',
+  `${onHand(packMailers)}/${onHand(packLabels)}`
+)
+ok(packing(PACK_DAY) === sixBefore.cost, "and the day's cost is untouched", String(packing(PACK_DAY)))
+
+// The count is live, not a flag: pack one and the sentence says one.
+stations.packDone(benchOrders[0].customerId, null)
+ok(stations.packingRemaining() === 1, 'one packed, one left', String(stations.packingRemaining()))
+threw = ''
+try {
+  sop.setShipSopStep('scan', true, null)
+} catch (err: any) {
+  threw = String(err?.message ?? err)
+}
+ok(threw.includes('1 order is still waiting to be packed'), 'and the refusal counts down with it', threw || '(no error)')
+
+// A SEND-BACK MUST NOT LOOK LIKE A FINISH. The rejection releases the handoff,
+// so the order stops reading as ready to pack — and if the count were taken
+// from readiness alone it would silently vanish and open steps 6 and 7 on an
+// order sitting on a bench with a card missing.
+const packerB = 'STATION-PACKER'
+getDb().prepare(`UPDATE sync_state SET value = ? WHERE key = 'device_id'`).run(packerB)
+const takenBack = stations.packNext(null)
+ok(takenBack?.customerId === benchOrders[1].customerId, 'the packer picks up the last one', String(takenBack?.customerId))
+ok(stations.sendBack(benchOrders[1].customerId, 'wrong Cubs card') === true, 'and sends it back')
+ok(stations.packQueue().length === 0, 'so it is in NEITHER queue at the bench', String(stations.packQueue().length))
+ok(stations.packingRemaining() === 1, 'but it is still outstanding pack work', String(stations.packingRemaining()))
+threw = ''
+try {
+  sop.setShipSopStep('scan', true, null)
+} catch (err: any) {
+  threw = String(err?.message ?? err)
+}
+ok(threw.includes('1 order is still waiting to be packed'), 'a sent-back order keeps step 6 shut', threw || '(no error)')
+
+// Picked again, handed over again — still not packed, still shut.
+stations.pickAdvance(benchOrders[1].customerId, null)
+ok(stations.packingRemaining() === 1, 'a re-pick does not pack it either', String(stations.packingRemaining()))
+
+// A LIVE CLAIM AT ANOTHER BENCH is outstanding work, and the pack queue hides
+// it — which is exactly why the count cannot be read from the queue.
+getDb().prepare(`UPDATE sync_state SET value = 'STATION-OTHER' WHERE key = 'device_id'`).run()
+const held = stations.packNext(null)
+ok(!!held, 'another bench takes it')
+getDb().prepare(`UPDATE sync_state SET value = ? WHERE key = 'device_id'`).run(packerB)
+ok(stations.packQueue().length === 0, 'this bench sees an empty queue', String(stations.packQueue().length))
+ok(stations.packingRemaining() === 1, 'the room does not', String(stations.packingRemaining()))
+
+// And a bench that goes home mid-box must not make the work disappear. The
+// claim expires so somebody else CAN take it; the box is still not in a mailer.
+const longGone = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString()
+getDb()
+  .prepare(`UPDATE ship_work_claims SET heartbeat_at = ? WHERE role = 'pack' AND finished_at IS NULL`)
+  .run(longGone)
+ok(stations.packingRemaining() === 1, 'an abandoned bench still owes a mailer', String(stations.packingRemaining()))
+ok(stations.packQueue().length === 1, 'and the order is takeable again, so it is not a dead end', String(stations.packQueue().length))
+
+// Finish it properly and the gate opens.
+stations.packDone(benchOrders[1].customerId, null)
+ok(stations.packingRemaining() === 0, 'nothing left to pack', String(stations.packingRemaining()))
+sop.setShipSopStep('scan', true, null)
+ok(sop.getShipSop().steps.find((s: any) => s.step === 'scan').done === true, 'step 6 ticks once the bench is clear')
+sop.setShipSopStep('confirm', true, null)
+ok(sop.getShipSop().steps.find((s: any) => s.step === 'confirm').done === true, 'and step 7 after it')
+
+// A LEAD REOPENS AN ORDER. Packing is outstanding again with 6 and 7 already
+// ticked, which is where the three exemptions have to hold.
+domain.setOrderStage(benchOrders[0].id, 'to_pick', null)
+ok(stations.packingRemaining() === 1, 'a reopened order is pack work again', String(stations.packingRemaining()))
+// (a) Re-ticking a step that is ALREADY ticked skips the gate — the same
+//     exemption that lets a corrected re-import top its quantities up.
+sop.setShipSopStep('scan', true, null)
+sop.setShipSopStep('confirm', true, null)
+ok(
+  sop.getShipSop().steps.filter((s: any) => (s.step === 'scan' || s.step === 'confirm') && s.done).length === 2,
+  're-ticking an already-done step is never refused'
+)
+// (b) Un-ticking is never refused, whatever the bench looks like.
+sop.setShipSopStep('confirm', false, null)
+sop.setShipSopStep('scan', false, null)
+ok(
+  sop.getShipSop().steps.filter((s: any) => (s.step === 'scan' || s.step === 'confirm') && s.done).length === 0,
+  'un-ticking 6 and 7 is never refused either'
+)
+// (c) And once off, they are shut again — the exemption was about the ROW that
+//     is already ticked, not a licence the day keeps.
+threw = ''
+try {
+  sop.setShipSopStep('scan', true, null)
+} catch (err: any) {
+  threw = String(err?.message ?? err)
+}
+ok(threw.includes('1 order is still waiting to be packed'), 'and re-ticking from scratch is refused again', threw || '(no error)')
+domain.setOrderStage(benchOrders[0].id, 'put_together', null)
+sop.setShipSopStep('scan', true, null)
+ok(sop.getShipSop().steps.find((s: any) => s.step === 'scan').done === true, 'closed again, ticks again')
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 9e. a one-person night is never deadlocked by the bench ===')
+// ---------------------------------------------------------------------------
+// The failure mode a gate like this creates: somebody works the whole night
+// through the Orders screen, never opens a bench, and finds the last two steps
+// locked against a packer who does not exist. There is no in-app way to stamp
+// `packed_at` except at a bench, so a count that read "picked but not packed"
+// would strand that night one step from the end for ever.
+//
+// So the count is evidence-based: it counts what has REACHED a bench. No
+// claims, no bench, nothing to wait for.
+const SOLO_DAY = '2027-10-10'
+load(TWO, 'One person', SOLO_DAY)
+mk('Bubble mailers solo', 500, 0.3, 'bubble_mailer')
+mk('4x6 labels solo', 1000, 0.5, 'shipping_label_4x6')
+ok(stations.packingRemaining() === 0, 'a fresh show owes the bench nothing', String(stations.packingRemaining()))
+for (const o of domain.listOrders()) ship.setCustomerSlotsChecked(o.customerId, true, null, true)
+ok(
+  domain.listOrders().every((o: any) => o.pick.checked === o.pick.total),
+  'every card found on the Orders screen'
+)
+ok(
+  stations.packingRemaining() === 0,
+  'and still nothing is at a bench, because nobody was ever at one',
+  String(stations.packingRemaining())
+)
+openTo('scan') // 1-5, ticked by hand — nobody was at a bench to close 5
+sop.setShipSopStep('scan', true, null)
+sop.setShipSopStep('confirm', true, null)
+ok(
+  sop.getShipSop().doneCount === 7,
+  'the night finishes all seven steps with nobody at a bench',
+  String(sop.getShipSop().doneCount)
+)
+
+// ---------------------------------------------------------------------------
 console.log('\n=== 10. on-hand IS the sum of the movements ===')
 // ---------------------------------------------------------------------------
 // The load-bearing assumption behind rebuildDerivedSupplyStock, which runs on

@@ -149,6 +149,31 @@ ok(
   }) === null,
   'a handoff that was sent back stops counting'
 )
+// The rejection outranks every handoff BEFORE it, not merely the earliest one.
+// A packer releases its OWN rows only, so after a cross-bench send-back the
+// picker's original handoff is still standing when the repick lands. If that
+// stale row were allowed to answer, the order would read as never handed over
+// again — out of the pack queue, and out of the picking run too once its repick
+// was done.
+ok(
+  readyToPackAt({
+    claims: [
+      mkClaim({ id: 'h1', finishedAt: '2026-08-01T10:00:05.000Z' }),
+      mkClaim({
+        id: 'b1',
+        role: 'pack',
+        stationId: 'B',
+        releasedAt: '2026-08-01T10:00:10.000Z',
+        note: 'sent back: missing card'
+      }),
+      mkClaim({ id: 'h2', finishedAt: '2026-08-01T10:00:20.000Z' })
+    ],
+    cardsTotal: 3,
+    cardsChecked: 3,
+    lastCheckedAt: '2026-08-01T10:00:01.000Z'
+  }) === '2026-08-01T10:00:20.000Z',
+  'and the repick after it is ready again, with the first handoff still standing'
+)
 
 // ---------------------------------------------------------------------------
 console.log('\n=== 4. against a real database ===')
@@ -283,6 +308,53 @@ ok(
   backInPicking?.sentBackReason === 'missing the Yankees card',
   'carrying the reason, so the next picker knows BEFORE they start',
   String(backInPicking?.sentBackReason)
+)
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 9b. a send-back ACROSS two benches, then the repick ===')
+// ---------------------------------------------------------------------------
+// The case above has one station doing both jobs, which hides the hazard: a
+// packer releases its OWN rows only, so a rejection at the packing bench leaves
+// the picker's original handoff standing. If that stale row is allowed to answer
+// "has this been handed over", the repick that follows is invisible — the order
+// is not ready to pack, and its repick is done so it is not to pick either. It
+// would sit in NEITHER queue, which is the one outcome the whole claim design
+// exists to prevent.
+const third = domain
+  .listOrders()
+  .find((o: any) => o.customerId !== first.customerId && o.customerId !== nextPick.customerId)
+ok(!!third, 'a third order to work with', String(third?.customerId))
+
+// The bench above went home holding its next order — release it, or the pack
+// queue would hide this one behind a picker who is not standing there.
+stations.releaseAllForStation('end of shift')
+
+getDb().prepare(`UPDATE sync_state SET value = 'STATION-P' WHERE key = 'device_id'`).run()
+stations.claimOrder(third.id, third.customerId, 'pick', 'user4')
+stations.pickAdvance(third.customerId, 'user4')
+getDb().prepare(`UPDATE sync_state SET value = 'STATION-Q' WHERE key = 'device_id'`).run()
+ok(stations.packNext('user5')?.customerId === third.customerId, 'the packer at the OTHER bench takes it')
+ok(stations.sendBack(third.customerId, 'sleeve is split') === true, 'and rejects it')
+ok(
+  stations.packQueue().every((o: any) => o.customerId !== third.customerId),
+  'it leaves the pack queue'
+)
+getDb().prepare(`UPDATE sync_state SET value = 'STATION-P' WHERE key = 'device_id'`).run()
+ok(
+  stations.pickableOrders().some((o: any) => o.customerId === third.customerId),
+  'and lands back in the picking run, even though the picker never released a thing'
+)
+
+// The picker fixes it and hands it over again.
+stations.pickAdvance(third.customerId, 'user4')
+ok(
+  stations.packQueue().some((o: any) => o.customerId === third.customerId),
+  'the repick puts it back in the PACK queue',
+  JSON.stringify(stations.packQueue().map((o: any) => o.customerId))
+)
+ok(
+  !stations.pickableOrders().some((o: any) => o.customerId === third.customerId),
+  'and takes it out of the picking run — one queue, never neither'
 )
 
 // ---------------------------------------------------------------------------

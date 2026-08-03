@@ -35,7 +35,8 @@ export function EmployeeFormModal({
     title: employee?.title ?? '',
     email: employee?.email ?? '',
     role: (employee?.role ?? 'staff') as Role,
-    status: (employee?.status ?? 'invited') as EmployeeStatus
+    status: (employee?.status ?? 'invited') as EmployeeStatus,
+    password: ''
   })
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -89,6 +90,13 @@ export function EmployeeFormModal({
   // that role alone the box is optional — they sign in with their Company ID.
   const emailOptional = form.role === 'shipping'
 
+  // …and for that role alone an administrator types the password here, because
+  // the computer is shared: there is nobody to own a generated one and nobody
+  // who could answer a "choose your own" prompt without locking the other three
+  // out. Only on creation — an existing account's password is changed through
+  // Reset, which is the one path that invalidates the old one.
+  const needsPassword = !isEdit && form.role === 'shipping'
+
   const submit = async (e: React.FormEvent): Promise<void> => {
     e.preventDefault()
     setError('')
@@ -96,6 +104,10 @@ export function EmployeeFormModal({
     // button calls this directly, so the input's own `required` never fires.
     if (!emailOptional && !form.email.trim()) {
       setError(`An email address is required for the ${roleLabel(form.role)} role.`)
+      return
+    }
+    if (needsPassword && form.password.length < 8) {
+      setError('Set a password of at least 8 characters for this account.')
       return
     }
     setBusy(true)
@@ -123,12 +135,18 @@ export function EmployeeFormModal({
           companyId: form.companyId,
           title: form.title,
           email: form.email,
-          role: form.role
+          role: form.role,
+          // Only for the role that takes one. Sending it otherwise would put a
+          // typed string on a path where nothing hashes it.
+          password: needsPassword ? form.password : undefined
         })
         if (!res.ok || !res.data) {
           setError(res.error ?? 'Could not create employee.')
           return
         }
+        // Drop the plaintext the moment it is no longer needed — this component
+        // stays mounted until its parent closes it.
+        setForm((f) => ({ ...f, password: '' }))
         toast.success(`${form.firstName} ${form.lastName} added.`)
         await onCreated(res.data)
       }
@@ -143,7 +161,9 @@ export function EmployeeFormModal({
       subtitle={
         isEdit
           ? 'Update this employee’s details, role or status.'
-          : 'They’ll get a temporary password to set up their account.'
+          : needsPassword
+            ? 'Set the password the packing bench signs in with.'
+            : 'They’ll get a temporary password to set up their account.'
       }
       onClose={onClose}
       footer={
@@ -241,6 +261,22 @@ export function EmployeeFormModal({
             </Field>
           )}
         </div>
+
+        {needsPassword && (
+          <Field
+            label="Bench password"
+            hint="At least 8 characters. Whoever is on shift signs in with the Company ID and this password — they are never asked to change it."
+          >
+            <Input
+              type="password"
+              value={form.password}
+              onChange={set('password')}
+              autoComplete="new-password"
+              required
+              minLength={8}
+            />
+          </Field>
+        )}
 
         {/* Hidden submit to enable Enter-to-save */}
         <button type="submit" style={{ display: 'none' }} aria-hidden />

@@ -155,11 +155,6 @@ export const IPC = {
   shipStationHeartbeat: 'shipping:station:heartbeat',
   // Per-card sleeve capture, split from the single old flag.
   shipSlotSleeve: 'shipping:teamslot:sleeve',
-  // Shared bench logins: a computer signs in, not a person.
-  stationsList: 'stations:list',
-  stationsCreate: 'stations:create',
-  stationsSetPassword: 'stations:set-password',
-  stationsSetStatus: 'stations:set-status',
   // The owner's home board — every module's headline in one read.
   ownerBoard: 'owner:board',
   // The owner's inbox. Anyone signed in may WRITE one; only the owner reads.
