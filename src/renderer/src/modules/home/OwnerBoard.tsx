@@ -103,9 +103,13 @@ export function OwnerBoard(): JSX.Element | null {
             sub="Sold off-stream"
             icon="Package"
             windows={[board.wholesale.week, board.wholesale.month]}
+            /* After fees, NOT after cost of goods — unlike the Whatnot card
+               beside it, whose headline figure is net of the boxes. The two sit
+               in the same place on the page, so the difference has to be said
+               rather than inferred. */
             footer={
               board.wholesale.productCount > 0
-                ? `${board.wholesale.productCount} product${board.wholesale.productCount === 1 ? '' : 's'} this month` +
+                ? `After fees, before cost of goods · ${board.wholesale.productCount} product${board.wholesale.productCount === 1 ? '' : 's'} this month` +
                   (board.wholesale.unmatchedCount > 0
                     ? ` · ${board.wholesale.unmatchedCount} not in the catalog`
                     : '')
