@@ -22,10 +22,26 @@
  *
  * The other blocker is quieter and does more damage: stock the run would leave
  * carried at NO cost. A blank quantity has always been fatal — a row naming a
- * product with no count is an unfinished sheet — and a cost that would leave the
- * shelf at zero is the same class of problem, except that it fails silently and
- * manufactures profit out of the whole market value while it does. See the
- * uncosted-stock check near the end of `buildResetPlan`.
+ * product with no count is an unfinished sheet — and a cost that would leave a
+ * CASE on the shelf at zero is the same class of problem, except that it fails
+ * silently and manufactures profit out of the whole market value while it does.
+ *
+ * BOXES ARE THE EXCEPTION, and only boxes: there it warns and applies. Two
+ * reasons, and both have to hold. A box is the thing that gets picked up with no
+ * price to hand, which is why the cost field on the add-stock form is optional
+ * at all; and the dashboard now leaves an uncosted box OUT of the Spread rather
+ * than reporting its market value as profit (PRODUCT_TOTALS in db/inventory.ts),
+ * so the damage this check exists to prevent does not happen to one. A case is a
+ * deliberate four-figure purchase whose price is known at the moment it is
+ * bought — nothing that size may slip through on "the sheet did not say".
+ *
+ * A cost cell holding an explicit 0 is a THIRD thing, and it is not a blank. It
+ * is the operator stating that cost is not tracked for that product, so it is
+ * written as stated and CLEARS any basis the shelf was carrying — which is the
+ * only way to say "stop tracking this one". A blank still means "not stated" and
+ * still keeps whatever the product already had. The two must never be collapsed
+ * into each other. See the uncosted-stock check near the end of
+ * `buildResetPlan`.
  *
  * EVERYTHING that decides *what would change* lives here, with no database and
  * no Electron: parsing, column mapping, product matching and the before→after
@@ -925,6 +941,14 @@ export function buildResetPlan(
   const projectedQty = new Map<string, number>()
   /** Counted unit cost per (product, location) — a shelf revaluation. */
   const projectedShelfCost = new Map<string, number>()
+  /**
+   * Lines whose cost cell STATED a number, an explicit 0 included.
+   *
+   * Kept because a stated zero and a blank end in the same place — stock with no
+   * basis — and only one of them is a surprise. The uncosted-box note below is
+   * for the operator who did not say; it has nothing to tell the one who did.
+   */
+  const statedCost = new Set<number>()
   const projectedMarket = new Map<string, number | null>()
 
   const key = (productId: string, location: string): string => `${productId}::${location}`
@@ -1089,6 +1113,23 @@ export function buildResetPlan(
         // written onto the layers and multiplied by the quantity again.
         plan.shelfCostAfter = unitMoney(costEach)
         projectedShelfCost.set(shelf, unitMoney(costEach))
+        statedCost.add(plan.line)
+        // A typed 0 is a DECLARATION — cost is not tracked for this product —
+        // and it is honoured exactly as any other stated cost is, which means it
+        // CLEARS a basis the shelf was carrying. That is the whole point of it,
+        // and it is also the one destructive thing a cost cell can do, so it is
+        // named on the row. Typing 0 over nothing loses nothing and says
+        // nothing: silence is the right answer when the operator has already
+        // said what they mean.
+        if (costEach === 0) {
+          const had = product.costByLocation[location] ?? product.unitCost
+          if (had > 0) {
+            warnings.push(
+              `Cost set to $0.00 — that clears the ${fmt(had)} basis on this shelf, and the stock ` +
+                'sits outside the spread until a cost is set again.'
+            )
+          }
+        }
       }
     } else if (rounded > 0) {
       // A row that counts stock but states no money for it. Nothing is written —
@@ -1248,18 +1289,39 @@ export function buildResetPlan(
   // dashboard banner tests: `zeroCost` in db/inventory.ts is `qty > 0 AND
   // cost_value <= 0` summed over a product's shelves. Testing per shelf here
   // would refuse sheets the banner would never have complained about; testing
-  // per product means a run that passes this cannot produce a banner row, which
-  // is the whole property this check exists to guarantee.
+  // per product means the two are looking at the same thing.
+  //
+  // AND IT SPLITS BY UNIT TYPE, because what a zero basis costs depends on what
+  // the stock is. For a case the paragraphs above hold unchanged — it blocks.
+  // For a BOX the dashboard no longer counts the market value as profit; it
+  // holds the box out of the Spread entirely and says how much it is holding
+  // (PRODUCT_TOTALS in db/inventory.ts). So the failure is no longer silent, and
+  // it is no longer a lie — it is an incomplete figure that the app states in
+  // full. That is a warning, not a refusal, and refusing it would be refusing
+  // the ordinary way boxes arrive: picked up with no price to hand, which is the
+  // reason the cost field is optional on the add-stock form in the first place.
+  //
+  // A run that passes can therefore leave a banner row after all — but only an
+  // uncosted BOX, and only the kind the banner reports as excluded rather than
+  // as fictional profit.
   const uncosted: Array<{ id: string; name: string; quantity: number }> = []
+  const uncostedBoxes: Array<{ id: string; name: string; quantity: number }> = []
   for (const p of catalog) {
     const qty = afterQtyTotal.get(p.id) ?? 0
+    if (!(qty > 0)) continue
     // `!(value > 0)` rather than `value <= 0` so a NaN — a cost column that
     // parsed into something unusable — lands on the refusing side.
-    if (qty > 0 && !((afterCostValue.get(p.id) ?? 0) > 0)) {
-      uncosted.push({ id: p.id, name: p.name, quantity: qty })
-    }
+    if ((afterCostValue.get(p.id) ?? 0) > 0) continue
+    const entry = { id: p.id, name: p.name, quantity: qty }
+    if (p.unitType === 'box') uncostedBoxes.push(entry)
+    else uncosted.push(entry)
   }
-  uncosted.sort((a, b) => b.quantity - a.quantity || a.name.localeCompare(b.name))
+  const worstFirst = (
+    a: { quantity: number; name: string },
+    b: { quantity: number; name: string }
+  ): number => b.quantity - a.quantity || a.name.localeCompare(b.name)
+  uncosted.sort(worstFirst)
+  uncostedBoxes.sort(worstFirst)
 
   if (uncosted.length > 0) {
     // Named with their counts, exactly like the write-off panel names what it is
@@ -1285,6 +1347,29 @@ export function buildResetPlan(
       if (!row.productId || !blocked.has(row.productId)) continue
       if (row.status === 'unmatched' || row.status === 'ambiguous' || row.status === 'invalid') continue
       row.warnings.push('This row is holding the count up: it would leave this stock at $0.00 cost.')
+    }
+  }
+
+  // The box half: a note on the rows, and the run goes through. Said per row
+  // rather than as one summary line because that is where the fix is — the same
+  // reason the write-off panel names shelves instead of counting them.
+  //
+  // A row that STATED its cost is skipped even though it ends at nothing. A
+  // typed 0 means cost is not tracked for that product, and telling somebody
+  // that what they just typed had the effect they typed it for is noise.
+  if (uncostedBoxes.length > 0) {
+    const noted = new Set(uncostedBoxes.map((u) => u.id))
+    for (const row of rows) {
+      if (!row.productId || !noted.has(row.productId)) continue
+      if (row.status === 'unmatched' || row.status === 'ambiguous' || row.status === 'invalid') continue
+      if (statedCost.has(row.line)) continue
+      // A row counting the shelf empty is not the row leaving stock uncosted —
+      // the stock is somewhere else on the sheet.
+      if (!(row.quantityAfter != null && row.quantityAfter > 0)) continue
+      row.warnings.push(
+        'No cost for this box — it goes on the shelf carrying nothing and stays outside the ' +
+          'spread until one is set.'
+      )
     }
   }
 

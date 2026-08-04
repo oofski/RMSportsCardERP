@@ -95,6 +95,9 @@ interface Seed {
   am?: number
   amCost?: number
   giveaway?: boolean
+  /** Boxes unless stated. Section 12 needs a case, because the uncosted-stock
+   *  check answers differently for one. */
+  unit?: string
 }
 
 const make = (s: Seed): string => {
@@ -107,7 +110,7 @@ const make = (s: Seed): string => {
       brand: '',
       setName: '',
       year: '',
-      unitType: 'box',
+      unitType: s.unit ?? 'box',
       boxesPerCase: null,
       packsPerBox: null,
       giveawayItem: !!s.giveaway,
@@ -651,7 +654,7 @@ ok(
 )
 
 // ---------------------------------------------------------------------------
-console.log('\n=== 12. a blank cost that would leave stock at $0.00 blocks the run ===')
+console.log('\n=== 12. stock that would end at $0.00: a case blocks, a box is noted ===')
 // ---------------------------------------------------------------------------
 // WHAT HAPPENED. A catalog import created 184 products at unit_cost 0. A baseline
 // paste then counted them with the cost column blank, which correctly means "the
@@ -660,12 +663,20 @@ console.log('\n=== 12. a blank cost that would leave stock at $0.00 blocks the r
 // $16,039.93 of Spread that was pure fiction, because spread is market − cost
 // and the cost was zero.
 //
-// A blank quantity has always been fatal. A blank cost that leaves the shelf at
-// nothing is the same class of problem and does more damage, because it fails
-// SILENTLY. It now blocks, on exactly one condition: whether the stock ENDS at a
-// zero cost basis. Not whether the cell is empty.
-const GOLF = make({ name: 'TEST Golf Uncosted Box', category: 'Baseball', cost: 0, bid: 200, rm: 0 })
-const HOTEL = make({ name: 'TEST Hotel Uncosted Box', category: 'Baseball', cost: 0, bid: 75, rm: 0 })
+// A blank quantity has always been fatal. A blank cost that leaves a CASE on the
+// shelf at nothing is the same class of problem and does more damage, because it
+// fails SILENTLY. It blocks, on exactly one condition: whether the stock ENDS at
+// a zero cost basis. Not whether the cell is empty.
+//
+// A BOX is the exception and only a box, because the dashboard stopped counting
+// an uncosted box as profit: it holds it out of the Spread and reports how much
+// it is holding. So the run warns and applies. A box is also the thing that gets
+// picked up with no price to hand, which is why its cost is optional everywhere
+// else; a case is a four-figure purchase whose price is known when it is bought.
+const GOLF = make({ name: 'TEST Golf Uncosted Case', category: 'Baseball', cost: 0, bid: 200, rm: 0, unit: 'case' })
+const HOTEL = make({ name: 'TEST Hotel Uncosted Case', category: 'Baseball', cost: 0, bid: 75, rm: 0, unit: 'case' })
+const KILO = make({ name: 'TEST Kilo Uncosted Box', category: 'Baseball', cost: 0, bid: 120, rm: 0 })
+const LIMA = make({ name: 'TEST Lima Tracked Box', category: 'Baseball', cost: 60, bid: 100, rm: 2 })
 
 /** Everything currently on a shelf, restated so a sheet is the whole warehouse. */
 const heldNow = (): string[] =>
@@ -681,14 +692,14 @@ const heldNow = (): string[] =>
       .all() as Array<{ name: string; loc: string; qty: number; bid: number; cost: number }>
   ).map((r) => `${r.name}\t${r.loc}\t${r.qty}\t${(r.bid || r.cost).toFixed(2)}\t${r.cost.toFixed(2)}`)
 
-// -- refused, and it says which products ------------------------------------
-const uncosted = [HEADER, ...heldNow(), 'TEST Golf Uncosted Box\tRM\t6\t200.00\t'].join('\n')
+// -- a case is refused, and it says which products ---------------------------
+const uncosted = [HEADER, ...heldNow(), 'TEST Golf Uncosted Case\tRM\t6\t200.00\t'].join('\n')
 const planF = preview(uncosted).plan
 ok(planF.counts.invalid === 0, 'the row itself is perfectly readable — it is not a rejected row')
 ok(planF.problems.length > 0, 'but the run is blocked all the same')
 const blockText = planF.problems.join(' | ')
 ok(/no cost/i.test(blockText), 'the problem says what is wrong', blockText)
-ok(blockText.includes('TEST Golf Uncosted Box'), 'and names the product', blockText)
+ok(blockText.includes('TEST Golf Uncosted Case'), 'and names the product', blockText)
 ok(/\(6\)/.test(blockText), 'with the quantity that would sit there uncosted', blockText)
 ok(
   applySheet(uncosted, planF.mapping).ok === false,
@@ -702,30 +713,104 @@ ok(
   JSON.stringify(golfRow.warnings)
 )
 
-// A cell stating a literal 0 is the same outcome by a different route, and is
-// refused for the same reason — the test is what the shelf ends up carrying.
-const explicitZero = [HEADER, ...heldNow(), 'TEST Golf Uncosted Box\tRM\t6\t200.00\t0.00'].join('\n')
-ok(preview(explicitZero).plan.problems.length > 0, 'a cost cell stating $0.00 is refused too')
+// On a case, a cell stating a literal 0 is the same outcome by a different
+// route, and is refused for the same reason — the test is what the shelf ends up
+// carrying. (On a box it is a declaration and is accepted; see below.)
+const explicitZero = [HEADER, ...heldNow(), 'TEST Golf Uncosted Case\tRM\t6\t200.00\t0.00'].join('\n')
+ok(preview(explicitZero).plan.problems.length > 0, 'a cost cell stating $0.00 on a case is refused too')
 
 // Several of them are all named, not just the first.
 const twoUncosted = [
   HEADER,
   ...heldNow(),
-  'TEST Golf Uncosted Box\tRM\t6\t200.00\t',
-  'TEST Hotel Uncosted Box\tAM\t2\t75.00\t'
+  'TEST Golf Uncosted Case\tRM\t6\t200.00\t',
+  'TEST Hotel Uncosted Case\tAM\t2\t75.00\t'
 ].join('\n')
 const twoText = preview(twoUncosted).plan.problems.join(' | ')
 ok(
-  twoText.includes('TEST Golf Uncosted Box') && twoText.includes('TEST Hotel Uncosted Box'),
+  twoText.includes('TEST Golf Uncosted Case') && twoText.includes('TEST Hotel Uncosted Case'),
   'both uncosted products are named',
   twoText
 )
 ok(/^2 products/.test(twoText), 'and counted', twoText)
 
+// -- a BOX is a note, and the run goes through -------------------------------
+// The same sheet shape, against a box. Nothing about the paste changes; what
+// changes is what the dashboard does with the result, and that is what decides
+// whether refusing is worth the cost of refusing.
+const boxBlank = [HEADER, ...heldNow(), 'TEST Kilo Uncosted Box\tRM\t4\t120.00\t'].join('\n')
+const planK = preview(boxBlank).plan
+ok(planK.problems.length === 0, 'a box left with no cost does not block the run', planK.problems.join(' | '))
+const kiloRow = planK.rows.find((r: any) => r.productId === KILO)
+ok(
+  kiloRow.warnings.some((w: string) => /outside the spread/i.test(w)),
+  'it is a note on the row instead, saying where the stock ends up',
+  JSON.stringify(kiloRow.warnings)
+)
+ok(applySheet(boxBlank, planK.mapping).ok === true, 'and the sheet applies')
+ok(stockQty(KILO, 'RM') === 4, 'the boxes are on the shelf', String(stockQty(KILO, 'RM')))
+ok(productRow(KILO).unit_cost === 0, 'carrying nothing', String(productRow(KILO).unit_cost))
+const kiloPricing = pricingList().find((r: any) => r.id === KILO)
+ok(eq(kiloPricing.invValue, 4 * 120), 'they are still worth their high bid', String(kiloPricing.invValue))
+ok(kiloPricing.outsideSpread === true && eq(kiloPricing.spread, 0), 'and they carry no spread at all')
+const kiloBanner = inventoryStats().zeroCost.find((z: any) => z.id === KILO)
+ok(
+  !!kiloBanner && kiloBanner.outsideSpread === true,
+  'the banner reports them as held OUT of the spread, not as invented profit'
+)
+ok(
+  eq(
+    inventoryStats().outsideSpreadValue,
+    inventoryStats()
+      .zeroCost.filter((z: any) => z.outsideSpread)
+      .reduce((n: number, z: any) => n + z.marketValue, 0)
+  ),
+  'and the excluded figure is exactly what the banner adds up to',
+  String(inventoryStats().outsideSpreadValue)
+)
+
+// -- an explicit 0 on a box is a VALUE, not an omission ----------------------
+// Blank means "the sheet did not say" and keeps what the product had. A typed 0
+// means "we do not track cost for this one" and is written as stated — which is
+// destructive, because it clears a basis that was there, and is the only way to
+// say it.
+const limaCostBefore = productRow(LIMA).unit_cost
+ok(limaCostBefore === 60, 'Lima starts out carrying a real basis', String(limaCostBefore))
+const limaZero = [HEADER, ...heldNow()]
+  .map((line) =>
+    line.startsWith('TEST Lima Tracked Box\t')
+      ? line.split('\t').slice(0, 4).join('\t') + '\t0.00'
+      : line
+  )
+  .join('\n')
+const planL = preview(limaZero).plan
+ok(planL.problems.length === 0, 'an explicit $0.00 on a box is accepted', planL.problems.join(' | '))
+const limaRow = planL.rows.find((r: any) => r.productId === LIMA)
+ok(limaRow.shelfCostAfter === 0, 'the zero is written as stated, not read as a blank', String(limaRow.shelfCostAfter))
+ok(
+  limaRow.warnings.some((w: string) => /clears the/i.test(w)),
+  'the row says which basis it is about to clear',
+  JSON.stringify(limaRow.warnings)
+)
+ok(
+  !limaRow.warnings.some((w: string) => /No cost for this box/i.test(w)),
+  'and is not also told it forgot to say — it said'
+)
+ok(applySheet(limaZero, planL.mapping).ok === true, 'it applies')
+ok(productRow(LIMA).unit_cost === 0, 'the basis it carried is gone', String(productRow(LIMA).unit_cost))
+ok(
+  openLots(LIMA).every((l: any) => l.unit_cost === 0),
+  'the layers under the stock went with it — not just the average'
+)
+const limaPricing = pricingList().find((r: any) => r.id === LIMA)
+ok(limaPricing.outsideSpread === true && eq(limaPricing.spread, 0), 'and it now sits outside the spread too')
+
 // -- allowed through when there IS a basis to keep ---------------------------
 // This is the half that stops the check being a nuisance: an ordinary recount
 // leaves the cost column blank on products whose cost is already set, and must
-// not force anybody to retype it.
+// not force anybody to retype it. Alpha is a BOX, so this is also the other side
+// of the distinction above: a blank keeps the cost, a typed 0 would have cleared
+// it, and the two do not mean the same thing just because a box may end at zero.
 const alphaCostBefore = productRow(ALPHA).unit_cost
 ok(alphaCostBefore > 0, 'Alpha already carries a real cost basis', String(alphaCostBefore))
 const recount = [HEADER, ...heldNow()]
@@ -744,6 +829,11 @@ ok(
   JSON.stringify(alphaRow.warnings)
 )
 ok(alphaRow.shelfCostAfter === null, 'nothing is written to that shelf’s cost')
+ok(
+  !alphaRow.warnings.some((w: string) => /outside the spread/i.test(w)),
+  'and a costed box is not told it is uncosted, because it is not',
+  JSON.stringify(alphaRow.warnings)
+)
 ok(eq(alphaRow.costAfter, alphaCostBefore), 'and the basis it keeps is the one it had', String(alphaRow.costAfter))
 ok(applySheet(recount, planG.mapping).ok === true, 'the recount applies')
 ok(
@@ -753,32 +843,48 @@ ok(
 )
 
 // -- THE PROPERTY THE WHOLE CHANGE EXISTS FOR --------------------------------
-// A run that passes cannot leave a row for the dashboard banner to complain
-// about. `zeroCost` is `qty > 0 AND cost_value <= 0` per product, which is the
-// same condition the planner refuses on, and this asserts the two agree on real
-// data rather than by reading.
+// A run that passes cannot leave stock whose market value the Spread is
+// reporting as profit. `zeroCost` is `qty > 0 AND cost_value <= 0` per product,
+// the same condition the planner refuses on, and this asserts the two agree on
+// real data rather than by reading.
+//
+// The property is now stated over the rows the banner marks as INFLATING the
+// spread. An uncosted box may survive a run — that is the whole of the change
+// above — but it lands in the excluded half, where the dashboard counts it in
+// Inventory value, keeps it out of Spread and says how much it is holding out.
+// A product in the other half is the failure this check exists to prevent.
+const inflating = (): any[] => inventoryStats().zeroCost.filter((z: any) => !z.outsideSpread)
 ok(
-  inventoryStats().zeroCost.length === 0,
-  'after a run that passed, the zero-cost banner has nothing to say',
-  inventoryStats().zeroCost.map((z: any) => z.name).join(', ')
+  inflating().length === 0,
+  'after a run that passed, nothing is inflating the spread',
+  inflating()
+    .map((z: any) => z.name)
+    .join(', ')
+)
+ok(
+  inventoryStats().zeroCost.some((z: any) => z.id === KILO),
+  'while the uncosted box that was allowed through is still named — as excluded'
 )
 
 // And the same, once for every sheet in this file that was allowed to apply: a
-// costed sheet, a fractional one and a counted zero all end with an empty banner.
+// costed sheet, a fractional one and a counted zero all end with nothing
+// inflating the spread.
 for (const [label, text] of [
   ['a fully costed sheet', [HEADER, ...heldNow()].join('\n')],
   [
     'one that also puts stock on a previously uncosted product',
-    [HEADER, ...heldNow(), 'TEST Hotel Uncosted Box\tRM\t3\t75.00\t44.00'].join('\n')
+    [HEADER, ...heldNow(), 'TEST Hotel Uncosted Case\tRM\t3\t75.00\t44.00'].join('\n')
   ]
 ] as Array<[string, string]>) {
   const p = preview(text).plan
   ok(p.problems.length === 0, `${label} is accepted`, p.problems.join(' | '))
   ok(applySheet(text, p.mapping).ok === true, `  ${label} applies`)
   ok(
-    inventoryStats().zeroCost.length === 0,
-    `  and leaves the banner empty`,
-    inventoryStats().zeroCost.map((z: any) => z.name).join(', ')
+    inflating().length === 0,
+    `  and leaves nothing inflating the spread`,
+    inflating()
+      .map((z: any) => z.name)
+      .join(', ')
   )
 }
 ok(stockQty(HOTEL, 'RM') === 3, 'the newly costed product is on the shelf', String(stockQty(HOTEL, 'RM')))
@@ -787,14 +893,16 @@ assertStockLotsConsistent(db)
 ok(true, 'and the stock/lot invariant survived all of it')
 
 // ---------------------------------------------------------------------------
-console.log('\n=== 13. fixing a zero cost basis from the banner ===')
+console.log('\n=== 13. putting a cost on stock that is carrying nothing ===')
 // ---------------------------------------------------------------------------
-// THE CAVEAT THAT MAKES THE INLINE FIELD WORTH HAVING. Setting a product's
-// average cost only clears the banner when its stock has NO cost layers — the
-// valuation reads layers first. A product that reached the banner the usual way
-// (created at zero, then counted by a paste that opened its layers at the zero it
-// found) has layers, all at zero, so writing the average alone changes nothing
-// visible. `setZeroCostBasis` re-bases the layers that carry nothing as well.
+// THE CAVEAT BOTH FIELDS HAVE TO CLEAR. A product's stored average is not what a
+// total is built from — the valuation reads the cost LAYERS first. A product
+// that reached the banner the usual way (created at zero, then counted by a
+// paste that opened its layers at the zero it found, or a box taken in with the
+// cost left blank) has layers, all at zero, so writing the average alone would
+// change nothing anybody can see. Both the catalog's cost field and the banner's
+// re-base the layers carrying nothing as well, because a field that silently
+// fails at the one thing it was offered for is worse than no field.
 const stuck = make({ name: 'TEST India Zero Layers', category: 'Baseball', cost: 0, bid: 90, rm: 4 })
 ok(
   openLots(stuck).length > 0 && openLots(stuck).every((l: any) => l.unit_cost === 0),
@@ -804,31 +912,45 @@ ok(
   inventoryStats().zeroCost.some((z: any) => z.id === stuck),
   'so the banner lists it'
 )
+const stuckSpreadBefore = inventoryStats().spread
 
-// What the naive fix would have done: the average moves, the layers do not, and
-// the banner is still there.
+// The CATALOG's own field — "go into the catalog and make sure it actually has a
+// price". That is where an operator goes to price a product, so that is where
+// pricing one has to land.
 updateProduct({ id: stuck, unitCost: 25 })
-ok(productRow(stuck).unit_cost === 25, 'writing the average alone does move the product row')
+ok(productRow(stuck).unit_cost === 25, 'the product row carries what was typed')
 ok(
-  openLots(stuck).every((l: any) => l.unit_cost === 0),
-  'but the layers still carry nothing'
+  openLots(stuck).every((l: any) => l.unit_cost === 25),
+  'and so do the layers under the stock — not just the average'
 )
 ok(
-  inventoryStats().zeroCost.some((z: any) => z.id === stuck),
-  'and the banner has not moved — which is why the field does more than this'
+  !inventoryStats().zeroCost.some((z: any) => z.id === stuck),
+  'so the banner has nothing left to say about it'
+)
+ok(
+  eq(inventoryStats().spread - stuckSpreadBefore, 4 * 90 - 4 * 25),
+  'and the spread rises by exactly market minus the cost that was just set',
+  String(inventoryStats().spread - stuckSpreadBefore)
 )
 
-const fixed = setZeroCostBasis(stuck, 25)
+// The BANNER's field is the same operation, and reports what it did so the row
+// can say whether the fix landed rather than assume it.
+const stillStuck = make({ name: 'TEST Kilo Zero Layers', category: 'Baseball', cost: 0, bid: 90, rm: 4 })
+const fixed = setZeroCostBasis(stillStuck, 25)
 ok(!!fixed, 'the banner’s field puts a real basis on it')
-ok(fixed.layersRevalued === openLots(stuck).length, 'every layer carrying nothing was re-based', String(fixed.layersRevalued))
-ok(openLots(stuck).every((l: any) => l.unit_cost === 25), 'they now carry the stated cost')
+ok(
+  fixed.layersRevalued === openLots(stillStuck).length,
+  'every layer carrying nothing was re-based',
+  String(fixed.layersRevalued)
+)
+ok(openLots(stillStuck).every((l: any) => l.unit_cost === 25), 'they now carry the stated cost')
 ok(eq(fixed.costValue, 4 * 25), 'the reported basis is the stock at that cost', String(fixed.costValue))
 ok(fixed.costValue > 0, 'which is what tells the caller the fix actually landed')
 ok(
-  !inventoryStats().zeroCost.some((z: any) => z.id === stuck),
+  !inventoryStats().zeroCost.some((z: any) => z.id === stillStuck),
   'and the banner no longer lists it'
 )
-ok(eq(productRow(stuck).unit_cost, 25), 'the average agrees with the layers under it')
+ok(eq(productRow(stillStuck).unit_cost, 25), 'the average agrees with the layers under it')
 
 // A layer carrying a REAL price is never touched: this is a screen for stock
 // with no basis, not one for repricing a purchase.

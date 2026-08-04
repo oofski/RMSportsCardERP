@@ -516,22 +516,66 @@ export function updateProduct(input: UpdateInventoryProduct): InventoryProduct |
       .prepare('UPDATE inventory_products SET high_bid_at = ? WHERE id = ?')
       .run(next.high_bid != null ? nowIso() : null, input.id)
   }
+  // A cost typed into the CATALOG has to reach the stock, not only the product
+  // row. The valuation reads the FIFO layers first (db/valuation.ts), so for the
+  // products that need this most — a box taken in with the cost field left
+  // blank, which opens its layer at zero — writing the average alone moves no
+  // total anywhere: the layers still say nothing, the box stays outside the
+  // Spread, and the operator is left believing a field works when it does not.
+  // The catalog is where somebody goes to put a price on a product, so it is
+  // where doing so has to land.
+  //
+  // It can only ever ADD basis, never reprice a purchase. It runs solely when
+  // the product's cost value is nil, and even then touches only layers carrying
+  // nothing — the same two guards `setZeroCostBasis` gives the banner's field,
+  // which remains the version that REPORTS what it did.
+  if (input.unitCost != null && next.unit_cost > 0 && productCostValue(getDb(), input.id) <= 0) {
+    rebaseZeroCostLayers(getDb(), input.id, unitMoney(next.unit_cost))
+  }
   return getProduct(input.id)
+}
+
+/**
+ * Re-base the open cost layers that are carrying NOTHING onto `cost`, and
+ * re-sync the product's average from what the layers then say.
+ *
+ * A layer at a real price is a real purchase and is never touched, so this can
+ * only add basis where there is none. Shared by the catalog's cost field and by
+ * the dashboard banner's, because "a cost typed here reaches the stock" has to
+ * be one behaviour rather than two that drift.
+ */
+function rebaseZeroCostLayers(db: Database, productId: string, cost: number): number {
+  const run = db.transaction((): number => {
+    const info = db
+      .prepare(
+        `UPDATE inventory_lots SET unit_cost = ?
+          WHERE product_id = ? AND qty_remaining > 0 AND unit_cost <= 0`
+      )
+      .run(cost, productId)
+    // Recomputes the average from whatever the layers now say. Where there are
+    // none it returns early and the figure already on the product row stands,
+    // which is the number the valuation falls back to.
+    syncProductAvgCost(db, productId)
+    return info.changes
+  })
+  return run()
 }
 
 /**
  * Put a cost basis on stock that is carried at nothing.
  *
- * WHY THIS IS NOT `updateProduct({ unitCost })`. The valuation reads the COST
+ * WHY THIS IS MORE THAN A WRITE TO `unit_cost`. The valuation reads the COST
  * LAYERS first and only falls back to the product's stored average where a shelf
  * has none (db/valuation.ts). So for the products that actually reach the
- * zero-cost banner — a catalog import that created them at `unit_cost = 0`,
- * followed by a count that opened layers at the zero it found — writing the
- * average alone changes nothing anybody can see: the layers still say zero, the
- * banner still lists the product, and the operator is left believing they typed
- * a number into a field that does not work. A cost field that silently fails to
- * fix the thing it was offered for is worse than no field, so this does the
- * whole job.
+ * zero-cost banner — a catalog import that created them at `unit_cost = 0`
+ * followed by a count that opened layers at the zero it found, or a box taken in
+ * with the cost left blank — writing the average alone changes nothing anybody
+ * can see: the layers still say zero, the banner still lists the product, and
+ * the operator is left believing they typed a number into a field that does not
+ * work. A cost field that silently fails to fix the thing it was offered for is
+ * worse than no field, so this does the whole job. `updateProduct` now shares
+ * the same re-basing for the same reason; what this adds is the REPORT — the
+ * caller can say whether it landed instead of assuming so.
  *
  * WHAT IT TOUCHES, AND WHAT IT REFUSES TO. Only layers carrying NOTHING are
  * re-based. A layer at a real price is a real purchase and this is not the screen
@@ -557,22 +601,12 @@ export function setZeroCostBasis(productId: string, unitCost: number): CostBasis
   // at everywhere else.
   const cost = unitMoney(Math.max(0, unitCost))
   const run = db.transaction((): number => {
-    const info = db
-      .prepare(
-        `UPDATE inventory_lots SET unit_cost = ?
-          WHERE product_id = ? AND qty_remaining > 0 AND unit_cost <= 0`
-      )
-      .run(cost, productId)
     db.prepare('UPDATE inventory_products SET unit_cost = ?, updated_at = ? WHERE id = ?').run(
       cost,
       nowIso(),
       productId
     )
-    // Recomputes the average from whatever the layers now say. Where there are
-    // none it returns early and the figure written above stands, which is the
-    // number the valuation will fall back to.
-    syncProductAvgCost(db, productId)
-    return info.changes
+    return rebaseZeroCostLayers(db, productId, cost)
   })
   const layersRevalued = run()
   const product = getProduct(productId)
@@ -1072,13 +1106,11 @@ export function recentSales(limit = 8): InventoryTransaction[] {
  * up on the way past. Money that size must not be able to leave the Spread
  * quietly, which is the difference this gate is drawing.
  *
- * DELIBERATELY NOT the rule the mass-paste check in shared/inventoryReset.ts
- * applies, and that is not an oversight to be tidied up. A pasted baseline still
- * REFUSES to leave any product at zero cost, boxes included, because that sheet
- * claims to be the whole warehouse — "the sheet did not say what it cost" is not
- * an answer something claiming completeness is allowed to give. A box added one
- * at a time claims nothing of the sort. The two checks disagree about boxes
- * because they are answering different questions.
+ * The mass-paste check in shared/inventoryReset.ts draws the SAME line, for the
+ * same reason: a pasted baseline warns about a box it would leave uncosted and
+ * applies it, and still refuses outright for anything larger. It can afford the
+ * warning precisely because of this rule — the box it lets through lands outside
+ * the Spread and is reported, rather than turning into profit nobody typed.
  */
 const PRODUCT_TOTALS = `
   SELECT t.*,

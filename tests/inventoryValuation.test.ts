@@ -44,7 +44,8 @@ const {
   listProducts,
   pricingList,
   recordSale,
-  stockQty
+  stockQty,
+  updateProduct
 } = require('../src/main/db/inventory')
 const { assertStockLotsConsistent, unitMoney } = require('../src/main/db/lots')
 const { layerGaps, shelfBasis } = require('../src/main/db/valuation')
@@ -89,6 +90,8 @@ interface Seed {
   qty?: number
   location?: string
   giveaway?: boolean
+  /** Boxes unless stated — section 11 needs a case, which is valued differently. */
+  unit?: string
 }
 
 const make = (s: Seed): string =>
@@ -101,7 +104,7 @@ const make = (s: Seed): string =>
       brand: '',
       setName: '',
       year: '',
-      unitType: 'box',
+      unitType: s.unit ?? 'box',
       boxesPerCase: null,
       packsPerBox: null,
       giveawayItem: !!s.giveaway,
@@ -604,6 +607,201 @@ ok(
   layerGaps(db).length === 0,
   'and with those two put right, Σ lot.qty_remaining equals stock on every shelf'
 )
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 11. stock with no cost basis: a box sits out of the spread ===')
+// ---------------------------------------------------------------------------
+// The mirror of the rule section 1 asserts. An UNPRICED product is valued at
+// what it cost, so it contributes exactly zero spread. The opposite shape — a
+// high bid and no cost — used to report its entire market value as profit,
+// because spread was value − cost and its cost was nothing. A box may be taken
+// into stock without a cost on purpose (the field is optional; boxes get picked
+// up with no price to hand), so that shape is ordinary rather than exceptional,
+// and it now gets the same answer: zero spread until somebody records what it
+// cost. What it is NOT is hidden — the boxes go on counting in Inventory value
+// and in the unit counts, and the money left out of the spread is reported so
+// the tiles still reconcile on screen.
+//
+// Boxes only. A case with no cost still books its whole market value, exactly as
+// it did before, because a case is a deliberate four-figure purchase and money
+// that size must not be able to leave the Spread quietly.
+const before11 = inventoryStats()
+
+const NOCOST = make({ name: 'VAL Uncosted Hobby Box', category: 'Wrestling', cost: 0, bid: 250, qty: 4 })
+const NOCOST_MARKET = 4 * 250
+
+const s11 = inventoryStats()
+ok(
+  eq(s11.totalValue, before11.totalValue + NOCOST_MARKET),
+  'the four boxes count in Inventory value at their high bid — they are on the shelf',
+  String(s11.totalValue - before11.totalValue)
+)
+ok(eq(s11.totalCost, before11.totalCost), 'Total cost does not move: nothing was recorded as paid')
+ok(
+  eq(s11.spread, before11.spread),
+  'and the Spread does not move by a cent',
+  String(s11.spread - before11.spread)
+)
+ok(
+  s11.units === before11.units + 4 && s11.boxes === before11.boxes + 4,
+  'the boxes are still counted as stock on hand',
+  `${s11.units} / ${s11.boxes}`
+)
+ok(s11.skuCount === before11.skuCount + 1, 'and still counted as a product')
+ok(
+  eq(s11.outsideSpreadValue, NOCOST_MARKET) && s11.outsideSpreadCount === 1,
+  'the excluded figure is exactly the market value being held out',
+  `${s11.outsideSpreadValue} / ${s11.outsideSpreadCount}`
+)
+// THE PROPERTY THAT KEEPS THE TILES HONEST. Value − cost no longer equals the
+// spread, and the difference is not left for the operator to discover: it is a
+// figure the dashboard returns and the banner states.
+ok(
+  eq(s11.totalValue - s11.totalCost, s11.spread + s11.outsideSpreadValue),
+  'value − cost = spread + what is held out, to the cent',
+  `${s11.totalValue - s11.totalCost} vs ${s11.spread + s11.outsideSpreadValue}`
+)
+
+const banner11 = s11.zeroCost.find((z: any) => z.id === NOCOST)
+ok(!!banner11 && banner11.outsideSpread === true, 'the banner names it as held OUT of the spread')
+ok(eq(banner11.marketValue, NOCOST_MARKET), 'at the money the tile says it is holding out')
+ok(
+  eq(
+    s11.outsideSpreadValue,
+    s11.zeroCost
+      .filter((z: any) => z.outsideSpread)
+      .reduce((n: number, z: any) => n + z.marketValue, 0)
+  ),
+  "and the tile's excluded figure is exactly what the banner adds up to"
+)
+
+const priceNo = onePricing(NOCOST)
+ok(eq(priceNo.invValue, NOCOST_MARKET), 'Daily Pricing carries the value', String(priceNo.invValue))
+ok(priceNo.outsideSpread === true && eq(priceNo.spread, 0), 'and shows no spread on the row')
+const cardNo = productMetrics(oneProduct(NOCOST))
+ok(cardNo.outsideSpread === true && eq(cardNo.spread, 0), 'so does the hover card / drill-down row')
+ok(eq(cardNo.invValue, NOCOST_MARKET), 'which still says what the stock is worth')
+ok(eq(categoryValue('Wrestling'), NOCOST_MARKET), 'the category card carries it like any other stock')
+ok(
+  eq(
+    categorySummaries().reduce((n: number, c: any) => n + c.value, 0),
+    s11.totalValue
+  ),
+  'and the category bars still sum to the headline value tile'
+)
+
+// -- a CASE with the same problem is untouched by any of this ----------------
+const NOCOST_CASE = make({
+  name: 'VAL Uncosted Hobby Case',
+  category: 'Racing',
+  cost: 0,
+  bid: 3000,
+  qty: 2,
+  unit: 'case'
+})
+const CASE_MARKET = 2 * 3000
+const s11c = inventoryStats()
+ok(
+  eq(s11c.spread, s11.spread + CASE_MARKET),
+  'an uncosted case still books its whole market value as spread — the old behaviour, deliberately kept',
+  String(s11c.spread - s11.spread)
+)
+ok(
+  eq(s11c.outsideSpreadValue, NOCOST_MARKET) && s11c.outsideSpreadCount === 1,
+  'none of it is held out, and it is not counted among what is',
+  `${s11c.outsideSpreadValue} / ${s11c.outsideSpreadCount}`
+)
+const bannerCase = s11c.zeroCost.find((z: any) => z.id === NOCOST_CASE)
+ok(
+  !!bannerCase && bannerCase.outsideSpread === false,
+  'the banner still names it — as stock inflating the spread, which is what it is'
+)
+ok(
+  eq(productMetrics(oneProduct(NOCOST_CASE)).spread, CASE_MARKET),
+  'and its own row still shows that spread',
+  String(productMetrics(oneProduct(NOCOST_CASE)).spread)
+)
+ok(eq(onePricing(NOCOST_CASE).spread, CASE_MARKET), 'Daily Pricing agrees')
+ok(onePricing(NOCOST_CASE).outsideSpread === false, 'and does not mark it as excluded')
+
+// -- the two shapes that were already right, and still are -------------------
+const NORMAL = make({ name: 'VAL Costed Priced Box', category: 'Wrestling', cost: 100, bid: 160, qty: 3 })
+const s11n = inventoryStats()
+ok(
+  eq(s11n.spread - s11c.spread, 3 * 160 - 3 * 100),
+  'a costed, priced box is completely unaffected: market − cost, as always',
+  String(s11n.spread - s11c.spread)
+)
+ok(eq(s11n.outsideSpreadValue, s11c.outsideSpreadValue), 'and nothing of it is held out')
+ok(!s11n.zeroCost.some((z: any) => z.id === NORMAL), 'it is not on the banner at all')
+
+const NOBID = make({ name: 'VAL Costed Unpriced Box', category: 'Wrestling', cost: 40, qty: 2 })
+const s11u = inventoryStats()
+ok(
+  eq(s11u.spread, s11n.spread),
+  'a box with a cost and no bid still contributes zero spread — unchanged',
+  String(s11u.spread - s11n.spread)
+)
+ok(
+  !s11u.zeroCost.some((z: any) => z.id === NOBID),
+  'and it is not uncosted stock: it has a cost, it just has no price'
+)
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 12. recording the cost brings it in, and moves nothing else ===')
+// ---------------------------------------------------------------------------
+// "If we go into the catalog and make sure that it actually has a price, then it
+// would update the spread." Every figure here is computed on read, so this is
+// one write and no re-import — but the write has to reach the cost LAYERS, not
+// just the product's average, or the operator types a number into a field that
+// changes nothing (see updateProduct in db/inventory.ts).
+const beforeFix = inventoryStats()
+const catsBefore = categorySummaries()
+const NOCOST_COST = 4 * 175
+updateProduct({ id: NOCOST, unitCost: 175 })
+const afterFix = inventoryStats()
+
+ok(
+  eq(afterFix.spread - beforeFix.spread, NOCOST_MARKET - NOCOST_COST),
+  'the spread rises by exactly market − cost for that product',
+  String(afterFix.spread - beforeFix.spread)
+)
+ok(
+  eq(afterFix.totalCost - beforeFix.totalCost, NOCOST_COST),
+  'total cost rises by what was just recorded',
+  String(afterFix.totalCost - beforeFix.totalCost)
+)
+ok(
+  eq(afterFix.totalValue, beforeFix.totalValue),
+  'inventory value does not move — those boxes were always counted in it',
+  String(afterFix.totalValue - beforeFix.totalValue)
+)
+ok(afterFix.units === beforeFix.units, 'and no stock moved')
+ok(
+  eq(afterFix.outsideSpreadValue, 0) && afterFix.outsideSpreadCount === 0,
+  'nothing is held out of the spread any more',
+  `${afterFix.outsideSpreadValue} / ${afterFix.outsideSpreadCount}`
+)
+ok(!afterFix.zeroCost.some((z: any) => z.id === NOCOST), 'and the banner has nothing to say about it')
+ok(
+  eq(afterFix.totalValue - afterFix.totalCost, afterFix.spread),
+  'value − cost is simply the spread again, with nothing left to explain'
+)
+ok(
+  eq(onePricing(NOCOST).spread, NOCOST_MARKET - NOCOST_COST) && onePricing(NOCOST).outsideSpread === false,
+  'Daily Pricing shows the same spread on the row',
+  String(onePricing(NOCOST).spread)
+)
+ok(
+  eq(productMetrics(oneProduct(NOCOST)).spread, NOCOST_MARKET - NOCOST_COST),
+  'so does the product card'
+)
+ok(
+  catsBefore.every((c: any) => eq(categoryValue(c.category), c.value)),
+  'and not one category value moved — recording a cost is not a revaluation'
+)
+assertStockLotsConsistent(db)
+ok(true, 'the stock/lot invariant survived the re-basing')
 
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail > 0) process.exit(1)
