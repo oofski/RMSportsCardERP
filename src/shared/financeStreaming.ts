@@ -157,7 +157,7 @@ export function bucketTreatment(bucket: LedgerBucket): LedgerTreatment {
  * can find rows classified by an older ruleset and re-run them, rather than
  * leaving a database with two generations of answers silently mixed together.
  */
-export const LEDGER_CLASSIFIER_VERSION = 2
+export const LEDGER_CLASSIFIER_VERSION = 3
 
 /**
  * A break marker in a listing title.
@@ -427,20 +427,60 @@ export function ledgerFingerprintSource(
 }
 
 /**
+ * A break number is small. Shows run tens of breaks, never thousands.
+ *
+ * This is the guard on the last-resort pattern below, and it exists for one
+ * shape in particular: a title that says "2026 BREAK 2026 TOPPS CHROME" would
+ * otherwise hand back 2026 as the break number. A four-figure answer from a
+ * pattern that read no punctuation around it is a year, not a break.
+ */
+const MAX_BREAK_NUMBER = 999
+
+/**
  * The break number on a sale, if it has one.
  *
- * Two layouts, both live in real exports:
- *   older  "...HOBBY BOX (NEW RELEASE!)- Break #18 - Arizona Diamondbacks"
- *   newer  "Earnings for selling a Break 19: 4x TOPPS CHROME... - Phillies"
- * The number moved to the front and lost its hash, so one pattern cannot cover
- * both and a single-pattern parser silently returns null on half the file.
+ * THREE layouts now, all live in real exports:
+ *   older     "...HOBBY BOX (NEW RELEASE!)- Break #18 - Arizona Diamondbacks"
+ *   newer     "Earnings for selling a Break 19: 4x TOPPS CHROME... - Phillies"
+ *   bracketed "Earnings for selling a [Break 1] 2026 Topps... - SF Giants"
+ * The number has moved twice — to the front, then into brackets — so patterns
+ * accrete rather than replace, and a single-pattern parser silently returns null
+ * on whatever generation of the format it was not written for.
+ *
+ * `classifyLedgerRow` has always called the bracketed form a break (its
+ * RE_LEDGER_BREAK is unanchored, so `[Break 1]` matches), which is why this gap
+ * never misfiled revenue — it only stripped the "Break N" chip off the row and
+ * left per-break attribution blank. The two now agree by construction: anything
+ * the classifier calls a break yields a number here, or the reason it cannot is
+ * one of the two stated below (a suffixed label, or an implausible number).
+ *
+ * The ordering matters. Each specific pattern reads punctuation that PROVES the
+ * digits are a break number; the generic one reads none, so it goes last and is
+ * range-checked. Bracketed is tried first because "[Break 1] ... - Break #2"
+ * cannot occur, but "(Break #12 - Boston Red Sox)" can, and the older trailing
+ * pattern must keep answering for it.
+ *
+ * A suffixed label ("Break 11A") returns 11: the column is an integer and half
+ * the label beats none of it. The packing-slip parser keeps the full label,
+ * because there the suffix distinguishes two real breaks.
  */
 export function parseBreakNumber(message: string): number | null {
   const m = message || ''
-  const trailing = /-\s*Break\s*#\s*(\d+)/i.exec(m)
+  // `=?` mirrors RE_LEDGER_BREAK: "BREAK #=7" is in the real data 30 times.
+  const bracketed = /[[({]\s*Break\s*#?\s*=?\s*(\d+)/i.exec(m)
+  if (bracketed) return Number(bracketed[1])
+  const trailing = /-\s*Break\s*#\s*=?\s*(\d+)/i.exec(m)
   if (trailing) return Number(trailing[1])
-  const leading = /\bBreak\s+(\d+)\s*:/i.exec(m)
+  const leading = /\bBreak\s+#?\s*=?\s*(\d+)\s*:/i.exec(m)
   if (leading) return Number(leading[1])
+  // Last resort: the word and a number, no punctuation to vouch for it. Only
+  // reached for rows the classifier already calls a break, so this assigns a
+  // number to a break rather than inventing a break out of a product sale.
+  const bare = /\bBreak\s*#?\s*=?\s*(\d+)/i.exec(m)
+  if (bare) {
+    const n = Number(bare[1])
+    if (n >= 1 && n <= MAX_BREAK_NUMBER) return n
+  }
   return null
 }
 

@@ -19,7 +19,12 @@ mkdirSync(DIR, { recursive: true })
 /* eslint-disable @typescript-eslint/no-var-requires */
 const { getDb } = require('../src/main/db/database')
 const inventory = require('../src/main/db/inventory')
-const { classifyLedgerRow, parseProductSaleName, booksToOwnDay } = require('../src/shared/financeStreaming')
+const {
+  classifyLedgerRow,
+  parseProductSaleName,
+  booksToOwnDay,
+  parseBreakNumber
+} = require('../src/shared/financeStreaming')
 const { isAnyLeagueTeam } = require('../src/main/shipping/teams')
 getDb()
 
@@ -59,6 +64,10 @@ const SPOTS: Array<[string, string]> = [
   // A typo that appears 30 times in one export. Without the `=` every one of
   // these reads as a whole product.
   ['2x 2026 TIER ONE BASEBALL HOBBY BOX - NEW RELEASE!! BREAK #=7 - Detroit Tigers', 'BREAK #=7'],
+  // The bracketed layout the new packing slips print. It must still be a SPOT,
+  // not a product — otherwise the matcher hunts the catalog for the box the
+  // break was cut from and books stock against something opened on stream.
+  ['[Break 1] 2026 Topps Chrome Baseball Hobby Box - San Francisco Giants', 'bracketed break'],
   // No break marker at all — carried entirely by the team on the end.
   [
     '1x COSMIC CHROME FOOTBALL HOBBY BOX- CHASE PLANETARY PURSUIT, SUPER NOVA, COSMIC DUST, + 1/1s!! - Dallas Cowboys',
@@ -75,6 +84,46 @@ const SPOTS: Array<[string, string]> = [
   ['2020-2021 Prizm Basketball Hobby Pack (FRESH FROM BOX) #1', 'numbered lot, other spelling']
 ]
 for (const [m, why] of SPOTS) ok(cls(m) === 'sale', `spot: ${why}`, cls(m))
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 2b. the break NUMBER comes off every generation of the format ===')
+// ---------------------------------------------------------------------------
+// Classification and numbering are two different reads of the same string, and
+// they drifted: RE_LEDGER_BREAK is unanchored so it always called "[Break 1]" a
+// break, while parseBreakNumber wanted either "- Break #n" or "Break n:" and
+// returned null. The row landed in the right bucket with no break on it, so the
+// money was right and the attribution was blank — the quiet half of the same
+// bug the packing slip showed loudly.
+const BREAKS: Array<[string, number | null, string]> = [
+  ['1x 2026 FINEST BASEBALL HOBBY BOX (NEW RELEASE!)- Break #12 - Boston Red Sox', 12, 'trailing "- Break #12"'],
+  ['2x 2026 TIER ONE BASEBALL HOBBY BOX - NEW RELEASE!! BREAK #=7 - Detroit Tigers', 7, 'the "#=" typo'],
+  ['Earnings for selling a Break 19: 4x TOPPS CHROME BASEBALL - Phillies', 19, 'leading "Break 19:"'],
+  // The new slip layout, and the reason this section exists.
+  ['Earnings for selling a [Break 1] 2026 Topps Chrome Baseball Hobby Box - San Francisco Giants', 1, 'bracketed'],
+  ['Earnings for selling a [Break 12] ... - Arizona Diamondbacks', 12, 'bracketed, two digits'],
+  ['Earnings for selling a ( Break 3 ) ... - New York Mets', 3, 'parenthesised and spaced'],
+  ['Earnings for selling a (Break #12 - Boston Red Sox)', 12, 'an OPEN bracket with the team still behind it'],
+  // A suffixed label loses its letter here on purpose: the column is an
+  // integer. The packing-slip parser keeps "11A" whole, because there the
+  // suffix tells two real breaks apart.
+  ['1x HOBBY BOX - Break #11A - Chicago Cubs', 11, 'a suffixed label yields its number'],
+  // Last resort: the word and a number with nothing vouching for them.
+  ['1x 2026 HOBBY BOX RANDOM TEAMS BREAK 4 - Detroit Tigers', 4, 'bare "BREAK 4"'],
+  // …but a year is not a break number, and this is exactly the string that
+  // would make a naked pattern say so.
+  ['Earnings for selling a 2026 BREAK 2026 TOPPS CHROME BASEBALL HOBBY BOX', null, 'a YEAR is refused'],
+  ['Earnings for selling a 2025 Topps Inception Baseball Hobby Box', null, 'a whole product has no break'],
+  ['Breaking News Collectibles Hobby Box', null, '"Breaking" is not "Break"']
+]
+for (const [m, want, why] of BREAKS) {
+  ok(parseBreakNumber(m) === want, `break #: ${why}`, String(parseBreakNumber(m)))
+}
+// The two reads must not disagree again: anything the classifier calls a break
+// carries a number, for every string above that IS one.
+for (const [m, why] of SPOTS) {
+  if (!/break/i.test(m)) continue
+  ok(parseBreakNumber(m) !== null, `classified a break AND numbered: ${why}`)
+}
 
 // ---------------------------------------------------------------------------
 console.log('\n=== 3. the name comes out clean ===')
