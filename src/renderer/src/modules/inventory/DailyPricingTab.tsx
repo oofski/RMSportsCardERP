@@ -6,6 +6,7 @@ import { Icon } from '../../components/Icon'
 import { CenterLoader, EmptyState } from '../../components/ui'
 import { formatDate, formatMoney, formatUnitMoney } from '../../lib/format'
 import { ProductQuickView } from './ProductCases'
+import { productMetrics } from './helpers'
 
 /**
  * Daily Pricing: a fast list of every in-stock product with an inline high-bid
@@ -35,15 +36,23 @@ export function DailyPricingTab({ onChanged }: { onChanged: () => Promise<void> 
     )
   }, [rows, query])
 
+  // `outside` is the money the Spread beside it is not speaking for — boxes with
+  // no cost basis, which the dashboard excludes for the same reason. Carried in
+  // the same reduce as the figure it qualifies, so the header can never state a
+  // spread without stating what is missing from it.
   const totals = useMemo(
     () =>
       filtered.reduce(
         (acc, r) => {
           acc.value += r.invValue
           acc.spread += r.spread
+          if (r.outsideSpread) {
+            acc.outside += r.invValue
+            acc.outsideCount += 1
+          }
           return acc
         },
-        { value: 0, spread: 0 }
+        { value: 0, spread: 0, outside: 0, outsideCount: 0 }
       ),
     [filtered]
   )
@@ -63,6 +72,12 @@ export function DailyPricingTab({ onChanged }: { onChanged: () => Promise<void> 
       const p = res.data
       // Mirror the backend: stamp "last priced" only when a bid is set.
       const at = p.highBid != null ? new Date().toISOString() : null
+      // The money on the row comes from the shared helper rather than being
+      // re-derived here: the cost side is READ from the product's layers, not
+      // rebuilt as quantity × average, and the spread follows the same
+      // uncosted-box rule pricingList applies. A row updated in place and a row
+      // reloaded from the database have to show the same money.
+      const m = productMetrics(p)
       setRows((prev) =>
         (prev ?? []).map((r) =>
           r.id === row.id
@@ -70,14 +85,11 @@ export function DailyPricingTab({ onChanged }: { onChanged: () => Promise<void> 
                 ...r,
                 highBid: p.highBid,
                 highBidAt: at,
-                // The cost side is READ from the product's layers, not rebuilt
-                // as quantity × average — same rule as pricingList, so a row
-                // updated in place and a row reloaded from the database show the
-                // same money.
-                unitCost: p.quantity > 0 ? p.costValue / p.quantity : p.unitCost,
-                costValue: p.costValue,
-                invValue: p.marketValue,
-                spread: p.marketValue - p.costValue
+                unitCost: m.avgCost,
+                costValue: m.totalCost,
+                invValue: m.invValue,
+                outsideSpread: m.outsideSpread,
+                spread: m.spread
               }
             : r
         )
@@ -103,6 +115,13 @@ export function DailyPricingTab({ onChanged }: { onChanged: () => Promise<void> 
               <strong className={totals.spread < 0 ? 'neg' : totals.spread > 0 ? 'pos' : ''}>
                 {formatMoney(totals.spread, { compact: true })}
               </strong>
+              {totals.outsideCount > 0 && (
+                <span>
+                  {' '}
+                  · {formatMoney(totals.outside, { compact: true })} on {totals.outsideCount} box
+                  {totals.outsideCount === 1 ? '' : 'es'} with no cost, outside the spread
+                </span>
+              )}
             </span>
           </div>
         </div>
@@ -151,7 +170,15 @@ export function DailyPricingTab({ onChanged }: { onChanged: () => Promise<void> 
                     <BidInput value={r.highBid} onCommit={(raw) => commitBid(r, raw)} />
                   </td>
                   <td className="money">{formatMoney(r.invValue)}</td>
-                  <td className={`money ${r.spread < 0 ? 'neg' : r.spread > 0 ? 'pos' : ''}`}>{formatMoney(r.spread)}</td>
+                  {/* A box with no cost basis has no spread to show — a dash,
+                      matching its Avg cost cell and the dashboard tile, rather
+                      than a $0.00 that would read as a measured result. */}
+                  <td
+                    className={`money ${r.outsideSpread ? '' : r.spread < 0 ? 'neg' : r.spread > 0 ? 'pos' : ''}`}
+                    title={r.outsideSpread ? 'No cost recorded — this stock is outside the spread.' : undefined}
+                  >
+                    {r.outsideSpread ? <span className="muted">—</span> : formatMoney(r.spread)}
+                  </td>
                   <td className="money" style={{ color: 'var(--text-3)' }}>{r.highBidAt ? formatDate(r.highBidAt) : '—'}</td>
                 </tr>
               ))}

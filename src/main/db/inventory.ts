@@ -663,19 +663,27 @@ export function pricingList(): PricingRow[] {
   return rows.map((r) => {
     const priced = r.high_bid != null && r.high_bid > 0
     const invValue = priced ? r.qty * (r.high_bid as number) : r.cost_value
+    const unitType = (UNIT_TYPES.includes(r.unit_type as UnitType) ? r.unit_type : 'other') as UnitType
+    // The same gate PRODUCT_TOTALS applies, on the same two facts — no basis
+    // under the stock, and it is a box. Restated rather than joined because this
+    // query reads the layers itself; it is asserted against the dashboard in
+    // tests/inventoryValuation.test.ts so the two cannot quietly disagree about
+    // which rows the Spread column is speaking for.
+    const outsideSpread = r.qty > 0 && r.cost_value <= 0 && unitType === 'box'
     return {
       id: r.id,
       name: r.name,
       sku: r.sku,
       category: r.category,
-      unitType: (UNIT_TYPES.includes(r.unit_type as UnitType) ? r.unit_type : 'other') as UnitType,
+      unitType,
       quantity: r.qty,
       unitCost: r.qty > 0 ? unitMoney(r.cost_value / r.qty) : r.unit_cost,
       costValue: r.cost_value,
       highBid: r.high_bid,
       highBidAt: r.high_bid_at,
       invValue,
-      spread: invValue - r.cost_value
+      outsideSpread,
+      spread: outsideSpread ? 0 : invValue - r.cost_value
     }
   })
 }
@@ -1046,19 +1054,56 @@ export function recentSales(limit = 8): InventoryTransaction[] {
  * operator typed, so quantity × bid is exact and stays a multiplication; without
  * a bid, stock is valued at what it cost, which is `cost_value` — so an unpriced
  * product contributes exactly zero spread rather than a rounding residue.
+ *
+ * `spread_value` is what the product puts into the Spread tile, and it is NOT
+ * always market − cost. A BOX may be taken into stock without a unit cost — the
+ * cost field on the add-stock form is optional because boxes get picked up ad
+ * hoc and there is often no figure to hand — and stock carried at nothing would
+ * otherwise report its entire high bid as profit. That is the exact mirror of
+ * the unpriced product above, so it gets the same answer: an uncosted box
+ * contributes zero until a cost is recorded, and `outside_spread` marks the rows
+ * that do, so the market value left out can be reported beside the tile instead
+ * of turning value − cost into a subtraction that does not reconcile.
+ *
+ * BOXES AND NOTHING ELSE. A case, a pack or a single with no cost keeps counting
+ * its whole market value as spread exactly as it does today, and the zero-cost
+ * banner goes on naming it. A case is a deliberate four-figure purchase whose
+ * price is known at the moment it is bought; a box is the thing that gets picked
+ * up on the way past. Money that size must not be able to leave the Spread
+ * quietly, which is the difference this gate is drawing.
+ *
+ * DELIBERATELY NOT the rule the mass-paste check in shared/inventoryReset.ts
+ * applies, and that is not an oversight to be tidied up. A pasted baseline still
+ * REFUSES to leave any product at zero cost, boxes included, because that sheet
+ * claims to be the whole warehouse — "the sheet did not say what it cost" is not
+ * an answer something claiming completeness is allowed to give. A box added one
+ * at a time claims nothing of the sort. The two checks disagree about boxes
+ * because they are answering different questions.
  */
 const PRODUCT_TOTALS = `
-  SELECT p.id, p.unit_type, p.unit_cost, p.reorder_point, p.category, p.high_bid,
-         COALESCE(s.qty, 0) AS qty,
-         COALESCE(v.cost_value, 0) AS cost_value,
-         CASE WHEN COALESCE(p.high_bid, 0) > 0
-              THEN COALESCE(s.qty, 0) * p.high_bid
-              ELSE COALESCE(v.cost_value, 0)
-         END AS market_value
-  FROM inventory_products p
-  LEFT JOIN (SELECT product_id, SUM(quantity) AS qty FROM inventory_stock GROUP BY product_id) s
-    ON s.product_id = p.id
-  LEFT JOIN (${PRODUCT_BASIS}) v ON v.product_id = p.id
+  SELECT t.*,
+         CASE WHEN t.outside_spread = 1 THEN 0 ELSE t.market_value - t.cost_value END AS spread_value
+    FROM (
+      SELECT p.id, p.unit_type, p.unit_cost, p.reorder_point, p.category, p.high_bid,
+             COALESCE(s.qty, 0) AS qty,
+             COALESCE(v.cost_value, 0) AS cost_value,
+             CASE WHEN COALESCE(p.high_bid, 0) > 0
+                  THEN COALESCE(s.qty, 0) * p.high_bid
+                  ELSE COALESCE(v.cost_value, 0)
+             END AS market_value,
+             -- Stock on the shelf, no cost basis under it, and it is a box.
+             -- One definition, read by the spread above and by every caller
+             -- that has to say how much money it is holding out.
+             CASE WHEN COALESCE(s.qty, 0) > 0
+                   AND COALESCE(v.cost_value, 0) <= 0
+                   AND p.unit_type = 'box'
+                  THEN 1 ELSE 0
+             END AS outside_spread
+      FROM inventory_products p
+      LEFT JOIN (SELECT product_id, SUM(quantity) AS qty FROM inventory_stock GROUP BY product_id) s
+        ON s.product_id = p.id
+      LEFT JOIN (${PRODUCT_BASIS}) v ON v.product_id = p.id
+    ) t
 `
 
 export function inventoryStats(): InventoryStats {
@@ -1068,6 +1113,9 @@ export function inventoryStats(): InventoryStats {
       `SELECT
          COALESCE(SUM(t.market_value), 0)                                          AS total_value,
          COALESCE(SUM(t.cost_value), 0)                                            AS total_cost,
+         COALESCE(SUM(t.spread_value), 0)                                          AS spread,
+         COALESCE(SUM(CASE WHEN t.outside_spread=1 THEN t.market_value ELSE 0 END), 0) AS outside_value,
+         COALESCE(SUM(t.outside_spread), 0)                                        AS outside_count,
          COALESCE(SUM(CASE WHEN t.unit_type='case'   THEN t.qty ELSE 0 END), 0)     AS cases,
          COALESCE(SUM(CASE WHEN t.unit_type='box'    THEN t.qty ELSE 0 END), 0)     AS boxes,
          COALESCE(SUM(CASE WHEN t.unit_type='pack'   THEN t.qty ELSE 0 END), 0)     AS packs,
@@ -1097,24 +1145,49 @@ export function inventoryStats(): InventoryStats {
   // average, because the layers are what a total is built from: a shelf whose
   // layers are all at zero is carrying no basis whatever the product row says.
   // `market_value` in PRODUCT_TOTALS already falls back to cost, so for these
-  // rows it IS the high bid — and every cent of it is spread the business never
-  // earned. Ordered by how much damage each is doing.
+  // rows it IS the high bid.
+  //
+  // ALL of it is listed, boxes and everything else, because every row here is a
+  // product whose money the app cannot fully account for. What differs is which
+  // way it is wrong, and `outsideSpread` is how the banner says so: an uncosted
+  // box is market value the Spread is leaving out, while an uncosted case is
+  // market value the Spread is still counting as profit. One list, two
+  // sentences. Ordered by how much money each is carrying either way.
   const zeroCost = (
     db
       .prepare(
-        `SELECT t.id, p.name, t.qty, t.market_value AS market_value
+        `SELECT t.id, p.name, t.qty, t.market_value AS market_value, t.outside_spread
            FROM (${PRODUCT_TOTALS}) t
            JOIN inventory_products p ON p.id = t.id
           WHERE t.qty > 0 AND t.cost_value <= 0
           ORDER BY market_value DESC`
       )
-      .all() as Array<{ id: string; name: string; qty: number; market_value: number }>
-  ).map((r) => ({ id: r.id, name: r.name, quantity: r.qty, marketValue: r.market_value }))
+      .all() as Array<{
+      id: string
+      name: string
+      qty: number
+      market_value: number
+      outside_spread: number
+    }>
+  ).map((r) => ({
+    id: r.id,
+    name: r.name,
+    quantity: r.qty,
+    marketValue: r.market_value,
+    outsideSpread: r.outside_spread === 1
+  }))
 
   return {
     totalValue: p.total_value,
     totalCost: p.total_cost,
-    spread: p.total_value - p.total_cost,
+    // Summed per product rather than taken as total_value − total_cost, which is
+    // no longer the same number: an uncosted box is counted in the value and
+    // contributes nothing here. The difference between the two is exactly
+    // `outsideSpreadValue`, which is why it is returned rather than left for the
+    // operator to discover by subtracting two tiles.
+    spread: p.spread,
+    outsideSpreadValue: p.outside_value,
+    outsideSpreadCount: p.outside_count,
     boxes: p.boxes,
     cases: p.cases,
     packs: p.packs,
@@ -1139,7 +1212,10 @@ export function categorySummaries(): CategorySummary[] {
          COALESCE(SUM(CASE WHEN t.unit_type='box'  THEN t.qty ELSE 0 END),0) AS boxes,
          COALESCE(SUM(t.qty),0)            AS units,
          -- Summed from the same per-product figure the headline tile sums, so
-         -- the bars of the value-by-category chart add up to it exactly.
+         -- the bars of the value-by-category chart add up to it exactly. This
+         -- is the MARKET side, which the uncosted-box rule does not touch: the
+         -- owner has those boxes and they are worth what they are worth. It is
+         -- only the spread they stay out of, and no category figure is a spread.
          COALESCE(SUM(t.market_value),0)   AS value,
          COUNT(t.id)                       AS product_count
        FROM (${PRODUCT_TOTALS}) t

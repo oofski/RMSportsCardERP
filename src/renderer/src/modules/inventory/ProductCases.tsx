@@ -161,13 +161,23 @@ export function ProductDetailBody({ data }: { data: ProductCardData }): JSX.Elem
           <Spec label="Total cost" value={formatMoney(m.totalCost)} />
           <Spec label="High bid" value={highBid != null && highBid > 0 ? formatMoney(highBid) : '—'} />
           <Spec label="Inv. value" value={formatMoney(m.invValue)} />
+          {/* A dash rather than $0.00 for a box with no cost basis: the
+              dashboard's Spread leaves that stock out, and a zero here would
+              read as a spread somebody measured and found to be nothing. The
+              note below says which it is. */}
           <Spec
             label="Spread"
-            value={formatMoney(m.spread)}
-            tone={m.spread < 0 ? 'neg' : m.spread > 0 ? 'pos' : undefined}
+            value={m.outsideSpread ? '—' : formatMoney(m.spread)}
+            tone={m.outsideSpread ? undefined : m.spread < 0 ? 'neg' : m.spread > 0 ? 'pos' : undefined}
           />
         </div>
       </div>
+      {m.outsideSpread && (
+        <div className="qv-note">
+          No cost recorded, so this stock sits outside the Spread. Set a cost in the catalog and it
+          joins it.
+        </div>
+      )}
       <div className="qv-cases-head">Cases · FIFO order (sold oldest first)</div>
       <div className="qv-cases-scroll">
         <ProductCasesLoader key={productId} productId={productId} unitType={unitType} />

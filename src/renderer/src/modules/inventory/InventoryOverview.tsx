@@ -110,6 +110,12 @@ export function InventoryOverview({
     return [...categories].sort((a, b) => rank(a.category) - rank(b.category) || a.category.localeCompare(b.category))
   }, [categories])
 
+  // One list from the main process, two banners: the rows the Spread excludes
+  // and the rows it is still inflating. Split here rather than in two queries so
+  // the flag that decides is the same one the arithmetic used.
+  const outsideRows = useMemo(() => stats.zeroCost.filter((z) => z.outsideSpread), [stats.zeroCost])
+  const inflatingRows = useMemo(() => stats.zeroCost.filter((z) => !z.outsideSpread), [stats.zeroCost])
+
   const valueByCategory = useMemo(
     () =>
       [...categories]
@@ -151,14 +157,29 @@ export function InventoryOverview({
         <Stat icon="Boxes" value={String(stats.cases)} label="Cases on hand" onClick={() => openDetail({ kind: 'cases', label: 'Cases on hand' })} />
       </div>
 
-      {/* Spread is value minus cost, so stock carried at nothing reports its
-          whole market value as profit. Naming the products is the difference
-          between a figure the operator distrusts and a short list they can go
-          and fix — and the cost field beside each name is the difference between
-          a list and a fix. */}
-      {stats.zeroCost.length > 0 && (
+      {/* Stock carried at nothing, split by what it is doing to the tiles above.
+          An uncosted BOX is money the Spread is leaving out — Inventory value
+          counts it, Spread does not, and this is the sentence that makes the
+          difference between those two tiles readable instead of mysterious.
+          Anything else uncosted is still counting its whole market value as
+          profit, which is the older and worse problem, so it keeps the warning
+          it has always had. Naming the products is the difference between a
+          figure the operator distrusts and a short list they can go and fix —
+          and the cost field beside each name is the difference between a list
+          and a fix. */}
+      {outsideRows.length > 0 && (
         <ZeroCostBanner
-          rows={stats.zeroCost}
+          variant="outside"
+          rows={outsideRows}
+          canManage={canManage}
+          onOpenProduct={onOpenProduct}
+          onChanged={onChanged}
+        />
+      )}
+      {inflatingRows.length > 0 && (
+        <ZeroCostBanner
+          variant="inflating"
+          rows={inflatingRows}
           canManage={canManage}
           onOpenProduct={onOpenProduct}
           onChanged={onChanged}
@@ -340,6 +361,16 @@ interface IncomingSummary {
 /**
  * Stock carried at nothing — named, and fixable where it stands.
  *
+ * TWO VARIANTS, BECAUSE THERE ARE TWO PROBLEMS. `outside` is the box case: the
+ * Spread deliberately does not count stock with no cost basis, so this is not a
+ * warning that a number is wrong, it is a note that it is incomplete — and it
+ * carries the amount, because that amount is exactly the gap between the
+ * Inventory value and Total cost tiles above and the Spread beside them.
+ * `inflating` is everything else uncosted, where the whole market value is still
+ * being reported as profit; that one is a warning and keeps the words it has
+ * always had. Same list, same field, same click-through — only the sentence at
+ * the top changes, because only the consequence does.
+ *
  * WHY THE FIELD IS HERE RATHER THAN A LINK TO THE CATALOG. The names have always
  * been buttons into the Catalog, which is one navigation, one search and one
  * scroll per product, times however many the import left uncosted (the run that
@@ -361,11 +392,14 @@ interface IncomingSummary {
  * the one thing it was offered for is worse than no field.
  */
 function ZeroCostBanner({
+  variant,
   rows,
   canManage,
   onOpenProduct,
   onChanged
 }: {
+  /** 'outside' — boxes the Spread leaves out; 'inflating' — stock it counts whole. */
+  variant: 'outside' | 'inflating'
   rows: InventoryStats['zeroCost']
   canManage: boolean
   onOpenProduct: (name: string) => void
@@ -401,20 +435,36 @@ function ZeroCostBanner({
     await onChanged()
   }
 
+  const total = rows.reduce((n, z) => n + z.marketValue, 0)
+  const outside = variant === 'outside'
   return (
-    <div className="zerocost-banner">
-      <Icon name="AlertTriangle" size={17} />
+    <div className={`zerocost-banner${outside ? ' zerocost-note' : ''}`}>
+      <Icon name={outside ? 'Info' : 'AlertTriangle'} size={17} />
       <div className="zerocost-main">
         <strong>
-          {formatMoney(rows.reduce((n, z) => n + z.marketValue, 0))} of the Spread above is stock
-          with no cost recorded.
+          {outside
+            ? `${formatMoney(total)} of stock is sitting outside the Spread above.`
+            : `${formatMoney(total)} of the Spread above is stock with no cost recorded.`}
         </strong>
         <span>
-          {rows.length} product{rows.length === 1 ? '' : 's'} sits on the shelf at $0.00, so its
-          full market value counts as profit.{' '}
-          {canManage
-            ? 'Type what one unit cost and the stock is carried at that from here on.'
-            : 'Setting the real cost needs the Manage inventory permission.'}
+          {outside ? (
+            <>
+              {rows.length} box{rows.length === 1 ? '' : 'es'} on the shelf {rows.length === 1 ? 'has' : 'have'}{' '}
+              no cost recorded, so {rows.length === 1 ? 'it counts' : 'they count'} in Inventory
+              value but not in Spread — there is nothing to measure a spread against yet.{' '}
+              {canManage
+                ? 'Type what one cost and it joins the Spread from here on.'
+                : 'Recording the cost needs the Manage inventory permission.'}
+            </>
+          ) : (
+            <>
+              {rows.length} product{rows.length === 1 ? '' : 's'} sits on the shelf at $0.00, so its
+              full market value counts as profit.{' '}
+              {canManage
+                ? 'Type what one unit cost and the stock is carried at that from here on.'
+                : 'Setting the real cost needs the Manage inventory permission.'}
+            </>
+          )}
         </span>
         <ul>
           {rows.slice(0, SHOWN).map((z) => (
@@ -1174,8 +1224,12 @@ function InventoryDetail({
         return withM.filter((x) => x.p.quantity > 0).sort((a, b) => b.m.invValue - a.m.invValue)
       case 'cost':
         return withM.filter((x) => x.p.quantity > 0 && x.m.hasCost).sort((a, b) => b.m.totalCost - a.m.totalCost)
+      // An uncosted box contributes nothing to the tile, so it is not listed
+      // under it either — it is accounted for in the line above the table.
       case 'spread':
-        return withM.filter((x) => x.p.quantity > 0 && x.m.hasCost).sort((a, b) => b.m.spread - a.m.spread)
+        return withM
+          .filter((x) => x.p.quantity > 0 && x.m.hasCost && !x.m.outsideSpread)
+          .sort((a, b) => b.m.spread - a.m.spread)
       case 'cases':
         return withM.filter((x) => x.p.unitType === 'case' && x.p.quantity > 0).sort((a, b) => b.p.quantity - a.p.quantity)
       case 'skus':
@@ -1187,6 +1241,16 @@ function InventoryDetail({
   }, [rows, detail])
 
   if (rows === null) return <CenterLoader />
+
+  // Stock the Spread tile does not speak for — uncosted boxes. Stated above the
+  // table on the spread drill-down, because a total with products missing from
+  // it has to say which and how much, or the operator is left subtracting tiles
+  // to find out where the difference went.
+  const held = rows.filter((p) => productMetrics(p).outsideSpread)
+  const outside =
+    detail.kind === 'spread' && held.length > 0
+      ? { count: held.length, value: held.reduce((n, p) => n + p.marketValue, 0) }
+      : null
 
   const totals = shown.reduce(
     (acc, { p, m }) => {
@@ -1213,6 +1277,13 @@ function InventoryDetail({
             <p>
               {shown.length} product{shown.length === 1 ? '' : 's'} · {totals.cases} case
               {totals.cases === 1 ? '' : 's'} on hand
+              {outside && (
+                <>
+                  {' '}
+                  · {outside.count} uncosted box{outside.count === 1 ? '' : 'es'} not listed,{' '}
+                  {formatMoney(outside.value)} of market value outside this figure
+                </>
+              )}
             </p>
           </div>
         </div>
@@ -1266,8 +1337,10 @@ function InventoryDetail({
                   <td className="money">{p.quantity > 0 ? formatMoney(m.invValue) : dash}</td>
                   <td className="money">{m.hasCost ? formatUnitMoney(m.avgCost) : dash}</td>
                   <td className="money">{m.hasCost && p.quantity > 0 ? formatMoney(m.totalCost) : dash}</td>
+                  {/* A dash, never $0.00, for a box the Spread excludes: zero is
+                      a spread somebody measured, and this one has not been. */}
                   <td className={`money ${m.hasCost ? (m.spread < 0 ? 'neg' : m.spread > 0 ? 'pos' : '') : ''}`}>
-                    {m.hasCost && p.quantity > 0 ? formatMoney(m.spread) : dash}
+                    {m.hasCost && !m.outsideSpread && p.quantity > 0 ? formatMoney(m.spread) : dash}
                   </td>
                 </tr>
               ))}

@@ -50,10 +50,18 @@ export interface ProductMetrics {
   avgCost: number
   /** On-hand cost basis, from the FIFO cost layers. */
   totalCost: number
-  /** invValue − totalCost. */
+  /** invValue − totalCost, or zero when `outsideSpread`. */
   spread: number
   /** Whether we have a cost basis (drives whether cost/spread show a value). */
   hasCost: boolean
+  /**
+   * Stock on the shelf, no cost basis under it, and it is a BOX — so the
+   * dashboard's Spread leaves it out and this row must not show one either.
+   * The same gate PRODUCT_TOTALS applies in db/inventory.ts; a product excluded
+   * from the tile that still showed a spread on its own line would be the app
+   * disagreeing with itself in the one place somebody goes to check.
+   */
+  outsideSpread: boolean
   /** Whether a high bid is recorded. */
   hasBid: boolean
 }
@@ -69,17 +77,19 @@ export interface ProductMetrics {
  * per unit and what is displayed as a total can never tell different stories.
  */
 export function productMetrics(
-  p: Pick<InventoryProduct, 'quantity' | 'unitCost' | 'highBid' | 'costValue' | 'marketValue'>
+  p: Pick<InventoryProduct, 'quantity' | 'unitType' | 'unitCost' | 'highBid' | 'costValue' | 'marketValue'>
 ): ProductMetrics {
   const hasBid = p.highBid != null && p.highBid > 0
   const marketUnit = hasBid ? (p.highBid as number) : p.unitCost
+  const outsideSpread = p.quantity > 0 && p.costValue <= 0 && p.unitType === 'box'
   return {
     marketUnit,
     invValue: p.marketValue,
     avgCost: p.quantity > 0 ? p.costValue / p.quantity : p.unitCost,
     totalCost: p.costValue,
-    spread: p.marketValue - p.costValue,
+    spread: outsideSpread ? 0 : p.marketValue - p.costValue,
     hasCost: p.costValue > 0 || p.unitCost > 0,
+    outsideSpread,
     hasBid
   }
 }

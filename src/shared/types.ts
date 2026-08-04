@@ -320,8 +320,34 @@ export interface InventoryStats {
    * rounding by the quantity too.
    */
   totalCost: number
-  /** totalValue − totalCost. */
+  /**
+   * What the stock on hand stands to make — and NOT totalValue − totalCost.
+   *
+   * A box may be taken into stock with no unit cost (the field is optional,
+   * deliberately: boxes get picked up ad hoc and there is often no figure to
+   * hand). Stock carried at nothing used to report its whole high bid as profit,
+   * because spread was a subtraction and its cost was zero. So an uncosted BOX
+   * now contributes exactly zero here, the same answer an unpriced product has
+   * always got, and its market value is reported in `outsideSpreadValue`.
+   *
+   * Only boxes. A case, a pack or a single with no cost still contributes its
+   * whole market value, exactly as before — a case is a deliberate four-figure
+   * purchase whose price is known when it is bought, and money that size must
+   * not be able to leave this figure quietly. The zero-cost banner goes on
+   * naming those the way it always has.
+   */
   spread: number
+  /**
+   * Market value on hand that `spread` is NOT speaking for — uncosted boxes.
+   *
+   * Returned so the difference can be stated on screen rather than discovered:
+   * totalValue − totalCost = spread + outsideSpreadValue, exactly, and without
+   * this field the three tiles would be a subtraction that does not reconcile.
+   * It is the same money the `outsideSpread` rows of `zeroCost` name.
+   */
+  outsideSpreadValue: number
+  /** How many products that is. */
+  outsideSpreadCount: number
   boxes: number
   cases: number
   packs: number
@@ -337,13 +363,16 @@ export interface InventoryStats {
   /**
    * Stock on the shelf carried at NO cost, worst first.
    *
-   * These are the reason a Spread figure can be nonsense. A product with stock
-   * and a zero cost basis contributes its ENTIRE market value to spread, because
-   * spread is value − cost and its cost is nothing. Seven such products were
-   * enough to make 48% of a real Spread number fictional. They are surfaced
-   * beside the tile rather than silently folded into it, because the fix (put
-   * the real cost on the product) is one the operator can act on and nobody can
-   * act on a number they cannot see inside.
+   * Every row here is money the app cannot fully account for; `outsideSpread`
+   * says which way. A BOX with no cost is market value the Spread is leaving
+   * out — an incomplete number, and the amount is `outsideSpreadValue`.
+   * Anything else with no cost is market value the Spread is still counting as
+   * profit — a wrong number, which is what this list was built for: seven such
+   * products were once enough to make 48% of a real Spread fictional.
+   *
+   * Both are surfaced beside the tile rather than folded into it, because the
+   * fix (put the real cost on the product) is one the operator can act on and
+   * nobody can act on a number they cannot see inside.
    */
   zeroCost: ZeroCostStock[]
   /**
@@ -363,8 +392,17 @@ export interface ZeroCostStock {
   id: string
   name: string
   quantity: number
-  /** What it is being valued at — i.e. how much fake spread it is creating. */
+  /**
+   * What it is being valued at — which is how much market value the Spread is
+   * holding out (`outsideSpread`), or how much fake spread it is creating.
+   */
   marketValue: number
+  /**
+   * True when this is a BOX, and therefore stock the Spread now excludes rather
+   * than inflates. Decided next to the arithmetic that does the excluding, so
+   * the banner describes the tile instead of guessing at it.
+   */
+  outsideSpread: boolean
 }
 
 /**
@@ -624,7 +662,12 @@ export interface PricingRow {
   highBidAt: string | null
   /** quantity × high bid when priced; the cost basis when not. */
   invValue: number
-  /** invValue − costValue. */
+  /**
+   * An uncosted BOX: stock with no basis under it, which the Spread leaves out
+   * rather than counting whole. Same gate as the dashboard — see InventoryStats.
+   */
+  outsideSpread: boolean
+  /** invValue − costValue, or zero when `outsideSpread`. */
   spread: number
 }
 

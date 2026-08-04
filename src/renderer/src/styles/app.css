@@ -3444,6 +3444,16 @@ table.data tfoot .data-total td {
   color: var(--danger);
 }
 
+/* Why a spec above reads as a dash rather than a number — currently only the
+   Spread on a box with no cost basis. Sits under the spec grid, above the
+   cases, so the explanation is beside the thing it explains. */
+.qv-note {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-3);
+  margin: -6px 0 14px;
+}
+
 /* Product card body (image + specs + cases) — shared by the quick-view modal
    and the dashboard hover card. */
 .qv-body {
@@ -15446,8 +15456,9 @@ button.sor-team:focus-visible {
    Inventory — zero-cost stock banner, inline add-product, cost gate
    ========================================================================== */
 
-/* Stock on the shelf carried at $0.00. Spread reports its whole market value as
-   profit, so this names the products rather than leaving the tile to lie. */
+/* Stock on the shelf carried at $0.00. For anything but a box, Spread still
+   reports its whole market value as profit, so this names the products rather
+   than leaving the tile to lie. */
 .zerocost-banner {
   display: flex;
   align-items: flex-start;
@@ -15464,6 +15475,17 @@ button.sor-team:focus-visible {
   flex: none;
   margin-top: 1px;
   color: var(--text);
+}
+/* The box variant. Nothing is WRONG on the screen — the Spread is deliberately
+   leaving this stock out until a cost is known — so it reads as a note in the
+   ordinary surface colours rather than as a warning in amber. Same layout, same
+   inline field; only the temperature changes. */
+.zerocost-note {
+  border-color: var(--border);
+  background: var(--surface-2);
+}
+.zerocost-note > svg {
+  color: var(--text-2);
 }
 .zerocost-main {
   display: flex;

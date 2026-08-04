@@ -18,6 +18,8 @@ const EMPTY_STATS: InventoryStats = {
   totalValue: 0,
   totalCost: 0,
   spread: 0,
+  outsideSpreadValue: 0,
+  outsideSpreadCount: 0,
   boxes: 0,
   cases: 0,
   packs: 0,
