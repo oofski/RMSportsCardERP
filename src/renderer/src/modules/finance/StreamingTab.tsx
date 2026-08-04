@@ -4,6 +4,7 @@ import type { StreamingFinanceView } from '@shared/financeStreaming'
 import { Button, CenterLoader } from '../../components/ui'
 import { useSession } from '../../lib/session'
 import { Note } from './bits'
+import { Expenses } from './Expenses'
 import { FinanceCalendar } from './FinanceCalendar'
 import { ImportPanel } from './ImportPanel'
 import { Provenance } from './Provenance'
@@ -278,6 +279,12 @@ export function StreamingTab(): JSX.Element {
         onReattribute={reattribute}
         onPickDay={(key) => setRange({ from: key, to: key })}
       />
+
+      {/* Under the statement, because it is the only figure on it that nobody
+          imported — and the only one an operator can change from this screen.
+          Above provenance, because provenance is about where the FILE came from
+          and this is about a number that came from a person. */}
+      <Expenses range={range} canManage={canManage} onView={applyView} />
 
       <Provenance view={view} canManage={canManage} onView={applyView} />
     </div>

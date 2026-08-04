@@ -83,8 +83,9 @@
  * So a day now carries TWO cost-of-goods lines, both NEGATIVE:
  *   breakCost     what the stock opened on the show cost (`cost_total`)
  *   giveawayCost  what the stock given away was worth  (`loss_value`)
- * and `cogs` is their sum. `grossProfit` is revenue plus cogs; `netProfit` is
- * gross profit after fees, shipping, show costs and adjustments.
+ * and `cogs` is their sum, itemised per product in `cogsBreakdown` off the very
+ * same rows. `grossProfit` is revenue plus cogs; `netProfit` is gross profit
+ * after fees, shipping, show costs, general expenses and adjustments.
  *
  * TWO GIVEAWAY COSTS, AND THEY ARE NOT THE SAME COST. `giveaway_shipping` is a
  * LEDGER row — the postage Whatnot charged to mail a prize — and it stays in
@@ -102,12 +103,14 @@ import { readFileSync } from 'fs'
 import { basename } from 'path'
 import type { Result } from '@shared/types'
 import type {
+  CogsItem,
   FinancePeriodRow,
   LedgerAttribution,
   LedgerBucket,
   LedgerImport,
   LedgerImportResult,
   LedgerRow,
+  MarketplaceItem,
   PnlCountField,
   PnlMoneyField,
   RateSlice,
@@ -136,6 +139,8 @@ import {
   emptyDayFinance,
   findCarryBackSession,
   ledgerFingerprintSource,
+  mergeCogsItems,
+  mergeMarketplaceItems,
   mergeRateSlices,
   parseBreakNumber,
   parseLedgerAmount,
@@ -147,6 +152,7 @@ import type { StreamSession } from '@shared/streaming'
 import { durationMinutes, isSuspiciouslyLong, streamDateOf } from '@shared/streaming'
 import { getDb } from './database'
 import { rateLookup } from './whatnotRates'
+import { expenseTotalsByDay } from './financeExpenses'
 import { packingCostByDay } from './shipSop'
 import { isAnyLeagueTeam } from '../shipping/teams'
 import { matchProductByName } from './inventory'
@@ -1649,11 +1655,23 @@ interface Rollup {
   counts: Map<CountField, number>
   /** Every rate the days inside this period were charged at. */
   rates: RateSlice[]
+  /** Every product cost and every whole-product sale on those days, unmerged.
+   *  Folding happens once, at the end, in the contract's own merge — so a week
+   *  cannot itemise a product differently from the days inside it. */
+  cogsItems: CogsItem[]
+  marketplace: MarketplaceItem[]
   dates: string[]
 }
 
 function newRollup(): Rollup {
-  return { money: new Map(), counts: new Map(), rates: [], dates: [] }
+  return {
+    money: new Map(),
+    counts: new Map(),
+    rates: [],
+    cogsItems: [],
+    marketplace: [],
+    dates: []
+  }
 }
 
 /**
@@ -1677,6 +1695,8 @@ function addDay(roll: Rollup, day: StreamDayFinance): void {
   for (const f of MONEY_FIELDS) roll.money.set(f, (roll.money.get(f) ?? 0) + toCents(fields[f]))
   for (const f of COUNT_FIELDS) roll.counts.set(f, (roll.counts.get(f) ?? 0) + fields[f])
   if (Array.isArray(day.rateBreakdown)) roll.rates.push(...day.rateBreakdown)
+  if (Array.isArray(day.cogsBreakdown)) roll.cogsItems.push(...day.cogsBreakdown)
+  if (Array.isArray(day.marketplaceBreakdown)) roll.marketplace.push(...day.marketplaceBreakdown)
   roll.dates.push(day.streamDate)
 }
 
@@ -1691,9 +1711,12 @@ function rollupBody(roll: Rollup): Omit<StreamDayFinance, 'streamDate' | 'sessio
   const out = emptyDay('') as unknown as Record<string, unknown>
   for (const f of MONEY_FIELDS) out[f] = toDollars(roll.money.get(f) ?? 0)
   for (const f of COUNT_FIELDS) out[f] = roll.counts.get(f) ?? 0
-  // Neither money nor a count, so it is carried by hand — the contract's own
-  // merge, in cents, so a month's slices still sum to the month's gross.
+  // Neither money nor a count, so all three are carried by hand — each through
+  // the contract's own merge, in cents, so a month's slices still sum to the
+  // month's gross and a month's product lines still sum to its cost of goods.
   out.rateBreakdown = mergeRateSlices(roll.rates)
+  out.cogsBreakdown = mergeCogsItems(roll.cogsItems)
+  out.marketplaceBreakdown = mergeMarketplaceItems(roll.marketplace)
   delete out.streamDate
   delete out.sessionTitles
   return out as unknown as Omit<StreamDayFinance, 'streamDate' | 'sessionTitles'>
@@ -2063,20 +2086,43 @@ function buildView(db: Database): StreamingFinanceView {
   // giveaway_shipping rows are the POSTAGE for mailing a prize and remain
   // exactly that, in Shipping, untouched. Two different real costs; the mistake
   // this comment exists to prevent is folding one into the other.
+  //
+  // GROUPED BY PRODUCT AS WELL AS BY ACT, because the statement now prints one
+  // line per product rather than two totals. The totals are summed from these
+  // very rows rather than from a second query, which is what makes the itemised
+  // lines add up to `cogs` by construction instead of by two queries happening
+  // to agree.
+  //
+  // Keyed on the NAME rather than on `product_id`. The id is nullable and is set
+  // to NULL when a catalog product is deleted, which is exactly the case the
+  // denormalised name on the line exists to survive; grouping by the id would
+  // collapse every deleted product in a range into one unnamed line.
   const itemRows = db
     .prepare(
-      `SELECT s.stream_date AS d, i.kind AS kind,
+      `SELECT s.stream_date AS d, i.kind AS kind, TRIM(i.product_name) AS name,
               COALESCE(SUM(CAST(ROUND(i.cost_total * 100) AS INTEGER)), 0) AS cents,
               COALESCE(SUM(CAST(ROUND(i.loss_value * 100) AS INTEGER)), 0) AS loss
          FROM stream_items i JOIN stream_sessions s ON s.id = i.session_id
-        GROUP BY s.stream_date, i.kind`
+        GROUP BY s.stream_date, i.kind, TRIM(i.product_name)`
     )
-    .all() as Array<{ d: string; kind: string; cents: number; loss: number }>
+    .all() as Array<{ d: string; kind: string; name: string; cents: number; loss: number }>
   // Both are stored POSITIVE on the line and reported NEGATIVE here: every
   // figure that feeds a bottom line is a signed number, so the total is a plain
   // sum and no screen has to remember which way to apply it. Getting this sign
   // wrong does not fail anywhere — it silently ADDS the cost of a broken case to
   // the profit of the show that broke it.
+  const cogsItems = new Map<string, CogsItem[]>()
+  const addCogsItem = (date: string, item: CogsItem): void => {
+    // A zero-cost line is a real thing — an uncosted box, a giveaway with no
+    // divisor — and it is deliberately not printed. It would arrive as a product
+    // name against $0.00, which reads as a costing failure the operator cannot
+    // act on from this screen, and the section's `empty` handling would hide it
+    // anyway on every day but the ones somebody has expanded the zero lines on.
+    if (item.amount === 0) return
+    const list = cogsItems.get(date) ?? []
+    list.push(item)
+    cogsItems.set(date, list)
+  }
   for (const r of itemRows) {
     const day = dayFor(r.d)
     if (r.kind === 'giveaway') {
@@ -2088,9 +2134,28 @@ function buildView(db: Database): StreamingFinanceView {
       // The same money under the name this view has always used for it, kept so
       // netAfterCosts and everything reading it keep meaning what they meant.
       day.giveawayLoss = day.giveawayCost
+      addCogsItem(r.d, { kind: 'giveaway', name: r.name, amount: toDollars(-r.loss) })
     } else {
       day.breakCost = toDollars(toCents(day.breakCost) - r.cents)
+      addCogsItem(r.d, { kind: 'break', name: r.name, amount: toDollars(-r.cents) })
     }
+  }
+  for (const [date, items] of cogsItems) dayFor(date).cogsBreakdown = mergeCogsItems(items)
+
+  // --- what somebody typed against a day -------------------------------------
+  //
+  // The one figure on a day that is neither in Whatnot's export nor derived from
+  // anything: a pack opened for fun, a box written off. NEGATIVE here for the
+  // same reason the stock cost is, and NOT a stock movement — see the field in
+  // the contract for why the two are kept apart.
+  //
+  // An entry against a date with no session and no ledger rows still creates a
+  // day, which is correct: money was spent on it, so it belongs on the calendar
+  // and in whatever range covers it.
+  for (const [date, e] of expenseTotalsByDay()) {
+    const day = dayFor(date)
+    day.generalExpenses = toDollars(toCents(day.generalExpenses) - e.cents)
+    day.generalExpenseCount += e.count
   }
 
   // --- packing materials, from Shipping + Supplies rather than the ledger -----
@@ -2221,14 +2286,22 @@ function buildView(db: Database): StreamingFinanceView {
   // `occurred_at` is deliberately NOT selected: the business day is the only
   // thing the derivation below reads a date for, and a column nobody uses is an
   // invitation to start pricing by it again.
+  //
+  // `bucket` and `product_name` ARE selected, and only to split the whole-product
+  // share of the gross out of the same pass. That share cannot be recovered
+  // afterwards by proportion: the flat card charge is per ROW, so a $10,794 case
+  // sold as one order and $10,794 of break spots gross up by different amounts,
+  // and apportioning would move real money between the two Revenue lines on
+  // exactly the days that carry both.
   const saleRows = db
     .prepare(
-      `SELECT stream_date AS d, CAST(ROUND(amount * 100) AS INTEGER) AS cents
+      `SELECT stream_date AS d, bucket, product_name AS name,
+              CAST(ROUND(amount * 100) AS INTEGER) AS cents
          FROM ledger_rows
         WHERE stream_date IS NOT NULL AND bucket IN ('sale', 'product_sale')
           AND (session_id IS NOT NULL OR attribution = 'own_day')`
     )
-    .all() as Array<{ d: string; cents: number }>
+    .all() as Array<{ d: string; bucket: string; name: string | null; cents: number }>
 
   interface DayFees {
     grossCents: number
@@ -2240,6 +2313,11 @@ function buildView(db: Database): StreamingFinanceView {
     unresolved: number
     /** Gross cents per SET OF TERMS charged — one entry on an ordinary day. */
     byTerms: Map<string, RateSlice>
+    /** The whole-product share of `grossCents`, and the products behind it.
+     *  Zero and empty on most days — 14 such sales on 6 days across both of the
+     *  owner's real exports. */
+    productGrossCents: number
+    byProduct: Map<string, { cents: number; count: number }>
   }
   const feesByDay = new Map<string, DayFees>()
   for (const r of saleRows) {
@@ -2279,7 +2357,9 @@ function buildView(db: Database): StreamingFinanceView {
       taxCents: 0,
       charged: 0,
       unresolved: 0,
-      byTerms: new Map<string, RateSlice>()
+      byTerms: new Map<string, RateSlice>(),
+      productGrossCents: 0,
+      byProduct: new Map<string, { cents: number; count: number }>()
     }
     acc.grossCents += fee.grossCents
     acc.whatnotCents += fee.whatnotFeeCents
@@ -2309,6 +2389,20 @@ function buildView(db: Database): StreamingFinanceView {
     // counting on the commission alone would then print a flat charge against
     // zero orders beside a real cost.
     if (fee.whatnotFeeCents !== 0 || fee.processingFeeCents !== 0) acc.charged += 1
+    // The whole-product share, taken off the same derived figure and in the same
+    // pass, so `grossCents - productGrossCents` is the break-spot gross to the
+    // cent and the two Revenue lines add to the section subtotal exactly.
+    if (r.bucket === 'product_sale') {
+      acc.productGrossCents += fee.grossCents
+      // The name the import parsed out of the message. Blank is a real outcome —
+      // a shape `parseProductSaleName` does not recognise — and the contract's
+      // merge gives that money a name rather than dropping the row.
+      const name = (r.name ?? '').trim()
+      const hit = acc.byProduct.get(name) ?? { cents: 0, count: 0 }
+      hit.cents += fee.grossCents
+      hit.count += 1
+      acc.byProduct.set(name, hit)
+    }
     feesByDay.set(r.d, acc)
   }
 
@@ -2326,7 +2420,9 @@ function buildView(db: Database): StreamingFinanceView {
       taxCents: 0,
       charged: 0,
       unresolved: 0,
-      byTerms: new Map<string, RateSlice>()
+      byTerms: new Map<string, RateSlice>(),
+      productGrossCents: 0,
+      byProduct: new Map<string, { cents: number; count: number }>()
     }
     // grossCents is Sigma(net + fees) over exactly the rows `netSales` was summed
     // from, so `grossSales - totalFees == netSales` to the cent, always. The
@@ -2346,6 +2442,18 @@ function buildView(db: Database): StreamingFinanceView {
     // statement's disclosure cannot disagree with the line it is disclosing.
     day.rateBreakdown = mergeRateSlices(
       [...fees.byTerms.values()].map((sl) => ({ ...sl, grossSales: toDollars(sl.grossSales) }))
+    )
+    // The marketplace share of that same gross, and what sold. `productSales`
+    // stays the NET share it has always been — it is what reconciles to the
+    // payout — and this is the figure the statement prints beside the sales line
+    // it was split out of.
+    day.productGrossSales = toDollars(fees.productGrossCents)
+    day.marketplaceBreakdown = mergeMarketplaceItems(
+      [...fees.byProduct.entries()].map(([name, v]) => ({
+        name,
+        amount: toDollars(v.cents),
+        count: v.count
+      }))
     )
 
     // `unclassified` has no field of its own in the day shape, so its money is
@@ -2396,6 +2504,9 @@ function buildView(db: Database): StreamingFinanceView {
         toCents(day.totalFees) +
         toCents(day.netShipping) +
         toCents(day.showBoost) +
+        // Its own statement section, and in the bottom line: an expense that did
+        // not reduce net profit would be a note, and the owner asked for a cost.
+        toCents(day.generalExpenses) +
         toCents(day.reversals)
     )
   }
@@ -2470,11 +2581,13 @@ function buildView(db: Database): StreamingFinanceView {
   for (const [, c] of dayNetCents) daysCents += c
   for (const day of days) daysRows += day.rowCount
 
-  // The day fields must decompose the SAME money the rows carry, and TWO of them
-  // are not ledger rows at all — both cost-of-goods terms, which come from the
-  // Streaming module — so stripping those back out has to land exactly on the
-  // raw net:
-  //     netProfit − cogs − packingSupplies == Σ(attributed non-payout rows)
+  // The day fields must decompose the SAME money the rows carry, and several of
+  // them are not ledger rows at all — both cost-of-goods terms, which come from
+  // the Streaming module, the packing, which comes from Supplies, and the manual
+  // expenses, which come from somebody typing — so stripping those back out has
+  // to land exactly on the raw net:
+  //     netProfit − cogs − packingSupplies − generalExpenses
+  //        == Σ(attributed non-payout rows)
   //
   // THE FEES ARE NOT STRIPPED, AND THAT IS THE ROUND-TRIP ASSERTION. They used
   // to be, because the top line was the ledger's own figure and the fee was
@@ -2500,7 +2613,13 @@ function buildView(db: Database): StreamingFinanceView {
     // exactly like the stock cost and the giveaway loss. Forgetting it here does
     // not fail loudly — it flags EVERY day unreconciled, which is how an
     // operator learns to ignore the one flag that matters.
-    fieldCents += toCents(day.netProfit) - toCents(day.cogs) - toCents(day.packingSupplies)
+    fieldCents +=
+      toCents(day.netProfit) -
+      toCents(day.cogs) -
+      toCents(day.packingSupplies) -
+      toCents(day.generalExpenses)
+    // `netAfterCosts` deliberately does not carry the manual expenses, so there
+    // is nothing to strip for them here — see the field in the contract.
     ledgerFieldCents +=
       toCents(day.netAfterCosts) - toCents(day.giveawayLoss) - toCents(day.packingSupplies)
   }

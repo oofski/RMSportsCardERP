@@ -1378,6 +1378,105 @@ export function mergeRateSlices(slices: readonly RateSlice[]): RateSlice[] {
     .map(({ slice, cents: c }) => ({ ...slice, grossSales: c / 100 }))
 }
 
+// ---------------------------------------------------------------------------
+// Named money that has to survive a rollup
+//
+// `rateBreakdown` established the pattern and these two follow it: a list of
+// named figures that a day carries, that a week has to MERGE rather than
+// recompute, and that a statement prints one line each from. The alternative —
+// re-querying the rows at whatever grain the screen happens to be showing — is
+// how a month ends up disagreeing with the days inside it about the same
+// product. Everything here folds in INTEGER CENTS for the same reason
+// `mergeRateSlices` does.
+// ---------------------------------------------------------------------------
+
+/**
+ * One product's share of a period's cost of goods.
+ *
+ * BREAK AND GIVEAWAY STAY APART, and the same product under each is two entries
+ * rather than one. They are different acts: a break is inventory consumed to
+ * make the revenue on the line above it, a giveaway is stock that simply left.
+ * Both are cost of goods and both reduce gross profit identically — which is why
+ * they share a section — but folding a product that was half given away into one
+ * line would make it read as a product that sold.
+ */
+export interface CogsItem {
+  kind: 'break' | 'giveaway'
+  /** The product as the stream line named it — the denormalised snapshot on
+   *  `stream_items`, which outlives the catalog row it came from. */
+  name: string
+  /** NEGATIVE, like every other cost figure that feeds a bottom line. */
+  amount: number
+}
+
+/**
+ * One product sold outright, and what the buyers paid for it.
+ *
+ * GROSS, not net — derived from the same rows the day's `grossSales` is, so a
+ * marketplace line printed beside the sales line is on the same basis as it and
+ * the two still add to the section subtotal. See `productGrossSales`.
+ */
+export interface MarketplaceItem {
+  /** The product as the ledger message named it. */
+  name: string
+  amount: number
+  /** Sale rows behind it — the count the flat card charge multiplies. */
+  count: number
+}
+
+/**
+ * Fold repeats together, biggest cost first.
+ *
+ * A product broken on Monday and again on Tuesday is ONE line over a range that
+ * covers both, holding the sum. Keyed on (kind, name) so the break/giveaway
+ * distinction above survives the fold.
+ */
+export function mergeCogsItems(items: readonly CogsItem[]): CogsItem[] {
+  const byKey = new Map<string, { item: CogsItem; cents: number }>()
+  for (const it of items) {
+    if (!it || !Number.isFinite(it.amount)) continue
+    const kind: CogsItem['kind'] = it.kind === 'giveaway' ? 'giveaway' : 'break'
+    const name = (it.name ?? '').trim() || UNNAMED_PRODUCT
+    const key = `${kind}|${name}`
+    const hit = byKey.get(key)
+    if (hit) hit.cents += Math.round(it.amount * 100)
+    else byKey.set(key, { item: { kind, name, amount: 0 }, cents: Math.round(it.amount * 100) })
+  }
+  return [...byKey.values()]
+    // Costs are negative, so "biggest" is the most negative. Ties break on the
+    // name so two products that cost the same do not swap places between two
+    // renders of the same period.
+    .sort((a, b) => a.cents - b.cents || a.item.name.localeCompare(b.item.name))
+    .map(({ item, cents: c }) => ({ ...item, amount: c / 100 }))
+}
+
+/** The same fold for whole-product sales. Biggest sale first. */
+export function mergeMarketplaceItems(items: readonly MarketplaceItem[]): MarketplaceItem[] {
+  const byName = new Map<string, { cents: number; count: number }>()
+  for (const it of items) {
+    if (!it || !Number.isFinite(it.amount)) continue
+    const name = (it.name ?? '').trim() || UNNAMED_PRODUCT
+    const hit = byName.get(name) ?? { cents: 0, count: 0 }
+    hit.cents += Math.round(it.amount * 100)
+    hit.count += Number.isFinite(it.count) ? it.count : 0
+    byName.set(name, hit)
+  }
+  return [...byName.entries()]
+    .map(([name, v]) => ({ name, amount: v.cents / 100, count: v.count }))
+    .sort((a, b) => b.amount - a.amount || a.name.localeCompare(b.name))
+}
+
+/**
+ * What a line with no product name is called.
+ *
+ * It is a real possibility rather than a defensive flourish: `product_name` on a
+ * ledger row is whatever `parseProductSaleName` could pull out of the message,
+ * and a shape it does not recognise leaves it empty. Money with no name still
+ * has to appear, under a label that says what happened, or the section subtotal
+ * stops matching its lines.
+ */
+export const UNNAMED_PRODUCT = 'Unnamed product'
+
 export interface StreamDayFinance {
   /** Business day (a session's streamDate). */
   streamDate: string
@@ -1420,7 +1519,27 @@ export interface StreamDayFinance {
    * marketplace without re-querying the ledger.
    */
   productSales: number
+  /**
+   * The DERIVED GROSS of those same rows — what the buyers paid for them.
+   *
+   * `productSales` above is the net share and stays that, because it is what
+   * reconciles to the payout. This is the figure the statement prints, and it has
+   * to be derived from the marketplace rows THEMSELVES rather than split out of
+   * the day's gross by proportion: the flat card charge is levied once per ORDER,
+   * so $10,794 sold as one sealed case grosses up by one 30¢ charge and the same
+   * money sold as 900 break spots grosses up by nine hundred of them. A
+   * proportional split would move real money between the two lines on exactly the
+   * days that have both.
+   *
+   * Built in the same pass, off the same rows, as `grossSales` — so
+   * `grossSales − productGrossSales` is the break-spot gross to the cent and the
+   * Revenue section still adds up to its own subtotal.
+   */
+  productGrossSales: number
   productSaleCount: number
+  /** Those sales per product, so a range can name what actually sold rather than
+   *  print one figure covering a case and forty loose boxes. */
+  marketplaceBreakdown: MarketplaceItem[]
   tips: number
   bonuses: number
   /**
@@ -1517,8 +1636,37 @@ export interface StreamDayFinance {
    */
   giveawayLoss: number
 
+  /**
+   * NEGATIVE. Costs somebody TYPED against this day — a pack opened for fun, a
+   * sleeve of cards that walked, a box written off.
+   *
+   * A DOLLAR AMOUNT AND NOT A STOCK MOVEMENT, and the distinction is the whole
+   * reason this exists separately from `giveawayCost`. Entering a giveaway in
+   * Streaming moves inventory: it consumes FIFO layers, drops the on-hand count
+   * and values itself at what those layers cost. This does none of that. It is
+   * for the loose case the owner described — "we opened one for fun" — where
+   * nobody is going to reconcile a pack against the shelf, so asking the app to
+   * pretend a lot was consumed would put the balance sheet further from the truth
+   * rather than closer to it. Anything that IS a real stock movement belongs in
+   * the streaming giveaway flow and must not be typed here as well, or the same
+   * pack is booked twice.
+   *
+   * Like the cost-of-goods fields and `packingSupplies` it comes from outside the
+   * ledger, so the reconciliation strips it back out before comparing a day to
+   * its rows.
+   */
+  generalExpenses: number
+  /** How many entries are behind that figure. On the line so the statement can
+   *  say the money was typed rather than derived. */
+  generalExpenseCount: number
+
   /** netRevenue + netShipping + showBoost + reversals + giveawayLoss. Every
-   *  cost the LEDGER knows about, but not what the stock cost. */
+   *  cost the LEDGER knows about, but not what the stock cost.
+   *
+   *  `generalExpenses` is deliberately NOT in it, for the same reason the break
+   *  cost is not: this figure is the show's LEDGER economics, and a number
+   *  somebody typed is the one thing Whatnot's export can never corroborate. It
+   *  is in `netProfit`, which is the bottom line. */
   netAfterCosts: number
 
   // --- Cost of goods ------------------------------------------------------
@@ -1535,13 +1683,25 @@ export interface StreamDayFinance {
   breakCost: number
   /** Stock given away, valued at pack cost. NEGATIVE. */
   giveawayCost: number
+  /**
+   * The same two figures TAKEN APART BY PRODUCT, which is what the statement
+   * actually prints.
+   *
+   * Built from the very rows `breakCost` and `giveawayCost` are summed from, in
+   * one pass, so the entries add up to `cogs` by construction rather than by
+   * agreement between two queries. It is a list rather than a money field
+   * because it has to MERGE over a range — a product broken on two nights is one
+   * line holding the sum, not two lines of the same name.
+   */
+  cogsBreakdown: CogsItem[]
   /** breakCost + giveawayCost. NEGATIVE. */
   cogs: number
   /** totalRevenue + cogs. What the show made before the platform took its cut. */
   grossProfit: number
   /**
-   * The bottom line: grossProfit + fees + shipping + show costs + adjustments.
-   * This is the number that goes on the calendar in green or red.
+   * The bottom line: grossProfit + fees + shipping + show costs + general
+   * expenses + adjustments. This is the number that goes on the calendar in
+   * green or red.
    */
   netProfit: number
 
@@ -1672,6 +1832,12 @@ export function buildPnl(d: {
   unclassified?: number
   /** Optional so a caller built before the fee rewrite still type-checks. */
   feeSaleCount?: number
+  /** Whole-product sales, on the SAME derived-gross basis as `grossSales` and a
+   *  SUBSET of it. Optional for a packaged main that predates the split, which
+   *  sends neither — and then the sales line is the whole of it, as before. */
+  productGrossSales?: number
+  productSaleCount?: number
+  marketplaceBreakdown?: MarketplaceItem[]
   /** Optional for the same reason: an older packaged main sends no breakdown,
    *  and the fee line then falls back to the derived rate it always printed. */
   rateBreakdown?: RateSlice[]
@@ -1680,12 +1846,19 @@ export function buildPnl(d: {
    *  processing fee was charged on. */
   salesTax?: number
   breakCost: number; giveawayCost: number; cogs: number; grossProfit: number
+  /** Optional for the same reason: an older packaged main sends the two totals
+   *  and no itemisation, and the section then prints them as it always did. */
+  cogsBreakdown?: CogsItem[]
   whatnotFee: number; processingFee: number; totalFees: number
   shippingSubsidy: number; shippingCharges: number; giveawayShipping: number
   refundShipping: number; netShipping: number
   /** Optional so a caller built before packing existed still type-checks. */
   packingSupplies?: number
   showBoost: number; reversals: number; netProfit: number
+  /** Optional so a caller built before manual expenses existed still
+   *  type-checks. Zero then, and the section reads as an empty one. */
+  generalExpenses?: number
+  generalExpenseCount?: number
 }): PnlSection[] {
   const line = (key: string, label: string, amount: number, detail?: string): PnlLine => ({
     key, label, amount: c2(amount), detail, empty: c2(amount) === 0
@@ -1756,6 +1929,125 @@ export function buildPnl(d: {
           `${flatLabel(cardSlices[0].processingFlatCents)} ${orders}`
         : `a share of each order plus a flat charge ${orders}`
 
+  // --- whole products, split off the sales line -------------------------------
+  //
+  // A sealed box or case sold outright rather than as break spots. Rare and
+  // material at once: across both of the owner's real exports there are fourteen
+  // of them on six days, and one of those days carries $10,794 of them inside a
+  // single Revenue line that says nothing about it.
+  //
+  // ON THE SAME BASIS AS THE LINE IT SITS BESIDE. `productGrossSales` is derived
+  // from the marketplace rows themselves, not apportioned out of `gross` by
+  // share — see the field for why a proportional split is wrong on exactly the
+  // days that have both kinds of sale. Because it comes off the same rows, the
+  // subtraction below is exact and the two lines still sum to the gross.
+  //
+  // SHOWN ONLY WHEN THERE IS ONE. Most days have none, and `empty` would hide a
+  // zero line anyway — but the sales line's own LABEL changes when the split
+  // happens, and calling a day's whole takings "Break spots" when nothing was
+  // split out of them is a claim about composition rather than a description of
+  // it.
+  const marketGross = c2(d.productGrossSales ?? 0)
+  const marketItems = mergeMarketplaceItems(d.marketplaceBreakdown ?? [])
+  const marketCount = d.productSaleCount ?? marketItems.reduce((n, i) => n + i.count, 0)
+  const split = marketGross !== 0
+  const spotCount = Math.max(0, d.saleCount - (split ? marketCount : 0))
+
+  // NAMED, WHERE NAMING STAYS READABLE. The breakdown merges over a range the
+  // same way the cost-of-goods one does, so a week that sold the same box twice
+  // names it once — but past a handful the names stop being a label and become a
+  // paragraph, so the tail is counted instead of listed.
+  const NAMES_ON_LINE = 3
+  const marketNames = marketItems.slice(0, NAMES_ON_LINE).map((i) => i.name)
+  const marketMore = marketItems.length - marketNames.length
+  const marketDetail =
+    `${count(marketCount)} sale${marketCount === 1 ? '' : 's'} · ` +
+    (marketNames.length === 0
+      ? 'sold outright rather than as break spots'
+      : `${marketNames.join(', ')}${marketMore > 0 ? ` and ${count(marketMore)} more` : ''}`)
+
+  // --- cost of goods, product by product --------------------------------------
+  //
+  // ONE LINE PER PRODUCT, valued at the cost consumed, instead of the two totals
+  // this section printed for three releases. "Stock broken $4,812" answers a
+  // question nobody asked; the owner wants to know WHICH case ate the night.
+  //
+  // The entries merge over a range, so a product broken on the 20th and again on
+  // the 21st is one line holding the sum rather than the same name twice. That
+  // merge is the reason this is a list on the day rather than something the
+  // screen recomputes: a week must not be able to itemise a product differently
+  // from the days inside it.
+  //
+  // BOUNDED. A month can touch dozens of products and an all-time range hundreds,
+  // and a section that prints four hundred rows is not a disclosure. Sorted
+  // biggest cost first and capped, with the tail rolled into one line that holds
+  // its money — so the cap changes how many lines there are and never what they
+  // add up to. The section is closed by default and its heading carries the count,
+  // so the long ranges cost a click rather than a scroll.
+  const COGS_LINES_MAX = 25
+  const cogsItems = mergeCogsItems(d.cogsBreakdown ?? [])
+  const cogsLines: PnlLine[] = []
+  if (cogsItems.length === 0) {
+    // Nothing itemised: either the period genuinely consumed no stock, or main is
+    // packaged older than the breakdown. Both print what this section always
+    // printed, and both still add to `cogs`.
+    cogsLines.push(
+      line('breakCost', 'Stock broken', d.breakCost),
+      line('giveawayCost', 'Stock given away', d.giveawayCost)
+    )
+  } else {
+    const shown = cogsItems.slice(0, COGS_LINES_MAX)
+    for (const it of shown) {
+      // The key carries the act as well as the name, because the same product
+      // broken AND given away is two lines and two React keys. The label is the
+      // product alone — a giveaway says so in its detail, which keeps the column
+      // of names readable while leaving the distinction on the row that has it.
+      cogsLines.push(
+        line(
+          `cogs:${it.kind}:${it.name}`,
+          it.name,
+          it.amount,
+          it.kind === 'giveaway' ? 'given away' : undefined
+        )
+      )
+    }
+    const rest = cogsItems.slice(shown.length)
+    if (rest.length > 0) {
+      cogsLines.push(
+        line(
+          'cogsRest',
+          `${count(rest.length)} other product${rest.length === 1 ? '' : 's'}`,
+          rest.reduce((n, i) => n + i.amount, 0),
+          'smaller lines, rolled up'
+        )
+      )
+    }
+    // THE SECTION MUST EQUAL `cogs`, whatever else is true. The entries are built
+    // from the same rows the two totals are summed from, so this is zero on every
+    // build where both come from the same version of main — and non-zero is
+    // exactly the skew that used to show up as a subtotal quietly larger than the
+    // lines under it, with nothing on screen to say so.
+    const itemisedCents = cogsItems.reduce((n, i) => n + Math.round(i.amount * 100), 0)
+    const residual = (Math.round(c2(d.cogs) * 100) - itemisedCents) / 100
+    if (c2(residual) !== 0) {
+      cogsLines.push(
+        line(
+          'cogsUnitemised',
+          'Stock cost with no product',
+          residual,
+          'this build could not attribute it to a line — the total is still right'
+        )
+      )
+    }
+  }
+
+  // The manual entries, as one figure. Which day and what it was for lives in
+  // the Finance screen that records them; a statement that grew a line per
+  // write-off would be a ledger, and it is already the thing this section
+  // summarises.
+  const general = c2(d.generalExpenses ?? 0)
+  const generalCount = d.generalExpenseCount ?? 0
+
   return [
     {
       key: 'revenue',
@@ -1766,10 +2058,11 @@ export function buildPnl(d: {
         // the section's note below, where it has room to be a sentence.
         line(
           'sales',
-          'Sales',
-          gross,
-          `${count(d.saleCount)} transaction${d.saleCount === 1 ? '' : 's'} · what buyers bid`
+          split ? 'Break spots' : 'Sales',
+          c2(gross - marketGross),
+          `${count(spotCount)} transaction${spotCount === 1 ? '' : 's'} · what buyers bid`
         ),
+        line('marketplace', 'Marketplace sales', marketGross, marketDetail),
         line('tips', 'Tips', d.tips),
         line('bonuses', 'Seller bonuses', d.bonuses),
         // Present so the subtotal always equals the lines above it. Optional on
@@ -1789,18 +2082,16 @@ export function buildPnl(d: {
       // anybody comparing this statement to a Whatnot screen needs to know which
       // of the two they are looking at.
       note:
-        `Sales is a DERIVED gross: the ${usd(c2(d.netSales))} Whatnot actually paid out for ` +
-        `these ${count(d.saleCount)} row${d.saleCount === 1 ? '' : 's'}, with the platform fees ` +
-        `below added back on. The net is what reconciles to the bank; the gross is what the ` +
-        `buyers bid, before the sales tax they also paid. Whatnot states only the net.`
+        `${split ? 'Both sales lines above are' : 'Sales is'} a DERIVED gross: the ` +
+        `${usd(c2(d.netSales))} Whatnot actually paid out for these ${count(d.saleCount)} ` +
+        `row${d.saleCount === 1 ? '' : 's'}, with the platform fees below added back on. The net ` +
+        `is what reconciles to the bank; the gross is what the buyers bid, before the sales tax ` +
+        `they also paid. Whatnot states only the net.`
     },
     {
       key: 'cogs',
       label: 'Cost of goods',
-      lines: [
-        line('breakCost', 'Stock broken', d.breakCost),
-        line('giveawayCost', 'Stock given away', d.giveawayCost)
-      ],
+      lines: cogsLines,
       subtotal: c2(d.cogs),
       subtotalLabel: 'Cost of goods'
     },
@@ -1854,6 +2145,37 @@ export function buildPnl(d: {
       lines: [line('showBoost', 'Show Boost', d.showBoost)],
       subtotal: c2(d.showBoost),
       subtotalLabel: 'Show costs'
+    },
+    {
+      // ITS OWN SECTION, not a second line under "Other show costs", and the
+      // reason is provenance rather than taxonomy. Everything in that section is
+      // a charge Whatnot levied and wrote into the export, so its subtotal can be
+      // checked against a Whatnot screen line for line. This is money somebody
+      // typed. Folding the two together would produce one figure that is half
+      // auditable and half not, and the half that is not is precisely the half a
+      // reader would want flagged — it is also the half the day-level
+      // reconciliation has to strip back out before comparing a day to its rows.
+      //
+      // The cost of a section of its own is a permanent row on a statement that
+      // reads $0.00 on most days, because a section is never hidden — hiding one
+      // would take its subtotal with it and the statement would stop reconciling
+      // on screen. That is the right trade: one quiet row, against a "show costs"
+      // total that silently stopped meaning what Whatnot charged.
+      key: 'general',
+      label: 'General expenses',
+      lines: [
+        line(
+          'generalExpenses',
+          'Product lost & write-offs',
+          general,
+          generalCount > 0
+            ? `${count(generalCount)} entr${generalCount === 1 ? 'y' : 'ies'} · ` +
+              `packs opened, given away or written off, entered by hand`
+            : 'nothing written off in this period'
+        )
+      ],
+      subtotal: general,
+      subtotalLabel: 'General expenses'
     },
     {
       key: 'adjustments',
@@ -2014,6 +2336,87 @@ export interface LedgerImportResult {
   view: StreamingFinanceView
 }
 
+// ---------------------------------------------------------------------------
+// General expenses — the one figure on a day nobody imported
+//
+// A DOLLAR AMOUNT, NOT A STOCK MOVEMENT. The owner asked for "general product
+// lost in dollar amount": a pack opened for fun, a box given to a friend, a
+// sleeve that walked. Recording an actual stock movement is what the Streaming
+// giveaway flow already does, and it does it properly — FIFO layers consumed,
+// on-hand reduced, valued at what those layers cost. This is for the case where
+// nobody is going to reconcile a pack against the shelf, and asking the app to
+// pretend a lot was consumed would put the count further from the truth rather
+// than closer. The two must not be conflated: a giveaway entered in Streaming
+// and typed here as well books the same pack twice.
+// ---------------------------------------------------------------------------
+
+export interface GeneralExpense {
+  id: string
+  /** The BUSINESS day it lands on — the same `stream_date` the P&L groups by,
+   *  so an entry made against a night that ran past midnight sits with that
+   *  night's takings rather than with the next morning's. */
+  streamDate: string
+  /** POSITIVE dollars, exactly as entered. The P&L reports it negative, the same
+   *  way `stream_items` stores a cost positive and the day reports it as a cost.
+   *  A signed column would let a typo turn a write-off into income. */
+  amount: number
+  label: string
+  note: string
+  createdAt: string
+  createdBy: string | null
+  updatedAt: string
+}
+
+export interface GeneralExpenseInput {
+  /** Absent to create, present to edit. */
+  id?: string
+  streamDate: string
+  amount: number
+  label: string
+  note?: string
+}
+
+/** Both writes hand back the entries AND the re-derived view, because one of
+ *  these changes the bottom line of the day it is on and every period above it. */
+export interface GeneralExpenseResult {
+  expenses: GeneralExpense[]
+  view: StreamingFinanceView
+}
+
+/** The label, bounded. This is a line on a P&L, not a place to keep an essay. */
+export const EXPENSE_LABEL_MAX = 80
+export const EXPENSE_NOTE_MAX = 400
+/** A ceiling that is absurd for a write-off and cheap insurance against a
+ *  mistyped amount landing a six-figure cost on a night nobody would query. */
+export const EXPENSE_AMOUNT_MAX = 100_000
+
+/**
+ * What is wrong with one entry, or null.
+ *
+ * Run in the renderer so the operator finds out while they are still in the
+ * field, and again in main inside the write — a renderer is a convenience, not a
+ * trust boundary, and this figure reduces reported profit.
+ */
+export function validateGeneralExpense(input: GeneralExpenseInput): string | null {
+  if (!isDayKey(input?.streamDate ?? '')) return 'Pick the day this cost belongs to.'
+  const amount = typeof input?.amount === 'number' ? input.amount : Number(input?.amount)
+  // Number('') is 0 and Number('$12') is NaN. Neither may be smoothed into
+  // something plausible: a blank field must not book a zero-dollar expense that
+  // then sits on the day looking like a decision somebody made.
+  if (!Number.isFinite(amount)) return 'That amount is not a number.'
+  if (amount <= 0) {
+    return 'An expense is a positive amount — this is a cost, and the statement shows it as one.'
+  }
+  if (amount > EXPENSE_AMOUNT_MAX) {
+    return `An expense of ${amount.toLocaleString('en-US')} is beyond what this is for. ` +
+      `Something that size belongs in a purchase order, not a write-off.`
+  }
+  if (!String(input?.label ?? '').trim()) {
+    return 'Say what it was — a line on a P&L with no description is a number nobody can check.'
+  }
+  return null
+}
+
 /** Gap that separates one burst of activity from the next when clustering. */
 export const CLUSTER_GAP_MINUTES = 90
 
@@ -2049,6 +2452,10 @@ export const PNL_MONEY_FIELDS = [
   'netSales',
   'grossSales',
   'productSales',
+  // A SUBSET of `grossSales`, summed like everything else. It is inside the
+  // Revenue subtotal rather than added to it — the sales line above it is the
+  // gross LESS this — so `pnlChecksum` is untouched by its presence.
+  'productGrossSales',
   'tips',
   'bonuses',
   'unclassified',
@@ -2070,6 +2477,9 @@ export const PNL_MONEY_FIELDS = [
   'showBoost',
   'reversals',
   'giveawayLoss',
+  // Its own section of the statement, so a range that dropped it would report a
+  // net profit its own sections did not add up to.
+  'generalExpenses',
   'netAfterCosts',
   'carriedBackAmount',
   'breakCost',
@@ -2086,6 +2496,7 @@ export const PNL_COUNT_FIELDS = [
   'saleCount',
   'feeSaleCount',
   'productSaleCount',
+  'generalExpenseCount',
   'rowCount',
   'carriedBackRows'
 ] as const
@@ -2107,7 +2518,9 @@ export function emptyDayFinance(streamDate: string): StreamDayFinance {
     saleCount: 0,
     feeSaleCount: 0,
     productSales: 0,
+    productGrossSales: 0,
     productSaleCount: 0,
+    marketplaceBreakdown: [],
     tips: 0,
     bonuses: 0,
     unclassified: 0,
@@ -2127,12 +2540,15 @@ export function emptyDayFinance(streamDate: string): StreamDayFinance {
     showBoost: 0,
     reversals: 0,
     giveawayLoss: 0,
+    generalExpenses: 0,
+    generalExpenseCount: 0,
     netAfterCosts: 0,
     rowCount: 0,
     carriedBackRows: 0,
     carriedBackAmount: 0,
     breakCost: 0,
     giveawayCost: 0,
+    cogsBreakdown: [],
     cogs: 0,
     grossProfit: 0,
     netProfit: 0
@@ -2182,6 +2598,14 @@ export function sumDayFinance(days: StreamDayFinance[]): StreamFinanceTotals {
   // dropped it would silently go back to printing the blended quotient — which
   // is precisely the disclosure a wide range needs most.
   out.rateBreakdown = mergeRateSlices(days.flatMap((d) => d.rateBreakdown ?? []))
+  // The same treatment for the two itemisations, and MERGED rather than
+  // concatenated: a product broken on two of these days is one line holding the
+  // sum. Concatenating would print the same name twice with the day it came from
+  // nowhere on the row — which is the shape the owner asked for the opposite of.
+  out.cogsBreakdown = mergeCogsItems(days.flatMap((d) => d.cogsBreakdown ?? []))
+  out.marketplaceBreakdown = mergeMarketplaceItems(
+    days.flatMap((d) => d.marketplaceBreakdown ?? [])
+  )
   delete out.streamDate
   delete out.sessionTitles
   return { ...(out as unknown as Omit<StreamDayFinance, 'streamDate' | 'sessionTitles'>),

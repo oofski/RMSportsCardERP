@@ -62,6 +62,10 @@ export const LIVE = {
     'ledger_rows',
     'ledger_row_imports',
     'finance_cogs',
+    // Typed on another laptop, and it changes the bottom line of a day on this
+    // one — so the tab refetches rather than showing a profit that is stale by
+    // exactly one write-off.
+    'finance_expenses',
     'inventory_transactions'
   ],
   people: ['employees', 'time_entries'],

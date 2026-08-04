@@ -76,7 +76,15 @@ export function buildStatement(m: PnlMoney): PnlSection[] {
     giveawayCost: finite(m.giveawayCost),
     cogs: finite(m.cogs),
     grossProfit: finite(m.grossProfit),
-    netProfit: finite(m.netProfit)
+    netProfit: finite(m.netProfit),
+    // The three newest fields, guarded for the same reason and with the same
+    // consequence. A packaged main that predates them sends none: the statement
+    // then prints the two cost-of-goods totals it always printed, no marketplace
+    // line, and an empty General expenses section — all of which are TRUE on that
+    // build, so nothing here fails when it should not.
+    productGrossSales: finite(m.productGrossSales),
+    generalExpenses: finite(m.generalExpenses),
+    generalExpenseCount: finite(m.generalExpenseCount)
   })
 }
 

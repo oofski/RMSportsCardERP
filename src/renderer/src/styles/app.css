@@ -14674,6 +14674,139 @@ button.sor-team:focus-visible {
 }
 
 /* ==========================================================================
+   Finance → Streaming: product lost & write-offs
+   --------------------------------------------------------------------------
+   Shaped like the waiting panel above it on purpose: same heading row, same
+   figure on the right, same quiet ground. They are the two things on this tab
+   that are not derived from the import, and reading as one family is what says
+   so without a paragraph.
+
+   NEUTRAL, not red. A write-off is a cost, and the money glyph already carries
+   the sign — tinting the whole panel would rank a $12 opened pack alongside a
+   reconciliation failure.
+   ========================================================================== */
+.fin-expenses {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  min-width: 0;
+}
+.fin-expenses-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+}
+.fin-expenses-figure {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 7px;
+}
+.fin-expenses-figure .fin-money {
+  font-size: 15px;
+}
+.fin-expenses-figure em {
+  font-style: normal;
+  font-size: 11.5px;
+  /* 6.26:1 light, 8.25:1 dark. */
+  color: var(--text-2);
+}
+.fin-expenses-acts {
+  display: inline-flex;
+  gap: 8px;
+  margin-left: auto;
+}
+.fin-expenses-empty {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-2);
+  max-width: 74ch;
+}
+.fin-expenses-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.fin-expense {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.fin-expense-date {
+  min-width: 84px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text);
+}
+/* The description takes the slack, so the amount and the controls stay on one
+   right edge however long the label is. */
+.fin-expense-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 200px;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--text);
+}
+.fin-expense-label em {
+  font-style: normal;
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+.fin-expense-acts {
+  display: inline-flex;
+  gap: 4px;
+}
+.fin-expense-act {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: color 0.13s ease, border-color 0.13s ease, background 0.13s ease;
+}
+.fin-expense-act:hover {
+  border-color: var(--border);
+  background: var(--surface-3);
+  color: var(--text);
+}
+.fin-expense-act.is-danger:hover {
+  color: var(--danger-strong);
+}
+.fin-expense-act:focus-visible {
+  outline: 2px solid var(--brand-500);
+  outline-offset: 1px;
+}
+.fin-expense-act[disabled] {
+  opacity: 0.5;
+  cursor: default;
+}
+@media (max-width: 640px) {
+  .fin-expenses-acts {
+    margin-left: 0;
+    flex: 1 0 100%;
+  }
+}
+
+/* ==========================================================================
    Admin → Inventory reset (mass re-adjustment from a count sheet)
    ========================================================================== */
 .inv-reset {

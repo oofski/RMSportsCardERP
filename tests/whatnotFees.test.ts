@@ -43,8 +43,10 @@ mkdirSync(DIR, { recursive: true })
 
 /* eslint-disable @typescript-eslint/no-var-requires */
 const { getDb } = require('../src/main/db/database')
-const { createSession } = require('../src/main/db/streaming')
+const { addItem, createSession } = require('../src/main/db/streaming')
+const { createProduct } = require('../src/main/db/inventory')
 const { importLedger, streamingFinanceView } = require('../src/main/db/financeStreaming')
+const { deleteExpense, listExpenses, saveExpense } = require('../src/main/db/financeExpenses')
 const {
   deleteRatePeriod,
   listRatePeriods,
@@ -62,9 +64,11 @@ const {
   deriveSaleFee,
   effectiveFeeRates,
   itemPriceFromPayout,
+  mergeCogsItems,
   mergeRateSlices,
   overlappingRatePeriod,
   parseLedgerAmount,
+  pnlChecksum,
   ratePct,
   resolveFeeRates,
   sumDayFinance,
@@ -1374,6 +1378,399 @@ const merged = mergeRateSlices([
 ok(merged.length === 2, 'merging folds repeats of the same rate together', JSON.stringify(merged))
 ok(merged[0].rate === 0.04 && merged[1].rate === 0.06, 'sorted lowest rate first')
 ok(cents(merged[1].grossSales) === cents(100.03), 'and the money adds in cents, not floats', String(merged[1].grossSales))
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 9. two nights of a real show, itemised ===')
+// ---------------------------------------------------------------------------
+// THE SETUP FOR THE THREE THINGS BELOW, and it is one setup on purpose: cost of
+// goods per product, the marketplace split and a typed write-off all have to sum
+// over the SAME range and land on the same bottom line, so they are asserted
+// against one pair of nights rather than three convenient ones.
+//
+// The nights are RELATIVE TO NOW rather than fixed in July 2026, because a
+// stream line entered against a session that has already ended is a
+// reconciliation — it states what the stock cost instead of consuming layers —
+// and which of those two paths runs depends on the wall clock, not on the
+// fixture. Forty days back is history whenever this file is run.
+//
+// The rate periods are cleared first so this section prices at the defaults
+// however section 8 left them; nothing below asserts a rate, but a section whose
+// numbers depend on a previous section's leftovers is one that fails for the
+// wrong reason.
+for (const p of listRatePeriods()) deleteRatePeriod(p.id)
+
+const back = (days: number, hour: number, minute = 0): Date => {
+  const d = new Date()
+  d.setDate(d.getDate() - days)
+  d.setHours(hour, minute, 0, 0)
+  return d
+}
+const NIGHT_A = back(40, 19)
+const NIGHT_B = back(39, 19)
+const dayA = streamDateOf(NIGHT_A.toISOString())
+const dayB = streamDateOf(NIGHT_B.toISOString())
+
+const sA = createSession(
+  { title: 'Itemised A', startedAt: NIGHT_A.toISOString(), endedAt: back(40, 23).toISOString() },
+  null
+)
+const sB = createSession(
+  { title: 'Itemised B', startedAt: NIGHT_B.toISOString(), endedAt: back(39, 23).toISOString() },
+  null
+)
+ok(sA.ok && sB.ok, 'two more shows logged', JSON.stringify([sA.error, sB.error]))
+
+const mkProduct = (name: string, unitType: 'case' | 'box', boxesPerCase: number | null): string =>
+  createProduct(
+    {
+      sku: `WF-${name.replace(/\W+/g, '').slice(0, 12)}`,
+      upc: null,
+      name,
+      category: 'Baseball',
+      brand: '',
+      setName: '',
+      year: '',
+      unitType,
+      boxesPerCase,
+      packsPerBox: null,
+      giveawayItem: false,
+      unitCost: 0,
+      highBid: null,
+      salePrice: null,
+      reorderPoint: 0,
+      notes: null,
+      openingQuantity: 0,
+      openingLocation: 'RM'
+    },
+    null
+  ).id
+
+const ALPHA = 'WF Alpha Hobby 12-Box Case'
+const BRAVO = 'WF Bravo Hobby 8-Box Case'
+const GIFT = 'WF Gift Hobby Box'
+const alphaId = mkProduct(ALPHA, 'case', 12)
+const bravoId = mkProduct(BRAVO, 'case', 8)
+const giftId = mkProduct(GIFT, 'box', null)
+
+// ALPHA IS BROKEN ON BOTH NIGHTS. That is the case the aggregation exists for:
+// two cases on the first night and one on the second must read as ONE line worth
+// $3,600 over a range covering both, not as two lines of the same name.
+const lines = [
+  { session: sA.data.id, kind: 'break', product: alphaId, cases: 2, price: 1200 },
+  { session: sA.data.id, kind: 'break', product: bravoId, cases: 1, price: 900 },
+  { session: sA.data.id, kind: 'giveaway', product: giftId, boxes: 1, price: 150 },
+  { session: sB.data.id, kind: 'break', product: alphaId, cases: 1, price: 1200 }
+]
+for (const l of lines) {
+  const res = addItem(
+    {
+      sessionId: l.session,
+      kind: l.kind,
+      productId: l.product,
+      cases: l.cases,
+      boxes: l.boxes,
+      casePrice: l.price,
+      location: 'RM',
+      breakNumber: l.kind === 'break' ? 1 : null
+    },
+    null
+  )
+  ok(res.ok, `  ${l.kind} line accepted`, res.ok ? '' : res.error)
+}
+
+// The ledger for those two nights. Night A carries a WHOLE PRODUCT sale beside a
+// dozen small break spots; night B carries spots only, so the marketplace line
+// has to be absent there and present next door.
+const PRODUCT_MSG = 'Earnings for selling a 2026 WF Marketplace Sealed Hobby Box'
+const NIGHT_A_ROWS: Line[] = [
+  ...Array.from({ length: 12 }, (_, i) => ({
+    when: back(40, 20, i),
+    amount: 5,
+    message: spotMsg(1, 'Boston Red Sox'),
+    type: 'SALES'
+  })),
+  { when: back(40, 21), amount: 600, message: PRODUCT_MSG, type: 'SALES' }
+]
+const NIGHT_B_ROWS: Line[] = [
+  { when: back(39, 20), amount: 40, message: spotMsg(2, 'New York Yankees'), type: 'SALES' },
+  { when: back(39, 20, 1), amount: 60, message: spotMsg(2, 'Chicago Cubs'), type: 'SALES' }
+]
+const csv9 = join(DIR, 'itemised.csv')
+writeFileSync(csv9, csvOf([...NIGHT_A_ROWS, ...NIGHT_B_ROWS]), 'utf8')
+const imported9 = importLedger(csv9, null)
+ok(imported9.ok, 'the two nights imported', imported9.ok ? '' : imported9.error)
+
+const viewOf = (): any => streamingFinanceView()
+const pick = (v: any, d: string): any => v.days.find((x: any) => x.streamDate === d)
+let v9 = viewOf()
+ok(v9.reconciled, 'the whole view still reconciles', String(v9.reconcileNote))
+
+let nightA = pick(v9, dayA)
+let nightB = pick(v9, dayB)
+ok(!!nightA && !!nightB, 'both new nights are in the P&L')
+
+// ---------------------------------------------------------------------------
+console.log('\n--- 9a. cost of goods, one line per product ---')
+// ---------------------------------------------------------------------------
+const cogsOf = (row: any): any[] => buildPnl(row).find((s: any) => s.key === 'cogs').lines
+const sumLines = (ls: any[]): number => ls.reduce((n: number, l: any) => n + cents(l.amount), 0)
+
+const aLines = cogsOf(nightA)
+ok(aLines.length === 3, 'night A lists three products, not two totals', JSON.stringify(aLines.map((l: any) => l.label)))
+ok(sumLines(aLines) === cents(nightA.cogs), 'and the lines add up to the day cogs exactly', `${sumLines(aLines)} vs ${cents(nightA.cogs)}`)
+ok(cents(nightA.cogs) === cents(-(2400 + 900 + 150)), 'which is what the three lines cost', String(nightA.cogs))
+
+const alphaA = aLines.find((l: any) => l.label === ALPHA)
+const giftA = aLines.find((l: any) => l.label === GIFT)
+ok(!!alphaA && cents(alphaA.amount) === cents(-2400), 'the two ALPHA cases are one line at $2,400', JSON.stringify(alphaA))
+ok(alphaA.amount < 0, 'and it is booked as a cost')
+// THE DISTINCTION THAT MUST NOT BE LOST SILENTLY. A giveaway is stock that left
+// with nothing sold against it; a break is stock consumed to make the revenue
+// two lines up. Both are cost of goods, so they share a section — but the
+// giveaway says what it was on the row that is one.
+ok(!!giftA && cents(giftA.amount) === cents(-150), 'the giveaway is its own line', JSON.stringify(giftA))
+ok(giftA.detail === 'given away', 'marked as given away rather than broken', String(giftA.detail))
+ok(!alphaA.detail, 'while a break carries no such mark', String(alphaA.detail))
+ok(
+  aLines[0].label === ALPHA,
+  'biggest cost first, so a cap would only ever roll up the small stuff',
+  aLines[0].label
+)
+
+const bLines = cogsOf(nightB)
+ok(bLines.length === 1, 'night B lists the one product it broke', JSON.stringify(bLines.map((l: any) => l.label)))
+ok(sumLines(bLines) === cents(nightB.cogs), 'and still sums to that day cogs')
+
+// THE AGGREGATION. A range over both nights folds ALPHA into ONE line holding
+// the sum, which is the whole of the owner's instruction for a multi-day view.
+const span9 = sumDayFinance([nightA, nightB])
+const spanLines = cogsOf(span9)
+ok(spanLines.length === 3, 'the two-night range still lists three products', JSON.stringify(spanLines.map((l: any) => l.label)))
+const alphaSpan = spanLines.filter((l: any) => l.label === ALPHA)
+ok(alphaSpan.length === 1, 'ALPHA appears ONCE across the range, not once per night', String(alphaSpan.length))
+ok(cents(alphaSpan[0].amount) === cents(-3600), 'holding both nights added together', String(alphaSpan[0].amount))
+ok(sumLines(spanLines) === cents(span9.cogs), 'and the range lines sum to the range cogs', `${sumLines(spanLines)} vs ${cents(span9.cogs)}`)
+ok(cents(span9.cogs) === cents(nightA.cogs) + cents(nightB.cogs), 'which is the two days added, to the cent')
+// The same thing through the OTHER accumulator — main builds the weeks and the
+// grand total with its own rollup, and a breakdown carried by hand in one of the
+// two and forgotten in the other is exactly the drift this asserts against.
+const wk = v9.weeks.find((w: any) => w.from <= dayA && w.to >= dayA)
+ok(!!wk && Array.isArray(wk.cogsBreakdown), "main's own week rollup carries the breakdown too")
+ok(
+  sumLines(cogsOf(wk)) === cents(wk.cogs),
+  'and its lines sum to the week cogs',
+  `${sumLines(cogsOf(wk))} vs ${cents(wk.cogs)}`
+)
+
+const checksumOk = (row: any, what: string): void => {
+  const sections = buildPnl(row)
+  ok(
+    cents(pnlChecksum(sections)) === cents(row.netProfit),
+    `  the ${what} statement still sums to its net profit`,
+    `${pnlChecksum(sections)} vs ${row.netProfit}`
+  )
+}
+checksumOk(nightA, 'night A')
+checksumOk(nightB, 'night B')
+checksumOk(span9, 'two-night range')
+checksumOk(v9.totals, 'all-time')
+
+// --- the three edges of the section, at the contract ------------------------
+//
+// Straight through `buildPnl`, because each of these is a shape the database
+// cannot easily be pushed into and every one of them ends in the same place: the
+// section subtotal is `cogs`, whatever the lines look like.
+const cogsShape = (row: any): any => buildPnl(row).find((s: any) => s.key === 'cogs')
+const bare = (over: any): any => ({
+  netSales: 0, grossSales: 0, saleCount: 0, tips: 0, bonuses: 0, totalRevenue: 0,
+  unclassified: 0, feeSaleCount: 0, breakCost: 0, giveawayCost: 0, cogs: 0, grossProfit: 0,
+  whatnotFee: 0, processingFee: 0, totalFees: 0, shippingSubsidy: 0, shippingCharges: 0,
+  giveawayShipping: 0, refundShipping: 0, packingSupplies: 0, netShipping: 0,
+  showBoost: 0, reversals: 0, netProfit: 0, ...over
+})
+
+// A build old enough to send the two totals and no itemisation prints what this
+// section always printed.
+const legacyCogs = cogsShape(bare({ breakCost: -500, giveawayCost: -20, cogs: -520, netProfit: -520 }))
+ok(
+  legacyCogs.lines.map((l: any) => l.key).join(',') === 'breakCost,giveawayCost',
+  'a day with no breakdown falls back to the two totals',
+  JSON.stringify(legacyCogs.lines.map((l: any) => l.key))
+)
+ok(sumLines(legacyCogs.lines) === cents(-520), 'which still add to cogs')
+
+// A LONG SHOW. Thirty products is more than a section should print, so the tail
+// rolls into one line that carries its money — the cap changes how many lines
+// there are and never what they add up to.
+const many = Array.from({ length: 30 }, (_, i) => ({
+  kind: 'break',
+  name: `Long Show Product ${String(i + 1).padStart(2, '0')}`,
+  amount: -(i + 1)
+}))
+const manyTotal = -((30 * 31) / 2)
+const manyCogs = cogsShape(bare({ cogsBreakdown: many, cogs: manyTotal, netProfit: manyTotal }))
+ok(manyCogs.lines.length === 26, 'thirty products print as 25 lines and a roll-up', String(manyCogs.lines.length))
+ok(manyCogs.lines[25].key === 'cogsRest', 'the last line is the roll-up', manyCogs.lines[25].key)
+ok(manyCogs.lines[25].label === '5 other products', 'and says how many it stands for', manyCogs.lines[25].label)
+ok(sumLines(manyCogs.lines) === cents(manyTotal), 'and the section still adds to cogs to the cent',
+   `${sumLines(manyCogs.lines)} vs ${cents(manyTotal)}`)
+ok(cents(manyCogs.subtotal) === cents(manyTotal), 'as does its subtotal')
+
+// A breakdown that does not account for the whole cost — only reachable through
+// a renderer and a main built from different versions. The gap is PRINTED rather
+// than left as a subtotal quietly larger than its lines.
+const shortCogs = cogsShape(
+  bare({ cogsBreakdown: [{ kind: 'break', name: 'Only Product', amount: -100 }], cogs: -160, netProfit: -160 })
+)
+ok(!!shortCogs.lines.find((l: any) => l.key === 'cogsUnitemised'),
+   'an unaccounted-for cost gets a line of its own', JSON.stringify(shortCogs.lines.map((l: any) => l.key)))
+ok(sumLines(shortCogs.lines) === cents(-160), 'so the section equals cogs even then')
+
+// The merge keeps the two ACTS apart. One product both broken and given away is
+// two lines; folding them would make a product that was half given away read as
+// a product that sold.
+const bothWays = mergeCogsItems([
+  { kind: 'break', name: 'Same Product', amount: -40 },
+  { kind: 'giveaway', name: 'Same Product', amount: -10 },
+  { kind: 'break', name: 'Same Product', amount: -2.01 }
+])
+ok(bothWays.length === 2, 'break and giveaway of one product stay two lines', JSON.stringify(bothWays))
+ok(cents(bothWays[0].amount) === cents(-42.01), 'with the two breaks folded in cents', String(bothWays[0].amount))
+
+// ---------------------------------------------------------------------------
+console.log('\n--- 9b. marketplace orders, on their own revenue line ---')
+// ---------------------------------------------------------------------------
+const revOf = (row: any): any => buildPnl(row).find((s: any) => s.key === 'revenue')
+const revA = revOf(nightA)
+const revB = revOf(nightB)
+const mktA = revA.lines.find((l: any) => l.key === 'marketplace')
+const mktB = revB.lines.find((l: any) => l.key === 'marketplace')
+
+ok(!!mktA && !mktA.empty, 'night A carries a marketplace line', JSON.stringify(mktA))
+ok(!!mktB && mktB.empty, 'night B has one at zero, which the statement hides', JSON.stringify(mktB))
+ok(revA.lines.find((l: any) => l.key === 'sales').label === 'Break spots',
+   'the sales line says what it is once something is split off it',
+   revA.lines.find((l: any) => l.key === 'sales').label)
+ok(revB.lines.find((l: any) => l.key === 'sales').label === 'Sales',
+   'and stays plain "Sales" on a night with nothing to split')
+
+// THE SUBTOTAL STILL EQUALS ITS LINES. This is the assertion the whole design of
+// the split hangs on: the marketplace figure is subtracted from the sales line
+// rather than added beside it, so Revenue is unchanged.
+const revSum = (s: any): number => s.lines.reduce((n: number, l: any) => n + cents(l.amount), 0)
+ok(revSum(revA) === cents(nightA.totalRevenue), 'night A revenue lines sum to total revenue', `${revSum(revA)} vs ${cents(nightA.totalRevenue)}`)
+ok(revSum(revB) === cents(nightB.totalRevenue), 'and so do night B\'s')
+ok(cents(nightA.grossSales) === cents(mktA.amount) + cents(revA.lines.find((l: any) => l.key === 'sales').amount),
+   'the two sales lines are exactly the derived gross, split')
+
+// GROSS, NOT NET. `productSales` is the ledger's own figure for those rows and
+// stays that; the line prints what the buyer paid.
+ok(cents(mktA.amount) === cents(nightA.productGrossSales), 'the line is the derived marketplace gross')
+ok(cents(nightA.productGrossSales) > cents(nightA.productSales), 'which is more than the net Whatnot paid for it',
+   `${nightA.productGrossSales} vs ${nightA.productSales}`)
+
+// THE ARITHMETIC CHOICE, PINNED. Splitting the day's gross in proportion to the
+// net would be the easy option and it is wrong: the flat card charge is levied
+// once per ORDER, so one $600 box and twelve $5 spots do not gross up at the
+// same ratio their nets sit in. The gap is real money, and it is why the figure
+// is derived from the marketplace rows themselves.
+const proportional = Math.round((cents(nightA.grossSales) * cents(nightA.productSales)) / cents(nightA.netSales))
+ok(
+  Math.abs(proportional - cents(nightA.productGrossSales)) > 1,
+  `a proportional split would have said ${proportional} where the rows say ${cents(nightA.productGrossSales)}`,
+  `${proportional} vs ${cents(nightA.productGrossSales)}`
+)
+
+// NAMED, AND THE NAMES MERGE. One sale, one product, so the detail names it —
+// and a range covering both nights still names it once.
+ok(nightA.marketplaceBreakdown.length === 1, 'one product behind night A', JSON.stringify(nightA.marketplaceBreakdown))
+ok(mktA.detail.includes('WF Marketplace Sealed Hobby Box'), 'and the line names it', mktA.detail)
+const revSpan = revOf(span9)
+const mktSpan = revSpan.lines.find((l: any) => l.key === 'marketplace')
+ok(cents(mktSpan.amount) === cents(mktA.amount), 'the range carries night A\'s marketplace money and no more')
+ok(span9.marketplaceBreakdown.length === 1, 'still one product over the range', JSON.stringify(span9.marketplaceBreakdown))
+ok(revSum(revSpan) === cents(span9.totalRevenue), 'and the range revenue lines still sum to its subtotal')
+
+// ---------------------------------------------------------------------------
+console.log('\n--- 9c. a general expense somebody typed ---')
+// ---------------------------------------------------------------------------
+ok(listExpenses().length === 0, 'nothing is written off out of the box')
+
+// Refused before it can reach a P&L. Each of these is a way a form can hand main
+// something that would otherwise sit on a day looking like a decision.
+const refusals: Array<[any, string]> = [
+  [{ streamDate: dayA, amount: Number.NaN, label: 'blank' }, 'a blank amount'],
+  [{ streamDate: dayA, amount: 0, label: 'zero' }, 'a zero'],
+  [{ streamDate: dayA, amount: -20, label: 'negative' }, 'a negative'],
+  [{ streamDate: dayA, amount: 20, label: '   ' }, 'no description'],
+  [{ streamDate: 'not-a-day', amount: 20, label: 'bad day' }, 'a date that is not one']
+]
+for (const [input, what] of refusals) {
+  const res = saveExpense(input, null)
+  ok(!res.ok, `  ${what} is refused`, JSON.stringify(res))
+}
+ok(listExpenses().length === 0, 'and none of them was stored')
+
+const beforeA = cents(nightA.netProfit)
+const beforeB = cents(nightB.netProfit)
+const e1 = saveExpense({ streamDate: dayA, amount: 24.99, label: 'Opened a box on air' }, null)
+ok(e1.ok, 'a real one saves', e1.ok ? '' : e1.error)
+const e2 = saveExpense({ streamDate: dayB, amount: 10, label: 'Pack given to a regular' }, null)
+ok(e2.ok, 'and a second, on the other night')
+
+v9 = viewOf()
+ok(v9.reconciled, 'the view STILL reconciles with money in it that no import brought', String(v9.reconcileNote))
+nightA = pick(v9, dayA)
+nightB = pick(v9, dayB)
+
+ok(cents(nightA.generalExpenses) === cents(-24.99), 'it lands NEGATIVE on the day', String(nightA.generalExpenses))
+ok(nightA.generalExpenseCount === 1, 'with the entry counted')
+ok(cents(nightA.netProfit) === beforeA - cents(24.99), 'and net profit is lower by exactly that much',
+   `${nightA.netProfit} vs ${beforeA / 100}`)
+ok(cents(nightB.netProfit) === beforeB - cents(10), 'the other night moves by its own entry and no more')
+
+const genA = buildPnl(nightA).find((s: any) => s.key === 'general')
+ok(!!genA, 'the statement has a General expenses section of its own')
+ok(cents(genA.subtotal) === cents(-24.99), 'holding the day figure', String(genA.subtotal))
+ok(genA.lines.length === 1 && !genA.lines[0].empty, 'with one line on it')
+ok(/1 entry/.test(String(genA.lines[0].detail)), 'that says how many entries are behind it', String(genA.lines[0].detail))
+// It is deliberately NOT under "Other show costs": that section is what Whatnot
+// charged and can be checked line for line against a Whatnot screen.
+const showA = buildPnl(nightA).find((s: any) => s.key === 'showCosts')
+ok(cents(showA.subtotal) === cents(nightA.showBoost), 'and Show costs still holds only what the platform charged',
+   `${showA.subtotal} vs ${nightA.showBoost}`)
+
+checksumOk(nightA, 'night A with an expense')
+checksumOk(nightB, 'night B with an expense')
+
+// IT SURVIVES A RANGE. Both entries, added, through the contract's accumulator.
+const span9b = sumDayFinance([nightA, nightB])
+ok(cents(span9b.generalExpenses) === cents(-34.99), 'a range sums both write-offs', String(span9b.generalExpenses))
+ok(span9b.generalExpenseCount === 2, 'and both counts')
+checksumOk(span9b, 'two-night range with expenses')
+checksumOk(v9.totals, 'all-time with expenses')
+
+// A DAY THAT IS NOTHING BUT A WRITE-OFF. Money was spent on it, so it belongs on
+// the calendar — and a day with no ledger row behind it is the sharpest test of
+// the reconciliation, which has to strip a cost the ledger never knew about.
+const lonely = back(60, 12)
+const lonelyDay = streamDateOf(lonely.toISOString())
+ok(saveExpense({ streamDate: lonelyDay, amount: 5, label: 'Cracked a pack' }, null).ok,
+   'an expense saves against a day with no show and no rows')
+v9 = viewOf()
+const L = pick(v9, lonelyDay)
+ok(!!L, 'that day now exists in the P&L', String(lonelyDay))
+ok(cents(L.netProfit) === cents(-5), 'and its whole bottom line is the write-off', String(L.netProfit))
+ok(v9.reconciled, 'with the ledger reconciliation untouched by it', String(v9.reconcileNote))
+checksumOk(L, 'expense-only day')
+
+// Removing one gives the money back, through the same path.
+const removed = deleteExpense(listExpenses().find((e: any) => e.streamDate === lonelyDay).id)
+ok(removed.ok, 'an entry can be removed', removed.ok ? '' : removed.error)
+v9 = viewOf()
+ok(!pick(v9, lonelyDay), 'and the day it was the only thing on goes with it')
+ok(v9.reconciled, 'still reconciled afterwards')
+ok(listExpenses().length === 2, 'the other two are untouched', String(listExpenses().length))
 
 console.log(`\n${pass} passed, ${fail} failed${skipped ? `, ${skipped} skipped` : ''}\n`)
 process.exit(fail === 0 ? 0 : 1)

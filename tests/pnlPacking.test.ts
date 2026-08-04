@@ -120,6 +120,26 @@ ok(shipSec.subtotalLabel === 'Net shipping & packing', 'renamed to say what it n
 ok(Math.abs(shipSec.subtotal - day.netShipping) < 0.005,
    'the section subtotal is netShipping', `${shipSec.subtotal} vs ${day.netShipping}`)
 
+// A DAY WITH NOTHING IN THE NEW SECTIONS. This show has no stream lines, no
+// marketplace order and nothing written off, which is the ordinary state — and
+// the sections that carry those three must still be present and still reconcile.
+// A section that vanished when it was empty would take its subtotal out of the
+// checksum with it, and the statement would stop adding up on screen for the
+// most common day there is.
+const genSec = sections.find((s: any) => s.key === 'general')
+ok(!!genSec && genSec.subtotal === 0, 'the General expenses section is there and at zero',
+   JSON.stringify(genSec?.subtotal))
+const revSec = sections.find((s: any) => s.key === 'revenue')
+const mktLine = revSec.lines.find((l: any) => l.key === 'marketplace')
+ok(!!mktLine && mktLine.empty, 'the marketplace line is present and empty, so it is hidden',
+   JSON.stringify(mktLine))
+ok(revSec.lines.find((l: any) => l.key === 'sales').label === 'Sales',
+   'and the sales line is not relabelled on a day with nothing split off it')
+const cogsSec = sections.find((s: any) => s.key === 'cogs')
+ok(cogsSec.lines.map((l: any) => l.key).join(',') === 'breakCost,giveawayCost',
+   'a day that broke nothing prints the two totals rather than an empty list',
+   JSON.stringify(cogsSec.lines.map((l: any) => l.key)))
+
 // Unticking gives the money back as well as the stock: the same code path, so
 // the two can never drift.
 console.log('\n=== untick ===')

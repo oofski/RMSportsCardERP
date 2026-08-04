@@ -21,6 +21,9 @@ import { IPC } from '@shared/ipc'
 import type { Result } from '@shared/types'
 import type { Permission } from '@shared/permissions'
 import type {
+  GeneralExpense,
+  GeneralExpenseInput,
+  GeneralExpenseResult,
   ImportDeleteImpact,
   LedgerImport,
   LedgerImportResult,
@@ -40,6 +43,7 @@ import {
   streamingFinanceView,
   type LedgerRowFilter
 } from './db/financeStreaming'
+import { deleteExpense, listExpenses, saveExpense } from './db/financeExpenses'
 import { deleteRatePeriod, listRatePeriods, saveRatePeriod } from './db/whatnotRates'
 import { currentUser } from './services/auth'
 
@@ -217,6 +221,59 @@ export function registerFinanceIpc(): void {
     try {
       requireManage()
       return deleteRatePeriod(str(id).trim())
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  // ---- General expenses ----------------------------------------------------
+  //
+  // A dollar amount typed against a business day — a pack opened for fun, a box
+  // written off. NOTHING HERE MOVES STOCK: recording an actual movement is the
+  // streaming giveaway flow's job, and the two must not be used for the same
+  // event or the pack is booked twice. Read like every other read; writes need
+  // `finance.manage`, because this figure comes straight off reported profit.
+  //
+  // Both writes hand back the entries AND the re-derived view, so the screen
+  // sees the reconciliation flag from the same derivation that just ran rather
+  // than from a second read that might disagree with it.
+
+  ipcMain.handle(IPC.finExpensesList, (): GeneralExpense[] =>
+    can('module.finance') ? listExpenses() : []
+  )
+
+  ipcMain.handle(
+    IPC.finExpenseSave,
+    (_e, input: GeneralExpenseInput): Result<GeneralExpenseResult> => {
+      try {
+        const actor = requireManage()
+        // `Number(...)` here rather than a cast: a form string that will not
+        // parse has to arrive as NaN and be REFUSED by the validator inside the
+        // write, not land as a zero-dollar expense sitting on a day.
+        const saved = saveExpense(
+          {
+            id: input?.id ? str(input.id).trim() : undefined,
+            streamDate: str(input?.streamDate).trim(),
+            amount: Number(input?.amount),
+            label: str(input?.label),
+            note: str(input?.note)
+          },
+          actor.id
+        )
+        if (!saved.ok || !saved.data) return { ok: false, error: saved.error ?? 'Not saved.' }
+        return { ok: true, data: { expenses: saved.data, view: streamingFinanceView() } }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  ipcMain.handle(IPC.finExpenseDelete, (_e, id: string): Result<GeneralExpenseResult> => {
+    try {
+      requireManage()
+      const done = deleteExpense(str(id).trim())
+      if (!done.ok || !done.data) return { ok: false, error: done.error ?? 'Not removed.' }
+      return { ok: true, data: { expenses: done.data, view: streamingFinanceView() } }
     } catch (err) {
       return fail(err)
     }

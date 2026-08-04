@@ -1,5 +1,8 @@
 import type { Result } from '@shared/types'
 import type {
+  GeneralExpense,
+  GeneralExpenseInput,
+  GeneralExpenseResult,
   ImportDeleteImpact,
   LedgerImport,
   LedgerImportResult,
@@ -52,6 +55,13 @@ export interface FinanceApi {
    *  next time the view is read — there is nothing to re-import. */
   saveRate(input: RatePeriodInput): Promise<Result<WhatnotRatePeriod[]>>
   deleteRate(id: string): Promise<Result<WhatnotRatePeriod[]>>
+  /** Costs typed against a business day — product opened, given away or written
+   *  off. A dollar amount only; nothing here moves stock. Both writes hand back
+   *  the entries and the re-derived view, because one of them changes the bottom
+   *  line of the day it lands on. */
+  expenses(): Promise<GeneralExpense[]>
+  saveExpense(input: GeneralExpenseInput): Promise<Result<GeneralExpenseResult>>
+  deleteExpense(id: string): Promise<Result<GeneralExpenseResult>>
 }
 
 /**

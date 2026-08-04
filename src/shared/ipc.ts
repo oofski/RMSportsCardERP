@@ -270,6 +270,11 @@ export const IPC = {
   finRatesList: 'finance:rates:list',
   finRateSave: 'finance:rates:save',
   finRateDelete: 'finance:rates:delete',
+  // Costs typed against a business day — product opened, given away or written
+  // off. A dollar amount only: nothing here moves stock.
+  finExpensesList: 'finance:expenses:list',
+  finExpenseSave: 'finance:expenses:save',
+  finExpenseDelete: 'finance:expenses:delete',
 
   // Email
   emailComposeInvite: 'email:compose-invite',

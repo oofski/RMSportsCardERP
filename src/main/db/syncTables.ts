@@ -105,6 +105,19 @@ export const SYNCED_TABLES: SyncedTable[] = [
   // order, and the rates screen shows both, which is the state somebody has to
   // resolve rather than one the app should silently pick a winner for.
   { table: 'whatnot_fee_periods', key: ['id'], tier: 0 },
+  // Synced, on the same argument that put the rate periods above it here: it
+  // changes the reported bottom line of a day. A laptop missing an entry the
+  // owner typed would show a HIGHER net profit for that night than the machine he
+  // typed it on, with nothing on either screen to say which was right — and this
+  // is the one figure in the P&L that no re-import can reconstruct, because it
+  // exists nowhere but in the row somebody wrote.
+  //
+  // It arbitrates cleanly. Each entry is a whole authored fact under a UUID
+  // nobody else mints, so last-write-wins only ever compares an entry against an
+  // older copy of ITSELF — there is no shared counter, no derived quantity and
+  // nothing another machine can be concurrently adding to. Tier 0: it points at
+  // nothing (its day is a date string, not a session id) and nothing points at it.
+  { table: 'finance_expenses', key: ['id'], tier: 0 },
   { table: 'stream_sessions', key: ['id'], tier: 0 },
   { table: 'purchase_orders', key: ['id'], tier: 0 },
   { table: 'inventory_resets', key: ['id'], tier: 0 },

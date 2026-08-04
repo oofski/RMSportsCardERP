@@ -140,6 +140,9 @@ import type {
   UpdateStreamSession
 } from '@shared/streaming'
 import type {
+  GeneralExpense,
+  GeneralExpenseInput,
+  GeneralExpenseResult,
   ImportDeleteImpact,
   LedgerImport,
   LedgerImportResult,
@@ -732,7 +735,20 @@ const api = {
     saveRate: (input: RatePeriodInput): Promise<Result<WhatnotRatePeriod[]>> =>
       ipcRenderer.invoke(IPC.finRateSave, input),
     deleteRate: (id: string): Promise<Result<WhatnotRatePeriod[]>> =>
-      ipcRenderer.invoke(IPC.finRateDelete, id)
+      ipcRenderer.invoke(IPC.finRateDelete, id),
+    /**
+     * Costs typed against a business day — a pack opened for fun, a box written
+     * off. A DOLLAR AMOUNT ONLY: nothing on this bridge moves stock, which is
+     * what separates it from the streaming giveaway flow.
+     *
+     * Both writes hand back the entries and the re-derived view together,
+     * because one of these changes the bottom line of the day it lands on.
+     */
+    expenses: (): Promise<GeneralExpense[]> => ipcRenderer.invoke(IPC.finExpensesList),
+    saveExpense: (input: GeneralExpenseInput): Promise<Result<GeneralExpenseResult>> =>
+      ipcRenderer.invoke(IPC.finExpenseSave, input),
+    deleteExpense: (id: string): Promise<Result<GeneralExpenseResult>> =>
+      ipcRenderer.invoke(IPC.finExpenseDelete, id)
   },
   email: {
     composeInvite: (

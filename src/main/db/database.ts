@@ -951,6 +951,41 @@ function migrate(database: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_whatnot_fee_periods_from
       ON whatnot_fee_periods (from_date);
 
+    -- v44: costs somebody TYPED against a business day.
+    --
+    -- A DOLLAR AMOUNT, NOT A STOCK MOVEMENT. A pack opened for fun, a box given
+    -- to a friend, a sleeve that walked. Recording an actual movement is what
+    -- the streaming giveaway flow already does -- it consumes FIFO layers, drops
+    -- the on-hand count and values itself at what those layers cost -- and this
+    -- table deliberately does none of that. It is for the loose case where
+    -- nobody is going to reconcile a pack against the shelf, and inventing a lot
+    -- consumption for it would put the count further from the truth. THE TWO
+    -- MUST NOT BE CONFLATED: a giveaway entered in Streaming and typed here as
+    -- well books the same pack twice.
+    --
+    -- amount is POSITIVE, exactly as entered, and the P&L reports it negative --
+    -- the same bargain stream_items makes with cost_total. A signed column would
+    -- let a stray minus turn a write-off into income with nothing to catch it.
+    --
+    -- stream_date is a BUSINESS day, the same key the P&L groups by, so an entry
+    -- against a night that ran past midnight sits with that night's takings.
+    -- Unconstrained: an expense can precede the ledger import that gives its day
+    -- any other rows, and refusing it then would mean the operator had to import
+    -- before they could record what they already knew.
+    CREATE TABLE IF NOT EXISTS finance_expenses (
+      id          TEXT PRIMARY KEY,
+      stream_date TEXT NOT NULL,
+      amount      REAL NOT NULL DEFAULT 0,
+      label       TEXT NOT NULL DEFAULT '',
+      note        TEXT,
+      created_at  TEXT NOT NULL,
+      created_by  TEXT,
+      updated_at  TEXT NOT NULL,
+      updated_by  TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_finance_expenses_day
+      ON finance_expenses (stream_date);
+
     -- =====================================================================
     -- v29: cloud sync
     -- =====================================================================
@@ -1745,6 +1780,15 @@ function migrate(database: Database.Database): void {
     database, 'whatnot_fee_periods', 'processing_flat_cents', 'INTEGER NOT NULL DEFAULT 30'
   )
   setMeta(database, 'schema_version', '43')
+
+  // v44: general expenses — the one figure on a day nobody imported.
+  //
+  // The table is created idempotently above and this version adds nothing else.
+  // There is deliberately no backfill: an empty table means no write-offs were
+  // recorded, which is the truth for every day that has ever been imported, and
+  // inferring one from a giveaway line would double-count the very stock movement
+  // this is explicitly NOT for.
+  setMeta(database, 'schema_version', '44')
 
   // Seed the product catalog once, then apply the on-hand snapshot once.
   seedCatalogIfNeeded(database)
