@@ -41,7 +41,8 @@ import { SHIP_SPORT_LABELS } from '@shared/shippingTypes'
 import {
   createNullTeamMatcher,
   createTeamMatcher,
-  detectSport,
+  detectSportDetailed,
+  isAnyLeagueTeam,
   type TeamMatcher
 } from './teams'
 
@@ -101,22 +102,73 @@ const RE_SUFFIX_JOINED = /^(?:[ \t]*[-–—.][ \t]*|)([A-Za-z]{1,2})(?![A-Za-z0
  */
 const RE_SUFFIX_SPACED = /^[ \t]+([A-Za-z])[ \t]*(?=$|\n)/
 
-/** The printed label ("11A", "3"), its numeric part, and where it ends. */
+/**
+ * Nothing but the punctuation a slip uses to fence one field off from another.
+ * A line made only of this says nothing about what is on it.
+ */
+const RE_SEPARATORS_ONLY = /^[\s\-–—.,:;|•·*_]*$/
+
+/**
+ * A break label is either a MARKER or a PREFIX, and which one it is decides
+ * where the team is allowed to come from.
+ *
+ * Whatnot changed the packing slip. The old one wrote the break inline at the
+ * end of the description line, with the team trailing it:
+ *
+ *     4x 2026 FINEST BASEBALL HOBBY BOX (NEW RELEASE!)- Break #12 - Boston Red Sox
+ *
+ * The new one gives the team a column of its own and prints the break as a
+ * bracketed marker under the product:
+ *
+ *     1  San Francisco Giants   Order 1237174001   $28.00
+ *                               4x 2026 CHROME BASEBAL JUMBO BOX (HALF CASE!)
+ *                               [Break 1]
+ *
+ * Taking the text after the label as the team is right for the first shape and
+ * catastrophic for the second, where the only thing after "Break 1" is the
+ * closing bracket. That is exactly what it cost: every card on a new-layout
+ * slip came out named "]", two of them in one break reported as the same team
+ * claimed twice, and — because "]" scores nothing in any league — the league
+ * auto-detection found no evidence at all and fell back to its first entry, so
+ * an MLB show imported as the NFL with not one team resolved.
+ *
+ * Hence this returns which of the two shapes it read. A marker contributes the
+ * break label and NOTHING else; the team then has to come from the row's own
+ * name column. Both shapes stay live — months of old slips are still re-imported.
+ */
 export function readBreakLabel(
   text: string
-): { label: string; number: number; end: number } | null {
+): { label: string; number: number; end: number; marker: boolean } | null {
   const head = RE_BREAK_HEAD.exec(text)
   if (!head) return null
   const number = Number(head[1])
-  const headEnd = (head.index ?? 0) + head[0].length
+  const headStart = head.index ?? 0
+  const headEnd = headStart + head[0].length
   const tail = text.slice(headEnd)
   const m = RE_SUFFIX_JOINED.exec(tail) ?? RE_SUFFIX_SPACED.exec(tail)
   const suffix = m ? m[1].toUpperCase() : ''
-  return {
-    label: `${number}${suffix}`,
-    number,
-    end: headEnd + (m ? m[0].length : 0)
-  }
+  const end = headEnd + (m ? m[0].length : 0)
+
+  // Judge the label against ITS OWN line. The parser hands whole multi-line
+  // windows in here, and what sits two lines above tells us nothing about how
+  // this label was written.
+  const lineStart = text.lastIndexOf('\n', headStart) + 1
+  const nextBreak = text.indexOf('\n', end)
+  const before = text.slice(lineStart, headStart)
+  const after = text.slice(end, nextBreak < 0 ? text.length : nextBreak)
+
+  // CLOSED, not merely opened. A description that reads "…(Break #12 - Boston
+  // Red Sox)" opens a bracket before the label and still puts the team after
+  // it, so an opening bracket proves nothing — a bracket that closes straight
+  // after the label does. This is what catches `[Break 1]`, `[Break 11A]`,
+  // `[ Break 1 ]` and `(Break 1)` however the columns get joined up.
+  const closed = /^[ \t]*[\])}>]/.test(after)
+  // Or the label is the entire line, with nothing but separators either side.
+  // A prefix always has its team behind it, so a label with empty air on both
+  // sides is never a prefix, whatever punctuation Whatnot drops next.
+  const alone = RE_SEPARATORS_ONLY.test(before) && RE_SEPARATORS_ONLY.test(after)
+
+  return { label: `${number}${suffix}`, number, end, marker: closed || alone }
 }
 
 /**
@@ -356,6 +408,38 @@ function stripQty(raw: string): string {
 /** Strip every `$1,250.00`-style token (used on the "team before Order" side). */
 function stripPrices(raw: string): string {
   return raw.replace(RE_PRICE_GLOBAL, ' ')
+}
+
+/**
+ * Cut any break marker out of a string that is about to be read as a team.
+ *
+ * The line grouper joins whatever shares a baseline, so a marker printed in the
+ * description column can land welded to the row above or below it — "[Break 1] 1
+ * Arizona Diamondbacks Order …". No team is called Break-anything, so removing
+ * the marker wherever it turns up costs nothing and saves the name it is stuck
+ * to. Same `{1,3}` digit cap as everywhere else, so a 10-digit order id is never
+ * mistaken for one.
+ */
+const RE_BREAK_FRAGMENT = /[[({<]?\s*\bBreak\s*#?\s*\d{1,3}[A-Za-z]{0,2}\s*[\])}>]?/gi
+function stripBreakMarkers(raw: string): string {
+  return raw.replace(RE_BREAK_FRAGMENT, ' ')
+}
+
+/**
+ * Can this string name a team AT ALL?
+ *
+ * A guard worth having on its own account, independent of any one layout: "]",
+ * "[", "-" and "" are what is left over when a slice lands between two columns,
+ * and every one of them used to sail through and be printed on the pick screen
+ * as the team somebody was supposed to find in a box.
+ *
+ * Two alphanumerics, not two letters. A slot genuinely titled "#30" exists in
+ * the July export — it resolves to no team and is warned about and kept exactly
+ * as printed, which is right. Dropping it because it has no letters would turn a
+ * real, findable card into "Unknown team".
+ */
+function isTeamCandidateText(raw: string): boolean {
+  return (raw.match(/[A-Za-z0-9]/g)?.length ?? 0) >= 2
 }
 
 /** Cut a candidate at the first `$` / `Order` and keep only its first line. */
@@ -799,21 +883,56 @@ export function parsePackingSlip(
     const breakNumber = parsedBreak?.number ?? null
 
     // team — two real layouts; prefer whichever resolves canonically.
+    //
+    // Nothing here trusts position on its own: a candidate is only a team once
+    // it can name one (isTeamCandidateText) and, for the last-resort source
+    // below, once teams.ts confirms it.
     const candidates: string[] = []
-    if (parsedBreak) {
-      // From the END of the label, not the end of the number: on "#11A" the
-      // team candidate must not start with the stray "A".
-      const candidate = truncateCandidate(fullWindow.slice(parsedBreak.end))
-      if (candidate) candidates.push(candidate)
+    const offer = (candidate: string): void => {
+      if (candidate && isTeamCandidateText(candidate)) candidates.push(candidate)
+    }
+    if (parsedBreak && !parsedBreak.marker) {
+      // The PREFIX form only. From the END of the label, not the end of the
+      // number: on "#11A" the team candidate must not start with the stray "A".
+      //
+      // A marker contributes no team by construction — see readBreakLabel. The
+      // text after "[Break 1" is "]", and reading that as the team is the whole
+      // bug: it is not a bad team name, it is the next column's punctuation.
+      offer(truncateCandidate(fullWindow.slice(parsedBreak.end)))
     }
     // Test the noise guard BEFORE stripQty: it anchors on the leading digits
     // ("1 Item"), and stripping the quantity first leaves a bare "Item" that
     // sails through and becomes a team name in the pick list.
-    const beforePre = cleanTeamText(stripPrices(beforeOrder))
+    const beforePre = cleanTeamText(stripBreakMarkers(stripPrices(beforeOrder)))
     const beforeCandidate = RE_ITEMS_NOISE.test(beforePre)
       ? ''
       : cleanTeamText(stripQty(beforePre))
-    if (beforeCandidate) candidates.push(beforeCandidate)
+    offer(beforeCandidate)
+
+    // Last resort, and only when the row itself offered nothing readable: a
+    // line inside this order's window that teams.ts will vouch for.
+    //
+    // The row's name column is where the team belongs, but the line grouper
+    // builds rows out of baselines and a row set in two type sizes can still be
+    // torn — that is the failure LINE_TOLERANCE exists to fight, and the new
+    // layout gives it a second column to tear. A torn name sorts just BELOW its
+    // own order line (the larger type sits fractionally lower), so it lands
+    // inside this window and nowhere else.
+    //
+    // Confirmation is what makes this safe to do at all. `isAnyLeagueTeam` is
+    // exact-and-alias only, never fuzzy, and it is league-blind on purpose: the
+    // harvest pass that DETECTS the league runs with a null matcher, so without
+    // it this rescue would be blind during exactly the pass that needs it most.
+    if (!candidates.length) {
+      for (const line of tail) {
+        const text = cleanTeamText(stripQty(cleanTeamText(stripBreakMarkers(stripPrices(line)))))
+        if (!isTeamCandidateText(text)) continue
+        if (matcher?.matchTeam(text).team || isAnyLeagueTeam(text)) {
+          candidates.push(text)
+          break
+        }
+      }
+    }
 
     let team: string | null = null
     let teamRaw: string | null = null
@@ -958,6 +1077,19 @@ function emitCustomerRecords(
             page: pack.page,
             message: `Could not match “${pack.team}” (@${handle}, break #${label}) to a ${matcher.sport.toUpperCase()} team — kept as printed.`,
             rawText: pack.team
+          })
+        }
+        // A card in a break whose name column read as nothing at all. It used
+        // to become a silent "Unknown team", which is the worst of both worlds:
+        // the card is on the pick list with a name nobody can find, and nothing
+        // says the parser never had a name to begin with. Now that punctuation
+        // fragments are refused rather than accepted, this is where a slip the
+        // parser genuinely could not read surfaces — so it has to say so.
+        if (!pack.team) {
+          warnings.push({
+            page: pack.page,
+            message: `No team could be read for order ${pack.orderId} (@${handle}, break #${label}) — the card is kept as “Unknown team”, please check the slip.`,
+            rawText: null
           })
         }
         if (teamsSeen.has(teamName)) {
@@ -1195,7 +1327,28 @@ export function parsePages(pages: string[], options: ParsePagesOptions = {}): Sh
 
   // Bind the league ONCE for the whole upload.
   const requested: ShipSportOption = options.sport ?? 'auto'
-  const sport: ShipSport = requested === 'auto' ? detectSport(collectTeamCandidates(groups)) : requested
+  let sport: ShipSport
+  // Detection with NO evidence is not detection, it is the tie-break: every
+  // league scored zero and `SHIP_SPORTS[0]` won by being first in the list.
+  // That is how a baseball show came out labelled NFL the moment the new layout
+  // stopped yielding team names, and the only trace of it was a pile of
+  // unmatched-team warnings that read like bad data rather than a wrong league.
+  // Say it plainly instead — the operator can pick the league by hand.
+  let blindDetection: ShipWarningInput | null = null
+  if (requested === 'auto') {
+    const harvested = collectTeamCandidates(groups)
+    const detection = detectSportDetailed(harvested)
+    sport = detection.sport
+    if (harvested.length > 0 && Object.values(detection.scores).every((s) => s === 0)) {
+      blindDetection = {
+        page: null,
+        message: `None of the ${harvested.length} names on these slips resolved to a team in any league, so the league could not be detected and everything was read as ${sport.toUpperCase()}. Choose the league by hand and re-import if the teams look wrong.`,
+        rawText: null
+      }
+    }
+  } else {
+    sport = requested
+  }
   const matcher = createTeamMatcher(sport)
 
   const customers: ShipCustomer[] = []
@@ -1203,6 +1356,7 @@ export function parsePages(pages: string[], options: ParsePagesOptions = {}): Sh
   const teamSlots: ShipTeamSlotDraft[] = []
   const orders: ShipOrder[] = []
   const warnings: ShipWarningInput[] = [...groupWarnings]
+  if (blindDetection) warnings.push(blindDetection)
 
   let processedPages = 0
   groups.forEach((group, index) => {

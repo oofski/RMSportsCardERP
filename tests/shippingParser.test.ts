@@ -156,6 +156,223 @@ ok(
   JSON.stringify(split.warnings.map((w) => w.message))
 )
 
+// --- 2d. the bracketed break marker: the team is a COLUMN, not a suffix ----
+//
+// Whatnot changed the packing slip. The break used to be written inline at the
+// end of the description with the team trailing it; now the team has a column
+// of its own and the break prints as `[Break 1]` under the product. Reading the
+// text after the label as the team is right for the first and wrong for the
+// second — the only thing after "Break 1" is "]".
+//
+// What that cost, measured on a reconstruction of the real slip: every card
+// came out named "]", the two in break 1 reported as one team claimed twice,
+// and because "]" scores nothing in any league the auto-detected sport fell
+// back to its first entry — a baseball show imported as the NFL with not one
+// team resolved. So both halves are pinned here: the team, and the league.
+const twoColSlip = (rows: string[], handle = 'shaunsir03'): string =>
+  [
+    'Whatnot Packing Slip 1/1',
+    `To: ${handle} From: rm_cardz`,
+    'Shaun Sir',
+    '5 Oak Ave. Reno, NV. 89501. US',
+    'QTY Name & Description Attributes Subtotal',
+    ...rows,
+    '2 Items $60.00',
+    'USPS Ground Advantage #9300120762602315706745 7.0 oz'
+  ].join('\n')
+
+const BRACKETED = twoColSlip([
+  '1 San Francisco Giants Order 1237174001 $28.00',
+  '4x 2026 CHROME BASEBAL JUMBO BOX (HALF CASE!)',
+  '[Break 1]',
+  '1 Arizona Diamondbacks Order 1237175471 $32.00',
+  '4x 2026 CHROME BASEBAL JUMBO BOX (HALF CASE!)',
+  '[Break 1]'
+])
+
+const bracketed = parsePages([BRACKETED], { sport: 'mlb' })
+const bracketedTeams = bracketed.teamSlots.map((s) => s.teamName).sort()
+ok(
+  bracketedTeams.join(' | ') === 'Arizona Diamondbacks | San Francisco Giants',
+  'the bracketed layout reads the team column, not the bracket',
+  JSON.stringify(bracketedTeams)
+)
+ok(
+  bracketed.teamSlots.every((s) => s.breakLabel === '1'),
+  'and both cards land in break 1',
+  JSON.stringify(bracketed.teamSlots.map((s) => s.breakLabel))
+)
+ok(
+  bracketed.warnings.length === 0,
+  'with nothing to warn about',
+  JSON.stringify(bracketed.warnings.map((w) => w.message))
+)
+
+// The league half. `auto` is what the Upload screen sends by default, and it
+// harvests through a null matcher — so a layout that yields only punctuation
+// leaves detection with no evidence at all and it silently picks the first
+// league in the list.
+const bracketedAuto = parsePages([BRACKETED], { sport: 'auto' })
+ok(bracketedAuto.sport === 'mlb', 'and the league is detected from it, not guessed',
+   String(bracketedAuto.sport))
+ok(
+  bracketedAuto.teamSlots.map((s) => s.teamName).sort().join(' | ') ===
+    'Arizona Diamondbacks | San Francisco Giants',
+  'so an auto-detected import gets the same teams',
+  JSON.stringify(bracketedAuto.teamSlots.map((s) => s.teamName))
+)
+
+// The marker is a marker WHEREVER the line grouper puts it. This is the part
+// that must not depend on one line arrangement: the same two rows are read from
+// a PDF whose text runs may group the marker onto its own line, onto the
+// product line, or onto the row itself — and a row torn in two by type size is
+// the failure LINE_TOLERANCE already exists to fight (see pdf.ts).
+const arrangements: [string, string[]][] = [
+  ['on its own line', [
+    '1 San Francisco Giants Order 1237174001 $28.00',
+    '4x 2026 CHROME BASEBAL JUMBO BOX (HALF CASE!)',
+    '[Break 1]'
+  ]],
+  ['joined to the product line', [
+    '1 San Francisco Giants Order 1237174001 $28.00',
+    '4x 2026 CHROME BASEBAL JUMBO BOX (HALF CASE!) [Break 1]'
+  ]],
+  ['joined to the row itself', [
+    '1 San Francisco Giants Order 1237174001 $28.00 4x 2026 CHROME BASEBAL JUMBO BOX [Break 1]'
+  ]],
+  ['with the name torn onto its own line', [
+    '1 Order 1237174001 $28.00',
+    'San Francisco Giants',
+    '4x 2026 CHROME BASEBAL JUMBO BOX (HALF CASE!)',
+    '[Break 1]'
+  ]],
+  ['written without brackets', [
+    '1 San Francisco Giants Order 1237174001 $28.00',
+    '4x 2026 CHROME BASEBAL JUMBO BOX (HALF CASE!)',
+    'Break 1'
+  ]]
+]
+for (const [shape, rows] of arrangements) {
+  const r = parsePages([twoColSlip(rows)], { sport: 'mlb' })
+  const slot = r.teamSlots[0]
+  ok(
+    r.teamSlots.length === 1 && slot?.teamName === 'San Francisco Giants' && slot?.breakLabel === '1',
+    `a marker ${shape} still gives break 1 to the Giants`,
+    JSON.stringify(r.teamSlots.map((s) => `${s.breakLabel}:${s.teamName}`))
+  )
+}
+
+// A bracketed label keeps its letter. #11A is a different break from #11 with a
+// full slate of its own, and the brackets must not cost that distinction.
+const bracketedSuffix = parsePages(
+  [
+    twoColSlip([
+      '1 San Francisco Giants Order 1237174001 $28.00',
+      '4x 2026 CHROME BASEBAL JUMBO BOX (HALF CASE!)',
+      '[Break 11A]',
+      '1 Arizona Diamondbacks Order 1237175471 $32.00',
+      '4x 2026 CHROME BASEBAL JUMBO BOX (HALF CASE!)',
+      '[ BREAK 11a ]'
+    ])
+  ],
+  { sport: 'mlb' }
+)
+ok(
+  bracketedSuffix.breaks.length === 1 && bracketedSuffix.breaks[0]?.breakLabel === '11A',
+  'a bracketed “[Break 11A]” keeps its suffix, however it is typed',
+  JSON.stringify(bracketedSuffix.breaks.map((b) => b.breakLabel))
+)
+
+// An opening bracket alone proves nothing. A description that parenthesises the
+// whole thing still puts the team AFTER the label, and that is the old form.
+const parenthesised = parsePages(
+  [
+    twoColSlip([
+      '1 Order 1237174001 $28.00',
+      '4x 2026 CHROME BASEBAL JUMBO BOX (Break #1 - San Francisco Giants)'
+    ])
+  ],
+  { sport: 'mlb' }
+)
+ok(
+  parenthesised.teamSlots[0]?.teamName === 'San Francisco Giants',
+  'a bracket that opens before the label but closes after the team is still a prefix',
+  JSON.stringify(parenthesised.teamSlots.map((s) => s.teamName))
+)
+
+// --- 2e. a punctuation fragment is never a team --------------------------
+// Worth having whatever the layout does. "]", "[" and "" are what is left when
+// a slice lands between two columns, and each of them used to be printed on the
+// pick screen as the team somebody had to find in a box.
+const fragments = parsePages(
+  [
+    twoColSlip([
+      '1 Order 5555555551 $12.00',
+      '4x 2026 CHROME BASEBAL JUMBO BOX (HALF CASE!)',
+      '[Break 4]',
+      '1 ] Order 5555555552 $13.00',
+      '1x 2026 CHROME BASEBAL JUMBO BOX- Break #4 - [',
+      '1 - Order 5555555553 $14.00',
+      '1x 2026 CHROME BASEBAL JUMBO BOX- Break #4 -'
+    ])
+  ],
+  { sport: 'mlb' }
+)
+ok(
+  fragments.teamSlots.length === 3,
+  'every unreadable card is still kept and still pickable',
+  String(fragments.teamSlots.length)
+)
+ok(
+  fragments.teamSlots.every((s) => /[A-Za-z0-9].*[A-Za-z0-9]/.test(s.teamName)),
+  'and none of them is named after a bracket or a dash',
+  JSON.stringify(fragments.teamSlots.map((s) => s.teamName))
+)
+ok(
+  fragments.teamSlots.every((s) => s.teamName === 'Unknown team'),
+  'they read as Unknown team, which is at least true',
+  JSON.stringify(fragments.teamSlots.map((s) => s.teamName))
+)
+ok(
+  fragments.warnings.filter((w) => /No team could be read/.test(w.message)).length === 3,
+  'and each one says so, naming its order',
+  JSON.stringify(fragments.warnings.map((w) => w.message))
+)
+
+// --- 2f. the same slip, both layouts, one dataset ------------------------
+// The old form is not legacy: RM re-imports months of it. Whichever way the
+// slip is printed, the import must be the same import.
+const sameRows = [
+  ['1 San Francisco Giants Order 1237174001 $28.00', '1 Arizona Diamondbacks Order 1237175471 $32.00'],
+  ['4x 2026 CHROME BASEBAL JUMBO BOX (HALF CASE!)', '4x 2026 CHROME BASEBAL JUMBO BOX (HALF CASE!)']
+]
+const oldForm = twoColSlip([
+  `${sameRows[0][0]}`,
+  `${sameRows[1][0]}- Break #1 - San Francisco Giants`,
+  `${sameRows[0][1]}`,
+  `${sameRows[1][1]}- Break #1 - Arizona Diamondbacks`
+])
+const newForm = twoColSlip([
+  `${sameRows[0][0]}`,
+  `${sameRows[1][0]}`,
+  '[Break 1]',
+  `${sameRows[0][1]}`,
+  `${sameRows[1][1]}`,
+  '[Break 1]'
+])
+const oldParsed = parsePages([oldForm], { sport: 'auto' })
+const newParsed = parsePages([newForm], { sport: 'auto' })
+ok(
+  oldParsed.teamSlots.map((s) => s.teamName).join(' | ') === 'San Francisco Giants | Arizona Diamondbacks',
+  'the old inline layout still yields its team',
+  JSON.stringify(oldParsed.teamSlots.map((s) => s.teamName))
+)
+ok(
+  JSON.stringify(oldParsed) === JSON.stringify(newParsed),
+  'and the two layouts of one slip produce the same dataset, field for field',
+  `old=${JSON.stringify(oldParsed.teamSlots)} new=${JSON.stringify(newParsed.teamSlots)}`
+)
+
 // --- 3. control: an ordinary break is untouched ---------------------------
 const plain = twoBreaks.replace(/Break #11A/g, 'Break #12')
 const res3 = parsePages([plain], { sport: 'mlb' })
