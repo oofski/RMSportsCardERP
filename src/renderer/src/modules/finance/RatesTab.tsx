@@ -1,14 +1,18 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { WhatnotRatePeriod } from '@shared/financeStreaming'
 import {
-  DEFAULT_WHATNOT_RATE,
-  STRIPE_FLAT_CENTS,
-  STRIPE_PERCENT_RATE,
-  WHATNOT_RATE_MAX,
-  WHATNOT_RATE_MIN,
+  COMMISSION_RATE_MAX,
+  COMMISSION_RATE_MIN,
+  DEFAULT_FEE_RATES,
+  PROCESSING_FLAT_MAX_CENTS,
+  PROCESSING_FLAT_MIN_CENTS,
+  PROCESSING_RATE_MAX,
+  PROCESSING_RATE_MIN,
+  TAX_RATE_MAX,
+  TAX_RATE_MIN,
   coveringRatePeriod,
   deriveSaleFee,
-  effectiveWhatnotRate,
+  effectiveFeeRates,
   isDayKey,
   overlappingRatePeriod,
   ratePct,
@@ -23,25 +27,26 @@ import { finance, resultError } from './api'
 import { todayKey } from './time'
 
 /**
- * Finance → Fees & rates: what Whatnot takes, and when it took it.
+ * Finance → Fees & rates: what the platform takes, and when it took it.
  *
  * WHY THIS SCREEN EXISTS, AND WHY IT IS IN FINANCE RATHER THAN ADMIN.
  *
- * Whatnot's ledger pays NET — its commission is already gone before the row is
+ * Whatnot's ledger pays NET — every charge is already gone before the row is
  * written. Everything the Streaming tab shows above the fee line is therefore
- * reverse-engineered from that net figure, and the commission rate is the one
- * input to that arithmetic the app cannot read out of the file. Get it wrong and
- * every gross, every fee and every margin in the module is wrong with it.
+ * recovered from that net figure, and the four terms here are the inputs to that
+ * arithmetic the app cannot read out of the file. Get one wrong and every gross,
+ * every fee and every margin in the module is wrong with it.
  *
  * So it sits beside the P&L it drives rather than in Admin with the settings
- * nobody looks at twice a year. Changing it here changes the statement one tab
- * across, immediately and retroactively, and this screen says so out loud
- * because that is a surprising amount of power for a form with four fields.
+ * nobody looks at twice a year. Changing anything here changes the statement one
+ * tab across, immediately and retroactively, and this screen says so out loud
+ * because that is a surprising amount of power for one small form.
  *
- * THE DEFAULT IS SHOWN, NOT IMPLIED. An empty table means 6% everywhere, which
- * used to be a constant in a file. It is printed as a real row at the bottom of
- * the list, so "what rate is being used for last March" is answerable by reading
- * the screen rather than by knowing what the code does when it finds nothing.
+ * THE DEFAULTS ARE SHOWN, NOT IMPLIED. An empty table means the standard terms
+ * everywhere, which used to be constants in a file. They are printed as a real
+ * row at the bottom of the list, so "what was being used for last March" is
+ * answerable by reading the screen rather than by knowing what the code does
+ * when it finds nothing.
  */
 export function RatesTab(): JSX.Element {
   const { can } = useSession()
@@ -103,8 +108,8 @@ export function RatesTab(): JSX.Element {
         <p>
           The app is running against a version that does not expose the rate bridge. Restart after
           updating and this screen will appear. Until then every day is priced at the{' '}
-          {ratePct(DEFAULT_WHATNOT_RATE)} default, which is what it was before this setting
-          existed.
+          {ratePct(DEFAULT_FEE_RATES.commissionRate)} commission default, which is what it was
+          before this setting existed.
         </p>
       </Note>
     )
@@ -133,10 +138,23 @@ export function RatesTab(): JSX.Element {
         </div>
 
         <p className="fin-rates-lead">
-          Whatnot&rsquo;s ledger pays <b>net</b> — its cut is already gone before the row is
-          written. The Streaming tab works back from that to what buyers actually paid, and this
-          rate is the one number that arithmetic needs and the file does not contain.
+          Whatnot&rsquo;s ledger pays <b>net</b> — every charge is already gone before the row is
+          written. The Streaming tab works back from that payout to the price the buyer actually
+          bid, and these four numbers are what that arithmetic needs and the file does not contain:
+          the <b>commission</b> Whatnot takes of the sale, the <b>sales tax</b> the buyer paid on
+          top, and the <b>card percentage and flat charge</b> the processor takes of the whole
+          order.
         </p>
+
+        <Note tone="info" icon="ReceiptText">
+          <b>Sales tax is here because the card fee is charged on it — not because it is ours.</b>
+          <p>
+            The buyer pays the tax and the state receives it. It is never revenue and never a cost,
+            so it appears in no figure on the P&amp;L. It has to be configured anyway: card
+            processing is charged on the <b>whole order</b>, tax included, so leaving it out makes
+            every processing fee a little light and no gross quite right.
+          </p>
+        </Note>
 
         <Note tone="info" icon="CalendarDays">
           <b>A period covers the shows that started on those nights.</b>
@@ -169,7 +187,7 @@ export function RatesTab(): JSX.Element {
 
       <EffectiveRate periods={periods} />
 
-      <StripePanel />
+      <ProcessingPanel />
 
       {editing && (
         <RateModal
@@ -199,12 +217,17 @@ export function RatesTab(): JSX.Element {
           }
         >
           <p className="fin-confirm-lead">
-            <b>{spanLabel(deleting)}</b> at <b>{ratePct(deleting.rate)}</b> goes.
+            <b>{spanLabel(deleting)}</b> at <b>{ratePct(deleting.rate)}</b> commission,{' '}
+            <b>{ratePct(deleting.taxRate)}</b> tax and{' '}
+            <b>
+              {ratePct(deleting.processingRate)} + {deleting.processingFlatCents}¢
+            </b>{' '}
+            processing goes.
           </p>
           <p className="fin-confirm-lead">
-            Those show nights fall back to whatever other period covers them, and to the{' '}
-            {ratePct(DEFAULT_WHATNOT_RATE)} default if none does. Every show in that stretch is
-            re-priced the next time the Streaming tab is opened.
+            Those show nights fall back to whatever other period covers them, and to the defaults
+            if none does. Every show in that stretch is re-priced the next time the Streaming tab
+            is opened.
           </p>
         </Modal>
       )}
@@ -247,7 +270,7 @@ function RateStack({
       <div className="fin-imports-head">
         <span className="fin-section-title">
           <Icon name="Percent" size={15} />
-          Whatnot commission
+          Platform terms
           <span className="fin-count">{sorted.length}</span>
         </span>
         {canManage && (
@@ -264,6 +287,11 @@ function RateStack({
             <span className="fin-rate-span">{spanLabel(p)}</span>
             {p.toDate === null && <span className="fin-rate-tag">In force</span>}
           </div>
+          {/* All four, on the row. The commission is the headline because it is
+              the one that moves; a period whose card terms differ from the
+              others is exactly the thing somebody needs to see without opening
+              the form. */}
+          <p className="fin-rate-terms mono">{termsLabel(p)}</p>
           {p.note && <p className="fin-rate-note">{p.note}</p>}
           {canManage && (
             <div className="fin-rate-acts">
@@ -282,10 +310,11 @@ function RateStack({
 
       <article className="fin-rate is-default">
         <div className="fin-rate-main">
-          <b className="fin-rate-figure mono">{ratePct(DEFAULT_WHATNOT_RATE)}</b>
+          <b className="fin-rate-figure mono">{ratePct(DEFAULT_FEE_RATES.commissionRate)}</b>
           <span className="fin-rate-span">Every other night</span>
           <span className="fin-rate-tag is-muted">Default</span>
         </div>
+        <p className="fin-rate-terms mono">{termsLabel(DEFAULT_TERMS)}</p>
         <p className="fin-rate-note">
           What the app uses for any show night no period above covers. It is not a row and cannot
           be edited or removed — add a period to override a stretch of nights.
@@ -307,32 +336,34 @@ function RateStack({
 
 /**
  * The list answers "what have we configured". This answers the question somebody
- * actually walks up with: what rate is a particular show being charged at, and
- * which row decided that.
+ * actually walks up with: what was a particular show charged, and which row
+ * decided that.
  *
- * It reads the SAME `effectiveWhatnotRate` and `deriveSaleFee` the P&L does, and
- * — since the statement started pricing a row by its show's business day — it is
- * asking that function the SAME KIND OF KEY. So the worked example under it is
- * not an illustration, it is the arithmetic the Streaming tab will run for that
- * night, running.
+ * It reads the SAME `effectiveFeeRates` and `deriveSaleFee` the P&L does, and —
+ * since the statement prices a row by its show's business day — it is asking
+ * those functions the SAME KIND OF KEY. So the worked example under it is not an
+ * illustration, it is the arithmetic the Streaming tab will run for that night,
+ * running.
  */
 function EffectiveRate({ periods }: { periods: WhatnotRatePeriod[] }): JSX.Element {
   const [day, setDay] = useState(() => todayKey())
   const valid = isDayKey(day)
 
-  const rate = valid ? effectiveWhatnotRate(periods, day) : DEFAULT_WHATNOT_RATE
+  const rates = valid ? effectiveFeeRates(periods, day) : DEFAULT_FEE_RATES
   const covering = valid ? coveringRatePeriod(periods, day) : null
 
-  // A $100 spot, taken apart exactly as a real row would be. Concrete on purpose:
-  // "6% plus 2.9% plus 30c" is three numbers nobody can hold, and a worked
-  // hundred dollars is one anybody can check.
-  const example = deriveSaleFee(10000, rate)
+  // A $100 payout, taken apart exactly as a real row would be, by the function
+  // that takes real rows apart. Concrete on purpose: four rates on four
+  // different bases is more than anybody holds in their head, and a worked
+  // hundred dollars is something anybody can check with a calculator.
+  const example = deriveSaleFee(10000, rates)
+  const bid = (example.itemCents ?? 0) / 100
 
   return (
     <section className="fin-rate-check">
       <span className="fin-section-title">
         <Icon name="CalendarSearch" size={15} />
-        The rate on a given show night
+        The terms on a given show night
       </span>
 
       <div className="fin-rate-check-row">
@@ -345,7 +376,7 @@ function EffectiveRate({ periods }: { periods: WhatnotRatePeriod[] }): JSX.Eleme
           />
         </Field>
         <p className="fin-rate-check-answer">
-          <b className="mono">{ratePct(rate)}</b>{' '}
+          <b className="mono">{ratePct(rates.commissionRate)}</b>{' '}
           {covering ? (
             <>
               from <b>{spanLabel(covering)}</b>
@@ -353,32 +384,57 @@ function EffectiveRate({ periods }: { periods: WhatnotRatePeriod[] }): JSX.Eleme
             </>
           ) : (
             <>
-              — the <b>{ratePct(DEFAULT_WHATNOT_RATE)} default</b>, because no period covers this
-              day
+              — the <b>{ratePct(DEFAULT_FEE_RATES.commissionRate)} default</b>, because no period
+              covers this day
             </>
           )}
+          <br />
+          <span className="mono">{termsLabel(covering ?? DEFAULT_TERMS)}</span>
         </p>
       </div>
 
-      <p className="fin-rate-worked">
-        A spot that paid out <Money value={100} /> on that night was bought for{' '}
-        <Money value={example.grossCents / 100} strong />: Whatnot took{' '}
-        <Money value={Math.abs(example.whatnotFeeCents) / 100} /> and Stripe took{' '}
-        <Money value={Math.abs(example.stripeFeeCents) / 100} /> (2.9% and 30¢). Every spot on that
-        show is priced this way, including the ones sold after midnight.
-      </p>
+      {example.exact ? (
+        <p className="fin-rate-worked">
+          A spot that paid out <Money value={100} /> on that night was bid up to{' '}
+          <Money value={bid} strong />: Whatnot took{' '}
+          <Money value={Math.abs(example.whatnotFeeCents) / 100} /> in commission and card
+          processing took <Money value={Math.abs(example.processingFeeCents) / 100} /> —{' '}
+          {ratePct(rates.processingRate)} of the{' '}
+          <Money value={((example.itemCents ?? 0) + example.taxCents) / 100} /> order plus{' '}
+          {rates.processingFlatCents}¢. The buyer also paid{' '}
+          <Money value={example.taxCents / 100} /> of sales tax, which goes to the state and
+          appears nowhere in the P&amp;L. Every spot on that show is priced this way, including
+          the ones sold after midnight.
+        </p>
+      ) : (
+        // The inverse could not reproduce this payout at these terms. It is not
+        // reachable with any sane set of rates, but saying so beats printing a
+        // bid nobody made — which is the whole reason the model reports whether
+        // it reproduced the payout rather than just returning a number.
+        <Note tone="warn" icon="AlertTriangle">
+          <b>No bid produces a $100.00 payout on these terms.</b>
+          <p>
+            The Streaming tab will still show figures that reconcile to what Whatnot paid, but the
+            sale prices behind them are approximate at these rates. Check the four numbers above
+            against a Whatnot statement.
+          </p>
+        </Note>
+      )}
     </section>
   )
 }
 
 /**
- * Stripe, stated and not editable.
+ * Card processing, and why it is not simply a percentage of the sale.
  *
- * A screen that offers to configure one of two fees, with no explanation of the
- * other, invites somebody to go looking for the missing setting. It is here to
- * say the number and to say why it has no form.
+ * This panel used to say the card terms were fixed and deliberately not
+ * configurable. That was wrong twice over: the platform changes what it passes
+ * on, and the charge is levied on the ORDER — sale plus tax — rather than on the
+ * sale, so a reader comparing the fee line to 2.9% of the gross would find it
+ * short every time and go looking for a bug. Both are now stated here, and all
+ * four terms are editable in the form above.
  */
-function StripePanel(): JSX.Element {
+function ProcessingPanel(): JSX.Element {
   return (
     <section className="fin-rate-stripe">
       <span className="fin-section-title">
@@ -386,11 +442,16 @@ function StripePanel(): JSX.Element {
         Card processing
       </span>
       <p>
-        <b className="mono">{(STRIPE_PERCENT_RATE * 100).toFixed(1)}%</b> of the sale plus{' '}
-        <b className="mono">{STRIPE_FLAT_CENTS}¢</b> per purchased slot. Fixed, and deliberately not
-        configurable: it is Stripe&rsquo;s published card rate rather than a term RM negotiates, and
-        the flat charge is what makes one break spot cost more to process than one line of a bulk
-        order.
+        A percentage of the <b>whole order</b> — the sale price plus the sales tax the buyer paid —
+        plus a flat charge per order. Defaults are{' '}
+        <b className="mono">{ratePct(DEFAULT_FEE_RATES.processingRate)}</b> and{' '}
+        <b className="mono">{DEFAULT_FEE_RATES.processingFlatCents}¢</b>, and both are configurable
+        per period above, because what the platform passes on is a term like any other.
+      </p>
+      <p>
+        The flat charge is what makes one break spot cost more to process than one line of a bulk
+        order, and the tax in the base is why this line is never exactly{' '}
+        {ratePct(DEFAULT_FEE_RATES.processingRate)} of the sales figure above it.
       </p>
     </section>
   )
@@ -410,10 +471,12 @@ function StripePanel(): JSX.Element {
  * both against the stored rows, because a renderer is not a trust boundary and
  * another laptop may have saved something in the meantime.
  *
- * The rate is entered as a PERCENTAGE, because that is how Whatnot writes it in
- * the seller agreement, and converted here. A form that took 0.06 would collect
- * a 6 from somebody eventually — a 600% commission, which the validator would
- * refuse, but only after they had wondered why.
+ * The rates are entered as PERCENTAGES, because that is how Whatnot writes them
+ * in the seller agreement and how a state writes a tax rate, and converted here.
+ * A form that took 0.08 would collect an 8 from somebody eventually — an 800%
+ * commission, which the validator would refuse, but only after they had wondered
+ * why. The flat charge is entered in CENTS for the mirror-image reason: 0.30 in
+ * a field labelled cents is thirty hundredths of a cent.
  */
 function RateModal({
   periods,
@@ -430,16 +493,48 @@ function RateModal({
   const [busy, setBusy] = useState(false)
   const [fromDate, setFromDate] = useState(period?.fromDate ?? todayKey())
   const [toDate, setToDate] = useState(period?.toDate ?? '')
+  const pct = (fraction: number): string => String(Math.round(fraction * 10000) / 100)
   const [percent, setPercent] = useState(
-    period ? String(Math.round(period.rate * 10000) / 100) : String(DEFAULT_WHATNOT_RATE * 100)
+    pct(period ? period.rate : DEFAULT_FEE_RATES.commissionRate)
+  )
+  const [taxPercent, setTaxPercent] = useState(
+    pct(period ? period.taxRate : DEFAULT_FEE_RATES.taxRate)
+  )
+  const [procPercent, setProcPercent] = useState(
+    pct(period ? period.processingRate : DEFAULT_FEE_RATES.processingRate)
+  )
+  const [flatCents, setFlatCents] = useState(
+    String(period ? period.processingFlatCents : DEFAULT_FEE_RATES.processingFlatCents)
   )
   const [note, setNote] = useState(period?.note ?? '')
 
-  // Number('') is 0 and Number('6%') is NaN. Both have to reach the validator as
+  // Number('') is 0 and Number('8%') is NaN. Both have to reach the validator as
   // themselves rather than being smoothed into something plausible — a blank
-  // field must not book a 0% commission.
-  const rate = percent.trim() === '' ? Number.NaN : Number(percent) / 100
-  const candidate = { fromDate, toDate: toDate.trim() === '' ? null : toDate, rate, note }
+  // field must not book a 0% commission, or a 0% tax that shifts every
+  // processing fee on the range.
+  const asRate = (text: string): number =>
+    text.trim() === '' ? Number.NaN : Number(text) / 100
+  const rate = asRate(percent)
+  const candidate = {
+    fromDate,
+    toDate: toDate.trim() === '' ? null : toDate,
+    rate,
+    taxRate: asRate(taxPercent),
+    processingRate: asRate(procPercent),
+    processingFlatCents: flatCents.trim() === '' ? Number.NaN : Number(flatCents),
+    note
+  }
+
+  // The candidate as the MODEL sees it, so the preview below is the same
+  // arithmetic the P&L will run rather than a second version of it. Shipping is
+  // zero because a rate period cannot know what one buyer paid for postage.
+  const candidateRates = {
+    commissionRate: candidate.rate,
+    taxRate: candidate.taxRate,
+    processingRate: candidate.processingRate,
+    processingFlatCents: candidate.processingFlatCents,
+    shippingCents: 0
+  }
 
   const invalid = validateRatePeriod(candidate)
   const clash = invalid ? null : overlappingRatePeriod(periods, candidate, period?.id)
@@ -459,6 +554,9 @@ function RateModal({
         fromDate: candidate.fromDate,
         toDate: candidate.toDate,
         rate: candidate.rate,
+        taxRate: candidate.taxRate,
+        processingRate: candidate.processingRate,
+        processingFlatCents: candidate.processingFlatCents,
         note: candidate.note
       })
       if (!res.ok || !res.data) {
@@ -509,18 +607,64 @@ function RateModal({
         </Field>
         <Field
           label="Commission (%)"
-          hint={`What Whatnot takes of each sale. ${WHATNOT_RATE_MIN * 100}–${
-            WHATNOT_RATE_MAX * 100
+          hint={`What Whatnot takes of the SALE PRICE — not of shipping or tax. ${
+            COMMISSION_RATE_MIN * 100
+          }–${COMMISSION_RATE_MAX * 100}%.`}
+        >
+          <Input
+            type="number"
+            step="0.01"
+            min={COMMISSION_RATE_MIN * 100}
+            max={COMMISSION_RATE_MAX * 100}
+            value={percent}
+            invalid={!!invalid}
+            onChange={(e) => setPercent(e.target.value)}
+          />
+        </Field>
+        <Field
+          label="Sales tax (%)"
+          hint={`What the BUYER pays on top. Never revenue — it is here because card processing is charged on it. ${
+            TAX_RATE_MIN * 100
+          }–${TAX_RATE_MAX * 100}%.`}
+        >
+          <Input
+            type="number"
+            step="0.0001"
+            min={TAX_RATE_MIN * 100}
+            max={TAX_RATE_MAX * 100}
+            value={taxPercent}
+            invalid={!!invalid}
+            onChange={(e) => setTaxPercent(e.target.value)}
+          />
+        </Field>
+        <Field
+          label="Card processing (%)"
+          hint={`Charged on the whole order, tax included. ${PROCESSING_RATE_MIN * 100}–${
+            PROCESSING_RATE_MAX * 100
           }%.`}
         >
           <Input
             type="number"
             step="0.01"
-            min={WHATNOT_RATE_MIN * 100}
-            max={WHATNOT_RATE_MAX * 100}
-            value={percent}
+            min={PROCESSING_RATE_MIN * 100}
+            max={PROCESSING_RATE_MAX * 100}
+            value={procPercent}
             invalid={!!invalid}
-            onChange={(e) => setPercent(e.target.value)}
+            onChange={(e) => setProcPercent(e.target.value)}
+          />
+        </Field>
+        <Field
+          label="Card flat charge (¢)"
+          hint={`Per ORDER, in cents — 30, not 0.30. ${PROCESSING_FLAT_MIN_CENTS}–${PROCESSING_FLAT_MAX_CENTS}¢.`}
+        >
+          <Input
+            type="number"
+            step="1"
+            min={PROCESSING_FLAT_MIN_CENTS}
+            max={PROCESSING_FLAT_MAX_CENTS}
+            value={flatCents}
+            invalid={!!invalid}
+            onChange={(e) => setFlatCents(e.target.value)}
           />
         </Field>
         <Field label="Note" hint="Why this rate — the agreement it came from, or the email.">
@@ -543,7 +687,7 @@ function RateModal({
           Saving this re-prices every show that started on one of those nights — all of it, the
           after-midnight hours included — the next time the Streaming tab is read. A $100 payout on
           one of those shows becomes a{' '}
-          <Money value={deriveSaleFee(10000, rate).grossCents / 100} strong /> sale.
+          <Money value={deriveSaleFee(10000, candidateRates).grossCents / 100} strong /> sale.
         </p>
       )}
     </Modal>
@@ -556,6 +700,29 @@ function RateModal({
 // than copied, because the P&L's commission line prints the same rates this
 // screen does — "6.25%" here and "6.3%" one tab across is the same "matches
 // nothing configured" complaint the blended-rate disclosure exists for.
+
+/**
+ * The three terms that are not the headline, in one line: "tax 5.18% · card
+ * 2.9% + 30¢".
+ *
+ * Shared by the list, the default row and the effective-terms answer so the same
+ * period cannot be spelled two ways on one screen — the same reason `ratePct`
+ * moved into the contract.
+ */
+function termsLabel(p: {
+  taxRate: number
+  processingRate: number
+  processingFlatCents: number
+}): string {
+  return `tax ${ratePct(p.taxRate)} · card ${ratePct(p.processingRate)} + ${p.processingFlatCents}¢`
+}
+
+/** The defaults, shaped like a period so `termsLabel` takes them unchanged. */
+const DEFAULT_TERMS = {
+  taxRate: DEFAULT_FEE_RATES.taxRate,
+  processingRate: DEFAULT_FEE_RATES.processingRate,
+  processingFlatCents: DEFAULT_FEE_RATES.processingFlatCents
+}
 
 function dayLabel(day: string): string {
   const [y, m, d] = (day || '').split('-').map(Number)

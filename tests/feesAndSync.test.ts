@@ -33,9 +33,11 @@ const sync = require('../src/main/db/sync')
 const {
   computeFees,
   deriveSaleFee,
-  DEFAULT_WHATNOT_RATE,
-  STRIPE_PERCENT_RATE,
-  STRIPE_FLAT_CENTS,
+  DEFAULT_COMMISSION_RATE,
+  DEFAULT_FEE_RATES,
+  DEFAULT_PROCESSING_FLAT_CENTS,
+  DEFAULT_PROCESSING_RATE,
+  DEFAULT_TAX_RATE,
   buildPnl,
   pnlChecksum
 } = require('../src/shared/financeStreaming')
@@ -55,18 +57,24 @@ const ok = (c: boolean, n: string, e = ''): void => {
 const near = (a: number, b: number, t = 0.005): boolean => Math.abs(a - b) < t
 
 // ---------------------------------------------------------------------------
-console.log('=== A1. the two rates, and which of them is negotiable ===')
+console.log('=== A1. the four terms, and the fact that all four are configurable ===')
 // ---------------------------------------------------------------------------
-ok(STRIPE_PERCENT_RATE === 0.029, "Stripe's percentage is 2.9%", String(STRIPE_PERCENT_RATE))
-ok(STRIPE_FLAT_CENTS === 30, 'and it carries a flat 30c per slot', String(STRIPE_FLAT_CENTS))
-ok(DEFAULT_WHATNOT_RATE === 0.06, 'Whatnot defaults to 6%', String(DEFAULT_WHATNOT_RATE))
-// The old contract exported a single blended TOTAL_FEE_RATE and a
-// WHATNOT_COMMISSION_RATE constant, both of which said the take was a fixed
-// 8.9% of a gross the ledger never contained. Anything still importing them
-// would be computing the old, wrong answer, so their absence is asserted.
+ok(DEFAULT_COMMISSION_RATE === 0.08, 'Whatnot commission defaults to 8%', String(DEFAULT_COMMISSION_RATE))
+ok(DEFAULT_TAX_RATE === 0.0518, 'sales tax defaults to 5.18%', String(DEFAULT_TAX_RATE))
+ok(DEFAULT_PROCESSING_RATE === 0.029, 'card processing defaults to 2.9%', String(DEFAULT_PROCESSING_RATE))
+ok(DEFAULT_PROCESSING_FLAT_CENTS === 30, 'plus a flat 30c per order', String(DEFAULT_PROCESSING_FLAT_CENTS))
+ok(DEFAULT_FEE_RATES.shippingCents === 0, 'and no shipping inside a sale row')
+// Three generations of wrong constants, and their absence is asserted because
+// anything still importing one would be computing an old, wrong answer:
+// TOTAL_FEE_RATE and WHATNOT_COMMISSION_RATE said the take was a fixed 8.9% of a
+// gross the ledger never contained; STRIPE_PERCENT_RATE and STRIPE_FLAT_CENTS
+// said the card terms were a published rate nobody could configure, which is
+// exactly what the owner asked to be able to change.
 const contract = require('../src/shared/financeStreaming') as Record<string, unknown>
 ok(contract.TOTAL_FEE_RATE === undefined, 'the blended 8.9% constant is gone')
 ok(contract.WHATNOT_COMMISSION_RATE === undefined, 'and the fixed 6% constant with it')
+ok(contract.STRIPE_PERCENT_RATE === undefined, 'and the un-configurable card percentage')
+ok(contract.STRIPE_FLAT_CENTS === undefined, 'and the un-configurable flat charge')
 
 // ---------------------------------------------------------------------------
 console.log('\n=== A2. the transaction count now DOES change the fee ===')
@@ -77,9 +85,9 @@ console.log('\n=== A2. the transaction count now DOES change the fee ===')
 // arriving as 2,000 spots means 2,000 slots were bought, so the buyers paid
 // $600 more than if it had arrived as one order — and the net is $10,000 either
 // way, which is why nothing here invents money.
-const row = (netCents: number): Record<string, number> => ({
+const row = (netCents: number): Record<string, unknown> => ({
   netCents,
-  whatnotRate: DEFAULT_WHATNOT_RATE
+  rates: DEFAULT_FEE_RATES
 })
 const one = computeFees([row(1000000)])
 const many = computeFees(Array.from({ length: 2000 }, () => row(500)))
@@ -91,11 +99,14 @@ ok(
   `${many.totalFees} vs ${one.totalFees}`
 )
 // And the difference is 1,999 extra flat charges — but NOT 1,999 × 30c. The 30c
-// is reverse-engineered out of a net figure, so each one is itself grossed up:
-// the buyer paid 30c / (1 − 0.06 − 0.029) = 32.9c to leave Whatnot 30c short.
-// Tolerance is half a cent per row across 2,000 rows, which is the most the
-// per-row rounding can ever be.
-const flatEach = 0.3 / (1 - 0.06 - 0.029)
+// is recovered out of a net figure, so each one is itself grossed up: the buyer
+// bid 30c / (1 − 0.08 − 0.029 × 1.0518) = 33.7c higher to leave Whatnot 30c
+// short. Tolerance is half a cent per row across 2,000 rows, which is the most
+// the per-row rounding can ever be.
+const flatEach =
+  DEFAULT_PROCESSING_FLAT_CENTS /
+  100 /
+  (1 - DEFAULT_COMMISSION_RATE - DEFAULT_PROCESSING_RATE * (1 + DEFAULT_TAX_RATE))
 const extra = Math.abs(many.totalFees) - Math.abs(one.totalFees)
 ok(
   near(extra, 1999 * flatEach, 2000 * 0.005 + 0.01),
@@ -140,6 +151,7 @@ const day: Record<string, unknown> = {
   tips: 0,
   bonuses: 0,
   totalRevenue: f.grossSales,
+  salesTax: f.salesTax,
   whatnotFee: f.whatnotFee,
   processingFee: f.processingFee,
   totalFees: f.totalFees,
@@ -174,10 +186,23 @@ const stripeLine = fees.lines.find((l: any) => l.key === 'processingFee')
 const whatnotLine = fees.lines.find((l: any) => l.key === 'whatnotFee')
 // The 30c is back on the line, deliberately: the previous version of this test
 // asserted it was absent, on a model where charging it invented money.
-ok(stripeLine.detail.includes('30¢'), 'the processing line states the 30c again', stripeLine.detail)
-ok(stripeLine.detail.includes('2.9%'), 'and the percentage', stripeLine.detail)
-ok(stripeLine.detail.includes('1,029'), 'and the order count it multiplies', stripeLine.detail)
-ok(whatnotLine.detail.includes('6%'), "Whatnot's line states the rate it charged", whatnotLine.detail)
+// A day built straight from `computeFees` carries no rate breakdown, so the
+// processing line describes the shape of the charge rather than naming terms it
+// was never told. What it must always state is the order count, because that is
+// what the flat charge multiplies.
+ok(stripeLine.detail.includes('1,029'), 'the processing line states the order count', stripeLine.detail)
+ok(
+  !stripeLine.detail.includes('2.9%'),
+  'and names no percentage it was not given',
+  stripeLine.detail
+)
+ok(whatnotLine.detail.includes('8%'), "Whatnot's line states the rate it charged", whatnotLine.detail)
+// THE TAX IS NAMED AS A PASS-THROUGH AND AS NOTHING ELSE.
+ok(
+  (fees.note || '').includes('NOT REVENUE AND NOT A COST'),
+  'and the section says what the tax is and is not',
+  String(fees.note)
+)
 ok(
   Math.abs(whatnotLine.amount) !== Math.abs(stripeLine.amount),
   'the two cuts are separate lines with separate figures'
@@ -188,27 +213,44 @@ ok(
   String(fees.note)
 )
 
-// A single $20 payout, taken apart by hand.
+// A single $20.00 payout, taken apart by hand at the default terms — and chosen
+// because it is a case where the closed form ALONE IS WRONG.
 //
-//   gross  = (2000 + 30) / (1 − 0.06 − 0.029) = 2228.32c
-//   whatnot= round(2228.32 × 0.06)            =  134c
-//   stripe = round(2228.32 × 0.029) + 30      =   95c
-//   gross  = 2000 + 134 + 95                  = 2229c
+//   k    = 0.029 × 1.0518                       = 0.030502
+//   item = (2000 + 30) / (1 − 0.08 − 0.030502)  = 2282.19c
 //
-// The reported gross is 2229 rather than the 2228 the division rounds to, and
-// that is the rounding decision made deliberately: the two FEES are honest
-// roundings of their own rates — which is what somebody checks against a
-// statement — and the derived gross absorbs the half-cent, so the three always
-// land back on the ledger's own net. Under the old model this same row was
-// reported as $20.00 of revenue costing $1.78 in fees; it was a $22.29 purchase
-// that had already cost $2.29.
-const spot = deriveSaleFee(2000, 0.06)
-ok(spot.grossCents === 2229, 'a $20.00 payout was a $22.29 purchase', String(spot.grossCents))
-ok(spot.whatnotFeeCents === -134, "Whatnot's 6% of that is $1.34", String(spot.whatnotFeeCents))
-ok(spot.stripeFeeCents === -95, "Stripe's 2.9% + 30c is $0.95", String(spot.stripeFeeCents))
+// Round that to 2282 and the forward model pays out 1999c, not 2000c. The search
+// around it finds 2283:
+//
+//   commission = round(2283 × 0.08)               =  183c
+//   tax        = round(2283 × 0.0518)             =  118c   (the buyer's, not ours)
+//   order      = 2283 + 118                       = 2401c
+//   processing = round(2401 × 0.029 + 30)         =  100c
+//   payout     = 2283 − 183 − 100                 = 2000c   exactly
+//
+// That correction is the whole reason the inverse checks itself against the
+// forward model instead of trusting the algebra: one cent, on every row of a
+// business that sells two thousand of them a night.
+const spot = deriveSaleFee(2000, DEFAULT_FEE_RATES)
+ok(spot.itemCents === 2283, 'a $20.00 payout was a $22.83 bid', String(spot.itemCents))
+ok(spot.grossCents === 2283, 'and the gross is that bid', String(spot.grossCents))
+ok(spot.whatnotFeeCents === -183, "Whatnot's 8% of the bid is $1.83", String(spot.whatnotFeeCents))
+ok(spot.processingFeeCents === -100, 'card processing on the $24.01 order is $1.00', String(spot.processingFeeCents))
+ok(spot.taxCents === 118, 'and the buyer paid $1.18 of tax on top', String(spot.taxCents))
+// THE TIE, right next door. $19.99 is paid out by BOTH a $22.81 and a $22.82
+// bid — a cent on the bid moves the payout by less than a cent, so about one
+// payout in nine has two answers. The inverse takes the one nearest the
+// unrounded solution, which makes it deterministic; what it can never do is
+// return a bid that pays out something else.
+const tie = deriveSaleFee(1999, DEFAULT_FEE_RATES)
+ok(tie.itemCents === 2281, 'a $19.99 payout resolves to the nearer of its two bids', String(tie.itemCents))
 ok(
-  spot.grossCents + spot.whatnotFeeCents + spot.stripeFeeCents === 2000,
-  'and the three land back on the $20.00 exactly'
+  tie.grossCents + tie.whatnotFeeCents + tie.processingFeeCents === 1999,
+  'and either way the row lands back on what was paid'
+)
+ok(
+  spot.grossCents + spot.whatnotFeeCents + spot.processingFeeCents === 2000,
+  'the three land back on the $20.00 exactly, with the tax in none of them'
 )
 
 // ---------------------------------------------------------------------------

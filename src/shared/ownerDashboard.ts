@@ -24,8 +24,8 @@ export interface OwnerPnlWindow {
    * actually landed in the account.
    */
   revenue: number
-  /** Negative: Whatnot's commission and Stripe's cut, already deducted by the
-   *  platform before the ledger row was written. */
+  /** Negative: Whatnot's commission and the card processing charge, already
+   *  deducted by the platform before the ledger row was written. */
   fees: number
   cogs: number
   netProfit: number

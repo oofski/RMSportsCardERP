@@ -907,12 +907,20 @@ function migrate(database: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_ledger_quarantine_import
       ON ledger_quarantine (import_id);
 
-    -- What Whatnot's commission was, over a stretch of days.
+    -- What the platform charged, over a stretch of SHOW NIGHTS.
     --
-    -- The ledger Amount is NET: Whatnot takes its cut before writing the row.
-    -- Gross and the two fees are reverse-engineered from that net on READ, at
-    -- the rate in force on each row's own date, so changing a rate here moves
-    -- every past show inside the range with no re-upload and no migration.
+    -- FOUR NUMBERS, not one. The ledger Amount is NET: Whatnot takes its cut
+    -- before writing the row, so the item price the buyer bid is recovered from
+    -- that net on READ. Recovering it needs the commission rate, the sales tax
+    -- rate (because card processing is charged on a total that includes tax),
+    -- the card percentage and the card flat charge. Changing any of them here
+    -- moves every past show inside the range with no re-upload and no migration.
+    --
+    -- rate is the COMMISSION, kept under its original name so a row synced from
+    -- a laptop on an older build still lands in the column it means.
+    -- processing_flat_cents is CENTS -- 30, not 0.30 -- because money in this
+    -- app is integer cents and a float flat charge would round differently on
+    -- two machines.
     --
     -- Nothing constrains the ranges in SQL. SQLite has no exclusion constraint,
     -- so non-overlap is enforced in db/whatnotRates.ts inside the write
@@ -920,17 +928,25 @@ function migrate(database: Database.Database): void {
     -- reason: two periods claiming one day would make a show's fee depend on
     -- which row was read first.
     --
-    -- to_date NULL means open-ended. An empty table is the ordinary state: 6%
-    -- applies to every day nothing covers.
+    -- to_date NULL means open-ended. An empty table is the ordinary state: the
+    -- defaults in the contract apply to every night nothing covers.
     CREATE TABLE IF NOT EXISTS whatnot_fee_periods (
-      id         TEXT PRIMARY KEY,
-      from_date  TEXT NOT NULL,
-      to_date    TEXT,
-      rate       REAL NOT NULL,
-      note       TEXT NOT NULL DEFAULT '',
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      created_by TEXT
+      id                    TEXT PRIMARY KEY,
+      from_date             TEXT NOT NULL,
+      to_date               TEXT,
+      rate                  REAL NOT NULL,
+      -- These three defaults restate DEFAULT_FEE_RATES in the contract. They
+      -- have to: a column default is DDL and cannot read TypeScript. The
+      -- migration below adds the same columns with the same defaults to a
+      -- database that predates them, and the contract's resolveFeeRates is what
+      -- catches a row that somehow arrives without one.
+      tax_rate              REAL NOT NULL DEFAULT 0.0518,
+      processing_rate       REAL NOT NULL DEFAULT 0.029,
+      processing_flat_cents INTEGER NOT NULL DEFAULT 30,
+      note                  TEXT NOT NULL DEFAULT '',
+      created_at            TEXT NOT NULL,
+      updated_at            TEXT NOT NULL,
+      created_by            TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_whatnot_fee_periods_from
       ON whatnot_fee_periods (from_date);
@@ -1705,6 +1721,30 @@ function migrate(database: Database.Database): void {
   // derived on read, so every stored row starts reporting correctly the moment
   // this build opens the database. Nothing to re-import.
   setMeta(database, 'schema_version', '42')
+
+  // v43: a rate period carries ALL FOUR of the platform's terms.
+  //
+  // The commission alone could never reproduce a payout. Whatnot charges card
+  // processing on the ORDER TOTAL — item price plus shipping plus sales tax —
+  // so the tax rate is an input to the fee even though the tax itself is
+  // neither revenue nor a cost, and the flat charge per order is the other half
+  // of a card fee that a percentage alone gets wrong on every small spot.
+  //
+  // Existing rows take the defaults, which is exactly what they were being
+  // priced at before this shipped: the rates were constants in the contract
+  // rather than columns, so nothing about a stored period changes meaning. The
+  // commission stays in `rate` under its original name — renaming a column on a
+  // SYNCED table would strand every laptop still on the older build.
+  //
+  // Still no backfill and still no seed row. An empty table means the contract's
+  // defaults everywhere, which is what the app assumes for any night no period
+  // covers, and a seeded row would look like a decision somebody made.
+  addColumnIfMissing(database, 'whatnot_fee_periods', 'tax_rate', 'REAL NOT NULL DEFAULT 0.0518')
+  addColumnIfMissing(database, 'whatnot_fee_periods', 'processing_rate', 'REAL NOT NULL DEFAULT 0.029')
+  addColumnIfMissing(
+    database, 'whatnot_fee_periods', 'processing_flat_cents', 'INTEGER NOT NULL DEFAULT 30'
+  )
+  setMeta(database, 'schema_version', '43')
 
   // Seed the product catalog once, then apply the on-hand snapshot once.
   seedCatalogIfNeeded(database)

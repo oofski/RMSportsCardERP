@@ -186,6 +186,12 @@ export function registerFinanceIpc(): void {
         // here rather than a cast: a form string that will not parse must arrive
         // as NaN and be REFUSED by the validator, not land as a 0% commission
         // that silently doubles the reported gross of every show in the range.
+        //
+        // The three newer terms are passed through UNTOUCHED when absent rather
+        // than coerced to NaN — `Number(undefined)` is NaN, and a renderer
+        // packaged before they existed would then be unable to save anything at
+        // all. `saveRatePeriod` fills an absent field with the default and still
+        // refuses one that is present and unparseable.
         return saveRatePeriod(
           {
             id: input?.id ? str(input.id).trim() : undefined,
@@ -194,6 +200,9 @@ export function registerFinanceIpc(): void {
               ? null
               : str(input.toDate).trim() || null,
             rate: Number(input?.rate),
+            taxRate: input?.taxRate as number,
+            processingRate: input?.processingRate as number,
+            processingFlatCents: input?.processingFlatCents as number,
             note: str(input?.note)
           },
           actor.id

@@ -54,15 +54,16 @@
  * a second time, which understated a ten-day export's revenue by about $35,000
  * and printed a fee that had already been taken.
  *
- * Gross and the two fees are DERIVED, per positive sale ROW, at the commission
- * rate in force on that row's own date (`deriveSaleFee` in the contract owns the
- * arithmetic and it is never inlined; `whatnotRates.ts` owns the rate). A row is
- * one purchased slot — 1,929 sale rows carry 1,929 distinct Order IDs — which is
- * what makes the flat 30c per row a fact rather than a model.
+ * The item price and the two fees are DERIVED, per positive sale ROW, on the
+ * terms in force on that row's BUSINESS DAY (`deriveSaleFee` in the contract
+ * owns the arithmetic and it is never inlined; `whatnotRates.ts` owns the
+ * terms). A row is one purchased ORDER — 1,929 sale rows carry 1,929 distinct
+ * Order IDs — which is what makes the flat charge per row a fact rather than a
+ * model.
  *
  * PER ROW, then summed onto a day; weeks, months and the grand total then sum
  * days. Nothing above a row ever re-derives, and it could not: a day's net sales
- * figure has lost how many 30c charges are inside it and which dates they fell
+ * figure has lost how many flat charges are inside it and which dates they fell
  * on. Because every step is linear the two agree to the cent, and the
  * reconciliation below asserts it rather than trusting it.
  *
@@ -1660,11 +1661,11 @@ function newRollup(): Rollup {
  * ever built.
  *
  * Every field is SUMMED, including the fees and the derived gross. A period
- * CANNOT re-derive them: the 30c is charged per ROW and the commission comes
- * from each row's own BUSINESS DAY, and a month's net-sales total has lost both
- * facts. Running `deriveSaleFee` on it would charge one 30c for the month at one
- * rate for the whole span. The derivation happens once, per row; everything
- * above a row adds.
+ * CANNOT re-derive them: the flat card charge is levied per ROW and the terms
+ * come from each row's own BUSINESS DAY, and a month's net-sales total has lost
+ * both facts. Running `deriveSaleFee` on it would levy one flat charge for the
+ * month on one set of terms for the whole span. The derivation happens once, per
+ * row; everything above a row adds.
  *
  * The rate breakdown rides along rather than being dropped at the day boundary:
  * a month is the shape MOST likely to span a rate change, and a month that lost
@@ -2146,8 +2147,8 @@ function buildView(db: Database): StreamingFinanceView {
     day.rowCount += r.rows
     const bucket = r.bucket as LedgerBucket
     // Counted from the row table rather than inferred from a dollar total — no
-    // average ticket price can recover it, and the flat 30c is charged once per
-    // row, so this count is load-bearing again rather than decoration.
+    // average ticket price can recover it, and the flat card charge is levied
+    // once per row, so this count is load-bearing again rather than decoration.
     if (bucket === 'sale' || bucket === 'product_sale') day.saleCount += r.rows
     if (bucket === 'product_sale') {
       day.productSales = toDollars(toCents(day.productSales) + r.cents)
@@ -2187,23 +2188,32 @@ function buildView(db: Database): StreamingFinanceView {
   // THE LEDGER'S AMOUNT IS NET. Whatnot deducts its cut before writing the row —
   // on the owner's real exports every non-payout row summed equals the payouts
   // to the cent, which could not be true if a fee were still to come off. So
-  // nothing is subtracted here. Gross and the two fees are reverse-engineered
-  // from the net, PER ROW:
+  // nothing is subtracted here. The item price the buyer bid is RECOVERED from
+  // the payout, PER ROW, and the fees fall out of it:
   //
-  //   gross      = (net + 0.30) / (1 - rate - 0.029)
-  //   whatnotFee = gross x rate
-  //   stripeFee  = gross x 0.029 + 0.30
+  //   commission = round(item x commissionRate)
+  //   tax        = round(item x taxRate)
+  //   processing = round((item + tax) x processingRate + processingFlat)
+  //   payout     = item - commission - processing
   //
-  // ROW BY ROW, AND IT HAS TO BE. The 30c is charged once per purchased slot
-  // (1,929 sale rows, 1,929 distinct Order IDs) and the commission comes from
-  // the rate in force on THAT ROW'S BUSINESS DAY, so neither survives being
+  // read backwards. The contract's `deriveSaleFee` owns that arithmetic and it
+  // is never restated here; the shipping term is zero on this path because
+  // shipping is not inside a Whatnot sale row (it arrives as its own ADJUSTMENT
+  // rows, which are classified and booked separately above).
+  //
+  // ROW BY ROW, AND IT HAS TO BE. The flat charge is levied once per purchased
+  // order (1,929 sale rows, 1,929 distinct Order IDs) and the terms come from
+  // the period covering THAT ROW'S BUSINESS DAY, so neither survives being
   // aggregated into a day's dollar total first. Only positive rows are charged:
   // a refund is not a purchase and a $0.00 sale is not a transaction, and both
   // pass through at face value.
   //
-  // `deriveSaleFee` in the contract owns the arithmetic and is never restated;
   // `rateLookup` snapshots the periods once for this whole derivation, so a rate
   // edited mid-pass cannot produce a day that disagrees with itself.
+  //
+  // THE TAX IS NOT A FEE AND NOT REVENUE. It is accumulated only because the
+  // processing charge is levied on a total that contains it; it lands on the day
+  // as a memo and in no subtotal anywhere.
   //
   // Fees are on SALES ONLY — tips, bonuses, subsidies, postage and Show Boost
   // arrive whole and are untouched by any of this.
@@ -2223,10 +2233,13 @@ function buildView(db: Database): StreamingFinanceView {
   interface DayFees {
     grossCents: number
     whatnotCents: number
-    stripeCents: number
+    processingCents: number
+    taxCents: number
     charged: number
-    /** Gross cents per rate charged — one entry on an ordinary day. */
-    byRate: Map<number, number>
+    /** Rows whose payout the model could not reproduce. See below. */
+    unresolved: number
+    /** Gross cents per SET OF TERMS charged — one entry on an ordinary day. */
+    byTerms: Map<string, RateSlice>
   }
   const feesByDay = new Map<string, DayFees>()
   for (const r of saleRows) {
@@ -2247,7 +2260,7 @@ function buildView(db: Database): StreamingFinanceView {
     // including a period the owner set to end ON the night of a show — split
     // into two rates and the statement reported the weighted average. A 4%
     // period ending 20 July produced "5.1%" for the 20 July show: 45% of the
-    // gross before midnight at 4%, the rest after it at the 6% default. The
+    // gross before midnight at 4%, the rest after it at the standing default. The
     // owner read the period as covering that night's show, which is how a person
     // reads dates against shows, and no screen said otherwise.
     //
@@ -2257,29 +2270,45 @@ function buildView(db: Database): StreamingFinanceView {
     // fix when that ever happens is to end the period on the day BEFORE the show
     // whose night it should stop covering — which is what the dates on the rates
     // screen now say they mean.
-    const rate = rateAt(r.d)
-    const fee = deriveSaleFee(r.cents, rate)
+    const rates = rateAt(r.d)
+    const fee = deriveSaleFee(r.cents, rates)
     const acc = feesByDay.get(r.d) ?? {
       grossCents: 0,
       whatnotCents: 0,
-      stripeCents: 0,
+      processingCents: 0,
+      taxCents: 0,
       charged: 0,
-      byRate: new Map<number, number>()
+      unresolved: 0,
+      byTerms: new Map<string, RateSlice>()
     }
     acc.grossCents += fee.grossCents
     acc.whatnotCents += fee.whatnotFeeCents
-    acc.stripeCents += fee.stripeFeeCents
-    // Kept per rate as well as in total, so the statement can name what it was
-    // charged instead of dividing one by the other. A day still CAN carry two
-    // rates — two shows on one night with a boundary between them, or a period
-    // edited to end mid-range — and the one thing that must not happen again is
-    // an averaged percentage printed as if it were a configured one.
-    acc.byRate.set(rate, (acc.byRate.get(rate) ?? 0) + fee.grossCents)
+    acc.processingCents += fee.processingFeeCents
+    acc.taxCents += fee.taxCents
+    // A payout the forward model cannot reproduce. On the owner's real files
+    // this is zero, and it stays zero while the configured terms match the ones
+    // Whatnot actually charged; a non-zero count is the app noticing that they
+    // do not, rather than printing a bid nobody made.
+    if (!fee.exact) acc.unresolved += 1
+    // Kept per SET OF TERMS as well as in total, so the statement can name what
+    // it was charged instead of dividing one by the other. A day still CAN carry
+    // two — two shows on one night with a period boundary between them, or a
+    // period edited to end mid-range — and the one thing that must not happen
+    // again is an averaged percentage printed as if it were a configured one.
+    const key = `${rates.commissionRate}|${rates.processingRate}|${rates.processingFlatCents}`
+    const slice = acc.byTerms.get(key) ?? {
+      rate: rates.commissionRate,
+      grossSales: 0,
+      processingRate: rates.processingRate,
+      processingFlatCents: rates.processingFlatCents
+    }
+    slice.grossSales += fee.grossCents
+    acc.byTerms.set(key, slice)
     // EITHER fee, not just the commission: a promotional 0% period would leave
-    // the commission at zero on rows that still paid Stripe its 2.9% + 30c, and
-    // counting on the commission alone would then print "30c x 0 orders" beside
-    // a real charge.
-    if (fee.whatnotFeeCents !== 0 || fee.stripeFeeCents !== 0) acc.charged += 1
+    // the commission at zero on rows that still paid the card charge, and
+    // counting on the commission alone would then print a flat charge against
+    // zero orders beside a real cost.
+    if (fee.whatnotFeeCents !== 0 || fee.processingFeeCents !== 0) acc.charged += 1
     feesByDay.set(r.d, acc)
   }
 
@@ -2293,24 +2322,31 @@ function buildView(db: Database): StreamingFinanceView {
     const fees = feesByDay.get(date) ?? {
       grossCents: 0,
       whatnotCents: 0,
-      stripeCents: 0,
+      processingCents: 0,
+      taxCents: 0,
       charged: 0,
-      byRate: new Map<number, number>()
+      unresolved: 0,
+      byTerms: new Map<string, RateSlice>()
     }
     // grossCents is Sigma(net + fees) over exactly the rows `netSales` was summed
     // from, so `grossSales - totalFees == netSales` to the cent, always. The
     // reconciliation below leans on that identity rather than assuming it.
     day.grossSales = toDollars(fees.grossCents)
     day.whatnotFee = toDollars(fees.whatnotCents)
-    day.processingFee = toDollars(fees.stripeCents)
-    day.totalFees = toDollars(fees.whatnotCents + fees.stripeCents)
+    day.processingFee = toDollars(fees.processingCents)
+    day.totalFees = toDollars(fees.whatnotCents + fees.processingCents)
     day.feeSaleCount = fees.charged
-    // The same rows, split by the rate each was charged at. Built from the same
-    // accumulator as `grossSales`, so the slices sum to it exactly and the
+    // A MEMO, and it stops here: nothing below adds it to anything. The buyers
+    // paid it and the state receives it, so it is neither revenue nor a cost —
+    // it exists on the day so the statement can say what the processing fee was
+    // charged on, which is the sales figure PLUS this.
+    day.salesTax = toDollars(fees.taxCents)
+    // The same rows, split by the terms each was charged under. Built from the
+    // same accumulator as `grossSales`, so the slices sum to it exactly and the
     // statement's disclosure cannot disagree with the line it is disclosing.
-    day.rateBreakdown = [...fees.byRate.entries()]
-      .sort((a, b) => a[0] - b[0])
-      .map(([rate, cents]) => ({ rate, grossSales: toDollars(cents) }))
+    day.rateBreakdown = mergeRateSlices(
+      [...fees.byTerms.values()].map((sl) => ({ ...sl, grossSales: toDollars(sl.grossSales) }))
+    )
 
     // `unclassified` has no field of its own in the day shape, so its money is
     // carried at FACE VALUE in totalRevenue and flagged in the import warnings.

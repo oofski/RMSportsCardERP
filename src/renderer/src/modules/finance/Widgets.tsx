@@ -82,9 +82,11 @@ export function RangeWidgets({
 
   // Denominator is GROSS SALES, not total revenue: fees are only ever charged on
   // sales — tips and bonuses arrive whole — so dividing by total revenue would
-  // dilute the rate on any day with a tip and understate what Whatnot costs. And
-  // gross rather than net, because that is the base the two rates are applied
-  // to; dividing by the net Whatnot paid would report 9.8% for a 8.9% take.
+  // dilute the rate on any day with a tip and understate what the platform
+  // costs. And gross rather than net, because the net is what is left AFTER the
+  // fees; dividing by it would report a bigger take than was charged. It is a
+  // share of the sales line, not one of the configured rates — neither of those
+  // is charged on this base.
   const feeRate = totals.grossSales > 0 ? (Math.abs(fees) / totals.grossSales) * 100 : null
   const cogsRate = revenue > 0 ? (Math.abs(sub('cogs')) / revenue) * 100 : null
   const margin = profitMargin(revenue, net)
@@ -110,17 +112,18 @@ export function RangeWidgets({
       prior: priorSub('fees'),
       magnitude: true,
       // THE SPLIT, on the face of the widget. The owner's ask was to still see
-      // what is lost in fees, and the two halves are set by different parties —
-      // Whatnot's commission is a term of the seller agreement and configurable
-      // by date on the Rates tab; Stripe's 2.9% + 30c is a published card rate
-      // nobody here negotiates. One combined figure hides which of those moved.
+      // what is lost in fees, and the two halves are charged on different bases —
+      // the commission on the sale price, card processing on the whole order
+      // including the sales tax the buyer paid, plus a flat charge per order.
+      // Both are configurable by date on the Rates tab. One combined figure
+      // hides which of them moved.
       sub:
         isZero(totals.whatnotFee) && isZero(totals.processingFee) ? (
           "Whatnot's cut and card processing"
         ) : (
           <>
-            {moneyText(Math.abs(totals.whatnotFee))} Whatnot ·{' '}
-            {moneyText(Math.abs(totals.processingFee))} Stripe
+            {moneyText(Math.abs(totals.whatnotFee))} commission ·{' '}
+            {moneyText(Math.abs(totals.processingFee))} processing
             {feeRate === null ? null : ` · ${feeRate.toFixed(2)}% of gross`}
           </>
         )

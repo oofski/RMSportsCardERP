@@ -17444,6 +17444,14 @@ button.sor-team:focus-visible {
   line-height: 1.6;
   color: var(--text-2);
 }
+/* The three terms that are not the headline commission. Quieter than the note
+   under it because it is a reading of the row rather than a sentence about it,
+   and monospaced so two periods line up under each other. */
+.fin-rate-terms {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-3, var(--text-2));
+}
 /* The default is a real row because it is what most of the calendar is actually
    priced at. Dimmer, and with no actions, so it cannot be mistaken for something
    somebody entered. */

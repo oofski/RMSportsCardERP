@@ -1,11 +1,13 @@
 /**
- * What Whatnot's commission was, and when.
+ * What the platform charged, and when.
  *
- * ONE NUMBER, AND IT MULTIPLIES EVERYTHING. The commission is the difference
- * between the net Whatnot paid and the gross the buyers paid, so it decides the
- * top line of every show the business has ever run. It defaults to 6% and the
- * owner can override it for a stretch of dates, because it is a term of a seller
- * agreement rather than a law of nature.
+ * FOUR NUMBERS, AND THEY MULTIPLY EVERYTHING. The commission, the sales tax
+ * rate, the card percentage and the card flat charge are between them the whole
+ * difference between the net Whatnot paid and the price the buyer bid, so they
+ * decide the top line of every show the business has ever run. Each defaults to
+ * what RM is on today and each can be overridden for a stretch of dates, because
+ * every one of them is a term somebody set — a seller agreement, a state, a card
+ * network — rather than a law of nature.
  *
  * A PERIOD COVERS SHOWS, NOT CALENDAR DAYS. The dates on a period are business
  * days — the same `stream_date` the P&L groups by — so "15 June to 20 July" is
@@ -28,9 +30,13 @@
  */
 import type { Result } from '@shared/types'
 import type { RatePeriodInput, WhatnotRatePeriod } from '@shared/financeStreaming'
+import type { WhatnotFeeRates } from '@shared/financeStreaming'
 import {
-  DEFAULT_WHATNOT_RATE,
-  effectiveWhatnotRate,
+  DEFAULT_FEE_RATES,
+  DEFAULT_PROCESSING_FLAT_CENTS,
+  DEFAULT_PROCESSING_RATE,
+  DEFAULT_TAX_RATE,
+  effectiveFeeRates,
   overlappingRatePeriod,
   validateRatePeriod
 } from '@shared/financeStreaming'
@@ -42,17 +48,32 @@ interface RateRow {
   from_date: string
   to_date: string | null
   rate: number
+  tax_rate: number | null
+  processing_rate: number | null
+  processing_flat_cents: number | null
   note: string | null
   created_at: string
   updated_at: string
 }
 
+/**
+ * A stored row as the contract sees it.
+ *
+ * The three newer columns fall back to the defaults rather than trusting the
+ * column default alone: a row can arrive from a laptop still running the build
+ * that had only a commission, and last-write-wins would land it here with those
+ * cells empty. A NULL tax rate reaching the model would price the whole range at
+ * nothing.
+ */
 function toPeriod(r: RateRow): WhatnotRatePeriod {
   return {
     id: r.id,
     fromDate: r.from_date,
     toDate: r.to_date,
     rate: r.rate,
+    taxRate: r.tax_rate ?? DEFAULT_TAX_RATE,
+    processingRate: r.processing_rate ?? DEFAULT_PROCESSING_RATE,
+    processingFlatCents: r.processing_flat_cents ?? DEFAULT_PROCESSING_FLAT_CENTS,
     note: r.note ?? '',
     createdAt: r.created_at,
     updatedAt: r.updated_at
@@ -63,7 +84,8 @@ function toPeriod(r: RateRow): WhatnotRatePeriod {
 export function listRatePeriods(): WhatnotRatePeriod[] {
   const rows = getDb()
     .prepare(
-      `SELECT id, from_date, to_date, rate, note, created_at, updated_at
+      `SELECT id, from_date, to_date, rate, tax_rate, processing_rate,
+              processing_flat_cents, note, created_at, updated_at
          FROM whatnot_fee_periods
         ORDER BY from_date ASC, rowid ASC`
     )
@@ -84,28 +106,29 @@ export function listRatePeriods(): WhatnotRatePeriod[] {
  * the row's `stream_date`; passing a calendar date instead is what made one show
  * report two rates and a blended percentage nobody had configured.
  */
-export function rateLookup(): (day: string) => number {
+export function rateLookup(): (day: string) => WhatnotFeeRates {
   const periods = listRatePeriods()
-  const cache = new Map<string, number>()
-  return (day: string): number => {
+  const cache = new Map<string, WhatnotFeeRates>()
+  return (day: string): WhatnotFeeRates => {
     const hit = cache.get(day)
     if (hit !== undefined) return hit
-    const rate = effectiveWhatnotRate(periods, day)
-    cache.set(day, rate)
-    return rate
+    const rates = effectiveFeeRates(periods, day)
+    cache.set(day, rates)
+    return rates
   }
 }
 
 /**
- * What Whatnot took on one BUSINESS DAY. The default where nothing is configured.
+ * What the platform charged on one BUSINESS DAY. The defaults where nothing is
+ * configured.
  *
  * This is what the Fees & rates preview answers with, and it takes the same kind
  * of key `rateLookup` is called with in `buildView` — a `stream_date`, not a
  * calendar date. That is the whole reason the preview and the statement agree:
  * ask both about 20 July and they are asking the period list the same question.
  */
-export function rateForDate(day: string): number {
-  return effectiveWhatnotRate(listRatePeriods(), day)
+export function rateForDate(day: string): WhatnotFeeRates {
+  return effectiveFeeRates(listRatePeriods(), day)
 }
 
 function fail(err: unknown): Result<never> {
@@ -141,6 +164,15 @@ export function saveRatePeriod(
   // Coerced HERE, not trusted from the renderer: a form sends strings, and
   // Number('') is 0 — a silently booked 0% commission that would double the
   // reported gross of every show in the range.
+  //
+  // An ABSENT figure takes the default rather than NaN, and only an absent one.
+  // A renderer packaged before the three newer terms existed sends the
+  // commission alone, and refusing its save outright would leave the operator
+  // with a screen that cannot write; taking the defaults puts that period on
+  // exactly the terms the app assumed before the columns existed. A field that
+  // is PRESENT and unparseable still arrives as NaN and is still refused.
+  const num = (v: unknown, fallback: number): number =>
+    v === undefined || v === null || v === '' ? fallback : typeof v === 'number' ? v : Number(v)
   const clean: RatePeriodInput = {
     id: typeof input?.id === 'string' && input.id.trim() ? input.id.trim() : undefined,
     fromDate: String(input?.fromDate ?? '').trim(),
@@ -149,6 +181,11 @@ export function saveRatePeriod(
         ? null
         : String(input.toDate).trim(),
     rate: typeof input?.rate === 'number' ? input.rate : Number(input?.rate),
+    taxRate: num(input?.taxRate, DEFAULT_FEE_RATES.taxRate),
+    processingRate: num(input?.processingRate, DEFAULT_FEE_RATES.processingRate),
+    processingFlatCents: Math.round(
+      num(input?.processingFlatCents, DEFAULT_FEE_RATES.processingFlatCents)
+    ),
     note: String(input?.note ?? '').trim().slice(0, NOTE_MAX)
   }
 
@@ -176,26 +213,35 @@ export function saveRatePeriod(
     if (clean.id) {
       db.prepare(
         `UPDATE whatnot_fee_periods
-            SET from_date = @from, to_date = @to, rate = @rate, note = @note, updated_at = @ts
+            SET from_date = @from, to_date = @to, rate = @rate, tax_rate = @tax,
+                processing_rate = @proc, processing_flat_cents = @flat,
+                note = @note, updated_at = @ts
           WHERE id = @id`
       ).run({
         id: clean.id,
         from: clean.fromDate,
         to: clean.toDate,
         rate: clean.rate,
+        tax: clean.taxRate,
+        proc: clean.processingRate,
+        flat: clean.processingFlatCents,
         note: clean.note,
         ts
       })
     } else {
       db.prepare(
         `INSERT INTO whatnot_fee_periods
-           (id, from_date, to_date, rate, note, created_at, updated_at, created_by)
-         VALUES (@id, @from, @to, @rate, @note, @ts, @ts, @by)`
+           (id, from_date, to_date, rate, tax_rate, processing_rate,
+            processing_flat_cents, note, created_at, updated_at, created_by)
+         VALUES (@id, @from, @to, @rate, @tax, @proc, @flat, @note, @ts, @ts, @by)`
       ).run({
         id: newId(),
         from: clean.fromDate,
         to: clean.toDate,
         rate: clean.rate,
+        tax: clean.taxRate,
+        proc: clean.processingRate,
+        flat: clean.processingFlatCents,
         note: clean.note,
         ts,
         by: actorId
@@ -212,9 +258,9 @@ export function saveRatePeriod(
 }
 
 /**
- * Remove a period. The days it covered fall back to whatever else covers them,
- * and to the 6% default if nothing does — which is a real change to the P&L, so
- * the caller is expected to confirm it first.
+ * Remove a period. The nights it covered fall back to whatever else covers them,
+ * and to the contract's defaults if nothing does — which is a real change to the
+ * P&L, so the caller is expected to confirm it first.
  */
 export function deleteRatePeriod(id: string): Result<WhatnotRatePeriod[]> {
   const db = getDb()
@@ -227,4 +273,4 @@ export function deleteRatePeriod(id: string): Result<WhatnotRatePeriod[]> {
   }
 }
 
-export { DEFAULT_WHATNOT_RATE }
+export { DEFAULT_FEE_RATES }

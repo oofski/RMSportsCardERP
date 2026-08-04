@@ -112,9 +112,9 @@ function whatnotPnl(): OwnerWhatnotPnl | null {
  *
  * The product breakdown goes back to the row table because a day does not carry
  * WHICH boxes sold — and now the windows do too, because a fee cannot be
- * apportioned out of a day's total. The 30c is charged per purchased slot and
- * the commission comes from each row's own BUSINESS DAY, so the only honest way
- * to price a subset of a day's sales is to price the rows in it. `deriveSaleFee`
+ * apportioned out of a day's total. The flat card charge is levied per order and
+ * the terms come from each row's own BUSINESS DAY, so the only honest way to
+ * price a subset of a day's sales is to price the rows in it. `deriveSaleFee`
  * is the same function the day view uses, AND it is handed the same date — this
  * widget and the Streaming tab would otherwise report two different costs for
  * one box the moment a show ran past midnight into a different rate period.
@@ -158,7 +158,7 @@ function wholesalePnl(): OwnerWholesalePnl | null {
       // the calendar.
       const fee = deriveSaleFee(r.cents, rateAt(r.d))
       grossCents += fee.grossCents
-      feeCents += fee.whatnotFeeCents + fee.stripeFeeCents
+      feeCents += fee.whatnotFeeCents + fee.processingFeeCents
       if (r.cents !== 0) activeDays.add(r.d)
     }
     const revenue = grossCents / 100
@@ -203,7 +203,7 @@ function wholesalePnl(): OwnerWholesalePnl | null {
  * Earned, and not yet in the bank.
  *
  * Every non-payout row is money the business made; every payout row is money
- * moved out to Stripe. The difference is the balance sitting at Whatnot. This
+ * moved out to the bank. The difference is the balance sitting at Whatnot. This
  * is the honest answer to "what is still owed to us" in an app with no
  * accounts-receivable ledger — and it is real, not modelled.
  */
