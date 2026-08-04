@@ -205,8 +205,9 @@ export function registerStreamingIpc(): void {
    * what an operator will type and `Number()` reads neither. Anything that is
    * not a plain amount becomes NaN and db/streaming.ts refuses it by name —
    * whereas a silent 0 would book a case of Bowman at nothing and look like a
-   * working feature. Whether a price is ALLOWED at all is not decided here: it
-   * depends on the session's date, which only the write can see.
+   * working feature. Neither whether a price is ALLOWED at all nor which unit it
+   * is PER is decided here: the first depends on the session's date and the
+   * second on the product's stock unit, and only the write can see either.
    */
   ipcMain.handle(IPC.streamItemAdd, (_e, input: NewStreamItem): Result<StreamSessionDetail> => {
     try {

@@ -18,6 +18,8 @@
  * ambiguous, and there would be no correct way to resolve it later.
  */
 
+import type { StockUnit } from './units'
+
 export type StreamStatus = 'live' | 'ended'
 
 /**
@@ -96,6 +98,10 @@ export interface StreamItem {
    * A break is entered as cases + loose boxes; a giveaway as boxes + loose
    * packs. All three are null on a line entered directly in stock units, and on
    * every line recorded before v25.
+   *
+   * On a RECONCILIATION exactly one of them is set — the product's own stock
+   * unit — and that is also what says which unit `statedCasePrice` is per. See
+   * `statedPriceUnit`.
    */
   enteredCases: number | null
   enteredBoxes: number | null
@@ -105,7 +111,14 @@ export interface StreamItem {
   unitCost: number
   costTotal: number
   /**
-   * RECONCILIATION lines only: what ONE case was stated to have cost.
+   * RECONCILIATION lines only: what ONE UNIT OF ENTRY was stated to have cost.
+   *
+   * The name is historical and the column behind it (`stream_items
+   * .stated_case_price`) is deliberately unrenamed — stream_items syncs, and a
+   * laptop that has not updated yet drops a column it does not recognise, which
+   * would land a reconciliation with no price on it and let the removal path
+   * hand back stock that never left. See statedPriceUnit for what the number
+   * means on a given line.
    *
    * Null on every line that moved stock — those are valued at the layers they
    * actually took, and a second number here would be a disagreeing answer to
@@ -113,7 +126,7 @@ export interface StreamItem {
    *
    * Its presence is what MAKES a line a reconciliation, and it changes what the
    * line is: no stock moved, no cost layer was consumed, and `costTotal` is
-   * `enteredCases × this` rather than the FIFO cost of anything.
+   * `the entered count × this` rather than the FIFO cost of anything.
    */
   statedCasePrice: number | null
   /**
@@ -225,12 +238,21 @@ export interface NewStreamItem {
   /** Giveaway entry: loose packs. */
   packs?: number | null
   /**
-   * RECONCILIATION entry: what ONE case cost. Accepted ONLY on a past-dated
-   * session (see `isPastDatedSession`), and only beside `cases`.
+   * RECONCILIATION entry: what ONE UNIT OF ENTRY cost. Accepted ONLY on a
+   * past-dated session (see `isPastDatedSession`).
    *
-   * Per case rather than a total, because the two age differently: a total is
-   * silently wrong the moment the case count is corrected, while "what we paid
-   * for a case" stays true however many of them are being recorded.
+   * WHICH unit is the product's own: a case-stocked product is counted in
+   * `cases` at a price per case, a box-stocked one in `boxes` at a price per
+   * box. A box-stocked product has nothing to convert — one box is one stock
+   * unit — so demanding a case count of it would invent a division it does not
+   * need and refuse the entry on a boxes-per-case it has no reason to carry.
+   * Main refuses the field that does not match, rather than ignoring it.
+   *
+   * The name is the one the column has kept, for the reason given on
+   * `StreamItem.statedCasePrice`. Per unit rather than a total, because the two
+   * age differently: a total is silently wrong the moment the count is
+   * corrected, while "what we paid for one" stays true however many are being
+   * recorded.
    *
    * Typed as a number, validated as though it were not — it arrives from a text
    * field, so main parses it through `parseMoneyInput` and refuses anything
@@ -315,6 +337,35 @@ export function parseMoneyInput(raw: unknown): number {
   const t = raw.trim().replace(/[$,\s]/g, '')
   if (!/^-?(?:\d+(?:\.\d+)?|\.\d+)$/.test(t)) return NaN
   return Number(t)
+}
+
+/**
+ * Which unit a reconciliation line's stated price is PER.
+ *
+ * The price column is one number for two different units — a case-stocked
+ * product is reconciled in cases at a price per case, a box-stocked one in
+ * boxes at a price per box — so the row has to be able to say which, and it
+ * does: a reconciliation sets exactly ONE of `enteredCases` / `enteredBoxes`,
+ * the one it was counted in. That is not an extra flag invented for this; it is
+ * the entry the line already carried so it could read back the way it was typed.
+ *
+ * Renaming or splitting the price column instead would strand every laptop that
+ * has not updated: `stream_items` syncs whole rows, and the apply path keeps
+ * only the columns the receiving database recognises. A row arriving with a
+ * column that machine has never heard of lands with its price NULL — and a
+ * reconciliation with no price is indistinguishable from a line that moved
+ * stock, so removing it would put cases back on a shelf they never left.
+ *
+ * Defaults to 'case' for a line that says neither, which is not a guess: the
+ * price column arrived at schema v40 and the entered units at v25, so every row
+ * that has ever carried a stated price was counted in cases and recorded which
+ * — and cases were the only thing a reconciliation could be entered in until
+ * this rule changed.
+ */
+export function statedPriceUnit(line: Pick<StreamItem, 'enteredCases' | 'enteredBoxes'>): StockUnit {
+  if (typeof line.enteredCases === 'number' && line.enteredCases > 0) return 'case'
+  if (typeof line.enteredBoxes === 'number' && line.enteredBoxes > 0) return 'box'
+  return 'case'
 }
 
 /** Whole minutes between two instants; null when either is missing/invalid. */

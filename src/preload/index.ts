@@ -661,10 +661,13 @@ const api = {
      * hatch and is ignored when any of the three are present.
      *
      * On a show that is already history (isPastDatedSession) this is a
-     * RECONCILIATION instead: send `cases` + `casePrice` and the line books what
-     * was actually paid, moving no stock. Main decides which of the two it is
-     * from the stored session and refuses a mismatch either way, so a form drawn
-     * before midnight cannot post the wrong kind of line after it.
+     * RECONCILIATION instead: send the count in the product's OWN stock unit —
+     * `cases` for a case-stocked product, `boxes` for a box-stocked one — plus
+     * `casePrice`, which is what one of those cost. The line then books what was
+     * actually paid, moving no stock. Main decides which of the two acts it is
+     * from the stored session, and which unit the count is in from the product,
+     * refusing a mismatch either way — so a form drawn before midnight cannot
+     * post the wrong kind of line after it.
      *
      * A refused conversion comes back as `Result.error` and is safe to show
      * verbatim: every one of those messages names the field to go and fill in

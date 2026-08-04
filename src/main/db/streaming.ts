@@ -738,12 +738,19 @@ function enteredUnit(value: number | null | undefined): number | null {
  * take units the warehouse still has and cost an old show at this month's
  * prices. Both failures are silent in the P&L.
  *
- * So a reconciliation asserts instead of infers. The operator states how many
- * cases were broken and what one case cost, and the line books exactly that:
- * `cases × price`. It moves NO stock, opens NO cost lot and consumes NO layer,
+ * So a reconciliation asserts instead of infers. The operator states how much
+ * was broken and what one of them cost, and the line books exactly that:
+ * `count × price`. It moves NO stock, opens NO cost lot and consumes NO layer,
  * because it is a statement about stock that is gone rather than a claim about
  * stock on hand — and `Σ lot.qty_remaining == inventory_stock.quantity` is an
  * invariant this module must leave exactly as it found it.
+ *
+ * WHAT IT IS COUNTED IN is the product's own stock unit: a case-stocked product
+ * in cases at a price per case, a box-stocked one in boxes at a price per box.
+ * There is nothing to convert on a box-stocked product — one box IS one stock
+ * unit — so insisting on cases would invent a division it does not need, and
+ * then refuse the whole entry over a boxes-per-case the product has no reason
+ * to carry.
  *
  * One transaction covering stock, cost lots, the ledger row, the line and the
  * layers it consumed — a line that exists without its stock movement (or the
@@ -768,7 +775,9 @@ export function addItem(input: NewStreamItem, actorId: string | null): Result<St
   // Re-parsed here rather than trusted — this is the write, and the renderer is
   // not a trust boundary.
   const priceGiven = input?.casePrice !== undefined && input?.casePrice !== null
-  const casePrice = priceGiven ? parseMoneyInput(input.casePrice) : NaN
+  // Per unit of ENTRY, not per case — see NewStreamItem.casePrice for why the
+  // field kept the older name.
+  const statedPrice = priceGiven ? parseMoneyInput(input.casePrice) : NaN
 
   const run = db.transaction((): Result<StreamSessionDetail> => {
     const session = db
@@ -788,32 +797,14 @@ export function addItem(input: NewStreamItem, actorId: string | null): Result<St
      * fallback either way is the failure that would not be noticed: a stated
      * price ignored on tonight's show books the average while the screen showed
      * $2,400 a case, and a missing price on an old show quietly eats layers
-     * bought since.
+     * bought since. Both halves of that are refused below — the second here, the
+     * first with the entry, where the product is known and the refusal can name
+     * the unit the price should have been in.
      */
     const reconcile = isPastDatedSession({
       streamDate: session.stream_date,
       endedAt: session.ended_at
     })
-    if (reconcile && !priceGiven) {
-      return {
-        ok: false,
-        error:
-          'That show is already history, so its stock is long gone and there is nothing left to cost it from. Enter how many cases were broken and what one case cost.'
-      }
-    }
-    if (!reconcile && priceGiven) {
-      return {
-        ok: false,
-        error:
-          'That show is not history yet — its stock is still on the shelf and costs what it cost. Leave the case price out; the line books the real cost of the stock it takes.'
-      }
-    }
-    if (reconcile) {
-      if (!Number.isFinite(casePrice)) {
-        return { ok: false, error: 'Enter what one case cost, as a number — 2400, not a blank or a word.' }
-      }
-      if (casePrice < 0) return { ok: false, error: 'A case cannot have cost less than nothing.' }
-    }
 
     if (!isLocation(location)) return { ok: false, error: 'Pick a stock location.' }
     const product = db
@@ -846,6 +837,18 @@ export function addItem(input: NewStreamItem, actorId: string | null): Result<St
       : null
     const fractional = Number(product.giveaway_item) === 1
 
+    // The other half of the mode check, made here rather than beside the
+    // session because "leave the case price out" is the wrong instruction for a
+    // product that would have been priced per box.
+    if (!reconcile && priceGiven) {
+      return {
+        ok: false,
+        error: `That show is not history yet — its stock is still on the shelf and costs what it cost. Leave the ${
+          units ? units.unitType : 'stated'
+        } price out; the line books the real cost of the stock it takes.`
+      }
+    }
+
     let qty: number
     // What the operator TYPED, kept beside the converted quantity so the line
     // reads back the way it was entered. Which of the three are filled in is
@@ -856,49 +859,85 @@ export function addItem(input: NewStreamItem, actorId: string | null): Result<St
     let entryPacks: number | null = null
     if (reconcile) {
       /**
-       * A reconciliation is counted in CASES, whichever kind of line it is,
-       * because the price is per case and there is no stated price for a loose
-       * box. Refusing the extra fields is better than ignoring them: a typed
-       * number that does nothing is a wrong total waiting to be believed.
+       * A reconciliation is counted in the PRODUCT'S OWN STOCK UNIT, whichever
+       * kind of line it is, and priced per one of those.
        *
-       * The conversion is the same contract every other entry goes through, so
-       * a case means here exactly what it means on tonight's show. A
-       * case-stocked product needs no divisor (one case IS one stock unit); a
-       * box-stocked one cannot express a case without boxes-per-case, and the
-       * contract says so by name rather than assuming a case holds one box.
+       * That is the only unit the price can honestly be in. A case-stocked
+       * product is bought and thought about by the case; a box-stocked one is
+       * bought and thought about by the box, and one box is already one stock
+       * unit — asking for a case count would make the entry depend on a
+       * boxes-per-case that such a product has no reason to carry, and refuse
+       * the whole line when it does not. There is nothing to convert, so nothing
+       * to demand a divisor for.
+       *
+       * The other fields are refused rather than ignored: a typed number that
+       * does nothing is a wrong total waiting to be believed.
        */
       if (!units) {
         return {
           ok: false,
-          error: `This product is stocked in ${product.unit_type}, not cases or boxes, so a case entry cannot be converted. Set its unit type to case or box in Inventory.`
+          error: `This product is stocked in ${product.unit_type}, not cases or boxes, so there is no unit for it to be priced by. Set its unit type to case or box in Inventory.`
         }
       }
-      if ((inBoxes ?? 0) > 0 || (inPacks ?? 0) > 0) {
+      const unit = units.unitType
+      const plural = unit === 'case' ? 'cases' : 'boxes'
+      if (!priceGiven) {
         return {
           ok: false,
-          error: 'A reconciliation is priced per case, so it is entered in whole cases. Record loose boxes as their own line, at what those boxes cost.'
+          error: `That show is already history, so its stock is long gone and there is nothing left to cost it from. Enter how many ${plural} were broken and what one ${unit} cost.`
         }
       }
-      // FRACTIONAL CASES ARE ALLOWED HERE, and only here.
+      if (!Number.isFinite(statedPrice)) {
+        return {
+          ok: false,
+          error: `Enter what one ${unit} cost, as a number — 2400, not a blank or a word.`
+        }
+      }
+      if (statedPrice < 0) {
+        return { ok: false, error: `A ${unit} cannot have cost less than nothing.` }
+      }
+      if (unit === 'case' && ((inBoxes ?? 0) > 0 || (inPacks ?? 0) > 0)) {
+        return {
+          ok: false,
+          error: 'This product is stocked in cases, so a reconciliation of it is priced per case and entered in cases. Record loose boxes as their own line, at what those boxes cost.'
+        }
+      }
+      if (unit === 'box' && ((inCases ?? 0) > 0 || (inPacks ?? 0) > 0)) {
+        return {
+          ok: false,
+          error: 'This product is stocked in boxes, so a reconciliation of it is priced per box and entered in boxes. Enter the boxes those cases held, at what one box cost.'
+        }
+      }
+      // FRACTIONAL COUNTS ARE ALLOWED HERE, and only here.
       //
-      // Everywhere else a case count must be whole, because everywhere else it
-      // moves stock, and a shelf cannot carry a quarter of a case unless the
-      // product is flagged for fractional holding. None of that applies to a
+      // Everywhere else a count must be whole, because everywhere else it moves
+      // stock, and a shelf cannot carry a quarter of a case unless the product
+      // is flagged for fractional holding. None of that applies to a
       // reconciliation: it writes a quantity change of ZERO and opens no cost
       // layer, so there is no shelf for a fraction to corrupt. What it records
       // is what a night cost, and a night that went through a case and a quarter
       // cost a case and a quarter — refusing 1.25 would force a number that is
       // wrong into the only field that was going to say what really happened.
-      // Zero and negatives are left to breakToStock, which already has the
-      // sentence for them; this only has to stop a value that is not a number.
-      const cases = inCases ?? 0
-      if (!Number.isFinite(cases)) {
-        return { ok: false, error: 'Enter how many cases were broken — 2, or 1.25 for part of one.' }
+      // The same is true of half a box, which is why this reads off the entry
+      // unit rather than off the word "case".
+      const counted = (unit === 'case' ? inCases : inBoxes) ?? 0
+      // Zero, a negative and a value that was never a number all arrive here as
+      // nothing entered — enteredUnit() has already turned the last of those
+      // into null — and one sentence answers all three.
+      if (!(counted > 0)) {
+        return { ok: false, error: `Enter at least one ${unit} — 2, or 1.25 for part of one.` }
       }
-      const conv = breakToStock(units, cases, 0)
+      // Through the same contract every other entry goes through, so a case
+      // means here exactly what it means on tonight's show and a box means
+      // exactly one unit of a box-stocked shelf.
+      const conv =
+        unit === 'case' ? breakToStock(units, counted, 0) : breakToStock(units, 0, counted)
       if (!conv.ok) return { ok: false, error: conv.error }
       qty = conv.value.quantity
-      entryCases = cases
+      // Which of the two is set is what tells a reader of this row — and
+      // statedPriceUnit — which unit its stated price is per.
+      if (unit === 'case') entryCases = counted
+      else entryBoxes = counted
     } else if (byUnits) {
       if (!units) {
         return {
@@ -982,12 +1021,15 @@ export function addItem(input: NewStreamItem, actorId: string | null): Result<St
        * on hand did not change, and a price from June must not re-base what
        * today's shelf is carried at.
        *
-       * The stated cost is `cases × price`, NOT `qty × per-stock-unit`: the
-       * operator asserted the case price, and dividing it down to a stock unit
-       * and multiplying back would round a 12-box case's cost by a cent or two
-       * against the number they typed.
+       * The stated cost is `the entered count × price`, NOT `qty ×
+       * per-stock-unit`: the operator asserted what one of the things they
+       * counted cost, and dividing that down and multiplying it back would round
+       * a 12-box case's cost by a cent or two against the number they typed. On
+       * a box-stocked product the two are the same arithmetic — one box is one
+       * stock unit — and it is written this way so both units go through one
+       * rule rather than two that happen to agree.
        */
-      costTotal = cents((entryCases ?? 0) * casePrice)
+      costTotal = cents((entryCases ?? entryBoxes ?? 0) * statedPrice)
       // Quantity change of ZERO. The row is written for the same reason every
       // other movement writes one — the ledger is append-only and a cost that
       // appears in the P&L with no entry behind it is untraceable — but it
@@ -1090,10 +1132,13 @@ export function addItem(input: NewStreamItem, actorId: string | null): Result<St
       location,
       unit_cost: perStockUnit,
       cost_total: costTotal,
-      // The assertion this line rests on, kept as it was typed. It is also the
-      // switch every reversal reads: a row with a price here moved no stock, so
-      // nothing may be handed back for it.
-      stated_case_price: reconcile ? cents(casePrice) : null,
+      // The assertion this line rests on, kept as it was typed: what ONE UNIT
+      // OF ENTRY cost. Which unit that is, the row says for itself through the
+      // entered count above — see statedPriceUnit, and the note there on why
+      // this column keeps a name that now only half fits. It is also the switch
+      // every reversal reads: a row with a price here moved no stock, so nothing
+      // may be handed back for it.
+      stated_case_price: reconcile ? cents(statedPrice) : null,
       pack_cost: packCostVal,
       loss_value: lossValue,
       note,

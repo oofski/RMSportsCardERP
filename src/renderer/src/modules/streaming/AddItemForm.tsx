@@ -11,7 +11,8 @@ import {
   giveawayToStock,
   packCost,
   type Conversion,
-  type ProductUnits
+  type ProductUnits,
+  type StockUnit
 } from '@shared/units'
 import { api } from '../../lib/api'
 import { formatMoney } from '../../lib/format'
@@ -51,6 +52,21 @@ function count(raw: string, allowFraction = false): number | null {
 }
 
 /**
+ * The word for the unit a reconciliation is counted and priced in.
+ *
+ * Null while no product is chosen, and for a product the unit contract has no
+ * case or box structure for — that entry is refused by name in the preview, and
+ * calling its count "cases" on the way there would be the same wrong assumption
+ * this form exists to avoid.
+ */
+function entryWord(unit: StockUnit | null, n: number): string {
+  if (!unit) return n === 1 ? 'unit' : 'units'
+  return stockUnitWord(unit, n)
+}
+
+const capitalize = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1)
+
+/**
  * Record a break or a giveaway.
  *
  * Both are the same operation against inventory — pull stock out of a location
@@ -69,11 +85,19 @@ function count(raw: string, allowFraction = false): number | null {
  *
  * On a show that is already history the form becomes a different one, because
  * the act is different. There is no stock to take — it went weeks ago — so the
- * question stops being "how much comes off the shelf" and becomes "how many
- * cases were broken, and what did a case cost". The whole panel changes with it:
- * the fields, the preview, the button, and a banner that says so in as many
- * words. Nobody should ever have to work out which mode they are in from the
- * shape of the inputs.
+ * question stops being "how much comes off the shelf" and becomes "how much was
+ * broken, and what did one of them cost". The whole panel changes with it: the
+ * fields, the preview, the button, and a banner that says so in as many words.
+ * Nobody should ever have to work out which mode they are in from the shape of
+ * the inputs.
+ *
+ * ONE FIELD, in the product's own stock unit. A case-stocked product is counted
+ * in cases at a price per case; a box-stocked one in boxes at a price per box,
+ * because that is how it is bought and because one box is already one unit of
+ * its shelf — there is nothing for a case count to convert through, and asking
+ * for one would refuse the entry over a boxes-per-case the product never needed.
+ * Every label, hint and message below follows that unit, so a box-stocked
+ * product never sees the word "case" on this screen.
  */
 export function AddItemForm({
   sessionId,
@@ -99,8 +123,8 @@ export function AddItemForm({
   const [cases, setCases] = useState('')
   const [boxes, setBoxes] = useState('')
   const [packs, setPacks] = useState('')
-  /** Reconcile mode: what one case was bought at, exactly as typed. */
-  const [casePriceRaw, setCasePriceRaw] = useState('')
+  /** Reconcile mode: what one unit of entry was bought at, exactly as typed. */
+  const [unitPriceRaw, setUnitPriceRaw] = useState('')
   /** Only used for products the unit contract does not model — packs, singles
    *  and "other" have no case/box structure to convert through. */
   const [plainQty, setPlainQty] = useState('1')
@@ -117,37 +141,45 @@ export function AddItemForm({
     [product]
   )
 
+  /**
+   * The unit a reconciliation of THIS product is counted and priced in: its own
+   * stock unit. Null until a product is chosen, and for one the contract has no
+   * case/box structure for.
+   */
+  const reconUnit: StockUnit | null = reconcile ? (units?.unitType ?? null) : null
+
   /** The two fields this kind of line is entered in: cases + boxes for a break,
    *  boxes + packs for a giveaway. Null means the field is not a whole number.
-   *  A reconciliation is entered in cases alone, whichever kind it is — the
-   *  price it carries is per case, and there is no stated price for a box. */
+   *  A reconciliation is entered in ONE of them — the product's own stock unit —
+   *  so a box-stocked product types into the boxes field and a case-stocked one
+   *  into cases, and each is priced per one of what it counted. */
   const entered = useMemo(() => {
-    if (reconcile) return { left: count(cases, true), right: 0 }
+    if (reconcile) return { left: count(reconUnit === 'box' ? boxes : cases, true), right: 0 }
     const left = isBreak ? count(cases) : count(boxes)
     const right = isBreak ? count(boxes) : count(packs)
     return { left, right }
-  }, [reconcile, isBreak, cases, boxes, packs])
+  }, [reconcile, reconUnit, isBreak, cases, boxes, packs])
 
   /** A shape problem in the fields themselves, before the contract is asked. */
   const entryError =
     entered.left === null || entered.right === null
       ? reconcile
-        ? 'Enter how many cases were broken — 2, or 1.25 for part of one.'
+        ? `Enter how many ${entryWord(reconUnit, 2)} were broken — 2, or 1.25 for part of one.`
         : isBreak
           ? 'Cases and boxes are whole numbers — enter 3, not 3.5.'
           : 'Boxes and packs are whole numbers — enter 3, not 3.5.'
       : null
 
   /**
-   * What one case cost. NaN covers both "nothing typed yet" and "that is not a
-   * number", which is right for the preview — neither can be costed — and the
-   * two are told apart at submit, where they are different mistakes.
+   * What one unit of entry cost. NaN covers both "nothing typed yet" and "that
+   * is not a number", which is right for the preview — neither can be costed —
+   * and the two are told apart at submit, where they are different mistakes.
    *
    * Parsed with the same function main parses it with, so a price this panel
    * accepts is a price the write accepts.
    */
-  const casePrice = parseMoneyInput(casePriceRaw)
-  const priceOk = reconcile ? Number.isFinite(casePrice) && casePrice >= 0 : true
+  const unitPrice = parseMoneyInput(unitPriceRaw)
+  const priceOk = reconcile ? Number.isFinite(unitPrice) && unitPrice >= 0 : true
 
   /**
    * What the entry converts to, in the product's own stock unit — or the
@@ -165,14 +197,22 @@ export function AddItemForm({
     // rightly rejects an empty entry, but showing that before the operator has
     // touched a field would be an alarm about their not having started.
     if (entered.left === 0 && entered.right === 0) return null
-    // Cases go through the break conversion in reconcile mode even for a
-    // giveaway: "what is N cases of this product, in the unit it is stocked in"
-    // is one question with one answer, and asking it twice is how the two get to
-    // disagree. Main converts the same entry the same way.
-    return isBreak || reconcile
+    // A reconciliation goes through the break conversion whichever kind of line
+    // it is: "what is N of this, in the unit it is stocked in" is one question
+    // with one answer, and asking it twice is how the two get to disagree. Which
+    // side of that conversion the count goes in follows the entry unit — for a
+    // box-stocked product it is already the answer, and the round trip is what
+    // keeps the arithmetic in one place. Main converts the same entry the same
+    // way.
+    if (reconcile) {
+      return reconUnit === 'box'
+        ? breakToStock(units, 0, entered.left)
+        : breakToStock(units, entered.left, 0)
+    }
+    return isBreak
       ? breakToStock(units, entered.left, entered.right)
       : giveawayToStock(units, entered.left, entered.right)
-  }, [units, isBreak, reconcile, entered])
+  }, [units, isBreak, reconcile, reconUnit, entered])
 
   const plain = Number.parseInt(plainQty, 10)
   const quantity = units
@@ -193,7 +233,7 @@ export function AddItemForm({
   const short = !reconcile && quantity !== null && quantity > onHand + QTY_EPS
 
   /** What the reconciliation asserts, in one number, before it is committed. */
-  const statedTotal = priceOk && entered.left ? entered.left * casePrice : null
+  const statedTotal = priceOk && entered.left ? entered.left * unitPrice : null
 
   const choose = (p: InventoryProduct): void => {
     setProduct(p)
@@ -207,17 +247,11 @@ export function AddItemForm({
     // seeding a pack there would fire "no packs-per-box set" at an operator who
     // has not typed anything yet.
     //
-    // A reconciliation seeds one case for the same reason, and deliberately
-    // leaves the price empty: it is the one number nobody but the operator
-    // knows, and a prefilled figure is one somebody eventually forgets to
-    // change.
-    const one = reconcile
-      ? 'case'
-      : kind === 'break' && p.unitType === 'case'
-        ? 'case'
-        : kind === 'break'
-          ? 'box'
-          : null
+    // A reconciliation seeds one of the same unit for the same reason, and
+    // deliberately leaves the price empty: it is the one number nobody but the
+    // operator knows, and a prefilled figure is one somebody eventually forgets
+    // to change.
+    const one = reconcile || kind === 'break' ? (p.unitType === 'box' ? 'box' : 'case') : null
     setCases(one === 'case' ? '1' : '')
     setBoxes(one === 'box' ? '1' : '')
     setPacks('')
@@ -242,7 +276,7 @@ export function AddItemForm({
     if (quantity === null || quantity <= 0) {
       setError(
         reconcile
-          ? 'Enter at least one case.'
+          ? `Enter at least one ${entryWord(reconUnit, 1)}.`
           : units
             ? isBreak
               ? 'Enter at least one case or box.'
@@ -255,10 +289,10 @@ export function AddItemForm({
     // different mistakes here, so they get two different sentences.
     if (reconcile && !priceOk) {
       setError(
-        casePriceRaw.trim() === ''
-          ? 'Enter what one case cost — that is the whole point of reconciling it.'
-          : Number.isFinite(casePrice)
-            ? 'A case cannot have cost less than nothing.'
+        unitPriceRaw.trim() === ''
+          ? `Enter what one ${entryWord(reconUnit, 1)} cost — that is the whole point of reconciling it.`
+          : Number.isFinite(unitPrice)
+            ? `A ${entryWord(reconUnit, 1)} cannot have cost less than nothing.`
             : 'That is not a price. Enter an amount like 2400 or 2,400.00.'
       )
       return
@@ -279,15 +313,19 @@ export function AddItemForm({
       // for, where there is nothing to convert.
       const input: NewStreamItem = reconcile
         ? {
+            // In the product's own stock unit, and only that one: main refuses
+            // the other field rather than ignoring it, so sending both would be
+            // sending a number that cannot be true.
             sessionId,
             kind,
             productId: product.id,
-            cases: entered.left,
-            // Per case, not the total on screen. Main multiplies it back out, so
-            // the number stored is the assertion the operator made rather than a
-            // product of it — and correcting the case count later cannot leave a
-            // stale total behind.
-            casePrice,
+            cases: reconUnit === 'box' ? null : entered.left,
+            boxes: reconUnit === 'box' ? entered.left : null,
+            // Per unit of entry, not the total on screen. Main multiplies it
+            // back out, so the number stored is the assertion the operator made
+            // rather than a product of it — and correcting the count later
+            // cannot leave a stale total behind.
+            casePrice: unitPrice,
             location,
             breakNumber: isBreak ? num : null,
             recipient: !isBreak ? recipient.trim() || null : null,
@@ -323,7 +361,7 @@ export function AddItemForm({
       }
       toast.success(
         reconcile
-          ? `${entered.left} case${entered.left === 1 ? '' : 's'} of ${product.name} recorded at ${
+          ? `${entered.left} ${entryWord(reconUnit, entered.left ?? 0)} of ${product.name} recorded at ${
               statedTotal !== null ? formatMoney(statedTotal) : formatMoney(0)
             }.`
           : `${units ? describeQuantity(units, quantity) : `${quantity} units`} of ${
@@ -342,7 +380,7 @@ export function AddItemForm({
       // Cleared with the rest. A reconciliation is usually several different
       // products at several different prices, and a price left sitting in the
       // field is the one that gets recorded against the wrong one.
-      setCasePriceRaw('')
+      setUnitPriceRaw('')
       setRecipient('')
       setNote('')
       setBreakNumber(num === null ? '' : String(num + 1))
@@ -360,9 +398,23 @@ export function AddItemForm({
         <div className="stm-recon-banner">
           <Icon name="History" size={15} />
           <div>
-            <b>Reconciling a past show.</b> Enter how many cases were broken and what you paid for a
-            case. This records the cost against that night — it does not take anything off
-            today&rsquo;s shelf.
+            {/* Named in the chosen product's unit as soon as there is one. Before
+                that there is no unit to name, and calling it a case would be a
+                promise the fields then break for a box-stocked product. */}
+            <b>Reconciling a past show.</b>{' '}
+            {reconUnit ? (
+              <>
+                Enter how many {entryWord(reconUnit, 2)} were broken and what you paid for a{' '}
+                {entryWord(reconUnit, 1)}.
+              </>
+            ) : (
+              <>
+                Enter how much was broken and what one of them cost, counted in the unit the product
+                is stocked in.
+              </>
+            )}{' '}
+            This records the cost against that night — it does not take anything off today&rsquo;s
+            shelf.
           </div>
         </div>
       )}
@@ -438,79 +490,59 @@ export function AddItemForm({
           <div className="stm-form-row">
             {reconcile ? (
               <>
+                {/* ONE count field, in the product's own stock unit, writing to
+                    the state that unit belongs to — so a box-stocked product
+                    enters boxes and a case-stocked one cases, and neither is
+                    offered a field it would have to be converted out of. */}
                 <Field
-                  label="Cases broken"
+                  label={`${capitalize(entryWord(reconUnit, 2))} broken`}
                   hint={
-                    units?.unitType === 'case'
-                      ? 'Stocked in cases — one case is one unit'
-                      : product.boxesPerCase
-                        ? `1 case = ${product.boxesPerCase} boxes`
-                        : 'Boxes per case is not set'
+                    reconUnit
+                      ? `Stocked in ${entryWord(reconUnit, 2)} — one ${entryWord(
+                          reconUnit,
+                          1
+                        )} is one unit`
+                      : `Stocked in ${product.unitType}s — not cases or boxes`
                   }
                 >
                   <Input
                     type="number"
                     min={0}
                     step={1}
-                    value={cases}
-                    onChange={(e) => setCases(e.target.value)}
+                    value={reconUnit === 'box' ? boxes : cases}
+                    onChange={(e) =>
+                      reconUnit === 'box' ? setBoxes(e.target.value) : setCases(e.target.value)
+                    }
                     placeholder="0"
                     autoFocus
                   />
                 </Field>
-                <Field label="Price paid per case" hint="What one case cost when you bought it">
+                <Field
+                  label={`Price paid per ${entryWord(reconUnit, 1)}`}
+                  hint={`What one ${entryWord(reconUnit, 1)} cost when you bought it`}
+                >
                   {/* A text input, not a number one: money is typed with commas
                       and dollar signs, and a number input silently discards the
                       lot — leaving a field that looks empty for a price the
                       operator is sure they entered. */}
                   <Input
                     inputMode="decimal"
-                    value={casePriceRaw}
-                    onChange={(e) => setCasePriceRaw(e.target.value)}
+                    value={unitPriceRaw}
+                    onChange={(e) => setUnitPriceRaw(e.target.value)}
                     placeholder="2400"
-                    invalid={casePriceRaw.trim() !== '' && !priceOk}
+                    invalid={unitPriceRaw.trim() !== '' && !priceOk}
                   />
                 </Field>
               </>
             ) : units ? (
               isBreak ? (
-                <>
-                  <Field
-                    label="Cases"
-                    hint={
-                      product.boxesPerCase
-                        ? `1 case = ${product.boxesPerCase} boxes`
-                        : 'Boxes per case is not set'
-                    }
-                  >
-                    <Input
-                      type="number"
-                      min={0}
-                      step={1}
-                      value={cases}
-                      onChange={(e) => setCases(e.target.value)}
-                      placeholder="0"
-                      autoFocus
-                    />
-                  </Field>
-                  <Field
-                    label="Boxes"
-                    hint={
-                      units.unitType === 'case'
-                        ? 'Loose boxes — a part-case'
-                        : 'The unit this product is stocked in'
-                    }
-                  >
-                    <Input
-                      type="number"
-                      min={0}
-                      step={1}
-                      value={boxes}
-                      onChange={(e) => setBoxes(e.target.value)}
-                      placeholder="0"
-                    />
-                  </Field>
-                </>
+                <BreakCounts
+                  units={units}
+                  cases={cases}
+                  boxes={boxes}
+                  setCases={setCases}
+                  setBoxes={setBoxes}
+                />
               ) : (
                 <>
                   <Field
@@ -599,12 +631,13 @@ export function AddItemForm({
             <ReconcilePreview
               product={product}
               units={units}
+              unit={reconUnit}
               entryError={entryError}
               conversion={conversion}
-              cases={entered.left}
+              counted={entered.left}
               quantity={quantity}
-              casePriceRaw={casePriceRaw}
-              casePrice={casePrice}
+              unitPriceRaw={unitPriceRaw}
+              unitPrice={unitPrice}
               priceOk={priceOk}
               total={statedTotal}
             />
@@ -653,14 +686,91 @@ export function AddItemForm({
 }
 
 /**
+ * The two count fields of a LIVE break, led by the one the product is actually
+ * stocked in.
+ *
+ * Both are always offered — a box-stocked product with a real boxes-per-case is
+ * genuinely broken a case at a time, and the contract converts that perfectly
+ * well — but the first field is the one the shelf counts, and it is the one the
+ * cursor lands in. The old fixed order put cases first for everything, so the
+ * usual entry for a box-stocked product started by tabbing past a field it was
+ * never going to use, into a divisor it may not even have.
+ */
+function BreakCounts({
+  units,
+  cases,
+  boxes,
+  setCases,
+  setBoxes
+}: {
+  units: ProductUnits
+  cases: string
+  boxes: string
+  setCases: (v: string) => void
+  setBoxes: (v: string) => void
+}): JSX.Element {
+  const leadsWithBoxes = units.unitType === 'box'
+
+  const caseField = (
+    <Field
+      key="cases"
+      label="Cases"
+      hint={
+        units.boxesPerCase ? `1 case = ${units.boxesPerCase} boxes` : 'Boxes per case is not set'
+      }
+    >
+      <Input
+        type="number"
+        min={0}
+        step={1}
+        value={cases}
+        onChange={(e) => setCases(e.target.value)}
+        placeholder="0"
+        autoFocus={!leadsWithBoxes}
+      />
+    </Field>
+  )
+
+  const boxField = (
+    <Field
+      key="boxes"
+      label="Boxes"
+      hint={leadsWithBoxes ? 'The unit this product is stocked in' : 'Loose boxes — a part-case'}
+    >
+      <Input
+        type="number"
+        min={0}
+        step={1}
+        value={boxes}
+        onChange={(e) => setBoxes(e.target.value)}
+        placeholder="0"
+        autoFocus={leadsWithBoxes}
+      />
+    </Field>
+  )
+
+  return leadsWithBoxes ? (
+    <>
+      {boxField}
+      {caseField}
+    </>
+  ) : (
+    <>
+      {caseField}
+      {boxField}
+    </>
+  )
+}
+
+/**
  * The arithmetic, spelled out, before the button is pressed: `4 cases × $2,400 =
- * $9,600`.
+ * $9,600`, or `3 boxes × $40 = $120` for a product stocked in boxes.
  *
  * A reconciliation has no shelf to check itself against — the stock is gone, so
- * "only 2 on hand" cannot catch a mistyped case count and nothing else will
- * either. The total IS the check: the operator knows what that night cost them,
- * and a wrong figure is obvious on sight in a way that a wrong case count in a
- * box beside a price is not.
+ * "only 2 on hand" cannot catch a mistyped count and nothing else will either.
+ * The total IS the check: the operator knows what that night cost them, and a
+ * wrong figure is obvious on sight in a way that a wrong count in a box beside a
+ * price is not.
  *
  * It also says the thing that separates this from every other line on the
  * screen — that no stock moves — because the only place a wrongly-moved case
@@ -669,23 +779,26 @@ export function AddItemForm({
 function ReconcilePreview({
   product,
   units,
+  unit,
   entryError,
   conversion,
-  cases,
+  counted,
   quantity,
-  casePriceRaw,
-  casePrice,
+  unitPriceRaw,
+  unitPrice,
   priceOk,
   total
 }: {
   product: InventoryProduct
   units: ProductUnits | null
+  /** The unit this entry is counted and priced in — the product's own. */
+  unit: StockUnit | null
   entryError: string | null
   conversion: Conversion | null
-  cases: number | null
+  counted: number | null
   quantity: number | null
-  casePriceRaw: string
-  casePrice: number
+  unitPriceRaw: string
+  unitPrice: number
   priceOk: boolean
   total: number | null
 }): JSX.Element {
@@ -696,7 +809,7 @@ function ReconcilePreview({
     entryError ??
     (conversion && !conversion.ok ? conversion.error : null) ??
     (!units
-      ? `${product.name} is stocked in ${product.unitType}s, which have no case to price. Set its unit type to case or box in Inventory.`
+      ? `${product.name} is stocked in ${product.unitType}s, not cases or boxes, so there is no unit for it to be priced by. Set its unit type to case or box in Inventory.`
       : null)
 
   if (problem) {
@@ -711,12 +824,14 @@ function ReconcilePreview({
     )
   }
 
-  if (!cases || quantity === null) {
+  if (!counted || quantity === null) {
     return (
       <div className="stm-consume is-idle">
         <Icon name="History" size={15} />
         <div className="stm-consume-body">
-          <span>Enter how many cases were broken, and what one case cost.</span>
+          <span>
+            Enter how many {entryWord(unit, 2)} were broken, and what one {entryWord(unit, 1)} cost.
+          </span>
         </div>
       </div>
     )
@@ -728,10 +843,13 @@ function ReconcilePreview({
         <Icon name="DollarSign" size={15} />
         <div className="stm-consume-body">
           <span>
-            {casePriceRaw.trim() === ''
-              ? `${cases} case${cases === 1 ? '' : 's'} of ${product.name}. Now enter what one case cost.`
-              : Number.isFinite(casePrice)
-                ? 'A case cannot have cost less than nothing.'
+            {unitPriceRaw.trim() === ''
+              ? `${counted} ${entryWord(unit, counted)} of ${product.name}. Now enter what one ${entryWord(
+                  unit,
+                  1
+                )} cost.`
+              : Number.isFinite(unitPrice)
+                ? `A ${entryWord(unit, 1)} cannot have cost less than nothing.`
                 : 'That is not a price. Enter an amount like 2400 or 2,400.00.'}
           </span>
         </div>
@@ -743,22 +861,14 @@ function ReconcilePreview({
     <div className="stm-consume is-recon">
       <Icon name="History" size={15} />
       <div className="stm-consume-body">
+        {/* The count is in the product's own stock unit, so it IS the number
+            that will appear in the line's × column. Nothing is divided down on
+            the way in any more, and there is nothing left to warn about. */}
         <span className="stm-recon-sum">
-          <b>{cases}</b> case{cases === 1 ? '' : 's'} × <b>{formatMoney(casePrice)}</b> ={' '}
+          <b>{counted}</b> {entryWord(unit, counted)} × <b>{formatMoney(unitPrice)}</b> ={' '}
           <b className="stm-recon-total">{formatMoney(total ?? 0)}</b>
         </span>
-        <span>
-          Books {formatMoney(total ?? 0)} of cost to this show
-          {units && units.unitType === 'box'
-            ? // The number that will appear in the line's × column, said here so
-              // it is not a surprise: a case-priced entry is stored in the unit
-              // the product is stocked in.
-              ` — ${formatUnitCount(quantity)} ${stockUnitWord(units.unitType, quantity)}, at ${formatMoney(
-                Math.round((total ?? 0) / quantity * 100) / 100
-              )} each`
-            : ''}
-          .
-        </span>
+        <span>Books {formatMoney(total ?? 0)} of cost to this show.</span>
         <span className="stm-consume-short">
           <Icon name="PackageMinus" size={13} />
           Today&rsquo;s stock is untouched — this stock left the shelf on the night.

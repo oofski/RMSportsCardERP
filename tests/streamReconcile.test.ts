@@ -5,6 +5,13 @@
  * because of a reconciliation … we will search a product and add it, and then
  * can enter how many cases of it and the price we bought each case at."
  *
+ * And the one that followed it, once he tried it on a product he buys by the
+ * box: "if a product is tagged as a box not a case … then the default value
+ * should just be a box not a case, and I can enter the per-box value." So the
+ * entry unit follows the PRODUCT, not the word "case" — a box-stocked product is
+ * counted in boxes at a price per box, which needs no boxes-per-case because
+ * there is nothing to convert.
+ *
  * That is a claim about COST, not a claim about stock, and the difference is
  * everything this file is about. Adding a line to a show two months old must:
  *
@@ -39,7 +46,7 @@ const {
   getSessionDetail,
   removeItem
 } = require('../src/main/db/streaming')
-const { isPastDatedSession, parseMoneyInput } = require('../src/shared/streaming')
+const { isPastDatedSession, parseMoneyInput, statedPriceUnit } = require('../src/shared/streaming')
 
 const db = getDb()
 
@@ -115,8 +122,9 @@ const CASE_P = make({
   cost: 1000,
   open: 5
 })
-// Box-stocked, eight boxes to a case: the entry is still cases, and the price
-// has to divide down to the unit the shelf actually counts.
+// Box-stocked, eight boxes to a case. The divisor is real and the LIVE break
+// path still uses it — but a reconciliation of this product is entered in boxes
+// at a price per box, because that is the unit it is stocked in.
 const BOX_P = make({
   name: 'SR Box Product Hobby Box',
   unitType: 'box',
@@ -132,9 +140,11 @@ const EMPTY_P = make({
   cost: 0,
   open: 0
 })
-// Box-stocked with NO boxes-per-case. A case cannot be expressed for it, and
-// pretending a case holds one box is the order-of-magnitude error the unit
-// contract exists to refuse.
+// Box-stocked with NO boxes-per-case — the owner's own failing product. A case
+// still cannot be expressed for it, and pretending a case holds one box is the
+// order-of-magnitude error the unit contract exists to refuse. But a
+// reconciliation of it never asks: it counts boxes and prices boxes, and the
+// divisor it does not have is one it never needed.
 const NO_BPC_P = make({
   name: 'SR No Divisor Hobby Box',
   unitType: 'box',
@@ -309,18 +319,39 @@ assertStockLotsConsistent(db)
 ok(true, 'stock and cost layers still agree')
 
 // ---------------------------------------------------------------------------
-console.log('\n=== 3. the case price divides down to the unit the shelf counts ===')
+console.log('\n=== 3. a box-stocked product is entered in BOXES, at a per-box price ===')
 // ---------------------------------------------------------------------------
+// This product HAS a boxes-per-case, and it is still not used here: the entry
+// unit follows what the shelf counts, so the operator states boxes and what one
+// box cost. Nothing is divided down, so nothing can be rounded on the way in.
 const r2 = addItem(
+  { sessionId: PAST, kind: 'break', productId: BOX_P, boxes: 16, casePrice: 300, location: 'RM' },
+  null
+)
+ok(r2.ok, 'sixteen boxes of a box-stocked product are accepted', r2.error)
+const line2 = lastItem(PAST) as Record<string, number | string | null>
+ok(line2.quantity === 16, 'sixteen boxes is sixteen stock units on a box-stocked product')
+ok(eq(line2.unitCost as number, 300), 'and the cost per stock unit is the stated BOX price')
+ok(eq(line2.costTotal as number, 4800), 'so the line books 16 × $300')
+ok(line2.enteredBoxes === 16, 'the line reads back as the sixteen boxes that were typed')
+ok(
+  line2.enteredCases === null,
+  'and carries no case count — which is how the row says its price is per box'
+)
+ok(stockQty(BOX_P, 'RM') === 20, 'still twenty boxes on the shelf')
+
+// The old rule, refused now. A case entry on a box-stocked product would have to
+// be divided by a boxes-per-case to become a price, and the number it produced
+// would not be the one the operator typed.
+const boxAsCases = addItem(
   { sessionId: PAST, kind: 'break', productId: BOX_P, cases: 2, casePrice: 2400, location: 'RM' },
   null
 )
-ok(r2.ok, 'two cases of a box-stocked product are accepted', r2.error)
-const line2 = lastItem(PAST) as Record<string, number | string | null>
-ok(line2.quantity === 16, 'two 8-box cases are sixteen boxes on a box-stocked product')
-ok(eq(line2.unitCost as number, 300), '$2,400 a case is $300 a box')
-ok(eq(line2.costTotal as number, 4800), 'and the line books 2 × $2,400')
-ok(stockQty(BOX_P, 'RM') === 20, 'still twenty boxes on the shelf')
+ok(
+  !boxAsCases.ok && /priced per box/.test(boxAsCases.error ?? ''),
+  'a case entry on a box-stocked product is refused, divisor or no divisor',
+  boxAsCases.error ?? 'accepted'
+)
 
 // ---------------------------------------------------------------------------
 console.log('\n=== 4. the normal case: nothing on hand at all ===')
@@ -418,14 +449,35 @@ bad(
   /priced per case/
 )
 
-const noDivisor = addItem(
+/**
+ * THIS ASSERTION USED TO SAY SOMETHING ELSE.
+ *
+ * It read: a box-stocked product with no boxes-per-case cannot express a case,
+ * and the refusal names the field to fill in. That was the old rule — every
+ * reconciliation was entered in cases — and it is precisely the wall the owner
+ * hit: the product is bought and broken by the box, the divisor is meaningless
+ * for it, and the app demanded one anyway.
+ *
+ * The refusal is still here because the entry is still wrong, but for the honest
+ * reason: this product is priced per BOX, so a case count is a number that
+ * cannot be turned into what it cost. It no longer sends anybody to Inventory to
+ * invent a divisor. The old message is still correct where it always was — a
+ * LIVE break really does have to convert cases into boxes — and section 11
+ * proves it survives there.
+ */
+const noDivisorAsCases = addItem(
   { sessionId: PAST, kind: 'break', productId: NO_BPC_P, cases: 2, casePrice: 800, location: 'RM' },
   null
 )
 ok(
-  !noDivisor.ok && /boxes-per-case/.test(noDivisor.error ?? ''),
-  'a box-stocked product with no boxes-per-case cannot express a case, and says which field to fill in',
-  noDivisor.error ?? 'accepted'
+  !noDivisorAsCases.ok && /priced per box/.test(noDivisorAsCases.error ?? ''),
+  'a box-stocked product refuses a case entry as priced per box, not as a missing divisor',
+  noDivisorAsCases.error ?? 'accepted'
+)
+ok(
+  !/boxes-per-case/.test(noDivisorAsCases.error ?? ''),
+  'and never sends the operator to Inventory for a divisor a reconciliation does not use',
+  noDivisorAsCases.error ?? 'accepted'
 )
 const packStocked = addItem(
   { sessionId: PAST, kind: 'break', productId: PACK_P, cases: 1, casePrice: 60, location: 'RM' },
@@ -433,7 +485,7 @@ const packStocked = addItem(
 )
 ok(
   !packStocked.ok && /not cases or boxes/.test(packStocked.error ?? ''),
-  'a pack-stocked product has no case to price, and is refused by name',
+  'a pack-stocked product has no case or box to price, and is refused by name',
   packStocked.error ?? 'accepted'
 )
 
@@ -577,6 +629,96 @@ assertStockLotsConsistent(db)
 ok(true, 'the database is consistent at the end of all of it')
 
 // ---------------------------------------------------------------------------
+console.log('\n=== 11. the owner’s product: stocked in boxes, no divisor, priced per box ===')
+// ---------------------------------------------------------------------------
+// The exact entry that used to come back "No boxes-per-case set for this
+// product, so cases cannot be converted to boxes. Set it in Inventory." Nothing
+// about that product needs a boxes-per-case: it is bought by the box, broken by
+// the box and counted by the box, and the divisor only ever existed to express a
+// CASE on a shelf that counts boxes. So the entry stops asking for one.
+{
+  const BOXES = mkSession('SR Box Night', at(28, 20), at(28, 23))
+  const before = {
+    qty: stockQty(NO_BPC_P, 'RM'),
+    avg: getProduct(NO_BPC_P).unitCost,
+    lots: lotState(NO_BPC_P),
+    txn: txnState(NO_BPC_P)
+  }
+  const r = addItem(
+    { sessionId: BOXES, kind: 'break', productId: NO_BPC_P, boxes: 3, casePrice: 40, location: 'RM' },
+    null
+  )
+  ok(r.ok, 'three boxes at $40 a box are recorded against a show two months old', r.ok ? '' : r.error)
+
+  const line = lastItem(BOXES) as Record<string, number | string | null>
+  ok(line.quantity === 3, 'three boxes is three stock units — nothing was converted')
+  ok(eq(line.costTotal as number, 120), 'and the cost is boxes × the per-box price', String(line.costTotal))
+  ok(eq(line.unitCost as number, 40), 'so a stock unit of it cost exactly what was stated')
+  ok(eq(line.statedCasePrice as number, 40), 'the stated price is stored as typed — per box')
+  ok(
+    line.enteredBoxes === 3 && line.enteredCases === null,
+    'and the row says which unit that price is per, through the count it was entered in'
+  )
+  ok(statedPriceUnit(line) === 'box', 'which reads back as a per-box price')
+
+  console.log('\n--- and it moved nothing, exactly like a case reconciliation ---')
+  ok(stockQty(NO_BPC_P, 'RM') === before.qty, 'the shelf still holds what it held')
+  ok(eq(getProduct(NO_BPC_P).unitCost, before.avg), 'the average cost did not move')
+  const lots = lotState(NO_BPC_P)
+  ok(
+    lots.rows === before.lots.rows && lots.qty === before.lots.qty && eq(lots.value, before.lots.value),
+    'no cost layer was opened, consumed or left half-eaten'
+  )
+  ok(itemLotRows(line.id as string) === 0, 'and no consumed layers are named on the line')
+  const txn = txnState(NO_BPC_P)
+  ok(txn.qty === before.txn.qty, 'the ledger row carries a quantity change of zero')
+  ok(eq(txn.cost, before.txn.cost + 120), 'and the whole stated cost')
+  assertStockLotsConsistent(db)
+  ok(true, 'stock and cost layers still agree')
+
+  // The v0.0.84 reasoning, in boxes: a night that went through two and a half
+  // boxes cost two and a half boxes, and nothing on a reconciliation can be
+  // corrupted by saying so.
+  const half = addItem(
+    { sessionId: BOXES, kind: 'break', productId: NO_BPC_P, boxes: 2.5, casePrice: 40, location: 'RM' },
+    null
+  )
+  ok(half.ok, 'half a box is recordable, exactly as a quarter of a case is', half.ok ? '' : half.error)
+  const halfLine = lastItem(BOXES) as Record<string, number | string | null>
+  ok(
+    Math.abs((halfLine.quantity as number) - 2.5) < 1e-9,
+    'the line records 2.5, not a rounded 2 or 3',
+    String(halfLine.quantity)
+  )
+  ok(eq(halfLine.costTotal as number, 100), 'and costs it at 2.5 × $40')
+  ok(stockQty(NO_BPC_P, 'RM') === before.qty, 'with the shelf still where it was')
+
+  console.log('\n--- the divisor still matters where it always did ---')
+  // The refusal the old test asserted, in the place it is still true: a LIVE
+  // break really does have to turn cases into boxes to take them off the shelf,
+  // and it cannot without the divisor.
+  const liveCases = addItem(
+    { sessionId: TODAY, kind: 'break', productId: NO_BPC_P, cases: 1, location: 'RM' },
+    null
+  )
+  ok(
+    !liveCases.ok && /boxes-per-case/.test(liveCases.error ?? ''),
+    'a LIVE break of it in cases is still refused, and still names the field to fill in',
+    liveCases.error ?? 'accepted'
+  )
+  const liveBoxes = addItem(
+    { sessionId: TODAY, kind: 'break', productId: NO_BPC_P, boxes: 2, location: 'RM' },
+    null
+  )
+  ok(liveBoxes.ok, 'while a live break of it in boxes records', liveBoxes.ok ? '' : liveBoxes.error)
+  ok(
+    stockQty(NO_BPC_P, 'RM') === before.qty - 2,
+    'and takes its two boxes off the shelf, as it always did'
+  )
+  assertStockLotsConsistent(db)
+}
+
+// ---------------------------------------------------------------------------
 console.log('\n=== 12. part of a case, and the shelf still never moves ===')
 // ---------------------------------------------------------------------------
 // A night can go through a case and a quarter. Everywhere else a case count is
@@ -642,6 +784,39 @@ console.log('\n=== 12. part of a case, and the shelf still never moves ===')
   )
 }
 
+// ---------------------------------------------------------------------------
+console.log('\n=== 13. a line says which unit its stated price is in ===')
+// ---------------------------------------------------------------------------
+// One column holds both prices, so the row has to be able to say which it means.
+// It does, through the count it was entered in — and a line recorded before any
+// of this must still read as what it was: cases.
+{
+  const MIXED = mkSession('SR Mixed Units', at(35, 19), at(35, 22))
+  addItem(
+    { sessionId: MIXED, kind: 'break', productId: CASE_P, cases: 2, casePrice: 2400, location: 'RM' },
+    null
+  )
+  const caseLine = lastItem(MIXED) as Record<string, number | string | null>
+  ok(statedPriceUnit(caseLine) === 'case', 'a case-stocked line reads back as priced per case')
+  ok(eq(caseLine.statedCasePrice as number, 2400), 'at the price that was stated for a case')
+  addItem(
+    { sessionId: MIXED, kind: 'break', productId: BOX_P, boxes: 5, casePrice: 300, location: 'RM' },
+    null
+  )
+  const boxLine = lastItem(MIXED) as Record<string, number | string | null>
+  ok(statedPriceUnit(boxLine) === 'box', 'and a box-stocked line beside it as priced per box')
+  ok(eq(boxLine.costTotal as number, 1500), 'costing 5 × $300, not 5 × a case', String(boxLine.costTotal))
+
+  // The rule, on the shapes a stored row can actually take. The last of these is
+  // a row from before the entered units existed: cases were the only thing a
+  // reconciliation could be entered in, so cases is what it was.
+  ok(statedPriceUnit({ enteredCases: 4, enteredBoxes: null }) === 'case', 'a case count means per case')
+  ok(statedPriceUnit({ enteredCases: null, enteredBoxes: 3 }) === 'box', 'a box count means per box')
+  ok(
+    statedPriceUnit({ enteredCases: null, enteredBoxes: null }) === 'case',
+    'and a line that says neither still reads as cases, which is what it was'
+  )
+}
 
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail > 0) process.exit(1)

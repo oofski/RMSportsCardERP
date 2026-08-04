@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { Employee } from '@shared/types'
 import type { StreamItem, StreamItemKind, StreamSessionDetail } from '@shared/streaming'
-import { formatDuration, isPastDatedSession, isSuspiciouslyLong } from '@shared/streaming'
+import {
+  formatDuration,
+  isPastDatedSession,
+  isSuspiciouslyLong,
+  statedPriceUnit
+} from '@shared/streaming'
 import { formatMoney } from '../../lib/format'
 import { formatUnitCount, typedEntryLabel } from '../../lib/productUnits'
 import { Icon } from '../../components/Icon'
@@ -199,8 +204,9 @@ export function SessionDetail({
           <Icon name="History" size={14} />
           <span>
             <b>This show is history.</b> Anything added here records what was broken and what it
-            cost — cases and the price you paid per case. It does not move today&rsquo;s stock,
-            because that stock left the shelf on the night.
+            cost — counted in the unit each product is stocked in, at the price you paid for one of
+            them. It does not move today&rsquo;s stock, because that stock left the shelf on the
+            night.
           </span>
         </div>
       )}
@@ -555,6 +561,11 @@ function ItemRow({
   // it is not the number anybody entered, and a line nobody recognises is a line
   // nobody will correct. Both are shown; the entry leads.
   const entry = typedEntryLabel(item)
+  // Which unit the stated price is PER. A reconciliation is priced in the unit
+  // the product is stocked in, and this list mixes both kinds — so the tag reads
+  // it off the line rather than saying "case" for everything, which was wrong on
+  // every box-stocked line by however many boxes a case holds.
+  const priceUnit = item.statedCasePrice !== null ? statedPriceUnit(item) : null
 
   return (
     <div className="stm-line">
@@ -581,15 +592,15 @@ function ItemRow({
           {/* This line is a statement about what stock cost, not a record of
               stock moving. Both are on the same list and they are not the same
               thing, so the one that moved nothing says so. */}
-          {item.statedCasePrice !== null && (
+          {item.statedCasePrice !== null && priceUnit && (
             <span
               className="stm-line-tag is-recon"
               title={`Reconciled after the show at ${formatMoney(
                 item.statedCasePrice
-              )} a case. No stock moved.`}
+              )} a ${priceUnit}. No stock moved.`}
             >
               <Icon name="History" size={10} />
-              {formatMoney(item.statedCasePrice)}/case
+              {formatMoney(item.statedCasePrice)}/{priceUnit}
             </span>
           )}
           {item.breakNumber !== null && (
