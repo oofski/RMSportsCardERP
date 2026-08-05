@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { Employee } from '@shared/types'
 import type { StreamSession } from '@shared/streaming'
-import { STREAM_LONG_HOURS, formatDuration, isSuspiciouslyLong } from '@shared/streaming'
+import { formatDuration, isSuspiciouslyLong } from '@shared/streaming'
 import { Icon } from '../../components/Icon'
 import { useToast } from '../../components/Toast'
 import { Button, Input, Select } from '../../components/ui'
@@ -187,9 +187,8 @@ export function LiveBar({
         <div className="stm-live-warn" role="alert">
           <Icon name="AlertTriangle" size={15} />
           <span>
-            Live for <b>{formatDuration(Math.floor(elapsed / 60000))}</b> — past {STREAM_LONG_HOURS}
-            h. That is usually a forgotten <b>End stream</b>. Until it closes, this session claims
-            every sale that lands, so end it at the time the show actually finished.
+            Live <b>{formatDuration(Math.floor(elapsed / 60000))}</b> — usually a forgotten{' '}
+            <b>End stream</b>. Until it closes it claims every sale.
           </span>
         </div>
       )}

@@ -208,10 +208,7 @@ export function SessionDetail({
         <div className="stm-inline-note recon">
           <Icon name="History" size={14} />
           <span>
-            <b>This show is history.</b> Anything added here records what was broken and what it
-            cost — counted in the unit each product is stocked in, at the price you paid for one of
-            them. It does not move today&rsquo;s stock, because that stock left the shelf on the
-            night.
+            <b>This show is history.</b> Lines added here record cost only — no stock moves.
           </span>
         </div>
       )}
@@ -353,8 +350,8 @@ export function SessionDetail({
               </p>
               {typedEntryLabel(removing) && (
                 <p className="stm-confirm-lead">
-                  That is {formatUnitCount(removing.quantity)} in stock units — the amount that was
-                  taken off the shelf and the amount that goes back on it.
+                  That is {formatUnitCount(removing.quantity)} stock units — the amount that goes
+                  back on the shelf.
                 </p>
               )}
             </>
@@ -394,7 +391,7 @@ export function SessionDetail({
               {/* A reconciliation never took stock, so promising its return here
                   would be a movement the operator then goes looking for. */}
               {items.every((i) => i.statedCasePrice !== null)
-                ? '. Nothing goes back on the shelf — every line on this show is a reconciliation and moved no stock.'
+                ? '. Nothing goes back on the shelf — no line on this show moved stock.'
                 : items.some((i) => i.statedCasePrice !== null)
                   ? ', and the stock the un-reconciled ones took goes back where it came from.'
                   : ', and that stock goes back where it came from.'}
@@ -837,7 +834,7 @@ function CostModal({
       <p className="stm-confirm-lead">
         <b>This corrects the record, not the stock.</b>{' '}
         {item.statedCasePrice !== null
-          ? 'This line never moved stock — it states what a show that is already history cost — so there is nothing on the shelf for a price to change.'
+          ? 'This line never moved stock, so nothing on the shelf changes.'
           : `The ${formatUnitCount(item.quantity)} ${
               item.quantity === 1 ? unitWord : unitPlural
             } came off ${item.location} when this was recorded and are already gone. The cost layers they took are left exactly as they are; what changes is what the statement says this night cost.`}

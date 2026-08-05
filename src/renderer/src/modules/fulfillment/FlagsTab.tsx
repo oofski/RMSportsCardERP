@@ -95,7 +95,7 @@ export function FlagsTab({ canFind, canPack, onChanged }: ShipTabProps): JSX.Ele
       <EmptyState
         icon="Flag"
         title="Nothing flagged"
-        message="Anything the import could not read cleanly shows up here. An empty list means every card matched a team and every break added up."
+        message="Anything the import could not read cleanly lands here. Empty means it all matched."
       />
     )
   }
@@ -130,8 +130,7 @@ export function FlagsTab({ canFind, canPack, onChanged }: ShipTabProps): JSX.Ele
       </div>
 
       <p className="flags-note">
-        None of these stop anyone working. Every card is still pickable and still counted — these
-        are the things worth a second look before the show closes.
+        None of these stop anyone working — they are worth a look before the show closes.
       </p>
 
       {visible.length === 0 ? (

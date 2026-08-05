@@ -413,10 +413,7 @@ export function HistoryTab({ summary, canManage, onChanged }: ShipTabProps): JSX
             <Icon name="Archive" size={16} /> Snapshots
             {snapshots.length > 0 && <span className="hist-count mono">{snapshots.length}</span>}
           </span>
-          <span className="hist-sub">
-            A dated capture of orders, shipments and sales. It survives the next import, so an event
-            stays reportable after the workspace has moved on.
-          </span>
+          <span className="hist-sub">A dated capture that survives the next import.</span>
           {canManage && hasDataset && (
             <Button
               size="sm"
@@ -518,12 +515,6 @@ export function HistoryTab({ summary, canManage, onChanged }: ShipTabProps): JSX
             <Icon name="History" size={16} /> Import history
             {imports.length > 0 && <span className="hist-count mono">{imports.length}</span>}
           </span>
-          <span className="hist-sub">
-            One dataset is active at a time — each import replaces it and logs a row here. Deleting
-            the row for the <b>active</b> import deletes the show with it and empties the workspace;
-            deleting any earlier row removes the log entry and the bench records stamped with it. The
-            confirmation says which, with the numbers.
-          </span>
           {imports.length > 0 && (
             <span className="hist-total mono">
               {importTotals.cards} cards · {formatMoney(importTotals.value)} across all imports
@@ -552,7 +543,7 @@ export function HistoryTab({ summary, canManage, onChanged }: ShipTabProps): JSX
                     {r.carriedForward ? (
                       <span
                         className="ship-chip info mini"
-                        title="A same-named event re-import, so check-offs, holds, notes and statuses were re-attached."
+                        title="Same-named re-import — check-offs and statuses were re-attached."
                       >
                         <Icon name="Repeat" size={11} /> Carried forward
                       </span>
@@ -709,8 +700,8 @@ function SnapshotContents({ contents }: { contents: ShipSnapshotContents }): JSX
       )}
 
       <span className="hist-snap-note">
-        Captured {formatDateTime(contents.createdAt)}. Exporting reads these stored rows, not the
-        live dataset — that is what makes it survive the next import.
+        Captured {formatDateTime(contents.createdAt)}. Exports read these stored rows, not the live
+        dataset.
       </span>
     </div>
   )
@@ -888,11 +879,9 @@ function ImportDeleteModal({
               <li>
                 <Icon name="Repeat" size={13} />
                 <span>
-                  <b>{plan.claims}</b> work {plan.claims === 1 ? 'claim' : 'claims'} and{' '}
-                  <b>{plan.assignments}</b> break{' '}
-                  {plan.assignments === 1 ? 'assignment' : 'assignments'} move to “
-                  {plan.carriedToName || 'the import that carried forward from this one'}”, which is
-                  the same run of work — nobody comes off a break they are standing at.
+                  Claims and assignments move to “
+                  {plan.carriedToName || 'the import that carried forward from this one'}” — the
+                  same run of work.
                 </span>
               </li>
             ) : (
@@ -914,8 +903,7 @@ function ImportDeleteModal({
                 {plan.snapshots > 0 ? (
                   <>
                     <b>{plan.snapshots}</b>{' '}
-                    {plan.snapshots === 1 ? 'snapshot survives' : 'snapshots survive'} this delete —
-                    a capture is the record that outlives its dataset, and it is never swept by one.
+                    {plan.snapshots === 1 ? 'snapshot survives' : 'snapshots survive'} this delete.
                   </>
                 ) : (
                   <>

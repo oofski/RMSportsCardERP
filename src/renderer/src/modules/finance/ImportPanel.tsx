@@ -155,13 +155,11 @@ export function ImportPanel({
           )}
 
           <p className="fin-confirm-lead">
-            The stretch it covered —{' '}
             <b>
               {shortInstantDate(deleting.firstOccurredAt)} to{' '}
               {shortInstantDate(deleting.lastOccurredAt)}
             </b>{' '}
-            — falls back to whatever the remaining imports hold. Re-uploading the same file brings
-            everything back; no session or stock record is touched.
+            falls back to the remaining imports. Re-uploading the file brings it all back.
           </p>
         </>
       )}
@@ -177,14 +175,8 @@ export function ImportPanel({
           </span>
           <h3>No ledger uploaded yet</h3>
           <p>
-            The file to upload is Whatnot&rsquo;s ledger export — the CSV of every money movement on
-            the account: sales, tips, shipping subsidies, giveaway postage, Show Boost charges and
-            payouts, each stamped with the moment it happened.
-          </p>
-          <p>
-            Each row is matched to the stream session running at that instant and booked to that
-            show&rsquo;s date — so a Thursday-night show that sells until 2am counts entirely on
-            Thursday. Anything matching no session is listed, not dropped.
+            Upload Whatnot&rsquo;s ledger CSV. Each row is matched to the show running at that
+            moment, so a Thursday show counts entirely on Thursday.
           </p>
           {canManage ? (
             <Button
@@ -299,12 +291,12 @@ function ImportRow({
         <Stat
           value={imp.rowsDuplicate}
           label="already stored"
-          hint="Rows already held from an overlapping export. Skipping them is what makes re-uploading a week safe."
+          hint="Already held from an overlapping export — skipping them makes a re-upload safe."
         />
         <Stat
           value={imp.rowsRepaired}
           label="repaired"
-          hint="Rows Whatnot exported with unescaped quotes, stitched back together rather than dropped."
+          hint="Exported with unescaped quotes, stitched back together rather than dropped."
         />
         <Stat
           value={imp.rowsQuarantined}

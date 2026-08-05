@@ -207,8 +207,7 @@ export function SessionFormModal({
         </span>
         <span className="stm-preview-dur mono">{formatDuration(minutes)}</span>
         <span className="stm-preview-note">
-          Filed under {longDayLabel(filedUnder)} — a stream belongs to the day it started, however
-          late it ran.
+          Filed under {longDayLabel(filedUnder)} — a stream belongs to the day it started.
         </span>
       </div>
 

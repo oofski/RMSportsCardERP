@@ -160,8 +160,12 @@ ok(labelLine.empty !== true && mailerLine.empty !== true,
    'and neither can be hidden by the zero-line toggle')
 ok(cents(day.packagingShippingLabels) === 0 && cents(day.packagingMailers) === 0,
    'their money fields are zero, because a money field cannot hold "unknown"')
-ok(String(pack.note).includes('net profit above is higher than the truth'),
-   'and the note says the bottom line is over-stated by exactly that gap',
+// The disclosure MOVED — from the standing note into a warning that exists
+// only while some night in the period really is unpriceable. A caveat printed
+// on every period is a caveat nobody reads; this one fires when it is true.
+// What must not change is that it still says the consequence out loud.
+ok(String(pack.warning).includes('net profit is higher than the truth'),
+   'and a warning says the bottom line is over-stated by exactly that gap',
    String(pack.note))
 
 // ---------------------------------------------------------------------------
@@ -208,6 +212,10 @@ ok(day.packagingPackages === 2, 'two envelopes went out', String(day.packagingPa
 ok(day.packagingDaysCovered === 1 && day.packagingDaysUnknown === 0,
    'the night now has a packing record', `${day.packagingDaysCovered}/${day.packagingDaysUnknown}`)
 ok(pack.incomplete !== true, 'so the heading carries no caveat', JSON.stringify(pack.incomplete))
+// The other half of "conditional". A caveat printed on every period is a caveat
+// nobody reads, so the absence of it here is as load-bearing as its presence
+// above — without this the flag would quietly become wallpaper.
+ok(!pack.warning, 'and no over-statement warning either', String(pack.warning))
 ok(!pack.lines.some((l: any) => l.unavailable), 'and no line reads "not known"')
 // 2 labels at 2c + 1 paid mailer at 48c + 1 giveaway mailer at 24c = 0.76.
 ok(cents(pack.subtotal) === cents(-2.19), 'the subtotal is now all six lines: -$2.19', String(pack.subtotal))

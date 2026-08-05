@@ -106,10 +106,8 @@ export function RatesTab(): JSX.Element {
       <Note tone="warn" icon="AlertTriangle">
         <b>Fee rates are not available in this build.</b>
         <p>
-          The app is running against a version that does not expose the rate bridge. Restart after
-          updating and this screen will appear. Until then every day is priced at the{' '}
-          {ratePct(DEFAULT_FEE_RATES.commissionRate)} commission default, which is what it was
-          before this setting existed.
+          This build has no rate bridge. Every day is priced at the{' '}
+          {ratePct(DEFAULT_FEE_RATES.commissionRate)} default until you update.
         </p>
       </Note>
     )
@@ -137,44 +135,18 @@ export function RatesTab(): JSX.Element {
           <span className="fin-head-scope">What the platform takes</span>
         </div>
 
+        {/* THREE STANDING PANELS USED TO SIT HERE and they now live where each
+            one is actually needed. Sales tax being in the list because the card
+            fee is charged on it is a fact about the SALES TAX FIELD, and it is
+            its hint. Dates being show nights rather than calendar days is a fact
+            about the FROM and TO FIELDS, and it is their hints. And "changing a
+            rate re-prices history" is said by the save confirmation in the form
+            below, at the moment somebody is about to do it — which is the only
+            moment it changes anybody's mind. */}
         <p className="fin-rates-lead">
-          Whatnot&rsquo;s ledger pays <b>net</b> — every charge is already gone before the row is
-          written. The Streaming tab works back from that payout to the price the buyer actually
-          bid, and these four numbers are what that arithmetic needs and the file does not contain:
-          the <b>commission</b> Whatnot takes of the sale, the <b>sales tax</b> the buyer paid on
-          top, and the <b>card percentage and flat charge</b> the processor takes of the whole
-          order.
+          Whatnot pays net. These four numbers are what the app needs to work back to the price the
+          buyer bid.
         </p>
-
-        <Note tone="info" icon="ReceiptText">
-          <b>Sales tax is here because the card fee is charged on it — not because it is ours.</b>
-          <p>
-            The buyer pays the tax and the state receives it. It is never revenue and never a cost,
-            so it appears in no figure on the P&amp;L. It has to be configured anyway: card
-            processing is charged on the <b>whole order</b>, tax included, so leaving it out makes
-            every processing fee a little light and no gross quite right.
-          </p>
-        </Note>
-
-        <Note tone="info" icon="CalendarDays">
-          <b>A period covers the shows that started on those nights.</b>
-          <p>
-            Dates here are <b>show nights</b>, not calendar days. A show that goes on at 9pm and
-            finishes at 2am is one show at one rate, counted on the night it started — so a period
-            ending 20 July includes the whole of the 20 July show, including everything that sold
-            after midnight. To stop a rate before a particular show, end the period on the night
-            before it.
-          </p>
-        </Note>
-
-        <Note tone="info" icon="History">
-          <b>Changing a rate changes history.</b>
-          <p>
-            The fee is worked out every time the P&amp;L is read, never stored on a row — so saving
-            a period below immediately re-prices every show inside it. Nothing needs re-uploading
-            and nothing needs re-attributing.
-          </p>
-        </Note>
       </section>
 
       <RateStack
@@ -225,9 +197,8 @@ export function RatesTab(): JSX.Element {
             processing goes.
           </p>
           <p className="fin-confirm-lead">
-            Those show nights fall back to whatever other period covers them, and to the defaults
-            if none does. Every show in that stretch is re-priced the next time the Streaming tab
-            is opened.
+            Those nights fall back to any other period, or the defaults, and are re-priced on next
+            read.
           </p>
         </Modal>
       )}
@@ -316,8 +287,7 @@ function RateStack({
         </div>
         <p className="fin-rate-terms mono">{termsLabel(DEFAULT_TERMS)}</p>
         <p className="fin-rate-note">
-          What the app uses for any show night no period above covers. It is not a row and cannot
-          be edited or removed — add a period to override a stretch of nights.
+          Used for any show night no period covers. Add a period to override it.
         </p>
       </article>
 
@@ -395,16 +365,10 @@ function EffectiveRate({ periods }: { periods: WhatnotRatePeriod[] }): JSX.Eleme
 
       {example.exact ? (
         <p className="fin-rate-worked">
-          A spot that paid out <Money value={100} /> on that night was bid up to{' '}
-          <Money value={bid} strong />: Whatnot took{' '}
-          <Money value={Math.abs(example.whatnotFeeCents) / 100} /> in commission and card
-          processing took <Money value={Math.abs(example.processingFeeCents) / 100} /> —{' '}
-          {ratePct(rates.processingRate)} of the{' '}
-          <Money value={((example.itemCents ?? 0) + example.taxCents) / 100} /> order plus{' '}
-          {rates.processingFlatCents}¢. The buyer also paid{' '}
-          <Money value={example.taxCents / 100} /> of sales tax, which goes to the state and
-          appears nowhere in the P&amp;L. Every spot on that show is priced this way, including
-          the ones sold after midnight.
+          A <Money value={100} /> payout that night was bid up to <Money value={bid} strong />:{' '}
+          <Money value={Math.abs(example.whatnotFeeCents) / 100} /> commission,{' '}
+          <Money value={Math.abs(example.processingFeeCents) / 100} /> processing,{' '}
+          <Money value={example.taxCents / 100} /> tax to the state.
         </p>
       ) : (
         // The inverse could not reproduce this payout at these terms. It is not
@@ -441,18 +405,7 @@ function ProcessingPanel(): JSX.Element {
         <Icon name="CreditCard" size={15} />
         Card processing
       </span>
-      <p>
-        A percentage of the <b>whole order</b> — the sale price plus the sales tax the buyer paid —
-        plus a flat charge per order. Defaults are{' '}
-        <b className="mono">{ratePct(DEFAULT_FEE_RATES.processingRate)}</b> and{' '}
-        <b className="mono">{DEFAULT_FEE_RATES.processingFlatCents}¢</b>, and both are configurable
-        per period above, because what the platform passes on is a term like any other.
-      </p>
-      <p>
-        The flat charge is what makes one break spot cost more to process than one line of a bulk
-        order, and the tax in the base is why this line is never exactly{' '}
-        {ratePct(DEFAULT_FEE_RATES.processingRate)} of the sales figure above it.
-      </p>
+      <p>A percentage of the whole order — sale plus tax — plus a flat charge per order.</p>
     </section>
   )
 }
@@ -596,12 +549,19 @@ function RateModal({
       }
     >
       <div className="fin-rate-form">
-        <Field label="From" hint="Inclusive. The first show NIGHT at this rate.">
+        {/* Both dates are SHOW NIGHTS, not calendar days, and the two hints are
+            where that used to be a standing panel above the list. A show that
+            starts at 9pm and ends at 2am is one show at one rate, counted on the
+            night it started. */}
+        <Field
+          label="From"
+          hint="Inclusive. The first show NIGHT at this rate — a show counts on the night it started."
+        >
           <Input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
         </Field>
         <Field
           label="To"
-          hint="Inclusive — the last show night, all of it. Blank for the rate still in force."
+          hint="Inclusive — the last show night, after-midnight hours included. Blank for the rate still in force."
         >
           <Input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} />
         </Field>
@@ -623,7 +583,10 @@ function RateModal({
         </Field>
         <Field
           label="Sales tax (%)"
-          hint={`What the BUYER pays on top. Never revenue — it is here because card processing is charged on it. ${
+          // Never revenue and never a cost — it is configured here only because
+          // the card fee is charged on it. That used to be a panel of its own
+          // above the list; it belongs on the field it is about.
+          hint={`What the BUYER pays on top — the state gets it, and it is in no P&L figure. It is here because card processing is charged on it. ${
             TAX_RATE_MIN * 100
           }–${TAX_RATE_MAX * 100}%.`}
         >

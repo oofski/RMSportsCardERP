@@ -70,7 +70,7 @@ export function Provenance({
             {unattributed.rowCount > 0 && (
               <span
                 className="fin-source-waiting"
-                title="Money in the ledger that no logged show covers. It is on those days in the calendar above, and listed under the statement."
+                title="Ledger money no logged show covers — shown per day in the calendar above."
               >
                 <Money value={unattributed.amount} strong /> waiting on{' '}
                 {plural(unattributed.byDay.length, 'day')}
@@ -99,7 +99,7 @@ export function Provenance({
           {view.reconciled && (
             <p className="fin-reconciled">
               <Icon name="CheckCircle2" size={14} />
-              Every row is accounted for — on a day in the calendar, or waiting for a show on one.
+              Every row is accounted for.
             </p>
           )}
         </div>

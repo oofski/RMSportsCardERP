@@ -401,20 +401,17 @@ export function AddItemForm({
             {/* Named in the chosen product's unit as soon as there is one. Before
                 that there is no unit to name, and calling it a case would be a
                 promise the fields then break for a box-stocked product. */}
-            <b>Reconciling a past show.</b>{' '}
+            <b>Reconciling a past show:</b>{' '}
             {reconUnit ? (
-              <>
-                Enter how many {entryWord(reconUnit, 2)} were broken and what you paid for a{' '}
-                {entryWord(reconUnit, 1)}.
-              </>
+              <>enter how many {entryWord(reconUnit, 2)} were broken and what one cost.</>
             ) : (
-              <>
-                Enter how much was broken and what one of them cost, counted in the unit the product
-                is stocked in.
-              </>
+              // No product chosen yet, so there is no unit to name. The clause
+              // that names it is dropped rather than guessed at — calling it a
+              // case would be a promise the fields then break for a box-stocked
+              // product.
+              <>enter how much was broken and what one cost.</>
             )}{' '}
-            This records the cost against that night — it does not take anything off today&rsquo;s
-            shelf.
+            Today&rsquo;s shelf is untouched.
           </div>
         </div>
       )}
@@ -427,8 +424,7 @@ export function AddItemForm({
         ) : (
           <div className="stm-inline-note warn">
             <Icon name="ShieldCheck" size={14} />
-            Searching the catalog needs Inventory access. Ask an admin to grant it before recording{' '}
-            {isBreak ? 'breaks' : 'giveaways'}.
+            Searching the catalog needs Inventory access — ask an admin.
           </div>
         )
       ) : (
@@ -1033,7 +1029,7 @@ function GiveawayLossLine({
     return (
       <span className="stm-consume-loss">
         <Icon name="DollarSign" size={13} />
-        Books a loss of about <b>{formatMoney(boxes * perBox + packs * perPack)}</b> — {packs}{' '}
+        Books about <b>{formatMoney(boxes * perBox + packs * perPack)}</b> — {packs}{' '}
         {packs === 1 ? 'pack' : 'packs'} at {formatMoney(perPack)}
         {boxes > 0 && (
           <>
@@ -1041,7 +1037,7 @@ function GiveawayLossLine({
             plus {boxes} {boxes === 1 ? 'box' : 'boxes'} at {formatMoney(perBox)}
           </>
         )}
-        . At average cost — the line books at the FIFO cost of the stock it takes.
+        . At average cost; books at FIFO.
       </span>
     )
   }
@@ -1053,16 +1049,15 @@ function GiveawayLossLine({
     return (
       <span className="stm-consume-loss is-missing">
         <Icon name="AlertTriangle" size={13} />
-        This product has no average cost, so nothing can be estimated here. The line still books at
-        the FIFO cost of the stock it takes.
+        No average cost to estimate from. The line still books at FIFO.
       </span>
     )
   }
   return (
     <span className="stm-consume-loss">
       <Icon name="DollarSign" size={13} />
-      Books a loss of about <b>{formatMoney(quantity * unitCost)}</b> — the cost of the stock that
-      goes out. At average cost; the line books at FIFO.
+      Books about <b>{formatMoney(quantity * unitCost)}</b>. At average cost; the line books at
+      FIFO.
     </span>
   )
 }

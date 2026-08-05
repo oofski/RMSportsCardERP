@@ -45,7 +45,7 @@ export function LedgerRowLine({
       {row.attribution === 'carried_back' && (
         <span
           className="fin-row-carry"
-          title="This settled after the show ended and was booked back to it. Expected for shipping and adjustment rows."
+          title="Settled after the show ended and was booked back to it."
         >
           <Icon name="Undo2" size={10} />
           settled later

@@ -251,7 +251,7 @@ export function SlipPane({
         <EmptyState
           icon="FileText"
           title="No slip on this machine"
-          message="The show imported fine and every card is here — the PDF itself just is not stored on this computer. Whoever ran the import has it; re-import here to work against the paper too."
+          message="The show imported fine — the PDF just is not on this computer. Re-import here to work against the paper."
         />
       </div>
     )
@@ -267,7 +267,7 @@ export function SlipPane({
         {many && (
           <span
             className="slip-multi"
-            title="This order runs onto more than one page — all of them are shown; click any one to read it"
+            title="This order runs onto several pages — click any one."
           >
             <Icon name="Copy" size={11} />
             {pages.length} pages

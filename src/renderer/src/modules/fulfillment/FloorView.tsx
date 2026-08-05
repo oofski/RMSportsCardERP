@@ -91,8 +91,7 @@ export function FloorView({ canFind, canPack, onGoTo, onChanged }: ShipTabProps)
       <div className="floor floor-gate">
         <h2>Who is at this bench?</h2>
         <p className="floor-lead">
-          Everyone on the clock right now. Your name goes on the cards you find and the boxes you
-          pack — the computer's does not.
+          Your name goes on the cards you find and the boxes you pack.
         </p>
         {roster.length === 0 ? (
           <div className="floor-empty">

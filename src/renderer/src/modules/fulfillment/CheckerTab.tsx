@@ -437,7 +437,7 @@ export function CheckerTab({ canManage, canFind, onChanged }: ShipTabProps): JSX
       <EmptyState
         icon="ListChecks"
         title="No breaks to pick"
-        message="A lead imports the Whatnot packing slips in Admin → Shipping, and every break becomes a pick list here."
+        message="A lead imports the slips in Admin → Shipping and every break becomes a pick list."
       />
     )
   }
@@ -509,7 +509,6 @@ export function CheckerTab({ canManage, canFind, onChanged }: ShipTabProps): JSX
               {people.length === 1 ? '1 person matches' : `${people.length} people match`} “
               {query.trim()}”
             </span>
-            <span className="chk-people-note">Click a break to open it at their cards.</span>
           </div>
           {people.map((o) => (
             <div className="chk-person" key={o.id}>
@@ -588,8 +587,7 @@ export function CheckerTab({ canManage, canFind, onChanged }: ShipTabProps): JSX
               <Icon name="Gift" size={15} /> Loose giveaways
             </span>
             <span className="chk-loose-note">
-              These cards belong to no break, so they never appear in a pick list above — check them
-              off here or they never get picked.
+              These belong to no break, so no pick list shows them — check them off here.
             </span>
             <span className="chk-loose-count mono">
               {looseGiveaways.reduce((n, g) => n + g.checked, 0)}/
@@ -1173,7 +1171,7 @@ function BreakDetailView({
             <button
               className={group === 'team' ? 'active' : ''}
               onClick={() => setGroup('team')}
-              title="The whole slate in team order, including the teams nobody bought — matches the stack in your hand"
+              title="The whole slate in team order — matches the stack in your hand"
             >
               <Icon name="ListChecks" size={14} /> By team
             </button>

@@ -274,7 +274,7 @@ export function AssignTab(): JSX.Element {
       <EmptyState
         icon="ShieldCheck"
         title="Shipping workspace unavailable"
-        message="Break assignments live in the Shipping workspace, which this account cannot open. Ask an owner for the Shipping permission."
+        message="Break assignments live in Shipping. Ask an owner for the Shipping permission."
       />
     )
   }
@@ -290,7 +290,7 @@ export function AssignTab(): JSX.Element {
       <EmptyState
         icon="Layers"
         title="No breaks to assign"
-        message="Break assignments need a loaded dataset. Import tonight's Whatnot packing-slip PDF on the Import tab above and every break shows up here, ready to be handed out."
+        message="Import tonight's packing-slip PDF on the Import tab and every break shows up here."
       />
     )
   }
@@ -324,9 +324,6 @@ export function AssignTab(): JSX.Element {
           <div className="ba-roster-head">
             <span className="ba-roster-title">
               <Icon name="Users" size={15} /> On the floor
-            </span>
-            <span className="ba-roster-note">
-              The same list read the other way round — each person and the breaks they hold.
             </span>
           </div>
           <div className="ba-roster-list">

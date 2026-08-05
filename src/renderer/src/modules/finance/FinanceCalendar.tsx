@@ -383,7 +383,7 @@ function DayCell({
         {day && waiting && (
           <span
             className="fin-cell-flag"
-            title={`${formatMoney(Math.abs(waiting.amount))} arrived outside the logged hours — probably a second show. Click the day for the detail.`}
+            title="Arrived outside the logged hours — probably a second show. Click for detail."
           >
             <Icon name="AlertTriangle" size={10} />
           </span>

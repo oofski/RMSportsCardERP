@@ -141,8 +141,8 @@ export function RangeStatement({
         <p className="fin-detail-empty">
           <Icon name="Moon" size={14} />
           {waiting.length > 0
-            ? 'No show is logged in this range, so none of the money below is on a day yet. Log it in Streaming and it lands here.'
-            : 'Nothing was streamed in this range, so there is no statement for it. Widen the range or pick a month with shows in it.'}
+            ? 'No show is logged in this range. Log it in Streaming and this money lands on a day.'
+            : 'Nothing streamed in this range. Widen it, or pick a month with shows.'}
         </p>
       ) : (
         <PnlStatement money={totals} range={range} rangeLabel={label} onCosted={onCosted} />
@@ -235,7 +235,7 @@ function WaitingPanel({
             size="sm"
             variant="secondary"
             icon="RefreshCw"
-            title="Re-check every stored row against the logged sessions. It only matches what a session already covers — it never moves money on its own."
+            title="Re-checks stored rows against logged sessions. Never moves money on its own."
             onClick={() => void onReattribute()}
           >
             Re-attribute

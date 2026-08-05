@@ -88,7 +88,7 @@ export function TodayTab({ summary, onGoTo }: ShipTabProps): JSX.Element {
       <EmptyState
         icon="CalendarDays"
         title="Tonight's show has not been imported yet"
-        message="A lead loads the packing slips in Admin → Shipping, and this board fills itself in. Nothing to do at the bench until then."
+        message="A lead loads the packing slips in Admin → Shipping. Nothing to do at the bench until then."
       />
     )
   }
@@ -104,11 +104,7 @@ export function TodayTab({ summary, onGoTo }: ShipTabProps): JSX.Element {
       <section className="today-start">
         <div className="today-start-text">
           <h3>Start fulfillment</h3>
-          <p>
-            Say who is at this bench and whether you are picking or packing. The orders come
-            one at a time, from page 1 of the slip onward — nothing to choose, nothing to be
-            assigned first.
-          </p>
+          <p>Say who is at this bench and whether you are picking or packing.</p>
         </div>
         <Button
           className="today-start-btn"
@@ -256,9 +252,9 @@ export function TodayTab({ summary, onGoTo }: ShipTabProps): JSX.Element {
         )}
         {unfinished.length === 0 && looseLeft > 0 && (
           <p className="today-note">
-            Every break is picked. {looseLeft} {looseGiveawaysOnly ? 'giveaway' : 'card'}
-            {looseLeft === 1 ? '' : 's'} {looseLeft === 1 ? 'is' : 'are'} still to find at the bottom
-            of Find — they belong to no break, so no break can show them.
+            Every break is picked. {looseLeft} loose {looseGiveawaysOnly ? 'giveaway' : 'card'}
+            {looseLeft === 1 ? '' : 's'} {looseLeft === 1 ? 'is' : 'are'} still at the bottom of
+            Find.
           </p>
         )}
       </section>

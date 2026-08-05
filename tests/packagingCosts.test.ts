@@ -387,18 +387,26 @@ ok(
 // And the SECTION says its own subtotal is short, because a reader who takes
 // the subtotal and skips the lines would otherwise carry away a complete-looking
 // figure that is missing two of its six components. Since this section is inside
-// net profit, the same gap makes the bottom line too high — the note has to say
-// so, and the heading has to carry it for a reader who never opens the section.
+// net profit, the same gap makes the bottom line too high — the warning has to
+// say so, and the heading has to carry it for a reader who never opens the
+// section.
+//
+// IT IS `warning`, NOT `note`, AND THAT IS THE POINT. The note is standing prose
+// about how the section is priced and is true on every period; this is a
+// condition, present only while some night in the range has no packing record.
+// It used to be appended to the note, which made a permanent sentence out of a
+// temporary fact — see the fully-covered night below, which must carry none of
+// it.
 const blindSec = buildPnl(a).find((s: any) => s.key === 'packaging')
 ok(
-  String(blindSec.note).includes('missing information, not a zero cost'),
-  'and the section note says the subtotal is short rather than complete',
-  String(blindSec.note)
+  String(blindSec.warning).includes('subtotal is short'),
+  'and the section warning says the subtotal is short rather than complete',
+  String(blindSec.warning)
 )
 ok(
-  String(blindSec.note).includes('net profit above is higher than the truth'),
+  String(blindSec.warning).includes('net profit is higher than the truth'),
   'naming the consequence for the bottom line, not just for the section',
-  String(blindSec.note)
+  String(blindSec.warning)
 )
 ok(
   blindSec.incomplete === true,
@@ -451,9 +459,20 @@ ok(cents(a.packagingShippingLabels) === cents(-0.04), '2 packages × 2¢ = −$0
 const labelLine2 = lineOf(a, 'packagingShippingLabels')
 ok(!labelLine2.unavailable, 'and the line is no longer unavailable')
 ok(String(labelLine2.detail) === '2 packages × 2¢', 'stating the arithmetic', String(labelLine2.detail))
+const countedSec = buildPnl(a).find((s: any) => s.key === 'packaging')
 ok(
-  buildPnl(a).find((s: any) => s.key === 'packaging').incomplete !== true,
+  countedSec.incomplete !== true,
   'and a fully counted night carries no caveat at all — otherwise it stops being read'
+)
+ok(
+  countedSec.warning === undefined,
+  'no warning strip either, because there is nothing wrong to report',
+  String(countedSec.warning)
+)
+ok(
+  String(countedSec.note).length > 0 && !String(countedSec.note).includes('not known'),
+  'the standing note stays, and says nothing about unknown nights',
+  String(countedSec.note)
 )
 
 // A PACKAGE IS AN ENVELOPE, NOT AN ORDER ID. This is the whole reason packages

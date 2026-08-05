@@ -145,9 +145,8 @@ export function Expenses({
 
       {shown.length === 0 ? (
         <p className="fin-expenses-empty">
-          Nothing written off in this range. Use this for a pack opened for fun or a box that
-          walked — a dollar amount only. Anything that should come off the shelf belongs in
-          Streaming as a giveaway, which costs it against the stock it actually consumed.
+          Nothing written off here. Use this for a dollar amount only — stock that left the shelf
+          is a Streaming giveaway.
         </p>
       ) : (
         <ul className="fin-expenses-list">
@@ -326,9 +325,8 @@ function ExpenseModal({
         // The one thing worth saying twice, because getting it wrong is silent.
         <Note tone="info" icon="Info">
           <p>
-            This books a <b>dollar amount</b> and moves no stock. If the pack actually came off
-            the shelf, log it in Streaming as a giveaway instead — that costs it against the
-            layers it consumed and drops the on-hand count. Doing both books it twice.
+            Books a dollar amount and moves no stock. If it came off the shelf, log a Streaming
+            giveaway instead — doing both books it twice.
           </p>
         </Note>
       )}

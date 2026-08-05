@@ -246,7 +246,7 @@ function PoCard({
             <button
               type="button"
               className="btn po-move po-move-remove"
-              title={`Delete ${po.poNumber} and its lines. Nothing has been checked in, so no stock is affected.`}
+              title={`Delete ${po.poNumber}. Nothing checked in, so no stock is affected.`}
               onClick={() => onDelete?.(po.id, po.poNumber)}
             >
               Delete

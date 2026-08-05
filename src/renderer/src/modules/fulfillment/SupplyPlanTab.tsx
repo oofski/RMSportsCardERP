@@ -78,7 +78,7 @@ export function SupplyPlanTab(): JSX.Element {
       <EmptyState
         icon="Boxes"
         title="Nothing to cost yet"
-        message="Import tonight's packing slips and this works out what the show will take out of supplies."
+        message="Import tonight's slips and this works out what the show takes out of supplies."
       />
     )
   }
@@ -132,9 +132,7 @@ export function SupplyPlanTab(): JSX.Element {
       </div>
 
       <p className="splan-note">
-        The slate, not the sales: every team in a break gets pulled, sleeved and bagged whether or
-        not somebody bought it. Giveaways never add a pack — that card came out of a break already
-        counted.
+        The slate, not the sales — every team in a break gets pulled. Giveaways add nothing.
       </p>
 
       {plan.unmappedRoles.length > 0 && (
@@ -144,8 +142,7 @@ export function SupplyPlanTab(): JSX.Element {
             <b>
               {plan.unmappedRoles.length} of {plan.lines.length}
             </b>{' '}
-            not linked to a product yet. The quantities are still right — they just cannot be costed
-            until you say which supply each one is.
+            Quantities are right; they cannot be costed until each one is linked to a supply.
           </span>
         </div>
       )}
@@ -199,14 +196,6 @@ export function SupplyPlanTab(): JSX.Element {
           </li>
         ))}
       </ul>
-
-      <div className="splan-foot">
-        <Icon name="Info" size={14} />
-        <span>
-          This screen is the forecast and the wiring — nothing on it moves stock. Supplies come out
-          on the <b>Steps</b> tab, when the floor ticks the step that used them.
-        </span>
-      </div>
     </div>
   )
 }

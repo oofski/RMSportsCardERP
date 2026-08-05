@@ -96,7 +96,7 @@ export function StreamingModule(): JSX.Element {
         <EmptyState
           icon="AlertTriangle"
           title="Streaming is not available in this build"
-          message="The app is running against a version that does not expose the streaming bridge. Restart after updating and it will appear."
+          message="This build does not expose the streaming bridge. Restart after updating."
         />
       </div>
     )

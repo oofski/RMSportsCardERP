@@ -215,9 +215,8 @@ export function ShippingModule(): JSX.Element {
         <div className="ship-collision-strip" role="status">
           <Icon name="Siren" size={16} />
           <span>
-            <b>Team collisions detected.</b> One or more teams were captured for two
-            customers in the same break. Keep picking — a lead has to review the audit
-            in Admin → Shipping → Flags before these go out.
+            A team was captured for two customers. Keep picking — a lead reviews Flags before
+            these ship.
           </span>
         </div>
       )}

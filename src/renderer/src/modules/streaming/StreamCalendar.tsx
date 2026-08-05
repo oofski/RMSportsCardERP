@@ -236,8 +236,8 @@ export function StreamCalendar({
           {month.days.length === 0 && !loading && (
             <div className="stm-empty-row">
               <Icon name="Moon" size={15} />
-              No streams in {monthLabel(monthKey)}. Start one from the bar above, or add a show that
-              already happened.
+              No streams in {monthLabel(monthKey)}. Start one from the bar above, or add a past
+              show.
             </div>
           )}
 

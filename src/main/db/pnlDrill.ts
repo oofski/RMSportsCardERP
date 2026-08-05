@@ -670,12 +670,26 @@ function derivedDetail(
     omitted: { count: 0, amount: 0 },
     terms,
     unknown,
-    // The nights nothing can answer for are no longer named here. They are
-    // listed under their own heading below the arithmetic, which says the same
-    // thing at the place a reader is already looking at them.
+    // The nights nothing can answer for are LISTED under their own heading
+    // below, so this no longer names them — but it still has to say what their
+    // absence COSTS, and only when there are any.
+    //
+    // That consequence is not decoration. A reader who drills into a line
+    // reading "not known" has arrived asking exactly one question — does this
+    // missing cost matter to my profit — and the answer is yes, upward. The
+    // section heading carries the same warning for somebody who never opens the
+    // section; this carries it for somebody who opens nothing else.
+    //
+    // Conditional, because a build with every night counted would otherwise
+    // print a caveat about a gap that does not exist, and a caveat printed
+    // always is a caveat nobody reads.
     note:
       `${basis.label} are modelled: ${
         basis.perPackage ? 'envelopes counted off the packing slips' : 'what the night sold'
-      } priced at a rate you state, night by night.`
+      } priced at a rate you state, night by night.` +
+      (unknown.length > 0
+        ? ` ${unknown.length} night${unknown.length === 1 ? '' : 's'} below cannot be priced at ` +
+          `all, so this total is short and net profit is higher than the truth by the same amount.`
+        : '')
   }
 }

@@ -242,8 +242,7 @@ export function StreamingTab(): JSX.Element {
               'Some rows are neither on a day nor in the unattributed pile, so the totals below are incomplete.'}
           </p>
           <p>
-            Re-attributing usually resolves it. If it does not, delete the most recent import and
-            upload it again before trusting anything on this screen.
+            Re-attribute first. If that fails, delete the last import and upload it again.
           </p>
         </Note>
       )}

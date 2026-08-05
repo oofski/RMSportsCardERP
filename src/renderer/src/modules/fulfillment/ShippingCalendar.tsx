@@ -255,8 +255,8 @@ export function ShippingCalendar({
           <Icon name="CalendarRange" size={16} /> Activity calendar
         </span>
         <span className="hist-sub">
-          Every day that carried work: what was imported, what it was worth and how far it got.
-          Shading is how busy the day was against the month&rsquo;s heaviest.
+          Every day that carried work. Shading is how busy it was against the month&rsquo;s
+          heaviest.
         </span>
         <div className="hcal-nav">
           <button className="hcal-nav-btn" onClick={() => go(-1)} aria-label="Previous month">
@@ -606,9 +606,8 @@ function DayPanel({
 
           {!progressKnown && (
             <span className="hcal-note">
-              <Icon name="Info" size={13} /> An import ran that day but nothing captured its
-              progress, so only what came in is known. Capture a snapshot at the end of an event and
-              the day keeps its picking and shipping numbers.
+              <Icon name="Info" size={13} /> Nothing captured this day&rsquo;s progress, so only
+              what came in is known.
             </span>
           )}
 

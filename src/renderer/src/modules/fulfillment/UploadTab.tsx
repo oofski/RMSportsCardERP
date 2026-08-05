@@ -390,15 +390,6 @@ export function UploadTab({ summary, canManage, onChanged, onGoTo }: ShipTabProp
           )}
         </div>
 
-        {/* A named event is what makes a corrected re-export keep its progress. */}
-        <div className="ship-carry-note">
-          <Icon name="Info" size={14} />
-          <span>
-            Operator progress (check-offs, holds, statuses, queue order) is only carried forward
-            when you re-import <b>the same named event on the same date</b>. Everything else starts
-            fresh at <b>To pick</b>.
-          </span>
-        </div>
       </div>
 
       {/* ---------------- Live job ---------------- */}
@@ -520,7 +511,7 @@ export function UploadTab({ summary, canManage, onChanged, onGoTo }: ShipTabProp
             <div>
               <h3>Break audit</h3>
               <span className="ph-sub">
-                Captured teams vs the full league slate, per break.
+                Captured teams vs the full slate.
                 {incomplete.length > 0
                   ? ` ${incomplete.length} of ${audit.length} incomplete.`
                   : ' Every break is complete.'}
@@ -555,8 +546,8 @@ export function UploadTab({ summary, canManage, onChanged, onGoTo }: ShipTabProp
             <div>
               <h3>Parser warnings</h3>
               <span className="ph-sub">
-                {warnings.length} line{warnings.length === 1 ? '' : 's'} the grammar could not fully
-                resolve. Cards are still imported — the raw text is kept so you can check the slip.
+                {warnings.length} line{warnings.length === 1 ? '' : 's'} the parser could not fully
+                resolve. Cards still imported; raw text kept.
               </span>
             </div>
           </div>
@@ -622,8 +613,7 @@ export function UploadTab({ summary, canManage, onChanged, onGoTo }: ShipTabProp
           </span>
           <h3>No dataset loaded</h3>
           <p>
-            Import a Whatnot combined labels + packing slips PDF to build the pick lists, the
-            package queue and the shipping tracker.
+            Import a Whatnot labels + packing slips PDF to build the pick lists and queue.
           </p>
         </div>
       )}

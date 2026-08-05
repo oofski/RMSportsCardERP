@@ -197,17 +197,30 @@ ok(
 )
 ok(whatnotLine.detail.includes('8%'), "Whatnot's line states the rate it charged", whatnotLine.detail)
 // THE TAX IS NAMED AS A PASS-THROUGH AND AS NOTHING ELSE.
+//
+// It is said on the PROCESSING LINE'S HINT rather than in the section note now.
+// The sentence only answers one question — why this charge is more than the card
+// percentage of sales — and it is asked by whoever is already looking at this
+// line, so it hangs off the detail's tooltip instead of standing under the
+// section where every reader had to walk past it. The assertion follows it: what
+// matters is that the app says it somewhere a reader can reach from the figure,
+// not which element carries it.
 ok(
-  (fees.note || '').includes('NOT REVENUE AND NOT A COST'),
-  'and the section says what the tax is and is not',
-  String(fees.note)
+  (stripeLine.detailHint || '').includes('not revenue and not a cost'),
+  'and the processing line says what the tax is and is not',
+  String(stripeLine.detailHint)
+)
+ok(
+  (stripeLine.detailHint || '').includes('order total'),
+  'and names the base it is charged on',
+  String(stripeLine.detailHint)
 )
 ok(
   Math.abs(whatnotLine.amount) !== Math.abs(stripeLine.amount),
   'the two cuts are separate lines with separate figures'
 )
 ok(
-  (fees.note || '').includes('NET'),
+  (fees.note || '').includes('Whatnot pays net'),
   'and the section says the ledger pays net',
   String(fees.note)
 )

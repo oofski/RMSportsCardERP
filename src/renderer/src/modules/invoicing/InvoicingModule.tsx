@@ -239,10 +239,7 @@ export function InvoicingModule(): JSX.Element {
           <div className="po-page-empty">
             <Icon name="ReceiptText" size={26} />
             <div className="po-page-empty-title">Nothing on order</div>
-            <p>
-              Create a PO to start tracking a product buy — its lines, its cost and where the
-              boxes land — or log a supply reorder for packaging.
-            </p>
+            <p>Create a PO to track a product buy, or log a supply reorder.</p>
             {canManage && (
               <Button variant="primary" icon="Plus" onClick={() => setShowCreate(true)}>
                 New PO
