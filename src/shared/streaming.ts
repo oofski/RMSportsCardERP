@@ -145,6 +145,22 @@ export interface StreamItem {
    * stock opened to sell, not stock lost.
    */
   lossValue: number
+  /**
+   * The unit `quantity` is counted in, off the catalog row as it stands TODAY.
+   *
+   * Joined rather than snapshotted, and unlike `productName` that is right: this
+   * is not a fact about the night, it is what the product IS, and it exists so a
+   * price entered against this line afterwards can be labelled per the unit that
+   * price would actually be per. Null when the catalog row has been deleted, and
+   * for the products @shared/units has no case/box structure for (packs,
+   * singles, other) — a form must then price the line as it stands rather than
+   * name a case the product never had.
+   *
+   * `statedPriceUnit` answers a narrower question — which unit a RECONCILIATION
+   * stated its price in — and reads it off the counts the line was typed with. A
+   * live break can carry both a case count and a box count, so it cannot.
+   */
+  stockUnit: StockUnit | null
   note: string | null
   createdAt: string
   createdBy: string | null
@@ -263,6 +279,32 @@ export interface NewStreamItem {
   breakNumber?: number | null
   recipient?: string | null
   note?: string | null
+}
+
+/**
+ * What a line already recorded turns out to have COST.
+ *
+ * The owner's ask: "give me the ability in the streaming or finance to enter the
+ * price … since we might not always know in the moment." A box is broken on air,
+ * the invoice is not to hand, and the line lands at zero — which the P&L now
+ * prints as an uncosted row rather than hiding. This is what fills it in.
+ *
+ * `unitPrice` is per ONE of whatever the product is stocked in — per case for a
+ * case-stocked product, per box for a box-stocked one — the same unit
+ * `NewStreamItem.casePrice` is in, and the same unit `StreamItem.quantity`
+ * counts. Decimals are real: 1.25 and 1.33 are prices somebody pays.
+ *
+ * IT CORRECTS THE RECORD, NOT THE STOCK. No FIFO layer is consumed, opened or
+ * revalued and no average is re-based, whichever kind of line it lands on. See
+ * `setItemCost` in db/streaming.ts for the full argument; the short form is that
+ * the stock this describes has already moved, or was never going to.
+ */
+export interface SetStreamItemCost {
+  itemId: string
+  /** Per one stock unit of the product. Typed as a number, validated as though
+   *  it were not — it comes off a text field and main parses it through
+   *  `parseMoneyInput` rather than storing whatever `Number()` made of it. */
+  unitPrice: number
 }
 
 // ---------------------------------------------------------------------------

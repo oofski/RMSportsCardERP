@@ -21,6 +21,7 @@ import type { Permission } from '@shared/permissions'
 import type {
   NewStreamItem,
   NewStreamSession,
+  SetStreamItemCost,
   StreamCalendarMonth,
   StreamSession,
   StreamSessionDetail,
@@ -36,6 +37,7 @@ import {
   getSessionDetail,
   listSessions,
   removeItem,
+  setItemCost,
   startSession,
   updateSession
 } from './db/streaming'
@@ -238,6 +240,32 @@ export function registerStreamingIpc(): void {
     try {
       const actor = requireManage()
       return removeItem(str(id).trim(), actor.id)
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  /**
+   * Say what a line cost, after the fact.
+   *
+   * Gated on `streaming.manage` like every other write here even though the P&L
+   * is one of the two screens that offers it: what it writes is a stream line,
+   * and the permission that governs a stream line is this one wherever the click
+   * came from.
+   *
+   * The price is parsed rather than cast, for the same reason `casePrice` is: it
+   * comes off a text field, so "1,250" and "$1,250" are what an operator types
+   * and `Number()` reads neither. Anything that is not a plain amount becomes NaN
+   * and db/streaming.ts refuses it by name — a silent 0 would look exactly like
+   * the uncosted line the operator was trying to fix.
+   */
+  ipcMain.handle(IPC.streamItemCost, (_e, input: SetStreamItemCost): Result<StreamSessionDetail> => {
+    try {
+      const actor = requireManage()
+      return setItemCost(
+        { itemId: str(input?.itemId).trim(), unitPrice: parseMoneyInput(input?.unitPrice) },
+        actor.id
+      )
     } catch (err) {
       return fail(err)
     }

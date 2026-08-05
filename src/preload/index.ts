@@ -128,6 +128,7 @@ import type {
 import type {
   NewStreamItem,
   NewStreamSession,
+  SetStreamItemCost,
   StreamCalendarMonth,
   StreamSession,
   StreamSessionDetail,
@@ -666,7 +667,22 @@ const api = {
       ipcRenderer.invoke(IPC.streamItemAdd, input),
     /** Puts back exactly the cost layers the line took. */
     removeItem: (id: string): Promise<Result<StreamSessionDetail>> =>
-      ipcRenderer.invoke(IPC.streamItemRemove, id)
+      ipcRenderer.invoke(IPC.streamItemRemove, id),
+    /**
+     * What a line already recorded turns out to have cost — "we might not always
+     * know in the moment".
+     *
+     * `unitPrice` is per ONE of whatever the product is stocked in: per case for
+     * a case-stocked product, per box for a box-stocked one, the same unit
+     * `addItem`'s `casePrice` is in.
+     *
+     * IT CORRECTS THE RECORD, NOT THE STOCK. No cost layer is consumed, opened
+     * or revalued and no average is re-based, on either kind of line — a
+     * reconciled line never moved stock and a live one moved it when it was
+     * recorded. What changes is what the statement says that night cost.
+     */
+    setItemCost: (input: SetStreamItemCost): Promise<Result<StreamSessionDetail>> =>
+      ipcRenderer.invoke(IPC.streamItemCost, input)
   },
   /**
    * Finance → Streaming: the Whatnot ledger, attributed to shows.

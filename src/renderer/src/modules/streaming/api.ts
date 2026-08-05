@@ -2,6 +2,7 @@ import type { Result } from '@shared/types'
 import type {
   NewStreamItem,
   NewStreamSession,
+  SetStreamItemCost,
   StreamCalendarMonth,
   StreamSession,
   StreamSessionDetail,
@@ -34,6 +35,9 @@ export interface StreamingApi {
   remove(id: string): Promise<Result>
   addItem(input: NewStreamItem): Promise<Result<StreamSessionDetail>>
   removeItem(id: string): Promise<Result<StreamSessionDetail>>
+  /** What a line turns out to have cost, per one stock unit of the product.
+   *  Corrects the STATEMENT: no stock moves and no cost layer is revalued. */
+  setItemCost(input: SetStreamItemCost): Promise<Result<StreamSessionDetail>>
 }
 
 /**
@@ -49,6 +53,17 @@ export const streaming: StreamingApi = api.streaming
  * plainly rather than throwing "cannot read property of undefined" on click.
  */
 export const streamingReady = typeof streaming?.calendar === 'function'
+
+/**
+ * False against a packaged preload older than entering a cost after the fact.
+ *
+ * Checked separately from `streamingReady` because the consequence is different:
+ * a screen without the module at all says so, whereas a screen without THIS
+ * still shows every uncosted line — the disclosure lands either way — and simply
+ * does not offer the button that would throw "setItemCost is not a function" on
+ * click.
+ */
+export const costEntryReady = typeof streaming?.setItemCost === 'function'
 
 /** Result → message, so no failed write is ever swallowed into silence. */
 export function resultError(res: Result<unknown>, fallback: string): string {

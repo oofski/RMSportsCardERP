@@ -1,8 +1,19 @@
 import { useMemo, useState } from 'react'
-import type { PnlLine, PnlSection, StreamDayFinance } from '@shared/financeStreaming'
+import type {
+  PnlLine,
+  PnlSection,
+  StreamDayFinance,
+  UncostedStreamItem
+} from '@shared/financeStreaming'
 import { buildPnl, pnlChecksum } from '@shared/financeStreaming'
+import { parseMoneyInput } from '@shared/streaming'
+import { formatUnitCount, stockUnitWord } from '../../lib/productUnits'
 import { Icon } from '../../components/Icon'
-import { Money, Note, Profit, plural } from './bits'
+import { useToast } from '../../components/Toast'
+import { Button, Field, Input, Modal } from '../../components/ui'
+import { costEntryReady, resultError, streaming } from '../streaming/api'
+import { Money, Note, Profit, moneyText, plural } from './bits'
+import { shortDayLabel } from './time'
 
 /**
  * The statement, read top to bottom.
@@ -124,9 +135,25 @@ export function pnlDrift(sections: PnlSection[], statedNetProfit: number): {
  * answered the top-level question. A statement nobody can take in at a glance
  * gets skipped, and a skipped statement is worse than a short one.
  */
-export function PnlStatement({ money }: { money: PnlMoney }): JSX.Element {
+export function PnlStatement({
+  money,
+  onCosted
+}: {
+  money: PnlMoney
+  /**
+   * Present when this reader may enter a cost against a stream line — the P&L's
+   * uncosted rows then become controls rather than statements. Absent for anyone
+   * without `streaming.manage`, and for a caller that has no way to reload the
+   * figures afterwards: a row that changed the database and left a stale
+   * statement on screen would be worse than a row that could not be clicked.
+   */
+  onCosted?: () => void | Promise<void>
+}): JSX.Element {
   const [open, setOpen] = useState<Record<string, boolean>>({})
   const [showAll, setShowAll] = useState(false)
+  /** The uncosted line being priced. Held here rather than per row so the modal
+   *  outlives the re-render that follows a save. */
+  const [costing, setCosting] = useState<UncostedStreamItem[] | null>(null)
 
   const sections = useMemo(() => buildStatement(money), [money])
 
@@ -199,9 +226,21 @@ export function PnlStatement({ money }: { money: PnlMoney }): JSX.Element {
             onToggle={() => setOpen((prev) => ({ ...prev, [section.key]: !prev[section.key] }))}
             showAll={showAll}
             revenue={withShare ? revenue : null}
+            onEnterCost={onCosted ? setCosting : undefined}
           />
         ))}
       </table>
+
+      {costing && onCosted && (
+        <UncostedModal
+          items={costing}
+          onClose={() => setCosting(null)}
+          onSaved={async () => {
+            setCosting(null)
+            await onCosted()
+          }}
+        />
+      )}
 
       <div className="fin-pnl-foot">
         {expandable.length > 0 && (
@@ -253,13 +292,15 @@ function SectionBody({
   open,
   onToggle,
   showAll,
-  revenue
+  revenue,
+  onEnterCost
 }: {
   section: PnlSection
   open: boolean
   onToggle: () => void
   showAll: boolean
   revenue: number | null
+  onEnterCost?: (items: UncostedStreamItem[]) => void
 }): JSX.Element {
   const cols = revenue === null ? 2 : 3
 
@@ -326,7 +367,9 @@ function SectionBody({
             <td colSpan={cols}>Nothing in this section.</td>
           </tr>
         ) : (
-          visible.map((line) => <LineRow key={line.key} line={line} revenue={revenue} />)
+          visible.map((line) => (
+            <LineRow key={line.key} line={line} revenue={revenue} onEnterCost={onEnterCost} />
+          ))
         ))}
 
       {/* The section's own footnote, printed verbatim from the contract for the
@@ -343,7 +386,63 @@ function SectionBody({
   )
 }
 
-function LineRow({ line, revenue }: { line: PnlLine; revenue: number | null }): JSX.Element {
+function LineRow({
+  line,
+  revenue,
+  onEnterCost
+}: {
+  line: PnlLine
+  revenue: number | null
+  onEnterCost?: (items: UncostedStreamItem[]) => void
+}): JSX.Element {
+  // NOBODY RECORDED WHAT THIS COST — and unlike the row below it, that is
+  // something the reader can fix from here. The words replace the figure for the
+  // same reason "not known" does: $0.00 says the cost did not happen, and this
+  // cost happened. What is different is that the stream lines are named on the
+  // row, so the amount cell is a BUTTON that opens them for pricing rather than
+  // a dead statement. It is never hidden — `buildPnl` refuses to mark it
+  // `empty`, so the zero-line toggle cannot swallow it either.
+  if (line.uncosted) {
+    const items = line.uncostedItems ?? []
+    // The line PRINTS either way. Only the button needs the newer preload
+    // behind it, and a row that says nothing at all would be the bug this whole
+    // change exists to fix.
+    const clickable = !!onEnterCost && costEntryReady && items.length > 0
+    return (
+      <tr className="fin-pnl-line is-uncosted">
+        <th scope="row">
+          <span className="fin-pnl-label">{line.label}</span>
+          {line.detail && <em className="fin-pnl-detail">{line.detail}</em>}
+        </th>
+        <td className="is-num">
+          {clickable ? (
+            <button
+              type="button"
+              className="fin-pnl-cost-btn mono"
+              onClick={() => onEnterCost?.(items)}
+              title={`Enter what ${line.label} cost — it is carried at nothing until you do`}
+            >
+              no cost recorded
+              <Icon name="Pencil" size={11} />
+            </button>
+          ) : (
+            <span
+              className="fin-money zero mono"
+              title="Nobody recorded what this cost, so it is carried at nothing"
+            >
+              no cost recorded
+            </span>
+          )}
+        </td>
+        {revenue !== null && (
+          <td className="is-num fin-pnl-share">
+            <span className="fin-money zero mono">—</span>
+          </td>
+        )}
+      </tr>
+    )
+  }
+
   // NOT KNOWN IS NOT ZERO, and this is the row where that has to be visible.
   // Printing $0.00 for a cost the app could not measure tells the reader the
   // cost did not happen. The figure is replaced by words, the share column is
@@ -389,5 +488,135 @@ function LineRow({ line, revenue }: { line: PnlLine; revenue: number | null }): 
       </td>
       <ShareCell amount={line.amount} revenue={revenue} />
     </tr>
+  )
+}
+
+/**
+ * Price the stream lines behind one uncosted row, from the statement itself.
+ *
+ * The owner asked for this in "the streaming or finance", and finance is where
+ * the hole is noticed: the statement is the screen that shows a night's cost of
+ * goods short, so it is the screen that has to be able to fix it.
+ *
+ * ONE FORM PER LINE, not one for the row. A row can stand for the same product
+ * broken on three nights, and those three boxes did not necessarily cost the
+ * same — one price applied to all of them would be a guess dressed as an entry.
+ * Each is priced in ITS OWN product's stock unit, per `priceUnit`, exactly as
+ * the Streaming module does it.
+ *
+ * The panel says what this changes and what it does not. An operator's
+ * reasonable reading of a cost field is that it re-values the shelf; it does
+ * not, on either kind of line, and being told that here is cheaper than
+ * discovering it in Inventory afterwards. See `setItemCost` in db/streaming.ts.
+ */
+function UncostedModal({
+  items,
+  onClose,
+  onSaved
+}: {
+  items: UncostedStreamItem[]
+  onClose: () => void
+  onSaved: () => void | Promise<void>
+}): JSX.Element {
+  const toast = useToast()
+  const [prices, setPrices] = useState<Record<string, string>>({})
+  const [busy, setBusy] = useState(false)
+
+  const priced = items
+    .map((it) => ({ item: it, price: parseMoneyInput(prices[it.id] ?? '') }))
+    .filter((e) => Number.isFinite(e.price) && e.price >= 0)
+  const anyBad = items.some(
+    (it) => (prices[it.id] ?? '').trim() !== '' && !(parseMoneyInput(prices[it.id] ?? '') >= 0)
+  )
+
+  const save = async (): Promise<void> => {
+    if (priced.length === 0) return
+    setBusy(true)
+    try {
+      let saved = 0
+      for (const entry of priced) {
+        const res = await streaming.setItemCost({
+          itemId: entry.item.id,
+          unitPrice: entry.price
+        })
+        if (!res.ok) {
+          toast.error(resultError(res, 'That cost could not be saved.'))
+          break
+        }
+        saved += 1
+      }
+      // Reloaded even on a partial failure: some of the writes landed, and a
+      // statement still showing the old figures for them is the one thing worse
+      // than the failure itself.
+      if (saved > 0) {
+        toast.success(`${plural(saved, 'line')} costed. The statement below has moved with it.`)
+        await onSaved()
+      }
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal
+      title="What did this cost?"
+      subtitle={`${plural(items.length, 'line')} carrying no cost`}
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            icon="DollarSign"
+            loading={busy}
+            disabled={priced.length === 0 || anyBad}
+            onClick={() => void save()}
+          >
+            {priced.length > 1 ? `Save ${priced.length} costs` : 'Save the cost'}
+          </Button>
+        </>
+      }
+    >
+      {items.map((it) => {
+        const one = it.priceUnit ? stockUnitWord(it.priceUnit, 1) : 'unit'
+        const many = it.priceUnit ? stockUnitWord(it.priceUnit, 2) : 'units'
+        const price = parseMoneyInput(prices[it.id] ?? '')
+        const total = Number.isFinite(price) && price >= 0 ? it.quantity * price : null
+        return (
+          <Field
+            key={it.id}
+            label={`${shortDayLabel(it.streamDate)} · ${it.sessionTitle || 'Untitled show'}`}
+            hint={
+              total !== null
+                ? `${formatUnitCount(it.quantity)} ${
+                    it.quantity === 1 ? one : many
+                  } → ${moneyText(Math.round(total * 100) / 100)} on that night`
+                : `${formatUnitCount(it.quantity)} ${
+                    it.quantity === 1 ? one : many
+                  } ${it.kind === 'giveaway' ? 'given away' : 'broken'} · price per ${one}`
+            }
+          >
+            <Input
+              inputMode="decimal"
+              value={prices[it.id] ?? ''}
+              onChange={(e) => setPrices((p) => ({ ...p, [it.id]: e.target.value }))}
+              placeholder={`what one ${one} cost`}
+              invalid={(prices[it.id] ?? '').trim() !== '' && !(price >= 0)}
+            />
+          </Field>
+        )
+      })}
+
+      <Note tone="info" icon="Info">
+        <b>This corrects the statement, not the stock.</b>
+        <p>
+          {items.every((i) => i.reconciled)
+            ? 'None of these lines ever moved stock — they record what a show that is already history cost — so there is nothing on a shelf for a price to change.'
+            : 'The stock these lines took came off the shelf when they were recorded and is already gone. The cost layers it took are left exactly as they are; what moves is what the statement says those nights cost.'}
+        </p>
+      </Note>
+    </Modal>
   )
 }

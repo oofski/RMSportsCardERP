@@ -12249,7 +12249,18 @@ button.sor-team:focus-visible {
   font-weight: 600;
   color: var(--text-2);
 }
-.stm-line-remove {
+/* Words, not $0.00, in the column a figure would otherwise sit in. A zero here
+   reads as "this was free"; what it actually means is that nobody has priced it,
+   and the show's cost is that much too low until somebody does. */
+.stm-line-uncosted {
+  font-size: 11.5px;
+  font-style: italic;
+  font-weight: 500;
+  color: var(--warning);
+  white-space: nowrap;
+}
+.stm-line-remove,
+.stm-line-cost {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -12264,6 +12275,16 @@ button.sor-team:focus-visible {
 .stm-line-remove:hover {
   border-color: var(--danger);
   color: var(--danger-strong);
+}
+.stm-line-cost:hover {
+  border-color: var(--brand-500);
+  color: var(--text);
+}
+/* The one line on the show whose cost is still missing. Amber so it is findable
+   in a list of thirty without reading every total. */
+.stm-line-cost.is-missing {
+  border-color: var(--warning);
+  color: var(--warning);
 }
 .stm-line-remove.placeholder {
   border-color: transparent;
@@ -13820,9 +13841,38 @@ button.sor-team:focus-visible {
    truncation. This one is a sentence explaining why there is no figure, and it
    is the whole point of the row: truncated at the container edge it would read
    "no packing record for this…" and answer nothing. */
-.fin-pnl-line.is-unknown .fin-pnl-detail {
+.fin-pnl-line.is-unknown .fin-pnl-detail,
+.fin-pnl-line.is-uncosted .fin-pnl-detail {
   display: inline;
   white-space: normal;
+}
+/* A cost nobody ever recorded. Reads as words rather than a figure for the same
+   reason "not known" does — $0.00 would say the cost did not happen — but it is
+   a CONTROL, not a statement: the stream lines behind it are named on the row,
+   so clicking it opens them for pricing. Warning ink because it is a hole in the
+   bottom line, underlined because it is the only clickable amount on the
+   statement and nothing else about a table cell says so. */
+.fin-pnl-cost-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 11.5px;
+  font-style: italic;
+  color: var(--warning);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.fin-pnl-cost-btn:hover {
+  color: var(--text);
+}
+.fin-pnl-line.is-uncosted td .fin-money {
+  font-style: italic;
+  font-size: 11.5px;
+  color: var(--warning);
 }
 /* The "short by" badge on a section heading. Muted like the line count beside
    it — it is a caveat, not an alarm, and the section's own note carries the

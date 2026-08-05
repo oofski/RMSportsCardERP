@@ -44,7 +44,8 @@ const {
   createSession,
   deleteSession,
   getSessionDetail,
-  removeItem
+  removeItem,
+  setItemCost
 } = require('../src/main/db/streaming')
 const { isPastDatedSession, parseMoneyInput, statedPriceUnit } = require('../src/shared/streaming')
 
@@ -198,6 +199,28 @@ const txnState = (productId: string): { rows: number; qty: number; cost: number 
     )
     .get(productId) as { rows: number; qty: number; cost: number }
   return { rows: r.rows, qty: r.qty, cost: cents(r.cost) }
+}
+
+/**
+ * How far ONE product's shelf sits from its cost layers.
+ *
+ * The whole-database assertion cannot be used past section 12: the live
+ * fractional break there leaves CASE_P a quarter of a case apart, and that
+ * section records it as the behaviour that actually exists rather than the one
+ * that would be tidier. So a later section proves what it can honestly prove —
+ * that it moved neither side of that gap — and demands an exact zero of the
+ * products it created itself.
+ */
+const lotStockGap = (productId: string): number => {
+  const rows = db
+    .prepare(
+      `SELECT s.location AS loc, s.quantity AS stock,
+              COALESCE((SELECT SUM(l.qty_remaining) FROM inventory_lots l
+                        WHERE l.product_id = s.product_id AND l.location = s.location), 0) AS lots
+         FROM inventory_stock s WHERE s.product_id = ?`
+    )
+    .all(productId) as Array<{ loc: string; stock: number; lots: number }>
+  return rows.reduce((worst, r) => Math.max(worst, Math.abs(r.stock - r.lots)), 0)
 }
 
 const itemLotRows = (itemId: string): number =>
@@ -816,6 +839,216 @@ console.log('\n=== 13. a line says which unit its stated price is in ===')
     statedPriceUnit({ enteredCases: null, enteredBoxes: null }) === 'case',
     'and a line that says neither still reads as cases, which is what it was'
   )
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 14. entering the price afterwards ===')
+// ---------------------------------------------------------------------------
+/**
+ * The owner: "give me the ability in the streaming or finance to enter the price
+ * … since we might not always know in the moment."
+ *
+ * A box gets broken on air with no invoice to hand and the line lands carrying
+ * nothing. The P&L now PRINTS that hole instead of hiding it, and this is what
+ * fills it in. What it must not do is the thing that would be easy and wrong:
+ * treat a late price as a reason to go back and move stock.
+ *
+ * THE CONTRACT IT INHERITS. A reconciled line never consumed FIFO, never opened
+ * a lot and never re-based the product's average, because the stock it describes
+ * left the shelf weeks before anybody typed it. Everything in sections 2, 4 and
+ * 11 rests on that. A cost arriving late changes what the STATEMENT says the
+ * night cost and nothing else — the four assertions below are the whole of it,
+ * and each names the thing that breaks if it is got wrong.
+ */
+{
+  const LATE = mkSession('SR Priced Later', at(55, 20), at(55, 23))
+  const before = {
+    stock: stockQty(CASE_P, 'RM'),
+    lots: lotState(CASE_P),
+    avg: getProduct(CASE_P).unitCost,
+    txn: txnState(CASE_P),
+    gap: lotStockGap(CASE_P)
+  }
+
+  // A reconciliation entered at a price of NOTHING — one of the two supported
+  // ways a real line reaches zero, and the one that produced the owner's report.
+  const r = addItem(
+    { sessionId: LATE, kind: 'break', productId: CASE_P, cases: 2, casePrice: 0, location: 'RM' },
+    null
+  )
+  ok(r.ok, 'a past show can be reconciled at a price of nothing — the invoice is not to hand', r.error)
+  const line = lastItem(LATE) as Record<string, number | string | null>
+  ok(eq(line.costTotal as number, 0), 'so the line carries no cost at all')
+  ok(line.statedCasePrice === 0, 'with the zero stored as the assertion it is, not as a null')
+
+  const priced = setItemCost({ itemId: line.id as string, unitPrice: 2400 }, null)
+  ok(priced.ok, 'and the price can be entered afterwards', priced.ok ? '' : priced.error)
+
+  const after = lastItem(LATE) as Record<string, number | string | null>
+  ok(eq(after.costTotal as number, 4800), 'two cases at $2,400 now cost the show $4,800', String(after.costTotal))
+  ok(eq(after.unitCost as number, 2400), 'at $2,400 a stock unit', String(after.unitCost))
+  ok(eq(after.statedCasePrice as number, 2400), 'and the stated price on the line is the one that was typed')
+
+  console.log('\n--- and it moved nothing, exactly as the original entry moved nothing ---')
+  // The four. Each of these is a different way a late price could quietly
+  // corrupt the shelf, and none of them is allowed to happen.
+  ok(stockQty(CASE_P, 'RM') === before.stock, 'ON-HAND STOCK is untouched — the cases went weeks ago')
+  const lots = lotState(CASE_P)
+  ok(
+    lots.rows === before.lots.rows && lots.qty === before.lots.qty,
+    'NO COST LAYER was consumed or opened',
+    `${JSON.stringify(before.lots)} -> ${JSON.stringify(lots)}`
+  )
+  ok(eq(lots.value, before.lots.value), 'and the value carried on the layers on hand is unchanged')
+  ok(
+    itemLotRows(line.id as string) === 0,
+    'the line still names no consumed layers, because it still consumed none'
+  )
+  ok(
+    eq(getProduct(CASE_P).unitCost, before.avg),
+    "the product's AVERAGE COST did not move — a price for stock nobody has must not re-base today's shelf",
+    `${before.avg} -> ${getProduct(CASE_P).unitCost}`
+  )
+  ok(
+    lotStockGap(CASE_P) === before.gap,
+    'and it moved neither the shelf nor the layers — the distance between them is exactly what it was',
+    `${before.gap} -> ${lotStockGap(CASE_P)}`
+  )
+
+  // The ledger records the correction rather than being edited, like everything
+  // else in this app: one row for the difference, carrying no quantity.
+  const txn = txnState(CASE_P)
+  ok(txn.qty === before.txn.qty, 'the correcting ledger row carries a quantity change of zero')
+  ok(eq(txn.cost, before.txn.cost + 4800), 'and the whole newly stated cost', String(txn.cost))
+
+  // And it reverses to nothing, so a price typed onto the wrong line is as
+  // undoable as the line itself always was.
+  ok(removeItem(line.id as string, null).ok, 'the priced line removes')
+  ok(stockQty(CASE_P, 'RM') === before.stock, 'still inventing no stock on the way out')
+  ok(eq(txnState(CASE_P).cost, before.txn.cost), 'and the ledger nets back to where it started')
+  ok(eq(getProduct(CASE_P).unitCost, before.avg), 'with the average cost where it started too')
+  ok(lotStockGap(CASE_P) === before.gap, 'and the shelf and its layers are still exactly as far apart')
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n--- 14a. decimals, because a box can cost $1.25 ---')
+// ---------------------------------------------------------------------------
+{
+  const DEC = mkSession('SR Decimals', at(56, 20), at(56, 23))
+  // A quarter of a case AND a price with cents — the two decimals meet on one
+  // line, which is where a rounding rule that only half works shows up.
+  addItem(
+    { sessionId: DEC, kind: 'break', productId: CASE_P, cases: 1.25, casePrice: 0, location: 'RM' },
+    null
+  )
+  const frac = lastItem(DEC) as Record<string, number | string | null>
+  ok(setItemCost({ itemId: frac.id as string, unitPrice: 1.33 }, null).ok, '1.33 a case is accepted')
+  const fracAfter = lastItem(DEC) as Record<string, number | string | null>
+  ok(eq(fracAfter.unitCost as number, 1.33), '1.33 comes back as 1.33, not 1.3 and not 1', String(fracAfter.unitCost))
+  ok(
+    eq(fracAfter.costTotal as number, 1.66),
+    '1.25 x 1.33 books $1.66 — rounded once, at the cent',
+    String(fracAfter.costTotal)
+  )
+
+  addItem(
+    { sessionId: DEC, kind: 'break', productId: BOX_P, boxes: 4, casePrice: 0, location: 'RM' },
+    null
+  )
+  const boxLine = lastItem(DEC) as Record<string, number | string | null>
+  ok(setItemCost({ itemId: boxLine.id as string, unitPrice: 1.25 }, null).ok, '$1.25 a box is accepted')
+  const boxAfter = lastItem(DEC) as Record<string, number | string | null>
+  ok(eq(boxAfter.unitCost as number, 1.25), '1.25 round-trips exactly', String(boxAfter.unitCost))
+  ok(eq(boxAfter.costTotal as number, 5), 'and four of them book $5.00', String(boxAfter.costTotal))
+  ok(eq(boxAfter.statedCasePrice as number, 1.25), 'the stated price is per BOX, because that is what it is stocked in')
+
+  // What it refuses, in the words the operator gets.
+  const neg = setItemCost({ itemId: boxLine.id as string, unitPrice: -1 }, null)
+  ok(!neg.ok && /less than nothing/.test(neg.error ?? ''), 'a negative price is refused', neg.error ?? 'accepted')
+  const nan = setItemCost({ itemId: boxLine.id as string, unitPrice: Number.NaN }, null)
+  ok(!nan.ok && /as a number/.test(nan.error ?? ''), 'and a NaN is refused rather than stored', nan.error ?? 'accepted')
+  const gone = setItemCost({ itemId: 'no-such-line', unitPrice: 10 }, null)
+  ok(!gone.ok && /no longer exists/.test(gone.error ?? ''), 'as is a line that is not there', gone.error ?? 'accepted')
+  const still = lastItem(DEC) as Record<string, number | string | null>
+  ok(eq(still.costTotal as number, 5), 'and none of the refusals changed the line they were aimed at')
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n--- 14b. a LIVE line: the record moves, the stock does not ---')
+// ---------------------------------------------------------------------------
+/**
+ * The other way a line reaches zero: a product carried at a cost of nothing,
+ * because "0 means don't track". This one DID consume FIFO — it is tonight's
+ * show and the boxes came off the shelf — and the decision is that a late price
+ * corrects what the STATEMENT says the night cost and leaves the cost layers
+ * exactly where they are.
+ *
+ * The alternative was considered and rejected. Rewriting the layers now would
+ * revalue stock that is already gone, move the product's average on the strength
+ * of a price for stock nobody has, and cascade into every later line that
+ * consumed the same lot. What is being corrected is a record, not a shelf.
+ *
+ * `stated_case_price` STAYING NULL is the load-bearing assertion here.
+ * `restoreItemStock` reads that column to decide whether a removal hands stock
+ * back; setting it on a live line would strand on the shelf the very boxes this
+ * line really did take.
+ */
+{
+  const ZERO_P = make({
+    name: 'SR Untracked Hobby Box',
+    unitType: 'box',
+    boxesPerCase: null,
+    cost: 0,
+    open: 10
+  })
+  const before = {
+    stock: stockQty(ZERO_P, 'RM'),
+    avg: getProduct(ZERO_P).unitCost,
+    lots: lotState(ZERO_P),
+    txn: txnState(ZERO_P)
+  }
+
+  const live = addItem(
+    { sessionId: TODAY, kind: 'break', productId: ZERO_P, boxes: 3, location: 'RM' },
+    null
+  )
+  ok(live.ok, 'three boxes of an untracked product break on tonight\'s show', live.ok ? '' : live.error)
+  const line = lastItem(TODAY) as Record<string, number | string | null>
+  ok(eq(line.costTotal as number, 0), 'and cost the show nothing, because the product is carried at nothing')
+  ok(line.statedCasePrice === null, 'it is a live line, so it states no price')
+  ok(itemLotRows(line.id as string) === 1, 'and it DID consume a cost layer, unlike a reconciliation')
+  const afterBreak = {
+    stock: stockQty(ZERO_P, 'RM'),
+    avg: getProduct(ZERO_P).unitCost,
+    lots: lotState(ZERO_P)
+  }
+  ok(afterBreak.stock === before.stock - 3, 'the three boxes came off the shelf')
+
+  ok(setItemCost({ itemId: line.id as string, unitPrice: 74.5 }, null).ok, 'the price arrives the next day')
+  const after = lastItem(TODAY) as Record<string, number | string | null>
+  ok(eq(after.costTotal as number, 223.5), '3 x $74.50 is now what the show carries', String(after.costTotal))
+  ok(
+    after.statedCasePrice === null,
+    'and the line is STILL not a reconciliation — setting that would strand the stock it really took on removal'
+  )
+
+  ok(stockQty(ZERO_P, 'RM') === afterBreak.stock, 'the shelf did not move again')
+  const lots = lotState(ZERO_P)
+  ok(
+    lots.rows === afterBreak.lots.rows && lots.qty === afterBreak.lots.qty && eq(lots.value, afterBreak.lots.value),
+    'the cost layers were NOT revalued — they describe a shelf, and this describes a night',
+    `${JSON.stringify(afterBreak.lots)} -> ${JSON.stringify(lots)}`
+  )
+  ok(eq(getProduct(ZERO_P).unitCost, afterBreak.avg), 'and the average cost was not re-based off it')
+  ok(itemLotRows(line.id as string) === 1, 'the layer it consumed is still the layer it consumed')
+  ok(lotStockGap(ZERO_P) === 0, 'stock and cost layers agree for it exactly')
+
+  // The one thing that HAS to still work afterwards: this line is still a stock
+  // movement, so removing it still gives the boxes back.
+  ok(removeItem(line.id as string, null).ok, 'the priced live line removes')
+  ok(stockQty(ZERO_P, 'RM') === before.stock, 'and its three boxes are back on the shelf')
+  ok(eq(txnState(ZERO_P).cost, before.txn.cost), 'with the ledger netting back to the cent', String(txnState(ZERO_P).cost))
+  ok(lotStockGap(ZERO_P) === 0, 'and it ends exactly consistent after all of it')
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)

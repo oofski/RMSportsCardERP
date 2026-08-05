@@ -54,6 +54,10 @@ import { dayRangeLabel, daySpan, monthKeyOfDayKey } from './time'
 export function StreamingTab(): JSX.Element {
   const { can } = useSession()
   const canManage = can('finance.manage')
+  // Entering a cost against a stream line is a STREAMING write — it edits
+  // `stream_items` — so it is gated on the streaming permission even though the
+  // click happens on the P&L.
+  const canCostLines = can('streaming.manage')
   const toast = useToast()
 
   const [view, setView] = useState<StreamingFinanceView | null>(null)
@@ -278,6 +282,14 @@ export function StreamingTab(): JSX.Element {
         waiting={waitingInRange}
         onReattribute={reattribute}
         onPickDay={(key) => setRange({ from: key, to: key })}
+        /* Only offered to somebody who may write a stream line. What it writes
+           is a stream line, whichever screen the click came from, so the gate is
+           `streaming.manage` and not this module's own permission. The whole
+           view is re-read afterwards rather than patched: a cost lands on cost
+           of goods, gross profit, net profit, the calendar cell and every rollup
+           that contains the day, and patching one of those would leave the rest
+           describing the arrangement from before. */
+        onCosted={canCostLines ? () => setAttempt((n) => n + 1) : undefined}
       />
 
       {/* Under the statement, because it is the only figure on it that nobody

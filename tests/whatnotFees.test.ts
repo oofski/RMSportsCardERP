@@ -43,7 +43,7 @@ mkdirSync(DIR, { recursive: true })
 
 /* eslint-disable @typescript-eslint/no-var-requires */
 const { getDb } = require('../src/main/db/database')
-const { addItem, createSession } = require('../src/main/db/streaming')
+const { addItem, createSession, setItemCost } = require('../src/main/db/streaming')
 const { createProduct } = require('../src/main/db/inventory')
 const { importLedger, streamingFinanceView, reattributeAll } = require('../src/main/db/financeStreaming')
 const { deleteExpense, listExpenses, saveExpense } = require('../src/main/db/financeExpenses')
@@ -1883,6 +1883,191 @@ for (let i = 0; i < beforeReattr.length; i++) {
 }
 ok(stable, 're-attributing three times changes nothing — it is idempotent')
 ok(streamingFinanceView().reconciled === true, 'and still reconciles')
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 12. a box nobody costed is PRINTED, and can be costed from here ===')
+// ---------------------------------------------------------------------------
+/**
+ * THE OWNER'S REPORT: "COGS on some of my streams got deleted."
+ *
+ * Nothing was deleted. A line whose cost came out at zero — a past show
+ * reconciled at a price of nothing, a box entered at cost 0 because "0 means
+ * don't track" — was dropped from the itemised section before it ever reached
+ * the statement, so the one screen that would have shown the hole showed nothing
+ * at all. The zero was never money; it was information, and it was the
+ * information the owner needed.
+ *
+ * So: the line appears, under the product's own name, reading as UNCOSTED rather
+ * than as $0.00 or as absent. The money is unchanged either way, which the
+ * checksums below assert on a day AND on a range — and then the cost is typed
+ * in, and the day moves by exactly that much and no more.
+ *
+ * Its own night, thirty days clear of every other fixture in this file, so
+ * nothing above has to be re-derived and nothing below inherits it.
+ */
+const UNCOSTED_NIGHT = back(70, 19)
+const dayU = streamDateOf(UNCOSTED_NIGHT.toISOString())
+const sU = createSession(
+  { title: 'Uncosted night', startedAt: UNCOSTED_NIGHT.toISOString(), endedAt: back(70, 23).toISOString() },
+  null
+)
+ok(sU.ok, 'a show with nothing costed on it is logged', sU.ok ? '' : sU.error)
+
+const CHARLIE = 'WF Charlie Hobby 12-Box Case'
+const DELTA = 'WF Delta Hobby 6-Box Case'
+const charlieId = mkProduct(CHARLIE, 'case', 12)
+const deltaId = mkProduct(DELTA, 'case', 6)
+
+// One costed line beside two uncosted ones, and one of the uncosted lines is the
+// SAME PRODUCT as the costed one. That last is the case the split in the query
+// exists for: folded together they would print a confident $1,500 against a name
+// half of whose cases nobody has priced.
+ok(
+  addItem(
+    { sessionId: sU.data.id, kind: 'break', productId: charlieId, cases: 1, casePrice: 1500, location: 'RM' },
+    null
+  ).ok,
+  'one case is recorded at $1,500'
+)
+const zeroSame = addItem(
+  { sessionId: sU.data.id, kind: 'break', productId: charlieId, cases: 1, casePrice: 0, location: 'RM' },
+  null
+)
+ok(zeroSame.ok, 'a second case of the same product is recorded with no price at all', zeroSame.error)
+const zeroOther = addItem(
+  { sessionId: sU.data.id, kind: 'break', productId: deltaId, cases: 2, casePrice: 0, location: 'RM' },
+  null
+)
+ok(zeroOther.ok, 'and two cases of another product, also unpriced', zeroOther.error)
+
+let vU = viewOf()
+ok(vU.reconciled, 'the view reconciles with uncosted lines on it', String(vU.reconcileNote))
+let dayUncosted = pick(vU, dayU)
+ok(!!dayUncosted, 'the night is on the statement')
+
+const uLines = cogsOf(dayUncosted)
+const labels = uLines.map((l: any) => l.label)
+ok(labels.length === 3, 'three cost-of-goods lines, not one', JSON.stringify(labels))
+
+// NOT ABSENT. This is the assertion the owner's complaint reduces to.
+const deltaLine = uLines.find((l: any) => l.label === DELTA)
+ok(!!deltaLine, 'the product nobody costed is on the statement, under its own name', JSON.stringify(labels))
+// NOT $0.00. `uncosted` is what the screen reads to print words instead of a
+// figure, and `empty` is what the zero-line toggle hides — it must be false, or
+// the line is back to being invisible on every default render.
+ok(deltaLine.uncosted === true, 'and it reads as uncosted rather than as a zero', JSON.stringify(deltaLine))
+ok(deltaLine.empty !== true, 'so the zero-line toggle cannot swallow it', JSON.stringify(deltaLine))
+ok(cents(deltaLine.amount) === 0, 'it carries no money, because none was ever recorded')
+ok(
+  !deltaLine.unavailable,
+  'and it is NOT the packaging flag — that one says "not known" and is a dead end',
+  JSON.stringify(deltaLine)
+)
+ok(
+  Array.isArray(deltaLine.uncostedItems) && deltaLine.uncostedItems.length === 1,
+  'the stream line behind it rides on the row, so the statement can offer it back for pricing',
+  JSON.stringify(deltaLine.uncostedItems)
+)
+ok(deltaLine.uncostedItems[0].priceUnit === 'case', 'named in the unit a price for it would be per')
+ok(deltaLine.uncostedItems[0].quantity === 2, 'and the count that price multiplies')
+ok(deltaLine.uncostedItems[0].reconciled === true, 'and says the line moved no stock')
+
+// THE SPLIT. One product, one act, one night, two entries — because one of them
+// is costed and the other is not.
+const charlieLines = uLines.filter((l: any) => l.label === CHARLIE)
+ok(charlieLines.length === 2, 'a product half costed prints TWICE, not once', JSON.stringify(charlieLines))
+ok(
+  charlieLines.filter((l: any) => l.uncosted).length === 1,
+  'one of them uncosted and one of them real money'
+)
+ok(sumLines(charlieLines) === cents(-1500), 'together they still hold exactly what was paid',
+   String(sumLines(charlieLines)))
+
+// UNCOSTED LINES OUTRANK COSTED ONES FOR A VISIBLE SLOT. They are worth zero, so
+// ordering by size alone would drop every one of them into the roll-up tail —
+// where the money stays right and the disclosure disappears.
+ok(uLines[0].uncosted === true, 'the uncosted lines sort to the top', JSON.stringify(labels))
+ok(uLines[1].uncosted === true, 'both of them, ahead of the $1,500 line')
+ok(
+  cogsShape(dayUncosted).incomplete === true,
+  'and the section heading says it is not fully counted, because the sections are closed by default'
+)
+
+// THE MONEY IS UNCHANGED. A zero line adds zero, so nothing about the statement's
+// arithmetic may move — on the day or on any range containing it.
+ok(sumLines(uLines) === cents(dayUncosted.cogs), 'the lines still sum to the day cost of goods',
+   `${sumLines(uLines)} vs ${cents(dayUncosted.cogs)}`)
+checksumOk(dayUncosted, 'uncosted night')
+const spanU = sumDayFinance([dayUncosted, nightA, nightB])
+checksumOk(spanU, 'a range containing the uncosted night')
+checksumOk(vU.totals, 'all-time with uncosted lines present')
+const spanULines = cogsOf(spanU)
+ok(
+  spanULines.filter((l: any) => l.uncosted).length === 2,
+  'the range carries both uncosted lines through the rollup',
+  JSON.stringify(spanULines.map((l: any) => [l.label, l.uncosted]))
+)
+ok(spanULines[0].uncosted && spanULines[1].uncosted, 'still ahead of every costed line over a range')
+ok(sumLines(spanULines) === cents(spanU.cogs), 'and the range lines still sum to the range cost of goods')
+
+// ---------------------------------------------------------------------------
+console.log('\n--- 12a. and then somebody types the price in ---')
+// ---------------------------------------------------------------------------
+const cogsBeforeFill = cents(dayUncosted.cogs)
+const netBeforeFill = cents(dayUncosted.netProfit)
+
+const costed = setItemCost({ itemId: deltaLine.uncostedItems[0].id, unitPrice: 725.5 }, null)
+ok(costed.ok, 'the cost is accepted from the id the statement handed over', costed.ok ? '' : costed.error)
+
+vU = viewOf()
+ok(vU.reconciled, 'the view still reconciles afterwards', String(vU.reconcileNote))
+dayUncosted = pick(vU, dayU)
+
+// EXACTLY THAT MUCH AND NO MORE. 2 cases x $725.50 = $1,451.
+ok(
+  cents(dayUncosted.cogs) === cogsBeforeFill - cents(1451),
+  'cost of goods moves by exactly the cost entered',
+  `${dayUncosted.cogs} vs ${(cogsBeforeFill - cents(1451)) / 100}`
+)
+ok(
+  cents(dayUncosted.netProfit) === netBeforeFill - cents(1451),
+  'and net profit by exactly the same amount',
+  `${dayUncosted.netProfit} vs ${(netBeforeFill - cents(1451)) / 100}`
+)
+checksumOk(dayUncosted, 'the night after its cost was entered')
+
+const afterLines = cogsOf(dayUncosted)
+const deltaAfter = afterLines.find((l: any) => l.label === DELTA)
+ok(!deltaAfter.uncosted, 'the line is no longer uncosted')
+ok(cents(deltaAfter.amount) === cents(-1451), 'and holds the money it was given', String(deltaAfter.amount))
+ok(afterLines.filter((l: any) => l.uncosted).length === 1, 'the other hole is still open, and still printed')
+ok(
+  cogsShape(dayUncosted).incomplete === true,
+  'so the section still says it is not fully counted'
+)
+
+// The last one closed, and the warning clears — which is what separates this
+// from the packaging unknown, whose flag can never be cleared by anybody.
+const lastHole = afterLines.find((l: any) => l.uncosted)
+ok(setItemCost({ itemId: lastHole.uncostedItems[0].id, unitPrice: 1500 }, null).ok, 'the last hole is filled')
+vU = viewOf()
+dayUncosted = pick(vU, dayU)
+ok(
+  cogsOf(dayUncosted).every((l: any) => !l.uncosted),
+  'no uncosted line is left',
+  JSON.stringify(cogsOf(dayUncosted).map((l: any) => [l.label, l.uncosted]))
+)
+ok(
+  !cogsShape(dayUncosted).incomplete,
+  'and the section stops claiming to be short — unlike the packaging unknown, this one can be finished'
+)
+ok(
+  cogsOf(dayUncosted).filter((l: any) => l.label === CHARLIE).length === 1,
+  'the two halves of the half-costed product fold back into one line once both are priced'
+)
+checksumOk(dayUncosted, 'the fully costed night')
+checksumOk(vU.totals, 'all-time once every hole is filled')
+ok(vU.reconciled, 'and the whole view still reconciles', String(vU.reconcileNote))
 
 console.log(`\n${pass} passed, ${fail} failed${skipped ? `, ${skipped} skipped` : ''}\n`)
 process.exit(fail === 0 ? 0 : 1)

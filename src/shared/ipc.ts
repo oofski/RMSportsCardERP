@@ -255,6 +255,9 @@ export const IPC = {
   streamDelete: 'stream:delete',
   streamItemAdd: 'stream:item:add',
   streamItemRemove: 'stream:item:remove',
+  // What a line turns out to have cost, entered after the fact. Records the
+  // price for the statement; moves no stock and touches no cost layer.
+  streamItemCost: 'stream:item:cost',
 
   // Finance — Streaming tab (Whatnot ledger import + day-by-day revenue)
   finStreamView: 'finance:stream:view',

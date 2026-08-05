@@ -5,17 +5,18 @@ import {
   formatDuration,
   isPastDatedSession,
   isSuspiciouslyLong,
+  parseMoneyInput,
   statedPriceUnit
 } from '@shared/streaming'
 import { formatMoney } from '../../lib/format'
-import { formatUnitCount, typedEntryLabel } from '../../lib/productUnits'
+import { formatUnitCount, stockUnitWord, typedEntryLabel } from '../../lib/productUnits'
 import { Icon } from '../../components/Icon'
 import { useToast } from '../../components/Toast'
-import { Button, CenterLoader, EmptyState, Modal } from '../../components/ui'
+import { Button, CenterLoader, EmptyState, Field, Input, Modal } from '../../components/ui'
 import { AddItemForm } from './AddItemForm'
 import { SessionFormModal } from './SessionFormModal'
 import { LiveChip, SourceChip, TimeSpan } from './bits'
-import { resultError, streaming } from './api'
+import { costEntryReady, resultError, streaming } from './api'
 import { longDayLabel } from './time'
 
 /**
@@ -51,6 +52,10 @@ export function SessionDetail({
 
   const [adding, setAdding] = useState<StreamItemKind | null>(null)
   const [removing, setRemoving] = useState<StreamItem | null>(null)
+  /** The line whose cost is being typed in — "we might not always know in the
+   *  moment", so a line can be recorded now and priced whenever the invoice
+   *  turns up. */
+  const [costing, setCosting] = useState<StreamItem | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [editing, setEditing] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -268,6 +273,7 @@ export function SessionDetail({
         onCloseAdd={() => setAdding(null)}
         onAdded={(next) => void applyDetail(next)}
         onRemove={setRemoving}
+        onCost={setCosting}
         sessionId={session.id}
       />
 
@@ -285,8 +291,20 @@ export function SessionDetail({
         onCloseAdd={() => setAdding(null)}
         onAdded={(next) => void applyDetail(next)}
         onRemove={setRemoving}
+        onCost={setCosting}
         sessionId={session.id}
       />
+
+      {costing && (
+        <CostModal
+          item={costing}
+          onClose={() => setCosting(null)}
+          onSaved={async (next) => {
+            setCosting(null)
+            await applyDetail(next)
+          }}
+        />
+      )}
 
       {removing && (
         <Modal
@@ -473,7 +491,8 @@ function ItemSection({
   onOpenAdd,
   onCloseAdd,
   onAdded,
-  onRemove
+  onRemove,
+  onCost
 }: {
   kind: StreamItemKind
   title: string
@@ -490,6 +509,8 @@ function ItemSection({
   onCloseAdd: () => void
   onAdded: (detail: StreamSessionDetail) => void
   onRemove: (item: StreamItem) => void
+  /** Type in what this line cost, whenever the invoice turns up. */
+  onCost: (item: StreamItem) => void
 }): JSX.Element {
   const units = items.reduce((n, i) => n + i.quantity, 0)
   const cost = items.reduce((n, i) => n + i.costTotal, 0)
@@ -539,7 +560,13 @@ function ItemSection({
       ) : (
         <div className="stm-lines">
           {items.map((item) => (
-            <ItemRow key={item.id} item={item} canManage={canManage} onRemove={onRemove} />
+            <ItemRow
+              key={item.id}
+              item={item}
+              canManage={canManage}
+              onRemove={onRemove}
+              onCost={onCost}
+            />
           ))}
         </div>
       )}
@@ -550,11 +577,13 @@ function ItemSection({
 function ItemRow({
   item,
   canManage,
-  onRemove
+  onRemove,
+  onCost
 }: {
   item: StreamItem
   canManage: boolean
   onRemove: (item: StreamItem) => void
+  onCost: (item: StreamItem) => void
 }): JSX.Element {
   // How the line was TYPED. A break of 2 cases + 3 boxes on a box-stocked
   // product is stored as 27 boxes, and 27 is the number that moved stock — but
@@ -566,6 +595,10 @@ function ItemRow({
   // it off the line rather than saying "case" for everything, which was wrong on
   // every box-stocked line by however many boxes a case holds.
   const priceUnit = item.statedCasePrice !== null ? statedPriceUnit(item) : null
+  // Nobody ever said what this cost. Read off the figure the P&L books for this
+  // line — `lossValue` on a giveaway, `costTotal` on a break — so this row and
+  // the statement can never disagree about which lines are the holes.
+  const uncosted = (item.kind === 'giveaway' ? item.lossValue : item.costTotal) === 0
 
   return (
     <div className="stm-line">
@@ -633,7 +666,11 @@ function ItemRow({
         {formatMoney(item.unitCost)}
       </span>
       <span className="stm-line-total mono" title="Total cost of this line">
-        {formatMoney(item.costTotal)}
+        {/* NOTHING WAS EVER RECORDED, said in words rather than as $0.00. The
+            same distinction the P&L now makes, on the screen the line lives on:
+            a zero here is not "this was free", it is "nobody has priced it", and
+            the two lead to completely different actions. */}
+        {uncosted ? <span className="stm-line-uncosted">no cost recorded</span> : formatMoney(item.costTotal)}
         {/* Giveaways carry a second figure: what the stock was worth, which is
             what the P&L books. It sits under the FIFO cost rather than replacing
             it because the two answer different questions and are usually — but
@@ -653,18 +690,158 @@ function ItemRow({
       </span>
 
       {canManage ? (
-        <button
-          type="button"
-          className="stm-line-remove"
-          onClick={() => onRemove(item)}
-          aria-label={`Remove ${entry ?? `${formatUnitCount(item.quantity)} ×`} ${item.productName}`}
-          title="Remove and return the stock"
-        >
-          <Icon name="Trash2" size={14} />
-        </button>
+        <>
+          {/* Offered on EVERY line, not only the uncosted ones. A price typed
+              wrong is as much a wrong statement as a price never typed, and the
+              button that fixes the first is the one that fixes the second.
+              Hidden entirely against a preload that predates the write, rather
+              than offered and then failing on click. */}
+          {costEntryReady && (
+            <button
+              type="button"
+              className={`stm-line-cost${uncosted ? ' is-missing' : ''}`}
+              onClick={() => onCost(item)}
+              aria-label={`Enter what ${item.productName} cost`}
+              title={
+                uncosted
+                  ? 'Nobody recorded what this cost — enter it'
+                  : 'Correct what this line cost'
+              }
+            >
+              <Icon name="DollarSign" size={14} />
+            </button>
+          )}
+          <button
+            type="button"
+            className="stm-line-remove"
+            onClick={() => onRemove(item)}
+            aria-label={`Remove ${entry ?? `${formatUnitCount(item.quantity)} ×`} ${item.productName}`}
+            title="Remove and return the stock"
+          >
+            <Icon name="Trash2" size={14} />
+          </button>
+        </>
       ) : (
         <span className="stm-line-remove placeholder" aria-hidden="true" />
       )}
     </div>
+  )
+}
+
+/**
+ * Type in what a line cost, whenever the number turns up.
+ *
+ * The owner: "give me the ability in the streaming or finance to enter the price
+ * … since we might not always know in the moment." Two things this form is
+ * careful about, and both of them are on screen rather than only in the code:
+ *
+ * WHICH UNIT the price is per. The product's own — per case for a case-stocked
+ * product, per box for a box-stocked one — read off `stockUnit`, exactly as
+ * `AddItemForm` does it. A form that said "case" on a product bought by the box
+ * would be wrong by however many boxes a case holds, silently, in the only field
+ * that was going to say what the night cost.
+ *
+ * WHAT IT CHANGES. The statement, not the stock. Said in the panel, because the
+ * operator's reasonable expectation of a cost field is that it re-values the
+ * shelf — and it does not, on either kind of line. See `setItemCost`.
+ */
+function CostModal({
+  item,
+  onClose,
+  onSaved
+}: {
+  item: StreamItem
+  onClose: () => void
+  onSaved: (detail: StreamSessionDetail) => void | Promise<void>
+}): JSX.Element {
+  const toast = useToast()
+  const [raw, setRaw] = useState(item.costTotal > 0 ? String(item.unitCost) : '')
+  const [busy, setBusy] = useState(false)
+
+  const price = parseMoneyInput(raw)
+  const valid = Number.isFinite(price) && price >= 0
+  const unitWord = item.stockUnit ? stockUnitWord(item.stockUnit, 1) : 'unit'
+  const unitPlural = item.stockUnit ? stockUnitWord(item.stockUnit, 2) : 'units'
+  // Recomputed on screen from the same multiplication main will do, so the total
+  // that lands on the show is the total that was agreed to before the click.
+  const total = valid ? Math.round(item.quantity * price * 100) / 100 : null
+
+  const save = async (): Promise<void> => {
+    if (!valid) return
+    setBusy(true)
+    try {
+      const res = await streaming.setItemCost({ itemId: item.id, unitPrice: price })
+      if (!res.ok || !res.data) {
+        toast.error(resultError(res, 'That cost could not be saved.'))
+        return
+      }
+      toast.success(
+        `${item.productName} now costs this show ${formatMoney(
+          Math.round(item.quantity * price * 100) / 100
+        )}.`
+      )
+      await onSaved(res.data)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal
+      title={item.costTotal > 0 ? 'Correct what this cost' : 'What did this cost?'}
+      subtitle={item.productName}
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            icon="DollarSign"
+            loading={busy}
+            disabled={!valid}
+            onClick={() => void save()}
+          >
+            Save the cost
+          </Button>
+        </>
+      }
+    >
+      <Field
+        label={`Price paid per ${unitWord}`}
+        hint={`This line is ${formatUnitCount(item.quantity)} ${
+          item.quantity === 1 ? unitWord : unitPlural
+        }. Decimals are fine — 1.25, 1.33.`}
+      >
+        {/* A text input, not a number one: money is typed with commas and dollar
+            signs, and a number input silently discards the lot — leaving a field
+            that looks empty for a price the operator is sure they entered. */}
+        <Input
+          inputMode="decimal"
+          value={raw}
+          onChange={(e) => setRaw(e.target.value)}
+          placeholder="2400"
+          invalid={raw.trim() !== '' && !valid}
+          autoFocus
+        />
+      </Field>
+
+      {total !== null && (
+        <p className="stm-confirm-lead">
+          This show will carry <b>{formatMoney(total)}</b> for it —{' '}
+          {formatUnitCount(item.quantity)} × {formatMoney(price)}.
+        </p>
+      )}
+
+      <p className="stm-confirm-lead">
+        <b>This corrects the record, not the stock.</b>{' '}
+        {item.statedCasePrice !== null
+          ? 'This line never moved stock — it states what a show that is already history cost — so there is nothing on the shelf for a price to change.'
+          : `The ${formatUnitCount(item.quantity)} ${
+              item.quantity === 1 ? unitWord : unitPlural
+            } came off ${item.location} when this was recorded and are already gone. The cost layers they took are left exactly as they are; what changes is what the statement says this night cost.`}
+      </p>
+    </Modal>
   )
 }

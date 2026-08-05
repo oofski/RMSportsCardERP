@@ -45,6 +45,11 @@ import {
   PACKAGING_TOP_LOADER_COST,
   PACKAGING_TOP_LOADER_SHARE
 } from './packagingCosts'
+// The unit a cost is quoted PER, for the stream lines this statement can send
+// back for costing. Taken from the unit contract rather than restated, so a
+// price typed into the P&L means exactly what the same price typed into the
+// Streaming module means.
+import type { StockUnit } from './units'
 
 // ---------------------------------------------------------------------------
 // Classification
@@ -1491,6 +1496,67 @@ export interface CogsItem {
   name: string
   /** NEGATIVE, like every other cost figure that feeds a bottom line. */
   amount: number
+  /**
+   * NOBODY EVER RECORDED WHAT THIS COST, and the entry is carried at zero.
+   *
+   * It is a separate entry from the costed one of the same product on the same
+   * act, never folded into it — see `mergeCogsItems`. A case broken for $1,200
+   * and a second case of the same name broken for nothing are two different
+   * facts, and adding them produces a $1,200 line that says the night is fully
+   * costed when half of it is not.
+   *
+   * The statement was hiding these entirely, on the reasoning that "$0.00" reads
+   * as a costing failure an operator cannot act on. The reading was right and
+   * the conclusion was backwards: the owner opened the P&L, found the cost of a
+   * night's boxes simply absent, and reported it as data loss. It is now printed
+   * with the product's name and the words "no cost recorded", and it is
+   * actionable — see `PnlLine.uncosted` and `items` below.
+   */
+  uncosted?: boolean
+  /**
+   * The stream lines behind an `uncosted` entry, so the screen printing it can
+   * hand them straight to the cost-entry form.
+   *
+   * Only ever set on an uncosted entry, and it is what makes the line a control
+   * rather than a complaint. Concatenated by `mergeCogsItems`, so a product left
+   * uncosted on three nights is one line offering all three.
+   */
+  items?: UncostedStreamItem[]
+}
+
+/**
+ * One stream line carrying no cost, named well enough to be fixed from the P&L.
+ *
+ * Deliberately not the whole `StreamItem`: this rides inside every finance view,
+ * and the only questions the operator has to answer before typing a price are
+ * WHICH night, WHICH show, HOW MANY, and WHAT UNIT that price is per.
+ */
+export interface UncostedStreamItem {
+  /** `stream_items.id` — the row a backfilled cost is written to. */
+  id: string
+  kind: 'break' | 'giveaway'
+  /** The business day the show belongs to, and its title. Two nights of the same
+   *  product are otherwise indistinguishable on a range-wide statement. */
+  streamDate: string
+  sessionTitle: string
+  /** In the product's own stock unit — cases for a case-stocked product, boxes
+   *  for a box-stocked one. This is the number a per-unit price multiplies. */
+  quantity: number
+  /**
+   * The unit a price for this line is PER: the product's own stock unit, which
+   * is the same unit `AddItemForm` prices a reconciliation in. Null when the
+   * catalog row is gone or the product is stocked in something with no case/box
+   * structure, and the form then names the product's own unit instead of
+   * inventing a case that does not exist.
+   */
+  priceUnit: StockUnit | null
+  /**
+   * This line moved NO stock when it was recorded — a reconciliation of a show
+   * that was already history. What backfilling a cost may touch differs between
+   * the two, and the form says which one the operator is looking at rather than
+   * leaving them to infer it. See `setItemCost` in db/streaming.ts.
+   */
+  reconciled: boolean
 }
 
 /**
@@ -1513,25 +1579,59 @@ export interface MarketplaceItem {
  *
  * A product broken on Monday and again on Tuesday is ONE line over a range that
  * covers both, holding the sum. Keyed on (kind, name) so the break/giveaway
- * distinction above survives the fold.
+ * distinction above survives the fold — and on whether the entry is COSTED,
+ * because a costed entry and an uncosted one of the same product are two
+ * different findings. Merging them hides the second inside the first: the
+ * statement would print one confident figure for a product half of whose boxes
+ * nobody has priced, which is the failure this whole change exists to end.
+ *
+ * UNCOSTED ENTRIES SORT FIRST. Everything else is ordered biggest cost first so
+ * that a cap only ever rolls up small change — but an uncosted entry is worth
+ * zero and would sort to the very bottom, straight into the roll-up tail. That
+ * would hide precisely the lines somebody has to act on, so they take the
+ * visible slots ahead of any costed line however large.
  */
 export function mergeCogsItems(items: readonly CogsItem[]): CogsItem[] {
-  const byKey = new Map<string, { item: CogsItem; cents: number }>()
+  const byKey = new Map<string, { item: CogsItem; cents: number; refs: UncostedStreamItem[] }>()
   for (const it of items) {
     if (!it || !Number.isFinite(it.amount)) continue
     const kind: CogsItem['kind'] = it.kind === 'giveaway' ? 'giveaway' : 'break'
     const name = (it.name ?? '').trim() || UNNAMED_PRODUCT
-    const key = `${kind}|${name}`
+    const uncosted = it.uncosted === true
+    const key = `${kind}|${uncosted ? 'uncosted' : 'costed'}|${name}`
     const hit = byKey.get(key)
-    if (hit) hit.cents += Math.round(it.amount * 100)
-    else byKey.set(key, { item: { kind, name, amount: 0 }, cents: Math.round(it.amount * 100) })
+    if (hit) {
+      hit.cents += Math.round(it.amount * 100)
+      if (it.items) hit.refs.push(...it.items)
+    } else {
+      byKey.set(key, {
+        item: { kind, name, amount: 0, ...(uncosted ? { uncosted: true } : null) },
+        cents: Math.round(it.amount * 100),
+        refs: it.items ? [...it.items] : []
+      })
+    }
   }
-  return [...byKey.values()]
-    // Costs are negative, so "biggest" is the most negative. Ties break on the
-    // name so two products that cost the same do not swap places between two
-    // renders of the same period.
-    .sort((a, b) => a.cents - b.cents || a.item.name.localeCompare(b.item.name))
-    .map(({ item, cents: c }) => ({ ...item, amount: c / 100 }))
+  return (
+    [...byKey.values()]
+      // Costs are negative, so "biggest" is the most negative. Ties break on the
+      // name so two products that cost the same do not swap places between two
+      // renders of the same period.
+      .sort(
+        (a, b) =>
+          Number(!!b.item.uncosted) - Number(!!a.item.uncosted) ||
+          a.cents - b.cents ||
+          a.item.name.localeCompare(b.item.name)
+      )
+      .map(({ item, cents: c, refs }) => ({
+        ...item,
+        amount: c / 100,
+        // Sorted so a line offering several nights lists them in the order they
+        // happened, which is the order somebody works through them in.
+        ...(item.uncosted
+          ? { items: refs.slice().sort((a, b) => a.streamDate.localeCompare(b.streamDate)) }
+          : null)
+      }))
+  )
 }
 
 /** The same fold for whole-product sales. Biggest sale first. */
@@ -1901,6 +2001,39 @@ export interface PnlLine {
    * or closed, and `packagingDaysUnknown` says how many nights are behind it.
    */
   unavailable?: boolean
+  /**
+   * NOBODY RECORDED WHAT THIS COST — a sibling of `unavailable`, not the same
+   * flag, and the difference is what the reader can do about it.
+   *
+   * Both print words where a figure would go and both refuse to be hidden by
+   * the zero-line toggle, which is why reusing `unavailable` was the first thing
+   * tried. It does not fit, in two ways that show up on the row itself:
+   *
+   * `unavailable` means MEASURED AND LOST. The packaging model needs a package
+   * count off a shipping dataset that holds one show at a time, so last week's
+   * count is genuinely unrecoverable. The line says "not known", which is a fact
+   * and a dead end, and its `amount` is the part that IS known — a real partial
+   * sum.
+   *
+   * `uncosted` means NEVER RECORDED. The stream line is still there, it holds
+   * zero, and the operator can supply the missing number from this very row —
+   * `uncostedItems` carries the lines to write it to. Its `amount` is a true
+   * zero rather than a partial figure. Printing "not known" on it would tell
+   * somebody a fixable thing is unfixable, and the tooltip that goes with that
+   * phrase talks about packing records, which would be a plain lie here.
+   *
+   * A day and a range still reconcile with these present: the line adds zero to
+   * its section, so `pnlChecksum` is untouched. What IS true is that NET PROFIT
+   * IS OVERSTATED BY WHATEVER THOSE BOXES COST until somebody types it in, which
+   * is why the section carrying one is marked `incomplete` — the sections are
+   * closed by default, and a disclosure inside a closed section is a disclosure
+   * to nobody.
+   */
+  uncosted?: boolean
+  /** The stream lines behind an `uncosted` row. What makes it a control rather
+   *  than a complaint: click it and enter what those boxes cost. Absent on every
+   *  other line. */
+  uncostedItems?: UncostedStreamItem[]
 }
 
 export interface PnlSection {
@@ -2087,6 +2220,31 @@ export function buildPnl(d: {
     unavailable: unavailable ? true : undefined
   })
 
+  /**
+   * The other kind of line that is zero and must still be seen.
+   *
+   * Its own builder rather than a sixth argument to `line`, because everything
+   * about it is fixed: the amount IS zero (that is what uncosted means), so
+   * there is no figure to pass and no chance of one being passed by mistake, and
+   * `empty` is forced false for the same reason it is on an unavailable line —
+   * the zero-line toggle must not be able to swallow it. See `PnlLine.uncosted`
+   * for why this is not `unavailable`.
+   */
+  const uncostedLine = (
+    key: string,
+    label: string,
+    detail: string,
+    items: UncostedStreamItem[]
+  ): PnlLine => ({
+    key,
+    label,
+    amount: 0,
+    detail,
+    empty: false,
+    uncosted: true,
+    uncostedItems: items
+  })
+
   const gross = c2(d.grossSales)
   const charged = d.feeSaleCount ?? d.saleCount
   // The LAST RESORT only. Dividing the fee by the gross gives a number that is
@@ -2207,9 +2365,18 @@ export function buildPnl(d: {
   // its money — so the cap changes how many lines there are and never what they
   // add up to. The section is closed by default and its heading carries the count,
   // so the long ranges cost a click rather than a scroll.
+  //
+  // THE CAP ALLOCATES ITS SLOTS TO THE UNCOSTED LINES FIRST, which `mergeCogsItems`
+  // arranges by sorting them ahead of every costed entry. An uncosted entry is
+  // worth zero, so ordering by size alone would put every one of them in the
+  // roll-up tail — where the money is still right (zero adds nothing) and the
+  // disclosure is gone, which is the one thing this section may not lose. A
+  // costed line that gets rolled up loses only its name; an uncosted one that
+  // gets rolled up loses the whole point of printing it.
   const COGS_LINES_MAX = 25
   const cogsItems = mergeCogsItems(d.cogsBreakdown ?? [])
   const cogsLines: PnlLine[] = []
+  const uncostedTotal = cogsItems.filter((i) => i.uncosted).length
   if (cogsItems.length === 0) {
     // Nothing itemised: either the period genuinely consumed no stock, or main is
     // packaged older than the breakdown. Both print what this section always
@@ -2225,6 +2392,26 @@ export function buildPnl(d: {
       // broken AND given away is two lines and two React keys. The label is the
       // product alone — a giveaway says so in its detail, which keeps the column
       // of names readable while leaving the distinction on the row that has it.
+      if (it.uncosted) {
+        const refs = it.items ?? []
+        const act = it.kind === 'giveaway' ? 'given away' : 'broken'
+        cogsLines.push(
+          uncostedLine(
+            // A different key from the costed line of the same product, because
+            // the two can both be present and React needs to tell them apart.
+            `cogs:${it.kind}:uncosted:${it.name}`,
+            it.name,
+            // The detail says how much went unpriced, which is what decides
+            // whether it is worth chasing — one box or eleven.
+            refs.length > 0
+              ? `${act} on ${count(refs.length)} line${refs.length === 1 ? '' : 's'} · ` +
+                `nobody recorded what it cost`
+              : `${act} · nobody recorded what it cost`,
+            refs
+          )
+        )
+        continue
+      }
       cogsLines.push(
         line(
           `cogs:${it.kind}:${it.name}`,
@@ -2236,12 +2423,19 @@ export function buildPnl(d: {
     }
     const rest = cogsItems.slice(shown.length)
     if (rest.length > 0) {
+      // A tail can only hold uncosted lines when there are more than the cap of
+      // them, and then the count has to ride on the roll-up: the money it shows
+      // is complete for the costed entries and silent about the rest, and a
+      // reader has no other way to learn that.
+      const restUncosted = rest.filter((i) => i.uncosted).length
       cogsLines.push(
         line(
           'cogsRest',
           `${count(rest.length)} other product${rest.length === 1 ? '' : 's'}`,
           rest.reduce((n, i) => n + i.amount, 0),
-          'smaller lines, rolled up'
+          restUncosted > 0
+            ? `smaller lines, rolled up · ${count(restUncosted)} with no cost recorded`
+            : 'smaller lines, rolled up'
         )
       )
     }
@@ -2397,7 +2591,15 @@ export function buildPnl(d: {
       label: 'Cost of goods',
       lines: cogsLines,
       subtotal: c2(d.cogs),
-      subtotalLabel: 'Cost of goods'
+      subtotalLabel: 'Cost of goods',
+      // KNOWN TO BE SHORT, and the heading is the only place that can say so
+      // while the section is closed — which it is by default. This is the same
+      // disclosure the packaging block makes and the same arithmetic behind it:
+      // the boxes were opened, their cost is carried at zero, and net profit is
+      // that much too high. Unlike packaging it CLEARS: enter the cost on the
+      // line and the flag goes with it, so this is a warning that can be
+      // finished rather than one that becomes wallpaper.
+      incomplete: uncostedTotal > 0
     },
     {
       key: 'grossProfit',

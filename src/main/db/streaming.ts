@@ -3,6 +3,7 @@ import type { Result } from '@shared/types'
 import type {
   NewStreamItem,
   NewStreamSession,
+  SetStreamItemCost,
   StreamCalendarDay,
   StreamCalendarMonth,
   StreamItem,
@@ -114,6 +115,9 @@ interface ItemRow {
   note: string | null
   created_at: string
   created_by: string | null
+  /** Joined from the catalog, not stored on the line. NULL once the product is
+   *  deleted — see `StreamItem.stockUnit`. */
+  unit_type: string | null
 }
 
 const SESSION_SELECT = `
@@ -174,6 +178,12 @@ function toItem(row: ItemRow, thumbs: Map<string, string | null>): StreamItem {
     statedCasePrice: row.stated_case_price,
     packCost: row.pack_cost,
     lossValue: row.loss_value ?? 0,
+    // Which unit `quantity` counts, joined live off the catalog rather than
+    // snapshotted: it is not a fact about what happened on the night, it is what
+    // the product IS, and a price typed against this line has to be per whatever
+    // the product is stocked in today. Null once the catalog row is gone, and
+    // for anything the unit contract has no case/box structure for.
+    stockUnit: row.unit_type ? stockUnitOf(row.unit_type) : null,
     note: row.note,
     createdAt: row.created_at,
     createdBy: row.created_by
@@ -334,11 +344,14 @@ export function getSessionDetail(id: string): StreamSessionDetail | null {
   if (!session) return null
   const rows = getDb()
     .prepare(
-      `SELECT id, session_id, kind, product_id, product_name, sku, category, break_number,
-              recipient, quantity, entered_cases, entered_boxes, entered_packs, location,
-              unit_cost, cost_total, stated_case_price, pack_cost, loss_value, note,
-              created_at, created_by
-       FROM stream_items WHERE session_id = ? ORDER BY created_at ASC, rowid ASC`
+      `SELECT i.id, i.session_id, i.kind, i.product_id, i.product_name, i.sku, i.category,
+              i.break_number, i.recipient, i.quantity, i.entered_cases, i.entered_boxes,
+              i.entered_packs, i.location, i.unit_cost, i.cost_total, i.stated_case_price,
+              i.pack_cost, i.loss_value, i.note, i.created_at, i.created_by,
+              p.unit_type AS unit_type
+       FROM stream_items i
+       LEFT JOIN inventory_products p ON p.id = i.product_id
+       WHERE i.session_id = ? ORDER BY i.created_at ASC, i.rowid ASC`
     )
     .all(id) as ItemRow[]
   const thumbs = new Map<string, string | null>()
@@ -713,6 +726,48 @@ function enteredUnit(value: number | null | undefined): number | null {
 }
 
 /**
+ * What a giveaway COST THE SHOW, and what one pack of it was worth.
+ *
+ * The P&L side of a giveaway. The FIFO consumption beside it is the
+ * balance-sheet side (stock left the shelf at what it cost); this is what
+ * running the show cost in prizes. They are not double counting — one moves
+ * inventory, the other is reported as a cost of the day alongside Show Boost.
+ *
+ * Valued at PACK cost when packs were given away, because that is the unit that
+ * left: `packCost` divides the cost of a stock unit down through boxes to packs
+ * and returns null rather than a guess when a divisor is missing. Otherwise it
+ * is simply the cost of the whole boxes that went out.
+ *
+ * A reconciled giveaway enters no packs, so it lands on that second branch and
+ * the loss is the cost that was stated for it — which is exactly right: what the
+ * prize cost the business is what the business paid for it.
+ *
+ * ONE FUNCTION because two callers now need it. `addItem` values a giveaway as
+ * it is recorded, and `setItemCost` re-values one whose price arrives weeks
+ * later. A second copy of this arithmetic would let the same prize be worth two
+ * different things depending on when its cost was typed, and only one of the two
+ * figures would be in the statement.
+ */
+function giveawayLossOf(
+  units: ProductUnits | null,
+  perStockUnit: number,
+  costTotal: number,
+  boxes: number | null,
+  packs: number | null
+): { lossValue: number; packCost: number | null } {
+  let packCostVal: number | null = null
+  let lossValue = costTotal
+  if (units) {
+    packCostVal = packCost(units, perStockUnit)
+    const perBox = boxCost(units, perStockUnit)
+    if ((packs ?? 0) > 0 && packCostVal !== null && perBox !== null) {
+      lossValue = cents((boxes ?? 0) * perBox + (packs as number) * packCostVal)
+    }
+  }
+  return { lossValue, packCost: packCostVal }
+}
+
+/**
  * Record something opened or given away on a show.
  *
  * TWO ACTS SHARE THIS FUNCTION, and which one it is comes from the SESSION,
@@ -1072,33 +1127,13 @@ export function addItem(input: NewStreamItem, actorId: string | null): Result<St
     // average, which drifts with every purchase and knows nothing about either.
     const perStockUnit = cents(costTotal / qty)
 
-    // --- the giveaway loss ---------------------------------------------------
-    //
-    // The P&L side. FIFO consumption above is the balance-sheet side (stock left
-    // the shelf at what it cost); this is what running the show cost in prizes.
-    // They are not double counting — one moves inventory, the other is reported
-    // as a cost of the day alongside Show Boost.
-    //
-    // Valued at PACK cost when packs were given away, because that is the unit
-    // that left: `packCost` divides the cost of a stock unit down through boxes
-    // to packs and returns null rather than a guess when a divisor is missing.
-    // Otherwise it is simply the FIFO cost of the whole boxes that went out.
-    //
-    // A reconciled giveaway enters no packs, so it lands on that second branch
-    // and the loss is the cost that was stated for it — which is exactly right:
-    // what the prize cost the business is what the business paid for it.
-    let packCostVal: number | null = null
-    let lossValue = 0
-    if (kind === 'giveaway') {
-      lossValue = costTotal
-      if (units) {
-        packCostVal = packCost(units, perStockUnit)
-        const perBox = boxCost(units, perStockUnit)
-        if ((inPacks ?? 0) > 0 && packCostVal !== null && perBox !== null) {
-          lossValue = cents((inBoxes ?? 0) * perBox + (inPacks as number) * packCostVal)
-        }
-      }
-    }
+    // The P&L side of a giveaway. See `giveawayLossOf`, which owns the
+    // arithmetic so that backfilling a cost onto a line months later values the
+    // prize exactly the way recording it tonight would.
+    const { lossValue, packCost: packCostVal } =
+      kind === 'giveaway'
+        ? giveawayLossOf(units, perStockUnit, costTotal, inBoxes, inPacks)
+        : { lossValue: 0, packCost: null }
 
     const id = newId()
     const ts = nowIso()
@@ -1263,6 +1298,193 @@ export function removeItem(id: string, actorId: string | null): Result<StreamSes
     if (!row) return { ok: false, error: 'That line no longer exists.' }
     restoreItemStock(db, id, `Removed from ${row.title.trim() || 'stream'}`, actorId)
     return { ok: true, data: getSessionDetail(row.session_id) as StreamSessionDetail }
+  })
+  try {
+    return run()
+  } catch (err) {
+    return fail(err)
+  }
+}
+
+interface CostRow {
+  id: string
+  session_id: string
+  kind: string
+  product_id: string | null
+  product_name: string
+  quantity: number
+  entered_boxes: number | null
+  entered_packs: number | null
+  cost_total: number
+  location: string
+  stated_case_price: number | null
+  title: string
+}
+
+/**
+ * Say what a line COST, after the fact.
+ *
+ * The owner's sentence: "give me the ability in the streaming or finance to
+ * enter the price … since we might not always know in the moment." A box gets
+ * broken on air, nobody has the invoice to hand, and the line lands carrying
+ * zero. That zero is now printed on the P&L instead of being hidden — see
+ * `PnlLine.uncosted` — and this is what the printed line is FOR.
+ *
+ * `unitPrice` is per one of whatever the product is stocked in: per case for a
+ * case-stocked product, per box for a box-stocked one, exactly the unit
+ * `AddItemForm` prices a reconciliation in. `quantity` on the line is already in
+ * that same unit, so the cost is a plain multiplication and nothing has to be
+ * divided down and multiplied back — which is what would round a 12-box case's
+ * cost a cent or two away from the number that was typed. Decimals are accepted
+ * throughout: a night that went through a case and a quarter cost a case and a
+ * quarter.
+ *
+ * ## IT RECORDS WHAT WAS PAID. IT DOES NOT MOVE STOCK. EITHER KIND OF LINE.
+ *
+ * This is the thing to get right, and the two paths fail differently if it is
+ * got wrong.
+ *
+ * A RECONCILED line (`stated_case_price` is set) never consumed FIFO, never
+ * opened a lot and never re-based the product's average, because the stock it
+ * describes left the shelf weeks before anybody typed it — see `addItem`, which
+ * spells the whole argument out. A cost arriving for that line late changes
+ * exactly one thing: the price the operator is asserting. Consuming layers here
+ * would take units the warehouse still has, for a show that never touched them,
+ * and break `Σ lot.qty_remaining == inventory_stock.quantity` on the way.
+ *
+ * A LIVE-path line DID consume FIFO, at whatever its layers were carrying — and
+ * this deliberately leaves those layers exactly as they are. The steer, and it
+ * is the right one: the layers are a record of what the SHELF held, and they
+ * have already been reversed out of it. Rewriting them now would revalue stock
+ * that is long gone, move the product's average on the strength of a price for
+ * stock nobody has, and cascade into every later line that consumed the same
+ * lot. What the operator is fixing is the STATEMENT — what that night cost — so
+ * that is the only thing this touches, and both the comment here and the form on
+ * screen say so in as many words.
+ *
+ * `stated_case_price` is written only where it was already set. On a live line it
+ * MUST stay null: `restoreItemStock` reads that column to decide whether a
+ * removal hands stock back, so setting it would strand on the shelf the units
+ * this line really did take.
+ *
+ * The ledger gets a correcting row rather than an edit, like everything else in
+ * this app: original + correction + the reversal a removal writes still nets to
+ * zero, and inventory history keeps saying what was believed and when.
+ */
+export function setItemCost(
+  input: SetStreamItemCost,
+  actorId: string | null
+): Result<StreamSessionDetail> {
+  const db = getDb()
+  const itemId = (input?.itemId ?? '').trim()
+  const unitPrice = Number(input?.unitPrice)
+
+  const run = db.transaction((): Result<StreamSessionDetail> => {
+    const item = db
+      .prepare(
+        `SELECT i.id, i.session_id, i.kind, i.product_id, i.product_name, i.quantity,
+                i.entered_boxes, i.entered_packs, i.cost_total, i.location, i.stated_case_price,
+                s.title
+           FROM stream_items i JOIN stream_sessions s ON s.id = i.session_id
+          WHERE i.id = ?`
+      )
+      .get(itemId) as CostRow | undefined
+    if (!item) return { ok: false, error: 'That line no longer exists.' }
+
+    // Parsed at the boundary too, and checked again here: this is the write, and
+    // a NaN stored in `cost_total` would poison every total that sums the column
+    // with nothing on any screen to say which line did it.
+    if (!Number.isFinite(unitPrice)) {
+      return { ok: false, error: 'Enter what one of them cost, as a number — 2400, or 1.25.' }
+    }
+    if (unitPrice < 0) return { ok: false, error: 'It cannot have cost less than nothing.' }
+    const qty = Number(item.quantity)
+    if (!Number.isFinite(qty) || !(qty > 0)) {
+      return { ok: false, error: 'That line has no quantity to price.' }
+    }
+
+    // The product may have been deleted since — the denormalised name on the
+    // line is there precisely for that. A price can still be recorded for the
+    // statement; only the pack-level valuation of a giveaway needs the divisors,
+    // and `giveawayLossOf` already falls back to the whole cost without them.
+    const product = item.product_id
+      ? (db
+          .prepare(
+            `SELECT unit_type, boxes_per_case, packs_per_box, giveaway_item
+               FROM inventory_products WHERE id = ?`
+          )
+          .get(item.product_id) as
+          | {
+              unit_type: string
+              boxes_per_case: number | null
+              packs_per_box: number | null
+              giveaway_item: number
+            }
+          | undefined)
+      : undefined
+    const stockUnit = product ? stockUnitOf(product.unit_type) : null
+    const units: ProductUnits | null =
+      product && stockUnit
+        ? {
+            unitType: stockUnit,
+            boxesPerCase: product.boxes_per_case,
+            packsPerBox: product.packs_per_box,
+            giveawayItem: Number(product.giveaway_item) === 1
+          }
+        : null
+
+    const costTotal = cents(qty * unitPrice)
+    const perStockUnit = cents(costTotal / qty)
+    const reconciled = item.stated_case_price !== null
+    const kind: StreamItemKind = item.kind === 'giveaway' ? 'giveaway' : 'break'
+    // Re-valued from the counts the line was TYPED with, through the same
+    // function that valued it when it was recorded — so a prize given away as
+    // four packs is still worth four packs once its price arrives.
+    const { lossValue, packCost: packCostVal } =
+      kind === 'giveaway'
+        ? giveawayLossOf(units, perStockUnit, costTotal, item.entered_boxes, item.entered_packs)
+        : { lossValue: 0, packCost: null }
+
+    const delta = cents(costTotal - Number(item.cost_total ?? 0))
+
+    db.prepare(
+      `UPDATE stream_items
+          SET unit_cost = @unit_cost, cost_total = @cost_total, loss_value = @loss_value,
+              pack_cost = @pack_cost, stated_case_price = @stated
+        WHERE id = @id`
+    ).run({
+      id: item.id,
+      unit_cost: perStockUnit,
+      cost_total: costTotal,
+      loss_value: lossValue,
+      pack_cost: packCostVal,
+      // Only ever rewritten, never introduced. See the note above on what
+      // setting it on a live line would do to that line's removal.
+      stated: reconciled ? cents(unitPrice) : null
+    })
+
+    // Nothing above touched bumpStock, consumeFifo, restoreFifo, createLot or
+    // syncProductAvgCost, and nothing below does either. The shelf, the cost
+    // layers and the product's average are exactly where this found them.
+    if (item.product_id && delta !== 0) {
+      insertTxn(
+        item.product_id,
+        txnType(kind),
+        // A quantity change of ZERO on both kinds of line. The reconciled one
+        // never moved stock; the live one moved it when it was recorded and is
+        // not moving it again. A number here would make inventory history
+        // disagree with the shelf it exists to explain.
+        0,
+        null,
+        null,
+        `${item.title.trim() || 'Stream'} — cost entered afterwards for ${item.product_name}`,
+        actorId,
+        item.location,
+        delta
+      )
+    }
+
+    return { ok: true, data: getSessionDetail(item.session_id) as StreamSessionDetail }
   })
   try {
     return run()

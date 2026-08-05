@@ -55,7 +55,8 @@ export function RangeStatement({
   day,
   waiting,
   onReattribute,
-  onPickDay
+  onPickDay,
+  onCosted
 }: {
   totals: StreamFinanceTotals
   /** How the range reads in words — "Jul 19 – Jul 27, 2026". */
@@ -71,6 +72,10 @@ export function RangeStatement({
   onReattribute: () => void | Promise<void>
   /** Narrow the whole screen to one waiting day. */
   onPickDay: (dayKey: string) => void
+  /** A cost was entered against one of the statement's uncosted stream lines;
+   *  every figure on the page has moved and has to be re-read. Absent for a
+   *  reader who may not write one. */
+  onCosted?: () => void | Promise<void>
 }): JSX.Element {
   /**
    * CLOSED. The rows used to open with the day, on the reasoning that a day is
@@ -134,7 +139,7 @@ export function RangeStatement({
             : 'Nothing was streamed in this range, so there is no statement for it. Widen the range or pick a month with shows in it.'}
         </p>
       ) : (
-        <PnlStatement money={totals} />
+        <PnlStatement money={totals} onCosted={onCosted} />
       )}
 
       <WaitingPanel days={waiting} onReattribute={onReattribute} onPickDay={onPickDay} />

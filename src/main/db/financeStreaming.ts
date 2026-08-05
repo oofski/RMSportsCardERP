@@ -120,7 +120,8 @@ import type {
   UnattributedCluster,
   UnattributedDay,
   UnattributedSummary,
-  UnattributedWindow
+  UnattributedWindow,
+  UncostedStreamItem
 } from '@shared/financeStreaming'
 import {
   CARRY_BACK_MAX_HOURS,
@@ -156,7 +157,7 @@ import { rateLookup } from './whatnotRates'
 import { expenseTotalsByDay } from './financeExpenses'
 import { packagingFactsByDay } from './packagingCosts'
 import { isAnyLeagueTeam } from '../shipping/teams'
-import { matchProductByName } from './inventory'
+import { matchProductByName, stockUnitOf } from './inventory'
 import { newId, nowIso } from '../util'
 
 // ---------------------------------------------------------------------------
@@ -2147,15 +2148,85 @@ function buildView(db: Database): StreamingFinanceView {
   // to NULL when a catalog product is deleted, which is exactly the case the
   // denormalised name on the line exists to survive; grouping by the id would
   // collapse every deleted product in a range into one unnamed line.
+  //
+  // AND SPLIT BY WHETHER THE LINE CARRIES A COST AT ALL. Two boxes of one product
+  // on one night, one of them priced and one of them not, is two facts, and the
+  // group that folds them together reports the first and loses the second — a
+  // confident $1,200 against a name half of whose stock nobody has costed. So
+  // "was anything recorded for this line" joins the grouping key, and the two
+  // halves come back as two entries. They still sum to the same day figures;
+  // there are simply more rows to sum.
   const itemRows = db
     .prepare(
       `SELECT s.stream_date AS d, i.kind AS kind, TRIM(i.product_name) AS name,
+              CASE WHEN CAST(ROUND(
+                     (CASE i.kind WHEN 'giveaway' THEN i.loss_value ELSE i.cost_total END) * 100
+                   ) AS INTEGER) = 0 THEN 1 ELSE 0 END AS uncosted,
               COALESCE(SUM(CAST(ROUND(i.cost_total * 100) AS INTEGER)), 0) AS cents,
               COALESCE(SUM(CAST(ROUND(i.loss_value * 100) AS INTEGER)), 0) AS loss
          FROM stream_items i JOIN stream_sessions s ON s.id = i.session_id
-        GROUP BY s.stream_date, i.kind, TRIM(i.product_name)`
+        GROUP BY s.stream_date, i.kind, TRIM(i.product_name), uncosted`
     )
-    .all() as Array<{ d: string; kind: string; name: string; cents: number; loss: number }>
+    .all() as Array<{
+    d: string
+    kind: string
+    name: string
+    uncosted: number
+    cents: number
+    loss: number
+  }>
+
+  // The individual lines behind the uncosted entries, so the statement can offer
+  // them back for costing rather than only naming the hole. One query for the
+  // whole view, keyed the same way the groups above are.
+  //
+  // `unit_type` comes off the catalog row and is what says which unit a price
+  // for this line would be PER — the same unit AddItemForm prices a
+  // reconciliation in. A product deleted since leaves it null, and the form then
+  // prices the line as it stands instead of naming a case the product may never
+  // have had.
+  const uncostedRefs = new Map<string, UncostedStreamItem[]>()
+  for (const r of db
+    .prepare(
+      `SELECT i.id AS id, i.kind AS kind, TRIM(i.product_name) AS name, i.quantity AS quantity,
+              i.stated_case_price AS stated, s.stream_date AS d, s.title AS title,
+              p.unit_type AS unit_type
+         FROM stream_items i
+         JOIN stream_sessions s ON s.id = i.session_id
+         LEFT JOIN inventory_products p ON p.id = i.product_id
+        WHERE CAST(ROUND(
+                (CASE i.kind WHEN 'giveaway' THEN i.loss_value ELSE i.cost_total END) * 100
+              ) AS INTEGER) = 0
+        ORDER BY s.stream_date ASC, i.created_at ASC, i.rowid ASC`
+    )
+    .all() as Array<{
+    id: string
+    kind: string
+    name: string
+    quantity: number
+    stated: number | null
+    d: string
+    title: string
+    unit_type: string | null
+  }>) {
+    const kind = r.kind === 'giveaway' ? 'giveaway' : 'break'
+    const key = `${r.d}|${kind}|${r.name}`
+    const list = uncostedRefs.get(key) ?? []
+    list.push({
+      id: r.id,
+      kind,
+      streamDate: r.d,
+      sessionTitle: r.title.trim(),
+      quantity: r.quantity,
+      priceUnit: r.unit_type ? stockUnitOf(r.unit_type) : null,
+      // Read off the LINE, never re-derived from the session's date: a show can
+      // be re-dated afterwards, and what a line did when it was written is fixed
+      // from then on. Same rule `restoreItemStock` reverses by.
+      reconciled: r.stated !== null
+    })
+    uncostedRefs.set(key, list)
+  }
+
   // Both are stored POSITIVE on the line and reported NEGATIVE here: every
   // figure that feeds a bottom line is a signed number, so the total is a plain
   // sum and no screen has to remember which way to apply it. Getting this sign
@@ -2163,19 +2234,30 @@ function buildView(db: Database): StreamingFinanceView {
   // the profit of the show that broke it.
   const cogsItems = new Map<string, CogsItem[]>()
   const addCogsItem = (date: string, item: CogsItem): void => {
-    // A zero-cost line is a real thing — an uncosted box, a giveaway with no
-    // divisor — and it is deliberately not printed. It would arrive as a product
-    // name against $0.00, which reads as a costing failure the operator cannot
-    // act on from this screen, and the section's `empty` handling would hide it
-    // anyway on every day but the ones somebody has expanded the zero lines on.
-    if (item.amount === 0) return
+    // A ZERO-COST LINE IS PRINTED, and this is the whole of the fix.
+    //
+    // It used to be dropped here, on the reasoning that a product name against
+    // $0.00 reads as a costing failure nobody can act on from the statement. The
+    // reading was right; dropping it was not. Two supported entries land at zero
+    // — a reconciled past show recorded at a price of nothing, and a box entered
+    // at cost 0 because "0 means don't track" — and the owner's report of the
+    // result was that his cost of goods had been DELETED. A hole you can see is
+    // a hole you can fill; a hole that is not printed is data loss.
+    //
+    // The money is unchanged either way: an uncosted entry carries zero, so the
+    // section subtotal and `pnlChecksum(sections) === netProfit` are exactly what
+    // they were. What changes is that the statement now says the hole is there,
+    // and hands back the lines to fill it.
     const list = cogsItems.get(date) ?? []
     list.push(item)
     cogsItems.set(date, list)
   }
   for (const r of itemRows) {
     const day = dayFor(r.d)
-    if (r.kind === 'giveaway') {
+    const uncosted = r.uncosted === 1
+    const kind: CogsItem['kind'] = r.kind === 'giveaway' ? 'giveaway' : 'break'
+    const refs = uncosted ? (uncostedRefs.get(`${r.d}|${kind}|${r.name}`) ?? []) : []
+    if (kind === 'giveaway') {
       // ONE cost-of-goods line for given-away stock, not two. `cost_total` is
       // the balance-sheet movement (stock left the shelf); `loss_value` is what
       // that stock was worth as a cost of the show, valued at pack cost when
@@ -2184,10 +2266,20 @@ function buildView(db: Database): StreamingFinanceView {
       // The same money under the name this view has always used for it, kept so
       // netAfterCosts and everything reading it keep meaning what they meant.
       day.giveawayLoss = day.giveawayCost
-      addCogsItem(r.d, { kind: 'giveaway', name: r.name, amount: toDollars(-r.loss) })
+      addCogsItem(r.d, {
+        kind: 'giveaway',
+        name: r.name,
+        amount: toDollars(-r.loss),
+        ...(uncosted ? { uncosted: true, items: refs } : null)
+      })
     } else {
       day.breakCost = toDollars(toCents(day.breakCost) - r.cents)
-      addCogsItem(r.d, { kind: 'break', name: r.name, amount: toDollars(-r.cents) })
+      addCogsItem(r.d, {
+        kind: 'break',
+        name: r.name,
+        amount: toDollars(-r.cents),
+        ...(uncosted ? { uncosted: true, items: refs } : null)
+      })
     }
   }
   for (const [date, items] of cogsItems) dayFor(date).cogsBreakdown = mergeCogsItems(items)
