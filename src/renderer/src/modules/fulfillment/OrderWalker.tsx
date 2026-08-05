@@ -161,10 +161,20 @@ export function OrderWalker({
       }
       await load()
       await onChanged()
-      // AFTER the reload, so "only orders with cards left" has already dropped
-      // this one and stepping lands on the next thing to do rather than skipping
-      // over it.
-      step(1)
+      // DO NOT step when the run is filtered. This is the "it goes odds only"
+      // bug, and the comment that used to sit here had the reasoning exactly
+      // backwards.
+      //
+      // With "only orders with cards left" on — the default for picking — the
+      // order just finished DROPS OUT of the run on reload. The list shrinks
+      // under the cursor, so the index the cursor already holds is now the next
+      // order. Stepping on top of that advances a second time and walks past
+      // one, which is why every other order was being skipped: pick page 1, land
+      // on page 3, pick page 3, land on page 5.
+      //
+      // With the filter off, nothing drops out and the cursor must move, or the
+      // button would re-show the order it just finished.
+      if (!onlyOpen) step(1)
     } finally {
       setBusy(null)
     }
