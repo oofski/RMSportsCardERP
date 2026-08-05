@@ -6,7 +6,7 @@ import { Money, moneyText } from './bits'
 import { buildStatement, pnlDrift, sectionSubtotal } from './Pnl'
 
 /**
- * The five figures the business is run on, as widgets over whatever range is
+ * The four figures the business is run on, as widgets over whatever range is
  * selected on the calendar.
  *
  * WHY THIS REPLACED THE EQUATION STRIP. The strip printed the same five terms
@@ -21,12 +21,18 @@ import { buildStatement, pnlDrift, sectionSubtotal } from './Pnl'
  * WHAT IS PRESERVED. Every figure here is still a SECTION SUBTOTAL from
  * `buildPnl`, not a field read off the totals, so a widget and the statement
  * under it cannot mean different things by "fees". The checksum is still run:
- * if the five do not reconcile to net profit, the row says so instead of
- * printing five confident numbers that quietly refuse to add up.
+ * if they do not reconcile to net profit, the row says so instead of printing
+ * four confident numbers that quietly refuse to add up.
  *
  * The order is the order of the statement — revenue, what the goods cost, what
- * the platform took, what shipping did, what was left — so reading left to
- * right is reading the P&L top to bottom.
+ * the platform took, what was left — so reading left to right is reading the
+ * P&L top to bottom.
+ *
+ * THERE IS NO SHIPPING WIDGET, because there is no shipping section: the owner
+ * took postage off the P&L pending another treatment of the cost. Reading it
+ * from `totals.shippingSubsidy` and friends instead would have kept the tile
+ * alive on the very screen the statement had stopped mentioning postage on,
+ * which is worse than either answer on its own.
  */
 
 /** Anything below half a cent is zero. */
@@ -137,25 +143,6 @@ export function RangeWidgets({
       sub: cogsRate === null ? 'stock broken and given away' : `${cogsRate.toFixed(1)}% of revenue`
     },
     {
-      key: 'shipping',
-      label: 'Shipping',
-      amount: sub('shipping'),
-      prior: priorSub('shipping'),
-      // The two sides, because this is the one widget whose sign is genuinely
-      // unpredictable — subsidy less postage lands either side of zero from one
-      // month to the next, and the figure alone never explains which happened.
-      sub: (
-        <>
-          {moneyText(totals.shippingSubsidy)} subsidy, {moneyText(
-            Math.abs(
-              totals.shippingCharges + totals.giveawayShipping + totals.refundShipping
-            )
-          )}{' '}
-          postage
-        </>
-      )
-    },
-    {
       key: 'net',
       label: 'Net profit',
       amount: net,
@@ -175,7 +162,7 @@ export function RangeWidgets({
       {!check.ok && (
         <p className="fin-widgets-drift" role="alert">
           <Icon name="AlertTriangle" size={14} />
-          These five do not add up to the stored net profit — they come to{' '}
+          These figures do not add up to the stored net profit — they come to{' '}
           <Money value={check.checksum} strong />, which is <Money value={check.drift} strong /> out.
           The app and its data engine were built from different versions of the P&amp;L; update the
           app and re-import before trusting any figure on this screen.

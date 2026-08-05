@@ -1773,7 +1773,25 @@ export interface StreamDayFinance {
    *  netSales + tips + bonuses + unclassified, exactly. */
   netRevenue: number
 
-  // --- Shipping, tracked on its own -------------------------------------
+  // --- Shipping: STILL MEASURED, READ BY NO SECTION OF THE STATEMENT --------
+  //
+  // Every figure below is populated from ledger rows exactly as it always was and
+  // rolls up into weeks, months and dragged ranges with everything else. What
+  // changed is that `buildPnl` stopped printing them: the owner took postage off
+  // the P&L entirely — "we will add this cost in for some other way but right now
+  // not necessary" — so there is no shipping section and net profit is higher by
+  // whatever net postage came to.
+  //
+  // NOBODY MAY DELETE THESE BECAUSE NOTHING READS THEM. They are the record of
+  // what postage did on each night, held against the night it happened, and the
+  // owner intends to bring the cost back in another shape. Dropping them would
+  // make that a re-import of every export ever loaded rather than an edit to
+  // `buildPnl`.
+  //
+  // The consequence is not optional: this is LEDGER money the statement no longer
+  // accounts for, so the day-versus-rows check in `buildView` has to take these
+  // same cents back off the ROW side before it compares. Without that strip every
+  // day reports a mismatch that is not there.
   /** Whatnot's contribution toward postage. Positive. */
   shippingSubsidy: number
   /** Postage charged back by Whatnot. Negative. */
@@ -1896,6 +1914,14 @@ export interface StreamDayFinance {
 
   /** netRevenue + netShipping + showBoost + reversals + giveawayLoss. Every
    *  cost the LEDGER knows about, but not what the stock cost.
+   *
+   *  IT STILL CARRIES THE POSTAGE that `netProfit` no longer does, and that is
+   *  the definition rather than a leftover: this figure is the money Whatnot's
+   *  export accounts for, postage is money Whatnot's export accounts for, and a
+   *  ledger-economics figure quietly missing one of the ledger's own buckets
+   *  could no longer be checked against a Whatnot screen — which is the only
+   *  thing it is for. It appears in no statement section, so which of the two
+   *  figures holds the postage makes no difference to the bottom line.
    *
    *  `generalExpenses` is deliberately NOT in it, for the same reason the break
    *  cost is not: this figure is the show's LEDGER economics, and a number
@@ -2157,9 +2183,9 @@ export const COGS_LINES_MAX = 25
  * Build the statement for one day (or any rolled-up period — the shapes match).
  *
  * Order is deliberate and follows how the money actually moves: what came in,
- * what the goods cost, what the platform took, what shipping did, what else the
- * show cost, then the exceptions. Fees sit AFTER cost of goods because they are
- * charged on the sale, not on the margin.
+ * what the goods cost, what the platform took, what the packaging cost, what
+ * else the show cost, then the exceptions. Fees sit AFTER cost of goods because
+ * they are charged on the sale, not on the margin.
  */
 export function buildPnl(d: {
   netSales: number; grossSales: number; saleCount: number
@@ -2185,8 +2211,11 @@ export function buildPnl(d: {
    *  and no itemisation, and the section then prints them as it always did. */
   cogsBreakdown?: CogsItem[]
   whatnotFee: number; processingFee: number; totalFees: number
-  shippingSubsidy: number; shippingCharges: number; giveawayShipping: number
-  refundShipping: number; netShipping: number
+  // The five shipping fields a day carries are NOT asked for here. Nothing in
+  // this function reads them any more — see the note where the shipping section
+  // used to be — and a parameter nothing reads is one somebody starts feeding
+  // from the wrong place. A caller passing a whole day is unaffected: the extra
+  // keys ride along and are ignored.
   /** Optional so a caller built before packing existed still type-checks. */
   // The modelled packaging block. All optional for the usual reason — a
   // packaged main that predates it sends none — and then the section prints
@@ -2642,18 +2671,20 @@ export function buildPnl(d: {
         `appears in no figure on this statement. Taking these two fees off the sales line ` +
         `above lands exactly on what was paid out, to the cent.`
     },
-    {
-      key: 'shipping',
-      label: 'Shipping',
-      lines: [
-        line('shippingSubsidy', 'Subsidy received', d.shippingSubsidy),
-        line('shippingCharges', 'Postage charged back', d.shippingCharges),
-        line('giveawayShipping', 'Giveaway postage', d.giveawayShipping),
-        line('refundShipping', 'Refund postage', d.refundShipping)
-      ],
-      subtotal: c2(d.netShipping),
-      subtotalLabel: 'Net shipping'
-    },
+    // THERE IS NO SHIPPING SECTION HERE, AND ITS ABSENCE IS A DECISION.
+    //
+    // Subsidy received, postage charged back, giveaway postage and refund
+    // postage were four lines subtotalling to `netShipping` in this slot, and the
+    // owner took the whole cost off the statement: "we will add this cost in for
+    // some other way but right now not necessary." Net profit is higher by
+    // exactly what net postage came to, on every day and every period.
+    //
+    // The five fields behind those lines are still on every day and still summed
+    // through every rollup — see `StreamDayFinance`, which says why — so putting
+    // the cost back is adding a section here and nothing else. What that absence
+    // costs elsewhere is one strip: the postage is real money on real attributed
+    // ledger rows, and no section above claims a cent of it, so the day-versus-
+    // rows reconciliation in main takes those cents off the row side to match.
     {
       // A REAL SECTION, in the bottom line like every other one here.
       //
@@ -3083,6 +3114,12 @@ export const PNL_MONEY_FIELDS = [
   'processingFee',
   'totalFees',
   'netRevenue',
+  // POSTAGE, SUMMED BUT NO LONGER PRINTED. No statement section reads these five,
+  // so `pnlChecksum` is untouched by them and the bottom line is exactly what it
+  // would be if they did not exist — the same standing `salesTax` has above. They
+  // are summed anyway because a week has to state the same postage its days do
+  // for the day the owner reintroduces the cost; dropping them here would leave
+  // the days right and every period silently at zero.
   'shippingSubsidy',
   'shippingCharges',
   'giveawayShipping',

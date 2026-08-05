@@ -128,21 +128,25 @@ ok(
   `${pnlChecksum(buildPnl(day))} vs ${day.netProfit}`
 )
 ok(
-  cents(day.netProfit) === cents(day.grossProfit + day.totalFees + day.netShipping +
+  cents(day.netProfit) === cents(day.grossProfit + day.totalFees +
     pack.subtotal + day.showBoost + day.generalExpenses + day.reversals),
-  'net profit is its sections added up, packaging among them',
+  'net profit is its sections added up, packaging among them and postage in none of them',
   String(day.netProfit)
 )
 
-// The shipping section is postage and nothing else now — every term in it is a
-// ledger row, which is what lets somebody check it against a Whatnot screen.
-const shipSec = sectionOf(day, 'shipping')
-ok(!shipSec.lines.find((l: any) => l.key === 'packingSupplies'),
-   'the shipping section carries no Packing supplies line',
-   JSON.stringify(shipSec.lines.map((l: any) => l.key)))
-ok(shipSec.subtotalLabel === 'Net shipping', 'and is labelled for what it now holds', shipSec.subtotalLabel)
-ok(cents(shipSec.subtotal) === cents(day.netShipping),
-   'with its subtotal still netShipping', `${shipSec.subtotal} vs ${day.netShipping}`)
+// POSTAGE IS OFF THE STATEMENT ENTIRELY. There is no shipping section and no
+// line printing one of its four figures — the owner took the cost out pending a
+// different treatment of it. Section 7 is where the money proves it is still
+// held and still reconciles; here it is enough that nothing prints it.
+ok(sectionOf(day, 'shipping') === null,
+   'the statement has no shipping section at all',
+   JSON.stringify(buildPnl(day).map((s: any) => s.key)))
+const SHIPPING_LINES = ['shippingSubsidy', 'shippingCharges', 'giveawayShipping', 'refundShipping']
+ok(
+  !buildPnl(day).some((s: any) => s.lines.some((l: any) => SHIPPING_LINES.includes(l.key))),
+  'and no section anywhere carries one of the four postage lines',
+  JSON.stringify(buildPnl(day).flatMap((s: any) => s.lines.map((l: any) => l.key)))
+)
 
 // THE DISCLOSURE. Net profit above is too high by whatever those envelopes cost,
 // so the screen has to say so on the line, on the heading and in the note —
@@ -562,6 +566,148 @@ for (const [label, row] of grains) {
      `${label}: the sections still sum to net profit`,
      `${pnlChecksum(buildPnl(row))} vs ${row.netProfit}`)
 }
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 7. postage: still in the ledger, out of the statement ===')
+// ---------------------------------------------------------------------------
+// THE SAME FAILURE AS SECTION 1, RUNNING THE OTHER WAY. Packaging is money in
+// net profit that no ledger row carries, so the reconciliation strips it from
+// the DAY side. Postage is now the mirror: the four buckets are still
+// classified, still attributed and still carrying cents, and no statement
+// section reads one of them. Every one of those cents is therefore inside the
+// ledger money `buildView` compares the day breakdown against, and none of it
+// is inside net profit — so without the matching strip on the ROW side, a night
+// that shipped a single parcel reports a break that is not there and the
+// operator gets the "these numbers do not add up" banner on a correct
+// statement. That is the flag they then learn to ignore.
+//
+// One night, all four buckets, and a sale so the night is a night.
+
+const NIGHT3 = '2026-07-14'
+const at3 = (h: number, m = 0): Date => new Date(2026, 6, 14, h, m, 0)
+const whatnot3 = (d: Date): string => {
+  const h24 = d.getHours()
+  const h = h24 % 12 === 0 ? 12 : h24 % 12
+  return `Jul ${d.getDate()}, ${d.getFullYear()}, ${h}:${two(d.getMinutes())}:00 ${h24 < 12 ? 'AM' : 'PM'}`
+}
+const sess3 = createSession(
+  { title: 'Tue Postage', startedAt: at3(19).toISOString(), endedAt: at3(23).toISOString() },
+  null
+)
+ok(sess3.ok, 'the postage show is logged', sess3.ok ? '' : sess3.error)
+
+const ledgerCsv = (name: string, lines: Array<{ when: Date; amount: string; message: string; type: string }>): string => {
+  const body =
+    ['Created Date,Amount,Listing ID,Order ID,Message,Status,Transaction Type,Completed Date']
+      .concat(
+        lines.map((r, i) =>
+          [
+            `"${whatnot3(r.when)}"`,
+            r.amount,
+            '2041799398',
+            `${name}${i + 1}`,
+            r.message,
+            'completed',
+            r.type,
+            `"${whatnot3(r.when)}"`
+          ].join(',')
+        )
+      )
+      .join('\r\n') + '\r\n'
+  const path = join(DIR, `${name}.csv`)
+  writeFileSync(path, body, 'utf8')
+  return path
+}
+
+// Four different figures on purpose: a bucket wired to the wrong field shows up
+// as a wrong number rather than as a total that happens to still be right.
+const postage = importLedger(
+  ledgerCsv('postage', [
+    { when: at3(20, 1), amount: '$30.00', message: spot(9, 'Boston Red Sox'), type: 'SALES' },
+    { when: at3(20, 4), amount: '$9.50', message: 'Shipping Subsidy', type: 'ADJUSTMENT' },
+    { when: at3(20, 7), amount: '($6.25)', message: 'Whatnot platform charge for shipping adjustment on order 8000000001', type: 'ADJUSTMENT' },
+    { when: at3(20, 10), amount: '($1.75)', message: 'Charged deduction of $1.75 for giveaway order 8000000002', type: 'SALES' },
+    { when: at3(20, 13), amount: '($2.40)', message: 'Deduction for order refund shipping costs on order 8000000003', type: 'ADJUSTMENT' }
+  ]),
+  null
+)
+ok(postage.ok, 'the postage ledger imported', postage.ok ? '' : postage.error)
+
+const v7 = streamingFinanceView()
+// THE ASSERTION THE WHOLE STRIP EXISTS FOR.
+ok(v7.reconciled === true, 'a night carrying all four postage buckets reconciles',
+   String(v7.reconcileNote))
+ok(v7.reconcileNote === null, 'and has nothing to say about it', String(v7.reconcileNote))
+
+const d7 = dayOf(v7, NIGHT3)
+ok(!!d7, 'the postage night is in the P&L', String(v7.days.map((d: any) => d.streamDate)))
+ok(
+  cents(d7.shippingSubsidy) === cents(9.5) && cents(d7.shippingCharges) === cents(-6.25) &&
+    cents(d7.giveawayShipping) === cents(-1.75) && cents(d7.refundShipping) === cents(-2.4),
+  'all four buckets are still measured onto the day',
+  JSON.stringify([d7.shippingSubsidy, d7.shippingCharges, d7.giveawayShipping, d7.refundShipping])
+)
+ok(cents(d7.netShipping) === cents(-0.9), 'and netShipping is still their sum', String(d7.netShipping))
+ok(cents(d7.netAfterCosts) ===
+   cents(d7.netRevenue + d7.netShipping + d7.showBoost + d7.reversals + d7.giveawayLoss),
+   'netAfterCosts still books the postage, because it is the LEDGER economics',
+   String(d7.netAfterCosts))
+
+// None of it reaches the statement — not as a section, not as a line, and not
+// as a figure the bottom line quietly carries.
+const pack7 = sectionOf(d7, 'packaging')
+ok(sectionOf(d7, 'shipping') === null, 'the night prints no shipping section',
+   JSON.stringify(buildPnl(d7).map((s: any) => s.key)))
+ok(
+  !buildPnl(d7).some((s: any) => s.lines.some((l: any) => SHIPPING_LINES.includes(l.key))),
+  'and no postage line anywhere on it'
+)
+ok(
+  cents(d7.netProfit) === cents(d7.grossProfit + d7.totalFees + pack7.subtotal + d7.showBoost +
+    d7.generalExpenses + d7.reversals),
+  'net profit is the sections it does print, with the 90¢ of net postage in none of them',
+  String(d7.netProfit)
+)
+ok(SHIPPING_LINES.every((k) => pnlDrillSource(k) === null),
+   'and the drill contract maps no line the statement cannot emit',
+   SHIPPING_LINES.filter((k) => pnlDrillSource(k) !== null).join(', '))
+
+// MORE POSTAGE MOVES THE RECORD AND NOT THE BOTTOM LINE. This is the owner's
+// change stated as behaviour rather than as a missing section: another subsidy
+// lands on the same night, the day's postage figure follows it, and net profit
+// does not move a cent.
+const netBeforePostage = cents(d7.netProfit)
+const more = importLedger(
+  ledgerCsv('postage-more', [
+    { when: at3(21, 40), amount: '$4.10', message: 'Shipping Subsidy', type: 'ADJUSTMENT' }
+  ]),
+  null
+)
+ok(more.ok, 'a second postage row imports', more.ok ? '' : more.error)
+const v7b = streamingFinanceView()
+const d7b = dayOf(v7b, NIGHT3)
+ok(v7b.reconciled === true, 'the view still reconciles with it', String(v7b.reconcileNote))
+ok(cents(d7b.shippingSubsidy) === cents(13.6), 'the subsidy on the day went up by $4.10',
+   String(d7b.shippingSubsidy))
+ok(cents(d7b.netProfit) === netBeforePostage, 'and net profit did not move',
+   `${cents(d7b.netProfit)} vs ${netBeforePostage}`)
+
+// The identity, at all three grains, on a period that now contains postage the
+// statement ignores. A rollup that dropped the strip fails here and nowhere on
+// the days.
+const week7 = v7b.weeks.find((w: any) => w.from <= NIGHT3 && w.to >= NIGHT3)
+for (const [label, row] of [
+  [NIGHT3, d7b],
+  [week7.label, week7],
+  ['all-time', v7b.totals]
+] as Array<[string, any]>) {
+  ok(cents(pnlChecksum(buildPnl(row))) === cents(row.netProfit),
+     `${label}: the statement sums to net profit with postage outside it`,
+     `${pnlChecksum(buildPnl(row))} vs ${row.netProfit}`)
+}
+ok(cents(v7b.totals.netShipping) !== 0,
+   'and the postage is still there to be reinstated when the owner wants it back',
+   String(v7b.totals.netShipping))
 
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

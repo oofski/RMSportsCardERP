@@ -78,7 +78,7 @@ const finite = (n: number): number => (Number.isFinite(n) ? n : 0)
  *
  * That is not a convenience. The strip's whole job is to be checkable by eye
  * against the statements below it, and the only way two screens cannot disagree
- * about what "fees" or "shipping" contains is for both to read the same
+ * about what "fees" or "packaging" contains is for both to read the same
  * `buildPnl` output — including the same guards on the same fields.
  */
 export function buildStatement(m: PnlMoney): PnlSection[] {
@@ -134,9 +134,10 @@ export function pnlDrift(sections: PnlSection[], statedNetProfit: number): {
  *
  * Every section now carries its own subtotal ON THE HEADING ROW and opens to
  * show the lines that make it. That is one row per section closed — Revenue,
- * Cost of goods, Gross profit, Platform fees, Shipping, Show costs,
- * Adjustments, Net profit — which is the whole P&L in eight lines, and the
- * detail is one click from whichever line raised the question.
+ * Cost of goods, Gross profit, Platform fees, Packaging costs, Other show
+ * costs, General expenses, Adjustments, Net profit — which is the whole P&L in
+ * nine lines, and the detail is one click from whichever line raised the
+ * question.
  *
  * It closed by default because the previous layout put roughly twenty rows on
  * screen whether or not anyone was reading them, under a summary that already

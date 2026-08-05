@@ -13109,19 +13109,20 @@ button.sor-team:focus-visible {
   outline-offset: 1px;
 }
 
-/* ---------- The five widgets ---------- */
-/* auto-fit rather than a fixed five: at 1400px they sit in a row, at 900px in
-   a three-and-two, and at phone width they stack — without a breakpoint that
-   has to be kept in step with the number of widgets. The minimum is 172px
+/* ---------- The range widgets ---------- */
+/* auto-fit rather than a fixed count: at 1400px they sit in a row, at 900px they
+   wrap, and at phone width they stack — without a breakpoint that has to be kept
+   in step with the number of widgets, which is exactly what earned its keep when
+   the shipping tile left and the row went from five to four. The minimum is 172px
    because "$160,250.90" at 22px is 148px of glyphs and a figure that meets its
    own cell edge looks truncated whether or not it is. */
 .fin-widgets {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(172px, 1fr));
   /* Four named bands — label, figure, note, delta — shared by every widget via
-     subgrid below. Without it the five figures sit on five different baselines
-     the moment one label wraps to two lines or one note does not, and a row of
-     KPIs whose numbers do not line up looks broken however correct it is. */
+     subgrid below. Without it the figures sit on as many baselines as there are
+     cards the moment one label wraps to two lines or one note does not, and a row
+     of KPIs whose numbers do not line up looks broken however correct it is. */
   grid-template-rows: auto auto auto auto;
   gap: 1px;
   background: var(--border);

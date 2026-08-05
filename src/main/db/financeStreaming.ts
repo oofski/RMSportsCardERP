@@ -198,6 +198,34 @@ function packagingCents(day: Pick<
   )
 }
 
+/**
+ * The four postage buckets as one signed figure, in cents — the mirror of
+ * `packagingCents`, and needed for the opposite reason.
+ *
+ * Packaging is money in the statement that no ledger row carries, so the
+ * reconciliation strips it from the DAY side. This is money ledger rows carry
+ * that no statement section reads, so the reconciliation strips it from the ROW
+ * side. Both strips exist because the check is "the day's fields decompose the
+ * same money the attributed rows do", and each of these breaks that equality in
+ * one direction.
+ *
+ * `netShipping` is the same sum and is still computed, but this reads the four
+ * buckets rather than the total on purpose: the strip must be the money the
+ * BUCKETS carry, so a day whose `netShipping` ever failed to be its own four
+ * terms would break the reconciliation instead of hiding inside it.
+ */
+function shippingCents(day: Pick<
+  StreamDayFinance,
+  'shippingSubsidy' | 'shippingCharges' | 'giveawayShipping' | 'refundShipping'
+>): number {
+  return (
+    toCents(day.shippingSubsidy) +
+    toCents(day.shippingCharges) +
+    toCents(day.giveawayShipping) +
+    toCents(day.refundShipping)
+  )
+}
+
 /** "$1,234.56" for a warning string the operator reads. */
 function money(cents: number): string {
   const sign = cents < 0 ? '-' : ''
@@ -2638,12 +2666,12 @@ function buildView(db: Database): StreamingFinanceView {
     // Postage only, and every term of it is a ledger row — which is what lets
     // this figure be checked against a Whatnot screen. The modelled packaging
     // deliberately stays out of it and lands in `netProfit` on its own.
-    day.netShipping = toDollars(
-      toCents(day.shippingSubsidy) +
-        toCents(day.shippingCharges) +
-        toCents(day.giveawayShipping) +
-        toCents(day.refundShipping)
-    )
+    //
+    // STILL COMPUTED, AND READ BY NO STATEMENT SECTION. The owner took postage
+    // off the P&L pending a different treatment of the cost, so this is the
+    // per-night record waiting for that treatment rather than a live input to
+    // anything the screen prints. `StreamDayFinance` carries the full argument.
+    day.netShipping = toDollars(shippingCents(day))
 
     // Everything the LEDGER knows about, plus the giveaway loss that has always
     // sat beside showBoost here because it is the same kind of thing: money
@@ -2669,7 +2697,11 @@ function buildView(db: Database): StreamingFinanceView {
     day.netProfit = toDollars(
       toCents(day.grossProfit) +
         toCents(day.totalFees) +
-        toCents(day.netShipping) +
+        // NO POSTAGE TERM. It was `netShipping` here and the owner removed the
+        // cost from the P&L, so the bottom line is higher by whatever the subsidy
+        // less the postage came to. Every term of this sum is a section of
+        // `buildPnl` and postage is no longer one of them — which is the property
+        // `pnlChecksum` asserts below, day, period and all-time.
         // The packaging section, summed from the same six rounded figures the
         // statement prints, so the bottom line is the column added up rather
         // than a second computation that agrees most of the time.
@@ -2756,9 +2788,10 @@ function buildView(db: Database): StreamingFinanceView {
   // them are not ledger rows at all — both cost-of-goods terms, which come from
   // the Streaming module, the modelled packaging, which comes from counting
   // cards and envelopes, and the manual expenses, which come from somebody
-  // typing — so stripping those back out has to land exactly on the raw net:
+  // typing — while the postage is the reverse, ledger money the statement no
+  // longer books. Both sides give ground, and the two must land on each other:
   //     netProfit − cogs − packaging − generalExpenses
-  //        == Σ(attributed non-payout rows)
+  //        == Σ(attributed non-payout rows) − Σ(the four postage buckets)
   //
   // THE FEES ARE NOT STRIPPED, AND THAT IS THE ROUND-TRIP ASSERTION. They used
   // to be, because the top line was the ledger's own figure and the fee was
@@ -2779,6 +2812,28 @@ function buildView(db: Database): StreamingFinanceView {
   // giveaway loss and no break cost, so it strips differently — and a figure
   // nobody checks is a figure that drifts.
   let ledgerFieldCents = 0
+  /**
+   * THE POSTAGE THE STATEMENT DELIBERATELY DOES NOT BOOK, taken off the LEDGER
+   * side of the comparison. This is the mirror of the packaging strip below it
+   * and the only thing standing between this release and a false alarm on every
+   * day that ever shipped a parcel.
+   *
+   * The failure it prevents, spelled out because it is not visible from here:
+   * the four postage buckets are still classified, still attributed to a day and
+   * still carry cents, so every one of them is inside `daysCents`. Net profit no
+   * longer contains a postage term, so `fieldCents` does not. Compare the two
+   * untouched and they differ by exactly the net postage — the check reports
+   * "the day breakdown adds to X but Y of ledger money is attributed", the
+   * operator gets the "these numbers do not add up" banner on a statement that
+   * is entirely correct, and the one flag that means something becomes wallpaper.
+   *
+   * The rule this obeys is the flat one already written above, read in the other
+   * direction: anything in `netProfit` that Whatnot's export cannot corroborate
+   * comes off the day side, and any ledger money `netProfit` does not claim
+   * comes off the row side. A future section that reinstates postage removes
+   * this strip and nothing else.
+   */
+  let unbookedShippingCents = 0
   for (const day of days) {
     // THE PACKAGING BLOCK IS STRIPPED, because it is now inside `netProfit` and
     // no part of it is a ledger row. It moved in when the shipping checklist —
@@ -2792,11 +2847,17 @@ function buildView(db: Database): StreamingFinanceView {
       toCents(day.cogs) -
       packagingCents(day) -
       toCents(day.generalExpenses)
+    unbookedShippingCents += shippingCents(day)
     // `netAfterCosts` carries neither the manual expenses nor the packaging —
     // it is the show's LEDGER economics — so the giveaway loss is the only
-    // non-ledger term there is to take back off.
+    // non-ledger term there is to take back off. THE POSTAGE IS NOT STRIPPED
+    // HERE: this figure still books it, on purpose, so it still decomposes the
+    // ledger's own money in full.
     ledgerFieldCents += toCents(day.netAfterCosts) - toCents(day.giveawayLoss)
   }
+  /** What the statement is answerable for: the attributed rows less the postage
+   *  no section of it reads. */
+  const bookedDayCents = daysCents - unbookedShippingCents
 
   /**
    * Every section subtotal of the statement, summed, must BE the bottom line.
@@ -2834,13 +2895,13 @@ function buildView(db: Database): StreamingFinanceView {
     reconcileNote =
       `${money(daysCents)} on shows + ${money(unCents)} unattributed = ${money(daysCents + unCents)}, ` +
       `but ${money(all.cents)} of non-payout money is stored. These totals are incomplete — do not book from them.`
-  } else if (fieldCents !== daysCents) {
+  } else if (fieldCents !== bookedDayCents) {
     reconciled = false
     reconcileNote =
-      `The day breakdown adds to ${money(fieldCents)} before stock cost but ${money(daysCents)} ` +
-      `of ledger money is attributed to those days. Either a bucket is landing in no column, or the ` +
-      `derived gross does not fall back to the net Whatnot paid — these totals are incomplete, do ` +
-      `not book from them.`
+      `The day breakdown adds to ${money(fieldCents)} before stock cost but ${money(bookedDayCents)} ` +
+      `of ledger money is attributed to those days outside postage. Either a bucket is landing in no ` +
+      `column, or the derived gross does not fall back to the net Whatnot paid — these totals are ` +
+      `incomplete, do not book from them.`
   } else if (ledgerFieldCents !== daysCents) {
     reconciled = false
     reconcileNote =

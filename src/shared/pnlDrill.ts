@@ -165,10 +165,14 @@ export const PNL_DRILL_SOURCES: Readonly<Record<string, PnlDrillSource>> = {
   },
 
   // --- Shipping -------------------------------------------------------------
-  shippingSubsidy: { kind: 'ledgerRows', buckets: ['shipping_subsidy'], basis: 'amount' },
-  shippingCharges: { kind: 'ledgerRows', buckets: ['shipping_charge'], basis: 'amount' },
-  giveawayShipping: { kind: 'ledgerRows', buckets: ['giveaway_shipping'], basis: 'amount' },
-  refundShipping: { kind: 'ledgerRows', buckets: ['refund_shipping'], basis: 'amount' },
+  // NOTHING, because the statement prints no postage line to click. The four
+  // that were here — subsidy, postage charged back, giveaway postage, refund
+  // postage — went when `buildPnl` stopped emitting the shipping section, and
+  // they went for the reason this list exists: it is meant to be read beside
+  // that `return` as the same list in the same order, and a mapping for a line
+  // nothing emits is dead weight that makes the enumeration test look satisfied
+  // while covering one line fewer. The buckets are untouched and the rows are
+  // still there; reinstating the section reinstates these four entries with it.
 
   // --- Packaging ------------------------------------------------------------
   // Modelled, every one of them. No table holds a sleeve.

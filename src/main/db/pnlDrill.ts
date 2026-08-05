@@ -163,7 +163,7 @@ export function pnlDetail(req: PnlDrillRequest, db: Database = getDb()): PnlDeta
 // ---------------------------------------------------------------------------
 
 /**
- * The rows under a revenue, fee, shipping or adjustment line.
+ * The rows under a revenue, fee, show-cost or adjustment line.
  *
  * THE CONTRIBUTION IS NOT ALWAYS THE STORED AMOUNT. Whatnot pays net, so the
  * sales line is a derived gross and the two fee lines are the pieces that were
