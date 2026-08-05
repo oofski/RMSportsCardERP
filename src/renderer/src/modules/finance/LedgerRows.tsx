@@ -10,6 +10,82 @@ import { timeLabel } from './time'
 const DAY_ROW_LIMIT = 300
 
 /**
+ * ONE ledger row, wherever a ledger row is shown.
+ *
+ * Extracted when the P&L grew a drill-down, because that screen lists the very
+ * same rows under a statement line and a second renderer for them would be a
+ * second place for the bucket chip, the carried-back marker and the repaired
+ * flag to fall out of step. There is one way a ledger row looks in this app.
+ *
+ * `amount` overrides what the row stores, and only the P&L passes it: the
+ * statement's sales line is a DERIVED gross, so under it a row contributes its
+ * net plus the fees that were taken off before Whatnot wrote it. `basis` is the
+ * sentence explaining that addition, printed on the row so nobody has to know in
+ * advance which lines are derived.
+ */
+export function LedgerRowLine({
+  row,
+  amount,
+  basis,
+  onOpen
+}: {
+  row: LedgerRow
+  /** What this row contributed to the figure above it. Defaults to `row.amount`. */
+  amount?: number
+  basis?: string
+  /** Present where there is a record view to open. The whole row becomes the
+   *  hit target: a row this wide with a small affordance is a miss waiting to
+   *  happen, and there is nothing else on it to click. */
+  onOpen?: () => void
+}): JSX.Element {
+  const body = (
+    <>
+      <span className="fin-row-time mono">{timeLabel(row.occurredAt)}</span>
+      <BucketChip bucket={row.bucket} />
+      {row.attribution === 'carried_back' && (
+        <span
+          className="fin-row-carry"
+          title="This settled after the show ended and was booked back to it. Expected for shipping and adjustment rows."
+        >
+          <Icon name="Undo2" size={10} />
+          settled later
+        </span>
+      )}
+      <span className="fin-row-msg" title={basis ? `${row.message} — ${basis}` : row.message}>
+        {row.message}
+      </span>
+      {row.breakNumber !== null && (
+        <span className="fin-row-break">
+          <Icon name="Hash" size={10} />
+          Break {row.breakNumber}
+        </span>
+      )}
+      {row.repaired && (
+        <span
+          className="fin-row-flag"
+          title="This row was exported malformed and was stitched back together on import."
+        >
+          repaired
+        </span>
+      )}
+      <Money value={amount ?? row.amount} title={basis} />
+    </>
+  )
+
+  return (
+    <li>
+      {onOpen ? (
+        <button type="button" className="fin-row is-openable" onClick={onOpen}>
+          {body}
+        </button>
+      ) : (
+        <span className="fin-row">{body}</span>
+      )}
+    </li>
+  )
+}
+
+/**
  * The rows behind a day — the evidence under the statement.
  *
  * Fetched on expand rather than with the view: a five-week export is thousands
@@ -81,37 +157,7 @@ export function LedgerRows({
     <>
       <ul className="fin-rows">
         {rows.map((r) => (
-          <li className="fin-row" key={r.id}>
-            <span className="fin-row-time mono">{timeLabel(r.occurredAt)}</span>
-            <BucketChip bucket={r.bucket} />
-            {r.attribution === 'carried_back' && (
-              <span
-                className="fin-row-carry"
-                title="This settled after the show ended and was booked back to it. Expected for shipping and adjustment rows."
-              >
-                <Icon name="Undo2" size={10} />
-                settled later
-              </span>
-            )}
-            <span className="fin-row-msg" title={r.message}>
-              {r.message}
-            </span>
-            {r.breakNumber !== null && (
-              <span className="fin-row-break">
-                <Icon name="Hash" size={10} />
-                Break {r.breakNumber}
-              </span>
-            )}
-            {r.repaired && (
-              <span
-                className="fin-row-flag"
-                title="This row was exported malformed and was stitched back together on import."
-              >
-                repaired
-              </span>
-            )}
-            <Money value={r.amount} />
-          </li>
+          <LedgerRowLine key={r.id} row={r} />
         ))}
       </ul>
       <p className="fin-detail-foot">

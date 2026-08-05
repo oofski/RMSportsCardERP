@@ -11,6 +11,7 @@ import type {
   StreamingFinanceView,
   WhatnotRatePeriod
 } from '@shared/financeStreaming'
+import type { PnlDetail, PnlDrillRequest } from '@shared/pnlDrill'
 import { api } from '../../lib/api'
 
 /** What `rows()` can be narrowed by. Every field is optional; an empty filter is
@@ -45,6 +46,15 @@ export interface FinanceApi {
    *  row count — which overstates it by whatever another import also covers. */
   importImpact(id: string): Promise<ImportDeleteImpact>
   rows(filter: LedgerRowFilter): Promise<LedgerRow[]>
+  /**
+   * The records behind ONE figure on the statement, over the range on screen.
+   *
+   * `start`/`end` are inclusive business days; both null is all time. The
+   * payload's `total` is the sum of EVERY matching record rather than of the
+   * page returned, because that is what the screen reconciles against the figure
+   * that was clicked — see `@shared/pnlDrill` for the line-id → source contract.
+   */
+  pnlDetail(req: PnlDrillRequest): Promise<PnlDetail>
   /** Re-runs attribution over every stored row against the current sessions —
    *  what you press after logging a show that was missing. */
   reattribute(): Promise<Result<StreamingFinanceView>>
@@ -77,6 +87,16 @@ export const finance: FinanceApi = api.finance
  * rather than throwing "cannot read property of undefined" on first paint.
  */
 export const financeReady = typeof finance?.streamView === 'function'
+
+/**
+ * False against a packaged preload that predates the drill-down.
+ *
+ * The statement PRINTS either way — every figure on it is real on that build —
+ * and simply does not turn its amounts into buttons that would throw
+ * "pnlDetail is not a function" on click. A statement you cannot open is the old
+ * behaviour; a statement that errors when you touch it is a new bug.
+ */
+export const pnlDrillReady = typeof finance?.pnlDetail === 'function'
 
 /** Result → message, so no failed write is ever swallowed into silence. */
 export function resultError(res: Result<unknown>, fallback: string): string {

@@ -1585,7 +1585,10 @@ export interface LedgerRowFilter {
   limit?: number
 }
 
-interface RawLedgerRow {
+/** Exported with `toLedgerRow` and `LEDGER_ROW_COLUMNS` below, so the drill-down
+ *  reads a ledger row through the same three pieces this module does rather than
+ *  keeping a second, slowly diverging copy of the column list. */
+export interface RawLedgerRow {
   id: string
   import_id: string
   occurred_at: string
@@ -1604,7 +1607,14 @@ interface RawLedgerRow {
   classifier_version: number
 }
 
-function toRow(r: RawLedgerRow): LedgerRow {
+/** Every column `RawLedgerRow` needs, in one string. A SELECT that drifts from
+ *  the interface produces undefined fields on a screen rather than an error. */
+export const LEDGER_ROW_COLUMNS =
+  `id, import_id, occurred_at, amount, order_id, listing_id, message, txn_type,
+   bucket, session_id, stream_date, attribution, break_number, fingerprint, repaired,
+   classifier_version`
+
+export function toLedgerRow(r: RawLedgerRow): LedgerRow {
   return {
     id: r.id,
     importId: r.import_id,
@@ -1657,14 +1667,12 @@ export function listRows(filter: LedgerRowFilter): LedgerRow[] {
     ROW_LIMIT_MAX
   )
   const sql =
-    `SELECT id, import_id, occurred_at, amount, order_id, listing_id, message, txn_type,
-            bucket, session_id, stream_date, attribution, break_number, fingerprint, repaired,
-            classifier_version
+    `SELECT ${LEDGER_ROW_COLUMNS}
        FROM ledger_rows
        ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
       ORDER BY occurred_at DESC, rowid DESC
       LIMIT ${limit}`
-  return (db.prepare(sql).all(args) as RawLedgerRow[]).map(toRow)
+  return (db.prepare(sql).all(args) as RawLedgerRow[]).map(toLedgerRow)
 }
 
 // ---------------------------------------------------------------------------

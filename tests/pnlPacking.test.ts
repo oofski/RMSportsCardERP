@@ -23,10 +23,15 @@ rmSync(DIR, { recursive: true, force: true }); mkdirSync(DIR, { recursive: true 
 
 /* eslint-disable @typescript-eslint/no-var-requires */
 const { getDb } = require('../src/main/db/database')
-const { createSession } = require('../src/main/db/streaming')
+const { addItem, createSession } = require('../src/main/db/streaming')
+const { createProduct } = require('../src/main/db/inventory')
+const { saveExpense } = require('../src/main/db/financeExpenses')
 const { importLedger, streamingFinanceView } = require('../src/main/db/financeStreaming')
+const { pnlDetail } = require('../src/main/db/pnlDrill')
 const ship = require('../src/main/db/shipping')
-const { buildPnl, pnlChecksum } = require('../src/shared/financeStreaming')
+const { buildPnl, emptyDayFinance, pnlChecksum, sumDayFinance } =
+  require('../src/shared/financeStreaming')
+const { pnlDetailCount, pnlDrillSource } = require('../src/shared/pnlDrill')
 const { parsePages } = require('../src/main/shipping/parser')
 getDb()
 
@@ -269,6 +274,294 @@ ok(cents(pnlChecksum(buildPnl(week))) === cents(week.netProfit),
 ok(cents(pnlChecksum(buildPnl(view.totals))) === cents(view.totals.netProfit),
    'and the all-time totals doing the same',
    `${pnlChecksum(buildPnl(view.totals))} vs ${view.totals.netProfit}`)
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 6. every figure opens, and what opens adds up ===')
+// ---------------------------------------------------------------------------
+// The drill-down's whole claim is that clicking a figure lands on the records
+// that make it. Two things have to be true for that to be worth anything, and
+// neither is self-evident:
+//
+//   1. EVERY line the statement can print has somewhere to go. A P&L line added
+//      upstream with no entry in the drill contract is a dead click, and a dead
+//      click on a money figure teaches an operator that the whole feature is
+//      decorative. The enumeration below is what stops one shipping.
+//   2. What comes back SUMS TO THE FIGURE, to the cent, on a day and on a range.
+//      A detail list that quietly disagrees with its own line is worse than none
+//      — it either makes a correct statement look wrong, or hides a real skew
+//      behind a plausible list of rows.
+//
+// The fixture is deliberately one of everything: both sales buckets, tips,
+// bonuses, all four shipping buckets, a boost, a reversal, a shape nothing
+// classifies, a costed break, an UNCOSTED break, a giveaway, and money somebody
+// typed. That is one line per source in the contract, which is the only way this
+// test covers all four payload kinds rather than the one the fixture happened to
+// have.
+
+const NIGHT2 = '2026-07-13'
+const at2 = (h: number, m = 0): Date => new Date(2026, 6, 13, h, m, 0)
+const whatnot2 = (d: Date): string => {
+  const h24 = d.getHours()
+  const h = h24 % 12 === 0 ? 12 : h24 % 12
+  return `Jul ${d.getDate()}, ${d.getFullYear()}, ${h}:${two(d.getMinutes())}:00 ${h24 < 12 ? 'AM' : 'PM'}`
+}
+
+const sess2 = createSession(
+  { title: 'Mon Mixed', startedAt: at2(19).toISOString(), endedAt: at2(23).toISOString() },
+  null
+)
+ok(sess2.ok, 'the second show is logged', sess2.ok ? '' : sess2.error)
+
+/** One of every classified shape, so every ledger-backed line has records. */
+const mixed: Array<{ when: Date; amount: string; message: string; type: string }> = [
+  { when: at2(20, 1), amount: '$24.00', message: spot(7, 'Dallas Cowboys'), type: 'SALES' },
+  { when: at2(20, 2), amount: '$31.50', message: spot(7, 'Green Bay Packers'), type: 'SALES' },
+  // No break number, no trailing team: a sealed case bought outright.
+  { when: at2(20, 5), amount: '$410.00', message: 'Earnings for selling a 1x 2026 TOPPS CHROME SEALED CASE', type: 'SALES' },
+  { when: at2(20, 9), amount: '$12.00', message: 'Tip from viewer', type: 'TIP' },
+  { when: at2(20, 12), amount: '$45.00', message: 'Super Seller Bonus', type: 'ADJUSTMENT' },
+  { when: at2(20, 15), amount: '$8.75', message: 'Shipping Subsidy', type: 'ADJUSTMENT' },
+  { when: at2(20, 18), amount: '($4.15)', message: 'Whatnot platform charge for shipping adjustment on order 7000000001', type: 'ADJUSTMENT' },
+  { when: at2(20, 21), amount: '($2.50)', message: 'Charged deduction of $2.50 for giveaway order 7000000002', type: 'SALES' },
+  { when: at2(20, 24), amount: '($30.00)', message: 'Seller purchased Show Boost for show 12345', type: 'ADJUSTMENT' },
+  { when: at2(20, 27), amount: '($18.40)', message: 'Reversal of sales transaction for order refund 7000000003', type: 'ADJUSTMENT' },
+  { when: at2(20, 30), amount: '($3.10)', message: 'Deduction for order refund shipping costs on order 7000000003', type: 'ADJUSTMENT' },
+  // A shape this version has never seen. Counted at face value in revenue, with
+  // a line of its own so the subtotal never exceeds its lines.
+  { when: at2(20, 33), amount: '$6.00', message: 'Mystery platform credit', type: 'ADJUSTMENT' }
+]
+const csv2 =
+  ['Created Date,Amount,Listing ID,Order ID,Message,Status,Transaction Type,Completed Date']
+    .concat(
+      mixed.map((r, i) =>
+        [
+          `"${whatnot2(r.when)}"`,
+          r.amount,
+          '2041799397',
+          `MIX${i + 1}`,
+          r.message,
+          'completed',
+          r.type,
+          `"${whatnot2(r.when)}"`
+        ].join(',')
+      )
+    )
+    .join('\r\n') + '\r\n'
+const csv2Path = join(DIR, 'night2.csv')
+writeFileSync(csv2Path, csv2, 'utf8')
+const imported2 = importLedger(csv2Path, null)
+ok(imported2.ok, 'the mixed ledger imported', imported2.ok ? '' : imported2.error)
+
+// --- cost of goods, costed and not ------------------------------------------
+//
+// Both sessions are dated in the past, so every line below is a RECONCILIATION:
+// it states what the stock cost rather than consuming a layer. A stated price of
+// zero is the supported way a line ends up carrying no cost at all, which is
+// exactly the row the uncosted drill-down exists for.
+const CASE_PRICE = 1200
+const prod = createProduct(
+  {
+    sku: 'PNL-DRILL-CASE', upc: null, name: 'PNL Drill Hobby 12-Box Case',
+    category: 'Baseball', brand: '', setName: '', year: '',
+    unitType: 'case', boxesPerCase: 12, packsPerBox: null, giveawayItem: false,
+    unitCost: CASE_PRICE, highBid: null, salePrice: null, reorderPoint: 0,
+    openingQuantity: 0, openingLocation: 'RM'
+  },
+  null
+).id
+const prod2 = createProduct(
+  {
+    sku: 'PNL-DRILL-GIFT', upc: null, name: 'PNL Drill Giveaway Case',
+    category: 'Baseball', brand: '', setName: '', year: '',
+    unitType: 'case', boxesPerCase: 12, packsPerBox: null, giveawayItem: false,
+    unitCost: 300, highBid: null, salePrice: null, reorderPoint: 0,
+    openingQuantity: 0, openingLocation: 'RM'
+  },
+  null
+).id
+
+const addLine = (sessionId: string, productId: string, kind: string, price: number): any =>
+  addItem({ sessionId, productId, kind, location: 'RM', cases: 1, casePrice: String(price) }, null)
+
+ok(addLine(sess.data.id, prod, 'break', CASE_PRICE).ok, 'a costed case is broken on night one')
+ok(addLine(sess2.data.id, prod, 'break', 0).ok, 'and one on night two that nobody priced')
+ok(addLine(sess2.data.id, prod2, 'giveaway', 300).ok, 'with a case given away on night two')
+
+// --- money somebody typed ----------------------------------------------------
+ok(saveExpense({ streamDate: NIGHT, amount: 25, label: 'Pack opened on stream' }, null).ok,
+   'an expense is typed against night one')
+ok(saveExpense({ streamDate: NIGHT2, amount: 10.5, label: 'Box written off' }, null).ok,
+   'and another against night two')
+
+view = streamingFinanceView()
+ok(view.reconciled === true, 'the whole fixture still reconciles', String(view.reconcileNote))
+
+const d1 = dayOf(view, NIGHT)
+const d2 = dayOf(view, NIGHT2)
+ok(!!d1 && !!d2, 'both nights are in the P&L', String(view.days.map((d: any) => d.streamDate)))
+const span = sumDayFinance([d1, d2])
+
+/**
+ * THE TEST THAT STOPS THIS FEATURE ROTTING.
+ *
+ * Walks every line the statement prints for a period, insists the contract knows
+ * where its money is, and insists that what comes back adds to the figure on the
+ * line. Reported as two assertions rather than two per line so a failure names
+ * every offender at once instead of scrolling the first one off the screen.
+ */
+const drillCheck = (label: string, row: any, start: string | null, end: string | null): void => {
+  const unmapped: string[] = []
+  const off: string[] = []
+  const kinds = new Set<string>()
+  let checked = 0
+  for (const sec of buildPnl(row)) {
+    for (const line of sec.lines) {
+      if (!pnlDrillSource(line.key)) {
+        unmapped.push(line.key)
+        continue
+      }
+      const got = pnlDetail({ lineId: line.key, start, end })
+      kinds.add(got.kind)
+      checked += 1
+      if (cents(got.total) !== cents(line.amount)) {
+        off.push(`${line.key}: records ${got.total} vs line ${line.amount}`)
+      }
+    }
+  }
+  ok(unmapped.length === 0, `${label}: every line has a drill-down mapping`, unmapped.join(', '))
+  ok(off.length === 0, `${label}: all ${checked} lines reconcile to the cent`, off.join(' | '))
+  ok(kinds.size === 4, `${label}: all four payload kinds are exercised`, [...kinds].join(','))
+}
+
+drillCheck('one day', d1, NIGHT, NIGHT)
+drillCheck('the other day', d2, NIGHT2, NIGHT2)
+drillCheck('a two-day range', span, NIGHT, NIGHT2)
+drillCheck('all time', view.totals, null, null)
+
+// The same enumeration over every grain the app actually renders, including the
+// EMPTY day — which is the only statement that prints the two cost-of-goods
+// fallback totals, and therefore the only one that can check they are mapped.
+const grains: Array<[string, any]> = [
+  ...view.days.map((d: any): [string, any] => [d.streamDate, d]),
+  ...view.weeks.map((w: any): [string, any] => [w.label, w]),
+  ...view.months.map((m: any): [string, any] => [m.label, m]),
+  ['all-time', view.totals],
+  ['an empty period', emptyDayFinance('2026-01-01')]
+]
+const missing: string[] = []
+for (const [, row] of grains) {
+  for (const sec of buildPnl(row)) {
+    for (const line of sec.lines) if (!pnlDrillSource(line.key)) missing.push(line.key)
+  }
+}
+ok(missing.length === 0,
+   'every line id any grain can emit — days, weeks, months, all time, an empty day — is mapped',
+   missing.join(', '))
+
+// --- the four kinds, named, so a failure says WHICH one broke ---------------
+const lineOf = (row: any, section: string, key: string): any =>
+  (sectionOf(row, section)?.lines ?? []).find((l: any) => l.key === key) ?? null
+
+const salesDetail = pnlDetail({ lineId: 'sales', start: NIGHT2, end: NIGHT2 })
+ok(salesDetail.kind === 'ledgerRows', 'the sales line drills to ledger rows', salesDetail.kind)
+ok(salesDetail.rows.length === 2, 'two break spots on night two', String(salesDetail.rows.length))
+// THE ROWS ARE NOT THE STORED AMOUNTS. Whatnot pays net; the statement's top
+// line is that net with the fees added back, so a list of stored amounts would
+// be short by exactly the fees on every single day.
+ok(salesDetail.rows.every((r: any) => r.amount > r.row.amount && !!r.basis),
+   'each row contributes its DERIVED gross, and says so',
+   JSON.stringify(salesDetail.rows.map((r: any) => [r.row.amount, r.amount])))
+ok(cents(salesDetail.total) === cents(lineOf(d2, 'revenue', 'sales').amount),
+   'and they add to the sales line exactly',
+   `${salesDetail.total} vs ${lineOf(d2, 'revenue', 'sales').amount}`)
+
+const feeDetail = pnlDetail({ lineId: 'whatnotFee', start: NIGHT2, end: NIGHT2 })
+ok(feeDetail.rows.length === 3, 'the commission drills to all three charged sales',
+   String(feeDetail.rows.length))
+ok(cents(feeDetail.total) === cents(d2.whatnotFee), 'and adds to the fee line',
+   `${feeDetail.total} vs ${d2.whatnotFee}`)
+
+const expenseDetail = pnlDetail({ lineId: 'generalExpenses', start: NIGHT, end: NIGHT2 })
+ok(expenseDetail.kind === 'expenses', 'the general expenses line drills to the typed entries',
+   expenseDetail.kind)
+ok(expenseDetail.entries.length === 2, 'both entries in the range', String(expenseDetail.entries.length))
+ok(cents(expenseDetail.total) === cents(-35.5),
+   'reported NEGATIVE, because the statement books them as a cost', String(expenseDetail.total))
+
+const sleeveDetail = pnlDetail({ lineId: 'packagingSleeves', start: NIGHT, end: NIGHT2 })
+ok(sleeveDetail.kind === 'derived', 'a packaging line is DERIVED, not a transaction list',
+   sleeveDetail.kind)
+ok(sleeveDetail.terms.length === 2, 'one term per night', String(sleeveDetail.terms.length))
+ok(sleeveDetail.terms.every((t: any) => /cards? × 5¢$/.test(t.detail)),
+   'each term is the counts and the rate, written out',
+   JSON.stringify(sleeveDetail.terms.map((t: any) => t.detail)))
+ok(cents(sleeveDetail.total) === cents(span.packagingSleeves),
+   'and the nights add to the line', `${sleeveDetail.total} vs ${span.packagingSleeves}`)
+
+// The two lines counted off packing slips. Both nights have lost their slips, so
+// this drills to NO arithmetic and TWO named nights — an unavailable line that
+// came back with an empty table would say the cost did not happen.
+const labelDetail = pnlDetail({ lineId: 'packagingShippingLabels', start: NIGHT, end: NIGHT2 })
+ok(labelDetail.kind === 'derived' && labelDetail.terms.length === 0,
+   'the shipping-label line has no night it can price', JSON.stringify(labelDetail.terms))
+ok(labelDetail.unknown.length === 2, 'and names both nights nothing can answer for',
+   JSON.stringify(labelDetail.unknown))
+ok(String(labelDetail.note).includes('net profit is higher than the truth'),
+   'saying plainly that the bottom line is over-stated by that gap', String(labelDetail.note))
+
+// --- the uncosted row --------------------------------------------------------
+const uncostedLine = (sectionOf(d2, 'cogs').lines as any[]).find((l) => l.uncosted)
+ok(!!uncostedLine, 'night two prints an uncosted cost-of-goods line',
+   JSON.stringify(sectionOf(d2, 'cogs').lines.map((l: any) => l.key)))
+const uncostedDetail = pnlDetail({ lineId: uncostedLine.key, start: NIGHT2, end: NIGHT2 })
+ok(uncostedDetail.kind === 'streamItems', 'which drills to the stream lines themselves',
+   uncostedDetail.kind)
+ok(uncostedDetail.items.length === (uncostedLine.uncostedItems ?? []).length &&
+   uncostedDetail.items.length === 1,
+   'exactly the lines the statement offered for pricing',
+   `${uncostedDetail.items.length} vs ${(uncostedLine.uncostedItems ?? []).length}`)
+ok(uncostedDetail.items[0].id === uncostedLine.uncostedItems[0].id,
+   'the same stream_items row, so the cost form writes to what was clicked')
+ok(uncostedDetail.items[0].priceUnit === 'case',
+   'carrying the unit a price for it would be per', String(uncostedDetail.items[0].priceUnit))
+ok(cents(uncostedDetail.total) === 0 && cents(uncostedLine.amount) === 0,
+   'and it reconciles at zero — which is what uncosted MEANS, not a failure to find rows')
+
+// The costed line of the SAME product on the same night is a different row and
+// must not be answered with the uncosted one's stream lines.
+const costedLine = (sectionOf(d1, 'cogs').lines as any[]).find(
+  (l) => !l.uncosted && l.key.startsWith('cogs:break:')
+)
+ok(!!costedLine, 'night one prints a costed cost-of-goods line',
+   JSON.stringify(sectionOf(d1, 'cogs').lines.map((l: any) => l.key)))
+const costedDetail = pnlDetail({ lineId: costedLine.key, start: NIGHT, end: NIGHT })
+ok(costedDetail.items.length === 1 && cents(costedDetail.total) === cents(-CASE_PRICE),
+   'and drills to the one case it cost, at what was stated for it',
+   `${costedDetail.items.length} lines, ${costedDetail.total}`)
+
+// --- a range with nothing in it ---------------------------------------------
+//
+// An empty answer, not an error and not a throw. This is the ordinary state of
+// most ranges somebody picks, and the screen's empty state depends on it.
+for (const id of ['sales', 'whatnotFee', 'generalExpenses', 'packagingSleeves', costedLine.key]) {
+  const nothing = pnlDetail({ lineId: id, start: '2020-01-01', end: '2020-01-31' })
+  ok(cents(nothing.total) === 0 && pnlDetailCount(nothing) === 0,
+     `a range with no data drills "${id}" to an empty list`, JSON.stringify(nothing))
+}
+
+// A line id nothing claims comes back EMPTY AND SAYING SO, rather than throwing:
+// the screen then reports "no records against $X", which is exactly what has
+// gone wrong, instead of a red box that names no line.
+const bogus = pnlDetail({ lineId: 'somethingNobodyMapped', start: null, end: null })
+ok(pnlDetailCount(bogus) === 0 && String(bogus.note).includes('No drill-down is defined'),
+   'an unmapped line id is reported as a gap in the contract', String(bogus.note))
+
+// --- and the statement still adds up ----------------------------------------
+for (const [label, row] of grains) {
+  ok(cents(pnlChecksum(buildPnl(row))) === cents(row.netProfit),
+     `${label}: the sections still sum to net profit`,
+     `${pnlChecksum(buildPnl(row))} vs ${row.netProfit}`)
+}
 
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

@@ -146,6 +146,7 @@ import type {
   StreamingFinanceView,
   WhatnotRatePeriod
 } from '@shared/financeStreaming'
+import type { PnlDetail, PnlDrillRequest } from '@shared/pnlDrill'
 
 const api = {
   app: {
@@ -719,6 +720,20 @@ const api = {
       unattributed?: boolean
       limit?: number
     }): Promise<LedgerRow[]> => ipcRenderer.invoke(IPC.finLedgerRows, filter),
+    /**
+     * The records behind ONE figure on the P&L, over the range on screen.
+     *
+     * `start`/`end` are inclusive business days and both null means all time —
+     * the same null the range control uses. Fetched on click rather than with
+     * the statement: a five-week export is thousands of rows and almost none of
+     * them are ever opened.
+     *
+     * The payload's `total` is the sum of EVERY matching record, not of the page
+     * that came back, because it is what the screen reconciles against the
+     * figure that was clicked.
+     */
+    pnlDetail: (req: PnlDrillRequest): Promise<PnlDetail> =>
+      ipcRenderer.invoke(IPC.finPnlDetail, req),
     /** Re-runs attribution against the sessions as they are NOW. This is how
      *  unattributed money moves onto a show after the operator adds the session
      *  they forgot to log — data entry, never a heuristic. */

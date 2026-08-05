@@ -267,6 +267,11 @@ export const IPC = {
   finLedgerImportImpact: 'finance:ledger:import:impact',
   finLedgerRows: 'finance:ledger:rows',
   finLedgerReattribute: 'finance:ledger:reattribute',
+  // The records behind ONE P&L line, over the range the tab is reporting on.
+  // Read on click and never with the statement: most of a period's rows are
+  // never opened, and a statement that fetched all of them would pay for a page
+  // nobody asked for. See @shared/pnlDrill for the line-id → source contract.
+  finPnlDetail: 'finance:pnl:detail',
   // What Whatnot's commission was, by date range. The fee is derived on read,
   // so saving one of these immediately re-prices every past show it covers.
   finRatesList: 'finance:rates:list',

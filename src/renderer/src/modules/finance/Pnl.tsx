@@ -1,19 +1,27 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type {
   PnlLine,
   PnlSection,
   StreamDayFinance,
+  StreamingFinanceView,
   UncostedStreamItem
 } from '@shared/financeStreaming'
 import { buildPnl, pnlChecksum } from '@shared/financeStreaming'
+import { pnlDrillSource } from '@shared/pnlDrill'
 import { parseMoneyInput } from '@shared/streaming'
+import { LIVE, useLiveRefresh } from '../../lib/live'
 import { formatUnitCount, stockUnitWord } from '../../lib/productUnits'
+import { useSession } from '../../lib/session'
 import { Icon } from '../../components/Icon'
 import { useToast } from '../../components/Toast'
-import { Button, Field, Input, Modal } from '../../components/ui'
+import { Button, CenterLoader, Field, Input, Modal } from '../../components/ui'
 import { costEntryReady, resultError, streaming } from '../streaming/api'
 import { Money, Note, Profit, moneyText, plural } from './bits'
-import { shortDayLabel } from './time'
+import { type DrillStep, PnlDrillPanel, resolveTrail } from './PnlDrill'
+import { RangeBar } from './RangeBar'
+import { finance, pnlDrillReady } from './api'
+import { type DayRange, coveredRange, totalsForRange } from './range'
+import { dayRangeLabel, shortDayLabel } from './time'
 
 /**
  * The statement, read top to bottom.
@@ -137,9 +145,21 @@ export function pnlDrift(sections: PnlSection[], statedNetProfit: number): {
  */
 export function PnlStatement({
   money,
+  range = null,
+  rangeLabel = 'All time',
   onCosted
 }: {
   money: PnlMoney
+  /**
+   * The range these figures are FOR, so a click on one of them can ask main for
+   * the records inside the same window. Null is all time, exactly as everywhere
+   * else. Without it the drill-down would have to guess, and a month's line
+   * answered with a day's rows is the one mistake this feature cannot make.
+   */
+  range?: DayRange | null
+  /** How that range reads in words, printed at the top of every drill view so a
+   *  list of records can never be mistaken for a different period's. */
+  rangeLabel?: string
   /**
    * Present when this reader may enter a cost against a stream line — the P&L's
    * uncosted rows then become controls rather than statements. Absent for anyone
@@ -154,8 +174,59 @@ export function PnlStatement({
   /** The uncosted line being priced. Held here rather than per row so the modal
    *  outlives the re-render that follows a save. */
   const [costing, setCosting] = useState<UncostedStreamItem[] | null>(null)
+  /**
+   * WHERE IN THE STATEMENT THE READER IS — empty is the statement itself.
+   *
+   * Held here rather than inside the drill panel because it has to outlive that
+   * panel: pricing a line reloads every figure on the page, and a trail that
+   * reset to the top on each save would send the operator back through three
+   * clicks after every entry.
+   *
+   * KEYS, not the sections and lines themselves — see `DrillStep`. `sections` is
+   * rebuilt whenever the figures move, and a trail holding the objects captured
+   * on the way in would go on showing the arithmetic from before the save.
+   */
+  const [trail, setTrail] = useState<DrillStep[]>([])
 
   const sections = useMemo(() => buildStatement(money), [money])
+
+  // The trail against the statement as it is now, cut at the first step that no
+  // longer exists — which is what pricing a line does to its own row, since an
+  // uncosted key and a costed one are deliberately different.
+  const drill = useMemo(() => resolveTrail(sections, trail), [sections, trail])
+  useEffect(() => {
+    if (drill.length < trail.length) setTrail((cur) => cur.slice(0, drill.length))
+  }, [drill.length, trail.length])
+
+  // BACK TO THE STATEMENT WHEN THE PERIOD MOVES. A record step holds the payload
+  // main sent for the OLD window — a ledger row that may not be in the new one
+  // at all — and even the levels that would re-resolve correctly leave the
+  // reader three deep in a report they did not ask for. Changing the period is
+  // asking a different question; it gets the top of the answer.
+  useEffect(() => {
+    setTrail([])
+  }, [range?.from, range?.to])
+
+  const navigate = useCallback((depth: number) => {
+    setTrail((cur) => (depth < 0 ? [] : cur.slice(0, depth + 1)))
+  }, [])
+  const push = useCallback((step: DrillStep) => setTrail((cur) => [...cur, step]), [])
+
+  /** A figure opens what is behind it — unless nothing claims it. See
+   *  `@shared/pnlDrill`: an unmapped line is a gap in the contract, which the
+   *  enumeration test fails on rather than leaving as a dead click here. */
+  const openLine = useCallback(
+    (sectionKey: string, line: PnlLine): (() => void) | undefined =>
+      pnlDrillReady && pnlDrillSource(line.key)
+        ? () => push({ kind: 'line', sectionKey, key: line.key })
+        : undefined,
+    [push]
+  )
+  const openSection = useCallback(
+    (section: PnlSection): (() => void) | undefined =>
+      pnlDrillReady ? () => push({ kind: 'section', key: section.key }) : undefined,
+    [push]
+  )
 
   const expandable = useMemo(() => sections.filter((s) => !s.running), [sections])
   const openCount = expandable.filter((s) => open[s.key]).length
@@ -199,37 +270,81 @@ export function PnlStatement({
         </Note>
       )}
 
-      {/* A table, not a stack of divs: one table means ONE amount column, so a
-          section subtotal is guaranteed to sit on the same right edge as the
-          lines above it. That alignment is the only way to eyeball whether a
-          subtotal belongs to the lines it follows. */}
-      <table className={`fin-pnl${withShare ? ' has-share' : ''}`}>
-        <thead>
-          <tr>
-            <th scope="col">Account</th>
-            <th scope="col" className="is-num">
-              Amount
-            </th>
-            {withShare && (
-              <th scope="col" className="is-num" title="Share of total revenue for this period">
-                % rev
-              </th>
-            )}
-          </tr>
-        </thead>
+      {/* THE STATEMENT OR ONE OF ITS FIGURES OPENED, never both. QuickBooks
+          replaces the report with the drill-down for the same reason: a list of
+          records under the statement it came from puts two amount columns on one
+          screen and leaves the reader to work out which of them they are reading.
+          The trail across the top says where they are and the crumbs come back. */}
+      {drill.length > 0 ? (
+        <PnlDrillPanel
+          stack={drill}
+          sections={sections}
+          range={range}
+          rangeLabel={rangeLabel}
+          onNavigate={navigate}
+          onPush={push}
+          onEnterCost={onCosted && costEntryReady ? setCosting : undefined}
+        />
+      ) : (
+        <>
+          {/* A table, not a stack of divs: one table means ONE amount column, so
+              a section subtotal is guaranteed to sit on the same right edge as
+              the lines above it. That alignment is the only way to eyeball
+              whether a subtotal belongs to the lines it follows. */}
+          <table className={`fin-pnl${withShare ? ' has-share' : ''}`}>
+            <thead>
+              <tr>
+                <th scope="col">Account</th>
+                <th scope="col" className="is-num">
+                  Amount
+                </th>
+                {withShare && (
+                  <th scope="col" className="is-num" title="Share of total revenue for this period">
+                    % rev
+                  </th>
+                )}
+              </tr>
+            </thead>
 
-        {sections.map((section) => (
-          <SectionBody
-            key={section.key}
-            section={section}
-            open={!!open[section.key]}
-            onToggle={() => setOpen((prev) => ({ ...prev, [section.key]: !prev[section.key] }))}
-            showAll={showAll}
-            revenue={withShare ? revenue : null}
-            onEnterCost={onCosted ? setCosting : undefined}
-          />
-        ))}
-      </table>
+            {sections.map((section) => (
+              <SectionBody
+                key={section.key}
+                section={section}
+                open={!!open[section.key]}
+                onToggle={() => setOpen((prev) => ({ ...prev, [section.key]: !prev[section.key] }))}
+                showAll={showAll}
+                revenue={withShare ? revenue : null}
+                onEnterCost={onCosted ? setCosting : undefined}
+                onOpenLine={openLine}
+                onOpenSection={openSection}
+              />
+            ))}
+          </table>
+
+          <div className="fin-pnl-foot">
+            {expandable.length > 0 && (
+              <button type="button" className="fin-more" aria-pressed={allOpen} onClick={toggleAll}>
+                <Icon name={allOpen ? 'ChevronsDownUp' : 'ChevronsUpDown'} size={14} />
+                {allOpen ? 'Collapse all' : 'Expand all'}
+              </button>
+            )}
+
+            {zeroLines > 0 && openCount > 0 && (
+              <button
+                type="button"
+                className="fin-more"
+                aria-pressed={showAll}
+                onClick={() => setShowAll((v) => !v)}
+              >
+                <Icon name={showAll ? 'EyeOff' : 'Eye'} size={14} />
+                {showAll
+                  ? `Hide the ${plural(zeroLines, 'empty line')}`
+                  : `Show ${plural(zeroLines, 'line')} sitting at zero`}
+              </button>
+            )}
+          </div>
+        </>
+      )}
 
       {costing && onCosted && (
         <UncostedModal
@@ -241,30 +356,42 @@ export function PnlStatement({
           }}
         />
       )}
-
-      <div className="fin-pnl-foot">
-        {expandable.length > 0 && (
-          <button type="button" className="fin-more" aria-pressed={allOpen} onClick={toggleAll}>
-            <Icon name={allOpen ? 'ChevronsDownUp' : 'ChevronsUpDown'} size={14} />
-            {allOpen ? 'Collapse all' : 'Expand all'}
-          </button>
-        )}
-
-        {zeroLines > 0 && openCount > 0 && (
-          <button
-            type="button"
-            className="fin-more"
-            aria-pressed={showAll}
-            onClick={() => setShowAll((v) => !v)}
-          >
-            <Icon name={showAll ? 'EyeOff' : 'Eye'} size={14} />
-            {showAll
-              ? `Hide the ${plural(zeroLines, 'empty line')}`
-              : `Show ${plural(zeroLines, 'line')} sitting at zero`}
-          </button>
-        )}
-      </div>
     </div>
+  )
+}
+
+/**
+ * A figure that opens what is behind it.
+ *
+ * Every money cell on the statement goes through here, including the ones that
+ * print words rather than a number. The affordance is deliberately quiet — a
+ * dotted underline that fills in on hover — because a P&L where twenty amounts
+ * shout "click me" stops reading as a statement, and the one thing this feature
+ * must not cost is the statement's own legibility.
+ *
+ * `onOpen` absent means there is nowhere to go: the figure prints exactly as it
+ * did before, with a title saying why rather than a button that does nothing.
+ */
+function Figure({
+  onOpen,
+  label,
+  children
+}: {
+  onOpen?: () => void
+  /** What the click will open, for the screen reader and the tooltip. */
+  label: string
+  children: JSX.Element
+}): JSX.Element {
+  if (!onOpen) return children
+  return (
+    <button
+      type="button"
+      className="fin-pnl-amt"
+      onClick={onOpen}
+      title={`Show what makes up ${label}`}
+    >
+      {children}
+    </button>
   )
 }
 
@@ -293,7 +420,9 @@ function SectionBody({
   onToggle,
   showAll,
   revenue,
-  onEnterCost
+  onEnterCost,
+  onOpenLine,
+  onOpenSection
 }: {
   section: PnlSection
   open: boolean
@@ -301,19 +430,31 @@ function SectionBody({
   showAll: boolean
   revenue: number | null
   onEnterCost?: (items: UncostedStreamItem[]) => void
+  /** Both return undefined where there is nothing to open, so a figure with no
+   *  drill-down prints as it always did rather than as a button that does
+   *  nothing. */
+  onOpenLine: (sectionKey: string, line: PnlLine) => (() => void) | undefined
+  onOpenSection: (section: PnlSection) => (() => void) | undefined
 }): JSX.Element {
   const cols = revenue === null ? 2 : 3
 
   // A running section is a milestone: it has no lines of its own, it is a
   // figure carried down from everything above it. Rendering it with a caret
   // would promise a disclosure that has nothing inside it.
+  //
+  // It still OPENS, and what it opens is the only honest answer to "what is
+  // gross profit made of": the sections above it. That composition is precisely
+  // what `pnlChecksum` sums, so it reconciles by the same construction the
+  // statement's own assertion uses.
   if (section.running) {
     return (
       <tbody className="fin-pnl-sec is-running">
         <tr className={`fin-pnl-mile${section.key === 'netProfit' ? ' is-bottom' : ''}`}>
           <th scope="row">{section.subtotalLabel}</th>
           <td className="is-num">
-            <Profit value={section.subtotal} />
+            <Figure onOpen={onOpenSection(section)} label={section.subtotalLabel}>
+              <Profit value={section.subtotal} />
+            </Figure>
           </td>
           <ShareCell amount={section.subtotal} revenue={revenue} />
         </tr>
@@ -352,7 +493,12 @@ function SectionBody({
           </button>
         </th>
         <td className="is-num">
-          <Money value={section.subtotal} strong />
+          {/* The subtotal opens the lines that make it, whether or not the
+              section is expanded. A reader who takes a figure off the column
+              without opening anything is exactly who needs the way in. */}
+          <Figure onOpen={onOpenSection(section)} label={section.subtotalLabel}>
+            <Money value={section.subtotal} strong />
+          </Figure>
         </td>
         <ShareCell amount={section.subtotal} revenue={revenue} />
       </tr>
@@ -368,7 +514,13 @@ function SectionBody({
           </tr>
         ) : (
           visible.map((line) => (
-            <LineRow key={line.key} line={line} revenue={revenue} onEnterCost={onEnterCost} />
+            <LineRow
+              key={line.key}
+              line={line}
+              revenue={revenue}
+              onEnterCost={onEnterCost}
+              onOpen={onOpenLine(section.key, line)}
+            />
           ))
         ))}
 
@@ -389,25 +541,31 @@ function SectionBody({
 function LineRow({
   line,
   revenue,
-  onEnterCost
+  onEnterCost,
+  onOpen
 }: {
   line: PnlLine
   revenue: number | null
   onEnterCost?: (items: UncostedStreamItem[]) => void
+  /** The drill-down, when the contract knows where this line's money is. */
+  onOpen?: () => void
 }): JSX.Element {
   // NOBODY RECORDED WHAT THIS COST — and unlike the row below it, that is
   // something the reader can fix from here. The words replace the figure for the
   // same reason "not known" does: $0.00 says the cost did not happen, and this
-  // cost happened. What is different is that the stream lines are named on the
-  // row, so the amount cell is a BUTTON that opens them for pricing rather than
-  // a dead statement. It is never hidden — `buildPnl` refuses to mark it
-  // `empty`, so the zero-line toggle cannot swallow it either.
+  // cost happened. It is never hidden — `buildPnl` refuses to mark it `empty`,
+  // so the zero-line toggle cannot swallow it either.
+  //
+  // THE CLICK NOW OPENS THE LINES RATHER THAN THE FORM. It used to go straight
+  // to the price fields, which was one click quicker and answered none of "which
+  // nights, which show, how many boxes" — the drill-down lists them and carries
+  // the same form one button away, so the operator prices what they can see. The
+  // old path stays as the fallback for a preload with no drill-down behind it:
+  // whatever else changes, this row must not stop being actionable.
   if (line.uncosted) {
     const items = line.uncostedItems ?? []
-    // The line PRINTS either way. Only the button needs the newer preload
-    // behind it, and a row that says nothing at all would be the bug this whole
-    // change exists to fix.
-    const clickable = !!onEnterCost && costEntryReady && items.length > 0
+    const priceHere = !!onEnterCost && costEntryReady && items.length > 0
+    const act = onOpen ?? (priceHere ? () => onEnterCost?.(items) : undefined)
     return (
       <tr className="fin-pnl-line is-uncosted">
         <th scope="row">
@@ -415,15 +573,19 @@ function LineRow({
           {line.detail && <em className="fin-pnl-detail">{line.detail}</em>}
         </th>
         <td className="is-num">
-          {clickable ? (
+          {act ? (
             <button
               type="button"
               className="fin-pnl-cost-btn mono"
-              onClick={() => onEnterCost?.(items)}
-              title={`Enter what ${line.label} cost — it is carried at nothing until you do`}
+              onClick={act}
+              title={
+                onOpen
+                  ? `Show the stream lines behind ${line.label} — none of them carries a cost yet`
+                  : `Enter what ${line.label} cost — it is carried at nothing until you do`
+              }
             >
               no cost recorded
-              <Icon name="Pencil" size={11} />
+              <Icon name={onOpen ? 'ChevronRight' : 'Pencil'} size={11} />
             </button>
           ) : (
             <span
@@ -449,6 +611,11 @@ function LineRow({
   // dropped rather than dividing an unknown by revenue, and the line is never
   // hidden — `buildPnl` refuses to mark an unavailable line `empty`, so the
   // zero-line toggle cannot swallow it either.
+  //
+  // It STILL OPENS, and what it opens is the part that is known — the nights
+  // this figure does cover, priced out — followed by the nights nothing can
+  // answer for, named. An unknown that drilled to an empty table would say the
+  // cost did not happen, which is the reading this whole flag exists to prevent.
   if (line.unavailable) {
     return (
       <tr className="fin-pnl-line is-unknown">
@@ -457,9 +624,14 @@ function LineRow({
           {line.detail && <em className="fin-pnl-detail">{line.detail}</em>}
         </th>
         <td className="is-num">
-          <span className="fin-money zero mono" title="This period has no packing record to count">
-            not known
-          </span>
+          <Figure onOpen={onOpen} label={line.label}>
+            <span
+              className="fin-money zero mono"
+              title="This period has no packing record to count"
+            >
+              not known
+            </span>
+          </Figure>
         </td>
         {revenue !== null && (
           <td className="is-num fin-pnl-share">
@@ -484,7 +656,9 @@ function LineRow({
         {line.detail && <em className="fin-pnl-detail">{line.detail}</em>}
       </th>
       <td className="is-num">
-        <Money value={line.amount} dash />
+        <Figure onOpen={onOpen} label={line.label}>
+          <Money value={line.amount} dash />
+        </Figure>
       </td>
       <ShareCell amount={line.amount} revenue={revenue} />
     </tr>
@@ -618,5 +792,155 @@ function UncostedModal({
         </p>
       </Note>
     </Modal>
+  )
+}
+
+/**
+ * FINANCE → COMPLETE P&L: the statement as a report you can open.
+ *
+ * This tab said "not built yet" for four releases, and the reason it gave was
+ * honest at the time: a complete P&L means streaming plus wholesale plus
+ * overhead, and two of those three are not recorded anywhere. That reason has
+ * not gone away and is still printed at the foot of this page — what changed is
+ * what the owner asked for, which was not the missing halves but the ability to
+ * READ the half that exists the way QuickBooks lets him read one: click a
+ * figure, land on the transactions inside it, click one of those, see the
+ * record.
+ *
+ * So this is the streaming statement with every figure on it openable, over a
+ * range this tab picks for itself. It is deliberately NOT the Streaming tab
+ * again: no calendar, no widgets, no import panel, no unattributed pile. Those
+ * answer "what happened and can I trust the file"; this answers "what does this
+ * number consist of", and a page that tried to do both would bury the statement
+ * under the apparatus around it.
+ *
+ * ONE READ, like every other finance screen. `streamView()` derives the days,
+ * the rollups and the reconciliation verdict in a single pass; the range is
+ * applied to the DAYS with the contract's own accumulator, so a range that lines
+ * up with a week produces that week's figures to the cent and the drill-down
+ * asks main about exactly the window on screen.
+ */
+export function CompletePnl(): JSX.Element {
+  const { can } = useSession()
+  // Entering a cost against a stream line is a STREAMING write — it edits
+  // `stream_items` — so it is gated on the streaming permission even though the
+  // click happens on the P&L.
+  const canCostLines = can('streaming.manage')
+
+  const [view, setView] = useState<StreamingFinanceView | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [attempt, setAttempt] = useState(0)
+  /** Null is all time, the same null the Streaming tab's range uses. */
+  const [range, setRange] = useState<DayRange | null>(null)
+
+  useEffect(() => {
+    let alive = true
+    setLoading(true)
+    setError(null)
+    ;(async () => {
+      try {
+        const next = await finance.streamView()
+        if (alive) setView(next)
+      } catch (err) {
+        if (alive) setError(err instanceof Error ? err.message : 'The P&L could not be read.')
+      } finally {
+        if (alive) setLoading(false)
+      }
+    })()
+    return () => {
+      alive = false
+    }
+  }, [attempt])
+
+  // A ledger import or a cost entered on another machine changes every figure
+  // here. Reuses the retry counter rather than adding a second way to reload.
+  useLiveRefresh(LIVE.finance, () => setAttempt((n) => n + 1))
+
+  const totals = useMemo(() => totalsForRange(view?.days ?? [], range), [view, range])
+  const covered = useMemo(() => coveredRange(view?.days ?? []), [view])
+  const rangeLabel = range
+    ? dayRangeLabel(range.from, range.to)
+    : covered
+      ? `All time · ${dayRangeLabel(covered.from, covered.to)}`
+      : 'All time'
+
+  if (loading) return <CenterLoader />
+
+  if (error || !view) {
+    return (
+      <Note tone="danger" icon="AlertTriangle" role="alert">
+        <b>The P&amp;L could not be read.</b>
+        <p>{error ?? 'Nothing came back.'}</p>
+        <Button size="sm" icon="RefreshCw" onClick={() => setAttempt((a) => a + 1)}>
+          Try again
+        </Button>
+      </Note>
+    )
+  }
+
+  return (
+    <div className="fin-stream">
+      {/* Reconciliation first and unconditionally. If the rows do not add up,
+          nothing below means what it says — and this is the one screen whose
+          whole promise is that every figure can be opened and checked. */}
+      {!view.reconciled && (
+        <Note tone="danger" icon="AlertTriangle" role="alert">
+          <b>These numbers do not add up — do not use them yet.</b>
+          <p>
+            {view.reconcileNote ??
+              'Some rows are neither on a day nor in the unattributed pile, so the totals below are incomplete.'}
+          </p>
+          <p>Re-attribute on the Streaming tab, and re-import if that does not clear it.</p>
+        </Note>
+      )}
+
+      <section className="fin-head" aria-label="Complete profit and loss">
+        <div className="fin-head-top">
+          <h2>Complete P&amp;L</h2>
+          <span className="fin-head-scope">{rangeLabel}</span>
+        </div>
+        <RangeBar range={range} weeks={view.weeks} months={view.months} onRange={setRange} />
+      </section>
+
+      <section className="fin-stmt" aria-label={`Profit and loss for ${rangeLabel}`}>
+        {totals.dayCount === 0 ? (
+          // Every figure would be zero, and a full statement of zeros invites the
+          // reader to wonder which of them is a finding. None of them is.
+          <p className="fin-detail-empty">
+            <Icon name="Moon" size={14} />
+            No show landed in this range, so there is no statement for it. Widen the range or pick
+            a month with shows in it.
+          </p>
+        ) : (
+          <PnlStatement
+            money={totals}
+            range={range}
+            rangeLabel={rangeLabel}
+            /* Only offered to somebody who may write a stream line, and the
+               whole view is re-read afterwards rather than patched: a cost lands
+               on cost of goods, gross profit, net profit and every rollup that
+               contains the day. */
+            onCosted={canCostLines ? () => setAttempt((n) => n + 1) : undefined}
+          />
+        )}
+      </section>
+
+      {/* THE HALF THAT IS NOT HERE, said plainly and at the bottom rather than
+          instead of the statement. The old placeholder was right that adding
+          streaming to an empty wholesale figure would report a profit that is
+          too high; it was wrong to withhold the statement that does exist over
+          it. Both facts fit on one page. */}
+      <Note tone="info" icon="Info">
+        <b>This is the streaming business, complete down to net profit.</b>
+        <p>
+          Cost of goods, platform fees, postage, packaging and anything typed against a day are all
+          in the bottom line above, and every figure on it opens onto the records behind it.
+          Wholesale is not built and no overhead — rent, wages, software — is recorded anywhere
+          yet, so neither is in this total. When they are, they join it here rather than becoming a
+          second P&amp;L.
+        </p>
+      </Note>
+    </div>
   )
 }

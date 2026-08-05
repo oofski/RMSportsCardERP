@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Icon } from '../../components/Icon'
 import { EmptyState } from '../../components/ui'
+import { CompletePnl } from './Pnl'
 import { RatesTab } from './RatesTab'
 import { StreamingTab } from './StreamingTab'
 import { financeReady } from './api'
@@ -8,18 +9,25 @@ import { financeReady } from './api'
 /**
  * Finance — the module shell.
  *
- * Four tabs, two of them real. Streaming is built because it is where the money
- * is: the Whatnot ledger is the only complete record of what the business earns,
- * and until it is attributed to shows there is nothing to build a P&L on. Fees &
- * rates is built because Whatnot's ledger pays NET — the gross on the Streaming
- * tab is derived from it, and the commission rate is the one input that
- * derivation needs and the export does not carry. It lives here rather than in
- * Admin on the owner's call: the setting belongs beside the P&L it decides, not
- * three modules away from it.
+ * Four tabs, three of them real. Streaming is built because it is where the
+ * money is: the Whatnot ledger is the only complete record of what the business
+ * earns, and until it is attributed to shows there is nothing to build a P&L on.
+ * Fees & rates is built because Whatnot's ledger pays NET — the gross on the
+ * Streaming tab is derived from it, and the commission rate is the one input
+ * that derivation needs and the export does not carry. It lives here rather than
+ * in Admin on the owner's call: the setting belongs beside the P&L it decides,
+ * not three modules away from it.
  *
- * Wholesale and the complete P&L say plainly that they are not here yet rather
- * than showing a plausible-looking zero — a finance screen that invents a number
- * is worse than one that admits it has none.
+ * The complete P&L is now the STATEMENT AS A REPORT YOU CAN OPEN — every figure
+ * on it drills to the records that add up to it, which is what the owner asked
+ * for when he asked for it to work like QuickBooks. It said "not built yet" for
+ * four releases on the grounds that a complete P&L needs wholesale and overhead
+ * too; that is still true and the page says so at its foot, but withholding the
+ * half that does exist bought nobody anything.
+ *
+ * Wholesale still says plainly that it is not here yet rather than showing a
+ * plausible-looking zero — a finance screen that invents a number is worse than
+ * one that admits it has none.
  */
 type FinanceTab = 'streaming' | 'rates' | 'wholesale' | 'pnl'
 
@@ -72,16 +80,7 @@ export function FinanceModule(): JSX.Element {
           detail="Nothing is being calculated for it, so there is deliberately nothing on screen. When it lands it will read from the same ledger discipline as Streaming: real rows, attributed, or visibly not attributed."
         />
       ) : (
-        <NotBuiltYet
-          icon="BarChart3"
-          title="The complete P&L is not built yet"
-          lead="This is where streaming and wholesale profit meet everything else the business spends — rent, wages, supplies, the costs no show is responsible for."
-          // Streaming's own statement is now complete down to net profit,
-          // including cost of goods, so the old reason this tab was empty no
-          // longer holds. The remaining reason is the honest one and it is
-          // stated: Wholesale has no numbers at all yet.
-          detail="Streaming already runs its own full P&L, cost of goods included. What is missing is the other half — Wholesale is not built, and no overhead is recorded anywhere yet. Adding those two up while one of them is empty would produce a profit figure that is simply too high."
-        />
+        <CompletePnl />
       )}
     </div>
   )

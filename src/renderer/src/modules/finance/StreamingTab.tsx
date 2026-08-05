@@ -277,6 +277,7 @@ export function StreamingTab(): JSX.Element {
       <RangeStatement
         totals={totals}
         label={rangeLabel}
+        range={range}
         spanDays={range ? daySpan(range.from, range.to) : null}
         day={singleDay}
         waiting={waitingInRange}

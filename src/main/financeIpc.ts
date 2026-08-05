@@ -32,6 +32,9 @@ import type {
   StreamingFinanceView,
   WhatnotRatePeriod
 } from '@shared/financeStreaming'
+import type { PnlDetail, PnlDrillRequest } from '@shared/pnlDrill'
+import { emptyPnlDetail } from '@shared/pnlDrill'
+import { pnlDetail } from './db/pnlDrill'
 import {
   deleteImport,
   emptyView,
@@ -94,6 +97,31 @@ export function registerFinanceIpc(): void {
     if (filter?.unattributed) clean.unattributed = true
     if (filter?.limit !== undefined) clean.limit = Number(filter.limit)
     return listRows(clean)
+  })
+
+  /**
+   * The records behind one figure on the P&L, over the range on screen.
+   *
+   * Gated like every other read — without `module.finance` it resolves to an
+   * empty payload of the right shape rather than an error, so the drill-down
+   * takes the same path through the screen as a range with nothing in it.
+   *
+   * ONE handler for every line, because there is ONE mapping: `@shared/pnlDrill`
+   * says where each line id's money lives and `db/pnlDrill` goes and gets it. A
+   * channel per source would put that mapping in as many places as there are
+   * sources, and a P&L line added with no drill-down would then be a silent dead
+   * click rather than a failing enumeration test.
+   */
+  ipcMain.handle(IPC.finPnlDetail, (_e, req: PnlDrillRequest): PnlDetail => {
+    const lineId = str(req?.lineId).trim()
+    if (!can('module.finance')) return emptyPnlDetail(lineId)
+    // Both bounds are coerced to strings and validated inside `pnlDetail` — a
+    // range is two values off the wire, and this is the trust boundary.
+    return pnlDetail({
+      lineId,
+      start: req?.start == null ? null : str(req.start).trim(),
+      end: req?.end == null ? null : str(req.end).trim()
+    })
   })
 
   // ---- Writes (finance.manage) --------------------------------------------

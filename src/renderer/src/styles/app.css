@@ -13973,6 +13973,243 @@ button.sor-team:focus-visible {
   gap: 6px 18px;
 }
 
+/* ==========================================================================
+   Drilling into the statement
+   --------------------------------------------------------------------------
+   Every money figure on the P&L opens onto the records behind it. The
+   affordance is deliberately QUIET — a dotted underline that fills in on hover
+   — because twenty amounts shouting "click me" would stop the page reading as a
+   statement, and the statement's legibility is the one thing this feature is
+   not allowed to cost. Anyone who wants to check a number will try clicking it;
+   anyone reading the column does not need to be told they could.
+   ========================================================================== */
+.fin-pnl-amt {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  border-bottom: 1px dotted var(--border-strong);
+}
+.fin-pnl-amt:hover {
+  border-bottom-color: var(--brand-600);
+}
+.fin-pnl-amt:hover .fin-money,
+.fin-pnl-amt:hover .fin-profit {
+  color: var(--brand-700);
+}
+.fin-pnl-amt:focus-visible {
+  outline: 2px solid var(--brand-500);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+.fin-drill {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+/* The trail across the top. It is the whole navigation model: there is no
+   router and no history stack, so a reader who cannot see where they are has no
+   way back at all. Every crumb but the last is a control. */
+.fin-crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+.fin-crumb-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  color: var(--text-2);
+}
+.fin-crumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--brand-700);
+  cursor: pointer;
+}
+.fin-crumb:hover {
+  background: var(--surface-3);
+}
+.fin-crumb:focus-visible {
+  outline: 2px solid var(--brand-500);
+  outline-offset: 1px;
+}
+/* Where you are. Not a button, because a control that goes nowhere is worse
+   than a label. */
+.fin-crumb.is-here {
+  color: var(--text);
+  cursor: default;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* WHAT PERIOD THIS IS. Printed on every drill view rather than only at the top
+   of the tab: a list of records with no dates on it reads as "all of them", and
+   the single most convincing way to be wrong here is to answer a month's line
+   with a day's rows. */
+.fin-drill-scope {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-2);
+}
+
+.fin-drill-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 9px;
+  border-bottom: 1px solid var(--border-strong);
+  min-width: 0;
+}
+.fin-drill-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.fin-drill-title h4 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fin-drill-figure {
+  flex: none;
+  font-size: 15px;
+}
+/* MODELLED, NOT TRANSACTED. The badge exists so nobody reads a list of nightly
+   arithmetic as a list of transactions — the packaging lines have no rows
+   anywhere, and saying so on the heading is cheaper than discovering it after
+   going looking for them. */
+.fin-drill-tag {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--text-2);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* The reconciliation, stated on every view. Quiet when it holds — it is the
+   expected outcome, and a green banner on every click is wallpaper — and the
+   failing case takes a full danger note instead, because a detail list that
+   disagrees with its own line is not a detail worth reading. */
+.fin-drill-recon {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.fin-drill-recon > svg {
+  flex: none;
+  color: var(--success);
+}
+.fin-drill-recon .fin-money {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* Prose under the heading: what a figure is derived from, what an empty list
+   means, what a period could not cover. Wraps, unlike a statement line detail,
+   because all of it is sentences. */
+.fin-drill-note {
+  margin: 0;
+  max-width: 74ch;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-2);
+}
+/* The arithmetic the statement printed beside the label, carried through so the
+   drill view and the line agree about what the figure claims to be. */
+.fin-drill-basis {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text);
+  font-weight: 500;
+}
+
+/* The nights nothing can answer for, kept apart from the ones that add up.
+   Folding them into the same list would make an unknown look like a zero, which
+   is the exact misreading the whole `unavailable` flag exists to prevent. */
+.fin-drill-unknown {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+}
+
+/* The record itself — the end of the trail. Two columns on anything but a
+   narrow window, because these are label/value pairs and a person reaching this
+   level is comparing them against something else on their screen. */
+.fin-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 1px;
+  margin: 0;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.fin-fact {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 11px;
+  background: var(--surface);
+  min-width: 0;
+}
+.fin-fact dt {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+.fin-fact dd {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
 /* The carried-back marker: deliberately quiet. A settlement row landing on the
    show that caused it is the CORRECT outcome, so the minus glyph carries the
    sign here and the danger ink is dropped — this is an explanation, not an
@@ -14048,18 +14285,70 @@ button.sor-team:focus-visible {
   overflow-y: auto;
   min-width: 0;
 }
+/* The row is now a child of its <li> rather than the <li> itself, because on the
+   P&L drill-down it is a BUTTON — the whole row opens the record behind it, and
+   a row this wide with a small affordance is a miss waiting to happen. The li
+   carries the list semantics; this carries the layout, whichever element it
+   turns out to be. */
 .fin-row {
   display: flex;
+  width: 100%;
   align-items: center;
   gap: 9px;
   padding: 5px 8px;
+  border: 0;
   border-radius: 6px;
+  background: none;
+  color: var(--text);
+  font: inherit;
   font-size: 12.5px;
+  text-align: left;
   min-width: 0;
 }
-/* Zebra against the statement's own ground, which is --surface. */
-.fin-row:nth-child(odd) {
+/* Zebra against the statement's own ground, which is --surface. Counted on the
+   list item, so it survives the row being a button, a span, or whatever the
+   next drill view needs. */
+.fin-rows > li:nth-child(odd) > .fin-row {
   background: var(--surface-2);
+}
+.fin-row.is-openable {
+  cursor: pointer;
+}
+.fin-row.is-openable:hover {
+  background: var(--brand-soft);
+}
+.fin-row.is-openable:focus-visible {
+  outline: 2px solid var(--brand-500);
+  outline-offset: -2px;
+}
+.fin-row.is-openable:disabled {
+  cursor: default;
+}
+/* The first thing on a composition or stream-item row: the name, which is what
+   the reader is scanning for. Body ink rather than the muted ledger message. */
+.fin-row-msg.is-lead {
+  color: var(--text);
+  font-weight: 500;
+}
+/* A qualifier riding beside the name — a quantity, a caveat, an expense note. */
+.fin-row-note {
+  flex: none;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-2);
+  font-size: 11.5px;
+}
+/* Words where a figure would be. Right-aligned into the money column so the
+   column keeps its edge, italic so it never reads as an amount. */
+.fin-row-words {
+  flex: none;
+  margin-left: auto;
+  min-width: 92px;
+  text-align: right;
+  font-style: italic;
+  font-size: 11.5px;
 }
 .fin-row-time {
   flex: none;

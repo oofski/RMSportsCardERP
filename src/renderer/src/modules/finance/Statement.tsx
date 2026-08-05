@@ -14,6 +14,7 @@ import { BucketChip, Money, moneyText, plural } from './bits'
 import { shortDayLabel, timeLabel } from './time'
 import { LedgerRows } from './LedgerRows'
 import { PnlStatement } from './Pnl'
+import type { DayRange } from './range'
 
 /**
  * The statement for whatever range is selected.
@@ -51,6 +52,7 @@ export function CarriedMark({ rows, amount }: { rows: number; amount: number }):
 export function RangeStatement({
   totals,
   label,
+  range,
   spanDays,
   day,
   waiting,
@@ -61,6 +63,10 @@ export function RangeStatement({
   totals: StreamFinanceTotals
   /** How the range reads in words — "Jul 19 – Jul 27, 2026". */
   label: string
+  /** The same range as figures, so a click on one of them asks main for the
+   *  records inside exactly this window rather than guessing at one. Null is
+   *  all time. */
+  range: DayRange | null
   /** Calendar days the range covers, or null for all time. Printed beside the
    *  days that actually had a show, because "6 days streamed" out of 9 and out
    *  of 90 are very different months. */
@@ -139,7 +145,7 @@ export function RangeStatement({
             : 'Nothing was streamed in this range, so there is no statement for it. Widen the range or pick a month with shows in it.'}
         </p>
       ) : (
-        <PnlStatement money={totals} onCosted={onCosted} />
+        <PnlStatement money={totals} range={range} rangeLabel={label} onCosted={onCosted} />
       )}
 
       <WaitingPanel days={waiting} onReattribute={onReattribute} onPickDay={onPickDay} />

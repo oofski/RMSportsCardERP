@@ -340,6 +340,34 @@ export function emptyPnlDetail(lineId: string, label = ''): PnlDetail {
   }
 }
 
+/**
+ * A drilled stream line, in the shape the cost-entry form already takes.
+ *
+ * The form exists, it is the one on the statement's uncosted rows, and a second
+ * one reached from the drill-down would be a second chance to disagree about
+ * which unit a price is per. So the record is narrowed to the fields that form
+ * needs rather than the form being taught a new type.
+ */
+export function asUncostedStreamItem(rec: PnlStreamItemRecord): {
+  id: string
+  kind: 'break' | 'giveaway'
+  streamDate: string
+  sessionTitle: string
+  quantity: number
+  priceUnit: StockUnit | null
+  reconciled: boolean
+} {
+  return {
+    id: rec.id,
+    kind: rec.kind,
+    streamDate: rec.streamDate,
+    sessionTitle: rec.sessionTitle,
+    quantity: rec.quantity,
+    priceUnit: rec.priceUnit,
+    reconciled: rec.reconciled
+  }
+}
+
 /** The records a payload holds, whatever kind it is — for the "N rows total $X"
  *  line, which has to say the same thing on all four. */
 export function pnlDetailCount(detail: PnlDetail): number {
