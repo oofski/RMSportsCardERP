@@ -174,10 +174,6 @@ export function HomeModule(): JSX.Element {
               <div className="panel-head">
                 <h3>Welcome to RM Operations</h3>
               </div>
-              <p className="muted" style={{ margin: 0, fontSize: 13.5 }}>
-                Your workspace for RM Cardz. Use the modules below to get to your work. As new
-                modules ship, they'll appear here automatically.
-              </p>
             </div>
           )}
 
@@ -219,7 +215,6 @@ export function HomeModule(): JSX.Element {
             <div className="panel-card tint hilite">
               <div className="hl-label">Avg hours / active member</div>
               <div className="hl-val">{formatHours(stats.avgPerActive)}</div>
-              <div className="text-sm muted">Across {stats.active} active team members this period.</div>
             </div>
           )}
 

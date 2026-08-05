@@ -10,7 +10,7 @@ import { api } from '../lib/api'
  * must choose their own password before reaching the app.
  */
 export function ChangePasswordScreen(): JSX.Element {
-  const { user, refresh, logout } = useSession()
+  const { refresh, logout } = useSession()
   const toast = useToast()
   const [current, setCurrent] = useState('')
   const [next, setNext] = useState('')
@@ -49,9 +49,6 @@ export function ChangePasswordScreen(): JSX.Element {
       <div className="auth-panel">
         <form className="auth-card" onSubmit={submit}>
           <h2>Set your password</h2>
-          <p className="sub">
-            Hi {user?.firstName}, choose a password to secure your account before continuing.
-          </p>
           <div className="auth-note">
             Enter the temporary password from your invite email, then pick a new one.
           </div>

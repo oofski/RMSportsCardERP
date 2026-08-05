@@ -195,17 +195,19 @@ export function InventoryOverview({
           what goes unnoticed for a quarter. So it is said out loud. */}
       {stats.layerGaps.length > 0 && (
         <div className="zerocost-banner">
-          <Icon name="Layers" size={17} />
+          {/* The WHY hangs off the icon rather than sitting under the headline:
+              the count and the list of shelves are what has to be read every
+              time, and the explanation is only wanted once. */}
+          <Icon
+            name="Layers"
+            size={17}
+            title="Valued at the shelf count using average cost. Re-count or adjust to restore a real basis."
+          />
           <div className="zerocost-main">
             <strong>
               {stats.layerGaps.length} shelf{stats.layerGaps.length === 1 ? '' : 'ves'} does not
               match its cost layers.
             </strong>
-            <span>
-              These are valued at the count on the shelf, using the product&rsquo;s average cost
-              where there is no purchase price to read. Re-count them, or adjust the stock, to put
-              the cost basis back on real numbers.
-            </span>
             <ul>
               {stats.layerGaps.slice(0, 6).map((g) => (
                 <li key={`${g.id}-${g.location}`}>
@@ -290,7 +292,7 @@ export function InventoryOverview({
       </div>
 
       {orderedCategories.length === 0 ? (
-        <EmptyState icon="Boxes" title="No inventory yet" message="Add products and stock to see category totals." />
+        <EmptyState icon="Boxes" title="No inventory yet" />
       ) : (
         <div className="cat-grid">
           {orderedCategories.map((c) => (
@@ -447,24 +449,9 @@ function ZeroCostBanner({
             : `${formatMoney(total)} of the Spread above is stock with no cost recorded.`}
         </strong>
         <span>
-          {outside ? (
-            <>
-              {rows.length} box{rows.length === 1 ? '' : 'es'} on the shelf {rows.length === 1 ? 'has' : 'have'}{' '}
-              no cost recorded, so {rows.length === 1 ? 'it counts' : 'they count'} in Inventory
-              value but not in Spread — there is nothing to measure a spread against yet.{' '}
-              {canManage
-                ? 'Type what one cost and it joins the Spread from here on.'
-                : 'Recording the cost needs the Manage inventory permission.'}
-            </>
-          ) : (
-            <>
-              {rows.length} product{rows.length === 1 ? '' : 's'} sits on the shelf at $0.00, so its
-              full market value counts as profit.{' '}
-              {canManage
-                ? 'Type what one unit cost and the stock is carried at that from here on.'
-                : 'Setting the real cost needs the Manage inventory permission.'}
-            </>
-          )}
+          {outside
+            ? 'No cost recorded, so these count in Inventory value but not in Spread. Type what one cost.'
+            : 'On the shelf at $0.00, so all of their market value counts as profit. Type what one unit cost.'}
         </span>
         <ul>
           {rows.slice(0, SHOWN).map((z) => (
@@ -492,8 +479,7 @@ function ZeroCostBanner({
               )}
               {settled[z.id]?.state === 'stuck' && (
                 <em className="zerocost-stuck">
-                  Still at $0.00 — its cost layers cannot be re-based from here. Adjust this
-                  one&rsquo;s stock to put a real basis on it.
+                  Still $0.00 — adjust this product&rsquo;s stock to give it a real cost basis.
                 </em>
               )}
             </li>

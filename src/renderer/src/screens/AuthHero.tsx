@@ -2,21 +2,9 @@ import { Brand } from '../components/Brand'
 import { Icon } from '../components/Icon'
 
 const POINTS = [
-  {
-    icon: 'ShieldCheck',
-    title: 'Roles & permissions',
-    text: 'Owner, Operations and Staff access — controlled from one place.'
-  },
-  {
-    icon: 'Users',
-    title: 'Your whole team',
-    text: 'Add employees, invite them by email, and track their hours.'
-  },
-  {
-    icon: 'Rocket',
-    title: 'Built to grow',
-    text: 'Nine modules — from orders to forecasting — arriving over time.'
-  }
+  { icon: 'ShieldCheck', title: 'Roles & permissions' },
+  { icon: 'Users', title: 'Your whole team' },
+  { icon: 'Rocket', title: 'Built to grow' }
 ]
 
 export function AuthHero(): JSX.Element {
@@ -25,9 +13,6 @@ export function AuthHero(): JSX.Element {
       <Brand onNavy gold />
       <div>
         <h1>The operations backbone for RM Cardz.</h1>
-        <p className="tagline">
-          One place to run the business — employees, orders, ledger, invoicing and more.
-        </p>
       </div>
       <div className="auth-hero-points">
         {POINTS.map((p) => (
@@ -37,7 +22,6 @@ export function AuthHero(): JSX.Element {
             </span>
             <div>
               <h4>{p.title}</h4>
-              <p>{p.text}</p>
             </div>
           </div>
         ))}

@@ -90,10 +90,7 @@ export function ShowCard(): JSX.Element | null {
       {!hasDataset ? (
         <div className="show-empty">
           <Icon name="UploadCloud" size={22} />
-          <p>
-            Nothing is loaded. Import the night&apos;s packing slips and every break, package and
-            card shows up for the floor.
-          </p>
+          <p>Nothing loaded. Import the night&apos;s packing slips to fill the floor.</p>
           {/* The import lives in Admin now — the shipping module is what the
               bench needs, and loading a night is the lead's job. Sending this
               button at the workspace would land on the bench with no way to
@@ -159,7 +156,7 @@ export function ShowCard(): JSX.Element | null {
               <Icon name={doc ? 'FileCheck' : 'FileX'} size={13} />
               {doc
                 ? `Slip attached · ${doc.pageCount} pages`
-                : 'No slip on this machine — re-import it in Admin › Shipping setup to work against the paper'}
+                : 'No slip on this machine — re-import in Admin › Shipping'}
             </span>
             <Button size="sm" icon="ArrowRight" onClick={() => navigate('fulfillment')}>
               Open shipping

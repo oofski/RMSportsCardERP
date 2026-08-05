@@ -219,9 +219,17 @@ export function OwnerBoard(): JSX.Element | null {
                 label="supplies low"
                 tone={board.inventory.supplyLowCount > 0 ? 'warn' : 'ok'}
               />
-              {/* Below zero is not "low" — it is a count that is wrong, and it
-                  only happens because the shipping checklist deducts past empty
-                  on purpose. It earns the loud colour. */}
+              {/* Below zero is not "low" — it is a count that is wrong. The
+                  shipping checklist that used to deduct past empty is gone, and
+                  every remaining hand-driven path refuses to cross zero
+                  (`useSupply` and `adjustSupply` both reject the movement). What
+                  can still land here is the sync rebuild:
+                  `rebuildDerivedSupplyStock` recovers the count as the SUM of
+                  every movement row and writes it with no floor, so two machines
+                  each consuming a legal amount offline — or a legacy `ship_use`
+                  row from the removed checklist still sitting in the table — can
+                  settle below zero once they merge. That is a real disagreement
+                  between the books and the shelf, so it earns the loud colour. */}
               <Flag
                 n={board.inventory.supplyNegativeCount}
                 label="below zero"

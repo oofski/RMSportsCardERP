@@ -58,7 +58,7 @@ export function LiveBadge(): JSX.Element | null {
       return {
         tone: 'offline',
         label: 'Offline',
-        title: `Cannot reach the relay — ${status.lastError ?? 'unknown error'}. Your work is saved here and goes up when the connection returns.`
+        title: 'Cannot reach the relay. Work is saved here and uploads when the connection returns.'
       }
     }
     if (status.pending > 0) {

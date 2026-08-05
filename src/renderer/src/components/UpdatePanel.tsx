@@ -185,14 +185,14 @@ export function UpdatePanel({ onClose }: { onClose: () => void }): JSX.Element {
 
       {phase === 'available' && !isWin && (
         <div className="auth-note mt-16">
-          Downloads the new installer — open it and drag the app to Applications to finish updating.
+          Open the installer and drag the app to Applications to finish.
         </div>
       )}
 
       <p className="muted text-sm mt-16">
         {isWin
           ? 'Updates are delivered from the RM Cardz release channel and install automatically.'
-          : 'Updates are delivered from the RM Cardz release channel. This build downloads the new version for you to reinstall — macOS only allows an app to replace itself when it is code-signed by Apple.'}
+          : 'macOS builds cannot self-replace — download, then reinstall over the old app.'}
       </p>
     </Modal>
   )

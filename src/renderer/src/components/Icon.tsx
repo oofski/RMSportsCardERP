@@ -283,14 +283,26 @@ export function Icon({
   name,
   size = 18,
   className,
-  strokeWidth = 2
+  strokeWidth = 2,
+  title
 }: {
   name: string
   size?: number
   className?: string
   strokeWidth?: number
+  /**
+   * Hover text, as an SVG <title> CHILD rather than a title attribute — SVG has
+   * no title attribute, so the attribute form draws no tooltip. lucide renders
+   * whatever children it is given inside the <svg>, which keeps the icon a
+   * direct child of its container and leaves every `> svg` rule intact.
+   */
+  title?: string
 }): JSX.Element | null {
   const Cmp = MAP[name]
   if (!Cmp) return null
-  return <Cmp size={size} className={className} strokeWidth={strokeWidth} />
+  return (
+    <Cmp size={size} className={className} strokeWidth={strokeWidth}>
+      {title ? <title key="t">{title}</title> : null}
+    </Cmp>
+  )
 }

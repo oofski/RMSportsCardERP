@@ -48,7 +48,6 @@ export function LoginScreen(): JSX.Element {
       <div className="auth-panel">
         <form className="auth-card" onSubmit={submit}>
           <h2>Sign in</h2>
-          <p className="sub">Welcome back. Enter your credentials to continue.</p>
           {error && <div className="auth-alert">{error}</div>}
 
           <Field label="Company ID or email">
