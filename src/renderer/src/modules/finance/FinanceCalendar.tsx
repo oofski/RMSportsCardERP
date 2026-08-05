@@ -383,7 +383,9 @@ function DayCell({
         {day && waiting && (
           <span
             className="fin-cell-flag"
-            title="Arrived outside the logged hours — probably a second show. Click for detail."
+            // With the amount. A flag that will not say how much is a flag nobody
+            // can triage — a stray $4 and a stray $4,000 want different reactions.
+            title={`${formatMoney(waiting.amount)} arrived outside the logged hours — probably a second show. Click for detail.`}
           >
             <Icon name="AlertTriangle" size={10} />
           </span>

@@ -58,7 +58,12 @@ export function LiveBadge(): JSX.Element | null {
       return {
         tone: 'offline',
         label: 'Offline',
-        title: 'Cannot reach the relay. Work is saved here and uploads when the connection returns.'
+        // The specific relay error is the whole value of this tooltip. "Cannot
+        // reach the relay" is already on the badge; what a person needs in order
+        // to DO anything about it is which failure it was.
+        title:
+          'Cannot reach the relay. Work is saved here and uploads when the connection returns.' +
+          (status.lastError ? ` (${status.lastError})` : '')
       }
     }
     if (status.pending > 0) {

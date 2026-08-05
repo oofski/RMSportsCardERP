@@ -162,7 +162,11 @@ export function InviteModal({
         </>
       ) : (
         <p className="muted text-sm mt-16">
-          No email on this account — read these out. They sign in with the Company ID above.
+          No email on this account — read these out. They sign in with the Company ID above.{' '}
+          {/* The shared-bench case needs this MORE than the email case, not less:
+              nobody is going to be prompted, so whether the password is permanent
+              is the one thing the person reading it out has to know. */}
+          {passwordNote}
         </p>
       )}
     </Modal>

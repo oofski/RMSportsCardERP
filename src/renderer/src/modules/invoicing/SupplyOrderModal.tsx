@@ -94,13 +94,9 @@ export function SupplyOrderModal({
     }
   }
 
-  if (supplies.length === 0) {
-    return (
-      <Modal title="New supply order" onClose={onClose} footer={<Button variant="ghost" onClick={onClose}>Close</Button>}>
-        <p className="muted">Add a supply first, then you can place orders for it.</p>
-      </Modal>
-    )
-  }
+  // No empty-state branch. The button that opens this is disabled while there
+  // are no supplies and says why, so a modal explaining the same thing after the
+  // click was a second answer to a question already answered before it.
 
   return (
     <Modal

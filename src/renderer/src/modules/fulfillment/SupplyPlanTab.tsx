@@ -142,7 +142,8 @@ export function SupplyPlanTab(): JSX.Element {
             <b>
               {plan.unmappedRoles.length} of {plan.lines.length}
             </b>{' '}
-            Quantities are right; they cannot be costed until each one is linked to a supply.
+            lines have no supply linked. Quantities are right; they cannot be costed until each one
+            is linked to a supply.
           </span>
         </div>
       )}

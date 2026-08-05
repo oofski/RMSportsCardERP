@@ -223,8 +223,21 @@ export function InvoicingModule(): JSX.Element {
               <span className="po-page-stat-label">Committed</span>
             </div>
           </div>
-          {canManageSupplies && supplies.length > 0 && (
-            <Button icon="Package" onClick={() => setNewSupplyOpen(true)}>
+          {/* SHOWN AND DISABLED, not hidden. A button that disappears when there
+              are no supplies teaches nothing — somebody looking for "where do I
+              order supplies" finds nothing at all and concludes the app cannot.
+              Disabled with the reason on it answers the question instead. */}
+          {canManageSupplies && (
+            <Button
+              icon="Package"
+              disabled={supplies.length === 0}
+              title={
+                supplies.length === 0
+                  ? 'Add a supply on the Inventory → Supplies tab first — an order has to be for something.'
+                  : undefined
+              }
+              onClick={() => setNewSupplyOpen(true)}
+            >
               New supply order
             </Button>
           )}
