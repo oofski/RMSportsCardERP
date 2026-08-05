@@ -140,9 +140,6 @@ export const IPC = {
   shipSupplyPlan: 'shipping:supplies:plan',
   // The same plan with the supplies list behind it: cost, on-hand, shortfalls.
   shipSupplyPlanCosted: 'shipping:supplies:plan-costed',
-  // The floor's SOP checklist. Unlike the two above, ticking a step MOVES STOCK.
-  shipSop: 'shipping:sop',
-  shipSopSetStep: 'shipping:sop:set-step',
   // Say which supply row plays a role in a show's arithmetic.
   supplySetShipRole: 'supplies:ship-role',
   // The floor: who is at this bench, and the pick -> pack handoff.

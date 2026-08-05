@@ -402,99 +402,16 @@ export function getShipEvent(): ShipEvent {
   }
 }
 
-/**
- * Move a show's SOP checklist and its supply usage to a new date.
- *
- * The two tables key on the day, so changing the day without this leaves every
- * ticked step behind on a date no screen can reach — the checklist reads empty,
- * somebody re-ticks it, and the same night comes out of stock a second time.
- * Fixing a mistyped show date is routine, so this has to be routine too.
- *
- * Plain SQL rather than a call into shipSop: this file is imported BY that one.
- *
- * Declines rather than merges when the target day already carries rows. Two
- * shows' worth of consumption under one set of ids cannot be told apart
- * afterwards, and a silent merge is the version of that with no way back.
- */
-function rekeyShipSopDate(db: Database.Database, from: string, to: string): boolean {
-  if (!from || !to || from === to) return false
-  const taken = db
-    .prepare(
-      `SELECT 1 FROM ship_supply_usage WHERE event_date = ?
-        UNION SELECT 1 FROM ship_sop_steps WHERE event_date = ? LIMIT 1`
-    )
-    .get(to, to)
-  if (taken) return false
-  // The id embeds the date, so both have to move together.
-  db.prepare(
-    `UPDATE ship_sop_steps
-        SET id = ? || substr(id, length(?) + 1), event_date = ?
-      WHERE event_date = ?`
-  ).run(to, from, to, from)
-  db.prepare(
-    `UPDATE ship_supply_usage
-        SET id = ? || substr(id, length(?) + 1), event_date = ?
-      WHERE event_date = ?`
-  ).run(to, from, to, from)
-  // The supply-ledger rows carry the date in their ids too ('shipsop|date|...'),
-  // and `already` is read from the usage row rather than from these, so a stale
-  // one here is cosmetic — but a ledger that names the wrong night is still a
-  // ledger somebody will not trust.
-  db.prepare(
-    `UPDATE supply_transactions
-        SET id = 'shipsop|' || ? || substr(id, length(?) + 9)
-      WHERE id LIKE 'shipsop|' || ? || '|%'`
-  ).run(to, from, from)
-  return true
-}
-
 /** Overwrite the single event row. */
 export function setShipEvent(name: string, date: string): ShipEvent {
-  const db = getDb()
-  const nextName = str(name).trim()
-  const nextDate = str(date).trim()
-  const run = db.transaction(() => {
-    const prev = db.prepare(`SELECT name, date FROM ship_event WHERE id = 1`).get() as
-      | { name?: string; date?: string }
-      | undefined
-    const beforeDate = str(prev?.date).trim()
-    const beforeName = str(prev?.name).trim()
-    db.prepare(
+  getDb()
+    .prepare(
       `INSERT INTO ship_event (id, name, date, updated_at) VALUES (1, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET name = excluded.name,
                                        date = excluded.date,
                                        updated_at = excluded.updated_at`
-    ).run(nextName, nextDate, nowIso())
-    // Only a real move. Clearing the date leaves the history where it happened —
-    // the stock went out that day whether or not the show still names one.
-    // Whether the rows ACTUALLY moved, not whether the date changed. The rekey
-    // declines when the target day is occupied — which is exactly the collision
-    // the owner name exists to catch — so trusting "the date changed" here let
-    // the relabel below adopt the other show's rows and switch the guard off on
-    // the one path it was written for.
-    const moved = rekeyShipSopDate(db, beforeDate, nextDate)
-
-    // Keep the owner name current so the two-shows-on-one-day guard checks what
-    // this show is called NOW, not what it was called at import.
-    //
-    // Narrowly, though. Relabelling every row on the date is how a DIFFERENT
-    // show loading onto an occupied day quietly adopts the first show's rows —
-    // which is the exact collision the name exists to catch, defeated by the
-    // code meant to support it. So: rows that travelled here with us, or rows
-    // that still answer to the name we had a moment ago.
-    if (nextDate && nextName) {
-      const relabel = (table: string): void => {
-        db.prepare(
-          `UPDATE ${table} SET event_name = ?
-            WHERE event_date = ?
-              AND (event_name IS NULL OR event_name = '' OR event_name = ? OR ?)`
-        ).run(nextName, nextDate, beforeName || nextName, moved ? 1 : 0)
-      }
-      relabel('ship_sop_steps')
-      relabel('ship_supply_usage')
-    }
-  })
-  run()
+    )
+    .run(str(name).trim(), str(date).trim(), nowIso())
   return getShipEvent()
 }
 
@@ -1652,9 +1569,9 @@ export function renameShipImport(id: string, name: string): ShipImportRecord | n
  *
  * It used to be this one line, and the line was a lie the History tab had to
  * explain away: it removed the log row and left the show — the cards, the
- * claims, the chain edge, the supplies its checklist had already taken — exactly
- * where it was. Doing it properly means handing stock back, which means calling
- * into `shipSop.ts`, which imports this file. So it lives in
+ * claims, the chain edge — exactly where it was. Doing it properly means
+ * reaching into this file, `shippingDomain.ts` and the claim reads at once, and
+ * each of those is imported by one of the others. So it lives in
  * `./shipImportDelete.ts`, above all three, for the same reason `shipClaims.ts`
  * sits below `shipStations.ts`.
  */

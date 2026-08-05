@@ -12,15 +12,13 @@ import { listOrders } from './shippingDomain'
  *
  * ## Why this is its own file
  *
- * `shipStations.ts` owns the pick → pack protocol, and the last pick closes SOP
- * step 5, so it imports `shipSop.ts`. Steps 6 and 7 now wait for the packing to
- * finish, so `shipSop.ts` needs to ask how much packing is left — and asking
- * `shipStations.ts` would close a cycle between the two.
- *
- * The reads both of them need sit here instead, below both: how the live import
- * chain is walked, how one order's claims are found, and the two counts. Nothing
- * about the claim protocol changed — `shipStations.ts` re-exports these so a
- * caller still sees one module, and the cycle simply never exists.
+ * `shipStations.ts` owns the pick → pack protocol and is imported by half the
+ * module, so anything that both it and its own callers need cannot live in it
+ * without closing a cycle. The reads in that position sit here instead, one
+ * layer down: how the live import chain is walked, how one order's claims are
+ * found, and the two "how much is left" counts. Nothing about the claim protocol
+ * changed — `shipStations.ts` re-exports these, so a caller still sees one
+ * module and the cycle simply never exists.
  *
  * ## Both counts answer "what does the ROOM still owe"
  *
@@ -158,8 +156,8 @@ export function pickingRemaining(): number {
 /**
  * Orders the bench still owes a mailer, whoever is currently holding them.
  *
- * The sibling of `pickingRemaining`, asked of the other half of step 5, and it
- * has to be honest about the same four awkward cases:
+ * The sibling of `pickingRemaining`, asked of the other half of the bench, and
+ * it has to be honest about the same four awkward cases:
  *
  *   WAITING FOR ANYONE   handed over and sitting in the pack queue. Counted by
  *                        the handoff, so it counts whether or not anybody has
@@ -185,7 +183,7 @@ export function pickingRemaining(): number {
  * Readiness is not enough. An order whose cards were all ticked on the Orders
  * screen reads as ready to pack, and on a night nobody ever stood at a bench
  * that is true of every order in the show — counting those would leave a
- * one-person night unable to finish its own checklist, waiting on a packer who
+ * one-person night reading as permanently unfinished, waiting on a packer who
  * does not exist and cannot be summoned. So the evidence has to come from the
  * claims: a handoff, a packer's hands, or a rejection.
  */

@@ -160,7 +160,6 @@ const day: Record<string, unknown> = {
   shippingCharges: 0,
   giveawayShipping: 0,
   refundShipping: 0,
-  packingSupplies: 0,
   netShipping: 0,
   showBoost: 0,
   reversals: 0,

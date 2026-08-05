@@ -482,5 +482,217 @@ for (const gone of ['.floor-work {', '.floor-order {', '.floor-handle {', '.floo
   ok(!cssSrc.includes(gone), `and the stylesheet has dropped ${gone.replace(' {', '')}`)
 }
 
+// ---------------------------------------------------------------------------
+console.log('\n=== 13. the night is over: the bench says so, once ===')
+// ---------------------------------------------------------------------------
+// A picker cannot see the end of the night from the order in their hands — the
+// run in front of them empties the moment anybody else takes what is left. So
+// the handoff reports it, and the screen uses that to say "every order is
+// picked" and walk the picker off the bench.
+//
+// It used to be reported by the shipping checklist closing its fifth step,
+// which was a claimed row write. There is no step to tick now, so the fact is
+// read straight off `pickingRemaining`, and what has to be true of it is that it
+// is FALSE on every pick but the last and TRUE on that one.
+getDb().prepare(`UPDATE sync_state SET value = 'STATION-A' WHERE key = 'device_id'`).run()
+ship.importDataset(
+  parsePages(
+    [
+      slip('one', '9300120762602315706801', ['1 Boston Red Sox Order 1300000001 $10.00', BOX + '2']),
+      slip('two', '9300120762602315706802', ['1 Chicago Cubs Order 1300000002 $10.00', BOX + '2']),
+      slip('three', '9300120762602315706803', ['1 Houston Astros Order 1300000003 $10.00', BOX + '2'])
+    ],
+    { sport: 'mlb', eventName: 'Last pick', eventDate: '2026-08-04' }
+  ),
+  { filename: 'last-pick.pdf' }
+)
+ship.setShipEvent('Last pick', '2026-08-04')
+ok(domain.listOrders().length === 3, 'three fresh orders', String(domain.listOrders().length))
+
+const completions: boolean[] = []
+for (let i = 0; i < 3; i++) {
+  const next = stations.pickableOrders()[0]
+  stations.claimOrder(next.orderId, next.customerId, 'pick', null)
+  completions.push(stations.pickAdvance(next.customerId, null).pickingCompleted)
+}
+ok(
+  completions.join(',') === 'false,false,true',
+  'only the pick that emptied the room reports it',
+  completions.join(',')
+)
+ok(stations.pickingRemaining() === 0, 'and nothing is left to pick')
+// Picking done is not packing done. The three boxes are still stacked at the
+// mailing end, which is what the toast has to say alongside it.
+ok(stations.packQueue().length === 3, 'while three boxes still wait for a mailer',
+   String(stations.packQueue().length))
+
+// An empty workspace must never announce that it has been picked: there is
+// nothing to have picked. `pickAdvance` cannot even be reached without a
+// shipment, so the guard is asserted where it lives.
+ship.clearShipDataset()
+ok(domain.listOrders().length === 0, 'the workspace is empty')
+ok(
+  stations.pickAdvance('nobody', null).pickingCompleted === false,
+  'and an advance against a package that is gone claims nothing'
+)
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 14. orders come back in PDF PAGE ORDER ===')
+// ---------------------------------------------------------------------------
+// The owner's complaint, in one sentence: "it should be in order from page 1 of
+// the pdf onward per order". Every screen that walks orders reads `listOrders`,
+// so this is the one place it has to be true.
+//
+// The handles here are deliberately in the WRONG order alphabetically and the
+// slips are deliberately not one page each — zulu opens on page 1, alpha on
+// page 2, and mike's order runs across pages 3, 4 and 5. Sorting by anything
+// but the first page gets a different answer for at least one of them.
+const twoPage = (h: string, t: string, lines: string[]): string[] => [
+  slip(h, t, lines),
+  // A continuation page: the same customer, more items, no address block.
+  ['Whatnot Packing Slip 1/1', `To: ${h} From: rm_cardz`, 'QTY Name & Description Attributes Subtotal', ...lines].join(
+    '\n'
+  )
+]
+ship.importDataset(
+  parsePages(
+    [
+      slip('zulu', '9300120762602315706901', ['1 Boston Red Sox Order 1400000001 $10.00', BOX + '2']),
+      slip('alpha', '9300120762602315706902', ['1 Chicago Cubs Order 1400000002 $10.00', BOX + '2']),
+      ...twoPage('mike', '9300120762602315706903', [
+        '1 Houston Astros Order 1400000003 $10.00',
+        BOX + '3'
+      ]),
+      slip('bravo', '9300120762602315706904', ['1 Atlanta Braves Order 1400000004 $10.00', BOX + '3'])
+    ],
+    { sport: 'mlb', eventName: 'Page order', eventDate: '2026-08-05' }
+  ),
+  { filename: 'page-order.pdf' }
+)
+ship.setShipEvent('Page order', '2026-08-05')
+
+const handles = (rows: any[]): string => rows.map((o: any) => o.customer?.handle ?? o.handle).join(',')
+const walked = domain.listOrders()
+ok(
+  handles(walked) === 'zulu,alpha,mike,bravo',
+  'the walk follows the slip, not the alphabet and not the insert order',
+  handles(walked)
+)
+ok(
+  walked.map((o: any) => o.customer.pages[0]).join(',') === '1,2,3,5',
+  'which is first pages 1, 2, 3, 5 ascending',
+  walked.map((o: any) => JSON.stringify(o.customer.pages)).join(' ')
+)
+ok(
+  walked[2].customer.pages.length === 2,
+  "and a customer whose slip runs on sorts by where it BEGINS, carrying all its pages",
+  JSON.stringify(walked[2].customer.pages)
+)
+
+// The bench walks the same order. It used to rotate the list by a hash of the
+// station id so two pickers would not contend; page order and a rotation cannot
+// both be true, and the slip wins.
+ok(
+  handles(stations.pickableOrders()) === 'zulu,alpha,mike,bravo',
+  'the picking run is the same walk, unrotated',
+  handles(stations.pickableOrders())
+)
+getDb().prepare(`UPDATE sync_state SET value = 'STATION-Q' WHERE key = 'device_id'`).run()
+ok(
+  handles(stations.pickableOrders()) === 'zulu,alpha,mike,bravo',
+  'and a different station id no longer starts somewhere else',
+  handles(stations.pickableOrders())
+)
+getDb().prepare(`UPDATE sync_state SET value = 'STATION-A' WHERE key = 'device_id'`).run()
+
+// The Orders tab walks this list BY INDEX — Previous and Next move a cursor by
+// one, and its only transform is a filter — so page order in `listOrders` is
+// page order under the operator's hands. A source check, for the same reason
+// section 12's are: a `.sort(` creeping into the walker would silently undo
+// everything above and nothing else in the app compares the two.
+const walkerSrc2 = readSrc('src/renderer/src/modules/fulfillment/OrderWalker.tsx')
+ok(!walkerSrc2.includes('.sort('), 'the Orders tab does not re-order what it was handed')
+ok(
+  walkerSrc2.includes('run[index]'),
+  'it draws run[index] — a cursor into the list, in the list’s own order'
+)
+
+// --- an order with no pages ------------------------------------------------
+//
+// A customer the parser could not place — a hand-added row, or a slip whose page
+// markers did not survive. It must sort LAST (a walk starts on page 1) and it
+// must not throw on the way.
+getDb().prepare(`UPDATE ship_customers SET pages = '[]' WHERE id = 'alpha'`).run()
+const withOrphan = domain.listOrders()
+ok(withOrphan.length === 4, 'still four orders — nothing was dropped', String(withOrphan.length))
+ok(
+  handles(withOrphan) === 'zulu,mike,bravo,alpha',
+  'the pageless order sorts to the end rather than to the front',
+  handles(withOrphan)
+)
+// Every one of them pageless is the degenerate case, and the handle is what
+// keeps it stable — two machines rebuilding this list must agree.
+getDb().prepare(`UPDATE ship_customers SET pages = '[]'`).run()
+const allOrphans = domain.listOrders()
+ok(
+  handles(allOrphans) === 'alpha,bravo,mike,zulu',
+  'with nothing placed at all it falls back to the handle, in one stable order',
+  handles(allOrphans)
+)
+ok(
+  handles(domain.listOrders()) === handles(allOrphans),
+  'and the same list twice running is the same list'
+)
+
+// --- two stations, both walking page order ---------------------------------
+//
+// The rotation is gone, so both benches now read the SAME head. What stops them
+// being handed the same order is the filter that hides anything another station
+// holds — asserted here rather than argued, because it is now the only thing
+// doing that job.
+ship.importDataset(
+  parsePages(
+    [
+      slip('one', '9300120762602315707001', ['1 Boston Red Sox Order 1500000001 $10.00', BOX + '2']),
+      slip('two', '9300120762602315707002', ['1 Chicago Cubs Order 1500000002 $10.00', BOX + '2']),
+      slip('three', '9300120762602315707003', ['1 Houston Astros Order 1500000003 $10.00', BOX + '2']),
+      slip('four', '9300120762602315707004', ['1 Atlanta Braves Order 1500000004 $10.00', BOX + '2'])
+    ],
+    { sport: 'mlb', eventName: 'Two benches', eventDate: '2026-08-06' }
+  ),
+  { filename: 'two-benches.pdf' }
+)
+ship.setShipEvent('Two benches', '2026-08-06')
+
+const handedOut: string[] = []
+const takeAt = (station: string): string | null => {
+  getDb().prepare(`UPDATE sync_state SET value = ? WHERE key = 'device_id'`).run(station)
+  const got = stations.pickNext(null)
+  return got?.customerId ?? null
+}
+// Alternating, which is the worst case: each bench looks at a list the other has
+// just written to.
+for (let i = 0; i < 2; i++) {
+  const a = takeAt('BENCH-1')
+  const b = takeAt('BENCH-2')
+  if (a) handedOut.push(a)
+  if (b) handedOut.push(b)
+  // Finish what each is holding so the next round asks for a new one.
+  getDb().prepare(`UPDATE sync_state SET value = 'BENCH-1' WHERE key = 'device_id'`).run()
+  if (a) stations.pickAdvance(a, null)
+  getDb().prepare(`UPDATE sync_state SET value = 'BENCH-2' WHERE key = 'device_id'`).run()
+  if (b) stations.pickAdvance(b, null)
+}
+ok(handedOut.length === 4, 'both benches between them took every order', handedOut.join(','))
+ok(
+  new Set(handedOut).size === handedOut.length,
+  'and NO order was handed to both of them',
+  handedOut.join(',')
+)
+// And they went out in page order across the two benches, which is the whole
+// point: one stack of paper, worked from the top by two people.
+ok(handedOut.join(',') === 'one,two,three,four', 'in page order, across both', handedOut.join(','))
+getDb().prepare(`UPDATE sync_state SET value = 'STATION-A' WHERE key = 'device_id'`).run()
+
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

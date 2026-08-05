@@ -206,11 +206,12 @@ export function packagingFactsByDay(db: Database = getDb()): Map<string, Packagi
   // would put a made-up cost on a real night.
   //
   // `ship_event.date` rather than `ship_breaks.event_date` deliberately: it is
-  // the same key `packingCostByDay` books the SOP's supply usage under, so the
-  // measured packing cost and the modelled one can never land on two different
-  // days for one show. A blank event date means the dataset is not assigned to a
-  // day yet, and then nothing here answers for anything — which is the safe
-  // direction to be wrong in.
+  // the day the operator ASSIGNED the show to, which is the same day the ledger
+  // rows for that night land on, so the envelopes and the cards they held can
+  // never be booked to two different days. A blank event date means the dataset
+  // is not assigned to a day yet, and then nothing here answers for anything —
+  // which is the safe direction to be wrong in, because these figures are now
+  // inside net profit and a mis-keyed one would move a bottom line.
   const eventDate = String(
     (db.prepare(`SELECT date FROM ship_event WHERE id = 1`).get() as { date?: string } | undefined)
       ?.date ?? ''

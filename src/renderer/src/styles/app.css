@@ -13824,21 +13824,18 @@ button.sor-team:focus-visible {
   display: inline;
   white-space: normal;
 }
-/* The memo badge. Muted like the line count beside it — it is a caveat on a
-   heading, not a warning, and the section's own note carries the reasoning. */
-.fin-pnl-memo {
+/* The "short by" badge on a section heading. Muted like the line count beside
+   it — it is a caveat, not an alarm, and the section's own note carries the
+   reasoning and the number of nights behind it. It has to sit on the HEADING
+   because the sections are closed by default: a reader taking the subtotal off
+   the column without opening anything is exactly who needs telling. */
+.fin-pnl-partial {
   margin-left: 8px;
   font-style: normal;
   font-size: 10.5px;
   font-weight: 600;
   letter-spacing: 0.02em;
-  color: var(--text-2);
-}
-/* A memo section's subtotal is real money that is deliberately outside the
-   bottom line, so it is printed lighter than the subtotals that are inside it. */
-.fin-pnl-sec.is-memo .fin-pnl-head > td .fin-money {
-  font-weight: 500;
-  color: var(--text-2);
+  color: var(--warning);
 }
 .fin-pnl-line.is-none td {
   width: auto;

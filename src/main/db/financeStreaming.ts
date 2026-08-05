@@ -154,7 +154,6 @@ import { durationMinutes, isSuspiciouslyLong, streamDateOf } from '@shared/strea
 import { getDb } from './database'
 import { rateLookup } from './whatnotRates'
 import { expenseTotalsByDay } from './financeExpenses'
-import { packingCostByDay } from './shipSop'
 import { packagingFactsByDay } from './packagingCosts'
 import { isAnyLeagueTeam } from '../shipping/teams'
 import { matchProductByName } from './inventory'
@@ -169,6 +168,34 @@ import { newId, nowIso } from '../util'
 
 const toCents = (dollars: number): number => Math.round(dollars * 100)
 const toDollars = (cents: number): number => Math.round(cents) / 100
+
+/**
+ * The packaging section as one signed figure, in cents.
+ *
+ * Named once and read in the two places that must agree about it — the bottom
+ * line adds it, the reconciliation takes it back off — because it is neither a
+ * ledger row nor a stored subtotal. Writing the six-term sum out twice is how
+ * one of them ends up with five terms, which reads as a phantom break of exactly
+ * one packaging line on every day in the period.
+ */
+function packagingCents(day: Pick<
+  StreamDayFinance,
+  | 'packagingSleeves'
+  | 'packagingTopLoaders'
+  | 'packagingTeamBags'
+  | 'packagingShippingLabels'
+  | 'packagingTeamBagStickers'
+  | 'packagingMailers'
+>): number {
+  return (
+    toCents(day.packagingSleeves) +
+    toCents(day.packagingTopLoaders) +
+    toCents(day.packagingTeamBags) +
+    toCents(day.packagingShippingLabels) +
+    toCents(day.packagingTeamBagStickers) +
+    toCents(day.packagingMailers)
+  )
+}
 
 /** "$1,234.56" for a warning string the operator reads. */
 function money(cents: number): string {
@@ -2181,40 +2208,6 @@ function buildView(db: Database): StreamingFinanceView {
     day.generalExpenseCount += e.count
   }
 
-  // --- packing materials, from Shipping + Supplies rather than the ledger -----
-  //
-  // What the mailers, labels, sleeves, toploaders and team bags cost, priced at
-  // the moving average unit cost in Supplies. Postage and packing are different
-  // money; the ledger only ever knew the first.
-  //
-  // Keyed on the SHOW's assigned day, which is why assigning a day matters: an
-  // unassigned show has nowhere to book its packing, so it books nowhere rather
-  // than guessing at today.
-  //
-  // Read from what the floor RECORDED — the SOP checklist's usage rows — not
-  // from recomputing tonight's plan. That is the difference between "the packing
-  // cost of whichever show's slips happen to still be loaded" and "the packing
-  // cost of that day", and only the second one survives the next import. A day
-  // whose steps were never ticked books nothing, which is correct: nothing was
-  // reported as used.
-  const packingByDay = new Map<string, number>()
-  let packingError: string | null = null
-  try {
-    for (const [d, cost] of packingCostByDay()) packingByDay.set(d, toCents(cost))
-  } catch (err) {
-    // Swallowing this used to make "packing failed to load" and "nothing was
-    // packed" render identically — on the one screen whose entire promise is
-    // that it says so when the numbers do not add up. An empty read is a normal
-    // day; a THROWN read is a statement that is quietly missing a cost, and it
-    // has to come out as unreconciled.
-    packingError = err instanceof Error ? err.message : String(err)
-  }
-  for (const [d, cents] of packingByDay) {
-    const day = dayFor(d)
-    // Negative, like every other cost that feeds a bottom line.
-    day.packingSupplies = toDollars(toCents(day.packingSupplies) - cents)
-  }
-
   // ATTRIBUTED money only — `session_id IS NOT NULL` rather than `stream_date IS
   // NOT NULL`. Deleting a session orphans its rows (ON DELETE SET NULL) and
   // leaves stream_date behind; counting those here AND in `unattributed` would
@@ -2254,12 +2247,11 @@ function buildView(db: Database): StreamingFinanceView {
 
   // --- packaging, modelled per card / per break / per package -----------------
   //
-  // A MEMO BLOCK, and it lands in no subtotal: not in `netShipping`, not in
-  // `netAfterCosts`, not in `netProfit`. These lines price the same sleeves,
-  // bags, labels and mailers that `packingSupplies` above already priced, from a
-  // per-unit model rather than from stock that actually left the shelf, and a
-  // day carrying both in its bottom line would charge every mailer twice. The
-  // statement prints them in their own memo section; `pnlChecksum` skips it.
+  // THE ONLY PACKAGING COST THERE IS, and it lands in `netProfit`. It stays out
+  // of `netShipping` and `netAfterCosts`, which are the LEDGER's two figures —
+  // every term in those can be checked against a Whatnot export, and a modelled
+  // cost inside either would break that property. It gets its own statement
+  // section instead, and `pnlChecksum` counts it like every other one.
   //
   // AFTER the bucket loop on purpose. `dayMap.get` rather than `dayFor` — this
   // block must never CREATE a business day. A shipping dataset sitting in the
@@ -2543,13 +2535,14 @@ function buildView(db: Database): StreamingFinanceView {
     // off, which lands exactly on netSales + tips + bonuses + unclassified.
     day.netRevenue = toDollars(toCents(day.totalRevenue) + toCents(day.totalFees))
 
-    // Postage AND packing. `packingSupplies` is already negative.
+    // Postage only, and every term of it is a ledger row — which is what lets
+    // this figure be checked against a Whatnot screen. The modelled packaging
+    // deliberately stays out of it and lands in `netProfit` on its own.
     day.netShipping = toDollars(
       toCents(day.shippingSubsidy) +
         toCents(day.shippingCharges) +
         toCents(day.giveawayShipping) +
-        toCents(day.refundShipping) +
-        toCents(day.packingSupplies)
+        toCents(day.refundShipping)
     )
 
     // Everything the LEDGER knows about, plus the giveaway loss that has always
@@ -2577,6 +2570,10 @@ function buildView(db: Database): StreamingFinanceView {
       toCents(day.grossProfit) +
         toCents(day.totalFees) +
         toCents(day.netShipping) +
+        // The packaging section, summed from the same six rounded figures the
+        // statement prints, so the bottom line is the column added up rather
+        // than a second computation that agrees most of the time.
+        packagingCents(day) +
         toCents(day.showBoost) +
         // Its own statement section, and in the bottom line: an expense that did
         // not reduce net profit would be a note, and the owner asked for a cost.
@@ -2657,10 +2654,10 @@ function buildView(db: Database): StreamingFinanceView {
 
   // The day fields must decompose the SAME money the rows carry, and several of
   // them are not ledger rows at all — both cost-of-goods terms, which come from
-  // the Streaming module, the packing, which comes from Supplies, and the manual
-  // expenses, which come from somebody typing — so stripping those back out has
-  // to land exactly on the raw net:
-  //     netProfit − cogs − packingSupplies − generalExpenses
+  // the Streaming module, the modelled packaging, which comes from counting
+  // cards and envelopes, and the manual expenses, which come from somebody
+  // typing — so stripping those back out has to land exactly on the raw net:
+  //     netProfit − cogs − packaging − generalExpenses
   //        == Σ(attributed non-payout rows)
   //
   // THE FEES ARE NOT STRIPPED, AND THAT IS THE ROUND-TRIP ASSERTION. They used
@@ -2683,28 +2680,22 @@ function buildView(db: Database): StreamingFinanceView {
   // nobody checks is a figure that drifts.
   let ledgerFieldCents = 0
   for (const day of days) {
-    // `packingSupplies` comes from Supplies, not the ledger, so it strips out
-    // exactly like the stock cost and the giveaway loss. Forgetting it here does
-    // not fail loudly — it flags EVERY day unreconciled, which is how an
-    // operator learns to ignore the one flag that matters.
-    //
-    // THE PACKAGING BLOCK IS NOT STRIPPED, AND THAT IS NOT AN OVERSIGHT. Every
-    // `packaging*` field is a memo: none of them is inside `netProfit` or
-    // `netAfterCosts`, so there is nothing here for them to be subtracted out
-    // of. Adding a strip for them would break this check by exactly the
-    // packaging total. If one of those figures is ever folded into a bottom line
-    // — which it should not be, because it prices the same materials
-    // `packingSupplies` already prices — then it has to be stripped here too, on
-    // the same line and for the same reason.
+    // THE PACKAGING BLOCK IS STRIPPED, because it is now inside `netProfit` and
+    // no part of it is a ledger row. It moved in when the shipping checklist —
+    // and with it the measured packing figure this line used to subtract — was
+    // removed. Forgetting a strip here does not fail loudly: it flags EVERY day
+    // unreconciled, which is how an operator learns to ignore the one flag that
+    // matters. So the rule is flat — anything in `netProfit` that Whatnot's
+    // export cannot corroborate comes back off on this line.
     fieldCents +=
       toCents(day.netProfit) -
       toCents(day.cogs) -
-      toCents(day.packingSupplies) -
+      packagingCents(day) -
       toCents(day.generalExpenses)
-    // `netAfterCosts` deliberately does not carry the manual expenses, so there
-    // is nothing to strip for them here — see the field in the contract.
-    ledgerFieldCents +=
-      toCents(day.netAfterCosts) - toCents(day.giveawayLoss) - toCents(day.packingSupplies)
+    // `netAfterCosts` carries neither the manual expenses nor the packaging —
+    // it is the show's LEDGER economics — so the giveaway loss is the only
+    // non-ledger term there is to take back off.
+    ledgerFieldCents += toCents(day.netAfterCosts) - toCents(day.giveawayLoss)
   }
 
   /**
@@ -2732,16 +2723,7 @@ function buildView(db: Database): StreamingFinanceView {
 
   let reconciled = true
   let reconcileNote: string | null = null
-  if (packingError) {
-    // First, and deliberately: every other check below is about the LEDGER
-    // adding up, and it will, because the money that went missing was never in
-    // the ledger. A statement that is knowingly short a cost must not print
-    // "reconciled" next to it.
-    reconciled = false
-    reconcileNote =
-      `Packing supplies could not be read (${packingError}), so any packing cost is missing from ` +
-      `every day below. The rest of these totals are complete — this one column is not.`
-  } else if (daysRows + unattributed.rowCount !== all.rows) {
+  if (daysRows + unattributed.rowCount !== all.rows) {
     reconciled = false
     reconcileNote =
       `${daysRows} rows on shows + ${unattributed.rowCount} unattributed = ` +

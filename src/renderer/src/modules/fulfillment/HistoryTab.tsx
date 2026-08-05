@@ -35,12 +35,11 @@ import { Button, CenterLoader, Checkbox, EmptyState, Field, Input, Modal } from 
  *    export of that capture's orders.
  *
  * Deleting an import row deletes THE SHOW when that import is the active one:
- * every package, card, claim and break assignment, and the supplies its
- * checklist already took come back off the shelf. Deleting any earlier row is
- * nearly inert, because that import's dataset was overwritten long ago. Which of
- * the two is about to happen — and what it costs — is the whole content of the
- * confirmation, and it is drawn from the main process rather than guessed at
- * here.
+ * every package, card, claim and break assignment goes with it. Deleting any
+ * earlier row is nearly inert, because that import's dataset was overwritten
+ * long ago. Which of the two is about to happen — and what it costs — is the
+ * whole content of the confirmation, and it is drawn from the main process
+ * rather than guessed at here.
  */
 
 const EXPORT_ICONS: Record<ShipExportKind, string> = {
@@ -239,30 +238,18 @@ export function HistoryTab({ summary, canManage, onChanged }: ShipTabProps): JSX
   )
 
   const deleteImport = useCallback(
-    async (id: string, releaseSupplies: boolean) => {
+    async (id: string) => {
       setBusy(true)
       try {
-        const res = await api.shipping.deleteImport(id, releaseSupplies)
+        const res = await api.shipping.deleteImport(id)
         if (!res.ok || !res.data) {
           toast.error(res.error ?? 'Could not delete that import.')
           return
         }
-        const { plan, workspaceCleared, stranded } = res.data
+        const { plan, workspaceCleared } = res.data
         await reloadAll()
         await onChangedRef.current()
         setEditing(null)
-        // Stranded units are the one outcome nobody asked for: the product a
-        // supply came out of has since been deleted, so there was nowhere to put
-        // it back. Said out loud, because a shelf count that stops matching is
-        // worse than an awkward sentence.
-        if (stranded.length > 0) {
-          toast.error(
-            `${plan.name} deleted, but ${stranded
-              .map((s) => `${s.quantity} ${s.label.toLowerCase()}`)
-              .join(', ')} could not go back — that product no longer exists.`
-          )
-          return
-        }
         toast.success(
           workspaceCleared
             ? `“${plan.name}” deleted. The workspace is empty.`
@@ -757,13 +744,13 @@ function SnapStat({
  * Modelled on the inventory reset's confirm rather than on the rename dialogs
  * beside it, because it belongs to the same category: irreversible, and capable
  * of destroying much more than the row that was clicked. So it leads with what
- * goes, prices it, names anyone who is mid-pick, and — the moment stock, live
- * work or real progress is involved — refuses to arm the button until the
- * operator has ticked an acknowledgement that says the number out loud.
+ * goes, prices it, names anyone who is mid-pick, and — the moment live work or
+ * real progress is involved — refuses to arm the button until the operator has
+ * ticked an acknowledgement that says the number out loud.
  *
- * The figures are the MAIN PROCESS's, fetched fresh when the dialog opens. The
- * delete then recomputes them and refuses if the supplies were not agreed to:
- * this screen states the bargain, it does not enforce it.
+ * The figures are the MAIN PROCESS's, fetched fresh when the dialog opens, and
+ * the delete recomputes them for itself: this screen states the bargain, it does
+ * not enforce it.
  */
 function ImportDeleteModal({
   record,
@@ -774,7 +761,7 @@ function ImportDeleteModal({
   record: ShipImportRecord
   busy: boolean
   onClose: () => void
-  onDelete: (id: string, releaseSupplies: boolean) => void
+  onDelete: (id: string) => void
 }): JSX.Element {
   const [plan, setPlan] = useState<ShipImportDeletePlan | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -812,7 +799,7 @@ function ImportDeleteModal({
             icon="Trash2"
             loading={busy}
             disabled={!armed}
-            onClick={() => plan && onDelete(plan.importId, plan.sopSteps > 0)}
+            onClick={() => plan && onDelete(plan.importId)}
           >
             {plan?.isLive ? 'Delete the show' : 'Delete the import'}
           </Button>
@@ -835,8 +822,8 @@ function ImportDeleteModal({
             ) : (
               <>
                 This import no longer owns the workspace — its dataset was replaced or cleared, so
-                no card, package or status changes and no supplies move. What goes is the{' '}
-                <b>log entry</b> and the bench records stamped with it.
+                no card, package or status changes. What goes is the <b>log entry</b> and the
+                bench records stamped with it.
               </>
             )}
           </p>
@@ -870,45 +857,6 @@ function ImportDeleteModal({
                 </dd>
               </div>
             </dl>
-          )}
-
-          {/* The half that moves real stock, above everything else it does. */}
-          {plan.sopSteps > 0 && (
-            <div className="hist-del-alarm">
-              <Icon name="PackageMinus" size={16} />
-              <div>
-                <strong>
-                  {plan.sopSteps} SOP {plan.sopSteps === 1 ? 'step is' : 'steps are'} ticked off for{' '}
-                  {plan.eventDate}
-                </strong>
-                <span>
-                  Those supplies really left the shelf. Deleting the show puts every one of them
-                  back and takes {formatMoney(plan.sopCost)} off that day&apos;s packing cost in the
-                  P&amp;L.
-                </span>
-                <ul className="hist-del-supplies">
-                  {plan.sopSupplies.map((s) => (
-                    <li key={`${s.role}`}>
-                      <b className="mono">{s.quantity.toLocaleString()}</b> {s.label.toLowerCase()}
-                      {s.supplyName ? ` (${s.supplyName})` : ''}
-                      <em className="mono">{formatMoney(s.cost)}</em>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            </div>
-          )}
-
-          {/* Two shows can share a date. The other one's stock is genuinely
-              gone, so it is left exactly where it is — and said so. */}
-          {plan.sopDayOwner && (
-            <p className="hist-del-note">
-              <Icon name="Info" size={14} />
-              <span>
-                {plan.eventDate}&apos;s checklist belongs to <b>{plan.sopDayOwner}</b>, not this
-                show. Nothing is handed back and that day&apos;s packing cost is untouched.
-              </span>
-            </p>
           )}
 
           {plan.working.length > 0 && (
@@ -984,11 +932,7 @@ function ImportDeleteModal({
               <Checkbox
                 checked={acknowledged}
                 onChange={setAcknowledged}
-                label={
-                  plan.sopSteps > 0
-                    ? `Yes — delete “${plan.name}” and put ${formatMoney(plan.sopCost)} of supplies back on the shelf`
-                    : `Yes — delete “${plan.name}” and everything shown above`
-                }
+                label={`Yes — delete “${plan.name}” and everything shown above`}
                 hint={
                   plan.cardsPicked > 0 || plan.packagesPacked > 0
                     ? `${plan.cardsPicked} picked cards and ${plan.packagesPacked} packed packages are thrown away with it.`

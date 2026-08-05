@@ -1,10 +1,10 @@
 /**
  * The shipping floor's two stations, and the handoff between them.
  *
- * SOP step 5 is one line of prose — "one person gathers the team bags for each
+ * The night is one line of prose — one person gathers the team bags for each
  * order, the shipper checks the break and username line up, then one bubble
- * mailer, double wrapped in a second, with the matching label" — and this is
- * that sentence turned into two screens.
+ * mailer, double wrapped in a second, with the matching label — and this is that
+ * sentence turned into two screens.
  *
  *   PICKER   works the whole run, one order at a time with the slip beside it,
  *            gathering that customer's bags. Finishing hands the order off.
@@ -289,8 +289,8 @@ export interface ShipStationOrder {
  * bench is empty.
  */
 export interface ShipPickAdvanced {
-  /** True for the ONE caller whose pick closed SOP step 5. */
-  sopShipCompleted: boolean
+  /** True when this pick was the one that left the room nothing to pick. */
+  pickingCompleted: boolean
   /** Orders handed over and still waiting for a packer. */
   queueDepth: number
 }
@@ -314,8 +314,8 @@ export interface ShipStationBoard {
    * Orders the bench still owes a mailer, whoever is holding them.
    *
    * NOT `packQueue`, which is what a packer standing here may take next and so
-   * hides an order in somebody else's hands. This is the whole room's figure,
-   * and it is what SOP steps 6 and 7 wait for.
+   * hides an order in somebody else's hands. This is the whole room's figure —
+   * what the bench still owes, whoever is holding it.
    */
   packingRemaining: number
   /** The order this station is holding, if any. */

@@ -15,24 +15,19 @@
  * come from the shipping module, because one ledger order id is one SPOT and a
  * buyer who took six teams gets six order ids and one envelope.
  *
- * ## Why this exists beside the packing figure the P&L already had
+ * ## A model, and now the only one
  *
- * `packingSupplies` on a day is REAL STOCK CONSUMED: the shipping SOP checklist
- * says the sleeving is done, so the sleeves leave Supplies at their moving
- * average unit cost and the money lands on the show's day. It is a measurement.
- * It also only exists for a day somebody ticked the checklist on, with every
- * consumable linked to a supply row that has a cost on it.
+ * The P&L used to carry a second packaging figure beside this one — real stock
+ * measurably leaving Supplies when the shipping checklist said the sleeving was
+ * done. Two valuations of one pile of materials, so this section was a MEMO and
+ * stayed out of the bottom line; booking both would have charged the same mailer
+ * twice on every night the floor ticked the list.
  *
- * This module is the other thing: a MODEL. It prices the same physical materials
- * from the shape of the night — cards sold, breaks run, packages shipped — at
- * rates the owner states, and it answers for every day the ledger covers rather
- * than only the ones the floor ticked.
- *
- * The two are the SAME MATERIALS valued two different ways, which is exactly why
- * the statement carries this section as a MEMO and keeps it out of the bottom
- * line. Booking both would charge the same mailer twice, every night the
- * checklist was used, and nothing on screen would look wrong. See the
- * `packaging` section in `buildPnl` for that decision written out.
+ * That checklist is gone. This is the only packaging cost the app has, it is in
+ * net profit, and it answers for every day the ledger covers rather than only
+ * the ones somebody remembered to tick. See the `packaging` section in
+ * `buildPnl` for what that costs in honesty on a night whose slips have been
+ * replaced.
  *
  * ## Pure
  *

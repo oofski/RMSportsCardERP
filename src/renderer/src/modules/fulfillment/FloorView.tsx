@@ -13,10 +13,10 @@ import type { ShipTabProps } from './ShippingModule'
 /**
  * The bench.
  *
- * Step 5 of the SOP is one sentence — "one person gathers the team bags for
- * each order, the shipper checks the break and username line up, then one
- * bubble mailer, double wrapped in a second, with the matching label" — and
- * this screen is that sentence, split in two.
+ * The night is one sentence — one person gathers the team bags for each order,
+ * the shipper checks the break and username line up, then one bubble mailer,
+ * double wrapped in a second, with the matching label — and this screen is that
+ * sentence, split in two.
  *
  * Everything here is deliberately narrow. A picker sees ONE order at a time
  * with the customer's own slip beside it. A packer sees only what has been
@@ -27,13 +27,13 @@ import type { ShipTabProps } from './ShippingModule'
  * Three screens, in the order somebody arriving at a bench meets them:
  * who is standing here → picking or packing → the work.
  *
- * ## In from step 5, out again when the picking is done
+ * ## Out again when the picking is done
  *
- * This is not a place anybody browses to. You arrive from the checklist's fifth
- * step, and the step is finished when the last order has been picked — so the
- * picker who finishes it is told, and taken back to the checklist, without ever
- * having to decide that the night is over. Everyone else's screen is left alone;
- * a packer mid-box does not get yanked anywhere.
+ * A picker cannot see the end of the night from the order in their hands: their
+ * own queue empties the moment somebody else takes what is left. So the main
+ * process says when the LAST order in the room has been picked, and the bench
+ * that hears it is told and sent back to Today, without anybody having to decide
+ * the night is over. A packer mid-box is left exactly where they are.
  *
  * Every other screen here still carries a plain way back, because leaving early
  * is normal and being trapped on a bench is not.
@@ -117,9 +117,9 @@ export function FloorView({ canFind, canPack, onGoTo, onChanged }: ShipTabProps)
           </div>
         )}
 
-        <button className="floor-back" onClick={() => onGoTo('sop')}>
+        <button className="floor-back" onClick={() => onGoTo('today')}>
           <Icon name="ArrowLeft" size={14} />
-          Back to Steps
+          Back to Today
         </button>
 
         {who && (
@@ -182,11 +182,11 @@ export function FloorView({ canFind, canPack, onGoTo, onChanged }: ShipTabProps)
         <Button size="sm" variant="ghost" icon="RotateCcw" disabled={busy} onClick={() => void switchJob()}>
           Switch job
         </Button>
-        {/* The way out. Step 5 closes itself when the picking does, so this is
-            not "I am finished" — it is "I am not standing here any more", which
-            people need at half past nine as much as at the end. */}
-        <Button size="sm" variant="ghost" icon="ListTodo" onClick={() => onGoTo('sop')}>
-          Steps
+        {/* The way out. The bench already says when the picking is finished, so
+            this is not "I am done" — it is "I am not standing here any more",
+            which people need at half past nine as much as at the end. */}
+        <Button size="sm" variant="ghost" icon="LayoutGrid" onClick={() => onGoTo('today')}>
+          Today
         </Button>
       </header>
 
@@ -224,7 +224,7 @@ export function FloorView({ canFind, canPack, onGoTo, onChanged }: ShipTabProps)
           role={session.role}
           board={board}
           onTake={() => void take()}
-          onBack={() => onGoTo('sop')}
+          onBack={() => onGoTo('today')}
           busy={busy}
         />
       )}
@@ -288,20 +288,25 @@ export function FloorView({ canFind, canPack, onGoTo, onChanged }: ShipTabProps)
           toast.error(res.error ?? 'Could not move on.')
           return
         }
-        // That was the last one, and this click is what closed step 5 — the
-        // main process says so for exactly ONE caller, so nobody else's screen
-        // moves and nothing is deducted twice. Refresh before leaving, or the
-        // checklist arrives showing the state from before the tick.
-        if (res.data?.sopShipCompleted) {
+        // That was the last order in the room. Say so, and get the picker off a
+        // bench that has nothing left on it — they cannot see that from the run
+        // in front of them, which empties the moment anybody else takes what is
+        // left. The picking being over is NOT the packing being over, so the
+        // count still waiting for a mailer goes in the same sentence rather
+        // than leaving somebody thinking the room is clear.
+        //
+        // Refresh before leaving, or Today arrives drawing the board from
+        // before this pick landed.
+        if (res.data?.pickingCompleted) {
           const waiting = res.data.queueDepth
           toast.success(
             waiting > 0
-              ? `Every order is picked — shipping is ticked off. ${waiting} ${waiting === 1 ? 'box is' : 'boxes are'} still to pack.`
-              : 'Every order is picked — shipping is ticked off.'
+              ? `Every order is picked. ${waiting} ${waiting === 1 ? 'box is' : 'boxes are'} still to pack.`
+              : 'Every order is picked.'
           )
           await load()
           await onChanged()
-          onGoTo('sop')
+          onGoTo('today')
           return
         }
       }
@@ -416,10 +421,10 @@ function Idle({
         <Icon name="CheckCheck" size={34} />
         <div>
           <b>Every order is picked and packed.</b>
-          <span>Scanning and Confirm are still to tick on the checklist.</span>
+          <span>Scanning the boxes into the Whatnot app is what is left.</span>
         </div>
-        <Button variant="primary" icon="ListTodo" onClick={onBack}>
-          Back to Steps
+        <Button variant="primary" icon="LayoutGrid" onClick={onBack}>
+          Back to Today
         </Button>
       </div>
     )
@@ -432,10 +437,10 @@ function Idle({
         <span>
           {role === 'pack'
             ? `The pickers are still going — ${board?.toPick ?? 0} orders left to pick.`
-            : // Nothing to PICK is not an empty bench. Step 5 follows the
-              // picking, so it can be ticked off with boxes still stacked at the
-              // mailing end, and a screen that stopped at "you are done" would be
-              // the one thing telling anybody the room was clear.
+            : // Nothing to PICK is not an empty bench. Picking finishes with
+              // boxes still stacked at the mailing end, and a screen that
+              // stopped at "you are done" would be the one thing in the room
+              // telling anybody it was clear.
               queue > 0
               ? `Every order is either picked or in somebody else’s hands — ${queue} ${queue === 1 ? 'is' : 'are'} still waiting to be packed.`
               : 'Every order is either picked or in somebody else’s hands.'}
@@ -445,8 +450,8 @@ function Idle({
         <Button variant="primary" icon="RefreshCw" disabled={busy} onClick={onTake}>
           Check again
         </Button>
-        <Button variant="ghost" icon="ListTodo" onClick={onBack}>
-          Back to Steps
+        <Button variant="ghost" icon="LayoutGrid" onClick={onBack}>
+          Back to Today
         </Button>
       </div>
     </div>
@@ -457,10 +462,10 @@ function Idle({
  * The order in front of you — the SAME pane the Orders tab draws.
  *
  * `walk-split` rather than a bench-only grid, and `OrderCard` rather than a
- * handle and a card count. Somebody sent here by step 5 is doing the identical
- * job they would be doing on the Orders tab, so the screen they get is the
- * identical screen: cards on the left at the same width, the customer's slip on
- * the right at the same width, everything in the same place.
+ * handle and a card count. Somebody standing here is doing the identical job
+ * they would be doing on the Orders tab, so the screen they get is the identical
+ * screen: cards on the left at the same width, the customer's slip on the right
+ * at the same width, everything in the same place.
  *
  * The bench's own buttons live in the bar above, where the walker keeps its
  * Previous / Skip / Picked·next. What is unique to a bench — the rejection

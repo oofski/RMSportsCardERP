@@ -87,11 +87,11 @@ export const SYNCED_TABLES: SyncedTable[] = [
   { table: 'ship_break_audit', key: ['break_label'], tier: 0 },
   { table: 'ship_imports', key: ['id'], tier: 0 },
   { table: 'ship_snapshots', key: ['id'], tier: 0 },
-  // Both carry DERIVED ids ('date|step', 'date|step|role') and ABSOLUTE
-  // quantities, so two benches ticking the same step off the same show land on
-  // one row holding one number rather than two rows holding the night twice.
-  { table: 'ship_sop_steps', key: ['id'], tier: 0 },
-  { table: 'ship_supply_usage', key: ['id'], tier: 0 },
+  // `ship_sop_steps` and `ship_supply_usage` are deliberately ABSENT, and their
+  // tables are deliberately still in the schema. The checklist that wrote them
+  // is gone, so nothing reads or writes them any more — but dropping a table on
+  // somebody's machine cannot be undone, and syncing one nothing reads is
+  // bandwidth spent carrying a dead night around forever.
   { table: 'ledger_imports', key: ['id'], tier: 0 },
   // Synced, and it has to be. The commission rate is what turns the net figure
   // Whatnot pays into the gross a P&L reports, so a laptop without a period the

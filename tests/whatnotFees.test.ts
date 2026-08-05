@@ -1345,7 +1345,7 @@ const twoRate = buildPnl({
   breakCost: 0, giveawayCost: 0, cogs: 0, grossProfit: 20000,
   whatnotFee: -1200, processingFee: -580, totalFees: -1780,
   shippingSubsidy: 0, shippingCharges: 0, giveawayShipping: 0, refundShipping: 0,
-  packingSupplies: 0, netShipping: 0, showBoost: 0, reversals: 0, netProfit: 18220
+  netShipping: 0, showBoost: 0, reversals: 0, netProfit: 18220
 })
   .find((s: any) => s.key === 'fees')
   .lines.find((l: any) => l.key === 'whatnotFee')
@@ -1363,7 +1363,7 @@ const legacy = buildPnl({
   breakCost: 0, giveawayCost: 0, cogs: 0, grossProfit: 20000,
   whatnotFee: -1200, processingFee: -580, totalFees: -1780,
   shippingSubsidy: 0, shippingCharges: 0, giveawayShipping: 0, refundShipping: 0,
-  packingSupplies: 0, netShipping: 0, showBoost: 0, reversals: 0, netProfit: 18220
+  netShipping: 0, showBoost: 0, reversals: 0, netProfit: 18220
 })
   .find((s: any) => s.key === 'fees')
   .lines.find((l: any) => l.key === 'whatnotFee')
@@ -1585,7 +1585,7 @@ const bare = (over: any): any => ({
   netSales: 0, grossSales: 0, saleCount: 0, tips: 0, bonuses: 0, totalRevenue: 0,
   unclassified: 0, feeSaleCount: 0, breakCost: 0, giveawayCost: 0, cogs: 0, grossProfit: 0,
   whatnotFee: 0, processingFee: 0, totalFees: 0, shippingSubsidy: 0, shippingCharges: 0,
-  giveawayShipping: 0, refundShipping: 0, packingSupplies: 0, netShipping: 0,
+  giveawayShipping: 0, refundShipping: 0, netShipping: 0,
   showBoost: 0, reversals: 0, netProfit: 0, ...over
 })
 

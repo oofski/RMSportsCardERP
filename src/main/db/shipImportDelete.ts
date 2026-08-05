@@ -2,14 +2,12 @@ import type Database from 'better-sqlite3'
 import type {
   ShipImportDeletePlan,
   ShipImportDeleteResult,
-  ShipImportDeleteSupply,
   ShipImportDeleteWorker
 } from '@shared/shippingViews'
 import { holderOf } from '@shared/shipStations'
 import { getDb } from './database'
 import { getEmployeeById } from './employees'
 import { claimsForOrder } from './shipClaims'
-import { getShipSopDay, releaseShipSopDay, shipSopShowName } from './shipSop'
 import {
   clearShipDataset,
   clearShipDocument,
@@ -35,11 +33,11 @@ import { listOrders } from './shippingDomain'
  *
  * ## Why this is its own file
  *
- * The same reason `shipClaims.ts` is: it would close a cycle. Handing a show's
- * supplies back means calling into `shipSop.ts`, and `shipSop.ts` imports
- * `shipping.ts` and `shippingDomain.ts` — so the delete cannot live in either of
- * them. It sits above all three instead and orchestrates them, which is also
- * what it is: an orchestration, not a DELETE.
+ * The same reason `shipClaims.ts` is: it would close a cycle. Clearing a show
+ * means reaching into `shipping.ts`, `shippingDomain.ts` and the claim reads at
+ * once, and every one of those is imported by one of the others — so the delete
+ * cannot live in any of them. It sits above all three instead and orchestrates
+ * them, which is also what it is: an orchestration, not a DELETE.
  *
  * ## What an import actually owns
  *
@@ -78,35 +76,14 @@ import { listOrders } from './shippingDomain'
  * which is always the case for the live import, since it is the head — is there
  * nowhere to move them to, and they go with it.
  *
- * ## Supplies are the dangerous half
+ * ## It moves no stock, and there is none for it to move
  *
- * Ticking a SOP step takes real stock off the shelf and books its cost to the
- * show's DAY, where the P&L reads it. Three things could be done with that on a
- * delete and two of them are wrong:
- *
- *   KEEP IT, DETACHED   leaves cost booked against a show that no longer exists
- *                       — and unreachable, because the checklist is drawn from
- *                       `ship_event` and the delete clears it. Nobody could ever
- *                       untick it again. This is the worst of the three.
- *   REVERSE IT SILENTLY puts stock back that may genuinely have been used.
- *   REVERSE IT, TOLD    what this does.
- *
- * The delete hands the supplies back, and it will not run until the caller has
- * passed `releaseSupplies` — which the confirmation only offers after showing
- * the quantities and the money by name. Main refuses without it rather than
- * trusting the screen to have asked, because the screen is not a trust boundary
- * and this is inventory.
- *
- * The reasoning: deleting an upload says the upload should not have happened,
- * and a show that did not happen consumed nothing. A show that DID happen is one
- * to snapshot and leave alone, not to delete. And when the day's checklist
- * belongs to a different show — two shows can share a date — nothing is touched
- * at all and the plan says whose it is.
- *
- * Nothing here is attributed for an EARLIER import: the SOP is keyed by day, the
- * log row carries no day, and guessing which of two shows on a date a stock
- * movement belonged to is exactly the guess that corrupts a P&L. So an earlier
- * import's delete touches no supply row, and the plan says so.
+ * A delete used to hand a show's consumables back, because ticking a checklist
+ * step had taken them off the shelf and booked their cost to the show's day.
+ * Nothing takes stock off the shelf for a show any more, so there is nothing to
+ * return and nothing to ask the operator to agree to. Packaging is costed from
+ * the shape of the night in the P&L instead, which needs no permission from a
+ * delete and cannot be double-counted by one.
  *
  * ## Snapshots are left alone
  *
@@ -220,26 +197,6 @@ export function planShipImportDelete(id: string): ShipImportDeletePlan | null {
   const event = isLive ? getShipEvent() : null
   const eventDate = event?.date.trim() || null
 
-  // Only the live import can name a day, so only the live import can be shown
-  // to own a stock movement. Everything else is a guess, and this is the P&L.
-  const sopDay = isLive && eventDate ? getShipSopDay(eventDate) : null
-  // An unnamed day is treated as this show's, following the same rule the tick
-  // guard follows: rows written before the column existed carry NULL, and those
-  // must not lock a show out of its own night in either direction.
-  const sopIsOurs =
-    sopDay && event ? sopDay.owner === null || sopDay.owner === shipSopShowName(event) : false
-  const sopDayOwner = sopDay && !sopIsOurs ? sopDay.owner : null
-  const sopSupplies: ShipImportDeleteSupply[] =
-    sopDay && sopIsOurs
-      ? sopDay.lines.map((l) => ({
-          role: l.role,
-          label: l.label,
-          supplyName: l.supplyName,
-          quantity: l.quantity,
-          cost: l.cost
-        }))
-      : []
-
   const working = isLive ? workingNow() : []
   const claims = countOf(db, 'ship_work_claims', 'import_id', id)
   const assignments = countOf(db, 'ship_break_assignments', 'import_id', id)
@@ -254,7 +211,6 @@ export function planShipImportDelete(id: string): ShipImportDeletePlan | null {
 
   const cardsPicked = counts?.checkedSlots ?? 0
   const packagesPacked = shipments.filter((s) => !!s.packedAt).length
-  const sopSteps = sopDay && sopIsOurs ? sopDay.steps.length : 0
 
   return {
     importId: record.id,
@@ -275,15 +231,11 @@ export function planShipImportDelete(id: string): ShipImportDeletePlan | null {
     working,
     eventName: event?.name.trim() || null,
     eventDate,
-    sopDayOwner,
-    sopSteps,
-    sopSupplies,
-    sopCost: money(sopSupplies.reduce((n, l) => n + l.cost, 0)),
     snapshots,
     // Two clicks for a mis-import nobody has touched; an acknowledgement the
-    // moment the delete would move stock, interrupt somebody, or throw away
-    // work that was really done.
-    needsAcknowledgement: sopSteps > 0 || working.length > 0 || cardsPicked > 0 || packagesPacked > 0
+    // moment the delete would interrupt somebody or throw away work that was
+    // really done.
+    needsAcknowledgement: working.length > 0 || cardsPicked > 0 || packagesPacked > 0
   }
 }
 
@@ -291,75 +243,28 @@ export function planShipImportDelete(id: string): ShipImportDeletePlan | null {
 // The delete
 // ---------------------------------------------------------------------------
 
-export interface DeleteShipImportOptions {
-  /**
-   * The operator has been shown what the show's ticked steps took and has
-   * agreed to it going back on the shelf. Required — main refuses without it
-   * rather than trusting a renderer to have asked.
-   */
-  releaseSupplies?: boolean
-  userId?: string | null
-}
-
-/** The refusal, worded with the actual numbers rather than a policy sentence. */
-function supplyRefusal(plan: ShipImportDeletePlan): string {
-  const parts = plan.sopSupplies
-    .map((l) => `${l.quantity.toLocaleString()} ${l.label.toLowerCase()}`)
-    .join(', ')
-  return (
-    `"${plan.name}" has ${plan.sopSteps} SOP ${plan.sopSteps === 1 ? 'step' : 'steps'} ticked off, ` +
-    `and ${parts || 'stock'} left the shelf against ${plan.eventDate}` +
-    (plan.sopCost > 0 ? ` at a cost of $${plan.sopCost.toFixed(2)}` : '') +
-    '. Deleting the show puts all of it back and takes that cost off the day — confirm that first.'
-  )
-}
 
 /**
  * Delete an import and everything that exists only because of it.
  *
  * ONE transaction. A half-deleted import is a workspace nobody can reconcile:
- * a chain with a hole in it, claims naming orders that are gone, stock returned
- * to a shelf whose show is still on the floor. better-sqlite3 nests the inner
- * transactions (the SOP release, the dataset clear) as savepoints, so a throw
- * anywhere unwinds the lot.
- *
- * The order is load-bearing. The supplies go back BEFORE the dataset is cleared:
- * the release reads its own rows and so would survive either order, but doing it
- * first means a failure to put stock back is a failure to delete, rather than a
- * cleared workspace with the shelf still short.
+ * a chain with a hole in it, claims naming orders that are gone, a dataset
+ * cleared out from under a show that still has a log row. better-sqlite3 nests
+ * the inner transaction (the dataset clear) as a savepoint, so a throw anywhere
+ * unwinds the lot.
  */
-export function deleteShipImport(
-  id: string,
-  opts: DeleteShipImportOptions = {}
-): ShipImportDeleteResult {
+export function deleteShipImport(id: string): ShipImportDeleteResult {
   const plan = planShipImportDelete(id)
   if (!plan) throw new Error('Import not found.')
-  if (plan.sopSteps > 0 && opts.releaseSupplies !== true) throw new Error(supplyRefusal(plan))
 
   const db = getDb()
-  const userId = opts.userId ?? null
-  const stranded: ShipImportDeleteSupply[] = []
 
   const run = db.transaction((): ShipImportDeleteResult => {
     const row = importRow(db, id)
     if (!row) throw new Error('Import not found.')
     const successor = successorOf(db, id)
 
-    // --- 1. the supplies, back where they came from -----------------------
-    if (plan.sopSteps > 0 && plan.eventDate) {
-      const released = releaseShipSopDay(plan.eventDate, userId)
-      for (const s of released.stranded) {
-        stranded.push({
-          role: s.role,
-          label: s.label,
-          supplyName: s.supplyName,
-          quantity: s.quantity,
-          cost: s.cost
-        })
-      }
-    }
-
-    // --- 2. the work stamped with this import -----------------------------
+    // --- 1. the work stamped with this import -----------------------------
     //
     // Re-homed onto whatever carried forward from it, because that import is
     // the same run of work on the same show — the person on break 11 is still
@@ -380,7 +285,7 @@ export function deleteShipImport(
       db.prepare(`DELETE FROM ship_break_assignments WHERE import_id = ?`).run(id)
     }
 
-    // --- 3. splice the chain ----------------------------------------------
+    // --- 2. splice the chain ----------------------------------------------
     // The successor takes over this import's predecessor. `carried_from` only
     // ever points backwards in time, so this can never close a loop.
     db.prepare(`UPDATE ship_imports SET carried_from = ? WHERE carried_from = ?`).run(
@@ -388,7 +293,7 @@ export function deleteShipImport(
       id
     )
 
-    // --- 4. the file, and the dataset it was parsed into -------------------
+    // --- 3. the file, and the dataset it was parsed into -------------------
     db.prepare(`DELETE FROM ship_documents WHERE import_id = ?`).run(id)
     if (plan.isLive) {
       clearShipDataset()
@@ -414,7 +319,7 @@ export function deleteShipImport(
       ).run()
     }
 
-    // --- 5. the log row itself --------------------------------------------
+    // --- 4. the log row itself --------------------------------------------
     const res = db.prepare(`DELETE FROM ship_imports WHERE id = ?`).run(id)
     if (res.changes === 0) throw new Error('Import not found.')
 
@@ -422,7 +327,7 @@ export function deleteShipImport(
     // an import that is no longer on the chain.
     pruneShipBreakAssignments(db)
 
-    return { plan, workspaceCleared: plan.isLive, stranded }
+    return { plan, workspaceCleared: plan.isLive }
   })
 
   return run()

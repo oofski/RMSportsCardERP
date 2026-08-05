@@ -1682,31 +1682,20 @@ export interface StreamDayFinance {
   giveawayShipping: number
   /** Postage on a refunded order. Negative. */
   refundShipping: number
-  /**
-   * NEGATIVE. What the packing materials cost — mailers, labels, sleeves,
-   * toploaders, team bags — priced at the moving average unit cost in Supplies.
-   *
-   * Postage and packing are different money and the P&L never had the second
-   * one. Four hundred bubble mailers is real spend that used to show up only as
-   * a supplies purchase weeks earlier, in a month that had nothing to do with
-   * the show that consumed them.
-   *
-   * Like `giveawayLoss`, this comes from OUTSIDE the ledger, so the
-   * reconciliation strips it back out before comparing the day to its rows.
-   * A role nobody has linked to a product contributes nothing — never a guess.
-   */
-  packingSupplies: number
-  /** Subsidy less all postage AND packing. Can land either side of zero. */
+  /** Subsidy less all postage. Can land either side of zero. */
   netShipping: number
 
   // --- Packaging, MODELLED per card / per break / per package -------------
   //
-  // A MEMO BLOCK. Every field below is negative money or a count, they roll up
-  // like everything else, and NOT ONE OF THEM IS IN `netProfit` — see the
-  // `packaging` section of `buildPnl` for why. They price the SAME physical
-  // materials `packingSupplies` above prices, from a per-unit model rather than
-  // from stock that actually left, and a statement that charged both would
-  // charge every mailer twice.
+  // Every field below is negative money or a count, they roll up like everything
+  // else, and the six money lines ARE in `netProfit` — see the `packaging`
+  // section of `buildPnl`.
+  //
+  // They were a memo for one release, beside a `packingSupplies` figure that
+  // priced the same sleeves and mailers from stock the shipping checklist had
+  // recorded leaving Supplies. That checklist is gone, so there is no second
+  // valuation left to double-count against and no reason for the real cost of
+  // four hundred mailers to sit outside the bottom line.
   /** NEGATIVE. Cards × the sleeve rate. */
   packagingSleeves: number
   /** NEGATIVE. Cards × the top-loader share × the top-loader rate. */
@@ -1796,9 +1785,9 @@ export interface StreamDayFinance {
    * the streaming giveaway flow and must not be typed here as well, or the same
    * pack is booked twice.
    *
-   * Like the cost-of-goods fields and `packingSupplies` it comes from outside the
-   * ledger, so the reconciliation strips it back out before comparing a day to
-   * its rows.
+   * Like the cost-of-goods fields and the packaging block it comes from outside
+   * the ledger, so the reconciliation strips it back out before comparing a day
+   * to its rows.
    */
   generalExpenses: number
   /** How many entries are behind that figure. On the line so the statement can
@@ -1894,6 +1883,22 @@ export interface PnlLine {
    * `amount` on such a line is whatever part IS known (zero on a day with
    * nothing, a partial sum on a range where some days are covered), and the
    * detail says how much of the period it covers.
+   *
+   * ## An unknown inside a section that feeds net profit
+   *
+   * It sits in one, and there is no way round that: the packaging block is a
+   * real cost and belongs in the bottom line, and the package count for a night
+   * whose slips have been replaced is genuinely unrecoverable. Zero is the only
+   * number a money field can carry, so the day contributes zero and NET PROFIT
+   * IS OVERSTATED BY WHATEVER THOSE NIGHTS SHIPPED — by two cents a label and
+   * about a third of a dollar a mailer.
+   *
+   * That is a small, one-directional, disclosed error, and it beats both
+   * alternatives: a guessed package count puts an invented cost on a real night,
+   * and refusing to state net profit at all withholds a figure that is right to
+   * within pennies. The disclosure is not optional — the line says "not known",
+   * `PnlSection.incomplete` marks the section on its heading whether it is open
+   * or closed, and `packagingDaysUnknown` says how many nights are behind it.
    */
   unavailable?: boolean
 }
@@ -1907,19 +1912,17 @@ export interface PnlSection {
   /** A running figure carried down the statement (gross profit, net profit). */
   running?: boolean
   /**
-   * A section that DISCLOSES rather than accounts: its subtotal is real money
-   * and is deliberately not part of the bottom line, so `pnlChecksum` skips it.
+   * This subtotal is real money and is KNOWN TO BE SHORT — one of its lines
+   * could not be measured for part of the period.
    *
-   * There is exactly one, and it exists because the packaging model and the
-   * packing-supplies figure price the same physical materials two different
-   * ways. A memo section is the only shape that can carry a cost the reader
-   * needs to see without adding it to a total that already contains it.
-   *
-   * It is also the only shape that may contain an `unavailable` line: a section
-   * feeding net profit cannot have an unknown in it, because then net profit
-   * would be an unknown too and would not say so.
+   * Every section on this statement is in the bottom line, so a section that
+   * cannot count one of its own inputs makes net profit slightly too high. The
+   * flag is what lets the screen say so on the heading row, where somebody
+   * reading the column without opening anything still sees it; the `unavailable`
+   * lines inside say which figure is missing, and the section note says by how
+   * many nights.
    */
-  memo?: boolean
+  incomplete?: boolean
   /**
    * A sentence printed under the section's lines when it is open.
    *
@@ -2041,7 +2044,6 @@ export function buildPnl(d: {
   shippingSubsidy: number; shippingCharges: number; giveawayShipping: number
   refundShipping: number; netShipping: number
   /** Optional so a caller built before packing existed still type-checks. */
-  packingSupplies?: number
   // The modelled packaging block. All optional for the usual reason — a
   // packaged main that predates it sends none — and then the section prints
   // every line at zero and says the model had nothing to work from, which is
@@ -2071,10 +2073,10 @@ export function buildPnl(d: {
     label: string,
     amount: number,
     detail?: string,
-    // Only the packaging memo lines pass this. `empty` is deliberately forced
-    // false alongside it: `empty` is what the screen hides behind the zero-line
-    // toggle, and an unknown cost hidden as a zero is the exact misreading this
-    // flag exists to prevent.
+    // Only the two per-package packaging lines pass this. `empty` is
+    // deliberately forced false alongside it: `empty` is what the screen hides
+    // behind the zero-line toggle, and an unknown cost hidden as a zero is the
+    // exact misreading this flag exists to prevent.
     unavailable?: boolean
   ): PnlLine => ({
     key,
@@ -2435,42 +2437,36 @@ export function buildPnl(d: {
         line('shippingSubsidy', 'Subsidy received', d.shippingSubsidy),
         line('shippingCharges', 'Postage charged back', d.shippingCharges),
         line('giveawayShipping', 'Giveaway postage', d.giveawayShipping),
-        line('refundShipping', 'Refund postage', d.refundShipping),
-        line('packingSupplies', 'Packing supplies', d.packingSupplies ?? 0)
+        line('refundShipping', 'Refund postage', d.refundShipping)
       ],
       subtotal: c2(d.netShipping),
-      subtotalLabel: 'Net shipping & packing'
+      subtotalLabel: 'Net shipping'
     },
     {
-      // A MEMO, AND THE ONLY ONE ON THE STATEMENT.
+      // A REAL SECTION, in the bottom line like every other one here.
       //
-      // Every line here prices a physical material the section above ALREADY
-      // prices. `packingSupplies` is stock that measurably left Supplies when
-      // the shipping checklist was ticked, at the moving average unit cost of
-      // the product linked to each role. These lines are the same sleeves, the
-      // same bags and the same mailers costed from the shape of the night at
-      // rates the owner states. Two valuations of one pile of materials.
+      // It was a memo for one release, sitting beside a "Packing supplies" line
+      // that priced the same sleeves, bags and mailers from stock the shipping
+      // checklist recorded leaving Supplies — two valuations of one pile of
+      // materials, and booking both would have charged every mailer twice. The
+      // checklist is gone and so is that line, which leaves this the only
+      // valuation there is. Four hundred mailers is real spend, and a bottom
+      // line that omits it is not conservative, it is wrong.
       //
-      // So it does not touch net profit, and `pnlChecksum` skips it. Putting it
-      // in the bottom line would charge the same mailer twice on every night the
-      // floor ticked the checklist — silently, since both figures are plausible
-      // and neither is obviously the duplicate. The choice of WHICH to book is
-      // not this function's to make and is not made by omission here: the P&L
-      // books the measured one, which is what it has always booked, and this
-      // section exists so the owner can see the modelled one beside it.
-      //
-      // It is also the only section allowed to contain an `unavailable` line,
-      // and that follows from being a memo rather than being a licence: a
-      // section inside net profit cannot hold an unknown, because then net
-      // profit is an unknown and does not say so.
+      // It is also the only section that can contain an `unavailable` line, and
+      // that is now a stated compromise rather than a property of being outside
+      // the total: an unknown night contributes zero to the money, so net profit
+      // is over-stated by whatever those nights' labels and mailers cost. Said
+      // three ways — on the line, on the heading, and in the note below — rather
+      // than resolved, because there is nothing to resolve it with. See
+      // `PnlLine.unavailable` for the full argument.
       key: 'packaging',
       label: 'Packaging costs',
       // The caveat rides on the FLAG rather than on the label. A consumer that
-      // reads `label` and ignores `memo` would take this subtotal into a total
-      // whatever the heading said, so "(memo)" in the text would buy tidiness
-      // and no safety; the flag is what `pnlChecksum` enforces and what the
-      // screen prints its badge from.
-      memo: true,
+      // reads `label` and ignores `incomplete` would take this subtotal as
+      // complete whatever the heading said, so "(partial)" in the text would buy
+      // tidiness and no safety.
+      incomplete: packagesUnavailable,
       lines: [
         line(
           'packagingSleeves',
@@ -2524,19 +2520,18 @@ export function buildPnl(d: {
         )
       ],
       subtotal: packagingSubtotal,
-      subtotalLabel: 'Modelled packaging',
+      subtotalLabel: 'Packaging',
       note:
-        `NOT IN NET PROFIT, on purpose. These are the same sleeves, bags, labels ` +
-        `and mailers already costed as "Packing supplies" above — that line is stock ` +
-        `that actually left Supplies when the shipping checklist was ticked, these are ` +
-        `the same materials priced from cards sold, breaks run and packages shipped. ` +
-        `Counting both would charge every mailer twice.` +
+        `Sleeves, top loaders, bags, stickers, labels and mailers, priced from cards ` +
+        `sold, breaks run and packages shipped at rates the owner states. Nothing here ` +
+        `comes from the Whatnot export, and all of it is in net profit.` +
         (packagesUnavailable
           ? ` The two lines charged per package read "not known" rather than $0.00 for ` +
             `${count(packagingUnknown)} night${packagingUnknown === 1 ? '' : 's'} here: ` +
             `packages are counted off the packing slips, and Shipping keeps one show's ` +
             `slips at a time. That is missing information, not a zero cost — this ` +
-            `subtotal is short by whatever those nights shipped.`
+            `subtotal is short by whatever those nights shipped, and net profit above ` +
+            `is higher than the truth by the same amount.`
           : '')
     },
     {
@@ -2613,20 +2608,20 @@ export function profitMargin(totalRevenue: number, netProfit: number): number | 
 }
 
 /**
- * Every section subtotal that is NOT a running total and NOT a memo, summed.
- * Must equal netProfit — exported so the UI and the tests can both assert it
- * rather than trusting it.
+ * Every section subtotal that is NOT a running total, summed. Must equal
+ * netProfit — exported so the UI and the tests can both assert it rather than
+ * trusting it.
  *
  * A running section is skipped because it is a figure carried down from the
- * sections above it, so counting it would count them twice. A MEMO section is
- * skipped because its money is genuinely outside the bottom line: the packaging
- * model prices the same materials `packingSupplies` already charged, and adding
- * both would overstate the cost of every night the shipping checklist was
- * ticked. Skipping it here is what makes that decision enforceable rather than
- * a comment somebody can drift away from.
+ * sections above it, so counting it would count them twice. NOTHING ELSE IS
+ * SKIPPED, and there is no flag for skipping one. There used to be — the
+ * packaging block was a memo, because a second valuation of the same materials
+ * sat two sections above it — and a subtotal that a filter here can quietly drop
+ * is a subtotal that can quietly leave the bottom line. Every section on this
+ * statement is money in net profit, and this is what enforces it.
  */
 export function pnlChecksum(sections: PnlSection[]): number {
-  return c2(sections.filter((s) => !s.running && !s.memo).reduce((a, s) => a + s.subtotal, 0))
+  return c2(sections.filter((s) => !s.running).reduce((a, s) => a + s.subtotal, 0))
 }
 
 /** How the day rows are rolled up. Days always exist underneath; a period is
@@ -2880,15 +2875,13 @@ export const PNL_MONEY_FIELDS = [
   'shippingCharges',
   'giveawayShipping',
   'refundShipping',
-  'packingSupplies',
   'netShipping',
-  // The modelled packaging lines. In NO subtotal and in NO section that the
-  // checksum reads, so `pnlChecksum` is untouched by their presence — but they
-  // are summed like everything else, because a month has to state the same
-  // packaging its days do. A money field left out of this list is not a type
-  // error anywhere: it simply reads zero on every week, month and dragged range
-  // while reading correctly on the days, which is the quietest way a statement
-  // can be wrong.
+  // The modelled packaging lines, which are inside `netProfit`. A money field
+  // left out of this list is not a type error anywhere: it simply reads zero on
+  // every week, month and dragged range while reading correctly on the days,
+  // which is the quietest way a statement can be wrong — and now that these six
+  // are in the bottom line, dropping one would put the week's net profit above
+  // the sum of its own days.
   'packagingSleeves',
   'packagingTopLoaders',
   'packagingTeamBags',
@@ -2968,7 +2961,6 @@ export function emptyDayFinance(streamDate: string): StreamDayFinance {
     shippingCharges: 0,
     giveawayShipping: 0,
     refundShipping: 0,
-    packingSupplies: 0,
     netShipping: 0,
     packagingSleeves: 0,
     packagingTopLoaders: 0,

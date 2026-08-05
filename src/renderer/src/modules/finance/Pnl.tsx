@@ -284,7 +284,7 @@ function SectionBody({
   const bodyId = `fin-pnl-${section.key}`
 
   return (
-    <tbody className={`fin-pnl-sec${section.memo ? ' is-memo' : ''}`} id={bodyId}>
+    <tbody className="fin-pnl-sec" id={bodyId}>
       <tr className={`fin-pnl-head${open ? ' is-open' : ''}`}>
         <th scope="row">
           {/* The whole heading is the control. A caret-sized hit target on a
@@ -299,12 +299,12 @@ function SectionBody({
           >
             <Icon name={open ? 'ChevronDown' : 'ChevronRight'} size={14} />
             <span>{section.label}</span>
-            {/* A memo subtotal sits in the same column, at the same weight, as
-                the subtotals that DO add up to the bottom line. Somebody adding
-                the column by eye would land a few hundred dollars under net
-                profit and go looking for the bug. So the row says on its face
-                that it is outside the total; the section's note says why. */}
-            {section.memo && <em className="fin-pnl-memo">not in net profit</em>}
+            {/* Every subtotal here is inside net profit, so the only thing a
+                heading has to disclose is a section that could not count one of
+                its own inputs — which makes the bottom line above it slightly
+                too high. Sections are closed by default, so saying it inside
+                would be saying it to nobody. */}
+            {section.incomplete && <em className="fin-pnl-partial">not fully counted</em>}
             {!open && visible.length > 0 && (
               <em className="fin-pnl-count">{plural(visible.length, 'line')}</em>
             )}

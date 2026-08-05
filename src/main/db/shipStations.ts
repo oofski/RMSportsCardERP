@@ -28,7 +28,6 @@ import { deviceId } from './sync'
 import { listBreakIdsForCustomer, setCustomerSlotsChecked } from './shipping'
 import { _orderRow, _recomputeBreakStatus, listOrders, setOrderStage } from './shippingDomain'
 import { getShipShipmentByCustomer } from './shipping'
-import { completeShipSopStepOnce } from './shipSop'
 import { newId, nowIso } from '../util'
 
 /**
@@ -59,11 +58,10 @@ import { newId, nowIso } from '../util'
  * ## Where the reads went
  *
  * Walking the live import chain, finding one order's claims, and the two "how
- * much is left" counts live in `./shipClaims`, one layer down. The SOP gate has
- * to read the packing count and this module already imports `shipSop` to close
- * step 5, so keeping them here would close a cycle between the two files. They
- * are re-exported below: to anybody outside, this is still the one module that
- * answers questions about claims.
+ * much is left" counts live in `./shipClaims`, one layer down — below both this
+ * module and `./shippingDomain`, which is what keeps the two counts reachable
+ * from either without a cycle. They are re-exported below: to anybody outside,
+ * this is still the one module that answers questions about claims.
  */
 
 export {
@@ -71,7 +69,7 @@ export {
   claimsForOrder,
   liveImportChain,
   // Siblings, and they belong side by side — one says how much the picking side
-  // of step 5 still owes, the other how much the packing side does.
+  // of the night still owes, the other how much the packing side does.
   packingRemaining,
   pickingRemaining
 }
@@ -385,32 +383,42 @@ function toStationOrder(o: ShipOrderRow, now: number, withDetail = false): ShipS
 /**
  * Orders a picker may take: not finished, not held by anyone else, not on hold.
  *
- * The station-derived start offset is the difference between two pickers who
- * contend on every single order all night and two who mostly never meet. Both
- * open the same list in the same order; starting them at deterministic but
- * different places means the claim protocol only has to settle the tail.
+ * IN PAGE ORDER, because `listOrders` is, and nothing here re-orders it.
+ *
+ * There used to be a station-derived rotation: every bench opened the same list
+ * and started at a different deterministic index, so two pickers would not
+ * contend on the same order all night. That is in direct conflict with walking
+ * the slip from page 1 — a rotation is precisely "starts somewhere else" — and
+ * the slip wins, because a picker holding the paper is the person this list is
+ * for.
+ *
+ * Dropping it costs nothing, and the reason is the `mine || not held` filter
+ * two lines down. It already hides every order another station is holding, so
+ * two benches never SEE the same head: A takes page 1, and page 1 stops being in
+ * B's list before B looks. Contention is confined to the moment two stations
+ * read before either has written, which is exactly what the claim protocol is
+ * for and exactly what the rotation could never eliminate either.
+ *
+ * What the rotation really bought was two pickers working from opposite ends of
+ * a long list. Two pickers now work from the same end, one order apart — which
+ * is also how two people share a stack of paper.
  */
 export function pickableOrders(): ShipStationOrder[] {
   const now = Date.now()
-  const station = deviceId()
-  const all = listOrders()
-    // Still to pick, OR sent back. A rejected order has every card ticked — the
-    // whole point is that one of them is wrong — so filtering on "not finished"
-    // alone would leave it in neither queue, and it would simply be forgotten.
-    .filter((o) => !o.onHold && !o.packedAt)
-    .filter(
-      (o) =>
-        o.pick.checked < o.pick.total ||
-        needsRepick(claimsForOrder(o.id, o.customerId))
-    )
-    .map((o) => toStationOrder(o, now))
-    .filter((o) => o.mine || (!o.heldByName && !o.heldByStation))
-    .filter((o) => o.readyAt === null || o.mine)
-  if (all.length === 0) return all
-  let offset = 0
-  for (let i = 0; i < station.length; i++) offset = (offset * 31 + station.charCodeAt(i)) % 997
-  const start = offset % all.length
-  return [...all.slice(start), ...all.slice(0, start)]
+  return (
+    listOrders()
+      // Still to pick, OR sent back. A rejected order has every card ticked —
+      // the whole point is that one of them is wrong — so filtering on "not
+      // finished" alone would leave it in neither queue, and it would simply be
+      // forgotten.
+      .filter((o) => !o.onHold && !o.packedAt)
+      .filter(
+        (o) => o.pick.checked < o.pick.total || needsRepick(claimsForOrder(o.id, o.customerId))
+      )
+      .map((o) => toStationOrder(o, now))
+      .filter((o) => o.mine || (!o.heldByName && !o.heldByStation))
+      .filter((o) => o.readyAt === null || o.mine)
+  )
 }
 
 /** Handed over and waiting, oldest first. Never browsable — a depth and a head. */
@@ -429,13 +437,19 @@ export interface AdvanceResult {
   next: ShipStationOrder | null
   queueDepth: number
   /**
-   * This pick was the last one, and it is the one that closed SOP step 5.
+   * There is nothing left in the room to pick, and this click is what did it.
    *
-   * True for exactly one caller ever, which is what makes it safe to act on:
-   * the bench that sees it is the bench that finished the night, so that is the
-   * screen — and only that screen — sent back to the checklist.
+   * It used to be reported by the SOP checklist's fifth step closing, which was
+   * a conditional row write and therefore true for exactly one caller ever. That
+   * row is gone, so the fact is read straight off the work instead: the picking
+   * count is zero the moment after this station handed its order over.
+   *
+   * Losing the exactly-once property costs nothing, because nothing is deducted
+   * from it any more. It is a statement about the ROOM — "there is no picking
+   * left" — and a second picker who reads it a moment later reads something that
+   * is still true and still means their run is over.
    */
-  sopShipCompleted: boolean
+  pickingCompleted: boolean
   error?: string
 }
 
@@ -446,14 +460,13 @@ export interface AdvanceResult {
  * somebody else found keeps their name), stamps `finished_at` on MY OWN claim
  * row — which is what puts the order in the pack pool — and claims the next one.
  *
- * It deducts NO supplies PER ORDER. Step 5's tick does that, once, for the whole
- * show; doing it per order as well would double-deduct every mailer and label
- * and leave a P&L day nobody can reconcile by hand.
+ * It moves NO stock. Nothing on this path ever did and nothing anywhere does
+ * now; a pick is a record of what was found, never a deduction.
  *
  * What it does do is notice when this was the LAST order to pick, because that
- * is what step 5 being finished means — nobody ticks it, the work does. The tick
- * is claimed rather than written, so of two pickers finishing seconds apart only
- * one moves the stock and only one gets sent back to the checklist.
+ * is the one thing a picker cannot read off the order in their hands: their own
+ * queue empties the moment somebody else takes what is left, and "nothing for
+ * me" and "nothing at all" are the difference between waiting and going home.
  */
 export function pickAdvance(customerId: string, loginUserId: string | null): AdvanceResult {
   const db = getDb()
@@ -463,7 +476,7 @@ export function pickAdvance(customerId: string, loginUserId: string | null): Adv
       finished: null,
       next: null,
       queueDepth: 0,
-      sopShipCompleted: false,
+      pickingCompleted: false,
       error: 'That package is gone.'
     }
   }
@@ -498,16 +511,17 @@ export function pickAdvance(customerId: string, loginUserId: string | null): Adv
   })
   run()
 
-  // The night's last pick closes step 5. Outside the transaction above on
-  // purpose: the handoff is this station's own row and must land whatever the
-  // checklist decides, and `completeShipSopStepOnce` runs its own transaction
-  // over stock. It never throws — a show with no day set, or a step whose
-  // predecessor is still open, is a reason for the tick not to happen and never
-  // a reason for the pick not to.
-  const sopShipCompleted =
-    pickingRemaining() === 0 && listOrders().length > 0
-      ? completeShipSopStepOnce('ship', loginUserId) !== null
-      : false
+  // Did that finish the night's picking? Asked AFTER the handoff has landed, so
+  // the order this station just put down is already out of the count.
+  //
+  // `pickingRemaining` is the room's figure rather than this bench's queue, on
+  // purpose: `pickableOrders` hides an order somebody else is holding, so two
+  // pickers working the tail would each be told the night was over while the
+  // other was still on it.
+  //
+  // The empty-workspace guard is what stops a show with no orders in it — a
+  // cleared dataset, a delete mid-shift — announcing that it has been picked.
+  const pickingCompleted = listOrders().length > 0 && pickingRemaining() === 0
 
   const next = pickableOrders()[0] ?? null
   if (next) claimOrder(next.orderId, next.customerId, 'pick', loginUserId)
@@ -515,7 +529,7 @@ export function pickAdvance(customerId: string, loginUserId: string | null): Adv
     finished: _orderRow(shipment),
     next: next ? toStationOrder(listOrders().find((o) => o.id === next.orderId) as ShipOrderRow, Date.now()) : null,
     queueDepth: packQueue().length,
-    sopShipCompleted
+    pickingCompleted
   }
 }
 
@@ -622,9 +636,9 @@ export function getStationBoard(): ShipStationBoard {
     toPick,
     packQueue: queue.length,
     // The room's figure, not this bench's: `queue` is what a packer standing
-    // here may take, so it hides an order somebody else is holding. The SOP
-    // checklist reads this one, because "is the packing finished" is a question
-    // about the night rather than about a screen.
+    // here may take, so it hides an order somebody else is holding. Anything
+    // asking "is the packing finished" reads this one, because that is a
+    // question about the night rather than about a screen.
     packingRemaining: packingRemaining(),
     current,
     others,

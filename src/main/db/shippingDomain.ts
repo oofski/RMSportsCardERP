@@ -103,7 +103,6 @@ import {
   updateShipment
 } from './shipping'
 import {
-  SHIP_SOP_STEPS,
   computeSupplyPlan,
   costSupplyPlan,
   type ShipSupplyPlan,
@@ -314,7 +313,15 @@ export function _orderRow(sh: ShipShipment, ctx?: DerivationContext): ShipOrderR
   }
 }
 
-/** Display order: held rows sink to the bottom, then the manual queue. */
+/**
+ * Display order for the tracker and the queue: held rows sink to the bottom,
+ * then the manual queue.
+ *
+ * NOT what the Orders tab and the benches walk — see `sortOrders` below, which
+ * is page order and answers a different question. This one is still the right
+ * answer for a lead scanning the shipping tracker, where a held package really
+ * does belong at the bottom and the manual queue is the only ordering there is.
+ */
 function sortShipments(rows: ShipShipment[]): ShipShipment[] {
   return rows
     .map((r, i) => ({ r, i }))
@@ -326,9 +333,58 @@ function sortShipments(rows: ShipShipment[]): ShipShipment[] {
     .map((x) => x.r)
 }
 
+/**
+ * Display order: PAGE 1 OF THE SLIP ONWARD, one order at a time.
+ *
+ * Every screen that walks orders — the Orders tab and both benches — draws this
+ * list in this order, and the paper on the desk is the uploaded PDF. Any other
+ * ordering means somebody working from page 1 is handed page 12, then page 3,
+ * and the whole point of having the slip open beside the cards is gone.
+ *
+ * `ship_customers.pages` is the page numbers this customer's slip occupies, and
+ * a buyer who took forty-seven cards runs across several — so the FIRST page is
+ * what sorts, which is where their slip begins.
+ *
+ * ## What this deliberately no longer honours
+ *
+ * HELD PACKAGES DO NOT SINK. A lead stopping a package is a reason not to work
+ * it, which `pickableOrders` and `packQueue` already act on by filtering it out
+ * of both queues. It is not a reason to move it on the paper: a walk that skips
+ * page 6 and comes back to it at the end is exactly the complaint.
+ *
+ * `queue_order` IS NOT READ HERE, though `sortShipments` above still reads it.
+ * It is the manual reorder's column, and a walk that follows the slip cannot
+ * also follow a hand-made ordering — the two disagree by construction, and the
+ * slip is the one on the desk.
+ *
+ * ## Anything with no pages sorts last, and never crashes
+ *
+ * An order with an empty `pages` array is one the parser could not place — a
+ * hand-added customer, or a slip whose page markers did not survive. It goes to
+ * the end rather than to the front, because a walk has to start on page 1, and
+ * within that group the handle keeps it stable. The handle is also the final
+ * tiebreak everywhere, so two orders that begin on the same page come out in the
+ * same order on every machine and on every rebuild of the list.
+ */
+function orderSortKey(o: ShipOrderRow): { page: number; handle: string } {
+  const pages = o.customer.pages ?? []
+  let first = Number.POSITIVE_INFINITY
+  for (const p of pages) {
+    if (Number.isFinite(p) && p > 0 && p < first) first = p
+  }
+  return { page: first, handle: (o.customer.handle || o.customerId).toLowerCase() }
+}
+
+function sortOrders(rows: ShipOrderRow[]): ShipOrderRow[] {
+  return rows
+    .map((r) => ({ r, k: orderSortKey(r) }))
+    .sort((a, b) => a.k.page - b.k.page || a.k.handle.localeCompare(b.k.handle))
+    .map((x) => x.r)
+}
+
 export function listOrders(): ShipOrderRow[] {
   const ctx = buildContext()
-  return sortShipments(listShipShipments()).map((sh) => _orderRow(sh, ctx))
+  return sortOrders(listShipShipments().map((sh) => _orderRow(sh, ctx)))
 }
 
 export function getOrder(id: string): ShipOrderRow | null {
@@ -1360,23 +1416,6 @@ export function listCustomerRows(): ShipCustomerRow[] {
 // Workspace summary
 // ---------------------------------------------------------------------------
 
-/**
- * How much of the SOP is ticked for the show's day.
- *
- * Queried here rather than imported from shipSop, which reads the costed plan
- * from this file — a cycle for the sake of one COUNT(*). The seven steps are the
- * shared constant, so the two cannot drift on what "all done" means.
- */
-function sopCounts(): { sopDone: number; sopTotal: number } {
-  const total = SHIP_SOP_STEPS.length
-  const date = getShipEvent().date.trim()
-  if (!date) return { sopDone: 0, sopTotal: total }
-  const row = getDb()
-    .prepare(`SELECT COUNT(*) AS n FROM ship_sop_steps WHERE event_date = ? AND done = 1`)
-    .get(date) as { n: number }
-  return { sopDone: Math.min(total, row?.n ?? 0), sopTotal: total }
-}
-
 export function getWorkspaceSummary(): ShipWorkspaceSummary {
   const ctx = buildContext()
   const shipments = listShipShipments()
@@ -1436,8 +1475,7 @@ export function getWorkspaceSummary(): ShipWorkspaceSummary {
     warnings: listShipWarnings(),
     audit,
     hasCollisions: audit.some((a) => a.collisions.length > 0),
-    lastImport: imports[0] ?? null,
-    ...sopCounts()
+    lastImport: imports[0] ?? null
   }
 }
 

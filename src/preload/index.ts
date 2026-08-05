@@ -8,13 +8,7 @@ import type {
   ShipStationOrder,
   ShipStationRole
 } from '@shared/shipStations'
-import type {
-  ShipSopResult,
-  ShipSopState,
-  ShipSopStep,
-  ShipSupplyPlan,
-  ShipSupplyPlanCosted
-} from '@shared/shippingSupplies'
+import type { ShipSupplyPlan, ShipSupplyPlanCosted } from '@shared/shippingSupplies'
 import type {
   ParsedSheet,
   ResetApplyResult,
@@ -475,12 +469,6 @@ const api = {
     ): Promise<Result<ShipSlotUpdate>> =>
       ipcRenderer.invoke(IPC.shipSlotSleeve, { slotId, which, on }),
 
-    /** The SOP checklist: where the night is up to, and what it has consumed. */
-    sop: (): Promise<ShipSopState | null> => ipcRenderer.invoke(IPC.shipSop),
-    /** Tick a step off — or take it back. This MOVES STOCK. */
-    sopSetStep: (step: ShipSopStep, done: boolean): Promise<Result<ShipSopResult>> =>
-      ipcRenderer.invoke(IPC.shipSopSetStep, { step, done }),
-
     // ---- The uploaded slip -------------------------------------------------
     /** Metadata only — cheap enough for any screen to ask on mount. */
     document: (): Promise<ShipDocument | null> => ipcRenderer.invoke(IPC.shipDocument),
@@ -602,15 +590,9 @@ const api = {
     /** What deleting this import would destroy, priced. Nothing is written. */
     importDeletePlan: (id: string): Promise<Result<ShipImportDeletePlan>> =>
       ipcRenderer.invoke(IPC.shipImportDeletePlan, { id }),
-    /**
-     * Delete the show, not just its log row.
-     *
-     * `releaseSupplies` says the operator has been shown what that show's ticked
-     * SOP steps took and has agreed to it going back on the shelf. Main refuses
-     * the delete without it when there is anything to hand back.
-     */
-    deleteImport: (id: string, releaseSupplies = false): Promise<Result<ShipImportDeleteResult>> =>
-      ipcRenderer.invoke(IPC.shipImportDelete, { id, releaseSupplies }),
+    /** Delete the show, not just its log row. */
+    deleteImport: (id: string): Promise<Result<ShipImportDeleteResult>> =>
+      ipcRenderer.invoke(IPC.shipImportDelete, { id }),
     snapshots: (): Promise<ShipSnapshotSummary[]> => ipcRenderer.invoke(IPC.shipSnapshotsList),
     snapshot: (id: string): Promise<ShipSnapshot | null> =>
       ipcRenderer.invoke(IPC.shipSnapshotGet, id),

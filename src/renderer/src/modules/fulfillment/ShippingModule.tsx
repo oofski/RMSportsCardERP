@@ -8,7 +8,6 @@ import { Icon } from '../../components/Icon'
 import { Button, CenterLoader, EmptyState } from '../../components/ui'
 import { CheckerTab } from './CheckerTab'
 import { TodayTab } from './TodayTab'
-import { SopTab } from './SopTab'
 import { FloorView } from './FloorView'
 import { WithSlipMode } from './WithSlipMode'
 
@@ -20,14 +19,14 @@ import { WithSlipMode } from './WithSlipMode'
  * refetches it after a mutation so badges never drift from the rows.
  */
 /**
- * Four screens, and nothing that is not somebody's next action.
+ * Three screens, and nothing that is not somebody's next action.
  *
  * Today   the show-day board, and the button that starts the night
- * Orders  ONE order at a time with the customer's slip beside it, which is how
- *         both picking and mailing are really done. The whole-night list is
- *         still here, one click away, for a lead scanning what is left.
- * Steps   the SOP, seven ticks in order — and the only place supplies leave stock
- * Bench   picking or packing, one order in front of you, entered from step 5
+ * Orders  ONE order at a time with the customer's slip beside it, in the order
+ *         the slip prints them, which is how both picking and mailing are really
+ *         done. The whole-night list is still here, one click away, for a lead
+ *         scanning what is left.
+ * Bench   picking or packing, one order in front of you
  *
  * Flags, Setup and History left for Admin, where a lead already goes to run the
  * show. None of the three is a thing anybody does with cards in their hands, and
@@ -36,7 +35,7 @@ import { WithSlipMode } from './WithSlipMode'
  * places rather than deleted: the collision strip below still says a lead has to
  * look, and Today's empty state says who imports the show.
  */
-export type ShipTabId = 'today' | 'find' | 'sop' | 'floor'
+export type ShipTabId = 'today' | 'find' | 'floor'
 
 /**
  * The prop contract every tab in this workspace takes. FRONTEND-2's Checker /
@@ -150,20 +149,10 @@ export function ShippingModule(): JSX.Element {
   const cardsLeft = Math.max(0, (counts?.teamSlots ?? 0) - (counts?.checkedSlots ?? 0))
   const hasDataset = !!summary?.hasDataset
   const collisions = summary?.hasCollisions ?? false
-  // Amber means somebody has to act. With no show loaded there is no night to
-  // work, so seven outstanding steps is noise rather than news — the same rule
-  // the rest of this row follows.
-  const stepsLeft = hasDataset
-    ? Math.max(0, (summary?.sopTotal ?? 0) - (summary?.sopDone ?? 0))
-    : 0
 
   const tabs: TabDef[] = [
     { id: 'today', label: 'Today', icon: 'LayoutGrid', badge: 0 },
     { id: 'find', label: 'Orders', icon: 'ListChecks', badge: cardsLeft, tone: 'warning' },
-    // The badge counts what is LEFT, like Orders does — seven minus what is
-    // ticked. A count of steps done would read as work outstanding and mean the
-    // opposite of what every other badge in this row means.
-    { id: 'sop', label: 'Steps', icon: 'ListTodo', badge: stepsLeft, tone: 'warning' },
     // The bench. Deliberately its own tab rather than a mode of Orders: a
     // picker and a packer are doing different jobs on different screens, and
     // the whole point is that neither is looking at the other's list.
@@ -240,7 +229,6 @@ export function ShippingModule(): JSX.Element {
             <CheckerTab {...tabProps} />
           </WithSlipMode>
         )}
-        {tab === 'sop' && <SopTab {...tabProps} />}
         {tab === 'floor' && <FloorView {...tabProps} />}
       </div>
     </div>

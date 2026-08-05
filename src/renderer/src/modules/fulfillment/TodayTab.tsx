@@ -13,10 +13,10 @@ import type { ShipTabProps } from './ShippingModule'
  *
  * Everyone lands here, so the first thing on it is the answer to the question
  * nine people in ten arrive with: *where do I start*. One button, always the
- * same button, going to the same place — the checklist, which then tells them
- * what is next. There is no decision in it, because there was never really a
- * decision to make: the seven steps run in order and the first one is the first
- * one.
+ * same button, going to the same place — the bench, which then asks who is
+ * standing there and which job they are doing. There is no decision in it,
+ * because there was never really a decision to make: the work is the orders, and
+ * the bench hands them out one at a time in the order the slip prints them.
  *
  * What USED to be here was "your breaks", built on somebody having handed the
  * show out first. Most nights nobody had, so the screen everybody landed on
@@ -77,11 +77,6 @@ export function TodayTab({ summary, onGoTo }: ShipTabProps): JSX.Element {
   // Nearly always true: a promo rider comes with no break number by nature. A
   // PAID card outside every break is the odd one, and the import flags it.
   const looseGiveawaysOnly = looseTotal > 0 && (summary?.looseGiveawayCards ?? 0) === looseTotal
-  const stepsLeft = Math.max(0, (summary?.sopTotal ?? 0) - (summary?.sopDone ?? 0))
-  // Supplies that leave the shelf have to book to a date, so a show with no day
-  // cannot be ticked off at all — and that is a person's job to fix, not a
-  // number that will come down on its own.
-  const noShowDay = !(summary?.event?.date ?? '').trim()
 
   if (loading) return <CenterLoader />
 
@@ -102,23 +97,24 @@ export function TodayTab({ summary, onGoTo }: ShipTabProps): JSX.Element {
     <div className="today-page">
       {/* ---- The front door.
 
-          One action, and it is the same one every night: go to the checklist and
-          start at the top. Deliberately the largest thing on the screen — this is
-          what almost everybody who opens this app came here to press, and making
-          them read a board first to find it was the whole complaint. */}
+          One action, and it is the same one every night: go to the bench and say
+          who you are. Deliberately the largest thing on the screen — this is what
+          almost everybody who opens this app came here to press, and making them
+          read a board first to find it was the whole complaint. */}
       <section className="today-start">
         <div className="today-start-text">
           <h3>Start fulfillment</h3>
           <p>
-            The seven steps, in order. Tick one off and the next one opens — nothing to
-            choose, nothing to be assigned first.
+            Say who is at this bench and whether you are picking or packing. The orders come
+            one at a time, from page 1 of the slip onward — nothing to choose, nothing to be
+            assigned first.
           </p>
         </div>
         <Button
           className="today-start-btn"
           variant="primary"
           icon="PlayCircle"
-          onClick={() => onGoTo('sop')}
+          onClick={() => onGoTo('floor')}
         >
           Start fulfillment
         </Button>
@@ -201,23 +197,6 @@ export function TodayTab({ summary, onGoTo }: ShipTabProps): JSX.Element {
           label={summary.onHoldCount === 1 ? 'package on hold' : 'packages on hold'}
           tone={summary.onHoldCount > 0 ? 'warn' : 'ok'}
           onClick={() => onGoTo('find')}
-        />
-        {/* Steps outstanding is BUSY, not amber — a show that has not been
-            worked yet is the normal state of every import. The exception is a
-            show with no day: nothing can be ticked at all until somebody fixes
-            that, which is precisely what amber is for. */}
-        <Blocker
-          icon="ListTodo"
-          value={stepsLeft}
-          label={
-            noShowDay
-              ? 'steps blocked — no day set'
-              : stepsLeft === 1
-                ? 'SOP step left'
-                : 'SOP steps left'
-          }
-          tone={noShowDay ? 'warn' : stepsLeft > 0 ? 'busy' : 'ok'}
-          onClick={() => onGoTo('sop')}
         />
       </div>
 

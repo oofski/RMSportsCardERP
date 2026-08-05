@@ -28,7 +28,6 @@ import type {
   ShipWarning
 } from './shippingTypes'
 import type { ShipStationRole } from './shipStations'
-import type { ShipSupplyRole } from './shippingSupplies'
 
 // ---------------------------------------------------------------------------
 // Fulfillment stage (architecture doc section 4.1)
@@ -432,13 +431,6 @@ export interface ShipWorkspaceSummary {
   /** True when any break audit reported a team owned by two customers. */
   hasCollisions: boolean
   lastImport: ShipImportRecord | null
-  /**
-   * SOP steps ticked for this show's day, out of seven. Zero when the show has
-   * no day assigned — which is also the state in which nothing CAN be ticked,
-   * since supplies leaving stock have to book to a date.
-   */
-  sopDone: number
-  sopTotal: number
 }
 
 // ---------------------------------------------------------------------------
@@ -675,22 +667,6 @@ export interface ShipCalendarDayDetail extends ShipCalendarDay {
 // Deleting an import — what goes with it
 // ---------------------------------------------------------------------------
 
-/**
- * One consumable a delete is about to put back on the shelf.
- *
- * Read from `ship_supply_usage`, never recomputed from tonight's plan: the row
- * is the only record of what actually left and at what it was booked, and it
- * survives the product being re-pointed or deleted.
- */
-export interface ShipImportDeleteSupply {
-  role: ShipSupplyRole
-  label: string
-  /** The product it came out of, when that product still exists. */
-  supplyName: string | null
-  quantity: number
-  cost: number
-}
-
 /** Somebody with an order in their hands at the moment the plan was drawn. */
 export interface ShipImportDeleteWorker {
   name: string | null
@@ -739,22 +715,12 @@ export interface ShipImportDeletePlan {
   /** The show's day, when this import still owns one. */
   eventName: string | null
   eventDate: string | null
-  /**
-   * Set when that day's checklist belongs to a DIFFERENT show. Nothing is
-   * handed back in that case — the other show's stock is genuinely gone.
-   */
-  sopDayOwner: string | null
-  /** Ticked steps whose stock the delete puts back. */
-  sopSteps: number
-  sopSupplies: ShipImportDeleteSupply[]
-  /** What comes off that day's packing cost in the P&L. */
-  sopCost: number
 
   /** Captures of this show that SURVIVE the delete. */
   snapshots: number
   /**
-   * True when the confirmation has to be acknowledged in writing: stock moves,
-   * somebody is working, or real progress is being thrown away.
+   * True when the confirmation has to be acknowledged in writing: somebody is
+   * working, or real progress is being thrown away.
    */
   needsAcknowledgement: boolean
 }
@@ -764,10 +730,4 @@ export interface ShipImportDeleteResult {
   plan: ShipImportDeletePlan
   /** True when the workspace is empty afterwards. */
   workspaceCleared: boolean
-  /**
-   * Units that could not be put back because the product they came from has
-   * been deleted. Never silent — a shelf count that stops matching is worse
-   * than a sentence nobody wanted to read.
-   */
-  stranded: ShipImportDeleteSupply[]
 }

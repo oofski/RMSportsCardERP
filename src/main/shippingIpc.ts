@@ -134,15 +134,7 @@ import {
 } from './db/shippingDomain'
 import { getShipCalendarDay, listShipCalendar } from './db/shippingCalendar'
 import { deleteShipImport, planShipImportDelete } from './db/shipImportDelete'
-import type {
-  ShipSopResult,
-  ShipSopState,
-  ShipSopStep,
-  ShipSupplyPlan,
-  ShipSupplyPlanCosted
-} from '@shared/shippingSupplies'
-import { SHIP_SOP_STEPS } from '@shared/shippingSupplies'
-import { getShipSop, setShipSopStep } from './db/shipSop'
+import type { ShipSupplyPlan, ShipSupplyPlanCosted } from '@shared/shippingSupplies'
 import {
   claimOrder,
   endStationSession,
@@ -612,53 +604,6 @@ export function registerShippingIpc(): void {
    */
   ipcMain.handle(IPC.shipSupplyPlanCosted, (): ShipSupplyPlanCosted | null =>
     can('module.fulfillment') && can('module.inventory') ? getSupplyPlanCosted() : null
-  )
-
-  /**
-   * The SOP checklist.
-   *
-   * Readable by anyone in the module — knowing where the night is up to is not
-   * privileged information, and a picker who cannot see whether sorting is done
-   * cannot decide what to do next. Costs are the exception and are stripped for
-   * anyone without Inventory, matching the plan handler above.
-   */
-  ipcMain.handle(IPC.shipSop, (): ShipSopState | null => {
-    if (!can('module.fulfillment')) return null
-    const state = getShipSop()
-    if (can('module.inventory')) return state
-    return {
-      ...state,
-      plannedCost: 0,
-      bookedCost: 0,
-      steps: state.steps.map((s) => ({
-        ...s,
-        cost: 0,
-        lines: s.lines.map((l) => ({ ...l, unitCost: 0, lineCost: 0, usedCost: 0 }))
-      }))
-    }
-  })
-
-  /**
-   * Tick a step — which is a STOCK MOVEMENT, so it is a write.
-   *
-   * Gated on packing rather than on Inventory. The person who just finished
-   * sleeving is the only one who knows the sleeving is finished, and making them
-   * fetch somebody with an Inventory permission to record it is how a checklist
-   * stops being ticked at all. What moves is the app's own count of its own
-   * consumables, off a plan they cannot edit from this screen.
-   */
-  ipcMain.handle(
-    IPC.shipSopSetStep,
-    (_e, payload: { step?: unknown; done?: unknown }): Result<ShipSopResult> => {
-      try {
-        const actor = requirePack()
-        const step = str(payload?.step).trim() as ShipSopStep
-        if (!SHIP_SOP_STEPS.includes(step)) throw new Error('Unknown step.')
-        return { ok: true, data: setShipSopStep(step, payload?.done !== false, actor.id) }
-      } catch (err) {
-        return fail(err)
-      }
-    }
   )
 
   // ---- The floor: stations, and the pick -> pack handoff -------------------
@@ -1183,8 +1128,8 @@ export function registerShippingIpc(): void {
 
   /**
    * What deleting this import would destroy. A read, but a lead's read: it
-   * carries the show's value, who is standing at a bench and what the day has
-   * booked in supplies, so it is gated exactly as the delete is.
+   * carries the show's value and who is standing at a bench, so it is gated
+   * exactly as the delete is.
    */
   ipcMain.handle(
     IPC.shipImportDeletePlan,
@@ -1200,25 +1145,13 @@ export function registerShippingIpc(): void {
     }
   )
 
-  /**
-   * `releaseSupplies` is checked HERE, not on the screen that asked for it.
-   * The renderer is not a trust boundary — this IPC is reachable from a second
-   * window and from any future caller — and what is on the other side of it is
-   * real stock and a P&L day.
-   */
   ipcMain.handle(
     IPC.shipImportDelete,
-    (_e, payload: { id: string; releaseSupplies?: boolean }): Result<ShipImportDeleteResult> => {
+    (_e, payload: { id: string }): Result<ShipImportDeleteResult> => {
       try {
-        const user = requireManage()
+        requireManage()
         const id = requireId(payload?.id, 'import')
-        return {
-          ok: true,
-          data: deleteShipImport(id, {
-            releaseSupplies: payload?.releaseSupplies === true,
-            userId: user.id
-          })
-        }
+        return { ok: true, data: deleteShipImport(id) }
       } catch (err) {
         return fail(err)
       }

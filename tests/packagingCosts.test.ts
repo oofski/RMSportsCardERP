@@ -22,9 +22,11 @@
  *     "no cost" on a night that certainly shipped something.
  *   - A break whose league cannot be identified must not be billed at 32 bags.
  *     A wrong slate is invisible: it is a plausible number in the right column.
- *   - A memo line that is missing from PNL_MONEY_FIELDS reads correctly on every
- *     day and zero on every week, month and dragged range. Nothing fails; the
- *     statement is simply wrong at exactly the grain the owner reads it at.
+ *   - A line that is missing from PNL_MONEY_FIELDS reads correctly on every day
+ *     and zero on every week, month and dragged range. Nothing fails; the
+ *     statement is simply wrong at exactly the grain the owner reads it at —
+ *     and now that these six are inside net profit, a week's bottom line stops
+ *     matching the sum of its own days.
  *
  * Run: npm run test:packaging
  */
@@ -384,12 +386,24 @@ ok(
 )
 // And the SECTION says its own subtotal is short, because a reader who takes
 // the subtotal and skips the lines would otherwise carry away a complete-looking
-// figure that is missing two of its six components.
+// figure that is missing two of its six components. Since this section is inside
+// net profit, the same gap makes the bottom line too high — the note has to say
+// so, and the heading has to carry it for a reader who never opens the section.
 const blindSec = buildPnl(a).find((s: any) => s.key === 'packaging')
 ok(
   String(blindSec.note).includes('missing information, not a zero cost'),
   'and the section note says the subtotal is short rather than complete',
   String(blindSec.note)
+)
+ok(
+  String(blindSec.note).includes('net profit above is higher than the truth'),
+  'naming the consequence for the bottom line, not just for the section',
+  String(blindSec.note)
+)
+ok(
+  blindSec.incomplete === true,
+  'and the heading is flagged, because the sections are closed by default',
+  JSON.stringify(blindSec.incomplete)
 )
 
 // --- now load a real packing dataset for night A -----------------------------
@@ -437,6 +451,10 @@ ok(cents(a.packagingShippingLabels) === cents(-0.04), '2 packages × 2¢ = −$0
 const labelLine2 = lineOf(a, 'packagingShippingLabels')
 ok(!labelLine2.unavailable, 'and the line is no longer unavailable')
 ok(String(labelLine2.detail) === '2 packages × 2¢', 'stating the arithmetic', String(labelLine2.detail))
+ok(
+  buildPnl(a).find((s: any) => s.key === 'packaging').incomplete !== true,
+  'and a fully counted night carries no caveat at all — otherwise it stops being read'
+)
 
 // A PACKAGE IS AN ENVELOPE, NOT AN ORDER ID. This is the whole reason packages
 // cannot come from the ledger: night A's ledger holds eight order ids for two
@@ -557,12 +575,12 @@ console.log('\n=== the statement still adds up ===')
 a = dayOf(view, NIGHT_A)
 // ---------------------------------------------------------------------------
 
-// THE IDENTITY EVERY OTHER P&L SUITE ALSO ASSERTS. The packaging section is a
-// memo — it prices the same materials "Packing supplies" prices, from a model
-// rather than from stock that left — so it is deliberately outside the bottom
-// line and `pnlChecksum` must skip it. If it ever stops skipping, this fails by
-// exactly the packaging total, which is the signal that the same mailer is
-// being charged twice.
+// THE IDENTITY EVERY OTHER P&L SUITE ALSO ASSERTS, and the one that now carries
+// the packaging block. It stopped being a memo when the shipping checklist — and
+// the second valuation of the same materials that came with it — was removed, so
+// `pnlChecksum` counts it like every other section. A build that folded it into
+// the bottom line and forgot the section, or the reverse, fails here by exactly
+// the packaging total.
 const checksumOk = (row: any, what: string): void => {
   const sections = buildPnl(row)
   ok(
@@ -575,26 +593,48 @@ checksumOk(a, 'night A')
 checksumOk(view.totals, 'all-time')
 
 const packSec = buildPnl(a).find((s: any) => s.key === 'packaging')
-ok(packSec.memo === true, 'the packaging section is marked as a memo', JSON.stringify(packSec.memo))
+ok(packSec.memo === undefined, 'the packaging section is no longer a memo', JSON.stringify(packSec.memo))
 ok(
   cents(packSec.subtotal) === cents(-3.69),
   'its subtotal is the sum of its own lines',
   String(packSec.subtotal)
 )
 ok(
-  String(packSec.note).includes('NOT IN NET PROFIT'),
-  'and it says on the statement that it is outside the bottom line',
+  !String(packSec.note).includes('NOT IN NET PROFIT'),
+  'and no longer claims to be outside the bottom line',
   String(packSec.note)
 )
 
-// The other half of the same promise: the section must NOT be inside the day's
-// own netShipping or netAfterCosts either, or the memo would be a memo in name
-// only.
+// IN NET PROFIT, and demonstrably: take the section back off the bottom line and
+// what is left is the statement without it. A day whose netProfit ignored the
+// packaging would pass the checksum above only if the section were skipped, so
+// the two assertions have to be read together.
+ok(
+  cents(packSec.subtotal) !== 0,
+  'the packaging subtotal on night A is real money',
+  String(packSec.subtotal)
+)
+const withoutPackaging = cents(a.netProfit) - cents(packSec.subtotal)
+ok(
+  cents(a.netProfit) < withoutPackaging,
+  'and net profit is LOWER with it than without, which is what a cost does',
+  `${cents(a.netProfit)} vs ${withoutPackaging}`
+)
+
+// The LEDGER's two figures stay clean. Every term of netShipping and
+// netAfterCosts can be checked against a Whatnot export, and a modelled cost
+// inside either would quietly destroy that property.
 ok(
   cents(a.netShipping) === cents(a.shippingSubsidy + a.shippingCharges + a.giveawayShipping +
-    a.refundShipping + a.packingSupplies),
-  'net shipping is untouched by the packaging block',
+    a.refundShipping),
+  'net shipping is postage only, untouched by the packaging block',
   String(a.netShipping)
+)
+ok(
+  cents(a.netAfterCosts) ===
+    cents(a.netRevenue + a.netShipping + a.showBoost + a.reversals + a.giveawayLoss),
+  'and netAfterCosts is the ledger economics on their own',
+  String(a.netAfterCosts)
 )
 
 // ---------------------------------------------------------------------------
