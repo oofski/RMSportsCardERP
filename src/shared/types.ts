@@ -50,7 +50,7 @@ export interface Employee {
  * shipping ROLE replaced them: it gives a real person the same narrow access,
  * so the shop has one way to put somebody at a packing computer instead of two.
  * Nothing creates a station any more, but rows created while it existed are
- * still on disk (they own time entries and SOP ticks, so deleting them would
+ * still on disk (they own time entries and picked cards, so deleting them would
  * throw away work), and the picking bench still excludes them from its roster.
  * The field reports what a row says; it is never written as anything but
  * 'person'.

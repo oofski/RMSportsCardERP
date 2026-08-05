@@ -37,13 +37,13 @@ export const ROLES: RoleDefinition[] = [
     rank: 1
   },
   // A sibling of Staff, not a rung below it — same rank, a different job. The
-  // people at the packing computers do the shipping SOP and work the bench, and
+  // people at the packing computers work the picking and packing bench, and
   // that is the whole of it; ranking them lower would only mean Staff could
   // assign the role, which they have no business doing either way.
   {
     id: 'shipping',
     label: 'Shipping',
-    description: 'Works the packing floor: the shipping SOP and the picking/packing bench.',
+    description: 'Works the packing floor: the picking and packing bench.',
     rank: 1
   }
 ]
@@ -255,8 +255,8 @@ const STAFF_PERMISSIONS: Permission[] = [
   'module.sops'
 ]
 
-// The packing bench, and nothing else. Someone hired to ship gets the seven-step
-// SOP and the pick/pack screens; they do not get Inventory, and they pointedly
+// The packing bench, and nothing else. Someone hired to ship gets the today
+// board and the pick/pack screens; they do not get Inventory, and they pointedly
 // do not get shipping.manage, which is what gates the exports carrying customer
 // names and addresses. That boundary was closed on purpose and this role does
 // not reopen it.

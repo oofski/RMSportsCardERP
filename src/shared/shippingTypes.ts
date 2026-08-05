@@ -140,7 +140,7 @@ export interface ShipTeamSlot {
   /**
    * Sleeved but not necessarily top-loaded — about half of them are not.
    *
-   * Split from `topSleeved` because SOP step 1 consumes TWO supplies at two
+   * Split from `topSleeved` because sleeving consumes TWO supplies at two
    * different rates (95% sleeves, 50% loaders) and one flag could not say which
    * had happened.
    */

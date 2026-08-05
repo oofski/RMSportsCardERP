@@ -1446,6 +1446,14 @@ function migrate(database: Database.Database): void {
 
   // v34: the floor's checklist, and the stock it actually moved.
   //
+  // RETIRED. The checklist was removed in a later release and nothing reads or
+  // writes either table now — they are not in the sync manifest either. They
+  // stay in the schema on purpose: dropping a table on somebody's machine cannot
+  // be undone, and the rows are the only surviving record of what a past show
+  // took off the shelf. The migration is left exactly as it ran, because a
+  // migration that changes shape after the fact is a migration nobody can
+  // reason about.
+  //
   // Two tables, because they answer two different questions and only one of them
   // is allowed to be forgotten.
   //
@@ -1574,7 +1582,7 @@ function migrate(database: Database.Database): void {
   // new row and 'station' for the handful written while the idea existed — and
   // dropping it would mean the very table rebuild the paragraph above declined,
   // for a column that costs nothing. Those rows are not deleted either: they can
-  // own time entries and SOP ticks, and stationRoster() in shipStations.ts still
+  // own time entries and picked cards, and stationRoster() in shipStations.ts still
   // reads this column to keep a computer out of the picking roster.
   addColumnIfMissing(database, 'employees', 'account_kind', "TEXT NOT NULL DEFAULT 'person'")
   setMeta(database, 'schema_version', '38')

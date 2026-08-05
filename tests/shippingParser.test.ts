@@ -9,6 +9,7 @@
  */
 import { learnBannerTail, parsePages } from '../src/main/shipping/parser'
 import { groupIntoLines } from '../src/main/shipping/pdf'
+import { SHIP_TEAM_LISTS } from '../src/main/shipping/teams'
 import { pageRangeLabel } from '../src/shared/shippingViews'
 
 let pass = 0, fail = 0
@@ -553,6 +554,337 @@ const twoRows = groupIntoLines([
   { y: 486.1, x: 349.8, s: '1x 2026 FINEST BASEBALL' }
 ])
 ok(twoRows.length === 2, 'a 12.47pt gap is still two lines', JSON.stringify(twoRows))
+
+// ---------------------------------------------------------------------------
+// 5. The real August layout, page for page, with invented people
+// ---------------------------------------------------------------------------
+//
+// The owner's 97-page slip parses correctly today: 87 customers, 265 team slots,
+// 8 breaks labelled 1–8, each one a clean 30-team MLB slate, 25 giveaways, no
+// warnings and no malformed team names. Nothing below changes any of that. It
+// exists so that the next edit to `readBreakLabel`, to the banner learner or to
+// the team column cannot quietly take it away — every previous regression in
+// this file was found on a real import, weeks late, after cards had been picked
+// against it.
+//
+// PRIVACY. Every name, street, handle, order id and tracking number here is
+// INVENTED. This repository is public and the real slip is a hundred pages of
+// customers' home addresses. What is reproduced is the LAYOUT — the exact line
+// shapes `groupIntoLines` emits for that document — and nothing else:
+//
+//     Whatnot Packing Slip 1/1
+//     To: <handle> From: rm_cardz
+//     <Buyer Name> ■ 2026 TRIBUTE AND CHROME BASEBALL
+//     <address> JUMBO! RANDOM TEAMS + $1 STARTS ■
+//     03 August, 2026
+//     QTY Name & Description Attributes Subtotal
+//     1 San Francisco Giants Order 1237174001 $28.00
+//     4x 2026 CHROME BASEBAL
+//     JUMBO BOX (HALF CASE!)
+//     [Break 1]
+//     ...
+//     2 Items $60.00
+//     USPS Ground Advantage™ #93001207626023788195 14.0 oz
+//
+// Three shapes in there are the whole difficulty, and all three are real:
+// QTY + TEAM + "Order <id>" + subtotal arrive as ONE line because they are four
+// columns of one row; the product description continues on the lines under it;
+// and `[Break N]` sits ALONE on a line of its own with nothing after the number
+// but a bracket. The ■ are the banner column's glyphs.
+console.log('\n--- the August layout, invented identities ---')
+
+const AUG_BANNER = '2026 TRIBUTE AND CHROME BASEBALL'
+const AUG_TAIL = 'JUMBO! RANDOM TEAMS + $1 STARTS'
+// Two lines, exactly as the description column wraps on the real slip.
+const AUG_PRODUCT = ['4x 2026 CHROME BASEBAL', 'JUMBO BOX (HALF CASE!)']
+const AUG_TEAMS = SHIP_TEAM_LISTS.mlb
+
+let augOrder = 1900000000
+let augTracking = 1000
+const augTrack = (): string => `94001000000000000${++augTracking}`
+
+/** One bought card: the joined row, the wrapped product, then the marker. */
+const augItem = (team: string, price: number, brk: number): string[] => [
+  `1 ${team} Order ${++augOrder} $${price.toFixed(2)}`,
+  ...AUG_PRODUCT,
+  `[Break ${brk}]`
+]
+/** A promo rider: $0.00, and no break of its own — which is what a rider IS. */
+const augRider = (team: string): string[] => [`1 ${team} Order ${++augOrder} $0.00`, 'GIVEAWAY']
+
+const augHead = (handle: string, name: string, addr: string[], page: string): string[] => [
+  `Whatnot Packing Slip ${page}`,
+  `To: ${handle} From: rm_cardz`,
+  `${name} ■ ${AUG_BANNER}`,
+  ...addr,
+  'QTY Name & Description Attributes Subtotal'
+]
+const augAddr = (line: string): string[] => [`${line} ${AUG_TAIL} ■`, '03 August, 2026']
+// A long address wraps, and the banner lands in the middle of it. The real
+// export has both shapes, and having both here matters: with every address
+// ending "…. US" the banner learner would take the country for part of the
+// banner, and the fixture would pin behaviour the real document never produces.
+const augWrapped = (a: string, b: string): string[] => [`${a} ${AUG_TAIL} ■`, `${b} 03 August, 2026`]
+const augFoot = (n: number, total: number): string[] => [
+  `${n} Items $${total.toFixed(2)}`,
+  `USPS Ground Advantage™ #${augTrack()} 14.0 oz`
+]
+
+const augPages: string[] = []
+
+// Pages 1–3: one buyer whose order runs on, ending in a rider. Nine of the July
+// show's orders did this and one took five pages.
+augPages.push(
+  [
+    ...augHead(
+      'quarrymoon',
+      'Dana Whitlock',
+      augWrapped('18 Falconer Way. Elkhart Lake, WI.', '53020-1187. US'),
+      '1/3'
+    ),
+    ...augItem(AUG_TEAMS[0], 28, 1),
+    ...augItem(AUG_TEAMS[1], 32, 1)
+  ].join('\n')
+)
+// A continuation page: the slip header repeats, the buyer block does not.
+augPages.push(
+  ['Whatnot Packing Slip 2/3', ...augItem(AUG_TEAMS[2], 19, 1), ...augItem(AUG_TEAMS[3], 21, 1)].join('\n')
+)
+augPages.push(['Whatnot Packing Slip 3/3', ...augRider(AUG_TEAMS[7]), ...augFoot(5, 100)].join('\n'))
+
+// Page 4: two items on one page, and they are in DIFFERENT breaks — which is
+// the case a per-page break guess would get wrong.
+augPages.push(
+  [
+    ...augHead('pinewood12', 'Marta Ellery', augAddr('6 Larkspur Bend. Ojai, CA. 93023-2210. US'), '1/1'),
+    ...augItem(AUG_TEAMS[4], 15, 1),
+    ...augItem(AUG_TEAMS[5], 17, 2),
+    ...augFoot(2, 32)
+  ].join('\n')
+)
+
+// The rest of both slates, one buyer to a page, the way most of the real slip is.
+const augRest: Array<{ team: string; brk: number }> = []
+for (let i = 5; i < 30; i++) augRest.push({ team: AUG_TEAMS[i], brk: 1 })
+for (let i = 0; i < 30; i++) if (i !== 5) augRest.push({ team: AUG_TEAMS[i], brk: 2 })
+augRest.forEach((r, i) => {
+  const n = i + 1
+  const price = 12 + (n % 7)
+  augPages.push(
+    [
+      ...augHead(
+        `buyer${String(n).padStart(2, '0')}`,
+        `Casey Fixture ${n}`,
+        augAddr(`${n} Sycamore Row. Bellwood, OR. 97000-${1000 + n}. US`),
+        '1/1'
+      ),
+      ...augItem(r.team, price, r.brk),
+      ...augFoot(1, price)
+    ].join('\n')
+  )
+})
+
+// A giveaway-only package: real, and the reason the supply model has a
+// single-mailer rate.
+augPages.push(
+  [
+    ...augHead('hollowmint', 'Ruth Vandermeer', augAddr('44 Copperline Ct. Argyle, TX. 76226-6018. US'), '1/1'),
+    ...augRider(AUG_TEAMS[11]),
+    ...augFoot(1, 0)
+  ].join('\n')
+)
+
+// `auto`, because that is what the Upload screen sends. The league has to come
+// out of the team column — the only other text on these pages is a product name
+// and a bracket.
+const aug = parsePages(augPages, { sport: 'auto' })
+
+ok(aug.sport === 'mlb', 'the league is detected from the team column', String(aug.sport))
+ok(aug.customers.length === 57, 'every buyer on the slip becomes a customer', String(aug.customers.length))
+ok(aug.teamSlots.length === 62, 'and every printed item becomes exactly one card', String(aug.teamSlots.length))
+ok(
+  aug.warnings.length === 0,
+  'a clean slip raises NO warnings — no false alarms was the explicit ask',
+  JSON.stringify(aug.warnings.map((w) => w.message))
+)
+
+// --- the break labels are the numbers, and nothing else --------------------
+ok(
+  aug.breaks.map((b) => b.breakLabel).join(',') === '1,2',
+  'the breaks are labelled by their printed number',
+  JSON.stringify(aug.breaks.map((b) => b.breakLabel))
+)
+ok(
+  aug.breaks.every((b) => b.breakLabel === String(b.breakNumber)),
+  'with the label and the number in agreement',
+  JSON.stringify(aug.breaks.map((b) => [b.breakLabel, b.breakNumber]))
+)
+// A CLEAN SLATE, which is what the owner checked on the real one: thirty cards
+// in each break, thirty DIFFERENT teams, nobody claimed twice.
+for (const label of ['1', '2']) {
+  const inBreak = aug.teamSlots.filter((s) => s.breakLabel === label)
+  ok(inBreak.length === 30, `break ${label} holds a full 30-team slate`, String(inBreak.length))
+  ok(
+    new Set(inBreak.map((s) => s.teamName)).size === 30,
+    `and thirty DISTINCT teams — no team claimed twice`,
+    String(new Set(inBreak.map((s) => s.teamName)).size)
+  )
+}
+ok(
+  aug.breakAudit.every((a) => a.collisions.length === 0 && a.missingTeams.length === 0),
+  'so the fidelity audit finds neither a collision nor a hole',
+  JSON.stringify(aug.breakAudit.map((a) => ({ l: a.breakLabel, c: a.collisions.length, m: a.missingTeams.length })))
+)
+
+// --- the team column, which is where the bracketed layout used to fail -----
+// Every card on a new-layout slip once came out named "]". These four
+// assertions are that failure, pinned four ways.
+ok(
+  aug.teamSlots.every((s) => !/[[\]()<>]/.test(s.teamName)),
+  'no team name carries a bracket',
+  JSON.stringify(aug.teamSlots.map((s) => s.teamName).filter((t) => /[[\]()<>]/.test(t)))
+)
+ok(
+  aug.teamSlots.every((s) => s.teamName.trim().length > 0),
+  'and none of them is empty'
+)
+ok(
+  aug.teamSlots.every((s) => !/break/i.test(s.teamName)),
+  'nor named after the marker that sits under it',
+  JSON.stringify(aug.teamSlots.map((s) => s.teamName).filter((t) => /break/i.test(t)))
+)
+ok(
+  aug.teamSlots.every((s) => AUG_TEAMS.includes(s.teamName)),
+  'every card names a real MLB team',
+  JSON.stringify([...new Set(aug.teamSlots.map((s) => s.teamName))].filter((t) => !AUG_TEAMS.includes(t)))
+)
+
+// --- a page holding two items yields two cards, in their own breaks --------
+const pine = aug.teamSlots.filter((s) => s.customerId === 'pinewood12')
+ok(pine.length === 2, 'a two-item page yields one card per item', String(pine.length))
+ok(
+  pine.map((s) => `${s.breakLabel}:${s.teamName}`).join(' | ') ===
+    `1:${AUG_TEAMS[4]} | 2:${AUG_TEAMS[5]}`,
+  'each taking the marker printed under IT, not the one above',
+  JSON.stringify(pine.map((s) => `${s.breakLabel}:${s.teamName}`))
+)
+
+// --- prices ---------------------------------------------------------------
+ok(
+  pine.map((s) => s.price).join(',') === '15,17',
+  'the subtotal on the joined row parses as the price',
+  JSON.stringify(pine.map((s) => s.price))
+)
+const augExpected = 28 + 32 + 19 + 21 + 15 + 17 + augRest.reduce((a, _r, i) => a + 12 + ((i + 1) % 7), 0)
+ok(
+  aug.teamSlots.reduce((a, s) => a + s.price, 0) === augExpected,
+  'and the show totals what the printed prices add to',
+  `${aug.teamSlots.reduce((a, s) => a + s.price, 0)} vs ${augExpected}`
+)
+
+// --- giveaways ------------------------------------------------------------
+const augGiveaways = aug.teamSlots.filter((s) => s.isGiveaway)
+ok(augGiveaways.length === 2, 'the promo riders are flagged as giveaways', String(augGiveaways.length))
+ok(augGiveaways.every((s) => s.price === 0), 'and every one of them is $0.00')
+ok(
+  augGiveaways.every((s) => s.breakLabel === null && s.breakId.startsWith('giveaway_')),
+  'a rider carries no break — it is a card from a break that already happened',
+  JSON.stringify(augGiveaways.map((s) => `${s.breakLabel}/${s.breakId}`))
+)
+ok(
+  aug.teamSlots.filter((s) => !s.isGiveaway).every((s) => s.price > 0),
+  'while nothing that was paid for is mistaken for one'
+)
+
+// --- the buyer block, and a run-on order ----------------------------------
+const augBig = aug.customers.find((c) => c.id === 'quarrymoon')
+ok(JSON.stringify(augBig?.pages) === '[1,2,3]', 'a three-page order carries all three pages',
+   JSON.stringify(augBig?.pages))
+ok(
+  aug.teamSlots.filter((s) => s.customerId === 'quarrymoon').length === 5,
+  'with every card from every one of them',
+  String(aug.teamSlots.filter((s) => s.customerId === 'quarrymoon').length)
+)
+ok(augBig?.realName === 'Dana Whitlock', 'the buyer name survives the banner glued to it', String(augBig?.realName))
+ok(
+  augBig?.address === '18 Falconer Way. Elkhart Lake, WI., 53020-1187. US',
+  'and a wrapped address keeps both halves with the banner cut out of the middle',
+  String(augBig?.address)
+)
+ok(
+  aug.customers.every((c) => !/RANDOM TEAMS|TRIBUTE AND CHROME|■|August/.test(`${c.realName} ${c.address}`)),
+  'no banner text or banner date lands in anybody’s name or address'
+)
+ok(
+  aug.customers.find((c) => c.id === 'pinewood12')?.pages?.join(',') === '4',
+  'and a one-page order is exactly one page',
+  JSON.stringify(aug.customers.find((c) => c.id === 'pinewood12')?.pages)
+)
+
+// --- how the marker gets typed --------------------------------------------
+//
+// Five shapes the owner has seen on real slips. Three of them are read; two are
+// NOT, and that is the designed behaviour rather than a gap. `readBreakLabel`
+// requires the word "Break" before the number, so a bare "#4" — which is also
+// how a lot number, a pack number and a quantity are written — is refused. The
+// card is still kept, still pickable and still named, and a warning says it sits
+// outside any break. Guessing "#4" into break 4 is precisely the wrong guess
+// that a warning exists instead of.
+console.log('\n--- however the break marker is typed ---')
+const augMarker = (marker: string): ReturnType<typeof parsePages> =>
+  parsePages(
+    [
+      [
+        ...augHead('markertest', 'Ivo Renshaw', augAddr('9 Kestrel Loop. Bend, OR. 97701-1010. US'), '1/1'),
+        `1 ${AUG_TEAMS[23]} Order 1990000001 $28.00`,
+        ...AUG_PRODUCT,
+        marker,
+        ...augFoot(1, 28)
+      ].join('\n')
+    ],
+    { sport: 'mlb' }
+  )
+
+for (const [marker, label] of [
+  ['[Break 2]', '2'],
+  ['Break 3', '3'],
+  ['- Break #5 -', '5'],
+  ['(Break 6)', '6'],
+  ['[ BREAK 7a ]', '7A']
+] as Array<[string, string]>) {
+  const r = augMarker(marker)
+  ok(
+    r.breaks.length === 1 && r.breaks[0]?.breakLabel === label && r.warnings.length === 0,
+    `“${marker}” reads as break ${label}, quietly`,
+    JSON.stringify({ labels: r.breaks.map((b) => b.breakLabel), warnings: r.warnings.map((w) => w.message) })
+  )
+  ok(
+    r.teamSlots[0]?.teamName === AUG_TEAMS[23],
+    `and the team still comes from the name column, not from “${marker}”`,
+    String(r.teamSlots[0]?.teamName)
+  )
+}
+
+// The two that are NOT a break marker. Neither may be guessed at, and neither
+// may be silent.
+for (const marker of ['#4', 'BREAK #=7']) {
+  const r = augMarker(marker)
+  ok(
+    r.breaks.length === 0,
+    `“${marker}” is not read as a break — the word is what makes a marker`,
+    JSON.stringify(r.breaks.map((b) => b.breakLabel))
+  )
+  ok(
+    r.teamSlots.length === 1 && r.teamSlots[0]?.teamName === AUG_TEAMS[23] && r.teamSlots[0]?.price === 28,
+    `while the card itself survives “${marker}” intact, team and price`,
+    JSON.stringify(r.teamSlots.map((s) => `${s.teamName}:${s.price}`))
+  )
+  ok(
+    r.warnings.some((w) => /sits outside any break/.test(w.message)),
+    `and a WARNING names it rather than a guess placing it`,
+    JSON.stringify(r.warnings.map((w) => w.message))
+  )
+}
 
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

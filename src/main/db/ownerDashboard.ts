@@ -273,8 +273,10 @@ function inventorySnapshot(): OwnerInventorySnapshot | null {
     const incoming = getDb()
       .prepare(`SELECT COUNT(*) AS n FROM inventory_incoming WHERE received_at IS NULL`)
       .get() as { n: number } | undefined
-    // Below zero is not "low stock" — it is a count that is wrong, and it only
-    // happens because the SOP checklist is allowed to deduct past empty.
+    // Below zero is not "low stock" — it is a count that is wrong. Nothing in
+    // the app deducts supplies on its own any more, so a negative here is a
+    // hand-entered count that disagrees with the shelf, and it is reported as a
+    // fact about now rather than as a warning about later.
     const negative = getDb()
       .prepare(`SELECT COUNT(*) AS n FROM supplies WHERE quantity < 0`)
       .get() as { n: number }
