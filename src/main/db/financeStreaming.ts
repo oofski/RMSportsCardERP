@@ -1306,7 +1306,28 @@ export function reattributeAll(actorId: string | null): Result<ReattributeSummar
       // rows stranded, and the two paths would disagree about the same money.
       const found = attributeRow(bucket, instantMs, sessions)
       const sessionId = found.session ? found.session.id : null
-      const streamDate = found.session ? found.session.streamDate : null
+      // THREE cases, exactly as the import writes them — see the same expression
+      // at the staging insert above. The own-day branch was missing here, and
+      // its absence was invisible until something re-attributed the whole table
+      // at once.
+      //
+      // A row that books to its own day carries a stream_date and NO session_id.
+      // Dropping the date while keeping the `own_day` label put such a row
+      // outside BOTH halves of the reconciliation: the day query wants a date it
+      // no longer had, and the unattributed query skips anything labelled
+      // own_day. The row still counted in the stored total, so the screen said
+      // "these numbers do not add up" and the row's money — a real marketplace
+      // sale — silently left the statement.
+      //
+      // Repair needs no migration and no backfill. `movedNow` below compares the
+      // computed date against the stored one, so every row this damaged differs
+      // and gets rewritten on the next re-attribution. The date was never lost:
+      // it is derived from occurred_at, which nothing here has ever written to.
+      const streamDate = found.session
+        ? found.session.streamDate
+        : found.attribution === 'own_day'
+          ? streamDateOf(r.occurred_at)
+          : null
 
       if (bucket !== 'payout') {
         if (found.attribution === 'in_window') summary.inWindow += 1

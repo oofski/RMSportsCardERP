@@ -45,7 +45,7 @@ mkdirSync(DIR, { recursive: true })
 const { getDb } = require('../src/main/db/database')
 const { addItem, createSession } = require('../src/main/db/streaming')
 const { createProduct } = require('../src/main/db/inventory')
-const { importLedger, streamingFinanceView } = require('../src/main/db/financeStreaming')
+const { importLedger, streamingFinanceView, reattributeAll } = require('../src/main/db/financeStreaming')
 const { deleteExpense, listExpenses, saveExpense } = require('../src/main/db/financeExpenses')
 const {
   deleteRatePeriod,
@@ -1771,6 +1771,118 @@ v9 = viewOf()
 ok(!pick(v9, lonelyDay), 'and the day it was the only thing on goes with it')
 ok(v9.reconciled, 'still reconciled afterwards')
 ok(listExpenses().length === 2, 'the other two are untouched', String(listExpenses().length))
+
+// ---------------------------------------------------------------------------
+console.log('\n=== IMPORT and RE-ATTRIBUTE must agree, row for row ===')
+// ---------------------------------------------------------------------------
+// The assertion whose absence cost real money.
+//
+// Two code paths decide where a row lands: the import writes it once, and
+// `reattributeAll` recomputes it later from the same stored fields. They are
+// meant to be the same function of the same inputs — and they were not. The
+// import wrote a stream_date three ways (matched show, own day, none); the
+// re-attribution knew only two, dropping the own-day date while keeping the
+// own-day LABEL. Such a row then satisfied neither half of the reconciliation:
+// counted in the stored total, absent from the days, skipped by unattributed.
+//
+// Nothing failed. The suite passed, the import path was correct, and the drift
+// only surfaced when a classifier bump made every row re-attribute at once —
+// on a real ledger, at which point four marketplace sales left the statement.
+//
+// So this compares the two paths directly. Snapshot every row's derived columns
+// after the import, re-attribute, and demand they are IDENTICAL. Re-attribution
+// is meant to be idempotent over an unchanged database; anything it changes on
+// an untouched ledger is a disagreement between the two, whatever it is.
+const derivedRows = (): Array<Record<string, unknown>> =>
+  getDb()
+    .prepare(
+      `SELECT id, bucket, session_id, stream_date, attribution, break_number
+         FROM ledger_rows ORDER BY id`
+    )
+    .all() as Array<Record<string, unknown>>
+
+// The fixture the bug needs, and the reason it survived a 275-assertion suite:
+// every marketplace sale above happens to fall INSIDE a logged show, so it gets
+// a session and never takes the own-day branch at all. The shape that broke is
+// a whole-product sale on a day with NO show — somebody sold a sealed box on a
+// Tuesday they did not stream. That row books to its own date, carries no
+// session, and is exactly the row the re-attribution used to strip.
+const ORPHAN_MSG = 'Earnings for selling a 2026 WF Unstreamed Sealed Hobby Box'
+const csvOrphan = join(DIR, 'orphan-day.csv')
+writeFileSync(csvOrphan, csvOf([{ when: back(200, 14), amount: 250, message: ORPHAN_MSG, type: 'SALES' }]), 'utf8')
+const impOrphan = importLedger(csvOrphan, null)
+ok(impOrphan.ok, 'a marketplace sale on a day with NO show imported', impOrphan.ok ? '' : impOrphan.error)
+
+const orphanRow = (): { attribution: string; stream_date: string | null; session_id: string | null } =>
+  getDb()
+    .prepare(
+      `SELECT attribution, stream_date, session_id FROM ledger_rows WHERE message = ?`
+    )
+    .get(ORPHAN_MSG) as { attribution: string; stream_date: string | null; session_id: string | null }
+
+const orphanAtImport = orphanRow()
+ok(orphanAtImport.attribution === 'own_day', 'the import books it to its own day', orphanAtImport.attribution)
+ok(orphanAtImport.session_id === null, 'with no session, because there was no show')
+ok(orphanAtImport.stream_date !== null, 'AND it keeps a date — the pair that makes it findable')
+
+const beforeReattr = derivedRows()
+ok(beforeReattr.length > 0, 'there are rows to compare', String(beforeReattr.length))
+
+const reattr = reattributeAll(null)
+ok(reattr.ok === true, 're-attribution ran', reattr.error)
+
+const afterReattr = derivedRows()
+ok(afterReattr.length === beforeReattr.length, 'no row was added or lost')
+
+const drifted: string[] = []
+for (let i = 0; i < beforeReattr.length; i++) {
+  const a = beforeReattr[i]
+  const b = afterReattr[i]
+  for (const col of ['bucket', 'session_id', 'stream_date', 'attribution', 'break_number']) {
+    if (a[col] !== b[col]) drifted.push(`${String(a.id).slice(0, 8)}.${col}: ${a[col]} -> ${b[col]}`)
+  }
+}
+ok(drifted.length === 0, 'every derived column survives a re-attribution unchanged', drifted.slice(0, 6).join(' | '))
+
+// The specific shape that broke, asserted on its own so a future regression
+// names itself instead of hiding inside the loop above.
+const ownDay = getDb()
+  .prepare(`SELECT COUNT(*) AS n FROM ledger_rows WHERE attribution = 'own_day' AND stream_date IS NULL`)
+  .get() as { n: number }
+ok(ownDay.n === 0, 'no own-day row has lost its date', String(ownDay.n))
+
+const orphanAfter = orphanRow()
+ok(orphanAfter.attribution === 'own_day', 'the unstreamed sale is still an own-day row')
+ok(
+  orphanAfter.stream_date === orphanAtImport.stream_date,
+  'and re-attributing did not take its date away',
+  `${orphanAtImport.stream_date} -> ${orphanAfter.stream_date}`
+)
+// The consequence, spelled out: a dateless own-day row is counted in the stored
+// total and in neither the days nor the unattributed, which is precisely the
+// "these numbers do not add up" banner.
+ok(
+  !!streamingFinanceView().days.find((d: any) => d.streamDate === orphanAfter.stream_date),
+  'and its day is still on the statement'
+)
+
+// And the reconciliation itself, which is what the operator actually sees.
+const afterView = streamingFinanceView()
+ok(afterView.reconciled === true, 'the statement still reconciles after re-attributing', afterView.reconcileNote ?? '')
+
+// Twice more. A path that is correct once but not stable would still drift on
+// the third press of a button people press when something looks wrong.
+reattributeAll(null)
+reattributeAll(null)
+const afterThrice = derivedRows()
+let stable = true
+for (let i = 0; i < beforeReattr.length; i++) {
+  for (const col of ['bucket', 'session_id', 'stream_date', 'attribution', 'break_number']) {
+    if (beforeReattr[i][col] !== afterThrice[i][col]) stable = false
+  }
+}
+ok(stable, 're-attributing three times changes nothing — it is idempotent')
+ok(streamingFinanceView().reconciled === true, 'and still reconciles')
 
 console.log(`\n${pass} passed, ${fail} failed${skipped ? `, ${skipped} skipped` : ''}\n`)
 process.exit(fail === 0 ? 0 : 1)
