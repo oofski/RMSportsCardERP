@@ -376,5 +376,111 @@ ok(
   'and nothing is still claimed from last week'
 )
 
+// ---------------------------------------------------------------------------
+console.log('\n=== 11. the bench is handed the order it has to DRAW ===')
+// ---------------------------------------------------------------------------
+// The bench renders the same pane as the Orders tab, and that pane needs every
+// break and every team — not a count of them. It used to show a handle and
+// "3/12 cards", which meant the one screen the checklist sends a picker to was
+// the one screen that never said WHICH teams to gather.
+//
+// The other half of the rule matters just as much: EVERY OTHER order stays
+// lean. `pickableOrders` runs over the whole night and is nearly always reduced
+// to a length, so attaching a break list to each would push the entire show
+// down the IPC channel every time anybody anywhere ticked a card.
+// A station session is only real while its operator is ON THE CLOCK — that is
+// the whole reason the bench needs no second password. So the picker has to be
+// punched in before any of this is true.
+const NOW_ISO = new Date().toISOString()
+getDb()
+  .prepare(
+    `INSERT INTO employees (id, first_name, last_name, company_id, title, email, role,
+       status, password_hash, must_change_password, created_at, updated_at)
+     VALUES ('emp_picker', 'Bench', 'Picker', 'RM-900', 'Picker', '', 'employee',
+       'active', 'x', 0, ?, ?)`
+  )
+  .run(NOW_ISO, NOW_ISO)
+getDb()
+  .prepare(
+    `INSERT INTO time_entries (id, employee_id, clock_in, clock_out, source, created_at)
+     VALUES ('te_picker', 'emp_picker', ?, NULL, 'manual', ?)`
+  )
+  .run(NOW_ISO, NOW_ISO)
+
+stations.endStationSession()
+const bench = stations.startStationSession('emp_picker', 'pick', null)
+ok(!!bench, 'a picker is at the bench, and on the clock')
+const took = stations.pickNext(null)
+ok(!!took, 'and is holding an order', String(took?.handle))
+
+const boardNow = stations.getStationBoard()
+const held = boardNow.current
+ok(!!held, 'the board says which one')
+ok(held?.detail != null, 'and hands over the whole order, not a summary')
+ok(
+  Array.isArray((held?.detail as any)?.breaks) && (held?.detail as any).breaks.length > 0,
+  'with its breaks',
+  String((held?.detail as any)?.breaks?.length)
+)
+const teamCount = ((held?.detail as any)?.breaks ?? []).reduce(
+  (n: number, b: any) => n + b.teams.length,
+  0
+)
+ok(teamCount > 0, 'and the teams inside them — the actual pick list', String(teamCount))
+ok(
+  ((held?.detail as any)?.breaks ?? []).every((b: any) =>
+    b.teams.every((t: any) => typeof t.slotId === 'string' && t.slotId.length > 0)
+  ),
+  'every team carries the slot id the bench ticks it off by'
+)
+// The counts on the lean shape and the detail must be the same number. Two
+// sources for "how many cards" is how a header comes to disagree with the list
+// printed directly underneath it.
+ok(
+  (held?.detail as any).pick.checked === held?.cardsChecked &&
+    (held?.detail as any).cardCount === held?.cardsTotal,
+  'the summary and the detail agree about the count',
+  `${held?.cardsChecked}/${held?.cardsTotal}`
+)
+
+ok(
+  stations.pickableOrders().every((o: any) => o.detail === null),
+  'and no other order in the run carries one'
+)
+ok(
+  stations.packQueue().every((o: any) => o.detail === null),
+  'nor anything sitting in the pack queue'
+)
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 12. one order pane, mounted by both screens ===')
+// ---------------------------------------------------------------------------
+// A source check, because the thing being protected is that there is only ONE
+// of these. The bench and the Orders tab drifted apart by each owning its own
+// copy of "draw an order" — one grew a break-by-break pick list, the other
+// stayed at "3/12 cards" — and nothing failed, because nothing was comparing
+// them. This does.
+const readSrc = (p: string): string =>
+  require('node:fs').readFileSync(require('node:path').join(process.cwd(), p), 'utf8')
+const floorSrc = readSrc('src/renderer/src/modules/fulfillment/FloorView.tsx')
+const walkerSrc = readSrc('src/renderer/src/modules/fulfillment/OrderWalker.tsx')
+
+for (const [name, src] of [
+  ['the bench', floorSrc],
+  ['the Orders tab', walkerSrc]
+] as Array<[string, string]>) {
+  ok(/<OrderCard\b/.test(src), `${name} mounts OrderCard`)
+  ok(src.includes('"walk-split"'), `${name} lays it out in walk-split — same widths, same sides`)
+}
+// The bench's old private layout must be gone, not merely unused: a stylesheet
+// that still answers for `floor-work` is one somebody re-reaches for.
+for (const gone of ['floor-work', 'floor-order-head', 'floor-handle', 'floor-cards']) {
+  ok(!floorSrc.includes(`"${gone}"`), `the bench no longer draws its own ${gone}`)
+}
+const cssSrc = readSrc('src/renderer/src/styles/app.css')
+for (const gone of ['.floor-work {', '.floor-order {', '.floor-handle {', '.floor-slip {']) {
+  ok(!cssSrc.includes(gone), `and the stylesheet has dropped ${gone.replace(' {', '')}`)
+}
+
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

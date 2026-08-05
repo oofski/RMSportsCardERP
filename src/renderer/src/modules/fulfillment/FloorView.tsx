@@ -6,6 +6,7 @@ import { LIVE, useLiveRefresh } from '../../lib/live'
 import { Button, CenterLoader } from '../../components/ui'
 import { Icon } from '../../components/Icon'
 import { useToast } from '../../components/Toast'
+import { OrderCard } from './OrderCard'
 import { SlipPane } from './SlipPane'
 import type { ShipTabProps } from './ShippingModule'
 
@@ -46,6 +47,9 @@ export function FloorView({ canFind, canPack, onGoTo, onChanged }: ShipTabProps)
   const [who, setWho] = useState<string | null>(null)
   const [sendingBack, setSendingBack] = useState(false)
   const [reason, setReason] = useState('')
+  // The one team line mid-save. Separate from `busy`, which locks the whole
+  // bench: ticking a team must not grey out the button that moves you on.
+  const [busySlot, setBusySlot] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     const [b, r] = await Promise.all([api.shipping.stationBoard(), api.shipping.stationRoster()])
@@ -200,10 +204,13 @@ export function FloorView({ canFind, canPack, onGoTo, onChanged }: ShipTabProps)
         <OrderPane
           order={current}
           role={session.role}
+          canPick={session.role === 'pick' && canFind}
           busy={busy}
+          busySlot={busySlot}
           sendingBack={sendingBack}
           reason={reason}
           onReason={setReason}
+          onToggleSlot={toggleSlot}
           onStartSendBack={() => setSendingBack(true)}
           onCancelSendBack={() => {
             setSendingBack(false)
@@ -302,6 +309,30 @@ export function FloorView({ canFind, canPack, onGoTo, onChanged }: ShipTabProps)
       await onChanged()
     } finally {
       setBusy(false)
+    }
+  }
+
+  /**
+   * Tick one team off, from the bench.
+   *
+   * The bench used to have no way to do this at all — the pane showed a count,
+   * so the only record of what had been gathered was the picker's memory until
+   * they pressed "Picked · next order" and every card went green at once. Now
+   * that the bench draws the same pane as the Orders tab, it does the same
+   * thing the Orders tab does, through the same call.
+   */
+  async function toggleSlot(slotId: string, checked: boolean): Promise<void> {
+    setBusySlot(slotId)
+    try {
+      const res = await api.shipping.setSlotChecked(slotId, checked)
+      if (!res.ok) {
+        toast.error(res.error ?? 'That did not save.')
+        return
+      }
+      await load()
+      await onChanged()
+    } finally {
+      setBusySlot(null)
     }
   }
 
@@ -422,13 +453,34 @@ function Idle({
   )
 }
 
+/**
+ * The order in front of you — the SAME pane the Orders tab draws.
+ *
+ * `walk-split` rather than a bench-only grid, and `OrderCard` rather than a
+ * handle and a card count. Somebody sent here by step 5 is doing the identical
+ * job they would be doing on the Orders tab, so the screen they get is the
+ * identical screen: cards on the left at the same width, the customer's slip on
+ * the right at the same width, everything in the same place.
+ *
+ * The bench's own buttons live in the bar above, where the walker keeps its
+ * Previous / Skip / Picked·next. What is unique to a bench — the rejection
+ * notice, and the form for writing one — rides inside the pane as its banner,
+ * because both are about THIS order and belong with it.
+ *
+ * `detail` can be null for a moment after a claim lands and before the board
+ * catches up. That renders the head alone rather than an empty screen; it is a
+ * frame, not a state anybody works in.
+ */
 function OrderPane({
   order,
   role,
+  canPick,
   busy,
+  busySlot,
   sendingBack,
   reason,
   onReason,
+  onToggleSlot,
   onStartSendBack,
   onCancelSendBack,
   onSendBack,
@@ -436,87 +488,124 @@ function OrderPane({
 }: {
   order: ShipStationOrder
   role: ShipStationRole
+  /** Ticking a team off is picking. A packer verifying a box does not do it. */
+  canPick: boolean
   busy: boolean
+  busySlot: string | null
   sendingBack: boolean
   reason: string
   onReason: (v: string) => void
+  onToggleSlot: (slotId: string, checked: boolean) => Promise<void>
   onStartSendBack: () => void
   onCancelSendBack: () => void
   onSendBack: () => void
   onAdvance: () => void
 }): JSX.Element {
-  return (
-    <div className="floor-work">
-      <div className="floor-order">
-        <div className="floor-order-head">
-          <span className="floor-handle">@{order.handle}</span>
-          {order.realName && <span className="floor-name">{order.realName}</span>}
-          <span className="floor-cards">
-            {order.cardsChecked}/{order.cardsTotal} cards
+  const detail = order.detail
+
+  const banner = (
+    <>
+      {/* A rejected order carries its reason into the picking run, so whoever
+          takes it next knows BEFORE they start rather than after. */}
+      {order.sentBackReason && !sendingBack && (
+        <div className="floor-sentback">
+          <Icon name="Undo2" size={15} />
+          <span>
+            <b>Sent back:</b> {order.sentBackReason}
           </span>
         </div>
-
-        {/* A rejected order carries its reason into the picking run, so whoever
-            takes it next knows BEFORE they start rather than after. */}
-        {order.sentBackReason && (
-          <div className="floor-sentback">
-            <Icon name="Undo2" size={15} />
-            <span>
-              <b>Sent back:</b> {order.sentBackReason}
-            </span>
+      )}
+      {sendingBack && (
+        <div className="floor-back-form">
+          <label>What is wrong with it?</label>
+          <div className="floor-back-presets">
+            {['Missing a card', 'Wrong card', 'Damaged'].map((p) => (
+              <button key={p} className="floor-preset" onClick={() => onReason(p)}>
+                {p}
+              </button>
+            ))}
           </div>
-        )}
-
-        {sendingBack ? (
-          <div className="floor-back-form">
-            <label>What is wrong with it?</label>
-            <div className="floor-back-presets">
-              {['Missing a card', 'Wrong card', 'Damaged'].map((p) => (
-                <button key={p} className="floor-preset" onClick={() => onReason(p)}>
-                  {p}
-                </button>
-              ))}
-            </div>
-            <input
-              className="input"
-              value={reason}
-              autoFocus
-              placeholder="Say what the picker needs to fix"
-              onChange={(e) => onReason(e.target.value)}
-            />
-            <div className="floor-back-actions">
-              <Button variant="ghost" onClick={onCancelSendBack}>
-                Cancel
-              </Button>
-              <Button variant="danger" icon="Undo2" disabled={!reason.trim() || busy} onClick={onSendBack}>
-                Send back to picking
-              </Button>
-            </div>
-          </div>
-        ) : (
-          <div className="floor-actions">
-            <Button
-              variant="primary"
-              icon={role === 'pack' ? 'PackageCheck' : 'ArrowRight'}
-              disabled={busy}
-              onClick={onAdvance}
-            >
-              {role === 'pack' ? 'Packed · next' : 'Picked · next order'}
+          <input
+            className="input"
+            value={reason}
+            autoFocus
+            placeholder="Say what the picker needs to fix"
+            onChange={(e) => onReason(e.target.value)}
+          />
+          <div className="floor-back-actions">
+            <Button variant="ghost" onClick={onCancelSendBack}>
+              Cancel
             </Button>
-            {role === 'pack' && (
-              <Button variant="ghost" icon="Undo2" disabled={busy} onClick={onStartSendBack}>
-                Send back
-              </Button>
-            )}
+            <Button variant="danger" icon="Undo2" disabled={!reason.trim() || busy} onClick={onSendBack}>
+              Send back to picking
+            </Button>
           </div>
-        )}
+        </div>
+      )}
+    </>
+  )
+
+  return (
+    <>
+      <div className="walk-bar floor-actbar">
+        <span className="floor-current">
+          <b>@{order.handle}</b>
+          {order.realName && <em>{order.realName}</em>}
+          <span className="walk-count mono">
+            {order.cardsChecked}/{order.cardsTotal} cards
+          </span>
+        </span>
+        <div className="walk-nav">
+          {role === 'pack' && (
+            <Button size="sm" icon="Undo2" disabled={busy || sendingBack} onClick={onStartSendBack}>
+              Send back
+            </Button>
+          )}
+          <Button
+            size="sm"
+            variant="primary"
+            icon={role === 'pack' ? 'PackageCheck' : 'ArrowRight'}
+            disabled={busy || sendingBack}
+            onClick={onAdvance}
+          >
+            {role === 'pack' ? 'Packed · next' : 'Picked · next order'}
+          </Button>
+        </div>
       </div>
 
-      {/* The customer's own slip. A picker who cannot see the paper cannot do
-          the job the paper is for. */}
-      <div className="floor-slip">
+      <div className="walk-split">
+        {detail ? (
+          <OrderCard
+            order={detail}
+            canAct={canPick}
+            busySlot={busySlot}
+            onToggleSlot={onToggleSlot}
+            actLabel={
+              role === 'pack'
+                ? 'You are packing this one — the cards were ticked off by whoever picked it.'
+                : 'You do not have permission to check cards off.'
+            }
+            banner={banner}
+          />
+        ) : (
+          <div className="walk-order">
+            <div className="walk-order-head">
+              <span className="walk-who">
+                <b>{order.realName || '—'}</b>
+                <span className="walk-handle">@{order.handle}</span>
+              </span>
+              <span className="walk-prog mono">
+                {order.cardsChecked}/{order.cardsTotal} picked
+              </span>
+            </div>
+            {banner}
+          </div>
+        )}
+
+        {/* The customer's own slip. A picker who cannot see the paper cannot do
+            the job the paper is for. */}
         <SlipPane pages={order.pages} label={`@${order.handle}`} />
       </div>
-    </div>
+    </>
   )
 }

@@ -342,7 +342,16 @@ function lastCheckedAtFor(customerId: string): string | null {
   return r?.t ?? null
 }
 
-function toStationOrder(o: ShipOrderRow, now: number): ShipStationOrder {
+/**
+ * `withDetail` is off by default, and that default is the load-bearing part.
+ *
+ * `pickableOrders` and `packQueue` run this over every order in the night and
+ * are then almost always reduced to a `.length`. Attaching the full break-and-
+ * team list to each would push the whole show down the IPC channel every time
+ * anybody ticked a card — for two numbers. Only the order a bench is actually
+ * holding is drawn, so only that one carries its detail.
+ */
+function toStationOrder(o: ShipOrderRow, now: number, withDetail = false): ShipStationOrder {
   const claims = claimsForOrder(o.id, o.customerId)
   const station = deviceId()
   const pickHolder = holderOf(claims, 'pick', now)
@@ -368,7 +377,8 @@ function toStationOrder(o: ShipOrderRow, now: number): ShipStationOrder {
       cardsChecked: o.pick.checked,
       lastCheckedAt: lastCheckedAtFor(o.customerId)
     }),
-    sentBackReason: sendBackReason(claims)
+    sentBackReason: sendBackReason(claims),
+    detail: withDetail ? o : null
   }
 }
 
@@ -591,7 +601,9 @@ export function getStationBoard(): ShipStationBoard {
   const current = mine
     ? (() => {
         const o = orders.find((x) => x.customerId === mine.customerId)
-        return o ? toStationOrder(o, now) : null
+        // WITH detail: this is the one order that gets drawn, and the bench
+        // draws the same full pane the Orders tab does.
+        return o ? toStationOrder(o, now, true) : null
       })()
     : null
 

@@ -15,6 +15,8 @@
  * claim MEANS without a database in the room.
  */
 
+import type { ShipOrderRow } from './shippingViews'
+
 export type ShipStationRole = 'pick' | 'pack'
 
 export const SHIP_STATION_ROLES: ShipStationRole[] = ['pick', 'pack']
@@ -258,6 +260,22 @@ export interface ShipStationOrder {
   readyAt: string | null
   /** Set when a packer sent it back, with their reason. */
   sentBackReason: string | null
+  /**
+   * The whole order — every break, every team — for the ONE order a bench is
+   * holding, and null for every other.
+   *
+   * The bench draws the same pane as the Orders tab, and that pane needs the
+   * teams, not a count of them. Carrying it on the board rather than fetching it
+   * separately is what keeps the two screens showing the same thing at the same
+   * moment; carrying it ONLY for `current` is what keeps a two-hundred-order
+   * night from shipping two hundred break lists down a channel that fires every
+   * time anyone anywhere ticks a card.
+   *
+   * The import below is `import type` in both directions — shippingViews already
+   * names ShipStationRole from this file — so the cycle is erased at compile
+   * time and nothing circular exists at runtime.
+   */
+  detail: ShipOrderRow | null
 }
 
 /**

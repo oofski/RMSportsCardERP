@@ -1,13 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ShipOrderRow } from '@shared/shippingViews'
-import { SHIP_STAGE_LABELS } from '@shared/shippingViews'
 import { api } from '../../lib/api'
 import { LIVE, useLiveRefresh } from '../../lib/live'
 import { Button, CenterLoader, EmptyState } from '../../components/ui'
 import { Icon } from '../../components/Icon'
 import { useToast } from '../../components/Toast'
-import { formatMoney } from '../../lib/format'
-import { BreakChip } from './BreakChip'
+import { OrderCard } from './OrderCard'
 import { SlipPane } from './SlipPane'
 
 /**
@@ -199,7 +197,6 @@ export function OrderWalker({
     )
   }
 
-  const done = order ? order.pick.checked >= order.pick.total : false
   // EVERY page of this order's slip. A big order runs on — one buyer's 47 cards
   // took five pages — and showing only the first is worse than showing none,
   // because a short list that looks complete gets agreed with and sealed.
@@ -306,100 +303,12 @@ export function OrderWalker({
         />
       ) : (
         <div className="walk-split">
-          <div className="walk-order" data-done={done ? 'true' : 'false'}>
-            <div className="walk-order-head">
-              <span className="walk-who">
-                <b>{order.customer.realName || '—'}</b>
-                <span className="walk-handle">@{order.customer.handle}</span>
-                {order.customer.isNew && <span className="ship-chip info mini">NEW</span>}
-              </span>
-              <span className="ship-chip mini" data-stage={order.stage}>
-                {SHIP_STAGE_LABELS[order.stage]}
-              </span>
-              {order.customer.pages && order.customer.pages.length > 1 && (
-                <span
-                  className="ship-chip mini"
-                  title="This order's slip runs onto more than one page — the whole run is on the right"
-                >
-                  <Icon name="Copy" size={11} /> {order.customer.pages.length}-page slip
-                </span>
-              )}
-              <span className={`walk-prog mono ${done ? 'done' : ''}`}>
-                {order.pick.checked}/{order.pick.total} picked
-              </span>
-              <span className="walk-value mono">{formatMoney(order.value)}</span>
-            </div>
-
-            <div className="walk-meta">
-              <span title={order.customer.address}>
-                <Icon name="MapPin" size={13} /> {order.customer.address || 'No address on the slip'}
-              </span>
-              {order.trackingNumber && (
-                <span className="mono">
-                  <Icon name="Truck" size={13} /> {order.trackingNumber}
-                </span>
-              )}
-              {order.onHold && (
-                <span className="ship-chip warn mini">
-                  <Icon name="PauseCircle" size={11} /> {order.heldReason || 'On hold'}
-                </span>
-              )}
-              {order.specialRequest && (
-                <span className="ship-chip warn mini" title={order.specialRequest.text}>
-                  <Icon name="MessageSquare" size={11} /> {order.specialRequest.text}
-                </span>
-              )}
-            </div>
-
-            {/* The cards, grouped the way the slip groups them: by break. */}
-            <div className="walk-breaks">
-              {order.breaks.map((b) => (
-                <div className="walk-break" key={b.breakId}>
-                  <div className="walk-break-head">
-                    {b.breakLabel == null ? (
-                      <span className="ship-chip mini">
-                        <Icon name="Gift" size={11} /> Giveaway
-                      </span>
-                    ) : (
-                      <BreakChip label={b.breakLabel} size="sm" />
-                    )}
-                    <span className="walk-break-count mono">
-                      {b.checked}/{b.total}
-                    </span>
-                    <span className="walk-break-val mono">{formatMoney(b.value)}</span>
-                  </div>
-                  <div className="walk-teams">
-                    {b.teams.map((t) => (
-                      <button
-                        key={t.slotId}
-                        type="button"
-                        className={`walk-team ${t.checkedOff ? 'checked' : ''}`}
-                        disabled={!canAct || busy === t.slotId}
-                        aria-pressed={t.checkedOff}
-                        title={
-                          canAct
-                            ? t.checkedOff
-                              ? `Un-check ${t.teamName}`
-                              : `Check off ${t.teamName}`
-                            : 'You do not have permission to check cards off.'
-                        }
-                        onClick={() => void toggleSlot(t.slotId, !t.checkedOff)}
-                      >
-                        <Icon
-                          name={t.checkedOff ? 'CheckCircle2' : 'Circle'}
-                          size={15}
-                          strokeWidth={t.checkedOff ? 2.4 : 1.9}
-                        />
-                        <span className="walk-team-name">{t.teamName}</span>
-                        {t.isGiveaway && <span className="ship-chip mini">Giveaway</span>}
-                        <span className="walk-team-price mono">{formatMoney(t.price)}</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
+          <OrderCard
+            order={order}
+            canAct={canAct}
+            busySlot={busy}
+            onToggleSlot={toggleSlot}
+          />
 
           <SlipPane pages={slipPages} label={`@${order.customer.handle}`} />
         </div>
