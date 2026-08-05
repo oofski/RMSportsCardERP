@@ -42,6 +42,8 @@ import {
   setEmployeeAvatar,
   setEmployeePermissions,
   setTemporaryPassword,
+  setPortalPin,
+  clearPortalPin,
   updateEmployee
 } from './db/employees'
 import {
@@ -310,6 +312,56 @@ export function registerIpcHandlers(): void {
         setTemporaryPassword(payload.id, temporaryPassword)
         const refreshed = getEmployeeById(payload.id) as Employee
         return { ok: true, data: { employee: refreshed, temporaryPassword } }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  /**
+   * Set — or take away — the PIN this employee clocks in with on the web.
+   *
+   * Gated on the same permission as resetting a password and by the same
+   * assignable-roles rule, for the same reason: this hands somebody a working
+   * credential, and an Operations account must not be able to mint one for the
+   * Owner. It is a weaker credential than a password — it only reaches the
+   * clock — but "weaker" is not "unguarded".
+   *
+   * The PIN is chosen by whoever is setting it and returned to them ONCE, in
+   * this reply, so they can hand it over. It is never stored in the clear and
+   * cannot be read back afterwards; a forgotten PIN is replaced, not recovered.
+   */
+  ipcMain.handle(
+    IPC.employeesSetPortalPin,
+    (_e, payload: { id: string; pin: string }): Result<Employee> => {
+      try {
+        const actor = requirePermission('admin.employees.manage')
+        const target = getEmployeeById(payload.id)
+        if (!target) return { ok: false, error: 'Employee not found.' }
+        if (!assignableRoles(actor.role).includes(target.role)) {
+          return { ok: false, error: 'You do not have permission to manage that user.' }
+        }
+        const res = setPortalPin(payload.id, String(payload.pin || ''))
+        if (!res.ok) return { ok: false, error: res.error ?? 'That PIN could not be set.' }
+        return { ok: true, data: getEmployeeById(payload.id) as Employee }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  ipcMain.handle(
+    IPC.employeesClearPortalPin,
+    (_e, payload: { id: string }): Result<Employee> => {
+      try {
+        const actor = requirePermission('admin.employees.manage')
+        const target = getEmployeeById(payload.id)
+        if (!target) return { ok: false, error: 'Employee not found.' }
+        if (!assignableRoles(actor.role).includes(target.role)) {
+          return { ok: false, error: 'You do not have permission to manage that user.' }
+        }
+        clearPortalPin(payload.id)
+        return { ok: true, data: getEmployeeById(payload.id) as Employee }
       } catch (err) {
         return fail(err)
       }

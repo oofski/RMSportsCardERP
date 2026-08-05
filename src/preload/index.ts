@@ -183,6 +183,10 @@ const api = {
       ipcRenderer.invoke(IPC.employeesResetPassword, { id }),
     setPermissions: (id: string, permissions: Permission[]): Promise<Result<Employee>> =>
       ipcRenderer.invoke(IPC.employeesSetPermissions, { id, permissions }),
+    setPortalPin: (id: string, pin: string): Promise<Result<Employee>> =>
+      ipcRenderer.invoke(IPC.employeesSetPortalPin, { id, pin }),
+    clearPortalPin: (id: string): Promise<Result<Employee>> =>
+      ipcRenderer.invoke(IPC.employeesClearPortalPin, { id }),
     setAvatar: (id: string): Promise<Result<Employee>> =>
       ipcRenderer.invoke(IPC.employeesSetAvatar, id),
     removeAvatar: (id: string): Promise<Result<Employee>> =>

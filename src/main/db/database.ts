@@ -1788,7 +1788,26 @@ function migrate(database: Database.Database): void {
   // recorded, which is the truth for every day that has ever been imported, and
   // inferring one from a giveaway line would double-count the very stock movement
   // this is explicitly NOT for.
-  setMeta(database, 'schema_version', '44')
+  // v45: the clock-in portal's PIN.
+  //
+  // A SECOND credential beside password_hash, not a replacement for it. The
+  // portal runs in a Cloudflare Worker on the free plan, where an invocation is
+  // killed after 10ms of CPU and one bcrypt-cost-12 verification is thirty
+  // times that. So the portal gets a PBKDF2 hash it can actually check, and the
+  // app password is left exactly as it was — see @shared/portalPin.
+  //
+  // Ordinary employees columns on purpose: `employees` is already tier 0 in the
+  // sync manifest, so a PIN set on any laptop reaches the relay — and therefore
+  // the portal — through machinery that already exists. Nothing portal-specific
+  // had to be added to sync at all.
+  //
+  // Null for everybody until somebody sets one, and a null hash means the
+  // portal refuses that employee. No backfill: a PIN nobody chose is a PIN
+  // nobody was told, and inventing one would put a live credential on every
+  // account in the company without anyone asking for it.
+  addColumnIfMissing(database, 'employees', 'portal_pin_hash', 'TEXT')
+  addColumnIfMissing(database, 'employees', 'portal_pin_set_at', 'TEXT')
+  setMeta(database, 'schema_version', '45')
 
   // Seed the product catalog once, then apply the on-hand snapshot once.
   seedCatalogIfNeeded(database)

@@ -7,6 +7,7 @@ import { useToast } from '../../components/Toast'
 import { Avatar, Button, EmptyState, Modal, RoleBadge, StatusBadge } from '../../components/ui'
 import { Icon } from '../../components/Icon'
 import { initials, fullName, formatDate } from '../../lib/format'
+import { PORTAL_PIN_RE, isWeakPortalPin } from '@shared/portalPin'
 import { EmployeeFormModal } from './EmployeeFormModal'
 import { InviteModal } from './InviteModal'
 
@@ -26,6 +27,7 @@ export function EmployeesTab({
   const [editing, setEditing] = useState<Employee | null>(null)
   const [invite, setInvite] = useState<EmployeeInvite | null>(null)
   const [confirmReset, setConfirmReset] = useState<Employee | null>(null)
+  const [pinFor, setPinFor] = useState<Employee | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
 
   const filtered = useMemo(() => {
@@ -213,6 +215,23 @@ export function EmployeesTab({
                       >
                         {e.status === 'invited' ? 'Resend' : 'Reset'}
                       </Button>
+                      {/* The web clock's PIN. A separate credential from the
+                          password beside it, and labelled so nobody assumes
+                          resetting one touches the other — see @shared/portalPin
+                          for why they cannot be the same secret. */}
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        icon="Smartphone"
+                        onClick={() => setPinFor(e)}
+                        title={
+                          e.hasPortalPin
+                            ? `Web clock PIN set ${formatDate(e.portalPinSetAt ?? '')} — change or remove it`
+                            : 'Give this person a PIN so they can clock in from their phone'
+                        }
+                      >
+                        {e.hasPortalPin ? 'PIN ✓' : 'PIN'}
+                      </Button>
                       <Button size="sm" variant="secondary" icon="Pencil" onClick={() => openEdit(e)}>
                         Edit
                       </Button>
@@ -270,7 +289,124 @@ export function EmployeesTab({
           </p>
         </Modal>
       )}
+
+      {pinFor && (
+        <PortalPinModal
+          employee={pinFor}
+          onClose={() => setPinFor(null)}
+          onSaved={async () => {
+            setPinFor(null)
+            await onChanged()
+          }}
+        />
+      )}
     </>
+  )
+}
+
+/**
+ * Set — or take away — somebody's web clock PIN.
+ *
+ * Typed rather than generated, because the person setting it is standing next
+ * to the person who needs it: reading out six digits you chose beats copying a
+ * random string into a message. It is shown while it is typed and never again;
+ * there is nothing to read it back from afterwards, only something to replace.
+ */
+function PortalPinModal({
+  employee,
+  onClose,
+  onSaved
+}: {
+  employee: Employee
+  onClose: () => void
+  onSaved: () => Promise<void>
+}): JSX.Element {
+  const toast = useToast()
+  const [pin, setPin] = useState('')
+  const [busy, setBusy] = useState(false)
+  const name = fullName(employee.firstName, employee.lastName)
+
+  const save = async (): Promise<void> => {
+    setBusy(true)
+    try {
+      const res = await api.employees.setPortalPin(employee.id, pin)
+      if (!res.ok) {
+        toast.error(res.error ?? 'That PIN could not be set.')
+        return
+      }
+      toast.success(`${employee.firstName} can clock in at the web portal with ${employee.companyId} and ${pin}.`)
+      await onSaved()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const remove = async (): Promise<void> => {
+    setBusy(true)
+    try {
+      const res = await api.employees.clearPortalPin(employee.id)
+      if (!res.ok) {
+        toast.error(res.error ?? 'Could not remove that PIN.')
+        return
+      }
+      toast.success(`${employee.firstName} can no longer clock in on the web.`)
+      await onSaved()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal
+      title={employee.hasPortalPin ? 'Change the web clock PIN' : 'Set a web clock PIN'}
+      subtitle={`${name} signs in at the portal with ${employee.companyId} and this PIN.`}
+      onClose={onClose}
+      footer={
+        <>
+          {employee.hasPortalPin && (
+            <Button variant="danger" icon="Trash2" disabled={busy} onClick={() => void remove()}>
+              Remove PIN
+            </Button>
+          )}
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            icon="Smartphone"
+            loading={busy}
+            disabled={!PORTAL_PIN_RE.test(pin)}
+            onClick={() => void save()}
+          >
+            {employee.hasPortalPin ? 'Change PIN' : 'Set PIN'}
+          </Button>
+        </>
+      }
+    >
+      <label className="field">
+        <span>Six digits</span>
+        <input
+          className="input mono"
+          inputMode="numeric"
+          maxLength={6}
+          autoFocus
+          value={pin}
+          placeholder="481907"
+          onChange={(ev) => setPin(ev.target.value.replace(/[^0-9]/g, '').slice(0, 6))}
+        />
+      </label>
+      {pin.length === 6 && isWeakPortalPin(pin) && (
+        <p className="muted" style={{ color: 'var(--danger)' }}>
+          That is one of the first PINs anyone would try. Pick six digits that are not all the same
+          and not in a row.
+        </p>
+      )}
+      <p className="muted">
+        This is separate from {employee.firstName}&rsquo;s app password, and only works on the web
+        clock — it cannot open the app or see anything but their own hours. Read it out now; it is
+        not stored anywhere you can look it up later.
+      </p>
+    </Modal>
   )
 }
 

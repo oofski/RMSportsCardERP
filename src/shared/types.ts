@@ -26,6 +26,17 @@ export interface Employee {
   avatarUrl: string | null
   /** A person, or a legacy shared bench computer. See AccountKind. */
   accountKind: AccountKind
+  /**
+   * Can this person clock in on the web portal — i.e. has a PIN been set?
+   *
+   * Deliberately a boolean and not the hash. The credential is needed by the
+   * Cloudflare Worker and by the one file that writes it, and by nothing on a
+   * screen; shipping it to the renderer would put it in a place where somebody
+   * could reasonably decide to render it.
+   */
+  hasPortalPin: boolean
+  /** When that PIN was last set, for the admin list. Null if there is none. */
+  portalPinSetAt: string | null
   createdAt: string
   updatedAt: string
   createdBy: string | null

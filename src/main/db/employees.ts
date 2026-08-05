@@ -1,4 +1,5 @@
 import bcrypt from 'bcryptjs'
+import { pbkdf2Sync, randomBytes } from 'node:crypto'
 import type { Database } from 'better-sqlite3'
 import type {
   Employee,
@@ -7,6 +8,14 @@ import type {
   UpdateEmployeeInput
 } from '@shared/types'
 import { sanitizePermissions, type Permission, type Role } from '@shared/permissions'
+import {
+  PORTAL_PIN_HASH_BYTES,
+  PORTAL_PIN_ITERATIONS,
+  PORTAL_PIN_PREFIX,
+  PORTAL_PIN_RE,
+  PORTAL_PIN_SALT_BYTES,
+  isWeakPortalPin
+} from '@shared/portalPin'
 import { getDb } from './database'
 import { deleteImageFile, imageDataUrl, importImageFile } from '../services/media'
 import { newId, nowIso } from '../util'
@@ -27,6 +36,8 @@ interface EmployeeRow {
   permissions_json: string | null
   avatar: string | null
   account_kind: string | null
+  portal_pin_hash: string | null
+  portal_pin_set_at: string | null
   created_at: string
   updated_at: string
   created_by: string | null
@@ -64,6 +75,12 @@ function toEmployee(row: EmployeeRow): Employee {
     // same column. Reporting what the row actually says is cheaper than
     // pretending the distinction never existed.
     accountKind: row.account_kind === 'station' ? 'station' : 'person',
+    // WHETHER there is a portal PIN, never the hash. This object reaches the
+    // renderer, and a credential that only the Worker and this file ever need
+    // to see has no business travelling to a screen that renders it. A boolean
+    // answers the only question the UI asks: does this person have one yet?
+    hasPortalPin: !!row.portal_pin_hash,
+    portalPinSetAt: row.portal_pin_set_at ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     createdBy: row.created_by
@@ -329,6 +346,64 @@ export function setChosenPassword(id: string, newPassword: string): boolean {
 export function verifyPassword(row: EmployeeRow, password: string): boolean {
   if (!row.password_hash) return false
   return bcrypt.compareSync(password, row.password_hash)
+}
+
+// ---------------------------------------------------------------------------
+// The clock-in portal's PIN
+// ---------------------------------------------------------------------------
+
+/**
+ * Set the six-digit PIN this employee clocks in with on the web.
+ *
+ * A SECOND credential, deliberately, and the reasoning is in @shared/portalPin:
+ * the app password is bcrypt at cost 12, which a Cloudflare Worker on the free
+ * plan cannot afford to verify. This one is PBKDF2, which it can.
+ *
+ * The hash is written into an ordinary employees column, so it reaches the
+ * relay through the sync that already carries every other employee field —
+ * there is no second push, no portal-specific plumbing, and a PIN set on a
+ * laptop with no internet works as soon as that laptop next syncs.
+ *
+ * Refuses a weak PIN outright rather than warning. Six digits is a small space
+ * already; spending a meaningful slice of it on 111111 and 123456 is a choice
+ * nobody makes deliberately.
+ */
+export function setPortalPin(id: string, pin: string): { ok: boolean; error?: string } {
+  const clean = (pin || '').trim()
+  if (!PORTAL_PIN_RE.test(clean)) return { ok: false, error: 'A portal PIN is exactly six digits.' }
+  if (isWeakPortalPin(clean)) {
+    return {
+      ok: false,
+      error: 'That PIN is one of the first anyone would try. Pick six digits that are not all the same and not in a row.'
+    }
+  }
+  const salt = randomBytes(PORTAL_PIN_SALT_BYTES)
+  const derived = pbkdf2Sync(clean, salt, PORTAL_PIN_ITERATIONS, PORTAL_PIN_HASH_BYTES, 'sha256')
+  const stored = `${PORTAL_PIN_PREFIX}${PORTAL_PIN_ITERATIONS}$${salt.toString('base64')}$${derived.toString('base64')}`
+  const info = getDb()
+    .prepare(
+      // A disabled account keeps whatever it had and gains nothing: the portal
+      // refuses a disabled employee anyway, and quietly arming a credential on
+      // a deactivated account is how one comes back to life unnoticed.
+      `UPDATE employees
+          SET portal_pin_hash = ?, portal_pin_set_at = ?, updated_at = ?
+        WHERE id = ? AND status <> 'disabled'`
+    )
+    .run(stored, nowIso(), nowIso(), id)
+  return info.changes > 0
+    ? { ok: true }
+    : { ok: false, error: 'That employee could not be found, or the account is disabled.' }
+}
+
+/** Take the PIN away. The employee can no longer clock in on the web at all. */
+export function clearPortalPin(id: string): boolean {
+  const info = getDb()
+    .prepare(
+      `UPDATE employees SET portal_pin_hash = NULL, portal_pin_set_at = NULL, updated_at = ?
+        WHERE id = ?`
+    )
+    .run(nowIso(), id)
+  return info.changes > 0
 }
 
 export function companyIdExists(companyId: string, exceptId?: string): boolean {
