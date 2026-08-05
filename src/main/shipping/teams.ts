@@ -594,3 +594,55 @@ export function detectSportDetailed(candidates: Iterable<string>): SportDetectio
 export function detectSport(candidates: Iterable<string>): ShipSport {
   return detectSportDetailed(candidates).sport
 }
+
+/**
+ * How much evidence a slate is allowed to be inferred from.
+ *
+ * 100 is one exact-or-alias team name. Below that the only things that can score
+ * are a mascot (10) and a fuzzy near-miss (1), and neither identifies a league
+ * on its own: "Giants" is a football team AND a baseball team, "Rangers" is
+ * hockey and baseball, "Cardinals" is football and baseball, "Panthers" is
+ * football and hockey. Ten mascots also reach 100, which is the deliberate
+ * second way in — a break whose slips only ever say "Cubs", "Mets", "Astros" is
+ * ten independent votes, not one guess repeated.
+ */
+export const SLATE_DETECTION_MIN_SCORE = 100
+
+export interface SlateDetection {
+  sport: ShipSport
+  /** 32 for NFL and NHL, 30 for MLB and NBA. */
+  slateSize: number
+  /** The winning league's score, so a caller can report HOW confident. */
+  score: number
+}
+
+/**
+ * The league's roster size for a set of team strings, or NULL when the evidence
+ * does not support one.
+ *
+ * `detectSport` ALWAYS returns a league. It has to — it is used where something
+ * must be picked, and it falls back to the first entry in `SHIP_SPORTS` on a
+ * tie, which means a set of strings containing no team at all comes back as
+ * 'nfl' with a score of zero. Costing a break off that answer bills 32 team bags
+ * against a night nobody can identify, and nothing on the screen would look
+ * wrong: 32 is a number of exactly the right shape in exactly the right column.
+ *
+ * So this refuses twice. Once on weight — see `SLATE_DETECTION_MIN_SCORE` — and
+ * once on ambiguity: a rival league tied on score whose slate is a DIFFERENT
+ * SIZE means the answer changes the money, and a coin toss must not. A tie
+ * between MLB and NBA is not refused, because both are 30 and the caller is
+ * asking for a slate size rather than for a league.
+ */
+export function detectSlate(candidates: Iterable<string>): SlateDetection | null {
+  const { sport, scores } = detectSportDetailed(candidates)
+  const score = scores[sport]
+  if (score < SLATE_DETECTION_MIN_SCORE) return null
+  const slateSize = SHIP_TEAM_SLATE_SIZE[sport]
+  for (const other of SHIP_SPORTS) {
+    if (other === sport) continue
+    // `detectSportDetailed` breaks ties by SHIP_SPORTS order, so anything
+    // scoring as high as the winner IS tied with it.
+    if (scores[other] >= score && SHIP_TEAM_SLATE_SIZE[other] !== slateSize) return null
+  }
+  return { sport, slateSize, score }
+}

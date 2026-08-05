@@ -284,7 +284,7 @@ function SectionBody({
   const bodyId = `fin-pnl-${section.key}`
 
   return (
-    <tbody className="fin-pnl-sec" id={bodyId}>
+    <tbody className={`fin-pnl-sec${section.memo ? ' is-memo' : ''}`} id={bodyId}>
       <tr className={`fin-pnl-head${open ? ' is-open' : ''}`}>
         <th scope="row">
           {/* The whole heading is the control. A caret-sized hit target on a
@@ -299,6 +299,12 @@ function SectionBody({
           >
             <Icon name={open ? 'ChevronDown' : 'ChevronRight'} size={14} />
             <span>{section.label}</span>
+            {/* A memo subtotal sits in the same column, at the same weight, as
+                the subtotals that DO add up to the bottom line. Somebody adding
+                the column by eye would land a few hundred dollars under net
+                profit and go looking for the bug. So the row says on its face
+                that it is outside the total; the section's note says why. */}
+            {section.memo && <em className="fin-pnl-memo">not in net profit</em>}
             {!open && visible.length > 0 && (
               <em className="fin-pnl-count">{plural(visible.length, 'line')}</em>
             )}
@@ -338,6 +344,33 @@ function SectionBody({
 }
 
 function LineRow({ line, revenue }: { line: PnlLine; revenue: number | null }): JSX.Element {
+  // NOT KNOWN IS NOT ZERO, and this is the row where that has to be visible.
+  // Printing $0.00 for a cost the app could not measure tells the reader the
+  // cost did not happen. The figure is replaced by words, the share column is
+  // dropped rather than dividing an unknown by revenue, and the line is never
+  // hidden — `buildPnl` refuses to mark an unavailable line `empty`, so the
+  // zero-line toggle cannot swallow it either.
+  if (line.unavailable) {
+    return (
+      <tr className="fin-pnl-line is-unknown">
+        <th scope="row">
+          <span className="fin-pnl-label">{line.label}</span>
+          {line.detail && <em className="fin-pnl-detail">{line.detail}</em>}
+        </th>
+        <td className="is-num">
+          <span className="fin-money zero mono" title="This period has no packing record to count">
+            not known
+          </span>
+        </td>
+        {revenue !== null && (
+          <td className="is-num fin-pnl-share">
+            <span className="fin-money zero mono">—</span>
+          </td>
+        )}
+      </tr>
+    )
+  }
+
   return (
     <tr className={`fin-pnl-line${line.empty ? ' is-empty' : ''}`}>
       <th scope="row">

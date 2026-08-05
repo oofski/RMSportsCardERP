@@ -32,6 +32,19 @@
  * off-stream sale would be silently credited to a show that did not make it.
  * Unattributed rows are kept, counted and shown instead.
  */
+// The packaging RATES only. The statement quotes them in its own detail lines,
+// and quoting them from the one module that defines them is what stops a
+// sentence on screen from describing a rate the arithmetic stopped using.
+import {
+  PACKAGING_GIVEAWAY_MAILER_COST,
+  PACKAGING_PAID_MAILER_COST,
+  PACKAGING_SHIPPING_LABEL_COST,
+  PACKAGING_TEAM_BAG_STICKER_COST,
+  PACKAGING_SLEEVE_COST,
+  PACKAGING_TEAM_BAG_COST,
+  PACKAGING_TOP_LOADER_COST,
+  PACKAGING_TOP_LOADER_SHARE
+} from './packagingCosts'
 
 // ---------------------------------------------------------------------------
 // Classification
@@ -208,10 +221,41 @@ export function parseProductSaleName(message: string): string {
  * a separator with spaces around it counts and only the last one is considered.
  */
 function endsWithTeam(message: string, isTeamName: (s: string) => boolean): boolean {
-  const at = message.lastIndexOf(' - ')
-  if (at < 0) return false
-  const tail = message.slice(at + 3).trim()
+  const tail = parseSaleTeamName(message)
   return tail.length > 0 && isTeamName(tail)
+}
+
+/**
+ * The team a break spot was sold as, or '' when the line does not carry one.
+ *
+ * Same rule `endsWithTeam` classifies on, and the two share it rather than
+ * restating it: the tail after the LAST " - ". Whatnot builds a break-spot title
+ * as "<listing title> - <team>", and the listing title is itself full of hyphens
+ * ("HOBBY BOX- CHASE PLANETARY PURSUIT", "2025-26", "12-Box"), so only a
+ * separator with spaces around it counts and only the last one is considered.
+ *
+ * Trailing brackets and punctuation are stripped, which the classifier never
+ * needed to do and this does. "Earnings for selling a (Break #12 - Boston Red
+ * Sox)" is a real shape: the classifier already calls it a break on the strength
+ * of the break number, so it never had to read the tail — but a caller trying to
+ * identify the LEAGUE gets "Boston Red Sox)" and matches nothing. Leading
+ * punctuation is left alone deliberately; nothing in the real data has any, and
+ * stripping speculatively is how a matcher starts accepting strings that are not
+ * team names.
+ *
+ * Exported because the packaging model reads it to work out which league a break
+ * belonged to, and a second copy of this rule would eventually disagree with the
+ * classification it is built on top of.
+ */
+export function parseSaleTeamName(message: string): string {
+  const msg = message || ''
+  const at = msg.lastIndexOf(' - ')
+  if (at < 0) return ''
+  return msg
+    .slice(at + 3)
+    .trim()
+    .replace(/[)\]}.,;:]+$/, '')
+    .trim()
 }
 
 /**
@@ -1655,6 +1699,67 @@ export interface StreamDayFinance {
   /** Subsidy less all postage AND packing. Can land either side of zero. */
   netShipping: number
 
+  // --- Packaging, MODELLED per card / per break / per package -------------
+  //
+  // A MEMO BLOCK. Every field below is negative money or a count, they roll up
+  // like everything else, and NOT ONE OF THEM IS IN `netProfit` — see the
+  // `packaging` section of `buildPnl` for why. They price the SAME physical
+  // materials `packingSupplies` above prices, from a per-unit model rather than
+  // from stock that actually left, and a statement that charged both would
+  // charge every mailer twice.
+  /** NEGATIVE. Cards × the sleeve rate. */
+  packagingSleeves: number
+  /** NEGATIVE. Cards × the top-loader share × the top-loader rate. */
+  packagingTopLoaders: number
+  /** NEGATIVE. Team slots × the team-bag rate. */
+  packagingTeamBags: number
+  /** NEGATIVE. Packages × the label rate. ZERO when `packagingDaysUnknown` says
+   *  the packages were never counted — read the two together, always. */
+  packagingShippingLabels: number
+  /** NEGATIVE. The same team slots the bags are charged on × the sticker rate —
+   *  one sticker per bag, so the base is shared on purpose. */
+  packagingTeamBagStickers: number
+  /** NEGATIVE. Paid packages at the double-mailer rate plus everything else at
+   *  the single. ZERO when `packagingDaysUnknown` says the packages were never
+   *  counted, exactly like the labels. */
+  packagingMailers: number
+  /** Break spots behind these figures — one ledger `sale` row is one card. */
+  packagingCards: number
+  /** Distinct numbered breaks that ran. */
+  packagingBreaks: number
+  /**
+   * How many of those had a league the app could identify from the team names
+   * on their spots. `packagingBreaks - packagingBreaksPriced` is what the
+   * statement reports as SKIPPED: those breaks are billed for nothing, because
+   * the alternative is to invent a slate, and 32 invented team bags look exactly
+   * like 32 real ones.
+   */
+  packagingBreaksPriced: number
+  /** Σ over the priced breaks of that break's full slate. The unit count behind
+   *  the team bags and the stickers. */
+  packagingSlateTeams: number
+  /** Physical envelopes shipped on the days this row covers. */
+  packagingPackages: number
+  /** Of those, the ones holding at least one PAID card. The rest — giveaway-only
+   *  packages, and the occasional package with nothing in it — take the single
+   *  mailer, and are `packagingPackages - packagingPaidPackages`. */
+  packagingPaidPackages: number
+  /**
+   * How many business days in this row had a packing record behind them, and
+   * how many needed one and did not have it.
+   *
+   * TWO COUNTS RATHER THAN A FLAG, because a flag does not survive a rollup. A
+   * month is fourteen show nights and at most one of them can have the shipping
+   * dataset still loaded, so "known" and "unknown" is not a property a period
+   * has — the honest statement is "this figure covers 1 of the 14 nights", and
+   * only counts can say that after being summed.
+   *
+   * A day that sold no break spots is in NEITHER: it needed no packaging, so its
+   * zero is a real zero and there is nothing to disclose.
+   */
+  packagingDaysCovered: number
+  packagingDaysUnknown: number
+
   // --- Other show costs ---------------------------------------------------
   /** Paid promotion. Negative. */
   showBoost: number
@@ -1775,6 +1880,22 @@ export interface PnlLine {
   detail?: string
   /** True for a line that is zero and only present to keep the shape stable. */
   empty?: boolean
+  /**
+   * NOT KNOWN, as distinct from zero.
+   *
+   * The screen must print this line as "not known" rather than as $0.00, and
+   * must never hide it behind the zero-line toggle. The two readings are not
+   * close: $0.00 says the cost did not happen, and a cost that did happen and
+   * could not be measured is the one thing an operator has to be told. It exists
+   * because the packaging model prices packages out of the shipping dataset, and
+   * the shipping module holds ONE dataset at a time — so the moment the next
+   * show is uploaded, last week's package count is genuinely gone.
+   *
+   * `amount` on such a line is whatever part IS known (zero on a day with
+   * nothing, a partial sum on a range where some days are covered), and the
+   * detail says how much of the period it covers.
+   */
+  unavailable?: boolean
 }
 
 export interface PnlSection {
@@ -1785,6 +1906,20 @@ export interface PnlSection {
   subtotalLabel: string
   /** A running figure carried down the statement (gross profit, net profit). */
   running?: boolean
+  /**
+   * A section that DISCLOSES rather than accounts: its subtotal is real money
+   * and is deliberately not part of the bottom line, so `pnlChecksum` skips it.
+   *
+   * There is exactly one, and it exists because the packaging model and the
+   * packing-supplies figure price the same physical materials two different
+   * ways. A memo section is the only shape that can carry a cost the reader
+   * needs to see without adding it to a total that already contains it.
+   *
+   * It is also the only shape that may contain an `unavailable` line: a section
+   * feeding net profit cannot have an unknown in it, because then net profit
+   * would be an unknown too and would not say so.
+   */
+  memo?: boolean
   /**
    * A sentence printed under the section's lines when it is open.
    *
@@ -1805,6 +1940,19 @@ export interface PnlSection {
  * with the machine would make the same statement render two ways on two desks.
  */
 const count = (n: number): string => n.toLocaleString('en-US')
+
+/**
+ * A sub-dollar unit rate, the way the packaging lines quote it: "5¢", "48¢".
+ *
+ * In cents rather than dollars because that is how the owner states these rates
+ * and how anybody would check them — "$0.05 per card" invites a reader to
+ * misplace a decimal that "5¢" cannot. Computed from the constant rather than
+ * written out, so editing a rate in `packagingCosts.ts` changes the sentence
+ * that explains it too; a hardcoded "5¢" beside a rate somebody moved to 6¢ is
+ * a detail line that actively lies. Carries a fraction of a cent when a rate has
+ * one, for the same reason.
+ */
+const centsLabel = (dollars: number): string => `${Math.round(dollars * 10000) / 100}¢`
 
 /** "$203,832.85". Pinned to en-US for the same reason `count` is. */
 const usd = (n: number): string =>
@@ -1894,14 +2042,47 @@ export function buildPnl(d: {
   refundShipping: number; netShipping: number
   /** Optional so a caller built before packing existed still type-checks. */
   packingSupplies?: number
+  // The modelled packaging block. All optional for the usual reason — a
+  // packaged main that predates it sends none — and then the section prints
+  // every line at zero and says the model had nothing to work from, which is
+  // true on that build.
+  packagingSleeves?: number
+  packagingTopLoaders?: number
+  packagingTeamBags?: number
+  packagingShippingLabels?: number
+  packagingTeamBagStickers?: number
+  packagingMailers?: number
+  packagingCards?: number
+  packagingBreaks?: number
+  packagingBreaksPriced?: number
+  packagingSlateTeams?: number
+  packagingPackages?: number
+  packagingPaidPackages?: number
+  packagingDaysCovered?: number
+  packagingDaysUnknown?: number
   showBoost: number; reversals: number; netProfit: number
   /** Optional so a caller built before manual expenses existed still
    *  type-checks. Zero then, and the section reads as an empty one. */
   generalExpenses?: number
   generalExpenseCount?: number
 }): PnlSection[] {
-  const line = (key: string, label: string, amount: number, detail?: string): PnlLine => ({
-    key, label, amount: c2(amount), detail, empty: c2(amount) === 0
+  const line = (
+    key: string,
+    label: string,
+    amount: number,
+    detail?: string,
+    // Only the packaging memo lines pass this. `empty` is deliberately forced
+    // false alongside it: `empty` is what the screen hides behind the zero-line
+    // toggle, and an unknown cost hidden as a zero is the exact misreading this
+    // flag exists to prevent.
+    unavailable?: boolean
+  ): PnlLine => ({
+    key,
+    label,
+    amount: c2(amount),
+    detail,
+    empty: !unavailable && c2(amount) === 0,
+    unavailable: unavailable ? true : undefined
   })
 
   const gross = c2(d.grossSales)
@@ -2088,6 +2269,87 @@ export function buildPnl(d: {
   const general = c2(d.generalExpenses ?? 0)
   const generalCount = d.generalExpenseCount ?? 0
 
+  // --- packaging, modelled ----------------------------------------------------
+  //
+  // The counts the detail lines quote, read off the day rather than divided back
+  // out of the money. Dividing would reproduce the count only until somebody
+  // edits a rate, and then a historical statement would print a card count that
+  // was never true of that night.
+  const packagingCards = d.packagingCards ?? 0
+  const packagingBreaks = d.packagingBreaks ?? 0
+  const packagingPriced = d.packagingBreaksPriced ?? 0
+  const packagingSlate = d.packagingSlateTeams ?? 0
+  const packagingSkipped = Math.max(0, packagingBreaks - packagingPriced)
+  // WHAT WAS COUNTED AND WHAT WAS NOT, on the two lines charged per break.
+  //
+  // A team-bag figure that quietly covers four of a night's five breaks is worse
+  // than no figure at all: it is a real number, in the right column, understating
+  // the cost by a fifth with nothing to say so. The skipped count rides on the
+  // line rather than in the section note because it is a fact about THAT figure,
+  // not about the section — and a range where every break was identified must
+  // not carry the caveat at all, or it stops being read.
+  const packagingSlateBasis =
+    `${count(packagingSlate)} team slot${packagingSlate === 1 ? '' : 's'} over ` +
+    `${count(packagingPriced)} break${packagingPriced === 1 ? '' : 's'}`
+  // After the rate rather than inside the basis, so the line still reads as the
+  // multiplication first and the caveat second.
+  const packagingSkippedNote =
+    packagingSkipped > 0
+      ? ` · ${count(packagingSkipped)} break${packagingSkipped === 1 ? '' : 's'} skipped, ` +
+        `league not identified`
+      : ''
+
+  // --- what the per-package lines are allowed to claim ------------------------
+  //
+  // The two lines charged per envelope can only be stated for days the shipping
+  // module still holds slips for, which is at most one. `packagingDaysUnknown`
+  // counts the days that sold spots and have no packing record; one of those in
+  // the period and the figure below is INCOMPLETE, so it is marked unavailable
+  // and the detail says how much of the period it actually covers.
+  //
+  // A period with neither counter set is a period that shipped nothing — no
+  // break spots, so no envelopes — and its zero is a real zero. Marking that
+  // unavailable would put "not known" on every day the business did not stream,
+  // which is how a warning becomes wallpaper.
+  const packagingCovered = d.packagingDaysCovered ?? 0
+  const packagingUnknown = d.packagingDaysUnknown ?? 0
+  const packagingPackages = d.packagingPackages ?? 0
+  const packagesUnavailable = packagingUnknown > 0
+  const packagingDayTotal = packagingCovered + packagingUnknown
+  // NOTHING AT ALL is a different sentence from PART OF IT. When some nights are
+  // covered the figure beside the line is real money for those nights, so the
+  // arithmetic is still written out and the gap is named after it. When none
+  // are, there is no arithmetic to write and the line says only why.
+  const packagingBlind = packagesUnavailable && packagingCovered === 0
+  const packagingNothingKnown =
+    `no packing record for ${
+      packagingDayTotal === 1 ? 'this day' : `${count(packagingDayTotal)} of these nights`
+    } — the shipping workspace holds one show's slips at a time`
+  const packagingOverNights = packagesUnavailable
+    ? ` over ${count(packagingCovered)} of ${count(packagingDayTotal)} nights`
+    : ''
+  const packagingGapNote = packagesUnavailable
+    ? ` · ${count(packagingUnknown)} night${packagingUnknown === 1 ? '' : 's'} have no packing record`
+    : ''
+
+  // The mailer line is the one figure in this section built from two rates, so
+  // it writes BOTH halves out. Anything not paid takes the single mailer — the
+  // giveaway-only packages, and the occasional envelope with no cards in it,
+  // which is why this is a subtraction rather than a third stored count.
+  const packagingPaid = Math.min(packagingPackages, d.packagingPaidPackages ?? 0)
+  const packagingGiveaway = Math.max(0, packagingPackages - packagingPaid)
+  // Summed from the SAME rounded figures the lines print, so the subtotal is the
+  // column above it added up rather than a second computation that agrees most
+  // of the time.
+  const packagingSubtotal = c2(
+    (d.packagingSleeves ?? 0) +
+      (d.packagingTopLoaders ?? 0) +
+      (d.packagingTeamBags ?? 0) +
+      (d.packagingShippingLabels ?? 0) +
+      (d.packagingTeamBagStickers ?? 0) +
+      (d.packagingMailers ?? 0)
+  )
+
   return [
     {
       key: 'revenue',
@@ -2180,6 +2442,104 @@ export function buildPnl(d: {
       subtotalLabel: 'Net shipping & packing'
     },
     {
+      // A MEMO, AND THE ONLY ONE ON THE STATEMENT.
+      //
+      // Every line here prices a physical material the section above ALREADY
+      // prices. `packingSupplies` is stock that measurably left Supplies when
+      // the shipping checklist was ticked, at the moving average unit cost of
+      // the product linked to each role. These lines are the same sleeves, the
+      // same bags and the same mailers costed from the shape of the night at
+      // rates the owner states. Two valuations of one pile of materials.
+      //
+      // So it does not touch net profit, and `pnlChecksum` skips it. Putting it
+      // in the bottom line would charge the same mailer twice on every night the
+      // floor ticked the checklist — silently, since both figures are plausible
+      // and neither is obviously the duplicate. The choice of WHICH to book is
+      // not this function's to make and is not made by omission here: the P&L
+      // books the measured one, which is what it has always booked, and this
+      // section exists so the owner can see the modelled one beside it.
+      //
+      // It is also the only section allowed to contain an `unavailable` line,
+      // and that follows from being a memo rather than being a licence: a
+      // section inside net profit cannot hold an unknown, because then net
+      // profit is an unknown and does not say so.
+      key: 'packaging',
+      label: 'Packaging costs',
+      // The caveat rides on the FLAG rather than on the label. A consumer that
+      // reads `label` and ignores `memo` would take this subtotal into a total
+      // whatever the heading said, so "(memo)" in the text would buy tidiness
+      // and no safety; the flag is what `pnlChecksum` enforces and what the
+      // screen prints its badge from.
+      memo: true,
+      lines: [
+        line(
+          'packagingSleeves',
+          'Sleeves',
+          d.packagingSleeves ?? 0,
+          `${count(packagingCards)} card${packagingCards === 1 ? '' : 's'} × ` +
+            `${centsLabel(PACKAGING_SLEEVE_COST)} · every card is sleeved`
+        ),
+        line(
+          'packagingTopLoaders',
+          'Top loaders',
+          d.packagingTopLoaders ?? 0,
+          `${pctLabel(PACKAGING_TOP_LOADER_SHARE)} of ${count(packagingCards)} ` +
+            `card${packagingCards === 1 ? '' : 's'} × ${centsLabel(PACKAGING_TOP_LOADER_COST)}`
+        ),
+        line(
+          'packagingTeamBags',
+          'Team bags',
+          d.packagingTeamBags ?? 0,
+          `${packagingSlateBasis} × ${centsLabel(PACKAGING_TEAM_BAG_COST)}${packagingSkippedNote}`
+        ),
+        line(
+          'packagingShippingLabels',
+          'Shipping labels',
+          d.packagingShippingLabels ?? 0,
+          packagingBlind
+            ? packagingNothingKnown
+            : `${count(packagingPackages)} package${packagingPackages === 1 ? '' : 's'}` +
+              `${packagingOverNights} × ${centsLabel(PACKAGING_SHIPPING_LABEL_COST)}` +
+              `${packagingGapNote}`,
+          packagesUnavailable
+        ),
+        line(
+          'packagingTeamBagStickers',
+          'Team bag stickers',
+          d.packagingTeamBagStickers ?? 0,
+          `${packagingSlateBasis} × ${centsLabel(PACKAGING_TEAM_BAG_STICKER_COST)}` +
+            `${packagingSkippedNote}`
+        ),
+        line(
+          'packagingMailers',
+          'Mailers',
+          d.packagingMailers ?? 0,
+          packagingBlind
+            ? packagingNothingKnown
+            : `${count(packagingPaid)} paid × ${centsLabel(PACKAGING_PAID_MAILER_COST)} + ` +
+              `${count(packagingGiveaway)} giveaway-only × ` +
+              `${centsLabel(PACKAGING_GIVEAWAY_MAILER_COST)}` +
+              `${packagingOverNights}${packagingGapNote}`,
+          packagesUnavailable
+        )
+      ],
+      subtotal: packagingSubtotal,
+      subtotalLabel: 'Modelled packaging',
+      note:
+        `NOT IN NET PROFIT, on purpose. These are the same sleeves, bags, labels ` +
+        `and mailers already costed as "Packing supplies" above — that line is stock ` +
+        `that actually left Supplies when the shipping checklist was ticked, these are ` +
+        `the same materials priced from cards sold, breaks run and packages shipped. ` +
+        `Counting both would charge every mailer twice.` +
+        (packagesUnavailable
+          ? ` The two lines charged per package read "not known" rather than $0.00 for ` +
+            `${count(packagingUnknown)} night${packagingUnknown === 1 ? '' : 's'} here: ` +
+            `packages are counted off the packing slips, and Shipping keeps one show's ` +
+            `slips at a time. That is missing information, not a zero cost — this ` +
+            `subtotal is short by whatever those nights shipped.`
+          : '')
+    },
+    {
       key: 'showCosts',
       label: 'Other show costs',
       lines: [line('showBoost', 'Show Boost', d.showBoost)],
@@ -2253,12 +2613,20 @@ export function profitMargin(totalRevenue: number, netProfit: number): number | 
 }
 
 /**
- * Every section subtotal that is NOT a running total, summed. Must equal
- * netProfit — exported so the UI and the tests can both assert it rather than
- * trusting it.
+ * Every section subtotal that is NOT a running total and NOT a memo, summed.
+ * Must equal netProfit — exported so the UI and the tests can both assert it
+ * rather than trusting it.
+ *
+ * A running section is skipped because it is a figure carried down from the
+ * sections above it, so counting it would count them twice. A MEMO section is
+ * skipped because its money is genuinely outside the bottom line: the packaging
+ * model prices the same materials `packingSupplies` already charged, and adding
+ * both would overstate the cost of every night the shipping checklist was
+ * ticked. Skipping it here is what makes that decision enforceable rather than
+ * a comment somebody can drift away from.
  */
 export function pnlChecksum(sections: PnlSection[]): number {
-  return c2(sections.filter((s) => !s.running).reduce((a, s) => a + s.subtotal, 0))
+  return c2(sections.filter((s) => !s.running && !s.memo).reduce((a, s) => a + s.subtotal, 0))
 }
 
 /** How the day rows are rolled up. Days always exist underneath; a period is
@@ -2514,6 +2882,19 @@ export const PNL_MONEY_FIELDS = [
   'refundShipping',
   'packingSupplies',
   'netShipping',
+  // The modelled packaging lines. In NO subtotal and in NO section that the
+  // checksum reads, so `pnlChecksum` is untouched by their presence — but they
+  // are summed like everything else, because a month has to state the same
+  // packaging its days do. A money field left out of this list is not a type
+  // error anywhere: it simply reads zero on every week, month and dragged range
+  // while reading correctly on the days, which is the quietest way a statement
+  // can be wrong.
+  'packagingSleeves',
+  'packagingTopLoaders',
+  'packagingTeamBags',
+  'packagingShippingLabels',
+  'packagingTeamBagStickers',
+  'packagingMailers',
   'showBoost',
   'reversals',
   'giveawayLoss',
@@ -2537,6 +2918,18 @@ export const PNL_COUNT_FIELDS = [
   'feeSaleCount',
   'productSaleCount',
   'generalExpenseCount',
+  // What the modelled packaging lines are multiplied out of. Summed for the same
+  // reason the money is: a week's detail line has to say how many cards it
+  // sleeved, and re-deriving that from the money would divide by a rate that may
+  // since have been edited.
+  'packagingCards',
+  'packagingBreaks',
+  'packagingBreaksPriced',
+  'packagingSlateTeams',
+  'packagingPackages',
+  'packagingPaidPackages',
+  'packagingDaysCovered',
+  'packagingDaysUnknown',
   'rowCount',
   'carriedBackRows'
 ] as const
@@ -2577,6 +2970,20 @@ export function emptyDayFinance(streamDate: string): StreamDayFinance {
     refundShipping: 0,
     packingSupplies: 0,
     netShipping: 0,
+    packagingSleeves: 0,
+    packagingTopLoaders: 0,
+    packagingTeamBags: 0,
+    packagingShippingLabels: 0,
+    packagingTeamBagStickers: 0,
+    packagingMailers: 0,
+    packagingCards: 0,
+    packagingBreaks: 0,
+    packagingBreaksPriced: 0,
+    packagingSlateTeams: 0,
+    packagingPackages: 0,
+    packagingPaidPackages: 0,
+    packagingDaysCovered: 0,
+    packagingDaysUnknown: 0,
     showBoost: 0,
     reversals: 0,
     giveawayLoss: 0,

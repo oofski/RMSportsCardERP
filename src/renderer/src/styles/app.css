@@ -13805,6 +13805,41 @@ button.sor-team:focus-visible {
 .fin-pnl-line.is-empty td .fin-money {
   color: var(--text-2);
 }
+/* A cost this period has no record of. It is NOT an empty line and must never
+   be greyed down to nothing: "not known" is the most important thing on the row,
+   because the alternative reading — $0.00, no cost — is the one that is wrong.
+   Italic and in the body colour, so it reads as a sentence rather than as a
+   figure somebody can add up. */
+.fin-pnl-line.is-unknown td .fin-money {
+  font-style: italic;
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+/* This one detail WRAPS, unlike every other. The rest are arithmetic — "50% of
+   7 cards × 5¢" — and a line break in the middle of a sum is worse than a
+   truncation. This one is a sentence explaining why there is no figure, and it
+   is the whole point of the row: truncated at the container edge it would read
+   "no packing record for this…" and answer nothing. */
+.fin-pnl-line.is-unknown .fin-pnl-detail {
+  display: inline;
+  white-space: normal;
+}
+/* The memo badge. Muted like the line count beside it — it is a caveat on a
+   heading, not a warning, and the section's own note carries the reasoning. */
+.fin-pnl-memo {
+  margin-left: 8px;
+  font-style: normal;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-2);
+}
+/* A memo section's subtotal is real money that is deliberately outside the
+   bottom line, so it is printed lighter than the subtotals that are inside it. */
+.fin-pnl-sec.is-memo .fin-pnl-head > td .fin-money {
+  font-weight: 500;
+  color: var(--text-2);
+}
 .fin-pnl-line.is-none td {
   width: auto;
   padding-left: 0;

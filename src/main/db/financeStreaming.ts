@@ -148,12 +148,14 @@ import {
   pnlChecksum,
   rowInSession
 } from '@shared/financeStreaming'
+import { computePackagingCosts } from '@shared/packagingCosts'
 import type { StreamSession } from '@shared/streaming'
 import { durationMinutes, isSuspiciouslyLong, streamDateOf } from '@shared/streaming'
 import { getDb } from './database'
 import { rateLookup } from './whatnotRates'
 import { expenseTotalsByDay } from './financeExpenses'
 import { packingCostByDay } from './shipSop'
+import { packagingFactsByDay } from './packagingCosts'
 import { isAnyLeagueTeam } from '../shipping/teams'
 import { matchProductByName } from './inventory'
 import { newId, nowIso } from '../util'
@@ -2229,6 +2231,57 @@ function buildView(db: Database): StreamingFinanceView {
     }
   }
 
+  // --- packaging, modelled per card / per break / per package -----------------
+  //
+  // A MEMO BLOCK, and it lands in no subtotal: not in `netShipping`, not in
+  // `netAfterCosts`, not in `netProfit`. These lines price the same sleeves,
+  // bags, labels and mailers that `packingSupplies` above already priced, from a
+  // per-unit model rather than from stock that actually left the shelf, and a
+  // day carrying both in its bottom line would charge every mailer twice. The
+  // statement prints them in their own memo section; `pnlChecksum` skips it.
+  //
+  // AFTER the bucket loop on purpose. `dayMap.get` rather than `dayFor` — this
+  // block must never CREATE a business day. A shipping dataset sitting in the
+  // workspace is a PDF somebody uploaded; on its own it is not evidence that a
+  // show happened, and a day conjured out of it would appear on the calendar
+  // with no session, no sales and a packaging cost, which reads as a night
+  // nobody can account for. Every day with cards on it already exists, because
+  // the very rows this counts created it a few lines above.
+  for (const [date, facts] of packagingFactsByDay(db)) {
+    const day = dayMap.get(date)
+    if (!day) continue
+    day.packagingCards = facts.cards
+    day.packagingBreaks = facts.breaks
+    day.packagingBreaksPriced = facts.breaksPriced
+    day.packagingSlateTeams = facts.slateTeams
+    day.packagingPackages = facts.packages ?? 0
+    day.packagingPaidPackages = facts.paidPackages ?? 0
+    const packaging = computePackagingCosts({
+      cards: facts.cards,
+      slateTeams: facts.slateTeams,
+      packages: facts.packages,
+      paidPackages: facts.paidPackages
+    })
+    day.packagingSleeves = packaging.sleeves
+    day.packagingTopLoaders = packaging.topLoaders
+    day.packagingTeamBags = packaging.teamBags
+    day.packagingShippingLabels = packaging.shippingLabels
+    day.packagingTeamBagStickers = packaging.teamBagStickers
+    day.packagingMailers = packaging.mailers
+    // ONE OF TWO COUNTERS, NEVER BOTH AND SOMETIMES NEITHER. A flag would not
+    // survive being summed into a week, and a week is exactly where the
+    // disclosure matters — at most one night in any month still has its slips
+    // loaded, so the honest statement is "this covers 1 of 14 nights" and only
+    // counts can carry that through a rollup.
+    //
+    // A day that sold no break spots is in neither counter: it needed no
+    // packaging, so its zero is a real zero and there is nothing to disclose.
+    // Putting it in `unknown` would print "not known" beside every day the
+    // business did not stream, which is how a warning stops being read.
+    if (packaging.packagesKnown) day.packagingDaysCovered = 1
+    else if (facts.cards > 0) day.packagingDaysUnknown = 1
+  }
+
   // How much of each day settled AFTER the show rather than during it. Reported
   // separately so a day's total is explainable: without it, a show's shipping
   // costs look like they materialised from nowhere the following afternoon.
@@ -2613,6 +2666,15 @@ function buildView(db: Database): StreamingFinanceView {
     // exactly like the stock cost and the giveaway loss. Forgetting it here does
     // not fail loudly — it flags EVERY day unreconciled, which is how an
     // operator learns to ignore the one flag that matters.
+    //
+    // THE PACKAGING BLOCK IS NOT STRIPPED, AND THAT IS NOT AN OVERSIGHT. Every
+    // `packaging*` field is a memo: none of them is inside `netProfit` or
+    // `netAfterCosts`, so there is nothing here for them to be subtracted out
+    // of. Adding a strip for them would break this check by exactly the
+    // packaging total. If one of those figures is ever folded into a bottom line
+    // — which it should not be, because it prices the same materials
+    // `packingSupplies` already prices — then it has to be stripped here too, on
+    // the same line and for the same reason.
     fieldCents +=
       toCents(day.netProfit) -
       toCents(day.cogs) -
