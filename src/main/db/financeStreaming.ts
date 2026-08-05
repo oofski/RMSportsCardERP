@@ -2694,14 +2694,15 @@ function buildView(db: Database): StreamingFinanceView {
     // period, rather than trusted.
     day.cogs = toDollars(toCents(day.breakCost) + toCents(day.giveawayCost))
     day.grossProfit = toDollars(toCents(day.totalRevenue) + toCents(day.cogs))
+    // THERE IS NO POSTAGE TERM BELOW, AND ITS ABSENCE IS THE CHANGE. `netShipping`
+    // was added into this sum until the owner took shipping off the P&L, so the
+    // bottom line is now higher by whatever the subsidy less the postage came to.
+    // Every term here is a section of `buildPnl` and postage is no longer one of
+    // them — which is the property `pnlChecksum` asserts below at every grain, and
+    // the reason the reconciliation has to give the same ground on the row side.
     day.netProfit = toDollars(
       toCents(day.grossProfit) +
         toCents(day.totalFees) +
-        // NO POSTAGE TERM. It was `netShipping` here and the owner removed the
-        // cost from the P&L, so the bottom line is higher by whatever the subsidy
-        // less the postage came to. Every term of this sum is a section of
-        // `buildPnl` and postage is no longer one of them — which is the property
-        // `pnlChecksum` asserts below, day, period and all-time.
         // The packaging section, summed from the same six rounded figures the
         // statement prints, so the bottom line is the column added up rather
         // than a second computation that agrees most of the time.
@@ -2814,9 +2815,9 @@ function buildView(db: Database): StreamingFinanceView {
   let ledgerFieldCents = 0
   /**
    * THE POSTAGE THE STATEMENT DELIBERATELY DOES NOT BOOK, taken off the LEDGER
-   * side of the comparison. This is the mirror of the packaging strip below it
-   * and the only thing standing between this release and a false alarm on every
-   * day that ever shipped a parcel.
+   * side of the comparison. It is the mirror of the packaging strip below, and
+   * the only thing standing between the operator and a false alarm on every day
+   * that ever shipped a parcel.
    *
    * The failure it prevents, spelled out because it is not visible from here:
    * the four postage buckets are still classified, still attributed to a day and
@@ -2855,8 +2856,9 @@ function buildView(db: Database): StreamingFinanceView {
     // ledger's own money in full.
     ledgerFieldCents += toCents(day.netAfterCosts) - toCents(day.giveawayLoss)
   }
-  /** What the statement is answerable for: the attributed rows less the postage
-   *  no section of it reads. */
+
+  /** What the statement is answerable for: the money on the attributed rows,
+   *  less the postage no section of it reads. */
   const bookedDayCents = daysCents - unbookedShippingCents
 
   /**
