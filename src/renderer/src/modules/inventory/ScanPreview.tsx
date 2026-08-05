@@ -223,9 +223,7 @@ function PlanBlock({ candidate }: { candidate: ScanPoCandidate }): JSX.Element {
       </div>
       <div className="scan-plan-row">
         <span className="scan-plan-key">Counting</span>
-        <span className="scan-plan-val">
-          One per scan — scan the rest of the stack, or type the count on the line.
-        </span>
+        <span className="scan-plan-val">One per scan — or type the count on the line.</span>
       </div>
       {candidate.unitPrice === 0 && (
         <div className="scan-warn">

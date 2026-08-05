@@ -262,11 +262,9 @@ export function PnlStatement({
         <Note tone="danger" icon="AlertTriangle" role="alert">
           <b>This statement does not add up — do not use it.</b>
           <p>
-            The sections below total <Money value={check.checksum} strong />, but this period was
-            stored with a net profit of <Money value={check.stated} strong />, a difference of{' '}
-            <Money value={check.drift} strong />. That can only happen if the app and its data
-            engine were built from different versions of the P&amp;L. Update the app and re-import
-            before trusting any figure here.
+            Sections total <Money value={check.checksum} strong /> but the stored net profit is{' '}
+            <Money value={check.stated} strong /> — <Money value={check.drift} strong /> out. Update
+            the app and re-import.
           </p>
         </Note>
       )}
@@ -535,6 +533,21 @@ function SectionBody({
           <td colSpan={cols}>{section.note}</td>
         </tr>
       )}
+
+      {/* Something is wrong with this section RIGHT NOW, as opposed to the note
+          above it, which is true on every period. It is only ever present while
+          the condition holds, so it needs no render test of its own — and it is
+          drawn as a strip rather than as prose, because a fact that changes the
+          bottom line should not arrive in the same ink as a footnote. */}
+      {open && section.warning && (
+        <tr className="fin-pnl-warn">
+          <td colSpan={cols}>
+            <Note tone="warn" icon="AlertTriangle" role="status">
+              {section.warning}
+            </Note>
+          </td>
+        </tr>
+      )}
     </tbody>
   )
 }
@@ -653,8 +666,18 @@ function LineRow({
             tooltip precisely because nobody hovers a number they already
             believe. It is printed verbatim from the contract: rewriting the
             builder's own words in the renderer would put two versions of the
-            same sentence in the app. */}
-        {line.detail && <em className="fin-pnl-detail">{line.detail}</em>}
+            same sentence in the app.
+
+            `detailHint` is the answer to the one question a detail provokes and
+            does not answer — today, why the card charge exceeds the card
+            percentage of sales. It hangs off the hover because it is wanted
+            once, by one reader, and printing it under the section made everybody
+            else read it every time. */}
+        {line.detail && (
+          <em className="fin-pnl-detail" title={line.detailHint}>
+            {line.detail}
+          </em>
+        )}
       </th>
       <td className="is-num">
         <Figure onOpen={onOpen} label={line.label}>
@@ -788,8 +811,8 @@ function UncostedModal({
         <b>This corrects the statement, not the stock.</b>
         <p>
           {items.every((i) => i.reconciled)
-            ? 'None of these lines ever moved stock — they record what a show that is already history cost — so there is nothing on a shelf for a price to change.'
-            : 'The stock these lines took came off the shelf when they were recorded and is already gone. The cost layers it took are left exactly as they are; what moves is what the statement says those nights cost.'}
+            ? 'These lines never moved stock, so no shelf changes when the price does.'
+            : 'That stock is already gone. Its cost layers stay as they are; only what the night cost changes.'}
         </p>
       </Note>
     </Modal>
@@ -910,8 +933,7 @@ export function CompletePnl(): JSX.Element {
           // reader to wonder which of them is a finding. None of them is.
           <p className="fin-detail-empty">
             <Icon name="Moon" size={14} />
-            No show landed in this range, so there is no statement for it. Widen the range or pick
-            a month with shows in it.
+            No show landed in this range. Widen it, or pick a month with shows in it.
           </p>
         ) : (
           <PnlStatement
@@ -935,11 +957,8 @@ export function CompletePnl(): JSX.Element {
       <Note tone="info" icon="Info">
         <b>This is the streaming business, complete down to net profit.</b>
         <p>
-          Cost of goods, platform fees, postage, packaging and anything typed against a day are all
-          in the bottom line above, and every figure on it opens onto the records behind it.
-          Wholesale is not built and no overhead — rent, wages, software — is recorded anywhere
-          yet, so neither is in this total. When they are, they join it here rather than becoming a
-          second P&amp;L.
+          Complete for streaming. Wholesale and overhead are not recorded anywhere yet, so neither
+          is in this total.
         </p>
       </Note>
     </div>

@@ -173,10 +173,7 @@ export function ProductDetailBody({ data }: { data: ProductCardData }): JSX.Elem
         </div>
       </div>
       {m.outsideSpread && (
-        <div className="qv-note">
-          No cost recorded, so this stock sits outside the Spread. Set a cost in the catalog and it
-          joins it.
-        </div>
+        <div className="qv-note">No cost recorded, so this stock sits outside the Spread.</div>
       )}
       <div className="qv-cases-head">Cases · FIFO order (sold oldest first)</div>
       <div className="qv-cases-scroll">

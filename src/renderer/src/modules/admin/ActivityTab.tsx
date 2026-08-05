@@ -39,11 +39,7 @@ export function ActivityTab(): JSX.Element {
   if (loading) return <CenterLoader />
   if (txns.length === 0) {
     return (
-      <EmptyState
-        icon="Layers"
-        title="No activity yet"
-        message="Sales, restocks and adjustments will show up here as they happen."
-      />
+      <EmptyState icon="Layers" title="No activity yet" />
     )
   }
 

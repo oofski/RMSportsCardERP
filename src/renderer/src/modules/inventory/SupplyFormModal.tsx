@@ -266,7 +266,7 @@ export function SupplyFormModal({
         />
       </div>
 
-      <Field label="Reorder link" hint="Paste the Amazon (or supplier) product URL to reorder in one click">
+      <Field label="Reorder link" hint="Supplier URL, for one-click reorder.">
         <Input
           type="url"
           value={reorderUrl}
@@ -285,8 +285,7 @@ export function SupplyFormModal({
 
       {!isEdit && (
         <p className="muted text-sm" style={{ marginTop: 4 }}>
-          Set the price here, or leave it — logging a <strong>Buy</strong> also updates the cost from the
-          order. Add stock and a photo once it&apos;s saved.
+          Leave the price blank and logging a Buy will set it from the order.
         </p>
       )}
     </Modal>

@@ -192,9 +192,8 @@ export function CloudSyncTab(): JSX.Element {
             <h3>{rejects.length} records could not be applied</h3>
           </header>
           <p className="sync-note">
-            These arrived from another computer and this one would not accept them. Usually it
-            means two people created the same thing separately. Nothing is lost — the records are
-            still on the other computer.
+            Sent from another computer and refused here — usually the same thing created twice.
+            Nothing is lost.
           </p>
           <ul className="sync-reject-list">
             {rejects.slice(0, 8).map((r) => (
@@ -222,9 +221,7 @@ export function CloudSyncTab(): JSX.Element {
           <h3>Customer form links</h3>
         </header>
         <p className="sync-note">
-          One link per event. Send it to customers to collect their shipping details. Anyone with
-          the link can fill it in, so what they send waits here for you to accept — nothing changes
-          a real customer record until you do.
+          One link per event. Anything customers send waits here until you accept it.
         </p>
 
         <div className="sync-link-form">
@@ -421,18 +418,12 @@ export function CloudSyncTab(): JSX.Element {
             {showSetup ? 'Hide' : 'Show'}
           </button>
         </header>
-        {status.config.builtIn && !showSetup && (
-          <p className="sync-note">
-            Nothing to set up. This copy of the app came already connected to RM Cardz and starts
-            syncing on its own.
-          </p>
-        )}
         {showSetup && (
           <>
             {status.config.builtIn && (
               <p className="sync-note">
-                These are already filled in by the app itself. Only change them to point this
-                computer at a different relay — leave them blank to go back to the built-in one.
+                Filled in by the app. Change only to use a different relay; blank restores the
+                built-in one.
               </p>
             )}
             <div className="sync-setup">
@@ -514,9 +505,7 @@ export function CloudSyncTab(): JSX.Element {
               <div>
                 <strong>Publish everything on this computer</strong>
                 <p className="sync-note">
-                  Normally you never touch this. The first computer to connect publishes what it
-                  holds automatically, and every other one pulls it. Use this only to force a
-                  re-publish — for example after the relay has been wiped.
+                  Only needed to force a re-publish, e.g. after the relay was wiped.
                 </p>
               </div>
               <Button

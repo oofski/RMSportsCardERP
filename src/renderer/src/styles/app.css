@@ -13909,6 +13909,17 @@ button.sor-team:focus-visible {
   white-space: normal;
   color: var(--text-2);
 }
+/* A section's live warning. Same cell geometry as the footnote above so the two
+   line up under the section's lines, but it carries a Note rather than prose —
+   the footnote is true on every period and this one is only present while
+   something is actually wrong. */
+.fin-pnl-warn td {
+  width: auto;
+  padding: 2px 0 10px 21px;
+  text-align: left;
+  max-width: 68ch;
+  white-space: normal;
+}
 /* The detail is the arithmetic written out — "2.9% + 30c x 1029". It sits
    beside the label, never in a tooltip: nobody hovers a number they already
    believe, and this is the thing that makes the number checkable. */

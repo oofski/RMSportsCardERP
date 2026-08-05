@@ -134,6 +134,9 @@ interface CompositionRow {
   key: string
   label: string
   detail?: string
+  /** Hover text for the detail, carried through from the line — see
+   *  `PnlLine.detailHint`. The same words in both places or in neither. */
+  detailHint?: string
   amount: number
   words?: string
   open?: () => void
@@ -160,6 +163,7 @@ function compose(
       key: line.key,
       label: line.label,
       detail: line.detail,
+      detailHint: line.detailHint,
       amount: line.amount,
       words: line.uncosted ? 'no cost recorded' : line.unavailable ? 'not known' : undefined,
       open: () => push({ kind: 'line', sectionKey: section.key, key: line.key })
@@ -294,7 +298,11 @@ function CompositionView({
                 <span className="fin-row-msg is-lead" title={r.label}>
                   {r.label}
                 </span>
-                {r.detail && <span className="fin-row-note">{r.detail}</span>}
+                {r.detail && (
+                  <span className="fin-row-note" title={r.detailHint}>
+                    {r.detail}
+                  </span>
+                )}
                 {r.words ? (
                   <span className="fin-money zero mono fin-row-words">{r.words}</span>
                 ) : (
@@ -411,7 +419,20 @@ function LineView({
       />
 
       {line.detail && <p className="fin-drill-basis">{line.detail}</p>}
-      {detail.note && <p className="fin-drill-note">{detail.note}</p>}
+      {/* A note the payload marked `danger` is a build fault, not a footnote, so
+          it gets the statement's own alarm rather than the grey paragraph — and
+          only while the figure it describes is actually there. The residual is
+          the one line that sets it: zero residual, nothing to report. */}
+      {detail.note &&
+        (detail.noteTone === 'danger' ? (
+          !isZero(line.amount) && (
+            <Note tone="danger" icon="AlertTriangle" role="alert">
+              {detail.note}
+            </Note>
+          )
+        ) : (
+          <p className="fin-drill-note">{detail.note}</p>
+        ))}
 
       {uncosted.length > 0 && onEnterCost && (
         <button
@@ -608,7 +629,7 @@ function DrillHead({
           {derived && (
             <span
               className="fin-drill-tag"
-              title="No table holds this figure — it is counts priced at a stated rate. The terms below are the arithmetic, not transactions."
+              title="Counts priced at a stated rate — arithmetic, not transactions."
             >
               <Icon name="Calculator" size={11} />
               derived
@@ -770,8 +791,7 @@ function RecordView({
         ]}
       />
       <p className="fin-drill-note">
-        A dollar amount against a day, not a stock movement — nothing here came off a shelf. The
-        movement itself, if there was one, is a giveaway line in Streaming.
+        A dollar amount against a day — nothing here came off a shelf.
       </p>
     </>
   )

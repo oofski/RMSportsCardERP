@@ -162,10 +162,9 @@ export function RangeWidgets({
       {!check.ok && (
         <p className="fin-widgets-drift" role="alert">
           <Icon name="AlertTriangle" size={14} />
-          These figures do not add up to the stored net profit — they come to{' '}
-          <Money value={check.checksum} strong />, which is <Money value={check.drift} strong /> out.
-          The app and its data engine were built from different versions of the P&amp;L; update the
-          app and re-import before trusting any figure on this screen.
+          These five come to <Money value={check.checksum} strong />,{' '}
+          <Money value={check.drift} strong /> off the stored net profit. Update the app and
+          re-import.
         </p>
       )}
     </div>

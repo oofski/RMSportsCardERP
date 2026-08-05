@@ -1993,6 +1993,17 @@ export interface PnlLine {
   amount: number
   /** Shown small beside the label — a count, a rate, a caveat. */
   detail?: string
+  /**
+   * Hover text for the detail, for the reader who asks why an arithmetic that
+   * looks wrong is right.
+   *
+   * A tooltip rather than more prose under the section, and the difference is
+   * who it is for: the detail beside the label is read every time, while this is
+   * wanted once, by whoever noticed that the card charge is more than the card
+   * percentage of sales. Putting the answer in the standing note made every
+   * reader pay for one reader's question.
+   */
+  detailHint?: string
   /** True for a line that is zero and only present to keep the shape stable. */
   empty?: boolean
   /**
@@ -2092,6 +2103,17 @@ export interface PnlSection {
    * on a statement somewhere.
    */
   note?: string
+  /**
+   * SOMETHING IS WRONG WITH THIS SECTION RIGHT NOW — set only while the state it
+   * describes holds, and drawn as an alarm rather than as a footnote.
+   *
+   * Separate from `note` because the two have different lifetimes. A note is
+   * standing prose about how a section works and is true on every period; this
+   * is a condition, and appending it to the note made a permanent sentence out
+   * of a temporary fact — which is how a warning becomes wallpaper. Absent means
+   * there is nothing wrong, not that nobody wrote a sentence.
+   */
+  warning?: string
 }
 
 /**
@@ -2619,11 +2641,8 @@ export function buildPnl(d: {
       // anybody comparing this statement to a Whatnot screen needs to know which
       // of the two they are looking at.
       note:
-        `${split ? 'Both sales lines above are' : 'Sales is'} a DERIVED gross: the ` +
-        `${usd(c2(d.netSales))} Whatnot actually paid out for these ${count(d.saleCount)} ` +
-        `row${d.saleCount === 1 ? '' : 's'}, with the platform fees below added back on. The net ` +
-        `is what reconciles to the bank; the gross is what the buyers bid, before the sales tax ` +
-        `they also paid. Whatnot states only the net.`
+        `Derived gross: the ${usd(c2(d.netSales))} Whatnot paid out with the fees below added ` +
+        `back. Whatnot states only the net.`
     },
     {
       key: 'cogs',
@@ -2659,17 +2678,26 @@ export function buildPnl(d: {
         line('whatnotFee', 'Whatnot commission', d.whatnotFee, feeDetail),
         // Written as the sum it is, so a person can reproduce it with a
         // calculator \u2014 including WHICH total the percentage runs on.
-        line('processingFee', 'Payment processing', d.processingFee, processingDetail)
+        //
+        // THE SALES TAX RIDES ON THE DETAIL'S TOOLTIP rather than in the section
+        // note. It answers exactly one question \u2014 why this charge is more than
+        // the card percentage of sales \u2014 and it is asked by whoever is already
+        // squinting at this line, so the standing note is the wrong place to
+        // make every other reader walk past it.
+        {
+          ...line('processingFee', 'Payment processing', d.processingFee, processingDetail),
+          detailHint:
+            `The commission is charged on the sale price; card processing is charged on the ` +
+            `order total \u2014 that sale price plus ${usd(salesTax)} of sales tax the buyers ` +
+            `paid. That tax is not revenue and not a cost: it passes to the state and appears ` +
+            `in no figure on this statement.`
+        }
       ],
       subtotal: c2(d.totalFees),
       subtotalLabel: 'Total fees',
       note:
-        `Whatnot pays NET \u2014 both of these were already gone before the ledger row was ` +
-        `written. The commission is charged on the sale price; card processing is charged on ` +
-        `the order total, which is that sale price plus ${usd(salesTax)} of sales tax the ` +
-        `buyers paid. THAT TAX IS NOT REVENUE AND NOT A COST \u2014 it passes to the state and ` +
-        `appears in no figure on this statement. Taking these two fees off the sales line ` +
-        `above lands exactly on what was paid out, to the cent.`
+        `Whatnot pays net \u2014 these two were already deducted. Sales minus both equals the ` +
+        `payout exactly.`
     },
     // THERE IS NO SHIPPING SECTION HERE, AND ITS ABSENCE IS A DECISION.
     //
@@ -2765,17 +2793,22 @@ export function buildPnl(d: {
       subtotal: packagingSubtotal,
       subtotalLabel: 'Packaging',
       note:
-        `Sleeves, top loaders, bags, stickers, labels and mailers, priced from cards ` +
-        `sold, breaks run and packages shipped at rates the owner states. Nothing here ` +
-        `comes from the Whatnot export, and all of it is in net profit.` +
-        (packagesUnavailable
-          ? ` The two lines charged per package read "not known" rather than $0.00 for ` +
-            `${count(packagingUnknown)} night${packagingUnknown === 1 ? '' : 's'} here: ` +
-            `packages are counted off the packing slips, and Shipping keeps one show's ` +
-            `slips at a time. That is missing information, not a zero cost — this ` +
-            `subtotal is short by whatever those nights shipped, and net profit above ` +
-            `is higher than the truth by the same amount.`
-          : '')
+        `Priced from cards sold, breaks run and packages shipped at rates you set — not ` +
+        `from the Whatnot export.`,
+      // A CONDITION, NOT A FOOTNOTE. It was the tail of the note above, which
+      // made a standing sentence out of a fact that is only true while some
+      // night in the period has no packing record — and a warning printed on
+      // every period is one nobody reads. It now exists only when it is true,
+      // and the screen draws it as an alarm rather than as prose.
+      ...(packagesUnavailable
+        ? {
+            warning:
+              `The two per-package lines read "not known" for ${count(packagingUnknown)} ` +
+              `night${packagingUnknown === 1 ? '' : 's'} — Shipping keeps one show's slips ` +
+              `at a time. This subtotal is short by whatever those nights shipped, and net ` +
+              `profit is higher than the truth by the same amount.`
+          }
+        : null)
     },
     {
       key: 'showCosts',

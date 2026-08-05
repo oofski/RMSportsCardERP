@@ -76,8 +76,7 @@ export function SuppliesTab({ canManage }: { canManage: boolean }): JSX.Element 
         <div>
           <h2>Supplies</h2>
           <p className="section-sub">
-            Packaging &amp; operating consumables — kept separate from card inventory. Reorders are
-            tracked on the Purchase Orders tab.
+            Packaging and operating consumables. Reorder them on the Purchase Orders tab.
           </p>
         </div>
         {canManage && (
@@ -113,7 +112,7 @@ export function SuppliesTab({ canManage }: { canManage: boolean }): JSX.Element 
         <EmptyState
           icon="Package"
           title="No supplies yet"
-          message="Add the things you buy on repeat — bubble mailers, poly bags, labels, tape — to track how many you have and what they cost."
+          message="Mailers, bags, labels, tape — anything you buy on repeat and want counted."
           action={
             canManage ? (
               <Button variant="primary" icon="Plus" onClick={() => setEditing('new')}>

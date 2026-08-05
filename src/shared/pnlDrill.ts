@@ -314,6 +314,15 @@ interface PnlDetailBase {
   /** Said on screen above the records. Why a figure is derived, what a range
    *  could not cover, what an empty list means. */
   note?: string
+  /**
+   * The note is a FAULT REPORT rather than a footnote, and has to be drawn as
+   * one — the same danger banner the statement raises when its own sections do
+   * not add up. Only the cost-of-goods residual sets it: that line exists at all
+   * only because main and the renderer were built from different versions, so a
+   * grey paragraph under the heading would put a build fault in the tone of a
+   * caption. Absent everywhere else, where the note really is a footnote.
+   */
+  noteTone?: 'danger'
 }
 
 export type PnlDetail =

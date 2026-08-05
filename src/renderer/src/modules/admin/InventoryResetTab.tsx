@@ -256,10 +256,8 @@ export function InventoryResetTab(): JSX.Element {
         <div>
           <h3>Bulk inventory re-adjustment</h3>
           <p>
-            Paste a count sheet and it becomes the inventory: every product on it is set to the
-            quantity, cost and market value it states, and every product it leaves out goes to
-            zero. Export the current count first if you want to start from what is on the shelves.
-            Nothing is written until you review the plan and apply it.
+            The sheet becomes the inventory: products on it are set, products left off go to zero.
+            Nothing is written until you apply.
           </p>
         </div>
         <div className="inv-reset-head-actions">
@@ -277,10 +275,7 @@ export function InventoryResetTab(): JSX.Element {
       <div className="inv-reset-paste">
         <label htmlFor="inv-reset-text">
           Count sheet
-          <em>
-            Copy the rows straight out of Excel or Google Sheets and paste them here. A header row
-            is optional — the columns are worked out either way.
-          </em>
+          <em>Paste straight from Excel or Sheets. A header row is optional.</em>
         </label>
         <textarea
           id="inv-reset-text"

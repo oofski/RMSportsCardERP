@@ -154,7 +154,7 @@ export function StockModal({
           </div>
 
           {mode === 'add' && (
-            <Field label="Unit cost" hint="What you paid per unit (optional — updates the product cost)">
+            <Field label="Unit cost" hint="Per unit — also updates the product cost.">
               <Input type="number" min={0} step="0.01" value={unitCost} onChange={(e) => setUnitCost(e.target.value)} placeholder="0.00" />
             </Field>
           )}

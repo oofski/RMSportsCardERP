@@ -265,7 +265,7 @@ export function EmployeeFormModal({
         {needsPassword && (
           <Field
             label="Bench password"
-            hint="At least 8 characters. Whoever is on shift signs in with the Company ID and this password — they are never asked to change it."
+            hint="At least 8 characters. They sign in with the Company ID and this password."
           >
             <Input
               type="password"

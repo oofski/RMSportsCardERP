@@ -284,15 +284,10 @@ function GiveawayToggle({
       />
       <p className="igt-body">
         {checked ? (
-          <>
-            Giving away 3 packs out of a 12-pack box leaves a quarter of a box on the shelf, and this
-            product is allowed to carry that. On-hand can be a fraction of a {unitWord}.
-          </>
+          <>On-hand may be a fraction of a {unitWord} — e.g. 3 packs out of a 12-pack box.</>
         ) : (
           <>
-            Off, so this product stays a whole number of {unitWord}s — a break or giveaway that would
-            leave a part-{unitWord} is refused rather than rounded. Turn it on only for stock
-            deliberately kept for giving packs away.
+            On-hand stays whole {unitWord}s; anything leaving a part-{unitWord} is refused.
           </>
         )}
       </p>

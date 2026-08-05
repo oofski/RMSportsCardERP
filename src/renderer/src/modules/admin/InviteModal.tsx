@@ -162,8 +162,7 @@ export function InviteModal({
         </>
       ) : (
         <p className="muted text-sm mt-16">
-          This account has no email address, so there is nothing to send — read these out at the
-          bench. They sign in with the Company ID above. {passwordNote}
+          No email on this account — read these out. They sign in with the Company ID above.
         </p>
       )}
     </Modal>

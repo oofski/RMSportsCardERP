@@ -107,7 +107,7 @@ export function EmployeesTab({
         <EmptyState
           icon="Users"
           title="No employees yet"
-          message="Add your first team member to get started. They'll receive an invite to set their password."
+          message="Add your first team member — they get an invite to set a password."
           action={
             canManage ? (
               <Button variant="primary" icon="UserPlus" onClick={openCreate}>
@@ -402,9 +402,7 @@ function PortalPinModal({
         </p>
       )}
       <p className="muted">
-        This is separate from {employee.firstName}&rsquo;s app password, and only works on the web
-        clock — it cannot open the app or see anything but their own hours. Read it out now; it is
-        not stored anywhere you can look it up later.
+        Web clock only — it cannot open the app. Read it out now; it is not stored anywhere.
       </p>
     </Modal>
   )

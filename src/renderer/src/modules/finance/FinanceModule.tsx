@@ -47,7 +47,7 @@ export function FinanceModule(): JSX.Element {
         <EmptyState
           icon="AlertTriangle"
           title="Finance is not available in this build"
-          message="The app is running against a version that does not expose the finance bridge. Restart after updating and it will appear."
+          message="This build does not expose the finance bridge. Restart after updating."
         />
       </div>
     )
@@ -76,8 +76,7 @@ export function FinanceModule(): JSX.Element {
         <NotBuiltYet
           icon="Boxes"
           title="Wholesale is not built yet"
-          lead="This tab will cover the revenue that does not come from a live show — bulk and wholesale orders sold off-stream."
-          detail="Nothing is being calculated for it, so there is deliberately nothing on screen. When it lands it will read from the same ledger discipline as Streaming: real rows, attributed, or visibly not attributed."
+          lead="Bulk and wholesale orders sold off-stream."
         />
       ) : (
         <CompletePnl />
@@ -93,13 +92,11 @@ export function FinanceModule(): JSX.Element {
 function NotBuiltYet({
   icon,
   title,
-  lead,
-  detail
+  lead
 }: {
   icon: string
   title: string
   lead: string
-  detail: string
 }): JSX.Element {
   return (
     <section className="fin-soon">
@@ -108,7 +105,6 @@ function NotBuiltYet({
       </span>
       <h2>{title}</h2>
       <p>{lead}</p>
-      <p className="fin-soon-detail">{detail}</p>
       <span className="fin-soon-tag">
         <Icon name="Sparkles" size={14} />
         Coming in a later release

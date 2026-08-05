@@ -138,9 +138,8 @@ export function pnlDetail(req: PnlDrillRequest, db: Database = getDb()): PnlDeta
       omitted: { count: 0, amount: 0 },
       rows: [],
       note:
-        `No drill-down is defined for "${lineId}". That is a gap in the P&L contract ` +
-        `rather than a period with no activity — the figure on the statement is real and ` +
-        `nothing here can account for it.`
+        `No drill-down is defined for "${lineId}" — the figure is real, but nothing here ` +
+        `can account for it.`
     }
   }
 
@@ -371,9 +370,8 @@ function streamItemDetail(
     items: shown.map(toItemRecord),
     note:
       select.costing === 'uncosted'
-        ? 'Nobody recorded what these lines cost, so they are carried at nothing and the ' +
-          'bottom line above is that much too high. Enter a price on any of them and the ' +
-          'statement moves with it.'
+        ? 'Carried at nothing, so net profit is that much too high. Price any line and the ' +
+          'statement moves.'
         : undefined
   }
 }
@@ -441,8 +439,7 @@ function rollupDetail(db: Database, lineId: string, bounds: Bounds): PnlDetail {
     note:
       tail.length > 0
         ? `The ${count(tail.length)} product${tail.length === 1 ? '' : 's'} the statement ` +
-          `rolled up, and every stream line behind them. The cap changes how many lines ` +
-          `the section prints and never what they add up to.`
+          `rolled up. The cap changes what is printed, never the total.`
         : 'Nothing was rolled up in this range — every product the period touched is named ' +
           'on the statement.'
   }
@@ -502,9 +499,7 @@ function expenseDetail(db: Database, lineId: string, bounds: Bounds): PnlDetail 
       createdBy: r.created_by,
       updatedAt: r.updated_at
     })),
-    note:
-      'Typed against a business day rather than imported — the one figure on this ' +
-      'statement that came from a person. Nothing here moved stock.'
+    note: 'Typed against a business day, not imported. Nothing here moved stock.'
   }
 }
 
@@ -614,12 +609,12 @@ function derivedDetail(
       omitted: { count: 0, amount: 0 },
       terms: [],
       unknown: [],
-      note:
-        `This line is a RESIDUAL, not a cost: it is the stored cost of goods for the ` +
-        `period less everything the section could attribute to a product. It is zero on ` +
-        `any build whose statement and data engine came from the same version, so its ` +
-        `presence means they did not — update the app and re-import. There are no records ` +
-        `behind it because it is what is left when the records have been counted.`
+      // A BUILD FAULT, drawn like one. This line only exists when the statement
+      // and the data engine came from different versions, so the renderer raises
+      // it as the same danger banner the statement uses when its own sections do
+      // not add up — see `PnlDetailBase.noteTone`.
+      note: 'Residual — cost of goods the section could not attribute. Update the app and re-import.',
+      noteTone: 'danger'
     }
   }
 
@@ -667,7 +662,6 @@ function derivedDetail(
     })
   }
 
-  const nights = terms.length
   return {
     kind: 'derived',
     lineId,
@@ -676,19 +670,12 @@ function derivedDetail(
     omitted: { count: 0, amount: 0 },
     terms,
     unknown,
+    // The nights nothing can answer for are no longer named here. They are
+    // listed under their own heading below the arithmetic, which says the same
+    // thing at the place a reader is already looking at them.
     note:
-      `${basis.label} are MODELLED, not transacted: nothing in the Whatnot export or any ` +
-      `other table holds this figure. It is ${
+      `${basis.label} are modelled: ${
         basis.perPackage ? 'envelopes counted off the packing slips' : 'what the night sold'
-      } priced at a rate the owner states, ${
-        nights === 1 ? 'for the one night below' : `night by night across ${count(nights)} nights`
-      }.` +
-      (unknown.length > 0
-        ? ` ${count(unknown.length)} further night${unknown.length === 1 ? '' : 's'} could not ` +
-          `be answered for at all and ${
-            unknown.length === 1 ? 'is' : 'are'
-          } listed below the arithmetic — this figure is short by whatever they shipped, and ` +
-          `net profit is higher than the truth by the same amount.`
-        : '')
+      } priced at a rate you state, night by night.`
   }
 }

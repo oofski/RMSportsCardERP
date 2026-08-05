@@ -205,8 +205,7 @@ export function QuickBooksTab(): JSX.Element {
         <div className="qbo-note">
           <Icon name="ExternalLink" size={15} />
           <div>
-            This is the exact URL the browser is opened at. Paste it into a browser to test the
-            consent step on its own:
+            The exact URL the app opens. Paste it into a browser to test consent alone.
             <code className="qbo-uri">{authUrl}</code>
             <div className="qbo-note-acts">
               <button
@@ -308,10 +307,8 @@ export function QuickBooksTab(): JSX.Element {
             <div>
               <b>Connect with tokens from the OAuth Playground</b>
               <p>
-                Use this when the loopback redirect cannot be registered. Open Intuit&rsquo;s OAuth
-                2.0 Playground, pick this app and the Accounting scope, authorise, then paste what
-                it gives you. The tokens belong to the same app, so the connection refreshes itself
-                afterwards — you only do this once.
+                For when the loopback redirect cannot be registered. Authorise in Intuit&rsquo;s
+                OAuth Playground and paste the tokens — once only.
               </p>
             </div>
           </div>

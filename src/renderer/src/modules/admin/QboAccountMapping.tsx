@@ -97,10 +97,7 @@ export function QboAccountMapping({ connected }: { connected: boolean }): JSX.El
       <div className="qbo-map-head">
         <div>
           <b>Account mapping</b>
-          <p>
-            Where each kind of money lands in QuickBooks. Nothing is posted until every account a
-            flow needs is chosen.
-          </p>
+          <p>Nothing posts until every account a flow needs is chosen.</p>
         </div>
         <div className="qbo-map-acts">
           {hasSuggestion && (
