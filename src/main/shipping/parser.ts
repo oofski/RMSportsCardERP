@@ -79,7 +79,31 @@ const RE_ORDER_GLOBAL = /Order\s+(\d+)/gi
  *
  * The number is captured separately, and only ever used for ordering.
  */
-const RE_BREAK_HEAD = /Break\s*#?\s*(\d{1,3})/i
+// `=?` is not a typo here — it is the typo. "BREAK #=7" appears thirty times in
+// one real export, and without this every one of those cards falls out of its
+// break and turns up loose.
+const RE_BREAK_HEAD = /Break\s*#?\s*=?\s*(\d{1,3})/i
+
+/**
+ * A bare `#4`, with no word "Break" anywhere near it.
+ *
+ * The owner writes the break this way sometimes, and the cards were landing
+ * loose. Reading it as a break is a deliberate trade, so the guard is narrow:
+ * it only counts when the `#N` is ALONE ON ITS OWN LINE, which is the exact
+ * position `[Break 1]` occupies in the Attributes column of a real slip.
+ *
+ * That anchor is what makes this safe. `#` in front of a number is also how a
+ * lot ("(Fresh From Box) #12"), a pack, a quantity and a tracking number are
+ * written — but every one of those appears WITH other text on its line, so
+ * none of them can reach this pattern. A bare number on a line of its own,
+ * inside a customer's item block, has no other meaning on this document.
+ *
+ * Deliberately bounded to three digits and to a line with nothing else on it.
+ * If a slip ever prints a lot number that way, this reads it as a break and
+ * the break audit will show a slate that is too large — which is a loud
+ * failure, and the reason that audit exists.
+ */
+const RE_BARE_HASH_LINE = /^[ \t]*#[ \t]*=?[ \t]*(\d{1,3})[ \t]*$/
 
 /**
  * A suffix written against the number, or joined to it by a dash or a dot.
@@ -136,11 +160,42 @@ const RE_SEPARATORS_ONLY = /^[\s\-–—.,:;|•·*_]*$/
  * break label and NOTHING else; the team then has to come from the row's own
  * name column. Both shapes stay live — months of old slips are still re-imported.
  */
+/**
+ * The bare-`#N` fallback, scanned line by line.
+ *
+ * A regex over the whole window cannot express "alone on its line" with `^`
+ * unless it is multiline, and a multiline `^` would also match a `#12` that
+ * merely STARTS a line — "#12 Boston Red Sox" — which is a quantity or a lot,
+ * not a break. Splitting first and testing each line whole is the cheap way to
+ * mean exactly what the guard says.
+ *
+ * Always a marker: a line holding nothing but the number has, by construction,
+ * no team on it to take.
+ */
+function bareHashLabel(
+  text: string
+): { label: string; number: number; end: number; marker: boolean } | null {
+  let offset = 0
+  for (const line of text.split('\n')) {
+    const m = RE_BARE_HASH_LINE.exec(line)
+    if (m) {
+      const n = Number(m[1])
+      return { label: String(n), number: n, end: offset + line.length, marker: true }
+    }
+    offset += line.length + 1
+  }
+  return null
+}
+
 export function readBreakLabel(
   text: string
 ): { label: string; number: number; end: number; marker: boolean } | null {
   const head = RE_BREAK_HEAD.exec(text)
-  if (!head) return null
+  // No word "Break" anywhere — the last chance is a bare `#4` on a line of its
+  // own. Tried ONLY here, after the explicit forms have all failed, so a window
+  // holding both "Break 1" and a stray `#4` still reads as break 1. The bare
+  // form is the weaker evidence and must never outrank the word.
+  if (!head) return bareHashLabel(text)
   const number = Number(head[1])
   const headStart = head.index ?? 0
   const headEnd = headStart + head[0].length

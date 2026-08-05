@@ -2143,6 +2143,17 @@ export function ratePct(rate: number): string {
 const c2 = (n: number): number => Math.round(n * 100) / 100
 
 /**
+ * How many cost-of-goods products the statement names before rolling the rest
+ * into one line. See the long note at the section that uses it for why there is
+ * a cap at all and why the uncosted entries get its slots first.
+ *
+ * EXPORTED BECAUSE THE DRILL-DOWN HAS TO AGREE WITH IT. `cogsRest` is defined as
+ * "everything past this number", so main resolving that line reads the same
+ * constant rather than a second 25 that somebody edits one of.
+ */
+export const COGS_LINES_MAX = 25
+
+/**
  * Build the statement for one day (or any rolled-up period — the shapes match).
  *
  * Order is deliberate and follows how the money actually moves: what came in,
@@ -2373,7 +2384,6 @@ export function buildPnl(d: {
   // disclosure is gone, which is the one thing this section may not lose. A
   // costed line that gets rolled up loses only its name; an uncosted one that
   // gets rolled up loses the whole point of printing it.
-  const COGS_LINES_MAX = 25
   const cogsItems = mergeCogsItems(d.cogsBreakdown ?? [])
   const cogsLines: PnlLine[] = []
   const uncostedTotal = cogsItems.filter((i) => i.uncosted).length

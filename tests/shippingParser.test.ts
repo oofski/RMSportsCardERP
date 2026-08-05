@@ -7,7 +7,7 @@
  *
  * Run: npm run test:parser
  */
-import { learnBannerTail, parsePages } from '../src/main/shipping/parser'
+import { learnBannerTail, parsePages, readBreakLabel } from '../src/main/shipping/parser'
 import { groupIntoLines } from '../src/main/shipping/pdf'
 import { SHIP_TEAM_LISTS } from '../src/main/shipping/teams'
 import { pageRangeLabel } from '../src/shared/shippingViews'
@@ -823,13 +823,12 @@ ok(
 
 // --- how the marker gets typed --------------------------------------------
 //
-// Five shapes the owner has seen on real slips. Three of them are read; two are
-// NOT, and that is the designed behaviour rather than a gap. `readBreakLabel`
-// requires the word "Break" before the number, so a bare "#4" — which is also
-// how a lot number, a pack number and a quantity are written — is refused. The
-// card is still kept, still pickable and still named, and a warning says it sits
-// outside any break. Guessing "#4" into break 4 is precisely the wrong guess
-// that a warning exists instead of.
+// Every shape the owner has seen on a real slip, and all of them are read. The
+// bare "#4" is the deliberate trade: "#" before a number is also how a lot, a
+// pack and a quantity are written, so it counts ONLY when it is alone on its
+// own line — which is exactly where "[Break 1]" sits in the Attributes column.
+// A "#12" with anything else on its line is still refused; that guard is tested
+// on its own in section 6, and it is what makes reading this one safe.
 console.log('\n--- however the break marker is typed ---')
 const augMarker = (marker: string): ReturnType<typeof parsePages> =>
   parsePages(
@@ -865,26 +864,74 @@ for (const [marker, label] of [
   )
 }
 
-// The two that are NOT a break marker. Neither may be guessed at, and neither
-// may be silent.
-for (const marker of ['#4', 'BREAK #=7']) {
+// The two the owner asked for by name. Both now land, both silently, and the
+// card keeps its team and price either way — a marker contributes the break and
+// nothing else, so the name column is still what names the team.
+for (const [marker, label] of [
+  ['#4', '4'],
+  ['BREAK #=7', '7']
+] as Array<[string, string]>) {
   const r = augMarker(marker)
   ok(
-    r.breaks.length === 0,
-    `“${marker}” is not read as a break — the word is what makes a marker`,
+    r.breaks.length === 1 && r.breaks[0]?.breakLabel === label,
+    `“${marker}” reads as break ${label}`,
     JSON.stringify(r.breaks.map((b) => b.breakLabel))
   )
   ok(
-    r.teamSlots.length === 1 && r.teamSlots[0]?.teamName === AUG_TEAMS[23] && r.teamSlots[0]?.price === 28,
-    `while the card itself survives “${marker}” intact, team and price`,
-    JSON.stringify(r.teamSlots.map((s) => `${s.teamName}:${s.price}`))
-  )
-  ok(
-    r.warnings.some((w) => /sits outside any break/.test(w.message)),
-    `and a WARNING names it rather than a guess placing it`,
+    r.warnings.length === 0,
+    `and raises no warning — it is a break, not a loose card`,
     JSON.stringify(r.warnings.map((w) => w.message))
   )
+  ok(
+    r.teamSlots.length === 1 && r.teamSlots[0]?.teamName === AUG_TEAMS[23] && r.teamSlots[0]?.price === 28,
+    `while the card keeps its team and price through “${marker}”`,
+    JSON.stringify(r.teamSlots.map((s) => `${s.teamName}:${s.price}`))
+  )
 }
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 6. every way a break gets written, and every way it does not ===')
+// ---------------------------------------------------------------------------
+// The owner writes the break number several ways and asked for all of them to
+// land, without false alarms. The bare `#4` is the deliberate trade: `#` in
+// front of a number is ALSO how a lot, a pack, a quantity and a tracking number
+// are written, so it counts only when it is alone on its own line — the exact
+// position `[Break 1]` occupies in the Attributes column of a real slip. The
+// negatives below are the whole reason that guard is narrow, and they matter
+// more than the positives.
+const READS: Array<[string, string | null, string]> = [
+  ['[Break 2]', '2', 'the bracketed form the August slips print'],
+  ['Break 3', '3', 'the bare word'],
+  ['- Break #5 -', '5', 'fenced by dashes'],
+  ['(Break 6)', '6', 'parenthesised'],
+  ['[ BREAK 7a ]', '7A', 'shouted, spaced, suffixed'],
+  ['Break #11A', '11A', 'a suffix keeps its letter'],
+  // Thirty rows of one real export carry this typo. Without it, thirty cards
+  // fall out of their break and turn up loose.
+  ['BREAK #=7', '7', 'the "#=" typo'],
+  ['#4', '4', 'a bare hash, alone on its line'],
+  ['  #4  ', '4', 'and the same padded'],
+  ['#=9', '9', 'a bare hash carrying the typo'],
+  ['Order 1237174001\n4x 2026 CHROME BASEBAL\n#4', '4', 'a bare hash below the item lines'],
+  // The negatives. Each of these is a real string off a real slip.
+  ['#12 Boston Red Sox', null, 'a hash with a TEAM after it is a quantity, not a break'],
+  ['(Fresh From Box) #12', null, 'a trailing lot number is not a break'],
+  ['4x 2026 CHROME BASEBAL JUMBO BOX (HALF CASE!)', null, 'a product title is not a break'],
+  ['USPS Ground Advantage #9300120762602378819581', null, 'a tracking number is not a break'],
+  ['1 San Francisco Giants Order 1237174001 $28.00', null, 'an item row is not a break'],
+  // The word always outranks the bare form, whichever order they appear in.
+  ['Break 1\n#9', '1', 'an explicit label beats a stray hash below it'],
+  ['#9\nBreak 1', '1', 'and beats one above it']
+]
+for (const [text, want, why] of READS) {
+  const got = readBreakLabel(text)
+  const label = got ? got.label : null
+  ok(label === want, `break: ${why}`, `${JSON.stringify(text).slice(0, 40)} -> ${String(label)}`)
+}
+// A marker contributes the break and nothing else — reading the text after it
+// as a team is the `]` bug that put a bracket in the pick list.
+ok(readBreakLabel('#4')?.marker === true, 'a bare hash is a marker, so it offers no team')
+ok(readBreakLabel('[Break 2]')?.marker === true, 'and so is a bracketed label')
 
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

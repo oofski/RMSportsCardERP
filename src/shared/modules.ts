@@ -86,15 +86,6 @@ export const MODULES: AppModule[] = [
     status: 'active'
   },
   {
-    id: 'sops',
-    name: 'SOP Creation',
-    shortName: 'SOPs',
-    description: 'Author and manage standard operating procedures.',
-    icon: 'ClipboardList',
-    permission: 'module.sops',
-    status: 'coming-soon'
-  },
-  {
     id: 'timepay',
     name: 'Time & Payroll',
     shortName: 'Payroll',

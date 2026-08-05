@@ -87,8 +87,7 @@ const EXPECTED = [
   'updates.check',
   'module.fulfillment',
   'shipping.find',
-  'shipping.pack',
-  'module.sops'
+  'shipping.pack'
 ]
 ok(
   same(permissionsForRole('shipping'), EXPECTED),

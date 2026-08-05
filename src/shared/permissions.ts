@@ -89,7 +89,6 @@ export type Permission =
   | 'module.invoicing'
   | 'module.finance'
   | 'finance.manage'
-  | 'module.sops'
   | 'module.streaming'
   | 'streaming.manage'
 
@@ -211,12 +210,6 @@ export const PERMISSIONS: PermissionDefinition[] = [
     description: 'Upload Whatnot ledgers and rebuild the P&L.',
     group: 'Modules'
   },
-  {
-    key: 'module.sops',
-    label: 'SOP Creation',
-    description: 'Access the SOP Creation module.',
-    group: 'Modules'
-  }
 ]
 
 const ALL_PERMISSIONS: Permission[] = PERMISSIONS.map((p) => p.key)
@@ -235,7 +228,6 @@ const OPERATIONS_PERMISSIONS: Permission[] = [
   'shipping.pack',
   'module.invoicing',
   'module.finance',
-  'module.sops',
   'module.streaming',
   'streaming.manage',
   'finance.manage'
@@ -251,8 +243,7 @@ const STAFF_PERMISSIONS: Permission[] = [
   'module.inventory',
   'module.fulfillment',
   'shipping.find',
-  'shipping.pack',
-  'module.sops'
+  'shipping.pack'
 ]
 
 // The packing bench, and nothing else. Someone hired to ship gets the today
@@ -264,8 +255,7 @@ const SHIPPING_PERMISSIONS: Permission[] = [
   'updates.check',
   'module.fulfillment',
   'shipping.find',
-  'shipping.pack',
-  'module.sops'
+  'shipping.pack'
 ]
 
 /** The permissions granted by each role. */
