@@ -34,6 +34,16 @@ await build({
         b.onResolve({ filter: /^@shared\// }, (a) => ({
           path: join(ROOT, 'src/shared', a.path.replace(/^@shared\//, '') + '.ts')
         }))
+        // Feasibility spike: point the db layer at the Cloudflare Durable Object
+        // adapter instead of the native driver, WITHOUT editing src/main. A suite
+        // that passes under this flag is evidence the code transplants; one that
+        // fails names something a Durable Object cannot do. Off by default, so
+        // `npm test` keeps testing what ships.
+        if (process.env.RMOPS_SQL_ADAPTER === '1') {
+          b.onResolve({ filter: /^better-sqlite3$/ }, () => ({
+            path: join(ROOT, 'tests/support/betterSqlite3Adapter.ts')
+          }))
+        }
         b.onResolve({ filter: /^electron$/ }, () => ({
           path: join(ROOT, 'tests/support/electronStub.js')
         }))
