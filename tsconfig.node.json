@@ -5,6 +5,7 @@
     "src/main/**/*",
     "src/preload/**/*",
     "src/bridge/**/*",
+    "src/server/**/*",
     "src/shared/**/*"
   ],
   "compilerOptions": {

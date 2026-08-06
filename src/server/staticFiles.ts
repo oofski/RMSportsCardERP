@@ -82,7 +82,8 @@ function resolveWithin(root: string, urlPath: string): string | null {
 export function serveStatic(
   req: IncomingMessage,
   res: ServerResponse,
-  pathname: string
+  pathname: string,
+  extraHeaders: Record<string, string> = {}
 ): boolean {
   const root = rendererRoot()
   const index = join(root, 'index.html')
@@ -95,7 +96,7 @@ export function serveStatic(
   // hands the browser HTML where it expected JavaScript, and the console error
   // that follows says nothing about the deploy being incomplete.
   if (!isFile && pathname.startsWith('/assets/')) {
-    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
+    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', ...extraHeaders })
     res.end('Not found.')
     return true
   }
@@ -106,7 +107,8 @@ export function serveStatic(
   res.writeHead(200, {
     'content-type': TYPES[extname(file).toLowerCase()] ?? 'application/octet-stream',
     'cache-control': immutable ? 'public, max-age=31536000, immutable' : 'no-store',
-    'content-length': statSync(file).size
+    'content-length': statSync(file).size,
+    ...extraHeaders
   })
   if (req.method === 'HEAD') {
     res.end()

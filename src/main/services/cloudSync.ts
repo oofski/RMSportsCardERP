@@ -64,17 +64,39 @@ export function getSyncConfig(): SyncConfig {
   const storedUrl = (syncStateGet('url') ?? '').trim()
   const stored = syncStateGet('enabled')
   return {
-    url: storedUrl || CLOUD_SYNC_URL,
+    url: storedUrl || envValue('RMOPS_SYNC_URL') || CLOUD_SYNC_URL,
     device: (syncStateGet('device') ?? '').trim() || defaultDeviceName(),
     intervalSeconds: Number(syncStateGet('interval') ?? DEFAULT_INTERVAL_SECONDS) || DEFAULT_INTERVAL_SECONDS,
-    // Never touched means ON for a build that ships a relay. Somebody who
-    // pauses it has said so explicitly, and that choice sticks.
-    enabled: stored === null ? CLOUD_SYNC_BUILT_IN : stored === '1'
+    // Never touched means ON for a build that ships a relay, or for a server
+    // that was handed one. Somebody who pauses it has said so explicitly, and
+    // that choice sticks.
+    enabled: stored === null ? CLOUD_SYNC_BUILT_IN || envConfigured() : stored === '1'
   }
 }
 
+/**
+ * The relay address and key, injected at RUNTIME.
+ *
+ * A desktop build gets them baked in at build time from CI secrets — that is
+ * what CLOUD_SYNC_URL and CLOUD_SYNC_KEY are. A server cannot: the container
+ * image is built once and would carry the key in a layer anybody who can pull
+ * the image can read. So the server is handed them as environment variables
+ * instead, and the image contains no secret at all.
+ *
+ * Order is stored → environment → build-time. Something an administrator typed
+ * into the app still wins, because it was a deliberate act; the environment is
+ * the default the deployment provides.
+ */
+function envValue(name: string): string {
+  return (process.env[name] ?? '').trim()
+}
+
+function envConfigured(): boolean {
+  return envValue('RMOPS_SYNC_URL').length > 0 && envValue('RMOPS_SYNC_KEY').length > 0
+}
+
 function sharedKey(): string {
-  return (syncStateGet('key') ?? '').trim() || CLOUD_SYNC_KEY
+  return (syncStateGet('key') ?? '').trim() || envValue('RMOPS_SYNC_KEY') || CLOUD_SYNC_KEY
 }
 
 function defaultDeviceName(): string {

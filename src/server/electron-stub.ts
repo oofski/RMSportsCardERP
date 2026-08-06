@@ -119,6 +119,11 @@ export const dialog = {
   showMessageBoxSync: (): number => 0
 }
 
+/** Is this one of the temporary paths a save dialog handed back? */
+export function isSpoolPath(path: string): boolean {
+  return path.startsWith(spoolDir() + '/') || path.startsWith(tmpdir())
+}
+
 /**
  * Collect whatever the handler wrote through a save dialog.
  *

@@ -104,7 +104,8 @@ import type {
   UpdateEmployeeInput,
   UpdateInventoryProduct,
   UpdateSupply,
-  UpdateStatus
+  UpdateStatus,
+  UploadedFile
 } from '@shared/types'
 import type {
   ShipBatchUrl,
@@ -179,6 +180,27 @@ export interface BridgeTransport {
   on(channel: string, listener: (event: any, ...args: any[]) => void): unknown
   /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
   removeListener(channel: string, listener: (event: any, ...args: any[]) => void): unknown
+  /**
+   * Ask the USER for a file, when the backend cannot ask for itself.
+   *
+   * Six operations begin by choosing a file. On the desktop the main process
+   * opens a native dialog, which is why those six take no argument. A server has
+   * no screen to put a dialog on and no business reading its own disk on a
+   * caller's say-so, so in a browser the picking happens HERE and the file's
+   * content travels with the call.
+   *
+   * Absent on the Electron transport — `ipcRenderer` has no such method — which
+   * is exactly how each method below decides which path it is on. One optional
+   * function, six `if`s, and no screen changed.
+   *
+   * Resolves to null when the person cancelled.
+   */
+  pickFile?(options: {
+    /** An `accept` attribute: '.csv,.tsv,.txt', '.pdf', 'image/*'. */
+    accept: string
+    /** Text for sheets, bytes for PDFs and images. */
+    as: 'text' | 'bytes'
+  }): Promise<UploadedFile | null>
 }
 
 export function createBridge(ipcRenderer: BridgeTransport) {
@@ -217,8 +239,13 @@ export function createBridge(ipcRenderer: BridgeTransport) {
         ipcRenderer.invoke(IPC.employeesSetPortalPin, { id, pin }),
       clearPortalPin: (id: string): Promise<Result<Employee>> =>
         ipcRenderer.invoke(IPC.employeesClearPortalPin, { id }),
-      setAvatar: (id: string): Promise<Result<Employee>> =>
-        ipcRenderer.invoke(IPC.employeesSetAvatar, id),
+      /** Desktop: main opens the picker. Browser: the picture goes up with the call. */
+      setAvatar: async (id: string): Promise<Result<Employee>> => {
+        if (!ipcRenderer.pickFile) return ipcRenderer.invoke(IPC.employeesSetAvatar, id)
+        const upload = await ipcRenderer.pickFile({ accept: 'image/*', as: 'bytes' })
+        if (!upload) return { ok: false, error: 'No image selected.' }
+        return ipcRenderer.invoke(IPC.employeesSetAvatar, id, upload)
+      },
       removeAvatar: (id: string): Promise<Result<Employee>> =>
         ipcRenderer.invoke(IPC.employeesRemoveAvatar, id)
     },
@@ -274,8 +301,12 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       thumbnails: (): Promise<Record<string, string>> => ipcRenderer.invoke(IPC.invThumbnails),
       listImages: (productId: string): Promise<ProductImage[]> =>
         ipcRenderer.invoke(IPC.invImageList, productId),
-      addImage: (productId: string): Promise<Result<ProductImage[]>> =>
-        ipcRenderer.invoke(IPC.invImageAdd, productId),
+      addImage: async (productId: string): Promise<Result<ProductImage[]>> => {
+        if (!ipcRenderer.pickFile) return ipcRenderer.invoke(IPC.invImageAdd, productId)
+        const upload = await ipcRenderer.pickFile({ accept: 'image/*', as: 'bytes' })
+        if (!upload) return { ok: false, error: 'No image selected.' }
+        return ipcRenderer.invoke(IPC.invImageAdd, productId, upload)
+      },
       removeImage: (imageId: string): Promise<Result<ProductImage[]>> =>
         ipcRenderer.invoke(IPC.invImageRemove, imageId),
       listIncoming: (): Promise<IncomingShipment[]> => ipcRenderer.invoke(IPC.invIncomingList),
@@ -324,8 +355,12 @@ export function createBridge(ipcRenderer: BridgeTransport) {
         defaultLocation?: string
       }): Promise<{ sheet: ParsedSheet; plan: ResetPlan; guessed: boolean } | null> =>
         ipcRenderer.invoke(IPC.invResetPreview, input),
-      resetPickFile: (): Promise<Result<{ text: string; filename: string }>> =>
-        ipcRenderer.invoke(IPC.invResetPickFile),
+      resetPickFile: async (): Promise<Result<{ text: string; filename: string }>> => {
+        if (!ipcRenderer.pickFile) return ipcRenderer.invoke(IPC.invResetPickFile)
+        const upload = await ipcRenderer.pickFile({ accept: '.csv,.tsv,.txt', as: 'text' })
+        if (!upload) return { ok: false, error: 'No file selected.' }
+        return ipcRenderer.invoke(IPC.invResetPickFile, upload)
+      },
       resetApply: (input: {
         text: string
         mapping: ResetField[]
@@ -354,8 +389,12 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       /** Say which consumable this row IS when a show is costed. Null unlinks. */
       setShipRole: (id: string, role: string | null): Promise<Result<Supply>> =>
         ipcRenderer.invoke(IPC.supplySetShipRole, { id, role }),
-      setImage: (id: string): Promise<Result<Supply>> =>
-        ipcRenderer.invoke(IPC.supplySetImage, { id }),
+      setImage: async (id: string): Promise<Result<Supply>> => {
+        if (!ipcRenderer.pickFile) return ipcRenderer.invoke(IPC.supplySetImage, { id })
+        const upload = await ipcRenderer.pickFile({ accept: 'image/*', as: 'bytes' })
+        if (!upload) return { ok: false, error: 'No image selected.' }
+        return ipcRenderer.invoke(IPC.supplySetImage, { id, upload })
+      },
       removeImage: (id: string): Promise<Result<Supply>> =>
         ipcRenderer.invoke(IPC.supplyRemoveImage, { id }),
       listOrders: (): Promise<SupplyOrder[]> => ipcRenderer.invoke(IPC.supplyOrdersList),
@@ -517,9 +556,22 @@ export function createBridge(ipcRenderer: BridgeTransport) {
         ipcRenderer.invoke(IPC.shipDocumentClear),
 
       // ---- Upload: the parse runs as a background job ------------------------
-      /** Opens a PDF picker (unless `filePath` is given) and starts the job. */
-      startParse: (request?: ShipParseRequest): Promise<Result<ShipParseStart>> =>
-        ipcRenderer.invoke(IPC.shipParseStart, request ?? {}),
+      /**
+        * Start the background parse.
+        *
+        * Desktop: main opens a PDF picker unless `filePath` is given. Browser:
+        * the PDF is chosen here and its bytes ride along, because a server has
+        * no picker and would not be given a path if it had one.
+        */
+      startParse: async (request?: ShipParseRequest): Promise<Result<ShipParseStart>> => {
+        const req = request ?? {}
+        if (!ipcRenderer.pickFile || req.filePath || req.upload) {
+          return ipcRenderer.invoke(IPC.shipParseStart, req)
+        }
+        const upload = await ipcRenderer.pickFile({ accept: '.pdf', as: 'bytes' })
+        if (!upload) return { ok: false, error: 'No file selected.' }
+        return ipcRenderer.invoke(IPC.shipParseStart, { ...req, upload })
+      },
       parseJob: (jobId: string): Promise<ShipParseJob | null> =>
         ipcRenderer.invoke(IPC.shipParseJob, jobId),
       onParseProgress: (callback: (job: ShipParseJob) => void): (() => void) => {
@@ -735,10 +787,15 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       /** Day-by-day revenue, totals, unattributed money and the reconciliation
        *  flag. `reconciled: false` means the numbers do not add up — show it. */
       streamView: (): Promise<StreamingFinanceView> => ipcRenderer.invoke(IPC.finStreamView),
-      /** Opens a native file picker. Re-importing an overlapping week is safe:
-       *  matched rows are skipped as duplicates, never counted twice. */
-      importLedger: (): Promise<Result<LedgerImportResult>> =>
-        ipcRenderer.invoke(IPC.finLedgerImport),
+      /** Opens a file picker — native in Electron, the browser's own in a tab.
+       *  Re-importing an overlapping week is safe: matched rows are skipped as
+       *  duplicates, never counted twice. */
+      importLedger: async (): Promise<Result<LedgerImportResult>> => {
+        if (!ipcRenderer.pickFile) return ipcRenderer.invoke(IPC.finLedgerImport)
+        const upload = await ipcRenderer.pickFile({ accept: '.csv', as: 'text' })
+        if (!upload) return { ok: false, error: 'No file selected.' }
+        return ipcRenderer.invoke(IPC.finLedgerImport, upload)
+      },
       imports: (): Promise<LedgerImport[]> => ipcRenderer.invoke(IPC.finLedgerImports),
       /** Removes the upload and the rows NOTHING ELSE covers — a correction.
        *  Rows another import also contains are re-pointed to it and survive. */

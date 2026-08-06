@@ -64,7 +64,18 @@ export function registerSyncIpc(): void {
   // connected cannot tell the difference between "nothing has happened" and
   // "nothing has reached me", and will act on stale numbers believing they are
   // current. The status carries no business data.
-  ipcMain.handle(IPC.syncStatus, (): SyncStatus => syncStatus())
+  ipcMain.handle(IPC.syncStatus, (): SyncStatus => {
+    const status = syncStatus()
+    // The last four characters of the shared key are shown so an administrator
+    // can tell WHICH key is installed without revealing it. Everyone else gets
+    // "a key is set" and nothing more: on a laptop the only reader was the
+    // machine's owner, but this server answers a dozen people over the public
+    // internet, and four characters of a bearer token is four characters more
+    // than a packer needs.
+    const user = currentUser()
+    if (user?.permissions.includes('admin.access')) return status
+    return { ...status, config: { ...status.config, keyHint: '' } }
+  })
 
   ipcMain.handle(
     IPC.syncConfigure,
