@@ -1,0 +1,91 @@
+# RM Operations — Fly.io deployment.
+#
+# Fly rather than Render, for one reason that matters more than any feature
+# comparison: this app is ONE process owning ONE SQLite file, and Fly makes that
+# arrangement explicit. A Fly volume is a real block device attached to exactly
+# one machine, so the single-writer assumption the FIFO cost engine is built on
+# stays true by construction. Platforms that scale by adding instances make the
+# dangerous thing (two machines, two databases, silently diverging) the easy
+# thing.
+#
+# THE ONE RULE: never run more than one machine.
+#
+#   fly scale count 1
+#
+# Two machines do not share the volume. They would each have their own copy of
+# the database, each answering half the requests, and nothing would look broken
+# until the numbers stopped agreeing. Section "When it breaks" in docs/WEB.md
+# says what to do if it happens anyway.
+
+app = "rm-operations"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+  RMOPS_PORT = "8080"
+  RMOPS_HOST = "0.0.0.0"
+  # The mount point below. The server checks that this really is a volume and
+  # refuses to start if it is not — a deploy that lost the volume fails loudly
+  # rather than coming up with an empty database.
+  RMOPS_DATA_DIR = "/data"
+  # Fly's proxy sets x-forwarded-for and x-forwarded-proto, so they can be
+  # believed here. Off by default, because on a directly-reachable machine they
+  # are whatever the caller typed and the login throttle would be worthless.
+  RMOPS_TRUST_PROXY = "1"
+
+# The database, the product images and the QuickBooks token live here. Created
+# once, by hand, and never by a deploy:
+#
+#   fly volumes create rmops_data --size 10 --region iad
+#
+# A deploy with no volume attached is refused by the server at boot.
+[[mounts]]
+  source = "rmops_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  # Plain http gets a redirect. The session cookie is Secure, so without this
+  # nobody could stay signed in over http anyway — they would simply see a login
+  # form that never takes.
+  force_https = true
+  # NOT auto-stopped. A stopped machine means the first person of the morning
+  # waits for a cold start, and a machine that stops mid-import leaves a
+  # half-parsed job nobody asked about. It also means the SSE streams every open
+  # tab is holding get dropped on a schedule.
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+  # One machine, and it is the only writer. These are the ceilings before Fly
+  # would want to start another one — which it must never do; see the rule above.
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 200
+    hard_limit = 250
+
+  # The one route that answers without a session, and says nothing when it does.
+  [[http_service.checks]]
+    grace_period = "20s"
+    interval = "30s"
+    method = "GET"
+    timeout = "5s"
+    path = "/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  # SQLite is happiest with page cache to spare, and a 200-page packing slip is
+  # parsed in memory. 1GB is comfortable for a dozen people; 512MB is not.
+  memory = "1gb"
+  cpus = 1
+
+# Secrets are NOT set here — this file is committed to a public repository.
+# They are set once, out of band, and live only in Fly's secret store:
+#
+#   fly secrets set RMOPS_SYNC_URL=https://…  RMOPS_SYNC_KEY=…
+#
+# Setting them turns the relay sync on, which is what feeds the public intake
+# form and the staff clock portal. Leave them unset and the server opens no
+# outbound connection at all.

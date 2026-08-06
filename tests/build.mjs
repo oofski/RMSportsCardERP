@@ -44,14 +44,30 @@ await build({
             path: join(ROOT, 'tests/support/betterSqlite3Adapter.ts')
           }))
         }
+        // Which Electron stand-in a test gets.
+        //
+        // Most tests want the minimal one in tests/support: enough surface for
+        // the database layer, and nothing else. The web-server test wants the
+        // one the SERVER actually ships with — it is the thing under test.
+        // Downloads, the SSE push window and the data directory all live in
+        // that file, so testing against a different stub would be testing a
+        // server that does not exist.
+        const serverStub = process.env.RMOPS_ELECTRON === 'server'
         b.onResolve({ filter: /^electron$/ }, () => ({
-          path: join(ROOT, 'tests/support/electronStub.js')
+          path: join(ROOT, serverStub ? 'src/server/electron-stub.ts' : 'tests/support/electronStub.js')
         }))
         // Same reason as `electron`: it expects a running app at import time,
         // and a test that reaches src/main/ipc.ts pulls it in transitively.
         b.onResolve({ filter: /^electron-updater$/ }, () => ({
-          path: join(ROOT, 'tests/support/electronUpdaterStub.js')
+          path: join(
+            ROOT,
+            serverStub ? 'src/server/electron-updater-stub.ts' : 'tests/support/electronUpdaterStub.js'
+          )
         }))
+        // pdfjs is ESM-only and must stay a real runtime import: bundled into
+        // CJS it loses the environment it expects and dies on a missing
+        // DOMMatrix the first time a PDF is parsed.
+        b.onResolve({ filter: /^pdfjs-dist/ }, (a) => ({ path: a.path, external: true }))
       }
     }
   ]

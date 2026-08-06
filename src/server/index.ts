@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { randomUUID } from 'node:crypto'
+import { statSync } from 'node:fs'
 import { IPC } from '@shared/ipc'
 import { effectivePermissions, type Permission } from '@shared/permissions'
 import { getDb } from '../main/db/database'
@@ -508,11 +509,16 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
   if (req.method === 'GET' && path.startsWith('/api/download/') && session) {
     const token = decodeURIComponent(path.slice('/api/download/'.length))
     const held = heldDownloads.get(token)
-    heldDownloads.delete(token)
     if (!held || held.expiresAt <= Date.now() || held.employeeId !== session.employeeId) {
+      // Deliberately NOT deleted here. Consuming a ticket on a failed attempt
+      // would let anybody holding a session destroy somebody else's export by
+      // asking for it once — a denial of service that looks exactly like a
+      // flaky download.
+      if (held && held.expiresAt <= Date.now()) heldDownloads.delete(token)
       send(req, res, 404, { ok: false, error: 'That download has expired.' })
       return
     }
+    heldDownloads.delete(token)
     res.writeHead(200, {
       'content-type': held.mime,
       'content-length': held.bytes.length,
@@ -716,11 +722,36 @@ export interface ServerOptions {
  */
 function assertDurableStorage(): void {
   if (process.env.NODE_ENV !== 'production') return
+  if (process.env.RMOPS_ALLOW_EPHEMERAL_DATA === '1') {
+    console.warn(
+      'RMOPS_ALLOW_EPHEMERAL_DATA=1 — the database is NOT on a volume and will be lost ' +
+        'when this container is replaced. Never set this on the real deployment.'
+    )
+    return
+  }
   if (!process.env.RMOPS_DATA_DIR) {
     throw new Error(
       'RMOPS_DATA_DIR is not set. Refusing to start: the database would be written to the ' +
         'container filesystem and lost on the next deploy. Mount a volume and point ' +
         'RMOPS_DATA_DIR at it (see docs/WEB.md).'
+    )
+  }
+  // Naming a directory is not the same as mounting one. A typo in the mount
+  // path, a volume that failed to attach, a `docker run` without `-v` — all of
+  // them leave RMOPS_DATA_DIR set and pointing at an ordinary directory inside
+  // the container, which works perfectly until the container is replaced and
+  // the company's entire database goes with it. There is no error, no warning
+  // and no missing file: the app comes up asking to create an Owner account.
+  //
+  // A mounted volume is a different filesystem, so it has a different device
+  // number. That is the one check that can tell the difference, and it is
+  // cheap enough to run on every boot.
+  if (statSync(dataDir()).dev === statSync('/').dev) {
+    throw new Error(
+      `RMOPS_DATA_DIR (${dataDir()}) is on the container's own filesystem, not a mounted ` +
+        'volume. Refusing to start: everything written there is destroyed by the next ' +
+        'deploy. Mount a volume at that path (see docs/WEB.md). If this really is what ' +
+        'you want — a throwaway demo — set RMOPS_ALLOW_EPHEMERAL_DATA=1.'
     )
   }
 }
@@ -815,7 +846,15 @@ export function startServer(options: ServerOptions = {}): Server {
   return server
 }
 
-/** Started directly (`npm run server`) rather than imported by a test. */
+/** Started directly (`npm run web`) rather than imported by a test. */
 if (process.env.RMOPS_SERVER_AUTOSTART !== 'false') {
-  startServer()
+  try {
+    startServer()
+  } catch (err) {
+    // A refusal to start is an operator's problem, not a programmer's — the
+    // message says exactly what to fix, and a Node stack trace above it only
+    // makes it harder to find in `fly logs`.
+    console.error(err instanceof Error ? err.message : String(err))
+    process.exit(1)
+  }
 }

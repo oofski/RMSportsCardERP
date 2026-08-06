@@ -7,6 +7,18 @@ the app foundation, the **Admin** module, and a full **Time & Payroll** module.
 > Navy-blue, professional, built to scale. SQLite today (same SQL dialect as
 > Cloudflare D1), so the move to a shared cloud database later is a drop-in swap.
 
+## It also runs in a browser
+
+The same app, served by a Node server that binds the same handlers to HTTP
+instead of IPC — one shared database, no installers, and nothing for macOS to
+refuse to update.
+
+```bash
+npm run web     # builds the renderer + server and starts it on :8787
+```
+
+Deployment, backups and the security posture: **[docs/WEB.md](docs/WEB.md)**.
+
 ---
 
 ## What's in v0.0.0

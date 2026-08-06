@@ -1,5 +1,11 @@
 # Multi-user: moving to a server + browser app
 
+> **This shipped.** The server exists (`src/server/`), the browser transport
+> exists (`src/renderer/src/lib/httpTransport.ts`), and the deployment is
+> documented in **[WEB.md](./WEB.md)** — read that one to run it. This document
+> is kept for the reasoning: why a server rather than Cloudflare D1, why SQLite
+> stays, and what the measurement said before any of it was built.
+
 ## Where we are today
 
 **Every install has its own private database.** `db/database.ts` opens a SQLite

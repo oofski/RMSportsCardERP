@@ -1,0 +1,21 @@
+# Everything the image must NOT carry.
+#
+# `data/` is the important one: a local development run leaves a real SQLite
+# database there, with real employees and real customer addresses in it. Copying
+# it into an image would put the company's data into a layer that gets pushed to
+# a registry.
+data/
+node_modules/
+out/
+release/
+dist/
+
+.git/
+.github/
+*.log
+.DS_Store
+.env
+.env.*
+*.local
+*.tsbuildinfo
+coverage/
