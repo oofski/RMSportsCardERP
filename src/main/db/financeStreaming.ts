@@ -774,14 +774,31 @@ export function importLedger(filePath: string, actorId: string | null): Result<L
   } catch (err) {
     return fail(err)
   }
+  return importLedgerText(text, basename(filePath), actorId)
+}
 
+/**
+ * The same import, given the CSV's CONTENT rather than a path to it.
+ *
+ * This is the real implementation; the path-taking function above is the
+ * desktop's convenience wrapper. Splitting them is what lets a browser import a
+ * ledger at all — there is no path to send, and a server that accepted one
+ * would be reading files off its own disk on a caller's say-so. `filename` is
+ * carried separately because the import record names the file the operator
+ * chose, and that is what they look for when reconciling a week later.
+ */
+export function importLedgerText(
+  text: string,
+  sourceName: string,
+  actorId: string | null
+): Result<LedgerImportResult> {
   const parsed = parseLedgerCsv(text)
   if (parsed.headerError) return { ok: false, error: parsed.headerError }
   if (parsed.dataLines === 0) return { ok: false, error: 'That ledger has no data rows.' }
 
   const db = getDb()
   const importId = newId()
-  const filename = basename(filePath)
+  const filename = basename(String(sourceName ?? 'ledger.csv'))
   const ts = nowIso()
 
   const run = db.transaction((): Result<LedgerImportResult> => {

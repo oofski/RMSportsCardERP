@@ -13,7 +13,7 @@ import type {
   UpdateSupply
 } from '@shared/types'
 import { getDb } from './database'
-import { deleteImageFile, imageDataUrl, importImageFile } from '../services/media'
+import { deleteImageFile, imageDataUrl, importImage, type ImageSource } from '../services/media'
 import { newId, nowIso } from '../util'
 
 /**
@@ -201,12 +201,12 @@ export function updateSupply(input: UpdateSupply): Supply | null {
 }
 
 /** Attach (or replace) a supply's photo. Copies the file into the media store. */
-export function setSupplyImage(id: string, srcPath: string): Supply | null {
+export function setSupplyImage(id: string, source: ImageSource): Supply | null {
   const row = getDb().prepare('SELECT image FROM supplies WHERE id = ?').get(id) as
     | { image: string | null }
     | undefined
   if (!row) return null
-  const filename = importImageFile(srcPath, `supply-${id}`)
+  const filename = importImage(source, `supply-${id}`)
   try {
     getDb().prepare('UPDATE supplies SET image = ?, updated_at = ? WHERE id = ?').run(filename, nowIso(), id)
   } catch (err) {

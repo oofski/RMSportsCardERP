@@ -17,7 +17,7 @@ import {
   isWeakPortalPin
 } from '@shared/portalPin'
 import { getDb } from './database'
-import { deleteImageFile, imageDataUrl, importImageFile } from '../services/media'
+import { deleteImageFile, imageDataUrl, importImage, type ImageSource } from '../services/media'
 import { newId, nowIso } from '../util'
 
 const BCRYPT_ROUNDS = 12
@@ -264,13 +264,13 @@ export function updateEmployee(input: UpdateEmployeeInput): Employee | null {
 
 /** Import a picked image as an employee's profile picture, replacing any prior
  *  one (the old file is deleted so the media dir doesn't leak). */
-export function setEmployeeAvatar(id: string, srcPath: string): Employee | null {
+export function setEmployeeAvatar(id: string, source: ImageSource): Employee | null {
   const db = getDb()
   const row = db.prepare('SELECT avatar FROM employees WHERE id = ?').get(id) as
     | { avatar: string | null }
     | undefined
   if (!row) return null
-  const filename = importImageFile(srcPath, `emp-${id}`)
+  const filename = importImage(source, `emp-${id}`)
   // Delete the previous file only if a different extension made a new filename,
   // so we never orphan e.g. an old .png after switching to a .jpg.
   if (row.avatar && row.avatar !== filename) deleteImageFile(row.avatar)

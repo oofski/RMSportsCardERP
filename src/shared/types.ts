@@ -150,6 +150,26 @@ export interface ExportResult {
   error?: string
 }
 
+/**
+ * A file the CLIENT sends up, rather than a path the backend opens.
+ *
+ * Six operations used to start by opening a native file picker in the main
+ * process — the ledger CSV, the count sheet, the packing-slip PDF and three
+ * images. That works only where the backend and the person are the same
+ * computer. In a browser they are not, and a server that took a path instead
+ * would be offering to read any file it can reach to anybody who can name one.
+ *
+ * So those operations take content. Exactly one of `text` (CSV/TSV) or `base64`
+ * (PDF, image) is set; `filename` is carried because the import records and the
+ * stored image extension are both derived from the name the operator chose.
+ * Omit the whole argument on the desktop and the native picker still runs.
+ */
+export interface UploadedFile {
+  filename: string
+  text?: string
+  base64?: string
+}
+
 export interface RememberedCredentials {
   identifier: string
   password: string

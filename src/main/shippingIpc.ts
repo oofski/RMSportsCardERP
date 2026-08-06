@@ -22,6 +22,7 @@ import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { writeFileSync } from 'node:fs'
 import { basename } from 'node:path'
+import { uploadedBytes, uploadedName } from './util'
 import { IPC } from '@shared/ipc'
 import type { ExportResult, Result } from '@shared/types'
 import type { Permission } from '@shared/permissions'
@@ -488,26 +489,40 @@ export function registerShippingIpc(): void {
       try {
         requireManage()
 
-        let filePath = str(request?.filePath).trim()
-        if (!filePath) {
-          const win = BrowserWindow.fromWebContents(e.sender) ?? BrowserWindow.getFocusedWindow()
-          const opts: OpenDialogOptions = {
-            title: 'Choose the Whatnot packing-slip PDF',
-            properties: ['openFile'],
-            filters: PDF_FILTERS
-          }
-          const picked = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts)
-          if (picked.canceled || !picked.filePaths[0]) {
-            return { ok: false, error: 'No file selected.' }
-          }
-          filePath = picked.filePaths[0]
-        }
-        if (!/\.pdf$/i.test(filePath)) return { ok: false, error: 'Choose a PDF file.' }
+        // Three ways the bytes arrive, in order of how much the caller knows:
+        // a browser uploads them, a desktop caller names a path, and a desktop
+        // caller who named nothing gets the native picker. The parse itself has
+        // always taken a Buffer, so nothing below this block changes.
+        let buffer: Buffer | null = null
+        let filename = ''
 
-        const buffer = await readFile(filePath)
+        const uploaded = uploadedBytes(request?.upload)
+        if (uploaded) {
+          filename = uploadedName(request?.upload, 'packing-slips.pdf')
+          if (!/\.pdf$/i.test(filename)) return { ok: false, error: 'Choose a PDF file.' }
+          buffer = uploaded
+        } else {
+          let filePath = str(request?.filePath).trim()
+          if (!filePath) {
+            const win = BrowserWindow.fromWebContents(e.sender) ?? BrowserWindow.getFocusedWindow()
+            const opts: OpenDialogOptions = {
+              title: 'Choose the Whatnot packing-slip PDF',
+              properties: ['openFile'],
+              filters: PDF_FILTERS
+            }
+            const picked = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts)
+            if (picked.canceled || !picked.filePaths[0]) {
+              return { ok: false, error: 'No file selected.' }
+            }
+            filePath = picked.filePaths[0]
+          }
+          if (!/\.pdf$/i.test(filePath)) return { ok: false, error: 'Choose a PDF file.' }
+          buffer = await readFile(filePath)
+          filename = basename(filePath)
+        }
+
         if (!buffer.length) return { ok: false, error: 'That PDF is empty.' }
 
-        const filename = basename(filePath)
         const job: ShipParseJob = {
           id: randomUUID(),
           status: 'running',

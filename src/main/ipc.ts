@@ -19,7 +19,8 @@ import type {
   ThemeMode,
   TimeEntry,
   UpdateEmployeeInput,
-  UpdateStatus
+  UpdateStatus,
+  UploadedFile
 } from '@shared/types'
 import { assignableRoles, roleLabel, sanitizePermissions, type Permission } from '@shared/permissions'
 import {
@@ -61,7 +62,8 @@ import { composeInviteEmail } from './services/email'
 import { roughLocation } from './services/location'
 import { computePayroll, gustoCsv, timesheetCsv, type GustoRow } from './services/csv'
 import { clearRemembered, getRemembered, setRemembered } from './services/credentials'
-import { generateTempPassword, isValidEmail } from './util'
+import { generateTempPassword, isValidEmail, uploadedBytes, uploadedName } from './util'
+import { hasRequestContext } from './services/session'
 import {
   checkForUpdates,
   currentDownloadUrl,
@@ -117,6 +119,9 @@ function requirePermission(permission: Permission): SessionUser {
 }
 
 class PermissionError extends Error {}
+
+/** What a profile picture may be, on either transport. */
+const AVATAR_EXTENSIONS = ['png', 'jpg', 'jpeg', 'gif', 'webp']
 
 function str(v: unknown): string {
   return typeof v === 'string' ? v : v == null ? '' : String(v)
@@ -408,24 +413,40 @@ export function registerIpcHandlers(): void {
     return target
   }
 
-  ipcMain.handle(IPC.employeesSetAvatar, async (e, id: string): Promise<Result<Employee>> => {
-    try {
-      const auth = canEditAvatar(String(id ?? ''))
-      if (typeof auth === 'string') return { ok: false, error: auth }
-      const win = BrowserWindow.fromWebContents(e.sender) ?? BrowserWindow.getFocusedWindow()
-      const opts: OpenDialogOptions = {
-        title: 'Choose a profile picture',
-        properties: ['openFile'],
-        filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp'] }]
+  ipcMain.handle(
+    IPC.employeesSetAvatar,
+    async (e, id: string, upload?: UploadedFile): Promise<Result<Employee>> => {
+      try {
+        const auth = canEditAvatar(String(id ?? ''))
+        if (typeof auth === 'string') return { ok: false, error: auth }
+        // Browser: the picture came up with the call. Desktop: open the picker.
+        const bytes = uploadedBytes(upload)
+        if (bytes) {
+          const filename = uploadedName(upload, 'avatar.png')
+          const ext = filename.toLowerCase().split('.').pop() ?? ''
+          if (!AVATAR_EXTENSIONS.includes(ext)) {
+            return { ok: false, error: 'Choose a PNG, JPG, GIF or WEBP.' }
+          }
+          const saved = setEmployeeAvatar(String(id), { filename, bytes })
+          return saved
+            ? { ok: true, data: saved }
+            : { ok: false, error: 'Could not set the picture.' }
+        }
+        const win = BrowserWindow.fromWebContents(e.sender) ?? BrowserWindow.getFocusedWindow()
+        const opts: OpenDialogOptions = {
+          title: 'Choose a profile picture',
+          properties: ['openFile'],
+          filters: [{ name: 'Images', extensions: AVATAR_EXTENSIONS }]
+        }
+        const picked = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts)
+        if (picked.canceled || !picked.filePaths[0]) return { ok: false, error: 'No image selected.' }
+        const updated = setEmployeeAvatar(String(id), picked.filePaths[0])
+        return updated ? { ok: true, data: updated } : { ok: false, error: 'Could not set the picture.' }
+      } catch (err) {
+        return fail(err)
       }
-      const picked = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts)
-      if (picked.canceled || !picked.filePaths[0]) return { ok: false, error: 'No image selected.' }
-      const updated = setEmployeeAvatar(String(id), picked.filePaths[0])
-      return updated ? { ok: true, data: updated } : { ok: false, error: 'Could not set the picture.' }
-    } catch (err) {
-      return fail(err)
     }
-  })
+  )
 
   ipcMain.handle(IPC.employeesRemoveAvatar, (_e, id: string): Result<Employee> => {
     try {
@@ -639,10 +660,31 @@ export function registerIpcHandlers(): void {
   })
 
   // ---- Remembered credentials (pre-login, no session) ---------------------
-  ipcMain.handle(IPC.credGet, (): RememberedCredentials | null => getRemembered())
+  //
+  // Desktop only, and refused outright anywhere else.
+  //
+  // "Remember me" writes one password into the `meta` table of the database.
+  // On a laptop that is the owner's own machine and their own password, which
+  // is the whole premise. On a shared server it would be ONE box holding
+  // whoever logged in last, sitting in a table any signed-in user's request
+  // could reach and in every backup of the database — a credential store nobody
+  // designed and nobody would approve.
+  //
+  // A browser does not need it: the session cookie already survives closing the
+  // tab, for twelve hours of inactivity and thirty days at the outside (see
+  // server/sessions.ts). That IS remember-me, minus a stored password.
+  //
+  // `hasRequestContext()` is true exactly when a request is being served, so
+  // this cannot be bypassed by calling the channel directly.
+  ipcMain.handle(IPC.credGet, (): RememberedCredentials | null =>
+    hasRequestContext() ? null : getRemembered()
+  )
 
   ipcMain.handle(IPC.credSet, (_e, creds: RememberedCredentials): Result => {
     try {
+      if (hasRequestContext()) {
+        return { ok: false, error: 'Staying signed in is handled by the browser session here.' }
+      }
       if (!creds || typeof creds.identifier !== 'string' || typeof creds.password !== 'string') {
         return { ok: false, error: 'Invalid credentials.' }
       }
@@ -654,7 +696,7 @@ export function registerIpcHandlers(): void {
   })
 
   ipcMain.handle(IPC.credClear, (): Result => {
-    clearRemembered()
+    if (!hasRequestContext()) clearRemembered()
     return { ok: true }
   })
 

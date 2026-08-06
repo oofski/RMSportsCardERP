@@ -28,6 +28,7 @@ import type {
   ShipWarning
 } from './shippingTypes'
 import type { ShipStationRole } from './shipStations'
+import type { UploadedFile } from './types'
 
 // ---------------------------------------------------------------------------
 // Fulfillment stage (architecture doc section 4.1)
@@ -443,8 +444,12 @@ export interface ShipParseRequest {
   eventDate?: string | null
   /** Human label for the import-history row; defaults to the filename. */
   name?: string | null
-  /** Optional pre-chosen path — omit and the main process opens a file dialog. */
+  /** Optional pre-chosen path — omit and the main process opens a file dialog.
+   *  Desktop only: a browser has no path to give, and a server that accepted
+   *  one would be reading its own disk on a caller's say-so. */
   filePath?: string | null
+  /** The PDF itself, base64, when the caller is a browser. */
+  upload?: UploadedFile
   /**
    * Keep the pick/pack progress from the dataset this import replaces.
    *

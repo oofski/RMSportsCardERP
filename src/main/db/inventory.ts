@@ -30,7 +30,7 @@ import {
   unitMoney
 } from './lots'
 import { PRODUCT_BASIS, allCostValues, layerGaps, productCostValue } from './valuation'
-import { deleteImageFile, imageDataUrl, importImageFile } from '../services/media'
+import { deleteImageFile, imageDataUrl, importImage, type ImageSource } from '../services/media'
 import { newId, nowIso } from '../util'
 
 interface ProductRow {
@@ -794,11 +794,11 @@ export function listProductImages(productId: string): ProductImage[] {
 }
 
 /** Copy a picked file into the media store and attach it to a product. */
-export function addProductImage(productId: string, srcPath: string): ProductImage[] {
+export function addProductImage(productId: string, source: ImageSource): ProductImage[] {
   const exists = getDb().prepare('SELECT id FROM inventory_products WHERE id = ?').get(productId)
   if (!exists) throw new Error('Product not found.')
   const id = newId()
-  const filename = importImageFile(srcPath, id)
+  const filename = importImage(source, id)
   try {
     const pos = (
       getDb()

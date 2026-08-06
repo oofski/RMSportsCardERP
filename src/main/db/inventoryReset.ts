@@ -185,10 +185,25 @@ function sizeMapping(mapping: ResetField[], columns: number): ResetField[] {
   return out
 }
 
-/** Read a chosen file so the same preview path serves paste and upload alike. */
+/**
+ * Accept a count sheet as CONTENT, so the same preview path serves paste,
+ * desktop file-picker and browser upload alike.
+ *
+ * Content rather than a path is the form that works everywhere: a browser
+ * cannot hand the server a filesystem path, and a server that accepted one
+ * would be offering to read any file it can reach to anybody who can name it.
+ * The desktop wrapper below is the only thing that ever touches the disk.
+ */
+export function readSheetText(text: string, filename: string): Result<{ text: string; filename: string }> {
+  const body = String(text ?? '')
+  if (!body.trim()) return { ok: false, error: 'That file is empty.' }
+  return { ok: true, data: { text: body, filename: basename(String(filename ?? 'count-sheet')) } }
+}
+
+/** Read a chosen file (desktop only) and hand its content to `readSheetText`. */
 export function readSheetFile(filePath: string): Result<{ text: string; filename: string }> {
   try {
-    return { ok: true, data: { text: readFileSync(filePath, 'utf8'), filename: basename(filePath) } }
+    return readSheetText(readFileSync(filePath, 'utf8'), basename(filePath))
   } catch (err) {
     return fail(err)
   }

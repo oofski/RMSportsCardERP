@@ -214,6 +214,40 @@ async function renderPdf(html: string): Promise<Buffer> {
   }
 }
 
+/** What the document turned into, and what to call the file it lands in. */
+export interface RenderedDocument {
+  bytes: Buffer
+  extension: '.pdf' | '.html'
+  mime: string
+}
+
+/**
+ * How the A4 document becomes bytes.
+ *
+ * Electron prints it with Chromium, which is the only thing in this app that
+ * can produce a PDF. A headless server has no Chromium and never will — a
+ * container carrying a browser to lay out one purchase order is a hundred
+ * megabytes and a monthly CVE feed for a feature the viewer's own browser
+ * already has.
+ *
+ * So the server installs a renderer that hands back the SAME html and lets the
+ * browser print it (File → Print → Save as PDF). The document is
+ * byte-identical; only who paginates it changes. Installed as a hook rather
+ * than branched on an environment variable so the desktop path cannot take the
+ * server's route by accident — nothing sets it unless a server is running.
+ */
+export type DocumentRenderer = (html: string) => Promise<RenderedDocument>
+
+let renderDocument: DocumentRenderer = async (html) => ({
+  bytes: await renderPdf(html),
+  extension: '.pdf',
+  mime: 'application/pdf'
+})
+
+export function setDocumentRenderer(next: DocumentRenderer): void {
+  renderDocument = next
+}
+
 export interface PoPdfResult {
   ok: boolean
   path?: string
@@ -229,9 +263,9 @@ export interface PoPdfResult {
  */
 export async function openPoPdf(po: PurchaseOrderDetail): Promise<PoPdfResult> {
   try {
-    const pdf = await renderPdf(buildPoHtml(po))
-    const file = join(tmpdir(), `${po.poNumber.replace(/[^\w.-]/g, '_')}.pdf`)
-    writeFileSync(file, pdf)
+    const doc = await renderDocument(buildPoHtml(po))
+    const file = join(tmpdir(), `${po.poNumber.replace(/[^\w.-]/g, '_')}${doc.extension}`)
+    writeFileSync(file, doc.bytes)
     const err = await shell.openPath(file)
     // openPath resolves to a NON-EMPTY string when it failed — an empty string
     // is success, which is easy to invert by accident.
@@ -245,16 +279,16 @@ export async function openPoPdf(po: PurchaseOrderDetail): Promise<PoPdfResult> {
 /** Render and save wherever the user chooses. */
 export async function savePoPdf(po: PurchaseOrderDetail): Promise<PoPdfResult> {
   try {
-    const pdf = await renderPdf(buildPoHtml(po))
+    const doc = await renderDocument(buildPoHtml(po))
     const win = BrowserWindow.getFocusedWindow()
     const opts = {
       title: `Save ${po.poNumber}`,
-      defaultPath: `${po.poNumber.replace(/[^\w.-]/g, '_')}.pdf`,
-      filters: [{ name: 'PDF', extensions: ['pdf'] }]
+      defaultPath: `${po.poNumber.replace(/[^\w.-]/g, '_')}${doc.extension}`,
+      filters: [{ name: doc.extension === '.pdf' ? 'PDF' : 'Web page', extensions: [doc.extension.slice(1)] }]
     }
     const picked = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts)
     if (picked.canceled || !picked.filePath) return { ok: false, canceled: true }
-    writeFileSync(picked.filePath, pdf)
+    writeFileSync(picked.filePath, doc.bytes)
     return { ok: true, path: picked.filePath }
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) }

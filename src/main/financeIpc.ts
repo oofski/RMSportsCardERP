@@ -18,7 +18,7 @@
 import { BrowserWindow, dialog, type OpenDialogOptions } from 'electron'
 import { ipcMain } from './ipcRegistry'
 import { IPC } from '@shared/ipc'
-import type { Result } from '@shared/types'
+import type { Result, UploadedFile } from '@shared/types'
 import type { Permission } from '@shared/permissions'
 import type {
   GeneralExpense,
@@ -40,6 +40,7 @@ import {
   emptyView,
   importDeleteImpact,
   importLedger,
+  importLedgerText,
   listImports,
   listRows,
   reattributeAll,
@@ -49,6 +50,7 @@ import {
 import { deleteExpense, listExpenses, saveExpense } from './db/financeExpenses'
 import { deleteRatePeriod, listRatePeriods, saveRatePeriod } from './db/whatnotRates'
 import { currentUser } from './services/auth'
+import { uploadedName, uploadedText } from './util'
 
 function can(permission: Permission): boolean {
   const user = currentUser()
@@ -127,29 +129,40 @@ export function registerFinanceIpc(): void {
   // ---- Writes (finance.manage) --------------------------------------------
 
   /**
-   * Pick a Whatnot ledger CSV and import it.
+   * Import a Whatnot ledger CSV.
    *
-   * The picker lives in main because that is where the window is; the renderer
-   * never sees a filesystem path. An import is idempotent — re-uploading a week
-   * that overlaps an earlier one inserts nothing and says so — so cancelling and
-   * retrying is always safe.
+   * Two ways in, one import. A browser sends the file's CONTENT (there is no
+   * path it could send, and a server that opened one would be reading its own
+   * disk on a caller's say-so); the desktop sends nothing and gets the native
+   * picker, because that is where the window is and the renderer has never seen
+   * a filesystem path. Either way the permission check above runs first.
+   *
+   * An import is idempotent — re-uploading a week that overlaps an earlier one
+   * inserts nothing and says so — so cancelling and retrying is always safe.
    */
-  ipcMain.handle(IPC.finLedgerImport, async (e): Promise<Result<LedgerImportResult>> => {
-    try {
-      const actor = requireManage()
-      const win = BrowserWindow.fromWebContents(e.sender) ?? BrowserWindow.getFocusedWindow()
-      const opts: OpenDialogOptions = {
-        title: 'Choose the Whatnot ledger export (CSV)',
-        properties: ['openFile'],
-        filters: CSV_FILTERS
+  ipcMain.handle(
+    IPC.finLedgerImport,
+    async (e, upload?: UploadedFile): Promise<Result<LedgerImportResult>> => {
+      try {
+        const actor = requireManage()
+        const text = uploadedText(upload)
+        if (text !== null) {
+          return importLedgerText(text, uploadedName(upload, 'ledger.csv'), actor.id)
+        }
+        const win = BrowserWindow.fromWebContents(e.sender) ?? BrowserWindow.getFocusedWindow()
+        const opts: OpenDialogOptions = {
+          title: 'Choose the Whatnot ledger export (CSV)',
+          properties: ['openFile'],
+          filters: CSV_FILTERS
+        }
+        const picked = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts)
+        if (picked.canceled || !picked.filePaths[0]) return { ok: false, error: 'No file selected.' }
+        return importLedger(picked.filePaths[0], actor.id)
+      } catch (err) {
+        return fail(err)
       }
-      const picked = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts)
-      if (picked.canceled || !picked.filePaths[0]) return { ok: false, error: 'No file selected.' }
-      return importLedger(picked.filePaths[0], actor.id)
-    } catch (err) {
-      return fail(err)
     }
-  })
+  )
 
   /**
    * Remove an upload and the rows it brought in. A correction, not a deletion of

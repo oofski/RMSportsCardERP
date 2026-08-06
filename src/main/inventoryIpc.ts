@@ -47,12 +47,14 @@ import type {
   SupplyUseInput,
   UnitType,
   UpdateInventoryProduct,
-  UpdateSupply
+  UpdateSupply,
+  UploadedFile
 } from '@shared/types'
 import { isLocation } from '@shared/inventory'
 import type { Permission } from '@shared/permissions'
 import { currentUser } from './services/auth'
 import { IMAGE_EXTENSIONS } from './services/media'
+import { uploadedBytes, uploadedName, uploadedText } from './util'
 import {
   addProductImage,
   addStock,
@@ -88,6 +90,7 @@ import {
   listResetRuns,
   previewReset,
   readSheetFile,
+  readSheetText,
   resetRunDetail
 } from './db/inventoryReset'
 import {
@@ -110,6 +113,19 @@ import {
 } from './db/supplies'
 
 const UNIT_TYPES: UnitType[] = ['case', 'box', 'pack', 'single', 'other']
+
+/**
+ * Is this a name we are willing to store an image under?
+ *
+ * Checked on the UPLOAD path only — the desktop picker already filters by
+ * extension. Without it a browser could name a file anything at all, and
+ * media.ts would fall back to .png rather than refusing, which turns an
+ * obviously wrong upload into a broken thumbnail nobody can explain.
+ */
+function hasImageExtension(filename: string): boolean {
+  const ext = filename.toLowerCase().split('.').pop() ?? ''
+  return IMAGE_EXTENSIONS.includes(ext)
+}
 
 function can(permission: Permission): boolean {
   const user = currentUser()
@@ -284,11 +300,22 @@ export function registerInventoryIpc(): void {
     })
   })
 
+  /**
+   * Get a count sheet's text.
+   *
+   * A browser sends the CONTENT it read locally and this echoes it back — which
+   * looks redundant until you notice that the round trip is what makes the
+   * permission check above run. Skipping it client-side would let anyone paste
+   * a sheet into the preview; the apply is checked again either way, but a
+   * preview nobody is allowed to see is still a disclosure.
+   */
   ipcMain.handle(
     IPC.invResetPickFile,
-    async (e): Promise<Result<{ text: string; filename: string }>> => {
+    async (e, upload?: UploadedFile): Promise<Result<{ text: string; filename: string }>> => {
       try {
         requireManage()
+        const text = uploadedText(upload)
+        if (text !== null) return readSheetText(text, uploadedName(upload, 'count-sheet.csv'))
         const win = BrowserWindow.fromWebContents(e.sender) ?? BrowserWindow.getFocusedWindow()
         const opts: OpenDialogOptions = {
           title: 'Choose the count sheet',
@@ -451,23 +478,33 @@ export function registerInventoryIpc(): void {
     }
   })
 
-  ipcMain.handle(IPC.invImageAdd, async (e, productId: string): Promise<Result<ProductImage[]>> => {
-    try {
-      requireManage()
-      if (!productId) return { ok: false, error: 'Select a product.' }
-      const win = BrowserWindow.fromWebContents(e.sender) ?? BrowserWindow.getFocusedWindow()
-      const opts: OpenDialogOptions = {
-        title: 'Add product image',
-        properties: ['openFile'],
-        filters: [{ name: 'Images', extensions: IMAGE_EXTENSIONS }]
+  ipcMain.handle(
+    IPC.invImageAdd,
+    async (e, productId: string, upload?: UploadedFile): Promise<Result<ProductImage[]>> => {
+      try {
+        requireManage()
+        if (!productId) return { ok: false, error: 'Select a product.' }
+        // Browser: the bytes are already here. Desktop: open the picker.
+        const bytes = uploadedBytes(upload)
+        if (bytes) {
+          const filename = uploadedName(upload, 'image.png')
+          if (!hasImageExtension(filename)) return { ok: false, error: 'Choose a PNG, JPG, WEBP or GIF.' }
+          return { ok: true, data: addProductImage(productId, { filename, bytes }) }
+        }
+        const win = BrowserWindow.fromWebContents(e.sender) ?? BrowserWindow.getFocusedWindow()
+        const opts: OpenDialogOptions = {
+          title: 'Add product image',
+          properties: ['openFile'],
+          filters: [{ name: 'Images', extensions: IMAGE_EXTENSIONS }]
+        }
+        const picked = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts)
+        if (picked.canceled || !picked.filePaths[0]) return { ok: false, error: 'No image selected.' }
+        return { ok: true, data: addProductImage(productId, picked.filePaths[0]) }
+      } catch (err) {
+        return fail(err)
       }
-      const picked = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts)
-      if (picked.canceled || !picked.filePaths[0]) return { ok: false, error: 'No image selected.' }
-      return { ok: true, data: addProductImage(productId, picked.filePaths[0]) }
-    } catch (err) {
-      return fail(err)
     }
-  })
+  )
 
   ipcMain.handle(IPC.invImageRemove, (_e, imageId: string): Result<ProductImage[]> => {
     try {
@@ -684,24 +721,34 @@ export function registerInventoryIpc(): void {
     }
   )
 
-  ipcMain.handle(IPC.supplySetImage, async (e, payload: { id: string }): Promise<Result<Supply>> => {
-    try {
-      requireManage()
-      if (!payload?.id) return { ok: false, error: 'No supply specified.' }
-      const win = BrowserWindow.fromWebContents(e.sender) ?? BrowserWindow.getFocusedWindow()
-      const opts: OpenDialogOptions = {
-        title: 'Add supply photo',
-        properties: ['openFile'],
-        filters: [{ name: 'Images', extensions: IMAGE_EXTENSIONS }]
+  ipcMain.handle(
+    IPC.supplySetImage,
+    async (e, payload: { id: string; upload?: UploadedFile }): Promise<Result<Supply>> => {
+      try {
+        requireManage()
+        if (!payload?.id) return { ok: false, error: 'No supply specified.' }
+        const bytes = uploadedBytes(payload.upload)
+        if (bytes) {
+          const filename = uploadedName(payload.upload, 'image.png')
+          if (!hasImageExtension(filename)) return { ok: false, error: 'Choose a PNG, JPG, WEBP or GIF.' }
+          const saved = setSupplyImage(payload.id, { filename, bytes })
+          return saved ? { ok: true, data: saved } : { ok: false, error: 'Supply not found.' }
+        }
+        const win = BrowserWindow.fromWebContents(e.sender) ?? BrowserWindow.getFocusedWindow()
+        const opts: OpenDialogOptions = {
+          title: 'Add supply photo',
+          properties: ['openFile'],
+          filters: [{ name: 'Images', extensions: IMAGE_EXTENSIONS }]
+        }
+        const picked = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts)
+        if (picked.canceled || !picked.filePaths[0]) return { ok: false, error: 'No image selected.' }
+        const updated = setSupplyImage(payload.id, picked.filePaths[0])
+        return updated ? { ok: true, data: updated } : { ok: false, error: 'Supply not found.' }
+      } catch (err) {
+        return fail(err)
       }
-      const picked = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts)
-      if (picked.canceled || !picked.filePaths[0]) return { ok: false, error: 'No image selected.' }
-      const updated = setSupplyImage(payload.id, picked.filePaths[0])
-      return updated ? { ok: true, data: updated } : { ok: false, error: 'Supply not found.' }
-    } catch (err) {
-      return fail(err)
     }
-  })
+  )
 
   ipcMain.handle(IPC.supplyRemoveImage, (_e, payload: { id: string }): Result<Supply> => {
     try {
