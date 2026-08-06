@@ -20,9 +20,6 @@
  *     a show running past midnight into another rate period would otherwise make
  *     the detail disagree with the statement by a few dollars, with nothing on
  *     screen to explain it;
- *   - the same `computePackagingCosts` on the same `packagingFactsByDay`, so a
- *     modelled line's terms are the arithmetic the money came from rather than
- *     an illustration of it;
  *   - the same `mergeCogsItems` and the same cap, so the roll-up tail is
  *     precisely the products the statement rolled up.
  *
@@ -38,34 +35,25 @@ import type { Database } from 'better-sqlite3'
 import type { CogsItem } from '@shared/financeStreaming'
 import { COGS_LINES_MAX, UNNAMED_PRODUCT, deriveSaleFee, mergeCogsItems } from '@shared/financeStreaming'
 import type {
-  PnlDerivation,
-  PnlDerivedTerm,
   PnlDetail,
   PnlDrillRequest,
   PnlLedgerRecord,
   PnlStreamItemRecord,
-  PnlStreamItemSelector,
-  PnlUnknownNight
+  PnlStreamItemSelector
 } from '@shared/pnlDrill'
 import { PNL_DRILL_LIMIT, pnlDrillSource } from '@shared/pnlDrill'
-import {
-  PACKAGING_GIVEAWAY_MAILER_COST,
-  PACKAGING_PAID_MAILER_COST,
-  PACKAGING_SHIPPING_LABEL_COST,
-  PACKAGING_SLEEVE_COST,
-  PACKAGING_TEAM_BAG_COST,
-  PACKAGING_TEAM_BAG_STICKER_COST,
-  PACKAGING_TOP_LOADER_COST,
-  PACKAGING_TOP_LOADER_SHARE,
-  computePackagingCosts
-} from '@shared/packagingCosts'
+// NEITHER THE PACKAGING RATES NOR `packagingFactsByDay` ARE IMPORTED HERE ANY
+// MORE. They priced the six packaging lines' per-night terms, and the statement
+// stopped emitting those lines when the owner took packaging off the P&L. Both
+// modules are untouched and still price every night for the fields a day carries
+// — see `StreamDayFinance` — so reinstating the section brings these imports and
+// the resolver they fed back together.
 import { getDb } from './database'
 import {
   LEDGER_ROW_COLUMNS,
   type RawLedgerRow,
   toLedgerRow
 } from './financeStreaming'
-import { packagingFactsByDay } from './packagingCosts'
 import { stockUnitOf } from './inventory'
 import { rateLookup } from './whatnotRates'
 
@@ -75,11 +63,6 @@ const toDollars = (cents: number): number => Math.round(cents) / 100
 /** "1,029" — pinned to en-US like every other count the statement writes, so the
  *  same period does not render two ways on two desks. */
 const count = (n: number): string => n.toLocaleString('en-US')
-
-/** "5¢", "48¢" — the way the owner states these rates and the only way a reader
- *  can check one without misplacing a decimal. Computed from the constant, so a
- *  rate edited in `packagingCosts.ts` moves the sentence explaining it too. */
-const centsLabel = (dollars: number): string => `${Math.round(dollars * 10000) / 100}¢`
 
 const usd = (n: number): string =>
   n.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 })
@@ -153,7 +136,7 @@ export function pnlDetail(req: PnlDrillRequest, db: Database = getDb()): PnlDeta
     case 'expenses':
       return expenseDetail(db, lineId, bounds)
     case 'derived':
-      return derivedDetail(db, lineId, source.derivation, bounds)
+      return derivedDetail(lineId)
   }
 }
 
@@ -507,189 +490,35 @@ function expenseDetail(db: Database, lineId: string, bounds: Bounds): PnlDetail 
 // Modelled figures
 // ---------------------------------------------------------------------------
 
-/** How each packaging line is priced, in the words the statement uses. One
- *  entry per derivation, so a rate change moves the money and the sentence
- *  together. */
-const PACKAGING_BASIS: Record<
-  string,
-  {
-    label: string
-    /** The line's own money on a day, taken from the same computation the day
-     *  itself stored. */
-    pick: (c: ReturnType<typeof computePackagingCosts>) => number
-    /** "3 cards × 5¢" for one night. */
-    detail: (f: {
-      cards: number
-      slateTeams: number
-      packages: number
-      paidPackages: number
-    }) => string
-    /** True for the two lines counted off packing slips, which are the only ones
-     *  a night can fail to answer for. */
-    perPackage?: boolean
-  }
-> = {
-  'packaging:sleeves': {
-    label: 'Sleeves',
-    pick: (c) => c.sleeves,
-    detail: (f) =>
-      `${count(f.cards)} card${f.cards === 1 ? '' : 's'} × ${centsLabel(PACKAGING_SLEEVE_COST)}`
-  },
-  'packaging:topLoaders': {
-    label: 'Top loaders',
-    pick: (c) => c.topLoaders,
-    // The share is quoted from the constant rather than written as "50%", for
-    // the same reason the rates are: a sentence describing a multiplier somebody
-    // has since changed is a detail line that actively lies.
-    detail: (f) =>
-      `${Math.round(PACKAGING_TOP_LOADER_SHARE * 1000) / 10}% of ${count(f.cards)} ` +
-      `card${f.cards === 1 ? '' : 's'} × ${centsLabel(PACKAGING_TOP_LOADER_COST)}`
-  },
-  'packaging:teamBags': {
-    label: 'Team bags',
-    pick: (c) => c.teamBags,
-    detail: (f) =>
-      `${count(f.slateTeams)} team slot${f.slateTeams === 1 ? '' : 's'} × ` +
-      `${centsLabel(PACKAGING_TEAM_BAG_COST)}`
-  },
-  'packaging:shippingLabels': {
-    label: 'Shipping labels',
-    pick: (c) => c.shippingLabels,
-    perPackage: true,
-    detail: (f) =>
-      `${count(f.packages)} package${f.packages === 1 ? '' : 's'} × ` +
-      `${centsLabel(PACKAGING_SHIPPING_LABEL_COST)}`
-  },
-  'packaging:teamBagStickers': {
-    label: 'Team bag stickers',
-    pick: (c) => c.teamBagStickers,
-    detail: (f) =>
-      `${count(f.slateTeams)} team slot${f.slateTeams === 1 ? '' : 's'} × ` +
-      `${centsLabel(PACKAGING_TEAM_BAG_STICKER_COST)}`
-  },
-  'packaging:mailers': {
-    label: 'Mailers',
-    pick: (c) => c.mailers,
-    perPackage: true,
-    detail: (f) =>
-      `${count(f.paidPackages)} paid × ${centsLabel(PACKAGING_PAID_MAILER_COST)} + ` +
-      `${count(Math.max(0, f.packages - f.paidPackages))} giveaway-only × ` +
-      `${centsLabel(PACKAGING_GIVEAWAY_MAILER_COST)}`
-  }
-}
-
 /**
- * A modelled line, night by night.
+ * A modelled line — a figure with no records to list.
  *
- * DERIVED IS NOT EMPTY. There is no row anywhere holding "$0.15 of sleeves" —
- * the figure is a card count times a rate the owner states — so listing nothing
- * would be the honest answer to "show me the transactions" and a useless one.
- * What the reader can be given instead is the arithmetic, per night, summing to
- * the same figure: reproducible with a calculator, which is the only way a cost
- * model earns its place on a statement.
+ * DERIVED IS NOT EMPTY, and the distinction is the whole reason this kind exists.
+ * The packaging block used it properly: there is no row anywhere holding "$0.15
+ * of sleeves", so a `PACKAGING_BASIS` table here turned each night's card count,
+ * team slate and envelope count back into the arithmetic that produced the money
+ * — reproducible with a calculator, which is the only way a cost model earns its
+ * place on a statement. That table, and the nights it had to report as
+ * unpriceable, went with the packaging section when the owner took the cost off
+ * the P&L.
  *
- * The two lines counted off packing slips also carry the nights that could not
- * be answered for. The shipping workspace holds one show's slips at a time, so
- * every other night is genuinely unrecoverable — and a night listed as "not
- * known" is the difference between a figure that is short and a figure that is
- * wrong.
+ * What is left is one line, and it is the opposite case: the cost-of-goods
+ * residual has nothing behind it BY CONSTRUCTION, because it only exists when
+ * main and the renderer were built from different versions. So it lists no terms
+ * and says why, as a fault rather than as a footnote.
  */
-function derivedDetail(
-  db: Database,
-  lineId: string,
-  derivation: PnlDerivation,
-  bounds: Bounds
-): PnlDetail {
-  if (derivation === 'cogs:residual') {
-    return {
-      kind: 'derived',
-      lineId,
-      label: '',
-      total: 0,
-      omitted: { count: 0, amount: 0 },
-      terms: [],
-      unknown: [],
-      // A BUILD FAULT, drawn like one. This line only exists when the statement
-      // and the data engine came from different versions, so the renderer raises
-      // it as the same danger banner the statement uses when its own sections do
-      // not add up — see `PnlDetailBase.noteTone`.
-      note: 'Residual — cost of goods the section could not attribute. Update the app and re-import.',
-      noteTone: 'danger'
-    }
-  }
-
-  const basis = PACKAGING_BASIS[derivation]
-  const terms: PnlDerivedTerm[] = []
-  const unknown: PnlUnknownNight[] = []
-  let totalCents = 0
-
-  // Every business day the packaging model can answer for, narrowed to the
-  // range. `packagingFactsByDay` only returns days that sold break spots, which
-  // are exactly the days `buildView` already created from those same rows — so
-  // nothing here can conjure a night the statement does not have.
-  const facts = [...packagingFactsByDay(db).entries()]
-    .filter(([d]) => (!bounds.start || d >= bounds.start) && (!bounds.end || d <= bounds.end))
-    .sort((a, b) => (a[0] < b[0] ? 1 : a[0] > b[0] ? -1 : 0))
-
-  for (const [date, f] of facts) {
-    const costs = computePackagingCosts({
-      cards: f.cards,
-      slateTeams: f.slateTeams,
-      packages: f.packages,
-      paidPackages: f.paidPackages
-    })
-    if (basis.perPackage && !costs.packagesKnown) {
-      unknown.push({
-        streamDate: date,
-        reason:
-          `${count(f.cards)} card${f.cards === 1 ? '' : 's'} sold and no packing record — ` +
-          `the shipping workspace holds one show's slips at a time`
-      })
-      continue
-    }
-    const amount = basis.pick(costs)
-    totalCents += toCents(amount)
-    terms.push({
-      key: date,
-      label: date,
-      detail: basis.detail({
-        cards: f.cards,
-        slateTeams: f.slateTeams,
-        packages: f.packages ?? 0,
-        paidPackages: f.paidPackages ?? 0
-      }),
-      amount
-    })
-  }
-
+function derivedDetail(lineId: string): PnlDetail {
   return {
     kind: 'derived',
     lineId,
     label: '',
-    total: toDollars(totalCents),
+    total: 0,
     omitted: { count: 0, amount: 0 },
-    terms,
-    unknown,
-    // The nights nothing can answer for are LISTED under their own heading
-    // below, so this no longer names them — but it still has to say what their
-    // absence COSTS, and only when there are any.
-    //
-    // That consequence is not decoration. A reader who drills into a line
-    // reading "not known" has arrived asking exactly one question — does this
-    // missing cost matter to my profit — and the answer is yes, upward. The
-    // section heading carries the same warning for somebody who never opens the
-    // section; this carries it for somebody who opens nothing else.
-    //
-    // Conditional, because a build with every night counted would otherwise
-    // print a caveat about a gap that does not exist, and a caveat printed
-    // always is a caveat nobody reads.
-    note:
-      `${basis.label} are modelled: ${
-        basis.perPackage ? 'envelopes counted off the packing slips' : 'what the night sold'
-      } priced at a rate you state, night by night.` +
-      (unknown.length > 0
-        ? ` ${unknown.length} night${unknown.length === 1 ? '' : 's'} below cannot be priced at ` +
-          `all, so this total is short and net profit is higher than the truth by the same amount.`
-        : '')
+    terms: [],
+    // A BUILD FAULT, drawn like one. The renderer raises it as the same danger
+    // banner the statement uses when its own sections do not add up — see
+    // `PnlDetailBase.noteTone`.
+    note: 'Residual — cost of goods the section could not attribute. Update the app and re-import.',
+    noteTone: 'danger'
   }
 }

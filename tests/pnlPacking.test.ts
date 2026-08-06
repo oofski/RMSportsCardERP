@@ -1,17 +1,28 @@
 /**
- * Packaging inside the bottom line, and the reconciliation that has to survive
- * it.
+ * Where the money lands — and, for packaging and postage, that it lands nowhere.
  *
- * The packaging figures come from counting cards, breaks and envelopes — not
- * from Whatnot's ledger — and this module reconciles every day against its rows.
- * A non-ledger cost that is inside `netProfit` and is NOT stripped from that
- * check flags EVERY day unreconciled, which does not fail loudly; it just
- * teaches the operator to ignore the one flag that matters. The reverse — a cost
- * stripped but never added — flags nothing at all and silently overstates the
- * night. Both are what these assertions exist to catch.
+ * Both costs are off the statement now, and they were taken off for opposite
+ * reasons that this module's reconciliation feels in opposite directions. The
+ * check it makes is that a day's own fields decompose the same money its
+ * attributed ledger rows carry, so every figure has to be classified twice: is it
+ * in `netProfit`, and is it on a ledger row.
  *
- * `packagingCosts.test.ts` owns the arithmetic of the six lines. This file owns
- * where the money lands.
+ *   - POSTAGE is on a ledger row and no longer in `netProfit`. Its cents come off
+ *     the ROW side of the check, or every night that shipped a parcel reports a
+ *     break that is not there.
+ *   - PACKAGING is in neither. It is modelled from cards, breaks and envelopes,
+ *     no ledger row has ever held a sleeve, and it left `netProfit` when the
+ *     owner took the section off the statement. So NOTHING is stripped for it —
+ *     and the strip that used to take it off the DAY side had to go with it, or
+ *     the day side comes up short by exactly the packaging and the operator gets
+ *     "these numbers do not add up" over a statement that is right to the cent.
+ *
+ * Neither failure is loud. Both flag every day unreconciled, which is how an
+ * operator learns to ignore the one flag that matters. That is what these
+ * assertions exist to catch.
+ *
+ * `packagingCosts.test.ts` owns the arithmetic of the six figures, which is still
+ * computed on every night. This file owns the fact that no section reads them.
  *
  * Run: npm run test:pnl
  */
@@ -97,15 +108,27 @@ writeFileSync(csvPath, csv, 'utf8')
 const imported = importLedger(csvPath, null)
 ok(imported.ok, 'the ledger imported', imported.ok ? '' : imported.error)
 
+/** The six line ids the packaging section used to print. */
+const PACKAGING_LINES = [
+  'packagingSleeves',
+  'packagingTopLoaders',
+  'packagingTeamBags',
+  'packagingShippingLabels',
+  'packagingTeamBagStickers',
+  'packagingMailers'
+]
+const SHIPPING_LINES = ['shippingSubsidy', 'shippingCharges', 'giveawayShipping', 'refundShipping']
+
 // ---------------------------------------------------------------------------
-console.log('\n=== 1. with no packing slips loaded ===')
+console.log('\n=== 1. the packaging is measured and printed nowhere ===')
 // ---------------------------------------------------------------------------
-// One break of MLB, three cards, and NOBODY KNOWS how many envelopes went out —
-// the shipping workspace is empty. Four of the six lines are real money; the two
-// charged per package are unknown, and unknown is not zero.
+// One break of MLB, three cards, and no packing dataset loaded. The model prices
+// what it can off the ledger — sleeves, loaders, bags, stickers — and the day
+// carries every figure. The statement carries none of them.
 let view = streamingFinanceView()
-ok(view.reconciled === true, 'the P&L reconciles with the packaging block inside net profit',
+ok(view.reconciled === true, 'the P&L reconciles with the packaging outside net profit',
    String(view.reconcileNote))
+ok(view.reconcileNote === null, 'and has nothing to say about it', String(view.reconcileNote))
 
 let day = dayOf(view, NIGHT)
 ok(!!day, 'the show day is in the P&L', String(view.days.map((d: any) => d.streamDate)))
@@ -113,67 +136,73 @@ ok(day.packagingCards === 3, 'three break spots are three cards', String(day.pac
 ok(day.packagingSlateTeams === 30, 'one MLB break is a 30-team slate', String(day.packagingSlateTeams))
 ok(day.packagingDaysUnknown === 1, 'and the night is counted as having no packing record',
    String(day.packagingDaysUnknown))
-
-let pack = sectionOf(day, 'packaging')
-ok(pack.memo === undefined, 'the packaging section is NOT a memo any more', JSON.stringify(pack.memo))
-ok(pack.incomplete === true, 'it is flagged as not fully counted', JSON.stringify(pack.incomplete))
 // 3 sleeves at 5c + 3 x 50% loaders at 5c + 30 bags at 3c + 30 stickers at 1c
-// = 0.15 + 0.08 + 0.90 + 0.30 = 1.43, with the labels and mailers unknown.
-ok(cents(pack.subtotal) === cents(-1.43), 'four of six lines come to -$1.43', String(pack.subtotal))
+// = 0.15 + 0.08 + 0.90 + 0.30 = 1.43. STILL COMPUTED — the model is dormant, not
+// deleted, and the owner is expected to want it back in another shape.
+const modelled = (row: any): number =>
+  PACKAGING_LINES.reduce((n, f) => n + cents(row[f]), 0)
+ok(modelled(day) === cents(-1.43), 'the four priceable figures still come to -$1.43 on the day',
+   String(modelled(day) / 100))
 
-// THE POINT OF THE WHOLE CHANGE: it is in the bottom line.
-ok(
-  cents(pnlChecksum(buildPnl(day))) === cents(day.netProfit),
-  'and the statement sections sum to netProfit with it counted',
-  `${pnlChecksum(buildPnl(day))} vs ${day.netProfit}`
-)
-ok(
-  cents(day.netProfit) === cents(day.grossProfit + day.totalFees +
-    pack.subtotal + day.showBoost + day.generalExpenses + day.reversals),
-  'net profit is its sections added up, packaging among them and postage in none of them',
-  String(day.netProfit)
-)
-
-// POSTAGE IS OFF THE STATEMENT ENTIRELY. There is no shipping section and no
-// line printing one of its four figures — the owner took the cost out pending a
-// different treatment of it. Section 7 is where the money proves it is still
-// held and still reconciles; here it is enough that nothing prints it.
-ok(sectionOf(day, 'shipping') === null,
-   'the statement has no shipping section at all',
+// AND NONE OF IT REACHES THE STATEMENT — not as a section, not as a line.
+ok(sectionOf(day, 'packaging') === null,
+   'the statement has no packaging section at all',
    JSON.stringify(buildPnl(day).map((s: any) => s.key)))
-const SHIPPING_LINES = ['shippingSubsidy', 'shippingCharges', 'giveawayShipping', 'refundShipping']
+ok(
+  !buildPnl(day).some((s: any) => s.lines.some((l: any) => PACKAGING_LINES.includes(l.key))),
+  'and no section anywhere carries one of the six packaging lines',
+  JSON.stringify(buildPnl(day).flatMap((s: any) => s.lines.map((l: any) => l.key)))
+)
+ok(PACKAGING_LINES.every((k) => pnlDrillSource(k) === null),
+   'and the drill contract maps no line the statement cannot emit',
+   PACKAGING_LINES.filter((k) => pnlDrillSource(k) !== null).join(', '))
+
+// POSTAGE IS OFF IT TOO, and for the other reason. Section 7 proves that money is
+// still held and still reconciles; here it is enough that nothing prints it.
+ok(sectionOf(day, 'shipping') === null,
+   'the statement has no shipping section either',
+   JSON.stringify(buildPnl(day).map((s: any) => s.key)))
 ok(
   !buildPnl(day).some((s: any) => s.lines.some((l: any) => SHIPPING_LINES.includes(l.key))),
   'and no section anywhere carries one of the four postage lines',
   JSON.stringify(buildPnl(day).flatMap((s: any) => s.lines.map((l: any) => l.key)))
 )
 
-// THE DISCLOSURE. Net profit above is too high by whatever those envelopes cost,
-// so the screen has to say so on the line, on the heading and in the note —
-// three places, because the sections are closed by default and a reader who
-// takes the subtotal off the column never opens one.
-const labelLine = pack.lines.find((l: any) => l.key === 'packagingShippingLabels')
-const mailerLine = pack.lines.find((l: any) => l.key === 'packagingMailers')
-ok(labelLine.unavailable === true && mailerLine.unavailable === true,
-   'both per-package lines read NOT KNOWN rather than $0.00')
-ok(labelLine.empty !== true && mailerLine.empty !== true,
-   'and neither can be hidden by the zero-line toggle')
-ok(cents(day.packagingShippingLabels) === 0 && cents(day.packagingMailers) === 0,
-   'their money fields are zero, because a money field cannot hold "unknown"')
-// The disclosure MOVED — from the standing note into a warning that exists
-// only while some night in the period really is unpriceable. A caveat printed
-// on every period is a caveat nobody reads; this one fires when it is true.
-// What must not change is that it still says the consequence out loud.
-ok(String(pack.warning).includes('net profit is higher than the truth'),
-   'and a warning says the bottom line is over-stated by exactly that gap',
-   String(pack.note))
+// THE BOTTOM LINE IS THE SECTIONS THAT DO PRINT, and nothing else.
+ok(
+  cents(pnlChecksum(buildPnl(day))) === cents(day.netProfit),
+  'the statement sections sum to netProfit',
+  `${pnlChecksum(buildPnl(day))} vs ${day.netProfit}`
+)
+ok(
+  cents(day.netProfit) === cents(day.grossProfit + day.totalFees + day.showBoost +
+    day.generalExpenses + day.reversals),
+  'which is gross profit, fees, show costs, expenses and adjustments — with the ' +
+    'packaging in none of them and the postage in none of them either',
+  String(day.netProfit)
+)
+
+// THE FLAGS THAT WENT WITH THE SECTION. Both existed for packaging's "not known"
+// nights and nothing else raised either, so a line carrying one now would mean
+// somebody reinstated half the section.
+ok(
+  !buildPnl(day).some((s: any) => s.warning !== undefined),
+  'no section raises a live warning',
+  JSON.stringify(buildPnl(day).filter((s: any) => s.warning !== undefined).map((s: any) => s.key))
+)
+ok(
+  !buildPnl(day).some((s: any) => s.lines.some((l: any) => l.unavailable !== undefined)),
+  'and no line is flagged unavailable'
+)
 
 // ---------------------------------------------------------------------------
 console.log('\n=== 2. load the packing slips ===')
 // ---------------------------------------------------------------------------
 // Two envelopes: one holding a bought card, one holding only a giveaway. The two
-// unknown lines become real money, the caveat disappears, and net profit drops
-// by exactly what they cost.
+// per-package figures the model could not price become real money on the day —
+// and NET PROFIT DOES NOT MOVE. That is the owner's change stated as behaviour
+// rather than as a missing section, and it is the assertion that fails if
+// packaging ever creeps back into the bottom line by the side door.
 const slip = (handle: string, tracking: string, lines: string[]): string =>
   [
     'Whatnot Packing Slip 1/1',
@@ -204,24 +233,25 @@ ship.importDataset(ds, { filename: 'night.pdf' })
 ship.setShipEvent('Finest Baseball', NIGHT)
 
 view = streamingFinanceView()
+// THE ASSERTION THE MISSING DAY-SIDE STRIP WOULD BREAK. Nothing about this night
+// changed for the ledger — no row was imported, no cent moved — so if the
+// reconciliation were still subtracting the packaging from the day side, the two
+// per-package figures arriving would put it 76¢ out on their own.
 ok(view.reconciled === true, 'still reconciles with the packages counted', String(view.reconcileNote))
+ok(view.reconcileNote === null, 'with nothing to report', String(view.reconcileNote))
 day = dayOf(view, NIGHT)
-pack = sectionOf(day, 'packaging')
 
 ok(day.packagingPackages === 2, 'two envelopes went out', String(day.packagingPackages))
 ok(day.packagingDaysCovered === 1 && day.packagingDaysUnknown === 0,
    'the night now has a packing record', `${day.packagingDaysCovered}/${day.packagingDaysUnknown}`)
-ok(pack.incomplete !== true, 'so the heading carries no caveat', JSON.stringify(pack.incomplete))
-// The other half of "conditional". A caveat printed on every period is a caveat
-// nobody reads, so the absence of it here is as load-bearing as its presence
-// above — without this the flag would quietly become wallpaper.
-ok(!pack.warning, 'and no over-statement warning either', String(pack.warning))
-ok(!pack.lines.some((l: any) => l.unavailable), 'and no line reads "not known"')
-// 2 labels at 2c + 1 paid mailer at 48c + 1 giveaway mailer at 24c = 0.76.
-ok(cents(pack.subtotal) === cents(-2.19), 'the subtotal is now all six lines: -$2.19', String(pack.subtotal))
-ok(cents(day.netProfit) === netBefore - 76,
-   'and net profit fell by exactly the 76¢ that had been unknown',
-   `${cents(day.netProfit)} vs ${netBefore - 76}`)
+// 2 labels at 2c + 1 paid mailer at 48c + 1 giveaway mailer at 24c = 0.76, on
+// top of the 1.43 the model could already price.
+ok(modelled(day) === cents(-2.19), 'and the model now prices all six figures: -$2.19',
+   String(modelled(day) / 100))
+ok(cents(day.netProfit) === netBefore,
+   'while net profit did not move a cent — the statement does not book any of it',
+   `${cents(day.netProfit)} vs ${netBefore}`)
+ok(sectionOf(day, 'packaging') === null, 'and there is still no packaging section to print it in')
 ok(cents(pnlChecksum(buildPnl(day))) === cents(day.netProfit),
    'the statement still sums to the bottom line',
    `${pnlChecksum(buildPnl(day))} vs ${day.netProfit}`)
@@ -230,10 +260,10 @@ ok(cents(pnlChecksum(buildPnl(day))) === cents(day.netProfit),
 console.log('\n=== 3. the show moves on ===')
 // ---------------------------------------------------------------------------
 // Clearing the show's day is what the next upload effectively does: the slips
-// for this night stop being readable. The four per-card and per-break lines are
-// derived from the LEDGER and stay exactly where they are; only the two counted
-// off envelopes go back to being unknown, and the statement says so again rather
-// than quietly reporting the night as cheaper.
+// for this night stop being readable. The four per-card and per-break figures are
+// derived from the LEDGER and stay exactly where they are, the two counted off
+// envelopes go back to zero — and once more the bottom line does not notice,
+// which is what "the owner will account for this cost another way" means.
 ship.setShipEvent('Finest Baseball', '')
 view = streamingFinanceView()
 ok(view.reconciled === true, 'still reconciles once the show has moved on', String(view.reconcileNote))
@@ -242,7 +272,10 @@ ok(cents(after.packagingTeamBags) === cents(-0.9),
    'the team bags are unchanged — they were never read off the slips',
    String(after.packagingTeamBags))
 ok(after.packagingDaysUnknown === 1, 'but the packages are unknown again', String(after.packagingDaysUnknown))
-ok(sectionOf(after, 'packaging').incomplete === true, 'and the caveat is back on the heading')
+ok(modelled(after) === cents(-1.43), 'so the model is back to pricing four figures of six',
+   String(modelled(after) / 100))
+ok(cents(after.netProfit) === netBefore, 'and net profit still has not moved',
+   `${cents(after.netProfit)} vs ${netBefore}`)
 ok(cents(pnlChecksum(buildPnl(after))) === cents(after.netProfit),
    'with the statement still adding up', `${pnlChecksum(buildPnl(after))} vs ${after.netProfit}`)
 
@@ -272,14 +305,16 @@ ok(cogsSec.lines.map((l: any) => l.key).join(',') === 'breakCost,giveawayCost',
 // ---------------------------------------------------------------------------
 console.log('\n=== 5. a week says what its days say ===')
 // ---------------------------------------------------------------------------
-// The rollup is a second accumulator with its own field list. A packaging figure
-// carried on the day and dropped at the week boundary would leave a week whose
-// net profit is higher than the sum of its own days — which is the failure the
-// checksum below catches at the grain the owner actually reads.
+// The rollup is a second accumulator with its own field list. The packaging is
+// in no section now, so dropping it at the week boundary would not move a
+// subtotal — which is exactly why it has to be asserted rather than noticed: a
+// week that silently reported none of the packaging its days did would look
+// perfect until the day the owner asks for the cost back.
 const week = view.weeks.find((w: any) => w.from <= NIGHT && w.to >= NIGHT)
 ok(!!week, 'the week exists', JSON.stringify(view.weeks.map((w: any) => w.key)))
 ok(cents(week.packagingTeamBags) === cents(after.packagingTeamBags),
-   'and carries the packaging money through the rollup', String(week.packagingTeamBags))
+   'and carries the packaging money through the rollup though nothing prints it',
+   String(week.packagingTeamBags))
 ok(cents(pnlChecksum(buildPnl(week))) === cents(week.netProfit),
    'with the week statement summing to the week net profit',
    `${pnlChecksum(buildPnl(week))} vs ${week.netProfit}`)
@@ -306,9 +341,16 @@ console.log('\n=== 6. every figure opens, and what opens adds up ===')
 // The fixture is deliberately one of everything: both sales buckets, tips,
 // bonuses, all four shipping buckets, a boost, a reversal, a shape nothing
 // classifies, a costed break, an UNCOSTED break, a giveaway, and money somebody
-// typed. That is one line per source in the contract, which is the only way this
-// test covers all four payload kinds rather than the one the fixture happened to
-// have.
+// typed. That is one line per source the statement can still emit, rather than
+// the one the fixture happened to have.
+//
+// THREE PAYLOAD KINDS COME OUT OF THAT AND THERE ARE FOUR. The fourth, `derived`,
+// used to arrive on every day through the packaging lines; the only derived line
+// left is the cost-of-goods residual, which by construction exists only on a
+// build where main and the renderer disagree and therefore cannot be provoked
+// from a correct fixture. It is exercised directly further down instead of being
+// smuggled into this count, because a count that quietly dropped from four to
+// three would otherwise be the first thing to rot.
 
 const NIGHT2 = '2026-07-13'
 const at2 = (h: number, m = 0): Date => new Date(2026, 6, 13, h, m, 0)
@@ -442,7 +484,8 @@ const drillCheck = (label: string, row: any, start: string | null, end: string |
   }
   ok(unmapped.length === 0, `${label}: every line has a drill-down mapping`, unmapped.join(', '))
   ok(off.length === 0, `${label}: all ${checked} lines reconcile to the cent`, off.join(' | '))
-  ok(kinds.size === 4, `${label}: all four payload kinds are exercised`, [...kinds].join(','))
+  ok(kinds.size === 3, `${label}: all three payload kinds a correct build can emit are exercised`,
+     [...kinds].join(','))
 }
 
 drillCheck('one day', d1, NIGHT, NIGHT)
@@ -500,26 +543,30 @@ ok(expenseDetail.entries.length === 2, 'both entries in the range', String(expen
 ok(cents(expenseDetail.total) === cents(-35.5),
    'reported NEGATIVE, because the statement books them as a cost', String(expenseDetail.total))
 
-const sleeveDetail = pnlDetail({ lineId: 'packagingSleeves', start: NIGHT, end: NIGHT2 })
-ok(sleeveDetail.kind === 'derived', 'a packaging line is DERIVED, not a transaction list',
-   sleeveDetail.kind)
-ok(sleeveDetail.terms.length === 2, 'one term per night', String(sleeveDetail.terms.length))
-ok(sleeveDetail.terms.every((t: any) => /cards? × 5¢$/.test(t.detail)),
-   'each term is the counts and the rate, written out',
-   JSON.stringify(sleeveDetail.terms.map((t: any) => t.detail)))
-ok(cents(sleeveDetail.total) === cents(span.packagingSleeves),
-   'and the nights add to the line', `${sleeveDetail.total} vs ${span.packagingSleeves}`)
+// THE FOURTH KIND, REACHED THE ONLY WAY IT STILL CAN. `cogsUnitemised` is the
+// residual a version-skewed build prints, so no fixture can make `buildPnl` emit
+// it; asking the contract for it directly is what keeps the payload shape and the
+// renderer's danger-banner branch covered now that the packaging lines that used
+// to exercise `derived` on every single day are gone.
+const residualDetail = pnlDetail({ lineId: 'cogsUnitemised', start: NIGHT, end: NIGHT2 })
+ok(residualDetail.kind === 'derived', 'the cost-of-goods residual is the one derived line left',
+   residualDetail.kind)
+ok(residualDetail.terms.length === 0 && cents(residualDetail.total) === 0,
+   'with nothing behind it, which is what a residual means',
+   JSON.stringify(residualDetail.terms))
+ok(residualDetail.noteTone === 'danger',
+   'and its note is a build fault rather than a footnote', String(residualDetail.noteTone))
 
-// The two lines counted off packing slips. Both nights have lost their slips, so
-// this drills to NO arithmetic and TWO named nights — an unavailable line that
-// came back with an empty table would say the cost did not happen.
-const labelDetail = pnlDetail({ lineId: 'packagingShippingLabels', start: NIGHT, end: NIGHT2 })
-ok(labelDetail.kind === 'derived' && labelDetail.terms.length === 0,
-   'the shipping-label line has no night it can price', JSON.stringify(labelDetail.terms))
-ok(labelDetail.unknown.length === 2, 'and names both nights nothing can answer for',
-   JSON.stringify(labelDetail.unknown))
-ok(String(labelDetail.note).includes('net profit is higher than the truth'),
-   'saying plainly that the bottom line is over-stated by that gap', String(labelDetail.note))
+// THE SIX PACKAGING LINES ARE NOT IN THE CONTRACT AT ALL, and that is the honest
+// way to keep the enumeration above passing: the ids are gone from `buildPnl`, so
+// the mappings are gone from here. A mapping left behind would have made the
+// enumeration look satisfied while covering one line fewer.
+for (const id of PACKAGING_LINES) {
+  const gone = pnlDetail({ lineId: id, start: NIGHT, end: NIGHT2 })
+  ok(pnlDrillSource(id) === null && pnlDetailCount(gone) === 0 &&
+     String(gone.note).includes('No drill-down is defined'),
+     `"${id}" maps to nothing and reports itself as unmapped`, String(gone.note))
+}
 
 // --- the uncosted row --------------------------------------------------------
 const uncostedLine = (sectionOf(d2, 'cogs').lines as any[]).find((l) => l.uncosted)
@@ -555,7 +602,7 @@ ok(costedDetail.items.length === 1 && cents(costedDetail.total) === cents(-CASE_
 //
 // An empty answer, not an error and not a throw. This is the ordinary state of
 // most ranges somebody picks, and the screen's empty state depends on it.
-for (const id of ['sales', 'whatnotFee', 'generalExpenses', 'packagingSleeves', costedLine.key]) {
+for (const id of ['sales', 'whatnotFee', 'generalExpenses', 'cogsRest', costedLine.key]) {
   const nothing = pnlDetail({ lineId: id, start: '2020-01-01', end: '2020-01-31' })
   ok(cents(nothing.total) === 0 && pnlDetailCount(nothing) === 0,
      `a range with no data drills "${id}" to an empty list`, JSON.stringify(nothing))
@@ -578,16 +625,15 @@ for (const [label, row] of grains) {
 // ---------------------------------------------------------------------------
 console.log('\n=== 7. postage: still in the ledger, out of the statement ===')
 // ---------------------------------------------------------------------------
-// THE SAME FAILURE AS SECTION 1, RUNNING THE OTHER WAY. Packaging is money in
-// net profit that no ledger row carries, so the reconciliation strips it from
-// the DAY side. Postage is now the mirror: the four buckets are still
-// classified, still attributed and still carrying cents, and no statement
-// section reads one of them. Every one of those cents is therefore inside the
-// ledger money `buildView` compares the day breakdown against, and none of it
-// is inside net profit — so without the matching strip on the ROW side, a night
-// that shipped a single parcel reports a break that is not there and the
-// operator gets the "these numbers do not add up" banner on a correct
-// statement. That is the flag they then learn to ignore.
+// THE OTHER HALF OF THE RULE, AND THE ONE STRIP THAT IS LEFT. Packaging is off
+// the statement and was never ledger money, so nothing is stripped for it — that
+// is sections 1 to 3. Postage is off the statement and IS ledger money: the four
+// buckets are still classified, still attributed and still carrying cents, so
+// every one of those cents is inside the ledger money `buildView` compares the
+// day breakdown against while none of it is inside net profit. Without the
+// matching strip on the ROW side, a night that shipped a single parcel reports a
+// break that is not there and the operator gets the "these numbers do not add up"
+// banner on a correct statement. That is the flag they then learn to ignore.
 //
 // One night, all four buckets, and a sale so the night is a night.
 
@@ -662,23 +708,29 @@ ok(cents(d7.netAfterCosts) ===
    String(d7.netAfterCosts))
 
 // None of it reaches the statement — not as a section, not as a line, and not
-// as a figure the bottom line quietly carries.
-const pack7 = sectionOf(d7, 'packaging')
+// as a figure the bottom line quietly carries. Nor does the packaging this night
+// certainly incurred: a sold break spot is a sleeved card.
 ok(sectionOf(d7, 'shipping') === null, 'the night prints no shipping section',
    JSON.stringify(buildPnl(d7).map((s: any) => s.key)))
+ok(sectionOf(d7, 'packaging') === null, 'and no packaging section',
+   JSON.stringify(buildPnl(d7).map((s: any) => s.key)))
 ok(
-  !buildPnl(d7).some((s: any) => s.lines.some((l: any) => SHIPPING_LINES.includes(l.key))),
-  'and no postage line anywhere on it'
+  !buildPnl(d7).some((s: any) =>
+    s.lines.some((l: any) => SHIPPING_LINES.includes(l.key) || PACKAGING_LINES.includes(l.key))),
+  'and no postage or packaging line anywhere on it'
 )
+ok(cents(d7.packagingSleeves) !== 0, 'though the night did sleeve a card and the model priced it',
+   String(d7.packagingSleeves))
 ok(
-  cents(d7.netProfit) === cents(d7.grossProfit + d7.totalFees + pack7.subtotal + d7.showBoost +
+  cents(d7.netProfit) === cents(d7.grossProfit + d7.totalFees + d7.showBoost +
     d7.generalExpenses + d7.reversals),
-  'net profit is the sections it does print, with the 90¢ of net postage in none of them',
+  'net profit is the sections it does print — the 90¢ of net postage in none of them, ' +
+    'and the modelled packaging in none of them either',
   String(d7.netProfit)
 )
-ok(SHIPPING_LINES.every((k) => pnlDrillSource(k) === null),
+ok([...SHIPPING_LINES, ...PACKAGING_LINES].every((k) => pnlDrillSource(k) === null),
    'and the drill contract maps no line the statement cannot emit',
-   SHIPPING_LINES.filter((k) => pnlDrillSource(k) !== null).join(', '))
+   [...SHIPPING_LINES, ...PACKAGING_LINES].filter((k) => pnlDrillSource(k) !== null).join(', '))
 
 // MORE POSTAGE MOVES THE RECORD AND NOT THE BOTTOM LINE. This is the owner's
 // change stated as behaviour rather than as a missing section: another subsidy
@@ -700,9 +752,9 @@ ok(cents(d7b.shippingSubsidy) === cents(13.6), 'the subsidy on the day went up b
 ok(cents(d7b.netProfit) === netBeforePostage, 'and net profit did not move',
    `${cents(d7b.netProfit)} vs ${netBeforePostage}`)
 
-// The identity, at all three grains, on a period that now contains postage the
-// statement ignores. A rollup that dropped the strip fails here and nowhere on
-// the days.
+// The identity, at all three grains, on a period that contains both the postage
+// and the packaging the statement ignores. A rollup that dropped either fails
+// here and nowhere on the days.
 const week7 = v7b.weeks.find((w: any) => w.from <= NIGHT3 && w.to >= NIGHT3)
 for (const [label, row] of [
   [NIGHT3, d7b],
@@ -710,12 +762,18 @@ for (const [label, row] of [
   ['all-time', v7b.totals]
 ] as Array<[string, any]>) {
   ok(cents(pnlChecksum(buildPnl(row))) === cents(row.netProfit),
-     `${label}: the statement sums to net profit with postage outside it`,
+     `${label}: the statement sums to net profit with both costs outside it`,
      `${pnlChecksum(buildPnl(row))} vs ${row.netProfit}`)
+  ok(sectionOf(row, 'packaging') === null && sectionOf(row, 'shipping') === null,
+     `${label}: and prints neither section`,
+     JSON.stringify(buildPnl(row).map((s: any) => s.key)))
 }
 ok(cents(v7b.totals.netShipping) !== 0,
    'and the postage is still there to be reinstated when the owner wants it back',
    String(v7b.totals.netShipping))
+ok(modelled(v7b.totals) !== 0,
+   'as is every figure the packaging model priced',
+   String(modelled(v7b.totals) / 100))
 
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

@@ -13,20 +13,28 @@
  * where CARDS is break spots sold, SLATE is the league's full roster (32 NFL and
  * NHL, 30 MLB and NBA) and a PACKAGE is one envelope, not one order id.
  *
+ * THE STATEMENT NO LONGER PRINTS ANY OF IT. The owner took packaging off the P&L
+ * to account for the cost another way, so there is no packaging section, no
+ * packaging line and no packaging term in net profit. What survived is the MODEL:
+ * every figure below is still computed for every night, still stored on the day
+ * and still rolled up, waiting for whatever shape the cost comes back in. That is
+ * what this file tests, and it is why it did not become a file about an absence —
+ * `pnlPacking.test.ts` owns the absence.
+ *
  * WHAT THIS FILE IS REALLY GUARDING is not the multiplication — that part is
  * arithmetic anybody can check. It is the three places the model can lie:
  *
  *   - PACKAGES come from the shipping dataset, and the shipping workspace holds
  *     ONE at a time. Every other day genuinely does not know how many envelopes
- *     went out, and "does not know" must never render as $0.00, which reads as
- *     "no cost" on a night that certainly shipped something.
+ *     went out, and the two counters that say which nights those were are the
+ *     only honest record of it now that no line can print "not known".
  *   - A break whose league cannot be identified must not be billed at 32 bags.
  *     A wrong slate is invisible: it is a plausible number in the right column.
- *   - A line that is missing from PNL_MONEY_FIELDS reads correctly on every day
- *     and zero on every week, month and dragged range. Nothing fails; the
- *     statement is simply wrong at exactly the grain the owner reads it at —
- *     and now that these six are inside net profit, a week's bottom line stops
- *     matching the sum of its own days.
+ *   - A field that is missing from PNL_MONEY_FIELDS reads correctly on every day
+ *     and zero on every week, month and dragged range. Nothing fails and no
+ *     subtotal moves, because no subtotal contains it — which makes the rollup
+ *     assertions below the ONLY thing standing between a dormant model and a
+ *     model that is quietly broken by the time somebody wants it back.
  *
  * Run: npm run test:packaging
  */
@@ -135,10 +143,35 @@ const importAll = (lines: Line[], name: string): void => {
 
 const dayOf = (view: any, date: string): any =>
   view.days.find((d: any) => d.streamDate === date) ?? null
-const lineOf = (row: any, key: string): any =>
-  buildPnl(row)
-    .find((s: any) => s.key === 'packaging')
-    .lines.find((l: any) => l.key === key) ?? null
+
+/** The six figures the model prices, named once. */
+const PACKAGING_FIELDS = [
+  'packagingSleeves',
+  'packagingTopLoaders',
+  'packagingTeamBags',
+  'packagingShippingLabels',
+  'packagingTeamBagStickers',
+  'packagingMailers'
+]
+
+/**
+ * Nothing on this row's statement mentions packaging.
+ *
+ * Asserted beside the arithmetic rather than only in `pnlPacking.test.ts`, and
+ * repeated at each grain, because the failure it guards against is a partial
+ * reinstatement: a section put back for a day and not for a week, or a line
+ * emitted with no drill mapping behind it. The figures below are all real money
+ * on the day, so anything printing them would look plausible.
+ */
+const printsNoPackaging = (row: any, what: string): void => {
+  const sections = buildPnl(row)
+  ok(
+    !sections.some((s: any) => s.key === 'packaging') &&
+      !sections.some((s: any) => s.lines.some((l: any) => PACKAGING_FIELDS.includes(l.key))),
+    `  the ${what} statement carries no packaging section and no packaging line`,
+    JSON.stringify(sections.flatMap((s: any) => [s.key, ...s.lines.map((l: any) => l.key)]))
+  )
+}
 
 // ---------------------------------------------------------------------------
 console.log('\n=== 1. sleeves — every card, at 5¢ ===')
@@ -189,17 +222,12 @@ ok(
 ok(cents(a.packagingSleeves) === cents(-0.35), '7 cards × 5¢ = −$0.35', String(a.packagingSleeves))
 ok(a.packagingSleeves < 0, 'and it is signed as a cost, like every other cost on the day')
 
-const sleeveLine = lineOf(a, 'packagingSleeves')
-ok(!!sleeveLine, 'the statement carries a Sleeves line')
-ok(cents(sleeveLine.amount) === cents(-0.35), 'holding the same figure as the day', String(sleeveLine.amount))
-ok(
-  String(sleeveLine.detail).includes('7 cards × 5¢'),
-  'and states the arithmetic so it can be checked by hand',
-  String(sleeveLine.detail)
-)
+// AND THE NIGHT'S STATEMENT SAYS NOTHING ABOUT IT. The figure above is real and
+// stored; the P&L is simply not one of its readers any more.
+printsNoPackaging(a, 'night A')
 
-// The rate is quoted from the constant, never written out — so a rate change
-// moves the sentence with the money.
+// The rate is still a named constant, because the model still reads it — what
+// went is the detail line that used to quote it back to the reader.
 ok(PACKAGING_SLEEVE_COST === 0.05, 'the sleeve rate is a named constant at 5¢', String(PACKAGING_SLEEVE_COST))
 ok(
   cents(computePackagingCosts({ cards: 400, slateTeams: 0 }).sleeves) === cents(-20),
@@ -218,14 +246,6 @@ ok(
   cents(a.packagingTopLoaders) === cents(-0.18),
   '7 cards × 50% × 5¢ = $0.175, rounded once to −$0.18',
   String(a.packagingTopLoaders)
-)
-
-const loaderLine = lineOf(a, 'packagingTopLoaders')
-ok(!!loaderLine, 'the statement carries a Top loaders line')
-ok(
-  String(loaderLine.detail).includes('50% of 7 cards × 5¢'),
-  'stating the share as well as the rate',
-  String(loaderLine.detail)
 )
 
 // DELIBERATELY NOT ROUNDED UP TO WHOLE LOADERS. The supply plan rounds up
@@ -261,17 +281,6 @@ ok(
   a.packagingSlateTeams > a.packagingCards,
   'the slate is bigger than the cards sold, which is the whole point',
   `${a.packagingSlateTeams} slots vs ${a.packagingCards} cards`
-)
-
-const bagLine = lineOf(a, 'packagingTeamBags')
-ok(
-  String(bagLine.detail) === '60 team slots over 2 breaks × 3¢',
-  'the line says how many slots over how many breaks',
-  String(bagLine.detail)
-)
-ok(
-  !String(bagLine.detail).includes('skipped'),
-  'and carries no caveat on a night where every break was identified'
 )
 
 // --- a MIXED night: one football break and one baseball break ----------------
@@ -352,66 +361,42 @@ ok(
   String(c.packagingCards)
 )
 
-const cBagLine = lineOf(c, 'packagingTeamBags')
+// The night's own record of what was skipped, which is what the statement used
+// to read to write "1 break skipped, league not identified" beside the figure.
+// The sentence went with the section; the counters it was built from did not,
+// because they are the only way a reinstated line could say it again.
 ok(
-  String(cBagLine.detail) === '30 team slots over 1 break × 3¢ · 1 break skipped, league not identified',
-  'and the statement SAYS one break was skipped rather than quietly under-reporting',
-  String(cBagLine.detail)
+  c.packagingBreaks - c.packagingBreaksPriced === 1,
+  'and the day records one break as skipped rather than quietly under-reporting',
+  `${c.packagingBreaks} ran, ${c.packagingBreaksPriced} priced`
 )
+printsNoPackaging(c, 'mystery night')
 
 // ---------------------------------------------------------------------------
 console.log('\n=== 4. shipping labels — one per package, at 2¢ ===')
 // ---------------------------------------------------------------------------
 
 // NO PACKING DATASET IS LOADED YET, so not one of the three nights above can say
-// how many envelopes it sent. That must read as NOT KNOWN, never as $0.00: a
-// night that sold seven break spots certainly shipped something, and a zero
-// there is the app inventing a fact.
+// how many envelopes it sent. The money field holds zero — a money field cannot
+// hold "unknown" — and the two counters beside it are what distinguish that zero
+// from a real one.
+//
+// WHILE THE SECTION EXISTED, that distinction was a disclosure: the line printed
+// "not known", the heading said "not fully counted" and a warning strip said the
+// bottom line was over-stated by whatever those nights shipped. All three are
+// gone with the section, and NOTHING IS OWED IN THEIR PLACE — the statement no
+// longer claims this cost at all, so an uncounted night makes the bottom line no
+// less true than a counted one. The counters stay because a reinstated section
+// would have to make that disclosure again, and it cannot be recovered later.
 console.log('\n--- with no packing dataset at all ---')
 ok(a.packagingDaysCovered === 0, 'night A has no packing record', String(a.packagingDaysCovered))
 ok(a.packagingDaysUnknown === 1, 'and is counted as a night that needed one', String(a.packagingDaysUnknown))
 ok(cents(a.packagingShippingLabels) === 0, 'so the money field is zero — a money field cannot hold "unknown"')
-
-const labelLine = lineOf(a, 'packagingShippingLabels')
-ok(labelLine.unavailable === true, 'but the statement line is marked UNAVAILABLE', JSON.stringify(labelLine))
 ok(
-  labelLine.empty !== true,
-  'and is NOT marked empty, so the hide-zero-lines toggle cannot swallow it',
-  JSON.stringify(labelLine.empty)
-)
-ok(
-  String(labelLine.detail).includes('no packing record for this day'),
-  'the detail says why rather than leaving a blank',
-  String(labelLine.detail)
-)
-// And the SECTION says its own subtotal is short, because a reader who takes
-// the subtotal and skips the lines would otherwise carry away a complete-looking
-// figure that is missing two of its six components. Since this section is inside
-// net profit, the same gap makes the bottom line too high — the warning has to
-// say so, and the heading has to carry it for a reader who never opens the
-// section.
-//
-// IT IS `warning`, NOT `note`, AND THAT IS THE POINT. The note is standing prose
-// about how the section is priced and is true on every period; this is a
-// condition, present only while some night in the range has no packing record.
-// It used to be appended to the note, which made a permanent sentence out of a
-// temporary fact — see the fully-covered night below, which must carry none of
-// it.
-const blindSec = buildPnl(a).find((s: any) => s.key === 'packaging')
-ok(
-  String(blindSec.warning).includes('subtotal is short'),
-  'and the section warning says the subtotal is short rather than complete',
-  String(blindSec.warning)
-)
-ok(
-  String(blindSec.warning).includes('net profit is higher than the truth'),
-  'naming the consequence for the bottom line, not just for the section',
-  String(blindSec.warning)
-)
-ok(
-  blindSec.incomplete === true,
-  'and the heading is flagged, because the sections are closed by default',
-  JSON.stringify(blindSec.incomplete)
+  !buildPnl(a).some((s: any) => s.incomplete || s.warning !== undefined) &&
+    !buildPnl(a).some((s: any) => s.lines.some((l: any) => l.unavailable !== undefined)),
+  'and the statement raises nothing about it, because it states no packaging cost to be short of',
+  JSON.stringify(buildPnl(a).filter((s: any) => s.incomplete).map((s: any) => s.key))
 )
 
 // --- now load a real packing dataset for night A -----------------------------
@@ -456,24 +441,7 @@ ok(a.packagingPackages === 2, 'two packages went out', String(a.packagingPackage
 ok(a.packagingDaysCovered === 1 && a.packagingDaysUnknown === 0, 'night A now has a packing record', `${a.packagingDaysCovered}/${a.packagingDaysUnknown}`)
 ok(cents(a.packagingShippingLabels) === cents(-0.04), '2 packages × 2¢ = −$0.04', String(a.packagingShippingLabels))
 
-const labelLine2 = lineOf(a, 'packagingShippingLabels')
-ok(!labelLine2.unavailable, 'and the line is no longer unavailable')
-ok(String(labelLine2.detail) === '2 packages × 2¢', 'stating the arithmetic', String(labelLine2.detail))
-const countedSec = buildPnl(a).find((s: any) => s.key === 'packaging')
-ok(
-  countedSec.incomplete !== true,
-  'and a fully counted night carries no caveat at all — otherwise it stops being read'
-)
-ok(
-  countedSec.warning === undefined,
-  'no warning strip either, because there is nothing wrong to report',
-  String(countedSec.warning)
-)
-ok(
-  String(countedSec.note).length > 0 && !String(countedSec.note).includes('not known'),
-  'the standing note stays, and says nothing about unknown nights',
-  String(countedSec.note)
-)
+printsNoPackaging(a, 'fully counted night A')
 
 // A PACKAGE IS AN ENVELOPE, NOT AN ORDER ID. This is the whole reason packages
 // cannot come from the ledger: night A's ledger holds eight order ids for two
@@ -489,8 +457,9 @@ ok(
 const bAfter = dayOf(view, NIGHT_B)
 ok(bAfter.packagingDaysUnknown === 1, 'night B is still unknown — one dataset at a time', String(bAfter.packagingDaysUnknown))
 ok(
-  lineOf(bAfter, 'packagingShippingLabels').unavailable === true,
-  'and says so on its own statement'
+  cents(bAfter.packagingShippingLabels) === 0 && bAfter.packagingDaysCovered === 0,
+  'and carries a zero label figure against a night it cannot answer for',
+  `${bAfter.packagingShippingLabels} over ${bAfter.packagingDaysCovered} covered nights`
 )
 
 // ---------------------------------------------------------------------------
@@ -510,15 +479,9 @@ ok(
   `${a.packagingTeamBags} vs ${a.packagingTeamBagStickers}`
 )
 
-// The skipped-break caveat has to appear on BOTH per-break lines, not just the
-// first one. A statement that discloses on one and not the other teaches the
-// reader that the undisclosed line is complete.
-const cStickerLine = lineOf(c, 'packagingTeamBagStickers')
-ok(
-  String(cStickerLine.detail) === '30 team slots over 1 break × 1¢ · 1 break skipped, league not identified',
-  'and the sticker line carries the same skipped-break caveat the bag line does',
-  String(cStickerLine.detail)
-)
+// THE SKIPPED BREAK HAS TO BE SKIPPED ON BOTH per-break figures, not just the
+// first one. Charging the sticker on a slate the bag was not charged on would be
+// a plausible number in the right column and invisible.
 ok(
   cents(c.packagingTeamBagStickers) === cents(-0.3),
   'billing 30 slots rather than a defaulted 62',
@@ -539,14 +502,6 @@ ok(
   String(a.packagingPackages - a.packagingPaidPackages)
 )
 ok(cents(a.packagingMailers) === cents(-0.72), '1 × 48¢ + 1 × 24¢ = −$0.72', String(a.packagingMailers))
-
-const mailerLine = lineOf(a, 'packagingMailers')
-ok(
-  String(mailerLine.detail) === '1 paid × 48¢ + 1 giveaway-only × 24¢',
-  'the line writes both halves out, so the sum can be checked',
-  String(mailerLine.detail)
-)
-ok(!mailerLine.unavailable, 'and it is a real figure while the dataset is loaded')
 
 // GIVEAWAY-ONLY MEANS EVERY SLOT IS A GIVEAWAY. A package holding one bought
 // card and one giveaway is a PAID package at the full 48¢, because the bought
@@ -580,26 +535,26 @@ ok(
 )
 ok(cents(aMixed.packagingMailers) === cents(-0.72), 'so the mailers are still 48¢ + 24¢', String(aMixed.packagingMailers))
 
-// And when no dataset covers the day, the mailers report NOT KNOWN — the same
-// promise the labels make, for the same reason.
-const bMailer = lineOf(bAfter, 'packagingMailers')
-ok(bMailer.unavailable === true, 'a night with no packing record reports mailers as not known')
-ok(cents(bAfter.packagingMailers) === 0, 'with the money field at zero rather than at a guess')
-ok(bMailer.empty !== true, 'and never hidden as an empty line')
+// And when no dataset covers the day, the mailers are zero rather than a guess —
+// the same promise the labels make, for the same reason. A guessed package count
+// would put an invented cost on a real night, and an invented cost is worse than
+// a dormant one.
+ok(cents(bAfter.packagingMailers) === 0,
+   'a night with no packing record carries no mailer money rather than a guess',
+   String(bAfter.packagingMailers))
 
 // ---------------------------------------------------------------------------
-console.log('\n=== the statement still adds up ===')
+console.log('\n=== the statement still adds up, without any of it ===')
 // Re-read: the mixed-package import above replaced the dataset, so the day
-// object built before it is stale for the two per-package lines.
+// object built before it is stale for the two per-package figures.
 a = dayOf(view, NIGHT_A)
 // ---------------------------------------------------------------------------
 
-// THE IDENTITY EVERY OTHER P&L SUITE ALSO ASSERTS, and the one that now carries
-// the packaging block. It stopped being a memo when the shipping checklist — and
-// the second valuation of the same materials that came with it — was removed, so
-// `pnlChecksum` counts it like every other section. A build that folded it into
-// the bottom line and forgot the section, or the reverse, fails here by exactly
-// the packaging total.
+// THE IDENTITY EVERY OTHER P&L SUITE ALSO ASSERTS. It used to be the thing that
+// proved the packaging block was in the bottom line; it now proves the opposite,
+// and the arithmetic is the same either way — every section subtotal, summed, is
+// net profit. A build that put the six figures back into `netProfit` and forgot
+// to print a section for them fails here by exactly the packaging total.
 const checksumOk = (row: any, what: string): void => {
   const sections = buildPnl(row)
   ok(
@@ -610,34 +565,20 @@ const checksumOk = (row: any, what: string): void => {
 }
 checksumOk(a, 'night A')
 checksumOk(view.totals, 'all-time')
+printsNoPackaging(a, 'night A')
+printsNoPackaging(view.totals, 'all-time')
 
-const packSec = buildPnl(a).find((s: any) => s.key === 'packaging')
-ok(packSec.memo === undefined, 'the packaging section is no longer a memo', JSON.stringify(packSec.memo))
+// OUT OF NET PROFIT, and demonstrably rather than by inspection: night A's model
+// prices $3.69 of packaging, and the bottom line is the statement's own sections
+// with none of it in them. Read together with the checksum above, that is the
+// whole of the owner's change — the cost is measured and it is not booked.
+const modelledA = PACKAGING_FIELDS.reduce((n, f) => n + cents(a[f]), 0)
+ok(modelledA === cents(-3.69), 'the model prices night A at −$3.69', String(modelledA / 100))
 ok(
-  cents(packSec.subtotal) === cents(-3.69),
-  'its subtotal is the sum of its own lines',
-  String(packSec.subtotal)
-)
-ok(
-  !String(packSec.note).includes('NOT IN NET PROFIT'),
-  'and no longer claims to be outside the bottom line',
-  String(packSec.note)
-)
-
-// IN NET PROFIT, and demonstrably: take the section back off the bottom line and
-// what is left is the statement without it. A day whose netProfit ignored the
-// packaging would pass the checksum above only if the section were skipped, so
-// the two assertions have to be read together.
-ok(
-  cents(packSec.subtotal) !== 0,
-  'the packaging subtotal on night A is real money',
-  String(packSec.subtotal)
-)
-const withoutPackaging = cents(a.netProfit) - cents(packSec.subtotal)
-ok(
-  cents(a.netProfit) < withoutPackaging,
-  'and net profit is LOWER with it than without, which is what a cost does',
-  `${cents(a.netProfit)} vs ${withoutPackaging}`
+  cents(a.netProfit) ===
+    cents(a.grossProfit + a.totalFees + a.showBoost + a.generalExpenses + a.reversals),
+  'and net profit is gross profit, fees, show costs, expenses and adjustments — nothing else',
+  String(a.netProfit)
 )
 
 // The LEDGER's two figures stay clean. Every term of netShipping and
@@ -660,9 +601,12 @@ ok(
 console.log('\n=== a range rolls the packaging up ===')
 // ---------------------------------------------------------------------------
 
-// THIS IS WHAT PNL_MONEY_FIELDS PROTECTS. A money field left off that list reads
-// correctly on the day and zero on every period above it, and nothing anywhere
-// fails.
+// THIS IS WHAT PNL_MONEY_FIELDS PROTECTS, and it protects it harder now than it
+// did. A field left off that list reads correctly on the day and zero on every
+// period above it; while the packaging was in the bottom line that showed up as a
+// week whose net profit did not match its own days, and now it shows up as
+// nothing at all — no subtotal contains these six, so no checksum can notice. The
+// assertions below are the whole of the guard.
 const spanOne = sumDayFinance([a])
 ok(
   cents(spanOne.packagingSleeves) === cents(a.packagingSleeves),
@@ -686,14 +630,7 @@ const cNow = dayOf(view, NIGHT_C)
 const span = sumDayFinance([a, bNow, cNow])
 
 const sums = (f: string): number => cents(a[f]) + cents(bNow[f]) + cents(cNow[f])
-for (const f of [
-  'packagingSleeves',
-  'packagingTopLoaders',
-  'packagingTeamBags',
-  'packagingShippingLabels',
-  'packagingTeamBagStickers',
-  'packagingMailers'
-]) {
+for (const f of PACKAGING_FIELDS) {
   ok(cents(span[f]) === sums(f), `  ${f} sums over three days`, `${cents(span[f])} vs ${sums(f)}`)
 }
 const counts = (f: string): number => a[f] + bNow[f] + cNow[f]
@@ -717,26 +654,19 @@ ok(span.packagingSlateTeams === 152, '152 team slots', String(span.packagingSlat
 ok(cents(span.packagingSleeves) === cents(-0.75), '15 cards × 5¢ = −$0.75', String(span.packagingSleeves))
 ok(cents(span.packagingTeamBags) === cents(-4.56), '152 slots × 3¢ = −$4.56', String(span.packagingTeamBags))
 
-// AND THE DISCLOSURE SURVIVES THE ROLLUP, which is the point of counting days
-// rather than carrying a flag. One of these three nights has slips; two do not,
-// and the range has to say so instead of quietly reporting a third of the
-// mailers as though it were all of them.
+// AND THE COVERAGE SURVIVES THE ROLLUP, which is the point of counting days
+// rather than carrying a flag. One of these three nights has slips and two do
+// not, and only counts can carry "this figure covers 1 of 3 nights" through a
+// sum. Nothing prints that sentence today; a reinstated section would have to,
+// and by then the nights would be long gone.
 ok(span.packagingDaysCovered === 1, 'one of the three nights has a packing record', String(span.packagingDaysCovered))
 ok(span.packagingDaysUnknown === 2, 'and two do not', String(span.packagingDaysUnknown))
-
-const spanMailer = lineOf(span, 'packagingMailers')
-ok(spanMailer.unavailable === true, 'so the range mailer line is still marked unavailable')
 ok(
-  String(spanMailer.detail) ===
-    '1 paid × 48¢ + 1 giveaway-only × 24¢ over 1 of 3 nights · 2 nights have no packing record',
-  'writing out the arithmetic for the night it covers AND naming the two it does not',
-  String(spanMailer.detail)
+  cents(span.packagingMailers) === cents(a.packagingMailers),
+  'so the range holds the mailer money for the one night it covers and no guess for the other two',
+  String(span.packagingMailers)
 )
-ok(
-  cents(spanMailer.amount) === cents(a.packagingMailers),
-  'while still holding the real money for the night it does cover',
-  String(spanMailer.amount)
-)
+printsNoPackaging(span, 'three-day range')
 
 // The same through MAIN's own rollup, which is a second accumulator with its own
 // field list. A breakdown carried by hand in one and forgotten in the other is
@@ -754,6 +684,7 @@ ok(
   String(week.packagingDaysUnknown)
 )
 checksumOk(week, 'week')
+printsNoPackaging(week, 'week')
 
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

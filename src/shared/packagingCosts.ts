@@ -15,19 +15,19 @@
  * come from the shipping module, because one ledger order id is one SPOT and a
  * buyer who took six teams gets six order ids and one envelope.
  *
- * ## A model, and now the only one
+ * ## Still the only packaging cost the app has, and no statement reads it
  *
- * The P&L used to carry a second packaging figure beside this one — real stock
- * measurably leaving Supplies when the shipping checklist said the sleeving was
- * done. Two valuations of one pile of materials, so this section was a MEMO and
- * stayed out of the bottom line; booking both would have charged the same mailer
- * twice on every night the floor ticked the list.
+ * The P&L printed these six as a section until the owner took the cost off it,
+ * to account for it another way. There is no packaging section now and no
+ * packaging term in net profit — see the note where that section used to be in
+ * `buildPnl` — so everything below is a DORMANT MODEL: it still runs for every
+ * business day the ledger covers, its output is still stored on the day and
+ * still rolled up, and nothing on screen states a cent of it.
  *
- * That checklist is gone. This is the only packaging cost the app has, it is in
- * net profit, and it answers for every day the ledger covers rather than only
- * the ones somebody remembered to tick. See the `packaging` section in
- * `buildPnl` for what that costs in honesty on a night whose slips have been
- * replaced.
+ * NOBODY MAY DELETE IT BECAUSE NOTHING READS IT. The owner intends to bring this
+ * cost back in another shape, the rates below are the ones they stated, and
+ * these figures are the per-night record waiting for that treatment.
+ * `StreamDayFinance` carries the full argument.
  *
  * ## Pure
  *

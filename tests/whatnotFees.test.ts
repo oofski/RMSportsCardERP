@@ -1958,9 +1958,13 @@ ok(!!deltaLine, 'the product nobody costed is on the statement, under its own na
 ok(deltaLine.uncosted === true, 'and it reads as uncosted rather than as a zero', JSON.stringify(deltaLine))
 ok(deltaLine.empty !== true, 'so the zero-line toggle cannot swallow it', JSON.stringify(deltaLine))
 ok(cents(deltaLine.amount) === 0, 'it carries no money, because none was ever recorded')
+// `uncosted` had a sibling, `unavailable`, which printed "not known" for a cost
+// the packaging model had measured and lost. It went with the packaging section,
+// and this row must never acquire it: a hole somebody can fill from the row
+// itself and a hole nobody can ever fill must not print the same words.
 ok(
-  !deltaLine.unavailable,
-  'and it is NOT the packaging flag — that one says "not known" and is a dead end',
+  deltaLine.unavailable === undefined,
+  'and carries no "not known" flag — this hole is fixable and says so',
   JSON.stringify(deltaLine)
 )
 ok(
@@ -2046,8 +2050,9 @@ ok(
   'so the section still says it is not fully counted'
 )
 
-// The last one closed, and the warning clears — which is what separates this
-// from the packaging unknown, whose flag can never be cleared by anybody.
+// The last one closed, and the caveat clears. That is what earned this flag its
+// place: cost of goods is now the only section that raises `incomplete`, and it
+// raises one that can be finished rather than one that becomes wallpaper.
 const lastHole = afterLines.find((l: any) => l.uncosted)
 ok(setItemCost({ itemId: lastHole.uncostedItems[0].id, unitPrice: 1500 }, null).ok, 'the last hole is filled')
 vU = viewOf()
@@ -2059,7 +2064,7 @@ ok(
 )
 ok(
   !cogsShape(dayUncosted).incomplete,
-  'and the section stops claiming to be short — unlike the packaging unknown, this one can be finished'
+  'and the section stops claiming to be short, which is a disclosure that can be finished'
 )
 ok(
   cogsOf(dayUncosted).filter((l: any) => l.label === CHARLIE).length === 1,

@@ -29,12 +29,14 @@
  *
  * ## Derived is not the same as empty
  *
- * Four of the sources list records. The fifth, `derived`, is for the figures
- * that are MODELLED rather than transacted — the packaging block prices cards,
- * team slates and envelopes at rates the owner states, and there is no row in
- * any table holding "$0.15 of sleeves". Those drill to the counts and the rates
- * that produced them, per night, summing to the same figure. They are marked as
- * derived on screen so nobody reads a model as a transaction list.
+ * Four of the sources list records. The fifth, `derived`, is for a figure that
+ * has no records to list, and today exactly one line is in that position: the
+ * cost-of-goods residual, which exists only when main and the renderer were built
+ * from different versions and therefore has nothing behind it by construction.
+ * The kind is not vestigial — the packaging block used it properly, drilling to
+ * the cards, team slates and envelopes a night was priced on, because no row in
+ * any table holds "$0.15 of sleeves" — and it is what a reinstated modelled cost
+ * would land on again.
  */
 import type { GeneralExpense, LedgerBucket, LedgerRow } from './financeStreaming'
 import type { StockUnit } from './units'
@@ -97,15 +99,16 @@ export interface PnlStreamItemSelector {
   product: string | null
 }
 
-/** A modelled figure, named by what it is modelled FROM. */
-export type PnlDerivation =
-  | 'packaging:sleeves'
-  | 'packaging:topLoaders'
-  | 'packaging:teamBags'
-  | 'packaging:shippingLabels'
-  | 'packaging:teamBagStickers'
-  | 'packaging:mailers'
-  | 'cogs:residual'
+/**
+ * A modelled figure, named by what it is modelled FROM.
+ *
+ * A union of one, which is not a mistake and not an invitation to collapse it
+ * into a boolean. Six `packaging:*` members sat here until `buildPnl` stopped
+ * emitting the packaging section, and the shape is what lets the next modelled
+ * cost — that one coming back, or another — be added as a member rather than as
+ * a second kind of source.
+ */
+export type PnlDerivation = 'cogs:residual'
 
 export type PnlDrillSource =
   | { kind: 'ledgerRows'; buckets: readonly LedgerBucket[]; basis: PnlLedgerBasis }
@@ -175,13 +178,15 @@ export const PNL_DRILL_SOURCES: Readonly<Record<string, PnlDrillSource>> = {
   // still there; reinstating the section reinstates these four entries with it.
 
   // --- Packaging ------------------------------------------------------------
-  // Modelled, every one of them. No table holds a sleeve.
-  packagingSleeves: { kind: 'derived', derivation: 'packaging:sleeves' },
-  packagingTopLoaders: { kind: 'derived', derivation: 'packaging:topLoaders' },
-  packagingTeamBags: { kind: 'derived', derivation: 'packaging:teamBags' },
-  packagingShippingLabels: { kind: 'derived', derivation: 'packaging:shippingLabels' },
-  packagingTeamBagStickers: { kind: 'derived', derivation: 'packaging:teamBagStickers' },
-  packagingMailers: { kind: 'derived', derivation: 'packaging:mailers' },
+  // NOTHING, AND FOR THE SAME REASON AS THE POSTAGE ABOVE. Sleeves, top loaders,
+  // team bags, shipping labels, team bag stickers and mailers were six `derived`
+  // entries here — no table holds a sleeve — and they went when `buildPnl`
+  // stopped emitting the packaging section. This list is meant to be read beside
+  // that `return` as the same list in the same order, and a mapping for a line
+  // nothing emits is dead weight that makes the enumeration test look satisfied
+  // while covering one line fewer. The model in `packagingCosts.ts` still prices
+  // every night; reinstating the section reinstates these six entries and the
+  // resolver in main that priced them.
 
   // --- The rest -------------------------------------------------------------
   showBoost: { kind: 'ledgerRows', buckets: ['show_boost'], basis: 'amount' },
@@ -285,18 +290,15 @@ export interface PnlDerivedTerm {
   amount: number
 }
 
-/**
- * A night this figure could not be measured for.
- *
- * Packages are counted off the packing slips and the shipping workspace holds
- * one show's slips at a time, so every night but the loaded one is genuinely
- * unrecoverable. Listed rather than omitted: an `unavailable` line that drilled
- * to an empty table would say the cost did not happen.
- */
-export interface PnlUnknownNight {
-  streamDate: string
-  reason: string
-}
+// A DERIVED PAYLOAD NO LONGER CARRIES A LIST OF NIGHTS IT COULD NOT MEASURE.
+// `PnlUnknownNight` was that list: the packaging model counted envelopes off the
+// packing slips, the shipping workspace holds one show's slips at a time, and a
+// line reading "not known" that drilled to an empty table would have said the
+// cost did not happen. Nothing on this statement is measured-and-lost any more —
+// the two lines that were went with the packaging section — so the type, the
+// field and the block that rendered it are gone rather than left to return an
+// empty array on every click. A modelled cost that comes back with the same
+// problem brings them back with it.
 
 interface PnlDetailBase {
   lineId: string
@@ -329,11 +331,7 @@ export type PnlDetail =
   | (PnlDetailBase & { kind: 'ledgerRows'; rows: PnlLedgerRecord[] })
   | (PnlDetailBase & { kind: 'streamItems'; items: PnlStreamItemRecord[] })
   | (PnlDetailBase & { kind: 'expenses'; entries: GeneralExpense[] })
-  | (PnlDetailBase & {
-      kind: 'derived'
-      terms: PnlDerivedTerm[]
-      unknown: PnlUnknownNight[]
-    })
+  | (PnlDetailBase & { kind: 'derived'; terms: PnlDerivedTerm[] })
 
 /** How many records one drill returns. Beyond this the total still covers
  *  everything and `omitted` says what was left out — the sum on screen is never

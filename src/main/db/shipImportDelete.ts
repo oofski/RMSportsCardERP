@@ -81,9 +81,9 @@ import { listOrders } from './shippingDomain'
  * A delete used to hand a show's consumables back, because ticking a checklist
  * step had taken them off the shelf and booked their cost to the show's day.
  * Nothing takes stock off the shelf for a show any more, so there is nothing to
- * return and nothing to ask the operator to agree to. Packaging is costed from
- * the shape of the night in the P&L instead, which needs no permission from a
- * delete and cannot be double-counted by one.
+ * return and nothing to ask the operator to agree to. Packaging is modelled from
+ * the shape of the night instead — and no longer booked anywhere, since the owner
+ * took the cost off the P&L — so a delete has no cost to reverse either way.
  *
  * ## Snapshots are left alone
  *

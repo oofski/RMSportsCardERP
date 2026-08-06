@@ -78,7 +78,7 @@ const finite = (n: number): number => (Number.isFinite(n) ? n : 0)
  *
  * That is not a convenience. The strip's whole job is to be checkable by eye
  * against the statements below it, and the only way two screens cannot disagree
- * about what "fees" or "packaging" contains is for both to read the same
+ * about what "fees" or "cost of goods" contains is for both to read the same
  * `buildPnl` output — including the same guards on the same fields.
  */
 export function buildStatement(m: PnlMoney): PnlSection[] {
@@ -134,10 +134,9 @@ export function pnlDrift(sections: PnlSection[], statedNetProfit: number): {
  *
  * Every section now carries its own subtotal ON THE HEADING ROW and opens to
  * show the lines that make it. That is one row per section closed — Revenue,
- * Cost of goods, Gross profit, Platform fees, Packaging costs, Other show
- * costs, General expenses, Adjustments, Net profit — which is the whole P&L in
- * nine lines, and the detail is one click from whichever line raised the
- * question.
+ * Cost of goods, Gross profit, Platform fees, Other show costs, General
+ * expenses, Adjustments, Net profit — which is the whole P&L in eight lines, and
+ * the detail is one click from whichever line raised the question.
  *
  * It closed by default because the previous layout put roughly twenty rows on
  * screen whether or not anyone was reading them, under a summary that already
@@ -527,25 +526,17 @@ function SectionBody({
           same reason a line's detail is: rewriting it here would put two
           versions of the same sentence in the app. Only the fees section has one
           today, and it is the sentence that stops a derived gross being read as
-          a figure Whatnot stated. */}
+          a figure Whatnot stated.
+
+          There was a second strip under this one, for a section carrying a live
+          `warning` — drawn as an alarm rather than as prose, because a fact that
+          changes the bottom line should not arrive in the same ink as a
+          footnote. Packaging was the only section that ever set one, and both
+          went together. A section that grows a condition again wants that
+          treatment back rather than a longer note. */}
       {open && section.note && (
         <tr className="fin-pnl-note">
           <td colSpan={cols}>{section.note}</td>
-        </tr>
-      )}
-
-      {/* Something is wrong with this section RIGHT NOW, as opposed to the note
-          above it, which is true on every period. It is only ever present while
-          the condition holds, so it needs no render test of its own — and it is
-          drawn as a strip rather than as prose, because a fact that changes the
-          bottom line should not arrive in the same ink as a footnote. */}
-      {open && section.warning && (
-        <tr className="fin-pnl-warn">
-          <td colSpan={cols}>
-            <Note tone="warn" icon="AlertTriangle" role="status">
-              {section.warning}
-            </Note>
-          </td>
         </tr>
       )}
     </tbody>
@@ -619,43 +610,13 @@ function LineRow({
     )
   }
 
-  // NOT KNOWN IS NOT ZERO, and this is the row where that has to be visible.
-  // Printing $0.00 for a cost the app could not measure tells the reader the
-  // cost did not happen. The figure is replaced by words, the share column is
-  // dropped rather than dividing an unknown by revenue, and the line is never
-  // hidden — `buildPnl` refuses to mark an unavailable line `empty`, so the
-  // zero-line toggle cannot swallow it either.
-  //
-  // It STILL OPENS, and what it opens is the part that is known — the nights
-  // this figure does cover, priced out — followed by the nights nothing can
-  // answer for, named. An unknown that drilled to an empty table would say the
-  // cost did not happen, which is the reading this whole flag exists to prevent.
-  if (line.unavailable) {
-    return (
-      <tr className="fin-pnl-line is-unknown">
-        <th scope="row">
-          <span className="fin-pnl-label">{line.label}</span>
-          {line.detail && <em className="fin-pnl-detail">{line.detail}</em>}
-        </th>
-        <td className="is-num">
-          <Figure onOpen={onOpen} label={line.label}>
-            <span
-              className="fin-money zero mono"
-              title="This period has no packing record to count"
-            >
-              not known
-            </span>
-          </Figure>
-        </td>
-        {revenue !== null && (
-          <td className="is-num fin-pnl-share">
-            <span className="fin-money zero mono">—</span>
-          </td>
-        )}
-      </tr>
-    )
-  }
-
+  // The row above had a sibling: a line flagged `unavailable`, which printed
+  // "not known" where the figure goes because the packaging model could not
+  // count the envelopes for a night whose packing slips had been replaced. It
+  // went with the packaging section — nothing on this statement is
+  // measured-and-lost any more. If a figure ever is again, the shape to copy is
+  // the one above and not the ordinary row below: words instead of a number, no
+  // share cell, and never hidden by the zero-line toggle.
   return (
     <tr className={`fin-pnl-line${line.empty ? ' is-empty' : ''}`}>
       <th scope="row">

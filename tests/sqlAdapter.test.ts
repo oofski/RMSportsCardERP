@@ -202,16 +202,35 @@ check('named @parameters bind correctly over a positional-only API', () => {
   assert(row, 'repeated named parameter resolved')
 })
 
-check('missing named key is an error, not a silent NULL', () => {
+check('named binding matches better-sqlite3 on undefined vs absent', () => {
+  // better-sqlite3's exact rule, which the db layer is written against:
+  // a key present with value undefined binds NULL (inventory.createProduct
+  // relies on this for optional `notes`); an ABSENT key is a hard error, which
+  // is what catches a mistyped parameter name.
   const db = freshAdapter()
   db.exec(`CREATE TABLE q (a TEXT, b TEXT)`)
+  db.prepare('INSERT INTO q VALUES (@a, @b)').run({ a: '1', b: undefined })
+  eq(db.prepare('SELECT * FROM q').get(), { a: '1', b: null }, 'undefined → NULL')
+
   let threw = false
   try {
     db.prepare('INSERT INTO q VALUES (@a, @b)').run({ a: '1' })
   } catch {
     threw = true
   }
-  assert(threw, 'a typo’d key must fail loudly')
+  assert(threw, 'an absent key must fail loudly')
+})
+
+check('booleans are refused, as better-sqlite3 refuses them', () => {
+  const db = freshAdapter()
+  db.exec(`CREATE TABLE b (flag INTEGER)`)
+  let threw = false
+  try {
+    db.prepare('INSERT INTO b VALUES (?)').run(true as unknown as number)
+  } catch {
+    threw = true
+  }
+  assert(threw, 'SQLite has no boolean; coercing here would hide a bug')
 })
 
 check('ON CONFLICT upsert with excluded', () => {

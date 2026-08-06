@@ -25,10 +25,30 @@
  *
  * The shipping workspace holds ONE dataset at a time — the next upload replaces
  * it wholesale. So a package count exists only for the day the loaded dataset
- * belongs to, and every other day genuinely does not know. That is reported as
- * NOT KNOWN and never as zero; zero would read as "nothing shipped that night",
- * which on a break night is a lie the statement would be telling on its own
- * initiative.
+ * belongs to, and every other day genuinely does not know. That comes back as
+ * NULL and never as zero; zero would read as "nothing shipped that night", which
+ * on a break night is something the app would be inventing.
+ *
+ * ## Nothing on the statement reads any of this, and it still runs
+ *
+ * The six figures this feeds were a P&L section until the owner took packaging
+ * off it to account for the cost another way. They are still computed for every
+ * night, still stored on the day and still rolled up — see `StreamDayFinance`
+ * for why they are kept — and no section prints one.
+ *
+ * SO `buildView` PAYS FOR THIS ON EVERY VIEW IT BUILDS, for figures nothing
+ * states. The bill is one grouped count and one ROW-LEVEL read of every
+ * attributed `sale` row's message, plus `detectSlate` over each break's team
+ * names — a few thousand short strings on a real export, in the same pass that
+ * already reads the whole ledger table twice over for the money. It is not free
+ * and it is not the expensive part of a view.
+ *
+ * It is deliberately NOT gated behind "somebody is looking at packaging",
+ * because nobody is, and a model that only runs when it is being read stops
+ * covering the nights that pass while it is switched off — which is the one
+ * thing keeping it alive is meant to prevent. If it ever does need gating, the
+ * honest shape is a stored per-day figure written at import rather than a flag
+ * that skips nights.
  */
 import type { Database } from 'better-sqlite3'
 import { parseSaleTeamName } from '@shared/financeStreaming'

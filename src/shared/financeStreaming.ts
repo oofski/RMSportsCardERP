@@ -32,19 +32,12 @@
  * off-stream sale would be silently credited to a show that did not make it.
  * Unattributed rows are kept, counted and shown instead.
  */
-// The packaging RATES only. The statement quotes them in its own detail lines,
-// and quoting them from the one module that defines them is what stops a
-// sentence on screen from describing a rate the arithmetic stopped using.
-import {
-  PACKAGING_GIVEAWAY_MAILER_COST,
-  PACKAGING_PAID_MAILER_COST,
-  PACKAGING_SHIPPING_LABEL_COST,
-  PACKAGING_TEAM_BAG_STICKER_COST,
-  PACKAGING_SLEEVE_COST,
-  PACKAGING_TEAM_BAG_COST,
-  PACKAGING_TOP_LOADER_COST,
-  PACKAGING_TOP_LOADER_SHARE
-} from './packagingCosts'
+// THE PACKAGING RATES ARE NO LONGER IMPORTED HERE. They were, so the six
+// packaging lines could quote the rate they were multiplied by; the owner took
+// that section off the statement and there is no sentence left to quote them in.
+// `packagingCosts.ts` is untouched and still prices every night — see
+// `StreamDayFinance` for why the figures are kept — so reinstating the section
+// brings this import back with it.
 // The unit a cost is quoted PER, for the stream lines this statement can send
 // back for costing. Taken from the unit contract rather than restated, so a
 // price typed into the P&L means exactly what the same price typed into the
@@ -1803,17 +1796,28 @@ export interface StreamDayFinance {
   /** Subsidy less all postage. Can land either side of zero. */
   netShipping: number
 
-  // --- Packaging, MODELLED per card / per break / per package -------------
+  // --- Packaging: STILL MODELLED, READ BY NO SECTION OF THE STATEMENT -------
   //
-  // Every field below is negative money or a count, they roll up like everything
-  // else, and the six money lines ARE in `netProfit` — see the `packaging`
-  // section of `buildPnl`.
+  // Every field below is still computed per night from cards, breaks and
+  // envelopes, still negative money or a count, and still rolls up into weeks,
+  // months and dragged ranges with everything else. What changed is that
+  // `buildPnl` stopped printing them: the owner took packaging off the P&L
+  // entirely, to account for the cost another way, so there is no packaging
+  // section and net profit is higher by whatever the sleeves and mailers came to.
   //
-  // They were a memo for one release, beside a `packingSupplies` figure that
-  // priced the same sleeves and mailers from stock the shipping checklist had
-  // recorded leaving Supplies. That checklist is gone, so there is no second
-  // valuation left to double-count against and no reason for the real cost of
-  // four hundred mailers to sit outside the bottom line.
+  // NOBODY MAY DELETE THESE BECAUSE NOTHING READS THEM. They are the model's
+  // record of what each night's packaging cost, held against the night, and the
+  // owner intends to bring the cost back in another shape. Dropping them would
+  // make that a rebuild of every night's figures rather than an edit to
+  // `buildPnl`.
+  //
+  // The consequence runs OPPOSITE to the postage above, and the two are worth
+  // reading together. Postage is ledger money the statement no longer books, so
+  // its cents come off the ROW side of the day-versus-rows check. Packaging was
+  // never ledger money at all: while it was in `netProfit` the check had to strip
+  // it from the DAY side, and now that it is out of `netProfit` there is nothing
+  // to strip. Leaving that strip behind would have understated the day side by
+  // exactly the packaging and flagged every night that ever sleeved a card.
   /** NEGATIVE. Cards × the sleeve rate. */
   packagingSleeves: number
   /** NEGATIVE. Cards × the top-loader share × the top-loader rate. */
@@ -1836,10 +1840,12 @@ export interface StreamDayFinance {
   packagingBreaks: number
   /**
    * How many of those had a league the app could identify from the team names
-   * on their spots. `packagingBreaks - packagingBreaksPriced` is what the
-   * statement reports as SKIPPED: those breaks are billed for nothing, because
-   * the alternative is to invent a slate, and 32 invented team bags look exactly
-   * like 32 real ones.
+   * on their spots. `packagingBreaks - packagingBreaksPriced` is the SKIPPED
+   * count: those breaks are billed for nothing, because the alternative is to
+   * invent a slate, and 32 invented team bags look exactly like 32 real ones.
+   * The statement used to print it beside the team-bag figure; it prints no
+   * packaging at all now, and the difference is kept because a reinstated line
+   * would have to disclose it again.
    */
   packagingBreaksPriced: number
   /** Σ over the priced breaks of that break's full slate. The unit count behind
@@ -1903,9 +1909,11 @@ export interface StreamDayFinance {
    * the streaming giveaway flow and must not be typed here as well, or the same
    * pack is booked twice.
    *
-   * Like the cost-of-goods fields and the packaging block it comes from outside
-   * the ledger, so the reconciliation strips it back out before comparing a day
-   * to its rows.
+   * Like the cost-of-goods fields it comes from outside the ledger AND is inside
+   * `netProfit`, so the reconciliation strips it back out before comparing a day
+   * to its rows. The modelled packaging used to be the third of these; it is
+   * still outside the ledger and no longer inside `netProfit`, which is exactly
+   * why it is no longer stripped.
    */
   generalExpenses: number
   /** How many entries are behind that figure. On the line so the statement can
@@ -2007,57 +2015,22 @@ export interface PnlLine {
   /** True for a line that is zero and only present to keep the shape stable. */
   empty?: boolean
   /**
-   * NOT KNOWN, as distinct from zero.
+   * NOBODY RECORDED WHAT THIS COST, so the screen prints words where the figure
+   * would go and never lets the zero-line toggle hide the row.
    *
-   * The screen must print this line as "not known" rather than as $0.00, and
-   * must never hide it behind the zero-line toggle. The two readings are not
-   * close: $0.00 says the cost did not happen, and a cost that did happen and
-   * could not be measured is the one thing an operator has to be told. It exists
-   * because the packaging model prices packages out of the shipping dataset, and
-   * the shipping module holds ONE dataset at a time — so the moment the next
-   * show is uploaded, last week's package count is genuinely gone.
+   * $0.00 would say the cost did not happen. This cost happened; what is missing
+   * is the price, and the operator can supply it from this very row —
+   * `uncostedItems` carries the stream lines to write it to. `amount` is
+   * therefore a true zero rather than a partial figure, which is what makes the
+   * row a control rather than a complaint.
    *
-   * `amount` on such a line is whatever part IS known (zero on a day with
-   * nothing, a partial sum on a range where some days are covered), and the
-   * detail says how much of the period it covers.
-   *
-   * ## An unknown inside a section that feeds net profit
-   *
-   * It sits in one, and there is no way round that: the packaging block is a
-   * real cost and belongs in the bottom line, and the package count for a night
-   * whose slips have been replaced is genuinely unrecoverable. Zero is the only
-   * number a money field can carry, so the day contributes zero and NET PROFIT
-   * IS OVERSTATED BY WHATEVER THOSE NIGHTS SHIPPED — by two cents a label and
-   * about a third of a dollar a mailer.
-   *
-   * That is a small, one-directional, disclosed error, and it beats both
-   * alternatives: a guessed package count puts an invented cost on a real night,
-   * and refusing to state net profit at all withholds a figure that is right to
-   * within pennies. The disclosure is not optional — the line says "not known",
-   * `PnlSection.incomplete` marks the section on its heading whether it is open
-   * or closed, and `packagingDaysUnknown` says how many nights are behind it.
-   */
-  unavailable?: boolean
-  /**
-   * NOBODY RECORDED WHAT THIS COST — a sibling of `unavailable`, not the same
-   * flag, and the difference is what the reader can do about it.
-   *
-   * Both print words where a figure would go and both refuse to be hidden by
-   * the zero-line toggle, which is why reusing `unavailable` was the first thing
-   * tried. It does not fit, in two ways that show up on the row itself:
-   *
-   * `unavailable` means MEASURED AND LOST. The packaging model needs a package
-   * count off a shipping dataset that holds one show at a time, so last week's
-   * count is genuinely unrecoverable. The line says "not known", which is a fact
-   * and a dead end, and its `amount` is the part that IS known — a real partial
-   * sum.
-   *
-   * `uncosted` means NEVER RECORDED. The stream line is still there, it holds
-   * zero, and the operator can supply the missing number from this very row —
-   * `uncostedItems` carries the lines to write it to. Its `amount` is a true
-   * zero rather than a partial figure. Printing "not known" on it would tell
-   * somebody a fixable thing is unfixable, and the tooltip that goes with that
-   * phrase talks about packing records, which would be a plain lie here.
+   * This used to have a sibling, `unavailable`, for the packaging model's
+   * "measured and lost" nights — the package count comes off a shipping dataset
+   * that holds one show at a time, so last week's count was genuinely
+   * unrecoverable and the line read "not known" instead. That flag went with the
+   * packaging section, and the distinction it carried is worth remembering if the
+   * section ever comes back: a fixable hole and an unfixable one must not print
+   * the same words, or somebody stops trying to fix the fixable one.
    *
    * A day and a range still reconcile with these present: the line adds zero to
    * its section, so `pnlChecksum` is untouched. What IS true is that NET PROFIT
@@ -2082,15 +2055,22 @@ export interface PnlSection {
   /** A running figure carried down the statement (gross profit, net profit). */
   running?: boolean
   /**
-   * This subtotal is real money and is KNOWN TO BE SHORT — one of its lines
-   * could not be measured for part of the period.
+   * This subtotal is real money and is KNOWN TO BE SHORT — one of its lines is
+   * carrying nothing where a cost belongs.
    *
    * Every section on this statement is in the bottom line, so a section that
    * cannot count one of its own inputs makes net profit slightly too high. The
    * flag is what lets the screen say so on the heading row, where somebody
-   * reading the column without opening anything still sees it; the `unavailable`
-   * lines inside say which figure is missing, and the section note says by how
-   * many nights.
+   * reading the column without opening anything still sees it; the `uncosted`
+   * lines inside say which figure is missing.
+   *
+   * Cost of goods is the only section that sets it now. Packaging set it too,
+   * for nights whose package count was gone, and it took its `warning` string
+   * with it when the section left — a live sentence drawn as an alarm rather
+   * than as a footnote, for the fact that the bottom line was over-stated by
+   * whatever those nights shipped. Nothing left on this statement has a
+   * condition that comes and goes like that, so the field went with the section
+   * rather than sitting here unset on every period.
    */
   incomplete?: boolean
   /**
@@ -2103,17 +2083,6 @@ export interface PnlSection {
    * on a statement somewhere.
    */
   note?: string
-  /**
-   * SOMETHING IS WRONG WITH THIS SECTION RIGHT NOW — set only while the state it
-   * describes holds, and drawn as an alarm rather than as a footnote.
-   *
-   * Separate from `note` because the two have different lifetimes. A note is
-   * standing prose about how a section works and is true on every period; this
-   * is a condition, and appending it to the note made a permanent sentence out
-   * of a temporary fact — which is how a warning becomes wallpaper. Absent means
-   * there is nothing wrong, not that nobody wrote a sentence.
-   */
-  warning?: string
 }
 
 /**
@@ -2124,19 +2093,6 @@ export interface PnlSection {
  * with the machine would make the same statement render two ways on two desks.
  */
 const count = (n: number): string => n.toLocaleString('en-US')
-
-/**
- * A sub-dollar unit rate, the way the packaging lines quote it: "5¢", "48¢".
- *
- * In cents rather than dollars because that is how the owner states these rates
- * and how anybody would check them — "$0.05 per card" invites a reader to
- * misplace a decimal that "5¢" cannot. Computed from the constant rather than
- * written out, so editing a rate in `packagingCosts.ts` changes the sentence
- * that explains it too; a hardcoded "5¢" beside a rate somebody moved to 6¢ is
- * a detail line that actively lies. Carries a fraction of a cent when a rate has
- * one, for the same reason.
- */
-const centsLabel = (dollars: number): string => `${Math.round(dollars * 10000) / 100}¢`
 
 /** "$203,832.85". Pinned to en-US for the same reason `count` is. */
 const usd = (n: number): string =>
@@ -2205,9 +2161,9 @@ export const COGS_LINES_MAX = 25
  * Build the statement for one day (or any rolled-up period — the shapes match).
  *
  * Order is deliberate and follows how the money actually moves: what came in,
- * what the goods cost, what the platform took, what the packaging cost, what
- * else the show cost, then the exceptions. Fees sit AFTER cost of goods because
- * they are charged on the sale, not on the margin.
+ * what the goods cost, what the platform took, what else the show cost, then the
+ * exceptions. Fees sit AFTER cost of goods because they are charged on the sale,
+ * not on the margin.
  */
 export function buildPnl(d: {
   netSales: number; grossSales: number; saleCount: number
@@ -2233,64 +2189,34 @@ export function buildPnl(d: {
    *  and no itemisation, and the section then prints them as it always did. */
   cogsBreakdown?: CogsItem[]
   whatnotFee: number; processingFee: number; totalFees: number
-  // The five shipping fields a day carries are NOT asked for here. Nothing in
-  // this function reads them any more — see the note where the shipping section
-  // used to be — and a parameter nothing reads is one somebody starts feeding
-  // from the wrong place. A caller passing a whole day is unaffected: the extra
-  // keys ride along and are ignored.
-  /** Optional so a caller built before packing existed still type-checks. */
-  // The modelled packaging block. All optional for the usual reason — a
-  // packaged main that predates it sends none — and then the section prints
-  // every line at zero and says the model had nothing to work from, which is
-  // true on that build.
-  packagingSleeves?: number
-  packagingTopLoaders?: number
-  packagingTeamBags?: number
-  packagingShippingLabels?: number
-  packagingTeamBagStickers?: number
-  packagingMailers?: number
-  packagingCards?: number
-  packagingBreaks?: number
-  packagingBreaksPriced?: number
-  packagingSlateTeams?: number
-  packagingPackages?: number
-  packagingPaidPackages?: number
-  packagingDaysCovered?: number
-  packagingDaysUnknown?: number
+  // NEITHER THE FIVE SHIPPING FIELDS NOR THE FOURTEEN PACKAGING ONES ARE ASKED
+  // FOR HERE, for the same reason and after the same decision: nothing in this
+  // function reads them any more — see the notes where those two sections used to
+  // be — and a parameter nothing reads is one somebody starts feeding from the
+  // wrong place. A caller passing a whole day is unaffected: the extra keys ride
+  // along and are ignored.
   showBoost: number; reversals: number; netProfit: number
   /** Optional so a caller built before manual expenses existed still
    *  type-checks. Zero then, and the section reads as an empty one. */
   generalExpenses?: number
   generalExpenseCount?: number
 }): PnlSection[] {
-  const line = (
-    key: string,
-    label: string,
-    amount: number,
-    detail?: string,
-    // Only the two per-package packaging lines pass this. `empty` is
-    // deliberately forced false alongside it: `empty` is what the screen hides
-    // behind the zero-line toggle, and an unknown cost hidden as a zero is the
-    // exact misreading this flag exists to prevent.
-    unavailable?: boolean
-  ): PnlLine => ({
+  const line = (key: string, label: string, amount: number, detail?: string): PnlLine => ({
     key,
     label,
     amount: c2(amount),
     detail,
-    empty: !unavailable && c2(amount) === 0,
-    unavailable: unavailable ? true : undefined
+    empty: c2(amount) === 0
   })
 
   /**
-   * The other kind of line that is zero and must still be seen.
+   * The kind of line that is zero and must still be seen.
    *
-   * Its own builder rather than a sixth argument to `line`, because everything
+   * Its own builder rather than a fifth argument to `line`, because everything
    * about it is fixed: the amount IS zero (that is what uncosted means), so
    * there is no figure to pass and no chance of one being passed by mistake, and
-   * `empty` is forced false for the same reason it is on an unavailable line —
-   * the zero-line toggle must not be able to swallow it. See `PnlLine.uncosted`
-   * for why this is not `unavailable`.
+   * `empty` is forced false because the zero-line toggle must not be able to
+   * swallow a hole in the bottom line. See `PnlLine.uncosted`.
    */
   const uncostedLine = (
     key: string,
@@ -2526,87 +2452,6 @@ export function buildPnl(d: {
   const general = c2(d.generalExpenses ?? 0)
   const generalCount = d.generalExpenseCount ?? 0
 
-  // --- packaging, modelled ----------------------------------------------------
-  //
-  // The counts the detail lines quote, read off the day rather than divided back
-  // out of the money. Dividing would reproduce the count only until somebody
-  // edits a rate, and then a historical statement would print a card count that
-  // was never true of that night.
-  const packagingCards = d.packagingCards ?? 0
-  const packagingBreaks = d.packagingBreaks ?? 0
-  const packagingPriced = d.packagingBreaksPriced ?? 0
-  const packagingSlate = d.packagingSlateTeams ?? 0
-  const packagingSkipped = Math.max(0, packagingBreaks - packagingPriced)
-  // WHAT WAS COUNTED AND WHAT WAS NOT, on the two lines charged per break.
-  //
-  // A team-bag figure that quietly covers four of a night's five breaks is worse
-  // than no figure at all: it is a real number, in the right column, understating
-  // the cost by a fifth with nothing to say so. The skipped count rides on the
-  // line rather than in the section note because it is a fact about THAT figure,
-  // not about the section — and a range where every break was identified must
-  // not carry the caveat at all, or it stops being read.
-  const packagingSlateBasis =
-    `${count(packagingSlate)} team slot${packagingSlate === 1 ? '' : 's'} over ` +
-    `${count(packagingPriced)} break${packagingPriced === 1 ? '' : 's'}`
-  // After the rate rather than inside the basis, so the line still reads as the
-  // multiplication first and the caveat second.
-  const packagingSkippedNote =
-    packagingSkipped > 0
-      ? ` · ${count(packagingSkipped)} break${packagingSkipped === 1 ? '' : 's'} skipped, ` +
-        `league not identified`
-      : ''
-
-  // --- what the per-package lines are allowed to claim ------------------------
-  //
-  // The two lines charged per envelope can only be stated for days the shipping
-  // module still holds slips for, which is at most one. `packagingDaysUnknown`
-  // counts the days that sold spots and have no packing record; one of those in
-  // the period and the figure below is INCOMPLETE, so it is marked unavailable
-  // and the detail says how much of the period it actually covers.
-  //
-  // A period with neither counter set is a period that shipped nothing — no
-  // break spots, so no envelopes — and its zero is a real zero. Marking that
-  // unavailable would put "not known" on every day the business did not stream,
-  // which is how a warning becomes wallpaper.
-  const packagingCovered = d.packagingDaysCovered ?? 0
-  const packagingUnknown = d.packagingDaysUnknown ?? 0
-  const packagingPackages = d.packagingPackages ?? 0
-  const packagesUnavailable = packagingUnknown > 0
-  const packagingDayTotal = packagingCovered + packagingUnknown
-  // NOTHING AT ALL is a different sentence from PART OF IT. When some nights are
-  // covered the figure beside the line is real money for those nights, so the
-  // arithmetic is still written out and the gap is named after it. When none
-  // are, there is no arithmetic to write and the line says only why.
-  const packagingBlind = packagesUnavailable && packagingCovered === 0
-  const packagingNothingKnown =
-    `no packing record for ${
-      packagingDayTotal === 1 ? 'this day' : `${count(packagingDayTotal)} of these nights`
-    } — the shipping workspace holds one show's slips at a time`
-  const packagingOverNights = packagesUnavailable
-    ? ` over ${count(packagingCovered)} of ${count(packagingDayTotal)} nights`
-    : ''
-  const packagingGapNote = packagesUnavailable
-    ? ` · ${count(packagingUnknown)} night${packagingUnknown === 1 ? '' : 's'} have no packing record`
-    : ''
-
-  // The mailer line is the one figure in this section built from two rates, so
-  // it writes BOTH halves out. Anything not paid takes the single mailer — the
-  // giveaway-only packages, and the occasional envelope with no cards in it,
-  // which is why this is a subtraction rather than a third stored count.
-  const packagingPaid = Math.min(packagingPackages, d.packagingPaidPackages ?? 0)
-  const packagingGiveaway = Math.max(0, packagingPackages - packagingPaid)
-  // Summed from the SAME rounded figures the lines print, so the subtotal is the
-  // column above it added up rather than a second computation that agrees most
-  // of the time.
-  const packagingSubtotal = c2(
-    (d.packagingSleeves ?? 0) +
-      (d.packagingTopLoaders ?? 0) +
-      (d.packagingTeamBags ?? 0) +
-      (d.packagingShippingLabels ?? 0) +
-      (d.packagingTeamBagStickers ?? 0) +
-      (d.packagingMailers ?? 0)
-  )
-
   return [
     {
       key: 'revenue',
@@ -2651,12 +2496,13 @@ export function buildPnl(d: {
       subtotal: c2(d.cogs),
       subtotalLabel: 'Cost of goods',
       // KNOWN TO BE SHORT, and the heading is the only place that can say so
-      // while the section is closed — which it is by default. This is the same
-      // disclosure the packaging block makes and the same arithmetic behind it:
-      // the boxes were opened, their cost is carried at zero, and net profit is
-      // that much too high. Unlike packaging it CLEARS: enter the cost on the
-      // line and the flag goes with it, so this is a warning that can be
-      // finished rather than one that becomes wallpaper.
+      // while the section is closed — which it is by default. The boxes were
+      // opened, their cost is carried at zero, and net profit is that much too
+      // high. The packaging block made the same disclosure for nights it could
+      // not count, and it is now the only one left — which is an improvement:
+      // this one CLEARS. Enter the cost on the line and the flag goes with it,
+      // so it is a warning that can be finished rather than one that becomes
+      // wallpaper.
       incomplete: uncostedTotal > 0
     },
     {
@@ -2713,103 +2559,29 @@ export function buildPnl(d: {
     // costs elsewhere is one strip: the postage is real money on real attributed
     // ledger rows, and no section above claims a cent of it, so the day-versus-
     // rows reconciliation in main takes those cents off the row side to match.
-    {
-      // A REAL SECTION, in the bottom line like every other one here.
-      //
-      // It was a memo for one release, sitting beside a "Packing supplies" line
-      // that priced the same sleeves, bags and mailers from stock the shipping
-      // checklist recorded leaving Supplies — two valuations of one pile of
-      // materials, and booking both would have charged every mailer twice. The
-      // checklist is gone and so is that line, which leaves this the only
-      // valuation there is. Four hundred mailers is real spend, and a bottom
-      // line that omits it is not conservative, it is wrong.
-      //
-      // It is also the only section that can contain an `unavailable` line, and
-      // that is now a stated compromise rather than a property of being outside
-      // the total: an unknown night contributes zero to the money, so net profit
-      // is over-stated by whatever those nights' labels and mailers cost. Said
-      // three ways — on the line, on the heading, and in the note below — rather
-      // than resolved, because there is nothing to resolve it with. See
-      // `PnlLine.unavailable` for the full argument.
-      key: 'packaging',
-      label: 'Packaging costs',
-      // The caveat rides on the FLAG rather than on the label. A consumer that
-      // reads `label` and ignores `incomplete` would take this subtotal as
-      // complete whatever the heading said, so "(partial)" in the text would buy
-      // tidiness and no safety.
-      incomplete: packagesUnavailable,
-      lines: [
-        line(
-          'packagingSleeves',
-          'Sleeves',
-          d.packagingSleeves ?? 0,
-          `${count(packagingCards)} card${packagingCards === 1 ? '' : 's'} × ` +
-            `${centsLabel(PACKAGING_SLEEVE_COST)} · every card is sleeved`
-        ),
-        line(
-          'packagingTopLoaders',
-          'Top loaders',
-          d.packagingTopLoaders ?? 0,
-          `${pctLabel(PACKAGING_TOP_LOADER_SHARE)} of ${count(packagingCards)} ` +
-            `card${packagingCards === 1 ? '' : 's'} × ${centsLabel(PACKAGING_TOP_LOADER_COST)}`
-        ),
-        line(
-          'packagingTeamBags',
-          'Team bags',
-          d.packagingTeamBags ?? 0,
-          `${packagingSlateBasis} × ${centsLabel(PACKAGING_TEAM_BAG_COST)}${packagingSkippedNote}`
-        ),
-        line(
-          'packagingShippingLabels',
-          'Shipping labels',
-          d.packagingShippingLabels ?? 0,
-          packagingBlind
-            ? packagingNothingKnown
-            : `${count(packagingPackages)} package${packagingPackages === 1 ? '' : 's'}` +
-              `${packagingOverNights} × ${centsLabel(PACKAGING_SHIPPING_LABEL_COST)}` +
-              `${packagingGapNote}`,
-          packagesUnavailable
-        ),
-        line(
-          'packagingTeamBagStickers',
-          'Team bag stickers',
-          d.packagingTeamBagStickers ?? 0,
-          `${packagingSlateBasis} × ${centsLabel(PACKAGING_TEAM_BAG_STICKER_COST)}` +
-            `${packagingSkippedNote}`
-        ),
-        line(
-          'packagingMailers',
-          'Mailers',
-          d.packagingMailers ?? 0,
-          packagingBlind
-            ? packagingNothingKnown
-            : `${count(packagingPaid)} paid × ${centsLabel(PACKAGING_PAID_MAILER_COST)} + ` +
-              `${count(packagingGiveaway)} giveaway-only × ` +
-              `${centsLabel(PACKAGING_GIVEAWAY_MAILER_COST)}` +
-              `${packagingOverNights}${packagingGapNote}`,
-          packagesUnavailable
-        )
-      ],
-      subtotal: packagingSubtotal,
-      subtotalLabel: 'Packaging',
-      note:
-        `Priced from cards sold, breaks run and packages shipped at rates you set — not ` +
-        `from the Whatnot export.`,
-      // A CONDITION, NOT A FOOTNOTE. It was the tail of the note above, which
-      // made a standing sentence out of a fact that is only true while some
-      // night in the period has no packing record — and a warning printed on
-      // every period is one nobody reads. It now exists only when it is true,
-      // and the screen draws it as an alarm rather than as prose.
-      ...(packagesUnavailable
-        ? {
-            warning:
-              `The two per-package lines read "not known" for ${count(packagingUnknown)} ` +
-              `night${packagingUnknown === 1 ? '' : 's'} — Shipping keeps one show's slips ` +
-              `at a time. This subtotal is short by whatever those nights shipped, and net ` +
-              `profit is higher than the truth by the same amount.`
-          }
-        : null)
-    },
+
+    // AND THERE IS NO PACKAGING SECTION EITHER, FOR THE OPPOSITE REASON.
+    //
+    // Sleeves, top loaders, team bags, shipping labels, team bag stickers and
+    // mailers were six lines subtotalling to "Packaging" in this slot, and the
+    // owner took that cost off the statement too, to account for it another way.
+    // Net profit is higher by exactly what those six came to, on every day and
+    // every period.
+    //
+    // WHERE IT DIFFERS FROM THE POSTAGE ABOVE, and the difference is the one
+    // thing a reader has to carry away: no ledger row has ever held a sleeve.
+    // Packaging was money the statement CLAIMED that Whatnot's export cannot
+    // corroborate, so while it lived here the day-versus-rows reconciliation had
+    // to strip it from the DAY side to make the two comparable. Now that no
+    // section claims it, that strip has gone with it — a strip left behind would
+    // have made the day side short by exactly the packaging and put "these
+    // numbers do not add up" over a correct statement, which is the failure the
+    // release before last existed to remove.
+    //
+    // The fourteen fields behind these lines are still on every day, still
+    // computed from the same model and still summed through every rollup — see
+    // `StreamDayFinance`, which says why — so putting the cost back is adding a
+    // section here and taking the day-side strip back in `buildView`.
     {
       key: 'showCosts',
       label: 'Other show costs',
@@ -3158,12 +2930,14 @@ export const PNL_MONEY_FIELDS = [
   'giveawayShipping',
   'refundShipping',
   'netShipping',
-  // The modelled packaging lines, which are inside `netProfit`. A money field
-  // left out of this list is not a type error anywhere: it simply reads zero on
-  // every week, month and dragged range while reading correctly on the days,
-  // which is the quietest way a statement can be wrong — and now that these six
-  // are in the bottom line, dropping one would put the week's net profit above
-  // the sum of its own days.
+  // THE MODELLED PACKAGING, SUMMED BUT NO LONGER PRINTED. No statement section
+  // reads these six either, so `pnlChecksum` is untouched by them and the bottom
+  // line is exactly what it would be if they did not exist — the same standing
+  // the postage above has, arrived at from the other direction. They are summed
+  // anyway because a week has to state the same packaging its days do for the day
+  // the owner reintroduces the cost; dropping them here would leave the days
+  // right and every period silently at zero, which is the quietest way a
+  // statement can be wrong.
   'packagingSleeves',
   'packagingTopLoaders',
   'packagingTeamBags',
@@ -3193,10 +2967,11 @@ export const PNL_COUNT_FIELDS = [
   'feeSaleCount',
   'productSaleCount',
   'generalExpenseCount',
-  // What the modelled packaging lines are multiplied out of. Summed for the same
-  // reason the money is: a week's detail line has to say how many cards it
-  // sleeved, and re-deriving that from the money would divide by a rate that may
-  // since have been edited.
+  // What the modelled packaging money is multiplied out of, kept for the same
+  // reason the money is: no section prints them today, and re-deriving a card
+  // count from the money when the cost comes back would divide by a rate that may
+  // since have been edited — which would put a card count on a historical night
+  // that was never true of it.
   'packagingCards',
   'packagingBreaks',
   'packagingBreaksPriced',
@@ -3244,6 +3019,11 @@ export function emptyDayFinance(streamDate: string): StreamDayFinance {
     giveawayShipping: 0,
     refundShipping: 0,
     netShipping: 0,
+    // The postage above and the packaging below are both zeroed here like every
+    // other field, and both are read by no statement section. They stay because
+    // this shape is what every sum starts from: drop one and the field it stands
+    // for silently arrives as `undefined` in every rollup, which is a worse day
+    // than the one somebody was tidying up for.
     packagingSleeves: 0,
     packagingTopLoaders: 0,
     packagingTeamBags: 0,

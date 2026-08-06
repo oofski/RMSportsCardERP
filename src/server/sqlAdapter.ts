@@ -242,19 +242,26 @@ function normaliseRow(row: Record<string, unknown>): Record<string, unknown> {
 /**
  * Normalise a value on its way IN.
  *
- * The Durable Object accepts only `ArrayBuffer | string | number | null`. Two
- * conversions matter in practice: booleans (SQLite has none, and better-sqlite3
- * rejects them outright, but the db layer stores flags as 0/1 so a stray boolean
- * would otherwise be a silent NULL), and `undefined`, which better-sqlite3 treats
- * as a hard error rather than NULL — keeping that strictness matters, because a
- * typo'd key in a named-parameter object should fail loudly, not write NULL.
+ * The Durable Object accepts only `ArrayBuffer | string | number | null`, so
+ * everything else has to be converted or refused here. The rules deliberately
+ * mirror better-sqlite3's rather than being "helpful", because the db layer was
+ * written against those rules and a laxer adapter would let a real bug through:
+ *
+ *   - `undefined` binds as NULL. It looks sloppy, but better-sqlite3 does this,
+ *     and db/inventory.ts createProduct passes `notes: input.notes` straight
+ *     through for an optional field. Refusing it breaks product creation.
+ *   - booleans are REFUSED, exactly as better-sqlite3 refuses them. SQLite has no
+ *     boolean, the db layer always writes flags as `x ? 1 : 0`, and silently
+ *     coercing here would hide the one call site that forgot.
  */
 function toSqlValue(v: unknown, where: string): unknown {
-  if (v === undefined) {
-    throw new TypeError(`Missing bound parameter ${where}`)
+  if (v === undefined || v === null) return null
+  if (typeof v === 'string' || typeof v === 'number') return v
+  if (typeof v === 'boolean') {
+    throw new TypeError(
+      `Cannot bind a boolean ${where}: SQLite has no boolean type (write 1/0 explicitly)`
+    )
   }
-  if (v === null || typeof v === 'string' || typeof v === 'number') return v
-  if (typeof v === 'boolean') return v ? 1 : 0
   if (typeof v === 'bigint') {
     // DO SQL has no int64 binding path: everything numeric is a double. Anything
     // past 2^53 would be silently rounded, so refuse rather than corrupt.
@@ -332,18 +339,23 @@ export class AdaptedStatement {
     }
 
     const src = args[0] as Record<string, unknown>
-    let cursor = 0
     return order.map((name, i) => {
       if (name === null) {
-        // Mixed `?` and `@x` in one statement. Fill anonymous slots from any
-        // array the caller smuggled in; otherwise this is unbindable and saying
-        // so beats writing a NULL.
+        // A statement mixing `?` with `@x` cannot be filled from an object.
+        // Saying so beats binding NULL into a column nobody notices for a week.
         throw new TypeError(
-          `Statement mixes anonymous and named parameters; index ${i + 1} has no name (${cursor})`
+          `Statement mixes anonymous and named parameters; index ${i + 1} has no name`
         )
       }
-      cursor++
-      const v = name in src ? src[name] : src[`@${name}`] ?? src[`:${name}`] ?? src[`$${name}`]
+      // A key that is PRESENT but undefined binds NULL; a key that is ABSENT is
+      // an error. That distinction is better-sqlite3's, and it is what catches a
+      // mistyped parameter name instead of quietly nulling a column.
+      let v: unknown
+      if (name in src) v = src[name]
+      else if (`@${name}` in src) v = src[`@${name}`]
+      else if (`:${name}` in src) v = src[`:${name}`]
+      else if (`$${name}` in src) v = src[`$${name}`]
+      else throw new TypeError(`Missing named parameter "${name}"`)
       return toSqlValue(v, `for @${name}`)
     })
   }

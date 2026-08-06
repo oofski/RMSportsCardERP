@@ -165,7 +165,7 @@ function compose(
       detail: line.detail,
       detailHint: line.detailHint,
       amount: line.amount,
-      words: line.uncosted ? 'no cost recorded' : line.unavailable ? 'not known' : undefined,
+      words: line.uncosted ? 'no cost recorded' : undefined,
       open: () => push({ kind: 'line', sectionKey: section.key, key: line.key })
     }))
   }
@@ -415,7 +415,7 @@ function LineView({
           derived ? 'nights' : detail.kind === 'expenses' ? 'entries' : 'records'
         )}
         derived={derived}
-        words={line.uncosted ? 'no cost recorded' : line.unavailable ? 'not known' : undefined}
+        words={line.uncosted ? 'no cost recorded' : undefined}
       />
 
       {line.detail && <p className="fin-drill-basis">{line.detail}</p>}
@@ -515,7 +515,7 @@ function LineView({
           ))}
         </ul>
       ) : (
-        <DerivedTerms terms={detail.terms} unknown={detail.unknown} />
+        <DerivedTerms terms={detail.terms} />
       )}
 
       {detail.omitted.count > 0 && (
@@ -544,14 +544,15 @@ function unitCount(it: PnlStreamItemRecord): string {
  * says so. What makes them worth showing anyway is that they add to the same
  * figure — "5,300 cards × 5¢" on a night is something a person can check with a
  * calculator, which is the only claim a cost model is entitled to make.
+ *
+ * It used to print a second block under these: the nights the packaging model
+ * could not price at all, named, because a line reading "not known" that drilled
+ * to an empty table would have said the cost did not happen. That went with the
+ * packaging section, and no payload carries such a night any more. Today the only
+ * derived line is the cost-of-goods residual, which has no terms either and says
+ * so in its note.
  */
-function DerivedTerms({
-  terms,
-  unknown
-}: {
-  terms: PnlDerivedTerm[]
-  unknown: { streamDate: string; reason: string }[]
-}): JSX.Element {
+function DerivedTerms({ terms }: { terms: PnlDerivedTerm[] }): JSX.Element {
   return (
     <>
       {terms.length > 0 && (
@@ -566,25 +567,6 @@ function DerivedTerms({
             </li>
           ))}
         </ul>
-      )}
-      {unknown.length > 0 && (
-        <div className="fin-drill-unknown">
-          <span className="fin-section-title">
-            <Icon name="HelpCircle" size={13} />
-            {plural(unknown.length, 'night')} nothing can answer for
-          </span>
-          <ul className="fin-rows">
-            {unknown.map((u) => (
-              <li key={u.streamDate}>
-                <span className="fin-row">
-                  <span className="fin-row-time mono">{shortDayLabel(u.streamDate)}</span>
-                  <span className="fin-row-msg is-lead">{u.reason}</span>
-                  <span className="fin-money zero mono fin-row-words">not known</span>
-                </span>
-              </li>
-            ))}
-          </ul>
-        </div>
       )}
     </>
   )

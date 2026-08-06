@@ -13827,22 +13827,12 @@ button.sor-team:focus-visible {
 .fin-pnl-line.is-empty td .fin-money {
   color: var(--text-2);
 }
-/* A cost this period has no record of. It is NOT an empty line and must never
-   be greyed down to nothing: "not known" is the most important thing on the row,
-   because the alternative reading — $0.00, no cost — is the one that is wrong.
-   Italic and in the body colour, so it reads as a sentence rather than as a
-   figure somebody can add up. */
-.fin-pnl-line.is-unknown td .fin-money {
-  font-style: italic;
-  font-size: 11.5px;
-  color: var(--text-2);
-}
-/* This one detail WRAPS, unlike every other. The rest are arithmetic — "50% of
-   7 cards × 5¢" — and a line break in the middle of a sum is worse than a
-   truncation. This one is a sentence explaining why there is no figure, and it
-   is the whole point of the row: truncated at the container edge it would read
-   "no packing record for this…" and answer nothing. */
-.fin-pnl-line.is-unknown .fin-pnl-detail,
+/* This detail WRAPS, unlike every other. The rest are arithmetic — "2.9% + 30c
+   x 1029" — and a line break in the middle of a sum is worse than a truncation.
+   This one is a sentence explaining why there is no figure, and it is the whole
+   point of the row: truncated at the container edge it would answer nothing.
+   (`.is-unknown` had the same treatment for the packaging model's "not known"
+   nights, and went with that section.) */
 .fin-pnl-line.is-uncosted .fin-pnl-detail {
   display: inline;
   white-space: normal;
@@ -13909,17 +13899,10 @@ button.sor-team:focus-visible {
   white-space: normal;
   color: var(--text-2);
 }
-/* A section's live warning. Same cell geometry as the footnote above so the two
-   line up under the section's lines, but it carries a Note rather than prose —
-   the footnote is true on every period and this one is only present while
-   something is actually wrong. */
-.fin-pnl-warn td {
-  width: auto;
-  padding: 2px 0 10px 21px;
-  text-align: left;
-  max-width: 68ch;
-  white-space: normal;
-}
+/* `.fin-pnl-warn` sat here: a section's live warning, same cell geometry as the
+   footnote above so the two lined up under the section's lines, but carrying a
+   Note rather than prose. Packaging was the only section that ever raised one and
+   it went with that section. */
 /* The detail is the arithmetic written out — "2.9% + 30c x 1029". It sits
    beside the label, never in a tooltip: nobody hovers a number they already
    believe, and this is the thing that makes the number checkable. */
@@ -14115,10 +14098,11 @@ button.sor-team:focus-visible {
   flex: none;
   font-size: 15px;
 }
-/* MODELLED, NOT TRANSACTED. The badge exists so nobody reads a list of nightly
-   arithmetic as a list of transactions — the packaging lines have no rows
-   anywhere, and saying so on the heading is cheaper than discovering it after
-   going looking for them. */
+/* MODELLED, NOT TRANSACTED. The badge exists so nobody reads a figure with no
+   records behind it as one whose records failed to load — saying so on the
+   heading is cheaper than discovering it after going looking for them. The
+   packaging lines were what it was built for; the cost-of-goods residual is what
+   still wears it. */
 .fin-drill-tag {
   display: inline-flex;
   flex: none;
@@ -14174,18 +14158,9 @@ button.sor-team:focus-visible {
   font-weight: 500;
 }
 
-/* The nights nothing can answer for, kept apart from the ones that add up.
-   Folding them into the same list would make an unknown look like a zero, which
-   is the exact misreading the whole `unavailable` flag exists to prevent. */
-.fin-drill-unknown {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 10px;
-  border: 1px dashed var(--border-strong);
-  border-radius: var(--radius-sm);
-}
-
+/* `.fin-drill-unknown` sat here: the nights the packaging model could not price,
+   boxed off from the ones that add up, because folding them into the same list
+   would have made an unknown look like a zero. It went with that section. */
 /* The record itself — the end of the trail. Two columns on anything but a
    narrow window, because these are label/value pairs and a person reaching this
    level is comparing them against something else on their screen. */
