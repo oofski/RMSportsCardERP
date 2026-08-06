@@ -647,10 +647,28 @@ async function employeeById(env, id) {
  * Three separate refusals, and they are all the same answer to the caller. A
  * portal that says "that company ID exists but has no PIN" has told an
  * anonymous caller which company IDs are real.
+ *
+ * ## Not 'active' — NOT DISABLED. The difference cost a real shift.
+ *
+ * This asked for `status === 'active'`, which sounds like the careful choice and
+ * is the wrong one. An employee created with an email address starts 'invited'
+ * and only becomes 'active' when they sign into the DESKTOP APP and choose a
+ * password (see `insertEmployee` and `setChosenPassword`). A new hire who was
+ * given a PIN and sent to the warehouse has never opened the desktop app — so
+ * they were refused, and told their PIN was wrong, which is a lie that leads
+ * somebody to type it again.
+ *
+ * The PIN is a SEPARATE credential. That is the entire design: it exists so
+ * clocking in does not depend on the app password, and gating it on the app
+ * password's state put the dependency straight back. An administrator setting a
+ * PIN is the authorisation; nothing about the desktop is part of that decision.
+ *
+ * 'disabled' still refuses, and must: that is somebody deliberately switched
+ * off, and `setPortalPin` refuses to arm one for exactly the same reason.
  */
 function portalEligible(emp) {
   if (!emp) return false
-  if (emp.status !== 'active') return false
+  if (emp.status === 'disabled') return false
   if (emp.account_kind === 'station') return false
   if (!emp.portal_pin_hash) return false
   return true

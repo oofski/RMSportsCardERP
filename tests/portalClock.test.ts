@@ -204,6 +204,65 @@ console.log('\n=== 3. the WORKER verifies what the APP wrote ===')
   ok(cols.includes('portal_pin_hash'), 'the column exists on employees')
   ok(cols.includes('portal_pin_set_at'), 'and so does its timestamp')
 
+  // ---------------------------------------------------------------------------
+  console.log('\n=== 7. an INVITED employee can still clock in ===')
+  // ---------------------------------------------------------------------------
+  // The bug this file did not catch, and it cost a real shift.
+  //
+  // An employee created WITH an email address starts 'invited' and only becomes
+  // 'active' when they sign into the DESKTOP app and choose a password. The
+  // Worker asked for `status === 'active'`, so a new hire who had been given a
+  // PIN and sent to the warehouse — who has never opened the desktop app — was
+  // refused at the clock, and told the PIN was wrong. Which is a lie, and the
+  // kind that makes somebody type it again.
+  //
+  // The PIN exists precisely so clocking in does not depend on the app
+  // password. Gating it on the app password's state put that dependency back.
+  const invitedId = 'e_invited'
+  getDb()
+    .prepare(
+      `INSERT INTO employees (id, first_name, last_name, company_id, title, email, role,
+         status, password_hash, must_change_password, created_at, updated_at)
+       VALUES (?, 'New', 'Hire', 'RM-NEW', 'Packer', ?, 'employee',
+         'invited', 'x', 1, ?, ?)`
+    )
+    .run(invitedId, `${invitedId}@none.invalid`, now, now)
+
+  const invitedSet = employees.setPortalPin(invitedId, '481907')
+  ok(invitedSet.ok === true, 'an invited employee can be given a PIN', invitedSet.error)
+  const invited = employees.getEmployeeById(invitedId)
+  ok(invited.status === 'invited', 'and is still invited — nothing about the PIN changes that')
+  ok(invited.hasPortalPin === true, 'but does have a PIN')
+  ok(await verifyPortalPin(hashOf(invitedId), '481907'), 'and the PIN verifies')
+
+  // The eligibility rule itself, mirrored from the Worker. `status === 'active'`
+  // is the wrong test; NOT DISABLED is the right one.
+  const eligible = (e: { status: string; hasPortalPin: boolean }): boolean =>
+    e.status !== 'disabled' && e.hasPortalPin
+  ok(eligible(invited), 'so the portal must let an INVITED employee clock in')
+  ok(
+    eligible({ status: 'active', hasPortalPin: true }),
+    'an active one too, obviously'
+  )
+  ok(
+    !eligible({ status: 'disabled', hasPortalPin: true }),
+    'and a DISABLED one never, PIN or no PIN'
+  )
+  // The source is the contract here — the Worker is a standalone file this test
+  // cannot import a function out of, so assert the rule it actually ships.
+  const workerSrc = require('node:fs').readFileSync(
+    require('node:path').join(process.cwd(), 'cloud/worker.js'),
+    'utf8'
+  )
+  ok(
+    workerSrc.includes("if (emp.status === 'disabled') return false"),
+    'and the Worker refuses on DISABLED rather than requiring ACTIVE'
+  )
+  ok(
+    !workerSrc.includes("if (emp.status !== 'active') return false"),
+    'the active-only rule is gone from the Worker'
+  )
+
   console.log(`\n${pass} passed, ${fail} failed\n`)
   process.exit(fail === 0 ? 0 : 1)
 })()
