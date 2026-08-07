@@ -199,6 +199,21 @@ async function call(
   const config = getSyncConfig()
   const key = sharedKey()
   if (!config.url || !key) throw new Error('Sync is not configured.')
+  // CHECKED HERE, in words, because the native failure is unreadable and points
+  // at nothing. A relay address that is not a URL — the commonest way being the
+  // shared KEY pasted into the url field, since the two are set together and
+  // look alike on a hosting dashboard — produces "Failed to parse URL from
+  // <key>/v1/pull?since=0&limit=500&device=…". That message names the pull
+  // route, so it reads like a relay fault or a protocol bug. It is neither: it
+  // is one env var holding the other one's value, and nothing syncs at all
+  // until somebody guesses that. This says so instead.
+  if (!/^https?:\/\//i.test(config.url)) {
+    throw new Error(
+      `The relay address is not a URL: "${config.url}". It must start with https:// — ` +
+        `this is usually the shared KEY pasted into the URL field by mistake. ` +
+        `Nothing will sync until it is corrected.`
+    )
+  }
 
   const controller = new AbortController()
   // Long enough for a big first push over a bad connection, short enough that a
