@@ -1961,6 +1961,44 @@ function migrate(database: Database.Database): void {
   )
   setMeta(database, 'schema_version', '49')
 
+  // v50: availability — what somebody says about a day BEFORE anybody is put
+  // on it.
+  //
+  // The other half of the rota, and the half that decides whether the rota is
+  // any good. A lead filling Thursday is guessing unless the people who work
+  // Thursday have said something, and the way that gets said today is a text
+  // message nobody can see a week later.
+  //
+  // TWO STATEMENTS, not one flag. "I can work Thursday" and "I cannot work
+  // Thursday" are both things somebody chose to say, and a day they have said
+  // NOTHING about is a third state that must stay distinct from both — a
+  // boolean would make silence mean either "nobody may be rostered until they
+  // opt in" or "nobody's day off is ever respected", and both are wrong.
+  //
+  // THE ID IS DERIVED from the person and the day, not a UUID, and that is what
+  // makes this safe to sync. Two machines recording the same person's answer
+  // for the same day mint the SAME id, so last-write-wins compares a row
+  // against an older copy of itself and the later answer wins — which is
+  // exactly the right outcome for somebody changing their mind. A UUID here
+  // would produce two rows saying opposite things with nothing to choose
+  // between them. Same pattern as the supply-usage rows.
+  database.exec(
+    `CREATE TABLE IF NOT EXISTS availability (
+       id          TEXT PRIMARY KEY,
+       employee_id TEXT NOT NULL,
+       day         TEXT NOT NULL,
+       status      TEXT NOT NULL,
+       start_time  TEXT,
+       end_time    TEXT,
+       note        TEXT,
+       created_at  TEXT NOT NULL,
+       updated_at  TEXT NOT NULL
+     );
+     CREATE INDEX IF NOT EXISTS idx_avail_person ON availability (employee_id, day);
+     CREATE INDEX IF NOT EXISTS idx_avail_day    ON availability (day);`
+  )
+  setMeta(database, 'schema_version', '50')
+
   // Payroll, once, for whoever owns the company.
   //
   // Seeded rather than left to be typed because the owner named it, named its

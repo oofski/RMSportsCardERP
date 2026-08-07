@@ -54,6 +54,67 @@ export interface NewShift {
 
 export const SHIFT_NOTE_MAX = 80
 
+/**
+ * What somebody says about a day BEFORE anybody is put on it.
+ *
+ * The other half of a rota, and the half that decides whether the rota is any
+ * good. A lead filling Thursday is guessing unless the people who work Thursday
+ * have said something, and the way that gets said today is a text message that
+ * nobody can see a week later.
+ *
+ * TWO STATEMENTS, not one flag with a default. "I can work Thursday" and "I
+ * cannot work Thursday" are both things somebody chose to say; a day they have
+ * said NOTHING about is a third state and must stay distinct from both. Storing
+ * it as a boolean would make silence mean "unavailable" (so nobody gets
+ * rostered until they opt in) or "available" (so nobody's day off is ever
+ * respected), and both readings are wrong.
+ *
+ * `unavailable` is the one that has to be loud. Being free is a default a lead
+ * can work around; being unable to come in is a fact they cannot.
+ */
+export type AvailabilityStatus = 'available' | 'unavailable'
+
+export interface Availability {
+  id: string
+  employeeId: string
+  /** Local calendar day, YYYY-MM-DD. */
+  day: string
+  status: AvailabilityStatus
+  /**
+   * Optional local HH:MM bounds. "Available, but only from 4pm" is a real and
+   * common answer, and forcing it into a whole-day yes/no loses the part a lead
+   * actually needs.
+   */
+  startTime: string | null
+  endTime: string | null
+  note: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface AvailabilityWithPerson extends Availability {
+  employeeName: string
+}
+
+export interface NewAvailability {
+  day: string
+  status: AvailabilityStatus
+  startTime?: string | null
+  endTime?: string | null
+  note?: string | null
+}
+
+export const AVAILABILITY_NOTE_MAX = 80
+
+/**
+ * How far ahead somebody may mark a day.
+ *
+ * A year. Long enough for a holiday booked in advance — the single most useful
+ * thing on this screen — and short enough that a stray keystroke in the year
+ * field cannot write a row nobody will ever see again.
+ */
+export const AVAILABILITY_HORIZON_DAYS = 366
+
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/
 
@@ -130,6 +191,34 @@ export function upcomingFrom<T extends Shift>(shifts: T[], today: string, limit 
   return sortShifts(shifts)
     .filter((s) => s.day >= today)
     .slice(0, Math.max(1, limit))
+}
+
+export function validateAvailability(input: NewAvailability): string | null {
+  if (!DAY_RE.test(input.day ?? '')) return 'Pick a day.'
+  if (input.status !== 'available' && input.status !== 'unavailable') {
+    return 'Say whether you can work or not.'
+  }
+  if (input.startTime && !TIME_RE.test(input.startTime)) return 'The start time has to be a time.'
+  if (input.endTime && !TIME_RE.test(input.endTime)) return 'The end time has to be a time.'
+  if ((input.note ?? '').length > AVAILABILITY_NOTE_MAX) {
+    return `Keep the note under ${AVAILABILITY_NOTE_MAX} characters.`
+  }
+  return null
+}
+
+/** How one person's answer reads on a lead's screen. */
+export function availabilityLabel(a: {
+  status: AvailabilityStatus
+  startTime: string | null
+  endTime: string | null
+}): string {
+  if (a.status === 'unavailable') return 'Cannot work'
+  const from = formatClock(a.startTime)
+  const to = formatClock(a.endTime)
+  if (from && to) return `Free ${from} – ${to}`
+  if (from) return `Free from ${from}`
+  if (to) return `Free until ${to}`
+  return 'Free'
 }
 
 /**

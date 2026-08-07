@@ -1,9 +1,13 @@
-import { randomUUID } from 'crypto'
-import { dayKey } from '@shared/homeTasks'
+import { dayKey, daysBetween } from '@shared/homeTasks'
 import {
+  AVAILABILITY_HORIZON_DAYS,
   sortShifts,
   upcomingFrom,
+  validateAvailability,
   validateShift,
+  type Availability,
+  type AvailabilityWithPerson,
+  type NewAvailability,
   type NewShift,
   type Shift,
   type ShiftWithPerson
@@ -120,20 +124,25 @@ export function createShift(input: NewShift, actorId: string | null): Shift {
   // is right. Adding again REPLACES, so correcting a time is the same gesture
   // as setting one.
   //
-  // Enforced HERE and deliberately not by a unique index. Two leads on two
-  // laptops can each mint a different id for the same person and day, and a
-  // unique index would make the second one fail to APPLY when it arrived over
-  // the relay — a rejected row that then retries forever, to stop a duplicate
-  // that is merely untidy. So the constraint is best-effort and local: the week
-  // view draws both lines and either can be removed, which is a state somebody
-  // can see and fix rather than one the sync silently chokes on.
+  // Enforced by the DERIVED id below rather than by a unique index, which would
+  // reject an incoming row at the relay and retry it forever. The id makes two
+  // machines rostering the same person for the same night write the SAME row, so
+  // there is nothing for a constraint to catch. A duplicate can now only survive
+  // from before this scheme existed, and the week view draws both so either can
+  // be removed — a state somebody can see and fix rather than one sync chokes on.
   const existing = db
     .prepare(`SELECT id, created_at FROM shifts WHERE employee_id = ? AND shift_date = ?`)
     .get(input.employeeId, input.day) as { id: string; created_at: string } | undefined
 
   const stamp = nowIso()
   const shift: Shift = {
-    id: existing?.id ?? randomUUID(),
+    // An existing row keeps its id; a new one gets an id DERIVED from the person
+    // and the day. Two leads rostering the same person for the same night on two
+    // machines then mint the same row and last-write-wins settles it, instead of
+    // producing two lines that both look authoritative. Rows made before this
+    // (plain UUIDs) are still found by the lookup above and updated in place, so
+    // nothing has to be migrated.
+    id: existing?.id ?? `sh_${input.employeeId}_${input.day}`,
     employeeId: input.employeeId,
     day: input.day,
     startTime: clean(input.startTime),
@@ -214,7 +223,9 @@ export function copyWeek(fromMonday: string, toMonday: string, actorId: string |
       )
       const day = shift(toMonday, offset)
       made += insert.run(
-        randomUUID(),
+        // Same derived id as createShift, so two leads copying the same week
+        // converge on one row per person per night rather than doubling it.
+        `sh_${r.employee_id}_${day}`,
         r.employee_id,
         day,
         r.start_time,
@@ -230,4 +241,152 @@ export function copyWeek(fromMonday: string, toMonday: string, actorId: string |
   })
   run()
   return made
+}
+
+// ---------------------------------------------------------------------------
+// Availability — what somebody says about a day before anybody is put on it
+// ---------------------------------------------------------------------------
+
+interface AvailRow {
+  id: string
+  employee_id: string
+  day: string
+  status: string
+  start_time: string | null
+  end_time: string | null
+  note: string | null
+  created_at: string
+  updated_at: string
+}
+
+function toAvailability(r: AvailRow): Availability {
+  return {
+    id: r.id,
+    employeeId: r.employee_id,
+    day: r.day,
+    // Anything the database does not recognise reads as UNAVAILABLE. A row this
+    // build cannot interpret must not be taken as permission to roster somebody
+    // — the safe reading of a corrupt answer is the cautious one.
+    status: r.status === 'available' ? 'available' : 'unavailable',
+    startTime: r.start_time,
+    endTime: r.end_time,
+    note: r.note,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at
+  }
+}
+
+/**
+ * The id of somebody's answer about a day.
+ *
+ * DERIVED, not minted — see the note in the v50 migration. Two machines
+ * recording the same person's answer for the same day produce the same row, so
+ * the relay compares it against an older copy of itself and the later answer
+ * wins, which is what changing your mind means.
+ */
+function availabilityId(employeeId: string, day: string): string {
+  return `av_${employeeId}_${day}`
+}
+
+/** One person's own answers, oldest day first. */
+export function myAvailability(employeeId: string): Availability[] {
+  return (
+    getDb()
+      .prepare(
+        `SELECT id, employee_id, day, status, start_time, end_time, note, created_at, updated_at
+           FROM availability WHERE employee_id = ? ORDER BY day ASC`
+      )
+      .all(employeeId) as AvailRow[]
+  ).map(toAvailability)
+}
+
+/** Everybody's answers across a range, with names — the lead's view. */
+export function listAvailability(from: string, to: string): AvailabilityWithPerson[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT a.id, a.employee_id, a.day, a.status, a.start_time, a.end_time, a.note,
+              a.created_at, a.updated_at,
+              e.first_name AS first, e.last_name AS last
+         FROM availability a
+         LEFT JOIN employees e ON e.id = a.employee_id
+        WHERE a.day >= ? AND a.day <= ?
+        ORDER BY a.day ASC`
+    )
+    .all(from, to) as Array<AvailRow & { first: string | null; last: string | null }>
+  return rows.map((r) => ({
+    ...toAvailability(r),
+    employeeName: `${r.first ?? ''} ${r.last ?? ''}`.trim() || 'Someone'
+  }))
+}
+
+/**
+ * Record an answer, replacing whatever this person said about that day before.
+ *
+ * There is exactly one answer per person per day by construction — the id says
+ * so — which means changing your mind is the same operation as answering, and
+ * there is no edit mode and nothing to delete first.
+ *
+ * The employee is NEVER taken from an argument. Every caller passes the session's
+ * own id, and the derived key means an operation that accepted "whose" would be
+ * one typo away from overwriting somebody else's day off.
+ */
+export function setAvailability(employeeId: string, input: NewAvailability): Availability {
+  const problem = validateAvailability(input)
+  if (problem) throw new Error(problem)
+
+  const today = dayKey(new Date())
+  // The PAST is not something to have an opinion about. A rota for last Tuesday
+  // is history, and letting somebody mark it would put a row on a lead's screen
+  // that reads as a request about a week that is over.
+  if (input.day < today) throw new Error('That day has already been and gone.')
+  if (daysBetween(today, input.day) > AVAILABILITY_HORIZON_DAYS) {
+    throw new Error('That is too far ahead to plan for.')
+  }
+
+  const db = getDb()
+  const stamp = nowIso()
+  const id = availabilityId(employeeId, input.day)
+  const existing = db.prepare(`SELECT created_at FROM availability WHERE id = ?`).get(id) as
+    | { created_at: string }
+    | undefined
+
+  const row: Availability = {
+    id,
+    employeeId,
+    day: input.day,
+    status: input.status,
+    startTime: clean(input.startTime),
+    endTime: clean(input.endTime),
+    note: clean(input.note),
+    createdAt: existing?.created_at ?? stamp,
+    updatedAt: stamp
+  }
+
+  db.prepare(
+    `INSERT INTO availability
+       (id, employee_id, day, status, start_time, end_time, note, created_at, updated_at)
+     VALUES (@id, @employeeId, @day, @status, @startTime, @endTime, @note, @createdAt, @updatedAt)
+     ON CONFLICT(id) DO UPDATE SET
+       status     = excluded.status,
+       start_time = excluded.start_time,
+       end_time   = excluded.end_time,
+       note       = excluded.note,
+       updated_at = excluded.updated_at`
+  ).run(row)
+  return row
+}
+
+/**
+ * Take an answer back — say nothing about that day again.
+ *
+ * Scoped to the caller by the KEY rather than by a WHERE clause somebody has to
+ * remember: the id is built from their own employee id, so a request naming
+ * another person's row simply does not match.
+ */
+export function clearAvailability(employeeId: string, day: string): boolean {
+  return (
+    getDb()
+      .prepare(`DELETE FROM availability WHERE id = ?`)
+      .run(availabilityId(employeeId, day)).changes > 0
+  )
 }

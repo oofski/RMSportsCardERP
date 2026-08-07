@@ -215,6 +215,14 @@ export const IPC = {
   scheduleCreate: 'schedule:create',
   scheduleDelete: 'schedule:delete',
   scheduleCopyWeek: 'schedule:copy-week',
+  // Availability — what somebody says about a day BEFORE anybody is put on it.
+  // The write half is scoped to the session and gated on nothing else: saying
+  // when you can and cannot work is not a privilege. Reading the TEAM's answers
+  // is the lead's view and needs admin.hours.view, same as the rota beside it.
+  availabilityMine: 'availability:mine',
+  availabilityList: 'availability:list',
+  availabilitySet: 'availability:set',
+  availabilityClear: 'availability:clear',
   shipDocument: 'shipping:document',
   shipDocumentBytes: 'shipping:document:bytes',
   shipDocumentArrival: 'shipping:document:arrival',

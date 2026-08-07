@@ -22,7 +22,14 @@ import { IPC, type AppInfo } from '@shared/ipc'
 import type { Permission } from '@shared/permissions'
 import type { NewReminder, OwnerBoard, Reminder, Todo } from '@shared/ownerDashboard'
 import type { StaffBoard } from '@shared/staffBoard'
-import type { NewShift, Shift, ShiftWithPerson } from '@shared/schedule'
+import type {
+  Availability,
+  AvailabilityWithPerson,
+  NewAvailability,
+  NewShift,
+  Shift,
+  ShiftWithPerson
+} from '@shared/schedule'
 import type { RecurringTask } from '@shared/homeTasks'
 import type {
   ShipPickAdvanced,
@@ -1003,7 +1010,22 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       deleteShift: (id: string): Promise<Result<{ id: string }>> =>
         ipcRenderer.invoke(IPC.scheduleDelete, id),
       copyWeek: (from: string, to: string): Promise<Result<{ created: number }>> =>
-        ipcRenderer.invoke(IPC.scheduleCopyWeek, { from, to })
+        ipcRenderer.invoke(IPC.scheduleCopyWeek, { from, to }),
+
+      /**
+       * Availability — what you say about a day before anybody is put on it.
+       *
+       * `myAvailability` and `setAvailability` name no employee, deliberately:
+       * the session is whose. `availability` is the lead's range read and comes
+       * back empty for anybody without admin.hours.view.
+       */
+      myAvailability: (): Promise<Availability[]> => ipcRenderer.invoke(IPC.availabilityMine),
+      availability: (from: string, to: string): Promise<AvailabilityWithPerson[]> =>
+        ipcRenderer.invoke(IPC.availabilityList, { from, to }),
+      setAvailability: (input: NewAvailability): Promise<Result<Availability>> =>
+        ipcRenderer.invoke(IPC.availabilitySet, input),
+      clearAvailability: (day: string): Promise<Result<{ day: string }>> =>
+        ipcRenderer.invoke(IPC.availabilityClear, day)
     },
     updates: {
       getStatus: (): Promise<UpdateStatus> => ipcRenderer.invoke(IPC.updatesGetStatus),

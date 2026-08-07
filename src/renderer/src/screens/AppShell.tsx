@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { MODULES } from '@shared/modules'
+import { MODULES, inWorkspace } from '@shared/modules'
 import { StreamingModule } from '../modules/streaming/StreamingModule'
 import { FinanceModule } from '../modules/finance/FinanceModule'
 import { useSession } from '../lib/session'
@@ -17,6 +17,7 @@ import { roleLabel } from '@shared/permissions'
 import { AdminModule } from '../modules/admin/AdminModule'
 import { HomeModule } from '../modules/home/HomeModule'
 import { TimePayrollModule } from '../modules/timepay/TimePayrollModule'
+import { ScheduleModule } from '../modules/schedule/ScheduleModule'
 import { InventoryModule } from '../modules/inventory/InventoryModule'
 import { InvoicingModule } from '../modules/invoicing/InvoicingModule'
 import { ShippingModule } from '../modules/fulfillment/ShippingModule'
@@ -49,7 +50,7 @@ export function AppShell(): JSX.Element {
     () =>
       MODULES.filter(
         (m) =>
-          (m.workspace ?? 'ops') === workspace &&
+          inWorkspace(m, workspace) &&
           (m.status === 'active' ? (m.permission ? can(m.permission) : true) : true)
       ),
     [can, workspace]
@@ -79,8 +80,12 @@ export function AppShell(): JSX.Element {
   // switch the sidebar first, which is what "go to that screen" has to mean.
   const navigate = (id: string): void => {
     const target = MODULES.find((m) => m.id === id)
-    const targetWorkspace: WorkspaceId = target?.workspace ?? 'ops'
-    if (target && targetWorkspace !== workspace) {
+    // A module that lives in BOTH needs no switch — it is already in the
+    // sidebar wherever you are standing, and moving the whole app to another
+    // company to open your own payslip would be a worse answer than doing
+    // nothing.
+    if (target && !inWorkspace(target, workspace)) {
+      const targetWorkspace: WorkspaceId = target.workspace === 'shipping' ? 'shipping' : 'ops'
       setWorkspace(targetWorkspace)
       localStorage.setItem('rmops.workspace', targetWorkspace)
     }
@@ -339,6 +344,8 @@ export function AppShell(): JSX.Element {
               <AdminModule />
             ) : activeModule?.id === 'timepay' ? (
               <TimePayrollModule />
+            ) : activeModule?.id === 'schedule' ? (
+              <ScheduleModule />
             ) : activeModule?.id === 'inventory' ? (
               <InventoryModule />
             ) : activeModule?.id === 'finance' ? (

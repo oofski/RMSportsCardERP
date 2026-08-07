@@ -1,8 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { Employee } from '@shared/types'
-import type { ShiftWithPerson } from '@shared/schedule'
+import type { AvailabilityWithPerson, ShiftWithPerson } from '@shared/schedule'
 import { addDays, dayKey } from '@shared/homeTasks'
-import { dayLabel, formatClock, shiftTimeLabel, SHIFT_NOTE_MAX } from '@shared/schedule'
+import {
+  availabilityLabel,
+  dayLabel,
+  formatClock,
+  shiftTimeLabel,
+  SHIFT_NOTE_MAX
+} from '@shared/schedule'
 import { api } from '../../lib/api'
 import { useSession } from '../../lib/session'
 import { LIVE, useLiveRefresh } from '../../lib/live'
@@ -60,6 +66,7 @@ export function RotaTab({ employees }: { employees: Employee[] }): JSX.Element {
   const today = dayKey(new Date())
   const [weekStart, setWeekStart] = useState(() => mondayOf(today))
   const [shifts, setShifts] = useState<ShiftWithPerson[]>([])
+  const [answers, setAnswers] = useState<AvailabilityWithPerson[]>([])
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [openDay, setOpenDay] = useState<string | null>(null)
@@ -71,7 +78,15 @@ export function RotaTab({ employees }: { employees: Employee[] }): JSX.Element {
   )
 
   const load = useCallback(async () => {
-    setShifts(await api.staff.shifts(weekStart, weekEnd))
+    // Both in one go. Reading them separately would let the week paint with a
+    // rota and no answers against it, which is the state this screen exists to
+    // avoid somebody making a decision in.
+    const [s, a] = await Promise.all([
+      api.staff.shifts(weekStart, weekEnd),
+      api.staff.availability(weekStart, weekEnd)
+    ])
+    setShifts(s)
+    setAnswers(a)
   }, [weekStart, weekEnd])
 
   useLiveRefresh(LIVE.schedule, load)
@@ -99,6 +114,23 @@ export function RotaTab({ employees }: { employees: Employee[] }): JSX.Element {
     }
     return map
   }, [shifts])
+
+  /**
+   * Everybody's answer for each day of this week, keyed day → employee.
+   *
+   * THE REASON AVAILABILITY EXISTS. A lead filling Thursday is guessing unless
+   * the people who work Thursday have said something, and until now the way
+   * that got said was a text message nobody could see a week later.
+   */
+  const answersByDay = useMemo(() => {
+    const map = new Map<string, Map<string, AvailabilityWithPerson>>()
+    for (const a of answers) {
+      const forDay = map.get(a.day) ?? new Map<string, AvailabilityWithPerson>()
+      forDay.set(a.employeeId, a)
+      map.set(a.day, forDay)
+    }
+    return map
+  }, [answers])
 
   // Disabled people can still appear on shifts already made — history is
   // history — but they are not offered for new ones.
@@ -180,6 +212,17 @@ export function RotaTab({ employees }: { employees: Employee[] }): JSX.Element {
       <div className="rota-week">
         {days.map((day, i) => {
           const list = byDay.get(day) ?? []
+          const said = answersByDay.get(day)
+          // Who has said they cannot do this day and is NOT already on it. The
+          // ones already on it are flagged individually below, which is the
+          // louder problem; this is the quieter one — a name a lead is about to
+          // add without knowing.
+          const away = [...(said?.values() ?? [])].filter(
+            (a) => a.status === 'unavailable' && !list.some((s) => s.employeeId === a.employeeId)
+          )
+          const free = [...(said?.values() ?? [])].filter(
+            (a) => a.status === 'available' && !list.some((s) => s.employeeId === a.employeeId)
+          )
           return (
             <div
               key={day}
@@ -192,12 +235,22 @@ export function RotaTab({ employees }: { employees: Employee[] }): JSX.Element {
                 <span>{Number(day.slice(8))}</span>
               </div>
               <ul className="rota-list">
-                {list.map((s) => (
-                  <li key={s.id}>
-                    <span className="rota-who">{s.employeeName}</span>
+                {list.map((s) => {
+                  // Rostered on a day they said they could not work. The single
+                  // most useful thing this screen can tell a lead, so it is a
+                  // colour on the row rather than something to go and check.
+                  const clash = said?.get(s.employeeId)?.status === 'unavailable'
+                  return (
+                  <li key={s.id} data-clash={clash ? 'true' : 'false'}>
+                    <span className="rota-who">
+                      {clash && <Icon name="AlertTriangle" size={11} strokeWidth={3} />}
+                      {s.employeeName}
+                    </span>
                     <span className="rota-when">
-                      {s.startTime ? formatClock(s.startTime) : 'TBC'}
-                      {s.note ? ` · ${s.note}` : ''}
+                      {clash
+                        ? 'Said they cannot work'
+                        : (s.startTime ? formatClock(s.startTime) : 'TBC') +
+                          (s.note ? ` · ${s.note}` : '')}
                     </span>
                     {canEdit && (
                       <button
@@ -210,9 +263,26 @@ export function RotaTab({ employees }: { employees: Employee[] }): JSX.Element {
                       </button>
                     )}
                   </li>
-                ))}
+                  )
+                })}
                 {list.length === 0 && !canEdit && <li className="rota-none">Nobody in</li>}
               </ul>
+              {(free.length > 0 || away.length > 0) && (
+                <div className="rota-said">
+                  {free.length > 0 && (
+                    <span className="rota-said-row" data-kind="available">
+                      <Icon name="Check" size={10} strokeWidth={3} />
+                      {free.map((a) => a.employeeName.split(' ')[0]).join(', ')} free
+                    </span>
+                  )}
+                  {away.length > 0 && (
+                    <span className="rota-said-row" data-kind="unavailable">
+                      <Icon name="Ban" size={10} strokeWidth={3} />
+                      {away.map((a) => a.employeeName.split(' ')[0]).join(', ')} away
+                    </span>
+                  )}
+                </div>
+              )}
               {canEdit && (
                 <button className="rota-add" onClick={() => setOpenDay(day)}>
                   <Icon name="Plus" size={13} />
@@ -229,6 +299,7 @@ export function RotaTab({ employees }: { employees: Employee[] }): JSX.Element {
           day={openDay}
           roster={roster}
           existing={byDay.get(openDay) ?? []}
+          said={answersByDay.get(openDay) ?? new Map()}
           onClose={() => setOpenDay(null)}
           onSaved={async () => {
             await load()
@@ -252,19 +323,35 @@ function AddShift({
   day,
   roster,
   existing,
+  said,
   onClose,
   onSaved
 }: {
   day: string
   roster: Employee[]
   existing: ShiftWithPerson[]
+  /** What each person said about this day, keyed by employee id. */
+  said: Map<string, AvailabilityWithPerson>
   onClose: () => void
   onSaved: () => Promise<void>
 }): JSX.Element {
   const toast = useToast()
   const taken = new Set(existing.map((s) => s.employeeId))
-  const available = roster.filter((e) => !taken.has(e.id))
-  const [employeeId, setEmployeeId] = useState(available[0]?.id ?? '')
+  /**
+   * Who is left to add, ORDERED BY WHAT THEY SAID.
+   *
+   * People who said they are free first, then people who said nothing, then
+   * people who said they cannot. Not a filter — a lead may have a good reason to
+   * ask somebody who marked themselves off, and a list that hid them would send
+   * that conversation back outside the app. But the default pick should be a
+   * person who has already agreed to be asked.
+   */
+  const RANK: Record<string, number> = { available: 0, none: 1, unavailable: 2 }
+  const available = roster
+    .filter((e) => !taken.has(e.id))
+    .map((e) => ({ e, status: said.get(e.id)?.status ?? 'none' }))
+    .sort((a, b) => RANK[a.status] - RANK[b.status] || a.e.firstName.localeCompare(b.e.firstName))
+  const [employeeId, setEmployeeId] = useState(available[0]?.e.id ?? '')
   const [startTime, setStartTime] = useState('16:00')
   const [endTime, setEndTime] = useState('')
   const [note, setNote] = useState('')
@@ -283,8 +370,8 @@ function AddShift({
       // Stay open, on the same day, with the next person preselected. Setting a
       // rota is several of these in a row.
       setNote('')
-      const next = available.find((e) => e.id !== employeeId)
-      setEmployeeId(next?.id ?? '')
+      const next = available.find((a) => a.e.id !== employeeId)
+      setEmployeeId(next?.e.id ?? '')
       if (!next) onClose()
     } finally {
       setSaving(false)
@@ -313,9 +400,10 @@ function AddShift({
           <label>
             Who
             <select value={employeeId} onChange={(e) => setEmployeeId(e.target.value)}>
-              {available.map((e) => (
+              {available.map(({ e, status }) => (
                 <option key={e.id} value={e.id}>
                   {e.firstName} {e.lastName}
+                  {status === 'available' ? ' — free' : status === 'unavailable' ? ' — away' : ''}
                 </option>
               ))}
             </select>
@@ -344,6 +432,26 @@ function AddShift({
             Add
           </Button>
         </div>
+      )}
+
+      {/* Said out loud, not just sorted to the bottom. Adding somebody who
+          marked themselves off is allowed — a lead may have a good reason to
+          ask — but it must never happen by accident. */}
+      {said.get(employeeId)?.status === 'unavailable' && (
+        <div className="sched-clash">
+          <Icon name="AlertTriangle" size={15} />
+          <span>
+            {said.get(employeeId)?.employeeName} said they cannot work this day
+            {said.get(employeeId)?.note ? ` — “${said.get(employeeId)?.note}”` : ''}. You can
+            still add them, but check with them first.
+          </span>
+        </div>
+      )}
+      {said.get(employeeId)?.status === 'available' && (
+        <p className="rota-free-note">
+          {availabilityLabel(said.get(employeeId) as AvailabilityWithPerson)}
+          {said.get(employeeId)?.note ? ` — “${said.get(employeeId)?.note}”` : ''}
+        </p>
       )}
     </div>
   )

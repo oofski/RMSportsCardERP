@@ -3,12 +3,8 @@ import { IPC } from '@shared/ipc'
 import type { Result } from '@shared/types'
 import type { Permission } from '@shared/permissions'
 import type { NewReminder, OwnerBoard, Reminder, Todo } from '@shared/ownerDashboard'
-import type { StaffBoard } from '@shared/staffBoard'
-import type { NewShift, Shift, ShiftWithPerson } from '@shared/schedule'
 import { currentUser } from './services/auth'
 import { getOwnerBoard } from './db/ownerDashboard'
-import { getStaffBoard } from './db/staffBoard'
-import { copyWeek, createShift, deleteShift, listShifts, myShifts } from './db/schedule'
 import {
   createReminder,
   deleteReminder,
@@ -58,22 +54,6 @@ function requireUser(): { id: string } {
   return { id: user.id }
 }
 
-/**
- * Whoever may change the rota.
- *
- * The same permission that adds and edits people, deliberately: putting
- * somebody on a shift is a statement about their week, and the set of people
- * who may make it is the set who may hire them.
- */
-function requireRoster(): { id: string } {
-  const user = currentUser()
-  if (!user) throw new Error('You are not signed in.')
-  if (!user.permissions.includes('admin.employees.manage')) {
-    throw new Error('Only a lead can change the rota.')
-  }
-  return { id: user.id }
-}
-
 function requireInbox(): { id: string } {
   const user = currentUser()
   if (!user) throw new Error('You are not signed in.')
@@ -110,83 +90,6 @@ export function registerOwnerIpc(): void {
       viewerId: currentUser()?.id ?? null
     })
   })
-
-  // The floor's board. Same access model as the owner's: assembled from what
-  // the caller can already open, and scoped to them by the session rather than
-  // by an argument. `hours` and `shifts` are theirs by construction, so there is
-  // no permission on them — a packer checking their own fortnight is not an
-  // administrative act.
-  ipcMain.handle(IPC.staffBoard, (): StaffBoard | null => {
-    const user = currentUser()
-    if (!user) return null
-    return getStaffBoard({ fulfillment: can('module.fulfillment'), viewerId: user.id })
-  })
-
-  // ---- The rota -----------------------------------------------------------
-  //
-  // Reading YOUR OWN needs nothing but a session, and the employee is the
-  // session's — there is no channel here that reads a named person's shifts.
-  ipcMain.handle(IPC.scheduleMine, (): Shift[] => {
-    const user = currentUser()
-    return user ? myShifts(user.id) : []
-  })
-
-  // The team's rota. Same gate as the team timesheet it sits beside: somebody
-  // who cannot see who worked has no business seeing who is due in.
-  ipcMain.handle(
-    IPC.scheduleList,
-    (_e, payload: { from?: unknown; to?: unknown }): ShiftWithPerson[] => {
-      if (!can('admin.hours.view')) return []
-      return listShifts(str(payload?.from), str(payload?.to))
-    }
-  )
-
-  ipcMain.handle(IPC.scheduleCreate, (_e, payload: NewShift): Result<Shift> => {
-    try {
-      const actor = requireRoster()
-      return {
-        ok: true,
-        data: createShift(
-          {
-            employeeId: str(payload?.employeeId),
-            day: str(payload?.day),
-            startTime: payload?.startTime ? str(payload.startTime) : null,
-            endTime: payload?.endTime ? str(payload.endTime) : null,
-            note: payload?.note ? str(payload.note) : null
-          },
-          actor.id
-        )
-      }
-    } catch (err) {
-      return fail(err)
-    }
-  })
-
-  ipcMain.handle(IPC.scheduleDelete, (_e, id: unknown): Result<{ id: string }> => {
-    try {
-      requireRoster()
-      const target = str(id)
-      if (!deleteShift(target)) return { ok: false, error: 'That shift is already gone.' }
-      return { ok: true, data: { id: target } }
-    } catch (err) {
-      return fail(err)
-    }
-  })
-
-  ipcMain.handle(
-    IPC.scheduleCopyWeek,
-    (_e, payload: { from?: unknown; to?: unknown }): Result<{ created: number }> => {
-      try {
-        const actor = requireRoster()
-        return {
-          ok: true,
-          data: { created: copyWeek(str(payload?.from), str(payload?.to), actor.id) }
-        }
-      } catch (err) {
-        return fail(err)
-      }
-    }
-  )
 
   ipcMain.handle(IPC.remindersList, (): Reminder[] => (can('admin.access') ? listReminders() : []))
 

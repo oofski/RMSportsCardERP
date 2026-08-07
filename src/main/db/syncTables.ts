@@ -170,6 +170,17 @@ export const SYNCED_TABLES: SyncedTable[] = [
   // under a UUID nobody else mints, and two leads editing the same one are
   // making the same kind of correction, where the later word is the one wanted.
   { table: 'shifts', key: ['id'], tier: 1 },
+  // What somebody said about a day before anybody was put on it. It travels for
+  // the mirror-image reason the rota does: availability is written by the
+  // packer and read by the lead building next week, so one that stayed on the
+  // phone it was typed on would be a message nobody receives.
+  //
+  // The id is DERIVED from the person and the day rather than minted, which is
+  // what makes last-write-wins the right arbiter here rather than a coin toss:
+  // two machines recording the same person's answer for the same day produce
+  // the same row, so the later answer wins — exactly what somebody changing
+  // their mind means. A UUID would leave two rows saying opposite things.
+  { table: 'availability', key: ['id'], tier: 1 },
   { table: 'time_entries', key: ['id'], tier: 1 },
   { table: 'inventory_transactions', key: ['id'], tier: 1 },
   { table: 'inventory_incoming', key: ['id'], tier: 1 },

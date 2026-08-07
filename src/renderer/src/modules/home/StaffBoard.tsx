@@ -80,7 +80,11 @@ export function StaffBoard(): JSX.Element | null {
         <HoursCard board={board} onOpen={() => navigate('timepay')} />
       </div>
 
-      <ShiftsCard shifts={board.allShifts} upcoming={board.shifts} />
+      <ShiftsCard
+        shifts={board.allShifts}
+        upcoming={board.shifts}
+        onOpen={() => navigate('schedule')}
+      />
 
       <div className="ob-card ob-span" style={{ marginTop: 12 }}>
         <header>
@@ -238,7 +242,15 @@ function HoursCard({ board, onOpen }: { board: Board; onOpen: () => void }): JSX
  * on the 14th tells you there is a shift; it does not tell you it starts at four
  * or that it is the pack bench, and those are the parts somebody acts on.
  */
-function ShiftsCard({ shifts, upcoming }: { shifts: Shift[]; upcoming: Shift[] }): JSX.Element {
+function ShiftsCard({
+  shifts,
+  upcoming,
+  onOpen
+}: {
+  shifts: Shift[]
+  upcoming: Shift[]
+  onOpen: () => void
+}): JSX.Element {
   const today = dayKey(new Date())
   const [month, setMonth] = useState(() => monthOf(today))
 
@@ -259,7 +271,11 @@ function ShiftsCard({ shifts, upcoming }: { shifts: Shift[]; upcoming: Shift[] }
     <div className="ob-card ob-span" style={{ marginTop: 12 }}>
       <header>
         <Icon name="CalendarDays" size={16} />
-        <h3>Your shifts</h3>
+        {/* A door, not a place to work — marking availability happens in
+            Schedule, and the header is how you get there from here. */}
+        <h3 className="sb-link" onClick={onOpen} title="Open Schedule">
+          Your shifts
+        </h3>
         <span className="ob-sub">
           {upcoming.length === 0
             ? 'Nothing scheduled yet'

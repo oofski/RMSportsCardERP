@@ -17,6 +17,7 @@ import { registerQuickBooksIpc } from '../main/quickbooksIpc'
 import { registerFinanceIpc } from '../main/financeIpc'
 import { registerSyncIpc } from '../main/syncIpc'
 import { registerOwnerIpc } from '../main/ownerIpc'
+import { registerScheduleIpc } from '../main/scheduleIpc'
 import { initCloudSync, stopCloudSync } from '../main/services/cloudSync'
 import { collectClientActions, type PendingDownload } from './clientActions'
 import {
@@ -821,6 +822,7 @@ export function startServer(options: ServerOptions = {}): Server {
   // Was missing, and its absence was invisible: the owner's home board and the
   // reminders inbox simply 404'd on the server while working on the desktop.
   registerOwnerIpc()
+  registerScheduleIpc()
 
   // The three modules that push do it by walking the window list. Give them one
   // window whose `send` goes out over SSE, and they push to the browser without

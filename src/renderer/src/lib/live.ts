@@ -80,11 +80,13 @@ export const LIVE = {
    * The rota.
    *
    * Its own key rather than a line in `people`, because it is written and read
-   * on different machines by different people: a lead sets Thursday's shifts on
-   * the office laptop and the packers read them at the bench. A rota that only
-   * updates when somebody remembers to reload is a rota nobody trusts.
+   * on different machines by different people, in BOTH directions: a lead sets
+   * Thursday's shifts on the office laptop and the packers read them at the
+   * bench; the packers mark next week's availability at the bench and the lead
+   * builds the rota from it. Either one only updating when somebody remembers
+   * to reload is a schedule nobody trusts.
    */
-  schedule: ['shifts'],
+  schedule: ['shifts', 'availability'],
 
   /**
    * The owner's inbox and the to-do list beside it on the home page.

@@ -414,5 +414,147 @@ ok(mine.shifts.length === 1, 'one shift coming up', String(mine.shifts.length))
 ok(mine.shifts[0].employeeId === meId, "and it is mine, not Robin's")
 ok(mine.allShifts.length === 1, 'the calendar sees only mine too', String(mine.allShifts.length))
 
+// ---------------------------------------------------------------------------
+console.log('\n=== 7. availability: what somebody says before anybody asks ===')
+// ---------------------------------------------------------------------------
+const {
+  availabilityLabel,
+  validateAvailability,
+  AVAILABILITY_HORIZON_DAYS
+} = require('../src/shared/schedule')
+
+ok(validateAvailability({ day: 'nope', status: 'available' }) !== null, 'a day has to be a day')
+ok(
+  validateAvailability({ day: plus(1), status: 'maybe' as never }) !== null,
+  'and the answer has to be one of the two'
+)
+ok(validateAvailability({ day: plus(1), status: 'available' }) === null, 'a plain yes is fine')
+ok(
+  validateAvailability({ day: plus(1), status: 'available', startTime: '99:00' }) !== null,
+  'a time has to be a time'
+)
+
+ok(availabilityLabel({ status: 'unavailable', startTime: null, endTime: null }) === 'Cannot work', 'a no reads plainly')
+ok(availabilityLabel({ status: 'available', startTime: null, endTime: null }) === 'Free', 'so does a yes')
+ok(
+  availabilityLabel({ status: 'available', startTime: '16:00', endTime: null }) === 'Free from 4:00pm',
+  'and a yes with a time keeps the time'
+)
+
+// THREE STATES. Silence is a real answer and must stay distinct from both — read
+// as "unavailable" nobody gets rostered until they opt in; read as "available"
+// nobody's day off is respected.
+ok(schedule.myAvailability('emp_pat').length === 0, 'saying nothing is the starting state')
+
+schedule.setAvailability('emp_pat', { day: plus(1), status: 'available', startTime: '16:00' })
+schedule.setAvailability('emp_pat', { day: plus(2), status: 'unavailable', note: 'Away' })
+schedule.setAvailability('emp_robin', { day: plus(1), status: 'unavailable' })
+
+const patSaid = schedule.myAvailability('emp_pat')
+ok(patSaid.length === 2, 'two answers recorded', String(patSaid.length))
+ok(patSaid[0].day === plus(1), 'oldest day first', patSaid[0].day)
+ok(patSaid[0].status === 'available' && patSaid[0].startTime === '16:00', 'a yes keeps its time')
+ok(patSaid[1].status === 'unavailable' && patSaid[1].note === 'Away', 'a no keeps its reason')
+ok(
+  schedule.myAvailability('emp_pat').every((a: any) => a.employeeId === 'emp_pat'),
+  "and none of them are Robin's"
+)
+
+// CHANGING YOUR MIND replaces, it does not append. The id is derived from the
+// person and the day, so there is exactly one answer per day by construction —
+// which is also what makes last-write-wins the right arbiter across machines.
+schedule.setAvailability('emp_pat', { day: plus(1), status: 'unavailable', note: 'Changed my mind' })
+const afterChange = schedule.myAvailability('emp_pat')
+ok(afterChange.length === 2, 'changing your mind does not add a row', String(afterChange.length))
+const changed = afterChange.find((a: any) => a.day === plus(1))
+ok(changed?.status === 'unavailable', 'the later answer wins', String(changed?.status))
+ok(changed?.startTime === null, 'and the old time does not survive it', String(changed?.startTime))
+ok(changed?.id === `av_emp_pat_${plus(1)}`, 'the id is derived, not minted', String(changed?.id))
+
+// TAKING IT BACK is its own action, because "say nothing" is not "say no".
+ok(schedule.clearAvailability('emp_pat', plus(1)) === true, 'an answer can be withdrawn')
+ok(schedule.myAvailability('emp_pat').length === 1, 'leaving one', String(schedule.myAvailability('emp_pat').length))
+ok(
+  schedule.clearAvailability('emp_pat', plus(1)) === false,
+  'withdrawing twice reports nothing to withdraw rather than pretending'
+)
+// And it cannot reach somebody else's — the key is built from the caller's id.
+ok(
+  schedule.clearAvailability('emp_pat', plus(1)) === false &&
+    schedule.myAvailability('emp_robin').length === 1,
+  "clearing your own day leaves Robin's alone"
+)
+
+// THE PAST is not something to have an opinion about, and neither is next
+// century — a stray keystroke in the year field would otherwise write a row
+// nobody sees again.
+let refusedPast = false
+try {
+  schedule.setAvailability('emp_pat', { day: plus(-1), status: 'available' })
+} catch {
+  refusedPast = true
+}
+ok(refusedPast, 'a day that has been and gone is refused')
+let refusedFar = false
+try {
+  schedule.setAvailability('emp_pat', {
+    day: plus(AVAILABILITY_HORIZON_DAYS + 5),
+    status: 'available'
+  })
+} catch {
+  refusedFar = true
+}
+ok(refusedFar, 'and so is a day years out')
+ok(
+  schedule.myAvailability('emp_pat').length === 1,
+  'neither wrote anything',
+  String(schedule.myAvailability('emp_pat').length)
+)
+
+// THE LEAD'S VIEW: everybody's answers across the week they are filling, with
+// names, so the rota can be built against them rather than against a guess.
+const said = schedule.listAvailability(plus(0), plus(7))
+ok(said.length === 2, "both people's answers are in range", String(said.length))
+ok(
+  said.some((a: any) => a.employeeName === 'Pat Ferrer'),
+  'carrying names'
+)
+ok(schedule.listAvailability(plus(30), plus(40)).length === 0, 'and a quiet week is empty')
+
+// A row whose status this build does not recognise reads as UNAVAILABLE. The
+// cautious reading of a corrupt answer is the one that does not roster somebody.
+db.prepare(
+  `INSERT INTO availability (id, employee_id, day, status, start_time, end_time, note, created_at, updated_at)
+   VALUES ('av_junk', 'emp_pat', ?, 'perhaps', NULL, NULL, NULL, ?, ?)`
+).run(plus(5), stamp, stamp)
+const junk = schedule.myAvailability('emp_pat').find((a: any) => a.id === 'av_junk')
+ok(junk?.status === 'unavailable', 'an unreadable answer is never taken as a yes', String(junk?.status))
+db.prepare(`DELETE FROM availability WHERE id = 'av_junk'`).run()
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 8. one shift per person per night, across machines ===')
+// ---------------------------------------------------------------------------
+// The shift id is derived too, so two leads rostering the same person for the
+// same night converge on one row instead of two that both look authoritative.
+db.prepare(`DELETE FROM shifts`).run()
+const made1 = schedule.createShift(
+  { employeeId: 'emp_pat', day: plus(4), startTime: '16:00' },
+  'emp_lead'
+)
+ok(made1.id === `sh_emp_pat_${plus(4)}`, 'a new shift gets a derived id', made1.id)
+// A row from before the derived scheme keeps its own id and is still corrected
+// in place rather than duplicated.
+db.prepare(
+  `INSERT INTO shifts (id, employee_id, shift_date, start_time, end_time, note, created_by, created_at, updated_at)
+   VALUES ('legacy-uuid-1', 'emp_robin', ?, '16:00', NULL, NULL, 'emp_lead', ?, ?)`
+).run(plus(4), stamp, stamp)
+const fixed = schedule.createShift(
+  { employeeId: 'emp_robin', day: plus(4), startTime: '18:00' },
+  'emp_lead'
+)
+ok(fixed.id === 'legacy-uuid-1', 'an older row keeps its id', fixed.id)
+ok(schedule.myShifts('emp_robin').length === 1, 'and is updated, not duplicated')
+ok(schedule.myShifts('emp_robin')[0].startTime === '18:00', 'with the new time')
+
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

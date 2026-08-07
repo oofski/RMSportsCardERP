@@ -18802,3 +18802,276 @@ button.sor-team:focus-visible {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
 }
+
+/* ---------------------------------------------------------------------------
+   SCHEDULE — one calendar carrying two different kinds of fact
+
+   A shift is a decision somebody took about your week; availability is a thing
+   you said about it. They share a square, and the interesting cases are exactly
+   where they disagree — so the shift owns the cell and the answer sits in the
+   corner, which makes a clash visible rather than overwritten.
+   --------------------------------------------------------------------------- */
+
+.sched-hint {
+  margin: 0 0 10px;
+  font-size: 12.5px;
+  color: var(--text-3);
+  line-height: 1.5;
+}
+
+.sched-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-bottom: 10px;
+}
+.sched-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+.sched-key i {
+  width: 11px;
+  height: 11px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+}
+.sched-key[data-kind='shift'] i {
+  background: color-mix(in srgb, var(--accent) 22%, var(--surface-2));
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.sched-key[data-kind='available'] i {
+  background: color-mix(in srgb, var(--success-strong) 22%, var(--surface-2));
+  border-color: color-mix(in srgb, var(--success-strong) 50%, transparent);
+}
+.sched-key[data-kind='unavailable'] i {
+  background: var(--surface-2);
+  border-style: dashed;
+  border-color: var(--text-3);
+}
+.sched-key[data-kind='clash'] i {
+  background: color-mix(in srgb, var(--danger-strong) 22%, var(--surface-2));
+  border-color: var(--danger-strong);
+}
+
+.sched-cal {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 12px;
+}
+.sched-cal .sb-cal-head {
+  margin-bottom: 6px;
+}
+
+/* A BUTTON, not a div — every cell is a thing you press to answer for that day,
+   so it has to be reachable from a keyboard and refuse the past by being
+   genuinely disabled rather than by ignoring the click. */
+.sched-cell {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  min-height: 56px;
+  padding: 4px 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  cursor: pointer;
+  font: inherit;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+.sched-cell:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+.sched-cell:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+.sched-cell[data-out='true'] {
+  background: transparent;
+  border-color: transparent;
+}
+.sched-cell[data-today='true'] {
+  border-color: var(--accent);
+  border-width: 2px;
+}
+.sched-date {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+.sched-cell[data-out='true'] .sched-date {
+  opacity: 0.45;
+}
+.sched-shift {
+  font-size: 9.5px;
+  font-weight: 700;
+  color: var(--accent);
+  white-space: nowrap;
+}
+.sched-cell[data-shift='true'] {
+  background: color-mix(in srgb, var(--accent) 15%, var(--surface-2));
+}
+.sched-cell[data-shift='true'] .sched-date {
+  color: var(--text);
+  font-weight: 700;
+}
+
+/* The answer, in the corner. Small on purpose: it is a note you left, not a
+   decision anybody took, and it must not outshout the shift in the same cell. */
+.sched-mark {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  color: var(--surface);
+}
+.sched-cell[data-mark='available'] .sched-mark {
+  background: var(--success-strong);
+}
+.sched-cell[data-mark='available'] {
+  border-color: color-mix(in srgb, var(--success-strong) 45%, transparent);
+}
+.sched-cell[data-mark='unavailable'] .sched-mark {
+  background: var(--text-3);
+}
+.sched-cell[data-mark='unavailable'] {
+  border-style: dashed;
+}
+.sched-cell[data-mark='unavailable'] .sched-date {
+  text-decoration: line-through;
+  opacity: 0.75;
+}
+/* Rostered on a day you said no to. The only arrangement on this calendar that
+   is a problem rather than information, so it is the only one in the loud
+   colour — and it beats both of the states it is made of. */
+.sched-cell[data-mark='clash'] {
+  background: color-mix(in srgb, var(--danger-strong) 16%, var(--surface-2));
+  border-color: var(--danger-strong);
+}
+.sched-cell[data-mark='clash'] .sched-mark {
+  background: var(--danger-strong);
+}
+.sched-cell[data-mark='clash'] .sched-shift {
+  color: var(--danger-strong);
+}
+
+.sched-clash {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  background: color-mix(in srgb, var(--danger-strong) 9%, transparent);
+  color: var(--danger-strong);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.sched-clash svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+/* The two answers, as two buttons. This IS the interface — everything else on
+   the editor is optional detail — so they get the width to say so. */
+.sched-choice {
+  display: flex;
+  gap: 8px;
+  padding: 12px 12px 0;
+}
+.sched-opt {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.sched-opt:hover {
+  color: var(--text);
+}
+.sched-opt.on[data-kind='available'] {
+  background: color-mix(in srgb, var(--success-strong) 16%, var(--surface-2));
+  border-color: var(--success-strong);
+  color: var(--text);
+}
+.sched-opt.on[data-kind='unavailable'] {
+  background: color-mix(in srgb, var(--danger-strong) 13%, var(--surface-2));
+  border-color: var(--danger-strong);
+  color: var(--text);
+}
+
+/* ---- What people said, inside the lead's week view --------------------- */
+
+.rota-said {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 7px 6px;
+}
+.rota-said-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  line-height: 1.35;
+  color: var(--text-3);
+}
+.rota-said-row[data-kind='available'] {
+  color: var(--success-strong);
+}
+.rota-said-row svg {
+  flex: none;
+}
+
+/* Rostered on a day they said no to — the single most useful thing this screen
+   can tell a lead, so it is on the row rather than something to go and check. */
+.rota-list li[data-clash='true'] {
+  background: color-mix(in srgb, var(--danger-strong) 14%, var(--surface-2));
+  box-shadow: inset 2px 0 0 var(--danger-strong);
+}
+.rota-list li[data-clash='true'] .rota-who {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--danger-strong);
+}
+.rota-list li[data-clash='true'] .rota-when {
+  color: var(--danger-strong);
+}
+
+.rota-free-note {
+  margin: 0;
+  padding: 0 12px 12px;
+  font-size: 12px;
+  color: var(--success-strong);
+}
+
+/* The heading doubles as the door into Schedule. The month nav lives in this
+   same header, so the whole strip cannot be the click target the other cards
+   use — paging to next month would open the module instead. */
+.sb-link {
+  cursor: pointer;
+}
+.sb-link:hover {
+  text-decoration: underline;
+}

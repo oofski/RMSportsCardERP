@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { Employee, EmployeeHoursSummary } from '@shared/types'
 import { useSession } from '../../lib/session'
 import { MyHours } from './MyHours'
-import { RotaTab } from './RotaTab'
 import { api } from '../../lib/api'
 import { LIVE, useLiveRefresh } from '../../lib/live'
 import { useToast } from '../../components/Toast'
@@ -40,7 +39,7 @@ export function TimePayrollModule(): JSX.Element {
   const canManage = can('admin.employees.manage')
   /** Whether the TEAM's timesheet is theirs to see. Their own always is. */
   const canView = can('admin.hours.view')
-  const [scope, setScope] = useState<'me' | 'team' | 'rota'>('me')
+  const [scope, setScope] = useState<'me' | 'team'>('me')
 
   const [employees, setEmployees] = useState<Employee[]>([])
   const [summary, setSummary] = useState<EmployeeHoursSummary[]>([])
@@ -129,19 +128,10 @@ export function TimePayrollModule(): JSX.Element {
         <button className={`seg ${scope === 'team' ? 'on' : ''}`} onClick={() => setScope('team')}>
           The team
         </button>
-        {/* Who is DUE in, next to who HAS been in. They are two halves of the
-            same question and were only ever apart because the first half had no
-            table behind it. Setting one needs more than reading the other, so
-            the writes inside are gated again on admin.employees.manage. */}
-        <button className={`seg ${scope === 'rota' ? 'on' : ''}`} onClick={() => setScope('rota')}>
-          Rota
-        </button>
       </div>
 
       {scope === 'me' ? (
         <MyHours />
-      ) : scope === 'rota' ? (
-        <RotaTab employees={employees} />
       ) : (
       <>
       <div className="stat-grid">
