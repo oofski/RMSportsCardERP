@@ -4,6 +4,7 @@ import { IS_WEB } from '../../lib/api'
 import { Icon } from '../../components/Icon'
 import { TimeClock } from '../../components/TimeClock'
 import { OwnerBoard } from './OwnerBoard'
+import { StaffBoard } from './StaffBoard'
 
 /**
  * The morning page.
@@ -55,6 +56,43 @@ export function HomeModule(): JSX.Element {
   const canHours = can('admin.hours.view')
   const canInvoicing = can('module.invoicing')
   const canFloor = can('module.fulfillment')
+
+  /**
+   * WHICH BOARD.
+   *
+   * By role rather than by permission, and deliberately. The two boards are not
+   * a wide view and a narrow one — they answer different questions, so "which
+   * cards may this person see" is the wrong test. A packer with an extra module
+   * granted is still a packer, and handing them the P&L card because somebody
+   * ticked `module.finance` for one afternoon would be a worse screen for them,
+   * not a more generous one.
+   *
+   * Staff and Shipping are siblings, not a rung apart — same rank, different
+   * job — so both get the floor's board.
+   */
+  const onTheFloor = user?.role === 'staff' || user?.role === 'shipping'
+
+  if (onTheFloor) {
+    return (
+      <div className="content-narrow">
+        <div className="greeting">
+          <h2>
+            {greetingWord()}, {user?.firstName}
+          </h2>
+        </div>
+
+        <div style={{ marginBottom: 16 }}>
+          <TimeClock />
+        </div>
+
+        {/* No quick actions below it. The two modules the floor can open are in
+            the sidebar at all times, and this app has no router — an action can
+            only ever land on a module's default screen, so a shortcut row here
+            would be four buttons for two doors. */}
+        <StaffBoard />
+      </div>
+    )
+  }
 
   return (
     <div className="content-narrow">

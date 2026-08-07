@@ -203,6 +203,18 @@ export const IPC = {
   // The caller's OWN shifts. No permission beyond being signed in, and the
   // employee is taken from the session — a packer checking their own pay.
   myHours: 'hours:mine',
+  // The floor's home board: what needs sorting, this fortnight's hours, and
+  // their own next shifts. Assembled per caller like the owner's board is.
+  staffBoard: 'staff:board',
+  // The rota. `scheduleMine` is scoped to the session and gated on nothing but
+  // being signed in; the rest are the lead's view and need admin.hours.view /
+  // admin.employees.manage. There is deliberately no channel that reads one
+  // NAMED person's shifts — that is the shape somebody forgets to gate.
+  scheduleMine: 'schedule:mine',
+  scheduleList: 'schedule:list',
+  scheduleCreate: 'schedule:create',
+  scheduleDelete: 'schedule:delete',
+  scheduleCopyWeek: 'schedule:copy-week',
   shipDocument: 'shipping:document',
   shipDocumentBytes: 'shipping:document:bytes',
   shipDocumentArrival: 'shipping:document:arrival',

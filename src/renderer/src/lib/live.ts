@@ -77,6 +77,16 @@ export const LIVE = {
   people: ['employees', 'time_entries'],
 
   /**
+   * The rota.
+   *
+   * Its own key rather than a line in `people`, because it is written and read
+   * on different machines by different people: a lead sets Thursday's shifts on
+   * the office laptop and the packers read them at the bench. A rota that only
+   * updates when somebody remembers to reload is a rota nobody trusts.
+   */
+  schedule: ['shifts'],
+
+  /**
    * The owner's inbox and the to-do list beside it on the home page.
    *
    * Both tables travel between machines and neither had a key here, so a note

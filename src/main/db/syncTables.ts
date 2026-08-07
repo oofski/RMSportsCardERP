@@ -163,6 +163,13 @@ export const SYNCED_TABLES: SyncedTable[] = [
   // reader — and it has to travel, or ticking payroll off on the laptop would
   // leave it still asking on the web app.
   { table: 'recurring_tasks', key: ['id'], tier: 1 },
+  // The rota. It has to travel, and for a blunter reason than most rows here: a
+  // shift is written on the lead's machine and read on the packer's, so a rota
+  // that stayed where it was typed would be a rota the people working it cannot
+  // see. Last-write-wins is the right arbiter — a shift is a whole authored fact
+  // under a UUID nobody else mints, and two leads editing the same one are
+  // making the same kind of correction, where the later word is the one wanted.
+  { table: 'shifts', key: ['id'], tier: 1 },
   { table: 'time_entries', key: ['id'], tier: 1 },
   { table: 'inventory_transactions', key: ['id'], tier: 1 },
   { table: 'inventory_incoming', key: ['id'], tier: 1 },

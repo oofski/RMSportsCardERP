@@ -21,6 +21,8 @@
 import { IPC, type AppInfo } from '@shared/ipc'
 import type { Permission } from '@shared/permissions'
 import type { NewReminder, OwnerBoard, Reminder, Todo } from '@shared/ownerDashboard'
+import type { StaffBoard } from '@shared/staffBoard'
+import type { NewShift, Shift, ShiftWithPerson } from '@shared/schedule'
 import type { RecurringTask } from '@shared/homeTasks'
 import type {
   ShipPickAdvanced,
@@ -983,6 +985,25 @@ export function createBridge(ipcRenderer: BridgeTransport) {
         totalMinutes: number
         firstDay: string | null
       } | null> => ipcRenderer.invoke(IPC.myHours)
+    },
+    /**
+     * The floor's home board, and the rota behind one of its cards.
+     *
+     * `board` is scoped to the caller by the handler, exactly as the owner's is.
+     * `mine` is their own shifts; the three write operations are the lead's and
+     * are refused for anybody else in main.
+     */
+    staff: {
+      board: (): Promise<StaffBoard | null> => ipcRenderer.invoke(IPC.staffBoard),
+      myShifts: (): Promise<Shift[]> => ipcRenderer.invoke(IPC.scheduleMine),
+      shifts: (from: string, to: string): Promise<ShiftWithPerson[]> =>
+        ipcRenderer.invoke(IPC.scheduleList, { from, to }),
+      addShift: (input: NewShift): Promise<Result<Shift>> =>
+        ipcRenderer.invoke(IPC.scheduleCreate, input),
+      deleteShift: (id: string): Promise<Result<{ id: string }>> =>
+        ipcRenderer.invoke(IPC.scheduleDelete, id),
+      copyWeek: (from: string, to: string): Promise<Result<{ created: number }>> =>
+        ipcRenderer.invoke(IPC.scheduleCopyWeek, { from, to })
     },
     updates: {
       getStatus: (): Promise<UpdateStatus> => ipcRenderer.invoke(IPC.updatesGetStatus),

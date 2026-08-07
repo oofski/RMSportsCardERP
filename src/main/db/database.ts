@@ -1924,6 +1924,43 @@ function migrate(database: Database.Database): void {
   )
   setMeta(database, 'schema_version', '48')
 
+  // v49: the rota. Who is DUE in, as opposed to who has clocked in.
+  //
+  // The app could answer the second question and not the first, and said so on
+  // the home page rather than guessing — an open time entry proves somebody is
+  // standing in the building, and nothing anywhere recorded an intention. A
+  // packer asking what shifts they have next week is asking the first question,
+  // so the first question needed a table.
+  //
+  // WALL CLOCK, not an instant, and this is the load-bearing decision. A shift
+  // is a local calendar day plus local HH:MM: "you are in at 4pm on Thursday"
+  // stays 4pm across a daylight-saving boundary and stays Thursday. Storing it
+  // as a UTC instant would slide the rota by an hour twice a year and would put
+  // a 7pm Chicago shift on the following day's screen — which is precisely the
+  // bug the "employees today" card had to be fixed for, reintroduced somewhere
+  // far harder to notice. time_entries stays the opposite and stays an instant,
+  // because a clock-in is a physical event rather than a plan.
+  //
+  // No foreign key on employee_id, matching every other table here: the sync
+  // relay applies rows one at a time on the recovery path, and a shift arriving
+  // before the employee row it names must land rather than be rejected.
+  database.exec(
+    `CREATE TABLE IF NOT EXISTS shifts (
+       id          TEXT PRIMARY KEY,
+       employee_id TEXT NOT NULL,
+       shift_date  TEXT NOT NULL,
+       start_time  TEXT,
+       end_time    TEXT,
+       note        TEXT,
+       created_by  TEXT,
+       created_at  TEXT NOT NULL,
+       updated_at  TEXT NOT NULL
+     );
+     CREATE INDEX IF NOT EXISTS idx_shifts_person ON shifts (employee_id, shift_date);
+     CREATE INDEX IF NOT EXISTS idx_shifts_day    ON shifts (shift_date);`
+  )
+  setMeta(database, 'schema_version', '49')
+
   // Payroll, once, for whoever owns the company.
   //
   // Seeded rather than left to be typed because the owner named it, named its

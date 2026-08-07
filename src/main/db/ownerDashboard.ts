@@ -19,6 +19,7 @@ import { rateLookup } from './whatnotRates'
 import { listActivePurchaseOrderBoxes, listPurchaseOrders } from './purchaseOrders'
 import { listIncoming } from './incoming'
 import { recurringDueNow, slipsOutstanding } from './homeTasks'
+import { listShifts } from './schedule'
 import { inventoryStats } from './inventory'
 import { supplyStats } from './supplies'
 import { nowIso } from '../util'
@@ -466,15 +467,21 @@ function ordersToShip(): { items: OwnerOrderToShip[]; remaining: number; importe
 }
 
 /**
- * Who is at work today.
+ * Who is at work today, and who is due to be.
  *
- * Built from time entries that START today, which is the only record this app
- * has of somebody being in. There is no rota anywhere — see the note on
- * OwnerEmployeeToday — so this answers "who is here" and does not pretend to
- * answer "who is due".
+ * TWO SOURCES, joined on the person. Time entries that START today are the only
+ * record of somebody actually being in; today's rota rows are the record of who
+ * was expected. Keeping them apart is what lets the card say "Dana is in" and
+ * "Rob is due at four and has not arrived" in the same list without either
+ * sentence being a guess.
  *
- * On the clock first, then most hours logged: at 8am the useful half of this
- * card is the people currently standing in the building.
+ * This used to be the clock alone, because there was no rota to read. There is
+ * one now (v49), and the owner asked for exactly this — "the employees that are
+ * going to be in".
+ *
+ * On the clock first, then everybody rostered, then most hours logged: at 8am
+ * the useful half of this card is the people currently standing in the building,
+ * and the second most useful is the ones who should be.
  */
 function employeesToday(): OwnerEmployeeToday[] {
   // LOCAL midnight, expressed as the UTC instant it happened — which is what
@@ -508,6 +515,15 @@ function employeesToday(): OwnerEmployeeToday[] {
     clock_out: string | null
   }>
 
+  // Today's rota, keyed by person. Read separately rather than joined into the
+  // query above, because the two sets only partly overlap: somebody rostered who
+  // has not arrived has no time entry at all, and would fall out of an inner
+  // join — which is exactly the person this card was extended to show.
+  const rostered = new Map<string, { start: string | null }>()
+  for (const s of listShifts(localDay(new Date()), localDay(new Date()))) {
+    rostered.set(s.employeeId, { start: s.startTime })
+  }
+
   const byPerson = new Map<string, OwnerEmployeeToday>()
   for (const r of rows) {
     const existing = byPerson.get(r.id)
@@ -517,7 +533,9 @@ function employeesToday(): OwnerEmployeeToday[] {
       role: r.role,
       onTheClock: false,
       since: null,
-      minutesToday: 0
+      minutesToday: 0,
+      dueAt: rostered.get(r.id)?.start ?? null,
+      scheduled: rostered.has(r.id)
     }
     if (r.clock_out) {
       const mins = (new Date(r.clock_out).getTime() - new Date(r.clock_in).getTime()) / 60000
@@ -533,8 +551,44 @@ function employeesToday(): OwnerEmployeeToday[] {
     byPerson.set(r.id, person)
   }
 
+  // Anybody on today's rota who has not clocked in at all. They have no time
+  // entry, so nothing above could have produced them — and they are the whole
+  // point of reading the rota here: the four o'clock start that has not turned
+  // up is the one thing on this card somebody might act on.
+  const missing = [...rostered.keys()].filter((id) => !byPerson.has(id))
+  if (missing.length > 0) {
+    const placeholders = missing.map(() => '?').join(', ')
+    const people = getDb()
+      .prepare(
+        `SELECT id, first_name AS first, last_name AS last, role
+           FROM employees
+          WHERE id IN (${placeholders}) AND status != 'disabled'`
+      )
+      .all(...missing) as Array<{
+      id: string
+      first: string | null
+      last: string | null
+      role: string
+    }>
+    for (const p of people) {
+      byPerson.set(p.id, {
+        id: p.id,
+        name: `${p.first ?? ''} ${p.last ?? ''}`.trim() || 'Someone',
+        role: p.role,
+        onTheClock: false,
+        since: null,
+        minutesToday: 0,
+        dueAt: rostered.get(p.id)?.start ?? null,
+        scheduled: true
+      })
+    }
+  }
+
   return [...byPerson.values()].sort((a, b) => {
     if (a.onTheClock !== b.onTheClock) return a.onTheClock ? -1 : 1
+    // Somebody expected sorts above somebody who has finished for the day: the
+    // shift still to come is the one there is anything to do about.
+    if (a.onTheClock === false && a.scheduled !== b.scheduled) return a.scheduled ? -1 : 1
     if (b.minutesToday !== a.minutesToday) return b.minutesToday - a.minutesToday
     return a.name.localeCompare(b.name)
   })

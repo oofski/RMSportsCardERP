@@ -18390,3 +18390,415 @@ button.sor-team:focus-visible {
   font-size: 12.5px;
   line-height: 1.55;
 }
+
+/* ---------------------------------------------------------------------------
+   THE FLOOR'S BOARD
+
+   The staff home page. Reuses .ob-card, .ob-grid and .ob-span wholesale — it is
+   the same furniture answering different questions, and a second card shell
+   would drift from the first the moment either was touched. What is new here is
+   only what the owner's board has no equivalent of: a row of plain figures, a
+   progress bar for the night, and the rota calendar.
+   --------------------------------------------------------------------------- */
+
+/* Three figures across, the first one larger. The lead figure is the one
+   somebody reads from across a room; the other two are context for it. */
+.sb-figures {
+  display: flex;
+  gap: 4px;
+  padding: 13px 14px 10px;
+}
+.sb-fig {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.sb-fig b {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.sb-fig[data-lead='true'] b {
+  font-size: 25px;
+  line-height: 1.1;
+}
+.sb-fig em {
+  font-style: normal;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+/* The night's progress, filled by what is DONE rather than what is left. */
+.sb-bar {
+  height: 5px;
+  margin: 0 14px 4px;
+  border-radius: 3px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.sb-bar span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+  transition: width 0.25s ease;
+}
+
+/* The fortnight's total, given the room it earns: it is the whole reason this
+   card exists and everything under it is a breakdown of it. */
+.sb-hours {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 14px 0;
+}
+.sb-hours b {
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- The rota ---------------------------------------------------------- */
+
+.sb-month-nav {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.sb-month-nav span {
+  min-width: 108px;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+.sb-month-nav button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text-2);
+  cursor: pointer;
+}
+.sb-month-nav button:hover {
+  color: var(--text);
+  border-color: var(--border-strong, var(--border));
+}
+
+/* Calendar left, the list of what is actually coming right. Collapses to one
+   column in a narrow tab rather than squeezing seven day-cells into 150px. */
+.sb-schedule {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+  gap: 16px;
+  padding: 14px;
+}
+@media (max-width: 860px) {
+  .sb-schedule {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.sb-cal-head,
+.sb-cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 3px;
+}
+.sb-cal-head {
+  margin-bottom: 4px;
+}
+.sb-cal-head span {
+  text-align: center;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--text-3);
+}
+.sb-cal-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  min-height: 42px;
+  padding: 3px 2px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.sb-cal-date {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+.sb-cal-time {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: var(--accent);
+  white-space: nowrap;
+}
+/* Days borrowed from the months either side. Present so the grid keeps its
+   shape, dimmed so they are not mistaken for this month. */
+.sb-cal-cell[data-out='true'] {
+  background: transparent;
+}
+.sb-cal-cell[data-out='true'] .sb-cal-date {
+  color: var(--text-3);
+  opacity: 0.45;
+}
+/* The pay period the hours card is adding up, shaded across the month so the
+   figure above and the days below are visibly the same fortnight. */
+.sb-cal-cell[data-period='true'] {
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface-2));
+}
+.sb-cal-cell[data-on='true'] {
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface-2));
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+.sb-cal-cell[data-on='true'] .sb-cal-date {
+  color: var(--text);
+  font-weight: 700;
+}
+/* A shift already worked is history, not a plan — it stays legible and stops
+   competing with the ones still ahead. */
+.sb-cal-cell[data-on='true'][data-past='true'] {
+  background: var(--surface-2);
+  border-color: var(--border);
+}
+.sb-cal-cell[data-on='true'][data-past='true'] .sb-cal-time {
+  color: var(--text-3);
+}
+.sb-cal-cell[data-today='true'] {
+  border-color: var(--accent);
+}
+
+.sb-next-head {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  margin-bottom: 6px;
+}
+.sb-next .ob-shows {
+  max-height: 236px;
+  overflow-y: auto;
+}
+
+/* ---------------------------------------------------------------------------
+   THE ROTA, FROM THE LEAD'S SIDE
+
+   A week across, one column per day. Seven columns of names is the shape the
+   decision is actually made in — "who is on Thursday" — and it stays legible at
+   four or five names because each cell is a column rather than a grid square.
+   --------------------------------------------------------------------------- */
+
+.rota-week {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+/* Two rows of days rather than seven unreadable slivers once the window is
+   narrow. Four then three, which keeps the weekend together. */
+@media (max-width: 1020px) {
+  .rota-week {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+@media (max-width: 620px) {
+  .rota-week {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.rota-day {
+  display: flex;
+  flex-direction: column;
+  min-height: 132px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+}
+.rota-day[data-today='true'] {
+  border-color: var(--accent);
+}
+/* A day already worked is history. It stays readable — a lead checking what
+   happened needs it — but it stops competing with the days still to fill. */
+.rota-day[data-past='true'] {
+  opacity: 0.62;
+}
+.rota-day-head {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 7px 9px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.rota-day-head b {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--text);
+}
+.rota-day-head span {
+  font-size: 11px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.rota-list {
+  flex: 1;
+  list-style: none;
+  margin: 0;
+  padding: 5px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.rota-list li {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 5px 20px 5px 7px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 11%, var(--surface-2));
+}
+.rota-who {
+  font-size: 11.5px;
+  font-weight: 650;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rota-when {
+  font-size: 10.5px;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rota-x {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  opacity: 0;
+}
+.rota-list li:hover .rota-x,
+.rota-x:focus-visible {
+  opacity: 1;
+}
+.rota-x:hover {
+  color: var(--danger-strong);
+  background: var(--surface);
+}
+
+.rota-none {
+  padding: 4px 7px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.rota-add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  margin: 0 6px 6px;
+  padding: 5px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.rota-add:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+/* The add form, inline under the week. Setting a rota is half a dozen of these
+   in a row, and a dialog reopened for each one turns two minutes into a chore. */
+.rota-add-panel {
+  margin-top: 12px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+}
+.rota-add-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-2);
+}
+.rota-add-head b {
+  font-size: 13px;
+  color: var(--text);
+}
+.rota-add-head .rota-x {
+  position: static;
+  margin-left: auto;
+  width: 22px;
+  height: 22px;
+  opacity: 1;
+}
+.rota-add-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 12px;
+}
+.rota-add-row label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-3);
+}
+.rota-add-row label.rota-note {
+  flex: 1;
+  min-width: 160px;
+}
+.rota-add-row select,
+.rota-add-row input {
+  padding: 6px 9px;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}

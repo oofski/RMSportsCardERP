@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import type { OwnerBoard as Board, OwnerPnlWindow, Reminder, Todo } from '@shared/ownerDashboard'
 import { REMINDER_MAX_LENGTH, TODO_MAX_LENGTH } from '@shared/ownerDashboard'
 import { dayKey, recurringLabel } from '@shared/homeTasks'
+import { formatClock } from '@shared/schedule'
 import { api } from '../../lib/api'
 import { useSession } from '../../lib/session'
 import { useChrome } from '../../lib/chrome'
@@ -58,6 +59,9 @@ export function OwnerBoard(): JSX.Element | null {
   // The slips task is a statement about a STREAM, so a show starting or ending
   // on another machine is a change this page has to hear.
   useLiveRefresh(LIVE.streaming, load)
+  // The rota feeds the "employees today" card now: somebody rostered on the
+  // office laptop has to appear here without a reload.
+  useLiveRefresh(LIVE.schedule, load)
 
   useEffect(() => {
     let active = true
@@ -247,7 +251,13 @@ export function OwnerBoard(): JSX.Element | null {
               <Icon name="Users" size={16} />
               <h3>Employees today</h3>
               <span className="ob-sub">
-                {board.employeesToday.filter((e) => e.onTheClock).length} on the clock
+                {(() => {
+                  const on = board.employeesToday.filter((e) => e.onTheClock).length
+                  const due = board.employeesToday.filter(
+                    (e) => !e.onTheClock && e.scheduled && e.minutesToday === 0
+                  ).length
+                  return due > 0 ? `${on} on the clock · ${due} due` : `${on} on the clock`
+                })()}
               </span>
               <span className="ob-open">
                 Open <Icon name="ArrowRight" size={13} />
@@ -255,29 +265,46 @@ export function OwnerBoard(): JSX.Element | null {
             </header>
             {board.employeesToday.length > 0 ? (
               <ul className="ob-shows">
-                {board.employeesToday.map((e) => (
-                  <li key={e.id} data-live={e.onTheClock ? 'true' : 'false'}>
-                    <span className="ob-show-when">
-                      {formatHours(e.minutesToday)}
-                      <em>
-                        {e.since
-                          ? new Date(e.since).toLocaleTimeString([], {
-                              hour: 'numeric',
-                              minute: '2-digit'
-                            })
-                          : 'finished'}
-                      </em>
-                    </span>
-                    <span className="ob-show-title">{e.name}</span>
-                    {e.onTheClock && <span className="ob-flag" data-tone="ok">IN</span>}
-                  </li>
-                ))}
+                {board.employeesToday.map((e) => {
+                  // Rostered, nothing logged, not currently on: expected and not
+                  // here. The one line on this card there is anything to do
+                  // about, so it gets its own reading rather than being
+                  // flattened into "0h · finished".
+                  const awaited = !e.onTheClock && e.scheduled && e.minutesToday === 0
+                  return (
+                    <li key={e.id} data-live={e.onTheClock ? 'true' : 'false'}>
+                      <span className="ob-show-when">
+                        {awaited ? '—' : formatHours(e.minutesToday)}
+                        <em>
+                          {e.onTheClock && e.since
+                            ? new Date(e.since).toLocaleTimeString([], {
+                                hour: 'numeric',
+                                minute: '2-digit'
+                              })
+                            : awaited
+                              ? e.dueAt
+                                ? `due ${formatClock(e.dueAt)}`
+                                : 'due in'
+                              : 'finished'}
+                        </em>
+                      </span>
+                      <span className="ob-show-title">{e.name}</span>
+                      {e.onTheClock ? (
+                        <span className="ob-flag" data-tone="ok">IN</span>
+                      ) : awaited ? (
+                        <span className="ob-flag" data-tone="warn">DUE</span>
+                      ) : null}
+                    </li>
+                  )
+                })}
               </ul>
             ) : (
-              /* NOT a rota. Nothing in this app records who is DUE in — only who
-                 has clocked in — so an empty card says exactly that rather than
-                 implying nobody is coming. */
-              <p className="ob-empty">Nobody has clocked in yet today.</p>
+              /* Both halves are empty: nobody clocked in AND nobody rostered.
+                 Said as two facts rather than one, because "nobody is coming"
+                 and "nobody has arrived" are different problems. */
+              <p className="ob-empty">
+                Nobody has clocked in, and nobody is on today’s rota.
+              </p>
             )}
           </div>
         )}

@@ -319,9 +319,38 @@ ok(
 getDb().prepare(`DELETE FROM time_entries WHERE id = 'te_evening'`).run()
 
 
+// THE ROTA HALF. Somebody due in who has not arrived has NO time entry at all,
+// so nothing built from the clock could ever have produced them — which is
+// exactly why this card used to answer only "who is here". A rostered no-show is
+// the one line on it there is anything to do about.
+const schedule = require('../src/main/db/schedule')
+const todayKey = (() => {
+  const d = new Date()
+  const p = (n: number): string => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+})()
+schedule.createShift({ employeeId: workerId, day: todayKey, startTime: '16:00' }, 'emp_me')
+const rostered = owner.getOwnerBoard(ALL).employeesToday
+const due = rostered.find((e: any) => e.id === workerId)
+ok(!!due, 'somebody on today’s rota appears without ever clocking in')
+ok(due?.scheduled === true, 'marked as rostered')
+ok(due?.dueAt === '16:00', 'with the time they are due', String(due?.dueAt))
+ok(due?.onTheClock === false, 'and NOT claimed to be on the clock')
+ok(due?.minutesToday === 0, 'having logged nothing', String(due?.minutesToday))
+// Tomorrow's rota is not today's card.
+schedule.createShift(
+  { employeeId: workerId, day: '2099-01-01', startTime: '09:00' },
+  'emp_me'
+)
+ok(
+  owner.getOwnerBoard(ALL).employeesToday.filter((e: any) => e.id === workerId).length === 1,
+  'a shift on another day does not add a second row'
+)
+
 // An OPEN entry — clocked in, still here. This is the half of the card that
-// matters at 8am, and it is a fact rather than a rota: nothing in this app
-// records who is DUE in, only who arrived.
+// matters at 8am, and it is a fact from the clock rather than an intention from
+// the rota. Somebody rostered who then ARRIVES must merge into one row carrying
+// both, not appear twice.
 const nowIso = new Date().toISOString()
 getDb()
   .prepare(
@@ -336,6 +365,14 @@ ok(dana?.onTheClock === true, 'and are marked on the clock')
 ok(dana?.since === nowIso, 'with the time they started', String(dana?.since))
 ok(dana?.name === 'Dana Brooks', 'under their own name', String(dana?.name))
 ok(withOpen[0]?.id === workerId, 'and sort first, because they are standing here')
+// ONE row, carrying both facts. Rostered AND arrived is one person, and the
+// rota row must not survive as a duplicate beside the clock row.
+ok(
+  withOpen.filter((e: any) => e.id === workerId).length === 1,
+  'rostered and arrived is one person, not two rows'
+)
+ok(dana?.scheduled === true, 'still known to be on the rota')
+ok(dana?.dueAt === '16:00', 'and still carrying when they were due', String(dana?.dueAt))
 
 // A CLOSED entry the same day adds to the total rather than creating a second
 // person — somebody who clocks out for lunch is still one person.

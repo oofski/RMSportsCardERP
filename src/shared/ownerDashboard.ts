@@ -167,17 +167,18 @@ export interface OwnerOrderToShip {
 }
 
 /**
- * Somebody who is at work today.
+ * Somebody who is at work today, or due to be.
  *
- * `onTheClock` is the one that matters at 8am — it is a fact, from an open time
- * entry. `minutesToday` is what they have already logged, which is how a person
- * who came in and went home again is told apart from one who never arrived.
+ * TWO FACTS, kept apart because they are different kinds of thing and the card
+ * is unreadable if they are merged. `onTheClock` comes from an open time entry
+ * and is a physical fact: that person is standing in the building. `dueAt` comes
+ * from the rota and is an intention somebody recorded.
  *
- * THIS IS NOT A ROTA. The app has no schedule table: nothing anywhere records
- * who is DUE in, only who has clocked in. So this card answers "who is here"
- * honestly rather than answering "who is going to be in" by guessing, and the
- * day it needs to answer the second one, that is a shift-scheduling feature with
- * its own table and its own screen.
+ * This card used to carry only the first, and said so — the app had no schedule
+ * table, so "who is going to be in" was a question it could not answer and
+ * refused to guess at. The `shifts` table (v49) is the answer, so the card now
+ * lists both: who is here, and who is expected. `minutesToday` still tells a
+ * person who came in and went home again apart from one who never arrived.
  */
 export interface OwnerEmployeeToday {
   id: string
@@ -187,6 +188,15 @@ export interface OwnerEmployeeToday {
   /** When they clocked in, for whoever is currently on. */
   since: string | null
   minutesToday: number
+  /**
+   * Local HH:MM they are rostered to start, or null when they are not on
+   * today's rota at all. Somebody with a `dueAt` who has never clocked in is
+   * expected and has not turned up yet; somebody with neither is here off the
+   * rota, which is worth being able to see.
+   */
+  dueAt: string | null
+  /** True when they are on today's rota, whatever time it says. */
+  scheduled: boolean
 }
 
 export interface OwnerBoard {
