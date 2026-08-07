@@ -18226,3 +18226,167 @@ button.sor-team:focus-visible {
   font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
+
+
+/* ---------------------------------------------------------------------------
+   A segmented switch INSIDE a tab. Deliberately quieter than the tab strip
+   above it — these are steps within one job, not siblings of Employees.
+   --------------------------------------------------------------------------- */
+.seg-row {
+  display: inline-flex;
+  gap: 2px;
+  margin-bottom: 14px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+}
+.seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 14px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.seg:hover {
+  color: var(--text-2);
+}
+.seg.on {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
+}
+
+
+/* The repeat control on the to-do composer. Folded away until asked for: most
+   lines somebody types are one-offs, and a cadence picker in front of every one
+   of them would be a form where a text box used to be. */
+.ob-repeat-toggle {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text-3);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.ob-repeat-toggle:hover {
+  color: var(--text-2);
+}
+.ob-repeat-toggle.on {
+  background: var(--brand-soft);
+  border-color: var(--brand-400);
+  color: var(--brand-700);
+}
+.ob-repeat-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 0 14px 12px;
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+.ob-repeat-row label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.ob-repeat-row select,
+.ob-repeat-row input {
+  padding: 5px 8px;
+  font-size: 12.5px;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.ob-repeat-hint {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+
+/* ---------------------------------------------------------------------------
+   My hours: the tenure calendar and the pay-period totals beside it.
+   --------------------------------------------------------------------------- */
+.mh-nav {
+  display: flex;
+  gap: 4px;
+}
+.mh-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+}
+.mh-head {
+  padding: 4px 0;
+  text-align: center;
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.mh-cell {
+  min-height: 52px;
+  padding: 5px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+.mh-cell.empty {
+  border-color: transparent;
+  background: transparent;
+}
+/* A day that was worked. Tinted rather than badged: the shape of a month is the
+   thing being read, and thirty badges is not a shape. */
+.mh-cell.worked {
+  background: var(--brand-soft);
+  border-color: var(--brand-300);
+}
+.mh-n {
+  display: block;
+  color: var(--text-3);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+.mh-cell.worked .mh-n {
+  color: var(--brand-700);
+  font-weight: 700;
+}
+.mh-h {
+  display: block;
+  margin-top: 3px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+.mh-now {
+  margin-left: 7px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--success-bg);
+  color: var(--success-strong);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.mh-note {
+  margin: 12px 0 0;
+  color: var(--text-3);
+  font-size: 12.5px;
+  line-height: 1.55;
+}

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { Employee, EmployeeHoursSummary } from '@shared/types'
 import { useSession } from '../../lib/session'
+import { MyHours } from './MyHours'
 import { api } from '../../lib/api'
 import { LIVE, useLiveRefresh } from '../../lib/live'
 import { useToast } from '../../components/Toast'
@@ -36,6 +37,9 @@ export function TimePayrollModule(): JSX.Element {
   const { can } = useSession()
   const toast = useToast()
   const canManage = can('admin.employees.manage')
+  /** Whether the TEAM's timesheet is theirs to see. Their own always is. */
+  const canView = can('admin.hours.view')
+  const [scope, setScope] = useState<'me' | 'team'>('me')
 
   const [employees, setEmployees] = useState<Employee[]>([])
   const [summary, setSummary] = useState<EmployeeHoursSummary[]>([])
@@ -105,8 +109,31 @@ export function TimePayrollModule(): JSX.Element {
     )
   }
 
+  // WHOSE HOURS. Everybody gets their own; only a lead gets the team's, and the
+  // segmented switch appears only when there is a second thing to switch to.
+  if (!canView) {
+    return (
+      <div className="content-narrow">
+        <MyHours />
+      </div>
+    )
+  }
+
   return (
     <div className="content-narrow">
+      <div className="seg-row">
+        <button className={`seg ${scope === 'me' ? 'on' : ''}`} onClick={() => setScope('me')}>
+          My hours
+        </button>
+        <button className={`seg ${scope === 'team' ? 'on' : ''}`} onClick={() => setScope('team')}>
+          The team
+        </button>
+      </div>
+
+      {scope === 'me' ? (
+        <MyHours />
+      ) : (
+      <>
       <div className="stat-grid">
         <Stat icon="Clock" value={formatHours(totals.minutes)} label="Total hours logged" />
         <Stat icon="Users" value={String(totals.tracked)} label="Employees tracked" />
@@ -205,6 +232,8 @@ export function TimePayrollModule(): JSX.Element {
             toast.success('Time entry added.')
           }}
         />
+      )}
+      </>
       )}
     </div>
   )

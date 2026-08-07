@@ -968,7 +968,21 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       completeRecurring: (id: string, occurrence: string): Promise<Result<{ id: string }>> =>
         ipcRenderer.invoke(IPC.recurringComplete, { id, occurrence }),
       deleteRecurring: (id: string): Promise<Result<{ id: string }>> =>
-        ipcRenderer.invoke(IPC.recurringDelete, id)
+        ipcRenderer.invoke(IPC.recurringDelete, id),
+
+      /** The caller's OWN shifts, day by day and by payroll period. */
+      myHours: (): Promise<{
+        days: Array<{ day: string; minutes: number; shifts: number }>
+        periods: Array<{
+          start: string
+          end: string
+          paidOn: string
+          current: boolean
+          minutes: number
+        }>
+        totalMinutes: number
+        firstDay: string | null
+      } | null> => ipcRenderer.invoke(IPC.myHours)
     },
     updates: {
       getStatus: (): Promise<UpdateStatus> => ipcRenderer.invoke(IPC.updatesGetStatus),

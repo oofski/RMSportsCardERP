@@ -200,6 +200,9 @@ export const IPC = {
   recurringCreate: 'recurring:create',
   recurringComplete: 'recurring:complete',
   recurringDelete: 'recurring:delete',
+  // The caller's OWN shifts. No permission beyond being signed in, and the
+  // employee is taken from the session — a packer checking their own pay.
+  myHours: 'hours:mine',
   shipDocument: 'shipping:document',
   shipDocumentBytes: 'shipping:document:bytes',
   shipDocumentArrival: 'shipping:document:arrival',

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { OwnerBoard as Board, OwnerPnlWindow, Reminder, Todo } from '@shared/ownerDashboard'
 import { REMINDER_MAX_LENGTH, TODO_MAX_LENGTH } from '@shared/ownerDashboard'
-import { recurringLabel } from '@shared/homeTasks'
+import { dayKey, recurringLabel } from '@shared/homeTasks'
 import { api } from '../../lib/api'
 import { useSession } from '../../lib/session'
 import { useChrome } from '../../lib/chrome'
@@ -450,6 +450,18 @@ function TodayCard({
   const toast = useToast()
   const [items, setItems] = useState<Todo[]>([])
   const [draft, setDraft] = useState('')
+  /**
+   * The repeat control, folded away until somebody wants it.
+   *
+   * PRESETS, not a number of days. Nobody thinks "every 14 days"; they think
+   * "every second Wednesday", and the date field is what carries the Wednesday.
+   * Weeks are the only unit this business runs on — payroll is a fortnight and
+   * a supplies order is a month of them — so a calendar-month option would be a
+   * promise the arithmetic here does not keep.
+   */
+  const [repeats, setRepeats] = useState(false)
+  const [everyDays, setEveryDays] = useState(14)
+  const [nextDue, setNextDue] = useState(dayKey(new Date()))
   const [busy, setBusy] = useState(false)
   /** The row with a call in flight. A second click on the same X used to reach
    *  a row that was already gone and raise "that task is no longer on your
@@ -471,15 +483,32 @@ function TodayCard({
     if (!body || busy) return
     setBusy(true)
     try {
-      const res = await api.owner.addTodo(body)
+      const res = repeats
+        ? await api.owner.addRecurring({ title: body, everyDays, anchorDate: nextDue, leadDays: 2 })
+        : await api.owner.addTodo(body)
       if (!res.ok) {
         toast.error(res.error ?? 'Could not add that.')
         return
       }
       setDraft('')
-      await load()
+      setRepeats(false)
+      // The board owns the recurring list; a one-off only needs the local one.
+      if (repeats) await onChanged()
+      else await load()
     } finally {
       setBusy(false)
+    }
+  }
+
+  const dropRecurring = async (id: string): Promise<void> => {
+    if (pending) return
+    setPending(id)
+    try {
+      const res = await api.owner.deleteRecurring(id)
+      if (!res.ok) toast.error(res.error ?? 'Could not remove that.')
+      await onChanged()
+    } finally {
+      setPending(null)
     }
   }
 
@@ -560,10 +589,39 @@ function TodayCard({
             if (e.key === 'Enter') void add()
           }}
         />
+        <button
+          type="button"
+          className={`ob-repeat-toggle ${repeats ? 'on' : ''}`}
+          title="Make this repeat"
+          onClick={() => setRepeats((v) => !v)}
+        >
+          <Icon name="RefreshCw" size={14} />
+          Repeat
+        </button>
         <Button size="sm" icon="Plus" loading={busy} disabled={!draft.trim()} onClick={() => void add()}>
           Add
         </Button>
       </div>
+
+      {repeats && (
+        <div className="ob-repeat-row">
+          <label>
+            Every
+            <select value={everyDays} onChange={(e) => setEveryDays(Number(e.target.value))}>
+              <option value={7}>week</option>
+              <option value={14}>2 weeks</option>
+              <option value={28}>4 weeks</option>
+            </select>
+          </label>
+          <label>
+            Next due
+            <input type="date" value={nextDue} onChange={(e) => setNextDue(e.target.value)} />
+          </label>
+          <span className="ob-repeat-hint">
+            It appears two days before, and comes back every time you tick it.
+          </span>
+        </div>
+      )}
 
       {/* WHAT THE APP WORKED OUT, above what anybody typed.
           A stream with no packing slip against it, and a job whose clock has
@@ -589,6 +647,14 @@ function TodayCard({
                   {recurringLabel(d)} · {d.dueOn}
                 </span>
               </span>
+              <button
+                className="ob-rem-tick"
+                disabled={pending === d.id}
+                title="Stop this repeating"
+                onClick={() => void dropRecurring(d.id)}
+              >
+                <Icon name="X" size={14} />
+              </button>
             </li>
           ))}
           {derived.map((t) => (

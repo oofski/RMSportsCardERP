@@ -88,10 +88,14 @@ export const MODULES: AppModule[] = [
   {
     id: 'timepay',
     name: 'Time & Payroll',
-    shortName: 'Payroll',
-    description: 'Timesheets, pay periods and Gusto export.',
+    shortName: 'Hours',
+    description: 'Your shifts and pay periods; timesheets and Gusto export for leads.',
     icon: 'Clock',
-    permission: 'admin.hours.view',
+    // NO PERMISSION. Everybody has their own hours and everybody may see them —
+    // a packer checking what they are owed is not an administrative act. The
+    // TEAM timesheet inside is still gated on admin.hours.view; what changed is
+    // that the door is no longer locked to the person whose hours are behind it.
+    permission: null,
     status: 'active'
   }
 ]

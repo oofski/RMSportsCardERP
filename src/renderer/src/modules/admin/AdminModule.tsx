@@ -9,7 +9,6 @@ import { EmployeesTab } from './EmployeesTab'
 import { OnboardingTab } from './OnboardingTab'
 import { RolesTab } from './RolesTab'
 import { ActivityTab } from './ActivityTab'
-import { QuickBooksTab } from './QuickBooksTab'
 import { InventoryResetTab } from './InventoryResetTab'
 import { CloudSyncTab } from './CloudSyncTab'
 import { ShipAdminTab, useShipAdminWorkspace } from './ShippingAdminTabs'
@@ -21,7 +20,6 @@ type TabId =
   | 'roles'
   | 'activity'
   | 'reset'
-  | 'quickbooks'
   | 'sync'
   | ShipAdminTabId
 
@@ -101,7 +99,6 @@ export function AdminModule(): JSX.Element {
       icon: 'ClipboardList',
       visible: can('inventory.manage')
     },
-    { id: 'quickbooks', label: 'QuickBooks', icon: 'Wallet', visible: can('admin.access') },
     // Anyone who runs breaks needs the customer form links and the submissions
     // waiting on them; the connection settings inside are separately gated on
     // admin.access by the handlers.
@@ -111,33 +108,21 @@ export function AdminModule(): JSX.Element {
       icon: 'Cloud',
       visible: can('admin.access') || can('shipping.manage')
     },
-    // ---- Running the show, moved off the packing bench --------------------
-    // The shipping module is now only what a person standing at a bench needs.
-    // Importing the slips, reading what the import flagged and keeping the
-    // history are the lead's work, and the lead is already in here. All three
-    // sit behind shipping.manage — the permission that has always meant "runs
-    // the show" — and behind a rule in the strip, so Admin does not read as one
-    // undifferentiated row of ten.
+    // ONE tab, three screens inside it. It was three — Setup, Flags, History —
+    // which made Admin read as a shipping module with an employees page bolted
+    // on. Running the show is one job done in three steps, so it is one tab.
+    //
+    // QuickBooks is gone from the strip. The integration itself is untouched —
+    // the OAuth, the account mapping and the sync log are all still there — it
+    // simply is not something anybody opens, so it stopped earning a place in a
+    // row that has to be readable at a glance.
     {
-      id: 'shipping-setup',
-      label: 'Shipping setup',
+      id: 'shipping',
+      label: 'Shipping',
       icon: 'UploadCloud',
-      visible: can('shipping.manage'),
-      startsGroup: true
-    },
-    {
-      id: 'shipping-flags',
-      label: 'Shipping flags',
-      icon: 'Flag',
       visible: can('shipping.manage'),
       badge: shipping.warnings,
       alarm: shipping.collisions
-    },
-    {
-      id: 'shipping-history',
-      label: 'Shipping history',
-      icon: 'History',
-      visible: can('shipping.manage')
     }
   ]
   const visibleTabs = tabs.filter((t) => t.visible)
@@ -183,11 +168,8 @@ export function AdminModule(): JSX.Element {
       {active === 'roles' && <RolesTab employees={employees} onChanged={loadEmployees} />}
       {active === 'activity' && <ActivityTab />}
       {active === 'reset' && <InventoryResetTab />}
-      {active === 'quickbooks' && <QuickBooksTab />}
       {active === 'sync' && <CloudSyncTab />}
-      {(active === 'shipping-setup' ||
-        active === 'shipping-flags' ||
-        active === 'shipping-history') && <ShipAdminTab tab={active} workspace={shipping} />}
+      {active === 'shipping' && <ShipAdminTab workspace={shipping} />}
     </div>
   )
 }

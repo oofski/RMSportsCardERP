@@ -188,3 +188,66 @@ export function validateRecurring(input: {
   }
   return null
 }
+
+// ---------------------------------------------------------------------------
+// Payroll periods
+// ---------------------------------------------------------------------------
+
+/**
+ * When payroll runs, and therefore what a "period" is.
+ *
+ * The same anchor and stride the recurring reminder uses — every second
+ * Wednesday from 5 August 2026 — because they have to be the same thing. A
+ * timesheet that adds up over a different fortnight from the one payroll pays is
+ * worse than no timesheet.
+ */
+export const PAYROLL_ANCHOR = '2026-08-05'
+export const PAYROLL_EVERY_DAYS = 14
+
+export interface PayrollPeriod {
+  /** First day of work in the period, inclusive. */
+  start: string
+  /** Last day of work in the period, inclusive. */
+  end: string
+  /** The payroll date that closes it — the day after `end`. */
+  paidOn: string
+  /** True for the period the given day falls inside. */
+  current: boolean
+}
+
+/**
+ * The period a day belongs to.
+ *
+ * Half-open by construction: a period runs from one payroll date up to, but not
+ * including, the next. So "05/08 → 19/08" is thirteen days of work ending on the
+ * 18th and paid on the 19th — which is what the boundary dates mean, and is why
+ * `end` is stated separately from `paidOn` rather than left to be inferred.
+ */
+export function payrollPeriodFor(day: string): PayrollPeriod {
+  const next = nextOccurrence(PAYROLL_ANCHOR, PAYROLL_EVERY_DAYS, day)
+  // A day that IS a payroll date opens the period it starts, rather than closing
+  // the one before: work done that Wednesday belongs to the fortnight ahead.
+  const start = next === day ? day : addDays(next, -PAYROLL_EVERY_DAYS)
+  return {
+    start,
+    end: addDays(start, PAYROLL_EVERY_DAYS - 1),
+    paidOn: addDays(start, PAYROLL_EVERY_DAYS),
+    current: false
+  }
+}
+
+/** The `count` most recent periods, newest first, ending with the one `today` is in. */
+export function recentPayrollPeriods(today: string, count: number): PayrollPeriod[] {
+  const here = payrollPeriodFor(today)
+  const out: PayrollPeriod[] = []
+  for (let i = 0; i < Math.max(1, count); i++) {
+    const start = addDays(here.start, -i * PAYROLL_EVERY_DAYS)
+    out.push({
+      start,
+      end: addDays(start, PAYROLL_EVERY_DAYS - 1),
+      paidOn: addDays(start, PAYROLL_EVERY_DAYS),
+      current: i === 0
+    })
+  }
+  return out
+}

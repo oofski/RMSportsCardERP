@@ -34,7 +34,7 @@ import type { ShipTabId, ShipTabProps } from '../fulfillment/ShippingModule'
  * and Admin's tab strip should not be pinned to a type that is about to change
  * underneath it.
  */
-export type ShipAdminTabId = 'shipping-setup' | 'shipping-flags' | 'shipping-history'
+export type ShipAdminTabId = 'shipping'
 
 export interface ShipAdminWorkspace {
   /** Everything the three tabs need, ready to spread. */
@@ -142,13 +142,12 @@ export function useShipAdminWorkspace(goTo: (tab: ShipAdminTabId) => void): Ship
     (tab: ShipTabId): void => {
       switch (tab as string) {
         case 'setup':
-          goTo('shipping-setup')
-          return
         case 'flags':
-          goTo('shipping-flags')
-          return
         case 'history':
-          goTo('shipping-history')
+          // All three now live inside ONE Admin tab, so "go there" is the same
+          // destination whichever of them asked. The tab opens on Import; the
+          // steps inside it are one click apart.
+          goTo('shipping')
           return
         default:
           if (canOpenBench) navigate('fulfillment')
@@ -168,13 +167,21 @@ export function useShipAdminWorkspace(goTo: (tab: ShipAdminTabId) => void): Ship
 }
 
 /** The body of whichever of the three is open. */
+/**
+ * ONE Admin tab, three screens inside it.
+ *
+ * They were three tabs in the strip, which made Admin read as a shipping module
+ * with an employees page attached. They are one job — running the show — done in
+ * three steps, so they are one tab with the steps inside it: import the slips,
+ * read what the import flagged, look back at what has been imported before.
+ */
 export function ShipAdminTab({
-  tab,
   workspace
 }: {
-  tab: ShipAdminTabId
   workspace: ShipAdminWorkspace
 }): JSX.Element {
+  const [inner, setInner] = useState<'setup' | 'flags' | 'history'>('setup')
+
   if (workspace.loading) return <CenterLoader />
   // A failed load is a dead end otherwise — show what happened and offer a retry.
   if (workspace.loadError) {
@@ -192,7 +199,31 @@ export function ShipAdminTab({
     )
   }
 
-  if (tab === 'shipping-setup') return <SetupTab {...workspace.props} />
-  if (tab === 'shipping-flags') return <FlagsTab {...workspace.props} />
-  return <HistoryTab {...workspace.props} />
+  const INNER: Array<{ id: 'setup' | 'flags' | 'history'; label: string }> = [
+    { id: 'setup', label: 'Import' },
+    { id: 'flags', label: 'Flags' },
+    { id: 'history', label: 'History' }
+  ]
+
+  return (
+    <>
+      <div className="seg-row">
+        {INNER.map((t) => (
+          <button
+            key={t.id}
+            className={`seg ${inner === t.id ? 'on' : ''}`}
+            onClick={() => setInner(t.id)}
+          >
+            {t.label}
+            {t.id === 'flags' && workspace.warnings > 0 && (
+              <span className="ship-tab-badge warning">{workspace.warnings}</span>
+            )}
+          </button>
+        ))}
+      </div>
+      {inner === 'setup' && <SetupTab {...workspace.props} />}
+      {inner === 'flags' && <FlagsTab {...workspace.props} />}
+      {inner === 'history' && <HistoryTab {...workspace.props} />}
+    </>
+  )
 }

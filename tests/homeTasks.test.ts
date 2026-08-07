@@ -300,5 +300,85 @@ ok(
   'and a show from two months ago has fallen off'
 )
 
+// ---------------------------------------------------------------------------
+console.log("\n=== 8. pay periods, and one person's own hours ===")
+// ---------------------------------------------------------------------------
+// A period runs from one payroll Wednesday to the day before the next. The
+// owner wrote it as "8/05 - 8/19": work from the 5th, paid on the 19th.
+const {
+  payrollPeriodFor,
+  recentPayrollPeriods,
+  PAYROLL_ANCHOR,
+  PAYROLL_EVERY_DAYS
+} = require('../src/shared/homeTasks')
+
+ok(PAYROLL_ANCHOR === '2026-08-05', 'the series starts where payroll does', PAYROLL_ANCHOR)
+ok(PAYROLL_EVERY_DAYS === 14, 'every second Wednesday', String(PAYROLL_EVERY_DAYS))
+
+const p1 = payrollPeriodFor('2026-08-05')
+ok(p1.start === '2026-08-05', 'a payroll day OPENS its period', p1.start)
+ok(p1.end === '2026-08-18', 'which ends the day before the next', p1.end)
+ok(p1.paidOn === '2026-08-19', 'and is paid on the 19th', p1.paidOn)
+// The boundary, both sides. The 18th is the last day of the first period and the
+// 19th is the first day of the second — off by one here and somebody's last
+// shift is paid a fortnight late.
+ok(payrollPeriodFor('2026-08-18').start === '2026-08-05', 'the 18th still belongs to the first')
+ok(payrollPeriodFor('2026-08-19').start === '2026-08-19', 'and the 19th opens the second')
+ok(payrollPeriodFor('2026-08-04').start === '2026-07-22', 'the day before falls in the one before')
+
+const recent = recentPayrollPeriods('2026-08-20', 3)
+ok(recent.length === 3, 'three periods back', String(recent.length))
+ok(recent[0].current === true, 'newest first, and it is the current one')
+ok(recent[0].start === '2026-08-19', 'starting the 19th', recent[0].start)
+ok(recent[1].start === '2026-08-05', 'then the 5th', recent[1].start)
+ok(recent[2].start === '2026-07-22', 'then the 22nd of July', recent[2].start)
+ok(
+  recent.every((p: any) => new Date(`${p.start}T12:00:00Z`).getUTCDay() === 3),
+  'and every period starts on a Wednesday'
+)
+
+// One person's own hours. Scoped to them and taken from the session, never an
+// argument — the same rule as the to-do list, for the same reason.
+const meId = 'emp_dana_hours'
+const stampNow = new Date().toISOString()
+getDb()
+  .prepare(
+    `INSERT INTO employees
+       (id, company_id, first_name, last_name, email, role, status, created_at, updated_at)
+     VALUES (?, 'RM-HRS', 'Dana', 'Hours', 'dana.hours@none.invalid', 'shipping', 'active', ?, ?)`
+  )
+  .run(meId, stampNow, stampNow)
+
+const shift = (id: string, back: number, hoursLong: number): void => {
+  const start = new Date()
+  start.setDate(start.getDate() - back)
+  start.setHours(9, 0, 0, 0)
+  const end = new Date(start.getTime() + hoursLong * 3600 * 1000)
+  getDb()
+    .prepare(
+      `INSERT INTO time_entries (id, employee_id, clock_in, clock_out, note, source, created_at)
+       VALUES (?, ?, ?, ?, NULL, 'clock', ?)`
+    )
+    .run(id, meId, start.toISOString(), end.toISOString(), start.toISOString())
+}
+shift('th1', 1, 6)
+shift('th2', 1, 2)
+shift('th3', 40, 8)
+
+const myOwn = tasks.myHours(meId)
+ok(myOwn.totalMinutes === 16 * 60, 'every shift adds up', String(myOwn.totalMinutes))
+ok(myOwn.days.length === 2, 'two days worked', String(myOwn.days.length))
+// Two shifts in one day are ONE day with both in it, not two rows.
+const yesterday = myOwn.days.find((d: any) => d.shifts === 2)
+ok(!!yesterday, 'two shifts in a day merge into one day')
+ok(yesterday?.minutes === 8 * 60, 'carrying both', String(yesterday?.minutes))
+ok(myOwn.periods.length === 8, 'eight pay periods back', String(myOwn.periods.length))
+ok(myOwn.periods[0].current === true, 'newest first')
+ok(
+  myOwn.periods.reduce((n: number, p: any) => n + p.minutes, 0) <= myOwn.totalMinutes,
+  'and no period claims hours from outside itself'
+)
+ok(tasks.myHours('emp_nobody').totalMinutes === 0, "somebody else's hours are not mine")
+
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

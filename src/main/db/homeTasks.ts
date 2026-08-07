@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto'
 import {
   dayKey,
   daysBetween,
+  recentPayrollPeriods,
   recurringDue,
   validateRecurring,
   type DerivedTask,
@@ -254,4 +255,69 @@ export function deleteRecurring(ownerId: string, id: string): boolean {
     getDb().prepare(`DELETE FROM recurring_tasks WHERE id = ? AND owner_id = ?`).run(id, ownerId)
       .changes > 0
   )
+}
+
+// ---------------------------------------------------------------------------
+// One person's own hours
+// ---------------------------------------------------------------------------
+
+/**
+ * Every shift somebody has worked, and what each payroll period came to.
+ *
+ * Scoped to ONE employee and never taking whose from an argument the caller
+ * chose — the same rule as the to-do list. This is the screen a packer opens to
+ * check their own pay, so it must be impossible for it to be somebody else's.
+ *
+ * The DAY of a shift is the day it STARTED, in local time. A shift that runs
+ * past midnight belongs to the night it began — that is how the floor talks
+ * about it, and how the payroll period it falls in has to count it.
+ */
+export function myHours(
+  employeeId: string,
+  periods = 8
+): {
+  days: Array<{ day: string; minutes: number; shifts: number }>
+  periods: Array<{ start: string; end: string; paidOn: string; current: boolean; minutes: number }>
+  totalMinutes: number
+  firstDay: string | null
+} {
+  const rows = getDb()
+    .prepare(
+      `SELECT clock_in, clock_out FROM time_entries
+        WHERE employee_id = ? ORDER BY clock_in ASC`
+    )
+    .all(employeeId) as Array<{ clock_in: string; clock_out: string | null }>
+
+  const byDay = new Map<string, { minutes: number; shifts: number }>()
+  let total = 0
+  let firstDay: string | null = null
+  for (const r of rows) {
+    const started = new Date(r.clock_in)
+    if (Number.isNaN(started.getTime())) continue
+    const day = dayKey(started)
+    if (firstDay === null || day < firstDay) firstDay = day
+    // An open shift counts what it has run so far, or somebody who clocked in
+    // an hour ago reads as having done nothing today.
+    const endedAt = r.clock_out ? new Date(r.clock_out).getTime() : Date.now()
+    const mins = Math.max(0, Math.round((endedAt - started.getTime()) / 60000))
+    const entry = byDay.get(day) ?? { minutes: 0, shifts: 0 }
+    entry.minutes += mins
+    entry.shifts += 1
+    total += mins
+    byDay.set(day, entry)
+  }
+
+  const days = [...byDay.entries()]
+    .map(([day, v]) => ({ day, minutes: v.minutes, shifts: v.shifts }))
+    .sort((a, b) => a.day.localeCompare(b.day))
+
+  const windows = recentPayrollPeriods(dayKey(new Date()), periods).map((p) => {
+    let minutes = 0
+    for (const d of days) {
+      if (d.day >= p.start && d.day <= p.end) minutes += d.minutes
+    }
+    return { start: p.start, end: p.end, paidOn: p.paidOn, current: p.current, minutes }
+  })
+
+  return { days, periods: windows, totalMinutes: total, firstDay }
 }

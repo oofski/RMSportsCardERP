@@ -16,7 +16,8 @@ import {
   completeRecurring,
   createRecurring,
   deleteRecurring,
-  listRecurring
+  listRecurring,
+  myHours
 } from './db/homeTasks'
 import type { RecurringTask } from '@shared/homeTasks'
 
@@ -193,6 +194,13 @@ export function registerOwnerIpc(): void {
       }
     }
   )
+
+  // Somebody's own shifts. Gated on nothing but being signed in — it is their
+  // own timesheet — and the employee id comes from the session, never a payload.
+  ipcMain.handle(IPC.myHours, (): ReturnType<typeof myHours> | null => {
+    const user = currentUser()
+    return user ? myHours(user.id) : null
+  })
 
   ipcMain.handle(IPC.recurringDelete, (_e, id: unknown): Result<{ id: string }> => {
     try {
