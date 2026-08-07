@@ -1062,6 +1062,19 @@ export interface UpdateStatus {
    * is two places to forget when signing is turned on.
    */
   selfUpdating?: boolean
+  /**
+   * Is a software update a thing that can happen to this copy at all?
+   *
+   * False in the browser, and it is NOT the same question as `selfUpdating`. An
+   * unsigned Mac build answers false to that one and is still updatable — a
+   * person downloads a .dmg. A web page is not a build; it is whatever was
+   * deployed last, so there is nothing to check and nothing to offer, and a UI
+   * that offers it anyway hands out an installer the tab cannot run.
+   *
+   * Absent means true, so a desktop build that predates this field behaves as
+   * it always did.
+   */
+  updatable?: boolean
   /** When it cannot self-install, the direct download link to reinstall from. */
   downloadUrl?: string
 }

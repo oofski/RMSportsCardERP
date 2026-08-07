@@ -4,7 +4,7 @@ import { MODULES } from '@shared/modules'
 import { ROLES } from '@shared/permissions'
 import { useSession } from '../../lib/session'
 import { useChrome } from '../../lib/chrome'
-import { api } from '../../lib/api'
+import { api, IS_WEB } from '../../lib/api'
 import { Icon } from '../../components/Icon'
 import { Donut, AreaChart } from '../../components/charts'
 import { CenterLoader } from '../../components/ui'
@@ -239,12 +239,17 @@ export function HomeModule(): JSX.Element {
                   onClick={() => navigate('admin')}
                 />
               )}
-              <QuickAction
-                icon="RefreshCw"
-                title="Check for updates"
-                desc="Get the latest version"
-                onClick={() => window.dispatchEvent(new CustomEvent('rmops:check-updates'))}
-              />
+              {/* Desktop only. In a browser the page is already the latest
+                  version, and this used to open a panel offering an installer
+                  the tab could not run. */}
+              {!IS_WEB && (
+                <QuickAction
+                  icon="RefreshCw"
+                  title="Check for updates"
+                  desc="Get the latest version"
+                  onClick={() => window.dispatchEvent(new CustomEvent('rmops:check-updates'))}
+                />
+              )}
             </div>
           </div>
 

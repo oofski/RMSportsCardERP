@@ -119,8 +119,27 @@ void (async (): Promise<void> => {
   console.log('=== 1. health ===')
   // -------------------------------------------------------------------------
   const health = await fetch(`${base}/health`)
-  const healthBody = (await health.json()) as { ok: boolean; operations: number }
+  const healthBody = (await health.json()) as {
+    ok: boolean
+    operations: number
+    version: string
+  }
   ok(health.status === 200 && healthBody.ok === true, 'health answers without a session')
+  // The server used to answer '0.0.0' — the version it reports is not cosmetic.
+  // Every release then looked NEWER than the running server, so a browser tab
+  // was told an update was available and offered a macOS installer it cannot
+  // run, with a Download button that could only say "No download link
+  // available". It also makes "did my deploy land?" one URL instead of a guess.
+  ok(
+    typeof healthBody.version === 'string' && healthBody.version !== '0.0.0',
+    'health reports the real version, not a placeholder',
+    String(healthBody.version)
+  )
+  ok(
+    healthBody.version === (require('../package.json') as { version: string }).version,
+    'and it is this build\'s version',
+    String(healthBody.version)
+  )
   ok(
     healthBody.operations >= 232,
     'and reports every registered operation',
@@ -406,6 +425,53 @@ void (async (): Promise<void> => {
 
   const benchStillIn = await bench.call('shipping:summary')
   ok(benchStillIn.body.ok === true, "one person signing out does not sign everybody out")
+
+  // -------------------------------------------------------------------------
+  console.log('\n=== 10. the web app does not offer itself a software update ===')
+  // -------------------------------------------------------------------------
+  // A page is not a build. It is whatever was deployed last, so it is current by
+  // definition — and it cannot install anything even if it were not. What the
+  // app used to do here: report version 0.0.0, find 0.0.100 on the release feed,
+  // announce an update, and hand the browser a .dmg link that did not exist for
+  // its platform.
+  const bench2 = new Client(base)
+  await bench2.call('auth:login', [{ identifier: 'RM-BENCH', password: 'bench-password' }])
+  const upd = await bench2.call('updates:get-status')
+  const updStatus = upd.body.data as {
+    phase: string
+    updatable?: boolean
+    availableVersion?: string
+    downloadUrl?: string
+    currentVersion: string
+  }
+  ok(updStatus.updatable === false, 'the server says it is not updatable', JSON.stringify(updStatus))
+  ok(updStatus.phase === 'not-available', 'and reports itself up to date', updStatus.phase)
+  ok(
+    updStatus.currentVersion === (require('../package.json') as { version: string }).version,
+    'and knows its own version',
+    updStatus.currentVersion
+  )
+
+  // The check must not reach the release feed at all, and must never come back
+  // saying an update is available — this is the exact call the panel makes.
+  const checked = await bench2.call('updates:check')
+  const checkedStatus = checked.body.data as {
+    phase: string
+    updatable?: boolean
+    availableVersion?: string
+  }
+  ok(checkedStatus.phase !== 'available', 'checking never finds an update', checkedStatus.phase)
+  ok(checkedStatus.availableVersion === undefined, 'and names no version to download')
+  ok(checkedStatus.updatable === false, 'and still says updates do not apply here')
+
+  // The dead button, asserted directly: with no link there is nothing to open,
+  // and that is the message the user saw four times.
+  const noLink = await bench2.call('updates:open-download', [])
+  ok(
+    (noLink.body.data as { ok: boolean }).ok === false,
+    'and opening a download with no link is refused',
+    JSON.stringify(noLink.body.data)
+  )
 
   server.close()
   console.log(`\n${pass} passed, ${fail} failed\n`)

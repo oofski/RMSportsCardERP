@@ -2,10 +2,20 @@ import { app, BrowserWindow } from 'electron'
 import pkg from 'electron-updater'
 import type { UpdateStatus } from '@shared/types'
 import { IPC } from '@shared/ipc'
-import { MAC_AUTO_UPDATE, UPDATE_FEED_URL } from '@shared/config'
+import { DOWNLOAD_URL, MAC_AUTO_UPDATE, UPDATE_FEED_URL } from '@shared/config'
 
 // electron-updater ships as CommonJS; destructure the default export.
 const { autoUpdater } = pkg
+
+/**
+ * Is this the web server rather than a desktop build?
+ *
+ * True exactly when the server build's alias swapped `electron-updater` for
+ * src/server/electron-updater-stub.ts, which is the only thing that sets this
+ * flag. The real package has no such property, so on the desktop it is
+ * undefined and this is false.
+ */
+const isWebServer = (pkg as unknown as { serverStub?: boolean }).serverStub === true
 
 /**
  * Auto-update wiring, delivered from the update feed.
@@ -31,13 +41,33 @@ const isWindows = platform === 'win32'
 const isMac = platform === 'darwin'
 
 /** Can this build install its own update, or must a human reinstall it? */
-const selfUpdating = isWindows || (isMac && MAC_AUTO_UPDATE)
+const selfUpdating = !isWebServer && (isWindows || (isMac && MAC_AUTO_UPDATE))
+
+/**
+ * Is a software update a thing that can happen to this copy at all?
+ *
+ * False on the web, and that is a different statement from `selfUpdating`. An
+ * unsigned Mac build cannot replace itself but is very much updatable — somebody
+ * downloads a .dmg. A browser tab is not a build: it is whatever was deployed
+ * last, so it is always current and there is nothing to offer.
+ *
+ * Saying so out loud is what stops the app from doing what it did — comparing
+ * the release feed against a version the server did not know, deciding it was
+ * behind, and offering a macOS installer to a web page, with a Download button
+ * that could only ever answer "No download link available."
+ */
+const updatable = !isWebServer
+
+const WEB_MESSAGE =
+  'This is the web app — it updates itself when the site is deployed, so it is always the current version.'
 
 let status: UpdateStatus = {
-  phase: 'idle',
+  phase: isWebServer ? 'not-available' : 'idle',
   currentVersion: app.getVersion(),
   platform,
-  selfUpdating
+  selfUpdating,
+  updatable,
+  message: isWebServer ? WEB_MESSAGE : undefined
 }
 
 let initialised = false
@@ -49,7 +79,14 @@ function broadcast(): void {
 }
 
 function setStatus(patch: Partial<UpdateStatus>): void {
-  status = { ...status, ...patch, currentVersion: app.getVersion(), platform, selfUpdating }
+  status = {
+    ...status,
+    ...patch,
+    currentVersion: app.getVersion(),
+    platform,
+    selfUpdating,
+    updatable
+  }
   broadcast()
 }
 
@@ -102,7 +139,7 @@ export function initUpdater(): void {
 }
 
 export function getUpdateStatus(): UpdateStatus {
-  return { ...status, currentVersion: app.getVersion(), platform }
+  return { ...status, currentVersion: app.getVersion(), platform, selfUpdating, updatable }
 }
 
 // ---------------------------------------------------------------------------
@@ -157,8 +194,13 @@ async function checkViaJson(): Promise<void> {
       setStatus({ phase: 'not-available', message: "You're on the latest version." })
       return
     }
+    // Falls back to the releases page when the feed carries no build for this
+    // exact platform and architecture. Without the fallback the app reported an
+    // update, offered a Download button, and answered "No download link
+    // available" when it was pressed — a dead end where "here is the page, go
+    // and look" is both true and useful.
     const key = downloadKey()
-    const url = key ? data.downloads?.[key] : undefined
+    const url = (key ? data.downloads?.[key] : undefined) ?? DOWNLOAD_URL
     setStatus({
       phase: 'available',
       availableVersion: data.version,
@@ -180,6 +222,13 @@ async function checkViaJson(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 export async function checkForUpdates(): Promise<UpdateStatus> {
+  // The web app answers without asking anybody. Reaching for the release feed
+  // here would compare a desktop version number against a page and conclude the
+  // page was out of date — which is not a thing a page can be.
+  if (isWebServer) {
+    setStatus({ phase: 'not-available', message: WEB_MESSAGE })
+    return getUpdateStatus()
+  }
   if (selfUpdating) {
     try {
       await autoUpdater.checkForUpdates()

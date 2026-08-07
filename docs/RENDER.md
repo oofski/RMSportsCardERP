@@ -48,7 +48,9 @@ certificate.
 ## Check it worked
 
 - **Logs** should show `listening ... 232 operations`.
-- Visit `/health` — expect `{"ok":true,...}`.
+- Visit `/health` — expect `{"ok":true,"version":"0.0.101",...}`. **The version is
+  the answer to "did my deploy land?"** — it is the running build's, so compare it
+  against the latest release before believing anything else on this page.
 - Wait a minute for the first sync, then sign in with your **existing** company
   ID and password. If it asks you to create an Owner account, stop and read
   "When it breaks" below.
@@ -101,6 +103,11 @@ The disk is not touched by a deploy. That is the point of it.
 your data. Either the sync values are missing or wrong, or the disk did not
 mount. **Do not create the account** — that starts a second company. Check the
 logs for sync errors first.
+
+**It offers me a software update / a download that does not work.** It should
+not, and after v0.0.101 it does not. The web app has no "Check for updates" —
+the page is whatever was deployed last, so it is always current. If you still
+see one, you are on an older deploy: check `/health` for the version.
 
 **The inventory totals are smaller here than in the desktop app.** On-hand
 quantity is the one number that does not travel between machines. It is summed

@@ -63,6 +63,51 @@ export function UpdatePanel({ onClose }: { onClose: () => void }): JSX.Element {
   // Whether the app can install its own update — decided by main, because on
   // macOS it depends on whether the build was signed, not on the OS.
   const isWin = status?.selfUpdating ?? status?.platform === 'win32'
+  // Whether updating is a thing that can happen to this copy at all. False in a
+  // browser tab, where the page is whatever was deployed last. Absent means the
+  // old answer, true, so a desktop build that predates the field is unaffected.
+  const updatable = status?.updatable !== false
+
+  // The web app gets a panel that answers the question and stops. No check
+  // button (there is nothing to check against), no download button (a tab
+  // cannot install anything), and no release notes for a version it is already
+  // running. What it does offer is the desktop app, for anyone who wants it.
+  if (!updatable) {
+    return (
+      <Modal
+        title="Software updates"
+        subtitle={`RM Operations App · web · version ${version}`}
+        onClose={onClose}
+        footer={
+          <>
+            <Button variant="ghost" onClick={onClose}>
+              Close
+            </Button>
+            <Button
+              variant="secondary"
+              icon="DownloadCloud"
+              onClick={() => api.updates.openDownload(DOWNLOAD_URL)}
+            >
+              Get the desktop app
+            </Button>
+          </>
+        }
+      >
+        <div className="update-status ok">
+          <span className="u-ico">
+            <Icon name="CheckCircle2" size={20} />
+          </span>
+          <div>
+            <div className="u-title">You&rsquo;re up to date</div>
+            <div className="u-msg">
+              {status?.message ??
+                'This is the web app — it updates itself when the site is deployed.'}
+            </div>
+          </div>
+        </div>
+      </Modal>
+    )
+  }
 
   let tone = ''
   let icon = 'RefreshCw'

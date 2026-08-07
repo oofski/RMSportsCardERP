@@ -56,6 +56,28 @@ export function InventoryOverview({
   refreshKey?: number
 }): JSX.Element {
   const [detail, setDetail] = useState<Detail | null>(null)
+  const [rebuilding, setRebuilding] = useState(false)
+  const overviewToast = useToast()
+
+  const rebuildFromLayers = useCallback(async (): Promise<void> => {
+    setRebuilding(true)
+    try {
+      const result = await api.sync.repairStock()
+      if (!result.ok) {
+        overviewToast.error(result.error ?? 'Could not rebuild the counts.')
+        return
+      }
+      const changed = result.data?.changed ?? 0
+      overviewToast.success(
+        changed === 0
+          ? 'Nothing to rebuild — every count already matches its layers.'
+          : `${changed} shelf count${changed === 1 ? '' : 's'} rebuilt from the cost layers.`
+      )
+      await onChanged()
+    } finally {
+      setRebuilding(false)
+    }
+  }, [onChanged, overviewToast])
 
   // Incoming stock is read ONCE here and shared by the "Incoming orders" tile,
   // its hover summary and the Incoming panel below, so the headline number and
@@ -224,6 +246,29 @@ export function InventoryOverview({
                 <li className="zerocost-more">and {stats.layerGaps.length - 6} more</li>
               )}
             </ul>
+            {/* The repair, offered where the problem is READ rather than only
+                on the sync screen two modules away.
+
+                On-hand quantity does not travel between computers — it is summed
+                from the cost layers, which do, and each computer works it out for
+                itself. So the usual reason a shelf appears here is that this
+                machine received the layers and never turned them into a count,
+                and every total above is short by exactly that stock.
+
+                It is a button and not automatic because the other direction is a
+                real state too: layers left behind on a shelf somebody emptied
+                here. Rebuilding those puts stock back that is not on the shelf,
+                which is why the wording says which is which and a person
+                decides. */}
+            {canManage && (
+              <Button
+                size="sm"
+                loading={rebuilding}
+                onClick={rebuildFromLayers}
+              >
+                Rebuild counts from cost layers
+              </Button>
+            )}
           </div>
         </div>
       )}

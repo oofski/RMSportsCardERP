@@ -19,7 +19,13 @@ import { registerSyncIpc } from '../main/syncIpc'
 import { registerOwnerIpc } from '../main/ownerIpc'
 import { initCloudSync, stopCloudSync } from '../main/services/cloudSync'
 import { collectClientActions, type PendingDownload } from './clientActions'
-import { dataDir, isSpoolPath, setBroadcastWindow, takeSpooledDownloads } from './electron-stub'
+import {
+  app,
+  dataDir,
+  isSpoolPath,
+  setBroadcastWindow,
+  takeSpooledDownloads
+} from './electron-stub'
 import { loginAllowed, loginFailed, loginSucceeded, purgeRateLimits } from './rateLimit'
 import { rendererExists, serveStatic } from './staticFiles'
 import {
@@ -429,6 +435,12 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
   if (req.method === 'GET' && path === '/health') {
     send(req, res, 200, {
       ok: true,
+      // The version is here so "did my deploy actually land?" is one URL rather
+      // than a guess. It is not a secret: the repository and every release are
+      // public, and the alternative — reading it off a screen inside the app —
+      // needs a session, which is exactly what you cannot get when a deploy has
+      // gone wrong.
+      version: app.getVersion(),
       operations: registeredHandlers().size,
       sessions: activeSessionCount(),
       uptimeSeconds: Math.round(process.uptime())

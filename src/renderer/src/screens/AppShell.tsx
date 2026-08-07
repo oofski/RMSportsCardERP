@@ -4,7 +4,7 @@ import { StreamingModule } from '../modules/streaming/StreamingModule'
 import { FinanceModule } from '../modules/finance/FinanceModule'
 import { useSession } from '../lib/session'
 import { useTheme } from '../lib/theme'
-import { api } from '../lib/api'
+import { api, IS_WEB } from '../lib/api'
 import { ChromeContext } from '../lib/chrome'
 import { Brand } from '../components/Brand'
 import { Icon } from '../components/Icon'
@@ -197,16 +197,30 @@ export function AppShell(): JSX.Element {
             ))}
           </nav>
 
+          {/* In a browser there is nothing to check. The page IS the current
+              version — it changed the moment the site was deployed — so the
+              three "Check for updates" entry points become one honest label.
+              What they used to do was compare the release feed against a
+              version the server did not know its own name for, decide the tab
+              was out of date, and offer a macOS installer a tab cannot run. */}
           <div className="sidebar-footer">
-            <button
-              className="sidebar-update"
-              onClick={() => setShowUpdates(true)}
-              title="Check for updates"
-            >
-              <Icon name="RefreshCw" size={16} />
-              <span>Check for updates</span>
-              <span className="ver">v{appInfo?.version ?? '0.0.0'}</span>
-            </button>
+            {IS_WEB ? (
+              <div className="sidebar-update" title="The web app is always the deployed version">
+                <Icon name="Cloud" size={16} />
+                <span>Web app</span>
+                <span className="ver">v{appInfo?.version ?? '—'}</span>
+              </div>
+            ) : (
+              <button
+                className="sidebar-update"
+                onClick={() => setShowUpdates(true)}
+                title="Check for updates"
+              >
+                <Icon name="RefreshCw" size={16} />
+                <span>Check for updates</span>
+                <span className="ver">v{appInfo?.version ?? '0.0.0'}</span>
+              </button>
+            )}
           </div>
         </aside>
 
@@ -235,13 +249,15 @@ export function AppShell(): JSX.Element {
               >
                 <Icon name={mode === 'dark' ? 'Sun' : 'Moon'} size={18} />
               </button>
-              <button
-                className="icon-btn"
-                onClick={() => setShowUpdates(true)}
-                title="Check for updates"
-              >
-                <Icon name="RefreshCw" size={18} />
-              </button>
+              {!IS_WEB && (
+                <button
+                  className="icon-btn"
+                  onClick={() => setShowUpdates(true)}
+                  title="Check for updates"
+                >
+                  <Icon name="RefreshCw" size={18} />
+                </button>
+              )}
 
               <div className="usermenu">
                 <button className="usermenu-btn" onClick={() => setMenuOpen((v) => !v)}>
@@ -293,16 +309,18 @@ export function AppShell(): JSX.Element {
                         <Icon name={mode === 'dark' ? 'Sun' : 'Moon'} size={16} />
                         {mode === 'dark' ? 'Light mode' : 'Dark mode'}
                       </button>
-                      <button
-                        className="menu-item"
-                        onClick={() => {
-                          setMenuOpen(false)
-                          setShowUpdates(true)
-                        }}
-                      >
-                        <Icon name="RefreshCw" size={16} />
-                        Check for updates
-                      </button>
+                      {!IS_WEB && (
+                        <button
+                          className="menu-item"
+                          onClick={() => {
+                            setMenuOpen(false)
+                            setShowUpdates(true)
+                          }}
+                        >
+                          <Icon name="RefreshCw" size={16} />
+                          Check for updates
+                        </button>
+                      )}
                       <button className="menu-item" onClick={() => logout()}>
                         <Icon name="LogOut" size={16} />
                         Sign out

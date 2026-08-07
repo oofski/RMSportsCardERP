@@ -17,3 +17,15 @@ import { httpTransport } from './httpTransport'
  * global, which is what made this a one-line decision instead of a rewrite.
  */
 export const api: RmOpsApi = window.rmops ?? createBridge(httpTransport)
+
+/**
+ * Is this the app in a browser tab rather than the installed desktop app?
+ *
+ * The same test the line above makes, named so screens can ask it. Almost
+ * nothing should: the whole point of one bundle over two transports is that a
+ * screen does not care. What legitimately cares is anything describing the COPY
+ * of the app rather than the company's data — software updates being the case
+ * that prompted this, where a browser tab was offering a macOS installer it
+ * could not run.
+ */
+export const IS_WEB = !window.rmops

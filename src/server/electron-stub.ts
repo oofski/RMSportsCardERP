@@ -48,6 +48,45 @@ export function dataDir(): string {
   return dir
 }
 
+/**
+ * What version this server is running.
+ *
+ * It used to answer '0.0.0' unless somebody remembered to set an environment
+ * variable, and nobody did — so the web app displayed "version 0.0.0" and, worse,
+ * every release looked NEWER than it, which is how a browser tab came to offer a
+ * macOS installer it could not possibly use.
+ *
+ * Read from package.json rather than injected at build time, because the file is
+ * genuinely there in every case that matters: the Dockerfile copies it into the
+ * runtime image beside out/server, and a checkout running `npm run server` has it
+ * at the working directory. Both are tried; the answer is cached because it
+ * cannot change while the process lives.
+ */
+let cachedVersion: string | null = null
+
+function readVersion(): string {
+  if (cachedVersion !== null) return cachedVersion
+  const fromEnv = process.env.RMOPS_VERSION
+  if (fromEnv) return (cachedVersion = fromEnv)
+  const candidates = [
+    // out/server/index.cjs → /app/package.json, which is the container layout.
+    join(__dirname, '..', '..', 'package.json'),
+    join(process.cwd(), 'package.json')
+  ]
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(readFileSync(candidate, 'utf8')) as { version?: unknown }
+      if (typeof parsed.version === 'string' && parsed.version.length > 0) {
+        return (cachedVersion = parsed.version)
+      }
+    } catch {
+      // Next candidate. A missing or unreadable package.json is not fatal —
+      // the version is a label, and the server has a warehouse to run.
+    }
+  }
+  return (cachedVersion = '0.0.0')
+}
+
 function unavailable(what: string): never {
   throw new Error(
     `${what} is not available on the server — the browser sends the file up instead.`
@@ -57,7 +96,7 @@ function unavailable(what: string): never {
 export const app = {
   getPath: (name: string): string => (name === 'userData' ? dataDir() : dataDir()),
   getName: (): string => 'RM Operations Server',
-  getVersion: (): string => process.env.RMOPS_VERSION ?? '0.0.0',
+  getVersion: readVersion,
   isPackaged: true,
   relaunch: (): never => {
     throw new Error('Restarting the app is a desktop action; redeploy the server instead.')
