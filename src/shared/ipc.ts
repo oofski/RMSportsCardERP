@@ -304,6 +304,7 @@ export const IPC = {
   syncRejects: 'sync:rejects',
   syncClearRejects: 'sync:rejects:clear',
   syncDrift: 'sync:drift',
+  syncRepairStock: 'sync:drift:repair',
   /** Push: the sync loop's own state changed (started, finished, failed). */
   syncStatusEvent: 'sync:status-event',
   /** Push: rows landed from another machine — screens showing them are stale. */

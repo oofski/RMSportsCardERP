@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { IntakeLink, IntakeSubmission, SyncReject, SyncStatus } from '@shared/sync'
+import type { IntakeLink, IntakeSubmission, StockDrift, SyncReject, SyncStatus } from '@shared/sync'
 import { api } from '../../lib/api'
 import { LIVE, useLiveRefresh } from '../../lib/live'
 import { Button, CenterLoader, EmptyState, Field, Input, Textarea } from '../../components/ui'
@@ -27,6 +27,7 @@ export function CloudSyncTab(): JSX.Element {
   const [key, setKey] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
   const [rejects, setRejects] = useState<SyncReject[]>([])
+  const [drift, setDrift] = useState<StockDrift[]>([])
   const [links, setLinks] = useState<IntakeLink[]>([])
   const [submissions, setSubmissions] = useState<IntakeSubmission[]>([])
   const [newLabel, setNewLabel] = useState('')
@@ -37,14 +38,16 @@ export function CloudSyncTab(): JSX.Element {
   const [showSetup, setShowSetup] = useState(false)
 
   const load = useCallback(async (): Promise<void> => {
-    const [s, r, l, subs] = await Promise.all([
+    const [s, r, d, l, subs] = await Promise.all([
       api.sync.status(),
       api.sync.rejects(),
+      api.sync.drift(),
       api.intake.links(),
       api.intake.submissions()
     ])
     setStatus(s)
     setRejects(r)
+    setDrift(d)
     setLinks(l)
     setSubmissions(subs)
     setUrl(s.config.url)
@@ -210,6 +213,55 @@ export function CloudSyncTab(): JSX.Element {
             onClick={() => run('clear', () => api.sync.clearRejects(), 'Cleared.')}
           >
             Clear the list
+          </Button>
+        </section>
+      )}
+
+      {/* ---- Shelves whose count and cost layers disagree ----
+
+          On-hand quantity is the one number that does not travel: it is summed
+          from the cost layers, which do, and every computer works it out for
+          itself. So a shelf listed here is one where this computer has the
+          layers and not the total — which reads on the inventory screen as a
+          product holding nothing, and takes its value out of every figure above
+          it. Naming them is the difference between a wrong total somebody can
+          fix and a wrong total nobody can see inside. */}
+      {drift.length > 0 && (
+        <section className="sync-card sync-card-warn">
+          <header>
+            <Icon name="Layers" size={17} />
+            <h3>
+              {drift.length} shelf{drift.length === 1 ? '' : 'ves'} does not match its cost layers
+            </h3>
+          </header>
+          <p className="sync-note">
+            On-hand is counted here; the cost layers came from another computer. Rebuilding sets
+            each count to what its layers say — right on a computer that only receives this data,
+            and wrong if somebody emptied a shelf here without clearing its layers.
+          </p>
+          <ul className="sync-reject-list">
+            {drift.slice(0, 8).map((d) => (
+              <li key={`${d.productId}:${d.location}`}>
+                <code>{d.location}</code>
+                <span>
+                  {d.name} — {d.stock.toLocaleString()} counted, {d.lots.toLocaleString()} in layers
+                </span>
+              </li>
+            ))}
+            {drift.length > 8 && <li>and {drift.length - 8} more</li>}
+          </ul>
+          <Button
+            size="sm"
+            loading={busy === 'repair'}
+            onClick={() =>
+              run(
+                'repair',
+                () => api.sync.repairStock(),
+                `${drift.length} shelf count${drift.length === 1 ? '' : 's'} rebuilt.`
+              )
+            }
+          >
+            Rebuild counts from cost layers
           </Button>
         </section>
       )}

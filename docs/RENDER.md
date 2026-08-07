@@ -78,9 +78,20 @@ Download it from the Shell, and keep the copies somewhere that is not Render.
 
 ## Updating
 
-Render redeploys automatically when the branch changes, which means **a release
-push updates the web app on its own**. If you would rather decide when that
-happens, turn off Auto-Deploy in Settings and use Manual Deploy.
+**Every push to `claude/rm-operations-app-initial-3sml0r` redeploys the web app.**
+Nothing to click, nothing to download — the tab is on the new version a few
+minutes later, and people already signed in stay signed in.
+
+That is Render's default, and it is worth checking once rather than assuming:
+
+- **Settings → Build & Deploy → Auto-Deploy** should read **Yes**.
+- **Settings → Branch** must be the branch above. This is the branch releases are
+  cut from; pointed anywhere else the site quietly stops following the app.
+- The **Events** tab shows a deploy starting within a minute of each push. If one
+  is missing, that is where the reason is.
+
+So a release now updates two things from the one push: the web app on its own,
+and the desktop installers, which each machine still has to accept.
 
 The disk is not touched by a deploy. That is the point of it.
 
@@ -90,6 +101,19 @@ The disk is not touched by a deploy. That is the point of it.
 your data. Either the sync values are missing or wrong, or the disk did not
 mount. **Do not create the account** — that starts a second company. Check the
 logs for sync errors first.
+
+**The inventory totals are smaller here than in the desktop app.** On-hand
+quantity is the one number that does not travel between machines. It is summed
+from the FIFO cost layers, which do travel, and each machine works it out for
+itself — so a shelf can arrive here with every layer and no count, and a screen
+whose totals follow the count values it at zero.
+
+Admin → Cloud sync lists any shelf where the two disagree, with a button that
+rebuilds the counts from the layers. On this server that is always the right
+answer: nothing here was ever counted by hand.
+
+If the list is long and keeps coming back, the sync is not finishing. Check the
+Sync screen's "Needs a look" figure and the logs.
 
 **Deploy fails on health check.** The service is not answering `/health`. Check
 the logs for a startup error — the most likely one is the disk guard below.

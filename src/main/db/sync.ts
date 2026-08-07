@@ -3,7 +3,7 @@ import type { Database } from 'better-sqlite3'
 import { getDb } from './database'
 import { SYNCED_BY_TABLE, SYNCED_TABLES, KEY_SEP, type SyncedTable } from './syncTables'
 import { normQty, lotWeightedAvgCost } from './lots'
-import type { SyncReject } from '@shared/sync'
+import type { StockDrift, SyncReject } from '@shared/sync'
 
 /**
  * The local half of sync: what goes up, what comes down, and what has to be
@@ -737,13 +737,25 @@ export function rebuildDerivedSupplyStock(supplyIds: string[]): number {
  * and clears itself when it is not; a row that still fails simply stays put with
  * its reason updated.
  */
-export function retryRejects(): { retried: number; recovered: number } {
+export function retryRejects(): {
+  retried: number
+  recovered: number
+  touchedProducts: string[]
+  touchedSupplies: string[]
+} {
   const rows = getDb()
     .prepare(`SELECT kind, id, seq, data FROM sync_rejects WHERE data IS NOT NULL ORDER BY seq ASC`)
     .all() as Array<{ kind: string; id: string; seq: number; data: string | null }>
-  if (rows.length === 0) return { retried: 0, recovered: 0 }
+  if (rows.length === 0) {
+    return { retried: 0, recovered: 0, touchedProducts: [], touchedSupplies: [] }
+  }
   const before = rejectCount()
-  applyRows(
+  // What the replay touched is REPORTED, not swallowed. A lot that lands here
+  // rather than on its first attempt is a lot whose product's on-hand is now
+  // wrong, and the caller is the only thing positioned to rebuild it — this
+  // returning nothing but a count is what left shelves reading "0 counted, 11 in
+  // layers" on a machine that had every lot and no quantity to go with them.
+  const applied = applyRows(
     rows.map((r) => ({
       kind: r.kind,
       id: r.id,
@@ -753,7 +765,12 @@ export function retryRejects(): { retried: number; recovered: number } {
       data: r.data
     }))
   )
-  return { retried: rows.length, recovered: Math.max(0, before - rejectCount()) }
+  return {
+    retried: rows.length,
+    recovered: Math.max(0, before - rejectCount()),
+    touchedProducts: applied.touchedProducts,
+    touchedSupplies: applied.touchedSupplies
+  }
 }
 
 /**
@@ -764,19 +781,58 @@ export function retryRejects(): { retried: number; recovered: number } {
  * here means two people did contradictory things to the same product while
  * offline, which is a fact to show someone, not a crash.
  */
-export function stockDrift(): Array<{ productId: string; location: string; stock: number; lots: number }> {
+export function stockDrift(): StockDrift[] {
   return (
     getDb()
       .prepare(
-        `SELECT s.product_id AS pid, s.location AS loc, s.quantity AS stock,
-                COALESCE((SELECT SUM(l.qty_remaining) FROM inventory_lots l
-                          WHERE l.product_id = s.product_id AND l.location = s.location), 0) AS lots
-         FROM inventory_stock s`
+        `SELECT k.product_id AS pid, p.name AS name, k.location AS loc,
+                COALESCE(s.quantity, 0) AS stock,
+                COALESCE(l.qty, 0) AS lots
+           FROM (SELECT product_id, location FROM inventory_stock
+                 UNION
+                 SELECT product_id, location FROM inventory_lots WHERE qty_remaining > 0) k
+           JOIN inventory_products p ON p.id = k.product_id
+           LEFT JOIN inventory_stock s
+             ON s.product_id = k.product_id AND s.location = k.location
+           LEFT JOIN (SELECT product_id, location, SUM(qty_remaining) AS qty
+                        FROM inventory_lots WHERE qty_remaining > 0
+                       GROUP BY product_id, location) l
+             ON l.product_id = k.product_id AND l.location = k.location
+          ORDER BY p.name COLLATE NOCASE, k.location`
       )
-      .all() as Array<{ pid: string; loc: string; stock: number; lots: number }>
+      .all() as Array<{ pid: string; name: string; loc: string; stock: number; lots: number }>
   )
     .filter((r) => Math.abs(r.stock - r.lots) > 1e-6)
-    .map((r) => ({ productId: r.pid, location: r.loc, stock: r.stock, lots: r.lots }))
+    .map((r) => ({
+      productId: r.pid,
+      name: r.name,
+      location: r.loc,
+      stock: r.stock,
+      lots: r.lots
+    }))
+}
+
+/**
+ * Put every drifted shelf back onto its cost layers.
+ *
+ * The deliberate hammer, and the reason it is manual rather than part of the
+ * sync round: the two directions of drift do not look different from here. A
+ * shelf holding lots and no quantity is the fingerprint of a lot that reached
+ * this machine while its rebuild did not — and it is ALSO what an orphan layer
+ * on a shelf somebody emptied looks like, which `zeroShelf` sweeps and this
+ * would resurrect. Running it automatically would mean guessing which; running
+ * it from a screen that lists the shelves first means somebody reads them and
+ * decides.
+ *
+ * On a machine that only ever received this data — the web server, a laptop
+ * that joined — there is nothing to decide: every quantity there is derived,
+ * so the layers are simply right.
+ */
+export function repairDerivedStock(): { shelves: number; changed: number } {
+  const drift = stockDrift()
+  if (drift.length === 0) return { shelves: 0, changed: 0 }
+  const products = [...new Set(drift.map((d) => d.productId))]
+  return { shelves: drift.length, changed: rebuildDerivedStock(products) }
 }
 
 /**

@@ -384,5 +384,120 @@ ok(sync.rejectCount() === 0, 'and the quarantine is empty', String(sync.rejectCo
 sync.rebuildDerivedSupplyStock([parent.id])
 ok(supplies.getSupply(parent.id).quantity === -10, 'the recovered movement is in the count', String(supplies.getSupply(parent.id).quantity))
 
+// ---------------------------------------------------------------------------
+console.log('\n=== B5. a lot that lands late still gets a quantity beside it ===')
+// ---------------------------------------------------------------------------
+// The failure this exists to stop, seen on the web server: 306 products, every
+// cost layer present, and $63,900 of inventory where the desktop showed
+// $426,700. The layers had arrived; the on-hand quantity that is DERIVED from
+// them had not, so every shelf missing one was valued at zero — a shelf reading
+// "0 counted, 11 in layers" on a screen whose totals follow the count.
+//
+// Two ways it happened, both here.
+const db2 = getDb()
+const now = new Date().toISOString()
+const productRow = (id: string, name: string): Record<string, unknown> => ({
+  id,
+  sku: '',
+  upc: null,
+  name,
+  category: 'Baseball',
+  brand: '',
+  set_name: '',
+  year: '',
+  unit_type: 'case',
+  boxes_per_case: null,
+  packs_per_box: null,
+  giveaway_item: 0,
+  unit_cost: 0,
+  high_bid: null,
+  sale_price: null,
+  reorder_point: 0,
+  notes: null,
+  created_at: now,
+  updated_at: now
+})
+const lotRow = (id: string, productId: string, qty: number, cost: number): Record<string, unknown> => ({
+  id,
+  product_id: productId,
+  location: 'RM',
+  qty_received: qty,
+  qty_remaining: qty,
+  unit_cost: cost,
+  received_at: now,
+  source: 'restock',
+  note: null,
+  created_at: now
+})
+const incoming = (kind: string, id: string, seq: number, data: Record<string, unknown>): any => ({
+  kind,
+  id,
+  seq,
+  updated_at: now,
+  deleted: 0 as const,
+  data: JSON.stringify(data)
+})
+const stockOf = (productId: string): number => {
+  const r = db2
+    .prepare(`SELECT COALESCE(SUM(quantity), 0) AS q FROM inventory_stock WHERE product_id = ?`)
+    .get(productId) as { q: number }
+  return r.q
+}
+
+// (i) THE ORDINARY PATH still works: product and lots in one batch.
+sync.applyRows([
+  incoming('inventory_products', 'prd_ok', 10, productRow('prd_ok', 'Arrived Together')),
+  incoming('inventory_lots', 'lot_ok', 11, lotRow('lot_ok', 'prd_ok', 4, 100))
+])
+sync.rebuildDerivedStock(['prd_ok'])
+ok(stockOf('prd_ok') === 4, 'a lot landing with its product produces a count', String(stockOf('prd_ok')))
+
+// (ii) THE LOT ARRIVES ALONE. Its product is not here yet, so it is refused and
+// quarantined — the ordinary shape of a first sync, where the relay orders rows
+// by when they were last WRITTEN and a product edited yesterday sorts after lots
+// received months ago.
+const orphanLot = lotRow('lot_late', 'prd_late', 11, 250)
+let r5 = sync.applyRows([incoming('inventory_lots', 'lot_late', 12, orphanLot)])
+ok(r5.rejected === 1, 'a lot whose product is missing is quarantined', JSON.stringify(r5))
+
+// The product arrives in the next batch, and the replay lands the lot.
+sync.applyRows([
+  incoming('inventory_products', 'prd_late', 13, productRow('prd_late', 'Arrived Late'))
+])
+const replay = sync.retryRejects()
+ok(replay.recovered === 1, 'and the replay lands it once its product exists', JSON.stringify(replay))
+// THIS is the assertion the bug was hiding behind. retryRejects used to return a
+// count and nothing else, so the caller had no way to know a lot had landed and
+// never rebuilt the shelf. The row was in the database; the quantity was not.
+ok(
+  replay.touchedProducts.includes('prd_late'),
+  'and it REPORTS whose shelf it just changed',
+  JSON.stringify(replay.touchedProducts)
+)
+ok(stockOf('prd_late') === 0, 'the count is still missing until something rebuilds it')
+sync.rebuildDerivedStock(replay.touchedProducts)
+ok(stockOf('prd_late') === 11, 'and the rebuild supplies it', String(stockOf('prd_late')))
+
+// ---------------------------------------------------------------------------
+console.log('\n=== B6. drift is reported for a shelf with NO stock row at all ===')
+// ---------------------------------------------------------------------------
+// The drift report used to walk inventory_stock, so a shelf holding layers and
+// no stock row — precisely the damage above — was invisible to the one screen
+// built to find it. It has to be driven off both tables.
+db2.prepare(`DELETE FROM inventory_stock WHERE product_id = ?`).run('prd_late')
+const gaps = sync.stockDrift() as Array<{ productId: string; name: string; stock: number; lots: number }>
+const gap = gaps.find((g) => g.productId === 'prd_late')
+ok(!!gap, 'a shelf with layers and no stock row is reported', JSON.stringify(gaps))
+ok(gap?.stock === 0 && gap?.lots === 11, 'with both sides of the disagreement', JSON.stringify(gap))
+ok(gap?.name === 'Arrived Late', 'and named, so somebody can go and look at it', String(gap?.name))
+
+// And the repair puts it back. This is the button on the sync screen.
+const repaired = sync.repairDerivedStock()
+ok(repaired.shelves >= 1, 'the repair reports what it found', JSON.stringify(repaired))
+ok(stockOf('prd_late') === 11, 'and the count is back on the shelf', String(stockOf('prd_late')))
+ok(sync.stockDrift().length === 0, 'with nothing left disagreeing', JSON.stringify(sync.stockDrift()))
+// A healthy database is left alone rather than churned.
+ok(sync.repairDerivedStock().changed === 0, 'a second run changes nothing')
+
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

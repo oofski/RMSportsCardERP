@@ -329,6 +329,7 @@ export async function syncOnce(): Promise<RoundResult> {
   broadcast()
   const changedKinds = new Set<string>()
   const touchedSupplies = new Set<string>()
+  const touchedProducts = new Set<string>()
   for (;;) {
     const since = cursor()
     const reply = await call(
@@ -345,9 +346,16 @@ export async function syncOnce(): Promise<RoundResult> {
       result.pulled += rows.length
       for (const kind of applied.kinds) changedKinds.add(kind)
       for (const id of applied.touchedSupplies) touchedSupplies.add(id)
+      for (const id of applied.touchedProducts) touchedProducts.add(id)
       if (applied.touchedProducts.length > 0) {
         // Quantities and average costs are recomputed from the lots that just
         // landed rather than trusted as they arrived — see rebuildDerivedStock.
+        //
+        // Done per batch AND again once the pull drains. Per batch so that a
+        // pull interrupted half way through — a dropped connection on a first
+        // sync of a whole catalog — still leaves every shelf it did manage to
+        // fill reading correctly, rather than leaving lots with no quantity
+        // beside them and a cursor already past the rows that would fix it.
         if (rebuildDerivedStock(applied.touchedProducts) > 0) {
           changedKinds.add('inventory_stock')
         }
@@ -369,13 +377,34 @@ export async function syncOnce(): Promise<RoundResult> {
   // supply that arrived in one batch with its purchases still in the next has an
   // incomplete history until here. Rebuilding per batch would settle it on a
   // negative count and leave it there until the next completed pull.
+  if (rejectCount() > 0) {
+    // A quarantined row is a permanently wrong number once a count is derived
+    // from rows, so give the rejects a chance to land before deriving anything
+    // from them. Most are a child that beat its parent.
+    //
+    // Unconditional, and it did not used to be: this ran only when a SUPPLY had
+    // been touched in the same round. A quarantined inventory LOT — the ordinary
+    // case of a lot arriving before its product — therefore sat in the
+    // quarantine untouched for as long as nobody happened to edit a supply, and
+    // the cursor was already past the rows that would have retried it.
+    const retry = retryRejects()
+    if (retry.recovered > 0) changedKinds.add('supplies')
+    for (const id of retry.touchedSupplies) touchedSupplies.add(id)
+    // And what the replay landed is rebuilt with everything else below. Recovered
+    // lots used to be dropped on the floor here: the rows were in the database
+    // and the quantity beside them was not, which reads on screen as a shelf
+    // holding nothing while its cost layers say otherwise.
+    for (const id of retry.touchedProducts) touchedProducts.add(id)
+  }
   if (touchedSupplies.size > 0) {
-    // A quarantined movement is a permanently wrong number once a count is
-    // derived from movements, so give the rejects a chance to land before
-    // deriving anything from them. Most are a child that beat its parent.
-    const { recovered } = retryRejects()
-    if (recovered > 0) changedKinds.add('supplies')
     if (rebuildDerivedSupplyStock([...touchedSupplies]) > 0) changedKinds.add('supplies')
+  }
+  if (touchedProducts.size > 0) {
+    // Once more over everything the whole pull touched, not just the last batch.
+    // Tier ordering holds inside a batch and not across them, so a product whose
+    // lots arrived in one batch and whose own row arrived in the next was
+    // rebuilt against half its layers; this is the pass that has all of them.
+    if (rebuildDerivedStock([...touchedProducts]) > 0) changedKinds.add('inventory_stock')
   }
 
   lastPulledRows = result.applied

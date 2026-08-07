@@ -47,6 +47,7 @@ import type {
   IntakeLinkInput,
   IntakeStatus,
   IntakeSubmission,
+  StockDrift,
   SyncConfig,
   SyncReject,
   SyncStatus
@@ -885,8 +886,9 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       rejects: (): Promise<SyncReject[]> => ipcRenderer.invoke(IPC.syncRejects),
       clearRejects: (): Promise<Result<{ cleared: number }>> =>
         ipcRenderer.invoke(IPC.syncClearRejects),
-      drift: (): Promise<Array<{ productId: string; location: string; stock: number; lots: number }>> =>
-        ipcRenderer.invoke(IPC.syncDrift),
+      drift: (): Promise<StockDrift[]> => ipcRenderer.invoke(IPC.syncDrift),
+      repairStock: (): Promise<Result<{ shelves: number; changed: number }>> =>
+        ipcRenderer.invoke(IPC.syncRepairStock),
       onStatus: (callback: (status: SyncStatus) => void): (() => void) => {
         const listener = (_e: unknown, status: SyncStatus): void => callback(status)
         ipcRenderer.on(IPC.syncStatusEvent, listener)

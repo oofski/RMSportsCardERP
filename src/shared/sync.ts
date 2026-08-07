@@ -80,6 +80,25 @@ export interface SyncReject {
   at: string
 }
 
+/**
+ * One shelf whose counted quantity and cost layers disagree.
+ *
+ * On-hand quantity does not travel between machines — it is arithmetic over the
+ * FIFO layers, which do travel, and every receiver recomputes it. So a shelf
+ * that disagrees here is either two people having done contradictory things to
+ * the same product offline, or a rebuild that never ran for lots that arrived.
+ * Both are worth a name and a number rather than a silently smaller total.
+ */
+export interface StockDrift {
+  productId: string
+  name: string
+  location: string
+  /** What inventory_stock says is on the shelf. */
+  stock: number
+  /** What the open layers there account for. */
+  lots: number
+}
+
 // ---------------------------------------------------------------------------
 // Public intake (the customer-facing form)
 // ---------------------------------------------------------------------------

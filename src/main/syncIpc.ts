@@ -7,6 +7,7 @@ import type {
   IntakeLinkInput,
   IntakeStatus,
   IntakeSubmission,
+  StockDrift,
   SyncConfig,
   SyncReject,
   SyncStatus
@@ -20,7 +21,7 @@ import {
   testConnection,
   type RoundResult
 } from './services/cloudSync'
-import { clearRejects, listRejects, stockDrift } from './db/sync'
+import { clearRejects, listRejects, repairDerivedStock, stockDrift } from './db/sync'
 import {
   acceptIntakeSubmission,
   createIntakeLink,
@@ -137,16 +138,26 @@ export function registerSyncIpc(): void {
     }
   })
 
-  // Products whose on-hand quantity and lots disagree — the fingerprint of two
-  // people having done contradictory things to the same product while offline.
-  ipcMain.handle(
-    IPC.syncDrift,
-    (): Array<{ productId: string; location: string; stock: number; lots: number }> => {
-      const user = currentUser()
-      if (!user || !user.permissions.includes('inventory.manage')) return []
-      return stockDrift()
+  // Shelves whose on-hand quantity and cost layers disagree — either two people
+  // having done contradictory things to the same product offline, or lots that
+  // reached this machine without the rebuild that turns them into a quantity.
+  ipcMain.handle(IPC.syncDrift, (): StockDrift[] => {
+    const user = currentUser()
+    if (!user || !user.permissions.includes('inventory.manage')) return []
+    return stockDrift()
+  })
+
+  // Put those shelves back onto their layers. Deliberately a button rather than
+  // part of the sync round — see repairDerivedStock for why the two directions
+  // of drift cannot be told apart from inside the code.
+  ipcMain.handle(IPC.syncRepairStock, (): Result<{ shelves: number; changed: number }> => {
+    try {
+      requirePermission('inventory.manage')
+      return { ok: true, data: repairDerivedStock() }
+    } catch (err) {
+      return fail(err)
     }
-  )
+  })
 
   // ---- Public intake form -------------------------------------------------
   ipcMain.handle(IPC.intakeLinks, (): IntakeLink[] => {
