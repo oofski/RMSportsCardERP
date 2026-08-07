@@ -194,6 +194,12 @@ export const IPC = {
   todoSetDone: 'todos:set-done',
   todoDelete: 'todos:delete',
   todosClearDone: 'todos:clear-done',
+  // Jobs on a clock — payroll every second Wednesday and anything like it.
+  // Scoped to the caller by the handler, exactly as the to-dos are.
+  recurringList: 'recurring:list',
+  recurringCreate: 'recurring:create',
+  recurringComplete: 'recurring:complete',
+  recurringDelete: 'recurring:delete',
   shipDocument: 'shipping:document',
   shipDocumentBytes: 'shipping:document:bytes',
   shipDocumentArrival: 'shipping:document:arrival',

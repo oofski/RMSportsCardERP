@@ -3,8 +3,7 @@ import { useChrome } from '../../lib/chrome'
 import { IS_WEB } from '../../lib/api'
 import { Icon } from '../../components/Icon'
 import { TimeClock } from '../../components/TimeClock'
-import { ShowCard } from './ShowCard'
-import { OwnerBoard, SendReminder } from './OwnerBoard'
+import { OwnerBoard } from './OwnerBoard'
 
 /**
  * The morning page.
@@ -69,23 +68,14 @@ export function HomeModule(): JSX.Element {
         <TimeClock />
       </div>
 
-      {/* The night's show, before the board: whoever runs the floor opens here,
-          and "is it loaded, and what day is it" is the first thing they need.
-          Renders nothing for somebody without the module. */}
-      <div style={{ marginBottom: 16 }}>
-        <ShowCard />
-      </div>
-
       {/* The sketch, in full. Renders nothing for somebody whose permissions
           cover none of its sections, so the floor's home page stays simple. */}
       <OwnerBoard />
 
-      <div className="dash-grid">
-        <div className="dash-col">
-          <div className="panel-card">
-            <div className="panel-head">
-              <h3>Quick actions</h3>
-            </div>
+      <div className="panel-card" style={{ marginTop: 16 }}>
+        <div className="panel-head">
+          <h3>Quick actions</h3>
+        </div>
             {/* THREE, and each one lands on the thing it names.
 
                 There is no router in this app: `navigate` takes a module id and
@@ -96,7 +86,7 @@ export function HomeModule(): JSX.Element {
                 an action that lands in the wrong place is worse than one that
                 does not exist. The three below all have the thing they promise
                 on the landing screen. */}
-            <div className="qa-list">
+        <div className="qa-list">
               {canHours && (
                 <QuickAction
                   icon="Wallet"
@@ -131,15 +121,6 @@ export function HomeModule(): JSX.Element {
                   onClick={() => window.dispatchEvent(new CustomEvent('rmops:check-updates'))}
                 />
               )}
-            </div>
-          </div>
-        </div>
-
-        <div className="dash-col">
-          {/* Anybody can write one, so this sits on the ORDINARY home page
-              rather than inside the owner's board — a box the floor cannot see
-              is a box nobody writes into. */}
-          <SendReminder />
         </div>
       </div>
     </div>

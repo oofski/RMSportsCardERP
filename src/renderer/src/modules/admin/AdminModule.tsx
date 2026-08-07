@@ -6,7 +6,7 @@ import { LIVE, useLiveRefresh } from '../../lib/live'
 import { Icon } from '../../components/Icon'
 import { CenterLoader } from '../../components/ui'
 import { EmployeesTab } from './EmployeesTab'
-import { HoursTab } from './HoursTab'
+import { OnboardingTab } from './OnboardingTab'
 import { RolesTab } from './RolesTab'
 import { ActivityTab } from './ActivityTab'
 import { QuickBooksTab } from './QuickBooksTab'
@@ -17,7 +17,7 @@ import type { ShipAdminTabId } from './ShippingAdminTabs'
 
 type TabId =
   | 'employees'
-  | 'hours'
+  | 'onboarding'
   | 'roles'
   | 'activity'
   | 'reset'
@@ -74,9 +74,25 @@ export function AdminModule(): JSX.Element {
 
   const tabs: TabDef[] = [
     { id: 'employees', label: 'Employees', icon: 'Users', visible: can('admin.employees.view') },
-    { id: 'hours', label: 'Hours', icon: 'Clock', visible: can('admin.hours.view') },
+    // ---- People. This is what Admin IS ------------------------------------
+    // Who works here, how they get in, and what they may touch. Everything
+    // below the rule is a system setting that ended up here because there was
+    // nowhere else to put it, and it reads as such.
+    //
+    // Hours is NOT here any more: Time & Payroll is a module of its own with
+    // the same timesheets, the period selector and the Gusto export on its
+    // landing screen. Two doors onto one table meant nobody knew which was the
+    // real one.
+    { id: 'onboarding', label: 'Onboarding', icon: 'UserPlus', visible: can('admin.employees.view') },
     { id: 'roles', label: 'Roles & Permissions', icon: 'ShieldCheck', visible: can('admin.access') },
-    { id: 'activity', label: 'Inventory activity', icon: 'Layers', visible: can('module.inventory') },
+    // ---- Everything else, behind a rule -----------------------------------
+    {
+      id: 'activity',
+      label: 'Inventory activity',
+      icon: 'Layers',
+      visible: can('module.inventory'),
+      startsGroup: true
+    },
     // Gated on the write permission, not on module access: this tab rewrites
     // stock and cost for the whole catalog in one action.
     {
@@ -163,7 +179,7 @@ export function AdminModule(): JSX.Element {
       {active === 'employees' && (
         <EmployeesTab employees={employees} onChanged={loadEmployees} />
       )}
-      {active === 'hours' && <HoursTab />}
+      {active === 'onboarding' && <OnboardingTab />}
       {active === 'roles' && <RolesTab employees={employees} onChanged={loadEmployees} />}
       {active === 'activity' && <ActivityTab />}
       {active === 'reset' && <InventoryResetTab />}

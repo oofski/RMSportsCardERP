@@ -1,6 +1,6 @@
 {
   "name": "rm-operations-app",
-  "version": "0.0.104",
+  "version": "0.0.105",
   "description": "RM Operations App — the internal operations platform for RM Cardz.",
   "author": {
     "name": "RM Cardz"
@@ -27,7 +27,7 @@
     "web": "npm run build && npm run build:server && node out/server/index.cjs",
     "test:parser": "esbuild tests/shippingParser.test.ts --bundle --platform=node --format=cjs --alias:@shared=./src/shared --outfile=out/tests/shippingParser.cjs --log-level=warning && node out/tests/shippingParser.cjs",
     "test:labels": "node tests/build.mjs tests/shippingLabels.test.ts out/tests/shippingLabels.cjs && node out/tests/shippingLabels.cjs",
-    "test": "npm run test:parser && npm run test:labels && npm run test:board && npm run test:supplies && npm run test:pnl && npm run test:fees-sync && npm run test:fees && npm run test:marketplace && npm run test:owner && npm run test:stations && npm run test:catalog && npm run test:shipping-role && npm run test:reset && npm run test:import-delete && npm run test:stream-reconcile && npm run test:valuation && npm run test:recovery && npm run test:portal && npm run test:packaging && npm run test:doc-sync && npm run test:web",
+    "test": "npm run test:parser && npm run test:labels && npm run test:board && npm run test:supplies && npm run test:pnl && npm run test:fees-sync && npm run test:fees && npm run test:marketplace && npm run test:owner && npm run test:stations && npm run test:catalog && npm run test:shipping-role && npm run test:reset && npm run test:import-delete && npm run test:stream-reconcile && npm run test:valuation && npm run test:recovery && npm run test:portal && npm run test:packaging && npm run test:doc-sync && npm run test:home-tasks && npm run test:web",
     "test:board": "node tests/build.mjs tests/shippingBoard.test.ts out/tests/shippingBoard.cjs && node out/tests/shippingBoard.cjs",
     "test:supplies": "esbuild tests/shippingSupplies.test.ts --bundle --platform=node --format=cjs --outfile=out/tests/shippingSupplies.cjs --log-level=warning && node out/tests/shippingSupplies.cjs",
     "test:pnl": "node tests/build.mjs tests/pnlPacking.test.ts out/tests/pnlPacking.cjs && node out/tests/pnlPacking.cjs",
@@ -44,6 +44,7 @@
     "test:valuation": "node tests/build.mjs tests/inventoryValuation.test.ts out/tests/inventoryValuation.cjs && node out/tests/inventoryValuation.cjs",
     "test:portal": "node tests/build.mjs tests/portalClock.test.ts out/tests/portalClock.cjs && node out/tests/portalClock.cjs",
     "test:recovery": "node tests/build.mjs tests/ownerRecovery.test.ts out/tests/ownerRecovery.cjs && node out/tests/ownerRecovery.cjs",
+    "test:home-tasks": "node tests/build.mjs tests/homeTasks.test.ts out/tests/homeTasks.cjs && node out/tests/homeTasks.cjs",
     "test:doc-sync": "node tests/build.mjs tests/shipDocumentSync.test.ts out/tests/shipDocumentSync.cjs && node out/tests/shipDocumentSync.cjs",
     "test:packaging": "node tests/build.mjs tests/packagingCosts.test.ts out/tests/packagingCosts.cjs && node out/tests/packagingCosts.cjs",
     "test:web": "RMOPS_ELECTRON=server node tests/build.mjs tests/webServer.test.ts out/tests/webServer.cjs && node out/tests/webServer.cjs"

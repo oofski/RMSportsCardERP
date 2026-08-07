@@ -18104,3 +18104,125 @@ button.sor-team:focus-visible {
   color: var(--text-2);
   border-color: var(--border-strong);
 }
+
+
+/* ---------------------------------------------------------------------------
+   The merged "Today" module: what the app worked out, what you wrote, what the
+   floor sent, and the box to send one back — one card, four sections.
+   --------------------------------------------------------------------------- */
+
+/* What the app worked out for itself, above what anybody typed. A stream with
+   no slip against it and a job whose clock has come round are the two things
+   most likely to be missed, because nobody wrote them down. */
+.ob-auto li {
+  background: var(--warning-bg);
+}
+.ob-auto li[data-late='true'] {
+  background: var(--danger-bg);
+}
+.ob-auto .ob-rem-tick {
+  color: var(--warning);
+}
+.ob-auto li[data-late='true'] .ob-rem-tick {
+  color: var(--danger-strong);
+}
+
+/* The non-interactive marker on a derived row. Same box as the tick beside it
+   so the rows line up, without the cursor and hover that promise a click. */
+.ob-rem-mark {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  color: var(--warning);
+}
+
+/* The inbox keeps its scroll cap inside the merged card. The multi-column rule
+   was written for a four-line to-do list; the reminders list can be a hundred
+   rows, and uncapped it pushes the composer off the bottom of the page. */
+.ob-span .ob-rem.ob-rem-scroll {
+  display: block;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+/* A quiet rule between the module's sections — a heading would make four cards
+   out of one, which is the thing this merge exists to stop. */
+.ob-todo-split {
+  padding: 10px 14px 4px;
+  border-top: 1px solid var(--border);
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.ob-compose-wrap {
+  padding: 4px 14px 14px;
+}
+
+
+/* ---------------------------------------------------------------------------
+   Admin -> Onboarding. A checklist holding a space, saying so.
+   --------------------------------------------------------------------------- */
+.onb-note {
+  display: flex;
+  gap: 9px;
+  align-items: flex-start;
+  margin: 4px 0 16px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text-3);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.onb-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  counter-reset: onb;
+}
+.onb-steps li {
+  display: flex;
+  gap: 12px;
+  padding: 12px 0;
+}
+.onb-steps li + li {
+  border-top: 1px solid var(--border);
+}
+.onb-n {
+  flex: 0 0 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--brand-soft);
+  color: var(--brand-700);
+  font-size: 12.5px;
+  font-weight: 700;
+}
+.onb-body {
+  min-width: 0;
+}
+.onb-title {
+  font-weight: 650;
+  color: var(--text);
+  font-size: 14px;
+}
+.onb-detail {
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.5;
+  margin-top: 2px;
+}
+.onb-where {
+  margin-top: 5px;
+  color: var(--text-3);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}

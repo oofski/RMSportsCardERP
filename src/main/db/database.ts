@@ -1893,6 +1893,71 @@ function migrate(database: Database.Database): void {
   )
   setMeta(database, 'schema_version', '47')
 
+  // v48: jobs on a clock.
+  //
+  // Payroll every second Wednesday is a real obligation that no table in this
+  // app can observe — nothing records that it happened, so nothing can notice
+  // that it did not. A note somebody writes once is worse than useless: it is
+  // ticked, disappears, and the next fortnight arrives unannounced.
+  //
+  // So the SERIES is stored and each occurrence is derived from it. anchor_date
+  // is any date the job IS due and every_days is the stride; ticking records
+  // WHICH occurrence was done in last_done_on, which is what makes the next one
+  // come back on its own. See recurringDue() in @shared/homeTasks for the
+  // arithmetic, and note the deliberate rule there: an occurrence nobody ticked
+  // stays on the list rather than rolling forward, because a payroll run missed
+  // on Wednesday is not less due on Thursday.
+  database.exec(
+    `CREATE TABLE IF NOT EXISTS recurring_tasks (
+       id           TEXT PRIMARY KEY,
+       owner_id     TEXT NOT NULL,
+       title        TEXT NOT NULL,
+       every_days   INTEGER NOT NULL,
+       anchor_date  TEXT NOT NULL,
+       lead_days    INTEGER NOT NULL DEFAULT 2,
+       last_done_on TEXT,
+       active       INTEGER NOT NULL DEFAULT 1,
+       created_at   TEXT NOT NULL,
+       updated_at   TEXT NOT NULL
+     );
+     CREATE INDEX IF NOT EXISTS idx_recurring_owner ON recurring_tasks (owner_id, active);`
+  )
+  setMeta(database, 'schema_version', '48')
+
+  // Payroll, once, for whoever owns the company.
+  //
+  // Seeded rather than left to be typed because the owner named it, named its
+  // cadence and named the date: every second Wednesday, 5 August 2026. Guarded
+  // by runOnce and by the row not already existing, so it lands once and never
+  // comes back if it is deleted — and it is an ordinary row, so deleting or
+  // editing it works exactly as it does for one somebody added.
+  // NOT runOnce. On a brand-new database this migration runs BEFORE the owner
+  // account exists — createOwner opens the database, which migrates it, and only
+  // then inserts the row — so the seed would find nobody, do nothing, and
+  // runOnce would stamp its flag anyway. The job would then never appear on any
+  // fresh install, with no screen to add one from.
+  //
+  // So it is idempotent and retried every boot, and the flag is set only once a
+  // row has actually been written. A deliberate deletion still sticks, because
+  // the flag is what stops it coming back.
+  if (getMeta(database, 'seed_payroll_recurring_v1') === null) {
+    const owner = database
+      .prepare(`SELECT id FROM employees WHERE role = 'owner' ORDER BY created_at ASC LIMIT 1`)
+      .get() as { id: string } | undefined
+    if (owner) {
+      const stamp = new Date().toISOString()
+      database
+        .prepare(
+          `INSERT OR IGNORE INTO recurring_tasks
+             (id, owner_id, title, every_days, anchor_date, lead_days, last_done_on, active,
+              created_at, updated_at)
+           VALUES (?, ?, 'Run payroll', 14, '2026-08-05', 2, NULL, 1, ?, ?)`
+        )
+        .run(`rt_payroll_${owner.id}`, owner.id, stamp, stamp)
+      setMeta(database, 'seed_payroll_recurring_v1', '1')
+    }
+  }
+
   // Seed the product catalog once, then apply the on-hand snapshot once.
   seedCatalogIfNeeded(database)
   seedSnapshotIfNeeded(database)

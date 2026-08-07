@@ -18,6 +18,7 @@ import { streamingFinanceView } from './financeStreaming'
 import { rateLookup } from './whatnotRates'
 import { listActivePurchaseOrderBoxes, listPurchaseOrders } from './purchaseOrders'
 import { listIncoming } from './incoming'
+import { recurringDueNow, slipsOutstanding } from './homeTasks'
 import { inventoryStats } from './inventory'
 import { supplyStats } from './supplies'
 import { nowIso } from '../util'
@@ -546,6 +547,8 @@ export interface OwnerBoardScope {
   streaming: boolean
   fulfillment: boolean
   hours: boolean
+  /** WHO is asking, for the half of the board that is theirs alone. */
+  viewerId: string | null
 }
 
 export function getOwnerBoard(scope: OwnerBoardScope): OwnerBoard {
@@ -559,6 +562,13 @@ export function getOwnerBoard(scope: OwnerBoardScope): OwnerBoard {
     incoming: scope.inventory || scope.invoicing ? incomingOrders(scope) : null,
     toShip: scope.fulfillment ? ordersToShip() : null,
     employeesToday: scope.hours ? employeesToday() : null,
+    // Never null. Everybody has a list of their own, and each half gates
+    // itself: a person who cannot see the streaming module is not told about a
+    // stream, and a recurring job belongs to one person by construction.
+    tasks: {
+      slips: scope.streaming && scope.fulfillment ? slipsOutstanding() : [],
+      recurring: scope.viewerId ? recurringDueNow(scope.viewerId) : []
+    },
     generatedAt: nowIso()
   }
 }

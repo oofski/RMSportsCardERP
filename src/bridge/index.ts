@@ -21,6 +21,7 @@
 import { IPC, type AppInfo } from '@shared/ipc'
 import type { Permission } from '@shared/permissions'
 import type { NewReminder, OwnerBoard, Reminder, Todo } from '@shared/ownerDashboard'
+import type { RecurringTask } from '@shared/homeTasks'
 import type {
   ShipPickAdvanced,
   ShipStationBoard,
@@ -953,7 +954,21 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       deleteTodo: (id: string): Promise<Result<{ id: string }>> =>
         ipcRenderer.invoke(IPC.todoDelete, id),
       clearDoneTodos: (): Promise<Result<{ cleared: number }>> =>
-        ipcRenderer.invoke(IPC.todosClearDone)
+        ipcRenderer.invoke(IPC.todosClearDone),
+
+      /** Jobs on a clock. Same rule: the caller's own, never named in a call. */
+      recurring: (): Promise<RecurringTask[]> => ipcRenderer.invoke(IPC.recurringList),
+      addRecurring: (input: {
+        title: string
+        everyDays: number
+        anchorDate: string
+        leadDays?: number
+      }): Promise<Result<RecurringTask>> => ipcRenderer.invoke(IPC.recurringCreate, input),
+      /** `occurrence` is the date the SCREEN showed, not today. */
+      completeRecurring: (id: string, occurrence: string): Promise<Result<{ id: string }>> =>
+        ipcRenderer.invoke(IPC.recurringComplete, { id, occurrence }),
+      deleteRecurring: (id: string): Promise<Result<{ id: string }>> =>
+        ipcRenderer.invoke(IPC.recurringDelete, id)
     },
     updates: {
       getStatus: (): Promise<UpdateStatus> => ipcRenderer.invoke(IPC.updatesGetStatus),

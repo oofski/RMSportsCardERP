@@ -158,6 +158,11 @@ export const SYNCED_TABLES: SyncedTable[] = [
   // worth syncing at all: a list that only exists on the laptop it was typed on
   // is a list somebody keeps twice.
   { table: 'todos', key: ['id'], tier: 1 },
+  // A repeating job, and the record of which occurrence was last ticked. Safe
+  // under last-write-wins for the same reason a to-do is — one author, one
+  // reader — and it has to travel, or ticking payroll off on the laptop would
+  // leave it still asking on the web app.
+  { table: 'recurring_tasks', key: ['id'], tier: 1 },
   { table: 'time_entries', key: ['id'], tier: 1 },
   { table: 'inventory_transactions', key: ['id'], tier: 1 },
   { table: 'inventory_incoming', key: ['id'], tier: 1 },

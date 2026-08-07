@@ -84,7 +84,7 @@ export const LIVE = {
    * one card on the board whose entire purpose is to be read the moment
    * somebody writes to it.
    */
-  notes: ['reminders', 'todos'],
+  notes: ['reminders', 'todos', 'recurring_tasks'],
   activity: ['audit_log', 'inventory_transactions'],
   intake: ['intake_links', 'intake_submissions']
 } as const

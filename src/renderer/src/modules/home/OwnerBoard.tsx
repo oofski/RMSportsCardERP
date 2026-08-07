@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { OwnerBoard as Board, OwnerPnlWindow, Reminder, Todo } from '@shared/ownerDashboard'
 import { REMINDER_MAX_LENGTH, TODO_MAX_LENGTH } from '@shared/ownerDashboard'
+import { recurringLabel } from '@shared/homeTasks'
 import { api } from '../../lib/api'
 import { useSession } from '../../lib/session'
 import { useChrome } from '../../lib/chrome'
@@ -54,6 +55,9 @@ export function OwnerBoard(): JSX.Element | null {
   useLiveRefresh(LIVE.finance, load)
   useLiveRefresh(LIVE.people, load)
   useLiveRefresh(LIVE.notes, load)
+  // The slips task is a statement about a STREAM, so a show starting or ending
+  // on another machine is a change this page has to hear.
+  useLiveRefresh(LIVE.streaming, load)
 
   useEffect(() => {
     let active = true
@@ -91,7 +95,7 @@ export function OwnerBoard(): JSX.Element | null {
     return (
       <div className="ob">
         <div className="ob-grid">
-          <TodoCard />
+          <TodayCard board={board} reminders={reminders} onChanged={load} canInbox={canInbox} />
         </div>
       </div>
     )
@@ -183,7 +187,6 @@ export function OwnerBoard(): JSX.Element | null {
           </div>
         )}
 
-        {canInbox && <Inbox reminders={reminders} onChanged={load} />}
         {board.whatnot && (
           <PnlCard
             title="Whatnot"
@@ -415,7 +418,7 @@ export function OwnerBoard(): JSX.Element | null {
           </div>
         )}
 
-        <TodoCard />
+        <TodayCard board={board} reminders={reminders} onChanged={load} canInbox={canInbox} />
       </div>
     </div>
   )
@@ -433,7 +436,17 @@ export function OwnerBoard(): JSX.Element | null {
  * gate: it is your list, scoped to you by the handler, and a packer keeping
  * three lines on it costs nobody anything.
  */
-function TodoCard(): JSX.Element {
+function TodayCard({
+  board,
+  reminders,
+  onChanged,
+  canInbox
+}: {
+  board: Board
+  reminders: Reminder[]
+  onChanged: () => Promise<void>
+  canInbox: boolean
+}): JSX.Element {
   const toast = useToast()
   const [items, setItems] = useState<Todo[]>([])
   const [draft, setDraft] = useState('')
@@ -500,13 +513,33 @@ function TodoCard(): JSX.Element {
     await load()
   }
 
-  const openCount = items.filter((t) => !t.done).length
+  const derived = board.tasks.slips
+  const due = board.tasks.recurring
+  const openReminders = reminders.filter((r) => r.status === 'open').length
+  const openCount = items.filter((t) => !t.done).length + derived.length + due.length + openReminders
+
+  const tickRecurring = async (id: string, occurrence: string): Promise<void> => {
+    if (pending) return
+    setPending(id)
+    try {
+      const res = await api.owner.completeRecurring(id, occurrence)
+      // A second tick — from another machine, or a double click — finds the
+      // occurrence already recorded and reports nothing changed. That is the
+      // job being done, not a failure, and an error toast for it is a lie.
+      if (!res.ok && !/no longer on your list/i.test(res.error ?? '')) {
+        toast.error(res.error ?? 'That did not save.')
+      }
+      await onChanged()
+    } finally {
+      setPending(null)
+    }
+  }
 
   return (
     <div className="ob-card ob-span">
       <header>
         <Icon name="ListChecks" size={16} />
-        <h3>To-do list</h3>
+        <h3>Today</h3>
         <span className="ob-sub">
           {openCount === 0 ? 'Nothing outstanding' : `${openCount} to do`}
         </span>
@@ -531,6 +564,49 @@ function TodoCard(): JSX.Element {
           Add
         </Button>
       </div>
+
+      {/* WHAT THE APP WORKED OUT, above what anybody typed.
+          A stream with no packing slip against it, and a job whose clock has
+          come round, are both things somebody has to do that nobody remembered
+          to write down — which makes them the most likely things on the page to
+          be missed. The slip rows carry no tick: they clear themselves the
+          moment the import lands, so a tick would be a lie. */}
+      {(derived.length > 0 || due.length > 0) && (
+        <ul className="ob-rem ob-auto">
+          {due.map((d) => (
+            <li key={d.id} data-late={d.daysLate > 0 ? 'true' : 'false'}>
+              <button
+                className="ob-rem-tick"
+                disabled={pending === d.id}
+                title={`Mark ${d.dueOn} done`}
+                onClick={() => void tickRecurring(d.id, d.dueOn)}
+              >
+                <Icon name="Circle" size={16} />
+              </button>
+              <span className="ob-rem-body">
+                <span className="ob-rem-text">{d.title}</span>
+                <span className="ob-rem-meta">
+                  {recurringLabel(d)} · {d.dueOn}
+                </span>
+              </span>
+            </li>
+          ))}
+          {derived.map((t) => (
+            <li key={t.id}>
+              {/* A MARK, not a tick. These rows clear themselves when the
+                  import lands, so a tick would be a lie — and the shared class
+                  made it look like one, cursor and hover included. */}
+              <span className="ob-rem-mark" aria-hidden="true">
+                <Icon name="AlertTriangle" size={15} />
+              </span>
+              <span className="ob-rem-body">
+                <span className="ob-rem-text">{t.title}</span>
+                <span className="ob-rem-meta">{t.detail}</span>
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
 
       {items.length > 0 ? (
         <ul className="ob-rem">
@@ -558,9 +634,21 @@ function TodoCard(): JSX.Element {
             </li>
           ))}
         </ul>
-      ) : (
+      ) : derived.length === 0 && due.length === 0 ? (
         <p className="ob-empty">Nothing on the list. Add the first thing above.</p>
+      ) : null}
+
+      {/* The inbox, in the same module rather than a card of its own. It is the
+          same question — what do I have to deal with — asked by somebody else. */}
+      {canInbox && reminders.length > 0 && (
+        <>
+          <div className="ob-todo-split">From the floor</div>
+          <Inbox reminders={reminders} onChanged={onChanged} bare />
+        </>
       )}
+
+      <div className="ob-todo-split">Send a reminder to the owner</div>
+      <SendReminder bare />
     </div>
   )
 }
@@ -622,10 +710,13 @@ function PnlCard({
  */
 function Inbox({
   reminders,
-  onChanged
+  onChanged,
+  bare
 }: {
   reminders: Reminder[]
   onChanged: () => Promise<void>
+  /** Inside the merged Today module: the list only, no card and no header. */
+  bare?: boolean
 }): JSX.Element {
   const toast = useToast()
   const [busy, setBusy] = useState<string | null>(null)
@@ -646,18 +737,20 @@ function Inbox({
   }
 
   return (
-    <div className="ob-card ob-inbox">
-      <header>
-        <Icon name="Inbox" size={16} />
-        <h3>Reminders</h3>
-        <span className="ob-sub">
-          {open.length === 0 ? 'all clear' : `${open.length} open`}
-        </span>
-      </header>
+    <div className={bare ? '' : 'ob-card ob-inbox'}>
+      {!bare && (
+        <header>
+          <Icon name="Inbox" size={16} />
+          <h3>Reminders</h3>
+          <span className="ob-sub">
+            {open.length === 0 ? 'all clear' : `${open.length} open`}
+          </span>
+        </header>
+      )}
       {reminders.length === 0 ? (
         <p className="ob-empty">Nothing from the floor.</p>
       ) : (
-        <ul className="ob-rem">
+        <ul className={bare ? 'ob-rem ob-rem-scroll' : 'ob-rem'}>
           {reminders.map((r) => (
             <li key={r.id} data-done={r.status === 'done' ? 'true' : 'false'}>
               <button
@@ -693,7 +786,7 @@ function Inbox({
  * the failure mode of a staff-to-owner inbox is silence, and a box the floor
  * cannot see is a box nobody writes into.
  */
-export function SendReminder(): JSX.Element {
+export function SendReminder({ bare }: { bare?: boolean } = {}): JSX.Element {
   const toast = useToast()
   const [body, setBody] = useState('')
   const [urgent, setUrgent] = useState(false)
@@ -720,11 +813,13 @@ export function SendReminder(): JSX.Element {
   const left = REMINDER_MAX_LENGTH - body.length
 
   return (
-    <div className="panel-card">
-      <div className="panel-head">
-        <h3>Send a reminder</h3>
-        <span className="ph-sub">Goes to the owner</span>
-      </div>
+    <div className={bare ? 'ob-compose-wrap' : 'panel-card'}>
+      {!bare && (
+        <div className="panel-head">
+          <h3>Send a reminder</h3>
+          <span className="ph-sub">Goes to the owner</span>
+        </div>
+      )}
       <textarea
         className="input ob-compose"
         rows={2}

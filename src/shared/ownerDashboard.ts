@@ -1,3 +1,4 @@
+import type { DerivedTask, RecurringDue } from './homeTasks'
 /**
  * The owner's home board.
  *
@@ -209,6 +210,14 @@ export interface OwnerBoard {
   toShip: { items: OwnerOrderToShip[]; remaining: number; imported: boolean } | null
   /** Null when the viewer cannot see the team's hours. */
   employeesToday: OwnerEmployeeToday[] | null
+  /**
+   * Jobs the app worked out on its own, for the caller.
+   *
+   * Never null: everybody has a list, and the two halves gate themselves —
+   * `slips` is empty for somebody who cannot see the streaming module, and
+   * `recurring` is per person by construction.
+   */
+  tasks: { slips: DerivedTask[]; recurring: RecurringDue[] }
   generatedAt: string
 }
 

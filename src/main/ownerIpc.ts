@@ -12,6 +12,13 @@ import {
   setReminderStatus
 } from './db/reminders'
 import { clearDoneTodos, createTodo, deleteTodo, listTodos, setTodoDone } from './db/todos'
+import {
+  completeRecurring,
+  createRecurring,
+  deleteRecurring,
+  listRecurring
+} from './db/homeTasks'
+import type { RecurringTask } from '@shared/homeTasks'
 
 /**
  * The owner's home board, and the inbox that feeds it.
@@ -75,7 +82,11 @@ export function registerOwnerIpc(): void {
       // The team's hours, not the caller's own. Somebody who cannot open the
       // Hours screen has no business reading who came in this morning off the
       // home page — the same boundary, stated in the same place.
-      hours: can('admin.hours.view')
+      hours: can('admin.hours.view'),
+      // The slips-missing task needs BOTH: it is a statement about a stream
+      // (streaming) that resolves by importing a slip (fulfillment). Somebody
+      // who cannot do the second should not be handed the first as a job.
+      viewerId: currentUser()?.id ?? null
     })
   })
 
@@ -133,6 +144,64 @@ export function registerOwnerIpc(): void {
     try {
       const actor = requireUser()
       return { ok: true, data: { cleared: clearDoneTodos(actor.id) } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  // ---- Jobs on a clock ----------------------------------------------------
+  ipcMain.handle(IPC.recurringList, (): RecurringTask[] => {
+    const user = currentUser()
+    return user ? listRecurring(user.id) : []
+  })
+
+  ipcMain.handle(
+    IPC.recurringCreate,
+    (_e, input: { title?: unknown; everyDays?: unknown; anchorDate?: unknown; leadDays?: unknown }): Result<RecurringTask> => {
+      try {
+        const actor = requireUser()
+        return {
+          ok: true,
+          data: createRecurring(actor.id, {
+            title: str(input?.title),
+            everyDays: Number(input?.everyDays),
+            anchorDate: str(input?.anchorDate),
+            leadDays: input?.leadDays === undefined ? undefined : Number(input.leadDays)
+          })
+        }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  // The OCCURRENCE is named by the caller, not assumed to be today. Somebody
+  // ticking Wednesday's payroll on Friday has done Wednesday's, and recording
+  // Friday would walk the whole series two days out of step for ever.
+  ipcMain.handle(
+    IPC.recurringComplete,
+    (_e, payload: { id?: unknown; occurrence?: unknown }): Result<{ id: string }> => {
+      try {
+        const actor = requireUser()
+        const id = str(payload?.id)
+        if (!completeRecurring(actor.id, id, str(payload?.occurrence))) {
+          return { ok: false, error: 'That job is no longer on your list.' }
+        }
+        return { ok: true, data: { id } }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  ipcMain.handle(IPC.recurringDelete, (_e, id: unknown): Result<{ id: string }> => {
+    try {
+      const actor = requireUser()
+      const target = str(id)
+      if (!deleteRecurring(actor.id, target)) {
+        return { ok: false, error: 'That job is no longer on your list.' }
+      }
+      return { ok: true, data: { id: target } }
     } catch (err) {
       return fail(err)
     }
