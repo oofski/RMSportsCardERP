@@ -1,3 +1,4 @@
+import { BYTES_TAG } from '@shared/ipc'
 import type { UploadedFile } from '@shared/types'
 import type { BridgeTransport } from '../../../bridge'
 
@@ -107,7 +108,43 @@ async function call(channel: string, args: unknown[]): Promise<unknown> {
   }
   if (!envelope.ok) throw new Error(envelope.error || 'That did not work.')
   await performClientActions(envelope)
-  return envelope.data
+  return withBytesRestored(envelope.data)
+}
+
+/**
+ * Turn tagged binary back into a Uint8Array.
+ *
+ * The mirror of withBytesTagged() on the server, and the reason both exist:
+ * Electron's IPC carries a Uint8Array as a Uint8Array, JSON does not. A
+ * `{"0":37,"1":80,…}` object reached `new Uint8Array(…)` in the pane and came
+ * out ZERO BYTES long, so the packing slip rendered as pdf.js's "The PDF file is
+ * empty" over a blank sheet — on the web only, while the desktop was fine.
+ *
+ * Recursive for the same reason the encoder is: the next operation to return
+ * bytes may well return them inside an object, and it would fail exactly as
+ * silently.
+ */
+function withBytesRestored(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(withBytesRestored)
+  if (value !== null && typeof value === 'object') {
+    const record = value as Record<string, unknown>
+    const tagged = record[BYTES_TAG]
+    if (typeof tagged === 'string' && Object.keys(record).length === 1) {
+      return fromBase64(tagged)
+    }
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(record)) out[k] = withBytesRestored(v)
+    return out
+  }
+  return value
+}
+
+/** base64 → bytes, without atob's one-character-at-a-time cost on 10 MB. */
+function fromBase64(text: string): Uint8Array {
+  const binary = atob(text)
+  const out = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i)
+  return out
 }
 
 // ---------------------------------------------------------------------------

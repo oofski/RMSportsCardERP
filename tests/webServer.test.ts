@@ -44,6 +44,8 @@ mkdirSync(DIR, { recursive: true })
 const { startServer } = require('../src/server/index')
 const { invokeHandler } = require('../src/main/ipcRegistry')
 const { runAs } = require('../src/main/services/session')
+const shipping = require('../src/main/db/shipping')
+const { BYTES_TAG } = require('../src/shared/ipc')
 
 let pass = 0
 let fail = 0
@@ -472,6 +474,56 @@ void (async (): Promise<void> => {
     'and opening a download with no link is refused',
     JSON.stringify(noLink.body.data)
   )
+
+  // -------------------------------------------------------------------------
+  console.log('\n=== 11. raw bytes survive the trip to a browser ===')
+  // -------------------------------------------------------------------------
+  // Electron's IPC carries a Uint8Array as a Uint8Array. JSON does not:
+  // JSON.stringify(new Uint8Array([37,80])) is {"0":37,"1":80}, and
+  // new Uint8Array() of THAT is zero bytes long. So the packing slip crossed the
+  // wire as a multi-megabyte object of numeric keys and arrived empty — the pane
+  // showing pdf.js's "The PDF file is empty, i.e. its size is zero bytes" over a
+  // blank sheet, on the web only, while every desktop was fine.
+  //
+  // Asserted through the REAL route, because that is the only place the fault
+  // lived: the handler was always correct and the renderer was always correct.
+  const slip = Buffer.from([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x37, 0x00, 0xff, 0x80, 0x7f])
+  shipping.putShipDocument({
+    importId: null,
+    name: 'packing-slips.pdf',
+    pageCount: 59,
+    bytes: slip
+  })
+  // A fresh session: `owner` was deliberately signed out in section 9.
+  const reader = new Client(base)
+  await reader.call('auth:login', [{ identifier: 'RM-BENCH', password: 'bench-password' }])
+  const meta = await reader.call('shipping:document')
+  ok(
+    (meta.body.data as { pageCount: number } | null)?.pageCount === 59,
+    'the slip metadata comes back',
+    JSON.stringify(meta.body.data)
+  )
+
+  const bytes = await reader.call('shipping:document:bytes')
+  const tagged = bytes.body.data as Record<string, unknown> | null
+  ok(tagged !== null, 'and so do the bytes', JSON.stringify(tagged).slice(0, 80))
+  // The shape is what the browser transport knows how to undo. The failing shape
+  // — an object of numeric keys — is asserted absent, because that one parses
+  // without error and produces an empty file.
+  ok(
+    typeof tagged?.[BYTES_TAG] === 'string',
+    'tagged as binary rather than spilled into numeric keys',
+    Object.keys(tagged ?? {}).slice(0, 5).join(',')
+  )
+  ok(
+    (tagged as Record<string, unknown>)['0'] === undefined,
+    'and NOT as {"0":37,"1":80,…}, which is what arrived empty'
+  )
+  const decoded = Buffer.from(String(tagged?.[BYTES_TAG]), 'base64')
+  ok(decoded.length === slip.length, 'the right number of bytes', `${decoded.length} vs ${slip.length}`)
+  ok(decoded.equals(slip), 'and byte for byte the file that was stored')
+  // A PDF begins %PDF-, and that is exactly what pdf.js checks first.
+  ok(decoded.subarray(0, 5).toString('latin1') === '%PDF-', 'starting with a real PDF header')
 
   server.close()
   console.log(`\n${pass} passed, ${fail} failed\n`)

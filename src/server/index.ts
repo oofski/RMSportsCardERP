@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { randomUUID } from 'node:crypto'
 import { statSync } from 'node:fs'
-import { IPC } from '@shared/ipc'
+import { BYTES_TAG, IPC } from '@shared/ipc'
 import { effectivePermissions, type Permission } from '@shared/permissions'
 import { getDb } from '../main/db/database'
 import { getEmployeeById } from '../main/db/employees'
@@ -625,6 +625,38 @@ async function handleLogin(req: IncomingMessage, res: ServerResponse): Promise<v
  * So the shape stays and the value becomes the name the browser saved it as,
  * which is the true answer to the question the toast is asking.
  */
+/**
+ * Tag any raw bytes in a result so JSON can carry them.
+ *
+ * Recursive, because a handler is free to return bytes inside an object and a
+ * top-level-only conversion would fail the next one silently and identically —
+ * an empty file, no error, on the web only. The walk costs what stringifying
+ * costs, which this is about to do anyway.
+ *
+ * Base64 rather than a second binary route: it is one function on each side, it
+ * needs no new authentication path, and the only caller fetches once when a pane
+ * opens. A tenth again in size on that one call is the whole price.
+ */
+function withBytesTagged(value: unknown): unknown {
+  if (value instanceof Uint8Array) {
+    return { [BYTES_TAG]: Buffer.from(value).toString('base64') }
+  }
+  if (Buffer.isBuffer(value)) return { [BYTES_TAG]: value.toString('base64') }
+  if (Array.isArray(value)) return value.map(withBytesTagged)
+  if (value !== null && typeof value === 'object') {
+    // Only plain objects. A Date has a JSON form of its own and walking one
+    // would replace it with an empty object.
+    const proto = Object.getPrototypeOf(value)
+    if (proto !== Object.prototype && proto !== null) return value
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = withBytesTagged(v)
+    }
+    return out
+  }
+  return value
+}
+
 function withoutServerPaths(value: unknown, filename: string | null): unknown {
   if (!filename || typeof value !== 'object' || value === null) return value
   const record = value as Record<string, unknown>
@@ -666,7 +698,7 @@ async function handleCall(
     // the OS to open. Collected only after the handler returned, so a call that
     // threw hands over nothing.
     const downloads = [...actions.downloads, ...takeSpooledDownloads()]
-    const result = withoutServerPaths(value, downloads[0]?.filename ?? null)
+    const result = withBytesTagged(withoutServerPaths(value, downloads[0]?.filename ?? null))
     const extra: Record<string, unknown> = {}
     if (downloads.length > 0 && employeeId) {
       extra.downloads = downloads.map((d) => ({

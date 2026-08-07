@@ -2,6 +2,28 @@
  * Central registry of IPC channel names. Both the preload bridge and the main
  * process import from here so the two sides can never drift apart.
  */
+/**
+ * How raw BYTES cross the HTTP transport.
+ *
+ * Electron's IPC carries a Uint8Array as a Uint8Array — structured clone knows
+ * what one is. JSON does not: `JSON.stringify(new Uint8Array([37,80]))` is
+ * `{"0":37,"1":80}`, an object with numeric keys, and `new Uint8Array(...)` of
+ * that object is ZERO BYTES LONG. So the packing slip crossed the wire as a
+ * multi-megabyte object and arrived in the browser as an empty file — pdf.js
+ * reporting "The PDF file is empty, i.e. its size is zero bytes" over a blank
+ * sheet, on the web only, while the desktop was fine.
+ *
+ * The server tags binary on the way out and the transport untags it on the way
+ * in. The tag lives here because it is the one thing both halves must agree on,
+ * and this file is already where they agree on names.
+ */
+export const BYTES_TAG = '__rmops_bytes__'
+
+/** The tagged form: `{ [BYTES_TAG]: '<base64>' }`. */
+export interface TaggedBytes {
+  [BYTES_TAG]: string
+}
+
 export const IPC = {
   // Auth
   authSetupState: 'auth:setup-state',
