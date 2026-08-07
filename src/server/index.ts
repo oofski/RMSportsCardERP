@@ -64,7 +64,12 @@ import {
  *     server. The browser is told whether one is set, never what it is.
  */
 
-const DEFAULT_PORT = Number(process.env.RMOPS_PORT ?? 8787)
+// `PORT` is the fallback because almost every managed host assigns one and
+// expects the process to take it — Render, Railway, Heroku, App Runner. Without
+// it the app binds 8787, the platform's health check knocks on the port it
+// chose, gets nothing, and reports a deploy that failed for no visible reason.
+// RMOPS_PORT still wins, so a machine you control is unaffected.
+const DEFAULT_PORT = Number(process.env.RMOPS_PORT ?? process.env.PORT ?? 8787)
 const DEFAULT_HOST = process.env.RMOPS_HOST ?? '0.0.0.0'
 
 /**

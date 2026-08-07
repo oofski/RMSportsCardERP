@@ -1,0 +1,52 @@
+# RM Operations on Render — a Blueprint.
+#
+# Render reads this file and creates the service, the disk and the environment
+# in one step, so the setup is a few clicks rather than a session in a terminal.
+# `docs/RENDER.md` is the walkthrough; this file is what it points at.
+#
+# THE ONE RULE, same as anywhere else: one instance. This app is one process
+# owning one SQLite file, and a Render disk attaches to exactly one instance —
+# so scaling up does not give you a faster app, it gives you two databases that
+# slowly stop agreeing. Do not raise the instance count.
+services:
+  - type: web
+    name: rm-operations
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    # Starter, not Free: the free plan has NO PERSISTENT DISK, and this app
+    # without one is a database that disappears on every deploy. Free also
+    # sleeps after inactivity, which for a clock-in screen means the first
+    # person of the morning waits for a cold start.
+    plan: starter
+    region: ohio
+    branch: claude/rm-operations-app-initial-3sml0r
+    # The one route that answers without a session. Render polls it to decide
+    # whether a deploy came up; point it anywhere else and every deploy fails.
+    healthCheckPath: /health
+    disk:
+      name: rmops-data
+      # Must match RMOPS_DATA_DIR below. The server compares device numbers at
+      # boot and refuses to start if this path is not really a mounted disk,
+      # because the alternative — writing to the container filesystem — works
+      # perfectly until the next deploy and then loses everything, silently.
+      mountPath: /data
+      sizeGB: 10
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: RMOPS_DATA_DIR
+        value: /data
+      # Render terminates TLS and forwards x-forwarded-for, so those headers can
+      # be believed here. Off by default, because on a directly-reachable machine
+      # they are whatever the caller typed and the login throttle is worthless.
+      - key: RMOPS_TRUST_PROXY
+        value: "1"
+      # `sync: false` means Render prompts for these and never stores them in
+      # this file — which is committed to a public repository. They point at the
+      # same relay the desktop apps use, and setting them is what pulls the
+      # existing company down. Leave them empty and the app comes up as a new,
+      # separate company with nothing in it.
+      - key: RMOPS_SYNC_URL
+        sync: false
+      - key: RMOPS_SYNC_KEY
+        sync: false
