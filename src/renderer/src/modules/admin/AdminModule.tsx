@@ -9,26 +9,16 @@ import { EmployeesTab } from './EmployeesTab'
 import { OnboardingTab } from './OnboardingTab'
 import { RolesTab } from './RolesTab'
 import { ActivityTab } from './ActivityTab'
-import { InventoryResetTab } from './InventoryResetTab'
-import { CloudSyncTab } from './CloudSyncTab'
-import { ShipAdminTab, useShipAdminWorkspace } from './ShippingAdminTabs'
-import type { ShipAdminTabId } from './ShippingAdminTabs'
+import { DeveloperTab } from './DeveloperTab'
 
-type TabId =
-  | 'employees'
-  | 'onboarding'
-  | 'roles'
-  | 'activity'
-  | 'reset'
-  | 'sync'
-  | ShipAdminTabId
+type TabId = 'employees' | 'onboarding' | 'roles' | 'activity' | 'developer'
 
 interface TabDef {
   id: TabId
   label: string
   icon: string
   visible: boolean
-  /** Count badge; 0 hides it. Only the shipping tabs carry one so far. */
+  /** Count badge; 0 hides it. */
   badge?: number
   /** Louder than a count: something is wrong, not merely outstanding. */
   alarm?: boolean
@@ -40,12 +30,7 @@ export function AdminModule(): JSX.Element {
   const { can } = useSession()
   const [employees, setEmployees] = useState<Employee[]>([])
   const [loading, setLoading] = useState(true)
-  // Declared before the tab list because the shipping tabs need it two ways
-  // round: the strip needs their badge, and they need to be able to move the
-  // strip (History's empty state opens Setup). Which tab is actually shown is
-  // resolved against what is visible below.
   const [tab, setTab] = useState<TabId>('employees')
-  const shipping = useShipAdminWorkspace(setTab)
 
   const loadEmployees = useCallback(async () => {
     const list = await api.employees.list()
@@ -91,38 +76,23 @@ export function AdminModule(): JSX.Element {
       visible: can('module.inventory'),
       startsGroup: true
     },
-    // Gated on the write permission, not on module access: this tab rewrites
-    // stock and cost for the whole catalog in one action.
-    {
-      id: 'reset',
-      label: 'Inventory reset',
-      icon: 'ClipboardList',
-      visible: can('inventory.manage')
-    },
-    // Anyone who runs breaks needs the customer form links and the submissions
-    // waiting on them; the connection settings inside are separately gated on
-    // admin.access by the handlers.
-    {
-      id: 'sync',
-      label: 'Cloud sync',
-      icon: 'Cloud',
-      visible: can('admin.access') || can('shipping.manage')
-    },
-    // ONE tab, three screens inside it. It was three — Setup, Flags, History —
-    // which made Admin read as a shipping module with an employees page bolted
-    // on. Running the show is one job done in three steps, so it is one tab.
+    // THE BACK OF THE HOUSE, in one tab.
     //
-    // QuickBooks is gone from the strip. The integration itself is untouched —
-    // the OAuth, the account mapping and the sync log are all still there — it
-    // simply is not something anybody opens, so it stopped earning a place in a
-    // row that has to be readable at a glance.
+    // Cloud sync and the inventory reset are not administration in the sense the
+    // three tabs above the rule are — nobody opens either in an ordinary week.
+    // One decides which company's data this machine reads and writes; the other
+    // rewrites stock and cost for the whole catalog in a single action. They are
+    // the two most consequential screens in the app and the two least visited,
+    // which is exactly the pair that should be behind one clearly-labelled door
+    // rather than sitting in the strip inviting a stray click.
+    //
+    // Gated on the WIDER of the two permissions, and each screen re-checks its
+    // own inside — the tab is a place to stand, not a grant.
     {
-      id: 'shipping',
-      label: 'Shipping',
-      icon: 'UploadCloud',
-      visible: can('shipping.manage'),
-      badge: shipping.warnings,
-      alarm: shipping.collisions
+      id: 'developer',
+      label: 'Developer',
+      icon: 'Terminal',
+      visible: can('admin.access') || can('inventory.manage') || can('shipping.manage')
     }
   ]
   const visibleTabs = tabs.filter((t) => t.visible)
@@ -167,9 +137,7 @@ export function AdminModule(): JSX.Element {
       {active === 'onboarding' && <OnboardingTab />}
       {active === 'roles' && <RolesTab employees={employees} onChanged={loadEmployees} />}
       {active === 'activity' && <ActivityTab />}
-      {active === 'reset' && <InventoryResetTab />}
-      {active === 'sync' && <CloudSyncTab />}
-      {active === 'shipping' && <ShipAdminTab workspace={shipping} />}
+      {active === 'developer' && <DeveloperTab />}
     </div>
   )
 }

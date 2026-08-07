@@ -8,10 +8,11 @@ import { Button, CenterLoader, EmptyState } from '../../components/ui'
 import { SetupTab } from '../fulfillment/SetupTab'
 import { FlagsTab } from '../fulfillment/FlagsTab'
 import { HistoryTab } from '../fulfillment/HistoryTab'
+import { AssignTab } from '../fulfillment/AssignTab'
 import type { ShipTabId, ShipTabProps } from '../fulfillment/ShippingModule'
 
 /**
- * The three shipping screens that run the show rather than do it, hosted here.
+ * Loading the night: import the slips, then hand the breaks out.
  *
  * The shipping module is what somebody stands in front of at a packing bench:
  * Today, Orders, Steps, Bench. Importing the night's slips, reading what the
@@ -34,9 +35,9 @@ import type { ShipTabId, ShipTabProps } from '../fulfillment/ShippingModule'
  * and Admin's tab strip should not be pinned to a type that is about to change
  * underneath it.
  */
-export type ShipAdminTabId = 'shipping'
+export type SlipsTabId = 'slips'
 
-export interface ShipAdminWorkspace {
+export interface SlipsWorkspace {
   /** Everything the three tabs need, ready to spread. */
   props: ShipTabProps
   loading: boolean
@@ -55,7 +56,7 @@ export interface ShipAdminWorkspace {
  * which is drawn whether or not a shipping tab is the one open — the summary
  * has to be loaded by then, not by the tab body.
  */
-export function useShipAdminWorkspace(goTo: (tab: ShipAdminTabId) => void): ShipAdminWorkspace {
+export function useSlipsWorkspace(goTo: (tab: SlipsTabId) => void): SlipsWorkspace {
   const { can } = useSession()
   const { navigate } = useChrome()
 
@@ -147,7 +148,7 @@ export function useShipAdminWorkspace(goTo: (tab: ShipAdminTabId) => void): Ship
           // All three now live inside ONE Admin tab, so "go there" is the same
           // destination whichever of them asked. The tab opens on Import; the
           // steps inside it are one click apart.
-          goTo('shipping')
+          goTo('slips')
           return
         default:
           if (canOpenBench) navigate('fulfillment')
@@ -175,12 +176,12 @@ export function useShipAdminWorkspace(goTo: (tab: ShipAdminTabId) => void): Ship
  * three steps, so they are one tab with the steps inside it: import the slips,
  * read what the import flagged, look back at what has been imported before.
  */
-export function ShipAdminTab({
+export function SlipsTab({
   workspace
 }: {
-  workspace: ShipAdminWorkspace
+  workspace: SlipsWorkspace
 }): JSX.Element {
-  const [inner, setInner] = useState<'setup' | 'flags' | 'history'>('setup')
+  const [inner, setInner] = useState<'setup' | 'assign' | 'flags' | 'history'>('setup')
 
   if (workspace.loading) return <CenterLoader />
   // A failed load is a dead end otherwise — show what happened and offer a retry.
@@ -199,8 +200,12 @@ export function ShipAdminTab({
     )
   }
 
-  const INNER: Array<{ id: 'setup' | 'flags' | 'history'; label: string }> = [
+  const INNER: Array<{ id: 'setup' | 'assign' | 'flags' | 'history'; label: string }> = [
     { id: 'setup', label: 'Import' },
+    // Upload, then hand the breaks out. They are the two halves of loading a
+    // night, and having them a module apart is what made the second half get
+    // forgotten until somebody was standing at a bench asking whose break it was.
+    { id: 'assign', label: 'Assign' },
     { id: 'flags', label: 'Flags' },
     { id: 'history', label: 'History' }
   ]
@@ -222,6 +227,7 @@ export function ShipAdminTab({
         ))}
       </div>
       {inner === 'setup' && <SetupTab {...workspace.props} />}
+      {inner === 'assign' && <AssignTab />}
       {inner === 'flags' && <FlagsTab {...workspace.props} />}
       {inner === 'history' && <HistoryTab {...workspace.props} />}
     </>

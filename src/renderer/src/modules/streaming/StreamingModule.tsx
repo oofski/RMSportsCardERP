@@ -9,6 +9,7 @@ import { EmptyState } from '../../components/ui'
 import { LiveBar } from './LiveBar'
 import { StreamCalendar } from './StreamCalendar'
 import { SessionsTab } from './SessionsTab'
+import { SlipsTab, useSlipsWorkspace } from './SlipsTab'
 import { SessionDetail } from './SessionDetail'
 import { SessionFormModal } from './SessionFormModal'
 import { streaming, streamingReady } from './api'
@@ -28,7 +29,7 @@ import { todayKey } from './time'
  * because the calendar, the list and the live bar all read the same sessions
  * from different angles and must never disagree about them.
  */
-type StreamTab = 'calendar' | 'sessions'
+type StreamTab = 'calendar' | 'sessions' | 'slips'
 
 export function StreamingModule(): JSX.Element {
   const { can } = useSession()
@@ -38,6 +39,7 @@ export function StreamingModule(): JSX.Element {
   const canSearchCatalog = can('module.inventory')
 
   const [tab, setTab] = useState<StreamTab>('calendar')
+  const slips = useSlipsWorkspace(setTab)
   const [openId, setOpenId] = useState<string | null>(null)
   const [active, setActive] = useState<StreamSession | null>(null)
   const [activeLoading, setActiveLoading] = useState(true)
@@ -148,9 +150,30 @@ export function StreamingModule(): JSX.Element {
               <Icon name="ListChecks" size={16} />
               Sessions
             </button>
+            {/* THE SLIPS BELONG TO THE SHOW.
+                A packing slip is the record of what a stream sold, so importing
+                one is the last step of running the night rather than a separate
+                administrative errand — which is what it was, three tabs deep in
+                Admin, on a screen about employees. Here it sits next to the
+                session it describes, and the break assignment that follows it is
+                one click away instead of in another module. */}
+            {canManage && (
+              <button
+                className={`tab ${tab === 'slips' ? 'active' : ''}`}
+                onClick={() => setTab('slips')}
+              >
+                <Icon name="UploadCloud" size={16} />
+                Packing slips
+                {slips.warnings > 0 && (
+                  <span className="ship-tab-badge warning">{slips.warnings}</span>
+                )}
+              </button>
+            )}
           </div>
 
-          {tab === 'calendar' ? (
+          {tab === 'slips' ? (
+            <SlipsTab workspace={slips} />
+          ) : tab === 'calendar' ? (
             <StreamCalendar
               version={version}
               canManage={canManage}
