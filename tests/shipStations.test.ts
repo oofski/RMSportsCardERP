@@ -694,5 +694,106 @@ ok(
 ok(handedOut.join(',') === 'one,two,three,four', 'in page order, across both', handedOut.join(','))
 getDb().prepare(`UPDATE sync_state SET value = 'STATION-A' WHERE key = 'device_id'`).run()
 
+// ---------------------------------------------------------------------------
+console.log('\n=== 15. the board counts the ROOM, not this bench ===')
+// ---------------------------------------------------------------------------
+// Two ways the bench used to send people home early, both by asking a
+// bench-LOCAL question and answering a room-wide one with the result.
+//
+// (a) A SENT-BACK ORDER. Every card in it is still ticked — that is what makes
+//     a rejection different from an unpick — so a count of `checked < total`
+//     saw nothing left to do, and the picking button read "0 orders to pick"
+//     about work the packer had just created.
+//
+// (b) A BOX OPEN AT ANOTHER BENCH. packQueue() deliberately hides an order
+//     somebody else is holding, because it answers "what may I take". Asking
+//     it whether the NIGHT is finished put "Every order is picked and packed"
+//     on one screen while the last mailer was being taped on another.
+for (const st of ['STATION-A', 'STATION-P', 'STATION-Q', 'STATION-R', 'STATION-S']) {
+  getDb().prepare(`UPDATE sync_state SET value = ? WHERE key = 'device_id'`).run(st)
+  stations.releaseAllForStation('reset for the board checks')
+}
+
+// Tick every card, then pack everything EXCEPT two orders kept back for the two
+// cases below. What is left is only what each case introduces.
+getDb().prepare(`UPDATE sync_state SET value = 'STATION-Z' WHERE key = 'device_id'`).run()
+for (const o of domain.listOrders() as any[]) {
+  if (o.onHold) continue
+  if (o.pick.checked < o.pick.total) domain.setOrderChecked(o.customerId, true, null, true)
+}
+const workable = (domain.listOrders() as any[]).filter((o) => !o.onHold && !o.packedAt)
+ok(workable.length >= 2, 'at least two orders to work with', String(workable.length))
+const rejectMe = workable[0]
+const leaveOpen = workable[1]
+for (const o of workable.slice(2)) {
+  stations.claimOrder(o.id, o.customerId, 'pick', null)
+  stations.pickAdvance(o.customerId, null)
+  const taken = stations.packNext(null)
+  if (taken) stations.packDone(taken.customerId, null)
+}
+
+// (a) One packer takes an order and rejects it.
+getDb().prepare(`UPDATE sync_state SET value = 'STATION-R' WHERE key = 'device_id'`).run()
+stations.claimOrder(rejectMe.id, rejectMe.customerId, 'pick', null)
+stations.pickAdvance(rejectMe.customerId, null)
+const tookIt = stations.packNext(null)
+ok(!!tookIt, 'a packer takes it', JSON.stringify(stations.packQueue().map((o: any) => o.customerId)))
+ok(
+  stations.sendBack(tookIt.customerId, 'sleeve is split') === true,
+  'and rejects it',
+  String(tookIt?.customerId)
+)
+const afterSendBack = stations.getStationBoard()
+ok(
+  afterSendBack.toPick >= 1,
+  'the bench counts it as picking work, though every card is still ticked',
+  String(afterSendBack.toPick)
+)
+ok(afterSendBack.allDone === false, 'and the night is not over', JSON.stringify(afterSendBack.allDone))
+
+// Put it right, so the second case starts from a known state.
+stations.pickAdvance(tookIt.customerId, null)
+const repacked = stations.packNext(null)
+if (repacked) stations.packDone(repacked.customerId, null)
+ok(
+  stations.getStationBoard().toPick === 0,
+  'repicked and packed, nothing is left to pick',
+  String(stations.getStationBoard().toPick)
+)
+
+// (b) A packer at ANOTHER bench is holding the last order, mid-box.
+getDb().prepare(`UPDATE sync_state SET value = 'STATION-S' WHERE key = 'device_id'`).run()
+stations.claimOrder(leaveOpen.id, leaveOpen.customerId, 'pick', null)
+stations.pickAdvance(leaveOpen.customerId, null)
+const openNow = stations.packNext(null)
+ok(!!openNow, 'bench S has the box open', JSON.stringify(stations.packQueue().map((o: any) => o.customerId)))
+
+// Now ask bench T, which can see none of that.
+getDb().prepare(`UPDATE sync_state SET value = 'STATION-T' WHERE key = 'device_id'`).run()
+const otherBench = stations.getStationBoard()
+ok(
+  otherBench.packQueue === 0,
+  'the other bench may take nothing — that part was always right',
+  String(otherBench.packQueue)
+)
+ok(
+  otherBench.packingRemaining >= 1,
+  'but the room still owes a mailer',
+  String(otherBench.packingRemaining)
+)
+ok(
+  otherBench.allDone === false,
+  'so it does not tell this picker the night is finished',
+  JSON.stringify(otherBench.allDone)
+)
+
+// And when that box IS sealed, the night reads as over — from either bench.
+getDb().prepare(`UPDATE sync_state SET value = 'STATION-S' WHERE key = 'device_id'`).run()
+stations.packDone(openNow.customerId, null)
+getDb().prepare(`UPDATE sync_state SET value = 'STATION-T' WHERE key = 'device_id'`).run()
+const finished = stations.getStationBoard()
+ok(finished.packingRemaining === 0, 'the last mailer closes the count', String(finished.packingRemaining))
+ok(finished.allDone === true, 'and the night is over', JSON.stringify(finished.allDone))
+
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

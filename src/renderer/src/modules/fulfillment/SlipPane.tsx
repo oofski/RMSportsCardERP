@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ShipDocument } from '@shared/shippingTypes'
 import { pageRangeLabel } from '@shared/shippingViews'
 import { api } from '../../lib/api'
+import { LIVE, useLiveRefresh } from '../../lib/live'
 import { Icon } from '../../components/Icon'
 import { CenterLoader, EmptyState } from '../../components/ui'
 
@@ -76,6 +77,7 @@ export function SlipPane({
   label: string
 }): JSX.Element {
   const [doc, setDoc] = useState<ShipDocument | null>(null)
+  const [arrival, setArrival] = useState<{ have: number; total: number; name: string } | null>(null)
   const [loading, setLoading] = useState(true)
   const [ready, setReady] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -90,7 +92,29 @@ export function SlipPane({
   // but not when React hands back an equal-but-new array.
   const key = pages.join(',')
 
-  // --- open the document ONCE ----------------------------------------------
+  /**
+   * Which stored document is open. Bumped when the one on disk changes.
+   *
+   * The open below used to run once and only once, and "once" outlived the file
+   * it opened. On a second machine the tiny rows of tonight's import arrive
+   * first and the slip — half a megabyte at a time — lands minutes later, so the
+   * pane opened LAST show's PDF and then kept drawing it: tonight's customers,
+   * last week's pages, for as long as the screen stayed put. Somebody would have
+   * had to leave the module and come back to see the right paper, with nothing
+   * on screen suggesting they should.
+   */
+  const [openedId, setOpenedId] = useState<string | null>(null)
+
+  const checkDocument = useCallback(async (): Promise<void> => {
+    const meta = await api.shipping.document()
+    setDoc(meta)
+    setArrival(meta ? null : await api.shipping.documentArrival())
+    setOpenedId(meta?.id ?? null)
+  }, [])
+
+  useLiveRefresh(LIVE.shipping, checkDocument)
+
+  // --- open the document, and again if it is replaced -----------------------
   useEffect(() => {
     let active = true
     let task: { destroy: () => void } | null = null
@@ -99,7 +123,14 @@ export function SlipPane({
         const meta = await api.shipping.document()
         if (!active) return
         setDoc(meta)
-        if (!meta) return
+        setOpenedId(meta?.id ?? null)
+        if (!meta) {
+          // Nothing to draw — but say WHY, which is either "nobody sent it" or
+          // "it is four slices of twelve in".
+          const inflight = await api.shipping.documentArrival()
+          if (active) setArrival(inflight)
+          return
+        }
         const bytes = await api.shipping.documentBytes()
         if (!active || !bytes) return
         // Copy: pdfjs takes ownership of the buffer it is handed.
@@ -123,8 +154,24 @@ export function SlipPane({
         /* closing a document that never opened is not an error worth raising */
       }
       pdfRef.current = null
+      setReady(false)
     }
-  }, [])
+  }, [openedId])
+
+  // --- a blown-up sheet belongs to ONE order --------------------------------
+  //
+  // The overlay used to survive the walk. Somebody reading page 30 of a five-page
+  // order full size, who then pressed Next — the walker's arrow keys still fire,
+  // because a sheet is a <button> and only Escape is intercepted — kept looking
+  // at the PREVIOUS customer's page at reading size, under the NEW customer's
+  // name in the bar above it. The canvas is never redrawn when `pages` shrinks
+  // past the open index, so it simply stayed there, order after order.
+  //
+  // Closing on a change of order is the honest answer: the sheet somebody opened
+  // is not on the screen any more, so neither is its picture.
+  useEffect(() => {
+    setZoom(null)
+  }, [key])
 
   // --- draw every page of this order ---------------------------------------
   useEffect(() => {
@@ -147,7 +194,20 @@ export function SlipPane({
         const target = pages[i]
         if (!canvas || !target || target < 1) continue
         try {
-          const p = (await pdf.getPage(Math.min(target, pdf.numPages))) as {
+          // NOT clamped into range. A page number past the end of the open
+          // file means the file is not the one this order was parsed from, and
+          // clamping turned that into a perfectly legitimate-looking page
+          // belonging to a different customer on a different night. Better to
+          // say so.
+          if (target > pdf.numPages) {
+            if (!cancelled) {
+              setError(
+                `page ${target} is past the end of the slip on this computer (${pdf.numPages} pages) — this is not the file this order came from`
+              )
+            }
+            return
+          }
+          const p = (await pdf.getPage(target)) as {
             getViewport: (o: { scale: number }) => { width: number; height: number }
             render: (o: unknown) => { promise: Promise<void>; cancel: () => void }
           }
@@ -191,12 +251,21 @@ export function SlipPane({
     const canvas = zoomCanvasRef.current
     if (!pdf || canvas == null || zoom == null) return
     const target = pages[zoom]
-    if (!target) return
+    // Belt and braces for the same fault: an index past the end of THIS order's
+    // pages closes the overlay rather than leaving the last drawing on it.
+    if (!target) {
+      setZoom(null)
+      return
+    }
     let cancelled = false
     let job: { cancel: () => void } | null = null
     void (async () => {
       try {
-        const p = (await pdf.getPage(Math.min(target, pdf.numPages))) as {
+        if (target > pdf.numPages) {
+          setZoom(null)
+          return
+        }
+        const p = (await pdf.getPage(target)) as {
           getViewport: (o: { scale: number }) => { width: number; height: number }
           render: (o: unknown) => { promise: Promise<void>; cancel: () => void }
         }
@@ -245,14 +314,25 @@ export function SlipPane({
     )
   }
 
+  // The slip travels from whoever imported it in slices, so a blank pane is two
+  // different situations. Telling somebody to re-import a file that is already
+  // arriving is the wrong instruction and the wrong thing to do.
   if (!doc) {
     return (
       <div className="slip-pane">
-        <EmptyState
-          icon="FileText"
-          title="No slip on this machine"
-          message="The show imported fine — the PDF just is not on this computer. Re-import here to work against the paper."
-        />
+        {arrival ? (
+          <EmptyState
+            icon="DownloadCloud"
+            title="The slip is on its way"
+            message={`${arrival.have} of ${arrival.total} pieces have arrived from the computer that imported it. It opens here on its own.`}
+          />
+        ) : (
+          <EmptyState
+            icon="FileText"
+            title="No slip on this machine"
+            message="The show imported fine — the PDF has not reached this computer. It arrives with the next sync; re-import here if sync is off."
+          />
+        )}
       </div>
     )
   }

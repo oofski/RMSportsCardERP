@@ -553,6 +553,14 @@ export function createBridge(ipcRenderer: BridgeTransport) {
        * around inside it locally, so moving between orders costs nothing.
        */
       documentBytes: (): Promise<Uint8Array | null> => ipcRenderer.invoke(IPC.shipDocumentBytes),
+      /**
+       * How much of a slip still on its way has arrived, or null when there is
+       * nothing to wait for. The document travels in slices (see
+       * ship_document_parts), so a blank pane means one of two very different
+       * things and this is how a screen tells them apart.
+       */
+      documentArrival: (): Promise<{ have: number; total: number; name: string } | null> =>
+        ipcRenderer.invoke(IPC.shipDocumentArrival),
       clearDocument: (): Promise<Result<{ cleared: number }>> =>
         ipcRenderer.invoke(IPC.shipDocumentClear),
 

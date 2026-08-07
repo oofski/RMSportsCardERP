@@ -4,6 +4,7 @@ import { CLOUD_SYNC_BUILT_IN, CLOUD_SYNC_KEY, CLOUD_SYNC_URL } from '@shared/con
 import type { SyncConfig, SyncConfigView, SyncStatus, SyncPhase } from '@shared/sync'
 import { getDb } from '../db/database'
 import { queueEverything } from '../db/syncTriggers'
+import { rebuildShipDocument } from '../db/shipping'
 import {
   applyRows,
   clearForJoin,
@@ -405,6 +406,19 @@ export async function syncOnce(): Promise<RoundResult> {
     // lots arrived in one batch and whose own row arrived in the next was
     // rebuilt against half its layers; this is the pass that has all of them.
     if (rebuildDerivedStock([...touchedProducts]) > 0) changedKinds.add('inventory_stock')
+  }
+  if (changedKinds.has('ship_document_parts')) {
+    // The packing slip, put back together from the slices that travelled.
+    //
+    // Here rather than per batch for the reason the whole settle block exists: a
+    // twelve-slice document arrives across several batches, and eleven slices
+    // assembled is a corrupt PDF that opens to a blank pane — which somebody
+    // reads as "this order has nothing on it". rebuildShipDocument waits for all
+    // of them and checks the length before writing anything.
+    if (rebuildShipDocument() > 0) {
+      changedKinds.add('ship_documents')
+      console.log('Sync: the packing slip arrived from another machine.')
+    }
   }
 
   lastPulledRows = result.applied

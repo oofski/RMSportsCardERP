@@ -587,6 +587,45 @@ function migrate(database: Database.Database): void {
       created_at  TEXT NOT NULL
     );
 
+    -- v46: the same slip, cut into pieces small enough to travel.
+    --
+    -- The table above is still not synced and still holds the whole file; this
+    -- is how it GETS to the other machines. One row per slice, base64, each with
+    -- its own id — which makes it an ordinary synced record that the existing
+    -- relay carries without knowing it is carrying a PDF.
+    --
+    -- Why it had to exist: the slip is the paper the floor works against, and a
+    -- packer on any machine but the one that uploaded it saw "No slip on this
+    -- machine". The parsed dataset synced perfectly; the document did not, so
+    -- every other person on the team — and the web app, where most of them now
+    -- are — had the card list and no way to check it against the customer's own
+    -- order.
+    --
+    -- Each part repeats the document's metadata rather than pointing at a second
+    -- synced row for it. It is a few hundred bytes against a half-megabyte
+    -- payload, and it means a machine that has all the parts can rebuild the
+    -- document with nothing else having arrived — no ordering rule to get wrong
+    -- between two tables, and no half-built document waiting on a header.
+    --
+    -- seq is 0-based and total is how many there are, so completeness is
+    -- COUNT(*) = total and needs no other bookkeeping. Reassembly happens after
+    -- a pull drains, exactly like inventory_stock: see rebuildShipDocument().
+    CREATE TABLE IF NOT EXISTS ship_document_parts (
+      id          TEXT PRIMARY KEY,
+      document_id TEXT NOT NULL,
+      import_id   TEXT,
+      name        TEXT NOT NULL,
+      page_count  INTEGER NOT NULL DEFAULT 0,
+      byte_size   INTEGER NOT NULL DEFAULT 0,
+      seq         INTEGER NOT NULL,
+      total       INTEGER NOT NULL,
+      data        TEXT NOT NULL,
+      created_at  TEXT NOT NULL,
+      UNIQUE (document_id, seq)
+    );
+    CREATE INDEX IF NOT EXISTS idx_ship_doc_parts
+      ON ship_document_parts (document_id, seq);
+
     -- Parse-time warnings (unmatched team names, duplicate slots, ...).
     CREATE TABLE IF NOT EXISTS ship_warnings (
       id       TEXT PRIMARY KEY,
@@ -1816,6 +1855,16 @@ function migrate(database: Database.Database): void {
   addColumnIfMissing(database, 'employees', 'portal_pin_hash', 'TEXT')
   addColumnIfMissing(database, 'employees', 'portal_pin_set_at', 'TEXT')
   setMeta(database, 'schema_version', '45')
+
+  // v46: the packing slip reaches everybody.
+  //
+  // The table is created idempotently above, so this version adds no column and
+  // no backfill — and the absence of a backfill is deliberate. Slicing the slip
+  // already on THIS machine would queue several megabytes to the relay from
+  // whichever laptop happened to open the app first after updating, for a show
+  // that is very likely finished. The next import publishes itself, which is the
+  // moment the paper is actually wanted.
+  setMeta(database, 'schema_version', '46')
 
   // Seed the product catalog once, then apply the on-hand snapshot once.
   seedCatalogIfNeeded(database)

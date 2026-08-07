@@ -54,6 +54,12 @@ export const LIVE = {
     'ship_break_assignments',
     'ship_settings',
     'ship_imports',
+    // The slip itself. It travels in slices and is reassembled on arrival, so
+    // "the paper is here now" is a change a screen showing the paper has to
+    // hear — without it the pane that opened before the file landed keeps
+    // drawing the PREVIOUS show's document for as long as it stays mounted.
+    'ship_documents',
+    'ship_document_parts',
     'intake_submissions'
   ],
   streaming: ['stream_sessions', 'stream_items', 'stream_item_lots', 'inventory_products'],

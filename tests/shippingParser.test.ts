@@ -933,5 +933,82 @@ for (const [text, want, why] of READS) {
 ok(readBreakLabel('#4')?.marker === true, 'a bare hash is a marker, so it offers no team')
 ok(readBreakLabel('[Break 2]')?.marker === true, 'and so is a bracketed label')
 
+// ---------------------------------------------------------------------------
+console.log('\n=== 7. the product NAME is not the break number ===')
+// ---------------------------------------------------------------------------
+// Reported from the floor as "the PDF does not match what is extracted per
+// break". Whatnot prints the product in the description column and the break in
+// the attributes column below it, and the product is called things like
+// "1x BREAK 2026 FINEST BASEBALL HOBBY BOX". The first "Break <digits>" in the
+// window used to win, and `\d{1,3}` took "202" out of "2026" — so the card was
+// filed under break #202, a break nobody ran, while the [Break 5] two lines down
+// was never looked at. On screen: a #202 chip beside a page reading Break 5.
+ok(readBreakLabel('1x BREAK 2026 FINEST BASEBALL HOBBY BOX') === null,
+  'a four-digit year is not a break number')
+ok(readBreakLabel('BREAK 2026') === null, 'nor on its own')
+ok(readBreakLabel('Break 1234567890') === null, 'and neither is an order id')
+// The marker wins wherever it sits, which is the general form of the same rule:
+// a phrase containing the word is weaker evidence than the slip saying so.
+ok(
+  readBreakLabel('1x 2026 BREAK 30 TEAM RANDOM\nBoston Red Sox\n[Break 5]')?.label === '5',
+  'a bracketed marker beats the word inside a product name',
+  String(readBreakLabel('1x 2026 BREAK 30 TEAM RANDOM\nBoston Red Sox\n[Break 5]')?.label)
+)
+ok(readBreakLabel('Break 11A')?.label === '11A', 'and a plain label still reads')
+ok(readBreakLabel('Break #=7')?.label === '7', 'including the =7 typo')
+
+const yearSlip = [
+  'Whatnot Packing Slip',
+  'To: @casey12',
+  'Casey Miller',
+  '12 Elm Street',
+  'Springfield, IL 62704',
+  'Order 1237174001',
+  'Item                                   Qty   Price   Attributes',
+  '1x BREAK 2026 FINEST BASEBALL HOBBY BOX  1   $28.00',
+  'Boston Red Sox',
+  '[Break 5]',
+  'USPS 9400111899561234567890'
+].join('\n')
+const yearOut = parsePages([yearSlip], { league: 'MLB' } as never) as unknown as Record<
+  string,
+  Array<Record<string, unknown>>
+>
+ok(yearOut.teamSlots.length === 1, 'the slip yields exactly one card', String(yearOut.teamSlots.length))
+ok(yearOut.teamSlots[0]?.breakLabel === '5', 'in break 5, as printed', String(yearOut.teamSlots[0]?.breakLabel))
+ok(yearOut.teamSlots[0]?.teamName === 'Boston Red Sox', 'for the right team', String(yearOut.teamSlots[0]?.teamName))
+ok(yearOut.teamSlots[0]?.price === 28, 'at the right price', String(yearOut.teamSlots[0]?.price))
+ok(yearOut.warnings.length === 0, 'with nothing to warn about', JSON.stringify(yearOut.warnings.map((w) => w.message)))
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 8. "PRE-ORDER" in a product name is not an order id ===')
+// ---------------------------------------------------------------------------
+// The same class of fault one column over. "4x PRE-ORDER 2026 CHROME BASEBALL"
+// registered as a second order whose id was the year, and a one-card $28 order
+// came out as a phantom "PRE" card for $28 under order 2026 plus a $0 giveaway —
+// with the card the customer actually bought in neither of them.
+const preSlip = [
+  'Whatnot Packing Slip',
+  'To: @casey12',
+  'Casey Miller',
+  '12 Elm Street',
+  'Springfield, IL 62704',
+  'Order 1237174001',
+  'Item                                   Qty   Price   Attributes',
+  '4x PRE-ORDER 2026 CHROME BASEBAL         1   $28.00',
+  'Boston Red Sox',
+  '[Break 1]',
+  'USPS 9400111899561234567890'
+].join('\n')
+const preOut = parsePages([preSlip], { league: 'MLB' } as never) as unknown as Record<
+  string,
+  Array<Record<string, unknown>>
+>
+ok(preOut.teamSlots.length === 1, 'one card, not two', String(preOut.teamSlots.length))
+ok(preOut.teamSlots[0]?.teamName === 'Boston Red Sox', 'and it is the team on the slip', String(preOut.teamSlots[0]?.teamName))
+ok(preOut.teamSlots[0]?.orderId === '1237174001', 'under the real order id', String(preOut.teamSlots[0]?.orderId))
+ok(preOut.teamSlots[0]?.isGiveaway === false, 'and it is not a giveaway')
+ok(preOut.warnings.length === 0, 'with nothing to warn about', JSON.stringify(preOut.warnings.map((w) => w.message)))
+
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

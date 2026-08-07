@@ -52,8 +52,26 @@ import {
 
 const RE_PACKING_HEADER = /Whatnot\s+Packing\s+Slip/i
 const RE_TO_HANDLE = /To:\s*(\S+)/
-const RE_ORDER_ANY = /Order\s+(\d+)/i
-const RE_ORDER_GLOBAL = /Order\s+(\d+)/gi
+/**
+ * An order id on the slip.
+ *
+ * Two guards, both put here after a real slip walked straight through the
+ * version without them:
+ *
+ *   `(?<![-\w])`  — "ORDER" also appears inside the PRODUCT NAME. Whatnot sells
+ *                   "4x PRE-ORDER 2026 CHROME BASEBALL", and without this the
+ *                   description line registered as a second order whose id was
+ *                   the year. One $28 Boston Red Sox card came out as a phantom
+ *                   "PRE" card for $28 under order 2026, plus a $0 giveaway —
+ *                   and the card the customer actually bought was in neither.
+ *
+ *   `\d{9,}`      — an order id is ten digits. Requiring most of them means a
+ *                   year, a quantity or a price can never be read as one, and
+ *                   an id that IS an id is not truncated: the digits after the
+ *                   ninth are still taken by `+`.
+ */
+const RE_ORDER_ANY = /(?<![-\w])Order\s+(\d{9,})/i
+const RE_ORDER_GLOBAL = /(?<![-\w])Order\s+(\d{9,})/gi
 /**
  * A break label: 1–3 digits and an OPTIONAL letter.
  *
@@ -82,7 +100,23 @@ const RE_ORDER_GLOBAL = /Order\s+(\d+)/gi
 // `=?` is not a typo here — it is the typo. "BREAK #=7" appears thirty times in
 // one real export, and without this every one of those cards falls out of its
 // break and turns up loose.
-const RE_BREAK_HEAD = /Break\s*#?\s*=?\s*(\d{1,3})/i
+//
+// `(?!\d)` is the year guard, and it is load-bearing. Whatnot prints the product
+// in the description column, and the product is called things like
+//
+//     1x BREAK 2026 FINEST BASEBALL HOBBY BOX
+//
+// Without the lookahead, `\d{1,3}` took "202" out of "2026" and the card was
+// filed under break #202 — a break that does not exist — while the real marker
+// two lines below, `[Break 5]`, was never even looked at. On screen that is a
+// `#202` chip beside a slip page that plainly reads Break 5: the owner's report
+// of "the PDF does not match what is extracted per break" was exactly this.
+//
+// A break label is 1–3 digits by design (the comment above says why: an order id
+// is ten). So a fourth digit does not mean "take the first three" — it means
+// this is not a break number at all, and the match is refused rather than
+// truncated.
+const RE_BREAK_HEAD = /Break\s*#?\s*=?\s*(\d{1,3})(?!\d)/i
 
 /**
  * A bare `#4`, with no word "Break" anywhere near it.
@@ -190,12 +224,44 @@ function bareHashLabel(
 export function readBreakLabel(
   text: string
 ): { label: string; number: number; end: number; marker: boolean } | null {
-  const head = RE_BREAK_HEAD.exec(text)
+  // EVERY "Break <n>" in the window, not just the first.
+  //
+  // The first one used to win outright, and the description column is printed
+  // above the attributes column — so a product whose NAME contains the word
+  // ("1x 2026 BREAK 30 TEAM RANDOM") outranked the `[Break 5]` marker that
+  // actually says which break this card belongs to. A marked label is the
+  // slip TELLING us; an unmarked one is a phrase that happens to contain the
+  // word. When both are present the marker wins, wherever it sits.
+  const heads = allBreakHeads(text)
   // No word "Break" anywhere — the last chance is a bare `#4` on a line of its
   // own. Tried ONLY here, after the explicit forms have all failed, so a window
   // holding both "Break 1" and a stray `#4` still reads as break 1. The bare
   // form is the weaker evidence and must never outrank the word.
-  if (!head) return bareHashLabel(text)
+  if (heads.length === 0) return bareHashLabel(text)
+  return heads.find((h) => h.marker) ?? heads[0]
+}
+
+/** Every `Break <n>` in the window, each judged against its own line. */
+function allBreakHeads(
+  text: string
+): Array<{ label: string; number: number; end: number; marker: boolean }> {
+  const scan = new RegExp(RE_BREAK_HEAD.source, 'gi')
+  const out: Array<{ label: string; number: number; end: number; marker: boolean }> = []
+  for (;;) {
+    const head = scan.exec(text)
+    if (!head) return out
+    const one = judgeBreakHead(text, head)
+    out.push(one)
+    // Continue past what this label consumed (the suffix may run past the
+    // match), so "Break 11A Break 12" reads as two and not as three.
+    scan.lastIndex = Math.max(scan.lastIndex, one.end)
+  }
+}
+
+function judgeBreakHead(
+  text: string,
+  head: RegExpExecArray
+): { label: string; number: number; end: number; marker: boolean } {
   const number = Number(head[1])
   const headStart = head.index ?? 0
   const headEnd = headStart + head[0].length

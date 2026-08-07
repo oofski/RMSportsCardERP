@@ -104,10 +104,24 @@ export function OrderCard({
         {order.breaks.map((b) => (
           <div className="walk-break" key={b.breakId}>
             <div className="walk-break-head">
+              {/* A group with no break label is one of TWO things, and calling
+                  both of them "Giveaway" told a picker that a card they have to
+                  go and find in a break was a free rider from the promo pile.
+                  A giveaway is free; a loose card has a price on it and the
+                  slip simply never said which break it came out of. */}
               {b.breakLabel == null ? (
-                <span className="ship-chip mini">
-                  <Icon name="Gift" size={11} /> Giveaway
-                </span>
+                b.teams.every((t) => t.isGiveaway) ? (
+                  <span className="ship-chip mini">
+                    <Icon name="Gift" size={11} /> Giveaway
+                  </span>
+                ) : (
+                  <span
+                    className="ship-chip mini warn"
+                    title="The slip did not say which break these came from. Check the paper on the right."
+                  >
+                    <Icon name="AlertTriangle" size={11} /> No break on the slip
+                  </span>
+                )
               ) : (
                 <BreakChip label={b.breakLabel} size="sm" />
               )}

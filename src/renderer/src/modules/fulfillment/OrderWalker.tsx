@@ -57,6 +57,27 @@ export function OrderWalker({
   const toast = useToast()
   const [orders, setOrders] = useState<ShipOrderRow[]>([])
   const [loading, setLoading] = useState(true)
+  /**
+   * WHICH ORDER IS ON SCREEN, by id.
+   *
+   * It used to be a position, and a position is not a thing to hold on to here:
+   * the list this screen walks is filtered and it reloads under the operator's
+   * hands. Three separate faults came out of that, all with the same shape —
+   * the pane silently becomes a DIFFERENT customer while somebody is holding
+   * the first one's cards:
+   *
+   *   · Ticking the last card of an order finished it, so the filter dropped it
+   *     and index 2 quietly became the next buyer. No button was pressed.
+   *   · A second person finishing an EARLIER order shifted everything after it
+   *     down one, so this screen moved on its own, mid-package.
+   *   · Finishing the last order in the run clamped the index down and landed
+   *     on the order just skipped past — Next moving backwards.
+   *
+   * An id cannot drift. The anchored order is also exempt from the "only orders
+   * with cards left" filter, so finishing it does not remove it from under the
+   * cursor; it stays until somebody deliberately moves.
+   */
+  const [anchorId, setAnchorId] = useState<string | null>(null)
   const [cursor, setCursor] = useState(0)
   const [query, setQuery] = useState('')
   const [onlyOpen, setOnlyOpen] = useState(mode === 'pick')
@@ -93,7 +114,11 @@ export function OrderWalker({
   const run = useMemo(() => {
     const q = query.trim().toLowerCase()
     return orders.filter((o) => {
-      if (onlyOpen && o.pick.checked >= o.pick.total) return false
+      // THE ANCHORED ORDER IS NEVER FILTERED OUT. Somebody who ticks the last
+      // card of the package in their hands has finished it, not left it — and
+      // dropping it from the list at that moment is what used to swap the whole
+      // pane, cards and slip, to the next buyer with no button pressed.
+      if (onlyOpen && o.pick.checked >= o.pick.total && o.customerId !== anchorId) return false
       if (!q) return true
       return (
         o.customer.handle.toLowerCase().includes(q) ||
@@ -102,28 +127,36 @@ export function OrderWalker({
         (o.trackingNumber ?? '').toLowerCase().includes(q)
       )
     })
-  }, [orders, onlyOpen, query])
+  }, [orders, onlyOpen, query, anchorId])
 
-  // The cursor is an index into a list that shrinks under it — clamp rather
-  // than reset, so finishing an order lands you on the next one rather than
-  // back at the top of the night.
-  const index = run.length === 0 ? 0 : Math.min(cursor, run.length - 1)
+  // Position follows the anchor, not the other way round. `cursor` survives only
+  // to place the anchor on the first render and after a search empties the run.
+  const anchorIndex = anchorId ? run.findIndex((o) => o.customerId === anchorId) : -1
+  const index =
+    anchorIndex >= 0 ? anchorIndex : run.length === 0 ? 0 : Math.min(cursor, run.length - 1)
   const order = run[index] ?? null
 
+  // Adopt whatever the position resolved to, so every later move is by id.
   useEffect(() => {
+    if (!order) {
+      if (anchorId !== null) setAnchorId(null)
+      return
+    }
+    if (order.customerId !== anchorId) setAnchorId(order.customerId)
     if (cursor !== index) setCursor(index)
-  }, [cursor, index])
+  }, [order, anchorId, cursor, index])
 
   const step = useCallback(
     (by: number) => {
-      setCursor((c) => {
-        if (run.length === 0) return 0
-        const next = c + by
-        if (next < 0) return run.length - 1
-        return next >= run.length ? 0 : next
-      })
+      if (run.length === 0) return
+      const from = anchorIndex >= 0 ? anchorIndex : Math.min(cursor, run.length - 1)
+      let next = from + by
+      if (next < 0) next = run.length - 1
+      if (next >= run.length) next = 0
+      setAnchorId(run[next].customerId)
+      setCursor(next)
     },
-    [run.length]
+    [run, anchorIndex, cursor]
   )
 
   // Arrow keys and J/K walk the run. A bench operator has cards in one hand.
@@ -147,6 +180,22 @@ export function OrderWalker({
   const pickAllAndAdvance = async (): Promise<void> => {
     if (!order) return
     const left = order.pick.total - order.pick.checked
+    // WHERE TO GO NEXT, decided from the list as it stands NOW.
+    //
+    // Before the reload, because the reload reshuffles: the destination has to
+    // be the order the operator can see below this one, not whatever ends up at
+    // some index afterwards. That is also the whole of the old "only step when
+    // the filter is off" special case, which existed because the list moved —
+    // it cannot move under an id, so the rule is simply "go to the next one".
+    //
+    // Null when this was the last of the work, which lets the anchor clear and
+    // the run empty out to the "every card is picked" state instead of wrapping
+    // silently to the top of the night.
+    const at = run.findIndex((o) => o.customerId === order.customerId)
+    const nextId =
+      (run.slice(at + 1).find((o) => o.customerId !== order.customerId) ??
+        run.slice(0, Math.max(at, 0)).find((o) => o.customerId !== order.customerId))
+        ?.customerId ?? null
     setBusy('order')
     try {
       if (left > 0) {
@@ -161,20 +210,7 @@ export function OrderWalker({
       }
       await load()
       await onChanged()
-      // DO NOT step when the run is filtered. This is the "it goes odds only"
-      // bug, and the comment that used to sit here had the reasoning exactly
-      // backwards.
-      //
-      // With "only orders with cards left" on — the default for picking — the
-      // order just finished DROPS OUT of the run on reload. The list shrinks
-      // under the cursor, so the index the cursor already holds is now the next
-      // order. Stepping on top of that advances a second time and walks past
-      // one, which is why every other order was being skipped: pick page 1, land
-      // on page 3, pick page 3, land on page 5.
-      //
-      // With the filter off, nothing drops out and the cursor must move, or the
-      // button would re-show the order it just finished.
-      if (!onlyOpen) step(1)
+      setAnchorId(nextId)
     } finally {
       setBusy(null)
     }
@@ -221,6 +257,7 @@ export function OrderWalker({
             value={query}
             onChange={(e) => {
               setQuery(e.target.value)
+              setAnchorId(null)
               setCursor(0)
             }}
             placeholder="Jump to a username, a name, an order or a tracking number…"
@@ -260,15 +297,17 @@ export function OrderWalker({
               variant="primary"
               icon="CheckCheck"
               loading={busy === 'order'}
-              disabled={!order || !canAct}
+              disabled={!order || !canAct || order.onHold}
               title={
-                canAct
-                  ? 'Mark every card in this package picked, then go to the next order'
-                  : 'You do not have permission to check cards off.'
+                order?.onHold
+                  ? 'This package is on hold. Skip past it, or have the hold lifted first.'
+                  : canAct
+                    ? 'Mark every card in this package picked, then go to the next order'
+                    : 'You do not have permission to check cards off.'
               }
               onClick={() => void pickAllAndAdvance()}
             >
-              Picked · next order
+              {order?.onHold ? 'On hold' : 'Picked · next order'}
             </Button>
           ) : (
             <Button

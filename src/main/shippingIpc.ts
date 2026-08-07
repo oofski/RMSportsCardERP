@@ -84,6 +84,7 @@ import {
   renameShipImport,
   getShipDocument,
   getShipDocumentBytes,
+  shipDocumentArrival,
   putShipDocument,
   renameShipSnapshot,
   setShipEvent,
@@ -814,6 +815,19 @@ export function registerShippingIpc(): void {
     const bytes = getShipDocumentBytes()
     return bytes ? new Uint8Array(bytes) : null
   })
+
+  /**
+   * How much of an incoming slip has landed, when one is on its way.
+   *
+   * "No slip on this machine" and "the slip is four slices of twelve in" look
+   * identical — a blank pane — and used to read the same, which told somebody to
+   * re-import a file that was already arriving.
+   */
+  ipcMain.handle(
+    IPC.shipDocumentArrival,
+    (): { have: number; total: number; name: string } | null =>
+      can('module.fulfillment') ? shipDocumentArrival() : null
+  )
 
   ipcMain.handle(IPC.shipDocumentClear, (): Result<{ cleared: number }> => {
     try {

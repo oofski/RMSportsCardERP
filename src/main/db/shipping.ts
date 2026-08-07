@@ -1673,6 +1673,17 @@ export function setShipSettings(patch: Record<string, string | null>): Record<st
  * old, which is also the "offload it when it is done" behaviour — the file stops
  * taking up room the moment it stops being the thing being worked.
  */
+/**
+ * How much of the file goes in one synced row.
+ *
+ * 512 KB raw, which base64 inflates to about 683 KB — comfortably inside the
+ * relay's 8 MB request body and inside D1's 2 MB row limit, with room for the
+ * batch to carry more than one. Smaller would mean more rows and more round
+ * trips for the same bytes; larger starts betting on limits rather than sitting
+ * well inside them.
+ */
+export const SHIP_DOC_PART_BYTES = 512 * 1024
+
 export function putShipDocument(input: {
   importId: string | null
   name: string
@@ -1682,22 +1693,44 @@ export function putShipDocument(input: {
   const database = getDb()
   const id = newId()
   const createdAt = nowIso()
+  const name = str(input.name) || 'packing-slips.pdf'
+  const pageCount = Math.max(0, Math.trunc(num(input.pageCount)))
+  const total = Math.max(1, Math.ceil(input.bytes.byteLength / SHIP_DOC_PART_BYTES))
   database.transaction(() => {
     database.prepare(`DELETE FROM ship_documents`).run()
+    // The old slices go too, and the delete is what tells everyone else theirs
+    // are finished with — a tombstone per part, through the ordinary trigger.
+    // There is one show on the floor at a time, so there is one slip.
+    database.prepare(`DELETE FROM ship_document_parts`).run()
     database
       .prepare(
         `INSERT INTO ship_documents (id, import_id, name, page_count, byte_size, bytes, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?)`
       )
-      .run(
+      .run(id, input.importId, name, pageCount, input.bytes.byteLength, input.bytes, createdAt)
+
+    // And the travelling copy. Written in the same transaction as the document
+    // so the two can never disagree about which slip is current.
+    const part = database.prepare(
+      `INSERT INTO ship_document_parts
+         (id, document_id, import_id, name, page_count, byte_size, seq, total, data, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    for (let seq = 0; seq < total; seq++) {
+      const slice = input.bytes.subarray(seq * SHIP_DOC_PART_BYTES, (seq + 1) * SHIP_DOC_PART_BYTES)
+      part.run(
+        newId(),
         id,
         input.importId,
-        str(input.name) || 'packing-slips.pdf',
-        Math.max(0, Math.trunc(num(input.pageCount))),
+        name,
+        pageCount,
         input.bytes.byteLength,
-        input.bytes,
+        seq,
+        total,
+        slice.toString('base64'),
         createdAt
       )
+    }
   })()
   return {
     id,
@@ -1707,6 +1740,31 @@ export function putShipDocument(input: {
     byteSize: input.bytes.byteLength,
     createdAt
   }
+}
+
+/**
+ * Does the stored slip belong to the dataset currently on the floor?
+ *
+ * The pane draws THIS order's page numbers into whatever PDF is on the machine,
+ * and page 27 of last week's export is a different customer's slip entirely. Two
+ * ordinary situations put an old file beside a new dataset:
+ *
+ *   · the tiny rows of tonight's import reach a second machine in the first pull
+ *     and the slip, which travels in half-megabyte slices, is still arriving —
+ *     so for a minute the new customers sit next to the old paper;
+ *   · somebody re-imports without the PDF, or the document was cleared.
+ *
+ * Both are silent, and a page that looks like a slip gets read as one. So the
+ * document is checked against the live import chain and refused when it does not
+ * belong — a blank pane that says why is recoverable; the wrong customer's
+ * address next to a box that is about to be taped is not.
+ */
+function documentIsCurrent(db: Database.Database, importId: string | null): boolean {
+  const chain = liveImportIds(db)
+  // Nothing imported yet, or a document from before imports stamped their id:
+  // there is no newer dataset to contradict it, so it stands.
+  if (chain.length === 0 || !importId) return true
+  return chain.includes(importId)
 }
 
 /** The document's metadata — cheap, and safe to put in every summary. */
@@ -1727,6 +1785,9 @@ export function getShipDocument(): ShipDocument | null {
       }
     | undefined
   if (!row) return null
+  // Refused rather than returned with a flag: every caller of this draws the
+  // file, and a caller that forgets to read the flag draws last week's slip.
+  if (!documentIsCurrent(getDb(), row.import_id ?? null)) return null
   return {
     id: row.id,
     importId: row.import_id ?? null,
@@ -1740,12 +1801,139 @@ export function getShipDocument(): ShipDocument | null {
 /** The file itself. Only read when a screen is about to render it. */
 export function getShipDocumentBytes(): Buffer | null {
   const row = getDb()
-    .prepare(`SELECT bytes FROM ship_documents ORDER BY created_at DESC LIMIT 1`)
-    .get() as { bytes: Buffer | null } | undefined
-  return row?.bytes ?? null
+    .prepare(`SELECT bytes, import_id FROM ship_documents ORDER BY created_at DESC LIMIT 1`)
+    .get() as { bytes: Buffer | null; import_id: string | null } | undefined
+  if (!row) return null
+  if (!documentIsCurrent(getDb(), row.import_id ?? null)) return null
+  return row.bytes ?? null
 }
 
 /** Drop the stored file. The dataset — the actual work — is untouched. */
 export function clearShipDocument(): number {
-  return getDb().prepare(`DELETE FROM ship_documents`).run().changes
+  const database = getDb()
+  let cleared = 0
+  database.transaction(() => {
+    cleared = database.prepare(`DELETE FROM ship_documents`).run().changes
+    // The slices go with it, which is also how every other machine learns the
+    // slip was put away. Clearing here and leaving them would have the next pull
+    // rebuild the document somebody just deleted.
+    database.prepare(`DELETE FROM ship_document_parts`).run()
+  })()
+  return cleared
+}
+
+/**
+ * How much of an incoming slip has landed, when one is on its way.
+ *
+ * Null when there is nothing to wait for — either the document is already here
+ * or nobody has imported one. Only for the screen: "no slip on this machine" and
+ * "the slip is 4 of 12 slices in" are the same blank pane and completely
+ * different situations, and the first one used to be shown for both, telling
+ * somebody to re-import a file that was already arriving.
+ */
+export function shipDocumentArrival(): { have: number; total: number; name: string } | null {
+  const database = getDb()
+  const row = database
+    .prepare(
+      `SELECT document_id AS id, MAX(total) AS total, COUNT(*) AS have,
+              MAX(name) AS name, MAX(created_at) AS created_at
+         FROM ship_document_parts
+        GROUP BY document_id
+        ORDER BY created_at DESC
+        LIMIT 1`
+    )
+    .get() as
+    | { id: string; total: number; have: number; name: string | null; created_at: string }
+    | undefined
+  if (!row || row.have >= row.total) return null
+  const held = database.prepare(`SELECT id FROM ship_documents WHERE id = ?`).get(row.id)
+  if (held) return null
+  return { have: row.have, total: row.total, name: str(row.name) || 'packing-slips.pdf' }
+}
+
+/**
+ * Rebuild the slip from the slices that have arrived, if they are all here.
+ *
+ * The counterpart to inventory_stock's rebuild, and for the same reason: the
+ * thing that travels is the set of small immutable rows, and the big derived
+ * artefact is reconstructed by whoever receives them. A PDF is not a value two
+ * machines can arbitrate — it is either whole or it is not — so it is never sent
+ * as one row and never merged.
+ *
+ * Called once after a pull has fully drained. Timing is part of the correctness:
+ * parts land across several batches, and a document assembled from eleven of
+ * twelve slices is a corrupt file that opens to a blank pane, which is worse
+ * than the honest "no slip on this machine" that precedes it. So it waits for
+ * COUNT(*) = total, and until then does nothing at all.
+ *
+ * Returns the number of documents rebuilt — 0 in the overwhelmingly common case
+ * where nothing changed.
+ */
+export function rebuildShipDocument(): number {
+  const database = getDb()
+  // The newest complete set wins, which matches getShipDocument reading the
+  // newest row: a second show imported tonight replaces the first.
+  const ready = database
+    .prepare(
+      `SELECT p.document_id AS id, p.total AS total, COUNT(*) AS have,
+              MAX(p.name) AS name, MAX(p.import_id) AS import_id,
+              MAX(p.page_count) AS page_count, MAX(p.byte_size) AS byte_size,
+              MAX(p.created_at) AS created_at
+         FROM ship_document_parts p
+        GROUP BY p.document_id, p.total
+       HAVING COUNT(*) = p.total
+        ORDER BY created_at DESC
+        LIMIT 1`
+    )
+    .get() as
+    | {
+        id: string
+        total: number
+        have: number
+        name: string | null
+        import_id: string | null
+        page_count: number | null
+        byte_size: number | null
+        created_at: string | null
+      }
+    | undefined
+  if (!ready) return 0
+
+  // Already holding this exact document: nothing to do. This is the ordinary
+  // case on every sync after the first, and it must not rewrite the row — a
+  // rewrite would churn the file on disk every four seconds.
+  const current = database.prepare(`SELECT id FROM ship_documents WHERE id = ?`).get(ready.id) as
+    | { id: string }
+    | undefined
+  if (current) return 0
+
+  const slices = database
+    .prepare(`SELECT data FROM ship_document_parts WHERE document_id = ? ORDER BY seq ASC`)
+    .all(ready.id) as Array<{ data: string }>
+  const bytes = Buffer.concat(slices.map((s) => Buffer.from(s.data, 'base64')))
+  const expected = num(ready.byte_size)
+  // A length that does not match what the sender recorded means a slice is
+  // truncated or a seq is missing in a way COUNT could not see. Refusing is the
+  // only safe answer: a corrupt PDF renders as a blank pane, which somebody
+  // reads as "this order has nothing on it" and seals the box.
+  if (expected > 0 && bytes.byteLength !== expected) return 0
+
+  database.transaction(() => {
+    database.prepare(`DELETE FROM ship_documents`).run()
+    database
+      .prepare(
+        `INSERT INTO ship_documents (id, import_id, name, page_count, byte_size, bytes, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        ready.id,
+        ready.import_id,
+        str(ready.name) || 'packing-slips.pdf',
+        num(ready.page_count),
+        bytes.byteLength,
+        bytes,
+        str(ready.created_at) || nowIso()
+      )
+  })()
+  return 1
 }

@@ -49,14 +49,24 @@ export interface SyncedTable {
  *                            with their own ids, which never collide) and the
  *                            quantity is recomputed from them after every pull.
  *                            See rebuildDerivedStock() in sync.ts.
- *   ship_documents           The uploaded packing-slip PDF, verbatim. A megabyte
- *                            of BLOB does not belong in a row-at-a-time relay
- *                            that batches whole rows into one JSON body. The
- *                            parsed dataset — every card, every break, every
- *                            address, which is what the work is actually done
- *                            against — syncs as normal, so a laptop without the
- *                            document loses the paper, not the job. Needs
- *                            object storage (R2) before it can travel.
+ *   ship_documents           The uploaded packing-slip PDF, verbatim — a single
+ *                            row holding several megabytes of BLOB, which is not
+ *                            a shape a row-at-a-time relay can carry.
+ *
+ *                            It travels anyway, as ship_document_parts: the same
+ *                            file cut into 512 KB slices, each an ordinary synced
+ *                            row with its own id, reassembled by the receiver
+ *                            once every slice is present. So this table is
+ *                            DERIVED on every machine but the one that uploaded
+ *                            — the same arrangement as inventory_stock and for
+ *                            the same reason. See rebuildShipDocument().
+ *
+ *                            The claim that used to sit here — "a laptop without
+ *                            the document loses the paper, not the job" — was
+ *                            wrong about the job. The slip IS the job: it is what
+ *                            a packer checks the box against, and everybody
+ *                            except the person who imported it saw "No slip on
+ *                            this machine".
  *   sync_*                   The plumbing itself.
  */
 export const SYNCED_TABLES: SyncedTable[] = [
@@ -86,6 +96,10 @@ export const SYNCED_TABLES: SyncedTable[] = [
   { table: 'ship_batch_urls', key: ['batch_number'], tier: 0 },
   { table: 'ship_break_audit', key: ['break_label'], tier: 0 },
   { table: 'ship_imports', key: ['id'], tier: 0 },
+  // The packing slip itself, in slices. Tier 0 because a slice points at nothing
+  // — it carries its own document's metadata precisely so it does not have to
+  // wait for a parent row, and a set of slices is complete or it is not.
+  { table: 'ship_document_parts', key: ['id'], tier: 0 },
   { table: 'ship_snapshots', key: ['id'], tier: 0 },
   // `ship_sop_steps` and `ship_supply_usage` are deliberately ABSENT, and their
   // tables are deliberately still in the schema. The checklist that wrote them

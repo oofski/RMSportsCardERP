@@ -96,12 +96,28 @@ function whereKey(spec: SyncedTable): string {
 }
 
 /**
+ * How many bytes of row payload one push may carry.
+ *
+ * A row used to be small enough that counting them was the same as counting
+ * bytes. It is not any more: the packing slip travels as 512 KB slices, and 300
+ * of those in one body is 200 MB against a relay that refuses anything over 8.
+ *
+ * So the batch is capped by BOTH, and the byte cap is the one that bites. A
+ * single row larger than the cap is still sent alone rather than skipped —
+ * skipping it would wedge the queue behind a row that can never leave.
+ */
+const OUTBOX_MAX_BYTES = 4 * 1024 * 1024
+
+/**
  * Read the next batch of queued changes, each with its current row contents.
  *
  * The snapshot is taken at send time rather than at change time on purpose: a
  * row edited five times while offline goes up once, in its final state. That is
  * both smaller and more correct than replaying an edit history whose
  * intermediate states nobody ever needs.
+ *
+ * `limit` is a ceiling on rows; OUTBOX_MAX_BYTES is a ceiling on size, and the
+ * batch stops at whichever it reaches first.
  */
 export function takeOutbox(limit: number): SyncRow[] {
   const db = getDb()
@@ -113,6 +129,7 @@ export function takeOutbox(limit: number): SyncRow[] {
     .all(limit) as Array<{ kind: string; id: string; updated_at: string; deleted: number }>
 
   const out: SyncRow[] = []
+  let bytes = 0
   for (const q of queued) {
     const spec = SYNCED_BY_TABLE.get(q.kind)
     if (!spec) {
@@ -134,12 +151,19 @@ export function takeOutbox(limit: number): SyncRow[] {
       out.push({ kind: q.kind, id: q.id, updated_at: q.updated_at, deleted: 1, data: null })
       continue
     }
+    const data = JSON.stringify(row)
+    // Stop BEFORE adding a row that would push the body over. `out.length > 0`
+    // is what guarantees progress: the first row of a batch always goes, however
+    // big it is, so an oversized row leaves rather than blocking everything
+    // behind it forever.
+    if (out.length > 0 && bytes + data.length > OUTBOX_MAX_BYTES) break
+    bytes += data.length
     out.push({
       kind: q.kind,
       id: q.id,
       updated_at: q.updated_at,
       deleted: 0,
-      data: JSON.stringify(row)
+      data
     })
   }
   return out

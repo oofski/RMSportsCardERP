@@ -166,6 +166,7 @@ export const IPC = {
   remindersDelete: 'reminders:delete',
   shipDocument: 'shipping:document',
   shipDocumentBytes: 'shipping:document:bytes',
+  shipDocumentArrival: 'shipping:document:arrival',
   shipDocumentClear: 'shipping:document:clear',
   // Orders
   shipOrdersList: 'shipping:orders:list',

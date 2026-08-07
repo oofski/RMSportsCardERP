@@ -609,7 +609,15 @@ export function getStationBoard(): ShipStationBoard {
   const session = getStationSession()
   const now = Date.now()
   const orders = listOrders()
-  const toPick = orders.filter((o) => !o.onHold && o.pick.checked < o.pick.total).length
+  // THE ROOM'S FIGURE, not a count of unticked cards.
+  //
+  // Counting `checked < total` misses the one case the send-back exists for: a
+  // packer rejecting an order leaves every card still ticked — that is what
+  // makes it a REJECTION rather than an unpick — so the order read as finished
+  // and disappeared from both counts at once. The bench then said "0 orders to
+  // pick" about work it had just created, and pickingRemaining, which already
+  // handles it, was sitting one import away.
+  const toPick = pickingRemaining()
   const queue = packQueue()
   const mine = session ? myClaim(session.role) : null
   const current = mine
@@ -642,7 +650,13 @@ export function getStationBoard(): ShipStationBoard {
     packingRemaining: packingRemaining(),
     current,
     others,
-    allDone: toPick === 0 && queue.length === 0 && orders.length > 0
+    // Asked of the ROOM, for exactly the reason stated three lines above.
+    //
+    // `queue.length` is what a packer standing HERE may take, so it hides an
+    // order another bench is holding — and this screen used that to announce
+    // "every order is picked and packed" while the last mailer was open on
+    // somebody else's table. "Is the night over" is a question about the night.
+    allDone: toPick === 0 && packingRemaining() === 0 && orders.length > 0
   }
 }
 

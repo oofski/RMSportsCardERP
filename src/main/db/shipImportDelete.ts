@@ -295,6 +295,10 @@ export function deleteShipImport(id: string): ShipImportDeleteResult {
 
     // --- 3. the file, and the dataset it was parsed into -------------------
     db.prepare(`DELETE FROM ship_documents WHERE import_id = ?`).run(id)
+    // The travelling slices go with it. Leaving them would have the next pull
+    // reassemble the slip on every OTHER machine — including this one, once the
+    // relay handed its own rows back — restoring a document somebody deleted.
+    db.prepare(`DELETE FROM ship_document_parts WHERE import_id = ?`).run(id)
     if (plan.isLive) {
       clearShipDataset()
       // The stored PDF belongs to the show, and a row written before imports
