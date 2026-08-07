@@ -19075,3 +19075,174 @@ button.sor-team:focus-visible {
 .sb-link:hover {
   text-decoration: underline;
 }
+
+/* ---------------------------------------------------------------------------
+   THE USUAL WEEK
+
+   Seven rows and one Save. This is the primary control — nobody thinks about
+   their availability one date at a time — and the calendar underneath is where
+   you record the exception.
+   --------------------------------------------------------------------------- */
+
+.usual-week {
+  margin-bottom: 12px;
+}
+.usual-week .panel-head {
+  align-items: center;
+}
+.uw-toggle {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text-2);
+  cursor: pointer;
+}
+.uw-collapsed,
+.uw-intro {
+  margin: 0;
+  padding: 0 14px 12px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-3);
+}
+
+.uw-grid {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+}
+.uw-row {
+  display: grid;
+  grid-template-columns: 88px auto 150px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+}
+/* A day nobody has spoken about recedes. The two answers are decisions; silence
+   is the absence of one, and it should not look like a third choice somebody
+   made. */
+.uw-row[data-status='none'] {
+  opacity: 0.72;
+}
+.uw-row[data-status='available'] {
+  background: color-mix(in srgb, var(--success-strong) 6%, transparent);
+}
+.uw-row[data-status='unavailable'] {
+  background: color-mix(in srgb, var(--danger-strong) 5%, transparent);
+}
+@media (max-width: 720px) {
+  .uw-row {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+}
+.uw-day {
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--text);
+}
+
+.uw-choice {
+  display: inline-flex;
+  gap: 4px;
+}
+.uw-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text-3);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.uw-opt:hover {
+  color: var(--text);
+}
+.uw-opt.on[data-kind='available'] {
+  background: color-mix(in srgb, var(--success-strong) 17%, var(--surface-2));
+  border-color: var(--success-strong);
+  color: var(--text);
+}
+.uw-opt.on[data-kind='unavailable'] {
+  background: color-mix(in srgb, var(--danger-strong) 14%, var(--surface-2));
+  border-color: var(--danger-strong);
+  color: var(--text);
+}
+
+.uw-times {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+.uw-times input {
+  width: 66px;
+  padding: 5px 6px;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.uw-times-empty {
+  font-style: italic;
+}
+.uw-note {
+  min-width: 0;
+  padding: 5px 9px;
+  font-size: 12.5px;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.uw-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 14px;
+}
+.uw-count {
+  flex: 1;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+/* A day filled in by the usual week rather than tapped. Both are real answers;
+   only one of them is a person who thought about that specific date, and the
+   calendar should not claim otherwise. Lighter, and no solid dot. */
+.sched-cell[data-source='pattern'][data-mark='available'] {
+  background: color-mix(in srgb, var(--success-strong) 7%, var(--surface-2));
+  border-style: dashed;
+}
+.sched-cell[data-source='pattern'][data-mark='available'] .sched-mark {
+  background: transparent;
+  color: var(--success-strong);
+}
+.sched-cell[data-source='pattern'][data-mark='unavailable'] .sched-mark {
+  background: transparent;
+  color: var(--text-3);
+}
+.sched-cell[data-source='pattern'][data-mark='unavailable'] .sched-date {
+  text-decoration: none;
+  opacity: 0.7;
+}
+.sched-key[data-kind='pattern'] i {
+  background: color-mix(in srgb, var(--success-strong) 9%, var(--surface-2));
+  border-style: dashed;
+  border-color: var(--success-strong);
+}

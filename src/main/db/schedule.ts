@@ -1,14 +1,21 @@
-import { dayKey, daysBetween } from '@shared/homeTasks'
+import { addDays, dayKey, daysBetween } from '@shared/homeTasks'
 import {
   AVAILABILITY_HORIZON_DAYS,
+  effectiveAvailability,
   sortShifts,
   upcomingFrom,
   validateAvailability,
+  validatePatternDay,
   validateShift,
+  weekdayOf,
   type Availability,
+  type AvailabilityPattern,
   type AvailabilityWithPerson,
+  type EffectiveAvailability,
+  type EffectiveAvailabilityWithPerson,
   type NewAvailability,
   type NewShift,
+  type PatternDayInput,
   type Shift,
   type ShiftWithPerson
 } from '@shared/schedule'
@@ -388,5 +395,228 @@ export function clearAvailability(employeeId: string, day: string): boolean {
     getDb()
       .prepare(`DELETE FROM availability WHERE id = ?`)
       .run(availabilityId(employeeId, day)).changes > 0
+  )
+}
+
+// ---------------------------------------------------------------------------
+// The usual week — a repeating pattern, evaluated rather than expanded
+// ---------------------------------------------------------------------------
+
+interface PatternRow {
+  id: string
+  employee_id: string
+  weekday: number
+  status: string
+  start_time: string | null
+  end_time: string | null
+  note: string | null
+  updated_at: string
+}
+
+function toPattern(r: PatternRow): AvailabilityPattern {
+  return {
+    id: r.id,
+    employeeId: r.employee_id,
+    weekday: r.weekday,
+    // Same rule as a dated answer: an unreadable status is never taken as
+    // permission to roster somebody.
+    status: r.status === 'available' ? 'available' : 'unavailable',
+    startTime: r.start_time,
+    endTime: r.end_time,
+    note: r.note,
+    updatedAt: r.updated_at
+  }
+}
+
+function patternId(employeeId: string, weekday: number): string {
+  return `ap_${employeeId}_${weekday}`
+}
+
+const PATTERN_COLS = `id, employee_id, weekday, status, start_time, end_time, note, updated_at`
+
+/** One person's usual week, Sunday first. */
+export function myPattern(employeeId: string): AvailabilityPattern[] {
+  return (
+    getDb()
+      .prepare(
+        `SELECT ${PATTERN_COLS} FROM availability_pattern
+          WHERE employee_id = ? ORDER BY weekday ASC`
+      )
+      .all(employeeId) as PatternRow[]
+  ).map(toPattern)
+}
+
+/**
+ * Replace the named days of a usual week in one go.
+ *
+ * ONE transaction and one gesture, because that is how somebody thinks about
+ * it: "this is my week." Saving seven days as seven calls would let a dropped
+ * connection leave a half-written week that reads as a real answer — Monday
+ * saved, Wednesday not, and a lead rostering against the difference.
+ *
+ * A day whose status is null is CLEARED rather than stored as a "no". Silence
+ * about Tuesday and "I cannot work Tuesday" are different claims, and the
+ * screen has three positions for exactly that reason.
+ */
+export function setPattern(employeeId: string, days: PatternDayInput[]): AvailabilityPattern[] {
+  for (const d of days) {
+    const problem = validatePatternDay(d)
+    if (problem) throw new Error(problem)
+  }
+  const seen = new Set<number>()
+  for (const d of days) {
+    if (seen.has(d.weekday)) throw new Error('That week names the same day twice.')
+    seen.add(d.weekday)
+  }
+
+  const db = getDb()
+  const stamp = nowIso()
+  const upsert = db.prepare(
+    `INSERT INTO availability_pattern
+       (id, employee_id, weekday, status, start_time, end_time, note, created_at, updated_at)
+     VALUES (@id, @employeeId, @weekday, @status, @startTime, @endTime, @note, @stamp, @stamp)
+     ON CONFLICT(id) DO UPDATE SET
+       status     = excluded.status,
+       start_time = excluded.start_time,
+       end_time   = excluded.end_time,
+       note       = excluded.note,
+       updated_at = excluded.updated_at`
+  )
+  const drop = db.prepare(`DELETE FROM availability_pattern WHERE id = ?`)
+
+  const run = db.transaction(() => {
+    for (const d of days) {
+      const id = patternId(employeeId, d.weekday)
+      // NULL CLEARS. It must not fall through into a stored "unavailable" —
+      // silence about a day and a refusal of it are different claims, and
+      // promoting one into the other is the single worst bug this table can have.
+      if (d.status === null) {
+        drop.run(id)
+        continue
+      }
+      upsert.run({
+        id,
+        employeeId,
+        weekday: d.weekday,
+        status: d.status,
+        startTime: clean(d.startTime),
+        endTime: clean(d.endTime),
+        note: clean(d.note),
+        stamp
+      })
+    }
+  })
+  run()
+  return myPattern(employeeId)
+}
+
+/** Throw the whole usual week away. */
+export function clearPattern(employeeId: string): number {
+  return getDb()
+    .prepare(`DELETE FROM availability_pattern WHERE employee_id = ?`)
+    .run(employeeId).changes
+}
+
+/**
+ * What one person's days actually come to across a range.
+ *
+ * The merge lives here rather than in every screen that wants it, because
+ * getting it wrong is silent: a caller that forgot the pattern would show a
+ * blank week for somebody who set their usual days months ago and has not
+ * touched a date since.
+ *
+ * Only days somebody has actually said something about come back. A range where
+ * neither an override nor a pattern applies is empty, which is what keeps
+ * "nothing said" a real third state rather than a default.
+ */
+export function myEffectiveAvailability(
+  employeeId: string,
+  from: string,
+  to: string
+): EffectiveAvailability[] {
+  const overrides = new Map(
+    myAvailability(employeeId)
+      .filter((a) => a.day >= from && a.day <= to)
+      .map((a) => [a.day, a])
+  )
+  const pattern = new Map(myPattern(employeeId).map((p) => [p.weekday, p]))
+  const out: EffectiveAvailability[] = []
+  let guard = 0
+  for (let day = from; day <= to && guard < 800; day = addDays(day, 1), guard++) {
+    const eff = effectiveAvailability(day, overrides.get(day), pattern.get(weekdayOf(day)))
+    if (eff) out.push(eff)
+  }
+  return out
+}
+
+/**
+ * EVERYBODY's days across a range, merged the same way — the lead's view.
+ *
+ * Two reads and an in-memory merge rather than a query per person per day. The
+ * alternative that looks tidier — a correlated subquery per calendar cell — is a
+ * table scan per cell on the one screen a lead builds next week from.
+ *
+ * ONE ROW PER PERSON PER DAY. An override REPLACES the pattern row rather than
+ * sitting beside it: two contradictory lines for one person on one day is
+ * exactly the thing a lead cannot act on.
+ */
+export function listEffectiveAvailability(
+  from: string,
+  to: string
+): EffectiveAvailabilityWithPerson[] {
+  const db = getDb()
+  const overrides = listAvailability(from, to)
+  const patterns = (
+    db
+      .prepare(
+        `SELECT p.id, p.employee_id, p.weekday, p.status, p.start_time, p.end_time, p.note,
+                p.updated_at, e.first_name AS first, e.last_name AS last
+           FROM availability_pattern p
+           LEFT JOIN employees e ON e.id = p.employee_id`
+      )
+      .all() as Array<PatternRow & { first: string | null; last: string | null }>
+  ).map((r) => ({
+    pattern: toPattern(r),
+    name: `${r.first ?? ''} ${r.last ?? ''}`.trim() || 'Someone'
+  }))
+
+  const overrideByKey = new Set(overrides.map((a) => `${a.employeeId}|${a.day}`))
+  const out: EffectiveAvailabilityWithPerson[] = []
+
+  // Every override in range lands, whatever the pattern says — it is the
+  // stronger claim by construction.
+  for (const a of overrides) {
+    out.push({
+      employeeId: a.employeeId,
+      employeeName: a.employeeName,
+      day: a.day,
+      status: a.status,
+      startTime: a.startTime,
+      endTime: a.endTime,
+      note: a.note,
+      source: 'day'
+    })
+  }
+
+  let guard = 0
+  for (let day = from; day <= to && guard < 400; day = addDays(day, 1), guard++) {
+    const weekday = weekdayOf(day)
+    for (const { pattern, name } of patterns) {
+      if (pattern.weekday !== weekday) continue
+      if (overrideByKey.has(`${pattern.employeeId}|${day}`)) continue
+      out.push({
+        employeeId: pattern.employeeId,
+        employeeName: name,
+        day,
+        status: pattern.status,
+        startTime: pattern.startTime,
+        endTime: pattern.endTime,
+        note: pattern.note,
+        source: 'pattern'
+      })
+    }
+  }
+  return out.sort(
+    (a, b) => a.day.localeCompare(b.day) || a.employeeName.localeCompare(b.employeeName)
   )
 }

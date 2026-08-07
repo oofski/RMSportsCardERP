@@ -223,6 +223,13 @@ export const IPC = {
   availabilityList: 'availability:list',
   availabilitySet: 'availability:set',
   availabilityClear: 'availability:clear',
+  // The USUAL WEEK behind those answers — "I work Mondays, Wednesdays and
+  // Fridays". The primary way somebody answers; a dated row is the exception.
+  // `patternSet` replaces the whole week in one call, because that is the one
+  // gesture somebody actually makes and a half-saved week reads as a real answer.
+  patternMine: 'availability:pattern:mine',
+  patternSet: 'availability:pattern:set',
+  patternClear: 'availability:pattern:clear',
   shipDocument: 'shipping:document',
   shipDocumentBytes: 'shipping:document:bytes',
   shipDocumentArrival: 'shipping:document:arrival',

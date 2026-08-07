@@ -181,6 +181,10 @@ export const SYNCED_TABLES: SyncedTable[] = [
   // the same row, so the later answer wins — exactly what somebody changing
   // their mind means. A UUID would leave two rows saying opposite things.
   { table: 'availability', key: ['id'], tier: 1 },
+  // The usual week behind those answers. Seven rows per person, derived ids for
+  // the same reason, and it travels for the same reason: set on a phone at the
+  // bench, read on the laptop where next week gets built.
+  { table: 'availability_pattern', key: ['id'], tier: 1 },
   { table: 'time_entries', key: ['id'], tier: 1 },
   { table: 'inventory_transactions', key: ['id'], tier: 1 },
   { table: 'inventory_incoming', key: ['id'], tier: 1 },

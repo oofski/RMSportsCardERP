@@ -556,5 +556,176 @@ ok(fixed.id === 'legacy-uuid-1', 'an older row keeps its id', fixed.id)
 ok(schedule.myShifts('emp_robin').length === 1, 'and is updated, not duplicated')
 ok(schedule.myShifts('emp_robin')[0].startTime === '18:00', 'with the new time')
 
+// ---------------------------------------------------------------------------
+console.log('\n=== 9. the usual week ===')
+// ---------------------------------------------------------------------------
+// Nobody thinks about availability one date at a time. The pattern is the
+// PRIMARY answer and a dated row is the exception — and the whole of that rule
+// lives in effectiveAvailability, so it is worth pinning hard.
+const {
+  WEEKDAY_NAMES,
+  patternSummary,
+  validatePatternDay,
+  weekdayOf
+} = require('../src/shared/schedule')
+
+// 5 August 2026 is a Wednesday (the payroll anchor). 0 = Sunday.
+ok(weekdayOf('2026-08-05') === 3, 'the payroll anchor is a Wednesday', String(weekdayOf('2026-08-05')))
+ok(weekdayOf('2026-08-02') === 0, 'and the Sunday before is 0', String(weekdayOf('2026-08-02')))
+ok(weekdayOf('2026-08-08') === 6, 'Saturday is 6', String(weekdayOf('2026-08-08')))
+// THE DAYLIGHT-SAVING TRAP again, and it is the nastiest one here: a pattern
+// that slips by a weekday twice a year would be invisible for months.
+ok(weekdayOf('2026-03-08') === 0, 'the spring-forward Sunday is still a Sunday')
+ok(weekdayOf('2026-11-01') === 0, 'and the fall-back Sunday too')
+ok(WEEKDAY_NAMES[3] === 'Wednesday', 'the names line up with the numbers')
+
+ok(validatePatternDay({ weekday: 7, status: 'available' }) !== null, 'there is no eighth day')
+ok(validatePatternDay({ weekday: -1, status: 'available' }) !== null, 'nor a minus-first')
+ok(validatePatternDay({ weekday: 1, status: null }) === null, 'clearing a day is always allowed')
+ok(
+  validatePatternDay({ weekday: 1, status: 'available', startTime: '9:00' }) !== null,
+  'a time still has to be a time'
+)
+
+db.prepare(`DELETE FROM availability`).run()
+db.prepare(`DELETE FROM availability_pattern`).run()
+ok(schedule.myPattern('emp_pat').length === 0, 'nobody starts with a usual week')
+
+// "I work Mondays, Wednesdays and Fridays, and I have class on Tuesday."
+const usual = schedule.setPattern('emp_pat', [
+  { weekday: 1, status: 'available', startTime: '16:00', endTime: '21:00' },
+  { weekday: 2, status: 'unavailable', note: 'Class' },
+  { weekday: 3, status: 'available', startTime: '16:00' },
+  { weekday: 5, status: 'available' },
+  // Saying nothing about a day is NOT saying no to it. A null must clear rather
+  // than store, or silence gets promoted into a refusal nobody made.
+  { weekday: 0, status: null },
+  { weekday: 4, status: null },
+  { weekday: 6, status: null }
+])
+ok(usual.length === 4, 'four days stored, three left silent', String(usual.length))
+ok(usual[0].weekday === 1, 'Sunday-first ordering', String(usual[0].weekday))
+ok(usual[0].id === 'ap_emp_pat_1', 'the id is derived from person and weekday', usual[0].id)
+ok(usual[0].startTime === '16:00', 'times survive')
+ok(usual.find((p: any) => p.weekday === 2)?.note === 'Class', 'and so does a reason')
+ok(patternSummary(usual) === 'Mon, Wed, Fri', 'it reads as a week', patternSummary(usual))
+
+// Saving again REPLACES rather than appending — seven rows is the ceiling.
+schedule.setPattern('emp_pat', [{ weekday: 1, status: 'available', startTime: '17:00' }])
+const afterPartial = schedule.myPattern('emp_pat')
+ok(afterPartial.length === 4, 'a partial save touches only the days it names', String(afterPartial.length))
+ok(
+  afterPartial.find((p: any) => p.weekday === 1)?.startTime === '17:00',
+  'and updates them in place'
+)
+// Clearing one day removes it rather than storing a "no".
+schedule.setPattern('emp_pat', [{ weekday: 5, status: null }])
+ok(schedule.myPattern('emp_pat').length === 3, 'clearing a day drops the row', String(schedule.myPattern('emp_pat').length))
+ok(
+  !schedule.myPattern('emp_pat').some((p: any) => p.weekday === 5),
+  'and Friday is silent again, not refused'
+)
+schedule.setPattern('emp_pat', [{ weekday: 5, status: 'available' }])
+
+let dupRefused = false
+try {
+  schedule.setPattern('emp_pat', [
+    { weekday: 1, status: 'available' },
+    { weekday: 1, status: 'unavailable' }
+  ])
+} catch {
+  dupRefused = true
+}
+ok(dupRefused, 'a week that names the same day twice is refused')
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 10. the exception beats the pattern ===')
+// ---------------------------------------------------------------------------
+// Find the next Monday and the next Tuesday from today, so the assertions do
+// not depend on which weekday the suite happens to run on.
+const nextWeekday = (target: number): string => {
+  for (let i = 1; i <= 7; i++) {
+    const d = plus(i)
+    if (weekdayOf(d) === target) return d
+  }
+  return plus(1)
+}
+const mon = nextWeekday(1)
+const tue = nextWeekday(2)
+const thu = nextWeekday(4)
+
+const eff = schedule.myEffectiveAvailability('emp_pat', plus(1), plus(7))
+const monAnswer = eff.find((e: any) => e.day === mon)
+ok(monAnswer?.status === 'available', 'a Monday comes back free without anybody tapping it')
+ok(monAnswer?.source === 'pattern', 'sourced from the usual week', String(monAnswer?.source))
+ok(monAnswer?.startTime === '17:00', 'carrying the pattern time')
+const tueAnswer = eff.find((e: any) => e.day === tue)
+ok(tueAnswer?.status === 'unavailable', 'and a Tuesday comes back as a no')
+// Thursday is silent in the pattern, so it must be ABSENT — not "unavailable".
+ok(!eff.some((e: any) => e.day === thu), 'a day the pattern says nothing about stays silent')
+
+// THE EXCEPTION. "I normally do Mondays, but not this Monday."
+schedule.setAvailability('emp_pat', { day: mon, status: 'unavailable', note: 'Dentist' })
+const eff2 = schedule.myEffectiveAvailability('emp_pat', plus(1), plus(7))
+const monOverridden = eff2.find((e: any) => e.day === mon)
+ok(monOverridden?.status === 'unavailable', 'the dated answer wins over the usual week')
+ok(monOverridden?.source === 'day', 'and says so', String(monOverridden?.source))
+ok(monOverridden?.note === 'Dentist', 'carrying its own reason')
+// The other Mondays are untouched — an exception is one date, not a rule change.
+const otherMondays = schedule
+  .myEffectiveAvailability('emp_pat', plus(8), plus(21))
+  .filter((e: any) => weekdayOf(e.day) === 1)
+ok(otherMondays.length >= 1, 'later Mondays are still covered', String(otherMondays.length))
+ok(
+  otherMondays.every((e: any) => e.status === 'available' && e.source === 'pattern'),
+  'and still free, from the pattern'
+)
+
+// Withdrawing the exception falls back to the usual week rather than to silence.
+schedule.clearAvailability('emp_pat', mon)
+const monBack = schedule
+  .myEffectiveAvailability('emp_pat', plus(1), plus(7))
+  .find((e: any) => e.day === mon)
+ok(monBack?.status === 'available', 'clearing an exception falls back to the usual week')
+ok(monBack?.source === 'pattern', 'not to nothing', String(monBack?.source))
+
+// AN EXCEPTION ON A SILENT DAY still works — that is the only way to answer for
+// a weekday the pattern says nothing about.
+schedule.setAvailability('emp_pat', { day: thu, status: 'available' })
+const thuAnswer = schedule
+  .myEffectiveAvailability('emp_pat', plus(1), plus(7))
+  .find((e: any) => e.day === thu)
+ok(thuAnswer?.status === 'available' && thuAnswer?.source === 'day', 'a one-off on a silent day lands')
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 11. what the lead sees ===')
+// ---------------------------------------------------------------------------
+// The rota screen must see pattern-derived days too. A lead building next week
+// off dated rows alone would see a blank week for somebody who set their usual
+// days months ago — which is exactly the person who answered most carefully.
+schedule.setPattern('emp_robin', [{ weekday: 1, status: 'unavailable', note: 'Second job' }])
+const teamWeek = schedule.listEffectiveAvailability(plus(1), plus(7))
+const robinMon = teamWeek.find((a: any) => a.employeeId === 'emp_robin' && a.day === mon)
+ok(!!robinMon, "Robin's usual Monday reaches the lead's week")
+ok(robinMon?.status === 'unavailable', 'as a no', String(robinMon?.status))
+ok(robinMon?.source === 'pattern', 'from the pattern')
+ok(robinMon?.employeeName === 'Robin Oyelaran', 'with a name', String(robinMon?.employeeName))
+ok(
+  teamWeek.some((a: any) => a.employeeId === 'emp_pat' && a.day === mon),
+  "and Pat's is in the same read"
+)
+// One row per person per day — an override must REPLACE the pattern row, never
+// sit beside it. Two contradictory lines for one person on one day is the exact
+// thing a lead cannot act on.
+schedule.setAvailability('emp_robin', { day: mon, status: 'available', note: 'Swapped' })
+const teamWeek2 = schedule.listEffectiveAvailability(plus(1), plus(7))
+const robinRows = teamWeek2.filter((a: any) => a.employeeId === 'emp_robin' && a.day === mon)
+ok(robinRows.length === 1, 'one row per person per day', String(robinRows.length))
+ok(robinRows[0].status === 'available' && robinRows[0].source === 'day', 'and it is the exception')
+ok(
+  teamWeek2.every((a: any, i: number) => i === 0 || teamWeek2[i - 1].day <= a.day),
+  'the lead sees it in date order'
+)
+
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

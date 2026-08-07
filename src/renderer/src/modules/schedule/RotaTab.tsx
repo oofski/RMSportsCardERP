@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { Employee } from '@shared/types'
-import type { AvailabilityWithPerson, ShiftWithPerson } from '@shared/schedule'
+import type { EffectiveAvailabilityWithPerson, ShiftWithPerson } from '@shared/schedule'
 import { addDays, dayKey } from '@shared/homeTasks'
 import {
   availabilityLabel,
@@ -66,7 +66,7 @@ export function RotaTab({ employees }: { employees: Employee[] }): JSX.Element {
   const today = dayKey(new Date())
   const [weekStart, setWeekStart] = useState(() => mondayOf(today))
   const [shifts, setShifts] = useState<ShiftWithPerson[]>([])
-  const [answers, setAnswers] = useState<AvailabilityWithPerson[]>([])
+  const [answers, setAnswers] = useState<EffectiveAvailabilityWithPerson[]>([])
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [openDay, setOpenDay] = useState<string | null>(null)
@@ -123,9 +123,9 @@ export function RotaTab({ employees }: { employees: Employee[] }): JSX.Element {
    * that got said was a text message nobody could see a week later.
    */
   const answersByDay = useMemo(() => {
-    const map = new Map<string, Map<string, AvailabilityWithPerson>>()
+    const map = new Map<string, Map<string, EffectiveAvailabilityWithPerson>>()
     for (const a of answers) {
-      const forDay = map.get(a.day) ?? new Map<string, AvailabilityWithPerson>()
+      const forDay = map.get(a.day) ?? new Map<string, EffectiveAvailabilityWithPerson>()
       forDay.set(a.employeeId, a)
       map.set(a.day, forDay)
     }
@@ -331,7 +331,7 @@ function AddShift({
   roster: Employee[]
   existing: ShiftWithPerson[]
   /** What each person said about this day, keyed by employee id. */
-  said: Map<string, AvailabilityWithPerson>
+  said: Map<string, EffectiveAvailabilityWithPerson>
   onClose: () => void
   onSaved: () => Promise<void>
 }): JSX.Element {
@@ -449,7 +449,7 @@ function AddShift({
       )}
       {said.get(employeeId)?.status === 'available' && (
         <p className="rota-free-note">
-          {availabilityLabel(said.get(employeeId) as AvailabilityWithPerson)}
+          {availabilityLabel(said.get(employeeId) as EffectiveAvailabilityWithPerson)}
           {said.get(employeeId)?.note ? ` — “${said.get(employeeId)?.note}”` : ''}
         </p>
       )}

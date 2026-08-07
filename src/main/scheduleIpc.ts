@@ -5,9 +5,11 @@ import type { Permission } from '@shared/permissions'
 import type { StaffBoard } from '@shared/staffBoard'
 import type {
   Availability,
-  AvailabilityWithPerson,
+  AvailabilityPattern,
+  EffectiveAvailabilityWithPerson,
   NewAvailability,
   NewShift,
+  PatternDayInput,
   Shift,
   ShiftWithPerson
 } from '@shared/schedule'
@@ -15,14 +17,17 @@ import { currentUser } from './services/auth'
 import { getStaffBoard } from './db/staffBoard'
 import {
   clearAvailability,
+  clearPattern,
   copyWeek,
   createShift,
   deleteShift,
-  listAvailability,
+  listEffectiveAvailability,
   listShifts,
   myAvailability,
+  myPattern,
   myShifts,
-  setAvailability
+  setAvailability,
+  setPattern
 } from './db/schedule'
 
 /**
@@ -160,11 +165,16 @@ export function registerScheduleIpc(): void {
     return user ? myAvailability(user.id) : []
   })
 
+  // EFFECTIVE, not raw. A lead building next week wants the answer for each day,
+  // and most of those answers come from somebody's usual week rather than a row
+  // they tapped — returning only the dated rows would show a blank week for a
+  // person who set their Mondays months ago and has not touched a date since.
+  // Each row carries `source` so the screen can still tell the two apart.
   ipcMain.handle(
     IPC.availabilityList,
-    (_e, payload: { from?: unknown; to?: unknown }): AvailabilityWithPerson[] => {
+    (_e, payload: { from?: unknown; to?: unknown }): EffectiveAvailabilityWithPerson[] => {
       if (!can('admin.hours.view')) return []
-      return listAvailability(str(payload?.from), str(payload?.to))
+      return listEffectiveAvailability(str(payload?.from), str(payload?.to))
     }
   )
 
@@ -181,6 +191,52 @@ export function registerScheduleIpc(): void {
           note: payload?.note ? str(payload.note) : null
         })
       }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  // ---- The usual week ------------------------------------------------------
+  //
+  // Same rule as everything else here: the employee is the SESSION's, never a
+  // payload's. There is no operation that reads or writes a named person's week.
+  ipcMain.handle(IPC.patternMine, (): AvailabilityPattern[] => {
+    const user = currentUser()
+    return user ? myPattern(user.id) : []
+  })
+
+  ipcMain.handle(
+    IPC.patternSet,
+    (_e, payload: { days?: unknown }): Result<AvailabilityPattern[]> => {
+      try {
+        const actor = requireUser()
+        const raw = Array.isArray(payload?.days) ? payload.days : []
+        const days: PatternDayInput[] = raw.map((d: Record<string, unknown>) => ({
+          weekday: Number(d?.weekday),
+          // Anything that is not one of the two answers CLEARS the day. Silence
+          // about Tuesday and "I cannot work Tuesday" are different claims, and
+          // a malformed value must not be promoted into the second one.
+          status:
+            d?.status === 'available'
+              ? 'available'
+              : d?.status === 'unavailable'
+                ? 'unavailable'
+                : null,
+          startTime: d?.startTime ? str(d.startTime) : null,
+          endTime: d?.endTime ? str(d.endTime) : null,
+          note: d?.note ? str(d.note) : null
+        }))
+        return { ok: true, data: setPattern(actor.id, days) }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  ipcMain.handle(IPC.patternClear, (): Result<{ cleared: number }> => {
+    try {
+      const actor = requireUser()
+      return { ok: true, data: { cleared: clearPattern(actor.id) } }
     } catch (err) {
       return fail(err)
     }

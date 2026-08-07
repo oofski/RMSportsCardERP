@@ -1999,6 +1999,45 @@ function migrate(database: Database.Database): void {
   )
   setMeta(database, 'schema_version', '50')
 
+  // v51: the USUAL WEEK — a repeating availability pattern.
+  //
+  // v50 let somebody answer for a date. It turns out that is not how anybody
+  // thinks about their own life: they think "I work Mondays, Wednesdays and
+  // Fridays, and I have class on Tuesday" — a shape that repeats — and asking
+  // them to express that by tapping thirty squares a month is asking them to do
+  // arithmetic on their own routine. They would do it once and never again,
+  // which is the same as not having the feature at all.
+  //
+  // So this is the PRIMARY way to answer and a dated row is now the EXCEPTION:
+  // "I normally do Thursdays, but not this Thursday."
+  //
+  // EVALUATED, NEVER EXPANDED. The pattern is not turned into dated rows.
+  // Expanding "every Monday" would write hundreds of records, make changing
+  // your mind mean rewriting all of them, and hand the relay hundreds of rows
+  // to arbitrate where one fact changed. The answer for a day is worked out at
+  // read time — see effectiveAvailability in @shared/schedule — which is also
+  // what keeps the three states honest: a day nobody has spoken about is still
+  // silent whether the silence is a missing override or an empty pattern.
+  //
+  // Seven rows per person at most, with the same derived id as v50 and for the
+  // same reason: two machines editing the same weekday write the same row, so
+  // last-write-wins compares it against an older copy of itself.
+  database.exec(
+    `CREATE TABLE IF NOT EXISTS availability_pattern (
+       id          TEXT PRIMARY KEY,
+       employee_id TEXT NOT NULL,
+       weekday     INTEGER NOT NULL,
+       status      TEXT NOT NULL,
+       start_time  TEXT,
+       end_time    TEXT,
+       note        TEXT,
+       created_at  TEXT NOT NULL,
+       updated_at  TEXT NOT NULL
+     );
+     CREATE INDEX IF NOT EXISTS idx_avpat_person ON availability_pattern (employee_id);`
+  )
+  setMeta(database, 'schema_version', '51')
+
   // Payroll, once, for whoever owns the company.
   //
   // Seeded rather than left to be typed because the owner named it, named its

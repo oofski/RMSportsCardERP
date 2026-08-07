@@ -107,6 +107,161 @@ export interface NewAvailability {
 export const AVAILABILITY_NOTE_MAX = 80
 
 /**
+ * A USUAL WEEK — the thing somebody actually knows about their own life.
+ *
+ * Nobody thinks about their availability one date at a time. They think "I work
+ * Mondays, Wednesdays and Fridays, and I have class on Tuesday" — a shape that
+ * repeats — and asking them to express that by tapping thirty squares a month is
+ * asking them to do arithmetic on their own routine. They will do it once and
+ * never again, which is the same as not having the feature.
+ *
+ * So the pattern is the PRIMARY way to answer, and a single day is the
+ * EXCEPTION: "I normally do Thursdays, but not this Thursday." Seven rows, set
+ * once, and after that the only days worth touching are the ones that differ.
+ *
+ * ## Evaluated, never expanded
+ *
+ * The pattern is not turned into rows. Expanding "every Monday" into dated
+ * availability would write hundreds of records, make changing your mind mean
+ * rewriting all of them, and give the sync relay hundreds of rows to arbitrate
+ * where one fact changed. The effective answer for a day is worked out at read
+ * time — see `effectiveAvailability` — which is also what keeps the three states
+ * honest: a day nobody has said anything about is still a day nobody has said
+ * anything about, whether the silence is a missing override or an empty pattern.
+ */
+export interface AvailabilityPattern {
+  id: string
+  employeeId: string
+  /** 0 = Sunday … 6 = Saturday, matching the calendar grid. */
+  weekday: number
+  status: AvailabilityStatus
+  startTime: string | null
+  endTime: string | null
+  note: string | null
+  updatedAt: string
+}
+
+/** One weekday's worth of a usual week, as the screen submits it. */
+export interface PatternDayInput {
+  weekday: number
+  /** null clears the day back to "nothing said". */
+  status: AvailabilityStatus | null
+  startTime?: string | null
+  endTime?: string | null
+  note?: string | null
+}
+
+/**
+ * What a given day actually comes to, once the usual week and any exception
+ * for that date have been resolved against each other.
+ *
+ * `source` is not decoration. "I said this specifically" and "this is just my
+ * usual Monday" are different strengths of claim, and a lead looking at a week
+ * deserves to know which one they are reading — one of them is a person who
+ * thought about that date.
+ */
+export interface EffectiveAvailability {
+  day: string
+  status: AvailabilityStatus
+  startTime: string | null
+  endTime: string | null
+  note: string | null
+  source: 'day' | 'pattern'
+}
+
+export interface EffectiveAvailabilityWithPerson extends EffectiveAvailability {
+  employeeId: string
+  employeeName: string
+}
+
+export const WEEKDAY_NAMES = [
+  'Sunday',
+  'Monday',
+  'Tuesday',
+  'Wednesday',
+  'Thursday',
+  'Friday',
+  'Saturday'
+]
+
+/**
+ * 0 = Sunday … 6 = Saturday for a YYYY-MM-DD.
+ *
+ * Parsed at UTC noon and read in UTC, like every other date in this file: a
+ * date-only string parsed as local midnight can slide across a daylight-saving
+ * boundary onto the previous day, and a rota pattern that shifts by one weekday
+ * twice a year is a bug nobody would find for months.
+ */
+export function weekdayOf(day: string): number {
+  const t = Date.parse(`${day}T12:00:00Z`)
+  if (!Number.isFinite(t)) return 0
+  return new Date(t).getUTCDay()
+}
+
+/**
+ * The answer for one day: the exception if there is one, otherwise the usual
+ * week, otherwise nothing.
+ *
+ * An override ALWAYS wins, including an override that says the opposite of the
+ * pattern — that is the entire point of being able to mark a single day. Null
+ * means nothing has been said, which stays distinct from both answers.
+ */
+export function effectiveAvailability(
+  day: string,
+  override: Availability | null | undefined,
+  pattern: AvailabilityPattern | null | undefined
+): EffectiveAvailability | null {
+  if (override) {
+    return {
+      day,
+      status: override.status,
+      startTime: override.startTime,
+      endTime: override.endTime,
+      note: override.note,
+      source: 'day'
+    }
+  }
+  if (pattern) {
+    return {
+      day,
+      status: pattern.status,
+      startTime: pattern.startTime,
+      endTime: pattern.endTime,
+      note: pattern.note,
+      source: 'pattern'
+    }
+  }
+  return null
+}
+
+export function validatePatternDay(input: PatternDayInput): string | null {
+  if (!Number.isInteger(input.weekday) || input.weekday < 0 || input.weekday > 6) {
+    return 'That is not a day of the week.'
+  }
+  if (input.status === null) return null
+  if (input.status !== 'available' && input.status !== 'unavailable') {
+    return 'Say whether you can work or not.'
+  }
+  if (input.startTime && !TIME_RE.test(input.startTime)) return 'The start time has to be a time.'
+  if (input.endTime && !TIME_RE.test(input.endTime)) return 'The end time has to be a time.'
+  if ((input.note ?? '').length > AVAILABILITY_NOTE_MAX) {
+    return `Keep the note under ${AVAILABILITY_NOTE_MAX} characters.`
+  }
+  return null
+}
+
+/** "Mon, Wed, Fri" — how a usual week reads in one line. */
+export function patternSummary(pattern: AvailabilityPattern[]): string {
+  const free = pattern
+    .filter((p) => p.status === 'available')
+    .map((p) => p.weekday)
+    .sort((a, b) => a - b)
+  if (free.length === 0) return 'No usual days set'
+  if (free.length === 7) return 'Every day'
+  return free.map((d) => WEEKDAY_NAMES[d].slice(0, 3)).join(', ')
+}
+
+/**
  * How far ahead somebody may mark a day.
  *
  * A year. Long enough for a holiday booked in advance — the single most useful

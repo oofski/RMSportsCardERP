@@ -24,9 +24,11 @@ import type { NewReminder, OwnerBoard, Reminder, Todo } from '@shared/ownerDashb
 import type { StaffBoard } from '@shared/staffBoard'
 import type {
   Availability,
-  AvailabilityWithPerson,
+  AvailabilityPattern,
+  EffectiveAvailabilityWithPerson,
   NewAvailability,
   NewShift,
+  PatternDayInput,
   Shift,
   ShiftWithPerson
 } from '@shared/schedule'
@@ -1020,12 +1022,30 @@ export function createBridge(ipcRenderer: BridgeTransport) {
        * back empty for anybody without admin.hours.view.
        */
       myAvailability: (): Promise<Availability[]> => ipcRenderer.invoke(IPC.availabilityMine),
-      availability: (from: string, to: string): Promise<AvailabilityWithPerson[]> =>
+      /**
+       * The team's answers across a range — EFFECTIVE, so a day covered by
+       * somebody's usual week is in here even though nobody tapped that date.
+       * Each row carries `source` so the screen can tell the two apart.
+       */
+      availability: (from: string, to: string): Promise<EffectiveAvailabilityWithPerson[]> =>
         ipcRenderer.invoke(IPC.availabilityList, { from, to }),
       setAvailability: (input: NewAvailability): Promise<Result<Availability>> =>
         ipcRenderer.invoke(IPC.availabilitySet, input),
       clearAvailability: (day: string): Promise<Result<{ day: string }>> =>
-        ipcRenderer.invoke(IPC.availabilityClear, day)
+        ipcRenderer.invoke(IPC.availabilityClear, day),
+
+      /**
+       * Your USUAL WEEK — "I work Mondays, Wednesdays and Fridays".
+       *
+       * `setPattern` takes the whole week at once because that is the one
+       * gesture somebody makes; seven separate calls would let a dropped
+       * connection leave a half-written week that reads as a real answer.
+       */
+      myPattern: (): Promise<AvailabilityPattern[]> => ipcRenderer.invoke(IPC.patternMine),
+      setPattern: (days: PatternDayInput[]): Promise<Result<AvailabilityPattern[]>> =>
+        ipcRenderer.invoke(IPC.patternSet, { days }),
+      clearPattern: (): Promise<Result<{ cleared: number }>> =>
+        ipcRenderer.invoke(IPC.patternClear)
     },
     updates: {
       getStatus: (): Promise<UpdateStatus> => ipcRenderer.invoke(IPC.updatesGetStatus),

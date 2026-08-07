@@ -1,22 +1,31 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { Availability, AvailabilityStatus, Shift } from '@shared/schedule'
+import type {
+  Availability,
+  AvailabilityPattern,
+  AvailabilityStatus,
+  EffectiveAvailability,
+  Shift
+} from '@shared/schedule'
 import {
   AVAILABILITY_NOTE_MAX,
   addMonths,
   availabilityLabel,
   dayLabel,
+  effectiveAvailability,
   formatClock,
   monthGrid,
   monthLabel,
   monthOf,
   shiftTimeLabel,
-  upcomingFrom
+  upcomingFrom,
+  weekdayOf
 } from '@shared/schedule'
 import { dayKey } from '@shared/homeTasks'
 import { api } from '../../lib/api'
 import { LIVE, useLiveRefresh } from '../../lib/live'
 import { Icon } from '../../components/Icon'
 import { Button, CenterLoader } from '../../components/ui'
+import { UsualWeek } from './UsualWeek'
 import { useToast } from '../../components/Toast'
 
 /**
@@ -50,15 +59,21 @@ export function MyScheduleTab(): JSX.Element {
   const today = dayKey(new Date())
   const [shifts, setShifts] = useState<Shift[]>([])
   const [answers, setAnswers] = useState<Availability[]>([])
+  const [pattern, setPattern] = useState<AvailabilityPattern[]>([])
   const [loading, setLoading] = useState(true)
   const [month, setMonth] = useState(() => monthOf(today))
   const [openDay, setOpenDay] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
   const load = useCallback(async () => {
-    const [s, a] = await Promise.all([api.staff.myShifts(), api.staff.myAvailability()])
+    const [s, a, p] = await Promise.all([
+      api.staff.myShifts(),
+      api.staff.myAvailability(),
+      api.staff.myPattern()
+    ])
     setShifts(s)
     setAnswers(a)
+    setPattern(p)
   }, [])
 
   useLiveRefresh(LIVE.schedule, load)
@@ -83,11 +98,31 @@ export function MyScheduleTab(): JSX.Element {
     return map
   }, [shifts])
 
-  const answerByDay = useMemo(() => {
+  /** The dated EXCEPTIONS only — what somebody tapped for a specific date. */
+  const overrideByDay = useMemo(() => {
     const map = new Map<string, Availability>()
     for (const a of answers) map.set(a.day, a)
     return map
   }, [answers])
+
+  const patternByWeekday = useMemo(() => {
+    const map = new Map<number, AvailabilityPattern>()
+    for (const p of pattern) map.set(p.weekday, p)
+    return map
+  }, [pattern])
+
+  /**
+   * What a day actually comes to: the exception if there is one, otherwise the
+   * usual week, otherwise nothing.
+   *
+   * Worked out through the SAME function main uses, so a day cannot read one way
+   * on this screen and another on the lead's.
+   */
+  const answerFor = useCallback(
+    (day: string): EffectiveAvailability | null =>
+      effectiveAvailability(day, overrideByDay.get(day), patternByWeekday.get(weekdayOf(day))),
+    [overrideByDay, patternByWeekday]
+  )
 
   const cells = useMemo(() => monthGrid(month), [month])
   const upcoming = useMemo(() => upcomingFrom(shifts, today, 6), [shifts, today])
@@ -151,10 +186,14 @@ export function MyScheduleTab(): JSX.Element {
         </div>
       </div>
 
+      <UsualWeek pattern={pattern} onSaved={load} />
+
       <p className="sched-hint">
-        Tap a day to say whether you can work it. {marked === 0
-          ? 'You have not marked any days yet — the more you mark, the better the rota fits.'
-          : `You have marked ${marked} day${marked === 1 ? '' : 's'} ahead.`}
+        {pattern.length === 0
+          ? 'Set your usual week above — then use the calendar only for the days that are different.'
+          : `Your usual week fills the calendar in. Tap a day to override it${
+              marked === 0 ? '.' : ` — you have changed ${marked} day${marked === 1 ? '' : 's'} ahead.`
+            }`}
       </p>
 
       <div className="sched-legend">
@@ -166,6 +205,9 @@ export function MyScheduleTab(): JSX.Element {
         </span>
         <span className="sched-key" data-kind="unavailable">
           <i /> Cannot work
+        </span>
+        <span className="sched-key" data-kind="pattern">
+          <i /> From your usual week
         </span>
         <span className="sched-key" data-kind="clash">
           <i /> Rostered on a day you said no
@@ -181,7 +223,7 @@ export function MyScheduleTab(): JSX.Element {
         <div className="sb-cal-grid">
           {cells.map((c) => {
             const shift = shiftByDay.get(c.day)
-            const answer = answerByDay.get(c.day)
+            const answer = answerFor(c.day)
             // The one arrangement worth a colour of its own: on the rota for a
             // day you already said you could not do. Nobody has to spot it.
             const clash = !!shift && answer?.status === 'unavailable'
@@ -195,6 +237,10 @@ export function MyScheduleTab(): JSX.Element {
                 data-past={past ? 'true' : 'false'}
                 data-shift={shift ? 'true' : 'false'}
                 data-mark={clash ? 'clash' : (answer?.status ?? 'none')}
+                /* A day that comes from the usual week is drawn lighter than one
+                   somebody tapped. Both are real answers; only one of them is a
+                   person who thought about that date. */
+                data-source={answer?.source ?? 'none'}
                 // The past is not something to have an opinion about, and the
                 // handler refuses it — so the button refuses it too rather than
                 // opening a form that can only fail.
@@ -203,7 +249,9 @@ export function MyScheduleTab(): JSX.Element {
                 title={
                   [
                     shift ? `On the rota · ${shiftTimeLabel(shift)}` : null,
-                    answer ? availabilityLabel(answer) : null
+                    answer
+                      ? `${availabilityLabel(answer)}${answer.source === 'pattern' ? ' (your usual week)' : ''}`
+                      : null
                   ]
                     .filter(Boolean)
                     .join(' — ') || undefined
@@ -236,7 +284,9 @@ export function MyScheduleTab(): JSX.Element {
         <DayEditor
           day={openDay}
           shift={shiftByDay.get(openDay) ?? null}
-          answer={answerByDay.get(openDay) ?? null}
+          override={overrideByDay.get(openDay) ?? null}
+          effective={answerFor(openDay)}
+          usual={patternByWeekday.get(weekdayOf(openDay)) ?? null}
           busy={busy}
           onSave={save}
           onClear={clear}
@@ -257,7 +307,7 @@ export function MyScheduleTab(): JSX.Element {
         ) : (
           <ul className="ob-shows">
             {upcoming.map((s) => {
-              const answer = answerByDay.get(s.day)
+              const answer = answerFor(s.day)
               return (
                 <li key={s.id} data-live={s.day === today ? 'true' : 'false'}>
                   <span className="ob-show-when">
@@ -297,7 +347,9 @@ export function MyScheduleTab(): JSX.Element {
 function DayEditor({
   day,
   shift,
-  answer,
+  override,
+  effective,
+  usual,
   busy,
   onSave,
   onClear,
@@ -305,7 +357,12 @@ function DayEditor({
 }: {
   day: string
   shift: Shift | null
-  answer: Availability | null
+  /** What was tapped for THIS date, if anything. Only this can be withdrawn. */
+  override: Availability | null
+  /** What the day comes to once the usual week is taken into account. */
+  effective: EffectiveAvailability | null
+  /** The usual-week answer for this weekday, if there is one. */
+  usual: AvailabilityPattern | null
   busy: boolean
   onSave: (
     day: string,
@@ -317,18 +374,24 @@ function DayEditor({
   onClear: (day: string) => Promise<void>
   onClose: () => void
 }): JSX.Element {
-  const [status, setStatus] = useState<AvailabilityStatus>(answer?.status ?? 'available')
-  const [startTime, setStartTime] = useState(answer?.startTime ?? '')
-  const [endTime, setEndTime] = useState(answer?.endTime ?? '')
-  const [note, setNote] = useState(answer?.note ?? '')
+  // Pre-filled from whatever the day currently comes to, INCLUDING the usual
+  // week. Opening a Monday somebody normally works and finding the form set to
+  // "cannot" would invite them to save the opposite of what they meant.
+  const [status, setStatus] = useState<AvailabilityStatus>(effective?.status ?? 'available')
+  const [startTime, setStartTime] = useState(effective?.startTime ?? '')
+  const [endTime, setEndTime] = useState(effective?.endTime ?? '')
+  const [note, setNote] = useState(effective?.note ?? '')
 
   return (
     <div className="rota-add-panel">
       <div className="rota-add-head">
         <Icon name="CalendarPlus" size={15} />
         <b>{dayLabel(day)}</b>
-        {shift && (
-          <span className="ob-sub">On the rota · {shiftTimeLabel(shift)}</span>
+        {shift && <span className="ob-sub">On the rota · {shiftTimeLabel(shift)}</span>}
+        {!shift && effective?.source === 'pattern' && (
+          <span className="ob-sub">
+            {availabilityLabel(effective)} — from your usual week
+          </span>
         )}
         <button className="rota-x" onClick={onClose} title="Close">
           <Icon name="X" size={14} />
@@ -338,7 +401,7 @@ function DayEditor({
       {/* A shift you already said no to is the one thing on this screen that
           needs saying in words rather than a colour — the person to fix it is a
           lead, not the packer reading this. */}
-      {shift && answer?.status === 'unavailable' && (
+      {shift && effective?.status === 'unavailable' && (
         <div className="sched-clash">
           <Icon name="AlertTriangle" size={15} />
           <span>
@@ -405,11 +468,16 @@ function DayEditor({
         >
           Save
         </Button>
-        {/* Only when there IS something to take back. "Clear" on a day nobody
-            has answered is a button that can only tell you it did nothing. */}
-        {answer && (
+        {/* Only when there IS an override to take back. On a day that only has
+            a usual-week answer this would do nothing — and the honest label for
+            withdrawing an exception is "go back to my usual week", not "clear",
+            because clearing is not what happens. */}
+        {override && (
           <Button variant="secondary" size="sm" disabled={busy} onClick={() => void onClear(day)}>
-            Say nothing
+            {/* Withdrawing an exception falls back to the usual week when there
+                is one, and to silence when there is not. The label has to say
+                which, or half the time it describes the wrong outcome. */}
+            {usual ? 'Back to my usual week' : 'Say nothing'}
           </Button>
         )}
       </div>
