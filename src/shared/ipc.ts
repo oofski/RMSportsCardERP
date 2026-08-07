@@ -186,6 +186,14 @@ export const IPC = {
   remindersCreate: 'reminders:create',
   remindersSetStatus: 'reminders:set-status',
   remindersDelete: 'reminders:delete',
+  // The other half of the home board: a person's own checklist. Every one of
+  // these is scoped to the caller by the handler — there is no operation that
+  // names whose list to touch.
+  todosList: 'todos:list',
+  todoCreate: 'todos:create',
+  todoSetDone: 'todos:set-done',
+  todoDelete: 'todos:delete',
+  todosClearDone: 'todos:clear-done',
   shipDocument: 'shipping:document',
   shipDocumentBytes: 'shipping:document:bytes',
   shipDocumentArrival: 'shipping:document:arrival',

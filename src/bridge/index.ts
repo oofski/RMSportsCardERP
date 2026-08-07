@@ -20,7 +20,7 @@
  */
 import { IPC, type AppInfo } from '@shared/ipc'
 import type { Permission } from '@shared/permissions'
-import type { NewReminder, OwnerBoard, Reminder } from '@shared/ownerDashboard'
+import type { NewReminder, OwnerBoard, Reminder, Todo } from '@shared/ownerDashboard'
 import type {
   ShipPickAdvanced,
   ShipStationBoard,
@@ -936,7 +936,24 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       setReminderStatus: (id: string, status: 'open' | 'done'): Promise<Result<Reminder>> =>
         ipcRenderer.invoke(IPC.remindersSetStatus, { id, status }),
       deleteReminder: (id: string): Promise<Result<boolean>> =>
-        ipcRenderer.invoke(IPC.remindersDelete, id)
+        ipcRenderer.invoke(IPC.remindersDelete, id),
+
+      /**
+       * The caller's OWN to-do list.
+       *
+       * None of these names whose list to touch. The owner id is taken from the
+       * session inside the handler, which is what makes "your list" a property
+       * of the operation rather than of the argument somebody remembered to
+       * pass.
+       */
+      todos: (): Promise<Todo[]> => ipcRenderer.invoke(IPC.todosList),
+      addTodo: (body: string): Promise<Result<Todo>> => ipcRenderer.invoke(IPC.todoCreate, body),
+      setTodoDone: (id: string, done: boolean): Promise<Result<Todo>> =>
+        ipcRenderer.invoke(IPC.todoSetDone, { id, done }),
+      deleteTodo: (id: string): Promise<Result<{ id: string }>> =>
+        ipcRenderer.invoke(IPC.todoDelete, id),
+      clearDoneTodos: (): Promise<Result<{ cleared: number }>> =>
+        ipcRenderer.invoke(IPC.todosClearDone)
     },
     updates: {
       getStatus: (): Promise<UpdateStatus> => ipcRenderer.invoke(IPC.updatesGetStatus),

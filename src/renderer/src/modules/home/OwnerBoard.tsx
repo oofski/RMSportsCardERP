@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { OwnerBoard as Board, OwnerPnlWindow, Reminder } from '@shared/ownerDashboard'
-import { REMINDER_MAX_LENGTH } from '@shared/ownerDashboard'
+import type { OwnerBoard as Board, OwnerPnlWindow, Reminder, Todo } from '@shared/ownerDashboard'
+import { REMINDER_MAX_LENGTH, TODO_MAX_LENGTH } from '@shared/ownerDashboard'
 import { api } from '../../lib/api'
 import { useSession } from '../../lib/session'
 import { useChrome } from '../../lib/chrome'
@@ -8,7 +8,7 @@ import { LIVE, useLiveRefresh } from '../../lib/live'
 import { Icon } from '../../components/Icon'
 import { Button } from '../../components/ui'
 import { useToast } from '../../components/Toast'
-import { formatMoney } from '../../lib/format'
+import { formatHours, formatMoney } from '../../lib/format'
 
 /**
  * The owner's board: every side of the business, above the fold.
@@ -43,8 +43,17 @@ export function OwnerBoard(): JSX.Element | null {
     setReminders(r)
   }, [canInbox])
 
+  // Every family the six cards read, not just two of them. The gaps were real:
+  // without `purchasing` a case received on the warehouse laptop left the
+  // incoming list stale, and without `finance` an overnight ledger import on
+  // another machine never reached the owner's morning numbers at all — which is
+  // the one thing this page exists to show.
   useLiveRefresh(LIVE.inventory, load)
   useLiveRefresh(LIVE.shipping, load)
+  useLiveRefresh(LIVE.purchasing, load)
+  useLiveRefresh(LIVE.finance, load)
+  useLiveRefresh(LIVE.people, load)
+  useLiveRefresh(LIVE.notes, load)
 
   useEffect(() => {
     let active = true
@@ -61,12 +70,32 @@ export function OwnerBoard(): JSX.Element | null {
   }, [load])
 
   if (!loaded || !board) return null
-  // Somebody with no finance, no invoicing, no inventory and no streaming has
-  // nothing to put here — the ordinary home page is a better screen for them
-  // than a grid of empty boxes.
-  const anything =
-    board.whatnot || board.payables || board.inventory || board.schedule || canInbox
-  if (!anything) return null
+  // Somebody whose permissions reach none of the sections has nothing to put
+  // here — an empty grid is a worse screen than no grid.
+  //
+  // THE TO-DO LIST IS NOT PART OF THAT TEST, and this is the whole bug the gate
+  // had: it listed four sections, was written before three more existed, and so
+  // a packer on the Shipping role — whose "orders to ship" card main had
+  // already built and sent down — got a blank page. Their own checklist went
+  // with it, though nothing gates a checklist but being signed in.
+  const anySection =
+    board.whatnot ||
+    board.payables ||
+    board.inventory ||
+    board.schedule ||
+    board.incoming ||
+    board.toShip ||
+    board.employeesToday ||
+    canInbox
+  if (!anySection) {
+    return (
+      <div className="ob">
+        <div className="ob-grid">
+          <TodoCard />
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="ob">
@@ -81,7 +110,80 @@ export function OwnerBoard(): JSX.Element | null {
         </button>
       )}
 
+      {/* THE SKETCH'S ORDER, and the order is the point. The top row is what
+          somebody has to DO today — stock arriving, packages going out, notes
+          people left him. The second row is how the business is doing. Money
+          above work would be a dashboard; work above money is a morning. */}
       <div className="ob-grid">
+        {board.incoming && (
+          <div className="ob-card">
+            <header onClick={() => navigate('inventory')}>
+              <Icon name="Truck" size={16} />
+              <h3>Incoming orders</h3>
+              <span className="ob-sub">
+                {board.incoming.orderCount === 0
+                  ? 'Nothing on the way'
+                  : `${board.incoming.units} unit${board.incoming.units === 1 ? '' : 's'} · ${formatMoney(board.incoming.value)}`}
+              </span>
+              <span className="ob-open">
+                Open <Icon name="ArrowRight" size={13} />
+              </span>
+            </header>
+            {board.incoming.items.length > 0 ? (
+              <ul className="ob-mini">
+                {board.incoming.items.map((o) => (
+                  <li key={o.id}>
+                    <span className="ob-mini-name">{o.title}</span>
+                    <span className="ob-mini-qty">{o.detail}</span>
+                    <span className="ob-mini-val mono">{o.units}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="ob-empty">Nothing on its way in.</p>
+            )}
+          </div>
+        )}
+
+        {board.toShip && (
+          <div className="ob-card">
+            <header onClick={() => navigate('fulfillment')}>
+              <Icon name="Package" size={16} />
+              <h3>Orders to ship</h3>
+              <span className="ob-sub">
+                {!board.toShip.imported
+                  ? 'No slip imported'
+                  : board.toShip.remaining === 0
+                    ? 'All gone out'
+                    : `${board.toShip.remaining} still to go`}
+              </span>
+              <span className="ob-open">
+                Open <Icon name="ArrowRight" size={13} />
+              </span>
+            </header>
+            {board.toShip.items.length > 0 ? (
+              <ul className="ob-mini">
+                {board.toShip.items.map((o) => (
+                  <li key={o.customerId}>
+                    <span className="ob-mini-name">@{o.handle}</span>
+                    <span className="ob-mini-qty">{o.realName}</span>
+                    <span className="ob-mini-val mono">
+                      {o.cardsLeft}/{o.cardsTotal}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="ob-empty">
+                {board.toShip.imported
+                  ? 'Every package has gone out.'
+                  : "Nothing imported yet — upload tonight's packing slips."}
+              </p>
+            )}
+          </div>
+        )}
+
+        {canInbox && <Inbox reminders={reminders} onChanged={load} />}
         {board.whatnot && (
           <PnlCard
             title="Whatnot"
@@ -102,7 +204,7 @@ export function OwnerBoard(): JSX.Element | null {
             title="Wholesale"
             sub="Sold off-stream"
             icon="Package"
-            windows={[board.wholesale.week, board.wholesale.month]}
+            windows={[board.wholesale.today, board.wholesale.week, board.wholesale.month]}
             /* After fees, NOT after cost of goods — unlike the Whatnot card
                beside it, whose headline figure is net of the boxes. The two sit
                in the same place on the page, so the difference has to be said
@@ -134,6 +236,47 @@ export function OwnerBoard(): JSX.Element | null {
               </ul>
             )}
           </PnlCard>
+        )}
+
+        {board.employeesToday && (
+          <div className="ob-card">
+            <header onClick={() => navigate('timepay')}>
+              <Icon name="Users" size={16} />
+              <h3>Employees today</h3>
+              <span className="ob-sub">
+                {board.employeesToday.filter((e) => e.onTheClock).length} on the clock
+              </span>
+              <span className="ob-open">
+                Open <Icon name="ArrowRight" size={13} />
+              </span>
+            </header>
+            {board.employeesToday.length > 0 ? (
+              <ul className="ob-shows">
+                {board.employeesToday.map((e) => (
+                  <li key={e.id} data-live={e.onTheClock ? 'true' : 'false'}>
+                    <span className="ob-show-when">
+                      {formatHours(e.minutesToday)}
+                      <em>
+                        {e.since
+                          ? new Date(e.since).toLocaleTimeString([], {
+                              hour: 'numeric',
+                              minute: '2-digit'
+                            })
+                          : 'finished'}
+                      </em>
+                    </span>
+                    <span className="ob-show-title">{e.name}</span>
+                    {e.onTheClock && <span className="ob-flag" data-tone="ok">IN</span>}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              /* NOT a rota. Nothing in this app records who is DUE in — only who
+                 has clocked in — so an empty card says exactly that rather than
+                 implying nobody is coming. */
+              <p className="ob-empty">Nobody has clocked in yet today.</p>
+            )}
+          </div>
         )}
 
         {(board.payables || board.receivables) && (
@@ -272,8 +415,152 @@ export function OwnerBoard(): JSX.Element | null {
           </div>
         )}
 
-        {canInbox && <Inbox reminders={reminders} onChanged={load} />}
+        <TodoCard />
       </div>
+    </div>
+  )
+}
+
+/**
+ * The owner's own checklist, full width beneath the two rows of tiles.
+ *
+ * Its own component with its own fetch, deliberately: it is the one card on this
+ * page that is not a view of something else, so it has nothing to gain from the
+ * board's single round trip and everything to lose from being coupled to it —
+ * ticking a box must not re-read the whole business.
+ *
+ * Everybody gets one. There is no permission on it because there is nothing to
+ * gate: it is your list, scoped to you by the handler, and a packer keeping
+ * three lines on it costs nobody anything.
+ */
+function TodoCard(): JSX.Element {
+  const toast = useToast()
+  const [items, setItems] = useState<Todo[]>([])
+  const [draft, setDraft] = useState('')
+  const [busy, setBusy] = useState(false)
+  /** The row with a call in flight. A second click on the same X used to reach
+   *  a row that was already gone and raise "that task is no longer on your
+   *  list" — an error toast for an action that worked. */
+  const [pending, setPending] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    setItems(await api.owner.todos())
+  }, [])
+
+  useLiveRefresh(LIVE.notes, load)
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  const add = async (): Promise<void> => {
+    const body = draft.trim()
+    if (!body || busy) return
+    setBusy(true)
+    try {
+      const res = await api.owner.addTodo(body)
+      if (!res.ok) {
+        toast.error(res.error ?? 'Could not add that.')
+        return
+      }
+      setDraft('')
+      await load()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const toggle = async (todo: Todo): Promise<void> => {
+    if (pending) return
+    setPending(todo.id)
+    try {
+      const res = await api.owner.setTodoDone(todo.id, !todo.done)
+      if (!res.ok) toast.error(res.error ?? 'That did not save.')
+      await load()
+    } finally {
+      setPending(null)
+    }
+  }
+
+  const remove = async (todo: Todo): Promise<void> => {
+    if (pending) return
+    setPending(todo.id)
+    try {
+      const res = await api.owner.deleteTodo(todo.id)
+      if (!res.ok) toast.error(res.error ?? 'Could not remove that.')
+      await load()
+    } finally {
+      setPending(null)
+    }
+  }
+
+  const clearDone = async (): Promise<void> => {
+    const res = await api.owner.clearDoneTodos()
+    if (!res.ok) toast.error(res.error ?? 'Could not clear those.')
+    await load()
+  }
+
+  const openCount = items.filter((t) => !t.done).length
+
+  return (
+    <div className="ob-card ob-span">
+      <header>
+        <Icon name="ListChecks" size={16} />
+        <h3>To-do list</h3>
+        <span className="ob-sub">
+          {openCount === 0 ? 'Nothing outstanding' : `${openCount} to do`}
+        </span>
+        {items.some((t) => t.done) && (
+          <button className="ob-todo-clear" onClick={() => void clearDone()}>
+            Clear ticked
+          </button>
+        )}
+      </header>
+
+      <div className="ob-todo-add">
+        <input
+          value={draft}
+          maxLength={TODO_MAX_LENGTH}
+          placeholder="Payroll, upload packing slips, call the supplier…"
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') void add()
+          }}
+        />
+        <Button size="sm" icon="Plus" loading={busy} disabled={!draft.trim()} onClick={() => void add()}>
+          Add
+        </Button>
+      </div>
+
+      {items.length > 0 ? (
+        <ul className="ob-rem">
+          {items.map((t) => (
+            <li key={t.id} data-done={t.done ? 'true' : 'false'}>
+              <button
+                className="ob-rem-tick"
+                disabled={pending === t.id}
+                title={t.done ? 'Put it back on the list' : 'Tick it off'}
+                onClick={() => void toggle(t)}
+              >
+                <Icon name={t.done ? 'CheckCircle2' : 'Circle'} size={16} />
+              </button>
+              <span className="ob-rem-body">
+                <span className="ob-rem-text">{t.body}</span>
+              </span>
+              <button
+                className="ob-rem-tick"
+                disabled={pending === t.id}
+                title="Remove"
+                onClick={() => void remove(t)}
+              >
+                <Icon name="X" size={14} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="ob-empty">Nothing on the list. Add the first thing above.</p>
+      )}
     </div>
   )
 }

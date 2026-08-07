@@ -20,6 +20,7 @@ mkdirSync(DIR, { recursive: true })
 const { getDb } = require('../src/main/db/database')
 const owner = require('../src/main/db/ownerDashboard')
 const reminders = require('../src/main/db/reminders')
+const todos = require('../src/main/db/todos')
 const { sortReminders, validateReminder, REMINDER_MAX_LENGTH } = require('../src/shared/ownerDashboard')
 getDb()
 
@@ -35,8 +36,22 @@ const ok = (c: boolean, n: string, e = ''): void => {
   }
 }
 
-const ALL = { finance: true, invoicing: true, inventory: true, streaming: true }
-const NONE = { finance: false, invoicing: false, inventory: false, streaming: false }
+const ALL = {
+  finance: true,
+  invoicing: true,
+  inventory: true,
+  streaming: true,
+  fulfillment: true,
+  hours: true
+}
+const NONE = {
+  finance: false,
+  invoicing: false,
+  inventory: false,
+  streaming: false,
+  fulfillment: false,
+  hours: false
+}
 
 // ---------------------------------------------------------------------------
 console.log('=== 1. permissions decide what exists, not what is zero ===')
@@ -216,6 +231,195 @@ ok(
   Math.abs(board.inventory.stockValue - Math.round(stats.totalCost * 100) / 100) < 0.005,
   'and so does the value at cost',
   `${board.inventory?.stockValue} vs ${stats.totalCost}`
+)
+
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 8. the new cards on the home board ===')
+// ---------------------------------------------------------------------------
+// The sketch asked for six cards. Three of them read data that was already on
+// the board; three needed adding, and each has to obey the rule the rest of the
+// board obeys — null when the caller may not see it, never zero.
+const blank = owner.getOwnerBoard(NONE)
+ok(blank.incoming === null, 'no inventory permission, no incoming list', JSON.stringify(blank.incoming))
+ok(blank.toShip === null, 'no fulfillment permission, no orders to ship', JSON.stringify(blank.toShip))
+ok(blank.employeesToday === null, 'and no hours permission, no team list', JSON.stringify(blank.employeesToday))
+// A zero here would be a claim about the business. These are three different
+// statements and the board must not collapse them into one.
+const board8 = owner.getOwnerBoard(ALL)
+ok(
+  board8.incoming !== null && Array.isArray(board8.incoming.items),
+  'with permission it is a list, even an empty one',
+  JSON.stringify(board8.incoming)
+)
+// Purchase orders AND hand-logged shipments, folded. Either one alone answers a
+// different question from the one the owner is asking.
+ok(
+  owner.getOwnerBoard({ ...NONE, invoicing: true }).incoming !== null,
+  'invoicing alone still sees the purchase orders coming in'
+)
+ok(
+  owner.getOwnerBoard({ ...NONE, inventory: true }).incoming !== null,
+  'and inventory alone still sees the hand-logged ones'
+)
+ok(board8.toShip !== null && typeof board8.toShip.remaining === 'number', 'to-ship carries the room total')
+ok(Array.isArray(board8.employeesToday), 'and the team list is a list')
+
+// Wholesale gained a TODAY window, because "did we make anything last night" is
+// not answerable from a seven-day figure.
+ok(board8.wholesale === null || !!board8.wholesale.today, 'wholesale has a daily window')
+if (board8.wholesale) {
+  ok(board8.wholesale.today.days === 1, 'covering one day', String(board8.wholesale.today.days))
+  ok(board8.wholesale.today.label === 'Today', 'and saying so', board8.wholesale.today.label)
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 9. who is in today ===')
+// ---------------------------------------------------------------------------
+// Written straight in rather than through insertEmployee: this test is about
+// who is IN today, and a password hash is not part of that question.
+const workerId = 'emp_dana'
+const madeAt = new Date().toISOString()
+getDb()
+  .prepare(
+    `INSERT INTO employees
+       (id, company_id, first_name, last_name, email, role, status, created_at, updated_at)
+     VALUES (?, 'RM-DANA', 'Dana', 'Brooks', 'dana@none.invalid', 'staff', 'active', ?, ?)`
+  )
+  .run(workerId, madeAt, madeAt)
+ok(!!getDb().prepare('SELECT 1 FROM employees WHERE id = ?').get(workerId), 'an employee to clock in')
+
+const noneYet = owner.getOwnerBoard(ALL).employeesToday
+ok(
+  !noneYet.some((e: any) => e.id === workerId),
+  'somebody who has not clocked in is not "in today"'
+)
+
+// THE TIMEZONE CASE, pinned because it is invisible for most of the day.
+// Clock times are stored as UTC ISO strings, so matching their first ten
+// characters against a LOCAL date is right until the evening and then wrong —
+// in Chicago a 7:30pm clock-in stores as tomorrow's UTC date and would drop off
+// tonight's card. The warehouse works evenings.
+const eveningIso = (() => {
+  const d = new Date()
+  d.setHours(19, 30, 0, 0)
+  return d.toISOString()
+})()
+getDb()
+  .prepare(
+    `INSERT INTO time_entries (id, employee_id, clock_in, clock_out, note, source, created_at)
+     VALUES ('te_evening', ?, ?, NULL, NULL, 'clock', ?)`
+  )
+  .run(workerId, eveningIso, eveningIso)
+ok(
+  owner.getOwnerBoard(ALL).employeesToday.some((e: any) => e.id === workerId),
+  'somebody who clocked in this evening is in today, whatever UTC calls it',
+  eveningIso
+)
+getDb().prepare(`DELETE FROM time_entries WHERE id = 'te_evening'`).run()
+
+
+// An OPEN entry — clocked in, still here. This is the half of the card that
+// matters at 8am, and it is a fact rather than a rota: nothing in this app
+// records who is DUE in, only who arrived.
+const nowIso = new Date().toISOString()
+getDb()
+  .prepare(
+    `INSERT INTO time_entries (id, employee_id, clock_in, clock_out, note, source, created_at)
+     VALUES ('te_open_1', ?, ?, NULL, NULL, 'clock', ?)`
+  )
+  .run(workerId, nowIso, nowIso)
+const withOpen = owner.getOwnerBoard(ALL).employeesToday
+const dana = withOpen.find((e: any) => e.id === workerId)
+ok(!!dana, 'they appear once clocked in', JSON.stringify(withOpen))
+ok(dana?.onTheClock === true, 'and are marked on the clock')
+ok(dana?.since === nowIso, 'with the time they started', String(dana?.since))
+ok(dana?.name === 'Dana Brooks', 'under their own name', String(dana?.name))
+ok(withOpen[0]?.id === workerId, 'and sort first, because they are standing here')
+
+// A CLOSED entry the same day adds to the total rather than creating a second
+// person — somebody who clocks out for lunch is still one person.
+const outIso = new Date(Date.now() - 60 * 60 * 1000).toISOString()
+const inIso = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString()
+getDb()
+  .prepare(
+    `INSERT INTO time_entries (id, employee_id, clock_in, clock_out, note, source, created_at)
+     VALUES ('te_closed_1', ?, ?, ?, NULL, 'clock', ?)`
+  )
+  .run(workerId, inIso, outIso, inIso)
+const merged = owner.getOwnerBoard(ALL).employeesToday.filter((e: any) => e.id === workerId)
+ok(merged.length === 1, 'two entries, one person', String(merged.length))
+ok(merged[0].minutesToday >= 120, 'and the day adds up', String(merged[0].minutesToday))
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 10. the to-do list is per person and never named in a call ===')
+// ---------------------------------------------------------------------------
+// A to-do is NOT a reminder. A reminder is the floor writing to the owner and
+// carries who sent it; a to-do is what somebody told themselves to do. Keeping
+// them apart is what stops a screen that cannot tell a request from a plan.
+const mine = todos.createTodo('emp_me', 'Payroll')
+todos.createTodo('emp_me', 'Upload packing slips')
+todos.createTodo('emp_someone_else', 'Not yours')
+
+const list = todos.listTodos('emp_me')
+ok(list.length === 2, 'my list holds mine', String(list.length))
+ok(
+  !list.some((t: any) => t.body === 'Not yours'),
+  "and nobody else's"
+)
+ok(list[0].body === 'Payroll', 'oldest first, so nothing falls off the bottom', list[0].body)
+
+ok(todos.setTodoDone('emp_me', mine.id, true)?.done === true, 'ticking works')
+const ticked = todos.listTodos('emp_me')
+ok(ticked[ticked.length - 1].id === mine.id, 'and a ticked line sinks')
+ok(ticked[ticked.length - 1].doneAt !== null, 'carrying when it was ticked')
+// Un-ticking must clear the timestamp: "when was this finished" has no answer
+// for something that is not finished, and a stale one sorts it among the done.
+ok(todos.setTodoDone('emp_me', mine.id, false)?.doneAt === null, 'un-ticking clears the time')
+
+// THE ONE THAT MATTERS. Every operation is scoped to the caller, so somebody
+// else's id cannot reach my row even with the right todo id in hand.
+ok(todos.setTodoDone('emp_someone_else', mine.id, true) === null, 'another person cannot tick my task')
+ok(todos.deleteTodo('emp_someone_else', mine.id) === false, 'nor delete it')
+ok(todos.listTodos('emp_me').some((t: any) => t.id === mine.id), 'and it is still on my list')
+
+ok(todos.deleteTodo('emp_me', mine.id) === true, 'but I can delete it')
+ok(todos.listTodos('emp_me').length === 1, 'leaving the rest', String(todos.listTodos('emp_me').length))
+
+// Both tables travel now. Reminders did NOT, which meant a note written at the
+// bench never reached the laptop it was written for.
+const { SYNCED_BY_TABLE } = require('../src/main/db/syncTables')
+ok(SYNCED_BY_TABLE.has('reminders'), 'reminders sync, so the inbox actually arrives')
+ok(SYNCED_BY_TABLE.has('todos'), 'and a list follows the person between machines')
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 11. the board is built for the person looking at it ===')
+// ---------------------------------------------------------------------------
+// A packer on the Shipping role carries module.fulfillment and nothing else on
+// this board. Main built their "orders to ship" card and sent it down — and the
+// screen threw it away, because the render gate listed four sections and was
+// written before three more existed. The one card their job depends on, gone.
+const packer = owner.getOwnerBoard({ ...NONE, fulfillment: true })
+ok(packer.toShip !== null, 'a packer gets the card their job needs', JSON.stringify(packer.toShip))
+ok(packer.whatnot === null, 'and none of the money')
+ok(packer.employeesToday === null, 'and not the team list either')
+
+// The purchase-order half of "incoming" follows the gate on poIncomingBoxes,
+// which is inventory OR invoicing — an inventory user WATCHES these land, which
+// is the whole reason that operation is open to them. Gating it on invoicing
+// alone told a Staff account "nothing on the way" while the Inventory screen
+// two clicks away listed the same purchase orders arriving.
+const staffish = owner.getOwnerBoard({ ...NONE, inventory: true })
+ok(staffish.incoming !== null, 'inventory alone still gets the incoming card')
+const invoicingOnly = owner.getOwnerBoard({ ...NONE, invoicing: true })
+ok(invoicingOnly.incoming !== null, 'and so does invoicing alone')
+
+// An empty shipping table is "nobody has imported a slip", not "the floor is
+// clear" — and the second is reassurance the data does not support.
+ok(
+  typeof packer.toShip?.imported === 'boolean',
+  'the card can tell an empty night from a finished one',
+  JSON.stringify(packer.toShip)
 )
 
 console.log(`\n${pass} passed, ${fail} failed\n`)

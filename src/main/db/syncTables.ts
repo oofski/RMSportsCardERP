@@ -137,8 +137,27 @@ export const SYNCED_TABLES: SyncedTable[] = [
   { table: 'inventory_resets', key: ['id'], tier: 0 },
   { table: 'qbo_sync_log', key: ['id'], tier: 0 },
   { table: 'intake_links', key: ['id'], tier: 0 },
+  // The owner's inbox, and it had to start travelling. Every reminder is a note
+  // somebody on the floor wrote FOR HIM — and until now it stayed on the machine
+  // it was typed on, so a packer sending "we are out of team bags" from the
+  // bench was writing into a box the owner's laptop could not see. A message
+  // that does not arrive is worse than no message box at all.
+  //
+  // Last-write-wins arbitrates nothing dangerous here: a reminder is a whole
+  // authored fact under a UUID nobody else mints, and the only field two people
+  // can move is `status`, where the later write — somebody marked it done — is
+  // exactly the answer wanted.
+  { table: 'reminders', key: ['id'], tier: 0 },
 
   // Tier 1 — children of a tier-0 row.
+  // One person's own checklist. Tier 1: it belongs to an employee.
+  //
+  // Safe under last-write-wins by construction — each row has exactly one author
+  // and one reader, so the relay only ever compares a row against an older copy
+  // of ITSELF from the same person's other machine. That is also what makes it
+  // worth syncing at all: a list that only exists on the laptop it was typed on
+  // is a list somebody keeps twice.
+  { table: 'todos', key: ['id'], tier: 1 },
   { table: 'time_entries', key: ['id'], tier: 1 },
   { table: 'inventory_transactions', key: ['id'], tier: 1 },
   { table: 'inventory_incoming', key: ['id'], tier: 1 },

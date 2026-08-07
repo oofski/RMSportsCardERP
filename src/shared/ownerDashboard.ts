@@ -60,6 +60,9 @@ export interface OwnerWhatnotPnl {
  * break spot arrive in one file and are told apart by the classifier.
  */
 export interface OwnerWholesalePnl {
+  /** Today alone. Added because the owner's morning question is "did we make
+   *  anything last night", and a 7-day window cannot answer it. */
+  today: OwnerPnlWindow
   week: OwnerPnlWindow
   month: OwnerPnlWindow
   /** Distinct products sold outright this month. */
@@ -123,6 +126,68 @@ export interface OwnerInventorySnapshot {
   supplyNegativeCount: number
 }
 
+/**
+ * A case or box on its way in.
+ *
+ * The owner's morning question is "what is arriving", not "what is the total
+ * value of open purchase orders" — so this is the SHIPMENTS, soonest first, with
+ * enough on each line to recognise it. The count lives in the inventory snapshot
+ * already; this is the list the sketch asked for.
+ */
+export interface OwnerIncomingOrder {
+  id: string
+  /** A purchase order, or a shipment somebody logged by hand. */
+  source: 'po' | 'manual'
+  /** The PO number, or the product name for a hand-logged row. */
+  title: string
+  detail: string
+  /** Distinct products still outstanding on it. */
+  itemCount: number
+  units: number
+  /** What the outstanding units cost — the basis the lots will open at. */
+  value: number
+}
+
+/**
+ * A package still to leave the building.
+ *
+ * Named by the customer, because that is how the floor talks about them, and
+ * counted by cards left so the owner can see whether it is nearly done or
+ * untouched. Held packages are EXCLUDED: a lead stopping a package is a decision
+ * that it is not tonight's work, and a morning list that includes it invites
+ * somebody to work it anyway.
+ */
+export interface OwnerOrderToShip {
+  customerId: string
+  handle: string
+  realName: string
+  cardsLeft: number
+  cardsTotal: number
+}
+
+/**
+ * Somebody who is at work today.
+ *
+ * `onTheClock` is the one that matters at 8am — it is a fact, from an open time
+ * entry. `minutesToday` is what they have already logged, which is how a person
+ * who came in and went home again is told apart from one who never arrived.
+ *
+ * THIS IS NOT A ROTA. The app has no schedule table: nothing anywhere records
+ * who is DUE in, only who has clocked in. So this card answers "who is here"
+ * honestly rather than answering "who is going to be in" by guessing, and the
+ * day it needs to answer the second one, that is a shift-scheduling feature with
+ * its own table and its own screen.
+ */
+export interface OwnerEmployeeToday {
+  id: string
+  name: string
+  role: string
+  onTheClock: boolean
+  /** When they clocked in, for whoever is currently on. */
+  since: string | null
+  minutesToday: number
+}
+
 export interface OwnerBoard {
   /** Null when the viewer cannot see the finance module. */
   whatnot: OwnerWhatnotPnl | null
@@ -134,6 +199,16 @@ export interface OwnerBoard {
   inventory: OwnerInventorySnapshot | null
   /** Null when the viewer cannot see streaming. */
   schedule: OwnerScheduleItem[] | null
+  /**
+   * Stock on its way in. Purchase orders AND hand-logged shipments folded
+   * together, because either one alone is a different question from the one the
+   * owner is asking. Null when the viewer can see neither module.
+   */
+  incoming: { items: OwnerIncomingOrder[]; orderCount: number; units: number; value: number } | null
+  /** Null when the viewer cannot see the fulfillment module. */
+  toShip: { items: OwnerOrderToShip[]; remaining: number; imported: boolean } | null
+  /** Null when the viewer cannot see the team's hours. */
+  employeesToday: OwnerEmployeeToday[] | null
   generatedAt: string
 }
 
@@ -203,6 +278,60 @@ export function sortReminders(list: Reminder[]): Reminder[] {
     if (a.status !== b.status) return a.status === 'open' ? -1 : 1
     if (a.status === 'open' && a.urgent !== b.urgent) return a.urgent ? -1 : 1
     if (a.status === 'done') return (b.doneAt ?? '').localeCompare(a.doneAt ?? '')
+    return a.createdAt.localeCompare(b.createdAt)
+  })
+}
+
+// ---------------------------------------------------------------------------
+// The to-do list — the other thing on this board nobody derived
+// ---------------------------------------------------------------------------
+
+/**
+ * One line on somebody's own checklist.
+ *
+ * Deliberately NOT a Reminder, and the distinction is the whole design. A
+ * reminder is an INBOX: the floor writes it, it carries who sent it, and the
+ * owner's job is to deal with it. A to-do is what he told HIMSELF to do —
+ * payroll, hire a breaker, call the supplier. Folding the two into one list
+ * would produce a screen that cannot tell a request apart from a plan, and the
+ * first thing anybody would ask of it is "who put this here".
+ *
+ * One list per person. A shared list would put "Payroll" in front of every
+ * packer and a packer's own list in front of the owner; it also means each row
+ * has exactly one author, which is what makes it safe to sync.
+ */
+export interface Todo {
+  id: string
+  body: string
+  done: boolean
+  createdAt: string
+  doneAt: string | null
+}
+
+/** Longest a to-do may be. A paragraph is a project, not a line on a list. */
+export const TODO_MAX_LENGTH = 200
+
+export function validateTodo(body: string): string | null {
+  const text = (body ?? '').trim()
+  if (!text) return 'Write the task first.'
+  if (text.length > TODO_MAX_LENGTH) {
+    return `Keep it under ${TODO_MAX_LENGTH} characters — this is ${text.length}.`
+  }
+  return null
+}
+
+/**
+ * Open first, then oldest first; done ones sink, most recently ticked at the top
+ * of that group.
+ *
+ * The same rule the reminders use, and for the same reason: the thing that has
+ * sat longest is the thing most likely to be forgotten, so it rises. A list
+ * whose purpose is that nothing falls off the bottom must not be a stack.
+ */
+export function sortTodos(list: Todo[]): Todo[] {
+  return [...list].sort((a, b) => {
+    if (a.done !== b.done) return a.done ? 1 : -1
+    if (a.done) return (b.doneAt ?? '').localeCompare(a.doneAt ?? '')
     return a.createdAt.localeCompare(b.createdAt)
   })
 }

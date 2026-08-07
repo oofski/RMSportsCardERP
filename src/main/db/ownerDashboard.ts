@@ -1,6 +1,9 @@
 import type {
   OwnerBoard,
+  OwnerEmployeeToday,
+  OwnerIncomingOrder,
   OwnerInventorySnapshot,
+  OwnerOrderToShip,
   OwnerPayable,
   OwnerPnlWindow,
   OwnerReceivables,
@@ -13,7 +16,8 @@ import { deriveSaleFee } from '@shared/financeStreaming'
 import { getDb } from './database'
 import { streamingFinanceView } from './financeStreaming'
 import { rateLookup } from './whatnotRates'
-import { listPurchaseOrders } from './purchaseOrders'
+import { listActivePurchaseOrderBoxes, listPurchaseOrders } from './purchaseOrders'
+import { listIncoming } from './incoming'
 import { inventoryStats } from './inventory'
 import { supplyStats } from './supplies'
 import { nowIso } from '../util'
@@ -186,6 +190,7 @@ function wholesalePnl(): OwnerWholesalePnl | null {
     .all(monthFrom) as Array<{ name: string | null; pid: string | null; units: number; revenue: number }>
 
   return {
+    today: win(localDay(new Date()), 'Today', 1),
     week: win(weekFrom, 'Last 7 days', 7),
     month: win(monthFrom, 'Last 30 days', 30),
     productCount: rows.length,
@@ -322,11 +327,225 @@ function schedule(): OwnerScheduleItem[] {
   }))
 }
 
+/**
+ * Stock on its way in.
+ *
+ * BOTH sources, folded, because neither alone answers the question. The
+ * hand-logged shipments in `inventory_incoming` miss every purchase order, which
+ * is where the money is; the purchase orders miss anything somebody logged by
+ * hand. The Inventory dashboard already folds them exactly this way — see
+ * summariseIncoming in InventoryOverview.tsx — and this follows it line for
+ * line so the two screens cannot report different totals.
+ *
+ * OUTSTANDING units, not ordered units. A part-scanned purchase order has
+ * already put some of its boxes on a shelf, and counting those again would say
+ * stock is arriving that is already here.
+ */
+function incomingOrders(scope: {
+  inventory: boolean
+  invoicing: boolean
+}): { items: OwnerIncomingOrder[]; orderCount: number; units: number; value: number } {
+  const orders: OwnerIncomingOrder[] = []
+
+  // Inventory OR invoicing, matching the gate on IPC.poIncomingBoxes — an
+  // inventory user watches these shipments land, which is the whole reason that
+  // operation is open to them. Gating this half on invoicing alone told a Staff
+  // account "nothing on the way" while the Inventory screen two clicks away
+  // listed four purchase orders arriving.
+  if (scope.invoicing || scope.inventory) {
+    for (const po of listActivePurchaseOrderBoxes()) {
+      const open = po.lines.filter((l) => l.qtyOutstanding > 0)
+      const units = open.reduce((n, l) => n + l.qtyOutstanding, 0)
+      if (units <= 0) continue
+      orders.push({
+        id: po.id,
+        source: 'po',
+        title: po.poNumber,
+        detail: `${po.supplier || 'No supplier'} → ${po.location}`,
+        itemCount: open.length,
+        units,
+        value: money(open.reduce((sum, l) => sum + l.qtyOutstanding * l.unitPrice, 0))
+      })
+    }
+  }
+
+  // Gated separately, and deliberately: invoicing can see purchase orders and
+  // has no claim on what somebody logged against the inventory module.
+  if (scope.inventory) {
+    for (const shipment of listIncoming()) {
+      if (shipment.quantity <= 0) continue
+      orders.push({
+        id: shipment.id,
+        source: 'manual',
+        title: shipment.productName,
+        detail: `→ ${shipment.location}${shipment.expectedDate ? ` · ${shipment.expectedDate}` : ''}`,
+        itemCount: 1,
+        units: shipment.quantity,
+        value: money(shipment.quantity * (shipment.unitCost ?? 0))
+      })
+    }
+  }
+
+  // Biggest commitment first — that is the one worth chasing. Sorting by
+  // expected date is tempting and wrong: purchase_orders carries no expected
+  // date at all, so every PO would fall into one undated bucket at the bottom.
+  orders.sort((a, b) => b.value - a.value || b.units - a.units)
+  return {
+    items: orders.slice(0, 5),
+    orderCount: orders.length,
+    units: orders.reduce((n, o) => n + o.units, 0),
+    value: money(orders.reduce((n, o) => n + o.value, 0))
+  }
+}
+
+/**
+ * Packages still to go out.
+ *
+ * TWO QUERIES, not listOrders(). The obvious implementation reads the same rows
+ * the floor's walk reads, which is right for fidelity and wrong for a landing
+ * screen: listOrders builds a context that reads every ship_customers row AND
+ * every ship_team_slots row, and the bench counters beside it run a claims query
+ * PER PACKAGE. On a two-hundred-package night that is two whole-table scans and
+ * two hundred queries, on the screen that has to paint first.
+ *
+ * The extra fidelity those buy — live claims, stale leases, send-backs — is real
+ * and belongs on the bench board that acts on it. An owner glancing at "what is
+ * left to go out" does not need to know which bench is holding one.
+ *
+ * ship_shipments holds exactly one live dataset, because an import clears and
+ * replaces it, so a plain aggregate over that table IS tonight's packages.
+ */
+function ordersToShip(): { items: OwnerOrderToShip[]; remaining: number; imported: boolean } {
+  const db = getDb()
+  const counts = db
+    .prepare(
+      `SELECT COUNT(*) AS all_rows,
+              SUM(CASE WHEN COALESCE(on_hold, 0) = 0 AND packed_at IS NULL THEN 1 ELSE 0 END) AS open_rows
+         FROM ship_shipments`
+    )
+    .get() as { all_rows: number; open_rows: number | null }
+
+  const rows = db
+    .prepare(
+      `SELECT s.customer_id AS cid, c.whatnot_handle AS handle, c.real_name AS name,
+              COALESCE(SUM(CASE WHEN t.checked_off = 1 THEN 1 ELSE 0 END), 0) AS done,
+              COUNT(t.id) AS total
+         FROM ship_shipments s
+         JOIN ship_customers c ON c.id = s.customer_id
+         LEFT JOIN ship_team_slots t ON t.customer_id = s.customer_id
+        WHERE COALESCE(s.on_hold, 0) = 0 AND s.packed_at IS NULL
+        GROUP BY s.customer_id, c.whatnot_handle, c.real_name
+        ORDER BY (COUNT(t.id) - COALESCE(SUM(CASE WHEN t.checked_off = 1 THEN 1 ELSE 0 END), 0)) DESC,
+                 c.whatnot_handle
+        LIMIT 5`
+    )
+    .all() as Array<{
+    cid: string
+    handle: string | null
+    name: string | null
+    done: number
+    total: number
+  }>
+
+  return {
+    // An empty table is "no packing slip has been imported", which is a
+    // completely different sentence from "every package has gone out" — and the
+    // second one is reassurance the data does not support. The card needs to be
+    // able to tell them apart.
+    imported: counts.all_rows > 0,
+    remaining: counts.open_rows ?? 0,
+    items: rows.map((r) => ({
+      customerId: r.cid,
+      handle: r.handle || r.cid,
+      realName: r.name || '',
+      cardsLeft: Math.max(0, r.total - r.done),
+      cardsTotal: r.total
+    }))
+  }
+}
+
+/**
+ * Who is at work today.
+ *
+ * Built from time entries that START today, which is the only record this app
+ * has of somebody being in. There is no rota anywhere — see the note on
+ * OwnerEmployeeToday — so this answers "who is here" and does not pretend to
+ * answer "who is due".
+ *
+ * On the clock first, then most hours logged: at 8am the useful half of this
+ * card is the people currently standing in the building.
+ */
+function employeesToday(): OwnerEmployeeToday[] {
+  // LOCAL midnight, expressed as the UTC instant it happened — which is what
+  // every other "today" in this app compares against (see startOfToday in
+  // main/ipc.ts, feeding the clock widget).
+  //
+  // NOT `substr(clock_in, 1, 10) = <today>`. Clock times are stored as UTC ISO
+  // strings, so the first ten characters are the UTC date, and matching them
+  // against a local one is right for about two-thirds of the day and wrong for
+  // the rest: in Chicago, somebody clocking in at 7:30pm is stored as
+  // 2026-08-08T00:30:00Z and would drop off tonight's card and reappear on
+  // tomorrow's. The evening is exactly when this warehouse is busy.
+  const dayStart = new Date()
+  dayStart.setHours(0, 0, 0, 0)
+  const from = dayStart.toISOString()
+  const rows = getDb()
+    .prepare(
+      `SELECT e.id AS id, e.first_name AS first, e.last_name AS last, e.role AS role,
+              t.clock_in AS clock_in, t.clock_out AS clock_out
+         FROM time_entries t
+         JOIN employees e ON e.id = t.employee_id
+        WHERE t.clock_in >= ?
+          AND e.status != 'disabled'`
+    )
+    .all(from) as Array<{
+    id: string
+    first: string | null
+    last: string | null
+    role: string
+    clock_in: string
+    clock_out: string | null
+  }>
+
+  const byPerson = new Map<string, OwnerEmployeeToday>()
+  for (const r of rows) {
+    const existing = byPerson.get(r.id)
+    const person: OwnerEmployeeToday = existing ?? {
+      id: r.id,
+      name: `${r.first ?? ''} ${r.last ?? ''}`.trim() || 'Someone',
+      role: r.role,
+      onTheClock: false,
+      since: null,
+      minutesToday: 0
+    }
+    if (r.clock_out) {
+      const mins = (new Date(r.clock_out).getTime() - new Date(r.clock_in).getTime()) / 60000
+      if (Number.isFinite(mins) && mins > 0) person.minutesToday += Math.round(mins)
+    } else {
+      // Still open. The running time counts too, or somebody who clocked in an
+      // hour ago reads as having done nothing.
+      person.onTheClock = true
+      person.since = person.since && person.since < r.clock_in ? person.since : r.clock_in
+      const mins = (Date.now() - new Date(r.clock_in).getTime()) / 60000
+      if (Number.isFinite(mins) && mins > 0) person.minutesToday += Math.round(mins)
+    }
+    byPerson.set(r.id, person)
+  }
+
+  return [...byPerson.values()].sort((a, b) => {
+    if (a.onTheClock !== b.onTheClock) return a.onTheClock ? -1 : 1
+    if (b.minutesToday !== a.minutesToday) return b.minutesToday - a.minutesToday
+    return a.name.localeCompare(b.name)
+  })
+}
+
 export interface OwnerBoardScope {
   finance: boolean
   invoicing: boolean
   inventory: boolean
   streaming: boolean
+  fulfillment: boolean
+  hours: boolean
 }
 
 export function getOwnerBoard(scope: OwnerBoardScope): OwnerBoard {
@@ -337,6 +556,9 @@ export function getOwnerBoard(scope: OwnerBoardScope): OwnerBoard {
     payables: scope.invoicing ? payables() : null,
     inventory: scope.inventory ? inventorySnapshot() : null,
     schedule: scope.streaming ? schedule() : null,
+    incoming: scope.inventory || scope.invoicing ? incomingOrders(scope) : null,
+    toShip: scope.fulfillment ? ordersToShip() : null,
+    employeesToday: scope.hours ? employeesToday() : null,
     generatedAt: nowIso()
   }
 }

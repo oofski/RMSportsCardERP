@@ -1866,6 +1866,33 @@ function migrate(database: Database.Database): void {
   // moment the paper is actually wanted.
   setMeta(database, 'schema_version', '46')
 
+  // v47: the to-do list on the home page.
+  //
+  // A checklist somebody keeps for themselves — payroll, hire a breaker, call
+  // the supplier — and deliberately NOT the same thing as `reminders`, which is
+  // an inbox: notes the floor sends TO the owner, carrying who sent them. One is
+  // "somebody asked me to"; the other is "I said I would". Folding them into one
+  // table would mean a screen that cannot tell a request apart from a plan.
+  //
+  // PER PERSON, keyed by owner_id. A single shared list would put "Payroll" in
+  // front of every packer, and a packer's own list in front of the owner. Each
+  // row therefore has exactly one author and one reader, which is also what makes
+  // it safe to sync: last-write-wins only ever compares a row against an older
+  // copy of ITSELF, from the same person, on their other machine.
+  database.exec(
+    `CREATE TABLE IF NOT EXISTS todos (
+       id         TEXT PRIMARY KEY,
+       owner_id   TEXT NOT NULL,
+       body       TEXT NOT NULL,
+       done       INTEGER NOT NULL DEFAULT 0,
+       created_at TEXT NOT NULL,
+       updated_at TEXT NOT NULL,
+       done_at    TEXT
+     );
+     CREATE INDEX IF NOT EXISTS idx_todos_owner ON todos (owner_id, done, created_at);`
+  )
+  setMeta(database, 'schema_version', '47')
+
   // Seed the product catalog once, then apply the on-hand snapshot once.
   seedCatalogIfNeeded(database)
   seedSnapshotIfNeeded(database)

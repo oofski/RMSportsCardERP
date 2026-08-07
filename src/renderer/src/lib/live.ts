@@ -75,6 +75,16 @@ export const LIVE = {
     'inventory_transactions'
   ],
   people: ['employees', 'time_entries'],
+
+  /**
+   * The owner's inbox and the to-do list beside it on the home page.
+   *
+   * Both tables travel between machines and neither had a key here, so a note
+   * typed at the bench did not reach the home page until it was remounted — the
+   * one card on the board whose entire purpose is to be read the moment
+   * somebody writes to it.
+   */
+  notes: ['reminders', 'todos'],
   activity: ['audit_log', 'inventory_transactions'],
   intake: ['intake_links', 'intake_submissions']
 } as const

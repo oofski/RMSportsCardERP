@@ -1507,7 +1507,8 @@ table.data tfoot .data-total td {
   flex-shrink: 0;
 }
 .qa-chip:hover .qa-ico {
-  background: #fff;
+  /* Was #fff, which flashed a white square on a navy card in dark mode. */
+  background: var(--surface);
 }
 .qa-chip .qa-t {
   font-size: 13px;
@@ -17012,7 +17013,12 @@ button.sor-team:focus-visible {
 
 .ob-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  /* 300, not 320. The arithmetic matters: at the app's own default 1280 window
+     the content box is 974px after the 244 sidebar, the 52 of padding and the
+     10px scrollbar — and three 320 tracks with two 12 gaps need 984. So the
+     sketch's row of three silently rendered as two. 300 gives three from 912
+     up, and .content-narrow's 1180 cap means it can never reach four. */
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   gap: 12px;
 }
 .ob-card {
@@ -17228,6 +17234,17 @@ button.sor-team:focus-visible {
 }
 .ob-flag[data-tone='danger'] b {
   color: var(--danger-strong);
+}
+/* "IN" on the Employees Today card. Tokenised rather than copying .ob-live,
+   which paints #fff on --danger — about 4:1 in light and worse in dark. */
+.ob-flag[data-tone='ok'] {
+  flex: 0 0 auto;
+  background: var(--success-bg);
+  color: var(--success-strong);
+  font-size: 9.5px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  padding: 2px 8px;
 }
 
 .ob-shows {
@@ -18005,4 +18022,85 @@ button.sor-team:focus-visible {
   .fin-rate-check-row .field {
     width: 100%;
   }
+}
+
+
+/* ---------------------------------------------------------------------------
+   The to-do list, full width under the two rows of tiles
+   --------------------------------------------------------------------------- */
+
+/* Spans whatever track count the row happens to have — three on a desktop, one
+   in a narrow browser tab — without a breakpoint needing to know about it.
+   It must be LAST in .ob-grid: auto-placement carries on after a spanning item,
+   so anything following it would start a fresh row of its own. */
+.ob-card.ob-span {
+  grid-column: 1 / -1;
+}
+
+/* Same rows as the Reminders card beside it; this only changes how many sit
+   side by side, because a four-item list down the middle of a 1180px card is
+   mostly empty card. The hairline has to move: in a grid `li + li` also matches
+   the second and third cell of the FIRST row, and would rule the top of items
+   with nothing above them. */
+.ob-span .ob-rem {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 0 22px;
+  max-height: none;
+}
+.ob-span .ob-rem li + li {
+  border-top: none;
+}
+.ob-span .ob-rem li {
+  border-bottom: 1px solid var(--border);
+}
+
+/* Adding a line. .ob-card carries no padding of its own — every child brings
+   its own gutter — so this states it rather than inheriting one. */
+.ob-todo-add {
+  display: flex;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.ob-todo-add input {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 10px;
+  font-size: 13.5px;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.ob-todo-add input:focus {
+  outline: none;
+  border-color: var(--brand-400);
+}
+.ob-todo-add input::placeholder {
+  color: var(--text-3);
+}
+
+/* The to-do row ends with a delete button, which no other .ob-rem list does —
+   the Inbox rows finish with their body. Without this the body shrinks to its
+   text and the X lands at a different x on every line, moving as somebody
+   types. */
+.ob-span .ob-rem .ob-rem-body {
+  flex: 1 1 auto;
+}
+
+/* "Clear ticked", in the card header beside the count. */
+.ob-todo-clear {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-3);
+  font-size: 11px;
+  cursor: pointer;
+}
+.ob-todo-clear:hover {
+  color: var(--text-2);
+  border-color: var(--border-strong);
 }
