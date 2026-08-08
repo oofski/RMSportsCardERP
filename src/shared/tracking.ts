@@ -220,13 +220,54 @@ export function trackingTone(status: ShipStatusCode | null): 'ok' | 'warn' | 'li
 export function trackingSummary(
   status: ShipStatusCode | null,
   checkedAt: string | null,
-  nowMs: number
+  nowMs: number,
+  /** Set when the LAST attempt failed, even if an older reading succeeded. */
+  error?: string | null,
+  attemptedAt?: string | null
 ): string {
-  const label = status ? TRACKING_LABELS[status] : 'Not checked yet'
-  if (!checkedAt) return label
-  const ms = nowMs - Date.parse(checkedAt)
-  if (!Number.isFinite(ms) || ms < 0) return label
-  return `${label} · checked ${humanAge(ms)}`
+  const label = status ? TRACKING_LABELS[status] : null
+
+  // A status we actually have, whether or not the newest attempt failed. Said
+  // first because it is the useful fact; the failure is appended as a caveat
+  // rather than replacing it.
+  if (label && checkedAt) {
+    const age = ageOf(checkedAt, nowMs)
+    const base = age ? `${label} · checked ${age}` : label
+    // A stale reading with a failing check behind it must SAY so — otherwise
+    // the age quietly stops advancing and nobody notices for a week.
+    return error ? `${base} · check failing` : base
+  }
+  if (label) return label
+
+  // Nothing has ever been read. Distinguish "not tried" from "tried and could
+  // not": one is waiting, the other is broken, and they need different people.
+  if (error) {
+    const age = ageOf(attemptedAt ?? null, nowMs)
+    return age ? `Could not read the carrier page · tried ${age}` : 'Could not read the carrier page'
+  }
+  return 'Not checked yet'
+}
+
+function ageOf(iso: string | null, nowMs: number): string | null {
+  if (!iso) return null
+  const ms = nowMs - Date.parse(iso)
+  if (!Number.isFinite(ms) || ms < 0) return null
+  return humanAge(ms)
+}
+
+/**
+ * The tone for a line that has never produced a reading.
+ *
+ * A failing check is amber, not grey: it is a thing somebody has to look at,
+ * and rendering it the same as "not checked yet" is how a broken feature sits
+ * unnoticed behind a quiet-looking card.
+ */
+export function trackingLineTone(
+  status: ShipStatusCode | null,
+  error: string | null | undefined
+): 'ok' | 'warn' | 'live' | 'idle' {
+  if (!status && error) return 'warn'
+  return trackingTone(status)
 }
 
 export function humanAge(ms: number): string {

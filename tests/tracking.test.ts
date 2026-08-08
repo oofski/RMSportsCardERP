@@ -17,9 +17,12 @@
  *      showing an earlier event must not walk a delivered package back to in
  *      transit, because that word decides whether somebody opens a claim.
  *
- *   4. A FAILED READ WRITES NOTHING — not even the timestamp. A status that
+ *   4. A FAILED READ NEVER TOUCHES THE STATUS or `checkedAt`. A status that
  *      kept its old value but got a fresh "checked just now" would claim the
- *      carrier confirmed something it never said.
+ *      carrier confirmed something it never said. The ATTEMPT is recorded
+ *      separately, so a card can distinguish "nobody has checked yet" from "we
+ *      checked and the carrier refused" — a blank card cannot, and those two
+ *      need different reactions from a person.
  *
  *   5. FINISHED PACKAGES ARE LEFT ALONE. Delivered and returned cannot change,
  *      and re-reading them every hour spends the whole budget on pages with no
@@ -38,6 +41,7 @@ const {
   looksUnreadable,
   parseTrackingStatus,
   shouldAdvance,
+  trackingLineTone,
   trackingSummary,
   trackingTone
 } = require('../src/shared/tracking')
@@ -194,6 +198,39 @@ ok(humanAge(30_000) === 'just now', 'under a minute')
 ok(humanAge(5 * 60_000) === '5 min ago', 'minutes')
 ok(humanAge(3 * 3_600_000) === '3h ago', 'hours')
 ok(humanAge(2 * 86_400_000) === '2d ago', 'days')
+
+// THE BLANK-CARD BUG. A card that renders nothing cannot tell "nobody has
+// checked yet" from "we checked and the carrier refused" — and those need
+// different reactions from a person. Every one of these is a distinct sentence.
+ok(
+  trackingSummary(null, null, NOW, 'FedEx refused the read', '2026-08-08T11:55:00.000Z') ===
+    'Could not read the carrier page · tried 5 min ago',
+  'a failed check with no status says so, and when it tried',
+  trackingSummary(null, null, NOW, 'x', '2026-08-08T11:55:00.000Z')
+)
+ok(
+  trackingSummary(null, null, NOW) === 'Not checked yet',
+  'and "never tried" is a different sentence from "tried and failed"'
+)
+// A STATUS WE HAVE still leads, with the failure as a caveat — the useful fact
+// first. Without the caveat the age quietly stops advancing and nobody notices.
+ok(
+  trackingSummary('in_transit', '2026-08-08T10:00:00.000Z', NOW, 'blocked', '2026-08-08T11:59:00.000Z') ===
+    'In transit · checked 2h ago · check failing',
+  'an old reading behind a failing check says both',
+  trackingSummary('in_transit', '2026-08-08T10:00:00.000Z', NOW, 'blocked', '2026-08-08T11:59:00.000Z')
+)
+ok(
+  !trackingSummary('in_transit', '2026-08-08T11:58:00.000Z', NOW).includes('failing'),
+  'and a working check says nothing about failing'
+)
+
+// A failing check with nothing to show is AMBER, not grey: it is a thing
+// somebody has to look at, and rendering it like "not checked yet" is how a
+// broken feature sits unnoticed behind a quiet-looking card.
+ok(trackingLineTone(null, 'blocked') === 'warn', 'a failing check with no status is amber')
+ok(trackingLineTone(null, null) === 'idle', 'and not-yet-checked stays quiet')
+ok(trackingLineTone('delivered', 'blocked') === 'ok', 'a delivered package stays green')
 
 ok(trackingTone('delivered') === 'ok', 'delivered is green')
 ok(trackingTone('exception') === 'warn', 'an exception wants attention')

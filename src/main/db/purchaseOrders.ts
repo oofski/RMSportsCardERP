@@ -41,6 +41,8 @@ interface PoRow {
   tracking_status_detail: string | null
   tracking_status_at: string | null
   tracking_checked_at: string | null
+  tracking_error: string | null
+  tracking_attempted_at: string | null
 }
 
 interface PoLineRow {
@@ -86,7 +88,9 @@ function toSummary(row: PoHeaderRow): PurchaseOrder {
     trackingStatus: asShipStatus(row.tracking_status),
     trackingStatusDetail: row.tracking_status_detail ?? null,
     trackingStatusAt: row.tracking_status_at ?? null,
-    trackingCheckedAt: row.tracking_checked_at ?? null
+    trackingCheckedAt: row.tracking_checked_at ?? null,
+    trackingError: row.tracking_error ?? null,
+    trackingAttemptedAt: row.tracking_attempted_at ?? null
   }
 }
 
@@ -112,6 +116,7 @@ const PO_SELECT = `
          po.ordered_at, po.paid_at, po.received_at, po.cancelled_at, po.scanned_at,
          po.carrier, po.service, po.tracking_number, po.payment_timing,
          po.tracking_status, po.tracking_status_detail, po.tracking_status_at, po.tracking_checked_at,
+         po.tracking_error, po.tracking_attempted_at,
          (SELECT COUNT(*) FROM purchase_order_lines l WHERE l.po_id = po.id) AS line_count,
          (SELECT COUNT(*) FROM purchase_order_lines l
            WHERE l.po_id = po.id AND l.qty_received >= l.quantity) AS received_line_count,

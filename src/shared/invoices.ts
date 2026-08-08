@@ -197,6 +197,10 @@ export interface Invoice {
   trackingStatusDetail: string | null
   trackingStatusAt: string | null
   trackingCheckedAt: string | null
+  /** Why the LAST attempt failed, if it did. Null once one succeeds. */
+  trackingError: string | null
+  /** When we last ASKED — distinct from checkedAt, which means we got an answer. */
+  trackingAttemptedAt: string | null
   createdBy: string | null
   createdAt: string
   updatedAt: string

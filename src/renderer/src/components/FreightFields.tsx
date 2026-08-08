@@ -9,7 +9,7 @@ import {
   trackingUrl
 } from '@shared/freight'
 import type { ShipStatusCode } from '@shared/shippingTypes'
-import { trackingSummary, trackingTone } from '@shared/tracking'
+import { trackingLineTone, trackingSummary } from '@shared/tracking'
 import { api } from '../lib/api'
 import { Icon } from './Icon'
 import { Button, Checkbox, Field, Input, Select } from './ui'
@@ -81,33 +81,47 @@ export function FreightLine({
 /**
  * What the carrier last said, and how long ago it said it.
  *
- * The AGE is part of the sentence rather than a tooltip on it. This status is
- * read off the carrier's own page on a schedule, and pages get restructured and
- * reads get refused — so a status with no age invites somebody to trust a
- * reading from Tuesday as though it were from this morning. "In transit ·
- * checked 12 min ago" answers the question and its follow-up at once.
+ * ALWAYS RENDERED once an order has a tracking number, even before anything has
+ * been read. It used to render nothing until a reading succeeded, and a blank
+ * space where a status belongs cannot tell "nobody has checked yet" from "we
+ * checked and the carrier refused" from "this build is too old to have the
+ * feature". Those need three different reactions, and an empty gap gives no
+ * clue which one you are looking at.
  *
- * Renders nothing when nothing has ever been read, rather than "unknown" on
- * every card: a row of unknowns is a row nobody scans for the real answers.
+ * The AGE is part of the sentence rather than a tooltip on it. This is scraped
+ * from the carrier's own page on a schedule, not fetched from an API — pages
+ * get restructured and reads get refused — so a status with no age invites
+ * somebody to trust Tuesday's reading as this morning's. A status that HAS a
+ * reading but whose latest check is failing says both: "In transit · checked
+ * 2h ago · check failing".
  */
 export function TrackingLine({
   status,
   checkedAt,
-  detail
+  detail,
+  error,
+  attemptedAt,
+  /** No tracking number means nothing to track — then, and only then, silent. */
+  hasTracking = true
 }: {
   status: ShipStatusCode | null
   checkedAt: string | null
   /** The carrier's own sentence, shown on hover so the parse is checkable. */
   detail?: string | null
+  error?: string | null
+  attemptedAt?: string | null
+  hasTracking?: boolean
 }): JSX.Element | null {
-  if (!status && !checkedAt) return null
+  if (!hasTracking) return null
   return (
     <div
-      className={`track-chip ${trackingTone(status)}`}
-      title={detail ?? undefined}
+      className={`track-chip ${trackingLineTone(status, error)}`}
+      // The carrier's own words when we have them; the failure when we do not.
+      // Either way the hover explains what the line is based on.
+      title={detail ?? error ?? undefined}
     >
       <span className="track-dot" aria-hidden="true" />
-      <span>{trackingSummary(status, checkedAt, Date.now())}</span>
+      <span>{trackingSummary(status, checkedAt, Date.now(), error, attemptedAt)}</span>
     </div>
   )
 }

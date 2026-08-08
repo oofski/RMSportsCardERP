@@ -9,9 +9,16 @@
  *
  * ## Rules that are not negotiable
  *
- * A FAILED READ WRITES NOTHING. Not the status, not the timestamp. If a status
- * kept its old value but got a fresh "checked just now", the screen would claim
- * the carrier confirmed something it never said.
+ * A FAILED READ NEVER TOUCHES THE STATUS, nor `checked_at`. If a status kept
+ * its old value but got a fresh "checked just now", the screen would claim the
+ * carrier confirmed something it never said.
+ *
+ * It DOES record the attempt, separately: `attempted_at` means "we asked",
+ * `checked_at` means "we got an answer". Writing nothing at all left the card
+ * blank, and a blank card cannot tell "nobody has checked yet" from "we checked
+ * and the carrier refused" — which need different reactions from a person. A
+ * successful read clears the error, or one bad afternoon would leave "check
+ * failing" on the card for the rest of the shipment's life.
  *
  * STATUS ONLY MOVES FORWARD. Carriers post late scans, and a page briefly
  * showing an earlier event must not walk a delivered package back to in
@@ -91,6 +98,10 @@ function writeStatus(
               tracking_status_detail = @detail,
               tracking_status_at = @at,
               tracking_checked_at = @at,
+              -- Cleared on success, or "check failing" would stick to the card
+              -- for the rest of the shipment's life after one bad read.
+              tracking_error = NULL,
+              tracking_attempted_at = @at,
               updated_at = @at
         WHERE id = @id`
     )
@@ -122,7 +133,11 @@ export async function sweepTracking(force = false): Promise<SweepResult> {
   for (const row of due) {
     const read = await readTracking(row.carrier, row.trackingNumber ?? '')
     if (!read.ok || !read.status) {
-      // NOTHING IS WRITTEN. Not even the timestamp — see the note at the top.
+      // The STATUS is untouched — that rule stands. But the attempt is
+      // recorded, because a card that shows nothing cannot tell "nobody has
+      // checked" from "we checked and the carrier refused", and those need
+      // different reactions from a person.
+      writeFailure(row.table, row.id, read.error ?? 'Could not read the carrier page.')
       failed++
     } else if (shouldAdvance(row.status, read.status)) {
       writeStatus(row.table, row.id, read.status, read.detail)
@@ -139,10 +154,23 @@ export async function sweepTracking(force = false): Promise<SweepResult> {
   return { checked: due.length, updated, failed, error: null }
 }
 
+/** Record that we asked and could not get an answer. Never touches the status. */
+function writeFailure(table: Row['table'], id: string, error: string): void {
+  getDb()
+    .prepare(
+      `UPDATE ${table} SET tracking_error = ?, tracking_attempted_at = ? WHERE id = ?`
+    )
+    .run(error, new Date().toISOString(), id)
+}
+
 function touchChecked(table: Row['table'], id: string): void {
   getDb()
-    .prepare(`UPDATE ${table} SET tracking_checked_at = ? WHERE id = ?`)
-    .run(new Date().toISOString(), id)
+    .prepare(
+      `UPDATE ${table}
+          SET tracking_checked_at = ?, tracking_attempted_at = ?, tracking_error = NULL
+        WHERE id = ?`
+    )
+    .run(new Date().toISOString(), new Date().toISOString(), id)
 }
 
 // ---------------------------------------------------------------------------

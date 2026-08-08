@@ -851,6 +851,10 @@ export interface PurchaseOrder {
   trackingStatusDetail: string | null
   trackingStatusAt: string | null
   trackingCheckedAt: string | null
+  /** Why the LAST attempt failed, if it did. Null once one succeeds. */
+  trackingError: string | null
+  /** When we last ASKED — distinct from checkedAt, which means we got an answer. */
+  trackingAttemptedAt: string | null
 }
 
 /** A PO with its line items (detail view + receipt). */

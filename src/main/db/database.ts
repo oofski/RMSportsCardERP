@@ -2233,6 +2233,24 @@ function migrate(database: Database.Database): void {
   }
   setMeta(database, 'schema_version', '56')
 
+  // v57: why the last read failed, and when it was attempted.
+  //
+  // A failed read still writes nothing to the STATUS — that rule stands, and it
+  // is what keeps a working answer from being replaced by a bad afternoon at a
+  // carrier. But writing nothing at all left the card blank, and a blank card
+  // cannot tell "nobody has checked yet" from "we checked and FedEx refused".
+  // Those need different reactions from a person, so they are now different
+  // things on screen.
+  //
+  // Separate from tracking_checked_at on purpose: `checked_at` means "we got an
+  // answer", `attempted_at` means "we asked". Merging them would make a card
+  // claim the carrier confirmed something it never said.
+  for (const table of ['purchase_orders', 'invoices']) {
+    addColumnIfMissing(database, table, 'tracking_error', 'TEXT')
+    addColumnIfMissing(database, table, 'tracking_attempted_at', 'TEXT')
+  }
+  setMeta(database, 'schema_version', '57')
+
   // Payroll, once, for whoever owns the company.
   //
   // Seeded rather than left to be typed because the owner named it, named its

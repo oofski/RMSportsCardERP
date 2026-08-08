@@ -359,6 +359,9 @@ function InvoiceCard({
         status={invoice.trackingStatus}
         checkedAt={invoice.trackingCheckedAt}
         detail={invoice.trackingStatusDetail}
+        error={invoice.trackingError}
+        attemptedAt={invoice.trackingAttemptedAt}
+        hasTracking={!!invoice.trackingNumber}
       />
 
       <div className="po-card-foot" onClick={(e) => e.stopPropagation()}>

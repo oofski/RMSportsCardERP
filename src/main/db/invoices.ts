@@ -243,6 +243,8 @@ interface InvoiceRow {
   tracking_status_detail: string | null
   tracking_status_at: string | null
   tracking_checked_at: string | null
+  tracking_error: string | null
+  tracking_attempted_at: string | null
   created_by: string | null
   created_at: string
   updated_at: string
@@ -295,6 +297,8 @@ function toInvoice(r: InvoiceRow): Invoice {
     trackingStatusDetail: r.tracking_status_detail ?? null,
     trackingStatusAt: r.tracking_status_at ?? null,
     trackingCheckedAt: r.tracking_checked_at ?? null,
+    trackingError: r.tracking_error ?? null,
+    trackingAttemptedAt: r.tracking_attempted_at ?? null,
     createdBy: r.created_by,
     createdAt: r.created_at,
     updatedAt: r.updated_at
@@ -321,7 +325,7 @@ const INVOICE_COLS = `id, invoice_number, customer_id, customer_name, email, ter
                       qbo_id, qbo_doc_number, qbo_synced_at, total, paid_at, paid_by,
                       carrier, service, tracking_number, payment_timing,
                       tracking_status, tracking_status_detail, tracking_status_at,
-                      tracking_checked_at,
+                      tracking_checked_at, tracking_error, tracking_attempted_at,
                       created_by, created_at, updated_at`
 
 /** Newest first — an invoice list is read from the top. */

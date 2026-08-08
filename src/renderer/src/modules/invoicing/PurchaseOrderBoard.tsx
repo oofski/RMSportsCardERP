@@ -240,6 +240,9 @@ function PoCard({
         status={po.trackingStatus}
         checkedAt={po.trackingCheckedAt}
         detail={po.trackingStatusDetail}
+        error={po.trackingError}
+        attemptedAt={po.trackingAttemptedAt}
+        hasTracking={!!po.trackingNumber}
       />
       {(moves.length > 0 || deletable) && (
         <div className="po-card-foot" onClick={(e) => e.stopPropagation()}>
