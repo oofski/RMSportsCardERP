@@ -20033,3 +20033,16 @@ button.sor-team:focus-visible {
 .track-chip.live .track-dot {
   background: var(--brand-500);
 }
+
+/* The PO header's buttons, as one group.
+   They used to be loose flex children after a margin-left:auto stats block, so
+   wrapping split them one at a time and a third button could push the primary
+   action onto its own line or past the right edge. Grouped, they wrap together
+   and stay findable. */
+.po-page-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}

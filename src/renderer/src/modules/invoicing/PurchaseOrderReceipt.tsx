@@ -50,7 +50,7 @@ export function PurchaseOrderReceipt({
 }): JSX.Element {
   const toast = useToast()
   const [detail, setDetail] = useState<PurchaseOrderDetail | null>(null)
-  const [pdfBusy, setPdfBusy] = useState<'open' | 'save' | null>(null)
+  const [pdfBusy, setPdfBusy] = useState(false)
 
   useEffect(() => {
     let active = true
@@ -103,39 +103,22 @@ export function PurchaseOrderReceipt({
               Delete
             </Button>
           )}
-          <Button
-            icon="Save"
-            loading={pdfBusy === 'save'}
-            disabled={pdfBusy !== null}
-            onClick={async () => {
-              setPdfBusy('save')
-              try {
-                const res = await api.purchaseOrders.savePdf(detail.id)
-                // A cancelled save dialog is not a failure — say nothing.
-                if (!res.ok && !res.canceled) {
-                  toast.error(res.error ?? 'Could not save the PDF.')
-                } else if (res.ok) {
-                  toast.success('PDF saved.')
-                }
-              } finally {
-                setPdfBusy(null)
-              }
-            }}
-          >
-            Save PDF
-          </Button>
+          {/* One PDF button, not two. Opening the document already offers Save
+              in the viewer — on the desktop and in the browser alike — so a
+              separate Save button was a second way to do a thing the first way
+              already did, taking up the widest row on the receipt. */}
           <Button
             variant="primary"
             icon="FileText"
-            loading={pdfBusy === 'open'}
-            disabled={pdfBusy !== null}
+            loading={pdfBusy}
+            disabled={pdfBusy}
             onClick={async () => {
-              setPdfBusy('open')
+              setPdfBusy(true)
               try {
                 const res = await api.purchaseOrders.openPdf(detail.id)
                 if (!res.ok) toast.error(res.error ?? 'Could not open the PDF.')
               } finally {
-                setPdfBusy(null)
+                setPdfBusy(false)
               }
             }}
           >

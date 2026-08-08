@@ -224,30 +224,36 @@ export function InvoicingModule(): JSX.Element {
               <span className="po-page-stat-label">Committed</span>
             </div>
           </div>
-          {/* SHOWN AND DISABLED, not hidden. A button that disappears when there
-              are no supplies teaches nothing — somebody looking for "where do I
-              order supplies" finds nothing at all and concludes the app cannot.
-              Disabled with the reason on it answers the question instead. */}
-          {canManageSupplies && (
-            <Button
-              icon="Package"
-              disabled={supplies.length === 0}
-              title={
-                supplies.length === 0
-                  ? 'Add a supply on the Inventory → Supplies tab first — an order has to be for something.'
-                  : undefined
-              }
-              onClick={() => setNewSupplyOpen(true)}
-            >
-              New supply order
-            </Button>
-          )}
-          {canManage && <CheckTrackingButton onDone={reload} />}
-          {canManage && (
-            <Button variant="primary" icon="Plus" onClick={() => setShowCreate(true)}>
-              New PO
-            </Button>
-          )}
+          {/* The actions travel together. Loose siblings after a margin-left:auto
+              stats block wrapped one at a time, so a third button pushed New PO
+              onto its own line — or off the edge on a narrow window, which is
+              how somebody ends up unable to find a button that is right there. */}
+          <div className="po-page-actions">
+            {/* SHOWN AND DISABLED, not hidden. A button that disappears when there
+                are no supplies teaches nothing — somebody looking for "where do I
+                order supplies" finds nothing at all and concludes the app cannot.
+                Disabled with the reason on it answers the question instead. */}
+            {canManageSupplies && (
+              <Button
+                icon="Package"
+                disabled={supplies.length === 0}
+                title={
+                  supplies.length === 0
+                    ? 'Add a supply on the Inventory → Supplies tab first — an order has to be for something.'
+                    : undefined
+                }
+                onClick={() => setNewSupplyOpen(true)}
+              >
+                New supply order
+              </Button>
+            )}
+            {canManage && <CheckTrackingButton onDone={reload} />}
+            {canManage && (
+              <Button variant="primary" icon="Plus" onClick={() => setShowCreate(true)}>
+                New PO
+              </Button>
+            )}
+          </div>
         </div>
 
         {pos.length === 0 && supplyOrders.length === 0 ? (
