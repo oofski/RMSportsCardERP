@@ -2038,6 +2038,90 @@ function migrate(database: Database.Database): void {
   )
   setMeta(database, 'schema_version', '51')
 
+  // v52: invoices — the SELL side, and the mirror image of a purchase order.
+  //
+  // A PO is money committed to a supplier. An invoice is money owed TO this
+  // business: a buyer, what they bought, the price agreed, a total. Same shape,
+  // opposite direction.
+  //
+  // THE COLUMNS ARE INTUIT'S. The owner supplied QuickBooks' own invoice-import
+  // template, and its fields are modelled here verbatim — not because a CSV
+  // should drive a schema, but because those columns ARE an invoice as
+  // QuickBooks understands one, and the whole purpose of this module is to
+  // produce something QuickBooks will accept. Inventing a different set and
+  // mapping it afterwards is how an export ends up with a column nobody can
+  // fill in.
+  database.exec(
+    `CREATE TABLE IF NOT EXISTS invoice_customers (
+       id         TEXT PRIMARY KEY,
+       name       TEXT NOT NULL,
+       email      TEXT,
+       terms      TEXT NOT NULL DEFAULT 'Net 30',
+       location   TEXT,
+       class_name TEXT,
+       message    TEXT,
+       notes      TEXT,
+       qbo_id     TEXT,
+       active     INTEGER NOT NULL DEFAULT 1,
+       created_at TEXT NOT NULL,
+       updated_at TEXT NOT NULL
+     );
+     CREATE INDEX IF NOT EXISTS idx_inv_cust_name ON invoice_customers (name);
+
+     -- customer_name is SNAPSHOTTED, not joined. A buyer renamed next year must
+     -- not silently rewrite a document that has already been sent: an invoice is
+     -- a record of what was said, not a view of who somebody is now. The id is
+     -- kept alongside so "their other invoices" still works, and is allowed to
+     -- go null when the buyer record is deleted.
+     CREATE TABLE IF NOT EXISTS invoices (
+       id             TEXT PRIMARY KEY,
+       invoice_number TEXT,
+       customer_id    TEXT,
+       customer_name  TEXT NOT NULL,
+       email          TEXT,
+       terms          TEXT NOT NULL DEFAULT 'Net 30',
+       invoice_date   TEXT NOT NULL,
+       due_date       TEXT NOT NULL,
+       location       TEXT,
+       memo           TEXT,
+       message        TEXT,
+       send_later     INTEGER NOT NULL DEFAULT 0,
+       class_name     TEXT,
+       status         TEXT NOT NULL DEFAULT 'draft',
+       qbo_id         TEXT,
+       qbo_doc_number TEXT,
+       qbo_synced_at  TEXT,
+       total          REAL NOT NULL DEFAULT 0,
+       created_by     TEXT,
+       created_at     TEXT NOT NULL,
+       updated_at     TEXT NOT NULL
+     );
+     CREATE INDEX IF NOT EXISTS idx_invoices_customer ON invoices (customer_id);
+     CREATE INDEX IF NOT EXISTS idx_invoices_date     ON invoices (invoice_date);
+     CREATE INDEX IF NOT EXISTS idx_invoices_number   ON invoices (invoice_number);
+
+     -- The amount column is stored rather than derived, and that is deliberate:
+     -- the agreed price is the fact and is ALLOWED to disagree with qty x rate.
+     -- A buyer talked down to a round number is a real thing on this floor, and
+     -- an invoice that silently recomputed it would quietly overcharge them.
+     CREATE TABLE IF NOT EXISTS invoice_lines (
+       id          TEXT PRIMARY KEY,
+       invoice_id  TEXT NOT NULL,
+       position    INTEGER NOT NULL DEFAULT 0,
+       item        TEXT NOT NULL,
+       description TEXT,
+       quantity    REAL NOT NULL DEFAULT 1,
+       rate        REAL NOT NULL DEFAULT 0,
+       amount      REAL NOT NULL DEFAULT 0,
+       tax_rate    TEXT,
+       class_name  TEXT,
+       created_at  TEXT NOT NULL,
+       updated_at  TEXT NOT NULL
+     );
+     CREATE INDEX IF NOT EXISTS idx_invoice_lines_inv ON invoice_lines (invoice_id, position);`
+  )
+  setMeta(database, 'schema_version', '52')
+
   // Payroll, once, for whoever owns the company.
   //
   // Seeded rather than left to be typed because the owner named it, named its

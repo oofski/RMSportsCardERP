@@ -97,6 +97,14 @@ export const LIVE = {
    * somebody writes to it.
    */
   notes: ['reminders', 'todos', 'recurring_tasks'],
+  /**
+   * Invoices and the people who buy from us.
+   *
+   * Its own key rather than a line in `purchasing`: the two boards are opposite
+   * sides of the business and a screen watching one has no reason to refetch
+   * when the other moves.
+   */
+  invoices: ['invoices', 'invoice_lines', 'invoice_customers'],
   activity: ['audit_log', 'inventory_transactions'],
   intake: ['intake_links', 'intake_submissions']
 } as const

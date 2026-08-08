@@ -18,6 +18,7 @@ import { registerFinanceIpc } from '../main/financeIpc'
 import { registerSyncIpc } from '../main/syncIpc'
 import { registerOwnerIpc } from '../main/ownerIpc'
 import { registerScheduleIpc } from '../main/scheduleIpc'
+import { registerInvoicesIpc } from '../main/invoicesIpc'
 import { initCloudSync, stopCloudSync } from '../main/services/cloudSync'
 import { collectClientActions, type PendingDownload } from './clientActions'
 import {
@@ -823,6 +824,7 @@ export function startServer(options: ServerOptions = {}): Server {
   // reminders inbox simply 404'd on the server while working on the desktop.
   registerOwnerIpc()
   registerScheduleIpc()
+  registerInvoicesIpc()
 
   // The three modules that push do it by walking the window list. Give them one
   // window whose `send` goes out over SSE, and they push to the browser without

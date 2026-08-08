@@ -125,6 +125,29 @@ export const IPC = {
   supplyOrderSetStatus: 'supplies:orders:set-status',
   supplyOrderDelete: 'supplies:orders:delete',
 
+  // Invoices — the SELL side, and the mirror image of a purchase order.
+  // Everything here is gated on `module.invoicing`, the same permission that
+  // raises a PO: somebody who may commit this business to paying a supplier may
+  // also bill a buyer. The three qbo* channels are the only ones that leave the
+  // machine, and `invoiceCreateInQbo` is the only one anywhere in this app that
+  // WRITES to somebody's accounting system.
+  invoiceCustomersList: 'invoices:customers:list',
+  invoiceCustomerSave: 'invoices:customers:save',
+  invoiceCustomerDelete: 'invoices:customers:delete',
+  invoicesList: 'invoices:list',
+  invoiceGet: 'invoices:get',
+  invoiceStats: 'invoices:stats',
+  invoiceNextNumber: 'invoices:next-number',
+  invoiceSave: 'invoices:save',
+  invoiceDelete: 'invoices:delete',
+  invoiceSetStatus: 'invoices:set-status',
+  invoiceExportCsv: 'invoices:export-csv',
+  invoiceQboCustomers: 'invoices:qbo:customers',
+  invoiceQboItems: 'invoices:qbo:items',
+  invoiceCreateInQbo: 'invoices:qbo:create',
+  invoiceSendFromQbo: 'invoices:qbo:send',
+  invoiceOpenInQbo: 'invoices:qbo:open',
+
   // Purchase orders
   poList: 'po:list',
   poGet: 'po:get',

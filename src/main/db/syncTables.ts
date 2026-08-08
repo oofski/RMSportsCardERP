@@ -135,6 +135,14 @@ export const SYNCED_TABLES: SyncedTable[] = [
   { table: 'stream_sessions', key: ['id'], tier: 0 },
   { table: 'purchase_orders', key: ['id'], tier: 0 },
   { table: 'inventory_resets', key: ['id'], tier: 0 },
+  // Buyers. Operator-authored whole facts under UUIDs nobody else mints, and
+  // they have to travel: an invoice raised on the office laptop for a buyer
+  // added at the bench would otherwise have nobody to address it to.
+  { table: 'invoice_customers', key: ['id'], tier: 0 },
+  // The invoice itself. Tier 0 because its customer id is allowed to dangle by
+  // design — the buyer's name is snapshotted onto the row, so an invoice whose
+  // customer record is gone still reads correctly and must still apply.
+  { table: 'invoices', key: ['id'], tier: 0 },
   { table: 'qbo_sync_log', key: ['id'], tier: 0 },
   { table: 'intake_links', key: ['id'], tier: 0 },
   // The owner's inbox, and it had to start travelling. Every reminder is a note
@@ -212,6 +220,9 @@ export const SYNCED_TABLES: SyncedTable[] = [
 
   // Tier 2 — children of a tier-1 row.
   { table: 'po_line_receipts', key: ['id'], tier: 2 },
+  // Invoice lines. Tier 2 so they land after the invoice they belong to on the
+  // row-at-a-time recovery path.
+  { table: 'invoice_lines', key: ['id'], tier: 2 },
   { table: 'stream_item_lots', key: ['id'], tier: 2 },
   { table: 'ledger_row_imports', key: ['row_id', 'import_id'], tier: 2 }
 ]

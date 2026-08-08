@@ -35,6 +35,14 @@ import type {
 } from '@shared/schedule'
 import type { RecurringTask } from '@shared/homeTasks'
 import type {
+  Invoice,
+  InvoiceCustomer,
+  InvoiceDetail,
+  InvoiceStatus,
+  InvoiceTerms,
+  NewInvoice
+} from '@shared/invoices'
+import type {
   ShipPickAdvanced,
   ShipStationBoard,
   ShipStationOrder,
@@ -1055,6 +1063,69 @@ export function createBridge(ipcRenderer: BridgeTransport) {
        */
       teamSchedule: (from: string, to: string): Promise<TeamScheduleOverview> =>
         ipcRenderer.invoke(IPC.scheduleTeamOverview, { from, to })
+    },
+    /**
+     * Invoices — the sell side, and the mirror image of purchase orders.
+     *
+     * Everything is gated on `module.invoicing` in main. The three qbo* calls
+     * are the only ones that leave the machine, and `createInQbo` is the only
+     * one anywhere in this API that WRITES to somebody's accounting system.
+     */
+    invoices: {
+      list: (): Promise<Invoice[]> => ipcRenderer.invoke(IPC.invoicesList),
+      get: (id: string): Promise<InvoiceDetail | null> => ipcRenderer.invoke(IPC.invoiceGet, id),
+      stats: (): Promise<{
+        draft: number
+        created: number
+        sent: number
+        outstanding: number
+        thisMonth: number
+      }> => ipcRenderer.invoke(IPC.invoiceStats),
+      nextNumber: (): Promise<string> => ipcRenderer.invoke(IPC.invoiceNextNumber),
+      save: (input: NewInvoice & { id?: string | null }): Promise<Result<InvoiceDetail>> =>
+        ipcRenderer.invoke(IPC.invoiceSave, input),
+      remove: (id: string): Promise<Result<{ id: string }>> =>
+        ipcRenderer.invoke(IPC.invoiceDelete, id),
+      setStatus: (id: string, status: InvoiceStatus): Promise<Result<{ id: string }>> =>
+        ipcRenderer.invoke(IPC.invoiceSetStatus, { id, status }),
+
+      /** Buyers. Saving by name merges rather than duplicating — see saveCustomer. */
+      customers: (): Promise<InvoiceCustomer[]> => ipcRenderer.invoke(IPC.invoiceCustomersList),
+      saveCustomer: (input: {
+        id?: string | null
+        name: string
+        email?: string | null
+        terms?: InvoiceTerms
+        location?: string | null
+        className?: string | null
+        message?: string | null
+        notes?: string | null
+        qboId?: string | null
+      }): Promise<Result<InvoiceCustomer>> => ipcRenderer.invoke(IPC.invoiceCustomerSave, input),
+      deleteCustomer: (id: string): Promise<Result<{ deleted: boolean }>> =>
+        ipcRenderer.invoke(IPC.invoiceCustomerDelete, id),
+
+      /** Intuit's own import template on disk. Works with no connection at all. */
+      exportCsv: (ids?: string[]): Promise<ExportResult> =>
+        ipcRenderer.invoke(IPC.invoiceExportCsv, ids ?? []),
+
+      /** The live lists behind the buyer and item pickers. Read-only. */
+      qboCustomers: (): Promise<Result<Array<{ id: string; name: string; email: string | null }>>> =>
+        ipcRenderer.invoke(IPC.invoiceQboCustomers),
+      qboItems: (): Promise<
+        Result<Array<{ id: string; name: string; rate: number | null; description: string | null }>>
+      > => ipcRenderer.invoke(IPC.invoiceQboItems),
+
+      /** Post it, then open the browser on it so somebody can press Send. */
+      createInQbo: (
+        id: string,
+        open = true
+      ): Promise<Result<{ url: string; docNumber: string | null; numberChanged: boolean }>> =>
+        ipcRenderer.invoke(IPC.invoiceCreateInQbo, { id, open }),
+      sendFromQbo: (id: string): Promise<Result<{ id: string }>> =>
+        ipcRenderer.invoke(IPC.invoiceSendFromQbo, id),
+      openInQbo: (id: string): Promise<Result<{ url: string }>> =>
+        ipcRenderer.invoke(IPC.invoiceOpenInQbo, id)
     },
     updates: {
       getStatus: (): Promise<UpdateStatus> => ipcRenderer.invoke(IPC.updatesGetStatus),
