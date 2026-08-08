@@ -380,6 +380,24 @@ ok(
   trackingSummary(null, null, NOW) === 'Not checked yet',
   'and "never tried" is a different sentence from "tried and failed"'
 )
+// ON THE WEB there is no browser window to read WITH, so "Not checked yet" is a
+// lie of implication — it reads as "press something", and nothing anybody
+// presses in a browser will help. Say where the checking happens instead.
+ok(
+  trackingSummary(null, null, NOW, null, null, false) === 'Checked on the desktop app',
+  'a client that cannot read says where checking happens'
+)
+ok(
+  trackingSummary(null, null, NOW, null, null, true) === 'Not checked yet',
+  'and one that can is still just waiting'
+)
+// A STATUS THAT EXISTS reads the same everywhere. The web shows what a desktop
+// machine read and sync carried over — that is a real answer, not a lesser one.
+ok(
+  trackingSummary('in_transit', '2026-08-08T11:58:00.000Z', NOW, null, null, false) ===
+    'In transit · checked 2 min ago',
+  'but a synced reading reads identically on the web'
+)
 // A STATUS WE HAVE still leads, with the failure as a caveat — the useful fact
 // first. Without the caveat the age quietly stops advancing and nobody notices.
 ok(

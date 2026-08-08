@@ -11,6 +11,7 @@ import {
 import type { ShipStatusCode } from '@shared/shippingTypes'
 import { trackingLineTone, trackingSummary } from '@shared/tracking'
 import { api } from '../lib/api'
+import { useCanReadTracking } from '../lib/canTrack'
 import { Icon } from './Icon'
 import { Button, Checkbox, Field, Input, Select } from './ui'
 
@@ -112,6 +113,10 @@ export function TrackingLine({
   attemptedAt?: string | null
   hasTracking?: boolean
 }): JSX.Element | null {
+  // Whether THIS client could read at all. Only changes the wording of the
+  // never-read case, so it is read from the shared cached answer rather than
+  // threaded down from every board.
+  const canRead = useCanReadTracking()
   if (!hasTracking) return null
   return (
     <div
@@ -121,7 +126,7 @@ export function TrackingLine({
       title={detail ?? error ?? undefined}
     >
       <span className="track-dot" aria-hidden="true" />
-      <span>{trackingSummary(status, checkedAt, Date.now(), error, attemptedAt)}</span>
+      <span>{trackingSummary(status, checkedAt, Date.now(), error, attemptedAt, canRead)}</span>
     </div>
   )
 }

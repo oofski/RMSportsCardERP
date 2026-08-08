@@ -318,7 +318,10 @@ export function trackingSummary(
   nowMs: number,
   /** Set when the LAST attempt failed, even if an older reading succeeded. */
   error?: string | null,
-  attemptedAt?: string | null
+  attemptedAt?: string | null,
+  /** False on a client that cannot read carrier pages at all — see the note
+   *  at the bottom of this function. Undefined means "do not know yet". */
+  canRead?: boolean | null
 ): string {
   const label = status ? TRACKING_LABELS[status] : null
 
@@ -340,7 +343,11 @@ export function trackingSummary(
     const age = ageOf(attemptedAt ?? null, nowMs)
     return age ? `Could not read the carrier page · tried ${age}` : 'Could not read the carrier page'
   }
-  return 'Not checked yet'
+  // On a client that cannot read — the web app has no browser window to read
+  // WITH — "Not checked yet" is a lie of implication: it reads as "press
+  // something", and nothing anybody presses in a browser will help. Say where
+  // the checking happens instead.
+  return canRead === false ? 'Checked on the desktop app' : 'Not checked yet'
 }
 
 function ageOf(iso: string | null, nowMs: number): string | null {
