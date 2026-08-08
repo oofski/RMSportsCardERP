@@ -16,6 +16,7 @@ import {
   type NewInvoice
 } from '@shared/invoices'
 import { asCarrier, asPaymentTiming, detectCarrier } from '@shared/freight'
+import { asShipStatus } from '@shared/tracking'
 import { getDb } from './database'
 
 /**
@@ -238,6 +239,10 @@ interface InvoiceRow {
   service: string | null
   tracking_number: string | null
   payment_timing: string | null
+  tracking_status: string | null
+  tracking_status_detail: string | null
+  tracking_status_at: string | null
+  tracking_checked_at: string | null
   created_by: string | null
   created_at: string
   updated_at: string
@@ -286,6 +291,10 @@ function toInvoice(r: InvoiceRow): Invoice {
     service: r.service,
     trackingNumber: r.tracking_number,
     paymentTiming: asPaymentTiming(r.payment_timing),
+    trackingStatus: asShipStatus(r.tracking_status),
+    trackingStatusDetail: r.tracking_status_detail ?? null,
+    trackingStatusAt: r.tracking_status_at ?? null,
+    trackingCheckedAt: r.tracking_checked_at ?? null,
     createdBy: r.created_by,
     createdAt: r.created_at,
     updatedAt: r.updated_at
@@ -311,6 +320,8 @@ const INVOICE_COLS = `id, invoice_number, customer_id, customer_name, email, ter
                       due_date, location, memo, message, send_later, class_name, status,
                       qbo_id, qbo_doc_number, qbo_synced_at, total, paid_at, paid_by,
                       carrier, service, tracking_number, payment_timing,
+                      tracking_status, tracking_status_detail, tracking_status_at,
+                      tracking_checked_at,
                       created_by, created_at, updated_at`
 
 /** Newest first — an invoice list is read from the top. */

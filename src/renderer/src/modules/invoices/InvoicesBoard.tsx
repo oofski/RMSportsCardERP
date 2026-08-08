@@ -5,7 +5,8 @@ import { api } from '../../lib/api'
 import { LIVE, useLiveRefresh } from '../../lib/live'
 import { Button, CenterLoader } from '../../components/ui'
 import { Icon } from '../../components/Icon'
-import { FreightLine } from '../../components/FreightFields'
+import { FreightLine, TrackingLine } from '../../components/FreightFields'
+import { CheckTrackingButton } from '../../components/CheckTrackingButton'
 import { useToast } from '../../components/Toast'
 import { formatMoney } from '../../lib/format'
 import { CreateInvoiceModal } from './CreateInvoiceModal'
@@ -193,6 +194,7 @@ export function InvoicesBoard({
           <Button variant="secondary" icon="FileSpreadsheet" onClick={() => void exportCsv()}>
             Export CSV
           </Button>
+          <CheckTrackingButton onDone={load} />
           <Button variant="primary" icon="Plus" onClick={() => setCreatingNew(true)}>
             New invoice
           </Button>
@@ -352,6 +354,11 @@ function InvoiceCard({
         carrier={invoice.carrier}
         service={invoice.service}
         trackingNumber={invoice.trackingNumber}
+      />
+      <TrackingLine
+        status={invoice.trackingStatus}
+        checkedAt={invoice.trackingCheckedAt}
+        detail={invoice.trackingStatusDetail}
       />
 
       <div className="po-card-foot" onClick={(e) => e.stopPropagation()}>

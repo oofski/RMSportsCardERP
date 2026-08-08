@@ -11,6 +11,8 @@ import type {
 } from '@shared/types'
 import { isPurchaseOrderStatus } from '@shared/purchaseOrders'
 import type { FreightPatch } from '@shared/freight'
+import { sweepTracking, type SweepResult } from './tracking/poller'
+import { canRead } from './tracking/read'
 import type { Permission } from '@shared/permissions'
 import { currentUser } from './services/auth'
 import { openPoPdf, savePoPdf } from './poPdf'
@@ -144,6 +146,20 @@ export function registerPurchaseOrdersIpc(): void {
       }
     }
   )
+
+  // Read every active order's carrier page now, rather than waiting for the
+  // hour. Gated like the rest of the module; it is a read of somebody else's
+  // public page, but it writes our records.
+  ipcMain.handle(IPC.trackingCheckNow, async (): Promise<Result<SweepResult>> => {
+    try {
+      requireInvoicing()
+      return { ok: true, data: await sweepTracking(true) }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle(IPC.trackingCanRead, (): boolean => canRead())
 
   ipcMain.handle(IPC.poDelete, (_e, id: string): Result<null> => {
     try {

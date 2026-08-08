@@ -1,4 +1,5 @@
 import type { Carrier, PaymentTiming } from './freight'
+import type { ShipStatusCode } from './shippingTypes'
 import type { Permission, Role } from './permissions'
 
 export type EmployeeStatus = 'invited' | 'active' | 'disabled'
@@ -842,6 +843,14 @@ export interface PurchaseOrder {
   trackingNumber: string | null
   /** Front or upon delivery. Null is a real answer: nobody has decided. */
   paymentTiming: PaymentTiming | null
+  /**
+   * Where the carrier says the package has got to, and when we last managed to
+   * read that. Null status means nobody has read it yet — NOT "no movement".
+   */
+  trackingStatus: ShipStatusCode | null
+  trackingStatusDetail: string | null
+  trackingStatusAt: string | null
+  trackingCheckedAt: string | null
 }
 
 /** A PO with its line items (detail view + receipt). */

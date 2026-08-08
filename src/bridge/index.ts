@@ -22,6 +22,13 @@ import { IPC, type AppInfo } from '@shared/ipc'
 import type { Permission } from '@shared/permissions'
 import type { FreightPatch } from '@shared/freight'
 import type { BreakBenchDetail, BreakStepState } from '@shared/breakSteps'
+/** Mirrors SweepResult in main; named here so the bridge stays off the main side. */
+interface TrackingSweep {
+  checked: number
+  updated: number
+  failed: number
+  error: string | null
+}
 import type { NewReminder, OwnerBoard, Reminder, Todo } from '@shared/ownerDashboard'
 import type { StaffBoard } from '@shared/staffBoard'
 import type {
@@ -485,6 +492,11 @@ export function createBridge(ipcRenderer: BridgeTransport) {
         removeStock: boolean
       ): Promise<Result<{ removedUnits: number; soldUnits: number }>> =>
         ipcRenderer.invoke(IPC.poForceDelete, { id, removeStock }),
+      /** Read every active order's carrier page now. Shared by both boards —
+       *  one sweep covers purchase orders and invoices together. */
+      checkTracking: (): Promise<Result<TrackingSweep>> =>
+        ipcRenderer.invoke(IPC.trackingCheckNow),
+      canReadTracking: (): Promise<boolean> => ipcRenderer.invoke(IPC.trackingCanRead),
       openPdf: (id: string): Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }> =>
         ipcRenderer.invoke(IPC.poOpenPdf, id),
       savePdf: (id: string): Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }> =>

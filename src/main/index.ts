@@ -7,6 +7,7 @@ import { registerIpcHandlers } from './ipc'
 import { honourOwnerReset } from './services/ownerRecovery'
 import { registerInventoryIpc } from './inventoryIpc'
 import { registerPurchaseOrdersIpc } from './purchaseOrdersIpc'
+import { startTrackingPoller } from './tracking/poller'
 import { registerShippingIpc } from './shippingIpc'
 import { registerStreamingIpc } from './streamingIpc'
 import { registerQuickBooksIpc } from './quickbooksIpc'
@@ -97,6 +98,9 @@ app.whenReady().then(() => {
   registerIpcHandlers()
   registerInventoryIpc()
   registerPurchaseOrdersIpc()
+  // The hourly carrier sweep. Starts itself late and does nothing at all on a
+  // build with no browser to read with — see src/main/tracking/poller.ts.
+  startTrackingPoller()
   registerShippingIpc()
   registerStreamingIpc()
   registerQuickBooksIpc()

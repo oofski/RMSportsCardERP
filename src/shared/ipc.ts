@@ -159,6 +159,9 @@ export const IPC = {
   poCreate: 'po:create',
   poSetStatus: 'po:set-status',
   poSetFreight: 'po:set-freight',
+  // Carrier status: the hourly sweep, forced by hand.
+  trackingCheckNow: 'tracking:check-now',
+  trackingCanRead: 'tracking:can-read',
   poCatalogSearch: 'po:catalog-search',
   poThumbnails: 'po:thumbnails',
   poIncomingBoxes: 'po:incoming-boxes',

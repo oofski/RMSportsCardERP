@@ -8,6 +8,8 @@ import {
   togglePayment,
   trackingUrl
 } from '@shared/freight'
+import type { ShipStatusCode } from '@shared/shippingTypes'
+import { trackingSummary, trackingTone } from '@shared/tracking'
 import { api } from '../lib/api'
 import { Icon } from './Icon'
 import { Button, Checkbox, Field, Input, Select } from './ui'
@@ -72,6 +74,40 @@ export function FreightLine({
       ) : (
         body
       )}
+    </div>
+  )
+}
+
+/**
+ * What the carrier last said, and how long ago it said it.
+ *
+ * The AGE is part of the sentence rather than a tooltip on it. This status is
+ * read off the carrier's own page on a schedule, and pages get restructured and
+ * reads get refused — so a status with no age invites somebody to trust a
+ * reading from Tuesday as though it were from this morning. "In transit ·
+ * checked 12 min ago" answers the question and its follow-up at once.
+ *
+ * Renders nothing when nothing has ever been read, rather than "unknown" on
+ * every card: a row of unknowns is a row nobody scans for the real answers.
+ */
+export function TrackingLine({
+  status,
+  checkedAt,
+  detail
+}: {
+  status: ShipStatusCode | null
+  checkedAt: string | null
+  /** The carrier's own sentence, shown on hover so the parse is checkable. */
+  detail?: string | null
+}): JSX.Element | null {
+  if (!status && !checkedAt) return null
+  return (
+    <div
+      className={`track-chip ${trackingTone(status)}`}
+      title={detail ?? undefined}
+    >
+      <span className="track-dot" aria-hidden="true" />
+      <span>{trackingSummary(status, checkedAt, Date.now())}</span>
     </div>
   )
 }

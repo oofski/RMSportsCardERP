@@ -10,6 +10,7 @@ import type {
 import { canTransition } from '@shared/purchaseOrders'
 import type { Carrier, PaymentTiming } from '@shared/freight'
 import { asCarrier, asPaymentTiming, detectCarrier } from '@shared/freight'
+import { asShipStatus } from '@shared/tracking'
 import { LOCATION_IDS, isLocation } from '@shared/inventory'
 import { getDb, getMeta, setMeta } from './database'
 import { addStock, adjustStock, reverseStockReceipt, stockQty } from './inventory'
@@ -36,6 +37,10 @@ interface PoRow {
   service: string | null
   tracking_number: string | null
   payment_timing: string | null
+  tracking_status: string | null
+  tracking_status_detail: string | null
+  tracking_status_at: string | null
+  tracking_checked_at: string | null
 }
 
 interface PoLineRow {
@@ -77,7 +82,11 @@ function toSummary(row: PoHeaderRow): PurchaseOrder {
     carrier: asCarrier(row.carrier),
     service: row.service ?? null,
     trackingNumber: row.tracking_number ?? null,
-    paymentTiming: asPaymentTiming(row.payment_timing)
+    paymentTiming: asPaymentTiming(row.payment_timing),
+    trackingStatus: asShipStatus(row.tracking_status),
+    trackingStatusDetail: row.tracking_status_detail ?? null,
+    trackingStatusAt: row.tracking_status_at ?? null,
+    trackingCheckedAt: row.tracking_checked_at ?? null
   }
 }
 
@@ -102,6 +111,7 @@ const PO_SELECT = `
          po.created_by, po.created_at, po.updated_at,
          po.ordered_at, po.paid_at, po.received_at, po.cancelled_at, po.scanned_at,
          po.carrier, po.service, po.tracking_number, po.payment_timing,
+         po.tracking_status, po.tracking_status_detail, po.tracking_status_at, po.tracking_checked_at,
          (SELECT COUNT(*) FROM purchase_order_lines l WHERE l.po_id = po.id) AS line_count,
          (SELECT COUNT(*) FROM purchase_order_lines l
            WHERE l.po_id = po.id AND l.qty_received >= l.quantity) AS received_line_count,

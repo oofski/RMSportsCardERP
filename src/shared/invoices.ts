@@ -38,6 +38,7 @@
 
 /** Payment terms, as QuickBooks names them. */
 import type { Carrier, PaymentTiming } from './freight'
+import type { ShipStatusCode } from './shippingTypes'
 
 export type InvoiceTerms = 'Due on receipt' | 'Net 15' | 'Net 30' | 'Net 60'
 
@@ -192,6 +193,10 @@ export interface Invoice {
   service: string | null
   trackingNumber: string | null
   paymentTiming: PaymentTiming | null
+  trackingStatus: ShipStatusCode | null
+  trackingStatusDetail: string | null
+  trackingStatusAt: string | null
+  trackingCheckedAt: string | null
   createdBy: string | null
   createdAt: string
   updatedAt: string

@@ -19993,3 +19993,43 @@ button.sor-team:focus-visible {
 .po-card[data-status='void'] {
   opacity: 0.6;
 }
+
+/* ---------- Carrier status on a board card (TrackingLine) ----------
+   A dot and a sentence. The dot carries the state at a glance from across a
+   room; the words carry it precisely, including how old the reading is. */
+.track-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--text-3);
+  min-width: 0;
+  margin-top: 3px;
+}
+.track-chip span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.track-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--text-3);
+}
+.track-chip.ok .track-dot {
+  background: var(--success-strong);
+}
+.track-chip.ok {
+  color: var(--success-strong);
+}
+.track-chip.warn .track-dot {
+  background: var(--warning);
+}
+.track-chip.warn {
+  color: var(--warning);
+}
+.track-chip.live .track-dot {
+  background: var(--brand-500);
+}

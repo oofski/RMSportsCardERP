@@ -16,6 +16,7 @@ import { formatMoney } from '../../lib/format'
 import { PurchaseOrderBoard } from './PurchaseOrderBoard'
 import { CreatePurchaseOrderModal } from './CreatePurchaseOrderModal'
 import { PurchaseOrderReceipt } from './PurchaseOrderReceipt'
+import { CheckTrackingButton } from '../../components/CheckTrackingButton'
 import { SupplyOrderModal } from './SupplyOrderModal'
 
 /**
@@ -241,6 +242,7 @@ export function InvoicingModule(): JSX.Element {
               New supply order
             </Button>
           )}
+          {canManage && <CheckTrackingButton onDone={reload} />}
           {canManage && (
             <Button variant="primary" icon="Plus" onClick={() => setShowCreate(true)}>
               New PO

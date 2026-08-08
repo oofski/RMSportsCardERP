@@ -2210,6 +2210,29 @@ function migrate(database: Database.Database): void {
   addColumnIfMissing(database, 'ship_team_slots', 'slip_position', 'INTEGER')
   setMeta(database, 'schema_version', '55')
 
+  // v56: where the package has got to, read off the carrier's own page.
+  //
+  // Four columns rather than one, because a status without provenance is a
+  // status nobody can judge:
+  //   tracking_status        one of ShipStatusCode — the seven words already
+  //                          used by the shipping tracker, not a second set
+  //   tracking_status_detail the carrier's own sentence, kept verbatim so a
+  //                          human can see what the parse was based on
+  //   tracking_status_at     when the CARRIER says it happened
+  //   tracking_checked_at    when WE last managed to read the page
+  //
+  // The last one is the important one. A reading that fails must never
+  // overwrite one that worked — stale-but-true beats fresh-and-wrong when the
+  // question is whether somebody's cards arrived — so the screen shows how old
+  // the answer is instead of implying it is current.
+  for (const table of ['purchase_orders', 'invoices']) {
+    addColumnIfMissing(database, table, 'tracking_status', 'TEXT')
+    addColumnIfMissing(database, table, 'tracking_status_detail', 'TEXT')
+    addColumnIfMissing(database, table, 'tracking_status_at', 'TEXT')
+    addColumnIfMissing(database, table, 'tracking_checked_at', 'TEXT')
+  }
+  setMeta(database, 'schema_version', '56')
+
   // Payroll, once, for whoever owns the company.
   //
   // Seeded rather than left to be typed because the owner named it, named its
