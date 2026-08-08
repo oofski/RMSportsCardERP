@@ -26,6 +26,7 @@ import { uploadedBytes, uploadedName } from './util'
 import { IPC } from '@shared/ipc'
 import type { ExportResult, Result } from '@shared/types'
 import type { Permission } from '@shared/permissions'
+import type { BreakBenchDetail, BreakStepState } from '@shared/breakSteps'
 import {
   type ShipDocument,
   SHIP_BREAK_STATUSES,
@@ -117,6 +118,10 @@ import {
   markBreakPacked,
   moveOrder,
   resetOrderQueue,
+  getBench,
+  listBenchStates,
+  setBreakStep,
+  setTeamBagged,
   setBreakChecked,
   setBreakStage,
   setBreakTopSleeved,
@@ -951,6 +956,56 @@ export function registerShippingIpc(): void {
         const actor = requireFind()
         const id = requireId(payload?.id, 'break')
         return { ok: true, data: setBreakChecked(id, !!payload?.checked, actor.id) }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  // ---- The bench checklist -------------------------------------------------
+  //
+  // Gated on `module.fulfillment` for reads and on the same permission as the
+  // pick list for writes: step 3 IS the pick list's checkmark, so anybody who
+  // may tick a card may tick it from here.
+  ipcMain.handle(IPC.shipBenchStates, (): BreakStepState[] =>
+    can('module.fulfillment') ? listBenchStates() : []
+  )
+
+  ipcMain.handle(IPC.shipBenchGet, (_e, id: string): BreakBenchDetail | null =>
+    can('module.fulfillment') ? getBench(str(id)) : null
+  )
+
+  ipcMain.handle(
+    IPC.shipBenchSetStep,
+    (
+      _e,
+      payload: { id: string; step: 'sleeve' | 'sort'; done: boolean }
+    ): Result<BreakBenchDetail> => {
+      try {
+        const actor = requireFind()
+        const id = requireId(payload?.id, 'break')
+        if (payload?.step !== 'sleeve' && payload?.step !== 'sort') {
+          return { ok: false, error: 'That is not a step that can be ticked all at once.' }
+        }
+        return { ok: true, data: setBreakStep(id, payload.step, !!payload?.done, actor.id) }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  ipcMain.handle(
+    IPC.shipBenchSetTeamBagged,
+    (
+      _e,
+      payload: { id: string; teamName: string; bagged: boolean }
+    ): Result<BreakBenchDetail> => {
+      try {
+        const actor = requireFind()
+        const id = requireId(payload?.id, 'break')
+        const teamName = str(payload?.teamName).trim()
+        if (!teamName) return { ok: false, error: 'No team specified.' }
+        return { ok: true, data: setTeamBagged(id, teamName, !!payload?.bagged, actor.id) }
       } catch (err) {
         return fail(err)
       }

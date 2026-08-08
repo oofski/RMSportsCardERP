@@ -288,6 +288,11 @@ export const IPC = {
   shipBreakSetStatus: 'shipping:breaks:set-status',
   shipSlotChecked: 'shipping:teamslot:checked',
   shipSlotTopSleeved: 'shipping:teamslot:top-sleeved',
+  // The bench checklist: sleeve, sort, then team-bag every team in the break.
+  shipBenchStates: 'shipping:bench:states',
+  shipBenchGet: 'shipping:bench:get',
+  shipBenchSetStep: 'shipping:bench:set-step',
+  shipBenchSetTeamBagged: 'shipping:bench:set-team-bagged',
   // Shipping tracker
   shipShipmentsList: 'shipping:shipments:list',
   shipShipmentStatus: 'shipping:shipments:status',

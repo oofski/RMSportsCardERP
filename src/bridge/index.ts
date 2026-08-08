@@ -21,6 +21,7 @@
 import { IPC, type AppInfo } from '@shared/ipc'
 import type { Permission } from '@shared/permissions'
 import type { FreightPatch } from '@shared/freight'
+import type { BreakBenchDetail, BreakStepState } from '@shared/breakSteps'
 import type { NewReminder, OwnerBoard, Reminder, Todo } from '@shared/ownerDashboard'
 import type { StaffBoard } from '@shared/staffBoard'
 import type {
@@ -636,6 +637,25 @@ export function createBridge(ipcRenderer: BridgeTransport) {
         ipcRenderer.invoke(IPC.shipSlotChecked, { id, checked }),
       setSlotTopSleeved: (id: string, topSleeved: boolean): Promise<Result<ShipSlotUpdate>> =>
         ipcRenderer.invoke(IPC.shipSlotTopSleeved, { id, topSleeved }),
+      /**
+       * The bench checklist. `benchStates` is every break at once (the board and
+       * the tab badge); `bench` is one break's team-by-team bagging list.
+       */
+      benchStates: (): Promise<BreakStepState[]> => ipcRenderer.invoke(IPC.shipBenchStates),
+      bench: (id: string): Promise<BreakBenchDetail | null> =>
+        ipcRenderer.invoke(IPC.shipBenchGet, id),
+      setBenchStep: (
+        id: string,
+        step: 'sleeve' | 'sort',
+        done: boolean
+      ): Promise<Result<BreakBenchDetail>> =>
+        ipcRenderer.invoke(IPC.shipBenchSetStep, { id, step, done }),
+      setTeamBagged: (
+        id: string,
+        teamName: string,
+        bagged: boolean
+      ): Promise<Result<BreakBenchDetail>> =>
+        ipcRenderer.invoke(IPC.shipBenchSetTeamBagged, { id, teamName, bagged }),
       setBreakChecked: (id: string, checked: boolean): Promise<Result<ShipBreakDetail>> =>
         ipcRenderer.invoke(IPC.shipBreakCheckAll, { id, checked }),
       packBreak: (id: string): Promise<Result<ShipBreakDetail>> =>

@@ -14,6 +14,8 @@
  *   - a team slot is keyed for carry-forward by `handle|breakNumber|teamName`
  */
 
+import type { StepStamp } from './breakSteps'
+
 // ---------------------------------------------------------------------------
 // Leagues
 // ---------------------------------------------------------------------------
@@ -69,6 +71,10 @@ export interface ShipBreak {
   eventName: string
   eventDate: string
   status: ShipBreakStatus
+  /** Step 1 of the bench checklist: every card sleeved and top-loaded. */
+  sleeve: StepStamp
+  /** Step 2: sorted into trays, one team per tray. */
+  sort: StepStamp
 }
 
 /** What the parser emits — status defaults to 'pending'. */
@@ -150,6 +156,16 @@ export interface ShipTeamSlot {
   checkedOff: boolean
   checkedOffAt: string | null
   checkedOffBy: string | null
+  /**
+   * Where this card printed on the paperwork: the page, then the line.
+   *
+   * Recorded so the bench's team-bag list can be walked in the same order as
+   * the stack of paper and the sticker sheet, rather than alphabetically. Null
+   * on anything imported before positions were captured — those fall back to
+   * team name, which is stable if not physical.
+   */
+  slipPage: number | null
+  slipPosition: number | null
 }
 
 /** What the parser emits — operator state is absent on a fresh parse. */
@@ -167,6 +183,8 @@ export interface ShipTeamSlotDraft {
   checkedOff?: boolean
   checkedOffAt?: string | null
   checkedOffBy?: string | null
+  slipPage?: number | null
+  slipPosition?: number | null
 }
 
 // ---------------------------------------------------------------------------

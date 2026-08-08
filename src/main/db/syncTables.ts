@@ -207,6 +207,15 @@ export const SYNCED_TABLES: SyncedTable[] = [
   { table: 'ship_orders', key: ['id'], tier: 1 },
   { table: 'ship_warnings', key: ['id'], tier: 1 },
   { table: 'ship_break_assignments', key: ['id'], tier: 1 },
+  // The bag tick for teams nobody bought — the half of step 3 that has no card
+  // row to live on. Tier 1: it points at a break, and a bag for a break that has
+  // not landed yet would be a tick against nothing.
+  //
+  // It arbitrates cleanly BECAUSE its id is derived from the break and the team
+  // rather than minted. Two benches bagging the same team write the same row, so
+  // last-write-wins only ever compares that row against an older copy of itself
+  // — there is no counter and nothing another machine adds to concurrently.
+  { table: 'ship_break_team_bags', key: ['id'], tier: 1 },
   // Every column is written by exactly ONE device — the station that created
   // the row — so last-write-wins arbitrates nothing here: the relay only ever
   // compares a row against an older copy of itself from the same writer. The

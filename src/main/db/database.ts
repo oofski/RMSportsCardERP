@@ -2161,6 +2161,55 @@ function migrate(database: Database.Database): void {
   }
   setMeta(database, 'schema_version', '54')
 
+  // v55: the bench checklist — what happens to a break before anything ships.
+  //
+  // Three steps per break: sleeve and top-load, sort into trays by team, then
+  // team-bag and sticker each team against its buyer. See @shared/breakSteps
+  // for why the first two are one tick each and the third is thirty.
+  //
+  // Steps 1 and 2 are stamps on the break itself. A boolean would say the pile
+  // was sleeved without saying by whom, and the one question asked about a
+  // mis-sleeved break is who had it.
+  addColumnIfMissing(database, 'ship_breaks', 'sleeved_at', 'TEXT')
+  addColumnIfMissing(database, 'ship_breaks', 'sleeved_by', 'TEXT')
+  addColumnIfMissing(database, 'ship_breaks', 'sorted_at', 'TEXT')
+  addColumnIfMissing(database, 'ship_breaks', 'sorted_by', 'TEXT')
+
+  // Step 3 for the teams NOBODY BOUGHT.
+  //
+  // All thirty teams are physically in the box and all thirty get bagged, but
+  // only the sold ones have a ship_team_slots row to carry the tick — an unsold
+  // team exists solely in the import's slate audit. Rather than fabricate card
+  // rows for them (which would land in sales and the ledger as phantom orders
+  // at zero, and corrupt every count derived from slots), the unsold ones get
+  // this small side record. Sold teams keep using the pick list's existing
+  // checkmark, so nothing is ticked twice.
+  //
+  // The id is DERIVED from the break and the team, never random: two laptops
+  // bagging the same team must write the SAME row, so last-write-wins compares
+  // a row against an older copy of itself instead of choosing between two rows
+  // that describe one bag. Same rule as the availability and shift ids.
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS ship_break_team_bags (
+      id         TEXT PRIMARY KEY,
+      break_id   TEXT NOT NULL,
+      team_name  TEXT NOT NULL,
+      bagged_at  TEXT,
+      bagged_by  TEXT,
+      created_at TEXT,
+      updated_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_ship_bags_break ON ship_break_team_bags (break_id);
+  `)
+
+  // Where a team printed, so the on-screen list walks in the same order as the
+  // stack of paper. Null on anything imported before this, and null forever for
+  // a team nobody bought — it appears on no slip — and both sort last rather
+  // than claiming a position they do not have.
+  addColumnIfMissing(database, 'ship_team_slots', 'slip_page', 'INTEGER')
+  addColumnIfMissing(database, 'ship_team_slots', 'slip_position', 'INTEGER')
+  setMeta(database, 'schema_version', '55')
+
   // Payroll, once, for whoever owns the company.
   //
   // Seeded rather than left to be typed because the owner named it, named its

@@ -475,6 +475,8 @@ export interface PackingOrder {
   hasPrice: boolean
   isGiveaway: boolean
   page: number
+  /** Which line of the page it printed on — ordering within a page. */
+  lineIndex: number
 }
 
 export interface PackingSlip {
@@ -1100,7 +1102,11 @@ export function parsePackingSlip(
       // it appears inside all-caps break titles and would zero out every paid
       // card in a giveaway-themed break.
       isGiveaway: price === 0,
-      page: lines[pos.lineIndex].page
+      page: lines[pos.lineIndex].page,
+      // Where this card printed. Carried through to the slot so the bench's
+      // team-bag list can be walked in the same order as the stack of paper,
+      // instead of an alphabetical order the stickers are not in.
+      lineIndex: pos.lineIndex
     })
   }
 
@@ -1130,6 +1136,17 @@ function emitCustomerRecords(
   const warnings: ShipWarningInput[] = []
   const mirror = new Map<string, ShipOrder>()
   const packOrders = packing?.orders ?? []
+  /**
+   * Where each card sits in the printed sequence of this customer's slip.
+   *
+   * An ORDINAL over the parsed orders, not the raw line index it came from.
+   * The same slip laid out two ways — the columns wrapped differently — groups
+   * its lines differently and yields line 7 one way and line 8 the other, so a
+   * raw index made two parses of one document disagree. The relative order is
+   * what the bench actually needs, and it is identical either way.
+   */
+  const packOrdinal = new Map<PackingOrder, number>()
+  packOrders.forEach((o, i) => packOrdinal.set(o, i))
   /** Packs already represented by a slot — the giveaway sweep reads this. */
   const consumedPacks = new Set<PackingOrder>()
   let counter = 0
@@ -1154,7 +1171,9 @@ function emitCustomerRecords(
       customerId: handle,
       orderId: pack?.orderId ?? null,
       price,
-      isGiveaway
+      isGiveaway,
+      slipPage: pack?.page ?? null,
+      slipPosition: pack ? (packOrdinal.get(pack) ?? null) : null
     }
     const order: ShipOrder = {
       id: `ord_${id}`,

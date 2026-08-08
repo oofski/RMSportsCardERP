@@ -21,6 +21,7 @@ const ship = require('../src/main/db/shipping')
 const domain = require('../src/main/db/shippingDomain')
 const employees = require('../src/main/db/employees')
 const { parsePages } = require('../src/main/shipping/parser')
+const { readyAllBreaks } = require('./support/bench')
 
 let pass = 0
 let fail = 0
@@ -97,6 +98,12 @@ ok(
 
 // Pick everything that lives in a break; the badge must still show the loose
 // one as outstanding rather than reading zero.
+//
+// The breaks go through the bench first because checking a card off is gated on
+// it — see tests/breakBench.test.ts. Done through the real calls rather than by
+// writing the columns, so this would start failing if the gate ever stopped
+// being reachable from a legitimate flow.
+readyAllBreaks()
 for (const b of breaks) domain.setBreakChecked(b.id, true)
 const mid = domain.getWorkspaceSummary()
 ok(
@@ -147,6 +154,7 @@ ok(
 )
 
 ship.importDataset(parsePages(PAGES, opts), { filename: 'board.pdf', carryForward: true })
+readyAllBreaks()
 const afterImport = domain.listBreaks()
 ok(
   afterImport.every((b: { assignees: unknown[] }) => b.assignees.length === 1),
@@ -168,6 +176,7 @@ db.prepare(
 
 const LETTERED = PAGES.map((p) => p.replace(new RegExp(`${BOX}4$`, 'm'), BOX + '4A'))
 ship.importDataset(parsePages(LETTERED, opts), { filename: 'board.pdf' })
+readyAllBreaks()
 const relabelled = domain.listBreaks()
 const four = relabelled.find((b: { breakLabel: string }) => b.breakLabel === '4A')
 ok(!!four, 'the break re-imported as #4A', JSON.stringify(relabelled.map((b: { breakLabel: string }) => b.breakLabel)))
@@ -208,6 +217,9 @@ ok(
 // are already in a box. So moving on IS the confirmation.
 console.log('\n=== 6. marking a whole package picked ===')
 ship.importDataset(parsePages(PAGES, opts), { filename: 'board.pdf' })
+// An import resets the bench, so the breaks go back through it before any card
+// can be ticked.
+readyAllBreaks()
 
 const alphaBefore = domain
   .listOrders()

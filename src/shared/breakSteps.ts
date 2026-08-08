@@ -1,0 +1,321 @@
+/**
+ * The three things that happen to a break, in order, before anything ships.
+ *
+ * A packing slip lands and every break in it goes through the same sequence on
+ * the bench:
+ *
+ *   1. SLEEVE   Every card in the break goes into a penny sleeve and a top
+ *               loader. One tick for the break — it is one motion over one pile.
+ *   2. SORT     The sleeved cards are laid into trays, one team per tray. Also
+ *               one tick, for the same reason.
+ *   3. BAG      Team by team: take the sticker, read off the buyer the system
+ *               pulled for that team in that break, team-bag it, sticker it,
+ *               and put it in the break box. THIRTY ticks, because thirty
+ *               separate things happen and each one can be got wrong on its own.
+ *
+ * Only when every break has finished all three does packing and scanning start.
+ *
+ * ## Why the third step is per team and the first two are not
+ *
+ * Steps 1 and 2 are true of the PILE. There is no useful state between "started
+ * sleeving" and "finished sleeving" that a screen could act on — nothing
+ * downstream branches on half a pile being sleeved, and a per-card sleeve tick
+ * would be thirty clicks that never get read.
+ *
+ * Step 3 is different: each team is matched against a named buyer, and getting
+ * one wrong sends a stranger's card to somebody. That is a per-team fact worth
+ * recording per team, and it is ALREADY recorded — the pick list's existing
+ * checkmark is exactly "this team's card is accounted for". So step 3 reuses it
+ * rather than inventing a second tick people would have to hit twice.
+ *
+ * ## Unsold teams
+ *
+ * All thirty (or thirty-two) teams are physically in the box, whether or not
+ * anybody bought them, and all thirty get bagged. The teams nobody bought have
+ * no card row to tick — they exist only in the import's slate audit — so they
+ * get their own small record. They are still real work, so they still count.
+ *
+ * ## Order
+ *
+ * Teams are listed in the order the paperwork prints them, so the screen and
+ * the sticker stack are walked the same way. A team nobody bought appears on no
+ * slip, so it has no printed position and sorts after the ones that do. See
+ * `compareBagRows`.
+ */
+
+// ---------------------------------------------------------------------------
+// The steps
+// ---------------------------------------------------------------------------
+
+export type BreakStepId = 'sleeve' | 'sort' | 'bag'
+
+export interface BreakStepDef {
+  id: BreakStepId
+  /** 1, 2, 3 — printed on the screen, and the order they must happen in. */
+  n: number
+  label: string
+  /** What the person actually does. Shown under the label. */
+  detail: string
+  /** True when the step is ticked team-by-team rather than once. */
+  perTeam: boolean
+}
+
+export const BREAK_STEPS: BreakStepDef[] = [
+  {
+    id: 'sleeve',
+    n: 1,
+    label: 'Sleeve & top-load',
+    detail: 'Every card in this break into a sleeve and a top loader.',
+    perTeam: false
+  },
+  {
+    id: 'sort',
+    n: 2,
+    label: 'Sort into trays',
+    detail: 'Lay the sleeved cards into trays, one team per tray.',
+    perTeam: false
+  },
+  {
+    id: 'bag',
+    n: 3,
+    label: 'Sticker & team-bag',
+    detail: 'Team by team: match the buyer, bag it, sticker it, into the break box.',
+    perTeam: true
+  }
+]
+
+export function breakStep(id: BreakStepId): BreakStepDef {
+  const found = BREAK_STEPS.find((s) => s.id === id)
+  // Every id in the type has an entry, so this is unreachable — but returning a
+  // real object beats a crash on a screen somebody is holding cards in front of.
+  return found ?? BREAK_STEPS[0]
+}
+
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+
+/** Who did a one-tick step, and when. Null throughout means "not done". */
+export interface StepStamp {
+  at: string | null
+  by: string | null
+}
+
+export const NO_STAMP: StepStamp = { at: null, by: null }
+
+export function isStamped(stamp: StepStamp | null | undefined): boolean {
+  return !!stamp?.at
+}
+
+/**
+ * One team's line in step 3.
+ *
+ * `handle` is the buyer the import pulled for this team in this break — the
+ * thing being matched against the sticker. It is null for a team nobody bought,
+ * which is a different situation from a team whose buyer could not be read, and
+ * the screen says so rather than printing an empty space.
+ */
+export interface BreakBagRow {
+  teamName: string
+  /** The Whatnot handle, or null when nobody bought this team. */
+  handle: string | null
+  /** Their real name, for the sticker. Empty when unsold or unknown. */
+  realName: string
+  /** The slot this ticks, or null for an unsold team (which has no card row). */
+  slotId: string | null
+  bagged: boolean
+  baggedAt: string | null
+  /**
+   * Where this team printed on the paperwork: the page, then the line.
+   *
+   * Null for a team nobody bought — it appears on no slip at all — and null for
+   * anything imported before positions were recorded. Both sort last rather
+   * than pretending to a position they do not have.
+   */
+  slipPage: number | null
+  slipPosition: number | null
+  /** A giveaway rides along in the same box and still has to be bagged. */
+  isGiveaway: boolean
+}
+
+export interface BreakStepState {
+  breakId: string
+  breakLabel: string
+  sleeve: StepStamp
+  sort: StepStamp
+  /** How many of the slate's teams are bagged, and how many there are. */
+  baggedTeams: number
+  totalTeams: number
+}
+
+/**
+ * One break's whole checklist, as a screen receives it.
+ *
+ * Lives here rather than beside the query that builds it because the bridge and
+ * the renderer both name this type, and neither may reach into the main
+ * process to find it.
+ */
+export interface BreakBenchDetail {
+  state: BreakStepState
+  /** Every team in the slate, in the order the paperwork prints them. */
+  rows: BreakBagRow[]
+  /** Null when step 3 may be worked on; the reason when it may not. */
+  bagBlockedReason: string | null
+}
+
+// ---------------------------------------------------------------------------
+// Ordering
+// ---------------------------------------------------------------------------
+
+/**
+ * Slip order: the page it printed on, then its line on that page.
+ *
+ * Ties break on team name so the list can never reorder itself between two
+ * renders of the same data — a list that shuffles while somebody is working
+ * down it is worse than one in a slightly wrong order.
+ */
+export function compareBagRows(a: BreakBagRow, b: BreakBagRow): number {
+  const ap = a.slipPage ?? Number.MAX_SAFE_INTEGER
+  const bp = b.slipPage ?? Number.MAX_SAFE_INTEGER
+  if (ap !== bp) return ap - bp
+  const ai = a.slipPosition ?? Number.MAX_SAFE_INTEGER
+  const bi = b.slipPosition ?? Number.MAX_SAFE_INTEGER
+  if (ai !== bi) return ai - bi
+  return a.teamName.localeCompare(b.teamName)
+}
+
+export function sortBagRows(rows: BreakBagRow[]): BreakBagRow[] {
+  return [...rows].sort(compareBagRows)
+}
+
+// ---------------------------------------------------------------------------
+// The gates
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether a step may be worked on yet.
+ *
+ * The order is the point of the checklist: bagging a team whose cards are not
+ * sleeved means opening the bag again, and sorting an unsleeved pile means
+ * handling every card twice. So step 2 waits for step 1 and step 3 waits for
+ * both — enforced in the main process, not only greyed out on screen, because a
+ * gate that only exists in the UI is not a gate.
+ */
+export function canStartStep(step: BreakStepId, state: BreakStepState): boolean {
+  switch (step) {
+    case 'sleeve':
+      return true
+    case 'sort':
+      return isStamped(state.sleeve)
+    case 'bag':
+      return isStamped(state.sleeve) && isStamped(state.sort)
+    default: {
+      const never: never = step
+      throw new Error(`Unknown break step: ${String(never)}`)
+    }
+  }
+}
+
+/** Why a step cannot be started, phrased for the person holding the cards. */
+export function blockedReason(step: BreakStepId, state: BreakStepState): string | null {
+  if (canStartStep(step, state)) return null
+  if (step === 'sort') return 'Sleeve and top-load this break first.'
+  return isStamped(state.sleeve)
+    ? 'Sort this break into trays first.'
+    : 'Sleeve, top-load and sort this break first.'
+}
+
+/**
+ * Un-ticking a step un-ticks the ones after it.
+ *
+ * If somebody says the sleeving was not actually finished, then the sorting
+ * done on top of it was not finished either — leaving step 2 ticked under an
+ * un-ticked step 1 would claim a state the checklist says cannot exist. The
+ * per-team bag ticks are NOT cleared: those are cards physically in bags, and
+ * throwing away that record because of a correction upstream would send
+ * somebody back through thirty teams they already did.
+ */
+export function stepsClearedBy(step: BreakStepId): BreakStepId[] {
+  if (step === 'sleeve') return ['sort']
+  return []
+}
+
+export function isStepDone(step: BreakStepId, state: BreakStepState): boolean {
+  if (step === 'sleeve') return isStamped(state.sleeve)
+  if (step === 'sort') return isStamped(state.sort)
+  return state.totalTeams > 0 && state.baggedTeams >= state.totalTeams
+}
+
+/** Every step finished — the break is in its box and ready to be packed from. */
+export function isBreakReady(state: BreakStepState): boolean {
+  return BREAK_STEPS.every((s) => isStepDone(s.id, state))
+}
+
+/** The step somebody should be working on, or null when the break is done. */
+export function currentStep(state: BreakStepState): BreakStepId | null {
+  return BREAK_STEPS.find((s) => !isStepDone(s.id, state))?.id ?? null
+}
+
+/**
+ * 0..1 across all three steps, weighted so the thirty-tick step is most of it.
+ *
+ * Steps 1 and 2 are a click each; step 3 is thirty pieces of work. Giving them
+ * a third of the bar each would show a break at 67% with every card still
+ * loose, which is the one reading a progress bar must never give.
+ */
+export function breakProgress(state: BreakStepState): number {
+  const bagShare = state.totalTeams > 0 ? state.baggedTeams / state.totalTeams : 0
+  const done = (isStamped(state.sleeve) ? 1 : 0) + (isStamped(state.sort) ? 1 : 0)
+  return Math.min(1, done * 0.1 + bagShare * 0.8)
+}
+
+// ---------------------------------------------------------------------------
+// The shipping gate
+// ---------------------------------------------------------------------------
+
+/**
+ * Which breaks are holding up packing.
+ *
+ * Packing is refused while any break a package touches is unfinished, and the
+ * refusal has to NAME them: "not ready" sends somebody hunting, "#11A still
+ * needs sorting" sends them to a tray.
+ */
+export function breaksNotReady(states: BreakStepState[]): BreakStepState[] {
+  return states.filter((s) => !isBreakReady(s))
+}
+
+export function notReadyMessage(states: BreakStepState[]): string | null {
+  const blocked = breaksNotReady(states)
+  if (!blocked.length) return null
+  const parts = blocked.map((s) => {
+    const step = currentStep(s)
+    const what = step === 'bag' ? `${s.baggedTeams}/${s.totalTeams} bagged` : breakStep(step ?? 'sleeve').label
+    return `#${s.breakLabel} (${what})`
+  })
+  const list = parts.length <= 3 ? parts.join(', ') : `${parts.slice(0, 3).join(', ')} and ${parts.length - 3} more`
+  return `${blocked.length === 1 ? 'This break is' : 'These breaks are'} not finished on the bench yet: ${list}.`
+}
+
+// ---------------------------------------------------------------------------
+// Identity
+// ---------------------------------------------------------------------------
+
+/**
+ * The id of an unsold team's bag record.
+ *
+ * DERIVED, not random. Two laptops ticking the same team of the same break must
+ * produce the SAME row, so last-write-wins compares a row against an older copy
+ * of itself rather than picking between two rows that both describe one bag.
+ * The same reasoning as the availability and shift ids.
+ */
+export function bagRowId(breakId: string, teamName: string): string {
+  return `bag_${breakId}_${teamSlug(teamName)}`
+}
+
+/** Lowercase, punctuation-free, single-underscore — stable across re-imports. */
+export function teamSlug(teamName: string): string {
+  return (teamName ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+}

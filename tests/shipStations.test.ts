@@ -26,6 +26,7 @@ const ship = require('../src/main/db/shipping')
 const domain = require('../src/main/db/shippingDomain')
 const stations = require('../src/main/db/shipStations')
 const { parsePages } = require('../src/main/shipping/parser')
+const { bagUnsoldTeams, finishAllBenches, readyAllBreaks } = require('./support/bench')
 const {
   holderOf,
   readyToPackAt,
@@ -199,6 +200,11 @@ ship.importDataset(parsePages(PAGES, { sport: 'mlb', eventName: 'Stations', even
   filename: 'stations.pdf'
 })
 ship.setShipEvent('Stations', '2026-08-01')
+// The bench work this suite is not about: sleeve and sort so cards can be
+// picked at all, and bag the teams nobody bought. What is left for the picking
+// station to do is exactly the sold cards, which is what these cases drive.
+readyAllBreaks()
+bagUnsoldTeams()
 
 ok(domain.listOrders().length === 3, 'three orders imported', String(domain.listOrders().length))
 ok(stations.liveImportChain().length === 1, 'one import on the chain')
@@ -271,28 +277,46 @@ ok(
 // ---------------------------------------------------------------------------
 console.log('\n=== 8. the packer sees ONLY the queue ===')
 // ---------------------------------------------------------------------------
+// Packing waits for the WHOLE break, not just this package — see
+// tests/breakBench.test.ts. So the rest of the bench work happens here, and
+// every order becomes pack-ready together, which is what "once all the breaks
+// are done comes shipping" means. Before the checklist this section could pack
+// one order while its break-mates were still out; that is no longer a state
+// the app allows, so the case now asserts the thing that still has to hold —
+// two stations never get handed the same box.
+finishAllBenches()
 const taken = stations.packNext('user2')
 ok(taken?.customerId === first.customerId, 'the packer is handed the queued order', String(taken?.customerId))
-ok(stations.packQueue().length === 1, 'it stays in the queue as MINE while I hold it')
+ok(
+  stations.packQueue().some((o: any) => o.customerId === first.customerId && o.mine),
+  'it stays in the queue as MINE while I hold it'
+)
 // A second station must not be handed the same box.
 getDb().prepare(`UPDATE sync_state SET value = 'STATION-C' WHERE key = 'device_id'`).run()
 const second = stations.packNext('user3')
-ok(second === null, 'a second packer gets nothing — there is only one order ready', String(second?.customerId))
+ok(
+  second === null || second.customerId !== first.customerId,
+  'a second packer never gets the box somebody is already holding',
+  String(second?.customerId)
+)
 getDb().prepare(`UPDATE sync_state SET value = 'STATION-B' WHERE key = 'device_id'`).run()
 
 const packed = stations.packDone(first.customerId, 'user2')
 ok(!!packed, 'the packer can finish it')
 const afterPack = domain.listOrders().find((o: any) => o.customerId === first.customerId)
 ok(afterPack.packedAt !== null, 'packed_at is stamped — the first UI ever to write it', String(afterPack.packedAt))
-ok(stations.packQueue().length === 0, 'and it leaves the queue')
+ok(
+  stations.packQueue().every((o: any) => o.customerId !== first.customerId),
+  'and it leaves the queue'
+)
 
 // ---------------------------------------------------------------------------
 console.log('\n=== 9. send back ===')
 // ---------------------------------------------------------------------------
-const nextPick = stations.pickableOrders()[0]
-stations.claimOrder(nextPick.orderId, nextPick.customerId, 'pick', 'user2')
-stations.pickAdvance(nextPick.customerId, 'user2')
+// Everything is off the bench by now, so the next box comes from the PACK
+// queue rather than the picking run — there is nothing left to pick.
 const toPack = stations.packNext('user2')
+const nextPick = toPack
 ok(toPack?.customerId === nextPick.customerId, 'a second order reaches packing')
 ok(stations.sendBack(nextPick.customerId, 'missing the Yankees card') === true, 'the packer can send it back')
 ok(stations.packQueue().length === 0, 'it leaves the pack queue', String(stations.packQueue().length))
@@ -320,20 +344,36 @@ console.log('\n=== 9b. a send-back ACROSS two benches, then the repick ===')
 // is not ready to pack, and its repick is done so it is not to pick either. It
 // would sit in NEITHER queue, which is the one outcome the whole claim design
 // exists to prevent.
-const third = domain
-  .listOrders()
+// Every bench above went home holding something — release the lot, or the pack
+// queue hides this one behind a picker who is not standing there. More stations
+// need clearing than used to: a break now finishes as a whole, so several boxes
+// went pack-ready together and more of them got claimed along the way.
+for (const st of ['STATION-B', 'STATION-C', 'STATION-P', 'STATION-Q']) {
+  getDb().prepare(`UPDATE sync_state SET value = ? WHERE key = 'device_id'`).run(st)
+  stations.releaseAllForStation('end of shift')
+}
+getDb().prepare(`UPDATE sync_state SET value = 'STATION-B' WHERE key = 'device_id'`).run()
+
+// A box nobody is holding. Chosen from the queue rather than from listOrders
+// because a whole break now finishes at once, so several boxes are pack-ready
+// together and more of them carry a claim than used to.
+const third = stations
+  .packQueue()
+  .filter((o: any) => !o.mine && !o.heldByStation)
+  .map((o: any) => ({ id: o.orderId, customerId: o.customerId }))
   .find((o: any) => o.customerId !== first.customerId && o.customerId !== nextPick.customerId)
 ok(!!third, 'a third order to work with', String(third?.customerId))
-
-// The bench above went home holding its next order — release it, or the pack
-// queue would hide this one behind a picker who is not standing there.
-stations.releaseAllForStation('end of shift')
 
 getDb().prepare(`UPDATE sync_state SET value = 'STATION-P' WHERE key = 'device_id'`).run()
 stations.claimOrder(third.id, third.customerId, 'pick', 'user4')
 stations.pickAdvance(third.customerId, 'user4')
 getDb().prepare(`UPDATE sync_state SET value = 'STATION-Q' WHERE key = 'device_id'`).run()
-ok(stations.packNext('user5')?.customerId === third.customerId, 'the packer at the OTHER bench takes it')
+// Claimed by name rather than by packNext: now that a break finishes as a
+// whole, several boxes become pack-ready at the same instant, so "the next one"
+// is no longer necessarily this one. What the case is about is a packer at
+// ANOTHER station holding it, which is what claiming it says.
+const claimed = stations.claimOrder(third.id, third.customerId, 'pack', 'user5')
+ok(claimed.ok === true, 'the packer at the OTHER bench takes it', JSON.stringify(claimed.error ?? claimed))
 ok(stations.sendBack(third.customerId, 'sleeve is split') === true, 'and rejects it')
 ok(
   stations.packQueue().every((o: any) => o.customerId !== third.customerId),
@@ -367,6 +407,10 @@ ok(claimsBefore > 0, 'there are claims on the board', String(claimsBefore))
 ship.importDataset(parsePages(PAGES, { sport: 'mlb', eventName: 'Next night', eventDate: '2026-08-08' }), {
   filename: 'next.pdf'
 })
+// Bench work done: sleeved, sorted, and the unsold teams bagged. What is left
+// is the sold cards, which is what the picking station is for.
+readyAllBreaks()
+bagUnsoldTeams()
 ship.setShipEvent('Next night', '2026-08-08')
 const claimsAfter = (getDb().prepare(`SELECT COUNT(*) AS n FROM ship_work_claims`).get() as { n: number }).n
 ok(claimsAfter === claimsBefore, 'not one claim row was written to', `${claimsBefore} -> ${claimsAfter}`)
@@ -506,6 +550,10 @@ ship.importDataset(
   ),
   { filename: 'last-pick.pdf' }
 )
+// Bench work done: sleeved, sorted, and the unsold teams bagged. What is left
+// is the sold cards, which is what the picking station is for.
+readyAllBreaks()
+bagUnsoldTeams()
 ship.setShipEvent('Last pick', '2026-08-04')
 ok(domain.listOrders().length === 3, 'three fresh orders', String(domain.listOrders().length))
 
@@ -569,6 +617,10 @@ ship.importDataset(
   ),
   { filename: 'page-order.pdf' }
 )
+// Bench work done: sleeved, sorted, and the unsold teams bagged. What is left
+// is the sold cards, which is what the picking station is for.
+readyAllBreaks()
+bagUnsoldTeams()
 ship.setShipEvent('Page order', '2026-08-05')
 
 const handles = (rows: any[]): string => rows.map((o: any) => o.customer?.handle ?? o.handle).join(',')
@@ -662,6 +714,10 @@ ship.importDataset(
   ),
   { filename: 'two-benches.pdf' }
 )
+// Bench work done: sleeved, sorted, and the unsold teams bagged. What is left
+// is the sold cards, which is what the picking station is for.
+readyAllBreaks()
+bagUnsoldTeams()
 ship.setShipEvent('Two benches', '2026-08-06')
 
 const handedOut: string[] = []

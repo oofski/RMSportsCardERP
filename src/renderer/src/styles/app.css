@@ -4074,6 +4074,217 @@ tr.hoverable-row:hover {
   font-size: 14px;
 }
 
+/* ---------- The bench checklist (BreakBench) ----------
+   Three steps per break before anything ships. Visually one block so the
+   sequence reads as one job, with step 3's team list carrying most of the
+   weight — it is most of the work. */
+.bench {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  margin: 0 0 14px;
+  overflow: hidden;
+}
+.bench-empty {
+  padding: 18px;
+  color: var(--text-3);
+  font-size: 13px;
+}
+.bench-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 16px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+.bench-head-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.bench-title {
+  font-weight: 700;
+  font-size: 13.5px;
+}
+.bench-sub {
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+.bench-bar {
+  flex: 1;
+  max-width: 240px;
+  height: 6px;
+  margin-left: auto;
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+}
+.bench-bar span {
+  display: block;
+  height: 100%;
+  background: var(--brand-500);
+  transition: width 0.18s ease;
+}
+.bench-bar.done span {
+  background: var(--success-strong);
+}
+
+.bench-steps {
+  list-style: none;
+  margin: 0;
+  padding: 6px 0;
+}
+.bench-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 9px 16px;
+}
+/* The step being worked on is the one thing on this panel somebody is looking
+   for, so it gets a rail rather than only a colour — findable at a glance from
+   arm's length, which is the distance this is read from. */
+.bench-step.active {
+  box-shadow: inset 3px 0 0 var(--brand-500);
+  background: var(--surface-2);
+}
+.bench-step.done .bench-step-label {
+  color: var(--text-3);
+}
+.bench-step.locked {
+  opacity: 0.5;
+}
+.bench-tick {
+  border: 0;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--text-3);
+  display: flex;
+  align-items: center;
+  flex: none;
+  margin-top: 1px;
+}
+.bench-tick:disabled {
+  cursor: default;
+}
+.bench-step.done .bench-tick,
+.bench-team.bagged .bench-tick {
+  color: var(--success-strong);
+}
+.bench-tick:not(:disabled):hover {
+  color: var(--brand-500);
+}
+.bench-step-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.bench-step-label {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+.bench-step-label b {
+  color: var(--text-3);
+  margin-right: 3px;
+}
+.bench-step-detail {
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+.bench-step-stamp {
+  font-size: 11px;
+  color: var(--success-strong);
+}
+
+.bench-bagging {
+  border-top: 1px solid var(--border);
+  padding: 11px 16px 6px;
+}
+.bench-bag-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+.bench-bag-count {
+  margin-left: auto;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+}
+.bench-bag-hint {
+  margin: 0 0 8px;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+.bench-blocked {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 8px;
+  padding: 8px 11px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-2);
+}
+/* Dimmed, never hidden. Somebody has to be able to SEE the thirty teams
+   waiting behind the gate to know what the gate is holding back. */
+.bench-bagging.locked .bench-teams {
+  opacity: 0.45;
+}
+
+.bench-teams {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.bench-team {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 2px;
+  border-bottom: 1px solid var(--border);
+}
+.bench-team:last-child {
+  border-bottom: 0;
+}
+/* Team and buyer at the same weight: matching one to the other IS the job, and
+   making either secondary makes the match harder to see. */
+.bench-team-name {
+  font-size: 13px;
+  font-weight: 600;
+  min-width: 168px;
+}
+.bench-team-who {
+  font-size: 13px;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bench-team-who.none {
+  font-size: 11.5px;
+  color: var(--text-3);
+  font-style: italic;
+}
+.bench-team-tag {
+  font-style: normal;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--warning);
+  margin-left: 7px;
+}
+.bench-team.bagged .bench-team-name,
+.bench-team.bagged .bench-team-who {
+  color: var(--text-3);
+}
+
 /* ---------- Shipping & payment (FreightFields, both modals) ---------- */
 
 /* The number and its Track button share one field. They belong together — the

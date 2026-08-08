@@ -51,6 +51,7 @@ const { getDb, getMeta } = require('../src/main/db/database')
 const ship = require('../src/main/db/shipping')
 const domain = require('../src/main/db/shippingDomain')
 const { parsePages } = require('../src/main/shipping/parser')
+const { readyAllBreaks } = require('./support/bench')
 
 const db = getDb()
 
@@ -114,6 +115,8 @@ const b11 = breaks.find((b) => b.breakLabel === '11')!
 const d11 = domain.getBreak(b11.id) as { slots: { id: string; teamName: string; breakLabel: string }[] }
 const sox11 = d11.slots.find((s) => s.teamName === 'Boston Red Sox')!
 ok(sox11 != null && sox11.breakLabel === '11', 'the Red Sox card in #11 is labelled 11')
+// Checking a card off is gated on the break being sleeved and sorted.
+readyAllBreaks()
 domain.setTeamSlotChecked(sox11.id, true, 'tester')
 
 // Same show, imported again — ids are regenerated, so only the natural key can

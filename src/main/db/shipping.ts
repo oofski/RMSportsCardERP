@@ -46,6 +46,7 @@ import type {
   ShipWarning,
   ShippingDataset
 } from '@shared/shippingTypes'
+import { bagRowId } from '@shared/breakSteps'
 import { getDb } from './database'
 import { newId, nowIso } from '../util'
 
@@ -66,6 +67,10 @@ interface BreakRow {
   event_name: string | null
   event_date: string | null
   status: string
+  sleeved_at: string | null
+  sleeved_by: string | null
+  sorted_at: string | null
+  sorted_by: string | null
 }
 
 interface CustomerRow {
@@ -96,6 +101,8 @@ interface TeamSlotRow {
   checked_off: number
   checked_off_at: string | null
   checked_off_by: string | null
+  slip_page: number | null
+  slip_position: number | null
 }
 
 interface ShipmentRow {
@@ -220,7 +227,9 @@ function toBreak(r: BreakRow): ShipBreak {
     breakNumber: num(r.break_number),
     eventName: str(r.event_name),
     eventDate: str(r.event_date),
-    status: (r.status || 'pending') as ShipBreakStatus
+    status: (r.status || 'pending') as ShipBreakStatus,
+    sleeve: { at: r.sleeved_at ?? null, by: r.sleeved_by ?? null },
+    sort: { at: r.sorted_at ?? null, by: r.sorted_by ?? null }
   }
 }
 
@@ -254,7 +263,9 @@ function toTeamSlot(r: TeamSlotRow): ShipTeamSlot {
     topSleevedBy: r.top_sleeved_by ?? null,
     checkedOff: bool(r.checked_off),
     checkedOffAt: r.checked_off_at ?? null,
-    checkedOffBy: r.checked_off_by ?? null
+    checkedOffBy: r.checked_off_by ?? null,
+    slipPage: r.slip_page ?? null,
+    slipPosition: r.slip_position ?? null
   }
 }
 
@@ -419,7 +430,9 @@ export function setShipEvent(name: string, date: string): ShipEvent {
 // Reads — breaks
 // ---------------------------------------------------------------------------
 
-const BREAK_SELECT = `SELECT id, break_label, break_number, event_name, event_date, status FROM ship_breaks`
+const BREAK_SELECT = `SELECT id, break_label, break_number, event_name, event_date, status,
+                             sleeved_at, sleeved_by, sorted_at, sorted_by
+                      FROM ship_breaks`
 
 export function listShipBreaks(): ShipBreak[] {
   const rows = getDb()
@@ -462,9 +475,16 @@ export function getShipCustomer(id: string): ShipCustomer | null {
 // Reads — team slots
 // ---------------------------------------------------------------------------
 
+// The sleeve columns are selected because setTeamSlotSleeve WRITES them. Left
+// out, toTeamSlot mapped `undefined` and every slot read back sleeved:false
+// however many had been sleeved — a store that cannot read back what it writes
+// is a trap for whoever first depends on the field.
 const SLOT_SELECT = `
   SELECT id, break_id, break_label, break_number, team_name, customer_id, order_id, price,
-         is_giveaway, top_sleeved, checked_off, checked_off_at, checked_off_by
+         is_giveaway, top_sleeved, top_sleeved_at, top_sleeved_by,
+         sleeved, sleeved_at, sleeved_by,
+         checked_off, checked_off_at, checked_off_by,
+         slip_page, slip_position
   FROM ship_team_slots
 `
 
@@ -857,6 +877,110 @@ export function setBreakSlotsTopSleeved(breakId: string, on: boolean): number {
     .run(flag(on), breakId).changes
 }
 
+// ---------------------------------------------------------------------------
+// The bench checklist — steps 1 and 2, and the bags for unsold teams
+// ---------------------------------------------------------------------------
+
+/**
+ * Stamp (or clear) one of the two whole-break steps.
+ *
+ * A stamp rather than a boolean: the one question ever asked about a break that
+ * came out wrong is who had it, and a `1` cannot answer that.
+ */
+export function setBreakStepStamp(
+  breakId: string,
+  step: 'sleeve' | 'sort',
+  done: boolean,
+  by: string | null
+): ShipBreak | null {
+  const atCol = step === 'sleeve' ? 'sleeved_at' : 'sorted_at'
+  const byCol = step === 'sleeve' ? 'sleeved_by' : 'sorted_by'
+  const res = getDb()
+    .prepare(`UPDATE ship_breaks SET ${atCol} = ?, ${byCol} = ? WHERE id = ?`)
+    .run(done ? nowIso() : null, done ? by : null, breakId)
+  if (res.changes === 0) return null
+  return getShipBreak(breakId)
+}
+
+export interface BreakTeamBagRow {
+  breakId: string
+  teamName: string
+  baggedAt: string | null
+  baggedBy: string | null
+}
+
+/** Every unsold-team bag recorded for a break. */
+export function listBreakTeamBags(breakId: string): BreakTeamBagRow[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT break_id, team_name, bagged_at, bagged_by
+         FROM ship_break_team_bags
+        WHERE break_id = ? AND bagged_at IS NOT NULL`
+    )
+    .all(breakId) as Array<{
+    break_id: string
+    team_name: string
+    bagged_at: string | null
+    bagged_by: string | null
+  }>
+  return rows.map((r) => ({
+    breakId: r.break_id,
+    teamName: r.team_name,
+    baggedAt: r.bagged_at,
+    baggedBy: r.bagged_by
+  }))
+}
+
+/** How many unsold teams are bagged, per break, in one pass. */
+export function countBreakTeamBags(): Map<string, number> {
+  const rows = getDb()
+    .prepare(
+      `SELECT break_id, COUNT(*) AS n
+         FROM ship_break_team_bags
+        WHERE bagged_at IS NOT NULL
+        GROUP BY break_id`
+    )
+    .all() as Array<{ break_id: string; n: number }>
+  return new Map(rows.map((r) => [r.break_id, r.n]))
+}
+
+/**
+ * Bag (or un-bag) a team that nobody bought.
+ *
+ * UPSERTS on the derived id so two benches doing the same team converge on one
+ * row instead of racing to create two. Un-bagging clears the stamp rather than
+ * deleting the row: a deleted row and a never-created row are indistinguishable
+ * to a sync that arbitrates by comparing rows, so the tombstone has to be a
+ * value rather than an absence.
+ */
+export function setBreakTeamBagged(
+  breakId: string,
+  teamName: string,
+  bagged: boolean,
+  by: string | null
+): BreakTeamBagRow {
+  const at = nowIso()
+  getDb()
+    .prepare(
+      `INSERT INTO ship_break_team_bags
+         (id, break_id, team_name, bagged_at, bagged_by, created_at, updated_at)
+       VALUES (@id, @breakId, @teamName, @baggedAt, @baggedBy, @at, @at)
+       ON CONFLICT(id) DO UPDATE SET
+         bagged_at  = excluded.bagged_at,
+         bagged_by  = excluded.bagged_by,
+         updated_at = excluded.updated_at`
+    )
+    .run({
+      id: bagRowId(breakId, teamName),
+      breakId,
+      teamName,
+      baggedAt: bagged ? at : null,
+      baggedBy: bagged ? by : null,
+      at
+    })
+  return { breakId, teamName, baggedAt: bagged ? at : null, baggedBy: bagged ? by : null }
+}
+
 export function setBreakStatus(id: string, status: ShipBreakStatus): ShipBreak | null {
   const res = getDb().prepare(`UPDATE ship_breaks SET status = ? WHERE id = ?`).run(status, id)
   if (res.changes === 0) return null
@@ -1100,7 +1224,14 @@ const DATASET_TABLES = [
   'ship_orders',
   'ship_batch_urls',
   'ship_break_audit',
-  'ship_warnings'
+  'ship_warnings',
+  // Dataset state, NOT operator state, despite being ticked by hand.
+  //
+  // Its id is derived from the break id and the team, and a break id is
+  // `break_<label>` — which repeats every show. Left behind, next week's #11A
+  // would open with last week's teams already bagged, and the bench would skip
+  // real work because a previous show said it was done.
+  'ship_break_team_bags'
 ] as const
 
 /**
@@ -1239,8 +1370,9 @@ export function importDataset(
     const insSlot = database.prepare(
       `INSERT INTO ship_team_slots
          (id, break_id, break_label, break_number, team_name, customer_id, order_id, price,
-          is_giveaway, top_sleeved, checked_off, checked_off_at, checked_off_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          is_giveaway, top_sleeved, checked_off, checked_off_at, checked_off_by,
+          slip_page, slip_position)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     for (const s of dataset.teamSlots) {
       insSlot.run(
@@ -1256,7 +1388,9 @@ export function importDataset(
         flag(s.topSleeved),
         flag(s.checkedOff),
         s.checkedOff ? (s.checkedOffAt ?? null) : null,
-        s.checkedOff ? (s.checkedOffBy ?? null) : null
+        s.checkedOff ? (s.checkedOffBy ?? null) : null,
+        s.slipPage ?? null,
+        s.slipPosition ?? null
       )
     }
 

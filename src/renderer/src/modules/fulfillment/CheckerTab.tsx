@@ -12,6 +12,7 @@ import type {
 } from '@shared/shippingViews'
 import { SHIP_STAGE_LABELS } from '@shared/shippingViews'
 import { BreakChip } from './BreakChip'
+import { BreakBench } from './BreakBench'
 import type { ShipTabProps } from './ShippingModule'
 import { api } from '../../lib/api'
 import { formatDateTime, formatMoney } from '../../lib/format'
@@ -392,6 +393,14 @@ export function CheckerTab({ canManage, canFind, onChanged }: ShipTabProps): JSX
             runBreakAction('change the status', () => api.shipping.setBreakStatus(detail.id, status))
           }
           onClear={() => setConfirmClear(detail)}
+          onBenchChanged={async () => {
+            // Bagging a SOLD team writes checked_off, which is what the pick
+            // list below is drawing — so this break has to be re-read, not just
+            // the workspace summary, or the two halves of one screen disagree.
+            const fresh = await api.shipping.break(detail.id)
+            if (fresh) applyBreak(fresh)
+            await onChangedRef.current()
+          }}
         />
         {confirmClear && (
           <Modal
@@ -796,7 +805,8 @@ function BreakDetailView({
   onPack,
   onSleeve,
   onStatus,
-  onClear
+  onClear,
+  onBenchChanged
 }: {
   detail: ShipBreakDetail
   /** Run the break: mark it packed, clear it, change its status. */
@@ -814,6 +824,9 @@ function BreakDetailView({
   onSleeve: (on: boolean) => void
   onStatus: (status: ShipBreakStatus) => void
   onClear: () => void
+  /** Re-read this break after a bench tick — step 3 writes the same flag the
+   *  pick list below is showing, so both have to move together. */
+  onBenchChanged: () => void | Promise<void>
 }): JSX.Element {
   // By team by default.
   //
@@ -997,6 +1010,11 @@ function BreakDetailView({
           ))
         )}
       </div>
+
+      {/* The bench checklist. Above the pick list on purpose: it is what happens
+          FIRST, and a screen that puts the finishing work above the preparation
+          reads as though the preparation were optional. */}
+      <BreakBench breakId={detail.id} canAct={canFind} onChanged={onBenchChanged} />
 
       <div className="chk-actions">
         <Button

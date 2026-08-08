@@ -93,6 +93,7 @@ import {
   recomputeBreakStatus,
   resetShipQueueOrder,
   listBreakIdsForCustomer,
+  getShipTeamSlot,
   setBreakSlotsChecked,
   setCustomerSlotsChecked,
   setBreakSlotsTopSleeved,
@@ -102,6 +103,15 @@ import {
   setTeamSlotSleeve as storeSetTeamSlotSleeve,
   updateShipment
 } from './shipping'
+import {
+  getBreakBench,
+  getBreakStepState,
+  listBreakStepStates,
+  packBlockedReason,
+  setBreakStep as benchSetBreakStep,
+  setTeamBagged as benchSetTeamBagged
+} from './breakBench'
+import { blockedReason, canStartStep, type BreakBenchDetail } from '@shared/breakSteps'
 import {
   computeSupplyPlan,
   costSupplyPlan,
@@ -409,6 +419,22 @@ export function setOrderStage(
   userId: string | null
 ): ShipOrderRow {
   const sh = requireShipment(id)
+
+  // The bench gate. A package cannot move FORWARD past picking while any break
+  // it touches is still on the bench — the checklist's order is the point of
+  // the checklist, and a mailer sealed over a break that was never team-bagged
+  // is the failure it exists to prevent.
+  //
+  // Only the forward moves are gated. `to_pick` is the way back, and the two
+  // side-states record something that has already happened out in the world —
+  // a package genuinely lost in the post is still lost whatever the bench says,
+  // and refusing to record that would make the screen lie about reality to
+  // enforce a rule about card sorting.
+  if (stage === 'put_together' || stage === 'sent' || stage === 'all_good') {
+    const blocked = packBlockedReason(listBreakIdsForCustomer(sh.customerId))
+    if (blocked) throw new Error(blocked)
+  }
+
   const at = nowIso()
   const status = (code: ShipStatusCode): { code: ShipStatusCode; setAt: string; setBy: string | null } => ({
     code,
@@ -870,6 +896,22 @@ export function setTeamSlotChecked(
   checked: boolean,
   userId: string | null
 ): ShipSlotUpdate {
+  // Gated like every other way of writing this flag. Without it the checklist
+  // could be walked around one card at a time, which — on a thirty-card break —
+  // is not even a slow way to do it.
+  //
+  // A break-less giveaway has no ship_breaks row and so no checklist; those are
+  // riders that never sat in a tray, and getBreakStepState returns null for
+  // them, which reads correctly as "nothing to wait for".
+  if (checked) {
+    const existing = getShipTeamSlot(slotId)
+    if (existing) {
+      const state = getBreakStepState(existing.breakId)
+      if (state && !canStartStep('bag', state)) {
+        throw new Error(blockedReason('bag', state) ?? 'That break is not ready to be bagged.')
+      }
+    }
+  }
   const slot = storeSetTeamSlotChecked(slotId, checked, userId)
   if (!slot) throw new Error('Card not found.')
   _recomputeBreakStatus(slot.breakId)
@@ -909,6 +951,48 @@ export function setTeamSlotTopSleeved(slotId: string, on: boolean): ShipSlotUpda
   }
 }
 
+// ---------------------------------------------------------------------------
+// The bench checklist
+//
+// Re-exported through the domain layer so IPC has ONE module to talk to, the
+// same way every other shipping operation does. setTeamBagged is handed the
+// slot mutation rather than importing it, which keeps breakBench.ts free of a
+// cycle back into this file.
+// ---------------------------------------------------------------------------
+
+export function getBench(breakId: string): BreakBenchDetail | null {
+  return getBreakBench(breakId)
+}
+
+/** Every break's checklist state — the board, and the tab badge. */
+export function listBenchStates(): ReturnType<typeof listBreakStepStates> {
+  return listBreakStepStates()
+}
+
+export function setBreakStep(
+  breakId: string,
+  step: 'sleeve' | 'sort',
+  done: boolean,
+  userId: string | null
+): BreakBenchDetail {
+  return benchSetBreakStep(breakId, step, done, userId)
+}
+
+export function setTeamBagged(
+  breakId: string,
+  teamName: string,
+  bagged: boolean,
+  userId: string | null
+): BreakBenchDetail {
+  return benchSetTeamBagged(breakId, teamName, bagged, userId, (slotId, on, by) => {
+    // Goes through the DOMAIN mutation, not the store's, so the break's
+    // pending/picking status is recomputed exactly as it is when the same card
+    // is ticked from the pick list. Two paths to one flag that re-derive
+    // different amounts is how the two screens start disagreeing.
+    setTeamSlotChecked(slotId, on, by)
+  })
+}
+
 function requireBreak(id: string): ShipBreak {
   const br = getShipBreak(id)
   if (!br) throw new Error('Break not found.')
@@ -922,6 +1006,15 @@ export function setBreakChecked(
   userId: string | null
 ): ShipBreakDetail {
   requireBreak(breakId)
+  // Same flag as step 3, so the same gate. Bulk-ticking a break that has not
+  // been sleeved and sorted would walk straight around the checklist using the
+  // one button that touches every card at once.
+  if (checked) {
+    const state = getBreakStepState(breakId)
+    if (state && !canStartStep('bag', state)) {
+      throw new Error(blockedReason('bag', state) ?? 'This break is not ready yet.')
+    }
+  }
   setBreakSlotsChecked(breakId, checked, userId)
   _recomputeBreakStatus(breakId)
   return getBreak(breakId) as ShipBreakDetail
@@ -953,6 +1046,17 @@ export function setOrderChecked(
   // Read the breaks BEFORE the write: they do not change, but reading after
   // would depend on the update having landed, which is a needless coupling.
   const breakIds = listBreakIdsForCustomer(customerId)
+  // "Next order" writes the same flag step 3 does, across every break the
+  // package touches, so it answers to the same gate. Un-picking never does —
+  // a correction must stay possible whatever state the bench is in.
+  if (checked) {
+    for (const id of breakIds) {
+      const state = getBreakStepState(id)
+      if (state && !canStartStep('bag', state)) {
+        throw new Error(blockedReason('bag', state) ?? 'That break is not ready to be bagged.')
+      }
+    }
+  }
   setCustomerSlotsChecked(customerId, checked, userId, onlyUnchecked)
   for (const id of breakIds) _recomputeBreakStatus(id)
   return _orderRow(shipment)
