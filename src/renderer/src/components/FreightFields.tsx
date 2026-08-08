@@ -13,12 +13,21 @@ import { Icon } from './Icon'
 import { Button, Checkbox, Field, Input, Select } from './ui'
 
 /**
- * Carrier + tracking number on a board card, with the number as a live link.
+ * How a card says where the box is: one line, in words.
  *
- * Renders nothing at all when there is no tracking number — a card that says
- * "no tracking" on every order is a card where nobody notices the ones that do
- * have it. `stopPropagation` because the cards are themselves buttons that open
- * the order, and clicking the link means "track", not "open".
+ * "USPS · Ground Advantage", and nothing else. The TRACKING NUMBER is
+ * deliberately not here — a twenty-two digit string is the widest thing on a
+ * board card and the least readable, it pushes the money and the item count out
+ * of line, and nobody reads a tracking number off a board. It lives on the
+ * order itself, where it is editable and has a Track button beside it.
+ *
+ * Clicking the line still opens the carrier's own live page, so the number
+ * being absent costs nothing: the thing somebody wants when they look at this
+ * is "where is it", and that is one click either way.
+ *
+ * Renders nothing when there is no carrier AND no service — a card that says
+ * "no shipping" on every order is a card where nobody notices the ones that
+ * have some.
  */
 export function FreightLine({
   carrier,
@@ -30,28 +39,38 @@ export function FreightLine({
   trackingNumber: string | null
 }): JSX.Element | null {
   const tracking = (trackingNumber ?? '').trim()
-  if (!tracking) return null
+  const who = [carrierLabel(carrier), service].filter(Boolean).join(' · ')
+  if (!who && !tracking) return null
   const url = trackingUrl(carrier, tracking)
-  const who = [carrierLabel(carrier), service].filter(Boolean).join(' ')
+
+  // With a carrier but no service the carrier alone is still worth saying; with
+  // neither but a number on file, say that a number exists rather than nothing.
+  const label = who || 'Tracking on file'
+
+  const body = (
+    <>
+      <Icon name="Truck" size={13} />
+      <span>{label}</span>
+    </>
+  )
 
   return (
-    <div className="freight-chip" title={`${who || 'Tracking'} ${tracking}`}>
-      <Icon name="Truck" size={13} />
-      {who && <span>{who}</span>}
+    <div className="freight-chip" title={tracking ? `${label} — ${tracking}` : label}>
       {url ? (
+        // stopPropagation because the card is itself a button that opens the
+        // order, and clicking here means "track", not "open".
         <a
           href={url}
-          className="mono"
           onClick={(e) => {
             e.preventDefault()
             e.stopPropagation()
             void api.email.openExternal(url)
           }}
         >
-          {tracking}
+          {body}
         </a>
       ) : (
-        <span className="mono">{tracking}</span>
+        body
       )}
     </div>
   )

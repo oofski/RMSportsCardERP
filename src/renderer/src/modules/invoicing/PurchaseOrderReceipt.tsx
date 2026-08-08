@@ -29,7 +29,8 @@ export function PurchaseOrderReceipt({
   thumbnails,
   onMove,
   onDelete,
-  onClose
+  onClose,
+  onSaved
 }: {
   id: string
   thumbnails: Record<string, string>
@@ -37,6 +38,15 @@ export function PurchaseOrderReceipt({
   /** Absent for users who cannot manage POs, which hides the action entirely. */
   onDelete?: (id: string, poNumber: string) => void | Promise<void>
   onClose: () => void
+  /**
+   * Re-read the board.
+   *
+   * Editing shipping here changes what the CARD behind this modal says, and the
+   * board holds its own copy of every PO. Without this the receipt showed the
+   * new carrier, the card behind it showed the old one, and closing the modal
+   * looked like the save had been thrown away.
+   */
+  onSaved: () => void | Promise<void>
 }): JSX.Element {
   const toast = useToast()
   const [detail, setDetail] = useState<PurchaseOrderDetail | null>(null)
@@ -157,7 +167,13 @@ export function PurchaseOrderReceipt({
 
         {detail.notes && <div className="po-receipt-notes">{detail.notes}</div>}
 
-        <FreightEditor po={detail} onSaved={setDetail} />
+        <FreightEditor
+          po={detail}
+          onSaved={(fresh) => {
+            setDetail(fresh)
+            void onSaved()
+          }}
+        />
 
         <div className="po-receipt-lines">
           <div className="po-receipt-line po-receipt-line-head">

@@ -285,6 +285,7 @@ export function InvoicingModule(): JSX.Element {
           onMove={move}
           onDelete={canManage ? removePo : undefined}
           onClose={() => setReceiptId(null)}
+          onSaved={reload}
         />
       )}
       {stuck && <StuckPoModal

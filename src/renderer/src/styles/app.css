@@ -4340,27 +4340,37 @@ tr.hoverable-row:hover {
   padding-bottom: 12px;
 }
 
-/* A carrier + tracking line on a board card. Reads as one fact, and the number
-   is monospaced so a transposed digit is findable by eye. */
+/* "USPS · Ground Advantage" on a board card — words, not a number. Truncates
+   rather than wrapping: one line is the whole point, and a carrier and service
+   long enough to wrap would push the card's totals out of alignment. */
 .freight-chip {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 6px;
   font-size: 11.5px;
   color: var(--text-3);
   min-width: 0;
+  margin-top: 2px;
 }
-.freight-chip .mono {
+.freight-chip a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: inherit;
+  text-decoration: none;
+  min-width: 0;
+}
+.freight-chip a:hover {
+  color: var(--brand-500);
+  text-decoration: underline;
+}
+.freight-chip span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.freight-chip a {
-  color: var(--brand-500);
-  text-decoration: none;
-}
-.freight-chip a:hover {
-  text-decoration: underline;
+.freight-chip svg {
+  flex: none;
 }
 
 /* ---------- Receipt ---------- */
