@@ -54,7 +54,27 @@ function mondayOf(day: string): string {
 
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
-export function RotaTab({ employees }: { employees: Employee[] }): JSX.Element {
+export function RotaTab({
+  employees,
+  weekStart,
+  setWeekStart,
+  focusDay,
+  onFocusHandled
+}: {
+  employees: Employee[]
+  /**
+   * The week being looked at, OWNED BY THE MODULE rather than by this tab.
+   *
+   * Lifted so the Team tab and this one page together: a lead who spots a gap on
+   * Thursday and clicks through must land on Thursday of the week they were
+   * looking at, not on whatever week this tab last had in its own state.
+   */
+  weekStart: string
+  setWeekStart: (day: string) => void
+  /** A day to open the Add form on, set by a click from the Team tab. */
+  focusDay: string | null
+  onFocusHandled: () => void
+}): JSX.Element {
   const toast = useToast()
   const { can } = useSession()
   // READING the rota is admin.hours.view — the gate on the tab itself, beside
@@ -64,7 +84,6 @@ export function RotaTab({ employees }: { employees: Employee[] }): JSX.Element {
   // change the rota", which is a worse screen than no button.
   const canEdit = can('admin.employees.manage')
   const today = dayKey(new Date())
-  const [weekStart, setWeekStart] = useState(() => mondayOf(today))
   const [shifts, setShifts] = useState<ShiftWithPerson[]>([])
   const [answers, setAnswers] = useState<EffectiveAvailabilityWithPerson[]>([])
   const [loading, setLoading] = useState(true)
@@ -104,6 +123,14 @@ export function RotaTab({ employees }: { employees: Employee[] }): JSX.Element {
       active = false
     }
   }, [load])
+
+  // A day clicked on the Team tab opens its Add form here, once. Cleared
+  // immediately so paging away and back does not reopen it.
+  useEffect(() => {
+    if (!focusDay) return
+    setOpenDay(focusDay)
+    onFocusHandled()
+  }, [focusDay, onFocusHandled])
 
   const byDay = useMemo(() => {
     const map = new Map<string, ShiftWithPerson[]>()
@@ -182,13 +209,13 @@ export function RotaTab({ employees }: { employees: Employee[] }): JSX.Element {
         </div>
         <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
           <div className="sb-month-nav">
-            <button onClick={() => setWeekStart((w) => addDays(w, -7))} title="Previous week">
+            <button onClick={() => setWeekStart(addDays(weekStart, -7))} title="Previous week">
               <Icon name="ChevronLeft" size={15} />
             </button>
             <span style={{ minWidth: 150 }}>
               {dayLabel(weekStart)} – {dayLabel(weekEnd)}
             </span>
-            <button onClick={() => setWeekStart((w) => addDays(w, 7))} title="Next week">
+            <button onClick={() => setWeekStart(addDays(weekStart, 7))} title="Next week">
               <Icon name="ChevronRight" size={15} />
             </button>
           </div>

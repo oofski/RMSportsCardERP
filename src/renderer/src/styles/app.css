@@ -19246,3 +19246,204 @@ button.sor-team:focus-visible {
   border-style: dashed;
   border-color: var(--success-strong);
 }
+
+/* ---------------------------------------------------------------------------
+   THE LEAD'S TEAM VIEW
+
+   Three panels in the order somebody plans in: what needs doing, how each night
+   is covered, and everybody's usual week as reference.
+   --------------------------------------------------------------------------- */
+
+.ts-alerts {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+}
+.ts-alerts li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-2);
+}
+.ts-alerts li + li {
+  border-top: 1px solid var(--border);
+}
+.ts-alerts li svg {
+  flex: none;
+}
+.ts-alerts li span {
+  flex: 1;
+}
+/* Rostered against a stated no is the only one that is somebody's mistake
+   rather than an unfinished job, so it is the only one in the loud colour. */
+.ts-alerts li[data-kind='clash'] {
+  color: var(--danger-strong);
+}
+.ts-alerts li[data-kind='uncovered'] {
+  color: var(--text);
+}
+.ts-alerts li[data-kind='no-pattern'],
+.ts-alerts li[data-kind='nobody-free'] {
+  color: var(--text-3);
+}
+.ts-alert-go {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.ts-alert-go:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.ts-cover {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+  padding: 12px 14px 14px;
+}
+@media (max-width: 760px) {
+  .ts-cover {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+.ts-cover-day {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  padding: 8px 4px 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  cursor: pointer;
+  font: inherit;
+}
+.ts-cover-day:hover {
+  border-color: var(--accent);
+}
+/* A night with nobody on AND people free is a gap that can be filled right now
+   — the only state here worth interrupting somebody for. */
+.ts-cover-day[data-gap='true'] {
+  background: color-mix(in srgb, var(--warning) 12%, var(--surface-2));
+  border-color: color-mix(in srgb, var(--warning) 45%, transparent);
+}
+.ts-cover-day[data-clash='true'] {
+  border-color: var(--danger-strong);
+}
+.ts-cover-name {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--text-3);
+}
+.ts-cover-on {
+  font-size: 21px;
+  font-weight: 700;
+  line-height: 1.05;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.ts-cover-sub {
+  font-size: 10px;
+  color: var(--text-3);
+}
+.ts-cover-bits {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 5px;
+  margin-top: 3px;
+}
+.ts-cover-bits em {
+  font-style: normal;
+  font-size: 10px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+.ts-cover-bits em[data-kind='free'] {
+  color: var(--success-strong);
+}
+.ts-cover-flag {
+  position: absolute;
+  top: 3px;
+  right: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 9.5px;
+  font-weight: 700;
+  color: var(--danger-strong);
+}
+
+/* ---- Everybody's usual week -------------------------------------------- */
+
+.ts-week td,
+.ts-week th {
+  white-space: nowrap;
+}
+.ts-cell {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 30px;
+  height: 22px;
+  padding: 0 5px;
+  border-radius: var(--radius-sm);
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--text-3);
+}
+.ts-cell[data-status='available'] {
+  background: color-mix(in srgb, var(--success-strong) 18%, transparent);
+  color: var(--success-strong);
+}
+.ts-cell[data-status='unavailable'] {
+  background: color-mix(in srgb, var(--danger-strong) 14%, transparent);
+  color: var(--danger-strong);
+}
+/* A dot, and nothing else. "Never asked" must not look like a decision — this
+   is the single easiest thing on the screen to get wrong. */
+.ts-cell[data-status='none'] {
+  background: transparent;
+  color: var(--text-3);
+  opacity: 0.55;
+}
+.ts-week tr[data-unset='true'] {
+  opacity: 0.72;
+}
+.ts-unset {
+  font-size: 11px;
+  font-style: italic;
+  color: var(--text-3);
+}
+.ts-row-clash {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 7px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--danger-strong);
+}
+.ts-foot {
+  margin: 0;
+  padding: 10px 14px 12px;
+  border-top: 1px solid var(--border);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-3);
+}

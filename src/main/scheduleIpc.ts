@@ -11,7 +11,8 @@ import type {
   NewShift,
   PatternDayInput,
   Shift,
-  ShiftWithPerson
+  ShiftWithPerson,
+  TeamScheduleOverview
 } from '@shared/schedule'
 import { currentUser } from './services/auth'
 import { getStaffBoard } from './db/staffBoard'
@@ -27,7 +28,8 @@ import {
   myPattern,
   myShifts,
   setAvailability,
-  setPattern
+  setPattern,
+  teamScheduleOverview
 } from './db/schedule'
 
 /**
@@ -230,6 +232,22 @@ export function registerScheduleIpc(): void {
       } catch (err) {
         return fail(err)
       }
+    }
+  )
+
+  // The lead's oversight read. Same gate as the team timesheet and the team
+  // rota: somebody who may not see who worked has no business seeing who said
+  // they are away next week. Returns an EMPTY overview rather than null so the
+  // screen has one shape to render — a null here would mean every field on the
+  // tab needs a second branch for a case that only arises if it is opened by
+  // somebody who cannot see it.
+  ipcMain.handle(
+    IPC.scheduleTeamOverview,
+    (_e, payload: { from?: unknown; to?: unknown }): TeamScheduleOverview => {
+      const from = str(payload?.from)
+      const to = str(payload?.to)
+      if (!can('admin.hours.view')) return { from, to, people: [], days: [] }
+      return teamScheduleOverview(from, to)
     }
   )
 

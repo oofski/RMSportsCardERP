@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { Employee } from '@shared/types'
+import { addDays, dayKey } from '@shared/homeTasks'
 import { useSession } from '../../lib/session'
 import { api } from '../../lib/api'
 import { LIVE, useLiveRefresh } from '../../lib/live'
 import { CenterLoader } from '../../components/ui'
 import { MyScheduleTab } from './MyScheduleTab'
 import { RotaTab } from './RotaTab'
+import { TeamScheduleTab } from './TeamScheduleTab'
 
 /**
  * Schedule — when you are in, and the days you can and cannot work.
@@ -17,18 +19,42 @@ import { RotaTab } from './RotaTab'
  * one of them is now a place the floor WRITES to — which a tab called "Hours"
  * gave no hint of.
  *
- * ONE screen for everybody, plus one more for leads. "Mine" is the whole module
- * for a packer: their rota and their availability on one calendar. A lead also
- * gets the week view they build the rota in, with everybody's answers shown
- * against the day they are filling — which is the entire point of collecting
- * them.
+ * ## One screen for everybody, two more for leads
+ *
+ * MY SCHEDULE is the whole module for a packer: their rota and their usual week
+ * on one calendar.
+ *
+ * TEAM is the oversight half — what needs sorting out this week, how each night
+ * is covered, and everybody's usual week in one grid. It answers "who can I put
+ * on Thursday" before the rota tab is opened to do it.
+ *
+ * ROTA is where the week is actually built.
+ *
+ * ## The week is owned HERE, not by either tab
+ *
+ * Both lead tabs are looking at the same seven days, and a lead who spots a gap
+ * on Team and clicks through has to land on that day of THAT week. Two tabs each
+ * holding their own week would put them on whichever week the rota tab last had,
+ * which is the sort of thing somebody only notices after rostering the wrong
+ * Thursday.
  */
 export function ScheduleModule(): JSX.Element {
   const { can } = useSession()
   const canTeam = can('admin.hours.view')
-  const [tab, setTab] = useState<'mine' | 'rota'>('mine')
+  const [tab, setTab] = useState<'mine' | 'team' | 'rota'>('mine')
   const [employees, setEmployees] = useState<Employee[]>([])
   const [loading, setLoading] = useState(true)
+
+  /** The Monday on or before a day. Sunday belongs to the week just ended. */
+  const mondayOf = (day: string): string => {
+    const t = Date.parse(`${day}T12:00:00Z`)
+    if (!Number.isFinite(t)) return day
+    const dow = new Date(t).getUTCDay()
+    return addDays(day, dow === 0 ? -6 : 1 - dow)
+  }
+
+  const [weekStart, setWeekStart] = useState(() => mondayOf(dayKey(new Date())))
+  const [focusDay, setFocusDay] = useState<string | null>(null)
 
   const loadEmployees = useCallback(async () => {
     // The roster is only needed to BUILD a rota. A packer cannot read it and
@@ -71,21 +97,44 @@ export function ScheduleModule(): JSX.Element {
     )
   }
 
+  /** Team → Rota, landing on the day that was clicked, in the week shown. */
+  const openDay = (day: string): void => {
+    setWeekStart(mondayOf(day))
+    setFocusDay(day)
+    setTab('rota')
+  }
+
   return (
     <div className="content-narrow">
       <div className="seg-row">
         <button className={`seg ${tab === 'mine' ? 'on' : ''}`} onClick={() => setTab('mine')}>
           My schedule
         </button>
-        {/* Who is DUE in, and what everybody said about the days that are still
-            open. Reading it is admin.hours.view; CHANGING it needs
+        {/* Oversight before editing, because that is the order the work happens
+            in: you find out what needs doing, then you go and do it. */}
+        <button className={`seg ${tab === 'team' ? 'on' : ''}`} onClick={() => setTab('team')}>
+          Team
+        </button>
+        {/* Reading the rota is admin.hours.view; CHANGING it needs
             admin.employees.manage, which the tab checks again inside. */}
         <button className={`seg ${tab === 'rota' ? 'on' : ''}`} onClick={() => setTab('rota')}>
-          Team rota
+          Rota
         </button>
       </div>
 
-      {tab === 'mine' ? <MyScheduleTab /> : <RotaTab employees={employees} />}
+      {tab === 'mine' ? (
+        <MyScheduleTab />
+      ) : tab === 'team' ? (
+        <TeamScheduleTab weekStart={weekStart} onOpenDay={openDay} />
+      ) : (
+        <RotaTab
+          employees={employees}
+          weekStart={weekStart}
+          setWeekStart={setWeekStart}
+          focusDay={focusDay}
+          onFocusHandled={() => setFocusDay(null)}
+        />
+      )}
     </div>
   )
 }

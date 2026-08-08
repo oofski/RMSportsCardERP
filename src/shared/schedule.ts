@@ -174,6 +174,132 @@ export interface EffectiveAvailabilityWithPerson extends EffectiveAvailability {
   employeeName: string
 }
 
+/**
+ * A lead's view of the whole team's week.
+ *
+ * ## Why this is a read of its own
+ *
+ * Everything on it can be derived from the rota plus availability, which is
+ * exactly the argument for computing it ONCE rather than in the screen. A lead
+ * looking at next Thursday is asking four questions at the same time — who can
+ * work it, who is already on it, is anybody on it who said no, and is anybody
+ * short of hours — and a screen that answers them from four independently
+ * filtered lists is a screen where those four answers can disagree.
+ *
+ * ## What earns a place here
+ *
+ * Only things somebody would ACT on. "Nobody is rostered on a night three
+ * people said they were free" is a job. "Rostered against a stated no" is a
+ * job. "This person has never set a usual week" is a job — it is the reason
+ * their column is empty, and without it an empty column reads as "unavailable"
+ * when it means "never asked".
+ *
+ * A count of how many people exist is not a job, and is not here.
+ */
+export interface TeamSchedulePerson {
+  employeeId: string
+  employeeName: string
+  role: string
+  /** Their usual week, Sunday first. Empty when they have never set one. */
+  pattern: AvailabilityPattern[]
+  /** False when they have never set a usual week — the reason a row is blank. */
+  hasPattern: boolean
+  /** Shifts they are on across the range being looked at. */
+  shiftsInRange: number
+  /** Rostered minutes across the range, where both ends of a shift are known. */
+  minutesInRange: number
+  /** Days in range they are rostered on having said they cannot work. */
+  clashDays: string[]
+}
+
+/** One day of the range, counted across everybody. */
+export interface TeamScheduleDay {
+  day: string
+  /** People whose effective answer for the day is "can work". */
+  free: number
+  /** People whose effective answer is "cannot work". */
+  away: number
+  /** People who have said nothing about it, one way or the other. */
+  unknown: number
+  rostered: number
+  /** Rostered on a day they said no to. */
+  clashes: number
+}
+
+export interface TeamScheduleOverview {
+  from: string
+  to: string
+  people: TeamSchedulePerson[]
+  days: TeamScheduleDay[]
+}
+
+/**
+ * The things on a team week somebody should actually do something about.
+ *
+ * Derived in the renderer rather than in main, because it is presentation: the
+ * facts are all in the overview already, and a second backend shape would be
+ * one more thing to keep in step with the first.
+ */
+export interface ScheduleAlert {
+  kind: 'clash' | 'uncovered' | 'no-pattern' | 'nobody-free'
+  /** The day it is about, when it is about one. */
+  day: string | null
+  text: string
+}
+
+export function scheduleAlerts(overview: TeamScheduleOverview): ScheduleAlert[] {
+  const out: ScheduleAlert[] = []
+
+  // Loudest first: somebody is on the rota for a day they said they cannot do.
+  // A person, not a count — the lead has to talk to them.
+  for (const p of overview.people) {
+    for (const day of p.clashDays) {
+      out.push({
+        kind: 'clash',
+        day,
+        text: `${p.employeeName} is rostered on ${dayLabel(day)} and said they cannot work it`
+      })
+    }
+  }
+
+  for (const d of overview.days) {
+    // Nobody on, but people available — the definition of a gap that can be
+    // filled right now, which is the only kind worth interrupting somebody for.
+    if (d.rostered === 0 && d.free > 0) {
+      out.push({
+        kind: 'uncovered',
+        day: d.day,
+        text: `Nobody is on ${dayLabel(d.day)} and ${d.free} ${d.free === 1 ? 'person is' : 'people are'} free`
+      })
+    }
+    // Nobody on and nobody free is a different problem with a different fix,
+    // and calling it the same thing would send a lead looking for a name that
+    // is not there.
+    else if (d.rostered === 0 && d.free === 0 && d.away > 0) {
+      out.push({
+        kind: 'nobody-free',
+        day: d.day,
+        text: `Nobody is on ${dayLabel(d.day)} and nobody has said they are free`
+      })
+    }
+  }
+
+  // Quietest, and last: a blank row means "never asked", not "unavailable".
+  const silent = overview.people.filter((p) => !p.hasPattern)
+  if (silent.length > 0) {
+    out.push({
+      kind: 'no-pattern',
+      day: null,
+      text:
+        silent.length === 1
+          ? `${silent[0].employeeName} has not set a usual week`
+          : `${silent.length} people have not set a usual week: ${silent.map((p) => p.employeeName.split(' ')[0]).join(', ')}`
+    })
+  }
+
+  return out
+}
+
 export const WEEKDAY_NAMES = [
   'Sunday',
   'Monday',

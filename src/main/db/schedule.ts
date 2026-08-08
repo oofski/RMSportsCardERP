@@ -6,6 +6,7 @@ import {
   upcomingFrom,
   validateAvailability,
   validatePatternDay,
+  shiftMinutes,
   validateShift,
   weekdayOf,
   type Availability,
@@ -17,7 +18,10 @@ import {
   type NewShift,
   type PatternDayInput,
   type Shift,
-  type ShiftWithPerson
+  type ShiftWithPerson,
+  type TeamScheduleDay,
+  type TeamSchedulePerson,
+  type TeamScheduleOverview
 } from '@shared/schedule'
 import { getDb } from './database'
 
@@ -619,4 +623,128 @@ export function listEffectiveAvailability(
   return out.sort(
     (a, b) => a.day.localeCompare(b.day) || a.employeeName.localeCompare(b.employeeName)
   )
+}
+
+// ---------------------------------------------------------------------------
+// The lead's view of the whole team's week
+// ---------------------------------------------------------------------------
+
+/**
+ * Everything a lead needs to look at a week, in ONE read.
+ *
+ * A lead looking at next Thursday is asking four questions at once — who can
+ * work it, who is already on it, is anybody on it who said no, is anybody short
+ * of hours — and a screen that answers them from four independently filtered
+ * lists is a screen where those four answers can disagree with each other.
+ *
+ * Built from three queries and an in-memory merge. The obvious alternative — a
+ * correlated subquery per person per calendar day — is a table scan per cell on
+ * the one screen next week gets planned from.
+ *
+ * DISABLED PEOPLE ARE EXCLUDED from the roster but NOT from the shift and clash
+ * counts: somebody who left last week may still be on Thursday's rota, and a
+ * screen that quietly dropped them would show a night as covered when nobody is
+ * coming.
+ */
+export function teamScheduleOverview(from: string, to: string): TeamScheduleOverview {
+  const db = getDb()
+
+  const roster = db
+    .prepare(
+      `SELECT id, first_name AS first, last_name AS last, role
+         FROM employees WHERE status != 'disabled'
+        ORDER BY first_name, last_name`
+    )
+    .all() as Array<{ id: string; first: string | null; last: string | null; role: string }>
+
+  const patterns = myPatternsForAll()
+  const shifts = listShifts(from, to)
+  const answers = listEffectiveAvailability(from, to)
+
+  const answerByKey = new Map(answers.map((a) => [`${a.employeeId}|${a.day}`, a]))
+
+  const days: TeamScheduleDay[] = []
+  const dayKeys: string[] = []
+  let guard = 0
+  for (let day = from; day <= to && guard < 120; day = addDays(day, 1), guard++) {
+    dayKeys.push(day)
+  }
+
+  const clashesByPerson = new Map<string, string[]>()
+  for (const s of shifts) {
+    if (answerByKey.get(`${s.employeeId}|${s.day}`)?.status !== 'unavailable') continue
+    const list = clashesByPerson.get(s.employeeId) ?? []
+    list.push(s.day)
+    clashesByPerson.set(s.employeeId, list)
+  }
+
+  const people: TeamSchedulePerson[] = roster.map((r) => {
+    const mine = shifts.filter((s) => s.employeeId === r.id)
+    let minutes = 0
+    for (const s of mine) {
+      const span = shiftMinutes(s)
+      if (span !== null) minutes += span
+    }
+    const pattern = patterns.get(r.id) ?? []
+    return {
+      employeeId: r.id,
+      employeeName: `${r.first ?? ''} ${r.last ?? ''}`.trim() || 'Someone',
+      role: r.role,
+      pattern,
+      // The distinction the whole grid rests on: an empty row means "never
+      // asked", not "unavailable", and without this flag nobody can tell.
+      hasPattern: pattern.length > 0,
+      shiftsInRange: mine.length,
+      minutesInRange: minutes,
+      clashDays: (clashesByPerson.get(r.id) ?? []).slice().sort()
+    }
+  })
+
+  for (const day of dayKeys) {
+    let free = 0
+    let away = 0
+    let rostered = 0
+    let clashes = 0
+    for (const r of roster) {
+      const a = answerByKey.get(`${r.id}|${day}`)
+      if (!a) continue
+      if (a.status === 'available') free++
+      else away++
+    }
+    for (const s of shifts) {
+      if (s.day !== day) continue
+      rostered++
+      if (answerByKey.get(`${s.employeeId}|${s.day}`)?.status === 'unavailable') clashes++
+    }
+    days.push({
+      day,
+      free,
+      away,
+      // Everybody on the roster who said neither thing. Counted rather than
+      // inferred from `roster.length - free - away` so a person who has left but
+      // still has an answer on file cannot make it come out negative.
+      unknown: roster.filter((r) => !answerByKey.has(`${r.id}|${day}`)).length,
+      rostered,
+      clashes
+    })
+  }
+
+  return { from, to, people, days }
+}
+
+/** Everybody's usual week, keyed by employee. */
+function myPatternsForAll(): Map<string, AvailabilityPattern[]> {
+  const rows = getDb()
+    .prepare(
+      `SELECT ${PATTERN_COLS} FROM availability_pattern ORDER BY employee_id, weekday ASC`
+    )
+    .all() as PatternRow[]
+  const map = new Map<string, AvailabilityPattern[]>()
+  for (const r of rows) {
+    const p = toPattern(r)
+    const list = map.get(p.employeeId) ?? []
+    list.push(p)
+    map.set(p.employeeId, list)
+  }
+  return map
 }

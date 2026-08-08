@@ -230,6 +230,10 @@ export const IPC = {
   patternMine: 'availability:pattern:mine',
   patternSet: 'availability:pattern:set',
   patternClear: 'availability:pattern:clear',
+  // A lead's whole view of a week — everybody's usual week, who is rostered,
+  // where the two disagree — in one read, so the four questions somebody asks
+  // at once cannot be answered by four lists that disagree with each other.
+  scheduleTeamOverview: 'schedule:team-overview',
   shipDocument: 'shipping:document',
   shipDocumentBytes: 'shipping:document:bytes',
   shipDocumentArrival: 'shipping:document:arrival',

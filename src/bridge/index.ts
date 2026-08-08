@@ -30,7 +30,8 @@ import type {
   NewShift,
   PatternDayInput,
   Shift,
-  ShiftWithPerson
+  ShiftWithPerson,
+  TeamScheduleOverview
 } from '@shared/schedule'
 import type { RecurringTask } from '@shared/homeTasks'
 import type {
@@ -1045,7 +1046,15 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       setPattern: (days: PatternDayInput[]): Promise<Result<AvailabilityPattern[]>> =>
         ipcRenderer.invoke(IPC.patternSet, { days }),
       clearPattern: (): Promise<Result<{ cleared: number }>> =>
-        ipcRenderer.invoke(IPC.patternClear)
+        ipcRenderer.invoke(IPC.patternClear),
+
+      /**
+       * A lead's whole view of a week: everybody's usual week, who is rostered,
+       * and where the two disagree. Comes back empty for anybody without
+       * admin.hours.view rather than null, so the screen has one shape.
+       */
+      teamSchedule: (from: string, to: string): Promise<TeamScheduleOverview> =>
+        ipcRenderer.invoke(IPC.scheduleTeamOverview, { from, to })
     },
     updates: {
       getStatus: (): Promise<UpdateStatus> => ipcRenderer.invoke(IPC.updatesGetStatus),

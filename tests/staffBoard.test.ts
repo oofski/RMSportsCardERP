@@ -727,5 +727,130 @@ ok(
   'the lead sees it in date order'
 )
 
+// ---------------------------------------------------------------------------
+console.log('\n=== 12. the lead\'s oversight of a week ===')
+// ---------------------------------------------------------------------------
+// One read answering four questions at once. The point of computing it in main
+// is that those four answers cannot disagree with each other, so the counts are
+// checked against the same fixture from every angle.
+const { scheduleAlerts } = require('../src/shared/schedule')
+
+db.prepare(`DELETE FROM shifts`).run()
+db.prepare(`DELETE FROM availability`).run()
+db.prepare(`DELETE FROM availability_pattern`).run()
+addPerson('emp_sam', 'Sam', 'Achebe')
+// Deliberately NOT given a usual week — a blank row must read as "never asked"
+// rather than "cannot work", and that is what the flag is for.
+
+const mon2 = nextWeekday(1)
+const tue2 = nextWeekday(2)
+schedule.setPattern('emp_pat', [
+  { weekday: weekdayOf(mon2), status: 'available', startTime: '16:00', endTime: '21:00' },
+  { weekday: weekdayOf(tue2), status: 'unavailable', note: 'Class' }
+])
+schedule.setPattern('emp_robin', [
+  { weekday: weekdayOf(mon2), status: 'available' }
+])
+
+const from = mon2
+const to = addDaysT(mon2, 6)
+function addDaysT(day: string, n: number): string {
+  const t = Date.parse(`${day}T12:00:00Z`)
+  return new Date(t + n * 86400000).toISOString().slice(0, 10)
+}
+
+const ov0 = schedule.teamScheduleOverview(from, to)
+ok(ov0.days.length === 7, 'seven days in a week', String(ov0.days.length))
+ok(ov0.days[0].day === from, 'starting where asked', ov0.days[0].day)
+ok(ov0.people.length === 4, 'four people on the roster', String(ov0.people.length))
+
+const monDay0 = ov0.days.find((d: any) => d.day === mon2)
+ok(monDay0?.free === 2, 'two people are free that Monday', String(monDay0?.free))
+ok(monDay0?.away === 0, 'nobody is away', String(monDay0?.away))
+// THE COUNT THAT MATTERS MOST: people who said NOTHING. Sam and Lee have no
+// usual week, so they are unknown rather than either answer.
+ok(monDay0?.unknown === 2, 'and two have said nothing', String(monDay0?.unknown))
+ok(monDay0?.free + monDay0?.away + monDay0?.unknown === 4, 'the three add up to the roster')
+ok(monDay0?.rostered === 0, 'nobody is on it yet')
+
+const tueDay0 = ov0.days.find((d: any) => d.day === tue2)
+ok(tueDay0?.away === 1, 'one person is away that Tuesday', String(tueDay0?.away))
+ok(tueDay0?.free === 0, 'and nobody has said they are free')
+
+// BLANK IS NOT "NO". The single easiest thing on this screen to get wrong.
+const sam = ov0.people.find((p: any) => p.employeeId === 'emp_sam')
+ok(sam?.hasPattern === false, 'somebody who never set a week is flagged as unset')
+ok(sam?.pattern.length === 0, 'with an empty pattern, not a week of refusals')
+const pat = ov0.people.find((p: any) => p.employeeId === 'emp_pat')
+ok(pat?.hasPattern === true, 'and somebody who did is not')
+ok(pat?.pattern.length === 2, 'carrying their days', String(pat?.pattern.length))
+
+// Rostered hours per person, so a lead can see who is being loaded up.
+schedule.createShift(
+  { employeeId: 'emp_pat', day: mon2, startTime: '16:00', endTime: '21:00' },
+  'emp_lead'
+)
+// A CLASH: Pat said they cannot work Tuesday, and here they are on Tuesday.
+schedule.createShift({ employeeId: 'emp_pat', day: tue2, startTime: '16:00' }, 'emp_lead')
+
+const ov1 = schedule.teamScheduleOverview(from, to)
+const pat1 = ov1.people.find((p: any) => p.employeeId === 'emp_pat')
+ok(pat1?.shiftsInRange === 2, 'two shifts counted', String(pat1?.shiftsInRange))
+ok(pat1?.minutesInRange === 300, 'and the one with both ends adds up', String(pat1?.minutesInRange))
+ok(pat1?.clashDays.length === 1, 'one clash found', String(pat1?.clashDays.length))
+ok(pat1?.clashDays[0] === tue2, 'on the right day', String(pat1?.clashDays[0]))
+ok(
+  ov1.days.find((d: any) => d.day === tue2)?.clashes === 1,
+  'and the day agrees with the person'
+)
+ok(ov1.days.find((d: any) => d.day === mon2)?.rostered === 1, 'Monday is now covered')
+// A shift on a day somebody is FREE for is not a clash.
+ok(
+  ov1.days.find((d: any) => d.day === mon2)?.clashes === 0,
+  'a shift on a free day is not a clash'
+)
+
+// The alerts are the actionable subset, loudest first.
+const alerts = scheduleAlerts(ov1)
+ok(alerts[0].kind === 'clash', 'the clash is first', String(alerts[0].kind))
+ok(alerts[0].day === tue2, 'naming the day')
+ok(/Pat Ferrer/.test(alerts[0].text), 'and the person', alerts[0].text)
+// A night with nobody on and somebody free is a fillable gap. A night with
+// nobody on and nobody free is a DIFFERENT problem — calling them the same
+// thing sends a lead looking for a name that is not there.
+const gaps = alerts.filter((a: any) => a.kind === 'uncovered')
+ok(gaps.length === 0, 'Monday is covered so it is not a gap', String(gaps.length))
+const noneFree = alerts.filter((a: any) => a.kind === 'nobody-free')
+ok(
+  noneFree.some((a: any) => a.day === tue2) === false,
+  'and Tuesday has somebody on it, so it is neither'
+)
+const unset = alerts.find((a: any) => a.kind === 'no-pattern')
+ok(!!unset, 'people with no usual week are named')
+ok(/Sam|2 people/.test(unset.text), 'by name', unset.text)
+
+// Remove Monday's shift: it becomes a fillable gap, because two are free.
+schedule.deleteShift(`sh_emp_pat_${mon2}`)
+const ov2 = schedule.teamScheduleOverview(from, to)
+const gap2 = scheduleAlerts(ov2).find((a: any) => a.kind === 'uncovered' && a.day === mon2)
+ok(!!gap2, 'an empty night with people free is raised as a gap')
+ok(/2 people are free/.test(gap2.text), 'saying how many', gap2.text)
+
+// A DISABLED person drops off the roster — but their shift does not vanish from
+// the day, or a night would read as covered when nobody is coming.
+schedule.createShift({ employeeId: 'emp_sam', day: mon2, startTime: '16:00' }, 'emp_lead')
+db.prepare(`UPDATE employees SET status = 'disabled' WHERE id = 'emp_sam'`).run()
+const ov3 = schedule.teamScheduleOverview(from, to)
+ok(
+  !ov3.people.some((p: any) => p.employeeId === 'emp_sam'),
+  'a disabled person is off the roster'
+)
+ok(
+  ov3.days.find((d: any) => d.day === mon2)?.rostered === 1,
+  'but their shift still counts toward the night',
+  String(ov3.days.find((d: any) => d.day === mon2)?.rostered)
+)
+db.prepare(`UPDATE employees SET status = 'active' WHERE id = 'emp_sam'`).run()
+
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)
