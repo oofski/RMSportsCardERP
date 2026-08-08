@@ -1078,7 +1078,9 @@ export function createBridge(ipcRenderer: BridgeTransport) {
         draft: number
         created: number
         sent: number
+        paid: number
         outstanding: number
+        paidTotal: number
         thisMonth: number
       }> => ipcRenderer.invoke(IPC.invoiceStats),
       nextNumber: (): Promise<string> => ipcRenderer.invoke(IPC.invoiceNextNumber),
@@ -1125,7 +1127,18 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       sendFromQbo: (id: string): Promise<Result<{ id: string }>> =>
         ipcRenderer.invoke(IPC.invoiceSendFromQbo, id),
       openInQbo: (id: string): Promise<Result<{ url: string }>> =>
-        ipcRenderer.invoke(IPC.invoiceOpenInQbo, id)
+        ipcRenderer.invoke(IPC.invoiceOpenInQbo, id),
+
+      /**
+       * The invoice as a document a BUYER reads — the only artefact in this
+       * module meant for a person rather than for QuickBooks.
+       */
+      openPdf: (id: string): Promise<{ ok: boolean; path?: string; error?: string }> =>
+        ipcRenderer.invoke(IPC.invoiceOpenPdf, id),
+      savePdf: (
+        id: string
+      ): Promise<{ ok: boolean; path?: string; canceled?: boolean; error?: string }> =>
+        ipcRenderer.invoke(IPC.invoiceSavePdf, id)
     },
     updates: {
       getStatus: (): Promise<UpdateStatus> => ipcRenderer.invoke(IPC.updatesGetStatus),

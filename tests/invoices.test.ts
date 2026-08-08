@@ -432,5 +432,108 @@ ok(
   `${before} → ${repo.invoiceStats().outstanding}`
 )
 
+// ---------------------------------------------------------------------------
+console.log('\n=== 11. paid is a tick, and the board moves forward ===')
+// ---------------------------------------------------------------------------
+const { INVOICE_STAGES, canMoveInvoice } = require('../src/shared/invoices')
+
+ok(INVOICE_STAGES.length === 4, 'four columns', String(INVOICE_STAGES.length))
+ok(
+  INVOICE_STAGES.map((s: any) => s.id).join('>') === 'draft>created>sent>paid',
+  'in pipeline order',
+  INVOICE_STAGES.map((s: any) => s.id).join('>')
+)
+
+// FORWARD ONLY. An invoice posted to QuickBooks cannot be un-posted from here,
+// and one marked paid in error is fixed there rather than by dragging a card.
+ok(canMoveInvoice('draft', 'sent') === true, 'a draft can be sent')
+ok(canMoveInvoice('sent', 'paid') === true, 'and a sent invoice can be paid')
+ok(canMoveInvoice('paid', 'sent') === false, 'but paid does not go backwards')
+ok(canMoveInvoice('created', 'draft') === false, 'nor does posted')
+ok(canMoveInvoice('void', 'draft') === false, 'and void is terminal')
+// THE CASE THAT MATTERS ON THIS FLOOR: plenty of invoices are settled in cash
+// without ever going near QuickBooks, and a board that forced somebody to post
+// one they had already been paid for would simply be lied to.
+ok(canMoveInvoice('draft', 'paid') === true, 'a draft can go straight to paid — cash happens')
+
+const cash = repo.saveInvoice(
+  { customerName: 'Ana Ruiz', invoiceDate: '2026-03-01', lines: [{ item: 'Design', quantity: 1, rate: 250 }] },
+  'emp_owner'
+)
+ok(cash.paidAt === null, 'a new invoice is not paid')
+repo.setInvoiceStatus(cash.id, 'paid', 'emp_owner')
+const paid = repo.getInvoice(cash.id)
+ok(paid.status === 'paid', 'ticking it records paid')
+ok(typeof paid.paidAt === 'string' && paid.paidAt.length > 0, 'and stamps when', String(paid.paidAt))
+ok(paid.paidBy === 'emp_owner', 'and who')
+
+// THE DATE MUST NOT OUTLIVE THE CLAIM. A stale "paid 3 March" on an invoice no
+// longer marked paid is the kind of thing somebody reads out to a buyer.
+repo.setInvoiceStatus(cash.id, 'sent', 'emp_owner')
+const unpaid = repo.getInvoice(cash.id)
+ok(unpaid.status === 'sent', 'moving it off paid works')
+ok(unpaid.paidAt === null, 'and clears the paid date', String(unpaid.paidAt))
+ok(unpaid.paidBy === null, 'and who ticked it')
+
+// Ticking twice keeps the FIRST date — the money arrived when it arrived.
+repo.setInvoiceStatus(cash.id, 'paid', 'emp_owner')
+const firstStamp = repo.getInvoice(cash.id).paidAt
+repo.setInvoiceStatus(cash.id, 'paid', 'emp_other')
+ok(repo.getInvoice(cash.id).paidAt === firstStamp, 'ticking paid twice keeps the first date')
+
+// Paid money is no longer outstanding; it moves to the paid total.
+const s2 = repo.invoiceStats()
+ok(s2.paid >= 1, 'the paid count includes it', String(s2.paid))
+ok(s2.paidTotal >= 250, 'and the paid total', String(s2.paidTotal))
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 12. the document a buyer reads ===')
+// ---------------------------------------------------------------------------
+const { buildInvoiceHtml } = require('../src/main/invoicePdf')
+const pdfInvoice = repo.getInvoice(inv1.id)
+const html = buildInvoiceHtml(pdfInvoice)
+
+ok(html.includes('Chris Smith'), 'the buyer is on it')
+ok(html.includes('email1@intuit.com'), 'with their email')
+ok(html.includes('Trimming') && html.includes('Design'), 'every line is on it')
+ok(html.includes('Net 30'), 'and the terms')
+ok(html.includes('$90.00'), 'and the total in money', /\$[\d.,]+/.exec(html)?.[0] ?? '')
+// The MESSAGE is for the buyer; the MEMO is internal and must never appear on
+// a document that gets sent to them.
+ok(html.includes('Thank you for your business!'), 'the message they should see is there')
+ok(
+  !html.includes('First invoice of 3 month contract.'),
+  'and the internal memo is NOT'
+)
+
+// A DRAFT is stamped. An unfinished invoice that looks exactly like a real one
+// is the single most damaging thing this file could produce — somebody pays it.
+const draftDoc = repo.saveInvoice(
+  { customerName: 'Ben Okafor', invoiceDate: '2026-03-02', lines: [{ item: 'Design', quantity: 1, rate: 10 }] },
+  'emp_owner'
+)
+ok(
+  buildInvoiceHtml(repo.getInvoice(draftDoc.id)).includes('class="mark"'),
+  'a draft is watermarked'
+)
+ok(
+  !buildInvoiceHtml(pdfInvoice).includes('class="mark"'),
+  'and a real invoice is not'
+)
+
+// Anything operator-typed is escaped — an invoice is a document that gets sent,
+// and a buyer name with a bracket in it must not become markup.
+const nasty = repo.saveInvoice(
+  {
+    customerName: 'Ruiz <script>alert(1)</script>',
+    invoiceDate: '2026-03-03',
+    lines: [{ item: 'Design', quantity: 1, rate: 10 }]
+  },
+  'emp_owner'
+)
+const nastyHtml = buildInvoiceHtml(repo.getInvoice(nasty.id))
+ok(!nastyHtml.includes('<script>'), 'a script tag in a name is escaped')
+ok(nastyHtml.includes('&lt;script&gt;'), 'and rendered as text', 'escaped')
+
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

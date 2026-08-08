@@ -231,6 +231,8 @@ interface InvoiceRow {
   qbo_doc_number: string | null
   qbo_synced_at: string | null
   total: number
+  paid_at: string | null
+  paid_by: string | null
   created_by: string | null
   created_at: string
   updated_at: string
@@ -250,7 +252,7 @@ interface LineRow {
 }
 
 function asStatus(v: string): InvoiceStatus {
-  return v === 'created' || v === 'sent' || v === 'void' ? v : 'draft'
+  return v === 'created' || v === 'sent' || v === 'paid' || v === 'void' ? v : 'draft'
 }
 
 function toInvoice(r: InvoiceRow): Invoice {
@@ -273,6 +275,8 @@ function toInvoice(r: InvoiceRow): Invoice {
     qboDocNumber: r.qbo_doc_number,
     qboSyncedAt: r.qbo_synced_at,
     total: r.total,
+    paidAt: r.paid_at,
+    paidBy: r.paid_by,
     createdBy: r.created_by,
     createdAt: r.created_at,
     updatedAt: r.updated_at
@@ -296,8 +300,8 @@ function toLine(r: LineRow): InvoiceLine {
 
 const INVOICE_COLS = `id, invoice_number, customer_id, customer_name, email, terms, invoice_date,
                       due_date, location, memo, message, send_later, class_name, status,
-                      qbo_id, qbo_doc_number, qbo_synced_at, total, created_by,
-                      created_at, updated_at`
+                      qbo_id, qbo_doc_number, qbo_synced_at, total, paid_at, paid_by,
+                      created_by, created_at, updated_at`
 
 /** Newest first — an invoice list is read from the top. */
 export function listInvoices(limit = 200): Invoice[] {
@@ -465,11 +469,31 @@ export function markPosted(
     .run(qbo.id, qbo.docNumber, nowIso(), status, nowIso(), id)
 }
 
-export function setInvoiceStatus(id: string, status: InvoiceStatus): boolean {
+/**
+ * Move an invoice along the board.
+ *
+ * Marking it paid STAMPS THE DATE, and moving it off paid clears it — so the
+ * date can never outlive the claim it belongs to. A stale "paid 3 March" on an
+ * invoice that is no longer marked paid is the kind of thing somebody reads off
+ * a screen and repeats to a buyer.
+ */
+export function setInvoiceStatus(
+  id: string,
+  status: InvoiceStatus,
+  actorId: string | null = null
+): boolean {
+  const stamp = nowIso()
   return (
     getDb()
-      .prepare(`UPDATE invoices SET status = ?, updated_at = ? WHERE id = ?`)
-      .run(status, nowIso(), id).changes > 0
+      .prepare(
+        `UPDATE invoices
+            SET status  = ?,
+                paid_at = CASE WHEN ? = 'paid' THEN COALESCE(paid_at, ?) ELSE NULL END,
+                paid_by = CASE WHEN ? = 'paid' THEN COALESCE(paid_by, ?) ELSE NULL END,
+                updated_at = ?
+          WHERE id = ?`
+      )
+      .run(status, status, stamp, status, actorId, stamp, id).changes > 0
   )
 }
 
@@ -504,7 +528,9 @@ export function invoiceStats(): {
   draft: number
   created: number
   sent: number
+  paid: number
   outstanding: number
+  paidTotal: number
   thisMonth: number
 } {
   const db = getDb()
@@ -513,12 +539,15 @@ export function invoiceStats(): {
     .all() as Array<{ status: string; n: number; value: number | null }>
 
   const count = (s: string): number => byStatus.find((r) => r.status === s)?.n ?? 0
-  // Everything raised and not voided is money this business is waiting on. This
-  // app has no payment ledger, so it deliberately does NOT claim to know what
-  // has been paid — QuickBooks knows that, and inventing a figure here that
-  // looks like it does would be worse than not showing one.
+  // OUTSTANDING is what has been billed and not yet ticked as paid — voided
+  // invoices are money nobody is waiting on, and paid ones have arrived. Both
+  // figures rest on somebody having ticked the box, which is why the screen
+  // labels this a record rather than a bank balance.
   const outstanding = byStatus
-    .filter((r) => r.status !== 'void')
+    .filter((r) => r.status !== 'void' && r.status !== 'paid')
+    .reduce((sum, r) => sum + (r.value ?? 0), 0)
+  const paidTotal = byStatus
+    .filter((r) => r.status === 'paid')
     .reduce((sum, r) => sum + (r.value ?? 0), 0)
 
   const month = new Date().toISOString().slice(0, 7)
@@ -535,7 +564,9 @@ export function invoiceStats(): {
     draft: count('draft'),
     created: count('created'),
     sent: count('sent'),
+    paid: count('paid'),
     outstanding: money(outstanding),
+    paidTotal: money(paidTotal),
     thisMonth: money(thisMonth)
   }
 }

@@ -2122,6 +2122,19 @@ function migrate(database: Database.Database): void {
   )
   setMeta(database, 'schema_version', '52')
 
+  // v53: an invoice can be PAID, and this app is allowed to say so.
+  //
+  // The first cut deliberately stopped at Sent, on the argument that QuickBooks
+  // knows when money arrived and this does not. That was right about the
+  // plumbing and wrong about the job: the owner's question is "which ones are
+  // paid", and a board that cannot answer it sends him to a second system to
+  // find out. So paid is an OPERATOR-RECORDED fact — somebody ticks it when the
+  // money lands — with paid_at recording when, and the screen says plainly that
+  // it is a note rather than a bank feed.
+  addColumnIfMissing(database, 'invoices', 'paid_at', 'TEXT')
+  addColumnIfMissing(database, 'invoices', 'paid_by', 'TEXT')
+  setMeta(database, 'schema_version', '53')
+
   // Payroll, once, for whoever owns the company.
   //
   // Seeded rather than left to be typed because the owner named it, named its

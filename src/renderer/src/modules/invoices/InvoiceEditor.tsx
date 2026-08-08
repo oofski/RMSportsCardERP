@@ -80,13 +80,16 @@ export function InvoiceEditor({
   invoice,
   customers,
   onClose,
-  onSaved
+  onSaved,
+  onOpenQuickBooks
 }: {
   /** Null when this is a new one. */
   invoice: InvoiceDetail | null
   customers: InvoiceCustomer[]
   onClose: () => void
   onSaved: () => Promise<void>
+  /** Where to send somebody when QuickBooks turns out not to be connected. */
+  onOpenQuickBooks: () => void
 }): JSX.Element {
   const toast = useToast()
   const readOnly = !!invoice && invoice.status !== 'draft'
@@ -121,29 +124,61 @@ export function InvoiceEditor({
   const [saving, setSaving] = useState(false)
   const [creating, setCreating] = useState(false)
 
-  /** QuickBooks' own product list, when there is a connection to read it from. */
-  const [qboItems, setQboItems] = useState<
-    Array<{ id: string; name: string; rate: number | null; description: string | null }>
+  /**
+   * The product list, FROM INVENTORY.
+   *
+   * This used to read QuickBooks' item list, which was wrong about where the
+   * truth lives: what this business sells is what is on its own shelves, and
+   * the person writing an invoice knows a box by its catalog name, not by
+   * whatever it was called when somebody set up the accounts. So the search is
+   * the same catalog the purchase-order builder uses — name, SKU or UPC — and
+   * it works with no QuickBooks connection at all.
+   *
+   * The name still has to MATCH a QuickBooks product to post over the API, and
+   * that is checked at the moment of posting, by name, with a clear message.
+   * The alternative — hiding every product QuickBooks has not heard of — would
+   * make the common case (an invoice destined for the CSV, or for a PDF) unable
+   * to name the thing actually being sold.
+   */
+  const [matches, setMatches] = useState<
+    Array<{ id: string; name: string; sku: string | null; salePrice: number | null }>
   >([])
-  const [qboReachable, setQboReachable] = useState<boolean | null>(null)
+  const [searchFor, setSearchFor] = useState<string | null>(null)
+  const [query, setQuery] = useState('')
 
   useEffect(() => {
-    if (readOnly) return
-    let active = true
-    void (async () => {
-      const res = await api.invoices.qboItems()
-      if (!active) return
-      // A failure here is NOT an error to put in front of somebody. It means
-      // QuickBooks is not connected, which is a perfectly good state to build a
-      // draft in — the item field just becomes free text and the CSV is the way
-      // out. Announcing it as a problem would teach people to ignore toasts.
-      setQboReachable(res.ok)
-      setQboItems(res.ok ? (res.data ?? []) : [])
-    })()
-    return () => {
-      active = false
+    if (readOnly || query.trim().length < 2) {
+      setMatches([])
+      return
     }
-  }, [readOnly])
+    let cancelled = false
+    const t = window.setTimeout(async () => {
+      try {
+        const r = (await api.purchaseOrders.searchCatalog(query)) as Array<{
+          id: string
+          name: string
+          sku?: string | null
+          salePrice?: number | null
+        }>
+        if (!cancelled) {
+          setMatches(
+            r.slice(0, 8).map((p) => ({
+              id: p.id,
+              name: p.name,
+              sku: p.sku ?? null,
+              salePrice: typeof p.salePrice === 'number' ? p.salePrice : null
+            }))
+          )
+        }
+      } catch {
+        if (!cancelled) setMatches([])
+      }
+    }, 180)
+    return () => {
+      cancelled = true
+      window.clearTimeout(t)
+    }
+  }, [query, readOnly])
 
   // A new invoice opens with the next number already in it.
   useEffect(() => {
@@ -269,7 +304,12 @@ export function InvoiceEditor({
         // The draft IS saved at this point, which is the useful half. Say so,
         // or somebody retypes an invoice that is already sitting in the list.
         await onSaved()
-        toast.error(`${res.error ?? 'QuickBooks would not take that.'} The draft is saved.`)
+        const why = res.error ?? 'QuickBooks would not take that.'
+        toast.error(`${why} The draft is saved.`)
+        // "Not connected" is the one failure with an obvious next step, and
+        // leaving somebody to find the setting three screens away is how a
+        // feature gets written off as broken.
+        if (/not connected|reconnect|consent/i.test(why)) onOpenQuickBooks()
         return
       }
       await onSaved()
@@ -321,6 +361,27 @@ export function InvoiceEditor({
           )}
         </div>
       </div>
+
+      {readOnly && invoice && (
+        <div className="inv-actions" style={{ marginTop: 0, marginBottom: 12 }}>
+          <Button
+            variant="secondary"
+            icon="FileText"
+            onClick={() => void api.invoices.openPdf(invoice.id)}
+          >
+            PDF
+          </Button>
+          {invoice.qboId && (
+            <Button
+              variant="secondary"
+              icon="ExternalLink"
+              onClick={() => void api.invoices.openInQbo(invoice.id)}
+            >
+              Open in QuickBooks
+            </Button>
+          )}
+        </div>
+      )}
 
       {readOnly && (
         <p className="inv-locked">
@@ -464,11 +525,7 @@ export function InvoiceEditor({
         <div className="panel-head">
           <h3>What they are buying</h3>
           <span className="ph-sub">
-            {qboReachable === false
-              ? 'QuickBooks not connected — type the product name as it appears there'
-              : qboItems.length > 0
-                ? `${qboItems.length} products from QuickBooks`
-                : 'Products and services'}
+            Searched straight from your inventory — name, SKU or UPC
           </span>
         </div>
 
@@ -488,27 +545,63 @@ export function InvoiceEditor({
               {lines.map((l) => (
                 <tr key={l.key}>
                   <td>
-                    <input
-                      value={l.item}
-                      disabled={readOnly}
-                      list={qboItems.length > 0 ? 'qbo-items' : undefined}
-                      placeholder="Trimming"
-                      onChange={(e) => {
-                        const name = e.target.value
-                        const match = qboItems.find(
-                          (i) => i.name.toLowerCase() === name.toLowerCase()
-                        )
-                        // Picking a known product offers its list price and
-                        // description — but only into fields nobody has filled
-                        // in, because the agreed price is the reason this screen
-                        // exists.
-                        patchLine(l.key, {
-                          item: name,
-                          ...(match && !l.amountEdited && !l.rate ? { rate: match.rate ?? 0 } : {}),
-                          ...(match && !l.description ? { description: match.description ?? '' } : {})
-                        })
-                      }}
-                    />
+                    <div className="inv-item-cell">
+                      <input
+                        value={l.item}
+                        disabled={readOnly}
+                        placeholder="Search inventory…"
+                        onFocus={() => {
+                          setSearchFor(l.key)
+                          setQuery(l.item)
+                        }}
+                        onChange={(e) => {
+                          patchLine(l.key, { item: e.target.value })
+                          setSearchFor(l.key)
+                          setQuery(e.target.value)
+                        }}
+                        onBlur={() => {
+                          // Late enough for a click on a result to land first.
+                          window.setTimeout(() => {
+                            setSearchFor((k) => (k === l.key ? null : k))
+                          }, 160)
+                        }}
+                      />
+                      {searchFor === l.key && matches.length > 0 && (
+                        <ul className="inv-item-results">
+                          {matches.map((m) => (
+                            <li key={m.id}>
+                              <button
+                                type="button"
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={() => {
+                                  // The catalog's sale price is OFFERED, never
+                                  // imposed: it only fills a rate nobody has
+                                  // typed and an amount nobody has agreed. The
+                                  // whole point of this screen is the price you
+                                  // settled on, which is often not the list one.
+                                  patchLine(l.key, {
+                                    item: m.name,
+                                    ...(!l.amountEdited && !l.rate && m.salePrice
+                                      ? { rate: m.salePrice }
+                                      : {})
+                                  })
+                                  setSearchFor(null)
+                                  setQuery('')
+                                }}
+                              >
+                                <span className="inv-item-name">{m.name}</span>
+                                {m.sku && <span className="inv-item-sku">{m.sku}</span>}
+                                {m.salePrice ? (
+                                  <span className="inv-item-price mono">
+                                    {formatMoney(m.salePrice)}
+                                  </span>
+                                ) : null}
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
                   </td>
                   <td>
                     <input
@@ -575,14 +668,6 @@ export function InvoiceEditor({
           </table>
         </div>
 
-        {qboItems.length > 0 && (
-          <datalist id="qbo-items">
-            {qboItems.map((i) => (
-              <option key={i.id} value={i.name} />
-            ))}
-          </datalist>
-        )}
-
         <div className="inv-lines-foot">
           {!readOnly && (
             <Button
@@ -648,6 +733,21 @@ export function InvoiceEditor({
           <Button variant="secondary" icon="Save" loading={saving} onClick={() => void saveDraft()}>
             Save draft
           </Button>
+          {/* The document a BUYER reads. Saves first, because the PDF is built
+              from the database and printing an unsaved edit would hand somebody
+              the previous version of the invoice on screen. */}
+          {invoice && (
+            <Button
+              variant="secondary"
+              icon="FileText"
+              onClick={async () => {
+                const saved = await save()
+                if (saved) await api.invoices.openPdf(saved.id)
+              }}
+            >
+              PDF
+            </Button>
+          )}
           <Button
             variant="primary"
             icon="Send"

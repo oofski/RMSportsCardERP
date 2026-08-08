@@ -17,7 +17,6 @@ import { PurchaseOrderBoard } from './PurchaseOrderBoard'
 import { CreatePurchaseOrderModal } from './CreatePurchaseOrderModal'
 import { PurchaseOrderReceipt } from './PurchaseOrderReceipt'
 import { SupplyOrderModal } from './SupplyOrderModal'
-import { InvoicesTab } from './InvoicesTab'
 
 /**
  * Invoicing & POs module — the buy side of the business as ONE board:
@@ -44,7 +43,6 @@ export function InvoicingModule(): JSX.Element {
   const canManageSupplies = can('inventory.manage')
   const toast = useToast()
 
-  const [tab, setTab] = useState<'po' | 'invoices'>('po')
   const [pos, setPos] = useState<PurchaseOrder[]>([])
   const [supplyOrders, setSupplyOrders] = useState<SupplyOrder[]>([])
   const [supplies, setSupplies] = useState<Supply[]>([])
@@ -205,28 +203,9 @@ export function InvoicingModule(): JSX.Element {
 
   if (loading) return <CenterLoader />
 
-  // TWO TABS, and the split is by DIRECTION of money.
-  //
-  // A purchase order is what this business owes a supplier; an invoice is what
-  // a buyer owes it. Mirror images at the level of shape — a party, some lines,
-  // a total — and never asked about at the same moment. One board carrying both
-  // would answer neither question, so they are two tabs in one module rather
-  // than one list or two modules.
-  if (tab === 'invoices') {
-    return (
-      <div className="content-narrow inv-shell">
-        <div className="inv-scroll po-tab">
-          <InvoiceTabs tab={tab} setTab={setTab} />
-          <InvoicesTab />
-        </div>
-      </div>
-    )
-  }
-
   return (
     <div className="content-narrow inv-shell">
       <div className="inv-scroll po-tab">
-        <InvoiceTabs tab={tab} setTab={setTab} />
         {/* No section shell: the board IS the page. A card-in-a-card added a
             border, a tinted band and an icon plate around content that already
             reads as columns of cards, so the chrome went and the page flows. */}
@@ -397,32 +376,5 @@ function StuckPoModal({
       </ul>
       <p className="fin-confirm-lead">Either way the purchase order is gone for good.</p>
     </Modal>
-  )
-}
-
-/**
- * The two directions money moves.
- *
- * Deliberately not a permission boundary — `module.invoicing` already covers
- * both, because somebody who may commit this business to paying a supplier may
- * also bill a buyer. Splitting it would invent a role that can spend but not
- * collect, which is not a job anybody has.
- */
-function InvoiceTabs({
-  tab,
-  setTab
-}: {
-  tab: 'po' | 'invoices'
-  setTab: (t: 'po' | 'invoices') => void
-}): JSX.Element {
-  return (
-    <div className="seg-row">
-      <button className={`seg ${tab === 'po' ? 'on' : ''}`} onClick={() => setTab('po')}>
-        Purchase orders
-      </button>
-      <button className={`seg ${tab === 'invoices' ? 'on' : ''}`} onClick={() => setTab('invoices')}>
-        Invoices
-      </button>
-    </div>
   )
 }

@@ -27,6 +27,7 @@ import {
   suggestInvoiceNumber,
   type CustomerInput
 } from './db/invoices'
+import { openInvoicePdf, saveInvoicePdf } from './invoicePdf'
 import {
   createQboInvoice,
   fetchQboCustomers,
@@ -110,7 +111,9 @@ export function registerInvoicesIpc(): void {
   )
 
   ipcMain.handle(IPC.invoiceStats, () =>
-    can() ? invoiceStats() : { draft: 0, created: 0, sent: 0, outstanding: 0, thisMonth: 0 }
+    can()
+      ? invoiceStats()
+      : { draft: 0, created: 0, sent: 0, paid: 0, outstanding: 0, paidTotal: 0, thisMonth: 0 }
   )
 
   ipcMain.handle(IPC.invoiceNextNumber, (): string => (can() ? suggestInvoiceNumber() : ''))
@@ -142,18 +145,46 @@ export function registerInvoicesIpc(): void {
     IPC.invoiceSetStatus,
     (_e, payload: { id?: unknown; status?: unknown }): Result<{ id: string }> => {
       try {
-        requireInvoicing()
+        const actor = requireInvoicing()
         const id = str(payload?.id)
         const raw = str(payload?.status)
         const status: InvoiceStatus =
-          raw === 'created' || raw === 'sent' || raw === 'void' ? raw : 'draft'
-        if (!setInvoiceStatus(id, status)) return { ok: false, error: 'That invoice is gone.' }
+          raw === 'created' || raw === 'sent' || raw === 'paid' || raw === 'void' ? raw : 'draft'
+        if (!setInvoiceStatus(id, status, actor.id)) {
+          return { ok: false, error: 'That invoice is gone.' }
+        }
         return { ok: true, data: { id } }
       } catch (err) {
         return fail(err)
       }
     }
   )
+
+  // ---- The document a buyer reads -----------------------------------------
+  //
+  // Both are READS of an invoice — they change nothing — so they are gated like
+  // `invoiceGet` rather than like a write.
+  ipcMain.handle(IPC.invoiceOpenPdf, async (_e, id: unknown) => {
+    try {
+      requireInvoicing()
+      const invoice = getInvoice(str(id))
+      if (!invoice) return { ok: false, error: 'That invoice is gone.' }
+      return await openInvoicePdf(invoice)
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
+  ipcMain.handle(IPC.invoiceSavePdf, async (_e, id: unknown) => {
+    try {
+      requireInvoicing()
+      const invoice = getInvoice(str(id))
+      if (!invoice) return { ok: false, error: 'That invoice is gone.' }
+      return await saveInvoicePdf(invoice)
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
 
   /**
    * Intuit's own import template, on disk.

@@ -20,6 +20,7 @@ import { TimePayrollModule } from '../modules/timepay/TimePayrollModule'
 import { ScheduleModule } from '../modules/schedule/ScheduleModule'
 import { InventoryModule } from '../modules/inventory/InventoryModule'
 import { InvoicingModule } from '../modules/invoicing/InvoicingModule'
+import { InvoicesModule } from '../modules/invoices/InvoicesModule'
 import { ShippingModule } from '../modules/fulfillment/ShippingModule'
 import { ComingSoon } from '../modules/ComingSoon'
 
@@ -354,6 +355,8 @@ export function AppShell(): JSX.Element {
               <StreamingModule />
             ) : activeModule?.id === 'invoicing' ? (
               <InvoicingModule />
+            ) : activeModule?.id === 'invoices' ? (
+              <InvoicesModule />
             ) : activeModule?.id === 'fulfillment' ? (
               <ShippingModule />
             ) : activeModule ? (

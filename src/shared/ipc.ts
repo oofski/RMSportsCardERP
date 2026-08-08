@@ -147,6 +147,11 @@ export const IPC = {
   invoiceCreateInQbo: 'invoices:qbo:create',
   invoiceSendFromQbo: 'invoices:qbo:send',
   invoiceOpenInQbo: 'invoices:qbo:open',
+  // The invoice as a document a BUYER reads. The CSV is for QuickBooks and the
+  // API call is for QuickBooks; this is the only artefact in the module meant
+  // for a person.
+  invoiceOpenPdf: 'invoices:pdf:open',
+  invoiceSavePdf: 'invoices:pdf:save',
 
   // Purchase orders
   poList: 'po:list',

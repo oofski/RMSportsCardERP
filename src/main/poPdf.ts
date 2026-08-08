@@ -248,6 +248,18 @@ export function setDocumentRenderer(next: DocumentRenderer): void {
   renderDocument = next
 }
 
+/**
+ * The same renderer, for other documents.
+ *
+ * Exported so the invoice PDF goes through the ONE hook the server replaces.
+ * A second copy of this indirection is a second thing to remember when a
+ * headless build has no Chromium — and the failure mode of forgetting is a
+ * server that throws on a button somebody presses in front of a customer.
+ */
+export function renderDocumentForExport(html: string): Promise<RenderedDocument> {
+  return renderDocument(html)
+}
+
 export interface PoPdfResult {
   ok: boolean
   path?: string

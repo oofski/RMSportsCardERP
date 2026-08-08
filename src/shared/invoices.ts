@@ -103,7 +103,50 @@ export interface InvoiceLine {
   className: string | null
 }
 
-export type InvoiceStatus = 'draft' | 'created' | 'sent' | 'void'
+/**
+ * Where an invoice is.
+ *
+ * PAID is operator-recorded, not read from a bank feed. The first cut stopped
+ * at `sent` on the argument that QuickBooks knows when money arrived and this
+ * does not — right about the plumbing, wrong about the job. The question being
+ * asked is "which ones are paid", and a board that cannot answer it sends
+ * somebody to a second system to find out. So it is a tick, with a date, and
+ * the screen says it is a note rather than a bank feed.
+ */
+export type InvoiceStatus = 'draft' | 'created' | 'sent' | 'paid' | 'void'
+
+/** The board's columns, left to right — the order the work moves in. */
+export const INVOICE_STAGES: Array<{ id: InvoiceStatus; label: string; hint: string }> = [
+  { id: 'draft', label: 'Draft', hint: 'Being built — not sent to anybody yet' },
+  { id: 'created', label: 'In QuickBooks', hint: 'Posted, waiting to be sent' },
+  { id: 'sent', label: 'Sent', hint: 'With the buyer, waiting to be paid' },
+  { id: 'paid', label: 'Paid', hint: 'Money in' }
+]
+
+/**
+ * Which moves are legal.
+ *
+ * Forward-only along the pipeline, plus void from anywhere that is not already
+ * paid. Going backwards is deliberately not offered: an invoice that has been
+ * posted to QuickBooks cannot be un-posted from here, and one marked paid in
+ * error is fixed by saying so in QuickBooks, not by dragging a card.
+ *
+ * `draft → paid` IS allowed, and it is the case that matters most on this
+ * floor: plenty of invoices are settled by cash or Zelle without ever going
+ * near QuickBooks, and a board that made somebody post an invoice they have
+ * already been paid for would just be lied to.
+ */
+export const INVOICE_TRANSITIONS: Record<InvoiceStatus, InvoiceStatus[]> = {
+  draft: ['created', 'sent', 'paid', 'void'],
+  created: ['sent', 'paid', 'void'],
+  sent: ['paid', 'void'],
+  paid: [],
+  void: []
+}
+
+export function canMoveInvoice(from: InvoiceStatus, to: InvoiceStatus): boolean {
+  return (INVOICE_TRANSITIONS[from] ?? []).includes(to)
+}
 
 export interface Invoice {
   id: string
@@ -139,6 +182,9 @@ export interface Invoice {
   qboSyncedAt: string | null
   /** Σ of the line amounts, stored so a list does not have to read every line. */
   total: number
+  /** When somebody recorded the money as arrived. Null until they do. */
+  paidAt: string | null
+  paidBy: string | null
   createdBy: string | null
   createdAt: string
   updatedAt: string

@@ -73,12 +73,31 @@ export const MODULES: AppModule[] = [
     permission: 'module.streaming',
     status: 'active'
   },
+  // TWO MODULES, not one with a tab strip. A purchase order is money owed to a
+  // supplier and an invoice is money owed to us — mirror images, and never
+  // asked about in the same breath. Sharing a door meant the sell side was
+  // always one extra click away and looked like a footnote to the buy side.
+  //
+  // The PO module keeps the id `invoicing` so every existing `navigate()` call
+  // and every saved sidebar position still lands where it did.
   {
     id: 'invoicing',
-    name: 'Invoicing & POs',
+    name: 'Purchase Orders',
+    shortName: 'POs',
+    description: 'What we have ordered from suppliers, and what we owe on it.',
+    icon: 'ClipboardList',
+    permission: 'module.invoicing',
+    status: 'active'
+  },
+  {
+    id: 'invoices',
+    name: 'Invoices',
     shortName: 'Invoices',
-    description: 'What we owe suppliers, and what buyers owe us.',
+    description: 'Billing buyers: who they are, what they bought, and who has paid.',
     icon: 'ReceiptText',
+    // The same permission the buy side uses. Somebody who may commit this
+    // business to paying a supplier may also bill a buyer; splitting it would
+    // invent a role that can spend but not collect, which is nobody's job.
     permission: 'module.invoicing',
     status: 'active'
   },
