@@ -20,6 +20,7 @@
  */
 import { IPC, type AppInfo } from '@shared/ipc'
 import type { Permission } from '@shared/permissions'
+import type { FreightPatch } from '@shared/freight'
 import type { NewReminder, OwnerBoard, Reminder, Todo } from '@shared/ownerDashboard'
 import type { StaffBoard } from '@shared/staffBoard'
 import type {
@@ -465,6 +466,9 @@ export function createBridge(ipcRenderer: BridgeTransport) {
         ipcRenderer.invoke(IPC.poCreate, input),
       setStatus: (id: string, status: PurchaseOrderStatus): Promise<Result<PurchaseOrderDetail>> =>
         ipcRenderer.invoke(IPC.poSetStatus, { id, status }),
+      /** Shipping + payment details. Omitted keys are left as they are. */
+      setFreight: (id: string, patch: FreightPatch): Promise<Result<PurchaseOrderDetail>> =>
+        ipcRenderer.invoke(IPC.poSetFreight, { id, ...patch }),
       searchCatalog: (query: string): Promise<InventoryProduct[]> =>
         ipcRenderer.invoke(IPC.poCatalogSearch, query),
       thumbnails: (): Promise<Record<string, string>> => ipcRenderer.invoke(IPC.poThumbnails),

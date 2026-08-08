@@ -8,6 +8,8 @@ import type {
   ScanPoCandidate
 } from '@shared/types'
 import { canTransition } from '@shared/purchaseOrders'
+import type { Carrier, PaymentTiming } from '@shared/freight'
+import { asCarrier, asPaymentTiming, detectCarrier } from '@shared/freight'
 import { LOCATION_IDS, isLocation } from '@shared/inventory'
 import { getDb, getMeta, setMeta } from './database'
 import { addStock, adjustStock, reverseStockReceipt, stockQty } from './inventory'
@@ -30,6 +32,10 @@ interface PoRow {
   received_at: string | null
   cancelled_at: string | null
   scanned_at: string | null
+  carrier: string | null
+  service: string | null
+  tracking_number: string | null
+  payment_timing: string | null
 }
 
 interface PoLineRow {
@@ -67,7 +73,11 @@ function toSummary(row: PoHeaderRow): PurchaseOrder {
     paidAt: row.paid_at,
     receivedAt: row.received_at,
     cancelledAt: row.cancelled_at,
-    scannedAt: row.scanned_at
+    scannedAt: row.scanned_at,
+    carrier: asCarrier(row.carrier),
+    service: row.service ?? null,
+    trackingNumber: row.tracking_number ?? null,
+    paymentTiming: asPaymentTiming(row.payment_timing)
   }
 }
 
@@ -91,6 +101,7 @@ const PO_SELECT = `
   SELECT po.id, po.po_number, po.supplier, po.notes, po.status, po.location, po.total,
          po.created_by, po.created_at, po.updated_at,
          po.ordered_at, po.paid_at, po.received_at, po.cancelled_at, po.scanned_at,
+         po.carrier, po.service, po.tracking_number, po.payment_timing,
          (SELECT COUNT(*) FROM purchase_order_lines l WHERE l.po_id = po.id) AS line_count,
          (SELECT COUNT(*) FROM purchase_order_lines l
            WHERE l.po_id = po.id AND l.qty_received >= l.quantity) AS received_line_count,
@@ -173,9 +184,11 @@ export function createPurchaseOrder(
     )
     db.prepare(
       `INSERT INTO purchase_orders
-         (id, po_number, supplier, notes, status, location, total, created_by, created_at, updated_at, ordered_at)
+         (id, po_number, supplier, notes, status, location, total, created_by, created_at, updated_at, ordered_at,
+          carrier, service, tracking_number, payment_timing)
        VALUES
-         (@id, @po_number, @supplier, @notes, 'ordered', @location, @total, @created_by, @ts, @ts, @ts)`
+         (@id, @po_number, @supplier, @notes, 'ordered', @location, @total, @created_by, @ts, @ts, @ts,
+          @carrier, @service, @tracking_number, @payment_timing)`
     ).run({
       id,
       po_number: poNumber,
@@ -184,7 +197,14 @@ export function createPurchaseOrder(
       location,
       total,
       created_by: actorId,
-      ts
+      ts,
+      // The carrier is stored as given when it is one of the three, and derived
+      // from the number when it is not — a pasted 1Z... identifies itself, so
+      // there is no reason to make somebody also pick UPS from a list.
+      carrier: asCarrier(input.carrier) ?? detectCarrier(input.trackingNumber ?? ''),
+      service: input.service?.trim() || null,
+      tracking_number: input.trackingNumber?.trim() || null,
+      payment_timing: asPaymentTiming(input.paymentTiming)
     })
 
     const insertLine = db.prepare(
@@ -207,6 +227,71 @@ export function createPurchaseOrder(
 export interface PoStatusResult {
   po: PurchaseOrderDetail | null
   error?: string
+}
+
+/**
+ * Set (or clear) how a PO travels and when it settles, after the fact.
+ *
+ * Separate from createPurchaseOrder because the tracking number almost never
+ * exists when the order is placed — it turns up in a shipping confirmation
+ * hours or days later. Without this the only way to record it would be to
+ * delete the PO and re-enter it, which would take its COGS entry and any
+ * received stock with it.
+ *
+ * Every field is optional and `undefined` means "leave it alone", so the board
+ * can send just a tracking number without wiping a payment choice somebody else
+ * made. An explicit null clears.
+ */
+export function setPurchaseOrderFreight(
+  id: string,
+  patch: {
+    carrier?: Carrier | null
+    service?: string | null
+    trackingNumber?: string | null
+    paymentTiming?: PaymentTiming | null
+  }
+): PoStatusResult {
+  const db = getDb()
+  const row = db.prepare('SELECT id FROM purchase_orders WHERE id = ?').get(id) as
+    | { id: string }
+    | undefined
+  if (!row) return { po: null, error: 'Purchase order not found.' }
+
+  const sets: string[] = []
+  const params: Record<string, unknown> = { id, ts: nowIso() }
+  const tracking = patch.trackingNumber === undefined ? undefined : patch.trackingNumber?.trim() || null
+  if (patch.carrier !== undefined || tracking !== undefined) {
+    // Same rule as creation: an explicit carrier wins, otherwise the number
+    // names itself. Recomputed whenever either half changes so the pair can
+    // never end up describing two different carriers.
+    const explicit = patch.carrier === undefined ? undefined : asCarrier(patch.carrier)
+    const current =
+      tracking !== undefined
+        ? tracking
+        : ((db.prepare('SELECT tracking_number AS t FROM purchase_orders WHERE id = ?').get(id) as
+            | { t: string | null }
+            | undefined)?.t ?? null)
+    sets.push('carrier = @carrier')
+    params.carrier = explicit ?? detectCarrier(current ?? '')
+  }
+  if (tracking !== undefined) {
+    sets.push('tracking_number = @tracking_number')
+    params.tracking_number = tracking
+  }
+  if (patch.service !== undefined) {
+    sets.push('service = @service')
+    params.service = patch.service?.trim() || null
+  }
+  if (patch.paymentTiming !== undefined) {
+    sets.push('payment_timing = @payment_timing')
+    params.payment_timing = asPaymentTiming(patch.paymentTiming)
+  }
+  if (!sets.length) return { po: getPurchaseOrder(id) }
+
+  db.prepare(
+    `UPDATE purchase_orders SET ${sets.join(', ')}, updated_at = @ts WHERE id = @id`
+  ).run(params)
+  return { po: getPurchaseOrder(id) }
 }
 
 /** Column stamped when a PO enters each stage (ordered_at is set at creation). */

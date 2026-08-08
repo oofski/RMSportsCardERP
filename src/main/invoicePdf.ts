@@ -4,6 +4,7 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 import type { InvoiceDetail } from '@shared/invoices'
 import { RM_LOGO_DATA_URI } from './brand'
+import { shipMeta } from './freightPdf'
 import { renderDocumentForExport, type PoPdfResult } from './poPdf'
 
 /**
@@ -113,11 +114,18 @@ export function buildInvoiceHtml(invoice: InvoiceDetail): string {
   .pname-lg { font-size: 12pt; font-weight: 600; }
   .pline { color: #444; }
 
-  .facts { display: flex; gap: 0; margin-bottom: 18px; border: 1px solid #ddd; border-radius: 6px; }
-  .fact { flex: 1; padding: 8px 12px; }
-  .fact + .fact { border-left: 1px solid #ddd; }
+  /* Four cells always, and up to three more when the invoice carries shipping
+     and payment details — so this wraps rather than squeezing a 22-digit
+     tracking number into a seventh of the page. The row-gap borders come from
+     .fact itself so a wrapped row still reads as part of the same strip. */
+  .facts {
+    display: flex; flex-wrap: wrap; gap: 0; margin-bottom: 18px;
+    border: 1px solid #ddd; border-radius: 6px; overflow: hidden;
+  }
+  .fact { flex: 1 1 128px; min-width: 0; padding: 8px 12px; border-left: 1px solid #ddd; }
+  .fact:first-child { border-left: 0; }
   .fkey { font-size: 8pt; letter-spacing: 0.06em; text-transform: uppercase; color: #777; }
-  .fval { font-size: 10.5pt; font-weight: 600; margin-top: 2px; }
+  .fval { font-size: 10.5pt; font-weight: 600; margin-top: 2px; overflow-wrap: anywhere; }
 
   table { width: 100%; border-collapse: collapse; }
   thead { display: table-header-group; }
@@ -189,6 +197,7 @@ ${watermark}
   <div class="fact"><div class="fkey">Due</div><div class="fval">${longDate(invoice.dueDate)}</div></div>
   <div class="fact"><div class="fkey">Terms</div><div class="fval">${esc(invoice.terms)}</div></div>
   <div class="fact"><div class="fkey">Total</div><div class="fval">${money(invoice.total)}</div></div>
+  ${shipMeta(invoice, { cell: 'fact', key: 'fkey', value: 'fval' })}
 </div>
 
 <table>

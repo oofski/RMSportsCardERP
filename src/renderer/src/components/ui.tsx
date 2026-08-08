@@ -63,8 +63,17 @@ export function Field({
   )
 }
 
-export function Input({ invalid, ...rest }: InputHTMLAttributes<HTMLInputElement> & { invalid?: boolean }): JSX.Element {
-  return <input className={`input ${invalid ? 'field-error' : ''}`} {...rest} />
+export function Input({
+  invalid,
+  className = '',
+  ...rest
+}: InputHTMLAttributes<HTMLInputElement> & { invalid?: boolean }): JSX.Element {
+  // Same rule as Select below: `className` is destructured and MERGED. Left in
+  // `...rest` it overwrote the base class, so every caller passing a modifier —
+  // .po-qty-input, .po-price-input — silently lost the app's field styling and
+  // rendered a native box. Those rules only ever set width and alignment; the
+  // look they sit on top of comes from .input.
+  return <input className={`input ${className} ${invalid ? 'field-error' : ''}`.trim()} {...rest} />
 }
 
 export function Textarea(props: TextareaHTMLAttributes<HTMLTextAreaElement>): JSX.Element {

@@ -5,9 +5,10 @@ import { api } from '../../lib/api'
 import { LIVE, useLiveRefresh } from '../../lib/live'
 import { Button, CenterLoader } from '../../components/ui'
 import { Icon } from '../../components/Icon'
+import { FreightLine } from '../../components/FreightFields'
 import { useToast } from '../../components/Toast'
 import { formatMoney } from '../../lib/format'
-import { InvoiceEditor } from './InvoiceEditor'
+import { CreateInvoiceModal } from './CreateInvoiceModal'
 
 /**
  * The sell-side pipeline: Draft → In QuickBooks → Sent → Paid.
@@ -53,19 +54,22 @@ export function InvoicesBoard({
   const [loading, setLoading] = useState(true)
   const [editing, setEditing] = useState<InvoiceDetail | null>(null)
   const [creatingNew, setCreatingNew] = useState(false)
+  const [nextNumber, setNextNumber] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
   const [dragId, setDragId] = useState<string | null>(null)
   const [overStage, setOverStage] = useState<InvoiceStatus | null>(null)
 
   const load = useCallback(async () => {
-    const [list, people, s] = await Promise.all([
+    const [list, people, s, next] = await Promise.all([
       api.invoices.list(),
       api.invoices.customers(),
-      api.invoices.stats()
+      api.invoices.stats(),
+      api.invoices.nextNumber()
     ])
     setInvoices(list)
     setCustomers(people)
     setStats(s)
+    setNextNumber(next)
   }, [])
 
   useLiveRefresh(LIVE.invoices, load)
@@ -165,21 +169,6 @@ export function InvoicesBoard({
 
   if (loading) return <CenterLoader />
 
-  if (editing || creatingNew) {
-    return (
-      <InvoiceEditor
-        invoice={editing}
-        customers={customers}
-        onClose={() => {
-          setEditing(null)
-          setCreatingNew(false)
-        }}
-        onSaved={load}
-        onOpenQuickBooks={onOpenQuickBooks}
-      />
-    )
-  }
-
   const fromStatus = dragId ? invoices.find((i) => i.id === dragId)?.status ?? null : null
 
   return (
@@ -268,6 +257,20 @@ export function InvoicesBoard({
         })}
       </div>
 
+      {(editing || creatingNew) && (
+        <CreateInvoiceModal
+          invoice={editing}
+          customers={customers}
+          nextNumber={nextNumber}
+          onClose={() => {
+            setEditing(null)
+            setCreatingNew(false)
+          }}
+          onSaved={load}
+          onOpenQuickBooks={onOpenQuickBooks}
+        />
+      )}
+
       <p className="inv-foot">
         <Icon name="Info" size={14} />
         <span>
@@ -345,6 +348,11 @@ function InvoiceCard({
             : `due ${invoice.dueDate}`}
         </span>
       </div>
+      <FreightLine
+        carrier={invoice.carrier}
+        service={invoice.service}
+        trackingNumber={invoice.trackingNumber}
+      />
 
       <div className="po-card-foot" onClick={(e) => e.stopPropagation()}>
         <button className="po-card-btn" title="Open the invoice as a PDF" onClick={onPdf}>

@@ -10,6 +10,7 @@ import type {
   Result
 } from '@shared/types'
 import { isPurchaseOrderStatus } from '@shared/purchaseOrders'
+import type { FreightPatch } from '@shared/freight'
 import type { Permission } from '@shared/permissions'
 import { currentUser } from './services/auth'
 import { openPoPdf, savePoPdf } from './poPdf'
@@ -21,6 +22,7 @@ import {
   listActivePurchaseOrderBoxes,
   listPurchaseOrders,
   scanInPurchaseOrder,
+  setPurchaseOrderFreight,
   setPurchaseOrderStatus
 } from './db/purchaseOrders'
 import { listCogsEntries } from './db/finance'
@@ -116,6 +118,24 @@ export function registerPurchaseOrdersIpc(): void {
         if (!payload?.id) return { ok: false, error: 'No purchase order specified.' }
         if (!isPurchaseOrderStatus(payload.status)) return { ok: false, error: 'Invalid stage.' }
         const res = setPurchaseOrderStatus(payload.id, payload.status, actor.id)
+        return res.error
+          ? { ok: false, error: res.error }
+          : { ok: true, data: res.po as PurchaseOrderDetail }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  // Shipping and payment details, editable for the life of the PO — the
+  // tracking number turns up long after the order is placed.
+  ipcMain.handle(
+    IPC.poSetFreight,
+    (_e, payload: { id: string } & FreightPatch): Result<PurchaseOrderDetail> => {
+      try {
+        requireInvoicing()
+        if (!payload?.id) return { ok: false, error: 'No purchase order specified.' }
+        const res = setPurchaseOrderFreight(payload.id, payload)
         return res.error
           ? { ok: false, error: res.error }
           : { ok: true, data: res.po as PurchaseOrderDetail }

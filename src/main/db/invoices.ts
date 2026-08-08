@@ -15,6 +15,7 @@ import {
   type InvoiceTerms,
   type NewInvoice
 } from '@shared/invoices'
+import { asCarrier, asPaymentTiming, detectCarrier } from '@shared/freight'
 import { getDb } from './database'
 
 /**
@@ -233,6 +234,10 @@ interface InvoiceRow {
   total: number
   paid_at: string | null
   paid_by: string | null
+  carrier: string | null
+  service: string | null
+  tracking_number: string | null
+  payment_timing: string | null
   created_by: string | null
   created_at: string
   updated_at: string
@@ -277,6 +282,10 @@ function toInvoice(r: InvoiceRow): Invoice {
     total: r.total,
     paidAt: r.paid_at,
     paidBy: r.paid_by,
+    carrier: asCarrier(r.carrier),
+    service: r.service,
+    trackingNumber: r.tracking_number,
+    paymentTiming: asPaymentTiming(r.payment_timing),
     createdBy: r.created_by,
     createdAt: r.created_at,
     updatedAt: r.updated_at
@@ -301,6 +310,7 @@ function toLine(r: LineRow): InvoiceLine {
 const INVOICE_COLS = `id, invoice_number, customer_id, customer_name, email, terms, invoice_date,
                       due_date, location, memo, message, send_later, class_name, status,
                       qbo_id, qbo_doc_number, qbo_synced_at, total, paid_at, paid_by,
+                      carrier, service, tracking_number, payment_timing,
                       created_by, created_at, updated_at`
 
 /** Newest first — an invoice list is read from the top. */
@@ -398,10 +408,12 @@ export function saveInvoice(
       `INSERT INTO invoices
          (id, invoice_number, customer_id, customer_name, email, terms, invoice_date, due_date,
           location, memo, message, send_later, class_name, status, qbo_id, qbo_doc_number,
-          qbo_synced_at, total, created_by, created_at, updated_at)
+          qbo_synced_at, total, carrier, service, tracking_number, payment_timing,
+          created_by, created_at, updated_at)
        VALUES (@id, @invoiceNumber, @customerId, @customerName, @email, @terms, @invoiceDate,
                @dueDate, @location, @memo, @message, @sendLater, @className, 'draft',
-               NULL, NULL, NULL, @total, @createdBy, @createdAt, @updatedAt)
+               NULL, NULL, NULL, @total, @carrier, @service, @trackingNumber, @paymentTiming,
+               @createdBy, @createdAt, @updatedAt)
        ON CONFLICT(id) DO UPDATE SET
          invoice_number = excluded.invoice_number,
          customer_id    = excluded.customer_id,
@@ -416,6 +428,10 @@ export function saveInvoice(
          send_later     = excluded.send_later,
          class_name     = excluded.class_name,
          total          = excluded.total,
+         carrier        = excluded.carrier,
+         service        = excluded.service,
+         tracking_number= excluded.tracking_number,
+         payment_timing = excluded.payment_timing,
          updated_at     = excluded.updated_at`
     ).run({
       id,
@@ -431,8 +447,19 @@ export function saveInvoice(
       message: clean(input.message),
       sendLater: input.sendLater ? 1 : 0,
       className: clean(input.className),
+      // An explicit carrier wins; otherwise the number names itself. Same rule
+      // as createPurchaseOrder, so a tracking number pasted on either side of
+      // the money behaves identically.
+      carrier: asCarrier(input.carrier) ?? detectCarrier(input.trackingNumber ?? ''),
+      service: clean(input.service),
+      trackingNumber: clean(input.trackingNumber),
+      paymentTiming: asPaymentTiming(input.paymentTiming),
       total: invoiceTotal(lines),
-      createdBy: existing ? undefined : actorId,
+      // Null on an edit. The ON CONFLICT branch does not touch created_by, so
+      // whatever is bound here is discarded on that path — but bind the value
+      // that MEANS "no author", rather than relying on the driver's handling of
+      // undefined, so the intent survives if that clause ever gains a column.
+      createdBy: existing ? null : actorId,
       createdAt: existing?.created_at ?? stamp,
       updatedAt: stamp
     })

@@ -1,3 +1,4 @@
+import type { Carrier, PaymentTiming } from './freight'
 import type { Permission, Role } from './permissions'
 
 export type EmployeeStatus = 'invited' | 'active' | 'disabled'
@@ -834,6 +835,13 @@ export interface PurchaseOrder {
   cancelledAt: string | null
   /** When the PO's cases were scanned into stock (idempotency guard). */
   scannedAt: string | null
+  /** Who is carrying it — see @shared/freight. Null until somebody says. */
+  carrier: Carrier | null
+  /** The carrier's own service name, e.g. "Ground". Free text by design. */
+  service: string | null
+  trackingNumber: string | null
+  /** Front or upon delivery. Null is a real answer: nobody has decided. */
+  paymentTiming: PaymentTiming | null
 }
 
 /** A PO with its line items (detail view + receipt). */
@@ -867,6 +875,10 @@ export interface NewPurchaseOrder {
   notes?: string | null
   /** Destination stock location (RM/AM); defaults to the first location. */
   location?: string | null
+  carrier?: Carrier | null
+  service?: string | null
+  trackingNumber?: string | null
+  paymentTiming?: PaymentTiming | null
   lines: NewPurchaseOrderLine[]
 }
 

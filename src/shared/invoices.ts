@@ -37,6 +37,8 @@
  */
 
 /** Payment terms, as QuickBooks names them. */
+import type { Carrier, PaymentTiming } from './freight'
+
 export type InvoiceTerms = 'Due on receipt' | 'Net 15' | 'Net 30' | 'Net 60'
 
 export const INVOICE_TERMS: InvoiceTerms[] = ['Due on receipt', 'Net 15', 'Net 30', 'Net 60']
@@ -185,6 +187,11 @@ export interface Invoice {
   /** When somebody recorded the money as arrived. Null until they do. */
   paidAt: string | null
   paidBy: string | null
+  /** How it ships, and when it settles. See @shared/freight. */
+  carrier: Carrier | null
+  service: string | null
+  trackingNumber: string | null
+  paymentTiming: PaymentTiming | null
   createdBy: string | null
   createdAt: string
   updatedAt: string
@@ -218,6 +225,10 @@ export interface NewInvoice {
   message?: string | null
   sendLater?: boolean
   className?: string | null
+  carrier?: Carrier | null
+  service?: string | null
+  trackingNumber?: string | null
+  paymentTiming?: PaymentTiming | null
   lines: NewInvoiceLine[]
 }
 

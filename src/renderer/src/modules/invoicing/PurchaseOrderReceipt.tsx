@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
 import type { PurchaseOrderDetail, PurchaseOrderLine, PurchaseOrderStatus } from '@shared/types'
+import type { Freight } from '@shared/freight'
 import { PO_TRANSITIONS } from '@shared/purchaseOrders'
 import { api } from '../../lib/api'
 import { Button, CenterLoader, Modal } from '../../components/ui'
 import { useToast } from '../../components/Toast'
+import { FreightFields } from '../../components/FreightFields'
 import { Icon } from '../../components/Icon'
 import { formatDate, formatMoney } from '../../lib/format'
 import { CategoryLogo } from '../inventory/CategoryLogo'
@@ -155,6 +157,8 @@ export function PurchaseOrderReceipt({
 
         {detail.notes && <div className="po-receipt-notes">{detail.notes}</div>}
 
+        <FreightEditor po={detail} onSaved={setDetail} />
+
         <div className="po-receipt-lines">
           <div className="po-receipt-line po-receipt-line-head">
             <span className="po-rl-img" aria-hidden="true" />
@@ -174,6 +178,81 @@ export function PurchaseOrderReceipt({
         </div>
       </div>
     </Modal>
+  )
+}
+
+/**
+ * Shipping and payment on an EXISTING order.
+ *
+ * This is where a tracking number is actually entered, because it does not
+ * exist when the PO is raised — it arrives in a shipping confirmation hours or
+ * days later. Save appears only once something has changed, so the receipt does
+ * not carry a button that usually does nothing.
+ */
+function FreightEditor({
+  po,
+  onSaved
+}: {
+  po: PurchaseOrderDetail
+  onSaved: (po: PurchaseOrderDetail) => void
+}): JSX.Element {
+  const toast = useToast()
+  const saved: Freight = {
+    carrier: po.carrier,
+    service: po.service,
+    trackingNumber: po.trackingNumber,
+    paymentTiming: po.paymentTiming
+  }
+  const [draft, setDraft] = useState<Freight>(saved)
+  const [busy, setBusy] = useState(false)
+
+  // Reset when a different PO is shown, or when a save returns a normalised
+  // value (a pasted number can set a carrier nobody chose).
+  useEffect(() => {
+    setDraft({
+      carrier: po.carrier,
+      service: po.service,
+      trackingNumber: po.trackingNumber,
+      paymentTiming: po.paymentTiming
+    })
+  }, [po.id, po.carrier, po.service, po.trackingNumber, po.paymentTiming])
+
+  const dirty =
+    draft.carrier !== saved.carrier ||
+    (draft.service ?? '') !== (saved.service ?? '') ||
+    (draft.trackingNumber ?? '') !== (saved.trackingNumber ?? '') ||
+    draft.paymentTiming !== saved.paymentTiming
+
+  const save = async (): Promise<void> => {
+    setBusy(true)
+    try {
+      const res = await api.purchaseOrders.setFreight(po.id, draft)
+      if (!res.ok || !res.data) {
+        toast.error(res.error ?? 'Could not save the shipping details.')
+        return
+      }
+      onSaved(res.data)
+      toast.success('Shipping details saved.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="po-receipt-freight">
+      <FreightFields
+        {...draft}
+        hint="Who is bringing it"
+        onChange={(patch) => setDraft((d) => ({ ...d, ...patch }))}
+      />
+      {dirty && (
+        <div className="po-receipt-freight-save">
+          <Button variant="primary" icon="Save" loading={busy} onClick={save}>
+            Save shipping
+          </Button>
+        </div>
+      )}
+    </div>
   )
 }
 

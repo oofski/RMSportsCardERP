@@ -1,11 +1,13 @@
 import { useMemo, useState } from 'react'
 import type { InventoryProduct } from '@shared/types'
+import type { Freight } from '@shared/freight'
 import { LOCATIONS } from '@shared/inventory'
 import { api } from '../../lib/api'
 import { useToast } from '../../components/Toast'
 import { Button, Field, Input, Modal, Select } from '../../components/ui'
 import { Icon } from '../../components/Icon'
 import { formatMoney } from '../../lib/format'
+import { FreightFields } from '../../components/FreightFields'
 import { POCatalogTypeahead } from './POCatalogTypeahead'
 
 /** A working line in the create form — quantity/price kept as strings so the
@@ -36,6 +38,12 @@ export function CreatePurchaseOrderModal({
   const [supplier, setSupplier] = useState('')
   const [location, setLocation] = useState<string>(LOCATIONS[0].id)
   const [notes, setNotes] = useState('')
+  const [freight, setFreight] = useState<Freight>({
+    carrier: null,
+    service: null,
+    trackingNumber: null,
+    paymentTiming: null
+  })
   const [lines, setLines] = useState<DraftLine[]>([])
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -108,6 +116,7 @@ export function CreatePurchaseOrderModal({
         supplier: supplier.trim() || null,
         location,
         notes: notes.trim() || null,
+        ...freight,
         lines: lines.map((l) => ({
           productId: l.productId,
           quantity: parseInt(l.quantity, 10),
@@ -176,6 +185,12 @@ export function CreatePurchaseOrderModal({
           />
         </Field>
       </div>
+
+      <FreightFields
+        {...freight}
+        hint="Who is bringing it"
+        onChange={(patch) => setFreight((f) => ({ ...f, ...patch }))}
+      />
 
       <POCatalogTypeahead onSelect={addLine} />
 

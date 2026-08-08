@@ -158,6 +158,7 @@ export const IPC = {
   poGet: 'po:get',
   poCreate: 'po:create',
   poSetStatus: 'po:set-status',
+  poSetFreight: 'po:set-freight',
   poCatalogSearch: 'po:catalog-search',
   poThumbnails: 'po:thumbnails',
   poIncomingBoxes: 'po:incoming-boxes',

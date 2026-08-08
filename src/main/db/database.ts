@@ -2135,6 +2135,32 @@ function migrate(database: Database.Database): void {
   addColumnIfMissing(database, 'invoices', 'paid_by', 'TEXT')
   setMeta(database, 'schema_version', '53')
 
+  // v54: how it travels, and when it gets paid for.
+  //
+  // The same four facts on BOTH sides of the money — a purchase order ships a
+  // box in and an invoice ships one out, and each settles at some point. Two
+  // separate sets of columns would drift the first time a carrier was added, so
+  // the vocabulary lives in @shared/freight and both tables carry the same
+  // names.
+  //
+  // TRACKING IS A NUMBER, NOT A FEED. Real carrier status needs a developer
+  // account, an OAuth dance and a set of secrets per carrier, on every machine
+  // — three integrations to save a click on fifteen packages a day. So the
+  // number is stored, the carrier is DETECTED from it, and the carrier's own
+  // tracking page is one click away: live and authoritative because it is
+  // theirs, rather than copied here where it can go stale. If per-package
+  // status ever earns its keep, these two columns are already its only inputs.
+  for (const table of ['purchase_orders', 'invoices']) {
+    addColumnIfMissing(database, table, 'carrier', 'TEXT')
+    addColumnIfMissing(database, table, 'service', 'TEXT')
+    addColumnIfMissing(database, table, 'tracking_number', 'TEXT')
+    // 'front' | 'delivery' | NULL. Null is a real third state: plenty of orders
+    // are placed before anybody has decided, and defaulting to either answer
+    // would put a claim on the record that nobody made.
+    addColumnIfMissing(database, table, 'payment_timing', 'TEXT')
+  }
+  setMeta(database, 'schema_version', '54')
+
   // Payroll, once, for whoever owns the company.
   //
   // Seeded rather than left to be typed because the owner named it, named its

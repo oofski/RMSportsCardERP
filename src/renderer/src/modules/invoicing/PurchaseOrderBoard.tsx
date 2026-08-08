@@ -7,6 +7,7 @@ import type {
 } from '@shared/types'
 import { PO_STAGES, PO_TRANSITIONS, canTransition } from '@shared/purchaseOrders'
 import { Icon } from '../../components/Icon'
+import { FreightLine } from '../../components/FreightFields'
 import { formatMoney } from '../../lib/format'
 import { PO_MOVE_LABEL, PO_STAGE_META } from './helpers'
 
@@ -230,6 +231,11 @@ function PoCard({
           {po.lineCount} {po.lineCount === 1 ? 'item' : 'items'}
         </span>
       </div>
+      <FreightLine
+        carrier={po.carrier}
+        service={po.service}
+        trackingNumber={po.trackingNumber}
+      />
       {(moves.length > 0 || deletable) && (
         <div className="po-card-foot" onClick={(e) => e.stopPropagation()}>
           {moves.map((to) => (

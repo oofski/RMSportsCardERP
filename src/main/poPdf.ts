@@ -20,6 +20,7 @@ import { tmpdir } from 'os'
 import type { PurchaseOrderDetail } from '@shared/types'
 import { productThumbnails } from './db/inventory'
 import { RM_LOGO_DATA_URI } from './brand'
+import { shipMeta } from './freightPdf'
 
 const money = (n: number): string =>
   (Number.isFinite(n) ? n : 0).toLocaleString('en-US', { style: 'currency', currency: 'USD' })
@@ -164,6 +165,7 @@ export function buildPoHtml(po: PurchaseOrderDetail): string {
     <div><div class="k">Supplier</div><div class="v">${esc(po.supplier || '—')}</div></div>
     <div><div class="k">Ordered</div><div class="v">${date(po.orderedAt ?? po.createdAt)}</div></div>
     <div><div class="k">Destination</div><div class="v">${esc(po.location)}</div></div>
+    ${shipMeta(po, { key: 'k', value: 'v' })}
   </div>
 
   <table>
