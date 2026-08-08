@@ -113,11 +113,15 @@ export function trackingUrl(carrier: string | null | undefined, tracking: string
   if (!t) return null
   const id = carrier || detectCarrier(t)
   const n = encodeURIComponent(t)
+  // Locale and country are pinned on purpose. Left off, these sites guess from
+  // the browser and can answer in another language or bounce through a country
+  // chooser — which is fine for a person clicking Track, and fatal for a reader
+  // matching English phrases.
   switch (id) {
     case 'fedex':
-      return `https://www.fedex.com/fedextrack/?trknbr=${n}`
+      return `https://www.fedex.com/fedextrack/?trknbr=${n}&locale=en_US&cntry_code=us`
     case 'ups':
-      return `https://www.ups.com/track?tracknum=${n}`
+      return `https://www.ups.com/track?loc=en_US&requester=ST&tracknum=${n}`
     case 'usps':
       return `https://tools.usps.com/go/TrackConfirmAction?tLabels=${n}`
     default:

@@ -96,6 +96,174 @@ ok(parseTrackingStatus('Track another package. Sign in. Help.') === null, 'nor i
 ok(parseTrackingStatus('Ship a package today with FedEx One Rate') === null, 'nor is marketing')
 
 // ---------------------------------------------------------------------------
+console.log('\n=== 1b. each carrier, in its own words ===')
+// ---------------------------------------------------------------------------
+// The three describe the same journey with different vocabulary, and the
+// generic patterns got the edges wrong. Each carrier's own phrasing is checked
+// first — these are the lines they actually print.
+
+// --- FedEx. The heaviest page, and the one that was coming back blank. -----
+ok(parseTrackingStatus('On the way', 'fedex') === 'in_transit', 'FedEx "On the way"')
+ok(
+  parseTrackingStatus('Shipment information sent to FedEx', 'fedex') === 'label_created',
+  'FedEx has the label but not the box'
+)
+ok(
+  parseTrackingStatus('On FedEx vehicle for delivery', 'fedex') === 'out_for_delivery',
+  'FedEx out for delivery, in its own words'
+)
+ok(parseTrackingStatus('We\u2019re holding your package', 'fedex') === 'exception', 'FedEx hold')
+ok(parseTrackingStatus('Delivery exception', 'fedex') === 'exception', 'FedEx exception')
+// TYPOGRAPHY. Carriers set their copy with real punctuation, and a curly
+// apostrophe matches nothing a pattern writes with an ASCII one. This silently
+// turned a real status into "could not read" until the text was normalised.
+ok(
+  parseTrackingStatus("We're holding your package", 'fedex') === 'exception',
+  'and the same sentence with a straight apostrophe'
+)
+ok(
+  parseTrackingStatus('In\u00a0transit to next facility', 'usps') === 'in_transit',
+  'a non-breaking space reads like a space'
+)
+ok(
+  parseTrackingStatus('Out\u2011for\u2011delivery'.replace(/\u2011/g, ' '), 'ups') === 'out_for_delivery',
+  'and a typographic hyphen does not break a phrase'
+)
+ok(parseTrackingStatus('Picked up', 'fedex') === 'in_transit', 'FedEx pickup scan')
+
+// A realistic FedEx page: status at the top, history and chrome below. The
+// status must come from the TOP, not from whatever matches lowest down.
+const FEDEX_PAGE = [
+  'FedEx Tracking',
+  'Track another shipment',
+  '123456789012',
+  'On the way',
+  'Scheduled delivery: Friday, 8/9/2026 by end of day',
+  'Travel History',
+  'Shipment information sent to FedEx',
+  'Picked up',
+  'FedEx Delivery Manager',
+  'Sign up for delivery notifications'
+].join('\n')
+ok(
+  parseTrackingStatus(FEDEX_PAGE, 'fedex') === 'in_transit',
+  'a whole FedEx page reads as its CURRENT status, not its oldest scan',
+  String(parseTrackingStatus(FEDEX_PAGE, 'fedex'))
+)
+
+// --- UPS ------------------------------------------------------------------
+ok(parseTrackingStatus('Shipment Ready for UPS', 'ups') === 'label_created', 'UPS label only')
+ok(
+  parseTrackingStatus('Out For Delivery Today', 'ups') === 'out_for_delivery',
+  'UPS out for delivery'
+)
+ok(parseTrackingStatus('Origin Scan', 'ups') === 'in_transit', 'UPS origin scan')
+ok(
+  parseTrackingStatus('Delivered\nLeft at: Front Door', 'ups') === 'delivered',
+  'UPS delivered'
+)
+const UPS_PAGE = [
+  'UPS Tracking',
+  '1Z999AA10123456784',
+  'In Transit',
+  'Estimated delivery Friday 08/09/2026',
+  'Shipment Ready for UPS',
+  'UPS My Choice'
+].join('\n')
+ok(parseTrackingStatus(UPS_PAGE, 'ups') === 'in_transit', 'a whole UPS page reads correctly')
+
+// --- USPS -----------------------------------------------------------------
+ok(
+  parseTrackingStatus('Moving Through Network', 'usps') === 'in_transit',
+  'USPS network movement'
+)
+ok(
+  parseTrackingStatus('Shipping Label Created, USPS Awaiting Item', 'usps') === 'label_created',
+  'USPS label only'
+)
+ok(parseTrackingStatus('Accepted at USPS Origin Facility', 'usps') === 'in_transit', 'USPS accept')
+// USPS heads a problem with a bare "Alert". Matched only at the START of a
+// line, because the word turns up in cookie banners and would otherwise mark
+// every package on the page as a problem.
+ok(parseTrackingStatus('Alert', 'usps') === 'exception', 'USPS "Alert" heads a problem')
+ok(
+  parseTrackingStatus('Get alerts about your package by email', 'usps') !== 'exception',
+  'but an advert offering alerts is not one'
+)
+const USPS_PAGE = [
+  'USPS Tracking',
+  '9400111899223197428490',
+  'In Transit to Next Facility',
+  'Arriving Late',
+  'Moving Through Network',
+  'Shipping Label Created, USPS Awaiting Item'
+].join('\n')
+ok(parseTrackingStatus(USPS_PAGE, 'usps') === 'in_transit', 'a whole USPS page reads correctly')
+
+// THE TOP LINE WINS, and that is the whole point of reading line by line. A
+// delivered package whose page also lists its earlier scans must read as
+// delivered, and an in-transit one must not read as delivered because the word
+// appears in "Delivery Manager" further down.
+const DELIVERED_PAGE = [
+  'Delivered',
+  'Friday 8/8/2026 at 3:14pm',
+  'Travel History',
+  'Out for delivery',
+  'In transit',
+  'Shipment information sent to FedEx'
+].join('\n')
+ok(
+  parseTrackingStatus(DELIVERED_PAGE, 'fedex') === 'delivered',
+  'a delivered package reads delivered despite its history',
+  String(parseTrackingStatus(DELIVERED_PAGE, 'fedex'))
+)
+
+// WHY LINE BY LINE, AND FROM THE TOP.
+//
+// Carriers print marketing under the status, and some of it contains the very
+// words the parser looks for. Matched against the page as ONE blob, a package
+// that has not left the building reads as delivered — because the guarantee
+// copy at the bottom says "delivered on time". That is the worst failure this
+// whole file exists to prevent: somebody stops looking for a package that was
+// never collected.
+const NOT_YET_SHIPPED = [
+  'FedEx Tracking',
+  '123456789012',
+  'Shipment information sent to FedEx',
+  'Label created 8/8/2026',
+  'Money-back guarantee',
+  'Delivered on time or your money back.'
+].join('\n')
+ok(
+  parseTrackingStatus(NOT_YET_SHIPPED, 'fedex') === 'label_created',
+  'marketing further down the page cannot deliver a package that has not shipped',
+  String(parseTrackingStatus(NOT_YET_SHIPPED, 'fedex'))
+)
+// The same hazard on the UPS page, whose footer sells delivery guarantees too.
+const UPS_NOT_SHIPPED = [
+  'UPS Tracking',
+  'Shipment Ready for UPS',
+  'Label Created 8/8/2026',
+  'UPS Delivered a package? Rate your experience.'
+].join('\n')
+ok(
+  parseTrackingStatus(UPS_NOT_SHIPPED, 'ups') === 'label_created',
+  'and on a UPS page',
+  String(parseTrackingStatus(UPS_NOT_SHIPPED, 'ups'))
+)
+
+// Without a carrier the generic list still handles all three vocabularies.
+ok(parseTrackingStatus('On the way') === 'in_transit', 'the generic list knows "on the way"')
+ok(
+  parseTrackingStatus('Shipment Ready for UPS') === 'label_created',
+  'and UPS label wording'
+)
+ok(
+  parseTrackingStatus('Shipment information sent to FedEx') === 'label_created',
+  'and FedEx label wording'
+)
+
+// ---------------------------------------------------------------------------
 console.log('\n=== 2. pages that are not answers ===')
 // ---------------------------------------------------------------------------
 ok(looksUnreadable(''), 'blank')

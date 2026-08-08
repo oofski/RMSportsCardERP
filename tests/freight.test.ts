@@ -89,10 +89,15 @@ ok(detectCarrier('1Z999AA1012345678') === null, 'a 1Z with the wrong length is r
 console.log('\n=== 2. the link, and when there must not be one ===')
 // ---------------------------------------------------------------------------
 ok(
-  trackingUrl('ups', '1Z999AA10123456784') ===
-    'https://www.ups.com/track?tracknum=1Z999AA10123456784',
-  'UPS deep link'
+  (trackingUrl('ups', '1Z999AA10123456784') ?? '').includes('tracknum=1Z999AA10123456784'),
+  'UPS deep link carries the number',
+  String(trackingUrl('ups', '1Z999AA10123456784'))
 )
+// Locale is pinned so the page answers in English — the reader matches English
+// phrases, and a site that guesses the language from the browser can hand back
+// one it cannot read.
+ok((trackingUrl('ups', '1Z999AA10123456784') ?? '').includes('loc=en_US'), 'and pins the locale')
+ok((trackingUrl('fedex', '123456789012') ?? '').includes('locale=en_US'), 'FedEx pins it too')
 ok(
   (trackingUrl('fedex', '123456789012') ?? '').startsWith('https://www.fedex.com/fedextrack/'),
   'FedEx deep link'
@@ -103,9 +108,9 @@ ok(
 )
 // No carrier given? Fall back to reading the number.
 ok(
-  trackingUrl(null, '1Z999AA10123456784') ===
-    'https://www.ups.com/track?tracknum=1Z999AA10123456784',
-  'a bare number that names itself still links'
+  (trackingUrl(null, '1Z999AA10123456784') ?? '').includes('ups.com/track'),
+  'a bare number that names itself still links',
+  String(trackingUrl(null, '1Z999AA10123456784'))
 )
 // And when it does NOT name itself, there is no link — see reason 1 above.
 ok(trackingUrl(null, '12345678901234567890') === null, 'an ambiguous number gets no link')

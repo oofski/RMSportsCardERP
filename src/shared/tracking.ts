@@ -32,68 +32,163 @@ import type { ShipStatusCode } from './shippingTypes'
 import { SHIP_STATUS_RANK } from './shippingTypes'
 
 /**
+ * What each carrier actually prints, in its own words.
+ *
+ * The three of them describe the same journey with different vocabulary, and a
+ * single generic pattern set gets the edges wrong. FedEx says "On the way" and
+ * "Shipment information sent to FedEx"; UPS says "Shipment Ready for UPS" and
+ * "Out For Delivery Today"; USPS says "Moving Through Network" and puts a bare
+ * "Alert" above a problem. None of those match the others' wording.
+ *
+ * Checked BEFORE the generic list, so a carrier's own phrasing always wins over
+ * a loose match. Order within each list matters for the same reason it does
+ * below: the most specific phrase first.
+ */
+const CARRIER_PHRASES: Record<string, Array<[RegExp, ShipStatusCode]>> = {
+  fedex: [
+    [/\breturn(?:ed|ing)? to (?:sender|shipper)\b/, 'returned'],
+    [/\bdelivered\b/, 'delivered'],
+    [/\bon fedex vehicle for delivery\b/, 'out_for_delivery'],
+    [/\bout for delivery\b/, 'out_for_delivery'],
+    [/\bdelivery exception\b/, 'exception'],
+    [/\bwe(?:'| a)?re holding\b/, 'exception'],
+    [/\bshipment exception\b/, 'exception'],
+    [/\bon the way\b/, 'in_transit'],
+    [/\bin transit\b/, 'in_transit'],
+    [/\b(?:arrived at|departed) fedex\b/, 'in_transit'],
+    [/\bat local fedex facility\b/, 'in_transit'],
+    [/\bpicked up\b/, 'in_transit'],
+    // FedEx's wording for "we know about it, we do not have it yet".
+    [/\bshipment information sent to fedex\b/, 'label_created'],
+    [/\blabel created\b/, 'label_created'],
+    [/\border processed\b/, 'label_created']
+  ],
+  ups: [
+    [/\breturn(?:ed|ing)? to sender\b/, 'returned'],
+    [/\bdelivered\b/, 'delivered'],
+    [/\bout for delivery(?: today)?\b/, 'out_for_delivery'],
+    [/\bexception\b/, 'exception'],
+    [/\baction (?:needed|required)\b/, 'exception'],
+    [/\bin transit\b/, 'in_transit'],
+    [/\bon the way\b/, 'in_transit'],
+    [/\b(?:arrived at|departed from) facility\b/, 'in_transit'],
+    [/\borigin scan\b/, 'in_transit'],
+    // UPS's two ways of saying the label exists and the parcel does not.
+    [/\bshipment ready for ups\b/, 'label_created'],
+    [/\blabel created\b/, 'label_created'],
+    [/\border processed[:,]? ready for ups\b/, 'label_created']
+  ],
+  usps: [
+    [/\breturn to sender\b/, 'returned'],
+    [/\bdelivered\b/, 'delivered'],
+    [/\bout for delivery\b/, 'out_for_delivery'],
+    // USPS heads a problem with a bare "Alert", so it is matched at the START
+    // of a line only — the word turns up in cookie banners otherwise.
+    [/^alert\b/, 'exception'],
+    [/\bdelivery exception\b/, 'exception'],
+    [/\baction needed\b/, 'exception'],
+    [/\bin transit(?: to next facility)?\b/, 'in_transit'],
+    [/\bmoving through network\b/, 'in_transit'],
+    [/\barrived at (?:usps|post office|facility)\b/, 'in_transit'],
+    [/\bdeparted (?:usps|post office)\b/, 'in_transit'],
+    [/\baccepted at\b/, 'in_transit'],
+    [/\bshipping label created,? usps awaiting item\b/, 'label_created'],
+    [/\bpre-?shipment\b/, 'label_created'],
+    [/\blabel created\b/, 'label_created']
+  ]
+}
+
+/** Wording common to all three, and the fallback when no carrier is known. */
+const GENERIC_PHRASES: Array<[RegExp, ShipStatusCode]> = [
+  [/\breturn(?:ed|ing)? to (?:sender|shipper)\b/, 'returned'],
+  [/\bdelivered\b/, 'delivered'],
+  [/\bout for delivery\b/, 'out_for_delivery'],
+  [/\bdelivery exception\b/, 'exception'],
+  [/\bundeliverable\b/, 'exception'],
+  [/\bexception\b/, 'exception'],
+  [/\bheld at\b/, 'exception'],
+  [/\baction (?:needed|required)\b/, 'exception'],
+  [/^alert\b/, 'exception'],
+  [/\bin transit\b/, 'in_transit'],
+  [/\bon the way\b/, 'in_transit'],
+  [/\barrived at\b/, 'in_transit'],
+  [/\bdeparted\b/, 'in_transit'],
+  [/\bmoving through\b/, 'in_transit'],
+  [/\bin possession of\b/, 'in_transit'],
+  [/\bshipping label created\b/, 'label_created'],
+  [/\bshipment information sent\b/, 'label_created'],
+  [/\bshipment ready for\b/, 'label_created'],
+  [/\blabel created\b/, 'label_created'],
+  [/\bpre-?shipment\b/, 'label_created'],
+  [/\border processed\b/, 'label_created'],
+  [/\bawaiting item\b/, 'label_created']
+]
+
+/**
+ * Flatten the typography carriers actually publish.
+ *
+ * They set their copy with real punctuation — "We\u2019re holding your package"
+ * carries a curly apostrophe, not the ASCII one a pattern is written with, and
+ * a non-breaking space between words looks identical on screen and matches
+ * nothing. Both silently turned a real status into "could not read". Normalised
+ * once here so every pattern below can be written the obvious way.
+ */
+function normalize(line: string): string {
+  return (line ?? '')
+    .toLowerCase()
+    .replace(/[\u2018\u2019\u02bc]/g, "'")
+    .replace(/[\u201c\u201d]/g, '"')
+    .replace(/[\u2010-\u2015]/g, '-')
+    .replace(/[\u00a0\u2007\u202f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+/** One line's worth of meaning, carrier's own vocabulary first. */
+export function statusFromLine(line: string, carrier?: string | null): ShipStatusCode | null {
+  const t = normalize(line)
+  if (!t) return null
+  const lists = carrier && CARRIER_PHRASES[carrier] ? [CARRIER_PHRASES[carrier]] : []
+  lists.push(GENERIC_PHRASES)
+  for (const list of lists) {
+    for (const [re, status] of list) {
+      if (re.test(t)) return status
+    }
+  }
+  return null
+}
+
+/**
  * Turn what the page says into one of our seven words.
  *
- * ORDER MATTERS. "Out for delivery" contains neither "delivered" nor
- * "delivery" as a whole word by accident — but "delivered" is a substring of
- * nothing else, while a page reading "Out for Delivery" also carries the word
- * "delivery" in half a dozen navigation links. So the most specific phrases are
- * tested first and the loosest last, and each pattern is anchored on wording
- * carriers actually print rather than on a single word.
+ * LINE BY LINE, FROM THE TOP — not one match against the whole blob. All three
+ * carriers put the current status at the top of the page and the history,
+ * navigation and marketing below it, so the first line that means anything is
+ * the current state. Matching the whole page at once let a phrase from a footer
+ * or a "Delivery Manager" advert decide the status of a real package.
+ *
+ * Within a line the most specific phrase wins, which is what keeps "Out for
+ * delivery" from reading as "delivered" — they share a word and mean opposite
+ * things to whoever is waiting for the box.
  *
  * Returns null when nothing matches, which the caller must treat as "could not
- * read" — not as "no movement".
+ * read" — never as "no movement".
  */
-export function parseTrackingStatus(pageText: string): ShipStatusCode | null {
-  const t = (pageText ?? '').toLowerCase().replace(/\s+/g, ' ')
-  if (!t.trim()) return null
+export function parseTrackingStatus(
+  pageText: string,
+  carrier?: string | null
+): ShipStatusCode | null {
+  const raw = pageText ?? ''
+  if (!raw.trim()) return null
 
-  // Terminal and unambiguous first.
-  if (/\breturn(ed|ing)? to sender\b/.test(t)) return 'returned'
-  if (/\bdelivered\b/.test(t) || /\byour item was delivered\b/.test(t)) return 'delivered'
-
-  // "Out for delivery" must beat the generic in-transit patterns below it.
-  if (/\bout for delivery\b/.test(t)) return 'out_for_delivery'
-
-  // Trouble. Checked before in-transit because an exception page still shows
-  // movement history, and the exception is the thing somebody has to act on.
-  if (
-    /\bdelivery exception\b/.test(t) ||
-    /\bexception\b/.test(t) ||
-    /\bundeliverable\b/.test(t) ||
-    /\balert\b/.test(t) ||
-    /\bheld at\b/.test(t) ||
-    /\baction (?:needed|required)\b/.test(t)
-  ) {
-    return 'exception'
+  for (const line of raw.split('\n')) {
+    const hit = statusFromLine(line, carrier)
+    if (hit) return hit
   }
 
-  if (
-    /\bin transit\b/.test(t) ||
-    /\bon the way\b/.test(t) ||
-    /\barrived at\b/.test(t) ||
-    /\bdeparted\b/.test(t) ||
-    /\bmoving through\b/.test(t) ||
-    /\bin possession of\b/.test(t)
-  ) {
-    return 'in_transit'
-  }
-
-  // The label exists and nothing has happened yet. Deliberately last: these
-  // phrases also appear on pages that have since moved on.
-  if (
-    /\bshipping label created\b/.test(t) ||
-    /\blabel created\b/.test(t) ||
-    /\bpre-?shipment\b/.test(t) ||
-    /\border processed\b/.test(t) ||
-    /\bawaiting item\b/.test(t) ||
-    /\bready for (?:usps|ups|fedex)\b/.test(t)
-  ) {
-    return 'label_created'
-  }
-
-  // A page that loaded but says nothing we know. NOT a status.
-  return null
+  // Nothing line-by-line. Try the page as one string, for a layout that runs
+  // the status into a single unbroken block.
+  return statusFromLine(raw.replace(/\n/g, ' '), carrier)
 }
 
 /**
@@ -104,7 +199,7 @@ export function parseTrackingStatus(pageText: string): ShipStatusCode | null {
  * looking like the package stopped moving.
  */
 export function looksUnreadable(pageText: string): boolean {
-  const t = (pageText ?? '').toLowerCase().replace(/\s+/g, ' ')
+  const t = normalize(pageText)
   if (t.trim().length < 40) return true
   return (
     /could not (?:be )?(?:locate|find)/.test(t) ||
