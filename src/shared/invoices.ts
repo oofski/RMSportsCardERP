@@ -1030,6 +1030,19 @@ export function qboInvoiceUrl(environment: 'sandbox' | 'production', qboId: stri
 }
 
 /**
+ * WHERE THE APP'S NUMBERING BEGINS.
+ *
+ * Set to the owner's next real invoice number, because the series did not start
+ * here — invoices were raised in QuickBooks by hand first, and the app must
+ * carry on from where the business actually is rather than opening a second
+ * series that collides with it.
+ *
+ * A floor, not a fixed value: once local numbering passes it, the highest
+ * number seen wins. See `nextInvoiceNumber`.
+ */
+export const INVOICE_NUMBER_START = 2293
+
+/**
  * The next invoice number, given what has been used.
  *
  * Numeric strings advance; anything else falls back to a fresh series rather
@@ -1037,10 +1050,16 @@ export function qboInvoiceUrl(environment: 'sandbox' | 'production', qboId: stri
  * decide which digits are the counter, and deciding wrong on somebody's real
  * numbering is worse than starting a new one they can overwrite.
  */
-export function nextInvoiceNumber(existing: string[], start = 1001): string {
+export function nextInvoiceNumber(existing: string[], start = INVOICE_NUMBER_START): string {
   const numeric = existing
     .map((n) => Number(n))
     .filter((n) => Number.isFinite(n) && Number.isInteger(n) && n > 0)
-  if (numeric.length === 0) return String(start)
-  return String(Math.max(...numeric) + 1)
+  // THE FLOOR IS NOT JUST FOR AN EMPTY LIST. The app's own history begins after
+  // a run of invoices raised in QuickBooks by hand, so the highest number here
+  // can be far below the highest number the BUSINESS has issued. Taking
+  // max+1 from local rows alone would re-issue numbers a customer has already
+  // been billed under, and QuickBooks would either refuse the duplicate or
+  // accept it and leave two documents claiming one number.
+  const highest = numeric.length ? Math.max(...numeric) : 0
+  return String(Math.max(highest + 1, start))
 }

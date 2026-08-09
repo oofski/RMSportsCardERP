@@ -100,13 +100,19 @@ ok(dueDateFor('2026-10-25', 'Net 15') === '2026-11-09', 'and the fall back')
 ok(toUsDate('2022-11-21') === '11/21/2022', 'dates export American')
 ok(toUsDate('') === '', 'and a blank stays blank rather than becoming 1970')
 
-ok(nextInvoiceNumber([]) === '1001', 'the first invoice is 1001')
-ok(nextInvoiceNumber(['1001', '1002']) === '1003', 'then it counts on')
-ok(nextInvoiceNumber(['1002', '1001']) === '1003', 'whatever order they arrive in')
+// THE SERIES DID NOT START HERE. Invoices were raised in QuickBooks by hand
+// first, so the app carries on from the owner's real next number rather than
+// opening a second series that collides with it. max+1 off local rows alone
+// would re-issue numbers a customer has already been billed under.
+ok(nextInvoiceNumber([]) === '2293', 'the first invoice is the owner\u2019s real next number')
+ok(nextInvoiceNumber(['1001', '1002']) === '2293', 'and history below the floor does not lower it')
+ok(nextInvoiceNumber(['2293']) === '2294', 'once it is reached, it counts on')
+ok(nextInvoiceNumber(['2400', '2293']) === '2401', 'from the highest, whatever order they arrive in')
+ok(nextInvoiceNumber(['1002', '1001'], 1001) === '1003', 'an explicit floor still wins for a caller that sets one')
 // A custom series is not guessed at: deciding which digits of "INV-0042" are
 // the counter and getting it wrong on somebody's real numbering is worse than
 // starting a series they can type over.
-ok(nextInvoiceNumber(['INV-0042']) === '1001', 'a non-numeric series is not guessed at')
+ok(nextInvoiceNumber(['INV-0042']) === '2293', 'a non-numeric series is not guessed at')
 
 // ---------------------------------------------------------------------------
 console.log('\n=== 3. what an invoice must have ===')
@@ -239,7 +245,11 @@ ok(
 ok(repo.getInvoice(inv1.id).customerId === chris.id, 'but they are still linked')
 repo.saveCustomer({ id: chris.id, name: 'Chris Smith' })
 
-ok(repo.suggestInvoiceNumber() === '1002', 'the next number follows the highest')
+// The invoices above were numbered by the test in the old series, which sits
+// below the floor — so the floor is what comes back, and that IS the rule: the
+// app must not hand out a number the business has already used.
+ok(repo.suggestInvoiceNumber() === '2293', 'the next number never drops below the floor',
+  repo.suggestInvoiceNumber())
 
 // ---------------------------------------------------------------------------
 console.log('\n=== 6. Intuit\'s import template, cell by cell ===')

@@ -326,12 +326,37 @@ export function CreateInvoiceModal({
       return null
     }
     setError('')
-    const res = await api.invoices.save(build())
+    // SAVE PUTS IT ON THE BOOKS. There is no separate "send to QuickBooks"
+    // step any more — the document exists in both places or the reason is on
+    // screen.
+    //
+    // The result shape is the load-bearing part: a QuickBooks failure comes
+    // back as ok:true with pushed:false, because the invoice IS saved and only
+    // the push has to be retried. Reading that as a failed save would tell
+    // somebody their work was lost while it sat on disk, and they would type
+    // it again.
+    const res = await api.invoices.saveAndPush(build())
     if (!res.ok || !res.data) {
       setError(res.error ?? 'Could not save the invoice.')
       return null
     }
-    return res.data
+    if (!res.data.pushed) {
+      // Saved locally, not in QuickBooks. Said out loud rather than swallowed:
+      // an invoice that only exists here will not be on the books, and the
+      // board's retry is the way out.
+      toast.error(
+        res.data.error
+          ? `Saved here, but QuickBooks refused it: ${res.data.error}`
+          : 'Saved here, but it did not reach QuickBooks. Retry it from the invoice card.'
+      )
+    } else if (res.data.numberChanged) {
+      // QuickBooks assigns its own document numbers and will not always take
+      // ours. Silently keeping the old one on screen means the number in the
+      // app and the number the buyer receives disagree.
+      toast.success(`Sent to QuickBooks as invoice ${res.data.docNumber}.`)
+    }
+    for (const note of res.data.notes ?? []) toast.error(note)
+    return res.data.invoice
   }
 
   /**
