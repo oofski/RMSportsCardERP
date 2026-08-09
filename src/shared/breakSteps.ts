@@ -84,6 +84,47 @@ export const BREAK_STEPS: BreakStepDef[] = [
   }
 ]
 
+/**
+ * The two that are NOT per break: they happen once, to packages, after every
+ * break on the floor is boxed.
+ *
+ * They live on the same numbered list as steps 1-3 even though nothing about
+ * them is ticked here, because the checklist ending at "team-bagged" made the
+ * bench look like the whole job. Somebody working down a break had no way to
+ * see what came next or what was still holding it up — the gate existed and
+ * refused them, but only at the moment they tried to pack, from a different
+ * screen. Shown here, greyed, with the breaks that are holding it named.
+ */
+export type ShipStepId = 'pack' | 'scan'
+
+/**
+ * Deliberately NOT a BreakStepDef. These carry no per-break state and must
+ * never reach `canStartStep` or `isStepDone`, both of which decide whether a
+ * BREAK is finished — a pack step answering "done?" there would make every
+ * break permanently unfinished and nothing would ever ship.
+ */
+export interface ShipStepDef {
+  id: ShipStepId
+  n: number
+  label: string
+  detail: string
+}
+
+export const SHIP_STEPS: ShipStepDef[] = [
+  {
+    id: 'pack',
+    n: BREAK_STEPS.length + 1,
+    label: 'Pack',
+    detail: 'Build each buyer’s package from the break boxes.'
+  },
+  {
+    id: 'scan',
+    n: BREAK_STEPS.length + 2,
+    label: 'Scan & ship',
+    detail: 'Label it, scan it out, and hand it to the carrier.'
+  }
+]
+
 export function breakStep(id: BreakStepId): BreakStepDef {
   const found = BREAK_STEPS.find((s) => s.id === id)
   // Every id in the type has an entry, so this is unreachable — but returning a
@@ -161,6 +202,8 @@ export interface BreakBenchDetail {
   rows: BreakBagRow[]
   /** Null when step 3 may be worked on; the reason when it may not. */
   bagBlockedReason: string | null
+  /** What steps 4 and 5 say: locked, waiting on other breaks, or go. */
+  shipGate: ShipGate
 }
 
 // ---------------------------------------------------------------------------
@@ -294,6 +337,51 @@ export function notReadyMessage(states: BreakStepState[]): string | null {
   })
   const list = parts.length <= 3 ? parts.join(', ') : `${parts.slice(0, 3).join(', ')} and ${parts.length - 3} more`
   return `${blocked.length === 1 ? 'This break is' : 'These breaks are'} not finished on the bench yet: ${list}.`
+}
+
+/**
+ * What steps 4 and 5 say on ONE break's checklist.
+ *
+ * Three states, because there are genuinely three situations and collapsing
+ * them loses the one that matters most:
+ *
+ *   locked   This break is not off the bench. Nothing to discuss.
+ *   waiting  This break IS boxed, but others are not. The person who just
+ *            finished it needs to know their break is not the hold-up — and
+ *            WHICH ones are, so the floor can go help rather than stand around.
+ *   go       Everything is boxed. Packing starts.
+ *
+ * The middle state is the reason this exists. Showing a flat "locked" on a
+ * break somebody has just finished reads as though their own work failed, and
+ * that is the reading that sends them back through thirty bags they already
+ * did correctly.
+ */
+export type ShipGateStatus = 'locked' | 'waiting' | 'go'
+
+export interface ShipGate {
+  status: ShipGateStatus
+  reason: string
+}
+
+export function shipGate(breakId: string, all: BreakStepState[]): ShipGate {
+  const mine = all.find((s) => s.breakId === breakId) ?? null
+  if (!mine || !isBreakReady(mine)) {
+    const step = mine ? currentStep(mine) : null
+    return {
+      status: 'locked',
+      reason: step
+        ? `Finish this break first — step ${breakStep(step).n}, ${breakStep(step).label.toLowerCase()}.`
+        : 'Finish this break on the bench first.'
+    }
+  }
+  const others = all.filter((s) => s.breakId !== breakId && !isBreakReady(s))
+  if (others.length) {
+    return {
+      status: 'waiting',
+      reason: `This break is boxed. ${notReadyMessage(others)}`
+    }
+  }
+  return { status: 'go', reason: 'Every break is off the bench — packing can start.' }
 }
 
 // ---------------------------------------------------------------------------

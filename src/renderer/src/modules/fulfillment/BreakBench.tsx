@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import type { BreakBagRow, BreakBenchDetail, BreakStepId } from '@shared/breakSteps'
 import {
   BREAK_STEPS,
+  SHIP_STEPS,
   blockedReason,
   breakProgress,
   canStartStep,
@@ -116,9 +117,10 @@ export function BreakBench({
         <div className="bench-head-text">
           <span className="bench-title">On the bench</span>
           <span className="bench-sub">
-            {ready
-              ? 'Finished — this break can be packed from.'
-              : `${state.baggedTeams} of ${state.totalTeams} teams bagged`}
+            {/* When this break is done but the floor is not, the old wording —
+                "can be packed from" — was a claim the gate would then refuse.
+                The gate's own sentence is the accurate one. */}
+            {ready ? detail.shipGate.reason : `${state.baggedTeams} of ${state.totalTeams} teams bagged`}
           </span>
         </div>
         <div className={`bench-bar ${ready ? 'done' : ''}`} title={`${pct}%`}>
@@ -236,6 +238,50 @@ export function BreakBench({
           ))}
         </ul>
       </div>
+
+      {/* ---- Steps 4 and 5: not this break's to tick ------------------------
+          On the same numbered list because the checklist stopping at step 3
+          made the bench look like the whole job — somebody finishing a break
+          could not see what came next, or what was still holding it up. The
+          gate itself was already enforced; it just refused them later, from
+          another screen, with no way to have known.
+
+          Never tickable here. Packing happens per PACKAGE at the pack station
+          and scanning at the ship station; a checkbox on a break's page would
+          be claiming one break can mark a package packed. */}
+      <ol className="bench-steps bench-after" data-gate={detail.shipGate.status}>
+        {SHIP_STEPS.map((s) => (
+          <li key={s.id} className={`bench-step ${detail.shipGate.status === 'go' ? '' : 'locked'}`}>
+            <span className="bench-tick static" aria-hidden="true">
+              <Icon
+                name={detail.shipGate.status === 'go' ? 'ArrowRight' : 'Lock'}
+                size={22}
+                strokeWidth={2}
+              />
+            </span>
+            <div className="bench-step-text">
+              <span className="bench-step-label">
+                <b>{s.n}.</b> {s.label}
+              </span>
+              <span className="bench-step-detail">{s.detail}</span>
+            </div>
+          </li>
+        ))}
+        {/* Said once under both, not twice — it is one fact about the floor. */}
+        <li className={`bench-gate ${detail.shipGate.status}`}>
+          <Icon
+            name={
+              detail.shipGate.status === 'go'
+                ? 'CheckCircle2'
+                : detail.shipGate.status === 'waiting'
+                  ? 'Clock'
+                  : 'Lock'
+            }
+            size={14}
+          />
+          <span>{detail.shipGate.reason}</span>
+        </li>
+      </ol>
     </div>
   )
 }

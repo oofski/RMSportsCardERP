@@ -20158,3 +20158,57 @@ button.sor-team:focus-visible {
   border-radius: var(--radius);
   background: var(--surface-2);
 }
+
+/* ---------------------------------------------------------------------------
+   Steps 4 and 5 on a break's checklist.
+
+   Not this break's to tick — packing is per package and scanning happens at the
+   ship station — so they are shown, never clickable, and separated by a rule so
+   the boundary between "your work" and "what your work unlocks" is visible
+   rather than inferred from the icons.
+   --------------------------------------------------------------------------- */
+.bench-after {
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+}
+.bench-tick.static {
+  cursor: default;
+  color: var(--text-3);
+}
+.bench-after[data-gate='go'] .bench-tick.static {
+  color: var(--brand-500);
+}
+/* One sentence about the floor, under both steps rather than repeated on each. */
+.bench-gate {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 2px 16px 10px;
+  padding: 9px 11px;
+  border-radius: var(--radius-sm, 8px);
+  font-size: 12px;
+  line-height: 1.5;
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+.bench-gate svg {
+  flex: none;
+  margin-top: 1px;
+  color: var(--text-3);
+}
+/* The state that needed its own colour: this break IS done, and saying so in
+   the same grey as "locked" reads as though the work had failed. */
+.bench-gate.waiting {
+  background: var(--warning-bg, var(--surface-2));
+  color: var(--text);
+}
+.bench-gate.waiting svg {
+  color: var(--warning);
+}
+.bench-gate.go {
+  background: var(--success-bg);
+  color: var(--text);
+}
+.bench-gate.go svg {
+  color: var(--success-strong);
+}

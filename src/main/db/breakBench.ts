@@ -37,6 +37,7 @@ import {
   canStartStep,
   isBreakReady,
   notReadyMessage,
+  shipGate,
   sortBagRows,
   stepsClearedBy
 } from '@shared/breakSteps'
@@ -172,10 +173,15 @@ export function getBreakBench(breakId: string): BreakBenchDetail | null {
   }
 
   const state = stateFrom(br, slots, rows.filter((r) => !r.slotId && r.bagged).length)
+  // Steps 4 and 5 are about the whole floor, so they need every break's state,
+  // not this one's. listBreakStepStates is three whole-table reads rather than
+  // a query per break — see its own note — so asking for all of them here costs
+  // about what asking for one would.
   return {
     state,
     rows: sortBagRows(rows),
-    bagBlockedReason: blockedReason('bag', state)
+    bagBlockedReason: blockedReason('bag', state),
+    shipGate: shipGate(breakId, listBreakStepStates())
   }
 }
 

@@ -52,6 +52,8 @@ const {
   currentStep,
   isBreakReady,
   notReadyMessage,
+  SHIP_STEPS,
+  shipGate,
   sortBagRows,
   stepsClearedBy,
   teamSlug
@@ -393,6 +395,67 @@ ok(!!fresh, 'the new show has a #7 as well')
 ok(fresh.state.baggedTeams === 0, 'and it starts at zero bagged', String(fresh.state.baggedTeams))
 ok(fresh.state.sleeve.at === null, 'with nothing sleeved')
 ok(ship.listBreakTeamBags(id).length === 0, 'last week’s bags are gone')
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 7. steps 4 and 5, and the three things they can say ===')
+// ---------------------------------------------------------------------------
+// The checklist used to stop at step 3, so somebody working a break could not
+// see what came next or what was holding it up — the gate refused them later,
+// from a different screen. These two are on the list now, never tickable.
+ok(SHIP_STEPS.length === 2, 'there are two of them')
+ok(SHIP_STEPS[0].n === BREAK_STEPS.length + 1, 'numbered on from the bench steps', String(SHIP_STEPS[0].n))
+ok(SHIP_STEPS[1].n === BREAK_STEPS.length + 2, 'consecutively')
+// They must never be mistaken for per-break steps: canStartStep and isStepDone
+// decide whether a BREAK is finished, and a pack step answering there would
+// make every break permanently unfinished and nothing would ever ship.
+ok(
+  BREAK_STEPS.every((s: { id: string }) => s.id !== 'pack' && s.id !== 'scan'),
+  'and they are NOT in the per-break list'
+)
+
+// Three states, built by hand so each one is unambiguous.
+const doneState = (bid: string): Record<string, unknown> => ({
+  breakId: bid,
+  breakLabel: bid.toUpperCase(),
+  sleeve: { at: '2026-08-09T12:00:00.000Z', by: 'emp1' },
+  sort: { at: '2026-08-09T12:00:00.000Z', by: 'emp1' },
+  baggedTeams: 30,
+  totalTeams: 30
+})
+const openState = (bid: string): Record<string, unknown> => ({
+  ...doneState(bid),
+  baggedTeams: 11
+})
+
+const alone = shipGate('a', [doneState('a')])
+ok(alone.status === 'go', 'a finished break with nothing else outstanding says go', alone.status)
+ok(alone.reason.includes('packing can start'), 'and says so in words')
+
+const mineOpen = shipGate('a', [openState('a'), doneState('b')])
+ok(mineOpen.status === 'locked', 'an unfinished break is locked', mineOpen.status)
+ok(/step 3/.test(mineOpen.reason), 'and is told which step it is on', mineOpen.reason)
+// It must NOT be told about other breaks while its own work is outstanding —
+// that is noise aimed at somebody who has something else to do first.
+ok(!mineOpen.reason.includes('#B'), 'and not about anyone else’s break yet', mineOpen.reason)
+
+// THE state this was built for. A break that is finished, with others still
+// going, used to read as a flat "locked" — which says the work failed.
+const waiting = shipGate('a', [doneState('a'), openState('b'), openState('c')])
+ok(waiting.status === 'waiting', 'a finished break waiting on others is its own state', waiting.status)
+ok(waiting.reason.startsWith('This break is boxed'), 'and is told its own work is done', waiting.reason)
+ok(waiting.reason.includes('#B') && waiting.reason.includes('#C'), 'and which breaks to go help', waiting.reason)
+
+// A break the caller does not know about cannot be reported as ready.
+ok(shipGate('nope', [doneState('a')]).status === 'locked', 'an unknown break is locked, not go')
+
+// And the real thing, off the database rather than hand-built. Section 6 has
+// just re-imported this break for a new show, which resets it — so the gate
+// must have swung back to locked. That is the assertion worth making: a gate
+// computed once and cached would still be saying "go" here.
+const liveGate = domain.getBench(id).shipGate
+ok(!!liveGate, 'the bench detail carries a gate')
+ok(liveGate.status === 'locked', 'and the re-imported break is locked again', String(liveGate.status))
+ok(/step 1/.test(liveGate.reason), 'back at step 1', liveGate.reason)
 
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)
