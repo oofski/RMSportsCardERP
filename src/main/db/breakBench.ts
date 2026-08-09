@@ -150,6 +150,9 @@ export function getBreakBench(breakId: string): BreakBenchDetail | null {
       slotId: s.id,
       bagged: s.checkedOff,
       baggedAt: s.checkedOffAt,
+      orderId: s.orderId,
+      // Stamped by sortBagRows once the list is in purchase order.
+      buyOrder: null,
       slipPage: s.slipPage,
       slipPosition: s.slipPosition,
       isGiveaway: s.isGiveaway
@@ -166,6 +169,8 @@ export function getBreakBench(breakId: string): BreakBenchDetail | null {
       slotId: null,
       bagged: bagged.has(teamName),
       baggedAt: null,
+      orderId: null,
+      buyOrder: null,
       slipPage: null,
       slipPosition: null,
       isGiveaway: false

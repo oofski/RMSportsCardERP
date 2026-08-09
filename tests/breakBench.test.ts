@@ -52,6 +52,7 @@ const {
   currentStep,
   isBreakReady,
   notReadyMessage,
+  orderSeq,
   SHIP_STEPS,
   shipGate,
   sortBagRows,
@@ -160,6 +161,56 @@ ok(
   ) < 0,
   'ties break on name so the order never wobbles'
 )
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 2b. purchase order — the order the stickers print in ===')
+// ---------------------------------------------------------------------------
+// The order id is the only field on the slip that encodes purchase TIME, so it
+// leads. slipPosition does not: it is an ordinal over PACKS, so one customer
+// who bought six teams occupies a single position and the six get interleaved
+// with everybody else's — which is exactly how the list stopped matching the
+// stack in the operator's hand.
+const bought = [
+  { teamName: 'Fourth', handle: 'd', orderId: '7000000044', slipPage: 1, slipPosition: 1 },
+  { teamName: 'First', handle: 'a', orderId: '7000000011', slipPage: 2, slipPosition: 9 },
+  { teamName: 'Third', handle: 'c', orderId: '7000000033', slipPage: 1, slipPosition: 1 },
+  { teamName: 'Second', handle: 'b', orderId: '7000000022', slipPage: 3, slipPosition: 4 }
+]
+const bySale = sortBagRows(bought).map((r: { teamName: string }) => r.teamName)
+ok(
+  JSON.stringify(bySale) === JSON.stringify(['First', 'Second', 'Third', 'Fourth']),
+  'teams come out in the order they were bought',
+  bySale.join(' > ')
+)
+// The mutation that would look right on a small fixture and be wrong in the
+// hand: falling back to page order when order ids are present.
+ok(bySale[0] !== 'Fourth', 'and NOT in the order the pages printed')
+
+// The stack is numbered 1..N over the sorted list.
+const numbered = sortBagRows(bought)
+ok(
+  JSON.stringify(numbered.map((r: { buyOrder: number }) => r.buyOrder)) === JSON.stringify([1, 2, 3, 4]),
+  'and numbered down the stack',
+  numbered.map((r: { buyOrder: number }) => r.buyOrder).join(',')
+)
+// A team nobody bought has no sticker, so it is not IN the stack — numbering it
+// would make the stack look longer than the paper in somebody's hand.
+const withUnsold = sortBagRows([
+  ...bought,
+  { teamName: 'Nobody', handle: null, orderId: null, slipPage: null, slipPosition: null }
+])
+ok(withUnsold[4].teamName === 'Nobody', 'an unsold team still sorts last')
+ok(withUnsold[4].buyOrder === null, 'and gets no stack position')
+ok(withUnsold[3].buyOrder === 4, 'while the bought ones keep theirs')
+
+// An unparseable id sorts LAST, not to zero: putting the one row nobody can
+// explain at the top of the stack puts it where somebody starts working.
+ok(orderSeq('') === Number.MAX_SAFE_INTEGER, 'a missing order id sorts last')
+ok(orderSeq(null) === Number.MAX_SAFE_INTEGER, 'and so does no id at all')
+ok(orderSeq('Order 7000000012') === 7000000012, 'digits are read out of a labelled id')
+ok(orderSeq('7000000012') < orderSeq('7000000013'), 'and compare numerically, not as text')
+// Text comparison is the bug this guards: '9' > '10' as strings.
+ok(orderSeq('9') < orderSeq('10'), 'so 9 comes before 10')
 
 // ---------------------------------------------------------------------------
 console.log('\n=== 3. a real break, through all three steps ===')

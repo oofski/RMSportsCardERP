@@ -192,8 +192,8 @@ export function BreakBench({
           </div>
         ) : (
           <p className="bench-bag-hint">
-            Work down the sticker stack. Match each team to the buyer shown, bag it, sticker it,
-            and put it in the break box.
+            In the order they were bought — the same order the stickers print in. Work down the
+            stack, match each team to the buyer shown, bag it, sticker it, into the break box.
           </p>
         )}
 
@@ -222,6 +222,12 @@ export function BreakBench({
                   strokeWidth={r.bagged ? 2.5 : 2}
                 />
               </button>
+              {/* How far down the sticker stack this is, and the order id it
+                  was bought under. Both, because the position is what somebody
+                  counts against the paper in their hand and the order id is
+                  what catches a sticker sheet printed from a different break —
+                  the failure that puts a stranger's card in a mailer. */}
+              <span className="bench-team-seq mono">{r.buyOrder ?? '—'}</span>
               <span className="bench-team-name">{r.teamName}</span>
               {r.handle ? (
                 <span className="bench-team-who" title={r.realName || undefined}>
@@ -234,6 +240,7 @@ export function BreakBench({
                 // an empty space says neither.
                 <span className="bench-team-who none">nobody bought this — to the house</span>
               )}
+              {r.orderId && <span className="bench-team-order mono">#{r.orderId}</span>}
             </li>
           ))}
         </ul>

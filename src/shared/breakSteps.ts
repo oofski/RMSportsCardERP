@@ -167,6 +167,23 @@ export interface BreakBagRow {
   bagged: boolean
   baggedAt: string | null
   /**
+   * The order id off the packing slip — "Order 7000000001".
+   *
+   * This is the sequence the teams were BOUGHT in, and therefore the order the
+   * stickers come out in. Shown on the row so it can be read against the
+   * sticker in hand, which is the only check that catches a sticker sheet
+   * printed from a different break.
+   */
+  orderId: string | null
+  /**
+   * 1, 2, 3 … down the sticker stack, after sorting.
+   *
+   * Assigned over the sorted list rather than parsed, because the useful number
+   * is "how far down the stack am I", not the ten-digit order id. Null for a
+   * team nobody bought — those are not in the stack at all.
+   */
+  buyOrder: number | null
+  /**
    * Where this team printed on the paperwork: the page, then the line.
    *
    * Null for a team nobody bought — it appears on no slip at all — and null for
@@ -211,13 +228,38 @@ export interface BreakBenchDetail {
 // ---------------------------------------------------------------------------
 
 /**
- * Slip order: the page it printed on, then its line on that page.
+ * The order the teams were BOUGHT in — which is the order the stickers print in.
+ *
+ * The order id leads, because that is the only field on the slip that encodes
+ * purchase time: Whatnot issues them in sequence as orders are placed, so
+ * ascending order id within one break is the sequence the sales happened in.
+ *
+ * This is not the same as where a line printed. `slipPosition` is an ordinal
+ * over PACKS — one customer who bought six teams occupies one position — so
+ * sorting by it interleaved the six with everybody else's and the list stopped
+ * matching the stack in the operator's hand. It stays as the tiebreak for
+ * anything imported before order ids were captured, where it is still better
+ * than alphabetical.
  *
  * Ties break on team name so the list can never reorder itself between two
  * renders of the same data — a list that shuffles while somebody is working
  * down it is worse than one in a slightly wrong order.
  */
+export function orderSeq(orderId: string | null | undefined): number {
+  // Ten digits fits a double exactly, so no precision games. Anything that is
+  // not a clean number sorts last rather than to zero — sorting an unparseable
+  // id to the FRONT would put the one row nobody can explain at the top of the
+  // stack, which is where somebody starts working.
+  const digits = (orderId ?? '').replace(/\D+/g, '')
+  if (!digits) return Number.MAX_SAFE_INTEGER
+  const n = Number(digits)
+  return Number.isSafeInteger(n) ? n : Number.MAX_SAFE_INTEGER
+}
+
 export function compareBagRows(a: BreakBagRow, b: BreakBagRow): number {
+  const ao = orderSeq(a.orderId)
+  const bo = orderSeq(b.orderId)
+  if (ao !== bo) return ao - bo
   const ap = a.slipPage ?? Number.MAX_SAFE_INTEGER
   const bp = b.slipPage ?? Number.MAX_SAFE_INTEGER
   if (ap !== bp) return ap - bp
@@ -227,8 +269,23 @@ export function compareBagRows(a: BreakBagRow, b: BreakBagRow): number {
   return a.teamName.localeCompare(b.teamName)
 }
 
+/**
+ * Sort, then number the stack.
+ *
+ * `buyOrder` is stamped here rather than parsed because it is a position in
+ * THIS list — renumbering has to happen wherever the list is built, or the
+ * number on screen stops agreeing with the row it sits on.
+ *
+ * Only rows that were actually bought get a number. A team nobody bought has no
+ * sticker and is not in the stack, so numbering it would make the stack look
+ * longer than the paper in somebody's hand.
+ */
 export function sortBagRows(rows: BreakBagRow[]): BreakBagRow[] {
-  return [...rows].sort(compareBagRows)
+  let n = 0
+  return [...rows].sort(compareBagRows).map((r) => ({
+    ...r,
+    buyOrder: r.handle ? ++n : null
+  }))
 }
 
 // ---------------------------------------------------------------------------

@@ -838,6 +838,14 @@ function BreakDetailView({
   const [hideChecked, setHideChecked] = useState(false)
   const [find, setFind] = useState('')
 
+  // OPENING A BREAK LANDS ON THE CHECKLIST. It used to land on the pick list
+  // with the checklist stacked above it, which meant the five steps — the
+  // actual sequence of the job — were something you scrolled past on the way to
+  // a search box. The pick list is still here and still does things the
+  // checklist cannot (group by customer, search, sleeve toggles); it is one
+  // click away rather than the thing in front of you.
+  const [view, setView] = useState<'steps' | 'pick'>('steps')
+
   const pct =
     detail.totalTeams > 0 ? Math.round((detail.checkedTeams / detail.totalTeams) * 100) : 0
   const done = detail.totalTeams > 0 && detail.checkedTeams >= detail.totalTeams
@@ -1011,10 +1019,27 @@ function BreakDetailView({
         )}
       </div>
 
-      {/* The bench checklist. Above the pick list on purpose: it is what happens
-          FIRST, and a screen that puts the finishing work above the preparation
-          reads as though the preparation were optional. */}
-      <BreakBench breakId={detail.id} canAct={canFind} onChanged={onBenchChanged} />
+      <div className="chk-viewtabs">
+        <button
+          className={view === 'steps' ? 'active' : ''}
+          onClick={() => setView('steps')}
+          title="The five steps this break goes through"
+        >
+          <Icon name="ListChecks" size={14} /> Checklist
+        </button>
+        <button
+          className={view === 'pick' ? 'active' : ''}
+          onClick={() => setView('pick')}
+          title="Every card, grouped and searchable"
+        >
+          <Icon name="Search" size={14} /> Pick list
+        </button>
+      </div>
+
+      {/* The bench checklist — the default view, because it IS the job. */}
+      {view === 'steps' && (
+        <BreakBench breakId={detail.id} canAct={canFind} onChanged={onBenchChanged} />
+      )}
 
       <div className="chk-actions">
         <Button
@@ -1121,7 +1146,12 @@ function BreakDetailView({
         </div>
       )}
 
-      {audit && (
+      {/* Everything below is the pick list. Collisions and the sticky-status
+          note above it are deliberately OUTSIDE this switch: a team captured
+          for two customers is how a stranger's card ends up in somebody's
+          mailer, and hiding that behind a tab nobody is on would be hiding the
+          one thing on this page that must not wait. */}
+      {view === 'pick' && audit && (
         <div className={`chk-audit-strip ${audit.hasAll ? 'ok' : 'warn'}`}>
           <span>
             <Icon name={audit.hasAll ? 'CheckCircle2' : 'AlertTriangle'} size={14} />
@@ -1163,6 +1193,8 @@ function BreakDetailView({
         </div>
       )}
 
+      {view === 'pick' && (
+      <>
       <div className="ship-toolbar chk-pick-toolbar">
         <div className="topsearch ship-search">
           <Icon name="Search" size={16} />
@@ -1266,6 +1298,8 @@ function BreakDetailView({
             </div>
           )}
         </div>
+      )}
+      </>
       )}
     </div>
   )

@@ -20212,3 +20212,66 @@ button.sor-team:focus-visible {
 .bench-gate.go svg {
   color: var(--success-strong);
 }
+
+/* Where this row sits in the sticker stack, and the order it was bought under.
+   Fixed-width so the column of numbers stays a column — somebody counting down
+   a stack of paper is scanning it vertically, and a ragged left edge makes that
+   a reading exercise instead of a glance. */
+.bench-team-seq {
+  flex: none;
+  width: 22px;
+  text-align: right;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+}
+.bench-team.bagged .bench-team-seq {
+  color: var(--success-strong);
+}
+/* The order id itself: pushed right and quiet. It is a checking value, read
+   only when something looks wrong, not part of the match being made. */
+.bench-team-order {
+  margin-left: auto;
+  flex: none;
+  font-size: 11px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Checklist vs pick list on a break.
+
+   Bigger than the Packs/By-team toggle inside the pick list, because this one
+   switches between two whole jobs rather than two arrangements of one — and it
+   defaults to the checklist, which is the sequence the break actually goes
+   through. The pick list used to be what a break opened onto, with the five
+   steps stacked above it as something you scrolled past. */
+.chk-viewtabs {
+  display: inline-flex;
+  align-self: flex-start;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--surface);
+}
+.chk-viewtabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 15px;
+  border: none;
+  background: none;
+  color: var(--text-3);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.chk-viewtabs button + button {
+  border-left: 1px solid var(--border);
+}
+.chk-viewtabs button:hover {
+  color: var(--text);
+}
+.chk-viewtabs button.active {
+  background: var(--brand-soft);
+  color: var(--brand-700);
+}
