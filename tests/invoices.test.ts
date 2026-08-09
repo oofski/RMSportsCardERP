@@ -392,7 +392,8 @@ try {
   deleteRefused = err instanceof Error ? err.message : String(err)
 }
 ok(deleteRefused !== '', 'and so is deleting it')
-ok(/void/i.test(deleteRefused), 'pointing at voiding instead', deleteRefused)
+ok(/removed there first/i.test(deleteRefused), 'pointing at QuickBooks first', deleteRefused)
+
 
 // A DRAFT deletes cleanly, lines and all.
 const scratch = repo.saveInvoice(
@@ -1003,6 +1004,38 @@ ok(
   !repo.listPostedInvoices().some((i: any) => i.id === watched.id),
   'a paid invoice is not re-checked'
 )
+
+// ---------------------------------------------------------------------------
+console.log('\n=== deleting an invoice that reached QuickBooks ===')
+// ---------------------------------------------------------------------------
+// LAST, because it destroys its fixture. Saving now posts to QuickBooks
+// immediately, so every invoice carries a qbo_id within seconds and the old
+// flat refusal had quietly become "you may never delete an invoice". The rule
+// did not go away — it moved: the second argument is the CALLER asserting the
+// remote copy is already gone, and the IPC handler only passes it after that
+// delete actually succeeded. A failed QuickBooks call therefore leaves the
+// local row untouched and retryable, rather than orphaning a live invoice in
+// the accounts that this app no longer knows exists.
+const doomed = repo.saveInvoice({
+  customerId: chris.id,
+  customerName: 'Chris Smith',
+  invoiceNumber: '9001',
+  terms: 'Due on receipt',
+  invoiceDate: '2026-08-09',
+  dueDate: '2026-08-09',
+  lines: [{ item: 'Anything', quantity: 1, rate: 10, amount: 10 }]
+})
+repo.markPosted(doomed.id, { id: '77', docNumber: '77' })
+let stillRefused = ''
+try {
+  repo.deleteInvoice(doomed.id)
+} catch (err) {
+  stillRefused = err instanceof Error ? err.message : String(err)
+}
+ok(stillRefused !== '', 'a posted invoice is still refused without the assertion')
+ok(repo.getInvoice(doomed.id) !== null, 'and survives the refusal intact')
+repo.deleteInvoice(doomed.id, true)
+ok(repo.getInvoice(doomed.id) === null, 'once QuickBooks is done with it, the local row goes')
 
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

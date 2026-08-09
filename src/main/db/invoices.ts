@@ -860,16 +860,27 @@ export function setInvoiceStatus(
  * and an invoice that exists in the accounts and nowhere else is worse than one
  * that is merely voided — so voiding is what is offered instead.
  */
-export function deleteInvoice(id: string): void {
+export function deleteInvoice(id: string, removedFromQbo = false): void {
   const db = getDb()
   const row = db.prepare(`SELECT qbo_id FROM invoices WHERE id = ?`).get(id) as
     | { qbo_id: string | null }
     | undefined
   if (!row) throw new Error('That invoice is already gone.')
-  if (row.qbo_id) {
+  // THE REMOTE COPY GOES FIRST, AND THE CALLER OWNS THAT. This used to refuse
+  // outright for anything carrying a qbo_id, on the sound reasoning that a
+  // local-only delete leaves the invoice live in the accounts with nothing on
+  // this side pointing at it. That reasoning still holds — what changed is that
+  // saving now posts to QuickBooks immediately, so EVERY invoice carries an id
+  // within seconds and the refusal had quietly become "you may never delete an
+  // invoice".
+  //
+  // So the guard moved rather than went away: `removedFromQbo` is the caller
+  // asserting it has already deleted the remote copy, and the IPC layer only
+  // passes it after that call actually succeeded.
+  if (row.qbo_id && !removedFromQbo) {
     throw new Error(
-      'That invoice is in QuickBooks. Void it there, then mark it void here — deleting it ' +
-        'would leave it in the accounts with no record on this side.'
+      'That invoice is in QuickBooks. It has to be removed there first, or it would stay in ' +
+        'the accounts with no record on this side.'
     )
   }
   const run = db.transaction(() => {

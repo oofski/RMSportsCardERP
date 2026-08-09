@@ -407,7 +407,13 @@ function InvoiceCard({
    * button whose only outcome is that explanation teaches the operator that
    * delete is broken rather than that this invoice is posted.
    */
-  const deletable = !invoice.qboId
+  // ALWAYS DELETABLE. This was gated on the invoice not yet being in
+  // QuickBooks, which was right when saving and posting were separate steps and
+  // became wrong the moment Save started posting immediately: every invoice
+  // carries a QuickBooks id within seconds, so the button had effectively
+  // disappeared. Delete now removes the remote copy first and only then the
+  // local one — see the IPC handler for why that order is not interchangeable.
+  const deletable = true
   const settled = invoice.status === 'paid' || invoice.status === 'void'
 
   return (
@@ -571,6 +577,17 @@ function DeleteInvoiceModal({
         The invoice and its line items are removed from this app for good. Nothing is archived
         and there is no undo — if you only want it off the board, mark it <b>void</b> instead.
       </p>
+      {/* NAMED, because deleting from a local app and deleting out of the
+          company books are very different acts and the button is the same
+          button. Somebody clearing a mistyped invoice needs to know this
+          reaches their accounts. */}
+      {invoice.qboId && (
+        <p className="fin-confirm-lead">
+          It is also deleted <b>in QuickBooks</b>, where it is invoice{' '}
+          {invoice.qboDocNumber || invoice.invoiceNumber}. QuickBooks goes first: if it refuses,
+          nothing is removed here either and you can try again.
+        </p>
+      )}
     </Modal>
   )
 }

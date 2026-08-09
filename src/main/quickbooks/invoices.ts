@@ -349,3 +349,46 @@ export async function sendQboInvoice(qboId: string, email?: string | null): Prom
     ...(email ? { query: { sendTo: email } } : {})
   })
 }
+
+/**
+ * Remove an invoice from QuickBooks.
+ *
+ * Two calls, not one, and the first is not optional: Intuit's delete needs the
+ * CURRENT SyncToken, and sending a stale one is refused with a version error
+ * rather than silently doing nothing. The app does not store the token — it
+ * changes every time anything touches the invoice, including edits made in
+ * QuickBooks itself — so it is read immediately before the delete rather than
+ * cached and hoped over.
+ *
+ * An invoice that is already gone from QuickBooks resolves rather than throws.
+ * The caller is deleting it locally next, and refusing because the remote copy
+ * has already been removed by hand would strand a row nobody can get rid of.
+ */
+export async function deleteQboInvoice(qboId: string): Promise<void> {
+  const id = (qboId ?? '').trim()
+  // Interpolated into a query string, so it is checked rather than trusted.
+  if (!/^[0-9]+$/.test(id)) throw new Error('That is not a QuickBooks invoice id.')
+
+  let syncToken: string | null = null
+  try {
+    const read = await qboRequest<{ Invoice?: { Id?: string; SyncToken?: string } }>({
+      path: `invoice/${id}`
+    })
+    syncToken = read?.Invoice?.SyncToken ?? null
+    if (!read?.Invoice?.Id) return
+  } catch (err) {
+    // Gone already is a success for what the caller is trying to achieve.
+    if (/\b404\b/.test(err instanceof Error ? err.message : String(err))) return
+    throw err
+  }
+  if (syncToken === null) {
+    throw new Error('QuickBooks did not return a version for that invoice, so it was not deleted.')
+  }
+
+  await qboRequest({
+    method: 'POST',
+    path: 'invoice',
+    query: { operation: 'delete' },
+    body: { Id: id, SyncToken: syncToken }
+  })
+}

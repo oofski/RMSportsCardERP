@@ -37,6 +37,7 @@ import {
 import { openInvoicePdf, saveInvoicePdf } from './invoicePdf'
 import {
   createQboInvoice,
+  deleteQboInvoice,
   fetchQboCustomers,
   fetchQboItems,
   sendQboInvoice,
@@ -208,11 +209,37 @@ export function registerInvoicesIpc(): void {
     }
   )
 
-  ipcMain.handle(IPC.invoiceDelete, (_e, id: unknown): Result<{ id: string }> => {
+  /**
+   * Delete an invoice here AND in QuickBooks.
+   *
+   * Order matters and is not interchangeable. QuickBooks first: if that call
+   * fails the local row is left exactly as it was, so the operator can see the
+   * invoice, read the reason, and try again. Deleting locally first and then
+   * failing remotely would leave a live invoice in the accounts that this app
+   * no longer knows exists — invisible on every screen and still owed by a
+   * customer.
+   */
+  ipcMain.handle(IPC.invoiceDelete, async (_e, id: unknown): Promise<Result<{ id: string }>> => {
     try {
       requireInvoicing()
       const target = str(id)
-      deleteInvoice(target)
+      const invoice = getInvoice(target)
+      if (!invoice) return { ok: false, error: 'That invoice is already gone.' }
+
+      let removedFromQbo = false
+      if (invoice.qboId) {
+        try {
+          await deleteQboInvoice(invoice.qboId)
+          removedFromQbo = true
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err)
+          return {
+            ok: false,
+            error: `QuickBooks would not delete it, so nothing was removed here either: ${message}`
+          }
+        }
+      }
+      deleteInvoice(target, removedFromQbo)
       return { ok: true, data: { id: target } }
     } catch (err) {
       return fail(err)
