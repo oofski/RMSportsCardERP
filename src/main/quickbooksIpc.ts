@@ -14,7 +14,14 @@ import type { Result } from '@shared/types'
 import type { QboAccount, QboAccountMap, QboEnvironment, QboStatus, QboSyncRow } from '@shared/quickbooks'
 import { getQboConfig, setQboConfig, clearQboConfig, getQboTokens, setQboTokens, clearQboTokens } from './quickbooks/store'
 import { authorize, effectiveRedirectUri, exchangeCode, revokeTokens } from './quickbooks/oauth'
-import { QBO_REDIRECT_URI, buildAuthorizeUrl, isLoopbackRedirect } from '@shared/quickbooks'
+import {
+  QBO_REDIRECT_URI,
+  buildAuthorizeUrl,
+  isLoopbackRedirect,
+  validateClientId,
+  validateRealmId,
+  validateRefreshToken
+} from '@shared/quickbooks'
 import { fetchCompanyInfo } from './quickbooks/client'
 import { fetchAccounts } from './quickbooks/accounts'
 import { getAccountMap, setAccountMap, suggestMap, validateMap } from './quickbooks/mapping'
@@ -83,12 +90,18 @@ export function registerQuickBooksIpc(): void {
         const clientId = (input?.clientId ?? '').trim()
         const clientSecret = (input?.clientSecret ?? '').trim()
         if (!clientId || !clientSecret) return { ok: false, error: 'Enter both the client id and the client secret.' }
+        const badId = validateClientId(clientId)
+        if (badId) return { ok: false, error: badId }
         const previous = getQboConfig()
-        setQboConfig(clientId, clientSecret, input.environment, input.redirectUri)
+        // PRODUCTION ONLY. The sandbox choice is gone: this business has one
+        // set of books and every invoice raised here is real, so an environment
+        // switch was a way to point a night's billing at a test company and not
+        // notice until somebody asked where the invoices went.
+        setQboConfig(clientId, clientSecret, 'production', input.redirectUri)
         // Changing the app registration or the environment invalidates any
         // existing grant — tokens issued by one app are meaningless to another,
         // and sandbox tokens do not work against production.
-        if (previous && (previous.clientId !== clientId || previous.environment !== input.environment)) {
+        if (previous && previous.clientId !== clientId) {
           clearQboTokens()
           setMeta(getDb(), COMPANY_KEY, '')
         }
@@ -205,9 +218,8 @@ export function registerQuickBooksIpc(): void {
         const code = (input?.code ?? '').trim()
         const realmId = (input?.realmId ?? '').trim()
         if (!code) return { ok: false, error: 'Paste the authorization code.' }
-        if (!realmId) {
-          return { ok: false, error: 'Paste the company (realm) id — it is in the same address bar.' }
-        }
+        const badRealm = validateRealmId(realmId)
+        if (badRealm) return { ok: false, error: badRealm }
 
         const previous = getQboTokens()
         try {
@@ -275,9 +287,13 @@ export function registerQuickBooksIpc(): void {
         const accessToken = (input?.accessToken ?? '').trim()
         const refreshToken = (input?.refreshToken ?? '').trim()
         const realmId = (input?.realmId ?? '').trim()
-        if (!refreshToken || !realmId) {
-          return { ok: false, error: 'The refresh token and the company (realm) id are both required.' }
-        }
+        // Shape-checked before anything is sent. Intuit's refusal names none of
+        // this, and "Client ID pasted into the company box" is the mistake that
+        // actually happens — see @shared/quickbooks.
+        const badToken = validateRefreshToken(refreshToken)
+        if (badToken) return { ok: false, error: badToken }
+        const badRealm = validateRealmId(realmId)
+        if (badRealm) return { ok: false, error: badRealm }
         const previous = getQboTokens()
         setQboTokens({
           accessToken,

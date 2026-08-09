@@ -59,7 +59,10 @@ export function getQboConfig(): QboConfig | null {
   return {
     clientId: cfg.clientId,
     clientSecret: cfg.clientSecret,
-    environment: cfg.environment === 'production' ? 'production' : 'sandbox',
+    // Production, always. A config saved when the sandbox switch existed reads
+    // back as production rather than silently pointing today's invoices at a
+    // test company.
+    environment: 'production',
     redirectUri: typeof cfg.redirectUri === 'string' ? cfg.redirectUri : undefined
   }
 }
@@ -67,13 +70,15 @@ export function getQboConfig(): QboConfig | null {
 export function setQboConfig(
   clientId: string,
   clientSecret: string,
-  environment: QboEnvironment,
+  /** Kept in the signature so callers read naturally; production is the only
+   *  value stored. See the note below. */
+  _environment: QboEnvironment,
   redirectUri?: string
 ): void {
   setMeta(getDb(), CONFIG_KEY, seal({
     clientId: clientId.trim(),
     clientSecret: clientSecret.trim(),
-    environment: environment === 'production' ? 'production' : 'sandbox',
+    environment: 'production',
     // Blank stores as undefined so `effectiveRedirectUri` falls back to the
     // loopback rather than sending Intuit an empty string.
     redirectUri: (redirectUri ?? '').trim() || undefined

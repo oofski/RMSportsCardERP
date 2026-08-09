@@ -325,3 +325,64 @@ export interface QboSyncRow {
   updatedAt: string
   syncedAt: string | null
 }
+
+
+// ---------------------------------------------------------------------------
+// Telling the four values apart
+//
+// Intuit hands out four long strings and gives two of them confusable names —
+// "Company ID" for the realm and "Client ID" for the app — so they get pasted
+// into each other's boxes. QuickBooks then refuses the connection with a
+// generic OAuth error that names none of this, and the operator is left staring
+// at four correct-looking fields.
+//
+// They are trivially distinguishable by SHAPE, so the app says which is which
+// before anything is sent. Checked in the main process too, not only on screen:
+// the same mistake arrives the same way from a stale window.
+// ---------------------------------------------------------------------------
+
+/** A realm (company) id is digits only — nothing else Intuit issues is. */
+export function looksLikeRealmId(value: string): boolean {
+  return /^\d{6,25}$/.test((value ?? '').trim())
+}
+
+/** Intuit's client ids are long and start AB. Used to RECOGNISE a misplaced
+ *  one, never to reject a client id that does not match — the format is
+ *  theirs to change and refusing a real credential is worse than accepting an
+ *  odd-looking one. */
+export function looksLikeClientId(value: string): boolean {
+  return /^AB[A-Za-z0-9]{20,}$/.test((value ?? '').trim())
+}
+
+/** Null when it will do. A sentence naming the mix-up when it will not. */
+export function validateRealmId(value: string): string | null {
+  const v = (value ?? '').trim()
+  if (!v) return 'The company (realm) id is required.'
+  if (looksLikeClientId(v)) {
+    return 'That is your Client ID, not the company id. The company id is all digits — it comes back in the address bar after consent, or sits in QuickBooks under Settings → Account and settings → Billing & subscription.'
+  }
+  if (!looksLikeRealmId(v)) {
+    return 'A company (realm) id is digits only, about 15 of them. Check you have not pasted a token or a client id.'
+  }
+  return null
+}
+
+export function validateClientId(value: string): string | null {
+  const v = (value ?? '').trim()
+  if (!v) return 'The client id is required.'
+  if (looksLikeRealmId(v)) {
+    return 'That is your company id, not the Client ID. The Client ID is on the Intuit developer portal under Keys & credentials, directly above the secret.'
+  }
+  return null
+}
+
+/** A refresh token is long and opaque. The only mistake worth catching is a
+ *  client id in its place, which is the same paste error one field over. */
+export function validateRefreshToken(value: string): string | null {
+  const v = (value ?? '').trim()
+  if (!v) return 'The refresh token is required.'
+  if (looksLikeClientId(v)) return 'That is your Client ID, not a refresh token.'
+  if (looksLikeRealmId(v)) return 'That is your company id, not a refresh token.'
+  if (v.length < 20) return 'That looks too short to be a refresh token.'
+  return null
+}

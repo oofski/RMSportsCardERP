@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { QboEnvironment, QboStatus } from '@shared/quickbooks'
+import type { QboStatus } from '@shared/quickbooks'
 import {
   QBO_PLAYGROUND_REDIRECT_URI,
   QBO_REDIRECT_URI,
-  isLoopbackRedirect
+  isLoopbackRedirect,
+  validateRealmId,
+  validateRefreshToken
 } from '@shared/quickbooks'
 import { api } from '../../lib/api'
-import { Button, CenterLoader, Field, Input, Select } from '../../components/ui'
+import { Button, CenterLoader, Field, Input } from '../../components/ui'
 import { Icon } from '../../components/Icon'
 import { useToast } from '../../components/Toast'
 import { formatDateTime } from '../../lib/format'
@@ -30,7 +32,6 @@ export function QuickBooksTab(): JSX.Element {
   const [loading, setLoading] = useState(true)
   const [clientId, setClientId] = useState('')
   const [clientSecret, setClientSecret] = useState('')
-  const [environment, setEnvironment] = useState<QboEnvironment>('sandbox')
   /** Blank means the loopback default — see the Redirect URI field below. */
   const [redirectUri, setRedirectUri] = useState('')
   const [authCode, setAuthCode] = useState('')
@@ -50,7 +51,6 @@ export function QuickBooksTab(): JSX.Element {
   const load = useCallback(async () => {
     const s = await api.quickbooks.status()
     setStatus(s)
-    if (s) setEnvironment(s.environment)
     if (s?.redirectUri) setRedirectUri(s.redirectUri)
   }, [])
 
@@ -161,12 +161,7 @@ export function QuickBooksTab(): JSX.Element {
             onChange={(e) => setClientSecret(e.target.value)}
           />
         </Field>
-        <Field label="Environment">
-          <Select value={environment} onChange={(e) => setEnvironment(e.target.value as QboEnvironment)}>
-            <option value="sandbox">Sandbox</option>
-            <option value="production">Production</option>
-          </Select>
-        </Field>
+        
       </div>
 
       {/* PRODUCTION CANNOT USE THE CONNECT BUTTON, and finding that out from
@@ -195,7 +190,7 @@ export function QuickBooksTab(): JSX.Element {
           against production keys. Consent then fails with "the redirect_uri
           query parameter value is invalid", which reads like a typo rather than
           a rule. Said here, beside the field that fixes it. */}
-      {environment === 'production' && isLoopbackRedirect(redirectUri) && (
+      {isLoopbackRedirect(redirectUri) && (
         <div className="qbo-note qbo-note-warn">
           <Icon name="AlertTriangle" size={15} />
           <div>
@@ -239,10 +234,15 @@ export function QuickBooksTab(): JSX.Element {
                   onChange={(e) => setAuthCode(e.target.value)}
                 />
               </Field>
-              <Field label="Company (realm) id">
+              <Field
+                label="Company (realm) id"
+                hint="All digits — not the Client ID"
+                error={codeRealmId ? (validateRealmId(codeRealmId) ?? undefined) : undefined}
+              >
                 <Input
                   value={codeRealmId}
                   placeholder="123456789012345"
+                  invalid={!!codeRealmId && !!validateRealmId(codeRealmId)}
                   onChange={(e) => setCodeRealmId(e.target.value)}
                 />
               </Field>
@@ -252,7 +252,7 @@ export function QuickBooksTab(): JSX.Element {
                 variant="primary"
                 icon="Link"
                 loading={busy === 'code'}
-                disabled={!authCode.trim() || !codeRealmId.trim()}
+                disabled={!authCode.trim() || !!validateRealmId(codeRealmId)}
                 onClick={async () => {
                   setBusy('code')
                   try {
@@ -355,7 +355,7 @@ export function QuickBooksTab(): JSX.Element {
             void run(
               'save',
               async () => {
-                const res = await api.quickbooks.saveConfig(clientId, clientSecret, environment, redirectUri)
+                const res = await api.quickbooks.saveConfig(clientId, clientSecret, 'production', redirectUri)
                 if (res.ok) {
                   // Never keep the secret in renderer state longer than the call.
                   setClientId('')
@@ -462,17 +462,32 @@ export function QuickBooksTab(): JSX.Element {
             </div>
           </div>
           <div className="qbo-form">
-            <Field label="Refresh token">
+            {/* Both fields say what SHAPE they want and refuse the wrong one
+                as it is typed. Intuit calls the app's credential a "Client ID"
+                and the company's a "Company ID", and the two get pasted into
+                each other's boxes — after which QuickBooks refuses the
+                connection with an OAuth error naming none of this. */}
+            <Field
+              label="Refresh token"
+              hint="The long-lived one from the Playground"
+              error={refreshToken ? (validateRefreshToken(refreshToken) ?? undefined) : undefined}
+            >
               <Input
                 value={refreshToken}
                 placeholder="Required — the long-lived one"
+                invalid={!!refreshToken && !!validateRefreshToken(refreshToken)}
                 onChange={(e) => setRefreshToken(e.target.value)}
               />
             </Field>
-            <Field label="Company (realm) id">
+            <Field
+              label="Company (realm) id"
+              hint="All digits — not the Client ID"
+              error={realmId ? (validateRealmId(realmId) ?? undefined) : undefined}
+            >
               <Input
                 value={realmId}
-                placeholder="Required — e.g. 4620816365..."
+                placeholder="Required — e.g. 9341454816183285"
+                invalid={!!realmId && !!validateRealmId(realmId)}
                 onChange={(e) => setRealmId(e.target.value)}
               />
             </Field>
@@ -488,7 +503,9 @@ export function QuickBooksTab(): JSX.Element {
             variant="primary"
             icon="Check"
             loading={busy === 'paste'}
-            disabled={busy !== null || !refreshToken.trim() || !realmId.trim()}
+            disabled={
+              busy !== null || !!validateRefreshToken(refreshToken) || !!validateRealmId(realmId)
+            }
             onClick={() =>
               void run(
                 'paste',
