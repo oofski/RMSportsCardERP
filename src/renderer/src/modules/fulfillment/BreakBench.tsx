@@ -47,12 +47,21 @@ import { formatDateTime } from '../../lib/format'
 export function BreakBench({
   breakId,
   canAct,
-  onChanged
+  onChanged,
+  onGoToPack
 }: {
   breakId: string
   canAct: boolean
   /** Fired after any tick so the surrounding board can re-derive its counts. */
   onChanged: () => void | Promise<void>
+  /**
+   * Step 4's doorway — switch this floor to the packing screen.
+   *
+   * Optional because the checklist is also rendered where there is nowhere to
+   * go; step 4 stays a plain line there rather than offering a button that
+   * would do nothing.
+   */
+  onGoToPack?: () => void
 }): JSX.Element {
   const toast = useToast()
   const [detail, setDetail] = useState<BreakBenchDetail | null>(null)
@@ -274,7 +283,10 @@ export function BreakBench({
             </div>
           </li>
         ))}
-        {/* Said once under both, not twice — it is one fact about the floor. */}
+        {/* Said once under both, not twice — it is one fact about the floor.
+            And when it says go, it is the way THROUGH: step 4 is the
+            one-order-at-a-time screen, which used to be a mode at the top of
+            the tab that you had to already know was the packing bench. */}
         <li className={`bench-gate ${detail.shipGate.status}`}>
           <Icon
             name={
@@ -287,6 +299,12 @@ export function BreakBench({
             size={14}
           />
           <span>{detail.shipGate.reason}</span>
+          {detail.shipGate.status === 'go' && onGoToPack && (
+            <button type="button" className="bench-gate-go" onClick={onGoToPack}>
+              Start packing
+              <Icon name="ArrowRight" size={14} />
+            </button>
+          )}
         </li>
       </ol>
     </div>

@@ -103,7 +103,15 @@ interface LooseGiveaway {
   checked: number
 }
 
-export function CheckerTab({ canManage, canFind, onChanged }: ShipTabProps): JSX.Element {
+export function CheckerTab({
+  canManage,
+  canFind,
+  onChanged,
+  onGoToShipping
+}: ShipTabProps & {
+  /** Step 4's doorway: hand this floor over to the packing screen. */
+  onGoToShipping?: () => void
+}): JSX.Element {
   const toast = useToast()
 
   const [breaks, setBreaks] = useState<ShipBreakSummary[]>([])
@@ -401,6 +409,7 @@ export function CheckerTab({ canManage, canFind, onChanged }: ShipTabProps): JSX
             if (fresh) applyBreak(fresh)
             await onChangedRef.current()
           }}
+          onGoToShipping={onGoToShipping}
         />
         {confirmClear && (
           <Modal
@@ -806,7 +815,8 @@ function BreakDetailView({
   onSleeve,
   onStatus,
   onClear,
-  onBenchChanged
+  onBenchChanged,
+  onGoToShipping
 }: {
   detail: ShipBreakDetail
   /** Run the break: mark it packed, clear it, change its status. */
@@ -827,6 +837,8 @@ function BreakDetailView({
   /** Re-read this break after a bench tick — step 3 writes the same flag the
    *  pick list below is showing, so both have to move together. */
   onBenchChanged: () => void | Promise<void>
+  /** Step 4's doorway: leave the bench and start packing orders. */
+  onGoToShipping?: () => void
 }): JSX.Element {
   // By team by default.
   //
@@ -1038,7 +1050,12 @@ function BreakDetailView({
 
       {/* The bench checklist — the default view, because it IS the job. */}
       {view === 'steps' && (
-        <BreakBench breakId={detail.id} canAct={canFind} onChanged={onBenchChanged} />
+        <BreakBench
+          breakId={detail.id}
+          canAct={canFind}
+          onChanged={onBenchChanged}
+          onGoToPack={onGoToShipping}
+        />
       )}
 
       <div className="chk-actions">

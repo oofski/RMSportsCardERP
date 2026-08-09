@@ -20275,3 +20275,25 @@ button.sor-team:focus-visible {
   background: var(--brand-soft);
   color: var(--brand-700);
 }
+
+/* Step 4's doorway. Only appears when the gate says go, so it is never a
+   button that argues with the sentence next to it. */
+.bench-gate-go {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  padding: 5px 12px;
+  border: 1px solid var(--success-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--success-strong);
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.bench-gate-go:hover {
+  background: var(--success-strong);
+  color: #fff;
+}

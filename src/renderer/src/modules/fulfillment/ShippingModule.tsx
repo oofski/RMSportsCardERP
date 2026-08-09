@@ -225,7 +225,7 @@ export function ShippingModule(): JSX.Element {
         {tab === 'today' && <TodayTab {...tabProps} />}
         {tab === 'find' && (
           <WithSlipMode mode="pick" canAct={canFind} props={tabProps}>
-            <CheckerTab {...tabProps} />
+            {(goToShipping) => <CheckerTab {...tabProps} onGoToShipping={goToShipping} />}
           </WithSlipMode>
         )}
         {tab === 'floor' && <FloorView {...tabProps} />}
