@@ -381,6 +381,10 @@ export const IPC = {
   // never opened, and a statement that fetched all of them would pay for a page
   // nobody asked for. See @shared/pnlDrill for the line-id → source contract.
   finPnlDetail: 'finance:pnl:detail',
+  // The same night's money, grouped one level finer. Its own channel rather
+  // than a drill-down source: a drill answers "what is behind THIS line", and
+  // this answers "how does the whole statement divide".
+  finBreakPnl: 'finance:pnl:byBreak',
   // What Whatnot's commission was, by date range. The fee is derived on read,
   // so saving one of these immediately re-prices every past show it covers.
   finRatesList: 'finance:rates:list',

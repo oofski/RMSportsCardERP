@@ -198,6 +198,7 @@ import type {
   WhatnotRatePeriod
 } from '@shared/financeStreaming'
 import type { PnlDetail, PnlDrillRequest } from '@shared/pnlDrill'
+import type { BreakPnlSplit } from '@shared/breakPnl'
 
 /**
  * What a transport has to provide. Electron's `ipcRenderer` satisfies this
@@ -895,6 +896,10 @@ export function createBridge(ipcRenderer: BridgeTransport) {
        */
       pnlDetail: (req: PnlDrillRequest): Promise<PnlDetail> =>
         ipcRenderer.invoke(IPC.finPnlDetail, req),
+      /** One business day, split by break. `day` is a stream_date — a BUSINESS
+       *  day, the same key the statement and the rate lookup are asked with. */
+      breakPnl: (day: string): Promise<BreakPnlSplit> =>
+        ipcRenderer.invoke(IPC.finBreakPnl, day),
       /** Re-runs attribution against the sessions as they are NOW. This is how
        *  unattributed money moves onto a show after the operator adds the session
        *  they forgot to log — data entry, never a heuristic. */

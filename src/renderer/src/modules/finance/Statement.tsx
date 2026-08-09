@@ -14,6 +14,7 @@ import { BucketChip, Money, moneyText, plural } from './bits'
 import { shortDayLabel, timeLabel } from './time'
 import { LedgerRows } from './LedgerRows'
 import { PnlStatement } from './Pnl'
+import { BreakPnl } from './BreakPnl'
 import type { DayRange } from './range'
 
 /**
@@ -92,6 +93,7 @@ export function RangeStatement({
    * answer to a specific question about a specific day, not a mode.
    */
   const [rowsOpen, setRowsOpen] = useState(false)
+  const [breaksOpen, setBreaksOpen] = useState(false)
 
   const quiet = totals.dayCount === 0
 
@@ -164,6 +166,24 @@ export function RangeStatement({
               : `Show the ${plural(day.rowCount, 'ledger row')} behind this day`}
           </button>
           {rowsOpen && <LedgerRows streamDate={day.streamDate} rowCount={day.rowCount} />}
+        </div>
+      )}
+
+      {/* The same night one level finer. Beside the ledger rows rather than
+          inside the statement: both answer "what is this made of", and neither
+          is part of the statement itself. */}
+      {day && day.rowCount > 0 && (
+        <div className="fin-stmt-rows">
+          <button
+            type="button"
+            className="fin-more"
+            aria-expanded={breaksOpen}
+            onClick={() => setBreaksOpen((v) => !v)}
+          >
+            <Icon name={breaksOpen ? 'ChevronUp' : 'ChevronDown'} size={14} />
+            {breaksOpen ? 'Hide the per-break split' : 'Show what each break made'}
+          </button>
+          {breaksOpen && <BreakPnl streamDate={day.streamDate} />}
         </div>
       )}
     </section>

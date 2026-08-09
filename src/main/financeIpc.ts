@@ -35,6 +35,8 @@ import type {
 import type { PnlDetail, PnlDrillRequest } from '@shared/pnlDrill'
 import { emptyPnlDetail } from '@shared/pnlDrill'
 import { pnlDetail } from './db/pnlDrill'
+import type { BreakPnlSplit } from '@shared/breakPnl'
+import { breakPnlForDay } from './db/breakPnl'
 import {
   deleteImport,
   emptyView,
@@ -114,6 +116,20 @@ export function registerFinanceIpc(): void {
    * sources, and a P&L line added with no drill-down would then be a silent dead
    * click rather than a failing enumeration test.
    */
+  /**
+   * One business day's P&L, split by break.
+   *
+   * Empty rather than an error without finance access, matching the drill above:
+   * a screen that cannot see the day must not be able to see it broken down.
+   */
+  ipcMain.handle(IPC.finBreakPnl, (_e, day: string): BreakPnlSplit => {
+    const d = str(day).trim()
+    if (!can('module.finance') || !/^\d{4}-\d{2}-\d{2}$/.test(d)) {
+      return { rows: [], grossSales: 0, totalFees: 0, cogs: 0, uncostedBreaks: 0, hasUnattributed: false }
+    }
+    return breakPnlForDay(d)
+  })
+
   ipcMain.handle(IPC.finPnlDetail, (_e, req: PnlDrillRequest): PnlDetail => {
     const lineId = str(req?.lineId).trim()
     if (!can('module.finance')) return emptyPnlDetail(lineId)
