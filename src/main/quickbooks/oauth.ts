@@ -199,6 +199,18 @@ async function postToken(config: QboConfig, body: URLSearchParams): Promise<Toke
   return parsed
 }
 
+/**
+ * The redirect this connection actually uses.
+ *
+ * The SAME value must go out with the authorize request and come back with the
+ * token exchange — Intuit compares them and refuses the exchange if they
+ * differ, which is a confusing failure precisely because consent appeared to
+ * work.
+ */
+export function effectiveRedirectUri(config: QboConfig): string {
+  return (config.redirectUri ?? '').trim() || QBO_REDIRECT_URI
+}
+
 export async function exchangeCode(
   config: QboConfig,
   code: string,
@@ -207,7 +219,7 @@ export async function exchangeCode(
   const body = new URLSearchParams({
     grant_type: 'authorization_code',
     code,
-    redirect_uri: QBO_REDIRECT_URI
+    redirect_uri: effectiveRedirectUri(config)
   })
   return toTokens(await postToken(config, body), realmId, Date.now())
 }

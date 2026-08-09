@@ -13,6 +13,14 @@ export interface QboConfig {
   clientId: string
   clientSecret: string
   environment: QboEnvironment
+  /**
+   * Where Intuit sends the browser after consent. Must match a URI registered
+   * on the SAME keys tab as `clientId`, character for character.
+   *
+   * Empty means the loopback default. Configurable because production keys
+   * cannot register a loopback URI at all — see QBO_PLAYGROUND_REDIRECT_URI.
+   */
+  redirectUri?: string
 }
 
 export interface QboTokens {
@@ -40,6 +48,12 @@ export interface QboStatus {
   /** ISO. When the operator will have to re-consent. */
   refreshExpiresAt: string | null
   lastError: string | null
+  /**
+   * The redirect URI in force, so the screen can reload the field and decide
+   * whether to offer Connect or the paste-the-code step. Never a secret — it
+   * travels in the address bar on every consent.
+   */
+  redirectUri: string
 }
 
 // ---------------------------------------------------------------------------
@@ -60,6 +74,37 @@ export const QBO_SCOPE = 'com.intuit.quickbooks.accounting'
  */
 export const QBO_REDIRECT_PORT = 8462
 export const QBO_REDIRECT_URI = `http://localhost:${QBO_REDIRECT_PORT}/callback`
+
+/**
+ * Intuit's OAuth Playground redirect. Already registered by Intuit, which is
+ * the whole reason it is useful here.
+ *
+ * PRODUCTION KEYS CANNOT USE THE LOOPBACK URI. Intuit accepts plain HTTP
+ * redirect URIs on the Development tab only, so `http://localhost:8462/callback`
+ * cannot be saved against production keys and consent is refused. This one is
+ * HTTPS and already on file, so consent succeeds.
+ *
+ * The catch, and the reason picking it changes the FLOW rather than just the
+ * URL: the browser lands on Intuit's page, not on this app's listener, so the
+ * app never sees the authorization code. It has to be copied across by hand
+ * once. See `isLoopbackRedirect`.
+ */
+export const QBO_PLAYGROUND_REDIRECT_URI =
+  'https://developer.intuit.com/v2/OAuth2Playground/RedirectUrl'
+
+/**
+ * Can this app CATCH the redirect itself?
+ *
+ * True only for the loopback URI it listens on. Anything else — the Playground
+ * URL, or a company's own https endpoint — sends the code somewhere this app
+ * cannot read, so the operator pastes it in. Asked as a question about the URI
+ * rather than stored as a second setting, because it is not an independent
+ * choice: it is a consequence of the address.
+ */
+export function isLoopbackRedirect(uri: string | null | undefined): boolean {
+  const u = (uri ?? '').trim()
+  return u === '' || u === QBO_REDIRECT_URI
+}
 
 export function qboApiBase(environment: QboEnvironment): string {
   return environment === 'production'

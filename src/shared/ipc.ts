@@ -343,6 +343,7 @@ export const IPC = {
   qboTest: 'qbo:test',
   // Diagnostics + the manual (OAuth Playground) token path.
   qboAuthorizeUrl: 'qbo:authorize-url',
+  qboExchangeCode: 'qbo:exchange-code',
   qboPasteTokens: 'qbo:tokens:paste',
   // Chart of accounts + the account mapping that posting will use. All reads;
   // nothing here can change the operator's books.

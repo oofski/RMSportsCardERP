@@ -59,15 +59,24 @@ export function getQboConfig(): QboConfig | null {
   return {
     clientId: cfg.clientId,
     clientSecret: cfg.clientSecret,
-    environment: cfg.environment === 'production' ? 'production' : 'sandbox'
+    environment: cfg.environment === 'production' ? 'production' : 'sandbox',
+    redirectUri: typeof cfg.redirectUri === 'string' ? cfg.redirectUri : undefined
   }
 }
 
-export function setQboConfig(clientId: string, clientSecret: string, environment: QboEnvironment): void {
+export function setQboConfig(
+  clientId: string,
+  clientSecret: string,
+  environment: QboEnvironment,
+  redirectUri?: string
+): void {
   setMeta(getDb(), CONFIG_KEY, seal({
     clientId: clientId.trim(),
     clientSecret: clientSecret.trim(),
-    environment: environment === 'production' ? 'production' : 'sandbox'
+    environment: environment === 'production' ? 'production' : 'sandbox',
+    // Blank stores as undefined so `effectiveRedirectUri` falls back to the
+    // loopback rather than sending Intuit an empty string.
+    redirectUri: (redirectUri ?? '').trim() || undefined
   } satisfies QboConfig))
 }
 

@@ -13,8 +13,8 @@ import { IPC } from '@shared/ipc'
 import type { Result } from '@shared/types'
 import type { QboAccount, QboAccountMap, QboEnvironment, QboStatus, QboSyncRow } from '@shared/quickbooks'
 import { getQboConfig, setQboConfig, clearQboConfig, getQboTokens, setQboTokens, clearQboTokens } from './quickbooks/store'
-import { authorize, exchangeCode, revokeTokens } from './quickbooks/oauth'
-import { QBO_REDIRECT_URI, buildAuthorizeUrl } from '@shared/quickbooks'
+import { authorize, effectiveRedirectUri, exchangeCode, revokeTokens } from './quickbooks/oauth'
+import { QBO_REDIRECT_URI, buildAuthorizeUrl, isLoopbackRedirect } from '@shared/quickbooks'
 import { fetchCompanyInfo } from './quickbooks/client'
 import { fetchAccounts } from './quickbooks/accounts'
 import { getAccountMap, setAccountMap, suggestMap, validateMap } from './quickbooks/mapping'
@@ -52,7 +52,8 @@ export function buildStatus(): QboStatus {
     companyName: getMeta(getDb(), COMPANY_KEY) || null,
     expiresAt: iso(tokens?.expiresAt),
     refreshExpiresAt: iso(tokens?.refreshExpiresAt),
-    lastError: getMeta(getDb(), ERROR_KEY) || null
+    lastError: getMeta(getDb(), ERROR_KEY) || null,
+    redirectUri: config ? effectiveRedirectUri(config) : QBO_REDIRECT_URI
   }
 }
 
@@ -68,14 +69,22 @@ export function registerQuickBooksIpc(): void {
 
   ipcMain.handle(
     IPC.qboSaveConfig,
-    (_e, input: { clientId: string; clientSecret: string; environment: QboEnvironment }): Result<QboStatus> => {
+    (
+      _e,
+      input: {
+        clientId: string
+        clientSecret: string
+        environment: QboEnvironment
+        redirectUri?: string
+      }
+    ): Result<QboStatus> => {
       try {
         requireAdmin()
         const clientId = (input?.clientId ?? '').trim()
         const clientSecret = (input?.clientSecret ?? '').trim()
         if (!clientId || !clientSecret) return { ok: false, error: 'Enter both the client id and the client secret.' }
         const previous = getQboConfig()
-        setQboConfig(clientId, clientSecret, input.environment)
+        setQboConfig(clientId, clientSecret, input.environment, input.redirectUri)
         // Changing the app registration or the environment invalidates any
         // existing grant — tokens issued by one app are meaningless to another,
         // and sandbox tokens do not work against production.
@@ -96,6 +105,19 @@ export function registerQuickBooksIpc(): void {
       requireAdmin()
       const config = getQboConfig()
       if (!config) return { ok: false, error: 'Enter the client id and secret first.' }
+
+      // The listener can only catch a redirect aimed at itself. With any other
+      // redirect — the Playground's, or a company's own https endpoint — Intuit
+      // sends the browser somewhere this app cannot read, so starting a
+      // listener would hang until it timed out and report nothing useful.
+      // Refused up front, naming the step that does work.
+      if (!isLoopbackRedirect(config.redirectUri)) {
+        return {
+          ok: false,
+          error:
+            'This connection uses a redirect URI the app cannot catch, so consent has to be finished by hand: press “Open consent page”, approve, then paste the code from the address bar.'
+        }
+      }
 
       const { code, realmId } = await authorize(config)
       const tokens = await exchangeCode(config, code, realmId)
@@ -160,6 +182,56 @@ export function registerQuickBooksIpc(): void {
   })
 
   /**
+   * Finish consent from a code the operator pasted.
+   *
+   * The other half of a non-loopback redirect. Intuit sent the browser to a
+   * page this app cannot read, so the code is carried across by hand — and the
+   * app still does the EXCHANGE itself, which is the part that matters: it ends
+   * up with a token pair minted against its own client id and secret, and
+   * refreshes them from then on. Pasting long-lived tokens works too, but this
+   * way nothing but a one-time code is ever copied through a clipboard.
+   *
+   * The redirect URI sent here MUST equal the one sent with the authorize
+   * request — Intuit compares them and refuses otherwise — which is why both
+   * read it from the same config rather than from a constant.
+   */
+  ipcMain.handle(
+    IPC.qboExchangeCode,
+    async (_e, input: { code: string; realmId: string }): Promise<Result<QboStatus>> => {
+      try {
+        requireAdmin()
+        const config = getQboConfig()
+        if (!config) return { ok: false, error: 'Enter the client id and secret first.' }
+        const code = (input?.code ?? '').trim()
+        const realmId = (input?.realmId ?? '').trim()
+        if (!code) return { ok: false, error: 'Paste the authorization code.' }
+        if (!realmId) {
+          return { ok: false, error: 'Paste the company (realm) id — it is in the same address bar.' }
+        }
+
+        const previous = getQboTokens()
+        try {
+          setQboTokens(await exchangeCode(config, code, realmId))
+          const info = await fetchCompanyInfo()
+          setMeta(getDb(), COMPANY_KEY, info.CompanyName ?? info.LegalName ?? '')
+        } catch (err) {
+          // Put back whatever was there. A half-finished exchange that leaves
+          // dead tokens behind is worse than not having tried.
+          if (previous) setQboTokens(previous)
+          else clearQboTokens()
+          const message = err instanceof Error ? err.message : String(err)
+          noteError(message)
+          return { ok: false, error: message }
+        }
+        noteError(null)
+        return { ok: true, data: buildStatus() }
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      }
+    }
+  )
+
+  /**
    * Diagnostics: the exact URL the browser is sent to. Intuit's "redirect_uri
    * is invalid" error says nothing about what it actually received, so being
    * able to read the outgoing value — and paste it into a browser by hand — is
@@ -174,8 +246,8 @@ export function registerQuickBooksIpc(): void {
       return {
         ok: true,
         data: {
-          url: buildAuthorizeUrl(config.clientId, 'diagnostic-state'),
-          redirectUri: QBO_REDIRECT_URI
+          url: buildAuthorizeUrl(config.clientId, 'rmops', effectiveRedirectUri(config)),
+          redirectUri: effectiveRedirectUri(config)
         }
       }
     } catch (err) {

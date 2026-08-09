@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { QboEnvironment, QboStatus } from '@shared/quickbooks'
-import { QBO_REDIRECT_URI } from '@shared/quickbooks'
+import {
+  QBO_PLAYGROUND_REDIRECT_URI,
+  QBO_REDIRECT_URI,
+  isLoopbackRedirect
+} from '@shared/quickbooks'
 import { api } from '../../lib/api'
 import { Button, CenterLoader, Field, Input, Select } from '../../components/ui'
 import { Icon } from '../../components/Icon'
@@ -27,8 +31,12 @@ export function QuickBooksTab(): JSX.Element {
   const [clientId, setClientId] = useState('')
   const [clientSecret, setClientSecret] = useState('')
   const [environment, setEnvironment] = useState<QboEnvironment>('sandbox')
+  /** Blank means the loopback default — see the Redirect URI field below. */
+  const [redirectUri, setRedirectUri] = useState('')
+  const [authCode, setAuthCode] = useState('')
+  const [codeRealmId, setCodeRealmId] = useState('')
   const [busy, setBusy] = useState<
-    'save' | 'connect' | 'test' | 'disconnect' | 'forget' | 'paste' | null
+    'save' | 'connect' | 'test' | 'disconnect' | 'forget' | 'paste' | 'code' | null
   >(null)
   // Manual path: tokens minted in Intuit's OAuth Playground, which every app
   // already has a registered redirect for. Needed when the loopback redirect
@@ -43,6 +51,7 @@ export function QuickBooksTab(): JSX.Element {
     const s = await api.quickbooks.status()
     setStatus(s)
     if (s) setEnvironment(s.environment)
+    if (s?.redirectUri) setRedirectUri(s.redirectUri)
   }, [])
 
   useEffect(() => {
@@ -167,16 +176,105 @@ export function QuickBooksTab(): JSX.Element {
           redirect_uri query parameter value is invalid", which reads like a
           typo rather than a rule. Said here, next to the Environment field that
           causes it, and pointing at the route that does work. */}
-      {environment === 'production' && (
+      <div className="field-row">
+        <Field
+          label="Redirect URI"
+          hint="Blank uses the built-in one. Must match Intuit exactly."
+        >
+          <Input
+            value={redirectUri}
+            placeholder={QBO_REDIRECT_URI}
+            onChange={(e) => setRedirectUri(e.target.value)}
+          />
+        </Field>
+      </div>
+
+      {/* PRODUCTION CANNOT USE THE BUILT-IN REDIRECT, and finding that out from
+          Intuit costs an afternoon: their Redirect URIs page accepts plain HTTP
+          on the Development tab only, so the loopback URI cannot be saved
+          against production keys. Consent then fails with "the redirect_uri
+          query parameter value is invalid", which reads like a typo rather than
+          a rule. Said here, beside the field that fixes it. */}
+      {environment === 'production' && isLoopbackRedirect(redirectUri) && (
         <div className="qbo-note qbo-note-warn">
           <Icon name="AlertTriangle" size={15} />
           <div>
-            <b>On Production, use “Paste tokens instead” below — not Connect.</b> Intuit only
-            accepts HTTP redirect URIs on the Development tab, so this app’s
-            <code className="qbo-uri">{QBO_REDIRECT_URI}</code>
-            cannot be registered against production keys and consent will be refused. Intuit’s
-            OAuth 2.0 Playground uses its own already-registered redirect, so it issues tokens
-            against your client id with nothing for you to register.
+            <b>Production will refuse this redirect URI.</b> Intuit only accepts plain HTTP
+            redirects on the Development tab, so <code className="qbo-uri">{QBO_REDIRECT_URI}</code>
+            cannot be registered against production keys.
+            <div className="qbo-note-acts">
+              <button
+                type="button"
+                className="link-btn"
+                onClick={() => {
+                  setRedirectUri(QBO_PLAYGROUND_REDIRECT_URI)
+                  toast.success('Set to Intuit’s Playground redirect — Save, then Open consent page.')
+                }}
+              >
+                <Icon name="Wand2" size={13} /> Use Intuit’s Playground redirect
+              </button>
+            </div>
+            It is HTTPS and Intuit already has it on file, so consent works. The app cannot catch
+            that redirect, so you finish by pasting the code — the step appears once it is set.
+          </div>
+        </div>
+      )}
+
+      {/* THE OTHER HALF of a redirect this app cannot catch. Intuit sends the
+          browser to somebody else's page, so the code comes back by hand — and
+          the app still does the exchange itself, ending up with tokens minted
+          against its own client id rather than pasted through a clipboard. */}
+      {status.configured && !isLoopbackRedirect(redirectUri) && (
+        <div className="qbo-note">
+          <Icon name="Info" size={15} />
+          <div>
+            <b>Finish consent by hand.</b> Press <b>Open consent page</b>, approve, and Intuit will
+            land on a page this app cannot read. Copy <code>code</code> and <code>realmId</code>
+            straight out of the address bar and paste them here.
+            <div className="field-row" style={{ marginTop: 10 }}>
+              <Field label="Authorization code">
+                <Input
+                  value={authCode}
+                  placeholder="AB11…"
+                  onChange={(e) => setAuthCode(e.target.value)}
+                />
+              </Field>
+              <Field label="Company (realm) id">
+                <Input
+                  value={codeRealmId}
+                  placeholder="123456789012345"
+                  onChange={(e) => setCodeRealmId(e.target.value)}
+                />
+              </Field>
+            </div>
+            <div className="qbo-note-acts">
+              <Button
+                variant="primary"
+                icon="Link"
+                loading={busy === 'code'}
+                disabled={!authCode.trim() || !codeRealmId.trim()}
+                onClick={async () => {
+                  setBusy('code')
+                  try {
+                    const res = await api.quickbooks.exchangeCode(authCode.trim(), codeRealmId.trim())
+                    if (!res.ok || !res.data) {
+                      toast.error(res.error ?? 'QuickBooks would not accept that code.')
+                      return
+                    }
+                    setStatus(res.data)
+                    setAuthCode('')
+                    setCodeRealmId('')
+                    toast.success('Connected to QuickBooks.')
+                  } finally {
+                    setBusy(null)
+                  }
+                }}
+              >
+                Finish connecting
+              </Button>
+            </div>
+            An authorization code is good for a few minutes only — if it is refused as expired,
+            press Open consent page again for a fresh one.
           </div>
         </div>
       )}
@@ -257,7 +355,7 @@ export function QuickBooksTab(): JSX.Element {
             void run(
               'save',
               async () => {
-                const res = await api.quickbooks.saveConfig(clientId, clientSecret, environment)
+                const res = await api.quickbooks.saveConfig(clientId, clientSecret, environment, redirectUri)
                 if (res.ok) {
                   // Never keep the secret in renderer state longer than the call.
                   setClientId('')
@@ -272,16 +370,46 @@ export function QuickBooksTab(): JSX.Element {
           Save credentials
         </Button>
 
-        <Button
-          icon="ExternalLink"
-          loading={busy === 'connect'}
-          disabled={busy !== null || !status.configured}
-          onClick={() =>
-            void run('connect', () => api.quickbooks.connect(), 'QuickBooks connected.')
-          }
-        >
-          {status.connected ? 'Reconnect' : 'Connect to QuickBooks'}
-        </Button>
+        {/* Two different jobs behind one place on the toolbar. With the
+            built-in loopback redirect the app catches the code itself and this
+            finishes the whole connection. With any other redirect it can only
+            OPEN the consent page — Intuit lands the browser somewhere this app
+            cannot read — so it says so rather than starting a listener that
+            would wait for a code that is never coming. */}
+        {isLoopbackRedirect(redirectUri) ? (
+          <Button
+            icon="ExternalLink"
+            loading={busy === 'connect'}
+            disabled={busy !== null || !status.configured}
+            onClick={() =>
+              void run('connect', () => api.quickbooks.connect(), 'QuickBooks connected.')
+            }
+          >
+            {status.connected ? 'Reconnect' : 'Connect to QuickBooks'}
+          </Button>
+        ) : (
+          <Button
+            icon="ExternalLink"
+            loading={busy === 'connect'}
+            disabled={busy !== null || !status.configured}
+            onClick={async () => {
+              setBusy('connect')
+              try {
+                const res = await api.quickbooks.authorizeUrl()
+                if (!res.ok || !res.data) {
+                  toast.error(res.error ?? 'Could not build the consent URL.')
+                  return
+                }
+                await api.email.openExternal(res.data.url)
+                toast.success('Approve in the browser, then paste the code below.')
+              } finally {
+                setBusy(null)
+              }
+            }}
+          >
+            Open consent page
+          </Button>
+        )}
 
         <span className="qbo-spacer" />
 

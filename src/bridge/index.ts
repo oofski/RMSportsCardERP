@@ -441,9 +441,13 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       saveConfig: (
         clientId: string,
         clientSecret: string,
-        environment: QboEnvironment
+        environment: QboEnvironment,
+        redirectUri?: string
       ): Promise<Result<QboStatus>> =>
-        ipcRenderer.invoke(IPC.qboSaveConfig, { clientId, clientSecret, environment }),
+        ipcRenderer.invoke(IPC.qboSaveConfig, { clientId, clientSecret, environment, redirectUri }),
+      /** Finish consent from a code pasted out of the browser's address bar. */
+      exchangeCode: (code: string, realmId: string): Promise<Result<QboStatus>> =>
+        ipcRenderer.invoke(IPC.qboExchangeCode, { code, realmId }),
       connect: (): Promise<Result<QboStatus>> => ipcRenderer.invoke(IPC.qboConnect),
       disconnect: (): Promise<Result<QboStatus>> => ipcRenderer.invoke(IPC.qboDisconnect),
       forget: (): Promise<Result<QboStatus>> => ipcRenderer.invoke(IPC.qboForget),
