@@ -17,6 +17,7 @@ import { randomUUID } from 'crypto'
 import { shell } from 'electron'
 import type { QboConfig, QboTokens } from '@shared/quickbooks'
 import {
+  QBO_DEFAULT_REDIRECT_URI,
   QBO_REDIRECT_PORT,
   QBO_REDIRECT_URI,
   QBO_REVOKE_URL,
@@ -131,7 +132,10 @@ export function authorize(config: QboConfig): Promise<AuthorizeResult> {
         () => finish(new Error('The QuickBooks connection timed out waiting for consent.')),
         CONSENT_TIMEOUT_MS
       )
-      void shell.openExternal(buildAuthorizeUrl(config.clientId, state))
+      // Explicitly the loopback URI: this listener is the only thing that can
+      // receive it, and `authorize()` is only ever called when that is the
+      // configured redirect. The default is now the Playground's.
+      void shell.openExternal(buildAuthorizeUrl(config.clientId, state, QBO_REDIRECT_URI))
     })
   })
 }
@@ -208,7 +212,7 @@ async function postToken(config: QboConfig, body: URLSearchParams): Promise<Toke
  * work.
  */
 export function effectiveRedirectUri(config: QboConfig): string {
-  return (config.redirectUri ?? '').trim() || QBO_REDIRECT_URI
+  return (config.redirectUri ?? '').trim() || QBO_DEFAULT_REDIRECT_URI
 }
 
 export async function exchangeCode(

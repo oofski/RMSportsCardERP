@@ -93,6 +93,18 @@ export const QBO_PLAYGROUND_REDIRECT_URI =
   'https://developer.intuit.com/v2/OAuth2Playground/RedirectUrl'
 
 /**
+ * What a fresh install uses.
+ *
+ * The Playground URI rather than the loopback one, because production is now
+ * the only environment and production keys CANNOT register a loopback URI —
+ * Intuit's portal refuses to save it and consent then fails. Intuit already has
+ * this URI on file for every app, so the default path needs no portal work at
+ * all: paste two keys, approve, paste the address back. The loopback listener
+ * survives for anyone who deliberately sets it in Advanced.
+ */
+export const QBO_DEFAULT_REDIRECT_URI = QBO_PLAYGROUND_REDIRECT_URI
+
+/**
  * Can this app CATCH the redirect itself?
  *
  * True only for the loopback URI it listens on. Anything else — the Playground
@@ -100,10 +112,11 @@ export const QBO_PLAYGROUND_REDIRECT_URI =
  * cannot read, so the operator pastes it in. Asked as a question about the URI
  * rather than stored as a second setting, because it is not an independent
  * choice: it is a consequence of the address.
+ *
+ * Blank is NOT loopback: an unset redirect means the default above.
  */
 export function isLoopbackRedirect(uri: string | null | undefined): boolean {
-  const u = (uri ?? '').trim()
-  return u === '' || u === QBO_REDIRECT_URI
+  return (uri ?? '').trim() === QBO_REDIRECT_URI
 }
 
 export function qboApiBase(environment: QboEnvironment): string {
@@ -373,7 +386,111 @@ export function validateClientId(value: string): string | null {
   if (looksLikeRealmId(v)) {
     return 'That is your company id, not the Client ID. The Client ID is on the Intuit developer portal under Keys & credentials, directly above the secret.'
   }
+  // THE APP'S NAME, pasted into the credential box. It happened, and the
+  // earlier check missed it: that one only recognised a company id, so
+  // "RM-Software" sailed through and QuickBooks refused the connection later
+  // with an error naming none of it.
+  //
+  // Length is the safe discriminator. Intuit's client ids are around forty
+  // opaque characters; no app name is, and nothing legitimate is under twenty.
+  // A space settles it outright — a credential never has one.
+  if (/\s/.test(v)) {
+    return 'A client id has no spaces in it. That looks like your app’s name — the Client ID is the long string on the Keys & credentials page, above the secret.'
+  }
+  if (v.length < 20) {
+    return 'That is too short to be a Client ID. Intuit’s are around forty characters — look on the Keys & credentials page, directly above the client secret.'
+  }
   return null
+}
+
+/**
+ * The secret, one field below the id — and the field a password manager is
+ * most likely to have written into. Same discriminators as the client id for
+ * the same reason: Intuit's secrets are around forty opaque characters, so a
+ * space or a short value is something else that got autofilled.
+ */
+export function validateClientSecret(value: string): string | null {
+  const v = (value ?? '').trim()
+  if (!v) return 'The client secret is required.'
+  if (looksLikeRealmId(v)) {
+    return 'That is your company id, not the client secret. The secret is on the Keys & credentials page, directly below the Client ID.'
+  }
+  if (looksLikeClientId(v)) {
+    return 'That is your Client ID again — the secret is the second value, below it on the same page.'
+  }
+  if (/\s/.test(v)) {
+    return 'A client secret has no spaces in it. Check what got pasted — a password manager may have filled this in.'
+  }
+  if (v.length < 20) {
+    return 'That is too short to be a client secret. Intuit’s are around forty characters.'
+  }
+  return null
+}
+
+// ---------------------------------------------------------------------------
+// Reading the address bar back
+//
+// Consent ends on a page this app cannot read, so the operator carries the
+// result across by hand. Asking for the code and the company id SEPARATELY
+// means reading a hundred-character URL and picking two substrings out of it by
+// eye, with `&state=` sitting between them — which is how a code arrives with a
+// trailing `&state` glued on and Intuit refuses it for no visible reason.
+//
+// So the app asks for the whole address and does the picking itself. One
+// select-all, one paste, no judgement required.
+// ---------------------------------------------------------------------------
+
+export type ConsentPaste =
+  | { ok: true; code: string; realmId: string }
+  | { ok: false; error: string }
+
+/**
+ * Pull the authorization code and company id out of whatever was pasted.
+ *
+ * Accepts the full redirect URL, or just its query string, in either order and
+ * with any other parameters present. Refuses anything it cannot read with a
+ * sentence naming what was missing — never a silent null, because the operator
+ * is looking at a screen full of correct-looking text.
+ */
+export function readConsentPaste(input: string): ConsentPaste {
+  // Address bars survive line wrapping in a chat or an email with newlines and
+  // stray spaces inside them; none of those belong to a value here.
+  const raw = (input ?? '').replace(/\s+/g, '').trim()
+  if (!raw) return { ok: false, error: 'Paste the address you landed on after approving.' }
+
+  const query = raw.includes('?') ? raw.slice(raw.indexOf('?') + 1) : raw
+  let params: URLSearchParams
+  try {
+    params = new URLSearchParams(query)
+  } catch {
+    return { ok: false, error: 'That could not be read as a web address.' }
+  }
+
+  const error = params.get('error_description') ?? params.get('error')
+  if (error) return { ok: false, error: `Intuit refused the connection: ${error}` }
+
+  const code = (params.get('code') ?? '').trim()
+  const realmId = (params.get('realmId') ?? params.get('realmid') ?? '').trim()
+
+  if (!code && !realmId) {
+    return {
+      ok: false,
+      error:
+        'No code in that. Copy the WHOLE address out of the browser after you approve — it is the one containing “code=”.'
+    }
+  }
+  if (!code) return { ok: false, error: 'That address has no code= in it.' }
+  if (!realmId) {
+    return {
+      ok: false,
+      error:
+        'That has the code but no realmId. Copy the whole address, not just part of it — the company id is on the end.'
+    }
+  }
+  const badRealm = validateRealmId(realmId)
+  if (badRealm) return { ok: false, error: badRealm }
+
+  return { ok: true, code, realmId }
 }
 
 /** A refresh token is long and opaque. The only mistake worth catching is a

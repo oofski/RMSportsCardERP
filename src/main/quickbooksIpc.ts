@@ -15,7 +15,7 @@ import type { QboAccount, QboAccountMap, QboEnvironment, QboStatus, QboSyncRow }
 import { getQboConfig, setQboConfig, clearQboConfig, getQboTokens, setQboTokens, clearQboTokens } from './quickbooks/store'
 import { authorize, effectiveRedirectUri, exchangeCode, revokeTokens } from './quickbooks/oauth'
 import {
-  QBO_REDIRECT_URI,
+  QBO_DEFAULT_REDIRECT_URI,
   buildAuthorizeUrl,
   isLoopbackRedirect,
   validateClientId,
@@ -53,14 +53,14 @@ export function buildStatus(): QboStatus {
   return {
     configured: !!config,
     connected: !!tokens,
-    environment: config?.environment ?? 'sandbox',
+    environment: 'production',
     clientIdHint: config ? config.clientId.slice(-4) : null,
     realmId: tokens?.realmId ?? null,
     companyName: getMeta(getDb(), COMPANY_KEY) || null,
     expiresAt: iso(tokens?.expiresAt),
     refreshExpiresAt: iso(tokens?.refreshExpiresAt),
     lastError: getMeta(getDb(), ERROR_KEY) || null,
-    redirectUri: config ? effectiveRedirectUri(config) : QBO_REDIRECT_URI
+    redirectUri: config ? effectiveRedirectUri(config) : QBO_DEFAULT_REDIRECT_URI
   }
 }
 

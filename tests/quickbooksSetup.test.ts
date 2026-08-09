@@ -21,9 +21,14 @@
  */
 /* eslint-disable @typescript-eslint/no-var-requires */
 const {
+  QBO_DEFAULT_REDIRECT_URI,
+  QBO_REDIRECT_URI,
+  isLoopbackRedirect,
   looksLikeClientId,
   looksLikeRealmId,
+  readConsentPaste,
   validateClientId,
+  validateClientSecret,
   validateRealmId,
   validateRefreshToken
 } = require('../src/shared/quickbooks')
@@ -44,6 +49,7 @@ const ok = (c: boolean, n: string, e = ''): void => {
 const REALM = '9341454816183285'
 const CLIENT_ID = 'ABxKp2QmR7vTn4Ls9Wd3Yf6Hc8Jb5Ng1Zt0Ax'
 const REFRESH = 'VDnw9XZoEthf6XHgn9jxaAtANaVqde5A1ktDP8QmZr2Lc'
+const SECRET = 'Kq7Rm2Wd9Tz4Xb6Nc1Vf8Hj3Lp5Sg0Yu2Ae4Bi7Ok'
 
 // ---------------------------------------------------------------------------
 console.log('=== 1. shapes ===')
@@ -81,6 +87,22 @@ ok(backwards !== null, 'a company id is refused as a client id')
 ok((backwards ?? '').includes('company id'), 'named just as plainly', String(backwards))
 ok(validateClientId(CLIENT_ID) === null, 'a real client id passes')
 
+// THE APP'S NAME in the credential box. This got through the first version of
+// these checks — they only recognised a company id — and QuickBooks then
+// refused the connection with an error naming none of it. Length and spaces
+// are the safe discriminators: Intuit's client ids are around forty opaque
+// characters, and no app name is.
+ok(
+  (validateClientId('RM-Software') ?? '').includes('too short'),
+  'an app name is refused as a client id',
+  String(validateClientId('RM-Software'))
+)
+ok(
+  (validateClientId('My Company App') ?? '').includes('no spaces'),
+  'and a name with a space is named for what it is'
+)
+ok(validateClientId('short') !== null, 'anything short is refused')
+
 // ---------------------------------------------------------------------------
 console.log('\n=== 3. the refresh token, one field over ===')
 // ---------------------------------------------------------------------------
@@ -117,6 +139,78 @@ ok(
   validateRefreshToken('AB' + 'x'.repeat(30)) !== null,
   'but a client-id-shaped value in the token box is still caught'
 )
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 6. the client secret, one field below ===')
+// ---------------------------------------------------------------------------
+// The field a password manager is most likely to have written into, because a
+// text input directly above a password input is exactly the shape Chromium
+// reads as a login form.
+ok(validateClientSecret(SECRET) === null, 'a secret-shaped value passes')
+ok((validateClientSecret(REALM) ?? '').includes('company id'), 'a company id is named')
+ok((validateClientSecret(CLIENT_ID) ?? '').includes('Client ID'), 'and so is the id one field up')
+ok((validateClientSecret('my app secret') ?? '').includes('no spaces'), 'a phrase is refused')
+ok(validateClientSecret('hunter2') !== null, 'and anything short')
+ok((validateClientSecret('') ?? '').includes('secret'), 'blank names itself')
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 7. reading the address bar back ===')
+// ---------------------------------------------------------------------------
+// Consent ends on a page this app cannot read, so the operator pastes the
+// whole address and the app picks the two values out. Asking for the code and
+// the realm SEPARATELY meant reading a long URL and picking substrings by eye,
+// with &state= sitting between them — which is how a code arrives with
+// "&state=..." glued onto the end and Intuit refuses it for no visible reason.
+const CODE = 'AB11758914707xUbGcyBOAWDGONtHNXHRJyfNczkGDG6yNTiwj'
+const LANDED = `${QBO_DEFAULT_REDIRECT_URI}?code=${CODE}&state=rmops&realmId=${REALM}`
+
+const good = readConsentPaste(LANDED)
+ok(good.ok === true, 'a whole redirect URL is read')
+ok(good.code === CODE, 'the code comes out clean', String(good.code))
+ok(good.realmId === REALM, 'and the company id with it', String(good.realmId))
+
+// The single failure this replaces: state carried into the code.
+ok(!String(good.code).includes('state'), 'and the code does NOT carry &state into it')
+
+// Order is Intuit's business, not the operator's.
+ok(
+  readConsentPaste(`${QBO_DEFAULT_REDIRECT_URI}?realmId=${REALM}&code=${CODE}`).code === CODE,
+  'parameter order does not matter'
+)
+// A bare query string, which is what a partial select gives you.
+ok(readConsentPaste(`code=${CODE}&realmId=${REALM}`).ok === true, 'a bare query string works')
+// Address bars survive a paste through chat with a line break in them.
+ok(
+  readConsentPaste(`${QBO_DEFAULT_REDIRECT_URI}?code=${CODE}\n  &realmId=${REALM}`).code === CODE,
+  'wrapped whitespace is not part of a value'
+)
+
+// Refusals name what is missing, because the operator is looking at a screen
+// full of text that all looks correct.
+ok(readConsentPaste('').ok === false, 'nothing is refused')
+ok((readConsentPaste('') as { error: string }).error.includes('approving'), 'and says what to paste')
+const noCode = readConsentPaste(`${QBO_DEFAULT_REDIRECT_URI}?realmId=${REALM}`)
+ok(noCode.ok === false && noCode.error.includes('code='), 'a URL with no code says so', String(noCode.error))
+const noRealm = readConsentPaste(`${QBO_DEFAULT_REDIRECT_URI}?code=${CODE}&state=rmops`)
+ok(noRealm.ok === false && noRealm.error.includes('realmId'), 'and one with no company id', String(noRealm.error))
+const denied = readConsentPaste(`${QBO_DEFAULT_REDIRECT_URI}?error=access_denied`)
+ok(denied.ok === false && denied.error.includes('refused'), 'Intuit’s own refusal is passed through')
+// A realm that is not digits is the same paste mix-up as everywhere else here.
+const junkRealm = readConsentPaste(`code=${CODE}&realmId=${CLIENT_ID}`)
+ok(junkRealm.ok === false, 'a client id in the realm slot is still caught')
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 8. the default redirect is the one production accepts ===')
+// ---------------------------------------------------------------------------
+// Production keys cannot register a loopback URI at all — Intuit's portal
+// accepts plain HTTP on the Development tab only — so the default has to be the
+// HTTPS one Intuit already has on file, or the very first attempt fails.
+ok(QBO_DEFAULT_REDIRECT_URI.startsWith('https://'), 'the default is HTTPS')
+ok(!isLoopbackRedirect(QBO_DEFAULT_REDIRECT_URI), 'and is not one this app can catch')
+ok(isLoopbackRedirect(QBO_REDIRECT_URI), 'the loopback URI still is')
+// Blank means "the default", NOT "loopback" — the old reading sent a fresh
+// install down the listener path, which cannot work on production.
+ok(!isLoopbackRedirect(''), 'and blank means the default, not loopback')
 
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

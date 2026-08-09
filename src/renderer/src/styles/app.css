@@ -20047,13 +20047,114 @@ button.sor-team:focus-visible {
   justify-content: flex-end;
 }
 
-/* The QuickBooks note that is a WARNING rather than a hint: on Production the
-   Connect button cannot work at all, and a person who misses that spends an
-   afternoon on Intuit's Redirect URIs page being told their URL is invalid. */
-.qbo-note-warn {
-  border-color: var(--warning);
+/* There used to be a warning here about the Connect button being unusable on
+   Production. It is gone because the cause is: the default redirect is one
+   Intuit already accepts, so there is nothing left to warn about. */
+
+/* ---------------------------------------------------------------------------
+   QuickBooks setup, as a numbered sequence.
+
+   The screen this replaces put every field, warning and escape hatch up at
+   once, and the result was that nobody could tell which parts applied to them —
+   setup failed repeatedly for reasons the page was technically already
+   explaining. Numbering it, and dimming the steps that are not reachable yet,
+   does more than any amount of extra prose did.
+   --------------------------------------------------------------------------- */
+.qbo-lede {
+  font-size: 13px;
+  color: var(--text-2);
+  line-height: 1.6;
+}
+.qbo-lede .link-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0 2px;
+}
+.qbo-step {
+  display: flex;
+  gap: 14px;
+  padding: 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
   background: var(--surface);
 }
-.qbo-note-warn svg {
-  color: var(--warning);
+/* Not reachable yet — legible, but plainly not where you are. */
+.qbo-step[data-ready='false'] {
+  opacity: 0.55;
+}
+.qbo-step[data-done='true'] {
+  border-color: var(--success);
+}
+.qbo-step-num {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-2);
+}
+.qbo-step[data-done='true'] .qbo-step-num {
+  background: var(--success-bg);
+  border-color: var(--success);
+  color: var(--success);
+}
+.qbo-step-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.qbo-step-body h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+}
+.qbo-step-body > p {
+  margin: -6px 0 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-2);
+}
+.qbo-step-acts {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.qbo-step-ok {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--success);
+}
+.qbo-step-wait {
+  font-size: 12px;
+  color: var(--text-3);
+}
+.qbo-advanced .link-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.qbo-advanced-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
 }
