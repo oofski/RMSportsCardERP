@@ -160,6 +160,27 @@ export function QuickBooksTab(): JSX.Element {
         </Field>
       </div>
 
+      {/* PRODUCTION CANNOT USE THE CONNECT BUTTON, and finding that out from
+          Intuit costs an afternoon: their Redirect URIs page accepts HTTP only
+          on the Development tab, so this app's loopback URI can never be
+          registered against production keys. Consent then fails with "the
+          redirect_uri query parameter value is invalid", which reads like a
+          typo rather than a rule. Said here, next to the Environment field that
+          causes it, and pointing at the route that does work. */}
+      {environment === 'production' && (
+        <div className="qbo-note qbo-note-warn">
+          <Icon name="AlertTriangle" size={15} />
+          <div>
+            <b>On Production, use “Paste tokens instead” below — not Connect.</b> Intuit only
+            accepts HTTP redirect URIs on the Development tab, so this app’s
+            <code className="qbo-uri">{QBO_REDIRECT_URI}</code>
+            cannot be registered against production keys and consent will be refused. Intuit’s
+            OAuth 2.0 Playground uses its own already-registered redirect, so it issues tokens
+            against your client id with nothing for you to register.
+          </div>
+        </div>
+      )}
+
       {/* The single most common reason a connection fails, so it is stated
           rather than left in a doc nobody opens — and copyable, because a
           hand-typed redirect URI has to match Intuit's copy character for

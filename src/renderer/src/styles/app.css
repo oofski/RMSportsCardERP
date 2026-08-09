@@ -20046,3 +20046,14 @@ button.sor-team:focus-visible {
   flex-wrap: wrap;
   justify-content: flex-end;
 }
+
+/* The QuickBooks note that is a WARNING rather than a hint: on Production the
+   Connect button cannot work at all, and a person who misses that spends an
+   afternoon on Intuit's Redirect URIs page being told their URL is invalid. */
+.qbo-note-warn {
+  border-color: var(--warning);
+  background: var(--surface);
+}
+.qbo-note-warn svg {
+  color: var(--warning);
+}
