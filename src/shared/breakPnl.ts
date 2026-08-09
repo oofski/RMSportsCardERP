@@ -64,7 +64,57 @@ export interface BreakPnlSaleRow {
   breakNumber: number | null
   netCents: number
   rates: WhatnotFeeRates
+  /** The raw ledger message, for the "3x" box count and the product name. */
+  message?: string
 }
+
+/**
+ * How many boxes went into a break, off the listing title.
+ *
+ * "Earnings for selling a 3x 2026 Finest Delight HALF CASE (NEW RELEASE!)-
+ * Break #7 - Houston Astros" → 3.
+ *
+ * The multiplier describes the BREAK, not the purchase: every row in break #7
+ * carries the same "3x" because it is part of the listing title all thirty
+ * teams were sold under. That is what makes it usable as a break-level fact
+ * from any one of its rows.
+ *
+ * ONLY BEFORE THE BREAK MARKER. A team name can contain a digit and an x
+ * ("Red Sox" does not, but nothing stops a future listing), and the segment
+ * after "Break #7 -" is the team. Reading a multiplier out of there would
+ * silently re-cost a break off the buyer's team name.
+ *
+ * Bounded at 60 because this multiplies a case price: a mis-read that produced
+ * 2026 boxes from the year would not look like a typo on a screen, it would
+ * look like a catastrophic night.
+ */
+export function parseBreakBoxes(message: string): number | null {
+  const m = message || ''
+  // Cut at the break marker so only the listing title is searched.
+  const cut = /\bBreak\s*#?\s*=?\s*\d+/i.exec(m)
+  const head = cut ? m.slice(0, cut.index) : m
+  // A digit immediately followed by x, as its own word: "3x", "12 x".
+  const hit = /\b(\d{1,2})\s*x\b/i.exec(head)
+  if (!hit) return null
+  const n = Number(hit[1])
+  return Number.isInteger(n) && n >= 1 && n <= 60 ? n : null
+}
+
+/**
+ * A product costed on this night, and what ONE BOX of it cost.
+ *
+ * The division from a case price is done by the caller with `boxCost` from
+ * @shared/units, which already refuses when boxes-per-case is unknown — a wrong
+ * divisor here silently distorts every break on the night, so a missing one has
+ * to stay missing rather than defaulting.
+ */
+export interface BreakPnlBoxCost {
+  productName: string
+  perBoxCost: number
+}
+
+/** Where a break's cost figure came from. Shown, because they differ in trust. */
+export type BreakCostSource = 'recorded' | 'derived' | 'unknown'
 
 /** One costed thing consumed on the night, from `stream_items`. */
 export interface BreakPnlCostRow {
@@ -99,6 +149,18 @@ export interface BreakPnlRow {
   cogs: number
   /** Was a cost actually recorded for this break? */
   costKnown: boolean
+  /**
+   * Where the cost came from.
+   *
+   * 'recorded' is a stream item entered against this break — the strongest.
+   * 'derived' is boxes × per-box price, read off the listing title. Both are
+   * real numbers; they are told apart on screen because one is what somebody
+   * entered and the other is what the app worked out, and an operator
+   * reconciling a night needs to know which is which.
+   */
+  costSource: BreakCostSource
+  /** Boxes in this break, off the "3x" in the listing title. Null if unread. */
+  boxes: number | null
   /** The products named on the cost lines, for a one-line detail. */
   products: string[]
   /**
@@ -117,7 +179,14 @@ export interface BreakPnlSplit {
   /** Every row's gross added up — equal to the day's sales line, to the cent. */
   grossSales: number
   totalFees: number
-  /** Only the cost that was actually recorded. */
+  /**
+   * Cost that could be attributed at all — recorded plus derived.
+   *
+   * NOT the night's cost of goods: a break with neither a cost line nor a
+   * readable box count contributes nothing here, so this can be short of the
+   * statement's own figure. That gap is the point — it is how much of the
+   * night's cost the split could actually place on a break.
+   */
   cogs: number
   /** How many rows have revenue and no recorded cost. */
   uncostedBreaks: number
@@ -152,9 +221,51 @@ export function compareBreakPnlRows(a: BreakPnlRow, b: BreakPnlRow): number {
  * arithmetic here IS the fee arithmetic on the day statement — there is no
  * second copy to drift.
  */
+/**
+ * Which costed product a break's listing title is naming.
+ *
+ * Matched on words rather than equality: the ledger title is marketing —
+ * "3x 2026 Finest Delight HALF CASE (NEW RELEASE!)" — and the catalog name is
+ * not. Scored by how many of the product's own words appear in the title, so a
+ * product named in full wins over one that happens to share a year.
+ *
+ * A TIE RETURNS NOTHING. Two products scoring equally means the title does not
+ * distinguish them, and picking either would put one product's case price on
+ * another product's break — a wrong number that looks entirely reasonable. The
+ * break's cost stays unknown instead, which is visible.
+ */
+export function matchBoxCost(
+  title: string,
+  costs: readonly BreakPnlBoxCost[]
+): BreakPnlBoxCost | null {
+  if (!costs.length) return null
+  // One costed product on the night is the ordinary case and needs no matching.
+  if (costs.length === 1) return costs[0]
+  const hay = ` ${(title || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ')} `
+  let best: BreakPnlBoxCost | null = null
+  let bestScore = 0
+  let tied = false
+  for (const c of costs) {
+    const words = c.productName.toLowerCase().replace(/[^a-z0-9]+/g, ' ').split(' ').filter(Boolean)
+    if (!words.length) continue
+    const score = words.filter((w) => hay.includes(` ${w} `)).length
+    if (score === 0) continue
+    if (score > bestScore) {
+      bestScore = score
+      best = c
+      tied = false
+    } else if (score === bestScore) {
+      tied = true
+    }
+  }
+  return tied ? null : best
+}
+
 export function splitPnlByBreak(
   sales: readonly BreakPnlSaleRow[],
-  costs: readonly BreakPnlCostRow[]
+  costs: readonly BreakPnlCostRow[],
+  /** What one box of each product costed on this night was worth. */
+  boxCosts: readonly BreakPnlBoxCost[] = []
 ): BreakPnlSplit {
   const saleGroups = new Map<number | null, BreakPnlSaleRow[]>()
   for (const row of sales) {
@@ -187,9 +298,29 @@ export function splitPnlByBreak(
   for (const key of keys) {
     const group = saleGroups.get(key) ?? []
     const fees = computeFees(group.map((r) => ({ netCents: r.netCents, rates: r.rates })))
+    // The break's own listing title, from whichever of its rows carries one.
+    // Every row in a break shares it, so the first is as good as any.
+    const title = group.find((r) => (r.message ?? '').trim())?.message ?? ''
+    const boxes = key === null ? null : parseBreakBoxes(title)
+
     const cost = costGroups.get(key)
-    const costKnown = !!cost && cost.total !== 0
-    const cogs = costKnown ? c2(cost.total) : 0
+    let costSource: BreakCostSource = 'unknown'
+    let cogs = 0
+    if (cost && cost.total !== 0) {
+      costSource = 'recorded'
+      cogs = c2(cost.total)
+    } else if (boxes !== null) {
+      // WHAT THE OPERATOR ASKED FOR. The listing says how many boxes went into
+      // this break; the night's cost of goods says what one box was worth. The
+      // product of the two is this break's cost, and it beats leaving the row
+      // blank when the two facts are both sitting there.
+      const per = matchBoxCost(title, boxCosts)
+      if (per && per.perBoxCost > 0) {
+        costSource = 'derived'
+        cogs = c2(boxes * per.perBoxCost)
+      }
+    }
+    const costKnown = costSource !== 'unknown'
     const grossProfit = costKnown ? c2(fees.grossSales - cogs) : null
     rows.push({
       breakNumber: key,
@@ -201,6 +332,8 @@ export function splitPnlByBreak(
       totalFees: fees.totalFees,
       cogs,
       costKnown,
+      costSource,
+      boxes,
       products: cost?.products ?? [],
       grossProfit,
       // Fees are already negative, so this is an addition. Written out rather

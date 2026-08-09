@@ -20398,3 +20398,15 @@ button.sor-team:focus-visible {
   line-height: 1.55;
   color: var(--text-3);
 }
+
+/* A cost the app worked out from the listing's box count rather than one
+   somebody entered. Marked with a tilde rather than a colour alone, so it
+   survives a screenshot and a printout. */
+.bpnl-derived {
+  color: var(--text-2);
+}
+.bpnl-derived em {
+  margin-left: 2px;
+  font-style: normal;
+  color: var(--text-3);
+}

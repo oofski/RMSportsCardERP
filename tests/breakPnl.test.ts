@@ -30,6 +30,8 @@ const {
 const {
   breakPnlLabel,
   compareBreakPnlRows,
+  matchBoxCost,
+  parseBreakBoxes,
   splitPnlByBreak
 } = require('../src/shared/breakPnl')
 
@@ -160,6 +162,81 @@ const nothing = splitPnlByBreak([], [])
 ok(nothing.rows.length === 0, 'no rows on an empty day')
 ok(nothing.grossSales === 0 && nothing.totalFees === 0, 'and zeroes rather than NaN')
 ok(!nothing.hasUnattributed, 'and nothing unattributed')
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 5. "3x" — boxes in the break, off the listing title ===')
+// ---------------------------------------------------------------------------
+// The real shape, from the owner's own ledger.
+const TITLE =
+  'Earnings for selling a 3x 2026 Finest Delight HALF CASE (NEW RELEASE!)- Break #7 - Houston Astros'
+ok(parseBreakBoxes(TITLE) === 3, 'three boxes read out of a real line', String(parseBreakBoxes(TITLE)))
+ok(parseBreakBoxes('a 12 x Prizm Case - Break #2 - Cubs') === 12, 'a space between is fine')
+ok(parseBreakBoxes('no multiplier here - Break #4 - Rays') === null, 'and a title without one says so')
+
+// ONLY BEFORE THE BREAK MARKER. Everything after it is the team, and reading a
+// multiplier out of a team name would silently re-cost the break.
+ok(
+  parseBreakBoxes('Finest - Break #7 - 3x Nothing') === null,
+  'a multiplier AFTER the break marker is ignored'
+)
+// A year is not a box count, and 2026 boxes would not read as a typo on screen.
+ok(parseBreakBoxes('a 2026x Case - Break #1 - Reds') === null, 'and an absurd count is refused')
+
+// The derivation the operator asked for: boxes x per-box price.
+const titled = (breakNumber: number, netCents: number, msg: string): Record<string, unknown> => ({
+  breakNumber,
+  netCents,
+  rates: RATES,
+  message: msg
+})
+const derived = splitPnlByBreak(
+  [titled(7, 2210_10, TITLE), titled(7, 15_00, TITLE)],
+  [],
+  [{ productName: '2026 Finest Delight', perBoxCost: 410.5 }]
+)
+const seven = derived.rows[0]
+ok(seven.boxes === 3, 'the break knows it was three boxes', String(seven.boxes))
+ok(seven.costSource === 'derived', 'and its cost is derived', seven.costSource)
+ok(seven.cogs === 1231.5, 'three boxes at $410.50', String(seven.cogs))
+ok(seven.grossProfit !== null, 'so it HAS a margin now, where it used to be blank')
+
+// A RECORDED COST STILL WINS. Somebody entering what was actually ripped must
+// not be overridden by an arithmetic guess off a listing title.
+const both = splitPnlByBreak(
+  [titled(7, 2210_10, TITLE)],
+  [{ breakNumber: 7, costTotal: 1500 }],
+  [{ productName: '2026 Finest Delight', perBoxCost: 410.5 }]
+)
+ok(both.rows[0].costSource === 'recorded', 'an entered cost beats a derived one', both.rows[0].costSource)
+ok(both.rows[0].cogs === 1500, 'and is the figure used', String(both.rows[0].cogs))
+
+// No per-box price to be had — the catalog cannot divide the case. Blank, not a
+// guess: a wrong divisor distorts every break on the night and looks fine.
+const noPrice = splitPnlByBreak([titled(7, 2210_10, TITLE)], [], [])
+ok(noPrice.rows[0].costSource === 'unknown', 'no per-box price leaves the cost unknown')
+ok(noPrice.rows[0].grossProfit === null, 'and states no margin')
+ok(noPrice.rows[0].boxes === 3, 'while still showing the box count it could read')
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 6. which product a title is naming ===')
+// ---------------------------------------------------------------------------
+const TWO = [
+  { productName: '2026 Finest Delight', perBoxCost: 410.5 },
+  { productName: '2026 Prizm Football', perBoxCost: 220 }
+]
+ok(matchBoxCost(TITLE, TWO)?.productName === '2026 Finest Delight', 'the named product wins')
+ok(matchBoxCost('nothing familiar', TWO) === null, 'a title naming neither matches neither')
+// One costed product is the ordinary night and needs no matching at all.
+ok(matchBoxCost('anything', [TWO[1]])?.perBoxCost === 220, 'a single product needs no match')
+// A TIE MUST RETURN NOTHING. Picking either would put one product's case price
+// on another product's break — a wrong number that looks entirely reasonable.
+ok(
+  matchBoxCost('2026 sale', [
+    { productName: '2026 Alpha', perBoxCost: 100 },
+    { productName: '2026 Beta', perBoxCost: 900 }
+  ]) === null,
+  'and a tie refuses rather than picking one'
+)
 
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

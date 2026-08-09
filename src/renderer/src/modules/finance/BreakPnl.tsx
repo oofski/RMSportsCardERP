@@ -53,8 +53,8 @@ export function BreakPnl({ streamDate }: { streamDate: string }): JSX.Element {
             {split.uncostedBreaks === 1
               ? 'One break has sales but no recorded box cost'
               : `${split.uncostedBreaks} breaks have sales but no recorded box cost`}
-            , so their margin is unknown rather than zero. Enter what was ripped on the show to
-            fill them in.
+            , and no box count could be read from their listing title either, so their margin is
+            unknown rather than zero. Enter what was ripped on the show to fill them in.
           </span>
         </div>
       )}
@@ -82,6 +82,11 @@ export function BreakPnl({ streamDate }: { streamDate: string }): JSX.Element {
                 {r.products.length > 0 && (
                   <span className="bpnl-product">{r.products.join(', ')}</span>
                 )}
+                {r.boxes !== null && (
+                  <span className="bpnl-count">
+                    {r.boxes} box{r.boxes === 1 ? '' : 'es'}
+                  </span>
+                )}
                 {r.saleCount > 0 && (
                   <span className="bpnl-count">
                     {r.saleCount} row{r.saleCount === 1 ? '' : 's'}
@@ -91,7 +96,23 @@ export function BreakPnl({ streamDate }: { streamDate: string }): JSX.Element {
               <td className="num mono">{formatMoney(r.grossSales)}</td>
               <td className="num mono">
                 {r.costKnown ? (
-                  formatMoney(-r.cogs)
+                  // A DERIVED cost is a real number the app worked out — boxes
+                  // off the listing title times the night's per-box price —
+                  // rather than one somebody entered. Marked, because an
+                  // operator reconciling a night needs to know which is which,
+                  // and because the mark is what tells them a break is still
+                  // waiting to have its boxes entered.
+                  <span
+                    className={r.costSource === 'derived' ? 'bpnl-derived' : undefined}
+                    title={
+                      r.costSource === 'derived'
+                        ? `Worked out: ${r.boxes} boxes at the night's per-box price. Enter what was ripped to replace it.`
+                        : undefined
+                    }
+                  >
+                    {formatMoney(-r.cogs)}
+                    {r.costSource === 'derived' && <em>~</em>}
+                  </span>
                 ) : (
                   <span className="bpnl-unknown" title="Nobody recorded what was ripped for this break">
                     —
