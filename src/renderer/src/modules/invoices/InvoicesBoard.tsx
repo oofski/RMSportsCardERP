@@ -57,6 +57,7 @@ export function InvoicesBoard({
   const [loading, setLoading] = useState(true)
   const [editing, setEditing] = useState<InvoiceDetail | null>(null)
   const [creatingNew, setCreatingNew] = useState(false)
+  const [syncing, setSyncing] = useState(false)
   const [nextNumber, setNextNumber] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
   /**
@@ -83,6 +84,63 @@ export function InvoicesBoard({
     setStats(s)
     setNextNumber(next)
   }, [])
+
+  /**
+   * Ask QuickBooks what it knows about the invoices already posted there.
+   *
+   * QuickBooks does not call this app — there is no webhook on this
+   * integration — so an invoice emailed from their UI, or a payment recorded
+   * against one, stays invisible here until something asks. This is that ask,
+   * and it is the whole of the status feature: sent and paid are read back and
+   * the invoice's stage moves to match.
+   *
+   * QUIET UNLESS ASKED. On the timer it says nothing when nothing changed —
+   * a toast every quarter hour announcing "0 invoices moved" trains people to
+   * dismiss toasts without reading them, and the next one matters. Pressed by
+   * hand it always answers, because silence after pressing a button reads as a
+   * broken button.
+   */
+  const syncStatus = useCallback(
+    async (announce: boolean): Promise<void> => {
+      setSyncing(true)
+      try {
+        const res = await api.invoices.syncQboStatus()
+        if (!res.ok || !res.data) {
+          if (announce) toast.error(res.error ?? 'Could not reach QuickBooks.')
+          return
+        }
+        const moved = res.data.moved.length
+        if (moved > 0) {
+          await load()
+          toast.success(
+            moved === 1
+              ? `1 invoice moved to ${res.data.moved[0].to}.`
+              : `${moved} invoices moved.`
+          )
+        } else if (announce) {
+          toast.success(
+            res.data.checked === 0
+              ? 'Nothing posted to QuickBooks yet.'
+              : `Checked ${res.data.checked} — nothing has changed.`
+          )
+        }
+      } finally {
+        setSyncing(false)
+      }
+    },
+    [load, toast]
+  )
+
+  // FIFTEEN MINUTES, and the first run is immediate. Invoices are not a
+  // real-time object — a payment lands when it lands and nobody is watching the
+  // second it does — so polling harder would spend somebody's API quota to
+  // shorten a wait nobody is sitting through. The manual button covers the
+  // moment when somebody IS waiting.
+  useEffect(() => {
+    void syncStatus(false)
+    const t = setInterval(() => void syncStatus(false), 15 * 60 * 1000)
+    return () => clearInterval(t)
+  }, [syncStatus])
 
   useLiveRefresh(LIVE.invoices, load)
 
@@ -245,6 +303,21 @@ export function InvoicesBoard({
             Export CSV
           </Button>
           <CheckTrackingButton onDone={load} />
+          {/* THE ONLY WAY AN INVOICE MOVES ON ITS OWN. QuickBooks does not call
+              this app, so a payment recorded there is invisible here until
+              somebody asks. It also runs on a timer below; the button exists
+              because "did that just land?" is asked at a moment, not on a
+              schedule, and waiting a quarter of an hour to find out is how
+              people go and look in QuickBooks instead. */}
+          <Button
+            variant="secondary"
+            icon="RefreshCw"
+            loading={syncing}
+            disabled={syncing}
+            onClick={() => void syncStatus(true)}
+          >
+            Check QuickBooks
+          </Button>
           <Button variant="primary" icon="Plus" onClick={() => setCreatingNew(true)}>
             New invoice
           </Button>
@@ -311,6 +384,19 @@ export function InvoicesBoard({
                         setOverStage(null)
                       }}
                       onMove={(to) => void move(inv, to)}
+                      onRetryPush={async () => {
+                        const res = await api.invoices.retryQboPush(inv.id)
+                        if (!res.ok || !res.data) {
+                          toast.error(res.error ?? 'Could not reach QuickBooks.')
+                          return
+                        }
+                        if (!res.data.pushed) {
+                          toast.error(res.data.error ?? 'QuickBooks refused it again.')
+                        } else {
+                          toast.success(`Now in QuickBooks as invoice ${res.data.docNumber}.`)
+                        }
+                        await load()
+                      }}
                       onSend={() => void sendIt(inv)}
                       onDelete={() => setDeleting(inv)}
                       onPdf={() => void api.invoices.openPdf(inv.id)}
@@ -381,6 +467,7 @@ function InvoiceCard({
   onDragStart,
   onDragEnd,
   onMove,
+  onRetryPush,
   onSend,
   onDelete,
   onPdf
@@ -391,6 +478,8 @@ function InvoiceCard({
   onDragStart: () => void
   onDragEnd: () => void
   onMove: (to: InvoiceStatus) => void
+  /** Try a QuickBooks push that failed on save. */
+  onRetryPush: () => Promise<void>
   onSend: () => void
   onDelete: () => void
   onPdf: () => void
@@ -400,13 +489,6 @@ function InvoiceCard({
     invoice.status !== 'void' &&
     invoice.dueDate < new Date().toISOString().slice(0, 10)
 
-  /**
-   * Delete is offered only where it can succeed — the rule `deleteInvoice`
-   * enforces, mirrored onto the card exactly as the PO board mirrors its own.
-   * An invoice with a QuickBooks id has to be voided over there first, and a
-   * button whose only outcome is that explanation teaches the operator that
-   * delete is broken rather than that this invoice is posted.
-   */
   // ALWAYS DELETABLE. This was gated on the invoice not yet being in
   // QuickBooks, which was right when saving and posting were separate steps and
   // became wrong the moment Save started posting immediately: every invoice
@@ -466,6 +548,24 @@ function InvoiceCard({
       />
 
       <div className="po-card-foot" onClick={(e) => e.stopPropagation()}>
+        {/* SAVED HERE, NOT IN QUICKBOOKS. The push runs on save and can fail —
+            no network, an expired grant, an item QuickBooks will not accept —
+            and the invoice is deliberately kept when it does, because throwing
+            away a document somebody just typed is worse than one that has not
+            reached the books yet. This is the way back. Without it the failure
+            toast pointed at a button that did not exist. */}
+        {invoice.qboPushState === 'failed' && (
+          <button
+            type="button"
+            className="btn po-move inv-move-retry"
+            disabled={busy}
+            title={invoice.qboPushError ?? 'QuickBooks refused this invoice.'}
+            onClick={() => void onRetryPush()}
+          >
+            <Icon name="RefreshCw" size={14} />
+            Retry QuickBooks
+          </button>
+        )}
         {invoice.status === 'draft' && (
           <button
             type="button"

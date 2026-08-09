@@ -20415,3 +20415,11 @@ button.sor-team:focus-visible {
   font-style: normal;
   color: var(--text-3);
 }
+
+/* The way back from a QuickBooks push that failed. Warning-toned rather than
+   danger: nothing is broken and nothing was lost — the invoice is saved, it is
+   just not on the books yet. */
+.inv-move-retry {
+  border-color: var(--warning);
+  color: var(--warning);
+}
