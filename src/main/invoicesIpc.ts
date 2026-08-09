@@ -10,7 +10,8 @@ import type {
   InvoiceStatus,
   NewInvoice
 } from '@shared/invoices'
-import { invoicesToCsv } from '@shared/invoices'
+import type { InvoicePushResult, QboInvoiceObservation } from '@shared/invoices'
+import { invoicesToCsv, nextStageFromQbo } from '@shared/invoices'
 import { currentUser } from './services/auth'
 import {
   deleteInvoice,
@@ -19,7 +20,13 @@ import {
   invoiceStats,
   listCustomers,
   listInvoices,
+  listInvoicesNeedingPush,
+  listPostedInvoices,
   markPosted,
+  markPushFailed,
+  markPushPending,
+  recordQboObservation,
+  recordQboStatusFailure,
   removeCustomer,
   saveCustomer,
   saveInvoice,
@@ -36,6 +43,7 @@ import {
   type QboCustomerRef,
   type QboItemRef
 } from './quickbooks/invoices'
+import { fetchQboInvoiceStatuses } from './quickbooks/invoiceStatus'
 
 /**
  * Invoices — the sell side.
@@ -77,6 +85,76 @@ function fail(err: unknown): Result<never> {
 
 function str(v: unknown): string {
   return typeof v === 'string' ? v : v == null ? '' : String(v)
+}
+
+/**
+ * Put a saved invoice into QuickBooks, recording how it went either way.
+ *
+ * ## The local row is never harmed by a remote failure
+ *
+ * This is only ever called with an invoice that is ALREADY committed. It writes
+ * three things to the local row — pending before, then posted or failed after —
+ * and touches nothing else. So the worst outcome of a dead network, an expired
+ * grant, a missing item or an Intuit outage is an invoice sitting in draft with
+ * a sentence saying why, which is a thing somebody can retry.
+ *
+ * ## Why 'pending' is stamped BEFORE the call
+ *
+ * A process killed between the request leaving and the reply arriving leaves the
+ * row reading 'pending', which means "this may be in QuickBooks". That is the
+ * state that makes somebody look before pushing again. Stamped after the call it
+ * would read 'none' — "never tried" — and that claim leads straight to the same
+ * invoice existing twice in a real company's books.
+ */
+async function pushToQbo(invoice: InvoiceDetail, open: boolean): Promise<InvoicePushResult> {
+  const base = {
+    invoice,
+    pushed: false,
+    url: null,
+    docNumber: null,
+    numberChanged: false,
+    notes: [] as string[]
+  }
+  if (invoice.status === 'void') {
+    return { ...base, error: 'That invoice is void, so it was not sent to QuickBooks.' }
+  }
+  if (invoice.qboId) {
+    return { ...base, error: 'That invoice is already in QuickBooks.' }
+  }
+
+  markPushPending(invoice.id)
+  try {
+    const res = await createQboInvoice(invoice)
+    markPosted(invoice.id, { id: res.qboId, docNumber: res.docNumber }, 'created')
+
+    // Opening the browser is a convenience, not the operation. A blocked pop-up
+    // or a machine with no default browser must not turn a successfully created
+    // invoice into a reported failure.
+    if (open) {
+      try {
+        await shell.openExternal(res.url)
+      } catch {
+        /* the URL comes back either way, so the screen can offer it */
+      }
+    }
+
+    return {
+      // Re-read: markPosted has moved the status and stamped the ids, and the
+      // caller is going to render this. Handing back the pre-push copy would
+      // show a draft that the database no longer agrees is one.
+      invoice: getInvoice(invoice.id) ?? invoice,
+      pushed: true,
+      url: res.url,
+      docNumber: res.docNumber,
+      numberChanged: res.numberChanged,
+      error: null,
+      notes: res.notes
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    markPushFailed(invoice.id, message)
+    return { ...base, invoice: getInvoice(invoice.id) ?? invoice, error: message }
+  }
 }
 
 export function registerInvoicesIpc(): void {
@@ -260,34 +338,174 @@ export function registerInvoicesIpc(): void {
     async (
       _e,
       payload: { id?: unknown; open?: unknown }
-    ): Promise<Result<{ url: string; docNumber: string | null; numberChanged: boolean }>> => {
+    ): Promise<
+      Result<{
+        url: string
+        docNumber: string | null
+        numberChanged: boolean
+        notes: string[]
+      }>
+    > => {
       try {
         requireInvoicing()
         const id = str(payload?.id)
         const invoice = getInvoice(id)
         if (!invoice) return { ok: false, error: 'That invoice is gone.' }
-        if (invoice.status === 'void') {
-          return { ok: false, error: 'That invoice is void.' }
-        }
 
-        const res = await createQboInvoice(invoice)
-        markPosted(id, { id: res.qboId, docNumber: res.docNumber }, 'created')
-
-        // Opening the browser is a convenience, not the operation. A blocked
-        // pop-up or a machine with no default browser must not turn a
-        // successfully created invoice into a reported failure.
-        if (payload?.open !== false) {
-          try {
-            await shell.openExternal(res.url)
-          } catch {
-            /* the URL comes back either way, so the screen can offer it */
-          }
-        }
+        const res = await pushToQbo(invoice, payload?.open !== false)
+        // This channel keeps its original contract — a failed push IS a failed
+        // operation here, because the caller asked for one thing and it did not
+        // happen. That differs from `invoiceSaveAndPush`, where the save
+        // succeeded and only the push did not, and reporting THAT as a failure
+        // would tell somebody their invoice was lost when it is on disk.
+        if (!res.pushed) return { ok: false, error: res.error ?? 'QuickBooks refused the invoice.' }
 
         return {
           ok: true,
-          data: { url: res.url, docNumber: res.docNumber, numberChanged: res.numberChanged }
+          data: {
+            url: res.url ?? '',
+            docNumber: res.docNumber,
+            numberChanged: res.numberChanged,
+            notes: res.notes
+          }
         }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  /**
+   * Save it, then put it in QuickBooks — the everyday gesture, with no separate
+   * send step.
+   *
+   * TWO WRITES, AND THE ORDER IS THE FEATURE. The local save is committed first
+   * and on its own; only then is QuickBooks called. So the failure modes split
+   * cleanly: a bad invoice is refused before anything is written, and a bad
+   * NETWORK leaves a perfectly good saved invoice with `qboPushState = 'failed'`
+   * and a sentence saying why.
+   *
+   * A failed push therefore comes back `ok: true` with `pushed: false`. That
+   * reads oddly for a second and is the only honest answer: the thing the
+   * operator did — write an invoice — worked.
+   */
+  ipcMain.handle(
+    IPC.invoiceSaveAndPush,
+    async (
+      _e,
+      payload: NewInvoice & { id?: string | null; open?: boolean }
+    ): Promise<Result<InvoicePushResult>> => {
+      try {
+        const actor = requireInvoicing()
+        // Throws on an invalid invoice, before any of it is written. A refusal
+        // here is a genuine failure — there is nothing saved to reassure anybody
+        // about.
+        const saved = saveInvoice(payload, actor.id)
+        const res = await pushToQbo(saved, payload?.open === true)
+        return { ok: true, data: res }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  /** Try a failed push again. Same path, same guards — nothing special. */
+  ipcMain.handle(
+    IPC.invoiceRetryQboPush,
+    async (_e, payload: { id?: unknown; open?: unknown }): Promise<Result<InvoicePushResult>> => {
+      try {
+        requireInvoicing()
+        const invoice = getInvoice(str(payload?.id))
+        if (!invoice) return { ok: false, error: 'That invoice is gone.' }
+        return { ok: true, data: await pushToQbo(invoice, payload?.open === true) }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  /**
+   * The invoices that tried to reach QuickBooks and did not.
+   *
+   * A local read — no connection needed — because the whole point is that it
+   * still answers when QuickBooks is the thing that is down.
+   */
+  ipcMain.handle(IPC.invoiceQboPending, (): Invoice[] =>
+    can() ? listInvoicesNeedingPush() : []
+  )
+
+  /**
+   * Ask QuickBooks where these invoices have got to.
+   *
+   * Reads only. What comes back is RECORDED in full and only then allowed to
+   * move a card, and only forwards along a legal transition — see
+   * nextStageFromQbo, which is where the two rules that matter live: a locally
+   * paid invoice is never dragged back (paid is operator-recorded here, and
+   * plenty settle in cash QuickBooks never sees), and an answer we could not
+   * read moves nothing.
+   *
+   * `checked` counts invoices QuickBooks answered for. `missing` counts ones it
+   * did not — an invoice deleted in QuickBooks comes back as silence, and that
+   * is worth a number on a screen rather than being rounded into the errors.
+   */
+  ipcMain.handle(
+    IPC.invoiceSyncQboStatus,
+    async (
+      _e,
+      payload?: { id?: unknown }
+    ): Promise<
+      Result<{
+        checked: number
+        missing: number
+        moved: Array<{ id: string; from: InvoiceStatus; to: InvoiceStatus }>
+      }>
+    > => {
+      try {
+        requireInvoicing()
+        const one = str(payload?.id)
+        const targets = one
+          ? [getInvoice(one)].filter((i): i is InvoiceDetail => !!i?.qboId)
+          : listPostedInvoices()
+        if (targets.length === 0) {
+          return { ok: true, data: { checked: 0, missing: 0, moved: [] } }
+        }
+
+        let observations: Map<string, QboInvoiceObservation>
+        try {
+          observations = await fetchQboInvoiceStatuses(
+            targets.map((i) => i.qboId).filter((v): v is string => !!v)
+          )
+        } catch (err) {
+          // One network failure, not one per invoice. Recorded against every
+          // invoice we asked about so each card can say when it was last tried
+          // — and, critically, WITHOUT touching the readings that already
+          // worked. Stale-but-true beats fresh-and-wrong.
+          const message = err instanceof Error ? err.message : String(err)
+          for (const invoice of targets) recordQboStatusFailure(invoice.id, message)
+          return { ok: false, error: message }
+        }
+
+        const moved: Array<{ id: string; from: InvoiceStatus; to: InvoiceStatus }> = []
+        let checked = 0
+        let missing = 0
+        for (const invoice of targets) {
+          const observed = invoice.qboId ? observations.get(invoice.qboId) : undefined
+          if (!observed) {
+            missing++
+            recordQboStatusFailure(
+              invoice.id,
+              'QuickBooks did not return this invoice. It may have been deleted there.'
+            )
+            continue
+          }
+          checked++
+          recordQboObservation(invoice.id, observed)
+          const next = nextStageFromQbo(invoice.status, observed)
+          if (next && setInvoiceStatus(invoice.id, next)) {
+            moved.push({ id: invoice.id, from: invoice.status, to: next })
+          }
+        }
+        return { ok: true, data: { checked, missing, moved } }
       } catch (err) {
         return fail(err)
       }

@@ -3,13 +3,14 @@ import type { Invoice, InvoiceCustomer, InvoiceDetail, InvoiceStatus } from '@sh
 import { INVOICE_STAGES, canMoveInvoice } from '@shared/invoices'
 import { api } from '../../lib/api'
 import { LIVE, useLiveRefresh } from '../../lib/live'
-import { Button, CenterLoader } from '../../components/ui'
+import { Button, CenterLoader, Modal } from '../../components/ui'
 import { Icon } from '../../components/Icon'
 import { FreightLine, TrackingLine } from '../../components/FreightFields'
 import { CheckTrackingButton } from '../../components/CheckTrackingButton'
 import { useToast } from '../../components/Toast'
-import { formatMoney } from '../../lib/format'
+import { formatDate, formatMoney } from '../../lib/format'
 import { CreateInvoiceModal } from './CreateInvoiceModal'
+import { formatDay } from './helpers'
 
 /**
  * The sell-side pipeline: Draft → In QuickBooks → Sent → Paid.
@@ -43,6 +44,7 @@ export function InvoicesBoard({
   const toast = useToast()
   const [invoices, setInvoices] = useState<Invoice[]>([])
   const [customers, setCustomers] = useState<InvoiceCustomer[]>([])
+  const [thumbnails, setThumbnails] = useState<Record<string, string>>({})
   const [stats, setStats] = useState({
     draft: 0,
     created: 0,
@@ -57,6 +59,15 @@ export function InvoicesBoard({
   const [creatingNew, setCreatingNew] = useState(false)
   const [nextNumber, setNextNumber] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
+  /**
+   * The invoice somebody has asked to delete, held until they confirm it.
+   *
+   * A held record rather than a window.confirm because the thing worth showing
+   * is WHICH invoice and for how much — "Delete 1043 · Chris Smith · $412.50"
+   * is checkable, and "Are you sure?" is not. Deleting the wrong one is
+   * unrecoverable: there is no undo and no trash.
+   */
+  const [deleting, setDeleting] = useState<Invoice | null>(null)
   const [dragId, setDragId] = useState<string | null>(null)
   const [overStage, setOverStage] = useState<InvoiceStatus | null>(null)
 
@@ -88,6 +99,19 @@ export function InvoicesBoard({
       active = false
     }
   }, [load])
+
+  // Line-item images for the invoice receipt, loaded once and shared by every
+  // invoice opened this session — base64 thumbnails are comparatively heavy, and
+  // the same catalog backs every line. Same call the PO board makes.
+  useEffect(() => {
+    let active = true
+    void api.purchaseOrders.thumbnails().then((t) => {
+      if (active) setThumbnails(t)
+    })
+    return () => {
+      active = false
+    }
+  }, [])
 
   const open = async (id: string): Promise<void> => {
     const detail = await api.invoices.get(id)
@@ -150,13 +174,30 @@ export function InvoicesBoard({
     }
   }
 
-  const remove = async (inv: Invoice): Promise<void> => {
-    if (busy) return
-    setBusy(inv.id)
+  /**
+   * Delete, once it has been confirmed.
+   *
+   * The open receipt is closed on the way out. Leaving it up would leave a
+   * modal describing a row that no longer exists, and its own Delete button
+   * would then fail with "already gone" — which reads as the app being broken
+   * rather than as the delete having worked.
+   */
+  const remove = async (): Promise<void> => {
+    const target = deleting
+    if (!target || busy) return
+    setBusy(target.id)
     try {
-      const res = await api.invoices.remove(inv.id)
-      if (!res.ok) toast.error(res.error ?? 'Could not delete that.')
-      else await load()
+      const res = await api.invoices.remove(target.id)
+      if (!res.ok) {
+        toast.error(res.error ?? 'Could not delete that.')
+        return
+      }
+      toast.success(
+        target.invoiceNumber ? `Invoice ${target.invoiceNumber} deleted.` : 'Invoice deleted.'
+      )
+      setDeleting(null)
+      setEditing(null)
+      await load()
     } finally {
       setBusy(null)
     }
@@ -178,19 +219,28 @@ export function InvoicesBoard({
         <h2>Invoices</h2>
         <div className="po-page-stats">
           <div className="po-page-stat">
-            <span className="mono">{formatMoney(stats.outstanding)}</span>
-            <em>awaiting payment</em>
+            <span className="po-page-stat-val mono">
+              {formatMoney(stats.outstanding, { compact: true })}
+            </span>
+            <span className="po-page-stat-label">Awaiting payment</span>
           </div>
           <div className="po-page-stat">
-            <span className="mono">{formatMoney(stats.paidTotal)}</span>
-            <em>paid</em>
+            <span className="po-page-stat-val mono">
+              {formatMoney(stats.paidTotal, { compact: true })}
+            </span>
+            <span className="po-page-stat-label">Paid</span>
           </div>
           <div className="po-page-stat">
-            <span className="mono">{formatMoney(stats.thisMonth)}</span>
-            <em>billed this month</em>
+            <span className="po-page-stat-val mono">
+              {formatMoney(stats.thisMonth, { compact: true })}
+            </span>
+            <span className="po-page-stat-label">Billed this month</span>
           </div>
         </div>
-        <div className="row" style={{ gap: 8, marginLeft: 'auto', flexWrap: 'wrap' }}>
+        {/* The actions travel as one group for the same reason they do on the PO
+            page: loose siblings after a margin-left:auto stats block wrap one at
+            a time, and New invoice was the one that fell off the edge. */}
+        <div className="po-page-actions">
           <Button variant="secondary" icon="FileSpreadsheet" onClick={() => void exportCsv()}>
             Export CSV
           </Button>
@@ -201,75 +251,100 @@ export function InvoicesBoard({
         </div>
       </div>
 
-      <div className="po-board">
-        {INVOICE_STAGES.map((stage) => {
-          const inStage = invoices.filter((i) => i.status === stage.id)
-          const canDrop = !!(dragId && fromStatus && canMoveInvoice(fromStatus, stage.id))
-          // While dragging, dim the columns this card cannot reach — never the
-          // one it came from — so valid and invalid targets are both explicit.
-          const noAllow = !!dragId && fromStatus !== stage.id && !canDrop
-          return (
-            <div
-              key={stage.id}
-              className={`po-col po-col-${stage.id}${overStage === stage.id ? ' po-col-dragover' : ''}${
-                noAllow ? ' po-col-noallow' : ''
-              }`}
-              onDragOver={(e) => {
-                if (!canDrop) return
-                e.preventDefault()
-                setOverStage(stage.id)
-              }}
-              onDragLeave={() => setOverStage((s) => (s === stage.id ? null : s))}
-              onDrop={(e) => {
-                e.preventDefault()
-                setOverStage(null)
-                const inv = invoices.find((i) => i.id === dragId)
-                setDragId(null)
-                if (inv) void move(inv, stage.id)
-              }}
-            >
-              <div className="po-col-head">
-                <span className="po-col-title" title={stage.hint}>
-                  {stage.label}
-                </span>
-                <span className="po-col-count">{inStage.length}</span>
+      {invoices.length === 0 ? (
+        <div className="po-page-empty">
+          <Icon name="ReceiptText" size={26} />
+          <div className="po-page-empty-title">Nothing billed yet</div>
+          <p>
+            Write an invoice to bill a buyer for what they bought. It stays a draft here until
+            you post it to QuickBooks or mark it paid.
+          </p>
+          <Button variant="primary" icon="Plus" onClick={() => setCreatingNew(true)}>
+            New invoice
+          </Button>
+        </div>
+      ) : (
+        <div className="po-board">
+          {INVOICE_STAGES.map((stage) => {
+            const inStage = invoices.filter((i) => i.status === stage.id)
+            const canDrop = !!(dragId && fromStatus && canMoveInvoice(fromStatus, stage.id))
+            // While dragging, dim the columns this card cannot reach — never the
+            // one it came from — so valid and invalid targets are both explicit.
+            const noAllow = !!dragId && fromStatus !== stage.id && !canDrop
+            return (
+              <div
+                key={stage.id}
+                className={`po-col po-col-${stage.id}${
+                  overStage === stage.id ? ' po-col-dragover' : ''
+                }${noAllow ? ' po-col-noallow' : ''}`}
+                onDragOver={(e) => {
+                  if (!canDrop) return
+                  e.preventDefault()
+                  setOverStage(stage.id)
+                }}
+                onDragLeave={() => setOverStage((s) => (s === stage.id ? null : s))}
+                onDrop={(e) => {
+                  e.preventDefault()
+                  setOverStage(null)
+                  const inv = invoices.find((i) => i.id === dragId)
+                  setDragId(null)
+                  if (inv) void move(inv, stage.id)
+                }}
+              >
+                <div className="po-col-head">
+                  <span className="po-col-title" title={stage.hint}>
+                    {stage.label}
+                  </span>
+                  <span className="po-col-count">{inStage.length}</span>
+                </div>
+                <div className="po-col-body">
+                  {inStage.length === 0 && <div className="po-col-empty">Nothing here.</div>}
+                  {inStage.map((inv) => (
+                    <InvoiceCard
+                      key={inv.id}
+                      invoice={inv}
+                      busy={busy === inv.id}
+                      onOpen={() => void open(inv.id)}
+                      onDragStart={() => setDragId(inv.id)}
+                      onDragEnd={() => {
+                        setDragId(null)
+                        setOverStage(null)
+                      }}
+                      onMove={(to) => void move(inv, to)}
+                      onSend={() => void sendIt(inv)}
+                      onDelete={() => setDeleting(inv)}
+                      onPdf={() => void api.invoices.openPdf(inv.id)}
+                    />
+                  ))}
+                </div>
               </div>
-              <div className="po-col-body">
-                {inStage.length === 0 && <div className="po-col-empty">Nothing here.</div>}
-                {inStage.map((inv) => (
-                  <InvoiceCard
-                    key={inv.id}
-                    invoice={inv}
-                    busy={busy === inv.id}
-                    onOpen={() => void open(inv.id)}
-                    onDragStart={() => setDragId(inv.id)}
-                    onDragEnd={() => {
-                      setDragId(null)
-                      setOverStage(null)
-                    }}
-                    onMove={(to) => void move(inv, to)}
-                    onSend={() => void sendIt(inv)}
-                    onDelete={() => void remove(inv)}
-                    onPdf={() => void api.invoices.openPdf(inv.id)}
-                  />
-                ))}
-              </div>
-            </div>
-          )
-        })}
-      </div>
+            )
+          })}
+        </div>
+      )}
 
       {(editing || creatingNew) && (
         <CreateInvoiceModal
           invoice={editing}
           customers={customers}
           nextNumber={nextNumber}
+          thumbnails={thumbnails}
           onClose={() => {
             setEditing(null)
             setCreatingNew(false)
           }}
           onSaved={load}
+          onDelete={(inv) => setDeleting(inv)}
           onOpenQuickBooks={onOpenQuickBooks}
+        />
+      )}
+
+      {deleting && (
+        <DeleteInvoiceModal
+          invoice={deleting}
+          busy={busy === deleting.id}
+          onClose={() => setDeleting(null)}
+          onConfirm={remove}
         />
       )}
 
@@ -289,9 +364,15 @@ export function InvoicesBoard({
 /**
  * One invoice, as a card.
  *
- * Same shell as a PO card so the two boards read identically. What differs is
- * what is on it: a PO card leads with the supplier because that is who is owed,
- * and this leads with the BUYER because that is who owes.
+ * Same shell as a PO card so the two boards read identically, down to the
+ * footer: full-width `.po-move` buttons in a column, the destructive one last.
+ * They were bare `.po-card-btn` elements with no rule behind that class at all,
+ * so every action on this board rendered as a raw browser button on a themed
+ * card — the single loudest reason the sell side looked older than the buy side.
+ *
+ * What differs from a PO card is what it says: a PO card leads with the supplier
+ * because that is who is owed, and this leads with the BUYER because that is who
+ * owes.
  */
 function InvoiceCard({
   invoice,
@@ -319,6 +400,16 @@ function InvoiceCard({
     invoice.status !== 'void' &&
     invoice.dueDate < new Date().toISOString().slice(0, 10)
 
+  /**
+   * Delete is offered only where it can succeed — the rule `deleteInvoice`
+   * enforces, mirrored onto the card exactly as the PO board mirrors its own.
+   * An invoice with a QuickBooks id has to be voided over there first, and a
+   * button whose only outcome is that explanation teaches the operator that
+   * delete is broken rather than that this invoice is posted.
+   */
+  const deletable = !invoice.qboId
+  const settled = invoice.status === 'paid' || invoice.status === 'void'
+
   return (
     <div
       className="po-card"
@@ -336,7 +427,7 @@ function InvoiceCard({
         {/* An unpaid invoice past its due date is the one thing on this board
             somebody would act on today, so it is the only badge. */}
         {overdue && (
-          <span className="po-card-dest" title={`Was due ${invoice.dueDate}`}>
+          <span className="po-card-dest" title={`Was due ${formatDay(invoice.dueDate)}`}>
             Overdue
           </span>
         )}
@@ -344,10 +435,14 @@ function InvoiceCard({
       <div className="po-card-supplier">{invoice.customerName}</div>
       <div className="po-card-figs">
         <span className="po-card-total mono">{formatMoney(invoice.total)}</span>
+        {/* paidAt is an INSTANT and dueDate is a calendar day, so they are
+            formatted by different functions on purpose. Slicing the instant to
+            ten characters and running it through formatDay would print the UTC
+            day, which after 5pm on the west coast is tomorrow. */}
         <span className="po-card-meta">
           {invoice.status === 'paid' && invoice.paidAt
-            ? `paid ${invoice.paidAt.slice(0, 10)}`
-            : `due ${invoice.dueDate}`}
+            ? `paid ${formatDate(invoice.paidAt)}`
+            : `due ${formatDay(invoice.dueDate)}`}
         </span>
       </div>
       <FreightLine
@@ -365,51 +460,117 @@ function InvoiceCard({
       />
 
       <div className="po-card-foot" onClick={(e) => e.stopPropagation()}>
-        <button className="po-card-btn" title="Open the invoice as a PDF" onClick={onPdf}>
-          <Icon name="FileText" size={13} />
-          PDF
-        </button>
-
         {invoice.status === 'draft' && (
-          <>
-            <button className="po-card-btn" disabled={busy} onClick={() => onMove('created')}>
-              To QuickBooks
-            </button>
-            <button className="po-card-btn" title="Delete this draft" onClick={onDelete}>
-              <Icon name="Trash2" size={13} />
-            </button>
-          </>
+          <button
+            type="button"
+            className="btn po-move"
+            disabled={busy}
+            onClick={() => onMove('created')}
+          >
+            To QuickBooks
+          </button>
         )}
 
         {invoice.status === 'created' && (
           <button
-            className="po-card-btn"
+            type="button"
+            className="btn po-move inv-move-send"
             disabled={busy || !invoice.email}
             title={invoice.email ? `Email it to ${invoice.email}` : 'That buyer has no email'}
             onClick={onSend}
           >
-            <Icon name="Mail" size={13} />
             Send
           </button>
         )}
 
-        {invoice.status !== 'paid' && invoice.status !== 'void' && (
-          <button className="po-card-btn" disabled={busy} onClick={() => onMove('paid')}>
-            <Icon name="Check" size={13} />
-            Paid
+        {!settled && (
+          <button
+            type="button"
+            className="btn po-move inv-move-paid"
+            disabled={busy}
+            onClick={() => onMove('paid')}
+          >
+            Mark paid
           </button>
         )}
 
+        <button
+          type="button"
+          className="btn po-move"
+          title="Open the invoice as a PDF"
+          onClick={onPdf}
+        >
+          Open as PDF
+        </button>
+
         {invoice.qboId && (
           <button
-            className="po-card-btn"
-            title="Open it in QuickBooks"
+            type="button"
+            className="btn po-move"
             onClick={() => void api.invoices.openInQbo(invoice.id)}
           >
-            <Icon name="ExternalLink" size={13} />
+            Open in QuickBooks
+          </button>
+        )}
+
+        {deletable && (
+          <button
+            type="button"
+            className="btn po-move po-move-remove"
+            title={`Delete invoice ${invoice.invoiceNumber || ''}`.trim()}
+            onClick={onDelete}
+          >
+            Delete
           </button>
         )}
       </div>
     </div>
+  )
+}
+
+/**
+ * Confirm a delete, by showing what is about to go.
+ *
+ * The number, the buyer and the amount, because those are what somebody checks
+ * before agreeing — a dialog that only asks "are you sure?" is answered yes by
+ * reflex. There is no undo behind this and no trash to fish it out of, which is
+ * the sentence the modal ends on.
+ */
+function DeleteInvoiceModal({
+  invoice,
+  busy,
+  onClose,
+  onConfirm
+}: {
+  invoice: Invoice
+  busy: boolean
+  onClose: () => void
+  onConfirm: () => void | Promise<void>
+}): JSX.Element {
+  return (
+    <Modal
+      title={`Delete invoice ${invoice.invoiceNumber || ''}`.trim()}
+      subtitle="This cannot be undone"
+      onClose={() => (busy ? undefined : onClose())}
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose} disabled={busy}>
+            Keep it
+          </Button>
+          <Button variant="danger" icon="Trash2" loading={busy} onClick={() => void onConfirm()}>
+            Delete invoice
+          </Button>
+        </>
+      }
+    >
+      <p className="fin-confirm-lead">
+        <b>{invoice.customerName}</b> · {formatMoney(invoice.total)} · dated{' '}
+        {formatDay(invoice.invoiceDate)}
+      </p>
+      <p className="fin-confirm-lead">
+        The invoice and its line items are removed from this app for good. Nothing is archived
+        and there is no undo — if you only want it off the board, mark it <b>void</b> instead.
+      </p>
+    </Modal>
   )
 }

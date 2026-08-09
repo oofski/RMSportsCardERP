@@ -2251,6 +2251,103 @@ function migrate(database: Database.Database): void {
   }
   setMeta(database, 'schema_version', '57')
 
+  // v58: everything the QuickBooks invoice FORM has that this app was not
+  // sending, plus an honest record of whether the push worked.
+  //
+  // ## The bill-to address
+  //
+  // Their invoice screen shows a name, a street, and a city/state/zip, and this
+  // app held none of it. Two places, on purpose: the buyer record carries the
+  // address they use, and the invoice SNAPSHOTS it — the same rule that already
+  // applies to customer_name. A buyer who moves next year must not rewrite where
+  // last year's document says it went.
+  //
+  // Nullable throughout, and a partial address is legal. A buyer with a city and
+  // no street is a real record here, and refusing to store one only means the
+  // address gets typed into the memo instead. The posting code falls back to the
+  // address QuickBooks already holds for the matched customer, which is exactly
+  // what their own form does when you pick somebody.
+  for (const table of ['invoice_customers', 'invoices']) {
+    addColumnIfMissing(database, table, 'bill_line1', 'TEXT')
+    addColumnIfMissing(database, table, 'bill_line2', 'TEXT')
+    addColumnIfMissing(database, table, 'bill_city', 'TEXT')
+    // State or province. Intuit calls this CountrySubDivisionCode; nothing on a
+    // screen in this app should have to.
+    addColumnIfMissing(database, table, 'bill_region', 'TEXT')
+    addColumnIfMissing(database, table, 'bill_postal_code', 'TEXT')
+    addColumnIfMissing(database, table, 'bill_country', 'TEXT')
+  }
+
+  // ## The line's product, and its SKU
+  //
+  // An invoice line was free text: a product name somebody typed. That is the
+  // reason posting could only ever match a QuickBooks item BY NAME, which fails
+  // the moment an item is renamed there — and fails silently in the worse
+  // direction if a different item has since taken the old name.
+  //
+  // product_id links the line to the catalog. sku is SNAPSHOTTED beside it, not
+  // joined, for the same reason the buyer's name is: a SKU corrected next year
+  // must not rewrite a document already sent. The posting code matches on the
+  // SKU first and only falls back to the name.
+  //
+  // Both stay nullable, and that is not laziness. Plenty of what gets billed
+  // here is a service or a one-off that was never stock, and a line typed
+  // freehand has to keep working exactly as it did.
+  addColumnIfMissing(database, 'invoice_lines', 'product_id', 'TEXT')
+  addColumnIfMissing(database, 'invoice_lines', 'sku', 'TEXT')
+
+  // ## Whether the push worked
+  //
+  // An invoice now goes to QuickBooks on save, and the local write happens
+  // FIRST. That ordering is the whole point: a refused push must leave a saved
+  // invoice somebody can retry, never a lost one. These columns are what make a
+  // retry possible instead of a re-type.
+  //
+  // qbo_push_state is none / pending / ok / failed. Pending is written before
+  // the network call and cleared after it, so a crash between the two leaves a
+  // row saying "we may have posted this" rather than one saying "never tried" —
+  // the difference between checking QuickBooks and creating the invoice twice.
+  addColumnIfMissing(database, 'invoices', 'qbo_push_state', "TEXT NOT NULL DEFAULT 'none'")
+  addColumnIfMissing(database, 'invoices', 'qbo_push_error', 'TEXT')
+  addColumnIfMissing(database, 'invoices', 'qbo_push_attempted_at', 'TEXT')
+  addColumnIfMissing(database, 'invoices', 'qbo_push_attempts', 'INTEGER NOT NULL DEFAULT 0')
+
+  // Anything already in QuickBooks was pushed successfully, whenever that was.
+  // Without this every historic invoice reads as never-attempted and would show
+  // up on a retry list that would then post it a second time.
+  database
+    .prepare(`UPDATE invoices SET qbo_push_state = 'ok' WHERE qbo_id IS NOT NULL AND qbo_id != ''`)
+    .run()
+
+  // ## What QuickBooks says about it now
+  //
+  // Read back, never written by us. Stored with the same provenance discipline
+  // as the carrier tracking columns above, and for the same reason: the answer
+  // comes from somebody else's system over a network allowed to be down, so a
+  // reading that FAILS must not overwrite one that worked. checked_at means we
+  // got an answer; attempted_at means we asked.
+  //
+  // Three of the five states the owner asked for are genuinely in this API and
+  // two are not. Sent is EmailStatus / DeliveryInfo, paid is Balance against
+  // TotalAmt, open is the absence of both. VIEWED BY THE PAYER IS NOT EXPOSED AT
+  // ALL — it is an e-invoicing signal in their web UI with no field behind it —
+  // and PAYOUT SENT belongs to QuickBooks Payments, a different API behind a
+  // scope this app does not request. There are deliberately no columns for those
+  // two: a column that can never be filled is a promise the screen would make
+  // and the API would break. See @shared/invoices for the full accounting.
+  addColumnIfMissing(database, 'invoices', 'qbo_email_status', 'TEXT')
+  addColumnIfMissing(database, 'invoices', 'qbo_delivered_at', 'TEXT')
+  addColumnIfMissing(database, 'invoices', 'qbo_balance', 'REAL')
+  addColumnIfMissing(database, 'invoices', 'qbo_total_amt', 'REAL')
+  // v3 has no status field for a voided invoice. The recognised signature is a
+  // zeroed invoice whose private note begins with the word Voided, which is a
+  // heuristic and is only ever allowed to move an invoice INTO void.
+  addColumnIfMissing(database, 'invoices', 'qbo_voided', 'INTEGER NOT NULL DEFAULT 0')
+  addColumnIfMissing(database, 'invoices', 'qbo_status_checked_at', 'TEXT')
+  addColumnIfMissing(database, 'invoices', 'qbo_status_attempted_at', 'TEXT')
+  addColumnIfMissing(database, 'invoices', 'qbo_status_error', 'TEXT')
+  setMeta(database, 'schema_version', '58')
+
   // Payroll, once, for whoever owns the company.
   //
   // Seeded rather than left to be typed because the owner named it, named its

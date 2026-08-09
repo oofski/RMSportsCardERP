@@ -1,33 +1,51 @@
 import { useMemo, useState } from 'react'
 import type { InventoryProduct } from '@shared/types'
 import type { Carrier, PaymentTiming } from '@shared/freight'
-import type { InvoiceCustomer, InvoiceDetail, InvoiceTerms } from '@shared/invoices'
+import { carrierLabel } from '@shared/freight'
+import type {
+  InvoiceCustomer,
+  InvoiceDetail,
+  InvoiceLine,
+  InvoiceStatus,
+  InvoiceTerms,
+  NewInvoiceLine
+} from '@shared/invoices'
 import { INVOICE_TERMS, dueDateFor, lineAmount, money } from '@shared/invoices'
 import { api } from '../../lib/api'
 import { useToast } from '../../components/Toast'
 import { Button, Field, Input, Modal, Select } from '../../components/ui'
 import { Icon } from '../../components/Icon'
-import { formatMoney } from '../../lib/format'
+import { formatDate, formatMoney } from '../../lib/format'
 import { FreightFields } from '../../components/FreightFields'
+import { CategoryLogo } from '../inventory/CategoryLogo'
 import { POCatalogTypeahead } from '../invoicing/POCatalogTypeahead'
 import { CustomerTypeahead } from './CustomerTypeahead'
+import { InvoiceStatusChip, formatDay } from './helpers'
 
 /**
- * Build an invoice — the mirror of "New purchase order", on purpose.
+ * One invoice, in the shape of a purchase order.
  *
- * The owner pointed at the PO modal and said "this". So this is that: the same
- * dialog, the same header row of fields, the SAME product typeahead component,
- * the same line table with a running total, the same footer. A PO adds catalog
- * products with a BUY price; this adds the same catalog products with a SELL
- * price. Somebody who can raise a PO can raise an invoice without being taught
- * anything.
+ * The owner pointed at the PO modal and said "this", so this is that, down to
+ * the class names: the same header block with the number, the party and a
+ * status chip; the same compact date strip; the same shipping fields with their
+ * helper text and the same boxed PAYMENT pair; the same line rows with a
+ * product name over its SKU; the same grand total; the same footer.
+ *
+ * ## Two faces, because the backend has two answers
+ *
+ * A DRAFT is a form. Anything past draft is a RECEIPT — read-only, laid out
+ * exactly like `PurchaseOrderReceipt`. That is not a styling preference:
+ * `saveInvoice` refuses any invoice that has already gone to QuickBooks, so the
+ * editable form on a posted invoice was a screenful of inputs whose only
+ * possible outcome was an error at the end. Showing what it says instead is the
+ * honest version of the same screen.
  *
  * ## Every field QuickBooks needs, and no more
  *
  * Invoice number, customer, email, terms, invoice date, due date, location,
  * memo, message, class — Intuit's own import template, which is the definition
- * of "enough to create it over there". Nothing else is asked for, because a
- * field that is not on their template is a field that cannot travel.
+ * of "enough to create it over there". A field that is not on their template is
+ * a field that cannot travel.
  *
  * ## Picking a buyer fills five things in
  *
@@ -40,7 +58,22 @@ import { CustomerTypeahead } from './CustomerTypeahead'
  *  controlled and empty-while-typing is allowed, exactly as the PO modal does. */
 interface DraftLine {
   key: string
+  /**
+   * The catalog product this line came from. Empty for a line somebody typed
+   * freehand, which stays legal — plenty of what gets billed here is a service
+   * that was never stock. It is what the picker de-duplicates on, so an empty
+   * one must never match another empty one; see `addLine`.
+   */
+  productId: string
   item: string
+  sku: string
+  /**
+   * Shown beside the SKU while the line is being built. Not stored on the saved
+   * line — `InvoiceLine` snapshots the name and SKU because those print on the
+   * document, and a category does not — so it is blank on reopen rather than
+   * fetched back, which would be a catalog read per line to decorate a subtitle.
+   */
+  category: string
   description: string
   quantity: string
   rate: string
@@ -55,21 +88,46 @@ function today(): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
 }
 
+/**
+ * Quantity × rate, unless somebody has taken the amount over.
+ *
+ * Pulled out of the change handler because the picker bumps a quantity too, and
+ * a second copy of this rule there was how adding the same product twice left a
+ * line whose amount still said one unit.
+ */
+function withAmount(line: DraftLine): DraftLine {
+  if (line.amountEdited) return line
+  const q = parseFloat(line.quantity)
+  const r = parseFloat(line.rate)
+  if (!Number.isFinite(q) || !Number.isFinite(r)) return line
+  return { ...line, amount: String(lineAmount(q, r)) }
+}
+
 export function CreateInvoiceModal({
   invoice,
   customers,
   nextNumber,
+  thumbnails,
   onClose,
   onSaved,
+  onDelete,
   onOpenQuickBooks
 }: {
-  /** Null for a new one; an existing draft to edit otherwise. */
+  /** Null for a new one; an existing invoice to open otherwise. */
   invoice: InvoiceDetail | null
   customers: InvoiceCustomer[]
   /** Suggested number for a new invoice, already fetched by the board. */
   nextNumber: string
+  /** Catalog thumbnails by product id, loaded once by the board. */
+  thumbnails: Record<string, string>
   onClose: () => void
   onSaved: () => void | Promise<void>
+  /**
+   * Ask to delete this invoice. Absent when there is nothing to delete yet (a
+   * new invoice) — the board owns the confirmation, because it also owns the
+   * list that has to lose a row afterwards.
+   */
+  onDelete?: (invoice: InvoiceDetail) => void
   onOpenQuickBooks: () => void
 }): JSX.Element {
   const toast = useToast()
@@ -96,7 +154,10 @@ export function CreateInvoiceModal({
   const [lines, setLines] = useState<DraftLine[]>(() =>
     (invoice?.lines ?? []).map((l) => ({
       key: l.id,
+      productId: l.productId ?? '',
       item: l.item,
+      sku: l.sku ?? '',
+      category: '',
       description: l.description ?? '',
       quantity: String(l.quantity),
       rate: String(l.rate),
@@ -106,6 +167,14 @@ export function CreateInvoiceModal({
   )
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+
+  /**
+   * Whether this screen is a form or a receipt.
+   *
+   * The condition is `saveInvoice`'s, not a guess: it throws on any invoice that
+   * is no longer a draft, so anything else has to be shown rather than edited.
+   */
+  const editable = !invoice || invoice.status === 'draft'
 
   /** Choosing a saved buyer takes everything the relationship already knows. */
   const pick = (c: InvoiceCustomer): void => {
@@ -136,23 +205,47 @@ export function CreateInvoiceModal({
     setDueDate(dueDateFor(d, terms))
   }
 
-  /** A product from the SAME catalog typeahead the PO modal uses. */
+  /**
+   * Append a catalog pick, exactly as `CreatePurchaseOrderModal` does it: the
+   * product's own name, SKU and category come across, the sale price is offered
+   * as the rate, and picking something already on the invoice bumps its
+   * quantity rather than opening a second row for the same box.
+   *
+   * The SKU is the point of the change. Before this the picker put a NAME on
+   * the line and dropped everything else, so two products filed a word apart
+   * were indistinguishable on the finished document — which is the whole reason
+   * the PO rows carry a SKU under the name.
+   */
   const addLine = (p: InventoryProduct): void => {
-    setLines((ls) => [
-      ...ls,
-      {
-        key: `${p.id}-${ls.length}-${p.sku ?? ''}`,
-        item: p.name,
-        description: '',
-        quantity: '1',
-        // The catalog's sale price is OFFERED. It is a starting point, not the
-        // deal — which is why the amount stops following it the moment somebody
-        // types over either field.
-        rate: p.salePrice ? String(p.salePrice) : '',
-        amount: p.salePrice ? String(money(p.salePrice)) : '',
-        amountEdited: false
+    setLines((prev) => {
+      // Only a real id counts as "already here". Saved lines carry an empty one
+      // and would otherwise all collapse onto whichever was picked first.
+      if (p.id && prev.some((l) => l.productId === p.id)) {
+        return prev.map((l) =>
+          l.productId === p.id
+            ? withAmount({ ...l, quantity: String((parseFloat(l.quantity) || 0) + 1) })
+            : l
+        )
       }
-    ])
+      return [
+        ...prev,
+        withAmount({
+          key: `${p.id}-${prev.length}-${p.sku ?? ''}`,
+          productId: p.id,
+          item: p.name,
+          sku: p.sku ?? '',
+          category: p.category ?? '',
+          description: '',
+          quantity: '1',
+          // The catalog's sale price is OFFERED. It is a starting point, not the
+          // deal — which is why the amount stops following it the moment
+          // somebody types over either field.
+          rate: p.salePrice ? String(p.salePrice) : '',
+          amount: '',
+          amountEdited: false
+        })
+      ]
+    })
   }
 
   const patch = (key: string, next: Partial<DraftLine>): void => {
@@ -163,13 +256,7 @@ export function CreateInvoiceModal({
         // Quantity and rate recompute the amount only while nobody has taken it
         // over. Once they have, it is the agreed price and this form stops
         // arguing with the person who made the deal.
-        if (('quantity' in next || 'rate' in next) && !merged.amountEdited) {
-          const q = parseFloat(merged.quantity)
-          const r = parseFloat(merged.rate)
-          merged.amount =
-            Number.isFinite(q) && Number.isFinite(r) ? String(lineAmount(q, r)) : merged.amount
-        }
-        return merged
+        return 'quantity' in next || 'rate' in next ? withAmount(merged) : merged
       })
     )
   }
@@ -197,15 +284,23 @@ export function CreateInvoiceModal({
     service: service?.trim() || null,
     trackingNumber: trackingNumber?.trim() || null,
     paymentTiming,
-    lines: lines.map((l) => ({
-      item: l.item,
-      description: l.description || null,
-      quantity: parseFloat(l.quantity) || 0,
-      rate: parseFloat(l.rate) || 0,
-      amount: parseFloat(l.amount) || 0,
-      taxRate: null,
-      className: null
-    }))
+    // productId and sku travel with every line. They are what makes the SKU
+    // under a product name survive a reload — and what lets the posting code
+    // match a QuickBooks Item on its SKU before falling back to a name somebody
+    // may have edited over there.
+    lines: lines.map(
+      (l): NewInvoiceLine => ({
+        item: l.item,
+        productId: l.productId || null,
+        sku: l.sku || null,
+        description: l.description || null,
+        quantity: parseFloat(l.quantity) || 0,
+        rate: parseFloat(l.rate) || 0,
+        amount: parseFloat(l.amount) || 0,
+        taxRate: null,
+        className: null
+      })
+    )
   })
 
   /** Validate here so the message names the line, not just "something is wrong". */
@@ -239,7 +334,15 @@ export function CreateInvoiceModal({
     return res.data
   }
 
-  const saveDraft = async (): Promise<void> => {
+  /**
+   * Save and close. The only Save there is.
+   *
+   * It was "Save draft" beside a "PDF" that also saved, which read as three
+   * ways out of one form and hid which of them was the ordinary one. The PDF
+   * lives on the board card now, where it can be reached without opening
+   * anything.
+   */
+  const saveIt = async (): Promise<void> => {
     if (busy) return
     setBusy(true)
     try {
@@ -292,229 +395,429 @@ export function CreateInvoiceModal({
     }
   }
 
-  const makePdf = async (): Promise<void> => {
-    if (busy) return
-    setBusy(true)
-    try {
-      const saved = await save()
-      if (!saved) return
-      await onSaved()
-      await api.invoices.openPdf(saved.id)
-    } finally {
-      setBusy(false)
-    }
-  }
+  /**
+   * Delete is offered only where it can succeed.
+   *
+   * `deleteInvoice` refuses anything with a QuickBooks id — deleting it here
+   * would leave the invoice in the accounts with nothing on this side — and the
+   * PO board settled the same question the same way: a button whose only
+   * outcome is a refusal teaches the operator that delete is broken rather than
+   * that this invoice is posted. Void it in QuickBooks instead.
+   */
+  const deletable = invoice !== null && onDelete !== undefined && !invoice.qboId
 
   return (
     <Modal
-      title={invoice ? `Invoice ${invoice.invoiceNumber || ''}` : 'New invoice'}
-      subtitle="Pick a buyer, add what they bought, and set the price you agreed."
+      title={
+        invoice ? `Invoice ${invoice.qboDocNumber || invoice.invoiceNumber || ''}` : 'New invoice'
+      }
+      subtitle={
+        editable
+          ? 'Pick a buyer, add what they bought, and set the price you agreed.'
+          : // Not "already in QuickBooks": an invoice settled in cash goes
+            // draft → paid without ever being posted, and is just as uneditable.
+            `${invoice?.customerName ?? ''} · no longer a draft, so this is a record rather than a form`
+      }
       onClose={onClose}
       wide
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>
-            Cancel
+            {editable ? 'Cancel' : 'Close'}
           </Button>
-          <Button variant="secondary" icon="FileText" loading={busy} onClick={makePdf}>
-            PDF
-          </Button>
-          <Button variant="secondary" icon="Save" loading={busy} onClick={saveDraft}>
-            Save draft
-          </Button>
-          <Button
-            variant="primary"
-            icon="ReceiptText"
-            loading={busy}
-            disabled={lines.length === 0}
-            onClick={createInQbo}
-          >
-            Create in QuickBooks
-          </Button>
+          {deletable && (
+            <Button
+              variant="danger"
+              icon="Trash2"
+              disabled={busy}
+              onClick={() => onDelete?.(invoice)}
+            >
+              Delete
+            </Button>
+          )}
+          {editable && (
+            <>
+              <Button variant="secondary" icon="Save" loading={busy} onClick={saveIt}>
+                Save
+              </Button>
+              <Button
+                variant="primary"
+                icon="ReceiptText"
+                loading={busy}
+                disabled={lines.length === 0}
+                onClick={createInQbo}
+              >
+                Create in QuickBooks
+              </Button>
+            </>
+          )}
         </>
       }
     >
       {error && <div className="auth-alert">{error}</div>}
 
-      {/* ---- Who, and on what terms ------------------------------------- */}
-      <CustomerTypeahead
-        customers={customers}
-        value={customerName}
-        onPick={pick}
-        onType={typeName}
+      {/* Fed from the LIVE fields, not from `invoice`. A header sourced from the
+          saved record kept showing the buyer and dates the invoice had when it
+          was opened, so retyping the buyer left the top of the modal naming
+          somebody else until the form was saved and reopened. */}
+      <InvoiceHead
+        number={invoice?.qboDocNumber || invoiceNumber}
+        customerName={customerName}
+        invoiceDate={invoiceDate}
+        dueDate={dueDate}
+        location={location}
+        status={invoice?.status ?? 'draft'}
       />
 
-      <div className="field-row">
-        <Field label="Email" hint="Where QuickBooks sends it">
-          <Input
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="buyer@example.com"
+      {editable ? (
+        <>
+          {/* ---- Who, and on what terms --------------------------------- */}
+          <CustomerTypeahead
+            customers={customers}
+            value={customerName}
+            onPick={pick}
+            onType={typeName}
           />
-        </Field>
-        <Field label="Terms" hint="Sets the due date">
-          <Select
-            value={terms}
-            onChange={(e) => setTermsAndDue(e.target.value as InvoiceTerms)}
-          >
-            {INVOICE_TERMS.map((t) => (
-              <option key={t} value={t}>
-                {t}
-              </option>
-            ))}
-          </Select>
-        </Field>
-        <Field label="Invoice number" hint="Yours, unless QuickBooks renumbers it">
-          <Input value={invoiceNumber} onChange={(e) => setInvoiceNumber(e.target.value)} />
-        </Field>
-      </div>
 
-      <div className="field-row">
-        <Field label="Invoice date">
-          <Input
-            type="date"
-            value={invoiceDate}
-            onChange={(e) => setDateAndDue(e.target.value)}
-          />
-        </Field>
-        <Field label="Due date" hint="From the terms — change it if you agreed something else">
-          <Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
-        </Field>
-        <Field label="Location" hint="Optional">
-          <Input
-            value={location}
-            onChange={(e) => setLocation(e.target.value)}
-            placeholder="e.g. West"
-          />
-        </Field>
-      </div>
-
-      {/* ---- How it gets there, and when it gets paid for ------------------ */}
-      <FreightFields
-        carrier={carrier}
-        service={service}
-        trackingNumber={trackingNumber}
-        paymentTiming={paymentTiming}
-        hint="Who is taking it to them"
-        onChange={(patch) => {
-          if ('carrier' in patch) setCarrier(patch.carrier ?? null)
-          if ('service' in patch) setService(patch.service ?? null)
-          if ('trackingNumber' in patch) setTrackingNumber(patch.trackingNumber ?? null)
-          if ('paymentTiming' in patch) setPaymentTiming(patch.paymentTiming ?? null)
-        }}
-      />
-
-      {/* ---- What they are buying ---------------------------------------- */}
-      <POCatalogTypeahead onSelect={addLine} />
-
-      {lines.length === 0 ? (
-        <div className="po-lines-empty">
-          No line items yet — search your inventory above to add products.
-        </div>
-      ) : (
-        <div className="po-lines">
-          <table className="data po-lines-table">
-            <thead>
-              <tr>
-                <th>Product</th>
-                <th>Description</th>
-                <th className="num">Qty</th>
-                <th className="num">Rate</th>
-                <th className="num">Amount</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {lines.map((l) => (
-                <tr key={l.key}>
-                  <td>
-                    <div className="po-line-name">{l.item}</div>
-                  </td>
-                  <td>
-                    <Input
-                      value={l.description}
-                      placeholder="Optional"
-                      onChange={(e) => patch(l.key, { description: e.target.value })}
-                    />
-                  </td>
-                  <td className="num">
-                    <Input
-                      value={l.quantity}
-                      inputMode="decimal"
-                      className="po-qty-input"
-                      onChange={(e) => patch(l.key, { quantity: e.target.value })}
-                    />
-                  </td>
-                  <td className="num">
-                    <Input
-                      value={l.rate}
-                      inputMode="decimal"
-                      placeholder="0.00"
-                      className="po-price-input"
-                      onChange={(e) => patch(l.key, { rate: e.target.value })}
-                    />
-                  </td>
-                  <td className="num">
-                    <Input
-                      value={l.amount}
-                      inputMode="decimal"
-                      placeholder="0.00"
-                      className="po-price-input"
-                      title={
-                        l.amountEdited
-                          ? `Agreed price — quantity × rate would be ${formatMoney(
-                              lineAmount(parseFloat(l.quantity) || 0, parseFloat(l.rate) || 0)
-                            )}`
-                          : undefined
-                      }
-                      onChange={(e) => patch(l.key, { amount: e.target.value, amountEdited: true })}
-                    />
-                  </td>
-                  <td className="num">
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm"
-                      title="Remove line"
-                      onClick={() => setLines((ls) => ls.filter((x) => x.key !== l.key))}
-                    >
-                      <Icon name="Trash2" size={15} />
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <div className="po-total">
-            <span>Total</span>
-            <span className="mono">{formatMoney(total)}</span>
+          <div className="field-row">
+            <Field label="Email" hint="Where QuickBooks sends it">
+              <Input
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="buyer@example.com"
+              />
+            </Field>
+            <Field label="Terms" hint="Sets the due date">
+              <Select value={terms} onChange={(e) => setTermsAndDue(e.target.value as InvoiceTerms)}>
+                {INVOICE_TERMS.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Field label="Invoice number" hint="Yours, unless QuickBooks renumbers it">
+              <Input value={invoiceNumber} onChange={(e) => setInvoiceNumber(e.target.value)} />
+            </Field>
           </div>
+
+          <div className="field-row">
+            <Field label="Invoice date" hint="The day it was billed">
+              <Input
+                type="date"
+                value={invoiceDate}
+                onChange={(e) => setDateAndDue(e.target.value)}
+              />
+            </Field>
+            <Field label="Due date" hint="From the terms — change it if you agreed something else">
+              <Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
+            </Field>
+            <Field label="Location" hint="Optional">
+              <Input
+                value={location}
+                onChange={(e) => setLocation(e.target.value)}
+                placeholder="e.g. West"
+              />
+            </Field>
+          </div>
+
+          {/* ---- How it gets there, and when it gets paid for ------------- */}
+          <FreightFields
+            carrier={carrier}
+            service={service}
+            trackingNumber={trackingNumber}
+            paymentTiming={paymentTiming}
+            hint="Who is taking it to them"
+            onChange={(p) => {
+              if ('carrier' in p) setCarrier(p.carrier ?? null)
+              if ('service' in p) setService(p.service ?? null)
+              if ('trackingNumber' in p) setTrackingNumber(p.trackingNumber ?? null)
+              if ('paymentTiming' in p) setPaymentTiming(p.paymentTiming ?? null)
+            }}
+          />
+
+          {/* ---- What they are buying ------------------------------------ */}
+          <POCatalogTypeahead onSelect={addLine} />
+
+          {lines.length === 0 ? (
+            <div className="po-lines-empty">
+              No line items yet — search your inventory above to add products.
+            </div>
+          ) : (
+            <div className="po-lines">
+              <table className="data po-lines-table">
+                <thead>
+                  <tr>
+                    <th>Product</th>
+                    <th className="num">Qty</th>
+                    <th className="num">Rate</th>
+                    <th className="num">Amount</th>
+                    <th aria-label="Remove" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {lines.map((l) => (
+                    <tr key={l.key}>
+                      <td>
+                        <div className="po-line-name">{l.item}</div>
+                        {(l.sku || l.category) && (
+                          <div className="po-line-sub">
+                            {l.sku && <span className="mono">{l.sku}</span>}
+                            {l.sku && l.category && <span> · </span>}
+                            {l.category && <span>{l.category}</span>}
+                          </div>
+                        )}
+                        {/* Description sits UNDER the name rather than in a
+                            column of its own. Six columns inside a 620px modal
+                            squeezed the money to three characters wide, and the
+                            description is the one field on the row that is
+                            usually empty. */}
+                        <Input
+                          value={l.description}
+                          placeholder="Description (optional)"
+                          className="inv-line-desc"
+                          onChange={(e) => patch(l.key, { description: e.target.value })}
+                        />
+                      </td>
+                      <td className="num">
+                        <Input
+                          value={l.quantity}
+                          inputMode="decimal"
+                          className="po-qty-input"
+                          onChange={(e) => patch(l.key, { quantity: e.target.value })}
+                        />
+                      </td>
+                      <td className="num">
+                        <Input
+                          value={l.rate}
+                          inputMode="decimal"
+                          placeholder="0.00"
+                          className="po-price-input"
+                          onChange={(e) => patch(l.key, { rate: e.target.value })}
+                        />
+                      </td>
+                      <td className="num">
+                        <Input
+                          value={l.amount}
+                          inputMode="decimal"
+                          placeholder="0.00"
+                          className="po-price-input"
+                          title={
+                            l.amountEdited
+                              ? `Agreed price — quantity × rate would be ${formatMoney(
+                                  lineAmount(parseFloat(l.quantity) || 0, parseFloat(l.rate) || 0)
+                                )}`
+                              : undefined
+                          }
+                          onChange={(e) =>
+                            patch(l.key, { amount: e.target.value, amountEdited: true })
+                          }
+                        />
+                      </td>
+                      <td className="num">
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          title="Remove line"
+                          onClick={() => setLines((ls) => ls.filter((x) => x.key !== l.key))}
+                        >
+                          <Icon name="Trash2" size={15} />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div className="po-total">
+                <span>Grand total</span>
+                <span className="mono">{formatMoney(total)}</span>
+              </div>
+            </div>
+          )}
+
+          {/* ---- What it says -------------------------------------------- */}
+          <div className="field-row">
+            <Field label="Message on the invoice" hint="The buyer sees this">
+              <Input
+                value={message}
+                onChange={(e) => setMessage(e.target.value)}
+                placeholder="e.g. Thank you for your business!"
+              />
+            </Field>
+            <Field label="Memo" hint="Internal — never shown to them">
+              <Input
+                value={memo}
+                onChange={(e) => setMemo(e.target.value)}
+                placeholder="e.g. Paid half up front"
+              />
+            </Field>
+            <Field label="Class" hint="Optional, for QuickBooks">
+              <Input
+                value={className}
+                onChange={(e) => setClassName(e.target.value)}
+                placeholder="e.g. Class A:Subclass B"
+              />
+            </Field>
+          </div>
+        </>
+      ) : (
+        invoice && <InvoiceReceipt invoice={invoice} thumbnails={thumbnails} />
+      )}
+    </Modal>
+  )
+}
+
+/**
+ * The header every invoice gets, form or receipt: the number, who owes, when it
+ * was billed and when it falls due, and where it has got to.
+ *
+ * Same block as `po-receipt-head` — number large and monospaced, party under
+ * it, dates under that, status chip pinned right — because a person who has
+ * opened a PO should recognise this before reading a word of it.
+ */
+function InvoiceHead({
+  number,
+  customerName,
+  invoiceDate,
+  dueDate,
+  location,
+  status
+}: {
+  number: string
+  customerName: string
+  invoiceDate: string
+  dueDate: string
+  location: string
+  status: InvoiceStatus
+}): JSX.Element {
+  return (
+    <div className="po-receipt-head">
+      <div className="po-rh-left">
+        <div className="po-rh-num mono">{number || 'No number'}</div>
+        {/* Says so rather than collapsing to nothing: an empty line here reads
+            as a rendering fault, and "who is this for" is the one question a
+            brand-new invoice most needs asked. */}
+        <div className="po-rh-supplier">{customerName || 'No buyer yet'}</div>
+        <div className="po-rh-date">
+          {formatDay(invoiceDate)} · due {formatDay(dueDate)}
+          {location ? ` · ${location}` : ''}
+        </div>
+      </div>
+      <InvoiceStatusChip status={status} />
+    </div>
+  )
+}
+
+/**
+ * A posted invoice as a document: the date strip, how it travels, the lines
+ * with a thumbnail and a SKU under each name, and the grand total.
+ *
+ * Deliberately the same markup as `PurchaseOrderReceipt` rather than a
+ * lookalike — the grid that lines those five columns up lives in `.po-receipt-*`
+ * and a second copy of it would drift the first time a column moved.
+ */
+function InvoiceReceipt({
+  invoice,
+  thumbnails
+}: {
+  invoice: InvoiceDetail
+  thumbnails: Record<string, string>
+}): JSX.Element {
+  const shipsWith = [carrierLabel(invoice.carrier), invoice.service].filter(Boolean).join(' · ')
+
+  return (
+    <div className="po-receipt">
+      <div className="po-receipt-timeline">
+        <TimeRow icon="ReceiptText" label="Invoiced" value={formatDay(invoice.invoiceDate)} />
+        <TimeRow icon="CalendarClock" label="Due" value={formatDay(invoice.dueDate)} />
+        <TimeRow
+          icon="DollarSign"
+          label="Paid"
+          value={invoice.paidAt ? formatDate(invoice.paidAt) : '—'}
+        />
+      </div>
+
+      {/* Shipping is READ-ONLY here, which is a gap rather than a decision: the
+          buy side can edit a PO's carrier from its receipt because
+          api.purchaseOrders.setFreight exists, and there is no invoice
+          equivalent yet. A tracking number typically arrives after the invoice
+          has been sent, so this is exactly where it would be typed. */}
+      {(shipsWith || invoice.trackingNumber) && (
+        <div className="po-receipt-timeline">
+          <TimeRow icon="Truck" label="Ships with" value={shipsWith || '—'} />
+          <TimeRow icon="Hash" label="Tracking" value={invoice.trackingNumber || '—'} mono />
         </div>
       )}
 
-      {/* ---- What it says ------------------------------------------------ */}
-      <div className="field-row">
-        <Field label="Message on the invoice" hint="The buyer sees this">
-          <Input
-            value={message}
-            onChange={(e) => setMessage(e.target.value)}
-            placeholder="e.g. Thank you for your business!"
-          />
-        </Field>
-        <Field label="Memo" hint="Internal — never shown to them">
-          <Input
-            value={memo}
-            onChange={(e) => setMemo(e.target.value)}
-            placeholder="e.g. Paid half up front"
-          />
-        </Field>
-        <Field label="Class" hint="Optional, for QuickBooks">
-          <Input
-            value={className}
-            onChange={(e) => setClassName(e.target.value)}
-            placeholder="e.g. Class A:Subclass B"
-          />
-        </Field>
+      {invoice.message && <div className="po-receipt-notes">{invoice.message}</div>}
+
+      <div className="po-receipt-lines">
+        <div className="po-receipt-line po-receipt-line-head">
+          <span className="po-rl-img" aria-hidden="true" />
+          <span className="po-rl-name">Product</span>
+          <span className="po-rl-qty">Qty</span>
+          <span className="po-rl-price">Rate</span>
+          <span className="po-rl-total">Amount</span>
+        </div>
+        {invoice.lines.map((line) => (
+          <ReceiptLine key={line.id} line={line} thumbnails={thumbnails} />
+        ))}
       </div>
-    </Modal>
+
+      <div className="po-grand-total">
+        <span>Grand total</span>
+        <span className="mono">{formatMoney(invoice.total)}</span>
+      </div>
+    </div>
+  )
+}
+
+function TimeRow({
+  icon,
+  label,
+  value,
+  mono
+}: {
+  icon: string
+  label: string
+  value: string
+  mono?: boolean
+}): JSX.Element {
+  return (
+    <div className="po-rt-row">
+      <Icon name={icon} size={14} />
+      <span className="po-rt-label">{label}</span>
+      <span className={`po-rt-date${mono ? ' mono' : ''}`}>{value}</span>
+    </div>
+  )
+}
+
+function ReceiptLine({
+  line,
+  thumbnails
+}: {
+  line: InvoiceLine
+  thumbnails: Record<string, string>
+}): JSX.Element {
+  const thumb = line.productId ? thumbnails[line.productId] : undefined
+
+  return (
+    <div className="po-receipt-line">
+      <span className="po-rl-img po-line-img">
+        {/* A line typed freehand has no product and so no picture. The category
+            glyph is the same fallback the PO receipt uses, and an empty
+            category resolves to its generic boxes mark — a filled cell keeps
+            the five columns aligned where a missing one would not. */}
+        {thumb ? <img src={thumb} alt={line.item} /> : <CategoryLogo category="" size={34} />}
+      </span>
+      <span className="po-rl-name">
+        <span className="po-rl-pname">{line.item}</span>
+        {line.sku && <span className="po-rl-sku mono">{line.sku}</span>}
+        {line.description && <span className="po-line-sub">{line.description}</span>}
+      </span>
+      <span className="po-rl-qty">{line.quantity}</span>
+      <span className="po-rl-price mono">{formatMoney(line.rate)}</span>
+      <span className="po-rl-total mono">{formatMoney(line.amount)}</span>
+    </div>
   )
 }

@@ -40,6 +40,46 @@
 import type { Carrier, PaymentTiming } from './freight'
 import type { ShipStatusCode } from './shippingTypes'
 
+/**
+ * A postal address, in QuickBooks' vocabulary but this app's spelling.
+ *
+ * `region` is what Intuit calls CountrySubDivisionCode — a two-letter state on a
+ * US company. Named for what a person would call it, and translated once at the
+ * payload boundary, because "CountrySubDivisionCode" appearing on a form field
+ * in this app would be somebody else's schema leaking through the screen.
+ *
+ * Every part is nullable and none is required. A buyer with a city and no street
+ * is a real record on this floor, and refusing to store a partial address only
+ * means the address gets typed into the memo instead.
+ */
+export interface InvoiceAddress {
+  line1: string | null
+  line2: string | null
+  city: string | null
+  /** State or province. Intuit: CountrySubDivisionCode. */
+  region: string | null
+  postalCode: string | null
+  country: string | null
+}
+
+/** True when any part of an address was actually filled in. */
+export function hasAddress(a: InvoiceAddress | null | undefined): boolean {
+  if (!a) return false
+  return [a.line1, a.line2, a.city, a.region, a.postalCode, a.country].some(
+    (v) => (v ?? '').trim() !== ''
+  )
+}
+
+/** Every part blank — the shape a screen binds to before anything is typed. */
+export const EMPTY_ADDRESS: InvoiceAddress = {
+  line1: null,
+  line2: null,
+  city: null,
+  region: null,
+  postalCode: null,
+  country: null
+}
+
 export type InvoiceTerms = 'Due on receipt' | 'Net 15' | 'Net 30' | 'Net 60'
 
 export const INVOICE_TERMS: InvoiceTerms[] = ['Due on receipt', 'Net 15', 'Net 30', 'Net 60']
@@ -74,6 +114,14 @@ export interface InvoiceCustomer {
   message: string | null
   /** Internal note. Never exported — this is for the floor, not the buyer. */
   notes: string | null
+  /**
+   * Where the invoice is billed to, which is a property of the BUYER and not of
+   * one sale — the same argument that put terms and email on this record. Null
+   * when nobody has typed one, and null is not a problem: the posting code falls
+   * back to the address QuickBooks already holds for the matched customer, which
+   * is exactly what their own invoice form does.
+   */
+  billAddr: InvoiceAddress | null
   /** QuickBooks Customer id, once matched. Null until it is. */
   qboId: string | null
   active: boolean
@@ -88,6 +136,26 @@ export interface InvoiceLine {
   position: number
   /** QuickBooks "Product/Service". Required by Intuit. */
   item: string
+  /**
+   * The catalog product this line came from, when it came from one.
+   *
+   * Null for a line somebody typed freehand, which stays legal — plenty of what
+   * gets billed here is a service or a one-off that was never stock. The id is
+   * kept so "what did we sell of this product" can be asked later; the NAME and
+   * the SKU beside it are snapshots, not a join, for the same reason
+   * `customerName` is: renaming a product next year must not rewrite a document
+   * that has already been sent.
+   */
+  productId: string | null
+  /**
+   * The SKU as it stood when the line was written.
+   *
+   * Auto-filled from the chosen product and then left alone. It is what the
+   * posting code matches a QuickBooks Item on FIRST, before falling back to the
+   * name — an item renamed in QuickBooks still carries its SKU, and matching on
+   * a name alone is how a line silently attaches to the wrong product.
+   */
+  sku: string | null
   description: string | null
   quantity: number
   rate: number
@@ -151,6 +219,30 @@ export function canMoveInvoice(from: InvoiceStatus, to: InvoiceStatus): boolean 
   return (INVOICE_TRANSITIONS[from] ?? []).includes(to)
 }
 
+/**
+ * How the last attempt to put this invoice into QuickBooks went.
+ *
+ * Separate from `status` because they answer different questions. `status` is
+ * where the DOCUMENT is — draft, posted, sent, paid. This is whether the last
+ * PUSH worked, and it exists so a failed push is a thing somebody can see and
+ * retry instead of an invoice that quietly never left the building.
+ *
+ *   none    nobody has tried; the everyday state of a draft
+ *   pending a push is in flight, or the app died mid-push
+ *   ok      QuickBooks has it, and `qboId` says which one
+ *   failed  it was tried and refused; `qboPushError` says what Intuit said
+ *
+ * PENDING IS THE ONE THAT EARNS ITS KEEP. It is written before the network call
+ * and cleared after, so a crash or a power cut between the two leaves a row that
+ * says "we may have posted this" rather than one that says "never tried" — the
+ * difference between checking QuickBooks and creating the invoice twice.
+ */
+export type InvoicePushState = 'none' | 'pending' | 'ok' | 'failed'
+
+export function asPushState(v: unknown): InvoicePushState {
+  return v === 'pending' || v === 'ok' || v === 'failed' ? v : 'none'
+}
+
 export interface Invoice {
   id: string
   /** Human number, e.g. "1001". Unique within the company. */
@@ -166,6 +258,12 @@ export interface Invoice {
    */
   customerName: string
   email: string | null
+  /**
+   * Bill-to, SNAPSHOTTED off the buyer the same way the name is. An address is
+   * where a document was sent, and a buyer who moves next year must not rewrite
+   * where last year's invoice says it went.
+   */
+  billAddr: InvoiceAddress | null
   terms: InvoiceTerms
   /** YYYY-MM-DD, local calendar day. */
   invoiceDate: string
@@ -183,6 +281,34 @@ export interface Invoice {
   /** What QuickBooks called it — may differ from ours if custom numbers are off. */
   qboDocNumber: string | null
   qboSyncedAt: string | null
+  /** See InvoicePushState. Whether the last PUSH worked, not where the document is. */
+  qboPushState: InvoicePushState
+  /** What Intuit said when it refused. Null once a push succeeds. */
+  qboPushError: string | null
+  /** When we last TRIED — distinct from qboSyncedAt, which means it worked. */
+  qboPushAttemptedAt: string | null
+  /** How many times. A number that keeps climbing is a problem, not a blip. */
+  qboPushAttempts: number
+  /**
+   * What QuickBooks last told us about this invoice, and when.
+   *
+   * Stored rather than derived because the answer comes from somebody else's
+   * system over a network that is allowed to be down. Same discipline as the
+   * carrier tracking columns: a reading that FAILS never overwrites one that
+   * worked, `checkedAt` means we got an answer and `attemptedAt` means we asked,
+   * and the screen shows how old the answer is instead of implying it is now.
+   *
+   * See QboInvoiceObservation for which of these QuickBooks genuinely reports
+   * and which two states of the owner's five it does not report at all.
+   */
+  qboEmailStatus: string | null
+  qboDeliveredAt: string | null
+  qboBalance: number | null
+  qboTotalAmt: number | null
+  qboVoided: boolean
+  qboStatusCheckedAt: string | null
+  qboStatusAttemptedAt: string | null
+  qboStatusError: string | null
   /** Σ of the line amounts, stored so a list does not have to read every line. */
   total: number
   /** When somebody recorded the money as arrived. Null until they do. */
@@ -210,8 +336,43 @@ export interface InvoiceDetail extends Invoice {
   lines: InvoiceLine[]
 }
 
+/**
+ * What came back from "save it, and put it in QuickBooks".
+ *
+ * `invoice` is ALWAYS the saved document, and that is the contract the whole
+ * feature rests on: the local write is committed before the network call is
+ * made, so a refused push costs the push and never the invoice. A caller that
+ * treats a failed push as a failed save would be throwing away a document
+ * somebody just typed because Intuit was having an afternoon.
+ *
+ * So `pushed: false` with a sentence in `error` is a SUCCESSFUL save. The screen
+ * says the invoice is safe and the push can be tried again — which is what
+ * `qboPushState` on the invoice is for.
+ */
+export interface InvoicePushResult {
+  invoice: InvoiceDetail
+  pushed: boolean
+  /** Where to look at it in QuickBooks. Null when it did not get there. */
+  url: string | null
+  docNumber: string | null
+  numberChanged: boolean
+  /** Why the push failed. Null when it did not. */
+  error: string | null
+  /**
+   * Things that were WANTED and were not resolved — a missing class, a term this
+   * company does not have, a SKU that disagrees. Not errors: the invoice posted.
+   * They exist so an omission has a voice instead of looking identical to a
+   * clean post.
+   */
+  notes: string[]
+}
+
 export interface NewInvoiceLine {
   item: string
+  /** The catalog product, when the line was picked rather than typed. */
+  productId?: string | null
+  /** Omit to take the chosen product's SKU. See resolveLineSku. */
+  sku?: string | null
   description?: string | null
   quantity: number
   rate: number
@@ -226,6 +387,7 @@ export interface NewInvoice {
   customerId?: string | null
   customerName: string
   email?: string | null
+  billAddr?: InvoiceAddress | null
   terms?: InvoiceTerms
   invoiceDate: string
   dueDate?: string | null
@@ -441,42 +603,198 @@ export function invoicesToCsv(invoices: InvoiceDetail[]): string {
  * Built here rather than in main so it can be unit-tested without a network or
  * an OAuth token — the mapping from our record to theirs is the part that is
  * easy to get quietly wrong, and the part a live call is worst at checking.
+ *
+ * ## The target is the owner's own invoice screen, field for field
+ *
+ *   QBO form field      Invoice entity field
+ *   ------------------  --------------------------------------------------
+ *   Customer            CustomerRef.value (+ .name, the display name)
+ *   Customer email      BillEmail.Address
+ *   Bill-to address     BillAddr.{Line1,Line2,City,CountrySubDivisionCode,
+ *                                 PostalCode,Country}
+ *   Invoice no.         DocNumber
+ *   Terms               SalesTermRef.value
+ *   Invoice date        TxnDate
+ *   Due date            DueDate
+ *   Product/service     Line[].SalesItemLineDetail.ItemRef.value
+ *   Description         Line[].Description
+ *   Qty                 Line[].SalesItemLineDetail.Qty
+ *   Rate                Line[].SalesItemLineDetail.UnitPrice
+ *   Amount              Line[].Amount
+ *   Class               Line[].SalesItemLineDetail.ClassRef, or the header
+ *                       ClassRef — see the note on QboInvoiceRefs.classOn
+ *
+ * ## SKU IS THE ONE COLUMN WITH NOWHERE TO PUT IT
+ *
+ * There is no SKU field on an invoice line. SalesItemLineDetail carries
+ * ItemRef, ClassRef, TaxCodeRef, MarkupInfo, ItemAccountRef, ServiceDate, Qty,
+ * UnitPrice, TaxClassificationRef, TaxInclusiveAmt, DiscountAmt and
+ * DiscountRate — and nothing else. The SKU on a printed QuickBooks invoice is
+ * read off the ITEM (Item.Sku) and shown when "SKU" is switched on in the sales
+ * form settings.
+ *
+ * So a SKU cannot be pushed onto a line, and pretending otherwise by stuffing it
+ * into Description would put a string in the customer-visible column that the
+ * SKU column is meant to hold. What this app does instead is make sure the line
+ * points at the RIGHT item: the ItemRef is resolved by SKU first and only falls
+ * back to the name. Get that right and the SKU column is right, because it is
+ * the item's own.
  */
+export interface QboRef {
+  value: string
+  name?: string
+}
+
+export interface QboAddress {
+  Line1?: string
+  Line2?: string
+  City?: string
+  /** Intuit's name for the state/province. */
+  CountrySubDivisionCode?: string
+  PostalCode?: string
+  Country?: string
+}
+
+export interface QboInvoiceLine {
+  DetailType: 'SalesItemLineDetail'
+  Amount: number
+  Description?: string
+  SalesItemLineDetail: {
+    ItemRef: QboRef
+    Qty: number
+    UnitPrice: number
+    ClassRef?: QboRef
+  }
+}
+
 export interface QboInvoicePayload {
   DocNumber?: string
   TxnDate: string
   DueDate: string
-  CustomerRef: { value: string; name?: string }
+  CustomerRef: QboRef
   BillEmail?: { Address: string }
+  BillAddr?: QboAddress
+  SalesTermRef?: QboRef
+  ClassRef?: QboRef
   CustomerMemo?: { value: string }
   PrivateNote?: string
-  Line: Array<{
-    DetailType: 'SalesItemLineDetail'
-    Amount: number
-    Description?: string
-    SalesItemLineDetail: {
-      ItemRef: { value: string; name?: string }
-      Qty: number
-      UnitPrice: number
-    }
-  }>
+  Line: QboInvoiceLine[]
+}
+
+/** What one QuickBooks Item looks like to the mapper. */
+export interface QboItemMatch {
+  id: string
+  name?: string
+  sku?: string | null
+}
+
+/**
+ * Where a class goes on this company's transactions.
+ *
+ * Not a preference of ours — it is theirs, read from
+ * Preferences.AccountingInfoPrefs.ClassTrackingPerTxn / ...PerTxnLine. Sending
+ * a ClassRef to the wrong place is not an error: QuickBooks accepts the payload
+ * and DROPS the reference silently, which is the worst possible outcome because
+ * the invoice posts and the class is simply missing.
+ *
+ * 'both' is the honest answer when their preferences could not be read: a
+ * reference in the slot their company ignores is discarded without complaint, so
+ * sending both lands the class rather than guessing wrong and losing it.
+ */
+export type QboClassPlacement = 'line' | 'transaction' | 'both' | 'none'
+
+/**
+ * The QuickBooks ids this app does not mint, resolved by the caller before the
+ * payload is built. Everything here is optional and every one of them is omitted
+ * rather than guessed when it could not be resolved — a ClassRef pointing at an
+ * id we invented posts real money against the wrong class, and no invoice is
+ * worth that.
+ */
+export interface QboInvoiceRefs {
+  /** Resolved from `invoice.terms` against the company's Term list. */
+  termRef?: QboRef | null
+  /** The "United States" class, resolved or created once. */
+  classRef?: QboRef | null
+  classOn?: QboClassPlacement
+  /** Bill-to. Falls back to the QuickBooks customer's own address. */
+  billAddr?: InvoiceAddress | null
+  /** Used when the invoice itself carries no email — same fallback rule. */
+  billEmail?: string | null
+  /** Items keyed by lowercased SKU. Consulted BEFORE the name map. */
+  itemsBySku?: Map<string, QboItemMatch>
+}
+
+function trimLower(v: string | null | undefined): string {
+  return (v ?? '').trim().toLowerCase()
+}
+
+/**
+ * Which QuickBooks item a line points at, and why.
+ *
+ * SKU FIRST. An item renamed in QuickBooks — which happens, because that name is
+ * a merchandising decision and gets tidied — still carries the same SKU, and a
+ * name-only match would either fail outright or, worse, land on a different item
+ * that happens to have taken the old name. The name is the fallback, not the
+ * key, and a line with no SKU (a service, a one-off) still resolves by name
+ * exactly as it always did.
+ */
+export function resolveLineItemRef(
+  line: { item: string; sku?: string | null },
+  itemsByName: Map<string, QboItemMatch>,
+  itemsBySku?: Map<string, QboItemMatch>
+): QboItemMatch | null {
+  const sku = trimLower(line.sku)
+  if (sku && itemsBySku) {
+    const bySku = itemsBySku.get(sku)
+    if (bySku) return bySku
+  }
+  return itemsByName.get(trimLower(line.item)) ?? null
+}
+
+function toQboAddress(a: InvoiceAddress): QboAddress {
+  const put = (v: string | null): string | undefined => {
+    const s = (v ?? '').trim()
+    return s === '' ? undefined : s
+  }
+  const out: QboAddress = {}
+  const line1 = put(a.line1)
+  const line2 = put(a.line2)
+  const city = put(a.city)
+  const region = put(a.region)
+  const postal = put(a.postalCode)
+  const country = put(a.country)
+  if (line1) out.Line1 = line1
+  if (line2) out.Line2 = line2
+  if (city) out.City = city
+  if (region) out.CountrySubDivisionCode = region
+  if (postal) out.PostalCode = postal
+  if (country) out.Country = country
+  return out
 }
 
 /**
  * Map one invoice onto Intuit's Invoice resource.
  *
- * `customerRef` and the per-line `itemRefs` are QuickBooks ids that this app
- * does not mint — they are looked up from the connected company before this is
- * called. A line whose item has no id is a line QuickBooks would reject, so the
- * caller resolves them first and this refuses rather than posting a document
- * that will half-fail.
+ * `customerRef` and the per-line item refs are QuickBooks ids that this app does
+ * not mint — they are looked up from the connected company before this is
+ * called. A line whose item resolves to nothing is a line QuickBooks would
+ * reject, so the caller resolves them first and this refuses BY NAME rather than
+ * posting a document that will half-fail.
+ *
+ * `refs` is everything else that had to be looked up. Each part is independently
+ * optional: a company with no matching Term still gets an invoice, it just gets
+ * one on QuickBooks' own default terms rather than one stamped with an id this
+ * app made up.
  */
 export function toQboInvoice(
   invoice: InvoiceDetail,
   customerRef: { id: string; name?: string },
-  itemRefs: Map<string, { id: string; name?: string }>
+  itemRefs: Map<string, QboItemMatch>,
+  refs: QboInvoiceRefs = {}
 ): QboInvoicePayload {
-  const missing = invoice.lines.filter((l) => !itemRefs.has(l.item.trim().toLowerCase()))
+  const missing = invoice.lines.filter(
+    (l) => !resolveLineItemRef(l, itemRefs, refs.itemsBySku)
+  )
   if (missing.length > 0) {
     throw new Error(
       `QuickBooks has no product or service called ${missing
@@ -484,6 +802,22 @@ export function toQboInvoice(
         .join(', ')}. Add it in QuickBooks first, or export the CSV instead.`
     )
   }
+
+  const classOn = refs.classOn ?? 'none'
+  const classRef = refs.classRef ?? null
+  const onLine = !!classRef && (classOn === 'line' || classOn === 'both')
+  const onTxn = !!classRef && (classOn === 'transaction' || classOn === 'both')
+
+  // The invoice's own snapshot wins; the QuickBooks customer's address is the
+  // fallback. That order matters — a buyer who moved is corrected here first,
+  // and copying their address onto the document explicitly is precisely what
+  // QuickBooks' own form does when you pick a customer.
+  const addr = hasAddress(invoice.billAddr)
+    ? invoice.billAddr
+    : hasAddress(refs.billAddr)
+      ? refs.billAddr
+      : null
+  const email = (invoice.email ?? '').trim() || (refs.billEmail ?? '').trim()
 
   return {
     // Only sent when we have one. QuickBooks replaces it silently unless the
@@ -494,7 +828,14 @@ export function toQboInvoice(
     TxnDate: invoice.invoiceDate,
     DueDate: invoice.dueDate,
     CustomerRef: { value: customerRef.id, ...(customerRef.name ? { name: customerRef.name } : {}) },
-    ...(invoice.email ? { BillEmail: { Address: invoice.email } } : {}),
+    ...(email ? { BillEmail: { Address: email } } : {}),
+    ...(addr ? { BillAddr: toQboAddress(addr) } : {}),
+    // Terms are a REFERENCE, not the words "Net 30". Sending the string does
+    // nothing at all — QuickBooks ignores an unrecognised shape here — so an
+    // invoice would silently take the customer's default terms and a due date
+    // computed from them, disagreeing with the one on this side.
+    ...(refs.termRef ? { SalesTermRef: refs.termRef } : {}),
+    ...(onTxn && classRef ? { ClassRef: classRef } : {}),
     // CustomerMemo is the message the BUYER sees; PrivateNote is the internal
     // memo. Intuit's names for them are the wrong way round from how they read,
     // and putting an internal note in front of a customer is the sort of mistake
@@ -502,7 +843,7 @@ export function toQboInvoice(
     ...(invoice.message ? { CustomerMemo: { value: invoice.message } } : {}),
     ...(invoice.memo ? { PrivateNote: invoice.memo } : {}),
     Line: invoice.lines.map((l) => {
-      const ref = itemRefs.get(l.item.trim().toLowerCase())
+      const ref = resolveLineItemRef(l, itemRefs, refs.itemsBySku)
       return {
         DetailType: 'SalesItemLineDetail' as const,
         Amount: money(l.amount),
@@ -510,11 +851,170 @@ export function toQboInvoice(
         SalesItemLineDetail: {
           ItemRef: { value: ref?.id ?? '', ...(ref?.name ? { name: ref.name } : {}) },
           Qty: l.quantity,
-          UnitPrice: l.rate
+          UnitPrice: l.rate,
+          ...(onLine && classRef ? { ClassRef: classRef } : {})
         }
       }
     })
   }
+}
+
+// ---------------------------------------------------------------------------
+// Reading a status back out of QuickBooks
+//
+// THE OWNER NAMED FIVE STATES. QuickBooks reports three of them. This block is
+// the honest accounting of which is which, and it is written down here rather
+// than discovered later by somebody wondering why a card never says "Viewed".
+//
+//   OPEN         REAL. An invoice that exists, is not voided, and still has a
+//                balance. Read from Balance vs TotalAmt — there is no status
+//                string on the entity to read instead.
+//   SENT         REAL. EmailStatus becomes 'EmailSent' and DeliveryInfo gains a
+//                DeliveryTime the moment QuickBooks emails it. Both are on the
+//                Invoice entity. Note it only reflects mail QUICKBOOKS sent: an
+//                invoice printed and handed over stays 'NotSet' forever, which
+//                is correct rather than broken.
+//   VIEWED       NOT AVAILABLE. The "Viewed" state in the QuickBooks web UI is
+//                an e-invoicing engagement signal. Nothing on the Invoice entity
+//                in the Accounting API reports it — not EmailStatus, whose only
+//                values are NotSet / NeedToSend / EmailSent, and not
+//                DeliveryInfo, which records when WE sent, not when they opened.
+//                So this app does not claim it. A stage that silently never
+//                arrives is worse than one that was never offered.
+//   PAID         REAL. Balance drops to zero against a non-zero TotalAmt, and
+//                LinkedTxn gains entries of TxnType 'Payment'. Partial payment
+//                is visible too (0 < Balance < TotalAmt) and is deliberately NOT
+//                reported as paid.
+//   PAYOUT SENT  NOT AVAILABLE. Money leaving QuickBooks Payments for the
+//                owner's bank is a QuickBooks PAYMENTS concept, on a different
+//                API behind the com.intuit.quickbooks.payment scope, which this
+//                app does not request (see QBO_SCOPE — accounting only). The
+//                Accounting API's Invoice carries no link to a payout, and the
+//                Payment entity's DepositToAccountRef describes a bookkeeping
+//                destination rather than a bank transfer that actually settled.
+//                Inferring "payout sent" from it would be a guess about somebody
+//                else's money.
+//
+// VOIDED is a fourth thing worth reading and is only HALF available: v3 has no
+// status field for it, and the recognised signature is a zeroed invoice whose
+// PrivateNote begins "Voided". That is a heuristic, it is labelled as one below,
+// and it is only ever allowed to move an invoice to void — never to move one
+// back out of it.
+// ---------------------------------------------------------------------------
+
+/**
+ * Does this look like a voided invoice?
+ *
+ * There is no field to ask. v3 has no status on the Invoice entity for it, so
+ * the recognised signature is the one QuickBooks leaves behind: every amount
+ * zeroed and the word written into the private note.
+ *
+ * BOTH HALVES ARE REQUIRED. A genuinely zero-value invoice with a note somebody
+ * typed must not read as voided, and a note mentioning a void on an invoice that
+ * still has a balance is describing something else entirely — most often the
+ * instruction not to.
+ *
+ * The note QuickBooks writes reads "Voided" or "Voided - RC 93", so the test is
+ * on the START of it rather than a substring anywhere inside: "do not void this
+ * one" contains the word and means the opposite.
+ *
+ * Lives here, with the rest of the mapping, so it can be tested without a
+ * network or an OAuth token — which is the part a live call is worst at
+ * checking.
+ */
+export function looksVoidedInQbo(raw: {
+  totalAmt?: number | null
+  balance?: number | null
+  privateNote?: string | null
+}): boolean {
+  const zeroed = (raw.totalAmt ?? 0) === 0 && (raw.balance ?? 0) === 0
+  return zeroed && (raw.privateNote ?? '').trim().toLowerCase().startsWith('voided')
+}
+
+/** What QuickBooks actually said about one invoice, verbatim where possible. */
+export interface QboInvoiceObservation {
+  qboId: string
+  docNumber: string | null
+  /** 'NotSet' | 'NeedToSend' | 'EmailSent'. Kept as a string: it is theirs. */
+  emailStatus: string | null
+  /** DeliveryInfo.DeliveryTime — when QUICKBOOKS sent it, not when it was read. */
+  deliveredAt: string | null
+  balance: number | null
+  totalAmt: number | null
+  /** LinkedTxn entries of TxnType 'Payment'. Zero is a real answer, not unknown. */
+  linkedPayments: number
+  /** The zeroed-and-annotated signature described above. A heuristic. */
+  voided: boolean
+}
+
+/**
+ * Fully settled?
+ *
+ * A zero balance on a zero total is NOT paid — that is what a voided or empty
+ * invoice looks like, and reporting it as paid would put money in the paid total
+ * that nobody ever sent.
+ */
+export function observedPaid(o: QboInvoiceObservation): boolean {
+  if (o.voided) return false
+  if (o.balance === null || o.totalAmt === null) return false
+  return o.totalAmt > 0 && o.balance <= 0
+}
+
+/** Some money in, but not all of it. Reported separately — it is not paid. */
+export function observedPartiallyPaid(o: QboInvoiceObservation): boolean {
+  if (o.voided) return false
+  if (o.balance === null || o.totalAmt === null) return false
+  return o.totalAmt > 0 && o.balance > 0 && o.balance < o.totalAmt
+}
+
+/** Did QuickBooks email it? The only "sent" this API can honestly report. */
+export function observedSent(o: QboInvoiceObservation): boolean {
+  return o.emailStatus === 'EmailSent' || !!o.deliveredAt
+}
+
+/**
+ * The stage QuickBooks' answer implies — or null when it implies nothing.
+ *
+ * Highest-water-mark order, because these are not exclusive: a paid invoice was
+ * also emailed, and reporting it as merely sent would walk the board backwards
+ * every time it was refreshed.
+ *
+ * Null rather than 'draft' when nothing can be concluded. A draft is a local
+ * state that by definition has no QuickBooks invoice behind it, so an
+ * observation can never mean it, and returning it would drag a posted invoice
+ * back to the first column.
+ */
+export function observedInvoiceStage(o: QboInvoiceObservation): InvoiceStatus | null {
+  if (o.voided) return 'void'
+  if (observedPaid(o)) return 'paid'
+  if (observedSent(o)) return 'sent'
+  // It exists in QuickBooks and nothing more can be said about it. That IS the
+  // "Open" state on their screen, and 'created' is this board's name for it.
+  if (o.balance !== null || o.totalAmt !== null) return 'created'
+  return null
+}
+
+/**
+ * What a pull should do to one local invoice, given what QuickBooks said.
+ *
+ * Only ever FORWARD, and only along a legal transition. Two rules are doing real
+ * work here:
+ *
+ *   - A locally-paid invoice is never dragged back. Paid is operator-recorded on
+ *     this floor — cash and Zelle settle plenty of these without QuickBooks ever
+ *     seeing the money — so QuickBooks reporting an outstanding balance is not
+ *     evidence the money did not arrive. INVOICE_TRANSITIONS already makes paid
+ *     terminal, and this leans on that rather than restating it.
+ *   - An observation that implies nothing changes nothing. A network answer we
+ *     could not read must never be the reason a card moves.
+ */
+export function nextStageFromQbo(
+  current: InvoiceStatus,
+  o: QboInvoiceObservation
+): InvoiceStatus | null {
+  const observed = observedInvoiceStage(o)
+  if (!observed || observed === current) return null
+  return canMoveInvoice(current, observed) ? observed : null
 }
 
 /**

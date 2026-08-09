@@ -45,8 +45,10 @@ import type {
 import type { RecurringTask } from '@shared/homeTasks'
 import type {
   Invoice,
+  InvoiceAddress,
   InvoiceCustomer,
   InvoiceDetail,
+  InvoicePushResult,
   InvoiceStatus,
   InvoiceTerms,
   NewInvoice
@@ -1147,6 +1149,8 @@ export function createBridge(ipcRenderer: BridgeTransport) {
         className?: string | null
         message?: string | null
         notes?: string | null
+        /** Bill-to. Omit entirely to leave a stored address alone — see saveCustomer. */
+        billAddr?: InvoiceAddress | null
         qboId?: string | null
       }): Promise<Result<InvoiceCustomer>> => ipcRenderer.invoke(IPC.invoiceCustomerSave, input),
       deleteCustomer: (id: string): Promise<Result<{ deleted: boolean }>> =>
@@ -1157,18 +1161,83 @@ export function createBridge(ipcRenderer: BridgeTransport) {
         ipcRenderer.invoke(IPC.invoiceExportCsv, ids ?? []),
 
       /** The live lists behind the buyer and item pickers. Read-only. */
-      qboCustomers: (): Promise<Result<Array<{ id: string; name: string; email: string | null }>>> =>
-        ipcRenderer.invoke(IPC.invoiceQboCustomers),
+      qboCustomers: (): Promise<
+        Result<
+          Array<{
+            id: string
+            name: string
+            email: string | null
+            billAddr: InvoiceAddress | null
+          }>
+        >
+      > => ipcRenderer.invoke(IPC.invoiceQboCustomers),
       qboItems: (): Promise<
-        Result<Array<{ id: string; name: string; rate: number | null; description: string | null }>>
+        Result<
+          Array<{
+            id: string
+            name: string
+            rate: number | null
+            description: string | null
+            /** Item.Sku. There is no SKU field on an invoice LINE — see @shared/invoices. */
+            sku: string | null
+          }>
+        >
       > => ipcRenderer.invoke(IPC.invoiceQboItems),
+
+      /**
+       * Save it and put it in QuickBooks, in that order — the everyday gesture.
+       *
+       * A refused push still resolves `ok: true`, with `pushed: false` and a
+       * sentence in `error`. That is not sloppiness: the SAVE succeeded, the
+       * invoice is on disk, and only the push has to be tried again. Treat this
+       * as a failed save and you throw away a document somebody just typed
+       * because Intuit was having an afternoon.
+       */
+      saveAndPush: (
+        input: NewInvoice & { id?: string | null; open?: boolean }
+      ): Promise<Result<InvoicePushResult>> => ipcRenderer.invoke(IPC.invoiceSaveAndPush, input),
+
+      /** Try a push that failed. Same guards, same result shape. */
+      retryQboPush: (id: string, open = false): Promise<Result<InvoicePushResult>> =>
+        ipcRenderer.invoke(IPC.invoiceRetryQboPush, { id, open }),
+
+      /** The ones that tried and did not make it. A LOCAL read — no connection. */
+      qboPending: (): Promise<Invoice[]> => ipcRenderer.invoke(IPC.invoiceQboPending),
+
+      /**
+       * Ask QuickBooks where these have got to, and move the cards it can
+       * justify moving.
+       *
+       * Only three of the five states the owner named are in that API. Sent,
+       * paid and open are real; VIEWED BY THE PAYER and PAYOUT SENT are not
+       * exposed by the Accounting API at all and are deliberately not faked —
+       * see @shared/invoices for the full accounting.
+       *
+       * Omit the id to sweep every posted invoice that is not already settled.
+       */
+      syncQboStatus: (
+        id?: string
+      ): Promise<
+        Result<{
+          checked: number
+          missing: number
+          moved: Array<{ id: string; from: InvoiceStatus; to: InvoiceStatus }>
+        }>
+      > => ipcRenderer.invoke(IPC.invoiceSyncQboStatus, { id: id ?? '' }),
 
       /** Post it, then open the browser on it so somebody can press Send. */
       createInQbo: (
         id: string,
         open = true
-      ): Promise<Result<{ url: string; docNumber: string | null; numberChanged: boolean }>> =>
-        ipcRenderer.invoke(IPC.invoiceCreateInQbo, { id, open }),
+      ): Promise<
+        Result<{
+          url: string
+          docNumber: string | null
+          numberChanged: boolean
+          /** Wanted but not resolved — a missing class, an unknown term, a SKU clash. */
+          notes: string[]
+        }>
+      > => ipcRenderer.invoke(IPC.invoiceCreateInQbo, { id, open }),
       sendFromQbo: (id: string): Promise<Result<{ id: string }>> =>
         ipcRenderer.invoke(IPC.invoiceSendFromQbo, id),
       openInQbo: (id: string): Promise<Result<{ url: string }>> =>

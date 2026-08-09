@@ -4018,6 +4018,26 @@ tr.hoverable-row:hover {
   border-color: var(--success);
 }
 
+/* The two invoice moves that are not neutral, toned the same way the buy side
+   tones its own: the happy ending green, the one that leaves the building in
+   brand. Everything else on an invoice card falls through to the plain
+   `.po-move` surface, exactly as "Reopen" does on a PO. */
+.po-move.inv-move-paid {
+  color: var(--success-strong);
+}
+.po-card-foot .po-move.inv-move-paid:hover {
+  background: var(--success-bg);
+  border-color: var(--success);
+}
+.po-move.inv-move-send {
+  color: var(--brand-700);
+}
+.po-card-foot .po-move.inv-move-send:hover {
+  background: var(--brand-soft-2);
+  border-color: var(--brand-500);
+  color: var(--brand-700);
+}
+
 /* ---------- Create modal: line items ---------- */
 .po-lines-empty {
   margin-top: 14px;
@@ -4052,6 +4072,17 @@ tr.hoverable-row:hover {
   margin-top: 2px;
   font-size: 12px;
   color: var(--text-3);
+}
+/* An invoice line carries a Description that a PO line does not. It sits UNDER
+   the name rather than in a sixth column: six columns inside a 620px modal
+   squeezed the money fields to three characters wide, and this is the one field
+   on the row that is usually left empty. Sized down so it reads as a footnote to
+   the product rather than competing with it. */
+.inv-line-desc {
+  margin-top: 6px;
+  width: 100%;
+  height: 30px;
+  font-size: 12.5px;
 }
 .po-qty-input {
   width: 74px;
@@ -4505,6 +4536,32 @@ tr.hoverable-row:hover {
   color: var(--success);
 }
 .po-badge-cancelled {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+/* Invoice status chips. Only the COLOURWAY is invoice-specific — the pill
+   geometry is `.badge` + `.po-badge`, shared with the buy side, because two
+   copies of one shape drift the first time a chip gets taller. The tones do not
+   line up with the PO's: an invoice's paid means money arrived where a PO's
+   means money left, and "Draft" has no buy-side equivalent at all. */
+.inv-badge-draft {
+  background: var(--surface-3);
+  color: var(--text-2);
+}
+.inv-badge-created {
+  background: var(--brand-soft);
+  color: var(--brand-600);
+}
+.inv-badge-sent {
+  background: var(--info-bg);
+  color: var(--info);
+}
+.inv-badge-paid {
+  background: var(--success-bg);
+  color: var(--success);
+}
+.inv-badge-void {
   background: var(--danger-bg);
   color: var(--danger);
 }
@@ -19920,65 +19977,13 @@ button.sor-team:focus-visible {
   margin-top: 2px;
 }
 
-/* The inventory search under a line item. A dropdown rather than a datalist:
-   a datalist cannot show a SKU and a price beside the name, and those are what
-   tell two similarly-named boxes apart. */
-.inv-item-cell {
-  position: relative;
-}
-.inv-item-results {
-  position: absolute;
-  z-index: 40;
-  top: 100%;
-  left: 0;
-  right: 0;
-  min-width: 300px;
-  max-height: 260px;
-  overflow-y: auto;
-  list-style: none;
-  margin: 3px 0 0;
-  padding: 4px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.18);
-}
-.inv-item-results button {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  width: 100%;
-  padding: 6px 8px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  text-align: left;
-  cursor: pointer;
-}
-.inv-item-results button:hover {
-  background: var(--surface-2);
-}
-.inv-item-name {
-  flex: 1;
-  min-width: 0;
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.inv-item-sku {
-  font-size: 10.5px;
-  color: var(--text-3);
-  white-space: nowrap;
-}
-.inv-item-price {
-  font-size: 11.5px;
-  font-weight: 600;
-  color: var(--text-2);
-  white-space: nowrap;
-}
+/* The bespoke "add from inventory" dropdown that used to hang under an invoice
+   line item lived here. It is gone: invoices now use POCatalogTypeahead — the
+   same debounced catalog search the purchase-order modal uses, in the same
+   place above the table — so there is one product picker in the app instead of
+   two that searched differently and disagreed about what a match looked like.
+   The rules went with it rather than being left behind, because a stylesheet
+   that still describes the old control is an invitation to rebuild it. */
 
 /* The paid column, so the board's happy ending reads as one. */
 .po-col-paid .po-col-title {

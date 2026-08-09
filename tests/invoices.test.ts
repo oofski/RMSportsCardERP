@@ -535,5 +535,464 @@ const nastyHtml = buildInvoiceHtml(repo.getInvoice(nasty.id))
 ok(!nastyHtml.includes('<script>'), 'a script tag in a name is escaped')
 ok(nastyHtml.includes('&lt;script&gt;'), 'and rendered as text', 'escaped')
 
+// ---------------------------------------------------------------------------
+console.log('\n=== 13. field parity with the QuickBooks invoice form ===')
+// ---------------------------------------------------------------------------
+// The owner's QBO invoice screen shows a customer, their email, a bill-to
+// address, an invoice number, terms, both dates, and lines with a product, a
+// SKU, a description, qty, rate, amount and a class. Everything on that list
+// that has a home on Intuit's Invoice entity has to be IN THE PAYLOAD — a field
+// this app quietly never sent looks identical, on our side, to one it did.
+const {
+  EMPTY_ADDRESS,
+  hasAddress,
+  looksVoidedInQbo,
+  nextStageFromQbo,
+  observedInvoiceStage,
+  observedPaid,
+  observedPartiallyPaid,
+  observedSent,
+  resolveLineItemRef
+} = require('../src/shared/invoices')
+
+ok(hasAddress(null) === false, 'no address is no address')
+ok(hasAddress(EMPTY_ADDRESS) === false, 'and neither is one with every field blank')
+ok(hasAddress({ ...EMPTY_ADDRESS, city: 'Burbank' }) === true, 'a city alone counts')
+// Whitespace is not an address. If it counted, the posting code would decide it
+// HAS one and send QuickBooks a blank BillAddr, erasing the address they hold.
+ok(hasAddress({ ...EMPTY_ADDRESS, city: '   ' }) === false, 'and spaces do not')
+
+const burbankAddr = {
+  line1: '1234 W Olive Ave',
+  line2: null,
+  city: 'Burbank',
+  region: 'CA',
+  postalCode: '91506',
+  country: null
+}
+const ryan = repo.saveCustomer({
+  name: 'Ryan Veres (Burbank Sportscards)',
+  email: 'ryan@burbankcards.com',
+  terms: 'Due on receipt',
+  billAddr: burbankAddr
+})
+ok(ryan.billAddr?.city === 'Burbank', 'a buyer keeps their bill-to', String(ryan.billAddr?.city))
+ok(ryan.billAddr?.region === 'CA', 'including the state')
+
+// AN EDIT THAT CARRIES NO ADDRESS LEAVES THE STORED ONE ALONE. Saving a
+// customer from the invoice screen passes a name and an email and nothing else,
+// and that must not wipe an address somebody typed on the buyer form.
+const ryanAgain = repo.saveCustomer({ id: ryan.id, name: ryan.name, email: 'ryan@burbankcards.com' })
+ok(ryanAgain.billAddr?.line1 === '1234 W Olive Ave', 'an address survives an unrelated edit')
+
+// A catalog product, so a line can be picked rather than typed.
+const stamp13 = new Date().toISOString()
+db.prepare(
+  `INSERT INTO inventory_products (id, sku, upc, name, category, brand, set_name, year,
+                                   unit_type, unit_cost, reorder_point, created_at, updated_at)
+   VALUES ('prod_topps', 'TOPPS-2024-HOB', '000000000001', '2024 Topps Series 1 Hobby Box',
+           'Baseball', 'Topps', 'Series 1', '2024', 'box', 80, 0, ?, ?)`
+).run(stamp13, stamp13)
+
+const parity = repo.saveInvoice(
+  {
+    invoiceNumber: '2258',
+    customerId: ryan.id,
+    customerName: 'Ryan Veres (Burbank Sportscards)',
+    email: 'ryan@burbankcards.com',
+    terms: 'Due on receipt',
+    invoiceDate: '2026-08-09',
+    lines: [
+      {
+        item: '2024 Topps Series 1 Hobby Box',
+        productId: 'prod_topps',
+        description: 'Sealed hobby box',
+        quantity: 4,
+        rate: 125
+      }
+    ]
+  },
+  'emp_owner'
+)
+
+// THE SKU AUTO-POPULATES FROM THE CHOSEN PRODUCT. Nothing typed it — the line
+// carried a product id and the SKU came off the catalog at save time.
+ok(parity.lines[0].sku === 'TOPPS-2024-HOB', 'the SKU fills itself in', String(parity.lines[0].sku))
+ok(parity.lines[0].productId === 'prod_topps', 'and the product stays linked')
+// The bill-to is SNAPSHOTTED off the buyer, not joined. Otherwise a buyer who
+// moves next year silently rewrites where last year's document says it went.
+ok(parity.billAddr?.line1 === '1234 W Olive Ave', 'the invoice snapshots the bill-to')
+repo.saveCustomer({ id: ryan.id, name: ryan.name, billAddr: { ...burbankAddr, city: 'Glendale' } })
+ok(
+  repo.getInvoice(parity.id).billAddr?.city === 'Burbank',
+  'and moving the buyer does not rewrite it',
+  String(repo.getInvoice(parity.id).billAddr?.city)
+)
+
+// A line typed freehand still works, and carries no product and no SKU.
+const freehand = repo.saveInvoice(
+  {
+    customerName: 'Ana Ruiz',
+    invoiceDate: '2026-08-09',
+    lines: [{ item: 'Grading submission fee', quantity: 1, rate: 45 }]
+  },
+  'emp_owner'
+)
+ok(freehand.lines[0].productId === null, 'a typed line has no product')
+ok(freehand.lines[0].sku === null, 'and no SKU')
+
+// A SKU somebody typed is KEPT — a one-off is allowed to carry a code that is
+// not in this catalog, and overwriting it from the product would lose it.
+const typedSku = repo.saveInvoice(
+  {
+    customerName: 'Ana Ruiz',
+    invoiceDate: '2026-08-09',
+    lines: [
+      { item: '2024 Topps Series 1 Hobby Box', productId: 'prod_topps', sku: 'CUSTOM-9', quantity: 1, rate: 10 }
+    ]
+  },
+  'emp_owner'
+)
+ok(typedSku.lines[0].sku === 'CUSTOM-9', 'a typed SKU beats the catalog one', String(typedSku.lines[0].sku))
+
+const parityDetail = repo.getInvoice(parity.id)
+const parityItems = new Map([
+  ['2024 topps series 1 hobby box', { id: '42', name: '2024 Topps Series 1 Hobby Box', sku: 'TOPPS-2024-HOB' }]
+])
+const full = toQboInvoice(
+  parityDetail,
+  { id: '77', name: 'Ryan Veres (Burbank Sportscards)' },
+  parityItems,
+  {
+    termRef: { value: '3', name: 'Due on receipt' },
+    classRef: { value: '5000000000000123456', name: 'United States' },
+    classOn: 'line',
+    itemsBySku: new Map([['topps-2024-hob', { id: '42', name: '2024 Topps Series 1 Hobby Box', sku: 'TOPPS-2024-HOB' }]])
+  }
+)
+
+ok(full.DocNumber === '2258', 'the invoice number travels', String(full.DocNumber))
+ok(full.CustomerRef.value === '77', 'the customer is an id')
+ok(full.CustomerRef.name === 'Ryan Veres (Burbank Sportscards)', 'with the display name beside it')
+ok(full.BillEmail?.Address === 'ryan@burbankcards.com', 'the email is on the invoice')
+ok(full.TxnDate === '2026-08-09', 'the invoice date')
+ok(full.DueDate === '2026-08-09', 'and due on receipt means the same day', String(full.DueDate))
+// TERMS ARE A REFERENCE, NEVER THE WORDS. Sending "Due on receipt" as a string
+// does nothing at all: QuickBooks takes the customer's default terms instead and
+// computes a due date from those, so the two systems disagree about when the
+// money is owed with nothing on either screen saying so.
+ok(full.SalesTermRef?.value === '3', 'the terms are a SalesTermRef', JSON.stringify(full.SalesTermRef))
+// BILL-TO, field by field. CountrySubDivisionCode is Intuit's name for the
+// state; putting the zip in it is the kind of mistake that posts happily.
+ok(full.BillAddr?.Line1 === '1234 W Olive Ave', 'the street', String(full.BillAddr?.Line1))
+ok(full.BillAddr?.City === 'Burbank', 'the city')
+ok(full.BillAddr?.CountrySubDivisionCode === 'CA', 'the STATE goes in CountrySubDivisionCode')
+ok(full.BillAddr?.PostalCode === '91506', 'and the zip in PostalCode')
+ok(full.BillAddr?.Line2 === undefined, 'a blank line is omitted, not sent empty')
+ok(full.Line[0].SalesItemLineDetail.ItemRef.value === '42', 'the product resolves to an id')
+ok(full.Line[0].Description === 'Sealed hobby box', 'the description travels')
+ok(full.Line[0].SalesItemLineDetail.Qty === 4, 'the quantity')
+ok(full.Line[0].SalesItemLineDetail.UnitPrice === 125, 'the rate')
+ok(full.Line[0].Amount === 500, 'and the amount', String(full.Line[0].Amount))
+ok(
+  full.Line[0].SalesItemLineDetail.ClassRef?.value === '5000000000000123456',
+  'the class is on the line',
+  JSON.stringify(full.Line[0].SalesItemLineDetail.ClassRef)
+)
+
+// THE ADDRESS FALLS BACK TO THE ONE QUICKBOOKS HOLDS. An invoice with none of
+// its own must still go up addressed — which is exactly what their form does
+// when you pick a customer — rather than posting a document with no bill-to.
+const noAddr = repo.getInvoice(freehand.id)
+const fellBack = toQboInvoice(noAddr, { id: '77' }, new Map([['grading submission fee', { id: '9' }]]), {
+  billAddr: { ...EMPTY_ADDRESS, line1: '9 QuickBooks Way', city: 'Los Angeles', region: 'CA' },
+  billEmail: 'fallback@example.com'
+})
+ok(fellBack.BillAddr?.Line1 === '9 QuickBooks Way', 'a missing address falls back to QuickBooks')
+ok(fellBack.BillEmail?.Address === 'fallback@example.com', 'and so does a missing email')
+// But the invoice's OWN address wins when it has one — a correction typed here
+// is the newer fact.
+const ownWins = toQboInvoice(parityDetail, { id: '77' }, parityItems, {
+  billAddr: { ...EMPTY_ADDRESS, line1: '9 QuickBooks Way' }
+})
+ok(ownWins.BillAddr?.Line1 === '1234 W Olive Ave', "the invoice's own address wins")
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 14. the SKU decides which item a line points at ===')
+// ---------------------------------------------------------------------------
+// There is NO SKU field on a QuickBooks invoice line. The SKU printed on the
+// document is read off the ITEM, so the only way to get it right is to point the
+// line at the right item — which means matching on the SKU first, because an
+// item renamed in QuickBooks still carries the same one.
+const byName = new Map([['old name', { id: '1', name: 'Old Name', sku: 'SKU-A' }]])
+const bySku = new Map([['sku-a', { id: '7', name: 'Renamed In QuickBooks', sku: 'SKU-A' }]])
+
+ok(
+  resolveLineItemRef({ item: 'Old Name', sku: 'SKU-A' }, byName, bySku).id === '7',
+  'the SKU wins over the name',
+  resolveLineItemRef({ item: 'Old Name', sku: 'SKU-A' }, byName, bySku).id
+)
+ok(
+  resolveLineItemRef({ item: 'Old Name', sku: 'sku-a' }, byName, bySku).id === '7',
+  'and the match is case-insensitive'
+)
+// A line with no SKU still resolves by name, exactly as it always did — plenty
+// of what gets billed here is a service that was never stock.
+ok(
+  resolveLineItemRef({ item: 'Old Name', sku: null }, byName, bySku).id === '1',
+  'no SKU falls back to the name'
+)
+// A SKU QuickBooks does not know falls back too, rather than failing: the name
+// is still a real match, and refusing would block an invoice over a code.
+ok(
+  resolveLineItemRef({ item: 'Old Name', sku: 'SKU-NOPE' }, byName, bySku).id === '1',
+  'an unknown SKU falls back to the name'
+)
+ok(resolveLineItemRef({ item: 'Nothing', sku: null }, byName, bySku) === null, 'and nothing is null')
+
+// A line that resolves to nothing is still refused BY NAME before anything is
+// posted. Half an invoice is not a useful thing to have created.
+let skuRefused = ''
+try {
+  toQboInvoice(parityDetail, { id: '1' }, new Map(), { itemsBySku: new Map() })
+} catch (err) {
+  skuRefused = err instanceof Error ? err.message : String(err)
+}
+ok(/Topps/.test(skuRefused), 'an unresolvable line is refused by name', skuRefused)
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 15. the class, and never guessing one ===')
+// ---------------------------------------------------------------------------
+// Putting a ClassRef in the slot a company does not use is NOT an error:
+// QuickBooks accepts the invoice and drops the reference silently. So where it
+// goes is read from their preferences, and 'both' is what an unreadable
+// preference falls back to — the ignored one is discarded without complaint.
+const klass = { value: '900', name: 'United States' }
+const onTxn = toQboInvoice(parityDetail, { id: '1' }, parityItems, { classRef: klass, classOn: 'transaction' })
+ok(onTxn.ClassRef?.value === '900', 'per-transaction puts it on the header')
+ok(onTxn.Line[0].SalesItemLineDetail.ClassRef === undefined, 'and not on the line')
+
+const onLine = toQboInvoice(parityDetail, { id: '1' }, parityItems, { classRef: klass, classOn: 'line' })
+ok(onLine.ClassRef === undefined, 'per-line leaves the header alone')
+ok(onLine.Line[0].SalesItemLineDetail.ClassRef?.value === '900', 'and puts it on the line')
+
+const onBoth = toQboInvoice(parityDetail, { id: '1' }, parityItems, { classRef: klass, classOn: 'both' })
+ok(
+  onBoth.ClassRef?.value === '900' && onBoth.Line[0].SalesItemLineDetail.ClassRef?.value === '900',
+  'both sends it twice, so whichever slot is live gets it'
+)
+
+// THE RULE THAT MATTERS MOST IN THIS FILE. A class that could not be resolved is
+// OMITTED, never invented. An id we made up either bounces with an error naming
+// nothing, or lands on a different record that happens to hold it — and posts
+// real revenue against the wrong class, which nobody finds until year end.
+const noClass = toQboInvoice(parityDetail, { id: '1' }, parityItems, { classRef: null, classOn: 'line' })
+ok(noClass.ClassRef === undefined, 'an unresolved class puts nothing on the header')
+ok(
+  noClass.Line[0].SalesItemLineDetail.ClassRef === undefined,
+  'and nothing on the line — omitted, not guessed'
+)
+const classOff = toQboInvoice(parityDetail, { id: '1' }, parityItems, { classRef: klass, classOn: 'none' })
+ok(
+  classOff.ClassRef === undefined && classOff.Line[0].SalesItemLineDetail.ClassRef === undefined,
+  'and class tracking switched off sends none of it'
+)
+// Same rule for terms: no match means QuickBooks' own default, not a made-up id.
+const noTerm = toQboInvoice(parityDetail, { id: '1' }, parityItems, { termRef: null })
+ok(noTerm.SalesTermRef === undefined, 'an unresolved term is omitted too')
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 16. a QuickBooks failure must not lose the invoice ===')
+// ---------------------------------------------------------------------------
+// The local write is committed BEFORE the network call, so the worst a refused
+// push can cost is the push. These three columns are what turn that into a
+// retry rather than a re-type.
+const pushMe = repo.saveInvoice(
+  {
+    customerName: 'Ana Ruiz',
+    invoiceDate: '2026-08-09',
+    lines: [{ item: 'Design', quantity: 1, rate: 60 }]
+  },
+  'emp_owner'
+)
+ok(pushMe.qboPushState === 'none', 'a fresh invoice has never been pushed', pushMe.qboPushState)
+ok(pushMe.qboPushAttempts === 0, 'and has no attempts')
+
+repo.markPushPending(pushMe.id)
+const pending = repo.getInvoice(pushMe.id)
+// PENDING IS STAMPED BEFORE THE CALL, on purpose. A process killed mid-flight
+// leaves a row saying "this may be in QuickBooks", which is what makes somebody
+// look before pushing again. Written afterwards it would read "never tried",
+// and that claim leads straight to the same invoice existing twice.
+ok(pending.qboPushState === 'pending', 'the attempt is recorded before the call', pending.qboPushState)
+ok(pending.qboPushAttempts === 1, 'and counted', String(pending.qboPushAttempts))
+ok(typeof pending.qboPushAttemptedAt === 'string', 'and stamped')
+
+repo.markPushFailed(pushMe.id, 'QuickBooks: Invalid Reference Id — no such item.')
+const failed = repo.getInvoice(pushMe.id)
+ok(failed.qboPushState === 'failed', 'a refusal is recorded')
+ok(/Invalid Reference Id/.test(failed.qboPushError), 'with what Intuit said', failed.qboPushError)
+// THE DOCUMENT IS UNTOUCHED. This is the whole point of the ordering.
+ok(failed.status === 'draft', 'and the invoice is still a draft somebody can retry')
+ok(failed.lines.length === 1, 'with its lines intact')
+ok(failed.total === 60, 'and its total')
+ok(repo.listInvoicesNeedingPush().some((i: any) => i.id === pushMe.id), 'and it is on the retry list')
+
+// A successful push clears the failure, or it would sit on the retry list for
+// ever and get posted a second time.
+repo.markPosted(pushMe.id, { id: 'qbo-4242', docNumber: '2259' })
+const pushed = repo.getInvoice(pushMe.id)
+ok(pushed.qboPushState === 'ok', 'a success records ok', pushed.qboPushState)
+ok(pushed.qboPushError === null, 'and clears the error')
+ok(pushed.status === 'created', 'and moves it out of draft')
+ok(
+  !repo.listInvoicesNeedingPush().some((i: any) => i.id === pushMe.id),
+  'and takes it off the retry list'
+)
+// Nothing already in QuickBooks may appear on that list, whatever its push
+// state says — a retry would create the invoice twice.
+db.prepare(`UPDATE invoices SET qbo_push_state = 'failed' WHERE id = ?`).run(pushMe.id)
+ok(
+  !repo.listInvoicesNeedingPush().some((i: any) => i.id === pushMe.id),
+  'an invoice with a QuickBooks id is never offered for retry'
+)
+db.prepare(`UPDATE invoices SET qbo_push_state = 'ok' WHERE id = ?`).run(pushMe.id)
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 17. reading a status back out of QuickBooks ===')
+// ---------------------------------------------------------------------------
+// THREE OF THE OWNER'S FIVE STATES ARE REAL. Open, sent and paid come off the
+// Invoice entity. Viewed-by-payer and payout-sent are NOT exposed by the
+// Accounting API at all, so nothing here invents them.
+const seen = (over: any = {}): any => ({
+  qboId: '9',
+  docNumber: '2258',
+  emailStatus: null,
+  deliveredAt: null,
+  balance: null,
+  totalAmt: null,
+  linkedPayments: 0,
+  voided: false,
+  ...over
+})
+
+// OPEN — derived from Balance against TotalAmt. There is no status string to
+// read instead; "Open" on their screen is exactly these two numbers.
+ok(observedInvoiceStage(seen({ balance: 500, totalAmt: 500 })) === 'created', 'an open invoice reads created')
+// SENT — EmailStatus, or a DeliveryInfo time. Both are real fields.
+ok(observedSent(seen({ emailStatus: 'EmailSent' })) === true, 'EmailSent means sent')
+ok(observedSent(seen({ emailStatus: 'NeedToSend' })) === false, 'NeedToSend does not')
+ok(observedSent(seen({ emailStatus: 'NotSet' })) === false, 'and NotSet does not')
+ok(observedSent(seen({ deliveredAt: '2026-08-09T10:35:20-07:00' })) === true, 'a delivery time does')
+ok(
+  observedInvoiceStage(seen({ balance: 500, totalAmt: 500, emailStatus: 'EmailSent' })) === 'sent',
+  'so an emailed open invoice reads sent'
+)
+// PAID — a zero balance against a NON-ZERO total.
+ok(observedPaid(seen({ balance: 0, totalAmt: 500 })) === true, 'a cleared balance is paid')
+ok(observedPaid(seen({ balance: 250, totalAmt: 500 })) === false, 'half of it is not')
+ok(observedPartiallyPaid(seen({ balance: 250, totalAmt: 500 })) === true, 'it is partially paid')
+ok(observedPartiallyPaid(seen({ balance: 0, totalAmt: 500 })) === false, 'and fully paid is not partial')
+// ZERO OVER ZERO IS NOT PAID. That is what a voided or empty invoice looks
+// like, and calling it paid would put money in the paid total nobody ever sent.
+ok(observedPaid(seen({ balance: 0, totalAmt: 0 })) === false, 'zero of zero is not paid')
+// A reading we could not get is not a reading. Null must never be coerced to 0.
+ok(observedPaid(seen({ balance: null, totalAmt: null })) === false, 'and no answer is not paid')
+ok(observedInvoiceStage(seen()) === null, 'an empty observation implies nothing at all')
+// VOIDED HAS NO FIELD. v3 gives no status for it, so the signature is a zeroed
+// invoice whose private note starts with the word — and BOTH halves are
+// required, or ordinary notes start voiding invoices.
+ok(
+  looksVoidedInQbo({ totalAmt: 0, balance: 0, privateNote: 'Voided - RC 93' }) === true,
+  "QuickBooks' own voided note is recognised"
+)
+ok(looksVoidedInQbo({ totalAmt: 0, balance: 0, privateNote: 'Voided' }) === true, 'bare and annotated alike')
+// A note that MENTIONS voiding is not a void. "do not void this one" contains
+// the word and means the opposite, which is why the test is on the start.
+ok(
+  looksVoidedInQbo({ totalAmt: 0, balance: 0, privateNote: 'Do not void this one' }) === false,
+  'a note that merely mentions voiding is not a void'
+)
+// And a zeroed invoice with an ordinary note is just a zeroed invoice.
+ok(
+  looksVoidedInQbo({ totalAmt: 0, balance: 0, privateNote: 'Comped for the show' }) === false,
+  'a zero-value invoice with an ordinary note is not voided'
+)
+// A live invoice does not become void because somebody wrote the word on it.
+ok(
+  looksVoidedInQbo({ totalAmt: 500, balance: 500, privateNote: 'Voided the last one' }) === false,
+  'and an invoice with a balance is never voided by its note'
+)
+ok(looksVoidedInQbo({}) === false, 'an absent invoice is not a voided one')
+
+// VOID beats everything, including a zero balance that would otherwise look paid.
+ok(observedInvoiceStage(seen({ voided: true, balance: 0, totalAmt: 0 })) === 'void', 'voided reads void')
+ok(observedPaid(seen({ voided: true, balance: 0, totalAmt: 500 })) === false, 'and voided is never paid')
+// Highest-water-mark order: a paid invoice was also emailed, and reporting it as
+// merely sent would walk the board backwards on every refresh.
+ok(
+  observedInvoiceStage(seen({ balance: 0, totalAmt: 500, emailStatus: 'EmailSent' })) === 'paid',
+  'paid outranks sent'
+)
+
+// Only ever FORWARD, and only along a legal transition.
+ok(nextStageFromQbo('created', seen({ balance: 0, totalAmt: 500 })) === 'paid', 'created can go to paid')
+ok(nextStageFromQbo('created', seen({ balance: 500, totalAmt: 500 })) === null, 'and stays put otherwise')
+// A LOCALLY PAID INVOICE IS NEVER DRAGGED BACK. Paid is operator-recorded here —
+// cash and Zelle settle plenty of these without QuickBooks ever seeing the money
+// — so an outstanding balance over there is not evidence it did not arrive.
+ok(
+  nextStageFromQbo('paid', seen({ balance: 500, totalAmt: 500, emailStatus: 'EmailSent' })) === null,
+  'and a paid invoice is never walked backwards'
+)
+ok(nextStageFromQbo('sent', seen({ balance: 500, totalAmt: 500 })) === null, 'nor is a sent one')
+ok(nextStageFromQbo('void', seen({ balance: 0, totalAmt: 500 })) === null, 'and void is terminal')
+// An observation that implies nothing changes nothing.
+ok(nextStageFromQbo('created', seen()) === null, 'an unreadable answer moves no card')
+
+// The observation is written down, with provenance.
+const watched = repo.saveInvoice(
+  { customerName: 'Ana Ruiz', invoiceDate: '2026-08-09', lines: [{ item: 'Design', quantity: 1, rate: 500 }] },
+  'emp_owner'
+)
+repo.markPosted(watched.id, { id: '9', docNumber: '2260' })
+repo.recordQboObservation(watched.id, seen({ balance: 500, totalAmt: 500, emailStatus: 'EmailSent', deliveredAt: '2026-08-09T17:35:20Z' }))
+const observed = repo.getInvoice(watched.id)
+ok(observed.qboEmailStatus === 'EmailSent', 'the email status is kept verbatim', String(observed.qboEmailStatus))
+ok(observed.qboDeliveredAt === '2026-08-09T17:35:20Z', 'and when QuickBooks sent it')
+ok(observed.qboBalance === 500 && observed.qboTotalAmt === 500, 'and both numbers')
+ok(typeof observed.qboStatusCheckedAt === 'string', 'and when we got an answer')
+ok(observed.qboStatusError === null, 'with no error hanging over from before')
+
+// A FAILED READ MUST NOT OVERWRITE ONE THAT WORKED. Stale-but-true beats
+// fresh-and-wrong: an invoice QuickBooks said was paid last week is still paid
+// during an outage, and blanking it because the network was down would take a
+// true answer off the screen and put nothing in its place.
+// Both writes stamp ISO milliseconds, and a test fast enough to land them in the
+// same millisecond cannot tell "attempted-at moved" from "attempted-at was never
+// touched" — the exact thing being asserted. So the clock is given room.
+const spinUntil = Date.now() + 3
+while (Date.now() < spinUntil) {
+  /* deliberately busy: sleeping would need this whole file to be async */
+}
+repo.recordQboStatusFailure(watched.id, 'QuickBooks is rate limiting requests.')
+const afterFailure = repo.getInvoice(watched.id)
+ok(afterFailure.qboBalance === 500, 'a failed read leaves the last good balance alone')
+ok(afterFailure.qboEmailStatus === 'EmailSent', 'and the last good email status')
+ok(afterFailure.qboStatusCheckedAt === observed.qboStatusCheckedAt, 'and does not move checked-at')
+ok(/rate limiting/.test(afterFailure.qboStatusError), 'while saying what went wrong')
+ok(
+  afterFailure.qboStatusAttemptedAt > afterFailure.qboStatusCheckedAt,
+  'and recording that we asked, more recently than we last got an answer',
+  `${afterFailure.qboStatusCheckedAt} → ${afterFailure.qboStatusAttemptedAt}`
+)
+
+// A settled invoice is off the sweep — there is nothing left to learn about it.
+repo.setInvoiceStatus(watched.id, 'paid', 'emp_owner')
+ok(
+  !repo.listPostedInvoices().some((i: any) => i.id === watched.id),
+  'a paid invoice is not re-checked'
+)
+
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

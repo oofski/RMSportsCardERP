@@ -147,6 +147,18 @@ export const IPC = {
   invoiceCreateInQbo: 'invoices:qbo:create',
   invoiceSendFromQbo: 'invoices:qbo:send',
   invoiceOpenInQbo: 'invoices:qbo:open',
+  // Save it here, then put it in QuickBooks — one gesture, two steps, in that
+  // order. The local write is committed BEFORE the network call, so a refused
+  // push costs the push and never the invoice. `invoiceQboPending` is what the
+  // ones that failed come back on, and `invoiceRetryQboPush` is how they are
+  // tried again; without those a failure would be a silent drop.
+  invoiceSaveAndPush: 'invoices:save-and-push',
+  invoiceRetryQboPush: 'invoices:qbo:retry-push',
+  invoiceQboPending: 'invoices:qbo:pending',
+  // Read the invoice's state back OUT of QuickBooks. Three of the five states
+  // the owner asked about are genuinely in this API and two are not — see
+  // @shared/invoices for which, and why the missing two are not faked.
+  invoiceSyncQboStatus: 'invoices:qbo:sync-status',
   // The invoice as a document a BUYER reads. The CSV is for QuickBooks and the
   // API call is for QuickBooks; this is the only artefact in the module meant
   // for a person.

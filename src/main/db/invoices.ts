@@ -1,6 +1,8 @@
 import { randomUUID } from 'crypto'
 import {
+  asPushState,
   dueDateFor,
+  hasAddress,
   invoiceTotal,
   lineAmount,
   money,
@@ -8,12 +10,14 @@ import {
   validateCustomer,
   validateInvoice,
   type Invoice,
+  type InvoiceAddress,
   type InvoiceCustomer,
   type InvoiceDetail,
   type InvoiceLine,
   type InvoiceStatus,
   type InvoiceTerms,
-  type NewInvoice
+  type NewInvoice,
+  type QboInvoiceObservation
 } from '@shared/invoices'
 import { asCarrier, asPaymentTiming, detectCarrier } from '@shared/freight'
 import { asShipStatus } from '@shared/tracking'
@@ -42,11 +46,67 @@ function asTerms(v: unknown): InvoiceTerms {
   return v === 'Due on receipt' || v === 'Net 15' || v === 'Net 60' ? v : 'Net 30'
 }
 
+/**
+ * The six bill-to columns, in and out.
+ *
+ * One pair of helpers shared by the buyer and the invoice, because the two
+ * tables hold the same six columns for the same reason and a second copy of this
+ * mapping is a second place for a typo to put the zip in the state.
+ */
+interface AddressRow {
+  bill_line1: string | null
+  bill_line2: string | null
+  bill_city: string | null
+  bill_region: string | null
+  bill_postal_code: string | null
+  bill_country: string | null
+}
+
+/**
+ * Null when nothing was filled in.
+ *
+ * An all-blank address must read as ABSENT rather than as an object of nulls:
+ * the posting code decides whether to fall back to the address QuickBooks holds
+ * by asking whether we have one, and an empty shell would answer yes and send
+ * QuickBooks an address that erases theirs.
+ */
+function toAddress(r: AddressRow): InvoiceAddress | null {
+  const a: InvoiceAddress = {
+    line1: r.bill_line1,
+    line2: r.bill_line2,
+    city: r.bill_city,
+    region: r.bill_region,
+    postalCode: r.bill_postal_code,
+    country: r.bill_country
+  }
+  return hasAddress(a) ? a : null
+}
+
+function addressParams(a: InvoiceAddress | null | undefined): {
+  billLine1: string | null
+  billLine2: string | null
+  billCity: string | null
+  billRegion: string | null
+  billPostalCode: string | null
+  billCountry: string | null
+} {
+  return {
+    billLine1: clean(a?.line1),
+    billLine2: clean(a?.line2),
+    billCity: clean(a?.city),
+    billRegion: clean(a?.region),
+    billPostalCode: clean(a?.postalCode),
+    billCountry: clean(a?.country)
+  }
+}
+
+const ADDRESS_COLS = `bill_line1, bill_line2, bill_city, bill_region, bill_postal_code, bill_country`
+
 // ---------------------------------------------------------------------------
 // Buyers
 // ---------------------------------------------------------------------------
 
-interface CustomerRow {
+interface CustomerRow extends AddressRow {
   id: string
   name: string
   email: string | null
@@ -71,6 +131,7 @@ function toCustomer(r: CustomerRow): InvoiceCustomer {
     className: r.class_name,
     message: r.message,
     notes: r.notes,
+    billAddr: toAddress(r),
     qboId: r.qbo_id,
     active: r.active === 1,
     createdAt: r.created_at,
@@ -79,7 +140,7 @@ function toCustomer(r: CustomerRow): InvoiceCustomer {
 }
 
 const CUSTOMER_COLS = `id, name, email, terms, location, class_name, message, notes, qbo_id,
-                       active, created_at, updated_at`
+                       ${ADDRESS_COLS}, active, created_at, updated_at`
 
 export function listCustomers(includeInactive = false): InvoiceCustomer[] {
   const rows = getDb()
@@ -108,6 +169,7 @@ export interface CustomerInput {
   className?: string | null
   message?: string | null
   notes?: string | null
+  billAddr?: InvoiceAddress | null
   qboId?: string | null
 }
 
@@ -150,10 +212,12 @@ export function saveCustomer(input: CustomerInput): InvoiceCustomer {
 
   db.prepare(
     `INSERT INTO invoice_customers
-       (id, name, email, terms, location, class_name, message, notes, qbo_id, active,
-        created_at, updated_at)
-     VALUES (@id, @name, @email, @terms, @location, @className, @message, @notes, @qboId, 1,
-             @createdAt, @updatedAt)
+       (id, name, email, terms, location, class_name, message, notes, qbo_id,
+        bill_line1, bill_line2, bill_city, bill_region, bill_postal_code, bill_country,
+        active, created_at, updated_at)
+     VALUES (@id, @name, @email, @terms, @location, @className, @message, @notes, @qboId,
+             @billLine1, @billLine2, @billCity, @billRegion, @billPostalCode, @billCountry,
+             1, @createdAt, @updatedAt)
      ON CONFLICT(id) DO UPDATE SET
        name       = excluded.name,
        email      = excluded.email,
@@ -166,6 +230,21 @@ export function saveCustomer(input: CustomerInput): InvoiceCustomer {
        -- learned from a successful post; a later rename typed on this screen
        -- must not throw it away and force the match to be made again.
        qbo_id     = COALESCE(excluded.qbo_id, invoice_customers.qbo_id),
+       -- The address moves as a WHOLE or not at all. Six independent COALESCEs
+       -- would merge a new street onto an old city the first time somebody
+       -- cleared a field, producing an address that was never anybody's.
+       bill_line1       = CASE WHEN @hasAddress = 1 THEN excluded.bill_line1
+                               ELSE invoice_customers.bill_line1 END,
+       bill_line2       = CASE WHEN @hasAddress = 1 THEN excluded.bill_line2
+                               ELSE invoice_customers.bill_line2 END,
+       bill_city        = CASE WHEN @hasAddress = 1 THEN excluded.bill_city
+                               ELSE invoice_customers.bill_city END,
+       bill_region      = CASE WHEN @hasAddress = 1 THEN excluded.bill_region
+                               ELSE invoice_customers.bill_region END,
+       bill_postal_code = CASE WHEN @hasAddress = 1 THEN excluded.bill_postal_code
+                               ELSE invoice_customers.bill_postal_code END,
+       bill_country     = CASE WHEN @hasAddress = 1 THEN excluded.bill_country
+                               ELSE invoice_customers.bill_country END,
        updated_at = excluded.updated_at`
   ).run({
     id,
@@ -177,6 +256,12 @@ export function saveCustomer(input: CustomerInput): InvoiceCustomer {
     message: clean(input.message),
     notes: clean(input.notes),
     qboId: clean(input.qboId),
+    ...addressParams(input.billAddr),
+    // An edit that carries no address at all leaves the stored one alone. The
+    // buyer form is not the only thing that saves a customer — writing one from
+    // the invoice screen passes a name and an email and nothing else, and that
+    // must not wipe an address somebody typed.
+    hasAddress: hasAddress(input.billAddr) ? 1 : 0,
     createdAt: existing?.created_at ?? stamp,
     updatedAt: stamp
   })
@@ -214,7 +299,7 @@ export function removeCustomer(id: string): { deleted: boolean } {
 // Invoices
 // ---------------------------------------------------------------------------
 
-interface InvoiceRow {
+interface InvoiceRow extends AddressRow {
   id: string
   invoice_number: string | null
   customer_id: string | null
@@ -232,6 +317,18 @@ interface InvoiceRow {
   qbo_id: string | null
   qbo_doc_number: string | null
   qbo_synced_at: string | null
+  qbo_push_state: string | null
+  qbo_push_error: string | null
+  qbo_push_attempted_at: string | null
+  qbo_push_attempts: number | null
+  qbo_email_status: string | null
+  qbo_delivered_at: string | null
+  qbo_balance: number | null
+  qbo_total_amt: number | null
+  qbo_voided: number | null
+  qbo_status_checked_at: string | null
+  qbo_status_attempted_at: string | null
+  qbo_status_error: string | null
   total: number
   paid_at: string | null
   paid_by: string | null
@@ -255,6 +352,8 @@ interface LineRow {
   invoice_id: string
   position: number
   item: string
+  product_id: string | null
+  sku: string | null
   description: string | null
   quantity: number
   rate: number
@@ -274,6 +373,7 @@ function toInvoice(r: InvoiceRow): Invoice {
     customerId: r.customer_id,
     customerName: r.customer_name,
     email: r.email,
+    billAddr: toAddress(r),
     terms: asTerms(r.terms),
     invoiceDate: r.invoice_date,
     dueDate: r.due_date,
@@ -286,6 +386,22 @@ function toInvoice(r: InvoiceRow): Invoice {
     qboId: r.qbo_id,
     qboDocNumber: r.qbo_doc_number,
     qboSyncedAt: r.qbo_synced_at,
+    qboPushState: asPushState(r.qbo_push_state),
+    qboPushError: r.qbo_push_error ?? null,
+    qboPushAttemptedAt: r.qbo_push_attempted_at ?? null,
+    qboPushAttempts: r.qbo_push_attempts ?? 0,
+    qboEmailStatus: r.qbo_email_status ?? null,
+    qboDeliveredAt: r.qbo_delivered_at ?? null,
+    // Nullable on purpose, and null is not zero. "QuickBooks says nothing is
+    // owed" and "we have never asked QuickBooks" are different facts, and a
+    // balance defaulted to 0 would read as paid in full on a card nobody has
+    // ever synced.
+    qboBalance: r.qbo_balance ?? null,
+    qboTotalAmt: r.qbo_total_amt ?? null,
+    qboVoided: r.qbo_voided === 1,
+    qboStatusCheckedAt: r.qbo_status_checked_at ?? null,
+    qboStatusAttemptedAt: r.qbo_status_attempted_at ?? null,
+    qboStatusError: r.qbo_status_error ?? null,
     total: r.total,
     paidAt: r.paid_at,
     paidBy: r.paid_by,
@@ -311,6 +427,8 @@ function toLine(r: LineRow): InvoiceLine {
     invoiceId: r.invoice_id,
     position: r.position,
     item: r.item,
+    productId: r.product_id,
+    sku: r.sku,
     description: r.description,
     quantity: r.quantity,
     rate: r.rate,
@@ -322,11 +440,20 @@ function toLine(r: LineRow): InvoiceLine {
 
 const INVOICE_COLS = `id, invoice_number, customer_id, customer_name, email, terms, invoice_date,
                       due_date, location, memo, message, send_later, class_name, status,
-                      qbo_id, qbo_doc_number, qbo_synced_at, total, paid_at, paid_by,
+                      qbo_id, qbo_doc_number, qbo_synced_at,
+                      qbo_push_state, qbo_push_error, qbo_push_attempted_at, qbo_push_attempts,
+                      qbo_email_status, qbo_delivered_at, qbo_balance, qbo_total_amt,
+                      qbo_voided, qbo_status_checked_at, qbo_status_attempted_at,
+                      qbo_status_error,
+                      ${ADDRESS_COLS},
+                      total, paid_at, paid_by,
                       carrier, service, tracking_number, payment_timing,
                       tracking_status, tracking_status_detail, tracking_status_at,
                       tracking_checked_at, tracking_error, tracking_attempted_at,
                       created_by, created_at, updated_at`
+
+const LINE_COLS = `id, invoice_id, position, item, product_id, sku, description, quantity, rate,
+                   amount, tax_rate, class_name`
 
 /** Newest first — an invoice list is read from the top. */
 export function listInvoices(limit = 200): Invoice[] {
@@ -347,11 +474,7 @@ export function getInvoice(id: string): InvoiceDetail | null {
     | undefined
   if (!row) return null
   const lines = db
-    .prepare(
-      `SELECT id, invoice_id, position, item, description, quantity, rate, amount,
-              tax_rate, class_name
-         FROM invoice_lines WHERE invoice_id = ? ORDER BY position ASC`
-    )
+    .prepare(`SELECT ${LINE_COLS} FROM invoice_lines WHERE invoice_id = ? ORDER BY position ASC`)
     .all(id) as LineRow[]
   return { ...toInvoice(row), lines: lines.map(toLine) }
 }
@@ -359,6 +482,29 @@ export function getInvoice(id: string): InvoiceDetail | null {
 /** Several invoices with their lines, for the CSV export. */
 export function getInvoices(ids: string[]): InvoiceDetail[] {
   return ids.map((id) => getInvoice(id)).filter((i): i is InvoiceDetail => i !== null)
+}
+
+/**
+ * A catalog product's SKU, or null.
+ *
+ * Its own read rather than a join in saveInvoice because the link is allowed to
+ * dangle: a product deleted after an invoice was raised leaves the line's
+ * snapshotted name and SKU intact, which is the behaviour a sent document needs.
+ */
+function productSku(productId: string): string | null {
+  const row = getDb().prepare(`SELECT sku FROM inventory_products WHERE id = ?`).get(productId) as
+    | { sku: string | null }
+    | undefined
+  return clean(row?.sku)
+}
+
+/** The buyer's stored bill-to, for snapshotting onto a new invoice. */
+function customerAddress(customerId: string | null): InvoiceAddress | null {
+  if (!customerId) return null
+  const row = getDb()
+    .prepare(`SELECT ${ADDRESS_COLS} FROM invoice_customers WHERE id = ?`)
+    .get(customerId) as AddressRow | undefined
+  return row ? toAddress(row) : null
 }
 
 /** The next number in the series, so the editor opens with one filled in. */
@@ -403,20 +549,39 @@ export function saveInvoice(
   const invoiceDate = input.invoiceDate
   const dueDate = clean(input.dueDate) ?? dueDateFor(invoiceDate, terms)
 
-  const lines = input.lines.map((l, i) => ({
-    id: randomUUID(),
-    invoiceId: id,
-    position: i,
-    item: l.item.trim(),
-    description: clean(l.description),
-    quantity: Number(l.quantity) || 0,
-    rate: money(Number(l.rate) || 0),
-    // The agreed amount wins when one was given; quantity × rate is only the
-    // suggestion. See the note on InvoiceLine.amount.
-    amount: money(l.amount ?? lineAmount(l.quantity, l.rate)),
-    taxRate: clean(l.taxRate),
-    className: clean(l.className)
-  }))
+  // The bill-to, snapshotted. When the invoice carries none of its own but names
+  // a buyer we hold, theirs is copied ONTO the invoice rather than joined at read
+  // time — which is the entire point of a snapshot, and the reason a buyer who
+  // moves next year cannot rewrite where this document says it went.
+  const billAddr =
+    hasAddress(input.billAddr) ? (input.billAddr ?? null) : customerAddress(clean(input.customerId))
+
+  const lines = input.lines.map((l, i) => {
+    // THE SKU IS AUTO-FILLED FROM THE PRODUCT, once, at save time. Looked up
+    // here rather than trusted from the caller because the caller is a form: a
+    // screen that fills the box on selection still leaves it stale if somebody
+    // changes the product afterwards, and an explicit blank must not silently
+    // undo the link. A SKU that WAS typed is kept — a one-off line is allowed to
+    // carry a code that is not in this catalog.
+    const productId = clean(l.productId)
+    const sku = clean(l.sku) ?? (productId ? productSku(productId) : null)
+    return {
+      id: randomUUID(),
+      invoiceId: id,
+      position: i,
+      item: l.item.trim(),
+      productId,
+      sku,
+      description: clean(l.description),
+      quantity: Number(l.quantity) || 0,
+      rate: money(Number(l.rate) || 0),
+      // The agreed amount wins when one was given; quantity × rate is only the
+      // suggestion. See the note on InvoiceLine.amount.
+      amount: money(l.amount ?? lineAmount(l.quantity, l.rate)),
+      taxRate: clean(l.taxRate),
+      className: clean(l.className)
+    }
+  })
 
   const run = db.transaction(() => {
     db.prepare(
@@ -424,16 +589,24 @@ export function saveInvoice(
          (id, invoice_number, customer_id, customer_name, email, terms, invoice_date, due_date,
           location, memo, message, send_later, class_name, status, qbo_id, qbo_doc_number,
           qbo_synced_at, total, carrier, service, tracking_number, payment_timing,
+          bill_line1, bill_line2, bill_city, bill_region, bill_postal_code, bill_country,
           created_by, created_at, updated_at)
        VALUES (@id, @invoiceNumber, @customerId, @customerName, @email, @terms, @invoiceDate,
                @dueDate, @location, @memo, @message, @sendLater, @className, 'draft',
                NULL, NULL, NULL, @total, @carrier, @service, @trackingNumber, @paymentTiming,
+               @billLine1, @billLine2, @billCity, @billRegion, @billPostalCode, @billCountry,
                @createdBy, @createdAt, @updatedAt)
        ON CONFLICT(id) DO UPDATE SET
          invoice_number = excluded.invoice_number,
          customer_id    = excluded.customer_id,
          customer_name  = excluded.customer_name,
          email          = excluded.email,
+         bill_line1       = excluded.bill_line1,
+         bill_line2       = excluded.bill_line2,
+         bill_city        = excluded.bill_city,
+         bill_region      = excluded.bill_region,
+         bill_postal_code = excluded.bill_postal_code,
+         bill_country     = excluded.bill_country,
          terms          = excluded.terms,
          invoice_date   = excluded.invoice_date,
          due_date       = excluded.due_date,
@@ -469,6 +642,7 @@ export function saveInvoice(
       service: clean(input.service),
       trackingNumber: clean(input.trackingNumber),
       paymentTiming: asPaymentTiming(input.paymentTiming),
+      ...addressParams(billAddr),
       total: invoiceTotal(lines),
       // Null on an edit. The ON CONFLICT branch does not touch created_by, so
       // whatever is bound here is discarded on that path — but bind the value
@@ -482,10 +656,10 @@ export function saveInvoice(
     db.prepare(`DELETE FROM invoice_lines WHERE invoice_id = ?`).run(id)
     const insert = db.prepare(
       `INSERT INTO invoice_lines
-         (id, invoice_id, position, item, description, quantity, rate, amount, tax_rate,
-          class_name, created_at, updated_at)
-       VALUES (@id, @invoiceId, @position, @item, @description, @quantity, @rate, @amount,
-               @taxRate, @className, @stamp, @stamp)`
+         (id, invoice_id, position, item, product_id, sku, description, quantity, rate, amount,
+          tax_rate, class_name, created_at, updated_at)
+       VALUES (@id, @invoiceId, @position, @item, @productId, @sku, @description, @quantity,
+               @rate, @amount, @taxRate, @className, @stamp, @stamp)`
     )
     for (const l of lines) insert.run({ ...l, stamp })
   })
@@ -496,19 +670,159 @@ export function saveInvoice(
   return saved
 }
 
-/** Record what QuickBooks said after a successful post. */
+/**
+ * Record what QuickBooks said after a successful post.
+ *
+ * Clears the push error as well as stamping the id: an invoice that failed
+ * yesterday and posted today is not a failure any more, and leaving the sentence
+ * behind would keep it on a retry list for ever.
+ */
 export function markPosted(
   id: string,
   qbo: { id: string; docNumber: string | null },
   status: InvoiceStatus = 'created'
 ): void {
+  const stamp = nowIso()
   getDb()
     .prepare(
       `UPDATE invoices
-          SET qbo_id = ?, qbo_doc_number = ?, qbo_synced_at = ?, status = ?, updated_at = ?
+          SET qbo_id = ?, qbo_doc_number = ?, qbo_synced_at = ?, status = ?,
+              qbo_push_state = 'ok', qbo_push_error = NULL, qbo_push_attempted_at = ?,
+              updated_at = ?
         WHERE id = ?`
     )
-    .run(qbo.id, qbo.docNumber, nowIso(), status, nowIso(), id)
+    .run(qbo.id, qbo.docNumber, stamp, status, stamp, stamp, id)
+}
+
+/**
+ * About to try. Stamped BEFORE the network call, and that ordering is the point.
+ *
+ * A process killed between the request leaving and the reply arriving leaves a
+ * row reading 'pending', which says "this may be in QuickBooks" — the state that
+ * makes somebody check before pushing again. Written after the call it would
+ * read 'none', and "never tried" is the one claim that leads straight to a
+ * duplicate invoice in a real company's books.
+ *
+ * The attempt COUNTER climbs here rather than on failure for the same reason: an
+ * attempt that vanished mid-flight still happened.
+ */
+export function markPushPending(id: string): void {
+  const stamp = nowIso()
+  getDb()
+    .prepare(
+      `UPDATE invoices
+          SET qbo_push_state = 'pending',
+              qbo_push_attempted_at = ?,
+              qbo_push_attempts = COALESCE(qbo_push_attempts, 0) + 1,
+              updated_at = ?
+        WHERE id = ?`
+    )
+    .run(stamp, stamp, id)
+}
+
+/**
+ * It was refused, and this is what Intuit said.
+ *
+ * The local invoice is untouched apart from these three columns. That is the
+ * whole contract of "save first, then push": a QuickBooks failure costs the
+ * push, never the document.
+ */
+export function markPushFailed(id: string, error: string): void {
+  const stamp = nowIso()
+  getDb()
+    .prepare(
+      `UPDATE invoices
+          SET qbo_push_state = 'failed', qbo_push_error = ?, updated_at = ?
+        WHERE id = ?`
+    )
+    .run(error.slice(0, 2000), stamp, id)
+}
+
+/**
+ * Invoices that tried to reach QuickBooks and did not.
+ *
+ * Deliberately excludes anything that already has a qbo_id — a row can only be
+ * on this list if there is nothing in QuickBooks to duplicate. 'pending' is
+ * included because a push interrupted mid-flight needs a human eye, and the
+ * screen offering the retry is the place to say so.
+ */
+export function listInvoicesNeedingPush(limit = 100): Invoice[] {
+  return (
+    getDb()
+      .prepare(
+        `SELECT ${INVOICE_COLS} FROM invoices
+          WHERE (qbo_id IS NULL OR qbo_id = '')
+            AND qbo_push_state IN ('failed', 'pending')
+            AND status != 'void'
+          ORDER BY qbo_push_attempted_at DESC LIMIT ?`
+      )
+      .all(Math.max(1, Math.min(500, limit))) as InvoiceRow[]
+  ).map(toInvoice)
+}
+
+/** Everything this app has posted, so a status pull knows what to ask about. */
+export function listPostedInvoices(limit = 200): Invoice[] {
+  return (
+    getDb()
+      .prepare(
+        `SELECT ${INVOICE_COLS} FROM invoices
+          WHERE qbo_id IS NOT NULL AND qbo_id != '' AND status != 'paid' AND status != 'void'
+          ORDER BY invoice_date DESC LIMIT ?`
+      )
+      .all(Math.max(1, Math.min(1000, limit))) as InvoiceRow[]
+  ).map(toInvoice)
+}
+
+/**
+ * Write down what QuickBooks said about an invoice.
+ *
+ * Facts only — this does NOT move the card. The caller decides that, through
+ * nextStageFromQbo, because moving a card is a judgement about two systems and
+ * recording an observation is not.
+ */
+export function recordQboObservation(id: string, o: QboInvoiceObservation): void {
+  const stamp = nowIso()
+  getDb()
+    .prepare(
+      `UPDATE invoices
+          SET qbo_email_status = ?, qbo_delivered_at = ?, qbo_balance = ?, qbo_total_amt = ?,
+              qbo_voided = ?, qbo_doc_number = COALESCE(?, qbo_doc_number),
+              qbo_status_checked_at = ?, qbo_status_attempted_at = ?, qbo_status_error = NULL,
+              updated_at = ?
+        WHERE id = ?`
+    )
+    .run(
+      o.emailStatus,
+      o.deliveredAt,
+      o.balance,
+      o.totalAmt,
+      o.voided ? 1 : 0,
+      o.docNumber,
+      stamp,
+      stamp,
+      stamp,
+      id
+    )
+}
+
+/**
+ * We asked and could not get an answer.
+ *
+ * Touches attempted_at and the error and NOTHING else — the same rule the
+ * carrier tracking columns follow. Stale-but-true beats fresh-and-wrong: an
+ * invoice QuickBooks said was paid last week is still paid during an outage, and
+ * blanking the reading because the network was down would take a true answer off
+ * the screen and replace it with nothing.
+ */
+export function recordQboStatusFailure(id: string, error: string): void {
+  const stamp = nowIso()
+  getDb()
+    .prepare(
+      `UPDATE invoices
+          SET qbo_status_attempted_at = ?, qbo_status_error = ?, updated_at = ?
+        WHERE id = ?`
+    )
+    .run(stamp, error.slice(0, 2000), stamp, id)
 }
 
 /**
