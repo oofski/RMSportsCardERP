@@ -56,6 +56,33 @@ function norm(v: string | null | undefined): string {
   return (v ?? '').trim().toLowerCase()
 }
 
+/**
+ * How long a NEGATIVE answer is believed.
+ *
+ * A resolved id is cached for the life of the process — an id does not change,
+ * and re-querying the class list on every invoice is two round trips to learn
+ * the same number. A failure is different: "class tracking is switched off" is a
+ * setting the operator is being told to go and change, and a cache that
+ * outlived the fix would keep posting classless invoices until somebody
+ * restarted the app and nobody would connect the two.
+ *
+ * Ten minutes is long enough that a bad afternoon at Intuit does not become two
+ * extra calls per invoice, and short enough that going to fix the setting and
+ * coming back works.
+ */
+const NEGATIVE_TTL_MS = 10 * 60 * 1000
+
+interface Cached<T> {
+  value: T
+  /** Infinity for answers that cannot go stale. */
+  until: number
+}
+
+function fresh<T>(entry: Cached<T> | undefined): T | undefined {
+  if (!entry) return undefined
+  return entry.until > Date.now() ? entry.value : undefined
+}
+
 // ---------------------------------------------------------------------------
 // Class
 // ---------------------------------------------------------------------------
@@ -74,7 +101,7 @@ export interface RefResult {
   reason: string | null
 }
 
-const classCache = new Map<string, RefResult>()
+const classCache = new Map<string, Cached<RefResult>>()
 
 /**
  * Find the "United States" class, creating it once if this company has none.
@@ -96,7 +123,7 @@ const classCache = new Map<string, RefResult>()
  */
 export async function resolveInvoiceClass(): Promise<RefResult> {
   const key = realm()
-  const cached = classCache.get(key)
+  const cached = fresh(classCache.get(key))
   if (cached) return cached
 
   let result: RefResult
@@ -139,11 +166,12 @@ export async function resolveInvoiceClass(): Promise<RefResult> {
     }
   }
 
-  // A FAILURE IS CACHED TOO, and on purpose. Class tracking being off is a
-  // setting, not a blip — retrying the create on every invoice would mean two
-  // extra round trips and an identical refusal each time, and would bury the one
-  // note that explains it under a stack of the same note.
-  classCache.set(key, result)
+  // A FAILURE IS CACHED TOO, and on purpose: class tracking being off is a
+  // setting, not a blip, and retrying the create on every invoice would mean two
+  // extra round trips and an identical refusal each time. But only for a while —
+  // the operator is being told to go and change that setting, and an answer
+  // cached for the life of the process would outlive the fix.
+  classCache.set(key, { value: result, until: result.ref ? Infinity : Date.now() + NEGATIVE_TTL_MS })
   return result
 }
 
@@ -167,7 +195,7 @@ interface RawPreferences {
   }
 }
 
-const placementCache = new Map<string, QboClassPlacement>()
+const placementCache = new Map<string, Cached<QboClassPlacement>>()
 
 /**
  * Header, line, or both — read from the company's own preferences.
@@ -185,20 +213,29 @@ const placementCache = new Map<string, QboClassPlacement>()
  */
 export async function resolveClassPlacement(): Promise<QboClassPlacement> {
   const key = realm()
-  const cached = placementCache.get(key)
+  const cached = fresh(placementCache.get(key))
   if (cached) return cached
 
   let placement: QboClassPlacement
+  let settled = true
   try {
     const body = await qboRequest<RawPreferences>({ path: 'preferences' })
     const prefs = body.Preferences?.AccountingInfoPrefs ?? {}
     const perLine = prefs.ClassTrackingPerTxnLine === true
     const perTxn = prefs.ClassTrackingPerTxn === true
     placement = perLine && perTxn ? 'both' : perLine ? 'line' : perTxn ? 'transaction' : 'none'
+    // 'none' means class tracking is OFF, which is the thing the operator is
+    // being told to switch on. Held briefly rather than for the session, for the
+    // same reason the class failure is.
+    settled = placement !== 'none'
   } catch {
     placement = 'both'
+    settled = false
   }
-  placementCache.set(key, placement)
+  placementCache.set(key, {
+    value: placement,
+    until: settled ? Infinity : Date.now() + NEGATIVE_TTL_MS
+  })
   return placement
 }
 
@@ -213,7 +250,7 @@ interface RawTerm {
   DueDays?: number
 }
 
-const termCache = new Map<string, Map<string, QboRef>>()
+const termCache = new Map<string, Cached<Map<string, QboRef>>>()
 
 /**
  * The company's payment terms, keyed by lowercased name.
@@ -226,7 +263,7 @@ const termCache = new Map<string, Map<string, QboRef>>()
  */
 async function loadTerms(): Promise<Map<string, QboRef>> {
   const key = realm()
-  const cached = termCache.get(key)
+  const cached = fresh(termCache.get(key))
   if (cached) return cached
 
   const byName = new Map<string, QboRef>()
@@ -239,7 +276,11 @@ async function loadTerms(): Promise<Map<string, QboRef>> {
     // An empty map means "omit SalesTermRef", which is the safe outcome. The
     // reason is reported by the caller, which knows which term it wanted.
   }
-  termCache.set(key, byName)
+  // Always time-limited, unlike the class id. A term this app wanted and did not
+  // find is something the operator can go and ADD in QuickBooks, and a list
+  // cached for the session would keep reporting it missing afterwards. One extra
+  // query every ten minutes is not a cost worth optimising against that.
+  termCache.set(key, { value: byName, until: Date.now() + NEGATIVE_TTL_MS })
   return byName
 }
 
