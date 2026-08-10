@@ -89,7 +89,21 @@ export function PasteOfferPanel({
 }: {
   onApply: (lines: OfferDraftLine[]) => void
 }): JSX.Element {
-  const [open, setOpen] = useState(false)
+  /**
+   * OPEN FROM THE START.
+   *
+   * This was a button you pressed to reveal the box, and the owner's first
+   * attempt went into the catalog search directly beneath it — a wide, obvious
+   * text field, where a collapsed button is not one. Nine lines of a supplier's
+   * message landed in a product search, which found nothing and explained
+   * nothing.
+   *
+   * A textarea that is already there cannot lose that race. Nothing is parsed
+   * until there is text and nothing is ordered until the rows are confirmed, so
+   * showing it costs a few lines of height and removes the only way to
+   * misunderstand the screen.
+   */
+  const [open, setOpen] = useState(true)
   const [text, setText] = useState('')
   const [rows, setRows] = useState<ReviewRow[] | null>(null)
   const [ignored, setIgnored] = useState<{ lineNumber: number; raw: string; reason: string }[]>([])
