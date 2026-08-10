@@ -210,41 +210,45 @@ export function registerInvoicesIpc(): void {
   )
 
   /**
-   * Delete an invoice here AND in QuickBooks.
+   * Delete an invoice. Here always; in QuickBooks if it will allow it.
    *
-   * Order matters and is not interchangeable. QuickBooks first: if that call
-   * fails the local row is left exactly as it was, so the operator can see the
-   * invoice, read the reason, and try again. Deleting locally first and then
-   * failing remotely would leave a live invoice in the accounts that this app
-   * no longer knows exists — invisible on every screen and still owed by a
-   * customer.
+   * The order is still QuickBooks first, but its refusal no longer stops
+   * anything — it is reported instead. Intuit will not delete an invoice that
+   * has a payment applied, and answers with a 401 AuthorizationFailure that
+   * reads like a broken connection rather than a business rule. Letting that
+   * block the local delete meant the button did nothing at all on precisely
+   * the invoices somebody wanted gone.
+   *
+   * `removedFromQbo` comes back so the screen can say which of the two
+   * happened. A copy left on the books is a real consequence and belongs on
+   * screen, not in a log.
    */
-  ipcMain.handle(IPC.invoiceDelete, async (_e, id: unknown): Promise<Result<{ id: string }>> => {
-    try {
-      requireInvoicing()
-      const target = str(id)
-      const invoice = getInvoice(target)
-      if (!invoice) return { ok: false, error: 'That invoice is already gone.' }
+  ipcMain.handle(
+    IPC.invoiceDelete,
+    async (_e, id: unknown): Promise<Result<{ id: string; removedFromQbo: boolean; qboError: string | null }>> => {
+      try {
+        requireInvoicing()
+        const target = str(id)
+        const invoice = getInvoice(target)
+        if (!invoice) return { ok: false, error: 'That invoice is already gone.' }
 
-      let removedFromQbo = false
-      if (invoice.qboId) {
-        try {
-          await deleteQboInvoice(invoice.qboId)
-          removedFromQbo = true
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err)
-          return {
-            ok: false,
-            error: `QuickBooks would not delete it, so nothing was removed here either: ${message}`
+        let removedFromQbo = false
+        let qboError: string | null = null
+        if (invoice.qboId) {
+          try {
+            await deleteQboInvoice(invoice.qboId)
+            removedFromQbo = true
+          } catch (err) {
+            qboError = err instanceof Error ? err.message : String(err)
           }
         }
+        deleteInvoice(target)
+        return { ok: true, data: { id: target, removedFromQbo, qboError } }
+      } catch (err) {
+        return fail(err)
       }
-      deleteInvoice(target, removedFromQbo)
-      return { ok: true, data: { id: target } }
-    } catch (err) {
-      return fail(err)
     }
-  })
+  )
 
   ipcMain.handle(
     IPC.invoiceSetStatus,

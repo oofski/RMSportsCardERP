@@ -1133,7 +1133,17 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       nextNumber: (): Promise<string> => ipcRenderer.invoke(IPC.invoiceNextNumber),
       save: (input: NewInvoice & { id?: string | null }): Promise<Result<InvoiceDetail>> =>
         ipcRenderer.invoke(IPC.invoiceSave, input),
-      remove: (id: string): Promise<Result<{ id: string }>> =>
+      /**
+       * Delete an invoice. Always locally; in QuickBooks when it allows it.
+       *
+       * `removedFromQbo` and `qboError` are BOTH returned because the outcome
+       * genuinely varies — QuickBooks refuses to delete an invoice that has a
+       * payment applied — and a screen that says only "deleted" would leave
+       * somebody believing their books are clear when one is still on them.
+       */
+      remove: (
+        id: string
+      ): Promise<Result<{ id: string; removedFromQbo: boolean; qboError: string | null }>> =>
         ipcRenderer.invoke(IPC.invoiceDelete, id),
       setStatus: (id: string, status: InvoiceStatus): Promise<Result<{ id: string }>> =>
         ipcRenderer.invoke(IPC.invoiceSetStatus, { id, status }),

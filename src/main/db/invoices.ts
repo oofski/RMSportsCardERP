@@ -860,29 +860,25 @@ export function setInvoiceStatus(
  * and an invoice that exists in the accounts and nowhere else is worse than one
  * that is merely voided — so voiding is what is offered instead.
  */
-export function deleteInvoice(id: string, removedFromQbo = false): void {
+export function deleteInvoice(id: string): void {
   const db = getDb()
   const row = db.prepare(`SELECT qbo_id FROM invoices WHERE id = ?`).get(id) as
     | { qbo_id: string | null }
     | undefined
   if (!row) throw new Error('That invoice is already gone.')
-  // THE REMOTE COPY GOES FIRST, AND THE CALLER OWNS THAT. This used to refuse
-  // outright for anything carrying a qbo_id, on the sound reasoning that a
-  // local-only delete leaves the invoice live in the accounts with nothing on
-  // this side pointing at it. That reasoning still holds — what changed is that
-  // saving now posts to QuickBooks immediately, so EVERY invoice carries an id
-  // within seconds and the refusal had quietly become "you may never delete an
-  // invoice".
+  // DELETING HERE NEVER DEPENDS ON QUICKBOOKS.
   //
-  // So the guard moved rather than went away: `removedFromQbo` is the caller
-  // asserting it has already deleted the remote copy, and the IPC layer only
-  // passes it after that call actually succeeded.
-  if (row.qbo_id && !removedFromQbo) {
-    throw new Error(
-      'That invoice is in QuickBooks. It has to be removed there first, or it would stay in ' +
-        'the accounts with no record on this side.'
-    )
-  }
+  // This refused anything with a qbo_id, then required the caller to have
+  // deleted the remote copy first. Both blocked the button in practice: saving
+  // posts immediately, so every invoice has an id within seconds, and Intuit
+  // refuses to delete an invoice that has a payment applied — which is exactly
+  // the invoice somebody wants off their board. The result was a Delete button
+  // that returned "Access Denied" and removed nothing.
+  //
+  // This is the owner's record. Clearing a mistake out of it is not conditional
+  // on another system's opinion. The caller still tries QuickBooks first and
+  // reports what happened, so a surviving copy over there is stated rather than
+  // discovered later.
   const run = db.transaction(() => {
     db.prepare(`DELETE FROM invoice_lines WHERE invoice_id = ?`).run(id)
     db.prepare(`DELETE FROM invoices WHERE id = ?`).run(id)

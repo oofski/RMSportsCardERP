@@ -385,14 +385,36 @@ try {
 ok(editRefused !== '', 'editing a posted invoice is refused', editRefused)
 ok(repo.getInvoice(inv1.id).lines.length === 2, 'and it is unchanged')
 
+// DELETING IS NEVER REFUSED, whatever the QuickBooks state — unlike editing
+// just above, which still is. It used to be refused too, and the button did
+// nothing at all on real data: saving posts immediately so every invoice has a
+// QuickBooks id within seconds, and Intuit will not delete an invoice that has
+// a payment applied — it answers 401 Access Denied, which reads like a broken
+// connection rather than a business rule. The remote delete is attempted by the
+// caller and its refusal reported; it never blocks the local one.
+//
+// On a THROWAWAY invoice rather than inv1, which the assertions further down
+// still need. A test that quietly destroys a fixture it shares fails somewhere
+// else entirely, and the failure names the wrong thing.
+const spare = repo.saveInvoice({
+  customerId: chris.id,
+  customerName: 'Chris Smith',
+  invoiceNumber: '8999',
+  terms: 'Due on receipt',
+  invoiceDate: '2026-08-09',
+  dueDate: '2026-08-09',
+  lines: [{ item: 'Anything', quantity: 1, rate: 10, amount: 10 }]
+})
+repo.markPosted(spare.id, { id: '901', docNumber: '901' })
 let deleteRefused = ''
 try {
-  repo.deleteInvoice(inv1.id)
+  repo.deleteInvoice(spare.id)
 } catch (err) {
   deleteRefused = err instanceof Error ? err.message : String(err)
 }
-ok(deleteRefused !== '', 'and so is deleting it')
-ok(/removed there first/i.test(deleteRefused), 'pointing at QuickBooks first', deleteRefused)
+ok(deleteRefused === '', 'a posted invoice can still be deleted here', deleteRefused)
+ok(repo.getInvoice(spare.id) === null, 'and it is actually gone')
+ok(repo.getInvoice(inv1.id) !== null, 'without touching anything else')
 
 
 // A DRAFT deletes cleanly, lines and all.
@@ -1008,14 +1030,14 @@ ok(
 // ---------------------------------------------------------------------------
 console.log('\n=== deleting an invoice that reached QuickBooks ===')
 // ---------------------------------------------------------------------------
-// LAST, because it destroys its fixture. Saving now posts to QuickBooks
-// immediately, so every invoice carries a qbo_id within seconds and the old
-// flat refusal had quietly become "you may never delete an invoice". The rule
-// did not go away — it moved: the second argument is the CALLER asserting the
-// remote copy is already gone, and the IPC handler only passes it after that
-// delete actually succeeded. A failed QuickBooks call therefore leaves the
-// local row untouched and retryable, rather than orphaning a live invoice in
-// the accounts that this app no longer knows exists.
+// LAST, because it destroys its fixture.
+//
+// The remote copy is the caller's problem, not this function's. deleteInvoice
+// used to refuse anything with a qbo_id and later demanded the caller prove the
+// remote copy was gone; both amounted to "you may never delete an invoice",
+// because saving posts immediately and Intuit refuses to delete an invoice with
+// a payment applied. The IPC layer attempts QuickBooks and REPORTS what
+// happened; this stays a plain local delete so the button always works.
 const doomed = repo.saveInvoice({
   customerId: chris.id,
   customerName: 'Chris Smith',
@@ -1026,16 +1048,9 @@ const doomed = repo.saveInvoice({
   lines: [{ item: 'Anything', quantity: 1, rate: 10, amount: 10 }]
 })
 repo.markPosted(doomed.id, { id: '77', docNumber: '77' })
-let stillRefused = ''
-try {
-  repo.deleteInvoice(doomed.id)
-} catch (err) {
-  stillRefused = err instanceof Error ? err.message : String(err)
-}
-ok(stillRefused !== '', 'a posted invoice is still refused without the assertion')
-ok(repo.getInvoice(doomed.id) !== null, 'and survives the refusal intact')
-repo.deleteInvoice(doomed.id, true)
-ok(repo.getInvoice(doomed.id) === null, 'once QuickBooks is done with it, the local row goes')
+ok(repo.getInvoice(doomed.id)?.qboId === '77', 'a posted invoice knows its QuickBooks id')
+repo.deleteInvoice(doomed.id)
+ok(repo.getInvoice(doomed.id) === null, 'and being posted does not stop it going')
 
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

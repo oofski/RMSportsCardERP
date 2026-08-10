@@ -240,9 +240,21 @@ export function InvoicesBoard({
         toast.error(res.error ?? 'Could not delete that.')
         return
       }
-      toast.success(
-        target.invoiceNumber ? `Invoice ${target.invoiceNumber} deleted.` : 'Invoice deleted.'
-      )
+      // WHICH OF THE TWO HAPPENED. The local delete always succeeds; the
+      // QuickBooks one is attempted and may be refused — a paid invoice cannot
+      // be deleted there. Saying only "deleted" would leave somebody believing
+      // their books are clear when an invoice is still sitting on them.
+      const label = target.invoiceNumber ? `Invoice ${target.invoiceNumber}` : 'Invoice'
+      if (res.data?.qboError) {
+        toast.error(
+          `${label} deleted here, but it is STILL IN QUICKBOOKS — ${res.data.qboError}. ` +
+            'Void or delete it there if it should not be on the books.'
+        )
+      } else if (res.data?.removedFromQbo) {
+        toast.success(`${label} deleted here and in QuickBooks.`)
+      } else {
+        toast.success(`${label} deleted.`)
+      }
       setDeleting(null)
       setEditing(null)
       await load()
@@ -668,15 +680,16 @@ function DeleteInvoiceModal({
         The invoice and its line items are removed from this app for good. Nothing is archived
         and there is no undo — if you only want it off the board, mark it <b>void</b> instead.
       </p>
-      {/* NAMED, because deleting from a local app and deleting out of the
-          company books are very different acts and the button is the same
-          button. Somebody clearing a mistyped invoice needs to know this
-          reaches their accounts. */}
+      {/* HEDGED ON PURPOSE, because the outcome genuinely varies. QuickBooks
+          will not delete an invoice with a payment applied, and the button
+          must not stop working because of that — so it is attempted, and
+          whichever happened is reported afterwards rather than promised
+          here. */}
       {invoice.qboId && (
         <p className="fin-confirm-lead">
-          It is also deleted <b>in QuickBooks</b>, where it is invoice{' '}
-          {invoice.qboDocNumber || invoice.invoiceNumber}. QuickBooks goes first: if it refuses,
-          nothing is removed here either and you can try again.
+          It is <b>also removed from QuickBooks</b> if QuickBooks allows it — it will not delete
+          an invoice that has a payment applied. Either way it goes from here, and you will be
+          told which happened.
         </p>
       )}
     </Modal>
