@@ -1,4 +1,5 @@
 import type { ClockPushState, PushDevice, PushSubscriptionInput } from '@shared/webPush'
+import { explainRelayProblem } from '@shared/webPush'
 import { call, getSyncConfig } from './cloudSync'
 
 /**
@@ -65,11 +66,14 @@ export async function clockPushState(employeeId: string): Promise<ClockPushState
     }
   } catch (err) {
     // A relay that cannot be reached right now is a fact to display, not an
-    // exception to throw at a screen somebody opened to read a toggle.
+    // exception to throw at a screen somebody opened to read a toggle. Passed
+    // through explainRelayProblem because one of these failures — a Worker
+    // running a copy of cloud/worker.js older than these routes — arrives as a
+    // bare 404 that names nothing.
     return {
       relayConfigured: true,
       ready: false,
-      problem: err instanceof Error ? err.message : String(err),
+      problem: explainRelayProblem(err instanceof Error ? err.message : String(err)),
       publicKey: null,
       devices: []
     }

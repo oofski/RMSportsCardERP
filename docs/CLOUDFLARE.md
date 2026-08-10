@@ -215,6 +215,29 @@ The Worker sends it, not the app, because punches arrive from several laptops
 and from the web app, and a sender living inside one Mac only fires when that
 Mac happens to be awake. The 7am shift would silently never notify.
 
+### What you are setting, at a glance
+
+Three variables on the Worker, and exactly one of them is a secret:
+
+| Name | Kind | Required | What it is |
+|---|---|---|---|
+| `VAPID_PRIVATE_KEY` | **Secret** (encrypted) | **Yes** | The 32-byte signing key, base64url. Never in this repository, never in a chat, never in a commit. Nothing is sent without it. |
+| `VAPID_PUBLIC_KEY` | Plain text variable | No | The matching public half. Optional because the same value is in `cloud/worker.js`; set it only to roll a new pair without editing the file. Not a secret. |
+| `VAPID_SUBJECT` | Plain text variable | No | `mailto:` address a push service can complain to. Defaults to the one in the file. Not a secret. |
+
+"Secret" is the type you pick in the **Add** dialog — Cloudflare encrypts it and
+stops showing you the value. The other two are ordinary variables and stay
+readable, which is correct: both are published to every phone that subscribes.
+
+**If your relay was deployed before this feature existed, re-paste
+`cloud/worker.js` first.** The notification routes, the subscription table and
+the send path are all in that file, and a Worker running last month's copy
+answers `/v1/push-notify/key` with a 404 — which the app reports as "the relay
+cannot send notifications yet". The dashboard never tells you that the deployed
+code is older than the repository, so re-pasting is the first thing to try
+whenever a relay feature seems to be missing rather than broken. Worker →
+**Edit code** → select all → paste → **Deploy**.
+
 ### Step A — Generate the key pair
 
 The two keys are a matched pair. The private one signs; the public one is what
@@ -345,7 +368,16 @@ Worker's **Logs** tab and clock in; a missing key logs a line naming it. The
 Notifications screen shows the same message in red.
 
 **One person, everybody else fine.** Their phone dropped the subscription —
-browsers expire them. Turn it off and on again on that phone.
+browsers expire them. Turn it off and on again on that phone. The device list on
+the Notifications screen says when each phone was last successfully sent to,
+which is how you tell a dead subscription from a quiet week.
+
+**One iPhone, and its Notifications screen has no switch at all.** The app on
+that home screen is a bookmark rather than an installed app — the giveaway is
+that opening it shows the Safari address bar at the top. Delete the icon and add
+it again from **Safari** (not Chrome), following
+**[docs/WEB.md](WEB.md#iphone-and-ipad--safari-only)**. A bookmark cannot
+receive a notification on iOS at any setting.
 
 **Everything worked, then stopped after a rotation.** Changing either key
 invalidates every phone already subscribed. Everyone turns it off and on again.

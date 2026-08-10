@@ -8,6 +8,17 @@
  * notification. That is the whole of it: no caching, no offline shell, no fetch
  * handler.
  *
+ * ## Why there is deliberately no fetch handler
+ *
+ * The usual advice is to add one so a browser will call the site installable.
+ * It is not worth it here. A fetch handler sits in front of EVERY navigation,
+ * and a service worker that throws in one has taken the whole app off the air
+ * for everybody it is installed on — recoverable only by clearing site data on
+ * each phone, which is not a thing you can talk somebody through. This app has
+ * no offline story to gain in exchange: every screen is a live query against a
+ * server. Installing from the browser's own menu works without one, and on iOS
+ * — the platform this exists for — "Add to Home Screen" has never cared.
+ *
  * Deliberately NOT part of the Vite bundle. A service worker is fetched by URL
  * and versioned by its bytes, so it must be a stable path (/sw.js) with no
  * content hash — a hashed filename would register a brand-new worker on every
@@ -113,8 +124,13 @@ self.addEventListener('push', function (event) {
       body: shown.body,
       tag: shown.tag,
       renotify: shown.renotify === true,
-      icon: '/app-icon-512.png',
-      badge: '/app-icon-512.png',
+      icon: '/app-icon-192.png',
+      // A BADGE is not a small icon. Android draws it in the status bar from
+      // the ALPHA CHANNEL ONLY and tints it, so a full-colour icon here comes
+      // out as a solid grey square — the app-icon-badge file is the wordmark
+      // keyed down to a silhouette for exactly this. See
+      // scripts/make-pwa-icons.mjs.
+      badge: '/app-icon-badge-96.png',
       // No sound and no vibration pattern: these arrive through a working day
       // and one that buzzes for every punch is one everybody turns off.
       silent: false,

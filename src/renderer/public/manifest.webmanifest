@@ -1,7 +1,9 @@
 {
+  "id": "/",
   "name": "RM Operations",
   "short_name": "RM Ops",
   "description": "The internal operations platform for RM Cardz.",
+  "lang": "en",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
@@ -10,13 +12,19 @@
   "orientation": "any",
   "icons": [
     {
+      "src": "/app-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
       "src": "/app-icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/app-icon-512.png",
+      "src": "/app-icon-maskable-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"

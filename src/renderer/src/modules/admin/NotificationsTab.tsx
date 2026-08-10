@@ -268,6 +268,35 @@ export function NotificationsTab(): JSX.Element {
         </section>
       )}
 
+      {/* ---- Capable, but still a browser tab.
+              Android and desktop Chrome deliver notifications to a tab
+              perfectly well, so this is not a blocker and does not hide the
+              toggle. It is here because a tab is not what anybody wants at
+              7am: a notification tapped from the lock screen should open the
+              app, not whatever was last on screen in a browser with twenty
+              other tabs. Installed, it has its own icon and its own window. */}
+      {capability.usable && !isStandalone() && (
+        <section className="sync-card">
+          <header>
+            <Icon name="Smartphone" size={17} />
+            <h3>Add it to your Home Screen</h3>
+          </header>
+          <p className="sync-note">
+            Notifications already work in this browser, so this is optional here — but installed,
+            the app gets its own icon and opens on its own instead of inside a browser tab.
+          </p>
+          <ul className="sync-note" style={{ paddingLeft: 18 }}>
+            <li>
+              <b>Android (Chrome):</b> menu (⋮) → <b>Add to Home screen</b> or <b>Install app</b>.
+            </li>
+            <li>
+              <b>Computer (Chrome or Edge):</b> the install icon at the right-hand end of the
+              address bar.
+            </li>
+          </ul>
+        </section>
+      )}
+
       {capability.blocker === 'permission-denied' && (
         <section className="sync-card sync-card-warn">
           <header>
@@ -301,8 +330,17 @@ export function NotificationsTab(): JSX.Element {
             {state.devices.map((device) => (
               <li key={device.id}>
                 <code>{device.label ?? device.service}</code>
-                <span>{device.service}</span>
-                <time>{formatDateTime(device.createdAt)}</time>
+                {/* WHEN IT LAST WORKED, not whether it is switched on. A row in
+                    the relay's table says only that somebody pressed a button
+                    once; a phone that stopped receiving weeks ago looks
+                    identical to one that has had a quiet week, and this is the
+                    only place the difference is visible. */}
+                <span>
+                  {device.lastSentAt
+                    ? `Last notified ${formatDateTime(device.lastSentAt)}`
+                    : 'Nothing sent to it yet — send a test'}
+                </span>
+                <time>Added {formatDateTime(device.createdAt)}</time>
               </li>
             ))}
           </ul>

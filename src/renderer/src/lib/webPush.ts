@@ -227,6 +227,47 @@ export async function ensureServiceWorker(): Promise<ServiceWorkerRegistration> 
   return navigator.serviceWorker.ready
 }
 
+/** Is this a page that could have a service worker at all? */
+export function canRegisterServiceWorker(): boolean {
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') return false
+  // The desktop build loads over file://, which is not a secure context and has
+  // no service worker API at all. Both checks, because the failure of the first
+  // one alone is a thrown TypeError on every Electron launch.
+  if (window.location.protocol === 'file:') return false
+  if (!window.isSecureContext) return false
+  return 'serviceWorker' in navigator && 'PushManager' in window
+}
+
+/**
+ * Register the worker when the app starts, not when somebody opens the
+ * notifications screen.
+ *
+ * Three separate things depend on it being registered EARLY, and all three are
+ * invisible when it is not:
+ *
+ *   · A worker is only replaced when the browser re-fetches /sw.js, which it
+ *     does on navigation. Registering only from the notifications screen means
+ *     a fix to sw.js reaches a phone the next time somebody opens that screen —
+ *     which for most people is never, so the fix ships and does nothing.
+ *   · `subscribeThisDevice` waits on `navigator.serviceWorker.ready`, and on a
+ *     cold page that is the install and activate cycle happening inside a
+ *     button press. On a slow connection the press appears to hang.
+ *   · A browser will not offer "Install app" for a site with no service worker,
+ *     and on Android an install that falls back to a plain shortcut is a
+ *     browser tab wearing an icon.
+ *
+ * Failure is swallowed on purpose. A worker that will not register is a phone
+ * that cannot receive notifications — which the notifications screen says in
+ * words — and it must never be an error on the login screen of an app somebody
+ * opened to do their job.
+ */
+export function registerServiceWorkerEarly(): void {
+  if (!canRegisterServiceWorker()) return
+  void navigator.serviceWorker.register(SERVICE_WORKER_URL, { scope: '/' }).catch(() => {
+    /* Said properly on the notifications screen; silent here. */
+  })
+}
+
 export interface SubscribeResult {
   ok: boolean
   error?: string

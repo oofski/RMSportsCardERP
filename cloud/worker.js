@@ -1851,14 +1851,21 @@ export function isDeadPushStatus(status) {
 /**
  * Walk the subscriptions, send, and reap the dead ones.
  *
- * Both the sending and the deleting are injected so this — the part with the
- * rules in it — can be tested without a network or a database. Sequential rather
- * than parallel on purpose: a Worker has a subrequest budget per invocation, and
- * a burst of parallel fetches to three different push services is the shape that
- * hits it. Ten phones at a couple of hundred milliseconds each is well inside
- * the time a waitUntil is allowed to take.
+ * The sending, the deleting and the "this one worked" note are all injected so
+ * this — the part with the rules in it — can be tested without a network or a
+ * database. Sequential rather than parallel on purpose: a Worker has a
+ * subrequest budget per invocation, and a burst of parallel fetches to three
+ * different push services is the shape that hits it. Ten phones at a couple of
+ * hundred milliseconds each is well inside the time a waitUntil is allowed to
+ * take.
+ *
+ * `touch` is optional and its failure is swallowed. It records when a device was
+ * last successfully sent to, which is what lets somebody look at their own list
+ * of phones and see that one of them stopped weeks ago — but it is bookkeeping,
+ * and a bookkeeping write that fails must never turn a delivered notification
+ * into a failed one.
  */
-export async function deliverPush({ subscriptions, send, drop }) {
+export async function deliverPush({ subscriptions, send, drop, touch }) {
   const result = { sent: 0, dropped: 0, failed: 0 }
   for (const subscription of subscriptions) {
     let status
@@ -1874,8 +1881,16 @@ export async function deliverPush({ subscriptions, send, drop }) {
       result.dropped += 1
       continue
     }
-    if (status >= 200 && status < 300) result.sent += 1
-    else result.failed += 1
+    if (status >= 200 && status < 300) {
+      result.sent += 1
+      if (touch) {
+        try {
+          await touch(subscription.endpoint)
+        } catch {
+          /* See above: the notification was delivered. */
+        }
+      }
+    } else result.failed += 1
   }
   return result
 }
@@ -1930,6 +1945,20 @@ async function subscriptionsForSend(env, excludeEmployeeId) {
 
 async function dropSubscription(env, endpoint) {
   await env.DB.prepare('DELETE FROM push_subscriptions WHERE endpoint = ?1').bind(endpoint).run()
+}
+
+/**
+ * Record that a notification actually reached this device.
+ *
+ * The only durable evidence anybody has that the chain works. "Turned on" is a
+ * row in a table and says nothing about delivery; a phone whose last delivery
+ * was three weeks ago is a phone that quietly stopped, and without this the
+ * person holding it has no way to tell that from a quiet week.
+ */
+async function markSent(env, endpoint) {
+  await env.DB.prepare('UPDATE push_subscriptions SET last_sent_at = ?1 WHERE endpoint = ?2')
+    .bind(new Date().toISOString(), endpoint)
+    .run()
 }
 
 /**
@@ -2020,7 +2049,8 @@ async function notifyClockEvents(env, events) {
     const outcome = await deliverPush({
       subscriptions,
       send: (subscription) => sendOnePush(env, subscription, bytes),
-      drop: (endpoint) => dropSubscription(env, endpoint)
+      drop: (endpoint) => dropSubscription(env, endpoint),
+      touch: (endpoint) => markSent(env, endpoint)
     })
     if (outcome.failed > 0 || outcome.dropped > 0) {
       console.log(
@@ -2193,7 +2223,8 @@ async function pushTest(request, env) {
   const outcome = await deliverPush({
     subscriptions,
     send: (subscription) => sendOnePush(env, subscription, bytes),
-    drop: (endpoint) => dropSubscription(env, endpoint)
+    drop: (endpoint) => dropSubscription(env, endpoint),
+    touch: (endpoint) => markSent(env, endpoint)
   })
   return json({
     ok: outcome.sent > 0,

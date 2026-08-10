@@ -56,6 +56,32 @@ export interface PushDevice {
  * one failure of this feature that nobody discovers until a shift goes
  * unannounced.
  */
+/**
+ * Turn a relay failure into something an operator can act on.
+ *
+ * One shape of failure earns this: a relay Worker running an OLDER copy of
+ * cloud/worker.js. The notification routes live in that file, and it is
+ * deployed by pasting the file into a dashboard by hand — so a relay set up
+ * before this feature existed answers /v1/push-notify/key with a flat 404, and
+ * the screen would otherwise say "Relay error 404." That names nothing, points
+ * nowhere, and reads like the relay is down when the relay is perfectly
+ * healthy and merely out of date. There is nothing in the Cloudflare dashboard
+ * that says the deployed code is older than the repository, so nobody finds
+ * this without being told.
+ *
+ * Everything else is passed through untouched: an invented explanation is worse
+ * than a plain error.
+ */
+export function explainRelayProblem(message: string): string {
+  const text = String(message || '').trim()
+  if (!/\b404\b|not found/i.test(text)) return text || 'The relay could not be reached.'
+  return (
+    `${text} The relay Worker does not have the notification routes, which almost always means ` +
+    'it is running an older copy of cloud/worker.js. Re-paste that file in the Cloudflare ' +
+    'dashboard (Worker → Edit code → select all → paste → Deploy). See docs/CLOUDFLARE.md.'
+  )
+}
+
 export interface ClockPushState {
   /** Is there a relay at all? A standalone build has none and can do none of this. */
   relayConfigured: boolean

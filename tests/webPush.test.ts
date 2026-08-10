@@ -26,12 +26,30 @@
  * that makes a retried push silent, and the 404/410 reaping without which the
  * subscription table fills with corpses and every punch gets slower forever.
  *
+ * ## And then the half of this feature that is not cryptography at all
+ *
+ * Sections 12 to 15 cover the INSTALL, which fails in a way that is easy to
+ * mistake for the crypto failing. On iOS, web push works only for a site that
+ * has been added to the Home Screen, and iOS will only add it as an APP — as
+ * opposed to a bookmark that opens in a Safari tab — when the manifest is
+ * present, readable, and served as a manifest. Get any of that wrong and the
+ * toggle is missing, or present and dead, with nothing anywhere naming the
+ * cause. So:
+ *
+ *   12. the manifest and the icon files it points at are real, the right sizes,
+ *       and the maskable one is genuinely opaque;
+ *   13. the HTML actually links them, and its CSP permits a service worker;
+ *   14. the server serves each of them with the content type and cache headers
+ *       that decide whether a browser will accept them at all;
+ *   15. the service worker draws the notification and, when tapped, focuses the
+ *       window that is already open instead of stacking up another one.
+ *
  * No fixture uses a real key or a real person. Every key here is generated at
  * runtime and thrown away; every name is invented.
  *
  * Run: npm run test:push
  */
-import { readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 /* eslint-disable @typescript-eslint/no-var-requires */
@@ -536,6 +554,7 @@ void (async () => {
 
   const statuses: Record<string, number> = { good: 201, gone: 410, missing: 404, wobble: 500 }
   const dropped: string[] = []
+  const touched: string[] = []
   const outcome = await deliverPush({
     subscriptions: [
       { endpoint: 'good' },
@@ -546,6 +565,9 @@ void (async () => {
     send: async (s: { endpoint: string }) => statuses[s.endpoint],
     drop: async (endpoint: string) => {
       dropped.push(endpoint)
+    },
+    touch: async (endpoint: string) => {
+      touched.push(endpoint)
     }
   })
   ok(outcome.sent === 1, 'one delivered', JSON.stringify(outcome))
@@ -553,6 +575,31 @@ void (async () => {
   ok(outcome.failed === 1, 'one counted as a failure and left alone')
   ok(dropped.join(',') === 'gone,missing', 'exactly the 410 and the 404 were deleted', dropped.join(','))
   ok(!dropped.includes('wobble'), 'a 500 does NOT cost somebody their notifications')
+
+  // "Last notified" is the only durable evidence that the chain works, so it
+  // must be written for a delivery and for nothing else. Marking a 500 as a
+  // delivery would make a phone that has been silent for a month look healthy.
+  ok(touched.join(',') === 'good', 'only the delivered one is marked as sent', touched.join(','))
+
+  // A bookkeeping write must never be able to lose a notification that was
+  // already delivered — the phone has buzzed by the time this runs.
+  const stillSent = await deliverPush({
+    subscriptions: [{ endpoint: 'good' }],
+    send: async () => 201,
+    drop: async () => {},
+    touch: async () => {
+      throw new Error('the database is having a moment')
+    }
+  })
+  ok(stillSent.sent === 1 && stillSent.failed === 0, 'a failed "last sent" write is not a failed push', JSON.stringify(stillSent))
+  // Nothing may require it: the same function runs in tests and in paths that
+  // have no table to write to.
+  const noTouch = await deliverPush({
+    subscriptions: [{ endpoint: 'good' }],
+    send: async () => 201,
+    drop: async () => {}
+  })
+  ok(noTouch.sent === 1, 'and it is optional')
 
   const thrownDropped: string[] = []
   const thrownOutcome = await deliverPush({
@@ -646,6 +693,485 @@ void (async () => {
   ok(
     JSON.parse(await decryptAsPhone(phone, namedBody)).name === 'Marisol Vandenberg',
     'but the phone reads it back in full'
+  )
+
+  // -------------------------------------------------------------------------
+  console.log('\n=== 11b. an out-of-date relay says so ===')
+  // -------------------------------------------------------------------------
+  // cloud/worker.js is deployed by pasting it into a dashboard, so a relay set
+  // up before this feature existed is a relay with no notification routes on
+  // it. It answers 404, everything else about it works, and nothing anywhere
+  // says the deployed code is older than the repository.
+  const { explainRelayProblem } = require('@shared/webPush')
+  const stale = explainRelayProblem('Relay error 404.')
+  ok(stale.includes('Relay error 404.'), 'the original error is kept', stale)
+  ok(stale.includes('cloud/worker.js'), 'and it names the file to re-paste')
+  ok(stale.includes('docs/CLOUDFLARE.md'), 'and where the steps are')
+  ok(
+    explainRelayProblem('Not found.').includes('older copy'),
+    'a worded 404 is recognised too',
+    explainRelayProblem('Not found.')
+  )
+  // Everything else is passed through: an invented explanation is worse than a
+  // plain error, and these are read by somebody trying to fix something.
+  for (const other of [
+    'Relay error 401.',
+    'Sync is not configured.',
+    'The relay replied with something that is not JSON — check the URL.'
+  ]) {
+    ok(explainRelayProblem(other) === other, `left alone: ${other}`)
+  }
+  ok(explainRelayProblem('').length > 0, 'and an empty error still says something')
+
+  // -------------------------------------------------------------------------
+  console.log('\n=== 12. the manifest, and the icons it promises ===')
+  // -------------------------------------------------------------------------
+  // Without a manifest a browser can still bookmark the site, and that is the
+  // trap: on iOS the bookmark opens in a Safari tab, a Safari tab has no
+  // PushManager at all, and the whole feature reads as broken with nothing
+  // anywhere mentioning a manifest.
+  const PUBLIC_DIR = join(process.cwd(), 'src/renderer/public')
+  const manifest = JSON.parse(readFileSync(join(PUBLIC_DIR, 'manifest.webmanifest'), 'utf8'))
+
+  ok(manifest.display === 'standalone', 'display is standalone, so it opens without browser chrome', String(manifest.display))
+  ok(manifest.start_url === '/', 'start_url is the site root', String(manifest.start_url))
+  ok(manifest.scope === '/', 'and the scope covers the whole app', String(manifest.scope))
+  ok(typeof manifest.name === 'string' && manifest.name.length > 0, 'it has a name')
+  // Home screens truncate hard. A short_name past about a dozen characters is
+  // an ellipsis under the icon on every phone.
+  ok(
+    typeof manifest.short_name === 'string' && manifest.short_name.length > 0 && manifest.short_name.length <= 12,
+    'and a short_name that fits under an icon',
+    String(manifest.short_name)
+  )
+  ok(/^#[0-9a-f]{6}$/i.test(String(manifest.theme_color)), 'theme_color is a colour', String(manifest.theme_color))
+  ok(/^#[0-9a-f]{6}$/i.test(String(manifest.background_color)), 'background_color is a colour', String(manifest.background_color))
+
+  /** width, height and colour type, straight out of the IHDR chunk. */
+  function pngHeader(path: string): { width: number; height: number; colorType: number } {
+    const bytes = readFileSync(path)
+    if (bytes.toString('ascii', 12, 16) !== 'IHDR') throw new Error(`${path} is not a PNG`)
+    return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20), colorType: bytes[25] }
+  }
+
+  const icons: Array<{ src: string; sizes: string; purpose?: string }> = manifest.icons || []
+  ok(icons.length >= 3, 'there are at least three icon entries', String(icons.length))
+  for (const icon of icons) {
+    // A relative src resolves against the MANIFEST's own URL, which is fine
+    // until the manifest moves and every icon 404s at install time.
+    ok(icon.src.startsWith('/'), `${icon.src} is an absolute path`)
+    const file = join(PUBLIC_DIR, icon.src.replace(/^\//, ''))
+    ok(existsSync(file), `${icon.src} exists on disk`)
+    if (!existsSync(file)) continue
+    const header = pngHeader(file)
+    // A declared size that does not match the file is not cosmetic: a browser
+    // picks an icon by its DECLARED size and then gets something else, and
+    // Chrome refuses to call a site installable when they disagree.
+    ok(
+      `${header.width}x${header.height}` === icon.sizes,
+      `${icon.src} really is ${icon.sizes}`,
+      `${header.width}x${header.height}`
+    )
+    // Is there a PICTURE in it? A 512px PNG of one flat colour compresses to
+    // well under a kilobyte, so a size floor is the cheapest test that the
+    // artwork survived whatever produced the file — and "the icons all came out
+    // blank" is exactly the kind of thing nobody notices until a phone shows a
+    // white square on its home screen. (The badge is deliberately excluded: it
+    // IS a flat silhouette and is supposed to be tiny.)
+    ok(readFileSync(file).length > 4096, `${icon.src} contains actual artwork`, `${readFileSync(file).length} bytes`)
+  }
+
+  const anyIcons = icons.filter((i) => !i.purpose || i.purpose.split(' ').includes('any'))
+  ok(anyIcons.some((i) => i.sizes === '192x192'), 'a 192px icon is declared — Chrome requires one to offer an install')
+  ok(anyIcons.some((i) => i.sizes === '512x512'), 'and a 512px one, which is the splash and the app switcher')
+
+  const maskable = icons.filter((i) => (i.purpose || '').split(' ').includes('maskable'))
+  ok(maskable.length >= 1, 'and at least one maskable icon')
+  for (const icon of maskable) {
+    // A launcher masks this to its own shape — circle, squircle, teardrop —
+    // and paints whatever is transparent as a black or white wedge. Colour
+    // type 2 is RGB with no alpha channel at all, which is the only version of
+    // "opaque" that cannot regress. See scripts/make-pwa-icons.mjs.
+    const header = pngHeader(join(PUBLIC_DIR, icon.src.replace(/^\//, '')))
+    ok(header.colorType === 2, `${icon.src} has no alpha channel to be cropped into a wedge`, `colour type ${header.colorType}`)
+    // A maskable icon reused as the ordinary icon is padded artwork floating in
+    // a box everywhere it is NOT masked, which is why they are separate files.
+    ok(
+      !anyIcons.some((i) => i.src === icon.src),
+      `${icon.src} is not doubling as the ordinary icon`
+    )
+  }
+
+  // The badge is the opposite requirement and it is easy to get backwards:
+  // Android draws it from the ALPHA CHANNEL ONLY, so one without alpha is a
+  // solid grey square in the status bar.
+  const badge = pngHeader(join(PUBLIC_DIR, 'app-icon-badge-96.png'))
+  ok(badge.colorType === 6, 'the notification badge DOES have an alpha channel', `colour type ${badge.colorType}`)
+
+  // iOS composites a touch icon onto black before applying its own rounding,
+  // so an alpha channel here shows as a dark ring inside the corners.
+  const touchIcon = pngHeader(join(PUBLIC_DIR, 'apple-touch-icon-180.png'))
+  ok(touchIcon.colorType === 2, 'the Apple touch icon is flattened', `colour type ${touchIcon.colorType}`)
+  ok(touchIcon.width === 180 && touchIcon.height === 180, 'and is 180px, the size iOS asks for', `${touchIcon.width}`)
+
+  // -------------------------------------------------------------------------
+  console.log('\n=== 13. the HTML that has to link all of it ===')
+  // -------------------------------------------------------------------------
+  const indexHtml = readFileSync(join(process.cwd(), 'src/renderer/index.html'), 'utf8')
+  ok(/rel="manifest"/.test(indexHtml), 'the page links a manifest')
+  const manifestHref = /rel="manifest"\s+href="([^"]+)"/.exec(indexHtml)
+  ok(
+    !!manifestHref && existsSync(join(PUBLIC_DIR, manifestHref[1].replace(/^[./]+/, ''))),
+    'and the file it links is really there',
+    manifestHref ? manifestHref[1] : 'no href'
+  )
+  const touchHref = /rel="apple-touch-icon"[^>]*href="([^"]+)"/.exec(indexHtml)
+  ok(!!touchHref, 'an apple-touch-icon is declared')
+  ok(
+    !!touchHref && existsSync(join(PUBLIC_DIR, touchHref[1].replace(/^[./]+/, ''))),
+    'and that file exists too',
+    touchHref ? touchHref[1] : 'no href'
+  )
+  ok(/apple-mobile-web-app-capable/.test(indexHtml), 'iOS is told this runs as an app')
+  // The page's own CSP governs whether a service worker may be registered at
+  // all. A default-src that does not cover it means registration is refused
+  // with a console message on a phone nobody is looking at.
+  const csp = /Content-Security-Policy"\s*\n?\s*content="([^"]+)"/.exec(indexHtml)
+  ok(!!csp, 'the page carries a Content-Security-Policy')
+  if (csp) {
+    const workerSrc = /worker-src ([^;]+)/.exec(csp[1])
+    ok(!!workerSrc && workerSrc[1].includes("'self'"), 'which permits a same-origin service worker', csp[1])
+  }
+  // The scope of a service worker is the directory it is served from, so one
+  // that is not at the root cannot control the app.
+  const { SERVICE_WORKER_URL, canRegisterServiceWorker } = require('../src/renderer/src/lib/webPush')
+  ok(SERVICE_WORKER_URL === '/sw.js', 'the worker is registered from the site root', String(SERVICE_WORKER_URL))
+  ok(existsSync(join(PUBLIC_DIR, 'sw.js')), 'and the file sits where that URL resolves to')
+
+  // The registration runs at startup, from main.tsx, in a bundle the DESKTOP
+  // app also loads — over file://, where there is no service worker API at all.
+  // An unguarded call there is a TypeError on every launch of the Electron app,
+  // which is the constraint this guard exists to satisfy and the one thing here
+  // that cannot be noticed by testing the web app.
+  function inFakeBrowser(window: unknown, navigator: unknown): boolean {
+    const before = [
+      Object.getOwnPropertyDescriptor(globalThis, 'window'),
+      Object.getOwnPropertyDescriptor(globalThis, 'navigator')
+    ]
+    Object.defineProperty(globalThis, 'window', { value: window, configurable: true })
+    Object.defineProperty(globalThis, 'navigator', { value: navigator, configurable: true })
+    try {
+      return canRegisterServiceWorker() === true
+    } finally {
+      for (const [i, name] of ['window', 'navigator'].entries()) {
+        if (before[i]) Object.defineProperty(globalThis, name, before[i] as PropertyDescriptor)
+        else delete (globalThis as Record<string, unknown>)[name]
+      }
+    }
+  }
+
+  const browserNavigator = { serviceWorker: {} }
+  ok(
+    inFakeBrowser({ location: { protocol: 'https:' }, isSecureContext: true, PushManager: {} }, browserNavigator),
+    'a secure https page may register the worker'
+  )
+  ok(
+    !inFakeBrowser({ location: { protocol: 'file:' }, isSecureContext: false, PushManager: {} }, browserNavigator),
+    'the desktop build on file:// does NOT — that is the Electron guard'
+  )
+  ok(
+    !inFakeBrowser({ location: { protocol: 'http:' }, isSecureContext: false, PushManager: {} }, browserNavigator),
+    'and neither does a plain-http LAN address, where a browser refuses anyway'
+  )
+  ok(
+    !inFakeBrowser({ location: { protocol: 'https:' }, isSecureContext: true, PushManager: {} }, {}),
+    'a browser with no service worker support is left alone'
+  )
+  ok(
+    !inFakeBrowser({ location: { protocol: 'https:' }, isSecureContext: true }, browserNavigator),
+    'and so is one with no PushManager'
+  )
+
+  // -------------------------------------------------------------------------
+  console.log('\n=== 14. how the server hands those files over ===')
+  // -------------------------------------------------------------------------
+  // Right file, wrong headers is the whole category of failure here: a manifest
+  // served as octet-stream is ignored, a service worker served as HTML is
+  // registered and fails forever, and either one is invisible from the app.
+  const { serveStatic } = require('../src/server/staticFiles')
+  const ROOT = join(process.cwd(), 'out/tests/pwa-root')
+  rmSync(ROOT, { recursive: true, force: true })
+  mkdirSync(join(ROOT, 'assets'), { recursive: true })
+  writeFileSync(join(ROOT, 'index.html'), '<!doctype html><title>app</title>')
+  writeFileSync(join(ROOT, 'sw.js'), '/* worker */')
+  writeFileSync(join(ROOT, 'manifest.webmanifest'), JSON.stringify(manifest))
+  writeFileSync(join(ROOT, 'app-icon-192.png'), readFileSync(join(PUBLIC_DIR, 'app-icon-192.png')))
+  writeFileSync(join(ROOT, 'assets/index-abc123.js'), 'console.log(1)')
+  process.env.RMOPS_RENDERER_DIR = ROOT
+
+  interface Served {
+    status: number
+    headers: Record<string, string>
+    handled: boolean
+  }
+  /** HEAD, so serveStatic answers with headers and never opens a stream. */
+  function serve(path: string): Served {
+    let status = 0
+    let headers: Record<string, string> = {}
+    const res = {
+      writeHead(code: number, head: Record<string, string>) {
+        status = code
+        headers = Object.fromEntries(
+          Object.entries(head || {}).map(([k, v]) => [k.toLowerCase(), String(v)])
+        )
+      },
+      end() {}
+    }
+    const handled = serveStatic({ method: 'HEAD' }, res, path, {})
+    return { status, headers, handled }
+  }
+
+  const servedManifest = serve('/manifest.webmanifest')
+  ok(servedManifest.status === 200, 'the manifest is served', String(servedManifest.status))
+  // application/manifest+json. As octet-stream the browser ignores the file
+  // entirely and iOS never offers "Add to Home Screen" as an app.
+  ok(
+    servedManifest.headers['content-type'].startsWith('application/manifest+json'),
+    'as application/manifest+json',
+    servedManifest.headers['content-type']
+  )
+  ok(servedManifest.headers['cache-control'] === 'no-store', 'and never cached', servedManifest.headers['cache-control'])
+
+  const servedWorker = serve('/sw.js')
+  ok(servedWorker.status === 200, 'the service worker is served', String(servedWorker.status))
+  ok(
+    servedWorker.headers['content-type'].startsWith('text/javascript'),
+    'as JavaScript — a browser refuses to register anything else',
+    servedWorker.headers['content-type']
+  )
+  // A cached service worker is a fix that cannot ship: the browser compares the
+  // bytes it fetched, and a cached copy is byte-identical forever.
+  ok(servedWorker.headers['cache-control'] === 'no-store', 'and never cached', servedWorker.headers['cache-control'])
+
+  const servedIcon = serve('/app-icon-192.png')
+  ok(servedIcon.headers['content-type'] === 'image/png', 'an icon is served as a PNG', servedIcon.headers['content-type'])
+  // Fetched again for the icon and the badge of every single notification.
+  ok(
+    /max-age=\d+/.test(servedIcon.headers['cache-control']) && !servedIcon.headers['cache-control'].includes('no-store'),
+    'and IS cacheable, because every notification fetches it again',
+    servedIcon.headers['cache-control']
+  )
+
+  const servedAsset = serve('/assets/index-abc123.js')
+  ok(
+    servedAsset.headers['cache-control'].includes('immutable'),
+    'content-hashed assets stay immutable',
+    servedAsset.headers['cache-control']
+  )
+
+  // The rule that keeps a missing file from becoming a silently broken one.
+  for (const missing of ['/sw.js', '/manifest.webmanifest', '/app-icon-512.png', '/assets/gone.js']) {
+    rmSync(join(ROOT, missing.replace(/^\//, '')), { force: true })
+    const answer = serve(missing)
+    ok(answer.status === 404, `a missing ${missing} is a 404, not the app shell`, String(answer.status))
+    ok(
+      !String(answer.headers['content-type']).startsWith('text/html'),
+      `and is never answered with HTML: ${missing}`,
+      String(answer.headers['content-type'])
+    )
+  }
+
+  // A path a person could have typed still lands in the app.
+  const fallback = serve('/some/deep/view')
+  ok(fallback.status === 200, 'an extensionless path still reaches the app shell', String(fallback.status))
+  ok(
+    fallback.headers['content-type'].startsWith('text/html'),
+    'as HTML',
+    fallback.headers['content-type']
+  )
+  // Traversal, still refused — the 404 rule above rewrote this function's
+  // branch, so the check that matters most is re-asserted here.
+  const namedEscape = serve('/../../package.json')
+  ok(namedEscape.status === 404, 'a named path outside the renderer root is a 404', String(namedEscape.status))
+  // Percent-encoded, so it has no visible extension for the rule above to catch.
+  const encodedEscape = serve('/assets/%2e%2e%2f%2e%2e%2f%2e%2e%2fetc%2fpasswd')
+  ok(encodedEscape.status === 404, 'and so is an encoded one under /assets', String(encodedEscape.status))
+  const shellEscape = serve('/../../../etc/passwd')
+  ok(
+    shellEscape.status === 200 &&
+      shellEscape.headers['content-type'].startsWith('text/html') &&
+      Number(shellEscape.headers['content-length']) === readFileSync(join(ROOT, 'index.html')).length,
+    'and an unnamed one gets the app shell, byte for byte — never the file it asked for',
+    `${shellEscape.status} ${shellEscape.headers['content-length']}`
+  )
+  delete process.env.RMOPS_RENDERER_DIR
+
+  // -------------------------------------------------------------------------
+  console.log('\n=== 15. the service worker, driven as a browser would drive it ===')
+  // -------------------------------------------------------------------------
+  // This file is the last few inches of the whole feature and nothing else in
+  // the repository executes it: it runs on a phone, with no console attached,
+  // in a process that exists for two seconds. So it is run here, in a vm, with
+  // the browser's side faked.
+  const vm = require('node:vm')
+
+  interface FakeWindow {
+    focused: boolean
+    postedMessages: unknown[]
+    focus: () => Promise<FakeWindow>
+    postMessage: (message: unknown) => void
+  }
+
+  function fakeWindow(): FakeWindow {
+    const win: FakeWindow = {
+      focused: false,
+      postedMessages: [],
+      focus: async () => {
+        win.focused = true
+        return win
+      },
+      postMessage: (message: unknown) => {
+        win.postedMessages.push(message)
+      }
+    }
+    return win
+  }
+
+  const listeners: Record<string, Array<(event: Record<string, unknown>) => void>> = {}
+  const notifications: Array<{ title: string; options: Record<string, unknown> }> = []
+  const openedUrls: string[] = []
+  let openWindows: FakeWindow[] = []
+  let skipWaitingCalls = 0
+  let claimCalls = 0
+
+  const workerSelf = {
+    addEventListener: (type: string, fn: (event: Record<string, unknown>) => void): void => {
+      ;(listeners[type] = listeners[type] || []).push(fn)
+    },
+    skipWaiting: (): void => {
+      skipWaitingCalls += 1
+    },
+    registration: {
+      showNotification: async (title: string, options: Record<string, unknown>): Promise<void> => {
+        notifications.push({ title, options })
+      }
+    },
+    clients: {
+      claim: async (): Promise<void> => {
+        claimCalls += 1
+      },
+      matchAll: async (): Promise<FakeWindow[]> => openWindows,
+      openWindow: async (url: string): Promise<FakeWindow> => {
+        openedUrls.push(url)
+        return fakeWindow()
+      }
+    }
+  }
+
+  vm.runInNewContext(readFileSync(join(PUBLIC_DIR, 'sw.js'), 'utf8'), {
+    self: workerSelf,
+    console
+  })
+
+  ok(Array.isArray(listeners.push) && listeners.push.length === 1, 'it registers a push handler')
+  ok(Array.isArray(listeners.notificationclick), 'and a notificationclick handler')
+
+  async function fire(type: string, event: Record<string, unknown>): Promise<void> {
+    const waits: Array<Promise<unknown>> = []
+    const full = { ...event, waitUntil: (p: Promise<unknown>) => waits.push(p) }
+    for (const fn of listeners[type] || []) fn(full)
+    await Promise.all(waits)
+  }
+
+  // A new worker must take over rather than wait for every tab to close. On a
+  // phone with the app on its home screen, "every tab closed" can be weeks.
+  await fire('install', {})
+  await fire('activate', {})
+  ok(skipWaitingCalls === 1, 'installing skips the waiting state')
+  ok(claimCalls === 1, 'and activating claims the open pages')
+
+  const pushed = (payload: unknown): Record<string, unknown> => ({
+    data: { json: () => payload }
+  })
+
+  await fire('push', pushed({ v: 1, kind: 'in', name: 'Marisol Vandenberg', at: '2026-08-10T14:03:11.000Z' }))
+  const first = notifications[0]
+  ok(!!first, 'a push draws a notification')
+  ok(first.title === 'Marisol Vandenberg clocked in', 'titled with the person and what they did', first.title)
+  // The Worker sends a UTC instant and the PHONE formats it, because the relay
+  // has no idea what timezone the phone is in.
+  ok(/\d{1,2}:\d{2}/.test(String(first.options.body)), 'and a local time in the body', String(first.options.body))
+  ok(String(first.options.icon).endsWith('.png'), 'with an icon', String(first.options.icon))
+  ok(
+    String(first.options.badge).includes('badge'),
+    'and a BADGE that is the dedicated silhouette, not the full-colour icon',
+    String(first.options.badge)
+  )
+
+  await fire('push', pushed({ v: 1, kind: 'out', name: 'Marisol Vandenberg', at: '2026-08-10T22:10:00.000Z' }))
+  ok(notifications[1].title === 'Marisol Vandenberg clocked out', 'out reads as out', notifications[1].title)
+  // Same person, same tag: punching straight back out replaces the first
+  // notification rather than stacking two lines about one person.
+  ok(notifications[1].options.tag === first.options.tag, 'and replaces their own earlier one')
+  ok(notifications[1].options.renotify === true, 'audibly, so the second one is not silently swapped in')
+
+  await fire('push', pushed({ v: 1, kind: 'in', name: 'Dana Whitfield', at: '2026-08-10T14:05:00.000Z' }))
+  ok(
+    notifications[2].options.tag !== first.options.tag,
+    'but a different person gets a different tag and does not overwrite them',
+    String(notifications[2].options.tag)
+  )
+
+  await fire('push', pushed({ v: 1, kind: 'test', name: 'Test', at: '2026-08-10T14:05:00.000Z' }))
+  ok(notifications[3].title === 'Notifications are working', 'a test push says so plainly', notifications[3].title)
+
+  // A payload that will not parse is still a real event, and on most platforms
+  // a push handler that displays NOTHING eventually costs the site its
+  // permission to send any at all.
+  const before = notifications.length
+  await fire('push', {
+    data: {
+      json: () => {
+        throw new Error('not json')
+      }
+    }
+  })
+  ok(notifications.length === before + 1, 'an unreadable payload still shows something')
+  ok(String(notifications[before].title).length > 0, 'with a title', String(notifications[before].title))
+  await fire('push', {})
+  ok(notifications.length === before + 2, 'and so does a push with no payload at all')
+
+  // Tapping it must reach the window that is already open. Without this, every
+  // tap since breakfast is another entry in the app switcher.
+  let dismissed = 0
+  const existing = fakeWindow()
+  openWindows = [existing]
+  await fire('notificationclick', {
+    notification: {
+      close: () => {
+        dismissed += 1
+      }
+    }
+  })
+  ok(dismissed === 1, 'tapping dismisses the notification')
+  ok(existing.focused, 'and focuses the window that was already open')
+  ok(openedUrls.length === 0, 'rather than opening a second copy of the app')
+
+  openWindows = []
+  await fire('notificationclick', { notification: { close: () => {} } })
+  ok(openedUrls.length === 1 && openedUrls[0] === '/', 'with nothing open it opens the app itself', openedUrls.join(','))
+
+  // The browser rotates subscriptions on its own and tells nobody but this.
+  openWindows = [fakeWindow(), fakeWindow()]
+  await fire('pushsubscriptionchange', {})
+  ok(
+    openWindows.every((w) => w.postedMessages.length === 1),
+    'a rotated subscription is announced to every open page'
+  )
+  ok(
+    String((openWindows[0].postedMessages[0] as { type: string }).type).includes('push'),
+    'in a message the notifications screen listens for',
+    JSON.stringify(openWindows[0].postedMessages[0])
   )
 
   console.log(`\n${pass} passed, ${fail} failed\n`)

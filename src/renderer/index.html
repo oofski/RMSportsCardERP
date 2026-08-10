@@ -10,17 +10,34 @@
     <title>RM Operations App</title>
     <!--
       The web app's installable identity. Harmless in Electron, which loads this
-      file over file:// and ignores both tags.
+      file over file:// and simply finds nothing at these paths.
 
-      On iOS these are not decoration and not optional: Safari refuses web push
-      entirely unless the site has been ADDED TO THE HOME SCREEN, and it will
-      only offer that for a page with a manifest. The apple-touch-icon is a
-      second, older mechanism iOS still reads for the home-screen icon itself —
-      without it the icon is a blurry screenshot of the login page.
+      None of this is decoration, and on iOS none of it is optional:
+
+        · THE MANIFEST is what turns "Add to Home Screen" from a bookmark into
+          an app. A bookmark opens in a Safari tab, and a Safari tab cannot
+          receive a push notification at all — so a missing or unreadable
+          manifest looks exactly like the notifications being broken, which is
+          the single most expensive way this feature can fail. See
+          src/server/staticFiles.ts for the content type it must be served with.
+
+        · THE APPLE TOUCH ICON is a second, older mechanism iOS reads for the
+          home-screen icon itself. Without it the icon is a screenshot of
+          whatever page was open — usually the login screen. It is a separate,
+          FLATTENED file because iOS composites an icon onto black before
+          applying its own rounding, so an alpha channel shows up as a dark
+          ring inside the corners. See scripts/make-pwa-icons.mjs.
+
+      Vite rewrites these to relative URLs (the renderer is built with a
+      relative base so Electron can load it over file://), which resolves to the
+      same thing for a page served at the site root — which is the only place
+      this app is ever served from.
     -->
     <link rel="manifest" href="/manifest.webmanifest" />
-    <link rel="apple-touch-icon" href="/app-icon-512.png" />
+    <link rel="icon" type="image/png" href="/app-icon-192.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon-180.png" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-title" content="RM Ops" />
     <meta name="theme-color" content="#12141a" />
   </head>

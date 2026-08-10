@@ -146,6 +146,79 @@ characters.
 
 ---
 
+## Putting it on a phone
+
+The web app installs to a home screen. It gets its own icon, opens without an
+address bar, and can put a notification on the lock screen when somebody clocks
+in. Nothing is downloaded from a store — the browser does all of it.
+
+### iPhone and iPad — Safari only
+
+Chrome and Firefox on iOS are Safari underneath but cannot install anything;
+this has to be **Safari**.
+
+1. Open the app's address in Safari and sign in.
+2. Tap **Share** — the square with an arrow coming out of the top.
+3. Scroll down and tap **Add to Home Screen**, then **Add**.
+4. Close Safari and open the app from the **new icon**.
+
+**This step is not cosmetic on an iPhone.** Apple allows web notifications only
+for an app that was added to the Home Screen — in an ordinary Safari tab the
+notification API does not exist at all. So an iPhone that skipped this has no
+way to be notified about anything, and the Notifications screen will say so and
+print these steps rather than showing a switch that does nothing. iOS 16.4 or
+newer; older iPhones cannot do it at any level of effort.
+
+**You will be asked to sign in again inside the installed app.** That is
+correct, not a bug: iOS gives an installed web app its own separate cookie
+store, so the session in Safari does not come with it.
+
+### Android
+
+Chrome menu (⋮) → **Add to Home screen** or **Install app**. Notifications work
+in an ordinary tab on Android too, so this one really is optional — but
+installed, a tapped notification opens the app rather than whichever tab was
+last on screen.
+
+### Turning on clock-in notifications
+
+Per person, per phone. There is no way to switch them on for somebody else.
+
+1. In the installed app: **Admin → Notifications**.
+2. **Turn on**, and allow notifications when the browser asks.
+3. **Send a test.** The phone should buzz within a few seconds.
+
+You are never notified about your own punches — the screen you just pressed
+already told you. The device list on that screen shows when each phone was last
+successfully sent to, which is the only way to tell "a quiet week" from "this
+phone stopped working three weeks ago".
+
+Everything on the sending side lives on the Cloudflare relay, including the
+signing key: see **[docs/CLOUDFLARE.md](CLOUDFLARE.md)**, *Clock-in
+notifications on your phone*. If nothing arrives for anybody, that is where to
+look first — a relay with no `VAPID_PRIVATE_KEY` accepts every subscription and
+sends nothing.
+
+### What the install actually consists of
+
+Worth knowing because all of it is silent when it breaks, and a broken install
+looks exactly like broken notifications:
+
+| Piece | Where | If it is wrong |
+|---|---|---|
+| `manifest.webmanifest` | `src/renderer/public/` | iOS adds a **bookmark** instead of an app. It opens in a tab, and a tab cannot receive push. |
+| its content type | `src/server/staticFiles.ts` | Served as anything but `application/manifest+json`, the browser ignores the file — same outcome. |
+| icons, 192 and 512 | `src/renderer/public/` | Chrome will not offer to install; iOS shows a screenshot of the login page as the icon. |
+| a **maskable** icon | as above | Android crops the artwork into whatever shape that launcher uses and fills the rest with black. |
+| `sw.js`, at the site root | `src/renderer/public/` | A service worker's reach is the folder it is served from. Anywhere but the root and it cannot receive anything. |
+| `no-store` on `sw.js` | `src/server/staticFiles.ts` | A cached service worker is a fix that can never ship — the browser compares bytes. |
+
+The icons are generated from the one master by `node scripts/make-pwa-icons.mjs`
+and committed; run it when the logo changes. `tests/webPush.test.ts` asserts
+every row of that table, because none of them announce themselves.
+
+---
+
 ## Backups
 
 The database is now the only copy of the business. Back it up before you need to.
