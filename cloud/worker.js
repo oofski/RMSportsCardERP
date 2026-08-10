@@ -95,7 +95,7 @@ export default {
       // subscription travels browser → app (session cookie, permission check) →
       // relay (shared key). That is also why there are no CORS headers on the
       // replies: nothing cross-origin is supposed to reach this.
-      if (path === '/v1/push-notify/key' && request.method === 'GET') return pushKey(env, url.origin)
+      if (path === '/v1/push-notify/key' && request.method === 'GET') return pushKey(env)
       if (path === '/v1/push-notify/subscribe' && request.method === 'POST') {
         return pushSubscribe(request, env)
       }
@@ -104,7 +104,7 @@ export default {
       }
       if (path === '/v1/push-notify/list' && request.method === 'GET') return pushList(url, env)
       if (path === '/v1/push-notify/test' && request.method === 'POST') {
-        return pushTest(request, env, url.origin)
+        return pushTest(request, env)
       }
       if (path === '/v1/push-notify/generate-keys' && request.method === 'POST') {
         return generateVapidKeys()
@@ -1343,6 +1343,868 @@ function clockHtml(body, status = 200) {
       'referrer-policy': 'no-referrer',
       'x-content-type-options': 'nosniff'
     }
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Job 4 — clock-in push notifications
+// ---------------------------------------------------------------------------
+
+/**
+ * Real W3C Web Push, signed and encrypted right here.
+ *
+ * ## Why not ntfy, Discord, Pushover or an email
+ *
+ * Because every one of them means handing a third party a stream that reads
+ * "Dana Whitfield started work at 07:58" — who works here, what hours they keep,
+ * and on bad days what they were doing at 2am. That is the company's payroll
+ * shape sitting in somebody else's database forever, in exchange for saving an
+ * afternoon. So the notification goes from this Worker straight to the browser
+ * vendor's push service and nowhere else, and the vendor sees an ENCRYPTED blob
+ * addressed to one device. The name is not in it in any form they can read.
+ *
+ * That is the entire reason the aes128gcm code below exists rather than a
+ * payload-less "something happened" ping. A payload-less push would be private
+ * too, but it would tell the phone nothing, and the service worker would have to
+ * call back for the detail — which is a network round trip that fails exactly
+ * when the phone is asleep, which is always.
+ *
+ * ## Why the WORKER sends and not the app
+ *
+ * Punches arrive from at least three places: the desktop app on any of several
+ * machines, the web app on Render, and the /clock portal above. A sender living
+ * in the Electron app only fires when that particular machine is awake, so the
+ * 7am shift — nobody at a desk yet — would silently never notify. The relay sees
+ * every one of those paths, because they all end as a row in sync_rows.
+ *
+ * ## What the crypto is, in the order it happens
+ *
+ * Per push:
+ *   1. VAPID (RFC 8292): an ES256 JWT proving the sender is us, so a push
+ *      service will accept the request at all.
+ *   2. aes128gcm (RFC 8291 + RFC 8188): ECDH against the phone's public key plus
+ *      its auth secret, HKDF down to a content key and a nonce, AES-128-GCM.
+ *
+ * Both are done by hand with WebCrypto. There is no npm here — this file is
+ * PASTED into the Cloudflare dashboard — so `web-push` is not an option, and a
+ * bundler would be a build step the deployment story does not have.
+ */
+
+/** Room for a name and a timestamp with a very great deal to spare. */
+const PUSH_RECORD_SIZE = 4096
+/** One AES-GCM tag (16) plus the record delimiter (1). */
+const PUSH_MAX_PLAINTEXT = PUSH_RECORD_SIZE - 17
+/**
+ * How long a push service should hold a notification for a phone that is off.
+ *
+ * Six hours, not days. "Rhea clocked in" that arrives tomorrow morning is not
+ * information, it is confusion — and a shift that started six hours ago has
+ * either been noticed or stopped mattering.
+ */
+const PUSH_TTL_SECONDS = 6 * 60 * 60
+/** RFC 8292 caps a VAPID token at 24h. Half that leaves room for clock skew. */
+const VAPID_JWT_TTL_SECONDS = 12 * 60 * 60
+/** A ceiling so a bug in a client loop cannot grow this table without bound. */
+const PUSH_MAX_SUBSCRIPTIONS = 500
+
+/**
+ * The PUBLIC half of the VAPID pair, in the file on purpose.
+ *
+ * It is not a secret in any sense: it is published to every browser that
+ * subscribes, and it is derivable from any push request this Worker makes. What
+ * it IS, is a value the phone and the Worker must agree on exactly — the phone
+ * bakes it into the subscription, and delivery is refused if the signature does
+ * not match it. Two hand-pasted copies of a 87-character string is a drift
+ * waiting to happen, and the failure lands at DELIVERY: subscribing succeeds,
+ * the toggle goes green, and nothing ever arrives.
+ *
+ * So one copy, here, served to the browser by /v1/push-notify/key rather than
+ * committed a second time into the app. VAPID_PUBLIC_KEY overrides it, which is
+ * what a rotation uses: set the new pair as a variable and a secret, confirm
+ * pushes arrive, then move the new public half into this line.
+ *
+ * The PRIVATE half is a Cloudflare secret and appears nowhere in this
+ * repository. This repository is public.
+ */
+const VAPID_PUBLIC_KEY_DEFAULT =
+  'BKqBBWG-N2QzNFKzvwIvJgavQ89ZD2yTynktJIQcgeBzkItdByFR3CCY69CQWBRlYx2B-0cVQPwlrLChcror7S8'
+
+/**
+ * Who a push service should complain to.
+ *
+ * Mozilla and Google both write to this address before they start throttling or
+ * dropping a sender, so an address nobody reads means the first sign of trouble
+ * is notifications quietly stopping.
+ *
+ * The FORMAT is load-bearing and unforgiving: `mailto:` immediately followed by
+ * the address, no space, no angle brackets, no display name. A malformed subject
+ * is rejected by some services as a 400 on the push itself — which surfaces as
+ * "notifications don't arrive", never as anything naming the subject. Hence
+ * VAPID_SUBJECT_RE and the loud log in vapidSubject().
+ */
+const VAPID_SUBJECT_DEFAULT = 'mailto:team.rmsportscardz@gmail.com'
+const VAPID_SUBJECT_RE = /^(mailto:[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+|https:\/\/[^\s<>]+)$/
+
+// ---------------------------------------------------------------------------
+// Bytes
+// ---------------------------------------------------------------------------
+
+export function b64urlFromBytes(bytes) {
+  return base64FromBytes(bytes).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+
+/**
+ * base64url → bytes, tolerating standard base64 as well.
+ *
+ * Both alphabets turn up: the push API's keys are handed to JavaScript as
+ * ArrayBuffers and whoever encodes them picks. Accepting either here is one line
+ * and removes a class of "the key looks right and does not decrypt".
+ */
+export function bytesFromB64url(text) {
+  const s = String(text || '').replace(/-/g, '+').replace(/_/g, '/')
+  return bytesFromBase64(s + '='.repeat((4 - (s.length % 4)) % 4))
+}
+
+function concatBytes(...parts) {
+  let total = 0
+  for (const p of parts) total += p.length
+  const out = new Uint8Array(total)
+  let at = 0
+  for (const p of parts) {
+    out.set(p, at)
+    at += p.length
+  }
+  return out
+}
+
+// ---------------------------------------------------------------------------
+// The subscription table
+// ---------------------------------------------------------------------------
+
+/**
+ * Created on first use, like portal_lockout above and for the same reason.
+ *
+ * cloud/schema.d1.sql is pasted into the D1 console by hand, and a feature that
+ * only works after somebody remembers a SECOND paste is a feature that appears
+ * broken — with no error to search for, because nothing errors: subscribing just
+ * fails and the toggle springs back off.
+ *
+ * The endpoint is the PRIMARY KEY, not a surrogate id, because the endpoint IS
+ * the identity of a subscription — it is the URL the push service will accept
+ * deliveries at. Re-subscribing on the same phone (which browsers do on their
+ * own, after a permission change, a long idle, or an app update) yields the same
+ * endpoint, so the upsert refreshes the row instead of leaving a second copy
+ * behind that would deliver every notification twice.
+ */
+let pushTableReady = false
+async function ensurePushTable(env) {
+  if (pushTableReady) return
+  await env.DB.batch([
+    env.DB.prepare(
+      `CREATE TABLE IF NOT EXISTS push_subscriptions (
+         endpoint    TEXT PRIMARY KEY,
+         employee_id TEXT NOT NULL,
+         p256dh      TEXT NOT NULL,
+         auth        TEXT NOT NULL,
+         label       TEXT,
+         created_at  TEXT NOT NULL,
+         last_sent_at TEXT
+       )`
+    ),
+    env.DB.prepare(
+      'CREATE INDEX IF NOT EXISTS idx_push_subscriptions_employee ON push_subscriptions (employee_id)'
+    )
+  ])
+  pushTableReady = true
+}
+
+/**
+ * A stable, non-reversible name for a subscription.
+ *
+ * The endpoint itself is a bearer capability: anybody holding it can deliver a
+ * notification to that phone. It therefore does not go back to a browser screen
+ * that only needs to say "this device, added Tuesday" — a hash does that job and
+ * cannot be replayed.
+ */
+async function subscriptionId(endpoint) {
+  const digest = await crypto.subtle.digest('SHA-256', enc.encode(String(endpoint || '')))
+  return b64urlFromBytes(new Uint8Array(digest)).slice(0, 22)
+}
+
+// ---------------------------------------------------------------------------
+// VAPID — proving to a push service that this sender is us
+// ---------------------------------------------------------------------------
+
+/**
+ * The audience of a VAPID token is the push service's ORIGIN and nothing else.
+ *
+ * Not the full endpoint. A token whose `aud` carries the path is rejected, and
+ * the rejection is a flat 401 from Apple or Google with no explanation — the
+ * single most common way a hand-rolled implementation of this fails.
+ */
+export function vapidAudience(endpoint) {
+  const url = new URL(String(endpoint))
+  if (url.protocol !== 'https:') throw new Error('A push endpoint must be https.')
+  return url.origin
+}
+
+/**
+ * Rebuild a signing key from the two halves the operator pasted in.
+ *
+ * WebCrypto cannot import a raw EC private scalar, and it has no way to derive a
+ * public key from one, so both halves have to be supplied and are stitched into
+ * a JWK here. That is also why the two are stored separately and why
+ * /v1/push-notify/key serves the public half rather than the app carrying its
+ * own copy: two hand-pasted values that must agree are two values that will
+ * eventually not, and the failure is silent — every push 401s.
+ */
+async function vapidSigningKey(env) {
+  if (!String(env.VAPID_PRIVATE_KEY || '').trim()) {
+    throw new Error(
+      'VAPID_PRIVATE_KEY is not set on this Worker, so no notification can be signed or sent. ' +
+        'Cloudflare dashboard → this Worker → Settings → Variables and Secrets → Add → Secret, ' +
+        'named VAPID_PRIVATE_KEY. See docs/CLOUDFLARE.md.'
+    )
+  }
+  const priv = bytesFromB64url(env.VAPID_PRIVATE_KEY)
+  const pub = bytesFromB64url(vapidPublicKey(env))
+  if (priv.length !== 32) {
+    throw new Error(
+      'VAPID_PRIVATE_KEY is ' +
+        priv.length +
+        ' bytes; it must be exactly 32, base64url. This is the "privateKey" field from ' +
+        '/v1/push-notify/generate-keys — not the public key and not a PEM file.'
+    )
+  }
+  if (pub.length !== 65 || pub[0] !== 0x04) {
+    throw new Error('VAPID_PUBLIC_KEY must be a 65-byte uncompressed P-256 point, base64url.')
+  }
+  return crypto.subtle.importKey(
+    'jwk',
+    {
+      kty: 'EC',
+      crv: 'P-256',
+      d: b64urlFromBytes(priv),
+      x: b64urlFromBytes(pub.slice(1, 33)),
+      y: b64urlFromBytes(pub.slice(33, 65)),
+      ext: false
+    },
+    { name: 'ECDSA', namedCurve: 'P-256' },
+    false,
+    ['sign']
+  )
+}
+
+/**
+ * An ES256 JWT, built by hand.
+ *
+ * The one detail worth stating: WebCrypto's ECDSA output is already the raw
+ * 64-byte r||s concatenation that JOSE wants. OpenSSL and most server-side
+ * libraries produce a DER SEQUENCE instead, so code copied from a Node example
+ * has to unwrap it. Doing that unwrapping here would corrupt a perfectly good
+ * signature, and the only symptom would be a 401 from the push service.
+ */
+export async function signVapidJwt(signingKey, { audience, subject, expiresAtSeconds }) {
+  const header = b64urlFromBytes(enc.encode(JSON.stringify({ typ: 'JWT', alg: 'ES256' })))
+  const payload = b64urlFromBytes(
+    enc.encode(JSON.stringify({ aud: audience, exp: expiresAtSeconds, sub: subject }))
+  )
+  const signingInput = `${header}.${payload}`
+  const signature = await crypto.subtle.sign(
+    { name: 'ECDSA', hash: 'SHA-256' },
+    signingKey,
+    enc.encode(signingInput)
+  )
+  return `${signingInput}.${b64urlFromBytes(new Uint8Array(signature))}`
+}
+
+/** The public half: the file's copy unless a variable deliberately overrides it. */
+function vapidPublicKey(env) {
+  return String((env && env.VAPID_PUBLIC_KEY) || '').trim() || VAPID_PUBLIC_KEY_DEFAULT
+}
+
+/**
+ * The contact URI, validated rather than trusted.
+ *
+ * A subject with a space after the colon, or wrapped in angle brackets the way
+ * an email client would show it, is the exact shape somebody pastes — and some
+ * push services answer that with a 400 on the notification. Nothing in that
+ * chain mentions the subject, so the visible symptom is "pushes stopped" with no
+ * lead to follow. Checking the shape here costs one regex and turns a silent
+ * outage into a line in `wrangler tail` naming the value that is wrong.
+ *
+ * A bad override falls back to the default rather than refusing to send: a
+ * malformed contact address is a reason to shout, not a reason to leave a shift
+ * unannounced.
+ */
+function vapidSubject(env) {
+  const configured = String((env && env.VAPID_SUBJECT) || '').trim()
+  if (!configured) return VAPID_SUBJECT_DEFAULT
+  if (VAPID_SUBJECT_RE.test(configured)) return configured
+  console.log(
+    'push: VAPID_SUBJECT is malformed (' +
+      JSON.stringify(configured) +
+      '). It must be exactly "mailto:someone@example.com" or an https:// URL — no space after ' +
+      'the colon, no angle brackets, no display name. Falling back to ' +
+      VAPID_SUBJECT_DEFAULT
+  )
+  return VAPID_SUBJECT_DEFAULT
+}
+
+export function vapidAuthorizationHeader(jwt, publicKeyB64url) {
+  return `vapid t=${jwt}, k=${publicKeyB64url}`
+}
+
+// ---------------------------------------------------------------------------
+// aes128gcm — RFC 8291 over RFC 8188
+// ---------------------------------------------------------------------------
+
+async function hmacSha256(keyBytes, messageBytes) {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    keyBytes,
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  )
+  return new Uint8Array(await crypto.subtle.sign('HMAC', key, messageBytes))
+}
+
+/**
+ * HKDF, spelled out rather than delegated.
+ *
+ * Extract is HMAC(key = salt, message = input key material) and expand is
+ * HMAC(key = PRK, message = info || 0x01) truncated — which is the whole of it
+ * for outputs of one block or less, and every output here is. Written out
+ * because the argument order of extract is the one people get backwards (the
+ * SALT is the key), and because it makes each of the five derivations below
+ * readable against the RFC line by line.
+ */
+async function hkdf(salt, ikm, info, length) {
+  const prk = await hmacSha256(salt, ikm)
+  const okm = await hmacSha256(prk, concatBytes(info, new Uint8Array([1])))
+  return okm.slice(0, length)
+}
+
+/**
+ * Encrypt one payload for one subscription.
+ *
+ * `serverKeys` and `salt` are injectable ONLY so the test suite can pin them and
+ * compare against a decryption it performs itself; production always generates
+ * both fresh. Reusing either across two pushes to the same subscription reuses
+ * an AES-GCM key and nonce pair, which is the one thing GCM does not survive.
+ */
+export async function encryptWebPushPayload({ plaintext, p256dh, auth, serverKeys, salt }) {
+  const uaPublicBytes = bytesFromB64url(p256dh)
+  const authSecret = bytesFromB64url(auth)
+  if (uaPublicBytes.length !== 65 || uaPublicBytes[0] !== 0x04) {
+    throw new Error('p256dh must be a 65-byte uncompressed P-256 point.')
+  }
+  if (authSecret.length !== 16) throw new Error('The auth secret must be 16 bytes.')
+  if (plaintext.length > PUSH_MAX_PLAINTEXT) {
+    throw new Error(`A push payload may not exceed ${PUSH_MAX_PLAINTEXT} bytes.`)
+  }
+
+  const keys =
+    serverKeys ||
+    (await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']))
+  const asPublicBytes = new Uint8Array(await crypto.subtle.exportKey('raw', keys.publicKey))
+  const uaPublicKey = await crypto.subtle.importKey(
+    'raw',
+    uaPublicBytes,
+    { name: 'ECDH', namedCurve: 'P-256' },
+    false,
+    []
+  )
+  // 256 bits: the x-coordinate of the shared point, which is what RFC 8291 calls
+  // ecdh_secret. WebCrypto returns exactly that and nothing else.
+  const ecdhSecret = new Uint8Array(
+    await crypto.subtle.deriveBits({ name: 'ECDH', public: uaPublicKey }, keys.privateKey, 256)
+  )
+
+  const realSalt = salt || crypto.getRandomValues(new Uint8Array(16))
+
+  // The key_info string is what BINDS the ciphertext to this exact pair of
+  // keys. Getting the order wrong (ours before theirs) produces a body that
+  // encrypts and transmits perfectly and that the phone silently cannot open —
+  // the service worker never fires and there is nothing anywhere to read.
+  const keyInfo = concatBytes(
+    enc.encode('WebPush: info'),
+    new Uint8Array([0]),
+    uaPublicBytes,
+    asPublicBytes
+  )
+  const ikm = await hkdf(authSecret, ecdhSecret, keyInfo, 32)
+  const cek = await hkdf(
+    realSalt,
+    ikm,
+    concatBytes(enc.encode('Content-Encoding: aes128gcm'), new Uint8Array([0])),
+    16
+  )
+  const nonce = await hkdf(
+    realSalt,
+    ikm,
+    concatBytes(enc.encode('Content-Encoding: nonce'), new Uint8Array([0])),
+    12
+  )
+
+  const contentKey = await crypto.subtle.importKey('raw', cek, { name: 'AES-GCM' }, false, [
+    'encrypt'
+  ])
+  // 0x02 is the RFC 8188 delimiter meaning "last record". 0x01 would mean
+  // another record follows, and a receiver told to expect one that never comes
+  // treats the whole message as truncated.
+  const padded = concatBytes(plaintext, new Uint8Array([2]))
+  const ciphertext = new Uint8Array(
+    await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce, tagLength: 128 }, contentKey, padded)
+  )
+
+  const header = new Uint8Array(21)
+  header.set(realSalt, 0)
+  // Record size, big-endian. It describes the maximum record, not this one.
+  header[16] = (PUSH_RECORD_SIZE >>> 24) & 0xff
+  header[17] = (PUSH_RECORD_SIZE >>> 16) & 0xff
+  header[18] = (PUSH_RECORD_SIZE >>> 8) & 0xff
+  header[19] = PUSH_RECORD_SIZE & 0xff
+  header[20] = asPublicBytes.length
+  return concatBytes(header, asPublicBytes, ciphertext)
+}
+
+// ---------------------------------------------------------------------------
+// What a clock event is, and what it says
+// ---------------------------------------------------------------------------
+
+/**
+ * Did this row change from "no shift" to "shift open", or from open to closed?
+ *
+ * Everything else is not a punch and must not notify: a note edited on a shift
+ * from last week, an admin correcting yesterday's finish time, a laptop
+ * re-pushing rows it already pushed, or the echo of a row another machine wrote
+ * a second ago. Returning null for all of those is what makes this idempotent —
+ * and idempotence is not a nicety here, because the sync loop retries pushes on
+ * any error and ten laptops each pull the same row.
+ */
+export function clockTransition(before, after) {
+  if (!after || !after.clock_in) return null
+  const wasOpen = !!before && !!before.clock_in && !before.clock_out
+  const isOpen = !after.clock_out
+  if (!before && isOpen) return 'in'
+  if (wasOpen && !isOpen) return 'out'
+  return null
+}
+
+/**
+ * What actually travels to the phone.
+ *
+ * `at` is a UTC ISO INSTANT and is passed through untouched. This Worker has no
+ * idea what timezone the person holding the phone is in — the phone knows,
+ * exactly and for free — so the service worker formats it and this does not. The
+ * same reasoning as clockTimesheet above: a wall-clock time computed on a guess
+ * is a wrong time on somebody's screen, and here it would be a wrong time in a
+ * notification about when a colleague started work.
+ *
+ * The name is deliberately IN the payload. It is readable only by the phone this
+ * was encrypted for; the push service carries ciphertext. Putting it here rather
+ * than having the phone look it up is what lets the notification arrive while
+ * the device is asleep and the app is not running.
+ */
+export function buildClockPayload({ kind, name, at, place }) {
+  return {
+    v: 1,
+    kind: kind === 'out' ? 'out' : 'in',
+    name: String(name || 'Someone').slice(0, 80),
+    at: String(at || new Date().toISOString()),
+    place: place ? String(place).slice(0, 60) : null
+  }
+}
+
+/**
+ * A subscription that answered 404 or 410 is GONE — the browser was uninstalled,
+ * the user cleared site data, or the push service retired the endpoint. Nothing
+ * will ever be delivered to it again.
+ *
+ * Deleting it immediately is the difference between a table of live phones and a
+ * table of corpses. Every send walks every row, so a relay that keeps them
+ * spends longer and longer per punch doing TLS handshakes with services that
+ * will only ever say 410 — and it never recovers on its own, because nothing
+ * else in the system has any reason to look at this table.
+ *
+ * Every OTHER failure is kept. A 500 from Apple, a 429, a timeout: those are the
+ * service having a bad minute, and dropping a real phone because of one is a
+ * person who quietly stops getting notifications and has no way to know.
+ */
+export function isDeadPushStatus(status) {
+  return status === 404 || status === 410
+}
+
+/**
+ * Walk the subscriptions, send, and reap the dead ones.
+ *
+ * Both the sending and the deleting are injected so this — the part with the
+ * rules in it — can be tested without a network or a database. Sequential rather
+ * than parallel on purpose: a Worker has a subrequest budget per invocation, and
+ * a burst of parallel fetches to three different push services is the shape that
+ * hits it. Ten phones at a couple of hundred milliseconds each is well inside
+ * the time a waitUntil is allowed to take.
+ */
+export async function deliverPush({ subscriptions, send, drop }) {
+  const result = { sent: 0, dropped: 0, failed: 0 }
+  for (const subscription of subscriptions) {
+    let status
+    try {
+      status = await send(subscription)
+    } catch {
+      // A thrown fetch is a network fault, not evidence about the subscription.
+      result.failed += 1
+      continue
+    }
+    if (isDeadPushStatus(status)) {
+      await drop(subscription.endpoint)
+      result.dropped += 1
+      continue
+    }
+    if (status >= 200 && status < 300) result.sent += 1
+    else result.failed += 1
+  }
+  return result
+}
+
+// ---------------------------------------------------------------------------
+// Sending
+// ---------------------------------------------------------------------------
+
+/**
+ * The only thing that can be missing is the private key.
+ *
+ * The public half has a default in this file and the subject has a default too,
+ * so "configured" reduces to one question: has the secret been pasted in? That
+ * matters because it is the one failure mode nobody notices — subscribing works,
+ * the screen says notifications are on, and every shift goes unannounced.
+ */
+function vapidConfigured(env) {
+  return String((env && env.VAPID_PRIVATE_KEY) || '').trim().length > 0
+}
+
+const VAPID_MISSING_MESSAGE =
+  'VAPID_PRIVATE_KEY is not set on the relay Worker, so no notification can be sent. ' +
+  'Cloudflare dashboard → Workers → rm-operations → Settings → Variables and Secrets → ' +
+  'Add → Secret, named VAPID_PRIVATE_KEY (see docs/CLOUDFLARE.md).'
+
+async function subscriptionsForSend(env, excludeEmployeeId) {
+  await ensurePushTable(env)
+  const result = await env.DB.prepare(
+    `SELECT endpoint, employee_id, p256dh, auth FROM push_subscriptions
+      WHERE employee_id <> ?1
+      ORDER BY created_at ASC LIMIT ?2`
+  )
+    .bind(String(excludeEmployeeId || ''), PUSH_MAX_SUBSCRIPTIONS)
+    .all()
+  return result.results || []
+}
+
+async function dropSubscription(env, endpoint) {
+  await env.DB.prepare('DELETE FROM push_subscriptions WHERE endpoint = ?1').bind(endpoint).run()
+}
+
+/**
+ * One HTTPS POST to one push service.
+ *
+ * Returns the status rather than throwing on a bad one, because the CALLER is
+ * what decides whether a status means "delete this row" — see deliverPush.
+ */
+async function sendOnePush(env, subscription, payloadBytes) {
+  const audience = vapidAudience(subscription.endpoint)
+  const signingKey = await vapidSigningKey(env)
+  const jwt = await signVapidJwt(signingKey, {
+    audience,
+    subject: vapidSubject(env),
+    expiresAtSeconds: Math.floor(Date.now() / 1000) + VAPID_JWT_TTL_SECONDS
+  })
+  const body = await encryptWebPushPayload({
+    plaintext: payloadBytes,
+    p256dh: subscription.p256dh,
+    auth: subscription.auth
+  })
+  const response = await fetch(subscription.endpoint, {
+    method: 'POST',
+    headers: {
+      authorization: vapidAuthorizationHeader(jwt, vapidPublicKey(env)),
+      'content-encoding': 'aes128gcm',
+      'content-type': 'application/octet-stream',
+      ttl: String(PUSH_TTL_SECONDS),
+      // Phones are quiet at 3am for a reason and a shift starting is not an
+      // emergency. 'normal' lets the OS batch it; 'high' would wake the device.
+      urgency: 'normal'
+    },
+    body
+  })
+  return response.status
+}
+
+/**
+ * The one entry point every punch path ends at.
+ *
+ * Never throws outward: the punch is the record and the push is a courtesy on
+ * top of it, so a push service having a bad minute must not turn a working
+ * clock-in into a 500 on a warehouse phone.
+ *
+ * But "does not throw" is not "says nothing". A missing VAPID_PRIVATE_KEY is the
+ * worst failure this feature has — everything upstream succeeds, the toggle in
+ * the app reads as on, and shifts simply go unannounced until somebody
+ * eventually asks why. So it is logged, loudly, with the fix in the message,
+ * every time there was somebody to notify. `wrangler tail` or the dashboard's
+ * live log is where that lands.
+ */
+async function notifyClockEvents(env, events, origin) {
+  if (!events || events.length === 0) return
+  if (!vapidConfigured(env)) {
+    const waiting = await subscriptionCount(env)
+    if (waiting > 0) {
+      console.log(
+        `push: ${waiting} device(s) are subscribed and ${events.length} clock event(s) ` +
+          `were NOT delivered. ${VAPID_MISSING_MESSAGE}`
+      )
+    }
+    return
+  }
+  for (const event of events) {
+    const entry = event.entry || {}
+    const employeeId = String(entry.employee_id || '')
+    if (!employeeId) continue
+
+    // Everyone EXCEPT the person who just punched. They are holding the phone
+    // that did it and have already been told by the screen in front of them; a
+    // second buzz two seconds later reads as a duplicate and is the fastest way
+    // to teach somebody to turn notifications off.
+    const subscriptions = await subscriptionsForSend(env, employeeId)
+    if (subscriptions.length === 0) continue
+
+    const emp = await employeeById(env, employeeId)
+    const name = emp
+      ? `${emp.first_name || ''} ${emp.last_name || ''}`.trim() || emp.company_id || 'Someone'
+      : 'Someone'
+    const payload = buildClockPayload({
+      kind: event.kind,
+      name,
+      at: event.kind === 'out' ? entry.clock_out : entry.clock_in,
+      place: event.kind === 'out' ? entry.clock_out_place : entry.clock_in_place
+    })
+    const bytes = enc.encode(JSON.stringify(payload))
+
+    const outcome = await deliverPush({
+      subscriptions,
+      send: (subscription) => sendOnePush(env, subscription, bytes),
+      drop: (endpoint) => dropSubscription(env, endpoint)
+    })
+    if (outcome.failed > 0 || outcome.dropped > 0) {
+      console.log(
+        `push: clock-${event.kind} — sent ${outcome.sent}, failed ${outcome.failed}, ` +
+          `removed ${outcome.dropped} dead subscription(s).`
+      )
+    }
+  }
+}
+
+async function subscriptionCount(env) {
+  try {
+    await ensurePushTable(env)
+    const row = await env.DB.prepare('SELECT COUNT(*) AS n FROM push_subscriptions').first()
+    return row ? Number(row.n) : 0
+  } catch {
+    return 0
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The routes the app server calls
+// ---------------------------------------------------------------------------
+
+async function pushKey(env) {
+  const configured = vapidConfigured(env)
+  return json({
+    ok: true,
+    configured,
+    // Not a secret — it is published to every phone that subscribes. Served
+    // from here rather than copied into the app so that the key the browser
+    // subscribes with and the key the Worker signs with are physically the same
+    // value. Two copies of it drift, and a subscription made against the wrong
+    // one fails at DELIVERY, weeks later, with no error anywhere.
+    publicKey: vapidPublicKey(env),
+    subject: vapidSubject(env),
+    // Carried all the way to the screen. Without it the app can only say
+    // "notifications are on" while the relay quietly sends nothing.
+    problem: configured ? null : VAPID_MISSING_MESSAGE
+  })
+}
+
+async function pushSubscribe(request, env) {
+  const body = await readJson(request)
+  const employeeId = String(body.employeeId || '').trim().slice(0, 80)
+  const endpoint = String(body.endpoint || '').trim()
+  const p256dh = String(body.p256dh || '').trim()
+  const auth = String(body.auth || '').trim()
+  const label = String(body.label || '').trim().slice(0, 80) || null
+
+  if (!employeeId) return json({ ok: false, error: 'Who is subscribing?' }, 400)
+  let audience
+  try {
+    audience = vapidAudience(endpoint)
+  } catch {
+    return json({ ok: false, error: 'That is not a usable push endpoint.' }, 400)
+  }
+  // Validated HERE rather than at send time. A malformed key stored now is a
+  // notification that fails months later, once, silently, for one person.
+  try {
+    if (bytesFromB64url(p256dh).length !== 65) throw new Error('p256dh')
+    if (bytesFromB64url(auth).length !== 16) throw new Error('auth')
+  } catch {
+    return json({ ok: false, error: 'That subscription is missing its keys.' }, 400)
+  }
+
+  await ensurePushTable(env)
+  const now = new Date().toISOString()
+  await env.DB.prepare(
+    `INSERT INTO push_subscriptions (endpoint, employee_id, p256dh, auth, label, created_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+     ON CONFLICT (endpoint) DO UPDATE SET
+       employee_id = excluded.employee_id,
+       p256dh      = excluded.p256dh,
+       auth        = excluded.auth,
+       label       = excluded.label`
+  )
+    .bind(endpoint, employeeId, p256dh, auth, label, now)
+    .run()
+
+  return json({ ok: true, id: await subscriptionId(endpoint), service: audience })
+}
+
+async function pushUnsubscribe(request, env) {
+  const body = await readJson(request)
+  const endpoint = String(body.endpoint || '').trim()
+  if (!endpoint) return json({ ok: false, error: 'Which subscription?' }, 400)
+  await ensurePushTable(env)
+  await dropSubscription(env, endpoint)
+  // Always ok. Unsubscribing something already gone is the desired end state,
+  // and a browser whose subscription expired underneath it must still be able
+  // to tidy up rather than being told it is wrong.
+  return json({ ok: true })
+}
+
+async function pushList(url, env) {
+  const employeeId = String(url.searchParams.get('employeeId') || '').trim()
+  await ensurePushTable(env)
+  const result = employeeId
+    ? await env.DB.prepare(
+        `SELECT endpoint, employee_id, label, created_at, last_sent_at FROM push_subscriptions
+          WHERE employee_id = ?1 ORDER BY created_at ASC`
+      )
+        .bind(employeeId)
+        .all()
+    : await env.DB.prepare(
+        `SELECT endpoint, employee_id, label, created_at, last_sent_at FROM push_subscriptions
+          ORDER BY created_at ASC LIMIT ?1`
+      )
+        .bind(PUSH_MAX_SUBSCRIPTIONS)
+        .all()
+
+  const devices = []
+  for (const row of result.results || []) {
+    devices.push({
+      id: await subscriptionId(row.endpoint),
+      employeeId: row.employee_id,
+      label: row.label,
+      createdAt: row.created_at,
+      lastSentAt: row.last_sent_at,
+      // The service, not the endpoint. "Apple" or "Google" is what a person
+      // needs to recognise their own phone in a list; the URL is a capability.
+      service: (() => {
+        try {
+          return new URL(row.endpoint).hostname
+        } catch {
+          return 'unknown'
+        }
+      })()
+    })
+  }
+  return json({ ok: true, devices })
+}
+
+/**
+ * Prove the whole chain works, on demand, without waiting for a shift.
+ *
+ * Worth a route of its own: everything between pressing the toggle and a phone
+ * buzzing is invisible — the key pair, the subscription row, the JWT, the
+ * encryption, the push service. Without this the first evidence any of it is
+ * wrong arrives at 7am on a Monday, and the person who could fix it is asleep.
+ */
+async function pushTest(request, env) {
+  if (!vapidConfigured(env)) return json({ ok: false, error: VAPID_MISSING_MESSAGE }, 400)
+  const body = await readJson(request)
+  const employeeId = String(body.employeeId || '').trim()
+  if (!employeeId) return json({ ok: false, error: 'Who is testing?' }, 400)
+
+  await ensurePushTable(env)
+  const result = await env.DB.prepare(
+    `SELECT endpoint, employee_id, p256dh, auth FROM push_subscriptions
+      WHERE employee_id = ?1 LIMIT ?2`
+  )
+    .bind(employeeId, PUSH_MAX_SUBSCRIPTIONS)
+    .all()
+  const subscriptions = result.results || []
+  if (subscriptions.length === 0) {
+    return json({ ok: false, error: 'This account has no device turned on yet.' }, 400)
+  }
+
+  const bytes = enc.encode(
+    JSON.stringify({
+      v: 1,
+      kind: 'test',
+      name: String(body.name || 'Test notification').slice(0, 80),
+      at: new Date().toISOString(),
+      place: null
+    })
+  )
+  const outcome = await deliverPush({
+    subscriptions,
+    send: (subscription) => sendOnePush(env, subscription, bytes),
+    drop: (endpoint) => dropSubscription(env, endpoint)
+  })
+  return json({
+    ok: outcome.sent > 0,
+    ...outcome,
+    error:
+      outcome.sent > 0
+        ? undefined
+        : outcome.dropped > 0
+          ? 'The push service says this device no longer exists. Turn notifications off and on again.'
+          : 'The push service refused the notification.'
+  })
+}
+
+/**
+ * Mint a VAPID key pair and hand both halves back, once.
+ *
+ * Nothing is stored: this is a generator, not a key store. The operator pastes
+ * the private half into a Worker secret and the public half into a Worker
+ * variable, and this route never needs calling again.
+ *
+ * It exists because the documented deployment story for this relay is "no
+ * command line, no wrangler, paste a file into a dashboard", and the ordinary
+ * way to produce these keys is an npm package. Behind the shared key, which
+ * already grants read and write over the entire business, so it widens nothing.
+ */
+async function generateVapidKeys() {
+  const pair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, [
+    'sign',
+    'verify'
+  ])
+  const jwk = await crypto.subtle.exportKey('jwk', pair.privateKey)
+  const publicKey = new Uint8Array(await crypto.subtle.exportKey('raw', pair.publicKey))
+  return json({
+    ok: true,
+    publicKey: b64urlFromBytes(publicKey),
+    privateKey: jwk.d,
+    note: 'privateKey is a SECRET. Paste it into the Worker secret VAPID_PRIVATE_KEY and nowhere else.'
   })
 }
 
