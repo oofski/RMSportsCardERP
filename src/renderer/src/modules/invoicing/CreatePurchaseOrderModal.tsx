@@ -10,6 +10,7 @@ import { formatMoney } from '../../lib/format'
 import { FreightFields } from '../../components/FreightFields'
 import { ContactTypeahead } from './ContactTypeahead'
 import { POCatalogTypeahead } from './POCatalogTypeahead'
+import { PasteOfferPanel, type OfferDraftLine } from './PasteOfferPanel'
 
 /** A working line in the create form — quantity/price kept as strings so the
  *  inputs stay controlled and empty-while-typing is allowed. */
@@ -76,6 +77,37 @@ export function CreatePurchaseOrderModal({
           unitPrice: p.unitCost ? String(p.unitCost) : ''
         }
       ]
+    })
+  }
+
+  /**
+   * Take the rows the operator confirmed in the paste review.
+   *
+   * A reviewed row REPLACES an existing line for the same product rather than
+   * bumping its quantity the way addLine does. The two are different acts: the
+   * typeahead's "clicked it again" means one more, while a reviewed row carries
+   * its own quantity AND its own price straight off the supplier's message, and
+   * adding it to whatever was already there would produce a quantity nobody
+   * chose at a price from one of two lines. The review has already refused to
+   * hand over two rows for one product for the same reason.
+   */
+  const addReviewedLines = (reviewed: OfferDraftLine[]): void => {
+    setLines((prev) => {
+      const next = [...prev]
+      for (const r of reviewed) {
+        const line: DraftLine = {
+          productId: r.product.id,
+          productName: r.product.name,
+          sku: r.product.sku,
+          category: r.product.category,
+          quantity: String(r.quantity),
+          unitPrice: String(r.unitPrice)
+        }
+        const at = next.findIndex((l) => l.productId === r.product.id)
+        if (at >= 0) next[at] = line
+        else next.push(line)
+      }
+      return next
     })
   }
 
@@ -190,6 +222,8 @@ export function CreatePurchaseOrderModal({
         hint="Who is bringing it"
         onChange={(patch) => setFreight((f) => ({ ...f, ...patch }))}
       />
+
+      <PasteOfferPanel onApply={addReviewedLines} />
 
       <POCatalogTypeahead onSelect={addLine} />
 

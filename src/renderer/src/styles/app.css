@@ -4120,6 +4120,311 @@ tr.hoverable-row:hover {
   font-size: 14px;
 }
 
+/* ---------- Create modal: the pasted-offer review (PasteOfferPanel) ----------
+   A supplier's text message, read into rows somebody checks before any of it
+   becomes a purchase order.
+
+   The layout is a CARD PER LINE rather than a table, and that is a constraint
+   rather than a preference: the modal is 620px, and the eight things a row has
+   to say — the supplier's own text, season, product, price, count, per-case or
+   total, line total, and which catalog product it is going against — are three
+   columns too many for that width. As a table they would each be four
+   characters wide and the money would be unreadable, which on this screen is
+   the whole point. Stacked, each row can wrap and stays legible on a phone
+   without a single phone-only rule.
+
+   Every colour below is a token; the row states are told apart by tint AND by
+   an icon and words, never by colour alone. */
+.offer-open {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 18px;
+}
+.offer-open-hint {
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+.offer-panel {
+  margin-top: 18px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  padding: 16px;
+}
+.offer-panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.offer-panel-head h4 {
+  margin: 0;
+  font-size: 14px;
+}
+.offer-panel-head p {
+  margin: 3px 0 0;
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+.offer-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+.offer-summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  font-size: 13px;
+  color: var(--text-2);
+}
+.offer-summary-total {
+  margin-left: auto;
+  font-weight: 600;
+  color: var(--text);
+}
+.offer-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--brand-600);
+  font-size: 12.5px;
+  font-family: inherit;
+  font-weight: 500;
+}
+.offer-link:hover {
+  text-decoration: underline;
+}
+.offer-ignored {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  border: 1px dashed var(--border-strong);
+  font-size: 12.5px;
+}
+.offer-ignored li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 0;
+  flex-wrap: wrap;
+}
+.offer-ignored em {
+  color: var(--text-3);
+  font-style: normal;
+}
+.offer-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 12px;
+}
+.offer-row {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 12px;
+}
+/* A line that could not be read keeps its place in the list and its original
+   text. Dropping it would leave nine pasted lines showing eight rows, and the
+   count of rows is the only thing that proves nothing went missing. */
+.offer-row.is-unparsed {
+  border-style: dashed;
+  border-color: var(--warning);
+  background: var(--warning-bg);
+}
+.offer-raw {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.offer-raw code {
+  font-size: 12.5px;
+  color: var(--text-2);
+  background: var(--surface-3);
+  border-radius: 6px;
+  padding: 3px 7px;
+  word-break: break-word;
+}
+.offer-include {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+.offer-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  background: var(--surface-3);
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 700;
+}
+.offer-unread {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 12.5px;
+  color: var(--warning);
+}
+.offer-unread strong {
+  color: var(--text);
+}
+.offer-read {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  margin-top: 12px;
+}
+.offer-fact {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 78px;
+}
+.offer-fact-grow {
+  flex: 1 1 150px;
+}
+.offer-fact-total {
+  margin-left: auto;
+  align-items: flex-end;
+  text-align: right;
+}
+.offer-fact-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-3);
+  font-weight: 600;
+}
+.offer-fact-value {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.offer-fact-note {
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+.offer-price-input {
+  width: 110px;
+  text-align: right;
+  height: 32px;
+}
+.offer-qty-input {
+  width: 70px;
+  text-align: right;
+  height: 32px;
+}
+/* Per case or a lot price. Both readings are always on screen as a pair of
+   buttons — an operator has to be able to see that the other reading exists
+   before they can notice it is the right one. Neither state is styled as a
+   warning: every line IS a case price, so the default is not an assumption
+   anybody needs prompting about. */
+.offer-basis {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 12px;
+}
+.offer-basis-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.offer-basis-toggle button {
+  background: var(--surface);
+  border: none;
+  padding: 5px 12px;
+  font-size: 12.5px;
+  font-family: inherit;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.offer-basis-toggle button + button {
+  border-left: 1px solid var(--border-strong);
+}
+.offer-basis-toggle button.is-on {
+  background: var(--brand-soft);
+  color: var(--brand-700);
+  font-weight: 600;
+}
+/* The one case where a line contradicts the fixed reading: it wrote "total".
+   Not a state of the toggle and not a colour on the row — a sentence naming the
+   word that was deleted, next to the control that can act on it. "per" never
+   produces one, because "per" agrees with how every line is already read. */
+.offer-basis-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--warning);
+  flex: 1 1 220px;
+}
+.offer-match {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border-strong);
+  font-size: 12.5px;
+}
+.offer-match.is-matched {
+  color: var(--success-strong);
+}
+.offer-match.is-uncertain {
+  color: var(--warning);
+}
+.offer-match.is-none {
+  color: var(--danger-strong);
+}
+.offer-match-name {
+  font-weight: 600;
+  color: var(--text);
+}
+.offer-match-sub {
+  color: var(--text-3);
+}
+.offer-match-note {
+  flex: 1 1 200px;
+}
+.offer-match-select {
+  height: 32px;
+  font-size: 12.5px;
+  max-width: 100%;
+  flex: 1 1 220px;
+}
+.offer-match-search {
+  flex: 1 1 100%;
+}
+
 /* ---------- The bench checklist (BreakBench) ----------
    Three steps per break before anything ships. Visually one block so the
    sequence reads as one job, with step 3's team list carrying most of the

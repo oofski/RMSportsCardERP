@@ -9,13 +9,30 @@ import { structureLabel } from '../inventory/helpers'
  * IncomingModal's CatalogTypeahead but pointed at api.purchaseOrders.searchCatalog
  * so a module.invoicing-only user can find products without holding
  * module.inventory. Picking a match appends it as a PO line item.
+ *
+ * The wording is overridable because the pasted-offer review reuses this exact
+ * control to attach a product to a line the parser could not place — the same
+ * search, the same permission, the same result rows. Two typeaheads over one
+ * catalog would be two things to keep in step and two ways to disagree about
+ * what a product is; the labels are the only part that differs, so they are the
+ * only part that is a prop. Every default below is the original text, so the
+ * create form's own call site is unchanged.
  */
 export function POCatalogTypeahead({
-  onSelect
+  onSelect,
+  label = 'Add a product',
+  hint = 'Search the catalog by name, SKU or UPC',
+  placeholder = 'Start typing a product name, SKU or UPC…',
+  initialQuery = ''
 }: {
   onSelect: (p: InventoryProduct) => void
+  label?: string
+  hint?: string
+  placeholder?: string
+  /** Pre-fill, so a row can open its search already asking for its own words. */
+  initialQuery?: string
 }): JSX.Element {
-  const [query, setQuery] = useState('')
+  const [query, setQuery] = useState(initialQuery)
   const [results, setResults] = useState<InventoryProduct[]>([])
   const [loading, setLoading] = useState(false)
   const timer = useRef<number | null>(null)
@@ -43,12 +60,8 @@ export function POCatalogTypeahead({
 
   return (
     <div className="typeahead">
-      <Field label="Add a product" hint="Search the catalog by name, SKU or UPC">
-        <Input
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Start typing a product name, SKU or UPC…"
-        />
+      <Field label={label} hint={hint}>
+        <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={placeholder} />
       </Field>
       {query.trim().length >= 2 && (
         <div className="ta-menu">
