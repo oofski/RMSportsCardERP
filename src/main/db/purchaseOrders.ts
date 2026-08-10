@@ -7,7 +7,7 @@ import type {
   PurchaseOrderStatus,
   ScanPoCandidate
 } from '@shared/types'
-import { canTransition, type SupplierSuggestion } from '@shared/purchaseOrders'
+import { canTransition, type SupplierSuggestion, type VendorSummary } from '@shared/purchaseOrders'
 import type { Carrier, PaymentTiming } from '@shared/freight'
 import { asCarrier, asPaymentTiming, detectCarrier } from '@shared/freight'
 import { asShipStatus } from '@shared/tracking'
@@ -1088,4 +1088,142 @@ function contactDetail(c: {
 }): string | null {
   const where = [c.bill_city, c.bill_region].filter(Boolean).join(', ')
   return [c.email, c.phone ?? c.mobile, where].filter(Boolean).join(' · ') || null
+}
+
+/**
+ * Everyone this business has bought from — the Vendors list.
+ *
+ * ## Why this is not listSupplierSuggestions with a different name
+ *
+ * That function answers "what could I be about to type", so it offers the whole
+ * contact list whether or not a penny has ever gone to any of them. This one
+ * answers "who ARE our vendors", and 360 people who have never sold us anything
+ * is the wrong answer to that — it would also make the count on the Admin tile
+ * the size of the contact list rather than the size of the vendor list, which
+ * is the exact failure the tile exists to avoid.
+ *
+ * So the direction is reversed. Names come only from what was BOUGHT, and the
+ * contact list is consulted afterwards, purely to fill in a way to reach them.
+ *
+ * ## Two sources, because stock arrives two ways
+ *
+ * A purchase order is the paperwork path. But `addStock` takes a vendor
+ * directly — that is somebody typing a case straight onto the shelf with no PO
+ * behind it, which is how a lot of this warehouse actually gets filled, and a
+ * vendor list that could not see those receipts would be missing the suppliers
+ * used most casually. `inventory_lots.vendor` is read for exactly that, and a
+ * vendor known ONLY that way still gets a row.
+ *
+ * ## Case is folded TWICE, and the two do different jobs
+ *
+ * The supplier box is free text, so the same distributor is typed in caps on one
+ * order and mixed case on the next. Grouped case-sensitively that is two vendors
+ * with half the orders each and two wrong spend figures — the same bug
+ * listSupplierSuggestions guards against, and the reason both group NOCASE.
+ *
+ * NOCASE inside each query is what makes the spelling shown the MOST RECENT one:
+ * with a single max() aggregate SQLite takes the other columns from the row that
+ * produced the maximum, so one group means one answer to "how was it last
+ * written". Cosmetic — nothing is keyed on it — but it is what somebody has just
+ * seen themselves type.
+ *
+ * The fold in the merge below is the one that cannot be done in SQL at all: the
+ * two spellings can be in two DIFFERENT TABLES, an order saying "Bramble
+ * Wholesale" and a receipt saying "BRAMBLE WHOLESALE", and no GROUP BY spans
+ * both. Without it the same business appears twice on the one screen whose
+ * entire job is to say who this business buys from.
+ */
+export function listVendors(): VendorSummary[] {
+  const db = getDb()
+
+  const ordered = db
+    .prepare(
+      `SELECT TRIM(supplier) AS name,
+              COUNT(*) AS orders,
+              SUM(CASE WHEN status = 'cancelled' THEN 0 ELSE total END) AS ordered,
+              MAX(created_at) AS last_at
+         FROM purchase_orders
+        WHERE supplier IS NOT NULL AND TRIM(supplier) != ''
+        GROUP BY TRIM(supplier) COLLATE NOCASE`
+    )
+    .all() as Array<{ name: string; orders: number; ordered: number | null; last_at: string }>
+
+  const received = db
+    .prepare(
+      `SELECT TRIM(vendor) AS name,
+              COUNT(*) AS receipts,
+              MAX(received_at) AS last_at
+         FROM inventory_lots
+        WHERE vendor IS NOT NULL AND TRIM(vendor) != ''
+        GROUP BY TRIM(vendor) COLLATE NOCASE`
+    )
+    .all() as Array<{ name: string; receipts: number; last_at: string }>
+
+  const contacts = db
+    .prepare(
+      `SELECT name, email, phone, mobile, bill_city, bill_region
+         FROM invoice_customers
+        WHERE active = 1`
+    )
+    .all() as Array<{
+    name: string
+    email: string | null
+    phone: string | null
+    mobile: string | null
+    bill_city: string | null
+    bill_region: string | null
+  }>
+  const byName = new Map(contacts.map((c) => [c.name.toLowerCase(), c]))
+
+  // Folded again in JS rather than trusting the two GROUP BYs to have produced
+  // matching keys: a PO backfilled the lot's vendor column, so the two tables
+  // hold the same names, and one collation quirk between them would list a
+  // distributor twice on a screen whose whole job is to be the list.
+  const merged = new Map<string, VendorSummary>()
+  const rowFor = (name: string): VendorSummary => {
+    const key = name.toLowerCase()
+    const found = merged.get(key)
+    if (found) return found
+    const fresh: VendorSummary = {
+      name,
+      detail: null,
+      orders: 0,
+      ordered: 0,
+      receipts: 0,
+      lastAt: null
+    }
+    merged.set(key, fresh)
+    return fresh
+  }
+  // ISO-8601 strings compare lexicographically in the same order they compare as
+  // instants, which is the whole reason this app stores them that way — so the
+  // latest of an order date and a receipt date needs no date parsing at all.
+  const noteSeen = (row: VendorSummary, when: string | null): void => {
+    if (when && (!row.lastAt || when > row.lastAt)) row.lastAt = when
+  }
+
+  for (const o of ordered) {
+    const row = rowFor(o.name)
+    row.orders += o.orders
+    row.ordered += o.ordered ?? 0
+    noteSeen(row, o.last_at)
+  }
+  for (const r of received) {
+    const row = rowFor(r.name)
+    // The purchase order's spelling wins when there is one: that is what somebody
+    // typed on the document, where the lot's copy was written by the backfill.
+    if (row.orders === 0) row.name = r.name
+    row.receipts += r.receipts
+    noteSeen(row, r.last_at)
+  }
+
+  for (const row of merged.values()) {
+    const contact = byName.get(row.name.toLowerCase())
+    if (contact) row.detail = contactDetail(contact)
+  }
+
+  // Most recently dealt with first. The same ordering the supplier box uses, and
+  // for the same reason: a list of everyone we have ever bought from is only
+  // useful if the ones still being bought from are at the top of it.
+  return [...merged.values()].sort((a, b) => (b.lastAt ?? '').localeCompare(a.lastAt ?? ''))
 }

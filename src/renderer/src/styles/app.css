@@ -1030,6 +1030,36 @@ table.data tbody tr:hover {
   color: var(--text-3);
   margin-top: 2px;
 }
+/* Admin's landing grid. `.stat-grid`'s own 176px minimum is tuned for the
+   dashboards it was written for — four short figures across, where narrow
+   columns are what puts them side by side to be compared.
+
+   Admin puts EIGHT tiles in the same row of space and half of them carry a
+   section name rather than a number, so at 176px the grid packs six columns
+   into 1180px and leaves each tile about 70px of text beside its icon badge:
+   "Roles & Permissions" wraps to four lines and the two tiles hardest to tell
+   apart become the two hardest to read. A wider minimum is four roomy columns
+   instead of six cramped ones, on the same card.
+
+   THIS IS ALSO THE PHONE RULE, which is why there is no matching block in
+   styles/mobile.css. 232px does not fit twice inside a 390px screen less its
+   28px of page padding, so auto-fit already gives a phone exactly one column
+   per tile — and gives an iPad in portrait three, which a blanket `1fr` in the
+   phone layer would have thrown away in exchange for eight full-width slabs. */
+.admin-tiles {
+  grid-template-columns: repeat(auto-fit, minmax(232px, 1fr));
+}
+/* A stat card standing in for a section that has NO figure worth printing —
+   Admin's tiles for Onboarding, Roles, Notifications, Activity and Developer.
+   The section's name takes the headline slot instead of a number, and shrinks
+   to do it: "Roles & Permissions" set at the 24px of a figure wraps to two
+   lines and pushes the tile taller than the counted ones beside it, which reads
+   as a layout bug rather than as a card with nothing to count. */
+.stat .stat-val.stat-val-name {
+  font-size: 16px;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+}
 /* Unit noun after a counted figure ("46 units"), same idea as the category
    card's `24 cases`. --text-2 rather than --text-3: it carries a word. */
 .stat .stat-val small {

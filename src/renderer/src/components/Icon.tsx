@@ -141,6 +141,8 @@ import {
   CheckSquare,
   // --- Employee performance ---
   Gauge,
+  // --- Admin -> Developer, whose tile draws an empty badge without it ---
+  Terminal,
   type LucideIcon
 } from 'lucide-react'
 
@@ -286,7 +288,8 @@ const MAP: Record<string, LucideIcon> = {
   Inbox,
   CheckSquare,
   // --- Employee performance ---
-  Gauge
+  Gauge,
+  Terminal
 }
 
 export function Icon({

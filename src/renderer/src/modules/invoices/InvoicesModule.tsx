@@ -1,6 +1,5 @@
 import { useState } from 'react'
 import { InvoicesBoard } from './InvoicesBoard'
-import { BuyersTab } from './BuyersTab'
 import { QuickBooksTab } from './QuickBooksTab'
 
 /**
@@ -12,24 +11,36 @@ import { QuickBooksTab } from './QuickBooksTab'
  * owe" and "what are we owed" in the same breath, so the sell side was always
  * one extra click away and read as a footnote to the buy side.
  *
- * ## Three sub-tabs, and each is a different question
+ * ## Two sub-tabs, and each is a different question
  *
- * INVOICES is the board — where every invoice is, and which have been paid.
+ * SALES ORDERS is the board — where every invoice is, and which have been paid.
  * Laid out like the purchase-order board on purpose: same columns, same cards,
  * same drag. Somebody who has used one has used the other.
- *
- * BUYERS is the people. It exists because the answer to "pick a buyer and it
- * fills itself in" has to be maintained somewhere, and burying that inside the
- * invoice form meant a buyer could only be corrected while writing an invoice
- * to them.
  *
  * QUICKBOOKS is the connection. It lives HERE rather than in Admin because
  * this is the only place in the app that uses it, and a setting whose only
  * consumer is three screens away is a setting nobody can find when it says it
  * is not connected.
+ *
+ * ## BUYERS IS GONE FROM HERE, AND IT DID NOT BECOME A SECOND COPY
+ *
+ * The customer list is one screen and it is now Admin → Customers, beside
+ * Employees and Vendors, because those three are one question — who this
+ * business deals with — and it was only ever filed here because invoices are
+ * what references it. Nothing was duplicated: this module still picks a
+ * customer through CustomerTypeahead, which searches that same table, and
+ * typing a name nobody has on file still works exactly as it did.
+ *
+ * The cost of the move is real and worth writing down: an account granted
+ * `module.invoicing` WITHOUT `admin.access` can raise a sales order and can no
+ * longer open the customer list, because Admin is the door and admin.access is
+ * its lock. No role in @shared/permissions grants one without the other — only
+ * a hand-made per-person override could — so this is a corner, not a hole. If
+ * it ever becomes somebody's actual job, the fix is a permission on the Admin
+ * module, not a second customer screen in here.
  */
 export function InvoicesModule(): JSX.Element {
-  const [tab, setTab] = useState<'invoices' | 'buyers' | 'quickbooks'>('invoices')
+  const [tab, setTab] = useState<'invoices' | 'quickbooks'>('invoices')
 
   return (
     <div className="content-narrow inv-shell">
@@ -41,9 +52,6 @@ export function InvoicesModule(): JSX.Element {
           >
             Sales Orders
           </button>
-          <button className={`seg ${tab === 'buyers' ? 'on' : ''}`} onClick={() => setTab('buyers')}>
-            Buyers
-          </button>
           <button
             className={`seg ${tab === 'quickbooks' ? 'on' : ''}`}
             onClick={() => setTab('quickbooks')}
@@ -54,8 +62,6 @@ export function InvoicesModule(): JSX.Element {
 
         {tab === 'invoices' ? (
           <InvoicesBoard onOpenQuickBooks={() => setTab('quickbooks')} />
-        ) : tab === 'buyers' ? (
-          <BuyersTab />
         ) : (
           <QuickBooksTab />
         )}

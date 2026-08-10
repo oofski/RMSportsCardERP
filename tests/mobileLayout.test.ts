@@ -183,7 +183,11 @@ function topLevel(css: string): { blocks: { prelude: string; body: string }[]; b
     'src/renderer/src/modules/admin/EmployeeTimesheet.tsx',
     'src/renderer/src/modules/admin/ActivityTab.tsx',
     'src/renderer/src/modules/admin/EmployeesTab.tsx',
-    'src/renderer/src/modules/invoices/BuyersTab.tsx',
+    // Both people-lists, now filed together under Admin. Customers moved here
+    // from the Sales Orders module (it was BuyersTab); Vendors is new and is
+    // just as wide, so it stacks under the same section-3 rules.
+    'src/renderer/src/modules/admin/CustomersTab.tsx',
+    'src/renderer/src/modules/admin/VendorsTab.tsx',
     'src/renderer/src/modules/finance/BreakPnl.tsx',
     'src/renderer/src/modules/inventory/SuppliesTab.tsx',
     'src/renderer/src/modules/inventory/InventoryOverview.tsx',

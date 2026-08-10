@@ -66,3 +66,58 @@ export interface SupplierSuggestion {
   /** How many purchase orders already name them. Zero for an unused contact. */
   usedOnOrders: number
 }
+
+/**
+ * One vendor on the Admin → Vendors list.
+ *
+ * ## This is DERIVED, and that is the honest shape of the data
+ *
+ * There is no vendor table in this schema and this interface does not pretend
+ * otherwise. A vendor exists because somebody has BOUGHT from them: their name
+ * is the free text on a purchase order (`purchase_orders.supplier`) or on a
+ * cost layer that stock was received into (`inventory_lots.vendor`). Nothing
+ * else in the database says who a vendor is.
+ *
+ * So the list is exactly "everyone this business has bought from", which is a
+ * true and complete answer to "who are our vendors" — and it is a stronger one
+ * than a typed-in list would be, because it cannot drift out of date and cannot
+ * contain somebody nobody has ever ordered from.
+ *
+ * What it CANNOT do is hold a vendor's email, phone or address, because no
+ * purchase order carries those. `detail` is filled in only when a contact
+ * record happens to be filed under the same name — the same name match, and the
+ * same reasoning, as SupplierSuggestion above. A vendor with no contact record
+ * shows a blank there, which is the truth: this app has never been told how to
+ * reach them.
+ *
+ * DO NOT "fix" that by minting a vendor record here. See the note on
+ * listSupplierSuggestions for why a second contact table for the buy side is
+ * the wrong answer, and the report accompanying this change for what filing
+ * vendor contact details properly would actually cost.
+ */
+export interface VendorSummary {
+  /** Their name as most recently typed on a purchase order. */
+  name: string
+  /** Email · phone · city, when a contact record is filed under this name. */
+  detail: string | null
+  /**
+   * Purchase orders naming them, CANCELLED ONES INCLUDED. A cancelled order is
+   * still an order this business raised with them, and dropping it would leave
+   * a vendor whose only order was cancelled reading as a stranger with a date.
+   */
+  orders: number
+  /**
+   * Σ of those orders' totals with CANCELLED ONES EXCLUDED — the opposite rule
+   * to `orders`, deliberately: money on a cancelled order was never committed,
+   * so counting it would overstate what this business has spent with them.
+   */
+  ordered: number
+  /**
+   * Cost layers naming them. Non-zero with `orders` at 0 means every receipt
+   * from them was entered straight onto stock without a purchase order, which
+   * is a real way stock arrives here and not an error.
+   */
+  receipts: number
+  /** The most recent order or receipt, ISO. Null is impossible in practice. */
+  lastAt: string | null
+}

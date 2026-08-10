@@ -186,6 +186,11 @@ export const IPC = {
   // used on a PO. A PO's supplier stays free text — see @shared/purchaseOrders
   // for why it is not turned into a foreign key.
   poSuppliers: 'po:suppliers',
+  // Who this business has actually bought from, for Admin → Vendors. A NARROWER
+  // question than poSuppliers answers and therefore a separate channel: that one
+  // offers the whole contact list as things you might type, this one lists only
+  // names that money has gone to.
+  poVendors: 'po:vendors',
   poThumbnails: 'po:thumbnails',
   poIncomingBoxes: 'po:incoming-boxes',
   poScanIn: 'po:scan-in',

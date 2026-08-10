@@ -13,10 +13,25 @@ import { formatMoney } from '../../lib/format'
 /**
  * The people who buy from us.
  *
- * Its own tab rather than a modal reachable only from inside an invoice, which
- * is where this started. That arrangement meant a buyer could only be corrected
- * while writing an invoice TO them — so a wrong email sat wrong until the next
- * sale, and nobody could answer "who do we sell to" without opening a form.
+ * Its own screen rather than a modal reachable only from inside an invoice,
+ * which is where this started. That arrangement meant a buyer could only be
+ * corrected while writing an invoice TO them — so a wrong email sat wrong until
+ * the next sale, and nobody could answer "who do we sell to" without opening a
+ * form.
+ *
+ * ## Why it lives in Admin and not in Sales Orders any more
+ *
+ * It was the "Buyers" tab of the Sales Orders module, filed with the documents
+ * that reference it. The people-lists are now together instead: Employees,
+ * Customers and Vendors are three answers to "who does this business deal
+ * with", and keeping one of them behind a billing screen meant the answer to
+ * that question depended on which document you happened to be looking at.
+ *
+ * MOVED, NOT COPIED. There is exactly one customer list and this is it — two
+ * screens onto one table is how a phone number gets corrected on the copy
+ * nobody else opens. What stayed behind in the invoice flow is the PICKER
+ * (CustomerTypeahead), which is a search over this same table and not a second
+ * place to maintain it.
  *
  * ## What is stored is the RELATIONSHIP
  *
@@ -25,9 +40,9 @@ import { formatMoney } from '../../lib/format'
  * exactly why picking them on an invoice fills all five in — and why they are
  * worth keeping in one place that can be edited on its own.
  */
-export function BuyersTab(): JSX.Element {
+export function CustomersTab(): JSX.Element {
   const toast = useToast()
-  const [buyers, setBuyers] = useState<InvoiceCustomer[]>([])
+  const [customers, setCustomers] = useState<InvoiceCustomer[]>([])
   const [totals, setTotals] = useState<Record<string, { count: number; value: number }>>({})
   const [loading, setLoading] = useState(true)
   const [editing, setEditing] = useState<InvoiceCustomer | null>(null)
@@ -37,7 +52,7 @@ export function BuyersTab(): JSX.Element {
 
   const load = useCallback(async () => {
     const [list, invoices] = await Promise.all([api.invoices.customers(), api.invoices.list()])
-    setBuyers(list)
+    setCustomers(list)
     // What each buyer has been billed, so the list answers "who is worth
     // chasing" rather than just "who exists". Voided invoices are not money.
     const sums: Record<string, { count: number; value: number }> = {}
@@ -67,10 +82,10 @@ export function BuyersTab(): JSX.Element {
     }
   }, [load])
 
-  const remove = async (buyer: InvoiceCustomer): Promise<void> => {
-    const res = await api.invoices.deleteCustomer(buyer.id)
+  const remove = async (customer: InvoiceCustomer): Promise<void> => {
+    const res = await api.invoices.deleteCustomer(customer.id)
     if (!res.ok) {
-      toast.error(res.error ?? 'Could not remove that buyer.')
+      toast.error(res.error ?? 'Could not remove that customer.')
       return
     }
     await load()
@@ -79,8 +94,8 @@ export function BuyersTab(): JSX.Element {
     // have to work that out from the list.
     toast.success(
       res.data?.deleted
-        ? `${buyer.name} removed.`
-        : `${buyer.name} retired — their invoices keep their history.`
+        ? `${customer.name} removed.`
+        : `${customer.name} retired — their invoices keep their history.`
     )
   }
 
@@ -114,8 +129,8 @@ export function BuyersTab(): JSX.Element {
 
   if (editing || adding) {
     return (
-      <BuyerForm
-        buyer={editing}
+      <CustomerForm
+        customer={editing}
         onClose={() => {
           setEditing(null)
           setAdding(false)
@@ -133,7 +148,7 @@ export function BuyersTab(): JSX.Element {
     <>
       <div className="section-head">
         <div>
-          <h2>Buyers</h2>
+          <h2>Customers</h2>
         </div>
         <div className="row" style={{ gap: 8 }}>
           <Button
@@ -145,23 +160,23 @@ export function BuyersTab(): JSX.Element {
             Import contacts
           </Button>
           <Button variant="primary" icon="UserPlus" onClick={() => setAdding(true)}>
-            Add a buyer
+            Add a customer
           </Button>
         </div>
       </div>
 
       {imported && <ImportReport result={imported} onDismiss={() => setImported(null)} />}
 
-      {buyers.length === 0 ? (
+      {customers.length === 0 ? (
         <EmptyState
           icon="Users"
-          title="No buyers yet"
-          message="Add the people who buy from you, or import your QuickBooks Customer Contact List. Picking one on an invoice fills in their terms, email and standing message."
+          title="No customers yet"
+          message="Add the people who buy from you, or import your QuickBooks Customer Contact List. Picking one on a sales order fills in their terms, email and standing message."
         />
       ) : (
         <div className="table-wrap">
           {/* Eight columns — name, three contact fields, terms and two money
-              figures — so on a phone it stacks into one card per buyer. See
+              figures — so on a phone it stacks into one card per customer. See
               section 3 of styles/mobile.css. */}
           <table className="data as-cards">
             <thead>
@@ -177,26 +192,26 @@ export function BuyersTab(): JSX.Element {
               </tr>
             </thead>
             <tbody>
-              {buyers.map((b) => {
-                const t = totals[b.id]
+              {customers.map((c) => {
+                const t = totals[c.id]
                 return (
                   <tr
-                    key={b.id}
-                    onClick={() => setEditing(b)}
+                    key={c.id}
+                    onClick={() => setEditing(c)}
                     style={{ cursor: 'pointer' }}
                   >
-                    <td style={{ fontWeight: 600 }}>{b.name}</td>
+                    <td style={{ fontWeight: 600 }}>{c.name}</td>
                     <td className="muted" data-label="Email">
-                      {b.email || '—'}
+                      {c.email || '—'}
                     </td>
                     <td className="muted" data-label="Phone">
-                      {b.phone || b.mobile || '—'}
+                      {c.phone || c.mobile || '—'}
                     </td>
                     <td className="muted" data-label="Where">
-                      {whereFrom(b) || '—'}
+                      {whereFrom(c) || '—'}
                     </td>
                     <td className="muted" data-label="Terms">
-                      {b.terms}
+                      {c.terms}
                     </td>
                     <td style={{ textAlign: 'right' }} data-label="Invoices">
                       {t?.count ?? 0}
@@ -210,10 +225,10 @@ export function BuyersTab(): JSX.Element {
                           className="icon-btn"
                           title={
                             t?.count
-                              ? 'Retire this buyer — their invoices keep their history'
-                              : 'Remove this buyer'
+                              ? 'Retire this customer — their invoices keep their history'
+                              : 'Remove this customer'
                           }
-                          onClick={() => void remove(b)}
+                          onClick={() => void remove(c)}
                         >
                           <Icon name="Trash2" size={15} />
                         </button>
@@ -230,7 +245,7 @@ export function BuyersTab(): JSX.Element {
       <p className="inv-foot">
         <Icon name="Info" size={14} />
         <span>
-          To create an invoice in QuickBooks the buyer must exist there under the{' '}
+          To create an invoice in QuickBooks the customer must exist there under the{' '}
           <b>same name</b>. This app deliberately does not add them for you — creating a
           contact in your accounting system as a side effect of billing somebody is a
           write nobody asked for, and one misspelling leaves a duplicate forever. That
@@ -360,25 +375,25 @@ function ImportReport({
   )
 }
 
-function BuyerForm({
-  buyer,
+function CustomerForm({
+  customer,
   onClose,
   onSaved
 }: {
-  buyer: InvoiceCustomer | null
+  customer: InvoiceCustomer | null
   onClose: () => void
   onSaved: () => Promise<void>
 }): JSX.Element {
   const toast = useToast()
-  const [name, setName] = useState(buyer?.name ?? '')
-  const [email, setEmail] = useState(buyer?.email ?? '')
-  const [phone, setPhone] = useState(buyer?.phone ?? '')
-  const [mobile, setMobile] = useState(buyer?.mobile ?? '')
-  const [terms, setTerms] = useState<InvoiceTerms>(buyer?.terms ?? 'Net 30')
-  const [location, setLocation] = useState(buyer?.location ?? '')
-  const [className, setClassName] = useState(buyer?.className ?? '')
-  const [message, setMessage] = useState(buyer?.message ?? '')
-  const [notes, setNotes] = useState(buyer?.notes ?? '')
+  const [name, setName] = useState(customer?.name ?? '')
+  const [email, setEmail] = useState(customer?.email ?? '')
+  const [phone, setPhone] = useState(customer?.phone ?? '')
+  const [mobile, setMobile] = useState(customer?.mobile ?? '')
+  const [terms, setTerms] = useState<InvoiceTerms>(customer?.terms ?? 'Net 30')
+  const [location, setLocation] = useState(customer?.location ?? '')
+  const [className, setClassName] = useState(customer?.className ?? '')
+  const [message, setMessage] = useState(customer?.message ?? '')
+  const [notes, setNotes] = useState(customer?.notes ?? '')
   const [saving, setSaving] = useState(false)
 
   const save = async (): Promise<void> => {
@@ -386,7 +401,7 @@ function BuyerForm({
     setSaving(true)
     try {
       const res = await api.invoices.saveCustomer({
-        id: buyer?.id ?? null,
+        id: customer?.id ?? null,
         name,
         email: email || null,
         // Sent as null rather than omitted, so clearing the box actually clears
@@ -401,7 +416,7 @@ function BuyerForm({
         notes: notes || null
       })
       if (!res.ok) {
-        toast.error(res.error ?? 'Could not save that buyer.')
+        toast.error(res.error ?? 'Could not save that customer.')
         return
       }
       await onSaved()
@@ -415,10 +430,10 @@ function BuyerForm({
     <>
       <div className="section-head">
         <div className="row" style={{ gap: 10, alignItems: 'center' }}>
-          <button className="icon-btn" onClick={onClose} title="Back to buyers">
+          <button className="icon-btn" onClick={onClose} title="Back to customers">
             <Icon name="ArrowLeft" size={18} />
           </button>
-          <h2 style={{ margin: 0 }}>{buyer ? buyer.name : 'New buyer'}</h2>
+          <h2 style={{ margin: 0 }}>{customer ? customer.name : 'New customer'}</h2>
         </div>
       </div>
 
@@ -516,7 +531,7 @@ function BuyerForm({
           disabled={!name.trim()}
           onClick={() => void save()}
         >
-          Save buyer
+          Save customer
         </Button>
       </div>
     </>

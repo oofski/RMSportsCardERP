@@ -658,5 +658,156 @@ ok(
 )
 
 // ---------------------------------------------------------------------------
+console.log('\n=== 13. the vendor list (Admin → Vendors) ===')
+// ---------------------------------------------------------------------------
+// Same file as the supplier box above because it is the same question asked the
+// other way round, and the difference between the two answers is the whole
+// point of this section.
+//
+// listSupplierSuggestions says "what might I be about to type" and therefore
+// offers every contact. listVendors says "who ARE our vendors" and must offer
+// only names money has gone to — because the Admin tile prints its LENGTH, and
+// a tile labelled Vendors showing the size of a 360-row customer list is worse
+// than a tile with no number on it.
+
+// Money, so the two totals below can disagree, and a cancelled order to prove
+// which of them counts it.
+db.prepare(
+  `INSERT INTO purchase_orders (id, po_number, supplier, status, location, total, created_at, updated_at, ordered_at)
+   VALUES ('po_test_4', 'PO-TEST-4', 'Bramble Wholesale', 'ordered', 'RM', 1200, ?, ?, ?)`
+).run('2026-08-05T12:00:00.000Z', '2026-08-05T12:00:00.000Z', '2026-08-05T12:00:00.000Z')
+db.prepare(
+  `INSERT INTO purchase_orders (id, po_number, supplier, status, location, total, created_at, updated_at, cancelled_at)
+   VALUES ('po_test_5', 'PO-TEST-5', 'bramble wholesale', 'cancelled', 'RM', 900, ?, ?, ?)`
+).run('2026-08-06T12:00:00.000Z', '2026-08-06T12:00:00.000Z', '2026-08-06T12:00:00.000Z')
+
+// Stock carried in and typed straight onto the shelf — no purchase order behind
+// it at all. This is a real way this warehouse is filled, and a vendor list that
+// could only see paperwork would be missing the suppliers used most casually.
+db.prepare(
+  `INSERT INTO inventory_products (id, sku, name, created_at, updated_at)
+   VALUES ('prod_test_v', 'SKU-V', 'Test Case', ?, ?)`
+).run('2026-08-03T12:00:00.000Z', '2026-08-03T12:00:00.000Z')
+db.prepare(
+  `INSERT INTO inventory_lots
+     (id, product_id, location, qty_received, qty_remaining, unit_cost, received_at, source, vendor, created_at)
+   VALUES ('lot_test_v', 'prod_test_v', 'RM', 4, 4, 25, ?, 'restock', 'Larkin Supply', ?)`
+).run('2026-08-04T12:00:00.000Z', '2026-08-04T12:00:00.000Z')
+
+// The same vendor as a purchase order names, shouted. The two spellings live in
+// two DIFFERENT TABLES, so no GROUP BY can fold them together — only the merge
+// in listVendors can, and if it does not, this business appears twice on the one
+// screen whose job is to say who it buys from.
+db.prepare(
+  `INSERT INTO inventory_lots
+     (id, product_id, location, qty_received, qty_remaining, unit_cost, received_at, source, vendor, created_at)
+   VALUES ('lot_test_w', 'prod_test_v', 'RM', 2, 2, 30, ?, 'restock', 'BRAMBLE WHOLESALE', ?)`
+).run('2026-08-02T12:00:00.000Z', '2026-08-02T12:00:00.000Z')
+
+const vendors = po.listVendors()
+const find = (re: RegExp): { name: string; detail: string | null; orders: number; ordered: number; receipts: number; lastAt: string | null } | undefined =>
+  vendors.find((v: { name: string }) => re.test(v.name))
+
+// THE ASSERTION THE ADMIN TILE RESTS ON. Three contacts are on file and exactly
+// one of them has ever been bought from, so the vendor list is four names, not
+// six. Widen this to the contact list and the tile silently starts reporting
+// the wrong business relationship.
+ok(vendors.length === 4, 'only names money has gone to are vendors', JSON.stringify(vendors.map((v: { name: string }) => v.name)))
+ok(
+  !vendors.some((v: { name: string }) => /Ohashi|Ferreira/.test(v.name)),
+  'a contact nobody has bought from is NOT a vendor'
+)
+
+// Typed in caps on one order and mixed case on another. Grouped case-sensitively
+// this is two vendors with half the orders each and two wrong spend figures.
+const vAnvil = vendors.filter((v: { name: string }) => /anvil/i.test(v.name))
+ok(vAnvil.length === 1, 'one supplier typed two ways is one vendor', JSON.stringify(vAnvil))
+ok(vAnvil[0].orders === 2, 'and its order count adds both spellings up', String(vAnvil[0].orders))
+
+const bramble = find(/bramble/i)
+// The asymmetry, on purpose: a cancelled order was still raised with them, so
+// it counts as an order — but the money on it was never committed, so it must
+// not count as spend. Fold the two rules together either way and one of the two
+// columns lies.
+ok(bramble?.orders === 2, 'a cancelled order still counts as an order', String(bramble?.orders))
+ok(bramble?.ordered === 1200, 'but its money is left out of the total', String(bramble?.ordered))
+ok(bramble?.receipts === 1, 'a receipt under a different capitalisation joins the same vendor', JSON.stringify(bramble))
+// The spelling shown is the most recently TYPED one — the latest purchase
+// order's, never the lot's, because the lot's copy was written by a backfill and
+// the order's is what somebody put on a document.
+ok(bramble?.name === 'bramble wholesale', 'and the latest order supplies the spelling', String(bramble?.name))
+ok(vAnvil[0].name === 'Anvil Distribution', 'the same rule when both spellings are orders', vAnvil[0].name)
+
+const larkin = find(/larkin/i)
+ok(!!larkin, 'stock received with no purchase order still makes a vendor')
+ok(larkin?.orders === 0 && larkin?.receipts === 1, 'counted as a receipt, not an order', JSON.stringify(larkin))
+ok(larkin?.ordered === 0, 'and contributes nothing to the ordered total', String(larkin?.ordered))
+
+// The one vendor who is also on the contact list. This is the ONLY way a
+// vendor's email or phone can reach this screen — no purchase order carries one.
+const vFenwick = find(/fenwick/i)
+ok(!!vFenwick?.detail && /ada@example\.com/.test(vFenwick.detail), 'a vendor on the contact list shows how to reach them', String(vFenwick?.detail))
+ok(vAnvil[0].detail === null, 'and one who is not shows nothing rather than a guess', String(vAnvil[0].detail))
+
+// Most recently dealt with first — the ordering is what makes a list of
+// everyone ever bought from usable at all.
+ok(vendors[0] === bramble, 'the most recent vendor is first', vendors[0].name)
+ok(
+  vendors.every(
+    (v: { lastAt: string | null }, i: number) =>
+      i === 0 || (vendors[i - 1].lastAt ?? '') >= (v.lastAt ?? '')
+  ),
+  'and the rest run backwards in time',
+  JSON.stringify(vendors.map((v: { name: string; lastAt: string }) => [v.name, v.lastAt]))
+)
+// The lot is dated the 4th and Anvil's latest order the 1st, so a "last seen"
+// that only looked at purchase orders would file them the wrong way round.
+ok(
+  (larkin?.lastAt ?? '') > (vAnvil[0].lastAt ?? ''),
+  'a receipt counts as dealing with them, not just an order',
+  `${larkin?.lastAt} vs ${vAnvil[0].lastAt}`
+)
+
+// A purchase order raised before anybody typed the supplier in. The column is
+// nullable and the box is free text, so both of these exist in a real database —
+// and neither is a business. Counted, they would be one or two phantom vendors
+// sitting at the top of the list and in the figure on the Admin tile.
+db.prepare(
+  `INSERT INTO purchase_orders (id, po_number, supplier, status, location, total, created_at, updated_at)
+   VALUES ('po_test_6', 'PO-TEST-6', NULL, 'ordered', 'RM', 40, ?, ?)`
+).run('2026-08-07T12:00:00.000Z', '2026-08-07T12:00:00.000Z')
+db.prepare(
+  `INSERT INTO purchase_orders (id, po_number, supplier, status, location, total, created_at, updated_at)
+   VALUES ('po_test_7', 'PO-TEST-7', '   ', 'ordered', 'RM', 40, ?, ?)`
+).run('2026-08-08T12:00:00.000Z', '2026-08-08T12:00:00.000Z')
+
+// Retiring a customer hides them without erasing their history (see
+// deleteCustomer). Their card is gone from the customer list, so it must not
+// come back as a vendor's contact detail on the next screen along — a deletion
+// that only takes effect on the screen it was performed on is not a deletion.
+db.prepare(`UPDATE invoice_customers SET active = 0 WHERE name = 'Cal Ohashi'`).run()
+db.prepare(
+  `INSERT INTO purchase_orders (id, po_number, supplier, status, location, total, created_at, updated_at)
+   VALUES ('po_test_8', 'PO-TEST-8', 'Cal Ohashi', 'ordered', 'RM', 60, ?, ?)`
+).run('2026-08-09T12:00:00.000Z', '2026-08-09T12:00:00.000Z')
+
+// And the same on the stock side. Nothing in the app writes a blank vendor onto
+// a cost layer today — createLot trims to null and the backfill only fires for a
+// non-blank supplier — but the column takes any string, and rows arrive on this
+// machine from other laptops running other builds. A guard on the read is what
+// makes that survivable.
+db.prepare(
+  `INSERT INTO inventory_lots
+     (id, product_id, location, qty_received, qty_remaining, unit_cost, received_at, source, vendor, created_at)
+   VALUES ('lot_test_blank', 'prod_test_v', 'RM', 1, 1, 5, ?, 'restock', '  ', ?)`
+).run('2026-08-09T13:00:00.000Z', '2026-08-09T13:00:00.000Z')
+
+const withBlanks = po.listVendors()
+ok(withBlanks.length === 5, 'a missing or blank name on either side is nobody', JSON.stringify(withBlanks.map((v: { name: string }) => v.name)))
+const vCal = withBlanks.find((v: { name: string }) => /Ohashi/.test(v.name))
+ok(!!vCal && vCal.orders === 1, 'the one real name added is a vendor', JSON.stringify(vCal))
+ok(vCal?.detail === null, 'a retired contact is not a way to reach anybody', String(vCal?.detail))
+
+// ---------------------------------------------------------------------------
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail > 0) process.exit(1)

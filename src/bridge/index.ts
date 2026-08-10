@@ -56,7 +56,7 @@ import type {
 } from '@shared/invoices'
 import type { ContactImportResult } from '@shared/contacts'
 import type { ClockPushState, PushSubscriptionInput } from '@shared/webPush'
-import type { SupplierSuggestion } from '@shared/purchaseOrders'
+import type { SupplierSuggestion, VendorSummary } from '@shared/purchaseOrders'
 import type {
   ShipPickAdvanced,
   ShipStationBoard,
@@ -516,6 +516,17 @@ export function createBridge(ipcRenderer: BridgeTransport) {
        * into one record.
        */
       suppliers: (): Promise<SupplierSuggestion[]> => ipcRenderer.invoke(IPC.poSuppliers),
+      /**
+       * Who this business has bought from — Admin → Vendors.
+       *
+       * NOT `suppliers()` filtered in the renderer. That call deliberately
+       * offers every contact whether or not anything was ever bought from
+       * them, so counting its result would put the size of the contact list on
+       * a tile labelled Vendors. This one is derived from purchase orders and
+       * stock receipts only; see @shared/purchaseOrders for why a vendor has no
+       * record of its own to be listed from.
+       */
+      vendors: (): Promise<VendorSummary[]> => ipcRenderer.invoke(IPC.poVendors),
       thumbnails: (): Promise<Record<string, string>> => ipcRenderer.invoke(IPC.poThumbnails),
       incomingBoxes: (): Promise<PurchaseOrderDetail[]> => ipcRenderer.invoke(IPC.poIncomingBoxes),
       scanIn: (id: string): Promise<Result<PurchaseOrderDetail>> =>

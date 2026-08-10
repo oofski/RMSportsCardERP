@@ -9,7 +9,11 @@ import type {
   PurchaseOrderStatus,
   Result
 } from '@shared/types'
-import { isPurchaseOrderStatus, type SupplierSuggestion } from '@shared/purchaseOrders'
+import {
+  isPurchaseOrderStatus,
+  type SupplierSuggestion,
+  type VendorSummary
+} from '@shared/purchaseOrders'
 import type { FreightPatch } from '@shared/freight'
 import { sweepTracking, type SweepResult } from './tracking/poller'
 import { canRead } from './tracking/read'
@@ -24,6 +28,7 @@ import {
   listActivePurchaseOrderBoxes,
   listPurchaseOrders,
   listSupplierSuggestions,
+  listVendors,
   scanInPurchaseOrder,
   setPurchaseOrderFreight,
   setPurchaseOrderStatus
@@ -68,6 +73,15 @@ export function registerPurchaseOrdersIpc(): void {
   // which module.invoicing already grants.
   ipcMain.handle(IPC.poSuppliers, (): SupplierSuggestion[] =>
     can('module.invoicing') ? listSupplierSuggestions() : []
+  )
+  // Admin → Vendors. Same single permission, and for the same reason the line
+  // above gives: the list carries contact detail for anyone who has one, so it
+  // is the same disclosure as the customer list, which module.invoicing already
+  // grants. Standing inside Admin is NOT what authorises it — an administrator
+  // without the invoicing permission gets an empty list here, and the Admin tile
+  // that leads to it is hidden by the same check in the renderer.
+  ipcMain.handle(IPC.poVendors, (): VendorSummary[] =>
+    can('module.invoicing') ? listVendors() : []
   )
   ipcMain.handle(IPC.poThumbnails, (): Record<string, string> =>
     can('module.invoicing') ? productThumbnails() : {}
