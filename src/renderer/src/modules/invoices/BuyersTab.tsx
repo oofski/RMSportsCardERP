@@ -220,7 +220,11 @@ export function BuyersTab(): JSX.Element {
           To create an invoice in QuickBooks the buyer must exist there under the{' '}
           <b>same name</b>. This app deliberately does not add them for you — creating a
           contact in your accounting system as a side effect of billing somebody is a
-          write nobody asked for, and one misspelling leaves a duplicate forever.
+          write nobody asked for, and one misspelling leaves a duplicate forever. That
+          is what <b>Import contacts</b> is for: it reads your QuickBooks Customer
+          Contact List and files everybody under the name QuickBooks already knows them
+          by, so the match is right without anybody typing it. Run it again whenever
+          the list changes — it updates rather than duplicates.
         </span>
       </p>
     </>
