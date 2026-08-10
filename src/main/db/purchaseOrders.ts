@@ -7,7 +7,7 @@ import type {
   PurchaseOrderStatus,
   ScanPoCandidate
 } from '@shared/types'
-import { canTransition } from '@shared/purchaseOrders'
+import { canTransition, type SupplierSuggestion } from '@shared/purchaseOrders'
 import type { Carrier, PaymentTiming } from '@shared/freight'
 import { asCarrier, asPaymentTiming, detectCarrier } from '@shared/freight'
 import { asShipStatus } from '@shared/tracking'
@@ -990,4 +990,95 @@ export function deletePurchaseOrder(
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) }
   }
+}
+
+/**
+ * Names to offer in the supplier box, from both places one can come from.
+ *
+ * Reaching into invoice_customers from the purchase-order file is deliberate
+ * and is the smaller of two evils. The alternative — a second contact table for
+ * the buy side — is the one that actually hurts: the same card shop would exist
+ * twice, and correcting a phone number on one copy would leave the other wrong
+ * with nothing on either screen to say which was current. One list of people,
+ * two documents that reference it, and only the reference differs.
+ *
+ * History wins the top of the list. A supplier used on a purchase order last
+ * week is far more likely to be the one being typed now than the 340th name in
+ * an alphabetical contact list, and the ordering is the whole value of a
+ * suggestion box.
+ */
+export function listSupplierSuggestions(): SupplierSuggestion[] {
+  const db = getDb()
+  const used = db
+    .prepare(
+      `SELECT TRIM(supplier) AS name, COUNT(*) AS n, MAX(created_at) AS last_used
+         FROM purchase_orders
+        WHERE supplier IS NOT NULL AND TRIM(supplier) != ''
+        GROUP BY TRIM(supplier) COLLATE NOCASE
+        ORDER BY last_used DESC`
+    )
+    .all() as Array<{ name: string; n: number; last_used: string }>
+
+  const contacts = db
+    .prepare(
+      `SELECT name, email, phone, mobile, bill_city, bill_region
+         FROM invoice_customers
+        WHERE active = 1
+        ORDER BY name COLLATE NOCASE ASC`
+    )
+    .all() as Array<{
+    name: string
+    email: string | null
+    phone: string | null
+    mobile: string | null
+    bill_city: string | null
+    bill_region: string | null
+  }>
+
+  // Matched case-insensitively, because that is how the buyer table matches
+  // names everywhere else. Without it a supplier typed in lower case would
+  // appear twice in the list — once from history, once from the contact it
+  // already is — and picking the wrong one would look like it did nothing.
+  const orders = new Map<string, { n: number }>()
+  for (const u of used) orders.set(u.name.toLowerCase(), { n: u.n })
+
+  const out: SupplierSuggestion[] = []
+  const claimed = new Set<string>()
+
+  for (const u of used) {
+    const key = u.name.toLowerCase()
+    const contact = contacts.find((c) => c.name.toLowerCase() === key)
+    claimed.add(key)
+    out.push({
+      name: contact?.name ?? u.name,
+      detail: contact
+        ? contactDetail(contact)
+        : `${u.n} purchase ${u.n === 1 ? 'order' : 'orders'}`,
+      source: contact ? 'contact' : 'history',
+      usedOnOrders: u.n
+    })
+  }
+
+  for (const c of contacts) {
+    const key = c.name.toLowerCase()
+    if (claimed.has(key)) continue
+    out.push({
+      name: c.name,
+      detail: contactDetail(c),
+      source: 'contact',
+      usedOnOrders: orders.get(key)?.n ?? 0
+    })
+  }
+  return out
+}
+
+function contactDetail(c: {
+  email: string | null
+  phone: string | null
+  mobile: string | null
+  bill_city: string | null
+  bill_region: string | null
+}): string | null {
+  const where = [c.bill_city, c.bill_region].filter(Boolean).join(', ')
+  return [c.email, c.phone ?? c.mobile, where].filter(Boolean).join(' · ') || null
 }

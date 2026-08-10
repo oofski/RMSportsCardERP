@@ -101,6 +101,20 @@ export const SYNCED_TABLES: SyncedTable[] = [
   // wait for a parent row, and a set of slices is complete or it is not.
   { table: 'ship_document_parts', key: ['id'], tier: 0 },
   { table: 'ship_snapshots', key: ['id'], tier: 0 },
+  // The floor's work log. It HAS to travel: the bench, the picking station and
+  // the packing station are different machines, so a performance figure built
+  // from one laptop's rows would report whoever happened to be standing at it.
+  //
+  // Tier 0 although it names breaks and shipments, because it is designed to
+  // OUTLIVE both — break_id and break_label are denormalised onto the row for
+  // exactly that reason, and a row that waited for a parent that was deleted
+  // three shows ago would never land at all.
+  //
+  // Last-write-wins arbitrates cleanly: the id is derived from the step and its
+  // subject, so two machines that saw the same tick write the same row and the
+  // relay only ever compares it against an older copy of itself. There is no
+  // counter here and nothing another machine adds to concurrently.
+  { table: 'ship_work_log', key: ['id'], tier: 0 },
   // `ship_sop_steps` and `ship_supply_usage` are deliberately ABSENT, and their
   // tables are deliberately still in the schema. The checklist that wrote them
   // is gone, so nothing reads or writes them any more — but dropping a table on

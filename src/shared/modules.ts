@@ -101,6 +101,26 @@ export const MODULES: AppModule[] = [
     permission: 'module.invoicing',
     status: 'active'
   },
+  // How long the work takes, and who did it.
+  //
+  // Its own door rather than a tab inside Shipping, and gated on 'admin.access'
+  // rather than on any shipping permission, because it is a report ABOUT PEOPLE
+  // rather than a tool for doing the work. Somebody at a packing bench needs the
+  // pick list; they do not need — and should not casually find — a table
+  // comparing their team-bagging against the person next to them, on numbers
+  // that cannot say who was helping.
+  //
+  // Ops workspace, deliberately, for the same reason: it belongs where the
+  // timesheets are, not where the night's work is.
+  {
+    id: 'performance',
+    name: 'Performance',
+    shortName: 'Performance',
+    description: 'How long each step of the night takes, and who did it.',
+    icon: 'Gauge',
+    permission: 'admin.access',
+    status: 'active'
+  },
   {
     id: 'finance',
     name: 'Finance',

@@ -140,6 +140,8 @@ import {
   Radio,
   Inbox,
   CheckSquare,
+  // --- Employee performance ---
+  Gauge,
   type LucideIcon
 } from 'lucide-react'
 
@@ -284,7 +286,9 @@ const MAP: Record<string, LucideIcon> = {
   // --- The owner board's status tiles ---
   Radio,
   Inbox,
-  CheckSquare
+  CheckSquare,
+  // --- Employee performance ---
+  Gauge
 }
 
 export function Icon({

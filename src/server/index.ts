@@ -19,6 +19,7 @@ import { registerSyncIpc } from '../main/syncIpc'
 import { registerOwnerIpc } from '../main/ownerIpc'
 import { registerScheduleIpc } from '../main/scheduleIpc'
 import { registerInvoicesIpc } from '../main/invoicesIpc'
+import { registerPerformanceIpc } from '../main/performanceIpc'
 import { initCloudSync, stopCloudSync } from '../main/services/cloudSync'
 import { collectClientActions, type PendingDownload } from './clientActions'
 import {
@@ -825,6 +826,7 @@ export function startServer(options: ServerOptions = {}): Server {
   registerOwnerIpc()
   registerScheduleIpc()
   registerInvoicesIpc()
+  registerPerformanceIpc()
 
   // The three modules that push do it by walking the window list. Give them one
   // window whose `send` goes out over SSE, and they push to the browser without

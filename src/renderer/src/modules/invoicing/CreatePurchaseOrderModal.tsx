@@ -8,6 +8,7 @@ import { Button, Field, Input, Modal, Select } from '../../components/ui'
 import { Icon } from '../../components/Icon'
 import { formatMoney } from '../../lib/format'
 import { FreightFields } from '../../components/FreightFields'
+import { ContactTypeahead } from './ContactTypeahead'
 import { POCatalogTypeahead } from './POCatalogTypeahead'
 
 /** A working line in the create form — quantity/price kept as strings so the
@@ -26,6 +27,10 @@ interface DraftLine {
  * header, a typeahead to append products, and a per-line quantity / unit buy
  * price with a live running total. Saves via api.purchaseOrders.create — the new
  * PO lands in the Ordered column.
+ *
+ * The supplier box searches the contact list and the suppliers already used on
+ * previous POs, and picking one only fills the box in: the value sent is still
+ * the free text this form has always sent. See ContactTypeahead.
  */
 export function CreatePurchaseOrderModal({
   onClose,
@@ -161,13 +166,7 @@ export function CreatePurchaseOrderModal({
       {error && <div className="auth-alert">{error}</div>}
 
       <div className="field-row">
-        <Field label="Supplier" hint="Optional">
-          <Input
-            value={supplier}
-            onChange={(e) => setSupplier(e.target.value)}
-            placeholder="e.g. Steel City Collectibles"
-          />
-        </Field>
+        <ContactTypeahead value={supplier} onChange={setSupplier} />
         <Field label="Destination" hint="Where the cases land">
           <Select value={location} onChange={(e) => setLocation(e.target.value)}>
             {LOCATIONS.map((l) => (

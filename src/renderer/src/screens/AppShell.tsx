@@ -15,6 +15,7 @@ import { useToast } from '../components/Toast'
 import { initials, fullName } from '../lib/format'
 import { roleLabel } from '@shared/permissions'
 import { AdminModule } from '../modules/admin/AdminModule'
+import { PerformanceModule } from '../modules/performance/PerformanceModule'
 import { HomeModule } from '../modules/home/HomeModule'
 import { TimePayrollModule } from '../modules/timepay/TimePayrollModule'
 import { ScheduleModule } from '../modules/schedule/ScheduleModule'
@@ -349,6 +350,8 @@ export function AppShell(): JSX.Element {
               <ScheduleModule />
             ) : activeModule?.id === 'inventory' ? (
               <InventoryModule />
+            ) : activeModule?.id === 'performance' ? (
+              <PerformanceModule />
             ) : activeModule?.id === 'finance' ? (
               <FinanceModule />
             ) : activeModule?.id === 'streaming' ? (

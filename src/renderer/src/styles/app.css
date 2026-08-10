@@ -20423,3 +20423,411 @@ button.sor-team:focus-visible {
   border-color: var(--warning);
   color: var(--warning);
 }
+
+/* ==========================================================================
+   Contact import — what the QuickBooks Customer Contact List did to the buyer
+   list. Deliberately a persistent card rather than a toast: an import of a few
+   hundred rows has something to say about dozens of them, and a line of text
+   that vanishes after four seconds is not a report anybody can act on.
+   ========================================================================== */
+.ci-report {
+  margin-bottom: 14px;
+}
+.ci-report-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.ci-report-head h3 {
+  font-size: 14.5px;
+  margin: 0;
+}
+.ci-report-head p {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--text-3);
+}
+.ci-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+.ci-count {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 104px;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  text-align: left;
+}
+.ci-count b {
+  font-size: 18px;
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+}
+.ci-count span {
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+.ci-count-btn {
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+.ci-count-btn:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+/* Amber, not red. Nothing here failed: a skipped row is a row with nothing in
+   it to import, and a flagged one was imported with a part this app would not
+   guess at. Both want a human eye, neither is an error. */
+.ci-count-btn.warn {
+  border-color: var(--warning);
+  background: var(--warning-bg);
+}
+.ci-count-btn.warn b {
+  color: var(--warning);
+}
+.ci-list {
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+  max-height: 260px;
+  overflow-y: auto;
+  border-top: 1px solid var(--border);
+}
+.ci-list li {
+  display: grid;
+  grid-template-columns: 62px minmax(120px, 220px) 1fr;
+  gap: 10px;
+  align-items: baseline;
+  padding: 7px 2px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px;
+}
+.ci-list .ci-row {
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.ci-list .ci-who {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ci-list .ci-why {
+  color: var(--text-2);
+}
+
+/* ---------------------------------------------------------------------------
+   Employee performance.
+
+   Built to make an ABSENT number as visible as a present one. Every dash, every
+   "untimed" count and every caveat below the table is load-bearing: the whole
+   screen is derived from completion stamps, so a cell that looks like a fast
+   time and a cell that could not be measured must never look alike.
+
+   Tokens only, light and dark. Nothing here hardcodes a colour, because the
+   warning tone under a count of untimed events has to keep meaning "read this"
+   on both themes.
+   --------------------------------------------------------------------------- */
+.perf {
+  padding: 4px 2px 10px;
+}
+
+.perf-rangebar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 16px;
+}
+.perf-range-btn {
+  padding: 6px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.perf-range-btn:hover {
+  color: var(--text);
+}
+.perf-range-btn.is-on {
+  border-color: var(--brand-500);
+  background: var(--brand-soft);
+  color: var(--brand-700);
+}
+.perf-range-dates {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-3);
+  font-size: 12.5px;
+}
+.perf-range-dates input {
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+}
+/* Visible to a screen reader, absent on screen: the two date boxes are
+   obviously a range to somebody looking at them and are two unlabelled fields
+   to somebody who is not. */
+.perf-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+.perf-range-now {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  color: var(--text-3);
+  font-size: 12px;
+}
+.perf-range-now em {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  font-style: normal;
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* The three counts the owner asked for first. */
+.perf-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.perf-tile {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.perf-tile-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-3);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.perf-tile-value {
+  margin-top: 4px;
+  font-size: 28px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+.perf-tile-detail {
+  margin: 4px 0 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+
+/* One card per step, carrying its own definition. The definition is not a
+   tooltip: a number whose meaning is only visible on hover is a number that
+   gets screenshotted without it. */
+.perf-steps {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.perf-step {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+.perf-step-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.perf-step-n {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--brand-soft);
+  color: var(--brand-700);
+  font-size: 11px;
+  font-weight: 700;
+}
+.perf-step-figs {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.perf-step-avg {
+  font-size: 20px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+.perf-step-sub {
+  font-size: 11.5px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.perf-step-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+/* Not a failure — a gap in what can be known. Warning-toned rather than danger,
+   because nothing is broken and nobody has to fix anything. */
+.perf-step-counts .warn {
+  color: var(--warning);
+  font-weight: 600;
+}
+.perf-step-measures {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  margin: 6px 0 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+.perf-step-measures svg {
+  flex: none;
+  margin-top: 3px;
+}
+.perf-step-caveat {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+
+.perf-tablewrap {
+  overflow-x: auto;
+}
+.perf-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.perf-table th {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  text-align: left;
+  white-space: nowrap;
+}
+.perf-table th.num,
+.perf-table td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.perf-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+.perf-table tbody tr:hover {
+  background: var(--surface-2);
+}
+/* The row for ticks with nobody's name on them. Quieter than a real person,
+   because it is a gap in the record rather than somebody's work. */
+.perf-table tr.unattributed td {
+  color: var(--text-2);
+  font-style: italic;
+}
+.perf-name {
+  display: block;
+  font-weight: 600;
+}
+.perf-events {
+  display: block;
+  font-size: 11px;
+  color: var(--text-3);
+  font-style: normal;
+}
+.perf-avg {
+  display: block;
+  font-weight: 600;
+}
+.perf-units {
+  display: block;
+  font-size: 11px;
+  color: var(--text-3);
+  font-style: normal;
+}
+.perf-units em {
+  color: var(--warning);
+  font-style: normal;
+}
+/* A step this person never touched. A middle dot rather than an em dash: the em
+   dash already means "touched, could not be timed", and the two must not read
+   as the same statement. */
+.perf-none {
+  color: var(--text-3);
+}
+.perf-unknown {
+  color: var(--text-3);
+  cursor: help;
+}
+
+.perf-caveats {
+  margin: 16px 2px 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+.perf-caveats p {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 0 8px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-2);
+}
+.perf-caveats p:last-child {
+  margin-bottom: 0;
+}
+.perf-caveats svg {
+  flex: none;
+  margin-top: 3px;
+  color: var(--text-3);
+}

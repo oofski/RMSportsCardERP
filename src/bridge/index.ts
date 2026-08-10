@@ -22,6 +22,7 @@ import { IPC, type AppInfo } from '@shared/ipc'
 import type { Permission } from '@shared/permissions'
 import type { FreightPatch } from '@shared/freight'
 import type { BreakBenchDetail, BreakStepState } from '@shared/breakSteps'
+import type { ShippingPerformanceView } from '@shared/performance'
 /** Mirrors SweepResult in main; named here so the bridge stays off the main side. */
 interface TrackingSweep {
   checked: number
@@ -54,6 +55,7 @@ import type {
   NewInvoice
 } from '@shared/invoices'
 import type { ContactImportResult } from '@shared/contacts'
+import type { SupplierSuggestion } from '@shared/purchaseOrders'
 import type {
   ShipPickAdvanced,
   ShipStationBoard,
@@ -474,6 +476,21 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       syncLog: (): Promise<Result<QboSyncRow[]>> => ipcRenderer.invoke(IPC.qboSyncLog)
     },
 
+    /**
+     * Employee performance. `null` means the account may not see it — the same
+     * shape the QuickBooks status uses, and for the same reason: a report about
+     * named people should not announce its own existence with an error.
+     *
+     * The range is two LOCAL day keys, inclusive. Main converts them to a UTC
+     * window; nothing in the renderer does that arithmetic, because a wall
+     * clock and an instant are different things and there should be exactly one
+     * place in the app that turns one into the other.
+     */
+    performance: {
+      shipping: (from: string, to: string): Promise<ShippingPerformanceView | null> =>
+        ipcRenderer.invoke(IPC.perfShipping, { from, to })
+    },
+
     purchaseOrders: {
       list: (): Promise<PurchaseOrder[]> => ipcRenderer.invoke(IPC.poList),
       get: (id: string): Promise<PurchaseOrderDetail | null> =>
@@ -487,6 +504,15 @@ export function createBridge(ipcRenderer: BridgeTransport) {
         ipcRenderer.invoke(IPC.poSetFreight, { id, ...patch }),
       searchCatalog: (query: string): Promise<InventoryProduct[]> =>
         ipcRenderer.invoke(IPC.poCatalogSearch, query),
+      /**
+       * Names for the supplier box: the contact list, plus every supplier
+       * already used on a PO, ordered with the recently used first.
+       *
+       * A PO's supplier remains free text and picking one only fills the box in.
+       * See @shared/purchaseOrders for why suppliers and buyers are not forced
+       * into one record.
+       */
+      suppliers: (): Promise<SupplierSuggestion[]> => ipcRenderer.invoke(IPC.poSuppliers),
       thumbnails: (): Promise<Record<string, string>> => ipcRenderer.invoke(IPC.poThumbnails),
       incomingBoxes: (): Promise<PurchaseOrderDetail[]> => ipcRenderer.invoke(IPC.poIncomingBoxes),
       scanIn: (id: string): Promise<Result<PurchaseOrderDetail>> =>
@@ -1155,6 +1181,9 @@ export function createBridge(ipcRenderer: BridgeTransport) {
         id?: string | null
         name: string
         email?: string | null
+        /** Omit BOTH to leave stored numbers alone; pass either as null to clear. */
+        phone?: string | null
+        mobile?: string | null
         terms?: InvoiceTerms
         location?: string | null
         className?: string | null

@@ -135,16 +135,28 @@ export function BuyersTab(): JSX.Element {
         <div>
           <h2>Buyers</h2>
         </div>
-        <Button variant="primary" icon="UserPlus" onClick={() => setAdding(true)}>
-          Add a buyer
-        </Button>
+        <div className="row" style={{ gap: 8 }}>
+          <Button
+            variant="secondary"
+            icon="FileUp"
+            loading={importing}
+            onClick={() => void importContacts()}
+          >
+            Import contacts
+          </Button>
+          <Button variant="primary" icon="UserPlus" onClick={() => setAdding(true)}>
+            Add a buyer
+          </Button>
+        </div>
       </div>
+
+      {imported && <ImportReport result={imported} onDismiss={() => setImported(null)} />}
 
       {buyers.length === 0 ? (
         <EmptyState
           icon="Users"
           title="No buyers yet"
-          message="Add the people who buy from you. Picking one on an invoice fills in their terms, email and standing message."
+          message="Add the people who buy from you, or import your QuickBooks Customer Contact List. Picking one on an invoice fills in their terms, email and standing message."
         />
       ) : (
         <div className="table-wrap">
@@ -153,8 +165,9 @@ export function BuyersTab(): JSX.Element {
               <tr>
                 <th>Name</th>
                 <th>Email</th>
+                <th>Phone</th>
+                <th>Where</th>
                 <th>Terms</th>
-                <th>Location</th>
                 <th style={{ textAlign: 'right' }}>Invoices</th>
                 <th style={{ textAlign: 'right' }}>Billed</th>
                 <th></th>
@@ -171,8 +184,9 @@ export function BuyersTab(): JSX.Element {
                   >
                     <td style={{ fontWeight: 600 }}>{b.name}</td>
                     <td className="muted">{b.email || '—'}</td>
+                    <td className="muted">{b.phone || b.mobile || '—'}</td>
+                    <td className="muted">{whereFrom(b) || '—'}</td>
                     <td className="muted">{b.terms}</td>
-                    <td className="muted">{b.location || '—'}</td>
                     <td style={{ textAlign: 'right' }}>{t?.count ?? 0}</td>
                     <td style={{ textAlign: 'right', fontWeight: 600 }}>
                       {formatMoney(t?.value ?? 0)}
@@ -213,6 +227,122 @@ export function BuyersTab(): JSX.Element {
   )
 }
 
+/**
+ * The shortest true answer to "where are they".
+ *
+ * City and state when both are known, and the country on its own for an
+ * overseas buyer whose address this app could not take apart — which is the
+ * honest thing to show, because the full address is still on the record and
+ * still prints. A blank cell where a country is known would read as "we have
+ * nothing", and that is not what happened.
+ */
+function whereFrom(b: InvoiceCustomer): string {
+  const a = b.billAddr
+  if (!a) return ''
+  const local = [a.city, a.region].filter(Boolean).join(', ')
+  if (local) return a.country && a.country !== 'United States' ? `${local}, ${a.country}` : local
+  return a.country ?? ''
+}
+
+/**
+ * What the import did, kept on screen until it is dismissed.
+ *
+ * Three lists, and they are three different things:
+ *
+ *   SKIPPED   a row that produced no buyer. The report footer QuickBooks prints
+ *             at the bottom of every export lands here every time, which is
+ *             correct and is why the reason is spelled out rather than counted.
+ *   NOTES     a buyer WAS imported, but something in the row could not be filed
+ *             — nearly always an address written on one line. Nothing was lost:
+ *             the text is on the record and prints; only the city column is
+ *             empty. Naming the rows is what lets somebody tidy them.
+ *   UNCHANGED not a failure. Re-importing the same file writes nothing, and the
+ *             count is how the operator can tell that is what happened.
+ */
+function ImportReport({
+  result,
+  onDismiss
+}: {
+  result: ContactImportResult
+  onDismiss: () => void
+}): JSX.Element {
+  const [open, setOpen] = useState<'skipped' | 'notes' | null>(null)
+  const toggle = (which: 'skipped' | 'notes'): void => setOpen((v) => (v === which ? null : which))
+
+  return (
+    <div className="panel-card ci-report">
+      <div className="ci-report-head">
+        <div>
+          <h3>Imported {result.source}</h3>
+          <p>
+            {result.rowsSeen} {result.rowsSeen === 1 ? 'row' : 'rows'} read.
+          </p>
+        </div>
+        <button className="icon-btn" title="Dismiss" onClick={onDismiss}>
+          <Icon name="X" size={16} />
+        </button>
+      </div>
+
+      <div className="ci-counts">
+        <div className="ci-count">
+          <b>{result.added}</b>
+          <span>added</span>
+        </div>
+        <div className="ci-count">
+          <b>{result.updated}</b>
+          <span>updated</span>
+        </div>
+        <div className="ci-count">
+          <b>{result.unchanged}</b>
+          <span>already up to date</span>
+        </div>
+        <button
+          type="button"
+          className={`ci-count ci-count-btn ${result.skipped.length ? 'warn' : ''}`}
+          disabled={result.skipped.length === 0}
+          onClick={() => toggle('skipped')}
+        >
+          <b>{result.skipped.length}</b>
+          <span>skipped</span>
+        </button>
+        <button
+          type="button"
+          className={`ci-count ci-count-btn ${result.notes.length ? 'warn' : ''}`}
+          disabled={result.notes.length === 0}
+          onClick={() => toggle('notes')}
+        >
+          <b>{result.notes.length}</b>
+          <span>needs a look</span>
+        </button>
+      </div>
+
+      {open === 'skipped' && (
+        <ul className="ci-list">
+          {result.skipped.map((s) => (
+            <li key={`${s.row}-${s.reason}`}>
+              <span className="ci-row">Row {s.row}</span>
+              <span className="ci-who">{s.label || '(blank)'}</span>
+              <span className="ci-why">{s.reason}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {open === 'notes' && (
+        <ul className="ci-list">
+          {result.notes.map((n, i) => (
+            <li key={`${n.row}-${i}`}>
+              <span className="ci-row">Row {n.row}</span>
+              <span className="ci-who">{n.name}</span>
+              <span className="ci-why">{n.note}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
 function BuyerForm({
   buyer,
   onClose,
@@ -225,6 +355,8 @@ function BuyerForm({
   const toast = useToast()
   const [name, setName] = useState(buyer?.name ?? '')
   const [email, setEmail] = useState(buyer?.email ?? '')
+  const [phone, setPhone] = useState(buyer?.phone ?? '')
+  const [mobile, setMobile] = useState(buyer?.mobile ?? '')
   const [terms, setTerms] = useState<InvoiceTerms>(buyer?.terms ?? 'Net 30')
   const [location, setLocation] = useState(buyer?.location ?? '')
   const [className, setClassName] = useState(buyer?.className ?? '')
@@ -240,6 +372,11 @@ function BuyerForm({
         id: buyer?.id ?? null,
         name,
         email: email || null,
+        // Sent as null rather than omitted, so clearing the box actually clears
+        // the number. saveCustomer leaves phones alone only when neither key is
+        // present at all — which is the invoice screen's case, not this one.
+        phone: phone || null,
+        mobile: mobile || null,
         terms,
         location: location || null,
         className: className || null,
@@ -304,6 +441,23 @@ function BuyerForm({
               value={location}
               placeholder="West"
               onChange={(e) => setLocation(e.target.value)}
+            />
+          </label>
+          <label className="inv-field">
+            Phone
+            <input
+              value={phone}
+              placeholder="(555) 010-1234"
+              onChange={(e) => setPhone(e.target.value)}
+            />
+            <span className="inv-hint">Kept exactly as typed — never reformatted.</span>
+          </label>
+          <label className="inv-field">
+            Mobile
+            <input
+              value={mobile}
+              placeholder="Only if it is a different number"
+              onChange={(e) => setMobile(e.target.value)}
             />
           </label>
           <label className="inv-field" style={{ gridColumn: 'span 2' }}>

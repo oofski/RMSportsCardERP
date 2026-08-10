@@ -294,6 +294,22 @@ export interface ShippingPerformance {
   empty: boolean
 }
 
+/**
+ * What a screen receives: the summary plus the log's own extent.
+ *
+ * `loggedFrom` is the honest empty state, and it is not decoration. This log
+ * begins when the feature shipped; every show before that is genuinely
+ * unrecoverable, because its stamps lived on tables the next import deleted. A
+ * range with nothing in it therefore means one of two completely different
+ * things — "nobody worked" or "we were not recording yet" — and only this field
+ * tells them apart. Without it the screen would report an empty week as an idle
+ * one.
+ */
+export interface ShippingPerformanceView extends ShippingPerformance {
+  loggedFrom: string | null
+  loggedTo: string | null
+}
+
 // ---------------------------------------------------------------------------
 // Days
 // ---------------------------------------------------------------------------

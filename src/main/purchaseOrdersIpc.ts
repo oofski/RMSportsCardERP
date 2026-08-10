@@ -9,7 +9,7 @@ import type {
   PurchaseOrderStatus,
   Result
 } from '@shared/types'
-import { isPurchaseOrderStatus } from '@shared/purchaseOrders'
+import { isPurchaseOrderStatus, type SupplierSuggestion } from '@shared/purchaseOrders'
 import type { FreightPatch } from '@shared/freight'
 import { sweepTracking, type SweepResult } from './tracking/poller'
 import { canRead } from './tracking/read'
@@ -23,6 +23,7 @@ import {
   getPurchaseOrder,
   listActivePurchaseOrderBoxes,
   listPurchaseOrders,
+  listSupplierSuggestions,
   scanInPurchaseOrder,
   setPurchaseOrderFreight,
   setPurchaseOrderStatus
@@ -60,6 +61,13 @@ export function registerPurchaseOrdersIpc(): void {
   // Lets a module.invoicing-only user search the catalog without module.inventory.
   ipcMain.handle(IPC.poCatalogSearch, (_e, query: string): InventoryProduct[] =>
     can('module.invoicing') ? searchCatalog(query ?? '') : []
+  )
+  // Names for the supplier box. Gated on the same single permission as the rest
+  // of the module, and that is not a shortcut: the list is drawn partly from the
+  // contact records, so it is the same disclosure as opening the Buyers tab —
+  // which module.invoicing already grants.
+  ipcMain.handle(IPC.poSuppliers, (): SupplierSuggestion[] =>
+    can('module.invoicing') ? listSupplierSuggestions() : []
   )
   ipcMain.handle(IPC.poThumbnails, (): Record<string, string> =>
     can('module.invoicing') ? productThumbnails() : {}

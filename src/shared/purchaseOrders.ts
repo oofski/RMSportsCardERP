@@ -32,3 +32,37 @@ export function isPurchaseOrderStatus(value: unknown): value is PurchaseOrderSta
 export function canTransition(from: PurchaseOrderStatus, to: PurchaseOrderStatus): boolean {
   return PO_TRANSITIONS[from]?.includes(to) ?? false
 }
+
+/**
+ * A name to offer in the supplier box.
+ *
+ * ## Why a suggestion and not a supplier record
+ *
+ * A PO's supplier is a STRING on the document — a nullable TEXT column, no id,
+ * no table, nothing pointing at it. A buyer is a record with a UUID that
+ * invoices refer to. They are not the same kind of thing in this schema, and
+ * turning the supplier into a foreign key would assert that everyone this
+ * business buys from is also someone it bills, which is false: a distributor
+ * is a supplier and never a buyer.
+ *
+ * So the two stay separate and only the SEARCH is shared. The contact list the
+ * owner imported is offered on the supplier box, and picking one types its name
+ * in — which is exactly the auto-populate that was asked for, without inventing
+ * a relationship the data does not have.
+ *
+ * ## Both sources, because both answer the question
+ *
+ * `contact` is somebody in the buyer/contact list. `history` is a name already
+ * used on a purchase order and known nowhere else — most of the regular
+ * distributors, who were typed straight onto POs long before any contact list
+ * existed. Dropping those would make the box worse than the plain text field it
+ * replaced.
+ */
+export interface SupplierSuggestion {
+  name: string
+  /** Email, phone or city for a contact; the PO count for a name from history. */
+  detail: string | null
+  source: 'contact' | 'history'
+  /** How many purchase orders already name them. Zero for an unused contact. */
+  usedOnOrders: number
+}

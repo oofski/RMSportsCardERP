@@ -179,6 +179,10 @@ export const IPC = {
   trackingCheckNow: 'tracking:check-now',
   trackingCanRead: 'tracking:can-read',
   poCatalogSearch: 'po:catalog-search',
+  // Names for the supplier box: the contact list plus every supplier already
+  // used on a PO. A PO's supplier stays free text — see @shared/purchaseOrders
+  // for why it is not turned into a foreign key.
+  poSuppliers: 'po:suppliers',
   poThumbnails: 'po:thumbnails',
   poIncomingBoxes: 'po:incoming-boxes',
   poScanIn: 'po:scan-in',
@@ -446,6 +450,13 @@ export const IPC = {
   intakeSubmissions: 'intake:submissions',
   intakeAccept: 'intake:accept',
   intakeReject: 'intake:reject',
+
+  // Employee performance (admin.access only — it is a report about people).
+  //
+  // One read, one range. The screen picks a day, a week, a month or two dates
+  // and everything on it is derived from the same answer, so the headline counts
+  // and the per-person table can never describe different periods.
+  perfShipping: 'performance:shipping',
 
   // App meta
   appInfo: 'app:info'

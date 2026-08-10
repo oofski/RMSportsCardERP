@@ -1235,7 +1235,21 @@ export function setShipmentStatus(
 ): ShipShipmentRow {
   const sh = getShipShipment(id)
   if (!sh) throw new Error('Shipment not found.')
-  updateShipment(id, { manualStatus: { code, setAt: nowIso(), setBy: userId } })
+  const at = nowIso()
+  updateShipment(id, { manualStatus: { code, setAt: at, setBy: userId } })
+  // Step 5, and ONLY from a person.
+  //
+  // The carrier sweep (bulkSetShipmentStatusByTracking) deliberately records
+  // nothing. Its timestamp is when THIS APP managed to read a tracking page, not
+  // when anybody handed a box over, and its setter is the string 'auto' rather
+  // than an employee. Logging it would put a network poll on somebody's
+  // performance row and date it hours after the fact.
+  if (isSentStatus(code)) {
+    recordShip({ shipmentId: id, packedAt: sh.packedAt, by: userId, finishedAt: at })
+  } else if (code === 'not_shipped') {
+    // A package put back to not-shipped never shipped.
+    clearWorkEvent('ship', id)
+  }
   return getShipmentRow(id) as ShipShipmentRow
 }
 
