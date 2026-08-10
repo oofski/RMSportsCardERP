@@ -4,7 +4,6 @@ import { isPhoneWidth } from '../lib/viewport'
 import { StreamingModule } from '../modules/streaming/StreamingModule'
 import { FinanceModule } from '../modules/finance/FinanceModule'
 import { useSession } from '../lib/session'
-import { useTheme } from '../lib/theme'
 import { api, IS_WEB } from '../lib/api'
 import { ChromeContext } from '../lib/chrome'
 import { Brand } from '../components/Brand'
@@ -37,7 +36,6 @@ const WORKSPACES: { id: WorkspaceId; name: string; icon: string }[] = [
 
 export function AppShell(): JSX.Element {
   const { user, appInfo, can, logout, refresh } = useSession()
-  const { mode, toggle } = useTheme()
   const toast = useToast()
   const [showUpdates, setShowUpdates] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
@@ -266,13 +264,6 @@ export function AppShell(): JSX.Element {
 
             <div className="topbar-actions">
               <LiveBadge />
-              <button
-                className="icon-btn"
-                onClick={toggle}
-                title={mode === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-              >
-                <Icon name={mode === 'dark' ? 'Sun' : 'Moon'} size={18} />
-              </button>
               {!IS_WEB && (
                 <button
                   className="icon-btn"
@@ -323,16 +314,6 @@ export function AppShell(): JSX.Element {
                           Remove photo
                         </button>
                       )}
-                      <button
-                        className="menu-item"
-                        onClick={() => {
-                          setMenuOpen(false)
-                          toggle()
-                        }}
-                      >
-                        <Icon name={mode === 'dark' ? 'Sun' : 'Moon'} size={16} />
-                        {mode === 'dark' ? 'Light mode' : 'Dark mode'}
-                      </button>
                       {!IS_WEB && (
                         <button
                           className="menu-item"

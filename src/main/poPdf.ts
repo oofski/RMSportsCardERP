@@ -10,8 +10,7 @@
  * So this does not print the screen at all. It builds a self-contained A4
  * document from the PO's data and renders it in an offscreen window, which
  * means the output is a real, paginated PDF whose layout owes nothing to the
- * app's stylesheet, the current theme, or how far the modal happened to be
- * scrolled.
+ * app's stylesheet or how far the modal happened to be scrolled.
  */
 import { BrowserWindow, dialog, shell } from 'electron'
 import { writeFileSync } from 'fs'

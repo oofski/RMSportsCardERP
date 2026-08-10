@@ -10,7 +10,7 @@
  * across a room and be right.
  *
  * Ten hues, because ten is roughly the limit of what stays distinguishable at
- * chip size in both themes and for viewers who are colourblind. Break 11 and
+ * chip size, including for viewers who are colourblind. Break 11 and
  * break 1 share a hue and are told apart by fill: 1–10 solid, 11–20 hollow. And
  * the label is ALWAYS printed, so colour is never the only signal — which is
  * the part that actually makes it accessible.

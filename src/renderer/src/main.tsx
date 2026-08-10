@@ -14,7 +14,7 @@ import './styles/mobile.css'
 import App from './App'
 import { SessionProvider } from './lib/session'
 import { ToastProvider } from './components/Toast'
-import { ThemeProvider } from './lib/theme'
+import { initSystemChrome } from './lib/systemChrome'
 import { registerServiceWorkerEarly } from './lib/webPush'
 
 // Before React, because it is a network fetch that nothing renders and the
@@ -23,14 +23,17 @@ import { registerServiceWorkerEarly } from './lib/webPush'
 // as a service worker — see canRegisterServiceWorker.
 registerServiceWorkerEarly()
 
+// Also before React, and it has to be: it evicts a dark-mode preference left on
+// machines that had the old toggle, and a screen that mounted first would paint
+// once through an attribute nothing styles. See lib/systemChrome.ts.
+initSystemChrome()
+
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   <React.StrictMode>
-    <ThemeProvider>
-      <ToastProvider>
-        <SessionProvider>
-          <App />
-        </SessionProvider>
-      </ToastProvider>
-    </ThemeProvider>
+    <ToastProvider>
+      <SessionProvider>
+        <App />
+      </SessionProvider>
+    </ToastProvider>
   </React.StrictMode>
 )

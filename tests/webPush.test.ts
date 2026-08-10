@@ -744,8 +744,32 @@ void (async () => {
     'and a short_name that fits under an icon',
     String(manifest.short_name)
   )
-  ok(/^#[0-9a-f]{6}$/i.test(String(manifest.theme_color)), 'theme_color is a colour', String(manifest.theme_color))
-  ok(/^#[0-9a-f]{6}$/i.test(String(manifest.background_color)), 'background_color is a colour', String(manifest.background_color))
+  // The two colours the PHONE paints, not the app: theme_color is the band it
+  // fills the status bar / notch strip with, background_color is the splash it
+  // shows before the first frame. Both were a dark navy left over from when the
+  // app had a dark theme, so an installed copy opened as a black splash into a
+  // white page under a black band. The app has one palette now
+  // (styles/theme.css) and these are the only two copies of it that live
+  // outside CSS and cannot read a token — a manifest takes no comments and no
+  // var(). So they are checked against the tokens rather than trusted: retune
+  // the palette without touching this file and the test says so.
+  const themeCss = readFileSync(join(process.cwd(), 'src/renderer/src/styles/theme.css'), 'utf8')
+  const token = (name: string): string =>
+    (new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{3,8})`).exec(themeCss)?.[1] ?? '').toLowerCase()
+  const surface = token('surface')
+  const canvas = token('bg')
+  ok(/^#[0-9a-f]{6}$/.test(surface), 'theme.css still declares a --surface hex', surface)
+  ok(/^#[0-9a-f]{6}$/.test(canvas), 'and a --bg hex', canvas)
+  ok(
+    String(manifest.theme_color).toLowerCase() === surface,
+    'theme_color is --surface, the colour of the bars drawn into the notch band',
+    `${manifest.theme_color} vs ${surface}`
+  )
+  ok(
+    String(manifest.background_color).toLowerCase() === canvas,
+    'background_color is --bg, so the splash is the page it becomes',
+    `${manifest.background_color} vs ${canvas}`
+  )
 
   /** width, height and colour type, straight out of the IHDR chunk. */
   function pngHeader(path: string): { width: number; height: number; colorType: number } {
@@ -833,6 +857,17 @@ void (async () => {
     touchHref ? touchHref[1] : 'no href'
   )
   ok(/apple-mobile-web-app-capable/.test(indexHtml), 'iOS is told this runs as an app')
+  // The same colour as the manifest's theme_color, and it has to be HERE too:
+  // the tag is read before any stylesheet or script exists, so this static hex
+  // is what fills the notch band on the first frame. lib/systemChrome.ts
+  // rewrites it from --surface once the CSS is up, which fixes a drift one
+  // frame late — long enough to see the band flash on every cold open.
+  const metaColor = /<meta\s+name="theme-color"\s+content="([^"]+)"/.exec(indexHtml)?.[1] ?? ''
+  ok(
+    metaColor.toLowerCase() === surface,
+    'and the notch band is --surface before any CSS has loaded',
+    `${metaColor} vs ${surface}`
+  )
   // The page's own CSP governs whether a service worker may be registered at
   // all. A default-src that does not cover it means registration is refused
   // with a console message on a phone nobody is looking at.

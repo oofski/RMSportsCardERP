@@ -137,7 +137,6 @@ import type {
   SupplyPurchaseInput,
   SupplyStats,
   SupplyUseInput,
-  ThemeMode,
   TimeEntry,
   UpdateEmployeeInput,
   UpdateInventoryProduct,
@@ -308,9 +307,6 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       get: (): Promise<RememberedCredentials | null> => ipcRenderer.invoke(IPC.credGet),
       set: (creds: RememberedCredentials): Promise<Result> => ipcRenderer.invoke(IPC.credSet, creds),
       clear: (): Promise<Result> => ipcRenderer.invoke(IPC.credClear)
-    },
-    theme: {
-      set: (mode: ThemeMode): Promise<Result> => ipcRenderer.invoke(IPC.themeSet, mode)
     },
     inventory: {
       list: (): Promise<InventoryProduct[]> => ipcRenderer.invoke(IPC.invProductsList),

@@ -56,17 +56,13 @@
 }
 /* This is the confirm on destructive actions — including the scan station's
    "Take N out of stock" — so the label has to be readable before it is pressed.
-   White on --danger was 4.06:1 in light and 2.83:1 in dark. Light darkens the
-   fill; dark's --danger is already a light red, so it takes dark ink instead. */
+   White on --danger is only 4.06:1, hence the darker --danger-strong fill. */
 .btn-danger {
   background: var(--danger-strong);
   color: #fff;
 }
 .btn-danger:hover:not(:disabled) {
   filter: brightness(1.08);
-}
-:root[data-theme='dark'] .btn-danger {
-  color: var(--ink-900);
 }
 .btn-sm {
   height: 30px;
@@ -2794,14 +2790,6 @@ table.data tfoot .data-total td {
   font-size: 12.5px;
   cursor: pointer;
 }
-/* Keep the tan unit badge + low-stock banner legible in dark mode. */
-:root[data-theme='dark'] .badge.unit-case {
-  background: rgba(180, 140, 40, 0.2);
-  color: #dcc27f;
-}
-:root[data-theme='dark'] .lowstock-banner {
-  border-color: rgba(180, 140, 40, 0.32);
-}
 
 /* Category cards (inventory dashboard) */
 .cat-grid {
@@ -3952,9 +3940,6 @@ tr.hoverable-row:hover {
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-}
-:root[data-theme='dark'] .po-supply-badge {
-  color: var(--ink-900);
 }
 /* Bought without anyone pressing a button — worth saying outright, so a card
    nobody remembers creating explains itself. */
@@ -5421,18 +5406,6 @@ tr.hoverable-row:hover {
   cursor: not-allowed;
 }
 
-/* Dark theme: the brand pulse and reticle need a lighter accent to read against
-   the darker surfaces, and the video surround stays dark in both themes. */
-:root[data-theme='dark'] .scan-cam-frame {
-  border-color: var(--brand-400);
-}
-:root[data-theme='dark'] .scan-candidate.active {
-  background: color-mix(in srgb, var(--brand-500) 16%, var(--surface));
-}
-:root[data-theme='dark'] .scan-target.ready {
-  background: color-mix(in srgb, var(--success) 14%, var(--surface-2));
-}
-
 /* ---------- Kanban drag-and-drop states ---------- */
 .po-card[draggable='true'] {
   cursor: grab;
@@ -5512,11 +5485,11 @@ tr.hoverable-row:hover {
     top: 0;
     width: 100%;
   }
-  /* Force a light, ink-friendly receipt regardless of the app theme. Browsers
-     drop backgrounds when printing but KEEP text color, so a dark-mode user
-     would otherwise print near-white text on white paper. Re-declaring the core
-     tokens here makes every var(--text*/--surface*/--border*) inside the receipt
-     resolve to light values. */
+  /* An ink-friendly ramp for paper. Browsers drop background fills when
+     printing but KEEP text color, so the screen's greys — tuned to sit on a
+     surface that is about to vanish — come out as pale grey on white and the
+     meta lines of a receipt are unreadable at arm's length. These are the same
+     tokens one step darker, scoped to the receipt so nothing else shifts. */
   .po-receipt {
     --surface: #ffffff;
     --surface-2: #ffffff;
@@ -6893,15 +6866,6 @@ tr.hoverable-row:hover {
 .sor-break-chip[data-accent] em {
   color: var(--text-2);
 }
-/* A 15% wash of a bright accent barely registers on a dark surface, so dark
-   leans on the tint harder to keep the six lanes as separable as in light. */
-:root[data-theme='dark'] .sor-break[data-accent] .sor-break-head {
-  background: color-mix(in srgb, var(--sor-accent) 26%, var(--surface));
-  border-bottom-color: color-mix(in srgb, var(--sor-accent) 50%, var(--surface));
-}
-:root[data-theme='dark'] .sor-break-chip[data-accent] {
-  background: color-mix(in srgb, var(--sor-accent) 26%, var(--surface));
-}
 
 .sor-break-title {
   display: inline-flex;
@@ -7043,17 +7007,10 @@ tr.hoverable-row:hover {
   color: var(--danger);
 }
 
-/* Dark: white-on-red loses contrast against the lighter dark-mode danger red,
-   so the alarm glyphs flip to the page background instead. */
-:root[data-theme='dark'] .ship-danger-ico,
-:root[data-theme='dark'] .ship-tab-badge.danger {
-  color: var(--bg);
-}
-
 /* ==========================================================================
    RM Cardz Shipping Workspace — Checker, Shipping tracker, History [FRONTEND-2]
    Appended below FRONTEND-1's block; nothing above this line is modified.
-   Token-driven throughout, so it is correct in light AND dark.
+   Token-driven throughout, so a palette change reaches all of it at once.
    ========================================================================== */
 
 /* Shared: a confirm modal's body copy. */
@@ -9994,17 +9951,9 @@ tr.hoverable-row:hover {
   }
 }
 
-/* Dark: the tracker's held-row tint and the selected-row tint both come from
-   token backgrounds that already flip, but the hover on top of them must not
-   wash the tint out. */
-:root[data-theme='dark'] .trk-row[data-hold='true']:hover,
-:root[data-theme='dark'] .trk-row.selected:hover {
-  filter: brightness(1.12);
-}
-
 /* Tinted tracker rows: the address / service / status-meta lines are --text-3,
    which reads fine on --surface but drops under 3:1 on the warning and brand
-   tints. They step up one level on a tinted row, in both themes. */
+   tints. They step up one level on a tinted row. */
 .trk-row.selected .trk-addr,
 .trk-row.selected .trk-service,
 .trk-row.selected .trk-status-meta,
@@ -10034,21 +9983,14 @@ tr.hoverable-row:hover {
   border-radius: var(--radius-sm);
   border: 1px solid var(--brand-500);
   background: var(--brand-500);
-  /* Was a literal #fff, which is only 4.24:1 on the dark theme's lighter
-     --brand-500. Both themes now use a token and clear 4.5:1. */
+  /* A token rather than a literal #fff, so this label follows --brand-500 if
+     the accent is ever retuned instead of quietly dropping under 4.5:1. */
   color: var(--text-inverse);
   font-size: 13px;
   font-weight: 650;
   cursor: pointer;
   white-space: nowrap;
   transition: background 0.13s ease, border-color 0.13s ease;
-}
-/* Only the FILLED variant sits on --brand-500 and needs dark ink. `.next` is an
-   outline button on --surface, and this selector outranks `.sor-advance.next`
-   (0,3,0 vs 0,2,0) — without :not() it repainted "Mark sent" in --ink-900 on
-   --surface, i.e. 1.13:1 and invisible on the dark theme. */
-:root[data-theme='dark'] .sor-advance:not(.next) {
-  color: var(--ink-900);
 }
 .sor-advance:hover:not(:disabled) {
   background: var(--brand-600);
@@ -10757,19 +10699,6 @@ button.sor-team:focus-visible {
   color: var(--text);
 }
 
-/* Dark: the wash and the busy-day shadow both need more presence on a dark
-   surface, and the flat tint alone would disappear. */
-:root[data-theme='dark'] .hcal-wash {
-  opacity: calc(var(--hcal-w, 0) * 0.34);
-}
-:root[data-theme='dark'] .hcal-cell.live-day {
-  box-shadow: 0 calc(var(--hcal-w, 0) * 3px) calc(var(--hcal-w, 0) * 14px)
-    rgba(0, 0, 0, calc(var(--hcal-w, 0) * 0.45));
-}
-:root[data-theme='dark'] .hcal-today-dot {
-  color: var(--bg);
-}
-
 @media (max-width: 1100px) {
   .hcal-cell {
     min-height: 104px;
@@ -11266,33 +11195,6 @@ button.sor-team:focus-visible {
 }
 .chk-crew-chip.gone svg {
   color: var(--danger);
-}
-
-/* ---- Dark theme ----
-   The tinted surfaces above are token-driven and already flip, but the two
-   soft washes (--danger-bg / --brand-soft) sit very close to --surface in
-   dark, so the chips get their contrast from a border and a brighter text
-   colour instead of the fill. */
-:root[data-theme='dark'] .ba-person.gone,
-:root[data-theme='dark'] .ba-chip.gone,
-:root[data-theme='dark'] .chk-crew-chip.gone {
-  background: var(--surface-3);
-  border-color: var(--danger);
-}
-:root[data-theme='dark'] .ba-headcount {
-  background: var(--brand-soft-2);
-  color: var(--brand-600);
-}
-:root[data-theme='dark'] .ba-person-count,
-:root[data-theme='dark'] .ba-filter.active span,
-:root[data-theme='dark'] .ba-filter.active {
-  color: var(--brand-600);
-}
-:root[data-theme='dark'] .ba-person-count {
-  background: var(--brand-soft-2);
-}
-:root[data-theme='dark'] .ba-chip-x:hover:not(:disabled) {
-  background: var(--surface-3);
 }
 
 @media (max-width: 1100px) {

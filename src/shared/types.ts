@@ -178,8 +178,6 @@ export interface RememberedCredentials {
   password: string
 }
 
-export type ThemeMode = 'light' | 'dark'
-
 // ---------------------------------------------------------------------------
 // Inventory
 // ---------------------------------------------------------------------------

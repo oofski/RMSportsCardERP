@@ -19,7 +19,11 @@
  *      query in the file is wider than the breakpoint;
  *   3. that the desktop's own stylesheets know nothing about any name the
  *      phone layer introduced — so the classes and attributes added to the
- *      components are provably inert at a desktop width;
+ *      components are provably inert at a desktop width; and, since it is the
+ *      same question asked of the same three files, that none of them has
+ *      grown a second palette — this app is light for everyone, and a rule
+ *      keyed to the viewer's OS is the other way a stylesheet renders
+ *      differently for one person than for whoever wrote it;
  *   4. that the Electron window still cannot be narrow enough to match, which
  *      is what makes (2) a guarantee rather than a convention;
  *   5. the handful of one-line details that are individually trivial and each
@@ -146,8 +150,9 @@ function topLevel(css: string): { blocks: { prelude: string; body: string }[]; b
     String(widths)
   )
 
-  // The house rule, made mechanical. A hex or an rgb() here would be a colour
-  // that ignores the theme, and dark mode is where that shows up.
+  // The house rule, made mechanical. A hex or an rgb() here is a colour that
+  // opts out of the palette, so it stops tracking the tokens the moment one is
+  // retuned — and it is a phone-only rule, so nobody at a desk ever sees it.
   const literals = [
     // `(?!-)` so `white-space` is a property, not the colour keyword `white`.
     ...stripped.matchAll(/#[0-9a-fA-F]{3,8}\b|\brgba?\s*\(|\bhsla?\s*\(|\b(?:white|black|silver)\b(?!-)/g)
@@ -191,6 +196,33 @@ function topLevel(css: string): { blocks: { prelude: string; body: string }[]; b
       `${file.split('/').pop()} carries both the class and its labels`
     )
   }
+
+  console.log('\n=== 3b. there is exactly one palette, and it is light ===')
+
+  // Two hooks a second theme could hang off, and they fail in opposite ways —
+  // which is why both are checked rather than just the one that was removed. A
+  // `data-theme` rule is inert unless something sets the attribute, and the
+  // module that set it is gone, so it would sit in the stylesheet applying to
+  // nobody and looking like it worked. A `prefers-color-scheme` block needs no
+  // attribute at all: it applies on its own to whoever has their laptop or
+  // phone in OS dark mode, repainting part of one screen for some of the team
+  // and not the rest. Neither is visible on the machine that wrote it.
+  for (const sheet of [MOBILE_CSS_PATH, 'src/renderer/src/styles/app.css', 'src/renderer/src/styles/theme.css']) {
+    const css = stripComments(read(sheet))
+    const name = sheet.split('/').pop()
+    ok(!css.includes('data-theme'), `${name} has no data-theme rule`)
+    ok(!css.includes('prefers-color-scheme'), `${name} has no prefers-color-scheme query`)
+  }
+
+  // The positive half. CSS owns the page; it does not own the canvas behind it,
+  // the scrollbars, the overscroll or the native picker behind an
+  // <input type="date">. Without this declaration the engine draws all four
+  // from the SYSTEM palette, so a phone in dark mode frames a light app in dark
+  // grey and offers a date picker nobody can read.
+  ok(
+    /:root\s*\{[^}]*color-scheme:\s*light/.test(stripComments(themeCss)),
+    'theme.css tells the browser this app is light, so native chrome follows'
+  )
 
   console.log('\n=== 4. the desktop window still cannot be that narrow ===')
 

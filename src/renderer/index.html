@@ -48,7 +48,18 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-title" content="RM Ops" />
-    <meta name="theme-color" content="#12141a" />
+    <!--
+      The colour iOS fills the notch strip and the home-indicator strip with on
+      an installed web app — the two bands the top bar and the bottom navigation
+      are drawn into (styles/mobile.css). This is --surface from
+      src/renderer/src/styles/theme.css, restated as a hex because the tag has
+      to be right BEFORE any stylesheet or script has loaded; it was a dark navy
+      from when the app had a dark theme, which put a black band above a white
+      app for every operator who had not chosen dark. lib/systemChrome.ts
+      re-reads --surface and rewrites this tag once the CSS is up, so the hex
+      here only has to survive the first frame and cannot drift permanently.
+    -->
+    <meta name="theme-color" content="#ffffff" />
   </head>
   <body>
     <div id="root"></div>

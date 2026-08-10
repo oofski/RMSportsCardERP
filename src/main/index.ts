@@ -30,6 +30,11 @@ function createWindow(): BrowserWindow {
     minHeight: 680,
     show: false,
     title: APP_NAME,
+    // What Chromium paints for the ~200ms before the renderer's first frame,
+    // and behind the page during a resize. Must stay equal to --bg in
+    // styles/theme.css: this is the one place in the app a colour cannot come
+    // from a token, because it is chosen in the main process before any
+    // stylesheet exists. Off by a shade and every launch starts with a flash.
     backgroundColor: '#f5f6f8',
     autoHideMenuBar: true,
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
@@ -67,6 +72,12 @@ function createWindow(): BrowserWindow {
 
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.rmcardz.operations')
+  // The renderer has one palette and it is light, so the NATIVE chrome has to
+  // agree: left on 'system', a machine in OS dark mode gives this app dark menus,
+  // a dark title bar and dark file dialogs framing a white page. Set before the
+  // first window exists, because the frame is painted with whatever this says at
+  // the moment of creation. Nothing else changes it — the renderer used to be
+  // able to, over an IPC channel that went with the toggle.
   nativeTheme.themeSource = 'light'
 
   app.on('browser-window-created', (_, window) => {

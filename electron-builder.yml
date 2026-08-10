@@ -58,7 +58,13 @@ mac:
         - arm64
         - x64
   artifactName: ${productName}-${version}-${arch}.${ext}
-  darkModeSupport: true
+  # The app has one palette and it is light. This writes
+  # NSRequiresAquaSystemAppearance into Info.plist, which keeps the title bar,
+  # the menu bar and the native dialogs in light appearance on a Mac set to
+  # dark — including for the moments before app.whenReady() runs and sets
+  # nativeTheme.themeSource, which is where a dark frame around a white page
+  # would otherwise flash on every launch.
+  darkModeSupport: false
   hardenedRuntime: true
   gatekeeperAssess: false
   # No entitlements or usage strings: the app reads local files and talks to one

@@ -1,4 +1,4 @@
-import { shell, app, dialog, nativeTheme, BrowserWindow, type OpenDialogOptions } from 'electron'
+import { shell, app, dialog, BrowserWindow, type OpenDialogOptions } from 'electron'
 import { ipcMain } from './ipcRegistry'
 import { writeFileSync } from 'fs'
 import { IPC, type AppInfo } from '@shared/ipc'
@@ -16,7 +16,6 @@ import type {
   RememberedCredentials,
   Result,
   SessionUser,
-  ThemeMode,
   TimeEntry,
   UpdateEmployeeInput,
   UpdateStatus,
@@ -697,12 +696,6 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle(IPC.credClear, (): Result => {
     if (!hasRequestContext()) clearRemembered()
-    return { ok: true }
-  })
-
-  // ---- Theme --------------------------------------------------------------
-  ipcMain.handle(IPC.themeSet, (_e, mode: ThemeMode): Result => {
-    nativeTheme.themeSource = mode === 'dark' ? 'dark' : 'light'
     return { ok: true }
   })
 }

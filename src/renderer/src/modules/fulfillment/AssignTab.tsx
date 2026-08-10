@@ -507,8 +507,8 @@ function BreakAssignCard({
                   : `This employee record has been removed (${a.employeeId}) — the assignment is kept so it can be cleared.`
               }
             >
-              {/* The name stays at --text so it is readable on both themes; the
-                  face is what says "this employee record is gone". */}
+              {/* The name stays at --text, at full contrast rather than dimmed;
+                  the face is what says "this employee record is gone". */}
               <AssigneeFace found={a.found} initials={a.initials} avatarUrl={a.avatarUrl} />
               <span className="ba-chip-name">{assigneeLabel(a)}</span>
               {canManage && (

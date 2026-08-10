@@ -88,7 +88,7 @@ export function Select({
 }: SelectHTMLAttributes<HTMLSelectElement> & { invalid?: boolean }): JSX.Element {
   // `className` must be destructured and MERGED, not left in `...rest` — spreading
   // it would overwrite the base class and strip the control of every app style,
-  // leaving a native white box on the dark theme.
+  // leaving a raw browser dropdown in the middle of a styled form.
   return (
     <select className={`select ${className} ${invalid ? 'field-error' : ''}`.trim()} {...rest}>
       {children}

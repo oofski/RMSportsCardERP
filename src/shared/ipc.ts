@@ -62,9 +62,6 @@ export const IPC = {
   credSet: 'credentials:set',
   credClear: 'credentials:clear',
 
-  // Theme
-  themeSet: 'theme:set',
-
   // Inventory
   invProductsList: 'inventory:products:list',
   invCatalogSearch: 'inventory:catalog:search',
