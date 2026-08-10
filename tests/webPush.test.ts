@@ -46,6 +46,7 @@ const {
   deliverPush,
   encryptWebPushPayload,
   isDeadPushStatus,
+  notifyTargets,
   sendOnePush,
   signVapidJwt,
   vapidAudience,
@@ -423,19 +424,20 @@ void (async () => {
   )
 
   // Malformed keys are refused at encryption time rather than producing a body
-  // nobody can open.
-  ok(
-    (await threw(async () =>
-      encryptWebPushPayload({ plaintext: enc.encode('x'), p256dh: b64urlFromBytes(new Uint8Array(32)), auth: phone.auth })
-    )) !== null,
-    'a p256dh that is not 65 bytes is refused'
+  // nobody can open. The MESSAGE is asserted, not just the throw: WebCrypto
+  // rejects a bad curve point too, with "The operation failed for an
+  // operation-specific reason", which names nothing and sends whoever reads it
+  // looking in the wrong place.
+  const badPoint = await threw(async () =>
+    encryptWebPushPayload({ plaintext: enc.encode('x'), p256dh: b64urlFromBytes(new Uint8Array(32)), auth: phone.auth })
   )
-  ok(
-    (await threw(async () =>
-      encryptWebPushPayload({ plaintext: enc.encode('x'), p256dh: phone.p256dh, auth: b64urlFromBytes(new Uint8Array(8)) })
-    )) !== null,
-    'an auth secret that is not 16 bytes is refused'
+  ok(badPoint !== null, 'a p256dh that is not 65 bytes is refused')
+  ok(String(badPoint).includes('p256dh'), 'and the error names the field', String(badPoint))
+  const badAuth = await threw(async () =>
+    encryptWebPushPayload({ plaintext: enc.encode('x'), p256dh: phone.p256dh, auth: b64urlFromBytes(new Uint8Array(8)) })
   )
+  ok(badAuth !== null, 'an auth secret that is not 16 bytes is refused')
+  ok(String(badAuth).includes('auth secret'), 'and that error names its field too', String(badAuth))
   ok(
     (await threw(async () =>
       encryptWebPushPayload({
@@ -577,6 +579,28 @@ void (async () => {
     drop: async () => {}
   })
   ok(order.join('') === 'abc', 'every subscription is attempted even after one throws', order.join(''))
+
+  // -------------------------------------------------------------------------
+  console.log('\n=== 10b. the person who punched is not told about themselves ===')
+  // -------------------------------------------------------------------------
+  const roster = [
+    { endpoint: 'lead-phone', employee_id: 'emp-lead' },
+    { endpoint: 'packer-phone', employee_id: 'emp-packer' },
+    { endpoint: 'lead-tablet', employee_id: 'emp-lead' }
+  ]
+  ok(
+    notifyTargets(roster, 'emp-packer')
+      .map((s: { endpoint: string }) => s.endpoint)
+      .join(',') === 'lead-phone,lead-tablet',
+    'the packer who clocked in is skipped, everybody else is notified'
+  )
+  ok(
+    notifyTargets(roster, 'emp-lead').length === 1,
+    'and BOTH of the lead devices are skipped when the lead punches, not just one'
+  )
+  ok(notifyTargets(roster, 'nobody').length === 3, 'an unrelated punch reaches every device')
+  ok(notifyTargets(roster, '').length === 3, 'a missing employee id excludes nobody rather than everybody')
+  ok(notifyTargets(null, 'emp-lead').length === 0, 'and no subscriptions is no recipients, not a crash')
 
   // -------------------------------------------------------------------------
   console.log('\n=== 11. the payload keeps a UTC instant an instant ===')

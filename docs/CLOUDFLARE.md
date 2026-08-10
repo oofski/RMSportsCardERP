@@ -125,6 +125,10 @@ While you are there, optionally add a plain-text variable (not a secret):
 - Name: `BRAND`, Value: `RM Cardz` — this is the name customers see on the
   public form.
 
+There is one more secret to add if you want clock-in notifications on phones —
+`VAPID_PRIVATE_KEY`. That has a section of its own further down, because it
+needs a key pair generating first and it is not part of getting sync working.
+
 ## Step 6 — Check it
 
 Open the Worker URL in a browser. You should see:
@@ -187,6 +191,173 @@ A machine nobody has set up recognises that it is joining rather than starting,
 discards the placeholder catalog every install seeds for itself, and takes the
 shared one. A machine that already has data publishes instead. Only the first
 one to arrive at an empty relay publishes; the rest pull.
+
+---
+
+## Clock-in notifications on your phone
+
+When somebody clocks in or out, the phones of the people who switched this on
+buzz with "Marisol Vandenberg clocked in — 7:58 AM". You do this once, in the
+dashboard, and then each person turns it on for themselves.
+
+### Why it is built this way, in one paragraph
+
+The obvious versions of this — ntfy, a Discord webhook, Pushover, an email —
+all mean handing a company you have never met a running list of who works here
+and what hours they keep. That is the payroll shape of the business sitting in
+somebody else's database forever, in exchange for saving an afternoon. So the
+Worker sends a real Web Push notification instead, **encrypted before it leaves
+Cloudflare**. Apple, Google and Mozilla carry it, and what they carry is a
+sealed block of bytes: no name, no time, nothing readable. They cannot tell one
+notification from another.
+
+The Worker sends it, not the app, because punches arrive from several laptops
+and from the web app, and a sender living inside one Mac only fires when that
+Mac happens to be awake. The 7am shift would silently never notify.
+
+### Step A — Generate the key pair
+
+The two keys are a matched pair. The private one signs; the public one is what
+each phone is told to expect. **The private key is a secret and must never be
+pasted into a chat, an issue, a commit, or this file.**
+
+The Worker can mint a pair for you, which saves installing anything:
+
+```
+curl -X POST https://rm-operations.<sub>.workers.dev/v1/push-notify/generate-keys \
+  -H "authorization: Bearer YOUR_SHARED_KEY"
+```
+
+You get back:
+
+```json
+{"ok":true,"publicKey":"BKq…","privateKey":"…","note":"…"}
+```
+
+Nothing is stored — it generates and hands them over. Run it once.
+
+If you would rather not use a terminal: open any browser, press F12 for the
+console, and paste this:
+
+```js
+crypto.subtle.generateKey({name:'ECDSA',namedCurve:'P-256'},true,['sign'])
+  .then(async k => {
+    const j = await crypto.subtle.exportKey('jwk', k.privateKey)
+    const p = new Uint8Array(await crypto.subtle.exportKey('raw', k.publicKey))
+    const b = s => btoa(String.fromCharCode(...s)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')
+    console.log('public :', b(p)); console.log('private:', j.d)
+  })
+```
+
+### Step B — Paste the private half into the Worker
+
+1. Worker → **Settings** → **Variables and Secrets**.
+2. **Add** → type **Secret**.
+   - Name: `VAPID_PRIVATE_KEY`  ← must be exactly this
+   - Value: the `privateKey` string, nothing else. No quotes, no spaces.
+3. **Deploy**.
+
+That is the only thing here that is a secret, and it is the only thing with no
+default. Close the terminal window afterwards.
+
+### Step C — Put the public half in the code
+
+Open `cloud/worker.js` and find:
+
+```js
+const VAPID_PUBLIC_KEY_DEFAULT = 'BKq…'
+```
+
+Replace the string with your `publicKey`, then re-paste the whole file into the
+dashboard editor and **Deploy** (same as Step 3 above).
+
+It lives in the file rather than in a second variable on purpose: the phone and
+the Worker have to agree on this value *exactly*, and two hand-typed copies of
+an 87-character string eventually stop agreeing. When they do, nothing errors —
+subscribing works, the toggle goes green, and no notification is ever delivered.
+One copy, served to the phone by the Worker itself, cannot drift.
+
+It is not a secret. It is published to every phone that subscribes.
+
+*(If you would rather not edit the file, a `VAPID_PUBLIC_KEY` plain-text
+variable overrides it. Same value, same effect.)*
+
+### Step D — Optional but recommended: a contact address
+
+1. Worker → **Settings** → **Variables and Secrets** → **Add** → **Variable**
+   (not a secret).
+   - Name: `VAPID_SUBJECT`
+   - Value: `mailto:you@yourdomain.com`
+
+Google and Mozilla write to this address before they start throttling or
+dropping a sender, so an address nobody reads means the first sign of trouble is
+notifications quietly stopping.
+
+**The format is fussy and the failure is silent.** It must be `mailto:` followed
+immediately by the address — no space after the colon, no `<angle brackets>`, no
+display name. Some push services reject a malformed one with an error that never
+mentions the subject. The Worker checks the shape, falls back to its default if
+it is wrong, and writes a line to the log saying so; you will see it in the
+Worker's **Logs** tab.
+
+If you skip this step entirely the built-in default is used and everything works.
+
+### Step E — Nothing. There is no table to create.
+
+The Worker creates `push_subscriptions` itself the first time somebody
+subscribes. It is deliberately not in `schema.d1.sql`, because a feature that
+only works after somebody remembers a *second* paste is a feature that appears
+broken with no error to search for.
+
+### Step F — Turn it on, per person, per phone
+
+Each person does this for themselves on the phone they want buzzed. There is no
+way to turn it on for somebody else — deliberately.
+
+1. Open the **web app** on the phone (not the desktop app; the desktop app
+   cannot receive these).
+2. **Admin → Notifications**.
+3. Press **Turn on** and allow notifications when the browser asks.
+4. Press **Send a test**. The phone should buzz within a few seconds.
+
+**On an iPhone or iPad there is one extra step, and it is not optional.** Apple
+allows web notifications only for a site that has been **added to the Home
+Screen**:
+
+1. Open the app in **Safari** — Chrome on iPhone cannot do this at all.
+2. Tap the **Share** button (the square with an arrow out of the top).
+3. Scroll down, tap **Add to Home Screen**, then **Add**.
+4. Close Safari and open the app from the **new icon**.
+5. Now go to Admin → Notifications and press Turn on.
+
+Needs iOS 16.4 or newer. The Notifications screen detects this case and prints
+these steps rather than showing a switch that does nothing — but it is written
+here too, because the person asking is usually standing in the warehouse.
+
+Only people with the **Clock-in notifications** permission see the screen at all.
+Owner and Operations have it; anyone else has to be granted it under **Admin →
+Roles & Permissions** (and needs Admin access to reach the screen).
+
+### When notifications do not arrive
+
+**Nothing at all, for anybody.** Almost always `VAPID_PRIVATE_KEY`. Open the
+Worker's **Logs** tab and clock in; a missing key logs a line naming it. The
+Notifications screen shows the same message in red.
+
+**One person, everybody else fine.** Their phone dropped the subscription —
+browsers expire them. Turn it off and on again on that phone.
+
+**Everything worked, then stopped after a rotation.** Changing either key
+invalidates every phone already subscribed. Everyone turns it off and on again.
+
+**You never get notified about your own punches.** Working as intended: the
+screen you just pressed already told you, and a second buzz two seconds later is
+what teaches people to mute an app.
+
+**Dead phones clean themselves up.** A push service answering 404 or 410 means
+that subscription is gone forever, and the Worker deletes the row on the spot.
+Without that, every punch would spend longer and longer handshaking with phones
+that no longer exist.
 
 ---
 

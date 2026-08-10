@@ -1901,6 +1901,21 @@ const VAPID_MISSING_MESSAGE =
   'Cloudflare dashboard → Workers → rm-operations → Settings → Variables and Secrets → ' +
   'Add → Secret, named VAPID_PRIVATE_KEY (see docs/CLOUDFLARE.md).'
 
+/**
+ * Everyone except the person who just punched.
+ *
+ * Split out from the query for the same reason findLink parses after its LIKE:
+ * the SQL narrows and this decides. It is also the only form of this rule that
+ * can be tested without a database, and it is a rule worth testing — somebody
+ * holding the phone that clocked them in has already been told by the screen in
+ * front of them, and a second buzz two seconds later reads as a duplicate. A
+ * notification system people mute is a notification system that does nothing.
+ */
+export function notifyTargets(subscriptions, punchedBy) {
+  const self = String(punchedBy || '')
+  return (subscriptions || []).filter((s) => String(s.employee_id || '') !== self)
+}
+
 async function subscriptionsForSend(env, excludeEmployeeId) {
   await ensurePushTable(env)
   const result = await env.DB.prepare(
@@ -1910,7 +1925,7 @@ async function subscriptionsForSend(env, excludeEmployeeId) {
   )
     .bind(String(excludeEmployeeId || ''), PUSH_MAX_SUBSCRIPTIONS)
     .all()
-  return result.results || []
+  return notifyTargets(result.results || [], excludeEmployeeId)
 }
 
 async function dropSubscription(env, endpoint) {
