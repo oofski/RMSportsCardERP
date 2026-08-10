@@ -10,6 +10,7 @@ import { seedCatalogExpansion } from './inventoryCatalogV2'
 import { seedCatalogV3 } from './inventoryCatalogV3'
 import { dedupeProducts } from './dedupe'
 import { backfillLots, resyncProductAvgCosts } from './lots'
+import { backfillWorkLog } from './workLogStore'
 import { installSyncTriggers } from './syncTriggers'
 import { fingerprintOf } from './financeStreaming'
 
@@ -2347,6 +2348,123 @@ function migrate(database: Database.Database): void {
   addColumnIfMissing(database, 'invoices', 'qbo_status_attempted_at', 'TEXT')
   addColumnIfMissing(database, 'invoices', 'qbo_status_error', 'TEXT')
   setMeta(database, 'schema_version', '58')
+
+  // v59: a buyer has a phone number.
+  //
+  // Added for the QuickBooks Customer Contact List importer, which is the first
+  // thing in this app that has ever had one to store — the buyer record was
+  // built from Intuit's INVOICE template, and an invoice has no phone field on
+  // it. Their customer record does, and that is what the contact export is a
+  // rendering of.
+  //
+  // Two columns rather than one because the export labels them separately and
+  // they are separate facts. In practice the two are the same number on almost
+  // every row of a real export, so the importer stores the mobile only when it
+  // differs from the phone — a second copy of the same digits is a second thing
+  // to keep in step and buys nothing. See importContacts.
+  //
+  // Deliberately NOT on the invoices table. An invoice snapshots the buyer's
+  // name, email and address because those print on the document; a phone number
+  // does not appear on it, so a per-invoice copy would only ever go stale.
+  addColumnIfMissing(database, 'invoice_customers', 'phone', 'TEXT')
+  addColumnIfMissing(database, 'invoice_customers', 'mobile', 'TEXT')
+  setMeta(database, 'schema_version', '59')
+
+  // v60: the floor's work log — the only durable record of who did what, when.
+  //
+  // ## Why a new table was unavoidable
+  //
+  // Every stamp the bench writes lives on a DATASET table: sleeved_at and
+  // sorted_at on ship_breaks, the bag tick on ship_team_slots, packed_at and
+  // the manual status on ship_shipments. DATASET_TABLES (db/shipping.ts) is
+  // deleted wholesale by the next import. So the night before last has no
+  // stamps at all — not stale ones, none — and a performance screen offering a
+  // date range would have answered every question about every past show with
+  // silence, or worse, with the current show's figures under an old heading.
+  //
+  // ship_imports survives and carries counts, but a count of what was IMPORTED
+  // is not a record of what anybody DID, and it has no names on it.
+  //
+  // ## Why both endpoints are stored, rather than derived on read
+  //
+  // A completion stamp is not a duration. Each of the five steps derives its
+  // start from something else that is stamped — the previous step, the earliest
+  // per-card sleeve tick, a pick/pack station claim — and every one of those
+  // lives on a dataset table too. The derivation is therefore only possible
+  // WHILE THE SHOW IS STILL LOADED, which is exactly when the event is written.
+  // Resolving it later is not merely slower, it is impossible.
+  //
+  // start_basis travels with the row for the same reason: by the time anything
+  // reads this, the evidence for which rule produced started_at is gone. A NULL
+  // started_at with basis 'none' is the honest statement that no start could be
+  // established, and it is what lets the screen print a dash instead of a zero.
+  //
+  // ## The id is DERIVED, never random
+  //
+  // wl_<kind>_<subject id>. One subject has one outcome per step, so two
+  // laptops recording the same tick write the SAME row and last-write-wins
+  // compares that row against an older copy of itself — the same rule as the
+  // availability, shift and team-bag ids. A UUID here would let one bench's
+  // copy of a tick and another's both survive, and every average would count
+  // the same team twice.
+  //
+  // Un-ticking a step DELETES its row rather than blanking it. A step that was
+  // ticked by mistake did not take a measurable time; it did not happen. The
+  // delete is captured by the sync trigger like any other, so it travels.
+  //
+  // ## Operator state, not dataset state
+  //
+  // Deliberately absent from DATASET_TABLES: this is the one shipping table an
+  // import must not touch. break_id and break_label are denormalised onto every
+  // row precisely so a row still reads as "break 11A" long after that break has
+  // been overwritten by next Tuesday's break 11A.
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS ship_work_log (
+      id          TEXT PRIMARY KEY,
+      -- sleeve | sort | bag | pack | ship | break_done. See @shared/performance.
+      kind        TEXT NOT NULL,
+      -- The break, card slot, unsold-team bag or shipment this is about.
+      subject_id  TEXT NOT NULL,
+      break_id    TEXT,
+      break_label TEXT,
+      import_id   TEXT,
+      -- NULL is a real state: a stamp nobody's name was attached to.
+      employee_id TEXT,
+      -- NULL when no earlier instant could be established. NOT a zero.
+      started_at  TEXT,
+      start_basis TEXT NOT NULL DEFAULT 'none',
+      finished_at TEXT NOT NULL,
+      -- Teams, packages or a break's whole slate, so a per-team step and a
+      -- per-break step can be compared without a second table saying how many.
+      units       INTEGER NOT NULL DEFAULT 1,
+      created_at  TEXT NOT NULL,
+      updated_at  TEXT NOT NULL
+    );
+    -- The range query is always a window on finished_at, and the per-person
+    -- table is that window grouped by employee. Both are covered here rather
+    -- than scanning a log that grows by a few thousand rows a show.
+    CREATE INDEX IF NOT EXISTS idx_ship_work_log_time
+      ON ship_work_log (finished_at);
+    CREATE INDEX IF NOT EXISTS idx_ship_work_log_person
+      ON ship_work_log (employee_id, finished_at);
+  `)
+
+  // Seed it from the show currently on the floor.
+  //
+  // Without this the module opens empty on the day it ships and stays empty
+  // until the next import, which reads as "nobody did anything" rather than as
+  // "we only started recording this today". The backfill can only see the one
+  // dataset that still exists — every earlier show is genuinely unrecoverable,
+  // and the screen says so rather than implying the range was quiet.
+  //
+  // runOnce, so a re-run cannot double-count. It would not anyway (the ids are
+  // derived and the write is an upsert), but the flag also stops it re-creating
+  // rows an operator has since had un-ticked.
+  runOnce(database, 'ship_work_log_backfill_v1', () => {
+    const n = backfillWorkLog(database)
+    setMeta(database, 'ship_work_log_backfill_v1_rows', String(n))
+  })
+  setMeta(database, 'schema_version', '60')
 
   // Payroll, once, for whoever owns the company.
   //

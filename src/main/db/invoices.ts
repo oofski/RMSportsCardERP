@@ -110,6 +110,8 @@ interface CustomerRow extends AddressRow {
   id: string
   name: string
   email: string | null
+  phone: string | null
+  mobile: string | null
   terms: string
   location: string | null
   class_name: string | null
@@ -126,6 +128,8 @@ function toCustomer(r: CustomerRow): InvoiceCustomer {
     id: r.id,
     name: r.name,
     email: r.email,
+    phone: r.phone,
+    mobile: r.mobile,
     terms: asTerms(r.terms),
     location: r.location,
     className: r.class_name,
@@ -139,8 +143,8 @@ function toCustomer(r: CustomerRow): InvoiceCustomer {
   }
 }
 
-const CUSTOMER_COLS = `id, name, email, terms, location, class_name, message, notes, qbo_id,
-                       ${ADDRESS_COLS}, active, created_at, updated_at`
+const CUSTOMER_COLS = `id, name, email, phone, mobile, terms, location, class_name, message, notes,
+                       qbo_id, ${ADDRESS_COLS}, active, created_at, updated_at`
 
 export function listCustomers(includeInactive = false): InvoiceCustomer[] {
   const rows = getDb()
@@ -164,6 +168,14 @@ export interface CustomerInput {
   id?: string | null
   name: string
   email?: string | null
+  /**
+   * Omit BOTH of these entirely to leave the stored numbers alone; pass either
+   * one as null to clear them. Same contract as billAddr, for the same reason:
+   * the invoice screen saves a buyer with a name and an email and nothing else,
+   * and that must not wipe a number the contact import brought in.
+   */
+  phone?: string | null
+  mobile?: string | null
   terms?: InvoiceTerms
   location?: string | null
   className?: string | null
@@ -212,15 +224,22 @@ export function saveCustomer(input: CustomerInput): InvoiceCustomer {
 
   db.prepare(
     `INSERT INTO invoice_customers
-       (id, name, email, terms, location, class_name, message, notes, qbo_id,
+       (id, name, email, phone, mobile, terms, location, class_name, message, notes, qbo_id,
         bill_line1, bill_line2, bill_city, bill_region, bill_postal_code, bill_country,
         active, created_at, updated_at)
-     VALUES (@id, @name, @email, @terms, @location, @className, @message, @notes, @qboId,
+     VALUES (@id, @name, @email, @phone, @mobile, @terms, @location, @className, @message, @notes,
+             @qboId,
              @billLine1, @billLine2, @billCity, @billRegion, @billPostalCode, @billCountry,
              1, @createdAt, @updatedAt)
      ON CONFLICT(id) DO UPDATE SET
        name       = excluded.name,
        email      = excluded.email,
+       -- Left alone by a save that did not mention them, exactly as the address
+       -- below is. A buyer written from the invoice screen carries a name and an
+       -- email; without this guard every such save would blank a phone number
+       -- that only the contact import knows.
+       phone      = CASE WHEN @hasPhone = 1 THEN excluded.phone ELSE invoice_customers.phone END,
+       mobile     = CASE WHEN @hasPhone = 1 THEN excluded.mobile ELSE invoice_customers.mobile END,
        terms      = excluded.terms,
        location   = excluded.location,
        class_name = excluded.class_name,
@@ -250,6 +269,9 @@ export function saveCustomer(input: CustomerInput): InvoiceCustomer {
     id,
     name: input.name.trim(),
     email: clean(input.email),
+    phone: clean(input.phone),
+    mobile: clean(input.mobile),
+    hasPhone: input.phone === undefined && input.mobile === undefined ? 0 : 1,
     terms: asTerms(input.terms),
     location: clean(input.location),
     className: clean(input.className),

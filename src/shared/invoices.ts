@@ -105,6 +105,17 @@ export interface InvoiceCustomer {
   id: string
   name: string
   email: string | null
+  /**
+   * How to reach them, kept exactly as it was written.
+   *
+   * Never reformatted. This list has US, UK and Hong Kong numbers in it, in
+   * fourteen different notations, and any rule that tidies a ten-digit US number
+   * into brackets also mangles a `+44` one. A phone number is a string somebody
+   * dials, not a quantity. `mobile` is null when it is the same number as
+   * `phone`, which is what a QuickBooks export usually says.
+   */
+  phone: string | null
+  mobile: string | null
   terms: InvoiceTerms
   /** QuickBooks Location, when the company has them switched on. */
   location: string | null

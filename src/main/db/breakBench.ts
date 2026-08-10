@@ -32,6 +32,7 @@ import type {
   BreakStepState
 } from '@shared/breakSteps'
 import {
+  bagRowId,
   blockedReason,
   breakStep,
   canStartStep,
@@ -46,6 +47,7 @@ import {
   getShipBreak,
   getShipBreakAudit,
   getShipCustomer,
+  getShipTeamSlot,
   listBreakTeamBags,
   listShipBreakAudit,
   listShipBreaks,
@@ -54,6 +56,7 @@ import {
   setBreakStepStamp,
   setBreakTeamBagged
 } from './shipping'
+import { recordBagTick, recordBenchStep, recordBreakDone } from './workLog'
 
 /**
  * How many teams a break has to account for.
@@ -219,10 +222,19 @@ export function setBreakStep(
   if (done && !canStartStep(step, state)) {
     throw new Error(blockedReason(step, state) ?? 'That step cannot be started yet.')
   }
-  setBreakStepStamp(breakId, step, done, userId)
+  const after = setBreakStepStamp(breakId, step, done, userId)
+  // The stamp that was actually written, not a second call to the clock. Two
+  // readings of `now` a millisecond apart would put the work log's idea of when
+  // this happened next to the break's own and let them disagree — which is
+  // exactly the kind of drift a duration derived from the pair would inherit.
+  const stampedAt = (step === 'sleeve' ? after?.sleeve.at : after?.sort.at) ?? null
+  recordBenchStep(breakId, step, done, userId, stampedAt ?? new Date().toISOString())
   if (!done) {
     for (const later of stepsClearedBy(step)) {
-      if (later !== 'bag') setBreakStepStamp(breakId, later, false, userId)
+      if (later !== 'bag') {
+        setBreakStepStamp(breakId, later, false, userId)
+        recordBenchStep(breakId, later, false, userId, '')
+      }
     }
   }
   return getBreakBench(breakId) as BreakBenchDetail
@@ -254,10 +266,41 @@ export function setTeamBagged(
   }
 
   const slot = listShipTeamSlotsByBreak(breakId).find((s) => s.teamName === teamName)
-  if (slot) checkSlot(slot.id, bagged, userId)
-  else setBreakTeamBagged(breakId, teamName, bagged, userId)
+  // The subject a measurement hangs off, and it has to be stable: the card
+  // slot's id for a sold team, the derived bag row id for an unsold one. Both
+  // survive a re-tick, so the work log's derived row id cannot split in two.
+  let subjectId: string
+  let stampedAt: string | null
+  if (slot) {
+    checkSlot(slot.id, bagged, userId)
+    subjectId = slot.id
+    // Re-read rather than reusing the pre-write row: `checkSlot` is injected and
+    // stamps its own clock, and the whole point of the pair of endpoints is that
+    // they come from the same place the screens read.
+    stampedAt = getShipTeamSlot(slot.id)?.checkedOffAt ?? null
+  } else {
+    subjectId = bagRowId(breakId, teamName)
+    stampedAt = setBreakTeamBagged(breakId, teamName, bagged, userId).baggedAt
+  }
+  recordBagTick({
+    breakId,
+    subjectId,
+    bagged,
+    by: userId,
+    finishedAt: stampedAt ?? new Date().toISOString()
+  })
 
-  return getBreakBench(breakId) as BreakBenchDetail
+  const detail = getBreakBench(breakId) as BreakBenchDetail
+  // "How many breaks were done in the range" is the first thing the owner asked
+  // for, and it is asked long after the dataset that could answer it has been
+  // overwritten. So the moment a break comes off the bench is recorded as it
+  // happens, by the tick that did it. Re-recording an already-finished break is
+  // an upsert onto the same derived id, so a correction elsewhere on the break
+  // cannot turn one break into two.
+  if (bagged && isBreakReady(detail.state)) {
+    recordBreakDone(breakId, userId, stampedAt ?? new Date().toISOString())
+  }
+  return detail
 }
 
 // ---------------------------------------------------------------------------

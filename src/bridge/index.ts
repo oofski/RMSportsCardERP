@@ -53,6 +53,7 @@ import type {
   InvoiceTerms,
   NewInvoice
 } from '@shared/invoices'
+import type { ContactImportResult } from '@shared/contacts'
 import type {
   ShipPickAdvanced,
   ShipStationBoard,
@@ -1165,6 +1166,24 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       }): Promise<Result<InvoiceCustomer>> => ipcRenderer.invoke(IPC.invoiceCustomerSave, input),
       deleteCustomer: (id: string): Promise<Result<{ deleted: boolean }>> =>
         ipcRenderer.invoke(IPC.invoiceCustomerDelete, id),
+
+      /**
+       * Load the QuickBooks Customer Contact List off the operator's own disk.
+       *
+       * Read as BYTES for both formats. A .xlsx has no choice, and taking the
+       * same route for a .csv means the format is worked out once, from the
+       * file's first two bytes, rather than differently on each of the two
+       * transports.
+       *
+       * Safe to run twice: buyers are matched on the QuickBooks display name and
+       * every field merges, so a repeat import of the same file writes nothing.
+       */
+      importContacts: async (): Promise<Result<ContactImportResult>> => {
+        if (!ipcRenderer.pickFile) return ipcRenderer.invoke(IPC.invoiceContactsImport)
+        const upload = await ipcRenderer.pickFile({ accept: '.xlsx,.csv,.tsv,.txt', as: 'bytes' })
+        if (!upload) return { ok: false, error: 'No file selected.' }
+        return ipcRenderer.invoke(IPC.invoiceContactsImport, upload)
+      },
 
       /** Intuit's own import template on disk. Works with no connection at all. */
       exportCsv: (ids?: string[]): Promise<ExportResult> =>

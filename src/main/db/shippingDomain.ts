@@ -112,6 +112,7 @@ import {
   setTeamBagged as benchSetTeamBagged
 } from './breakBench'
 import { blockedReason, canStartStep, type BreakBenchDetail } from '@shared/breakSteps'
+import { clearWorkEvent, isSentStatus, recordPack, recordShip } from './workLog'
 import {
   computeSupplyPlan,
   costSupplyPlan,
@@ -492,7 +493,35 @@ export function setOrderStage(
     }
   }
 
-  return _orderRow(requireShipment(id))
+  // Record steps 4 and 5 against the row as it now stands, not against the
+  // arguments that produced it. `packedAt` is sticky — a package moved straight
+  // to `sent` keeps the pack stamp it already had — so reading it back is the
+  // only way the log agrees with the screen about when this box was packed.
+  const after = requireShipment(id)
+  if (stage === 'to_pick') {
+    // The pack stamp has just been cleared, so the measurements that hung off
+    // it describe work the app no longer claims happened.
+    clearWorkEvent('pack', id)
+    clearWorkEvent('ship', id)
+  } else if (stage === 'put_together' || stage === 'sent' || stage === 'all_good') {
+    if (after.packedAt) {
+      recordPack({
+        shipmentId: id,
+        customerId: after.customerId,
+        by: after.packedBy,
+        finishedAt: after.packedAt
+      })
+    }
+    // Only the two stages that mean a person said the box has gone. `exception`
+    // and `returned` describe something that happened to a package already out
+    // in the world, and the carrier sweep is handled deliberately elsewhere —
+    // see setShipmentStatus.
+    if (stage === 'sent' || stage === 'all_good') {
+      recordShip({ shipmentId: id, packedAt: after.packedAt, by: userId, finishedAt: at })
+    }
+  }
+
+  return _orderRow(after)
 }
 
 // ---------------------------------------------------------------------------

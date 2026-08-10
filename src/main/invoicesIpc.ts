@@ -1,8 +1,10 @@
-import { writeFileSync } from 'fs'
-import { BrowserWindow, dialog, shell } from 'electron'
+import { readFileSync, writeFileSync } from 'fs'
+import { basename } from 'path'
+import { BrowserWindow, dialog, shell, type OpenDialogOptions } from 'electron'
 import { ipcMain } from './ipcRegistry'
 import { IPC } from '@shared/ipc'
-import type { ExportResult, Result } from '@shared/types'
+import type { ExportResult, Result, UploadedFile } from '@shared/types'
+import type { ContactImportResult } from '@shared/contacts'
 import type {
   Invoice,
   InvoiceCustomer,
@@ -34,6 +36,8 @@ import {
   suggestInvoiceNumber,
   type CustomerInput
 } from './db/invoices'
+import { importContactFile } from './contactsImport'
+import { uploadedBytes, uploadedName } from './util'
 import { openInvoicePdf, saveInvoicePdf } from './invoicePdf'
 import {
   createQboInvoice,
@@ -181,6 +185,50 @@ export function registerInvoicesIpc(): void {
       return fail(err)
     }
   })
+
+  /**
+   * Import the QuickBooks Customer Contact List.
+   *
+   * Two ways in and one importer, the same arrangement the ledger import uses: a
+   * browser sends the file's CONTENT because it has no path it could send and a
+   * server that opened one would be reading its own disk on a caller's say-so;
+   * the desktop sends nothing and gets the native picker, because that is where
+   * the window is.
+   *
+   * BYTES EITHER WAY, even for CSV. A .xlsx has to arrive as bytes, and having
+   * one path for both formats means the format is decided in exactly one place —
+   * by the file name, below — rather than by which branch the caller took.
+   *
+   * Re-running it is safe by construction: matching is on the QuickBooks display
+   * name and every field merges, so a second import of the same file writes
+   * nothing at all. See importContacts.
+   */
+  ipcMain.handle(
+    IPC.invoiceContactsImport,
+    async (e, upload?: UploadedFile): Promise<Result<ContactImportResult>> => {
+      try {
+        requireInvoicing()
+        const bytes = uploadedBytes(upload)
+        if (bytes) return { ok: true, data: importContactFile(bytes, uploadedName(upload, '')) }
+
+        const win = BrowserWindow.fromWebContents(e.sender) ?? BrowserWindow.getFocusedWindow()
+        const opts: OpenDialogOptions = {
+          title: 'Choose the QuickBooks Customer Contact List',
+          properties: ['openFile'],
+          filters: [
+            { name: 'Spreadsheet', extensions: ['xlsx', 'csv', 'tsv', 'txt'] },
+            { name: 'All files', extensions: ['*'] }
+          ]
+        }
+        const picked = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts)
+        if (picked.canceled || !picked.filePaths[0]) return { ok: false, error: 'No file selected.' }
+        const path = picked.filePaths[0]
+        return { ok: true, data: importContactFile(readFileSync(path), basename(path)) }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
 
   // ---- Invoices -----------------------------------------------------------
   ipcMain.handle(IPC.invoicesList, (): Invoice[] => (can() ? listInvoices() : []))

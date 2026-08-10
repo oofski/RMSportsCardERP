@@ -134,6 +134,10 @@ export const IPC = {
   invoiceCustomersList: 'invoices:customers:list',
   invoiceCustomerSave: 'invoices:customers:save',
   invoiceCustomerDelete: 'invoices:customers:delete',
+  // The QuickBooks Customer Contact List, off the operator's own disk. It never
+  // leaves the machine and there is deliberately no copy of it in this repo —
+  // the list is 360 real people, and this repository is public.
+  invoiceContactsImport: 'invoices:contacts:import',
   invoicesList: 'invoices:list',
   invoiceGet: 'invoices:get',
   invoiceStats: 'invoices:stats',

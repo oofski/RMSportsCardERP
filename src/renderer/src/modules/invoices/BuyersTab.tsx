@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { InvoiceCustomer, InvoiceTerms } from '@shared/invoices'
 import { INVOICE_TERMS } from '@shared/invoices'
+import type { ContactImportResult } from '@shared/contacts'
+import { summarizeImport } from '@shared/contacts'
 import { api } from '../../lib/api'
 import { LIVE, useLiveRefresh } from '../../lib/live'
 import { Button, CenterLoader, EmptyState } from '../../components/ui'
@@ -30,6 +32,8 @@ export function BuyersTab(): JSX.Element {
   const [loading, setLoading] = useState(true)
   const [editing, setEditing] = useState<InvoiceCustomer | null>(null)
   const [adding, setAdding] = useState(false)
+  const [importing, setImporting] = useState(false)
+  const [imported, setImported] = useState<ContactImportResult | null>(null)
 
   const load = useCallback(async () => {
     const [list, invoices] = await Promise.all([api.invoices.customers(), api.invoices.list()])
@@ -78,6 +82,32 @@ export function BuyersTab(): JSX.Element {
         ? `${buyer.name} removed.`
         : `${buyer.name} retired — their invoices keep their history.`
     )
+  }
+
+  /**
+   * Bring in the QuickBooks Customer Contact List.
+   *
+   * The result is kept on screen rather than announced in a toast and lost. An
+   * import of 360 rows says something about nearly every one of them — which
+   * were added, which already existed, which had an address this app could not
+   * take apart — and a line of text that disappears after four seconds is not a
+   * report anybody can act on.
+   */
+  const importContacts = async (): Promise<void> => {
+    if (importing) return
+    setImporting(true)
+    try {
+      const res = await api.invoices.importContacts()
+      if (!res.ok || !res.data) {
+        if (res.error && res.error !== 'No file selected.') toast.error(res.error)
+        return
+      }
+      setImported(res.data)
+      await load()
+      toast.success(summarizeImport(res.data))
+    } finally {
+      setImporting(false)
+    }
   }
 
   if (loading) return <CenterLoader />
