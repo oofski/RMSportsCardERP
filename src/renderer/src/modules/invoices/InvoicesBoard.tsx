@@ -216,21 +216,11 @@ export function InvoicesBoard({
     }
   }
 
-  const sendIt = async (inv: Invoice): Promise<void> => {
-    if (busy) return
-    setBusy(inv.id)
-    try {
-      const res = await api.invoices.sendFromQbo(inv.id)
-      if (!res.ok) {
-        toast.error(res.error ?? 'QuickBooks would not send that.')
-        return
-      }
-      await load()
-      toast.success(`Sent to ${inv.email}.`)
-    } finally {
-      setBusy(null)
-    }
-  }
+  // Emailing the buyer used to be a button on every card. It is not here any
+  // more — see the note in the card footer — and the handler went with it
+  // rather than being left behind as dead code that a future edit would wire
+  // back up without re-reading why it was removed. `api.invoices.sendFromQbo`
+  // is still there for whenever this app wants to do the emailing itself.
 
   /**
    * Delete, once it has been confirmed.
@@ -397,7 +387,6 @@ export function InvoicesBoard({
                         }
                         await load()
                       }}
-                      onSend={() => void sendIt(inv)}
                       onDelete={() => setDeleting(inv)}
                       onPdf={() => void api.invoices.openPdf(inv.id)}
                     />
@@ -468,7 +457,6 @@ function InvoiceCard({
   onDragEnd,
   onMove,
   onRetryPush,
-  onSend,
   onDelete,
   onPdf
 }: {
@@ -480,7 +468,6 @@ function InvoiceCard({
   onMove: (to: InvoiceStatus) => void
   /** Try a QuickBooks push that failed on save. */
   onRetryPush: () => Promise<void>
-  onSend: () => void
   onDelete: () => void
   onPdf: () => void
 }): JSX.Element {
@@ -577,17 +564,14 @@ function InvoiceCard({
           </button>
         )}
 
-        {invoice.status === 'created' && (
-          <button
-            type="button"
-            className="btn po-move inv-move-send"
-            disabled={busy || !invoice.email}
-            title={invoice.email ? `Email it to ${invoice.email}` : 'That buyer has no email'}
-            onClick={onSend}
-          >
-            Send
-          </button>
-        )}
+        {/* SEND IS NOT ON THE CARD. It emails the invoice to the BUYER, which
+            is a different act from putting it on the books — but read as "send
+            it to QuickBooks" beside an invoice already in QuickBooks, which
+            made it look like an unfinished step on a finished document. The
+            owner does not email from here; QuickBooks does the sending, and
+            Open in QuickBooks is one click away with Send, print and payment
+            all on that screen. Emailing a buyer now happens in QuickBooks,
+            which is also where a record of having sent it lives. */}
 
         {!settled && (
           <button
@@ -600,14 +584,21 @@ function InvoiceCard({
           </button>
         )}
 
-        <button
-          type="button"
-          className="btn po-move"
-          title="Open the invoice as a PDF"
-          onClick={onPdf}
-        >
-          Open as PDF
-        </button>
+        {/* PDF ONLY WHILE IT IS STILL OURS. Once an invoice is in QuickBooks,
+            THEIR document is the one the buyer gets and the one that prints —
+            a locally rendered PDF beside it is a second version of the same
+            invoice that can quietly disagree with it. Drafts still need one,
+            because there is nothing on the other side to open yet. */}
+        {!invoice.qboId && (
+          <button
+            type="button"
+            className="btn po-move"
+            title="Open the invoice as a PDF"
+            onClick={onPdf}
+          >
+            Open as PDF
+          </button>
+        )}
 
         {invoice.qboId && (
           <button
