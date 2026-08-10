@@ -30,6 +30,10 @@ const TYPES: Record<string, string> = {
   '.mjs': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
+  // Served as octet-stream a browser ignores the manifest entirely, and iOS
+  // then never offers "Add to Home Screen" — which is the one thing that makes
+  // web push possible there at all.
+  '.webmanifest': 'application/manifest+json; charset=utf-8',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
@@ -95,7 +99,12 @@ export function serveStatic(
   // A missing ASSET is a real 404 — answering index.html for a missing bundle
   // hands the browser HTML where it expected JavaScript, and the console error
   // that follows says nothing about the deploy being incomplete.
-  if (!isFile && pathname.startsWith('/assets/')) {
+  //
+  // /sw.js is in the same category and worse. A browser handed index.html for a
+  // service worker registers HTML as a script, fails, and RETRIES on a schedule
+  // of its own for as long as the app is installed — while the notifications
+  // screen shows a toggle that turns itself back off with no error anywhere.
+  if (!isFile && (pathname.startsWith('/assets/') || pathname === '/sw.js')) {
     res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8', ...extraHeaders })
     res.end('Not found.')
     return true

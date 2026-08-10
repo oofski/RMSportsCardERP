@@ -9,9 +9,10 @@ import { EmployeesTab } from './EmployeesTab'
 import { OnboardingTab } from './OnboardingTab'
 import { RolesTab } from './RolesTab'
 import { ActivityTab } from './ActivityTab'
+import { NotificationsTab } from './NotificationsTab'
 import { DeveloperTab } from './DeveloperTab'
 
-type TabId = 'employees' | 'onboarding' | 'roles' | 'activity' | 'developer'
+type TabId = 'employees' | 'onboarding' | 'roles' | 'notifications' | 'activity' | 'developer'
 
 interface TabDef {
   id: TabId
@@ -68,6 +69,15 @@ export function AdminModule(): JSX.Element {
     // real one.
     { id: 'onboarding', label: 'Onboarding', icon: 'UserPlus', visible: can('admin.employees.view') },
     { id: 'roles', label: 'Roles & Permissions', icon: 'ShieldCheck', visible: can('admin.access') },
+    // Above the rule because it is about people, not plumbing: it decides
+    // whether a phone buzzes when a named colleague starts a shift. Its own
+    // permission rather than admin.access — see 'notifications.clock'.
+    {
+      id: 'notifications',
+      label: 'Notifications',
+      icon: 'Bell',
+      visible: can('notifications.clock')
+    },
     // ---- Everything else, behind a rule -----------------------------------
     {
       id: 'activity',
@@ -136,6 +146,7 @@ export function AdminModule(): JSX.Element {
       )}
       {active === 'onboarding' && <OnboardingTab />}
       {active === 'roles' && <RolesTab employees={employees} onChanged={loadEmployees} />}
+      {active === 'notifications' && <NotificationsTab />}
       {active === 'activity' && <ActivityTab />}
       {active === 'developer' && <DeveloperTab />}
     </div>
