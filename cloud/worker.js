@@ -11,6 +11,11 @@
  *      customers do not have one. Submissions are stored as ordinary sync rows,
  *      so they arrive on the laptops through job 1 with no extra machinery.
  *
+ *   3. THE STAFF CLOCK.  A phone, a PIN, two buttons.
+ *
+ *   4. CLOCK-IN PUSH NOTIFICATIONS.  Real W3C Web Push, signed and encrypted
+ *      here. See the "Job 4" section for why it is HERE and not in the app.
+ *
  * What this Worker is NOT: it does not run the business. It holds no logic about
  * cost, stock or orders, and it never decides anything — it stores rows and hands
  * them back in order. Every rule lives in the app, on the laptops, where it can
@@ -18,9 +23,13 @@
  *
  * Deployed from the dashboard (Workers & Pages → Create → paste this file).
  * Bindings it expects:
- *   DB          D1 database binding
- *   SHARED_KEY  secret; the shared key every laptop sends
- *   BRAND       optional plain-text var; company name shown on the public form
+ *   DB                D1 database binding
+ *   SHARED_KEY        secret; the shared key every laptop sends
+ *   BRAND             optional plain-text var; company name shown on the public form
+ *   VAPID_PRIVATE_KEY secret; 32 bytes base64url. NEVER in the repo — see docs/CLOUDFLARE.md
+ *   VAPID_PUBLIC_KEY  plain-text var; 65 bytes base64url. Not secret; the browser needs it
+ *   VAPID_SUBJECT     optional; a mailto: or https: URI a push service can use to
+ *                     contact whoever runs this. Defaults to this Worker's own origin
  *
  * No R2. R2 stores files, and nothing here is a file — the rows travel as JSON
  * in D1. R2 only becomes necessary the day product photos should travel too.
@@ -42,7 +51,12 @@ const MAX_PULL_ROWS = 1000
 const MAX_CLOCK_SKEW_MS = 5 * 60 * 1000
 
 export default {
-  async fetch(request, env) {
+  // `ctx` is Cloudflare's third argument and is what makes push notifications
+  // free at the point of use: sending one is several TLS round trips to Apple,
+  // Google and Mozilla, and nobody pressing "Clock in" on a warehouse phone
+  // should wait for them. ctx.waitUntil keeps the Worker alive to finish that
+  // work AFTER the response has already gone back. See scheduleAfterResponse.
+  async fetch(request, env, ctx) {
     const url = new URL(request.url)
     const path = url.pathname.replace(/\/+$/, '') || '/'
 
@@ -64,7 +78,7 @@ export default {
       // lets a caller read and write the whole company, and it is not going on
       // a phone. They authenticate as themselves, with their own PIN.
       if (path === '/clock' && request.method === 'GET') return clockPage(env)
-      if (path.startsWith('/clock/api/')) return clockApi(request, env, path)
+      if (path.startsWith('/clock/api/')) return clockApi(request, env, path, ctx, url.origin)
 
       // ---- Job 1: sync. Everything below needs the shared key. -------------
       if (!authorized(request, env)) {
@@ -72,14 +86,62 @@ export default {
       }
 
       if (path === '/v1/state' && request.method === 'GET') return state(env)
-      if (path === '/v1/push' && request.method === 'POST') return push(request, env)
+      if (path === '/v1/push' && request.method === 'POST') return push(request, env, ctx, url.origin)
       if (path === '/v1/pull' && request.method === 'GET') return pull(url, env)
       if (path === '/v1/reset' && request.method === 'POST') return reset(request, env)
+
+      // ---- Job 4: web push. Behind the shared key because the APP SERVER is
+      // what calls these, never a browser. A phone has no shared key, so its
+      // subscription travels browser → app (session cookie, permission check) →
+      // relay (shared key). That is also why there are no CORS headers on the
+      // replies: nothing cross-origin is supposed to reach this.
+      if (path === '/v1/push-notify/key' && request.method === 'GET') return pushKey(env, url.origin)
+      if (path === '/v1/push-notify/subscribe' && request.method === 'POST') {
+        return pushSubscribe(request, env)
+      }
+      if (path === '/v1/push-notify/unsubscribe' && request.method === 'POST') {
+        return pushUnsubscribe(request, env)
+      }
+      if (path === '/v1/push-notify/list' && request.method === 'GET') return pushList(url, env)
+      if (path === '/v1/push-notify/test' && request.method === 'POST') {
+        return pushTest(request, env, url.origin)
+      }
+      if (path === '/v1/push-notify/generate-keys' && request.method === 'POST') {
+        return generateVapidKeys()
+      }
 
       return json({ ok: false, error: 'Not found.' }, 404)
     } catch (err) {
       return json({ ok: false, error: String((err && err.message) || err) }, 500)
     }
+  }
+}
+
+/**
+ * Run work after the response has been sent, or inline when there is no runtime
+ * to hold the Worker open.
+ *
+ * The fallback is not decoration. `ctx` is absent in tests and in any harness
+ * that calls a route function directly, and a floating promise there is work
+ * that silently never happens — which for a notification means "it worked in
+ * production and did nothing in the suite", the exact shape of bug this repo
+ * keeps writing comments about.
+ */
+async function scheduleAfterResponse(ctx, task) {
+  if (ctx && typeof ctx.waitUntil === 'function') {
+    ctx.waitUntil(
+      task().catch((err) => {
+        // A failed notification must never turn a successful punch into a 500.
+        // The punch is the record; the push is a courtesy on top of it.
+        console.log('push: ' + String((err && err.message) || err))
+      })
+    )
+    return
+  }
+  try {
+    await task()
+  } catch (err) {
+    console.log('push: ' + String((err && err.message) || err))
   }
 }
 
@@ -197,7 +259,7 @@ async function state(env) {
  * DELIVERY order, not an edit order: a row updated today must be handed to
  * everyone who has not seen today's version, regardless of where it sat before.
  */
-async function push(request, env) {
+async function push(request, env, ctx, origin) {
   const body = await readJson(request)
   const rows = Array.isArray(body.rows) ? body.rows : []
   const device = String(body.device || '').slice(0, 100)
@@ -208,6 +270,19 @@ async function push(request, env) {
     const seq = await env.DB.prepare('SELECT value FROM sync_seq WHERE id = 1').first()
     return json({ ok: true, accepted: 0, cursor: seq ? Number(seq.value) : 0 })
   }
+
+  // What the timesheet rows in this batch looked like BEFORE it landed.
+  //
+  // Read here, not after, because the whole point is the difference: a punch is
+  // an EDIT to a row, and only the before-and-after says whether somebody
+  // started a shift, ended one, or whether an admin merely corrected a note on
+  // a shift that ended last Tuesday. Guessing from the incoming row alone would
+  // send a "clocked in" every time any laptop re-pushed an old entry.
+  const timeIds = []
+  for (const row of rows) {
+    if (String(row && row.kind) === 'time_entries' && row.id) timeIds.push(String(row.id))
+  }
+  const before = await readTimeEntries(env, timeIds)
 
   const ceiling = Date.now() + MAX_CLOCK_SKEW_MS
   const nowIso = new Date().toISOString()
@@ -243,7 +318,55 @@ async function push(request, env) {
   }
 
   if (statements.length > 0) await env.DB.batch(statements)
+
+  // And what they look like now.
+  //
+  // Re-read rather than assuming the pushed row won: the INSERT above carries a
+  // last-write-wins guard, so a laptop that has been offline for a week can push
+  // a stale punch that is correctly refused. Comparing against what is actually
+  // STORED means a refused write sends no notification, and it means pushing the
+  // same batch twice — which retries do — is silent the second time.
+  if (timeIds.length > 0) {
+    const after = await readTimeEntries(env, timeIds)
+    const events = []
+    for (const id of timeIds) {
+      const kind = clockTransition(before.get(id) || null, after.get(id) || null)
+      if (kind) events.push({ kind, entry: after.get(id) })
+    }
+    if (events.length > 0) {
+      await scheduleAfterResponse(ctx, () => notifyClockEvents(env, events, origin))
+    }
+  }
+
   return json({ ok: true, accepted: statements.length, cursor: end })
+}
+
+/** The stored time_entries rows for a set of ids, parsed, keyed by id. */
+async function readTimeEntries(env, ids) {
+  const found = new Map()
+  if (!ids || ids.length === 0) return found
+  // Bound the IN list rather than expanding it to whatever a caller sent: a push
+  // may carry 500 rows, and D1 has a limit on bound parameters per statement.
+  const unique = [...new Set(ids)].slice(0, MAX_PUSH_ROWS)
+  const marks = unique.map((_, i) => '?' + (i + 1)).join(', ')
+  const result = await env.DB.prepare(
+    'SELECT id, deleted, data FROM sync_rows WHERE kind = ' +
+      "'time_entries'" +
+      ' AND id IN (' +
+      marks +
+      ')'
+  )
+    .bind(...unique)
+    .all()
+  for (const row of result.results || []) {
+    if (row.deleted) continue
+    try {
+      found.set(String(row.id), JSON.parse(row.data))
+    } catch {
+      // A row that will not parse is not an entry.
+    }
+  }
+  return found
 }
 
 /**
@@ -775,7 +898,7 @@ function cleanCoord(v) {
   return n
 }
 
-async function clockApi(request, env, path) {
+async function clockApi(request, env, path, ctx, origin) {
   const route = path.slice('/clock/api/'.length)
 
   if (route === 'login' && request.method === 'POST') return clockLogin(request, env)
@@ -795,7 +918,7 @@ async function clockApi(request, env, path) {
   }
 
   if (route === 'session' && request.method === 'GET') return clockSession(env, emp)
-  if (route === 'punch' && request.method === 'POST') return clockPunch(request, env, emp)
+  if (route === 'punch' && request.method === 'POST') return clockPunch(request, env, emp, ctx, origin)
   if (route === 'timesheet' && request.method === 'GET') return clockTimesheet(request, env, emp)
   return json({ ok: false, error: 'Not found.' }, 404)
 }
@@ -860,7 +983,7 @@ async function clockSession(env, emp) {
  * moment of the press, so a phone whose screen is out of date cannot open two
  * shifts by pressing the stale button.
  */
-async function clockPunch(request, env, emp) {
+async function clockPunch(request, env, emp, ctx, origin) {
   const body = await readJson(request)
   const lat = cleanCoord(body.lat)
   const lng = cleanCoord(body.lng)
@@ -878,6 +1001,11 @@ async function clockPunch(request, env, emp) {
       clock_out_place: place
     }
     await writeSyncRow(env, 'time_entries', open.id, updated)
+    // No before/after diffing needed on this path: the portal is the thing that
+    // made the change, so it already knows which way the punch went.
+    await scheduleAfterResponse(ctx, () =>
+      notifyClockEvents(env, [{ kind: 'out', entry: updated }], origin)
+    )
     return json({ ok: true, action: 'out', at: now, entryId: open.id })
   }
 
@@ -901,6 +1029,9 @@ async function clockPunch(request, env, emp) {
     clock_out_place: null
   }
   await writeSyncRow(env, 'time_entries', id, record)
+  await scheduleAfterResponse(ctx, () =>
+    notifyClockEvents(env, [{ kind: 'in', entry: record }], origin)
+  )
   return json({ ok: true, action: 'in', at: now, entryId: id })
 }
 
