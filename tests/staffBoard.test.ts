@@ -650,6 +650,25 @@ const nextWeekday = (target: number): string => {
   }
   return plus(1)
 }
+
+const dayAfter = (day: string, n: number): string =>
+  new Date(Date.parse(`${day}T12:00:00Z`) + n * 86400000).toISOString().slice(0, 10)
+
+/**
+ * TWO KINDS OF WEEK, and picking the wrong one breaks the suite on some
+ * weekdays and not others — which is worse than breaking it always, because it
+ * passes in CI on a Wednesday and fails on somebody's Monday.
+ *
+ * THESE THREE are read out of a ROLLING window, `plus(1)` to `plus(7)`, so each
+ * one has to sit inside the next seven days on its own account. `nextWeekday`
+ * is exactly that and they stay independent. Anchoring them to the Monday would
+ * push Thursday past the end of the window whenever the next Monday is late in
+ * it — which is what happens every Monday.
+ *
+ * The pair in section 12 is the opposite case: that window is opened AT a
+ * Monday and runs seven days from there, so its Tuesday has to be that
+ * Monday's. See `tue2`.
+ */
 const mon = nextWeekday(1)
 const tue = nextWeekday(2)
 const thu = nextWeekday(4)
@@ -743,7 +762,13 @@ addPerson('emp_sam', 'Sam', 'Achebe')
 // rather than "cannot work", and that is what the flag is for.
 
 const mon2 = nextWeekday(1)
-const tue2 = nextWeekday(2)
+// THE TUESDAY OF mon2's WEEK, not the next Tuesday from today. The window
+// below opens at mon2 and runs seven days; an independent nextWeekday(2) is
+// only inside it four days out of seven. Run on a Monday, the next Tuesday is
+// tomorrow while the next Monday is a week away, so every lookup into that
+// window came back undefined and eight assertions failed with nothing at all
+// wrong in the code they were testing. See the note on `mon` above.
+const tue2 = dayAfter(mon2, 1)
 schedule.setPattern('emp_pat', [
   { weekday: weekdayOf(mon2), status: 'available', startTime: '16:00', endTime: '21:00' },
   { weekday: weekdayOf(tue2), status: 'unavailable', note: 'Class' }
