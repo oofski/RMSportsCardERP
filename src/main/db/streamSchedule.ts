@@ -100,10 +100,13 @@ export function listUpcoming(limit = 12): ScheduledStream[] {
        ORDER BY s.starts_at ASC
        LIMIT ?`
     )
-    // A little slack behind now, so a show that was due five minutes ago and
-    // has not been started yet is still on the screen of the person who is
-    // supposed to be starting it. Dropping it at the stroke of nine would hide
-    // the row exactly when it matters most.
+    // An hour of slack BEHIND now, so a show that was due at nine and has not
+    // been started yet is still on the screen of the person who is supposed to
+    // be starting it. Dropping it at the stroke of nine would hide the row
+    // exactly when it matters most — and the row is the "Start now" button.
+    //
+    // Nothing is reminded about in that hour: the relay's window closes before
+    // the start, whatever this list chooses to show.
     .all(new Date(Date.now() - 60 * 60_000).toISOString(), Math.max(1, Math.min(100, limit))) as ScheduleRow[]
   return rows.map(toPlan)
 }

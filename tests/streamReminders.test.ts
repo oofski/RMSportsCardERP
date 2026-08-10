@@ -168,6 +168,16 @@ ok(!reminderDue(SHOW + 60 * MIN, SHOW, 60), 'and nothing fires an hour after it 
 ok(!reminderDue(Number.NaN, SHOW, 60), 'an unreadable clock fires nothing')
 ok(!reminderDue(SHOW - 60 * MIN, Number.NaN, 60), 'and neither does an unreadable start')
 
+// "Nothing once the show has started" is redundant at the two leads shipping
+// today — both windows close five minutes clear of the start — and it is not
+// decoration. It is the rule the owner actually asked for, and it is the only
+// thing standing between a phone and a reminder about a show already on air the
+// day somebody adds a lead SHORTER than the window. Exercised at lead 5, where
+// the window would otherwise run straight past the start.
+ok(!reminderDue(SHOW, SHOW, 5), 'a lead shorter than the window still fires nothing at the start')
+ok(!reminderDue(SHOW + 2 * MIN, SHOW, 5), 'nor two minutes into the show')
+ok(reminderDue(SHOW - MIN, SHOW, 5), 'though it is still due a minute before it')
+
 // THE INVARIANT THAT MAKES THE WHOLE THING WORK. A window narrower than the cron
 // interval leaves gaps that a show can start in the middle of, and the failure is
 // total silence for that show.
@@ -379,7 +389,10 @@ ok(
 )
 
 let dueDrift = 0
-for (const lead of REMINDER_LEADS) {
+// Lead 5 is not shipped and is swept anyway: it is the case where the "not once
+// it has started" guard is load-bearing, and a copy that dropped it would agree
+// with the other everywhere else.
+for (const lead of [...REMINDER_LEADS, 5]) {
   for (let delta = -125 * MIN; delta <= 10 * MIN; delta += 30_000) {
     const now = SHOW + delta
     if (reminderDue(now, SHOW, lead) !== streamReminderDue(now, SHOW, lead)) dueDrift += 1
