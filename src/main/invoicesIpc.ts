@@ -177,14 +177,17 @@ export function registerInvoicesIpc(): void {
     }
   })
 
-  ipcMain.handle(IPC.invoiceCustomerDelete, (_e, id: unknown): Result<{ deleted: boolean }> => {
-    try {
-      requireInvoicing()
-      return { ok: true, data: removeCustomer(str(id)) }
-    } catch (err) {
-      return fail(err)
+  ipcMain.handle(
+    IPC.invoiceCustomerDelete,
+    (_e, id: unknown): Result<{ deleted: boolean; keptAsVendor: boolean }> => {
+      try {
+        requireInvoicing()
+        return { ok: true, data: removeCustomer(str(id)) }
+      } catch (err) {
+        return fail(err)
+      }
     }
-  })
+  )
 
   /**
    * Import the QuickBooks Customer Contact List.

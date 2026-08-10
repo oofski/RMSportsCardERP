@@ -1091,7 +1091,7 @@ function contactDetail(c: {
 }
 
 /**
- * Everyone this business has bought from — the Vendors list.
+ * Everyone this business buys from — the Vendors list.
  *
  * ## Why this is not listSupplierSuggestions with a different name
  *
@@ -1102,10 +1102,14 @@ function contactDetail(c: {
  * the size of the contact list rather than the size of the vendor list, which
  * is the exact failure the tile exists to avoid.
  *
- * So the direction is reversed. Names come only from what was BOUGHT, and the
- * contact list is consulted afterwards, purely to fill in a way to reach them.
+ * So the contact list is NOT offered wholesale. Names come from what was bought
+ * and from the contacts explicitly FLAGGED as vendors by the directory import,
+ * and those are two different claims: the first is "money went to them", the
+ * second is "the owner put them on the list of people we buy from". Both are
+ * answers to the question this screen asks. A customer who has never sold us
+ * anything is neither, and still does not appear.
  *
- * ## Two sources, because stock arrives two ways
+ * ## Three sources, because stock arrives two ways and a directory is the third
  *
  * A purchase order is the paperwork path. But `addStock` takes a vendor
  * directly — that is somebody typing a case straight onto the shelf with no PO
@@ -1113,6 +1117,13 @@ function contactDetail(c: {
  * vendor list that could not see those receipts would be missing the suppliers
  * used most casually. `inventory_lots.vendor` is read for exactly that, and a
  * vendor known ONLY that way still gets a row.
+ *
+ * The third is the imported directory — contacts flagged is_vendor. It carries
+ * no figures at all, because a directory entry is not a transaction, and that is
+ * precisely why it had to be a separate source rather than a fourth column on
+ * one of the other two: a business the owner has found and not yet ordered from
+ * has nothing in either table to be found by, and would otherwise be invisible
+ * on the screen listing who we can buy from.
  *
  * ## Case is folded TWICE, and the two do different jobs
  *
@@ -1159,11 +1170,16 @@ export function listVendors(): VendorSummary[] {
     )
     .all() as Array<{ name: string; receipts: number; last_at: string }>
 
+  // Ordered here rather than sorted later, so the directory-only vendors — which
+  // all share a null lastAt and would otherwise come back in whatever order
+  // SQLite felt like — land alphabetically at the bottom of the list instead of
+  // shuffling between two reads of the same unchanged data.
   const contacts = db
     .prepare(
-      `SELECT name, email, phone, mobile, bill_city, bill_region
+      `SELECT name, email, phone, mobile, bill_city, bill_region, is_vendor, vendor_label
          FROM invoice_customers
-        WHERE active = 1`
+        WHERE active = 1
+        ORDER BY name COLLATE NOCASE ASC`
     )
     .all() as Array<{
     name: string
@@ -1172,13 +1188,17 @@ export function listVendors(): VendorSummary[] {
     mobile: string | null
     bill_city: string | null
     bill_region: string | null
+    is_vendor: number
+    vendor_label: string | null
   }>
   const byName = new Map(contacts.map((c) => [c.name.toLowerCase(), c]))
 
-  // Folded again in JS rather than trusting the two GROUP BYs to have produced
+  // Folded again in JS rather than trusting the GROUP BYs to have produced
   // matching keys: a PO backfilled the lot's vendor column, so the two tables
   // hold the same names, and one collation quirk between them would list a
-  // distributor twice on a screen whose whole job is to be the list.
+  // distributor twice on a screen whose whole job is to be the list. The
+  // directory joins through the same fold for the same reason — the owner's
+  // sheet spells a distributor properly and the purchase order shouts it.
   const merged = new Map<string, VendorSummary>()
   const rowFor = (name: string): VendorSummary => {
     const key = name.toLowerCase()
@@ -1187,6 +1207,8 @@ export function listVendors(): VendorSummary[] {
     const fresh: VendorSummary = {
       name,
       detail: null,
+      onFile: false,
+      label: null,
       orders: 0,
       ordered: 0,
       receipts: 0,
@@ -1217,13 +1239,41 @@ export function listVendors(): VendorSummary[] {
     noteSeen(row, r.last_at)
   }
 
+  // The directory, last, and it brings no figures — only the fact that somebody
+  // put this business on the list of people we buy from, and what they file them
+  // under. A name in here with nothing above it is a vendor with no activity,
+  // which is a real and useful thing to know: it is a supplier who has been
+  // found and not yet ordered from.
+  for (const c of contacts) {
+    if (c.is_vendor !== 1) continue
+    const row = rowFor(c.name)
+    // THE DIRECTORY'S SPELLING WINS, which is the opposite of the rule one loop
+    // up, and deliberately so. A lot's vendor is a backfilled copy of a purchase
+    // order, so between those two the document is the better source. A directory
+    // record is not a copy of anything — it is a name somebody deliberately
+    // curated, where a PO supplier is free text typed at speed on a form with no
+    // spell-check. Taking the PO's would also make the name on this screen flip
+    // spelling every time somebody raised an order in a hurry.
+    row.name = c.name
+    row.onFile = true
+    row.label = c.vendor_label
+  }
+
   for (const row of merged.values()) {
     const contact = byName.get(row.name.toLowerCase())
     if (contact) row.detail = contactDetail(contact)
   }
 
   // Most recently dealt with first. The same ordering the supplier box uses, and
-  // for the same reason: a list of everyone we have ever bought from is only
-  // useful if the ones still being bought from are at the top of it.
-  return [...merged.values()].sort((a, b) => (b.lastAt ?? '').localeCompare(a.lastAt ?? ''))
+  // for the same reason: a list of everyone we buy from is only useful if the
+  // ones still being bought from are at the top of it.
+  //
+  // The tiebreak is what keeps the directory readable. Every vendor who has never
+  // been ordered from has a null lastAt, so without it 151 imported names would
+  // come back in map-insertion order — which is stable enough to look deliberate
+  // and arbitrary enough to be unfindable.
+  return [...merged.values()].sort((a, b) => {
+    const when = (b.lastAt ?? '').localeCompare(a.lastAt ?? '')
+    return when !== 0 ? when : a.name.toLowerCase().localeCompare(b.name.toLowerCase())
+  })
 }

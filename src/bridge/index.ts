@@ -517,16 +517,35 @@ export function createBridge(ipcRenderer: BridgeTransport) {
        */
       suppliers: (): Promise<SupplierSuggestion[]> => ipcRenderer.invoke(IPC.poSuppliers),
       /**
-       * Who this business has bought from — Admin → Vendors.
+       * Who this business buys from — Admin → Vendors.
        *
        * NOT `suppliers()` filtered in the renderer. That call deliberately
        * offers every contact whether or not anything was ever bought from
        * them, so counting its result would put the size of the contact list on
-       * a tile labelled Vendors. This one is derived from purchase orders and
-       * stock receipts only; see @shared/purchaseOrders for why a vendor has no
-       * record of its own to be listed from.
+       * a tile labelled Vendors. This one merges what was actually bought —
+       * purchase orders and stock receipts — with the contacts explicitly
+       * flagged as vendors by the directory import, and says on each row which
+       * of the two it came from.
        */
       vendors: (): Promise<VendorSummary[]> => ipcRenderer.invoke(IPC.poVendors),
+
+      /**
+       * Load the owner's vendor sheet off their own disk.
+       *
+       * Read as BYTES for both formats, for the reason the contact import gives:
+       * a .xlsx has no choice, and taking the same route for a .csv means the
+       * format is worked out once, from the file's first two bytes, rather than
+       * differently on each of the two transports.
+       *
+       * Safe to run twice: vendors are matched on their name and every field
+       * merges, so a repeat import of the same sheet writes nothing.
+       */
+      importVendors: async (): Promise<Result<ContactImportResult>> => {
+        if (!ipcRenderer.pickFile) return ipcRenderer.invoke(IPC.poVendorsImport)
+        const upload = await ipcRenderer.pickFile({ accept: '.xlsx,.csv,.tsv,.txt', as: 'bytes' })
+        if (!upload) return { ok: false, error: 'No file selected.' }
+        return ipcRenderer.invoke(IPC.poVendorsImport, upload)
+      },
       thumbnails: (): Promise<Record<string, string>> => ipcRenderer.invoke(IPC.poThumbnails),
       incomingBoxes: (): Promise<PurchaseOrderDetail[]> => ipcRenderer.invoke(IPC.poIncomingBoxes),
       scanIn: (id: string): Promise<Result<PurchaseOrderDetail>> =>
@@ -1224,7 +1243,15 @@ export function createBridge(ipcRenderer: BridgeTransport) {
         billAddr?: InvoiceAddress | null
         qboId?: string | null
       }): Promise<Result<InvoiceCustomer>> => ipcRenderer.invoke(IPC.invoiceCustomerSave, input),
-      deleteCustomer: (id: string): Promise<Result<{ deleted: boolean }>> =>
+      /**
+       * Remove a buyer — three outcomes, and the caller has to say which.
+       *
+       * `deleted` false with `keptAsVendor` false means they had invoices and
+       * were retired instead. `keptAsVendor` true means the record survives
+       * because it is also in the vendor directory and deleting it would take a
+       * supplier's address away from a screen this gesture never mentioned.
+       */
+      deleteCustomer: (id: string): Promise<Result<{ deleted: boolean; keptAsVendor: boolean }>> =>
         ipcRenderer.invoke(IPC.invoiceCustomerDelete, id),
 
       /**

@@ -258,8 +258,14 @@ export function splitDisplayName(raw: string): SplitName {
  * addresses, they are invisible on screen, and left alone they make two copies
  * of the same buyer name compare as different — which is exactly the duplicate
  * this importer exists to avoid.
+ *
+ * Exported because @shared/vendors folds names with it as well. ONE definition
+ * on purpose: both importers key on a name COLLATE NOCASE, and two slightly
+ * different ideas of what whitespace to fold would let the same business be
+ * filed twice — once by the customer list and once by the vendor list — which
+ * is the exact duplicate a single contact table was chosen to prevent.
  */
-function collapse(v: string | undefined | null): string {
+export function collapse(v: string | undefined | null): string {
   // JS regex \s already covers the non-breaking spaces this export carries
   // inside addresses, so one pass folds every kind of whitespace at once.
   return (v ?? '').replace(/\s+/g, ' ').trim()

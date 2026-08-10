@@ -20456,6 +20456,18 @@ button.sor-team:focus-visible {
   color: var(--text-2);
 }
 
+/* The owner's own filing label for a vendor, under the business name. Quiet and
+   secondary because it is not the name anything is keyed on — a purchase order
+   matches on the business name — but it is what they recognise the row by, so
+   it earns the second line rather than a tooltip nobody hovers. Only rendered
+   when it says something the name does not; see parseVendorSheet. */
+.vendor-label {
+  margin-top: 2px;
+  font-size: 11.5px;
+  font-weight: 400;
+  color: var(--text-3);
+}
+
 /* ---------------------------------------------------------------------------
    Employee performance.
 

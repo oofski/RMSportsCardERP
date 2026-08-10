@@ -1,3 +1,6 @@
+import { BrowserWindow, dialog, type OpenDialogOptions } from 'electron'
+import { readFileSync } from 'fs'
+import { basename } from 'path'
 import { ipcMain } from './ipcRegistry'
 import { IPC } from '@shared/ipc'
 import type {
@@ -7,8 +10,10 @@ import type {
   PurchaseOrder,
   PurchaseOrderDetail,
   PurchaseOrderStatus,
-  Result
+  Result,
+  UploadedFile
 } from '@shared/types'
+import type { ContactImportResult } from '@shared/contacts'
 import {
   isPurchaseOrderStatus,
   type SupplierSuggestion,
@@ -35,6 +40,8 @@ import {
 } from './db/purchaseOrders'
 import { listCogsEntries } from './db/finance'
 import { getProduct, productThumbnails, searchCatalog } from './db/inventory'
+import { importVendorFile } from './vendorsImport'
+import { uploadedBytes, uploadedName } from './util'
 
 function can(permission: Permission): boolean {
   const user = currentUser()
@@ -83,6 +90,56 @@ export function registerPurchaseOrdersIpc(): void {
   ipcMain.handle(IPC.poVendors, (): VendorSummary[] =>
     can('module.invoicing') ? listVendors() : []
   )
+  /**
+   * Import the owner's vendor sheet.
+   *
+   * Two ways in and one importer, the same arrangement the contact import and
+   * the ledger import both use: a browser sends the file's CONTENT because it
+   * has no path it could send and a server that opened one would be reading its
+   * own disk on a caller's say-so; the desktop sends nothing and gets the native
+   * picker, because that is where the window is.
+   *
+   * BYTES EITHER WAY, even for CSV. A .xlsx has to arrive as bytes, and having
+   * one path for both formats means the format is decided in exactly one place —
+   * from the file's first two bytes, in importFile.ts — rather than by which
+   * branch the caller took.
+   *
+   * A WRITE, so it takes requireInvoicing rather than the softer `can` the reads
+   * above use: this one adds contact records to a synced table, and an empty
+   * list is a reasonable answer to a read that is not permitted while silently
+   * doing nothing is not a reasonable answer to an import.
+   *
+   * Re-running it is safe by construction: vendors are matched on the name and
+   * every field merges, so a second import of the same sheet writes nothing at
+   * all. See importVendors.
+   */
+  ipcMain.handle(
+    IPC.poVendorsImport,
+    async (e, upload?: UploadedFile): Promise<Result<ContactImportResult>> => {
+      try {
+        requireInvoicing()
+        const bytes = uploadedBytes(upload)
+        if (bytes) return { ok: true, data: importVendorFile(bytes, uploadedName(upload, '')) }
+
+        const win = BrowserWindow.fromWebContents(e.sender) ?? BrowserWindow.getFocusedWindow()
+        const opts: OpenDialogOptions = {
+          title: 'Choose the vendor list',
+          properties: ['openFile'],
+          filters: [
+            { name: 'Spreadsheet', extensions: ['xlsx', 'csv', 'tsv', 'txt'] },
+            { name: 'All files', extensions: ['*'] }
+          ]
+        }
+        const picked = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts)
+        if (picked.canceled || !picked.filePaths[0]) return { ok: false, error: 'No file selected.' }
+        const path = picked.filePaths[0]
+        return { ok: true, data: importVendorFile(readFileSync(path), basename(path)) }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
   ipcMain.handle(IPC.poThumbnails, (): Record<string, string> =>
     can('module.invoicing') ? productThumbnails() : {}
   )

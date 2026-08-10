@@ -184,9 +184,12 @@ export function AdminModule(): JSX.Element {
       count: customerCount,
       hint: 'Who buys from us'
     },
-    // DERIVED, not a table. See VendorsTab and listVendors() — the count is how
-    // many distinct names purchase orders and stock receipts have between them,
-    // which is the only true answer this schema can give to "how many vendors".
+    // Half derived, half imported, and the tile prints the union. See VendorsTab
+    // and listVendors(): distinct names across purchase orders, stock receipts
+    // and the contacts flagged as vendors by the directory import. Deliberately
+    // NOT the size of the contact list — a customer who has never sold us
+    // anything is not a vendor, and a tile labelled Vendors showing the buyer
+    // count is the exact failure the separate query exists to avoid.
     {
       id: 'vendors',
       label: 'Vendors',

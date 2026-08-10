@@ -191,6 +191,13 @@ export const IPC = {
   // offers the whole contact list as things you might type, this one lists only
   // names that money has gone to.
   poVendors: 'po:vendors',
+  // The owner's vendor sheet, off their own disk. It never leaves the machine
+  // and there is deliberately no copy of it in this repo — the list is 151 real
+  // businesses with street addresses, and this repository is public. Filed with
+  // the PO channels because Admin → Vendors is where it is run from, though what
+  // it writes is a contact record: see db/vendorImport.ts for why there is no
+  // separate vendor table.
+  poVendorsImport: 'po:vendors:import',
   poThumbnails: 'po:thumbnails',
   poIncomingBoxes: 'po:incoming-boxes',
   poScanIn: 'po:scan-in',

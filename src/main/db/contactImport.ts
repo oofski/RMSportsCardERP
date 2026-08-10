@@ -61,6 +61,7 @@ import { getDb } from './database'
 interface ExistingRow {
   id: string
   name: string
+  is_customer: number
   email: string | null
   phone: string | null
   mobile: string | null
@@ -129,21 +130,28 @@ export function importContacts(sheet: ParsedContactSheet, source: string): Conta
   const stamp = new Date().toISOString()
 
   const find = db.prepare(
-    `SELECT id, name, email, phone, mobile,
+    `SELECT id, name, is_customer, email, phone, mobile,
             bill_line1, bill_line2, bill_city, bill_region, bill_postal_code, bill_country
        FROM invoice_customers
       WHERE name = ? COLLATE NOCASE`
   )
+  // is_customer is stated rather than left to the column default, because since
+  // v62 this table also holds the vendor directory and the default is only right
+  // for a row nobody has classified. A business already on file as a VENDOR that
+  // now turns up on the QuickBooks customer export is both, and the update below
+  // says so — otherwise it would be imported successfully and still not appear on
+  // the customer list, which looks exactly like the import having skipped it.
   const insert = db.prepare(
     `INSERT INTO invoice_customers
-       (id, name, email, phone, mobile, terms, active, created_at, updated_at,
+       (id, name, email, phone, mobile, terms, active, is_customer, created_at, updated_at,
         bill_line1, bill_line2, bill_city, bill_region, bill_postal_code, bill_country)
-     VALUES (@id, @name, @email, @phone, @mobile, 'Net 30', 1, @stamp, @stamp,
+     VALUES (@id, @name, @email, @phone, @mobile, 'Net 30', 1, 1, @stamp, @stamp,
              @line1, @line2, @city, @region, @postalCode, @country)`
   )
   const update = db.prepare(
     `UPDATE invoice_customers
-        SET email            = @email,
+        SET is_customer      = 1,
+            email            = @email,
             phone            = @phone,
             mobile           = @mobile,
             bill_line1       = @line1,
@@ -208,6 +216,7 @@ export function importContacts(sheet: ParsedContactSheet, source: string): Conta
         : storedAddress(existing)
 
     const unchanged =
+      existing.is_customer === 1 &&
       same(merged.email, existing.email) &&
       same(merged.phone, existing.phone) &&
       same(merged.mobile, existing.mobile) &&

@@ -2564,6 +2564,54 @@ function migrate(database: Database.Database): void {
   })
   setMeta(database, 'schema_version', '61')
 
+  // v62: a contact can be somebody we buy from, somebody we sell to, or BOTH.
+  //
+  // ## Why the vendor directory landed on invoice_customers and not a new table
+  //
+  // The alternative was a vendors table with its own id, its own name and its
+  // own address columns. @shared/purchaseOrders already carries the written
+  // rejection of that, and the reason is not tidiness: several of the businesses
+  // on the owner's vendor list are also on the customer list, so a second table
+  // means the same shop exists twice, under two ids, with two addresses. The
+  // first time somebody corrects a phone number on one copy the other is wrong,
+  // silently, and nothing in the schema can even notice.
+  //
+  // One table, one row per business, one place to correct it.
+  //
+  // ## Two independent flags, NOT one kind column
+  //
+  // The obvious shape is a single kind TEXT holding customer / vendor / both.
+  // It is wrong, and specifically it is wrong in the direction that loses data:
+  // it makes "both" a THIRD value that every query has to remember, so the
+  // natural predicate for the customer list — kind = 'customer' — silently drops
+  // every business that also sells to us. That failure is invisible on the
+  // screen that has it (the list still looks like a list) and it is exactly the
+  // overlap this change exists to represent.
+  //
+  // Two booleans make each question one predicate that CANNOT forget the
+  // overlap: is_customer = 1 is the customer list, is_vendor = 1 is the vendor
+  // directory, and a business that is both matches both without anybody writing
+  // an OR.
+  //
+  // is_customer defaults to 1 because every row already in this table got here
+  // as a buyer — through the invoice screen, the buyer form or the QuickBooks
+  // contact import — and a default of 0 would empty the customer list on upgrade.
+  // is_vendor defaults to 0 for the mirror-image reason: nothing in the table
+  // has ever been asserted to be a supplier.
+  addColumnIfMissing(database, 'invoice_customers', 'is_customer', 'INTEGER NOT NULL DEFAULT 1')
+  addColumnIfMissing(database, 'invoice_customers', 'is_vendor', 'INTEGER NOT NULL DEFAULT 0')
+  // What the OWNER files them under, which is not always what the business calls
+  // itself: a shorthand, an initialism, sometimes a bracketed filing code. Kept
+  // in its own column rather than folded into the name because the name is the
+  // KEY — it has to match what somebody types on a purchase order — and rewriting
+  // it to include a filing label would stop that match working. Kept rather than
+  // dropped because it is the only column in the owner's sheet that says
+  // something the others do not, and it is how they recognise the row.
+  //
+  // NOT notes: notes is typed in this app and an import must never overwrite it.
+  addColumnIfMissing(database, 'invoice_customers', 'vendor_label', 'TEXT')
+  setMeta(database, 'schema_version', '62')
+
   // Payroll, once, for whoever owns the company.
   //
   // Seeded rather than left to be typed because the owner named it, named its

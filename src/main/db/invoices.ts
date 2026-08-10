@@ -146,11 +146,23 @@ function toCustomer(r: CustomerRow): InvoiceCustomer {
 const CUSTOMER_COLS = `id, name, email, phone, mobile, terms, location, class_name, message, notes,
                        qbo_id, ${ADDRESS_COLS}, active, created_at, updated_at`
 
+/**
+ * The buyers.
+ *
+ * `is_customer = 1` and not merely "every row in the table", because since v62
+ * this table also holds the vendor directory — the same table on purpose, so a
+ * business that both buys and sells is ONE record (see the v62 note in
+ * database.ts). Without this predicate importing 151 suppliers would add 151
+ * names to the customer list, to the sales-order buyer picker and to the count
+ * on the Admin tile, none of whom has ever bought anything.
+ *
+ * A contact who is both matches this and the vendor list, which is the point.
+ */
 export function listCustomers(includeInactive = false): InvoiceCustomer[] {
   const rows = getDb()
     .prepare(
       `SELECT ${CUSTOMER_COLS} FROM invoice_customers
-        ${includeInactive ? '' : 'WHERE active = 1'}
+        WHERE is_customer = 1 ${includeInactive ? '' : 'AND active = 1'}
         ORDER BY name COLLATE NOCASE ASC`
     )
     .all() as CustomerRow[]
@@ -226,14 +238,23 @@ export function saveCustomer(input: CustomerInput): InvoiceCustomer {
     `INSERT INTO invoice_customers
        (id, name, email, phone, mobile, terms, location, class_name, message, notes, qbo_id,
         bill_line1, bill_line2, bill_city, bill_region, bill_postal_code, bill_country,
-        active, created_at, updated_at)
+        active, is_customer, created_at, updated_at)
      VALUES (@id, @name, @email, @phone, @mobile, @terms, @location, @className, @message, @notes,
              @qboId,
              @billLine1, @billLine2, @billCity, @billRegion, @billPostalCode, @billCountry,
-             1, @createdAt, @updatedAt)
+             1, 1, @createdAt, @updatedAt)
      ON CONFLICT(id) DO UPDATE SET
        name       = excluded.name,
        email      = excluded.email,
+       -- Saving somebody from the buyer screen IS the assertion that they are a
+       -- buyer, so it is made here. It matters for the by-name branch above: a
+       -- business already on file as a vendor and now being sold to must join the
+       -- customer list rather than get a second record under the same name.
+       --
+       -- is_vendor is deliberately not mentioned. This screen knows nothing about
+       -- the buy side, and clearing a flag it was never shown would delete a
+       -- vendor from the directory as a side effect of correcting an email.
+       is_customer = 1,
        -- Left alone by a save that did not mention them, exactly as the address
        -- below is. A buyer written from the invoice screen carries a name and an
        -- email; without this guard every such save would blank a phone number
@@ -300,8 +321,18 @@ export function saveCustomer(input: CustomerInput): InvoiceCustomer {
  * the name it was raised under, so deleting the record would not corrupt a
  * document — but it would break "show me everything this buyer has bought",
  * which is the one question a customer list exists to answer.
+ *
+ * ## And never deleted at all when they are also a vendor
+ *
+ * Since v62 one row can be both sides of the business. Deleting a buyer who is
+ * also on the vendor list would take a supplier's address off the vendor
+ * directory from a screen that does not show the vendor directory and gives no
+ * hint that it is about to — which is precisely the failure mode a single
+ * contact table was chosen to prevent, arriving from the other direction. So
+ * they stop being a customer and stay a vendor, and the caller is told which of
+ * the three things happened so the confirmation can say it out loud.
  */
-export function removeCustomer(id: string): { deleted: boolean } {
+export function removeCustomer(id: string): { deleted: boolean; keptAsVendor: boolean } {
   const db = getDb()
   const used = db.prepare(`SELECT COUNT(*) AS n FROM invoices WHERE customer_id = ?`).get(id) as {
     n: number
@@ -311,10 +342,19 @@ export function removeCustomer(id: string): { deleted: boolean } {
       nowIso(),
       id
     )
-    return { deleted: false }
+    return { deleted: false, keptAsVendor: false }
+  }
+  const row = db.prepare(`SELECT is_vendor FROM invoice_customers WHERE id = ?`).get(id) as
+    | { is_vendor: number }
+    | undefined
+  if (row?.is_vendor === 1) {
+    db.prepare(
+      `UPDATE invoice_customers SET is_customer = 0, updated_at = ? WHERE id = ?`
+    ).run(nowIso(), id)
+    return { deleted: false, keptAsVendor: true }
   }
   db.prepare(`DELETE FROM invoice_customers WHERE id = ?`).run(id)
-  return { deleted: true }
+  return { deleted: true, keptAsVendor: false }
 }
 
 // ---------------------------------------------------------------------------

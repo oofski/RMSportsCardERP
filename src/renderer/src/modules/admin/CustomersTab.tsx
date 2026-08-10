@@ -7,6 +7,7 @@ import { api } from '../../lib/api'
 import { LIVE, useLiveRefresh } from '../../lib/live'
 import { Button, CenterLoader, EmptyState } from '../../components/ui'
 import { Icon } from '../../components/Icon'
+import { ImportReport } from '../../components/ImportReport'
 import { useToast } from '../../components/Toast'
 import { formatMoney } from '../../lib/format'
 
@@ -89,13 +90,17 @@ export function CustomersTab(): JSX.Element {
       return
     }
     await load()
-    // Retired vs deleted is a real difference and the toast says which happened
-    // — somebody who expects a name gone and finds it merely hidden should not
-    // have to work that out from the list.
+    // Removed vs retired vs still-a-vendor is a real difference and the toast
+    // says which happened — somebody who expects a name gone and finds it merely
+    // hidden should not have to work that out from the list. The third case is
+    // the one nobody would guess: the record survives because it is also in the
+    // vendor directory, and this screen never mentions vendors.
     toast.success(
       res.data?.deleted
         ? `${customer.name} removed.`
-        : `${customer.name} retired — their invoices keep their history.`
+        : res.data?.keptAsVendor
+          ? `${customer.name} is no longer a customer — their record stays on the vendor list.`
+          : `${customer.name} retired — their invoices keep their history.`
     )
   }
 
@@ -274,105 +279,6 @@ function whereFrom(b: InvoiceCustomer): string {
   const local = [a.city, a.region].filter(Boolean).join(', ')
   if (local) return a.country && a.country !== 'United States' ? `${local}, ${a.country}` : local
   return a.country ?? ''
-}
-
-/**
- * What the import did, kept on screen until it is dismissed.
- *
- * Three lists, and they are three different things:
- *
- *   SKIPPED   a row that produced no buyer. The report footer QuickBooks prints
- *             at the bottom of every export lands here every time, which is
- *             correct and is why the reason is spelled out rather than counted.
- *   NOTES     a buyer WAS imported, but something in the row could not be filed
- *             — nearly always an address written on one line. Nothing was lost:
- *             the text is on the record and prints; only the city column is
- *             empty. Naming the rows is what lets somebody tidy them.
- *   UNCHANGED not a failure. Re-importing the same file writes nothing, and the
- *             count is how the operator can tell that is what happened.
- */
-function ImportReport({
-  result,
-  onDismiss
-}: {
-  result: ContactImportResult
-  onDismiss: () => void
-}): JSX.Element {
-  const [open, setOpen] = useState<'skipped' | 'notes' | null>(null)
-  const toggle = (which: 'skipped' | 'notes'): void => setOpen((v) => (v === which ? null : which))
-
-  return (
-    <div className="panel-card ci-report">
-      <div className="ci-report-head">
-        <div>
-          <h3>Imported {result.source}</h3>
-          <p>
-            {result.rowsSeen} {result.rowsSeen === 1 ? 'row' : 'rows'} read.
-          </p>
-        </div>
-        <button className="icon-btn" title="Dismiss" onClick={onDismiss}>
-          <Icon name="X" size={16} />
-        </button>
-      </div>
-
-      <div className="ci-counts">
-        <div className="ci-count">
-          <b>{result.added}</b>
-          <span>added</span>
-        </div>
-        <div className="ci-count">
-          <b>{result.updated}</b>
-          <span>updated</span>
-        </div>
-        <div className="ci-count">
-          <b>{result.unchanged}</b>
-          <span>already up to date</span>
-        </div>
-        <button
-          type="button"
-          className={`ci-count ci-count-btn ${result.skipped.length ? 'warn' : ''}`}
-          disabled={result.skipped.length === 0}
-          onClick={() => toggle('skipped')}
-        >
-          <b>{result.skipped.length}</b>
-          <span>skipped</span>
-        </button>
-        <button
-          type="button"
-          className={`ci-count ci-count-btn ${result.notes.length ? 'warn' : ''}`}
-          disabled={result.notes.length === 0}
-          onClick={() => toggle('notes')}
-        >
-          <b>{result.notes.length}</b>
-          <span>needs a look</span>
-        </button>
-      </div>
-
-      {open === 'skipped' && (
-        <ul className="ci-list">
-          {result.skipped.map((s) => (
-            <li key={`${s.row}-${s.reason}`}>
-              <span className="ci-row">Row {s.row}</span>
-              <span className="ci-who">{s.label || '(blank)'}</span>
-              <span className="ci-why">{s.reason}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {open === 'notes' && (
-        <ul className="ci-list">
-          {result.notes.map((n, i) => (
-            <li key={`${n.row}-${i}`}>
-              <span className="ci-row">Row {n.row}</span>
-              <span className="ci-who">{n.name}</span>
-              <span className="ci-why">{n.note}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  )
 }
 
 function CustomerForm({
