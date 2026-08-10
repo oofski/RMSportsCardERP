@@ -55,6 +55,7 @@ import type {
   NewInvoice
 } from '@shared/invoices'
 import type { ContactImportResult } from '@shared/contacts'
+import type { ClockPushState, PushSubscriptionInput } from '@shared/webPush'
 import type { SupplierSuggestion } from '@shared/purchaseOrders'
 import type {
   ShipPickAdvanced,
@@ -1002,6 +1003,23 @@ export function createBridge(ipcRenderer: BridgeTransport) {
         ipcRenderer.on(IPC.syncChangedEvent, listener)
         return () => ipcRenderer.removeListener(IPC.syncChangedEvent, listener)
       }
+    },
+    /**
+     * Clock-in push notifications.
+     *
+     * The browser gets its own subscription from the push service and hands the
+     * three public values here; the relay does the signing and encrypting. No
+     * VAPID private key and no relay key ever reaches this side — see
+     * @shared/webPush for why the middleman exists at all.
+     */
+    push: {
+      state: (): Promise<ClockPushState> => ipcRenderer.invoke(IPC.pushState),
+      subscribe: (input: PushSubscriptionInput): Promise<Result<{ ok: true }>> =>
+        ipcRenderer.invoke(IPC.pushSubscribe, input),
+      unsubscribe: (endpoint: string): Promise<Result<{ ok: true }>> =>
+        ipcRenderer.invoke(IPC.pushUnsubscribe, endpoint),
+      test: (): Promise<Result<{ sent: number; dropped: number; failed: number }>> =>
+        ipcRenderer.invoke(IPC.pushTest)
     },
     intake: {
       links: (): Promise<IntakeLink[]> => ipcRenderer.invoke(IPC.intakeLinks),

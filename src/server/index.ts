@@ -16,6 +16,7 @@ import { registerStreamingIpc } from '../main/streamingIpc'
 import { registerQuickBooksIpc } from '../main/quickbooksIpc'
 import { registerFinanceIpc } from '../main/financeIpc'
 import { registerSyncIpc } from '../main/syncIpc'
+import { registerPushIpc } from '../main/pushIpc'
 import { registerOwnerIpc } from '../main/ownerIpc'
 import { registerScheduleIpc } from '../main/scheduleIpc'
 import { registerInvoicesIpc } from '../main/invoicesIpc'
@@ -821,6 +822,7 @@ export function startServer(options: ServerOptions = {}): Server {
   registerQuickBooksIpc()
   registerFinanceIpc()
   registerSyncIpc()
+  registerPushIpc()
   // Was missing, and its absence was invisible: the owner's home board and the
   // reminders inbox simply 404'd on the server while working on the desktop.
   registerOwnerIpc()

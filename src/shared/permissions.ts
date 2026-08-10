@@ -76,6 +76,7 @@ export type Permission =
   | 'admin.employees.manage'
   | 'admin.hours.view'
   | 'admin.roles.manage'
+  | 'notifications.clock'
   // Available to everyone
   | 'updates.check'
   // Module access (built out over time)
@@ -128,6 +129,22 @@ export const PERMISSIONS: PermissionDefinition[] = [
     key: 'admin.roles.manage',
     label: 'Manage roles & permissions',
     description: 'Change roles and (later) fine-grained permissions.',
+    group: 'Administration'
+  },
+  // A permission of its own rather than a corner of admin.access, because what
+  // it grants is a live feed of when named colleagues start and finish work,
+  // delivered to a personal phone. That is a supervisory capability and a
+  // privacy boundary — the same class of thing as the customer-list export —
+  // and it should be possible to give somebody the roster screens without it,
+  // or it without the roster screens.
+  //
+  // The screen lives inside the Admin module, so granting this to a person who
+  // does not already have admin.access means granting that too.
+  {
+    key: 'notifications.clock',
+    label: 'Clock-in notifications',
+    description:
+      'Turn on push notifications to your own phone when anyone clocks in or out. Shows who and when.',
     group: 'Administration'
   },
   {
@@ -219,6 +236,8 @@ const OPERATIONS_PERMISSIONS: Permission[] = [
   'admin.employees.view',
   'admin.employees.manage',
   'admin.hours.view',
+  // Whoever runs the floor is the person who needs to know a shift started.
+  'notifications.clock',
   'updates.check',
   'module.inventory',
   'inventory.manage',

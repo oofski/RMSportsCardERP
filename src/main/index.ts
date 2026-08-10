@@ -13,6 +13,7 @@ import { registerStreamingIpc } from './streamingIpc'
 import { registerQuickBooksIpc } from './quickbooksIpc'
 import { registerFinanceIpc } from './financeIpc'
 import { registerSyncIpc } from './syncIpc'
+import { registerPushIpc } from './pushIpc'
 import { registerOwnerIpc } from './ownerIpc'
 import { registerScheduleIpc } from './scheduleIpc'
 import { registerInvoicesIpc } from './invoicesIpc'
@@ -107,6 +108,7 @@ app.whenReady().then(() => {
   registerQuickBooksIpc()
   registerFinanceIpc()
   registerSyncIpc()
+  registerPushIpc()
   registerOwnerIpc()
   registerScheduleIpc()
   registerInvoicesIpc()

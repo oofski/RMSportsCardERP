@@ -443,6 +443,16 @@ export const IPC = {
   /** Push: rows landed from another machine — screens showing them are stale. */
   syncChangedEvent: 'sync:changed-event',
 
+  // Clock-in push notifications.
+  //
+  // The app is the authenticated middleman only: it holds the relay's shared
+  // key, the browser holds a session, and neither ever holds the other's. All
+  // the signing and encrypting happens in the Worker — see @shared/webPush.
+  pushState: 'push:state',
+  pushSubscribe: 'push:subscribe',
+  pushUnsubscribe: 'push:unsubscribe',
+  pushTest: 'push:test',
+
   // Public intake form
   intakeLinks: 'intake:links',
   intakeLinkCreate: 'intake:link:create',

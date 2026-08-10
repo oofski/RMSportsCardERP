@@ -193,7 +193,17 @@ function announceChange(kinds: string[]): void {
 // Transport
 // ---------------------------------------------------------------------------
 
-async function call(
+/**
+ * The ONE place that knows the relay's address, its key and how it fails.
+ *
+ * Exported so services/webPush.ts can reach the notification routes without a
+ * second copy of the address resolution, the bearer header, the 30-second
+ * timeout and — most of all — the "that is not a URL, it is the key" check
+ * below, which took a week to diagnose the first time and would be worth
+ * exactly nothing sitting in only one of two callers.
+ */
+
+export async function call(
   path: string,
   init: { method: 'GET' | 'POST'; body?: unknown }
 ): Promise<Record<string, unknown>> {

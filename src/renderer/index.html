@@ -8,6 +8,21 @@
       content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' blob:; worker-src 'self' blob:; frame-src 'self' blob:"
     />
     <title>RM Operations App</title>
+    <!--
+      The web app's installable identity. Harmless in Electron, which loads this
+      file over file:// and ignores both tags.
+
+      On iOS these are not decoration and not optional: Safari refuses web push
+      entirely unless the site has been ADDED TO THE HOME SCREEN, and it will
+      only offer that for a page with a manifest. The apple-touch-icon is a
+      second, older mechanism iOS still reads for the home-screen icon itself —
+      without it the icon is a blurry screenshot of the login page.
+    -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/app-icon-512.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="RM Ops" />
+    <meta name="theme-color" content="#12141a" />
   </head>
   <body>
     <div id="root"></div>

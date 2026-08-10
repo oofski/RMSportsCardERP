@@ -26,10 +26,13 @@
  *   DB                D1 database binding
  *   SHARED_KEY        secret; the shared key every laptop sends
  *   BRAND             optional plain-text var; company name shown on the public form
- *   VAPID_PRIVATE_KEY secret; 32 bytes base64url. NEVER in the repo — see docs/CLOUDFLARE.md
- *   VAPID_PUBLIC_KEY  plain-text var; 65 bytes base64url. Not secret; the browser needs it
+ *   VAPID_PRIVATE_KEY secret; 32 bytes base64url. REQUIRED for notifications, and the
+ *                     one thing here with no default. NEVER in the repo — see
+ *                     docs/CLOUDFLARE.md. Missing it is logged loudly on every punch
+ *   VAPID_PUBLIC_KEY  optional plain-text var; overrides VAPID_PUBLIC_KEY_DEFAULT below,
+ *                     which is where the public half normally lives. Not a secret
  *   VAPID_SUBJECT     optional; a mailto: or https: URI a push service can use to
- *                     contact whoever runs this. Defaults to this Worker's own origin
+ *                     contact whoever runs this. Defaults to VAPID_SUBJECT_DEFAULT below
  *
  * No R2. R2 stores files, and nothing here is a file — the rows travel as JSON
  * in D1. R2 only becomes necessary the day product photos should travel too.
@@ -78,7 +81,7 @@ export default {
       // lets a caller read and write the whole company, and it is not going on
       // a phone. They authenticate as themselves, with their own PIN.
       if (path === '/clock' && request.method === 'GET') return clockPage(env)
-      if (path.startsWith('/clock/api/')) return clockApi(request, env, path, ctx, url.origin)
+      if (path.startsWith('/clock/api/')) return clockApi(request, env, path, ctx)
 
       // ---- Job 1: sync. Everything below needs the shared key. -------------
       if (!authorized(request, env)) {
@@ -86,7 +89,7 @@ export default {
       }
 
       if (path === '/v1/state' && request.method === 'GET') return state(env)
-      if (path === '/v1/push' && request.method === 'POST') return push(request, env, ctx, url.origin)
+      if (path === '/v1/push' && request.method === 'POST') return push(request, env, ctx)
       if (path === '/v1/pull' && request.method === 'GET') return pull(url, env)
       if (path === '/v1/reset' && request.method === 'POST') return reset(request, env)
 
@@ -259,7 +262,7 @@ async function state(env) {
  * DELIVERY order, not an edit order: a row updated today must be handed to
  * everyone who has not seen today's version, regardless of where it sat before.
  */
-async function push(request, env, ctx, origin) {
+async function push(request, env, ctx) {
   const body = await readJson(request)
   const rows = Array.isArray(body.rows) ? body.rows : []
   const device = String(body.device || '').slice(0, 100)
@@ -334,7 +337,7 @@ async function push(request, env, ctx, origin) {
       if (kind) events.push({ kind, entry: after.get(id) })
     }
     if (events.length > 0) {
-      await scheduleAfterResponse(ctx, () => notifyClockEvents(env, events, origin))
+      await scheduleAfterResponse(ctx, () => notifyClockEvents(env, events))
     }
   }
 
@@ -898,7 +901,7 @@ function cleanCoord(v) {
   return n
 }
 
-async function clockApi(request, env, path, ctx, origin) {
+async function clockApi(request, env, path, ctx) {
   const route = path.slice('/clock/api/'.length)
 
   if (route === 'login' && request.method === 'POST') return clockLogin(request, env)
@@ -918,7 +921,7 @@ async function clockApi(request, env, path, ctx, origin) {
   }
 
   if (route === 'session' && request.method === 'GET') return clockSession(env, emp)
-  if (route === 'punch' && request.method === 'POST') return clockPunch(request, env, emp, ctx, origin)
+  if (route === 'punch' && request.method === 'POST') return clockPunch(request, env, emp, ctx)
   if (route === 'timesheet' && request.method === 'GET') return clockTimesheet(request, env, emp)
   return json({ ok: false, error: 'Not found.' }, 404)
 }
@@ -983,7 +986,7 @@ async function clockSession(env, emp) {
  * moment of the press, so a phone whose screen is out of date cannot open two
  * shifts by pressing the stale button.
  */
-async function clockPunch(request, env, emp, ctx, origin) {
+async function clockPunch(request, env, emp, ctx) {
   const body = await readJson(request)
   const lat = cleanCoord(body.lat)
   const lng = cleanCoord(body.lng)
@@ -1004,7 +1007,7 @@ async function clockPunch(request, env, emp, ctx, origin) {
     // No before/after diffing needed on this path: the portal is the thing that
     // made the change, so it already knows which way the punch went.
     await scheduleAfterResponse(ctx, () =>
-      notifyClockEvents(env, [{ kind: 'out', entry: updated }], origin)
+      notifyClockEvents(env, [{ kind: 'out', entry: updated }])
     )
     return json({ ok: true, action: 'out', at: now, entryId: open.id })
   }
@@ -1030,7 +1033,7 @@ async function clockPunch(request, env, emp, ctx, origin) {
   }
   await writeSyncRow(env, 'time_entries', id, record)
   await scheduleAfterResponse(ctx, () =>
-    notifyClockEvents(env, [{ kind: 'in', entry: record }], origin)
+    notifyClockEvents(env, [{ kind: 'in', entry: record }])
   )
   return json({ ok: true, action: 'in', at: now, entryId: id })
 }
@@ -1388,12 +1391,20 @@ function clockHtml(body, status = 200) {
  * Both are done by hand with WebCrypto. There is no npm here — this file is
  * PASTED into the Cloudflare dashboard — so `web-push` is not an option, and a
  * bundler would be a build step the deployment story does not have.
+ *
+ * ## Why so much of this section is exported
+ *
+ * Hand-rolled crypto that nobody can run is hand-rolled crypto that is wrong.
+ * The named exports below exist purely so tests/webPush.test.ts can call the
+ * REAL functions — generating throwaway keys at runtime, encrypting, and then
+ * decrypting the result itself to prove the bytes are what a phone will be able
+ * to open. The Cloudflare runtime only ever calls the default export's fetch.
  */
 
 /** Room for a name and a timestamp with a very great deal to spare. */
-const PUSH_RECORD_SIZE = 4096
+export const PUSH_RECORD_SIZE = 4096
 /** One AES-GCM tag (16) plus the record delimiter (1). */
-const PUSH_MAX_PLAINTEXT = PUSH_RECORD_SIZE - 17
+export const PUSH_MAX_PLAINTEXT = PUSH_RECORD_SIZE - 17
 /**
  * How long a push service should hold a notification for a phone that is off.
  *
@@ -1403,7 +1414,7 @@ const PUSH_MAX_PLAINTEXT = PUSH_RECORD_SIZE - 17
  */
 const PUSH_TTL_SECONDS = 6 * 60 * 60
 /** RFC 8292 caps a VAPID token at 24h. Half that leaves room for clock skew. */
-const VAPID_JWT_TTL_SECONDS = 12 * 60 * 60
+export const VAPID_JWT_TTL_SECONDS = 12 * 60 * 60
 /** A ceiling so a bug in a client loop cannot grow this table without bound. */
 const PUSH_MAX_SUBSCRIPTIONS = 500
 
@@ -1426,7 +1437,7 @@ const PUSH_MAX_SUBSCRIPTIONS = 500
  * The PRIVATE half is a Cloudflare secret and appears nowhere in this
  * repository. This repository is public.
  */
-const VAPID_PUBLIC_KEY_DEFAULT =
+export const VAPID_PUBLIC_KEY_DEFAULT =
   'BKqBBWG-N2QzNFKzvwIvJgavQ89ZD2yTynktJIQcgeBzkItdByFR3CCY69CQWBRlYx2B-0cVQPwlrLChcror7S8'
 
 /**
@@ -1442,7 +1453,7 @@ const VAPID_PUBLIC_KEY_DEFAULT =
  * "notifications don't arrive", never as anything naming the subject. Hence
  * VAPID_SUBJECT_RE and the loud log in vapidSubject().
  */
-const VAPID_SUBJECT_DEFAULT = 'mailto:team.rmsportscardz@gmail.com'
+export const VAPID_SUBJECT_DEFAULT = 'mailto:team.rmsportscardz@gmail.com'
 const VAPID_SUBJECT_RE = /^(mailto:[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+|https:\/\/[^\s<>]+)$/
 
 // ---------------------------------------------------------------------------
@@ -1558,7 +1569,7 @@ export function vapidAudience(endpoint) {
  * own copy: two hand-pasted values that must agree are two values that will
  * eventually not, and the failure is silent — every push 401s.
  */
-async function vapidSigningKey(env) {
+export async function vapidSigningKey(env) {
   if (!String(env.VAPID_PRIVATE_KEY || '').trim()) {
     throw new Error(
       'VAPID_PRIVATE_KEY is not set on this Worker, so no notification can be signed or sent. ' +
@@ -1619,7 +1630,7 @@ export async function signVapidJwt(signingKey, { audience, subject, expiresAtSec
 }
 
 /** The public half: the file's copy unless a variable deliberately overrides it. */
-function vapidPublicKey(env) {
+export function vapidPublicKey(env) {
   return String((env && env.VAPID_PUBLIC_KEY) || '').trim() || VAPID_PUBLIC_KEY_DEFAULT
 }
 
@@ -1637,7 +1648,7 @@ function vapidPublicKey(env) {
  * malformed contact address is a reason to shout, not a reason to leave a shift
  * unannounced.
  */
-function vapidSubject(env) {
+export function vapidSubject(env) {
   const configured = String((env && env.VAPID_SUBJECT) || '').trim()
   if (!configured) return VAPID_SUBJECT_DEFAULT
   if (VAPID_SUBJECT_RE.test(configured)) return configured
@@ -1912,7 +1923,7 @@ async function dropSubscription(env, endpoint) {
  * Returns the status rather than throwing on a bad one, because the CALLER is
  * what decides whether a status means "delete this row" — see deliverPush.
  */
-async function sendOnePush(env, subscription, payloadBytes) {
+export async function sendOnePush(env, subscription, payloadBytes) {
   const audience = vapidAudience(subscription.endpoint)
   const signingKey = await vapidSigningKey(env)
   const jwt = await signVapidJwt(signingKey, {
@@ -1955,7 +1966,7 @@ async function sendOnePush(env, subscription, payloadBytes) {
  * every time there was somebody to notify. `wrangler tail` or the dashboard's
  * live log is where that lands.
  */
-async function notifyClockEvents(env, events, origin) {
+async function notifyClockEvents(env, events) {
   if (!events || events.length === 0) return
   if (!vapidConfigured(env)) {
     const waiting = await subscriptionCount(env)
@@ -2185,8 +2196,9 @@ async function pushTest(request, env) {
  * Mint a VAPID key pair and hand both halves back, once.
  *
  * Nothing is stored: this is a generator, not a key store. The operator pastes
- * the private half into a Worker secret and the public half into a Worker
- * variable, and this route never needs calling again.
+ * the private half into the VAPID_PRIVATE_KEY secret and the public half into
+ * VAPID_PUBLIC_KEY_DEFAULT in this file (or the VAPID_PUBLIC_KEY variable), and
+ * this route never needs calling again.
  *
  * It exists because the documented deployment story for this relay is "no
  * command line, no wrangler, paste a file into a dashboard", and the ordinary
@@ -2204,7 +2216,12 @@ async function generateVapidKeys() {
     ok: true,
     publicKey: b64urlFromBytes(publicKey),
     privateKey: jwk.d,
-    note: 'privateKey is a SECRET. Paste it into the Worker secret VAPID_PRIVATE_KEY and nowhere else.'
+    note:
+      'privateKey is a SECRET: paste it into the Worker secret VAPID_PRIVATE_KEY and nowhere ' +
+      'else — never into a chat, an issue or a commit. publicKey is not secret and belongs in ' +
+      'VAPID_PUBLIC_KEY_DEFAULT in cloud/worker.js (or the VAPID_PUBLIC_KEY variable). ' +
+      'Changing either one invalidates every phone already subscribed; they have to turn ' +
+      'notifications off and on again.'
   })
 }
 
