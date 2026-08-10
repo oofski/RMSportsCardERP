@@ -69,6 +69,32 @@ function formatLocalTime(iso) {
 }
 
 /**
+ * "in 47 minutes" / "in 3 minutes" / "now".
+ *
+ * Computed HERE, against the phone's own clock at the moment the notification is
+ * drawn, rather than taken from the `lead` the relay sent. That is the whole
+ * point: a push can sit in Apple's or Google's queue for minutes, and a
+ * notification that says "in 15 minutes" while the phone draws it four minutes
+ * before the show is a lie the phone was in a position not to tell.
+ *
+ * A start already in the past reads as overdue rather than as a countdown. It
+ * still draws — on most platforms a push handler that displays NOTHING
+ * eventually costs the site its permission to send any at all, so "this should
+ * have started" is both the honest line and the safe one.
+ */
+function countdown(iso) {
+  var when = new Date(iso)
+  if (isNaN(when.getTime())) return ''
+  var minutes = Math.round((when.getTime() - Date.now()) / 60000)
+  if (minutes <= -1) return 'overdue'
+  if (minutes <= 0) return 'now'
+  if (minutes === 1) return 'in 1 minute'
+  if (minutes < 60) return 'in ' + minutes + ' minutes'
+  var hours = Math.round(minutes / 60)
+  return hours === 1 ? 'in about an hour' : 'in about ' + hours + ' hours'
+}
+
+/**
  * Turn the payload into the two lines a person actually reads.
  *
  * Defensive about every field, because this runs on a payload that came off the
@@ -81,6 +107,25 @@ function describe(data) {
   }
   const name = typeof data.name === 'string' && data.name ? data.name : 'Someone'
   const at = formatLocalTime(data.at)
+
+  /**
+   * A scheduled show, an hour out and again a quarter of an hour out.
+   *
+   * ONE TAG PER SHOW, so the second reminder REPLACES the first rather than
+   * leaving two notifications about the same stream stacked on a lock screen.
+   * renotify keeps it audible — silently swapping the text would mean the
+   * fifteen-minute warning that nobody noticed.
+   */
+  if (data.kind === 'stream') {
+    const soon = countdown(data.at)
+    const show = typeof data.title === 'string' && data.title ? data.title : 'Stream'
+    return {
+      title: soon === 'overdue' ? show + ' was due to start' : show + ' starts ' + soon,
+      body: (at ? at + ' — s' : 'S') + 'tart the stream on the RM Operations App.',
+      tag: 'rmops-stream-' + (data.id || show),
+      renotify: true
+    }
+  }
 
   if (data.kind === 'test') {
     return {

@@ -2612,6 +2612,69 @@ function migrate(database: Database.Database): void {
   addColumnIfMissing(database, 'invoice_customers', 'vendor_label', 'TEXT')
   setMeta(database, 'schema_version', '62')
 
+  // v63: a show that has not happened yet.
+  //
+  // Nothing in this app could say "we are streaming on Friday at nine". A
+  // stream_sessions row is the RECORD of a night — an absolute window, opened by
+  // Start stream or typed in afterwards — and every reader of that table assumes
+  // its start is in the past. The reminders the owner asked for need the other
+  // fact, so the other fact needs a table.
+  //
+  // ## Why not a 'scheduled' status on stream_sessions
+  //
+  // It looks like the smaller change and it is the more expensive one.
+  //
+  // sessionsOverlap treats a session with no end as running to the END OF TIME,
+  // because a live show does. A plan parked in that table with no end would
+  // therefore collide with every later window — Start stream would be refused
+  // with "that overlaps ..." from tonight onwards, and it would be refused on
+  // laptops that have not updated too, because the overlap rule is theirs as
+  // well.
+  //
+  // And the P&L, the calendar totals and the ledger attribution all range over
+  // stream_sessions. A plan has no stock, no cost and no revenue, so every one
+  // of those readers would need a new exclusion — and the one that gets missed
+  // reports a night that has not happened.
+  //
+  // ## WALL CLOCK AND INSTANT, both, on purpose
+  //
+  // stream_date + start_time is the INTENTION: "9:00 PM on Friday", which stays
+  // 9:00 PM across a daylight-saving boundary. That is what the screen shows and
+  // what somebody would say out loud, and it is the same shape as `shifts`.
+  //
+  // starts_at is the same moment as an INSTANT, converted once on the machine
+  // that scheduled it, where the local zone is known. It exists because the
+  // relay does the arithmetic — "one hour before" — and a Cloudflare Worker runs
+  // in UTC with no idea what zone this business is in. Asking it to read
+  // "21:00" would put every reminder out by the local offset, and it would look
+  // like the notification system was broken rather than a date conversion. See
+  // @shared/streamReminders.
+  //
+  // No foreign key on host_id or session_id, matching every other synced table
+  // here: the relay applies rows one at a time on the recovery path, and a plan
+  // naming an employee whose row has not landed yet must still land.
+  database.exec(
+    `CREATE TABLE IF NOT EXISTS stream_schedule (
+       id          TEXT PRIMARY KEY,
+       title       TEXT NOT NULL DEFAULT '',
+       stream_date TEXT NOT NULL,
+       start_time  TEXT NOT NULL,
+       starts_at   TEXT NOT NULL,
+       host_id     TEXT,
+       note        TEXT,
+       status      TEXT NOT NULL DEFAULT 'planned',
+       session_id  TEXT,
+       created_at  TEXT NOT NULL,
+       updated_at  TEXT NOT NULL,
+       created_by  TEXT
+     );
+     CREATE INDEX IF NOT EXISTS idx_stream_schedule_when
+       ON stream_schedule (status, starts_at);
+     CREATE INDEX IF NOT EXISTS idx_stream_schedule_day
+       ON stream_schedule (stream_date);`
+  )
+  setMeta(database, 'schema_version', '63')
+
   // Payroll, once, for whoever owns the company.
   //
   // Seeded rather than left to be typed because the owner named it, named its

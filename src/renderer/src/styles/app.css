@@ -21253,3 +21253,112 @@ button.sor-team:focus-visible {
   font-size: 11.5px;
   color: var(--text-3);
 }
+
+/* ---------------------------------------------------------------------------
+   Streaming — the diary of shows that have not happened yet.
+
+   Sits directly under the live bar and is deliberately QUIETER than it. The bar
+   is a status light for something happening right now; this is a list of things
+   that are not. Giving them the same weight would make the page read as two
+   equally urgent claims, and the one that matters is the one on air.
+   --------------------------------------------------------------------------- */
+.stm-sched {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 14px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.stm-sched-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.stm-sched-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+/* The sentence that says what scheduling a stream actually DOES. It earns the
+   space: the effect of this feature is invisible until somebody's phone buzzes
+   an hour before a show, and a list with no explanation reads as a calendar. */
+.stm-sched-hint {
+  flex: 1 1 240px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-3);
+  line-height: 1.45;
+}
+.stm-sched-empty {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.stm-sched-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.stm-sched-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.stm-sched-when {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+}
+.stm-sched-title {
+  flex: 1 1 160px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+.stm-sched-host {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+/* The relative time, which is the field somebody actually scans for. Boxed so
+   the eye finds it without reading the row. */
+.stm-sched-until {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  font-size: 11.5px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+.stm-sched-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}

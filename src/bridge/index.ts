@@ -191,6 +191,7 @@ import type {
   StreamSessionDetail,
   UpdateStreamSession
 } from '@shared/streaming'
+import type { NewScheduledStream, ScheduledStream } from '@shared/streamReminders'
 import type {
   GeneralExpense,
   GeneralExpenseInput,
@@ -902,7 +903,50 @@ export function createBridge(ipcRenderer: BridgeTransport) {
        * recorded. What changes is what the statement says that night cost.
        */
       setItemCost: (input: SetStreamItemCost): Promise<Result<StreamSessionDetail>> =>
-        ipcRenderer.invoke(IPC.streamItemCost, input)
+        ipcRenderer.invoke(IPC.streamItemCost, input),
+      /**
+       * Shows that have not happened yet — the diary, not the record.
+       *
+       * A plan carries BOTH halves of its start on purpose. `streamDate` +
+       * `startTime` is the intention ("9:00 PM on Friday"), which is what a
+       * screen shows and what stays true across a daylight-saving boundary.
+       * `startsAt` is the same moment as a UTC instant, and the CALLER computes
+       * it — the browser is the only party that knows what timezone the person
+       * typing "9:00 PM" is in, and the relay that sends the reminders runs in
+       * UTC and must never guess. Use `isoFromLocalParts` from the streaming
+       * module's time helpers; do not send a hand-built string.
+       */
+      plans: {
+        /** Everything still to come, soonest first. Cancelled plans excluded. */
+        upcoming: (): Promise<ScheduledStream[]> => ipcRenderer.invoke(IPC.streamPlanList),
+        /** Plans whose LOCAL day falls in [from, to] — the calendar's question. */
+        range: (from: string, to: string): Promise<ScheduledStream[]> =>
+          ipcRenderer.invoke(IPC.streamPlanRange, { from, to }),
+        create: (input: NewScheduledStream): Promise<Result<ScheduledStream>> =>
+          ipcRenderer.invoke(IPC.streamPlanCreate, input),
+        /**
+         * Partial: an omitted field keeps its value, an explicit null clears it.
+         *
+         * Moving the start RE-ARMS both reminders, because the relay records
+         * what it has sent against the start instant as well as the plan. A show
+         * moved from 9pm to 11pm is told about again; a title correction is not.
+         */
+        update: (input: { id: string } & Partial<NewScheduledStream>): Promise<Result<ScheduledStream>> =>
+          ipcRenderer.invoke(IPC.streamPlanUpdate, input),
+        /** Call it off. Keeps the row, stops the reminders. */
+        cancel: (id: string): Promise<Result<ScheduledStream>> =>
+          ipcRenderer.invoke(IPC.streamPlanCancel, id),
+        /** For the one typed by mistake. */
+        remove: (id: string): Promise<Result> => ipcRenderer.invoke(IPC.streamPlanDelete, id),
+        /**
+         * Go live on it. Runs the ordinary Start-stream path — same "already
+         * live" and overlap refusals — and returns the session it created. The
+         * session's start is NOW, not the planned time: the plan said nine and
+         * the show went on at 9:07, and the record has to be what happened.
+         */
+        start: (id: string): Promise<Result<{ sessionId: string }>> =>
+          ipcRenderer.invoke(IPC.streamPlanStart, id)
+      }
     },
     /**
      * Finance → Streaming: the Whatnot ledger, attributed to shows.

@@ -147,6 +147,22 @@ export const SYNCED_TABLES: SyncedTable[] = [
   // nothing (its day is a date string, not a session id) and nothing points at it.
   { table: 'finance_expenses', key: ['id'], tier: 0 },
   { table: 'stream_sessions', key: ['id'], tier: 0 },
+  // A show that has not happened yet, and the only table on this list that has
+  // to travel for a reason OUTSIDE the app: the relay cannot remind anybody
+  // about a stream it has never seen. Everything else here syncs so that ten
+  // laptops agree; this one syncs so that a Cloudflare cron has something to
+  // read at ten to nine on a Friday.
+  //
+  // It also has to travel for the ordinary reason. A plan typed on the office
+  // laptop is read by the person who has to be at the desk for it, and a plan
+  // that stays where it was typed is a plan nobody else knows about.
+  //
+  // Last-write-wins arbitrates cleanly: a plan is a whole authored fact under a
+  // UUID nobody else mints, so the relay only ever compares it against an older
+  // copy of itself. There is no counter and nothing another machine adds to.
+  // Tier 0 — it names an employee and a session, and both are allowed to dangle
+  // (see the migration note), so it must never wait for either.
+  { table: 'stream_schedule', key: ['id'], tier: 0 },
   { table: 'purchase_orders', key: ['id'], tier: 0 },
   { table: 'inventory_resets', key: ['id'], tier: 0 },
   // Buyers. Operator-authored whole facts under UUIDs nobody else mints, and

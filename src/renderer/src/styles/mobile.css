@@ -934,4 +934,36 @@
     overflow: visible;
     text-overflow: clip;
   }
+
+  /* ------------------------------------------------------------------------
+     13. The scheduled-stream strip
+
+     Six things on one desktop row — time, title, host, countdown, and three
+     buttons — and at 390px that wraps into a shape where the buttons land under
+     a different show than the one they act on. Which is the one mistake this
+     strip must not allow: "Start now" on the wrong row starts the wrong show,
+     and the overlap rule then blocks the right one.
+
+     So the row stacks: the show on one line, its buttons on their own full-width
+     line under it, at thumb height. And the explanatory sentence in the header
+     is dropped — it is a paragraph on a phone, above a list two rows long, and
+     the strip says what it is without it.
+     ------------------------------------------------------------------------ */
+  .stm-sched-hint {
+    display: none;
+  }
+  .stm-sched-row {
+    row-gap: 8px;
+  }
+  .stm-sched-title {
+    flex: 1 1 100%;
+  }
+  .stm-sched-actions {
+    flex: 1 1 100%;
+    margin-left: 0;
+  }
+  .stm-sched-actions > .btn {
+    flex: 1 1 0;
+    min-height: var(--rm-tap);
+  }
 }

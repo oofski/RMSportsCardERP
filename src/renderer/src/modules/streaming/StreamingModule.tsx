@@ -12,6 +12,7 @@ import { SessionsTab } from './SessionsTab'
 import { SlipsTab, useSlipsWorkspace } from './SlipsTab'
 import { SessionDetail } from './SessionDetail'
 import { SessionFormModal } from './SessionFormModal'
+import { ScheduledStrip } from './Scheduled'
 import { streaming, streamingReady } from './api'
 import { todayKey } from './time'
 
@@ -123,6 +124,20 @@ export function StreamingModule(): JSX.Element {
         onEnded={onChanged}
         onOpen={setOpenId}
       />
+
+      {/* Under the bar because it answers the same question from the other
+          side: the bar says what is on air, this says what is not on air YET.
+          Hidden while a session is open — that screen is about one night, and
+          next Friday is not part of it. */}
+      {!openId && (
+        <ScheduledStrip
+          version={version}
+          canManage={canManage}
+          hosts={hosts}
+          onChanged={onChanged}
+          onOpenSession={setOpenId}
+        />
+      )}
 
       {openId ? (
         <SessionDetail

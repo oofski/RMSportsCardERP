@@ -403,6 +403,18 @@ export const IPC = {
   // price for the statement; moves no stock and touches no cost layer.
   streamItemCost: 'stream:item:cost',
 
+  // Streaming — shows that have not happened yet. A separate set of channels
+  // because a plan is a separate table and a separate kind of fact: an
+  // intention (a local day and a local HH:MM), not the record of a window that
+  // was on air. See @shared/streamReminders.
+  streamPlanList: 'stream:plan:list',
+  streamPlanRange: 'stream:plan:range',
+  streamPlanCreate: 'stream:plan:create',
+  streamPlanUpdate: 'stream:plan:update',
+  streamPlanCancel: 'stream:plan:cancel',
+  streamPlanDelete: 'stream:plan:delete',
+  streamPlanStart: 'stream:plan:start',
+
   // Finance — Streaming tab (Whatnot ledger import + day-by-day revenue)
   finStreamView: 'finance:stream:view',
   finLedgerImport: 'finance:ledger:import',

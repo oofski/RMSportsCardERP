@@ -27,6 +27,7 @@ import type {
   StreamSessionDetail,
   UpdateStreamSession
 } from '@shared/streaming'
+import type { NewScheduledStream, ScheduledStream } from '@shared/streamReminders'
 import {
   addItem,
   calendarMonth,
@@ -41,6 +42,15 @@ import {
   startSession,
   updateSession
 } from './db/streaming'
+import {
+  cancelScheduled,
+  deleteScheduled,
+  listScheduledBetween,
+  listUpcoming,
+  rescheduleStream,
+  scheduleStream,
+  startScheduled
+} from './db/streamSchedule'
 import { currentUser } from './services/auth'
 
 function can(permission: Permission): boolean {
@@ -266,6 +276,104 @@ export function registerStreamingIpc(): void {
         { itemId: str(input?.itemId).trim(), unitPrice: parseMoneyInput(input?.unitPrice) },
         actor.id
       )
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  // ---- Scheduled shows ------------------------------------------------------
+  //
+  // Same gates as everything above: reads on 'module.streaming' returning an
+  // empty list, writes on 'streaming.manage'. A plan is not a stock movement,
+  // but it IS what makes several phones buzz an hour later, and the permission
+  // that decides who may run a show is the one that decides who may announce one.
+  ipcMain.handle(IPC.streamPlanList, (): ScheduledStream[] =>
+    can('module.streaming') ? listUpcoming() : []
+  )
+
+  ipcMain.handle(
+    IPC.streamPlanRange,
+    (_e, payload: { from: string; to: string }): ScheduledStream[] => {
+      if (!can('module.streaming')) return []
+      const from = str(payload?.from).trim()
+      const to = str(payload?.to).trim()
+      if (!from || !to) return []
+      return listScheduledBetween(from, to)
+    }
+  )
+
+  /**
+   * `startsAt` arrives from the CLIENT and is passed through unrecomputed.
+   *
+   * Main cannot redo the conversion: in the web build it runs on a server that
+   * may sit in a different timezone than the browser where somebody typed "9:00
+   * PM", and resolving the wall clock there would schedule the reminders against
+   * the server's evening rather than the warehouse's. The browser is the only
+   * party that knows what was meant. db/streamSchedule.ts checks the instant is
+   * a plausible conversion of the pair beside it rather than trusting it blindly
+   * — see `impliedZoneOffsetMinutes` for what that does and does not prove.
+   */
+  ipcMain.handle(IPC.streamPlanCreate, (_e, input: NewScheduledStream): Result<ScheduledStream> => {
+    try {
+      const actor = requireManage()
+      return scheduleStream(
+        {
+          title: str(input?.title),
+          streamDate: str(input?.streamDate).trim(),
+          startTime: str(input?.startTime).trim(),
+          startsAt: str(input?.startsAt).trim(),
+          hostId: str(input?.hostId).trim() || null,
+          note: str(input?.note).trim() || null
+        },
+        actor.id
+      )
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  /** Partial, with the same undefined/null discipline the session edit uses. */
+  ipcMain.handle(
+    IPC.streamPlanUpdate,
+    (_e, input: { id: string } & Partial<NewScheduledStream>): Result<ScheduledStream> => {
+      try {
+        const actor = requireManage()
+        const patch: { id: string } & Partial<NewScheduledStream> = { id: str(input?.id).trim() }
+        if (input?.title !== undefined) patch.title = str(input.title)
+        if (input?.streamDate !== undefined) patch.streamDate = str(input.streamDate).trim()
+        if (input?.startTime !== undefined) patch.startTime = str(input.startTime).trim()
+        if (input?.startsAt !== undefined) patch.startsAt = str(input.startsAt).trim()
+        if (input?.hostId !== undefined) patch.hostId = str(input.hostId).trim() || null
+        if (input?.note !== undefined) patch.note = str(input.note).trim() || null
+        return rescheduleStream(patch, actor.id)
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  ipcMain.handle(IPC.streamPlanCancel, (_e, id: string): Result<ScheduledStream> => {
+    try {
+      const actor = requireManage()
+      return cancelScheduled(str(id).trim(), actor.id)
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle(IPC.streamPlanDelete, (_e, id: string): Result => {
+    try {
+      const actor = requireManage()
+      return deleteScheduled(str(id).trim(), actor.id)
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle(IPC.streamPlanStart, (_e, id: string): Result<{ sessionId: string }> => {
+    try {
+      const actor = requireManage()
+      return startScheduled(str(id).trim(), actor.id)
     } catch (err) {
       return fail(err)
     }

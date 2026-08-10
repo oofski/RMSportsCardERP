@@ -141,6 +141,12 @@ export function isValidLocalTime(time: unknown): boolean {
  * Returns null when either half is malformed or the gap is not a real zone
  * offset. Real zones span UTC-12:00 to UTC+14:00; nothing outside that is a
  * timezone, it is a mistake.
+ *
+ * The SIGN follows `Date.prototype.getTimezoneOffset`, which is the convention
+ * every other piece of date code in this project is written against: minutes to
+ * ADD to local to get UTC. New York in summer is +240; Kathmandu is -345. A
+ * function that quietly used the other sign would be right about the range and
+ * wrong about every comparison anybody later wrote against it.
  */
 export function impliedZoneOffsetMinutes(
   streamDate: string,
@@ -152,7 +158,7 @@ export function impliedZoneOffsetMinutes(
   if (Number.isNaN(instant)) return null
   const asIfUtc = Date.parse(`${streamDate}T${startTime}:00.000Z`)
   if (Number.isNaN(asIfUtc)) return null
-  const minutes = (asIfUtc - instant) / 60_000
+  const minutes = (instant - asIfUtc) / 60_000
   if (!Number.isInteger(minutes)) return null
   if (minutes < -14 * 60 || minutes > 12 * 60) return null
   return minutes
@@ -395,6 +401,12 @@ export function reminderRecipients(adminIds: string[], hostId: string | null): s
 export interface StreamReminderPayload {
   v: 1
   kind: 'stream'
+  /**
+   * The plan's id, carried so the phone can tag both reminders for one show
+   * alike and have the second REPLACE the first. Tagging by title instead would
+   * collide two different shows called "Monday Night Rip" into one notification.
+   */
+  id: string
   /** The show's name, already trimmed to something a lock screen can hold. */
   title: string
   /** The planned start, as a UTC ISO INSTANT. The phone formats it, not us. */
@@ -424,6 +436,7 @@ export interface StreamReminderPayload {
  * the device is asleep and the app is not running.
  */
 export function buildStreamReminderPayload(input: {
+  scheduleId: string
   title: string
   startsAt: string
   lead: number
@@ -432,6 +445,7 @@ export function buildStreamReminderPayload(input: {
   return {
     v: 1,
     kind: 'stream',
+    id: String(input?.scheduleId || ''),
     title: title.slice(0, SCHEDULED_TITLE_MAX),
     at: String(input?.startsAt || ''),
     lead: Number(input?.lead) || 0

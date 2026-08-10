@@ -393,6 +393,105 @@ that no longer exist.
 
 ---
 
+## Stream reminders — THE ONE STEP THAT IS NOT AUTOMATIC
+
+When a stream is scheduled in the app (Streaming → **Schedule a stream**), the
+relay sends a push notification **one hour before** and again **fifteen minutes
+before** it starts, to everyone with **Admin access** and to the **host** of that
+stream if the host is not an admin. It says which show, what time it starts, and
+to go and start it on the RM Operations App.
+
+**None of this happens until you add a Cron Trigger by hand. Read the next
+paragraph.**
+
+Every other notification in this app is a reaction: somebody clocks in, a row
+arrives at the relay, the relay sends. A reminder is the opposite — it has to
+fire when *nothing* has happened, at ten to nine on a Friday with every laptop
+asleep. So it needs a clock of its own, and on Cloudflare that clock is a **Cron
+Trigger**. Pasting `cloud/worker.js` in is *not* enough: there is no
+`wrangler.toml` in this project, so nothing in the code declares a schedule. A
+Worker with the reminder code and no trigger records scheduled streams, shows
+them, syncs them — and silently never announces one. Nothing anywhere says so.
+
+### Add the trigger (about four clicks, once, forever)
+
+1. Cloudflare dashboard → **Workers & Pages** → **rm-operations**.
+2. **Settings** → **Triggers** (older dashboards: **Trigger Events**).
+3. Under **Cron Triggers**, press **Add Cron Trigger**.
+4. Choose **Cron expression** / *Custom* and enter exactly:
+
+   ```
+   */5 * * * *
+   ```
+
+5. **Add** / **Save**. It starts within a minute or two.
+
+That is "every five minutes". Nothing else needs setting: the reminders use the
+same `VAPID_PRIVATE_KEY` and the same subscriptions the clock-in notifications
+already use, so if a test notification reaches your phone, reminders will too.
+
+**Re-paste `cloud/worker.js` first if your relay predates this feature.** The
+`scheduled` handler the trigger calls lives in that file. A trigger pointed at an
+older copy fires every five minutes and does nothing, with no error anywhere.
+
+### Why five minutes, and what "an hour before" actually means
+
+A cron cannot land exactly on T-60. So a reminder is defined over a **window**,
+not an instant: the hour reminder goes out at the first cron tick at or after
+T-60, and the fifteen-minute one at the first tick at or after T-15. In practice
+that is **up to five minutes late and never early** — the hour reminder arrives
+somewhere in T-60 to T-55, the short one in T-15 to T-10.
+
+A reminder more than **ten minutes** late is dropped rather than sent. That is
+what stops a relay that was down for an hour waking up and firing a flurry of
+stale reminders at everybody at once, and it is why "starts in an hour" is never
+a lie. Ten minutes is two cron ticks, so one missed or failed run still delivers.
+
+Every-minute (`* * * * *`) would be exact to the minute and costs 1,440 cron runs
+and 1,440 database queries a day, permanently, to sharpen a reminder nobody is
+timing with a stopwatch. Every fifteen minutes would be worse than useless — the
+"fifteen minutes before" reminder could arrive one minute before the show. Five
+is the largest interval that keeps the short reminder worth sending.
+
+### Each reminder is sent exactly once
+
+The trigger re-examines the same show every five minutes, so without this the
+feature would send "your stream starts soon" a dozen times an hour — after which
+everybody mutes the app, and the clock-in notifications go with it.
+
+Before sending, the Worker writes a row into a table called
+`push_reminders_sent`, keyed by the show, its start time and which reminder it
+is. That write is what grants permission to send: if the row is already there —
+because five minutes ago it sent one, or because two cron runs overlapped — the
+insert fails and nothing goes out. There is no table to create; the Worker makes
+it on first use, like `push_subscriptions`.
+
+The key includes the **start time**, on purpose. Move a show from 9pm to 11pm and
+it reminds again, because the earlier reminder was about a time that is no longer
+true. Correct only its title and it does not.
+
+Nothing is sent for a show that was **cancelled**, that somebody has already
+**started**, or whose start time is in the **past**.
+
+### What can still go wrong, honestly
+
+**A stream cancelled on a laptop that is offline still reminds.** The relay only
+knows what has reached it. Cancel a show and the cancellation travels with the
+next sync; until then, the relay has a planned show at nine o'clock and will say
+so.
+
+**The relay reminds about what it was told, not about what is true now.** Same
+sentence, other direction: schedule a stream on a laptop that never syncs and no
+reminder is ever sent, because the relay has never heard of it.
+
+**Reminders honour the timezone of the machine that scheduled the show.** "9:00
+PM" is resolved to an absolute moment on the computer where somebody typed it —
+the relay runs in UTC and is never asked to guess. The scheduling dialog prints
+both reminder times before you save; if those look an hour or five hours out,
+that machine's clock or timezone is wrong, not the relay.
+
+---
+
 ## The customer form
 
 1. **Admin → Cloud sync → Customer form links**.

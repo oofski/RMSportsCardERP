@@ -8,6 +8,7 @@ import type {
   StreamSessionDetail,
   UpdateStreamSession
 } from '@shared/streaming'
+import type { NewScheduledStream, ScheduledStream } from '@shared/streamReminders'
 import { api } from '../../lib/api'
 
 /**
@@ -38,6 +39,24 @@ export interface StreamingApi {
   /** What a line turns out to have cost, per one stock unit of the product.
    *  Corrects the STATEMENT: no stock moves and no cost layer is revalued. */
   setItemCost(input: SetStreamItemCost): Promise<Result<StreamSessionDetail>>
+  /**
+   * Shows that have not happened yet.
+   *
+   * Optional on the type because a packaged preload older than this feature does
+   * not have it, and the screens check `scheduleReady` rather than calling into
+   * `undefined` on click.
+   */
+  plans?: ScheduledStreamsApi
+}
+
+export interface ScheduledStreamsApi {
+  upcoming(): Promise<ScheduledStream[]>
+  range(from: string, to: string): Promise<ScheduledStream[]>
+  create(input: NewScheduledStream): Promise<Result<ScheduledStream>>
+  update(input: { id: string } & Partial<NewScheduledStream>): Promise<Result<ScheduledStream>>
+  cancel(id: string): Promise<Result<ScheduledStream>>
+  remove(id: string): Promise<Result>
+  start(id: string): Promise<Result<{ sessionId: string }>>
 }
 
 /**
@@ -64,6 +83,18 @@ export const streamingReady = typeof streaming?.calendar === 'function'
  * click.
  */
 export const costEntryReady = typeof streaming?.setItemCost === 'function'
+
+/**
+ * False against a packaged preload older than scheduled streams.
+ *
+ * Its own flag, like `costEntryReady`, and for the same reason: the rest of the
+ * module works perfectly without this, so the right behaviour is to hide the
+ * upcoming strip rather than to declare the whole module unavailable.
+ */
+export const scheduleReady = typeof streaming?.plans?.upcoming === 'function'
+
+/** The plans surface, once `scheduleReady` says it is there. */
+export const streamPlans = streaming?.plans as ScheduledStreamsApi
 
 /** Result → message, so no failed write is ever swallowed into silence. */
 export function resultError(res: Result<unknown>, fallback: string): string {

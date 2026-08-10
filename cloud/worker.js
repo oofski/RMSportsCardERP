@@ -117,6 +117,34 @@ export default {
     } catch (err) {
       return json({ ok: false, error: String((err && err.message) || err) }, 500)
     }
+  },
+
+  /**
+   * Job 5: the only thing in this file that nobody asked for.
+   *
+   * Every other route here reacts — a laptop pushes, a phone posts, the Worker
+   * answers. A stream reminder has to fire when NOTHING has happened, at ten to
+   * nine on a Friday with every laptop asleep, so it needs a clock of its own.
+   * That clock is a Cloudflare Cron Trigger, and this is what it calls.
+   *
+   * IT DOES NOT EXIST UNTIL SOMEBODY ADDS THE TRIGGER IN THE DASHBOARD. Pasting
+   * this file in is not enough — there is no wrangler.toml in this project and
+   * therefore nothing that declares a schedule. A Worker with this handler and no
+   * trigger is a Worker where scheduled streams are recorded, displayed, synced,
+   * and silently never announced. docs/CLOUDFLARE.md has the four clicks.
+   *
+   * Never throws outward and never leaves work floating: waitUntil is what keeps
+   * the invocation alive while it talks to Apple and Google, exactly as the punch
+   * path does.
+   */
+  async scheduled(event, env, ctx) {
+    // event.scheduledTime is the moment the cron was DUE, not the moment this
+    // started. Using it means a queued invocation evaluates the window it was
+    // scheduled for rather than one drifted by however long the queue was —
+    // which is the difference between a reminder landing inside its window and
+    // one being suppressed for lateness it did not cause.
+    const at = Number((event && event.scheduledTime) || Date.now())
+    await scheduleAfterResponse(ctx, () => runStreamReminders(env, at))
   }
 }
 
@@ -1962,12 +1990,37 @@ async function markSent(env, endpoint) {
 }
 
 /**
+ * How long a push service should hold a notification that could not be
+ * delivered, in seconds, given how long the thing it is about stays true.
+ *
+ * A clock notification is worth six hours (see PUSH_TTL_SECONDS). A stream
+ * reminder is worth exactly as long as it is still ahead of the show: "start the
+ * stream" arriving after the stream should have started is not a reminder, it is
+ * a phone shouting about last night. So a reminder's TTL is the time remaining
+ * until the start, and a push service that could not reach the phone in that
+ * window throws it away rather than delivering it stale.
+ *
+ * Floored at 60 because zero means "deliver now or never", and one minute is
+ * enough for a phone that is merely between cell towers.
+ */
+export function pushTtlUntil(startsAt, nowMs = Date.now()) {
+  const at = Date.parse(String(startsAt || ''))
+  if (Number.isNaN(at)) return PUSH_TTL_SECONDS
+  return Math.max(60, Math.round((at - nowMs) / 1000))
+}
+
+/**
  * One HTTPS POST to one push service.
  *
  * Returns the status rather than throwing on a bad one, because the CALLER is
  * what decides whether a status means "delete this row" — see deliverPush.
+ *
+ * `options` is optional and every caller that does not care gets the clock
+ * defaults. It exists because a reminder and a punch expire differently and want
+ * different urgencies, and baking one answer in would make the reminder either
+ * arrive stale or wake somebody's phone at 3am about a shift.
  */
-export async function sendOnePush(env, subscription, payloadBytes) {
+export async function sendOnePush(env, subscription, payloadBytes, options) {
   const audience = vapidAudience(subscription.endpoint)
   const signingKey = await vapidSigningKey(env)
   const jwt = await signVapidJwt(signingKey, {
@@ -1986,10 +2039,15 @@ export async function sendOnePush(env, subscription, payloadBytes) {
       authorization: vapidAuthorizationHeader(jwt, vapidPublicKey(env)),
       'content-encoding': 'aes128gcm',
       'content-type': 'application/octet-stream',
-      ttl: String(PUSH_TTL_SECONDS),
+      ttl: String((options && options.ttlSeconds) || PUSH_TTL_SECONDS),
       // Phones are quiet at 3am for a reason and a shift starting is not an
       // emergency. 'normal' lets the OS batch it; 'high' would wake the device.
-      urgency: 'normal'
+      //
+      // A stream reminder overrides this to 'high', and that is not enthusiasm:
+      // it has a deadline. A batched "start the stream in 15 minutes" that the
+      // OS decides to hand over in twenty is not a late notification, it is a
+      // wrong one, and the show it was about has already been missed.
+      urgency: (options && options.urgency) || 'normal'
     },
     body
   })
@@ -2269,6 +2327,454 @@ async function generateVapidKeys() {
       'Changing either one invalidates every phone already subscribed; they have to turn ' +
       'notifications off and on again.'
   })
+}
+
+// ---------------------------------------------------------------------------
+// Job 5 — scheduled-stream reminders
+//
+// An hour before a planned show, and again a quarter of an hour before, every
+// admin's phone (and the host's, if the host is not an admin) is told to go and
+// start the stream.
+//
+// ## Why this is the odd one out
+//
+// Everything else in this file happens because somebody did something. This
+// happens because a clock struck. That is a Cloudflare Cron Trigger calling the
+// `scheduled` handler at the top of this file — added BY HAND in the dashboard,
+// because there is no wrangler.toml here to declare it. Without that trigger,
+// every part of this section is dead code and nothing anywhere says so.
+//
+// ## The failure this section is mostly about
+//
+// A cron re-examines the same show every five minutes. The naive version of this
+// feature therefore sends "your stream starts soon" twelve times an hour, after
+// which everybody mutes the app and the feature is worse than absent — it has
+// spent the notification permission that the clock-in notifications rely on.
+//
+// So: every reminder claims a row in push_reminders_sent BEFORE it is sent, and
+// the claim is a primary-key INSERT. Two overlapping cron invocations both read
+// the same show; only one of them gets the row.
+//
+// ## Wall clock and instant
+//
+// A planned show carries both: `stream_date` + `start_time` are the intention
+// ("9:00 PM on Friday"), and `starts_at` is the same moment as a UTC instant,
+// converted ONCE on the machine that scheduled it. This Worker reads ONLY
+// `starts_at`. It runs in UTC and has no idea what timezone this business is in,
+// so reading "21:00" here would put every reminder out by the local offset —
+// four or five hours — and it would look like the notification system was broken
+// rather than a date conversion. src/shared/streamReminders.ts is the canonical
+// statement of all of this and carries the same rules in TypeScript;
+// tests/streamReminders.test.ts runs both copies over the same cases and fails
+// if they ever disagree.
+// ---------------------------------------------------------------------------
+
+/** An hour out, and a quarter of an hour out. Longest first: that is send order. */
+export const STREAM_REMINDER_LEADS = [60, 15]
+
+/**
+ * How late a reminder may be and still go out, in minutes.
+ *
+ * Ten: two ticks of a five-minute cron, so one missed or failed invocation still
+ * delivers. Past that it is SUPPRESSED rather than sent, because "starts in an
+ * hour" arriving twenty minutes late is a false statement about the show — and
+ * it is also what stops a relay that was asleep waking up and firing a flurry of
+ * stale reminders at everybody at once.
+ */
+export const STREAM_REMINDER_WINDOW_MINUTES = 10
+
+/** Never look at more planned shows than this in one tick. A bug upstream must
+ *  not turn one cron invocation into a thousand push sends. */
+const STREAM_REMINDER_MAX_ROWS = 50
+
+/** How long a sent-reminder record is kept before it is swept up. Long enough
+ *  that no live show can still be pending, short enough that the table does not
+ *  grow forever — nothing else in this Worker would ever look at it again. */
+const STREAM_REMINDER_KEEP_DAYS = 30
+
+/**
+ * Half-open window: [start - lead, start - lead + window). Half-open because a
+ * closed one double-counts its boundary, and a cron that lands on exact
+ * five-minute marks hits boundaries constantly.
+ *
+ * The last clause — nothing once the show has started — is redundant today (the
+ * shortest lead is 15 and the window is 10, so every window closes five minutes
+ * clear of the start) and is here anyway. It is the rule the owner actually
+ * cares about, and it stays true if a five-minute lead is ever added.
+ */
+export function streamReminderDue(nowMs, startsAtMs, lead) {
+  if (!Number.isFinite(nowMs) || !Number.isFinite(startsAtMs)) return false
+  const dueAt = startsAtMs - lead * 60000
+  if (nowMs < dueAt) return false
+  if (nowMs >= dueAt + STREAM_REMINDER_WINDOW_MINUTES * 60000) return false
+  return nowMs < startsAtMs
+}
+
+/**
+ * The key a sent reminder is filed under. THE START INSTANT IS PART OF IT.
+ *
+ * Keying on the show and the lead alone would mean a show moved from 9pm to 11pm
+ * never reminds again — there is already a "60 minutes before" against it, for a
+ * time that is no longer true. Including the instant makes a rescheduled show a
+ * different reminder, which is what it is, while the common case (ten laptops
+ * pulling the same unchanged row) produces the identical key and is refused.
+ */
+export function streamReminderKey(scheduleId, startsAt, lead) {
+  return String(scheduleId) + '|' + String(startsAt) + '|' + String(lead)
+}
+
+/**
+ * Which reminders are due at `nowMs`, out of the planned shows handed in.
+ *
+ * Pure, and pure on purpose: the four refusals in here are the whole behaviour
+ * of this feature, and they are the part that has to be testable without a
+ * database, a cron or a phone.
+ *
+ *  · not 'planned' — cancelled, or already started. Both reach this Worker as
+ *    ordinary synced rows.
+ *  · an unparseable instant — never guess at a time.
+ *  · outside the window — covers "already started" and "the cron has been down
+ *    and is catching up" in one rule.
+ *  · already sent — NOT decided here, because a pure function cannot know. The
+ *    caller claims the key in D1 first, which is what makes it hold across two
+ *    invocations running at once.
+ */
+export function streamRemindersDue(rows, nowMs) {
+  const out = []
+  for (const row of rows || []) {
+    if (!row || String(row.status) !== 'planned') continue
+    const startsAtMs = Date.parse(String(row.startsAt))
+    if (Number.isNaN(startsAtMs)) continue
+    for (const lead of STREAM_REMINDER_LEADS) {
+      if (!streamReminderDue(nowMs, startsAtMs, lead)) continue
+      out.push({
+        scheduleId: String(row.id),
+        title: String(row.title || ''),
+        startsAt: String(row.startsAt),
+        hostId: row.hostId ? String(row.hostId) : null,
+        lead,
+        key: streamReminderKey(row.id, row.startsAt, lead)
+      })
+    }
+  }
+  out.sort((a, b) => (a.startsAt === b.startsAt ? b.lead - a.lead : a.startsAt < b.startsAt ? -1 : 1))
+  return out
+}
+
+/** Longest lead plus the window: past that, nothing can be due yet. */
+export function streamReminderLookaheadMinutes() {
+  let longest = 0
+  for (const lead of STREAM_REMINDER_LEADS) if (lead > longest) longest = lead
+  return longest + STREAM_REMINDER_WINDOW_MINUTES
+}
+
+/**
+ * Does this employee row have admin access?
+ *
+ * A HAND-COPIED MIRROR of `grantsAdminAccess` in src/shared/streamReminders.ts,
+ * which is the canonical one and reads the real permission table. This file is
+ * pasted into a dashboard and can import nothing, so the role list is spelled
+ * out — and tests/streamReminders.test.ts walks every role defined in
+ * @shared/permissions through both copies and fails the moment they disagree.
+ * That test is the only thing standing between this constant and the day
+ * somebody grants a new role admin access and half the company stops being
+ * reminded about anything.
+ *
+ * The overrides are additive by construction in the app, so a packer who was
+ * granted admin.access by hand counts — which is the entire point of the
+ * override, and a role-only check here would silently exclude them.
+ */
+export function grantsAdminAccess(role, permissionsJson) {
+  const named = String(role || '')
+  if (named === 'owner' || named === 'operations') return true
+  let overrides = permissionsJson
+  if (typeof permissionsJson === 'string' && permissionsJson.trim()) {
+    try {
+      overrides = JSON.parse(permissionsJson)
+    } catch {
+      // A blob that will not parse is not a grant. The role alone is the
+      // conservative reading and matches what the app does with this column.
+      overrides = []
+    }
+  }
+  if (!Array.isArray(overrides)) return false
+  for (const p of overrides) if (String(p) === 'admin.access') return true
+  return false
+}
+
+/**
+ * Every admin, plus the host if the host is not one of them.
+ *
+ * A Set, because in this business the host usually IS an admin, and two
+ * notifications for one show is how you teach somebody that this app buzzes
+ * twice for everything.
+ *
+ * PEOPLE, not devices. One person with a phone and an iPad hears about it on
+ * both, correctly; that fan-out happens against push_subscriptions afterwards.
+ */
+export function streamReminderRecipients(adminIds, hostId) {
+  const set = new Set()
+  for (const id of adminIds || []) {
+    const clean = String(id || '').trim()
+    if (clean) set.add(clean)
+  }
+  const host = String(hostId || '').trim()
+  if (host) set.add(host)
+  return [...set]
+}
+
+/**
+ * What travels to the phone.
+ *
+ * `at` is the start INSTANT, untouched, for the same reason a punch is: the
+ * relay has no idea what timezone the phone is in and the phone knows exactly.
+ * The service worker computes "in 12 minutes" from it against the phone's own
+ * clock at the moment it draws — which matters, because a push can sit in
+ * Apple's queue for minutes and "in 15 minutes" drawn ten minutes later is a lie
+ * the phone was in a position not to tell. `lead` rides along for the wording
+ * and the log, never for the timing.
+ */
+export function buildStreamReminderPayload(input) {
+  const title = String((input && input.title) || '').trim() || 'Stream'
+  return {
+    v: 1,
+    kind: 'stream',
+    // Carried so the phone can tag both reminders for one show alike and have
+    // the second REPLACE the first. Tagging by title would collide two different
+    // shows that happen to share a name into a single notification.
+    id: String((input && input.scheduleId) || ''),
+    title: title.slice(0, 80),
+    at: String((input && input.startsAt) || ''),
+    lead: Number(input && input.lead) || 0
+  }
+}
+
+/**
+ * Created on first use, like push_subscriptions and portal_lockout above and for
+ * the same reason: cloud/schema.d1.sql is pasted into a console by hand, and a
+ * feature that only works after somebody remembers a SECOND paste is a feature
+ * that appears broken with no error to search for.
+ *
+ * `key` is the primary key and that is the whole once-only guarantee — see
+ * claimReminder.
+ */
+let reminderTableReady = false
+async function ensureReminderTable(env) {
+  if (reminderTableReady) return
+  await env.DB.batch([
+    env.DB.prepare(
+      `CREATE TABLE IF NOT EXISTS push_reminders_sent (
+         key         TEXT PRIMARY KEY,
+         schedule_id TEXT NOT NULL,
+         lead        INTEGER NOT NULL,
+         sent_at     TEXT NOT NULL
+       )`
+    ),
+    env.DB.prepare(
+      'CREATE INDEX IF NOT EXISTS idx_push_reminders_sent_at ON push_reminders_sent (sent_at)'
+    )
+  ])
+  reminderTableReady = true
+}
+
+/**
+ * Claim a reminder. True means "you send it"; false means somebody already has.
+ *
+ * A bare INSERT, and the primary-key collision IS the answer. Not a SELECT
+ * followed by an INSERT: two cron invocations overlapping — which Cloudflare
+ * permits, and which a slow push service makes likely — would both read nothing
+ * and both send. Not a check on `meta.changes` either, which is a shape of the
+ * D1 result object rather than a guarantee.
+ *
+ * A genuine database fault also lands here and also returns false, so the
+ * reminder is skipped. That is the safe direction and it is chosen deliberately:
+ * a reminder that did not arrive costs one show; a reminder that arrives every
+ * five minutes costs the notification permission on every phone in the building.
+ */
+async function claimReminder(env, reminder) {
+  try {
+    await env.DB.prepare(
+      `INSERT INTO push_reminders_sent (key, schedule_id, lead, sent_at)
+       VALUES (?1, ?2, ?3, ?4)`
+    )
+      .bind(reminder.key, reminder.scheduleId, reminder.lead, new Date().toISOString())
+      .run()
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Sweep records nobody will ever consult again. Cheap, and it runs on the tick
+ *  rather than on a second schedule nobody would remember to add. */
+async function reapReminders(env) {
+  const cutoff = new Date(Date.now() - STREAM_REMINDER_KEEP_DAYS * 86400000).toISOString()
+  try {
+    await env.DB.prepare('DELETE FROM push_reminders_sent WHERE sent_at < ?1').bind(cutoff).run()
+  } catch {
+    // Housekeeping. A failed sweep must never stop a reminder going out.
+  }
+}
+
+/**
+ * The planned shows near enough to matter, straight out of the synced rows.
+ *
+ * The SQL bound is an OPTIMISATION and nothing more — `streamRemindersDue`
+ * decides. Written that way on purpose: the interesting rules then live in a
+ * pure function a test can drive, rather than half here in a WHERE clause that
+ * nothing can exercise without a D1 instance.
+ *
+ * The instants compare as strings because every one of them was written by
+ * `Date.prototype.toISOString`, which is fixed-width UTC. A row carrying an
+ * instant in any other shape simply falls outside the bound and is not reminded
+ * about, which is the right failure: silence, not a notification at a wrong time.
+ */
+async function plannedStreamsNear(env, nowMs) {
+  const from = new Date(nowMs).toISOString()
+  const to = new Date(nowMs + streamReminderLookaheadMinutes() * 60000).toISOString()
+  const result = await env.DB.prepare(
+    `SELECT data FROM sync_rows
+      WHERE kind = 'stream_schedule' AND deleted = 0
+        AND json_extract(data, '$.status') = 'planned'
+        AND json_extract(data, '$.starts_at') >= ?1
+        AND json_extract(data, '$.starts_at') <= ?2
+      ORDER BY json_extract(data, '$.starts_at') ASC
+      LIMIT ?3`
+  )
+    .bind(from, to, STREAM_REMINDER_MAX_ROWS)
+    .all()
+  const rows = []
+  for (const row of result.results || []) {
+    let parsed
+    try {
+      parsed = JSON.parse(row.data)
+    } catch {
+      continue
+    }
+    rows.push({
+      id: String(parsed.id || ''),
+      title: String(parsed.title || ''),
+      startsAt: String(parsed.starts_at || ''),
+      hostId: parsed.host_id ? String(parsed.host_id) : null,
+      status: String(parsed.status || '')
+    })
+  }
+  return rows
+}
+
+/**
+ * Everyone with admin access, by employee id.
+ *
+ * Read whole and filtered here rather than in SQL, because the answer depends on
+ * a role table and an additive override list and neither of those is expressible
+ * in a WHERE clause without pinning the permission model into this file twice.
+ * The employee list is dozens of rows.
+ *
+ * Disabled accounts are skipped. Somebody switched off is somebody who is not
+ * being asked to start a stream, and a notification to them is a notification to
+ * a phone that should have stopped hearing from this company.
+ */
+async function adminEmployeeIds(env) {
+  const result = await env.DB.prepare(
+    `SELECT id, data FROM sync_rows WHERE kind = 'employees' AND deleted = 0 LIMIT 500`
+  ).all()
+  const ids = []
+  for (const row of result.results || []) {
+    let emp
+    try {
+      emp = JSON.parse(row.data)
+    } catch {
+      continue
+    }
+    if (!emp || emp.status === 'disabled') continue
+    if (grantsAdminAccess(emp.role, emp.permissions_json)) ids.push(String(row.id))
+  }
+  return ids
+}
+
+/** Every device belonging to any of these people. */
+async function subscriptionsForPeople(env, employeeIds) {
+  await ensurePushTable(env)
+  const unique = [...new Set((employeeIds || []).map((id) => String(id)))].slice(0, 100)
+  if (unique.length === 0) return []
+  const marks = unique.map((_, i) => '?' + (i + 1)).join(', ')
+  const result = await env.DB.prepare(
+    'SELECT endpoint, employee_id, p256dh, auth FROM push_subscriptions WHERE employee_id IN (' +
+      marks +
+      ') ORDER BY created_at ASC LIMIT ' +
+      PUSH_MAX_SUBSCRIPTIONS
+  )
+    .bind(...unique)
+    .all()
+  return result.results || []
+}
+
+/**
+ * One cron tick.
+ *
+ * Order matters in exactly one place: the claim happens BEFORE the send. If the
+ * send then fails the reminder is lost rather than retried, which is the
+ * trade-off written down in claimReminder — and the second reminder is still
+ * coming, so a failed hour-before is not a silent show.
+ *
+ * Logged when there is something to say. A missing VAPID_PRIVATE_KEY is
+ * announced loudly for the same reason it is on the punch path: everything
+ * upstream succeeds, the app's toggle reads as on, and shows simply go
+ * unannounced until somebody eventually asks why.
+ */
+async function runStreamReminders(env, nowMs) {
+  await ensureReminderTable(env)
+  await reapReminders(env)
+
+  const planned = await plannedStreamsNear(env, nowMs)
+  const due = streamRemindersDue(planned, nowMs)
+  if (due.length === 0) return
+
+  if (!vapidConfigured(env)) {
+    console.log(
+      `push: ${due.length} stream reminder(s) were NOT delivered. ${VAPID_MISSING_MESSAGE}`
+    )
+    return
+  }
+
+  // Read once per tick, not once per show. The admin list is the same for every
+  // reminder in this batch and each read is a D1 round trip.
+  const admins = await adminEmployeeIds(env)
+
+  for (const reminder of due) {
+    const people = streamReminderRecipients(admins, reminder.hostId)
+    const subscriptions = await subscriptionsForPeople(env, people)
+    if (subscriptions.length === 0) continue
+
+    // Claimed here — after we know there is somebody to tell, before a single
+    // byte goes out. Claiming earlier would burn the key on a tick where nobody
+    // had notifications turned on yet.
+    if (!(await claimReminder(env, reminder))) continue
+
+    const bytes = enc.encode(
+      JSON.stringify(
+        buildStreamReminderPayload({
+          scheduleId: reminder.scheduleId,
+          title: reminder.title,
+          startsAt: reminder.startsAt,
+          lead: reminder.lead
+        })
+      )
+    )
+    // Expires when the show starts, and jumps the queue. Both for the same
+    // reason: this notification is only true until nine o'clock.
+    const options = { ttlSeconds: pushTtlUntil(reminder.startsAt, nowMs), urgency: 'high' }
+    const outcome = await deliverPush({
+      subscriptions,
+      send: (subscription) => sendOnePush(env, subscription, bytes, options),
+      drop: (endpoint) => dropSubscription(env, endpoint),
+      touch: (endpoint) => markSent(env, endpoint)
+    })
+    console.log(
+      `push: stream reminder T-${reminder.lead} for ${reminder.scheduleId} — sent ${outcome.sent}, ` +
+        `failed ${outcome.failed}, removed ${outcome.dropped} dead subscription(s).`
+    )
+  }
 }
 
 // ---------------------------------------------------------------------------
