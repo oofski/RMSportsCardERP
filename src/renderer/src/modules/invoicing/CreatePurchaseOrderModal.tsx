@@ -32,6 +32,13 @@ interface DraftLine {
  * The supplier box searches the contact list and the suppliers already used on
  * previous POs, and picking one only fills the box in: the value sent is still
  * the free text this form has always sent. See ContactTypeahead.
+ *
+ * Two ways in, one way out. PasteOfferPanel reads a supplier's text message
+ * into a review the operator confirms, and the typeahead adds one product at a
+ * time; both do nothing but append to the same `lines` below, and NEITHER
+ * creates anything. A purchase order is still made by this form, by somebody
+ * pressing Create PO — the paste is a way of filling the form in, not a second
+ * path to the same table.
  */
 export function CreatePurchaseOrderModal({
   onClose,
@@ -175,7 +182,7 @@ export function CreatePurchaseOrderModal({
   return (
     <Modal
       title="New purchase order"
-      subtitle="Add catalog products with a buy price to open a new PO."
+      subtitle="Paste a supplier's message or search the catalog, then check the lines."
       onClose={onClose}
       wide
       footer={

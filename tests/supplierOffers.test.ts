@@ -92,15 +92,15 @@ const MESSAGE = [
   'Hey — here is what I can do this week:',
   '',
   'Football:',
-  '26 Reflector FB Crest-$3150 per (4cs)',
+  '26 Reflector FB Crest-$3250 per (4cs)',
   '26 Reflector FB Vault-$2725 per (6cs)',
   '26 Lantern Crest-$1840 per (9cs)',
-  '26 Beacon Jumbo FB-$3320 (4cs)',
+  '26 Beacon Prime FB-$3320 (4cs)',
   '26 Beacon FB Crest-$4,180 (7cs)',
   '26/7 Beacon BKB Standard-$5,940 (2cs)',
   '27 Meridian Two-$1275 (3cs)',
   '26 Aurora Baseball-$960 (8cs)',
-  '27 Nova FIFA Cup-$2410 per (5cs)',
+  '27 Nova Soccer Prime-$2410 per (5cs)',
   '',
   'Prices hold until Friday.',
   'Thanks',
@@ -133,9 +133,9 @@ const first = message.lines[0] as ParsedOfferLine
 ok(first.season?.label === '2026', 'the season expands', String(first.season?.label))
 ok(first.productText === 'Reflector FB Crest', 'the product keeps the supplier’s own words', first.productText)
 ok(first.searchText === 'Reflector Football Crest', 'and is searched with the sport spelled out', first.searchText)
-ok(first.price === 3150, 'the price is the number after the "$"', String(first.price))
+ok(first.price === 3250, 'the price is the number after the "$"', String(first.price))
 ok(first.quantity === 4 && first.unit === 'case', 'the count and its unit', `${first.quantity}${first.unit}`)
-ok(lineTotalOf(first) === 12600, 'and the line comes to 4 x $3,150', String(lineTotalOf(first)))
+ok(lineTotalOf(first) === 13000, 'and the line comes to 4 x $3,250', String(lineTotalOf(first)))
 
 // ---------------------------------------------------------------------------
 console.log('\n=== 2. "per" is noise — every line is a case price ===')
@@ -203,7 +203,7 @@ ok(unitPriceOf(emptied) === 0, 'a zero count divides to zero, not to infinity', 
 ok(lineTotalOf(emptied) === 0, 'and the line total with it', String(lineTotalOf(emptied)))
 
 ok(
-  offerTotal([first, withPer]) === 24600,
+  offerTotal([first, withPer]) === 25000,
   'the running total is the sum of the lines',
   String(offerTotal([first, withPer]))
 )
@@ -358,7 +358,7 @@ console.log('\n=== 9. finding the product, and refusing to guess it ===')
 // ---------------------------------------------------------------------------
 const CATALOG: MatchableProduct[] = [
   { id: 'a', name: '2026 Halo Football Crest Case', sku: 'HFC-26', year: '2026', unitType: 'case' },
-  { id: 'b', name: '2026 Halo Football Crest Jumbo Case', sku: 'HFCJ-26', year: '2026', unitType: 'case' },
+  { id: 'b', name: '2026 Halo Football Crest Prime Case', sku: 'HFCP-26', year: '2026', unitType: 'case' },
   { id: 'c', name: '2026 Halo Basketball Vault Case', sku: 'HBV-26', year: '2026', unitType: 'case' },
   { id: 'd', name: '2019 Halo Football Crest Case', sku: 'HFC-19', year: '2019', unitType: 'case' },
   { id: 'e', name: '2026 Aurora Baseball Standard Box', sku: 'ABS-26', year: '2026', unitType: 'box' }
