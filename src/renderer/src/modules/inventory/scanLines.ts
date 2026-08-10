@@ -7,6 +7,7 @@ import type {
   ScanPoCandidate,
   ScanResolution
 } from '@shared/types'
+import type { LotPick } from '@shared/costLots'
 
 /**
  * The pending scan list — the small piece of state that makes a stack of
@@ -269,8 +270,14 @@ export function commitBlockedReason(lines: PendingLine[]): string | null {
  * The commit for one line — the SAME shape the single-scan flow has always
  * sent, carrying the accumulated quantity. Nothing about the commit contract
  * changed; a line of five is one of these with quantity: 5.
+ *
+ * `allocation` is the operator's cost-layer choice for an OUTBOUND line, passed
+ * in rather than stored on the line: repeat scans of one code accumulate, and an
+ * allocation chosen while the line read 1 would be wrong the moment it reads 5.
+ * It is therefore asked once, at confirm, against the count that is about to be
+ * committed.
  */
-export function toCommitInput(line: PendingLine): ScanCommitInput {
+export function toCommitInput(line: PendingLine, allocation?: LotPick[] | null): ScanCommitInput {
   const base = {
     rawCode: line.rawCode,
     mode: line.mode,
@@ -279,7 +286,13 @@ export function toCommitInput(line: PendingLine): ScanCommitInput {
   }
   if (line.kind === 'po_line') return { ...base, kind: 'po_line', lineId: line.lineId }
   if (line.kind === 'remove_stock') {
-    return { ...base, kind: 'remove_stock', productId: line.productId, location: line.location }
+    return {
+      ...base,
+      kind: 'remove_stock',
+      productId: line.productId,
+      location: line.location,
+      allocation: allocation ?? null
+    }
   }
   return {
     ...base,

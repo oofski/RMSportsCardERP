@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { InventoryProduct } from '@shared/types'
 import type { NewStreamItem, StreamItemKind, StreamSessionDetail } from '@shared/streaming'
 import { parseMoneyInput } from '@shared/streaming'
+import type { LotPick } from '@shared/costLots'
 import { LOCATIONS, type Location } from '@shared/inventory'
 import {
   QTY_EPS,
@@ -21,6 +22,7 @@ import { Icon } from '../../components/Icon'
 import { useToast } from '../../components/Toast'
 import { Button, Field, Input } from '../../components/ui'
 import { structureLabel } from '../inventory/helpers'
+import { useLotPicker } from '../inventory/LotPicker'
 import { resultError, streaming } from './api'
 
 /**
@@ -117,6 +119,10 @@ export function AddItemForm({
   onCancel: () => void
 }): JSX.Element {
   const toast = useToast()
+  // The case being ripped on air is the exact thing the picker was built for:
+  // this is the line whose cost lands on the break's P&L. Never asked in
+  // reconcile mode — that line consumes no layer at all.
+  const { picker, askAllocation } = useLotPicker()
   const isBreak = kind === 'break'
   const [product, setProduct] = useState<InventoryProduct | null>(null)
   const [location, setLocation] = useState<Location>('RM')
@@ -305,6 +311,33 @@ export function AddItemForm({
     setError('')
     setBusy(true)
     try {
+      /**
+       * WHICH CASE. Asked before anything is written, and only on a live show —
+       * a reconciliation states what a night cost weeks after the stock left, so
+       * there is no layer for it to come out of and main refuses an allocation
+       * against one.
+       *
+       * The quantity asked about is the CONVERTED one, in the product's own
+       * stock unit, because that is the unit the cost layers are held in. The
+       * entry ("two cases and three boxes") is still what gets submitted — main
+       * re-runs the same conversion — so the two cannot disagree about how much
+       * is moving.
+       *
+       * A cancel abandons the whole line. It does NOT fall through: booking the
+       * oldest layer at the moment the operator declined to choose is exactly
+       * the silence this replaced.
+       */
+      let allocation: LotPick[] | null = null
+      if (!reconcile) {
+        const choice = await askAllocation({
+          productId: product.id,
+          location,
+          quantity,
+          productName: product.name
+        })
+        if (!choice) return
+        allocation = choice.allocation
+      }
       // The ENTRY is what travels, not the converted number: main runs the same
       // contract helpers over it and stores both. Sending the converted quantity
       // instead would make this form's arithmetic the authority, and two copies
@@ -339,6 +372,7 @@ export function AddItemForm({
             cases: isBreak ? entered.left : null,
             boxes: isBreak ? entered.right : entered.left,
             packs: isBreak ? null : entered.right,
+            allocation,
             location,
             breakNumber: isBreak ? num : null,
             recipient: !isBreak ? recipient.trim() || null : null,
@@ -349,6 +383,7 @@ export function AddItemForm({
             kind,
             productId: product.id,
             quantity,
+            allocation,
             location,
             breakNumber: isBreak ? num : null,
             recipient: !isBreak ? recipient.trim() || null : null,
@@ -391,6 +426,7 @@ export function AddItemForm({
 
   return (
     <div className={`stm-additem ${kind}${reconcile ? ' reconcile' : ''}`}>
+      {picker}
       {/* First thing in the panel, before the product is even chosen: what this
           form is going to do. The fields below only make sense once that is
           known, and finding out afterwards is finding out too late. */}

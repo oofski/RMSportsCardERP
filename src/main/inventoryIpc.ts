@@ -22,6 +22,7 @@ import type {
   InventoryProduct,
   InventoryStats,
   InventoryTransaction,
+  LotPickerData,
   NewIncomingShipment,
   NewInventoryProduct,
   NewSupply,
@@ -51,6 +52,7 @@ import type {
   UploadedFile
 } from '@shared/types'
 import { isLocation } from '@shared/inventory'
+import { tidyPicks } from '@shared/costLots'
 import type { Permission } from '@shared/permissions'
 import { currentUser } from './services/auth'
 import { IMAGE_EXTENSIONS } from './services/media'
@@ -65,6 +67,7 @@ import {
   getProduct,
   inventoryStats,
   listLots,
+  lotOptions,
   listProductImages,
   listProducts,
   listTransactions,
@@ -210,6 +213,21 @@ export function registerInventoryIpc(): void {
   )
   ipcMain.handle(IPC.invProductLots, (_e, productId: string): ProductLot[] =>
     can('module.inventory') ? listLots(String(productId ?? '')) : []
+  )
+  // The cost-lot picker's read. Gated like the catalog search rather than like
+  // the rest of Inventory: a streaming-only operator is exactly who this dialog
+  // is for — they are the one ripping the case — and locking it behind
+  // module.inventory would leave them recording breaks with no way to say which
+  // case they opened, which is the whole complaint this answers.
+  ipcMain.handle(
+    IPC.invLotOptions,
+    (_e, input: { productId: string; location: string }): LotPickerData | null => {
+      if (!can('module.inventory') && !can('module.streaming')) return null
+      const productId = String(input?.productId ?? '')
+      const location = String(input?.location ?? '')
+      if (!productId || !isLocation(location)) return null
+      return lotOptions(productId, location)
+    }
   )
 
   // ---- UPC scanning -------------------------------------------------------
@@ -456,7 +474,15 @@ export function registerInventoryIpc(): void {
       if (input.unitCost != null && (!Number.isFinite(input.unitCost) || input.unitCost < 0)) {
         return { ok: false, error: 'Enter a valid unit cost.' }
       }
-      const res = addStock(input.productId, input.location, input.quantity, input.unitCost ?? null, input.note ?? null, actor.id)
+      const res = addStock(
+        input.productId,
+        input.location,
+        input.quantity,
+        input.unitCost ?? null,
+        input.note ?? null,
+        actor.id,
+        input.vendor ?? null
+      )
       return res.error ? { ok: false, error: res.error } : { ok: true, data: res.product as InventoryProduct }
     } catch (err) {
       return fail(err)
@@ -471,7 +497,19 @@ export function registerInventoryIpc(): void {
       if (!Number.isFinite(input.quantityChange) || input.quantityChange === 0) {
         return { ok: false, error: 'Enter a non-zero quantity.' }
       }
-      const res = adjustStock(input.productId, input.location, input.quantityChange, input.note ?? null, actor.id)
+      // Tidied here rather than trusted: the dialog holds a row for every layer
+      // on screen and most are zero, and a zero slice would claim a layer
+      // supplied nothing. An allocation that tidies to empty is the same as none
+      // given, which is the no-choice case and runs FIFO.
+      const allocation = tidyPicks(Array.isArray(input.allocation) ? input.allocation : [])
+      const res = adjustStock(
+        input.productId,
+        input.location,
+        input.quantityChange,
+        input.note ?? null,
+        actor.id,
+        allocation
+      )
       return res.error ? { ok: false, error: res.error } : { ok: true, data: res.product as InventoryProduct }
     } catch (err) {
       return fail(err)
@@ -610,7 +648,16 @@ export function registerInventoryIpc(): void {
         return { ok: false, error: 'Enter a valid sale price.' }
       }
       if (!input.client?.trim()) return { ok: false, error: 'Enter the client name.' }
-      const res = recordSale(input.productId, input.location, input.quantity, input.unitPrice, input.client, input.note ?? null, actor.id)
+      const res = recordSale(
+        input.productId,
+        input.location,
+        input.quantity,
+        input.unitPrice,
+        input.client,
+        input.note ?? null,
+        actor.id,
+        tidyPicks(Array.isArray(input.allocation) ? input.allocation : [])
+      )
       return res.error ? { ok: false, error: res.error } : { ok: true, data: res.product as InventoryProduct }
     } catch (err) {
       return fail(err)

@@ -94,6 +94,12 @@ export const IPC = {
   // not just to the product row, which is why it is not `invProductUpdate`.
   invCostBasisFix: 'inventory:cost-basis:fix',
   invProductLots: 'inventory:product:lots',
+  // The cost-lot picker's one read: the open layers for a (product, location)
+  // plus the average to judge them against. A READ — the choice it informs is
+  // carried on the write that follows (addStock/adjustStock/recordSale/stream
+  // addItem), never committed from here, so an abandoned dialog leaves nothing
+  // behind.
+  invLotOptions: 'inventory:lots:options',
   // UPC scanning. resolve/history are reads; commit/log-miss/undo write stock.
   invScanResolve: 'inventory:scan:resolve',
   invScanCommit: 'inventory:scan:commit',

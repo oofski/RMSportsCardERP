@@ -247,6 +247,10 @@ export const SYNCED_TABLES: SyncedTable[] = [
   // row-at-a-time recovery path.
   { table: 'invoice_lines', key: ['id'], tier: 2 },
   { table: 'stream_item_lots', key: ['id'], tier: 2 },
+  // Which cost layers one ledger movement took, and whether an operator chose
+  // them. Tier 2: it names a transaction, and a composition arriving before the
+  // movement it explains would be a set of slices attached to nothing.
+  { table: 'inventory_txn_lots', key: ['id'], tier: 2 },
   { table: 'ledger_row_imports', key: ['row_id', 'import_id'], tier: 2 }
 ]
 

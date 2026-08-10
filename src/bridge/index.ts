@@ -106,6 +106,7 @@ import type {
   InventoryProduct,
   InventoryStats,
   InventoryTransaction,
+  LotPickerData,
   NewEmployeeInput,
   NewIncomingShipment,
   NewInventoryProduct,
@@ -364,6 +365,11 @@ export function createBridge(ipcRenderer: BridgeTransport) {
         ipcRenderer.invoke(IPC.invCostBasisFix, { productId, unitCost }),
       productLots: (productId: string): Promise<ProductLot[]> =>
         ipcRenderer.invoke(IPC.invProductLots, productId),
+      // What the cost-lot picker draws itself from. A pure READ: the operator's
+      // answer is carried on the write that follows (adjustStock / recordSale /
+      // streaming.addItem), so closing the dialog leaves nothing behind to undo.
+      lotOptions: (productId: string, location: string): Promise<LotPickerData | null> =>
+        ipcRenderer.invoke(IPC.invLotOptions, { productId, location }),
       // UPC scanning. resolve is read-only and safe to call repeatedly (the camera
       // decoder fires many times a second); commit performs the one confirmed
       // action. The raw code is sent un-trimmed — the backend does the cleaning so

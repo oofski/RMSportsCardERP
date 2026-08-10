@@ -9,6 +9,7 @@ import type {
   ScanResolution
 } from '@shared/types'
 import { LOCATION_IDS, isLocation } from '@shared/inventory'
+import { tidyPicks } from '@shared/costLots'
 import { cleanScan, normalizeUpc } from '@shared/upc'
 import { getDb } from './database'
 import {
@@ -439,7 +440,18 @@ export function commitScan(
       // oldest FIFO lots and re-derives the average from what is LEFT, so taking
       // stock out never rolls the cost basis. No purchase order is read or
       // written here — an outbound scan has nothing to do with one.
-      const res = adjustStock(productId, location, -quantity, input.note ?? 'Scanned out', actorId)
+      // The layers the operator picked at confirm time, or none — in which case
+      // adjustStock walks oldest-first exactly as it always has. A REPLAYED
+      // commit never reaches here at all (the token short-circuits above), so a
+      // retry cannot consume a second set of layers.
+      const res = adjustStock(
+        productId,
+        location,
+        -quantity,
+        input.note ?? 'Scanned out',
+        actorId,
+        tidyPicks(Array.isArray(input.allocation) ? input.allocation : [])
+      )
       // adjustStock RETURNS its errors ("would make stock negative", "not found");
       // throwing turns that into a rollback, so no scan row is written either.
       if (res.error) throw new Error(res.error)

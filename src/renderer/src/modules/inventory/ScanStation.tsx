@@ -28,6 +28,8 @@ import {
   type PendingLine
 } from './scanLines'
 import { useScanInput } from './useScanInput'
+import { useLotPicker } from './LotPicker'
+import type { LotPick } from '@shared/costLots'
 
 /**
  * The scan surface.
@@ -66,6 +68,9 @@ export function ScanStation({
   onChanged: () => void | Promise<void>
 }): JSX.Element {
   const toast = useToast()
+  // Outbound scans consume cost layers, so the same question gets asked here as
+  // anywhere else stock leaves — once per line, at confirm.
+  const { picker, askAllocation } = useLotPicker()
   const [direction, setDirection] = useState<ScanDirection>('in')
   const [manual, setManual] = useState('')
   const [pending, setPending] = useState<PendingLine[]>([])
@@ -349,9 +354,34 @@ export function ScanStation({
     const done: ScanCommitResult[] = []
     try {
       for (const line of pending) {
+        /**
+         * WHICH LAYER, for an outbound line, asked against the count that is
+         * about to be committed rather than the one that was on screen when the
+         * barcode first beeped.
+         *
+         * Cancelling stops the RUN. Everything already committed stays committed
+         * — it cannot be otherwise, each line is its own transaction — and this
+         * line and everything after it stay on the list, unwritten. That is the
+         * honest analogue of "cancel aborts the action": the action this cancel
+         * refers to is this line, and nothing was booked for it.
+         */
+        let allocation: LotPick[] | null = null
+        if (line.kind === 'remove_stock') {
+          const choice = await askAllocation({
+            productId: line.productId,
+            location: line.location,
+            quantity: line.quantity,
+            productName: line.productName
+          })
+          if (!choice) {
+            toast.toast(`${line.productName} was left on the list — nothing was taken out for it.`)
+            break
+          }
+          allocation = choice.allocation
+        }
         let res: Awaited<ReturnType<typeof api.inventory.scanCommit>>
         try {
-          res = await api.inventory.scanCommit(toCommitInput(line))
+          res = await api.inventory.scanCommit(toCommitInput(line, allocation))
         } catch (err) {
           toast.error(err instanceof Error ? err.message : 'Could not scan that in.')
           break
@@ -383,162 +413,167 @@ export function ScanStation({
   const idle = pending.length === 0 && !resolution
 
   return (
-    <Modal
-      title={out ? 'Scan items out' : 'Scan items in'}
-      subtitle={
-        out
-          ? 'Taking stock off the shelf — scan each item, or scan one item repeatedly to count it up'
-          : 'Scan each box with the handheld scanner — scan one repeatedly to count it up'
-      }
-      wide
-      onClose={onClose}
-    >
-      <div className={`scan-station scan-station-${direction}`}>
-        {denied ? (
-          <div className="scan-result scan-result-unknown">
-            <div className="scan-unknown-ico">
-              <Icon name="AlertCircle" size={26} />
-            </div>
-            <div className="scan-unknown-title">Scanning is not available</div>
-            <div className="scan-unknown-msg">You do not have permission to look up inventory.</div>
-          </div>
-        ) : (
-          <>
-            {/* DIRECTION — decided before scanning, and never off screen while
-                scanning. Locked once a list exists so half a stack cannot be
-                added and the other half removed, and locked again while a
-                question is open: that question was asked of one direction and
-                its answer must not be filed under the other. */}
-            <div className="scan-modes scan-dirs" role="group" aria-label="Scan direction">
-              <button
-                type="button"
-                className={`scan-mode-btn scan-dir-btn ${direction === 'in' ? 'active' : ''}`}
-                aria-pressed={direction === 'in'}
-                disabled={dirLocked}
-                title={dirLocked ? dirLockReason : undefined}
-                onClick={() => setDirection('in')}
-              >
-                <Icon name="PackagePlus" size={16} />
-                Stock in
-              </button>
-              <button
-                type="button"
-                className={`scan-mode-btn scan-dir-btn ${out ? 'active' : ''}`}
-                aria-pressed={out}
-                disabled={dirLocked}
-                title={dirLocked ? dirLockReason : undefined}
-                onClick={() => setDirection('out')}
-              >
-                <Icon name="PackageMinus" size={16} />
-                Stock out
-              </button>
-            </div>
-
-            <div className={`scan-target ${armed ? 'ready' : 'held'}`}>
-              <span className="scan-pulse" aria-hidden />
-              {/* The direction is repeated here because this strip is what the
-                  operator's eye is on while scanning. */}
-              <span className="scan-chip scan-chip-brand scan-dir-chip">
-                <Icon name={out ? 'PackageMinus' : 'PackagePlus'} size={13} />
-                {out ? 'Taking OUT' : 'Adding IN'}
-              </span>
-              <span className="scan-target-label">
-                {resolving
-                  ? 'Reading barcode…'
-                  : busy
-                    ? 'Saving…'
-                    : resolution
-                      ? 'Answer the question below to carry on scanning'
-                      : pending.length > 0
-                        ? `${totals.units} counted — keep scanning`
-                        : 'Ready — scan a barcode'}
-              </span>
-              <input
-                ref={inputRef}
-                className="scan-input"
-                data-scan-target="true"
-                value={manual}
-                placeholder="or type a barcode + Enter"
-                aria-label="Barcode"
-                disabled={!armed}
-                onChange={(e) => setManual(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key !== 'Enter') return
-                  e.preventDefault()
-                  const value = e.currentTarget.value.trim()
-                  if (value) feed(value, 'manual')
-                }}
-              />
-            </div>
-
-            {last.length > 0 && idle && (
-              <div className="scan-banner scan-banner-success">
-                <Icon name="CheckCircle2" size={16} />
-                {last.length === 1
-                  ? last[0].message
-                  : last.map((r) => `${r.quantity} × ${r.product?.name ?? 'item'}`).join(' · ')}
+    <>
+      <Modal
+        title={out ? 'Scan items out' : 'Scan items in'}
+        subtitle={
+          out
+            ? 'Taking stock off the shelf — scan each item, or scan one item repeatedly to count it up'
+            : 'Scan each box with the handheld scanner — scan one repeatedly to count it up'
+        }
+        wide
+        onClose={onClose}
+      >
+        <div className={`scan-station scan-station-${direction}`}>
+          {denied ? (
+            <div className="scan-result scan-result-unknown">
+              <div className="scan-unknown-ico">
+                <Icon name="AlertCircle" size={26} />
               </div>
-            )}
-
-            {scanError && (
-              <div className="scan-banner scan-banner-error">
-                <Icon name="AlertCircle" size={16} />
-                <span>{scanError}</span>
-                <button type="button" className="link-btn" onClick={() => setScanError(null)}>
-                  Dismiss
+              <div className="scan-unknown-title">Scanning is not available</div>
+              <div className="scan-unknown-msg">You do not have permission to look up inventory.</div>
+            </div>
+          ) : (
+            <>
+              {/* DIRECTION — decided before scanning, and never off screen while
+                  scanning. Locked once a list exists so half a stack cannot be
+                  added and the other half removed, and locked again while a
+                  question is open: that question was asked of one direction and
+                  its answer must not be filed under the other. */}
+              <div className="scan-modes scan-dirs" role="group" aria-label="Scan direction">
+                <button
+                  type="button"
+                  className={`scan-mode-btn scan-dir-btn ${direction === 'in' ? 'active' : ''}`}
+                  aria-pressed={direction === 'in'}
+                  disabled={dirLocked}
+                  title={dirLocked ? dirLockReason : undefined}
+                  onClick={() => setDirection('in')}
+                >
+                  <Icon name="PackagePlus" size={16} />
+                  Stock in
+                </button>
+                <button
+                  type="button"
+                  className={`scan-mode-btn scan-dir-btn ${out ? 'active' : ''}`}
+                  aria-pressed={out}
+                  disabled={dirLocked}
+                  title={dirLocked ? dirLockReason : undefined}
+                  onClick={() => setDirection('out')}
+                >
+                  <Icon name="PackageMinus" size={16} />
+                  Stock out
                 </button>
               </div>
-            )}
 
-            {pending.length > 0 && (
-              <ScanQueue
-                lines={pending}
-                direction={direction}
-                busy={busy}
-                onQuantity={(key, quantity) => setPending((l) => setQuantity(l, key, quantity))}
-                onLocation={(key, location) => setPending((l) => setLocation(l, key, location))}
-                onUnitCost={(key, unitCost) => setPending((l) => setUnitCost(l, key, unitCost))}
-                onRemove={(key) => setPending((l) => removeLine(l, key))}
-                onClear={() => setPending([])}
-                onConfirm={() => void confirm()}
-              />
-            )}
-
-            {resolution && (
-              <div ref={previewRef}>
-                {adding ? (
-                  <ScanNewProduct
-                    code={adding}
-                    defaultLocation={resolution.suggestedLocation || LOCATION_IDS[0]}
-                    categories={categoryOptions}
-                    onCancel={() => setAdding(null)}
-                    onCreated={acceptNewProduct}
-                  />
-                ) : (
-                  <ScanPreview
-                    key={seq}
-                    resolution={resolution}
-                    products={products}
-                    onPick={pick}
-                    onDismiss={dismiss}
-                    onAdd={(code) => setAdding(code)}
-                  />
-                )}
+              <div className={`scan-target ${armed ? 'ready' : 'held'}`}>
+                <span className="scan-pulse" aria-hidden />
+                {/* The direction is repeated here because this strip is what the
+                    operator's eye is on while scanning. */}
+                <span className="scan-chip scan-chip-brand scan-dir-chip">
+                  <Icon name={out ? 'PackageMinus' : 'PackagePlus'} size={13} />
+                  {out ? 'Taking OUT' : 'Adding IN'}
+                </span>
+                <span className="scan-target-label">
+                  {resolving
+                    ? 'Reading barcode…'
+                    : busy
+                      ? 'Saving…'
+                      : resolution
+                        ? 'Answer the question below to carry on scanning'
+                        : pending.length > 0
+                          ? `${totals.units} counted — keep scanning`
+                          : 'Ready — scan a barcode'}
+                </span>
+                <input
+                  ref={inputRef}
+                  className="scan-input"
+                  data-scan-target="true"
+                  value={manual}
+                  placeholder="or type a barcode + Enter"
+                  aria-label="Barcode"
+                  disabled={!armed}
+                  onChange={(e) => setManual(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key !== 'Enter') return
+                    e.preventDefault()
+                    const value = e.currentTarget.value.trim()
+                    if (value) feed(value, 'manual')
+                  }}
+                />
               </div>
-            )}
-          </>
-        )}
 
-        {idle && (
-          <>
-            <div className="scan-hist-head">
-              <Icon name="History" size={15} />
-              Recent scans
-            </div>
-            <ScanHistory refreshKey={historyKey} canManage={canManage} onUndone={onChanged} />
-          </>
-        )}
-      </div>
-    </Modal>
+              {last.length > 0 && idle && (
+                <div className="scan-banner scan-banner-success">
+                  <Icon name="CheckCircle2" size={16} />
+                  {last.length === 1
+                    ? last[0].message
+                    : last.map((r) => `${r.quantity} × ${r.product?.name ?? 'item'}`).join(' · ')}
+                </div>
+              )}
+
+              {scanError && (
+                <div className="scan-banner scan-banner-error">
+                  <Icon name="AlertCircle" size={16} />
+                  <span>{scanError}</span>
+                  <button type="button" className="link-btn" onClick={() => setScanError(null)}>
+                    Dismiss
+                  </button>
+                </div>
+              )}
+
+              {pending.length > 0 && (
+                <ScanQueue
+                  lines={pending}
+                  direction={direction}
+                  busy={busy}
+                  onQuantity={(key, quantity) => setPending((l) => setQuantity(l, key, quantity))}
+                  onLocation={(key, location) => setPending((l) => setLocation(l, key, location))}
+                  onUnitCost={(key, unitCost) => setPending((l) => setUnitCost(l, key, unitCost))}
+                  onRemove={(key) => setPending((l) => removeLine(l, key))}
+                  onClear={() => setPending([])}
+                  onConfirm={() => void confirm()}
+                />
+              )}
+
+              {resolution && (
+                <div ref={previewRef}>
+                  {adding ? (
+                    <ScanNewProduct
+                      code={adding}
+                      defaultLocation={resolution.suggestedLocation || LOCATION_IDS[0]}
+                      categories={categoryOptions}
+                      onCancel={() => setAdding(null)}
+                      onCreated={acceptNewProduct}
+                    />
+                  ) : (
+                    <ScanPreview
+                      key={seq}
+                      resolution={resolution}
+                      products={products}
+                      onPick={pick}
+                      onDismiss={dismiss}
+                      onAdd={(code) => setAdding(code)}
+                    />
+                  )}
+                </div>
+              )}
+            </>
+          )}
+
+          {idle && (
+            <>
+              <div className="scan-hist-head">
+                <Icon name="History" size={15} />
+                Recent scans
+              </div>
+              <ScanHistory refreshKey={historyKey} canManage={canManage} onUndone={onChanged} />
+            </>
+          )}
+        </div>
+      </Modal>
+      {/* After the station's own modal: both overlays sit at the same z-index,
+          so whichever is later in the DOM is the one the operator can reach. */}
+      {picker}
+    </>
   )
 }

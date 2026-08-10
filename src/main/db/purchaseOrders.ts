@@ -431,7 +431,7 @@ export function receivePoLine(
   const row = db
     .prepare(
       `SELECT l.id, l.po_id, l.product_id, l.quantity, l.qty_received, l.unit_price,
-              p.name AS product_name, po.po_number, po.status, po.location
+              p.name AS product_name, po.po_number, po.status, po.location, po.supplier
        FROM purchase_order_lines l
        JOIN purchase_orders po ON po.id = l.po_id
        JOIN inventory_products p ON p.id = l.product_id
@@ -449,6 +449,7 @@ export function receivePoLine(
         po_number: string
         status: PurchaseOrderStatus
         location: string
+        supplier: string | null
       }
     | undefined
   if (!row) throw new Error('That purchase order line no longer exists.')
@@ -466,13 +467,19 @@ export function receivePoLine(
   const take = Math.min(Math.max(1, want), outstanding)
 
   // The one money path: FIFO lot + moving weighted-average cost + ledger entry.
+  // The supplier travels onto the cost layer this receipt opens. It is the one
+  // place in the app that reliably knows who stock was bought from, and without
+  // it the picker's vendor column would be blank for every case in the building —
+  // leaving an operator to choose between "$1,400" and "$1,600" with nothing else
+  // to go on.
   const res = addStock(
     row.product_id,
     row.location,
     take,
     row.unit_price,
     note ?? `Scanned in ${row.po_number}`,
-    actorId
+    actorId,
+    row.supplier
   )
   if (res.error) throw new Error(res.error) // THROW so the outer txn rolls back every prior line (atomic)
 

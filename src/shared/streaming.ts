@@ -18,6 +18,7 @@
  * ambiguous, and there would be no correct way to resolve it later.
  */
 
+import type { LotPick } from './costLots'
 import type { StockUnit } from './units'
 
 export type StreamStatus = 'live' | 'ended'
@@ -275,6 +276,21 @@ export interface NewStreamItem {
    * that is not a real, non-negative amount rather than storing a NaN.
    */
   casePrice?: number | null
+  /**
+   * Which cost layers this line takes its stock out of, as chosen in the picker.
+   *
+   * Absent means there was nothing to decide — one open layer, or several all at
+   * the same unit cost — and the oldest are consumed, exactly as they always
+   * were. A picker that was shown and CANCELLED never gets here: the form
+   * abandons the whole add, because a line that books the oldest layer while the
+   * operator believes they picked the $1,600 case is the precise failure this
+   * exists to stop.
+   *
+   * REFUSED on a reconciliation. That line consumes no layer at all — it states
+   * what a night cost, weeks after the stock left — so an allocation against it
+   * would be a claim about layers it is not touching.
+   */
+  allocation?: LotPick[] | null
   location: string
   breakNumber?: number | null
   recipient?: string | null

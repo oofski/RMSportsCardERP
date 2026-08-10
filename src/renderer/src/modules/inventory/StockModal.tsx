@@ -6,6 +6,7 @@ import { formatUnitCount } from '../../lib/productUnits'
 import { useToast } from '../../components/Toast'
 import { Button, Field, Input, Modal } from '../../components/ui'
 import { structureLabel } from './helpers'
+import { useLotPicker } from './LotPicker'
 
 /**
  * The fast "add stock" flow: type a name → pick from the catalog → it
@@ -22,11 +23,17 @@ export function StockModal({
   onSaved: () => void | Promise<void>
 }): JSX.Element {
   const toast = useToast()
+  // Only the DOWNWARD half of "adjust" consumes anything, so this is only ever
+  // asked there. An upward correction opens a layer rather than taking one.
+  const { picker, askAllocation } = useLotPicker()
   const [selected, setSelected] = useState<InventoryProduct | null>(presetProduct ?? null)
   const [mode, setMode] = useState<'add' | 'adjust'>('add')
   const [location, setLocation] = useState<Location>('RM')
   const [quantity, setQuantity] = useState('1')
   const [unitCost, setUnitCost] = useState('')
+  /** Who a RECEIPT was bought from. Stamped on the cost layer it opens, so the
+   *  picker can later say which case is which — see lotLabel. */
+  const [vendor, setVendor] = useState('')
   const [note, setNote] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -65,14 +72,29 @@ export function StockModal({
           location,
           quantity: qty,
           unitCost: cost,
-          note: note.trim() || null
+          note: note.trim() || null,
+          vendor: vendor.trim() || null
         })
       } else {
+        // Only a correction DOWN takes cost layers, and only then is there
+        // anything to ask about. A cancel abandons the correction rather than
+        // letting oldest-first run behind the operator's back.
+        let allocation: Awaited<ReturnType<typeof askAllocation>> = { allocation: null }
+        if (qty < 0) {
+          allocation = await askAllocation({
+            productId: selected.id,
+            location,
+            quantity: -qty,
+            productName: selected.name
+          })
+          if (!allocation) return
+        }
         res = await api.inventory.adjustStock({
           productId: selected.id,
           location,
           quantityChange: qty,
-          note: note.trim() || null
+          note: note.trim() || null,
+          allocation: allocation.allocation
         })
       }
       if (!res.ok) {
@@ -87,83 +109,98 @@ export function StockModal({
   }
 
   return (
-    <Modal
-      title={presetProduct ? 'Update stock' : 'Add stock'}
-      subtitle={presetProduct ? presetProduct.name : undefined}
-      onClose={onClose}
-      footer={
-        <>
-          <Button variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button variant="primary" icon="PackagePlus" loading={busy} onClick={submit} disabled={!selected}>
-            {mode === 'add' ? `Add to ${location}` : `Adjust ${location}`}
-          </Button>
-        </>
-      }
-    >
-      {error && <div className="auth-alert">{error}</div>}
+    <>
+      <Modal
+        title={presetProduct ? 'Update stock' : 'Add stock'}
+        subtitle={presetProduct ? presetProduct.name : undefined}
+        onClose={onClose}
+        footer={
+          <>
+            <Button variant="ghost" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button variant="primary" icon="PackagePlus" loading={busy} onClick={submit} disabled={!selected}>
+              {mode === 'add' ? `Add to ${location}` : `Adjust ${location}`}
+            </Button>
+          </>
+        }
+      >
+        {error && <div className="auth-alert">{error}</div>}
 
-      {!selected ? (
-        <CatalogTypeahead onSelect={choose} />
-      ) : (
-        <>
-          <div className="selected-product">
-            <div>
-              <div className="sp-name">{selected.name}</div>
-              <div className="sp-meta">
-                <span className="mono">{selected.sku}</span>
-                {selected.upc && <span className="mono">{selected.upc}</span>}
-                {selected.category && <span>{selected.category}</span>}
-                <span>{structureLabel(selected)}</span>
+        {!selected ? (
+          <CatalogTypeahead onSelect={choose} />
+        ) : (
+          <>
+            <div className="selected-product">
+              <div>
+                <div className="sp-name">{selected.name}</div>
+                <div className="sp-meta">
+                  <span className="mono">{selected.sku}</span>
+                  {selected.upc && <span className="mono">{selected.upc}</span>}
+                  {selected.category && <span>{selected.category}</span>}
+                  <span>{structureLabel(selected)}</span>
+                </div>
               </div>
-            </div>
-            {!presetProduct && (
-              <button className="btn btn-ghost btn-sm" style={{ marginLeft: 'auto' }} onClick={() => setSelected(null)}>
-                Change
-              </button>
-            )}
-          </div>
-
-          <Field label="Location">
-            <div className="loc-pills">
-              {LOCATIONS.map((l) => (
-                <button
-                  key={l.id}
-                  type="button"
-                  className={`loc-pill ${location === l.id ? 'active' : ''}`}
-                  onClick={() => setLocation(l.id)}
-                >
-                  {l.label}
-                  <div className="lp-sub">{formatUnitCount(selected.quantityByLocation[l.id] ?? 0)} on hand</div>
+              {!presetProduct && (
+                <button className="btn btn-ghost btn-sm" style={{ marginLeft: 'auto' }} onClick={() => setSelected(null)}>
+                  Change
                 </button>
-              ))}
+              )}
             </div>
-          </Field>
 
-          <div className="field-row">
-            <Field label="Mode">
-              <select className="select" value={mode} onChange={(e) => setMode(e.target.value as 'add' | 'adjust')}>
-                <option value="add">Add received stock</option>
-                <option value="adjust">Adjust / correct (+/−)</option>
-              </select>
+            <Field label="Location">
+              <div className="loc-pills">
+                {LOCATIONS.map((l) => (
+                  <button
+                    key={l.id}
+                    type="button"
+                    className={`loc-pill ${location === l.id ? 'active' : ''}`}
+                    onClick={() => setLocation(l.id)}
+                  >
+                    {l.label}
+                    <div className="lp-sub">{formatUnitCount(selected.quantityByLocation[l.id] ?? 0)} on hand</div>
+                  </button>
+                ))}
+              </div>
             </Field>
-            <Field label={mode === 'add' ? 'Quantity' : 'Change (use − to reduce)'}>
-              <Input type="number" value={quantity} onChange={(e) => setQuantity(e.target.value)} autoFocus />
-            </Field>
-          </div>
 
-          {mode === 'add' && (
-            <Field label="Unit cost" hint="Per unit — also updates the product cost.">
-              <Input type="number" min={0} step="0.01" value={unitCost} onChange={(e) => setUnitCost(e.target.value)} placeholder="0.00" />
+            <div className="field-row">
+              <Field label="Mode">
+                <select className="select" value={mode} onChange={(e) => setMode(e.target.value as 'add' | 'adjust')}>
+                  <option value="add">Add received stock</option>
+                  <option value="adjust">Adjust / correct (+/−)</option>
+                </select>
+              </Field>
+              <Field label={mode === 'add' ? 'Quantity' : 'Change (use − to reduce)'}>
+                <Input type="number" value={quantity} onChange={(e) => setQuantity(e.target.value)} autoFocus />
+              </Field>
+            </div>
+
+            {mode === 'add' && (
+              <div className="field-row">
+                <Field label="Unit cost" hint="Per unit — also updates the product cost.">
+                  <Input type="number" min={0} step="0.01" value={unitCost} onChange={(e) => setUnitCost(e.target.value)} placeholder="0.00" />
+                </Field>
+                {/* Optional, and left blank rather than guessed at. It rides onto
+                    the cost layer this receipt opens: when the same product is
+                    later held at two prices, this is what tells the operator which
+                    case is which — a picker showing "$1,400" and "$1,600" and
+                    nothing else is a coin toss. */}
+                <Field label="Vendor" hint="Optional — who it was bought from.">
+                  <Input value={vendor} onChange={(e) => setVendor(e.target.value)} placeholder="Supplier name" />
+                </Field>
+              </div>
+            )}
+            <Field label="Note" hint="Optional">
+              <Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. New case from vendor" />
             </Field>
-          )}
-          <Field label="Note" hint="Optional">
-            <Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. New case from vendor" />
-          </Field>
-        </>
-      )}
-    </Modal>
+          </>
+        )}
+      </Modal>
+      {/* After the modal, so it stacks above it — the two overlays share a
+          z-index and DOM order is what decides. */}
+      {picker}
+    </>
   )
 }
 

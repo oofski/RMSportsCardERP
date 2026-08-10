@@ -1,3 +1,4 @@
+import type { CostLot, LotPick } from './costLots'
 import type { Carrier, PaymentTiming } from './freight'
 import type { ShipStatusCode } from './shippingTypes'
 import type { Permission, Role } from './permissions'
@@ -321,6 +322,13 @@ export interface AddStockInput {
   quantity: number
   unitCost?: number | null
   note?: string | null
+  /**
+   * Who it was bought from. Stamped on the cost layer this receipt opens, so the
+   * picker can later tell two layers of the same product apart by more than
+   * their price. Optional and never guessed — a receipt with nobody named opens
+   * a layer with no vendor, which is the truth about it.
+   */
+  vendor?: string | null
 }
 
 /** Correct a location's count up or down. */
@@ -329,6 +337,17 @@ export interface AdjustStockInput {
   location: string
   quantityChange: number
   note?: string | null
+  /**
+   * Which cost layers a DOWNWARD correction comes out of, as chosen in the
+   * picker. Absent means there was nothing to decide and the oldest layers are
+   * consumed — the behaviour every caller had before the picker existed.
+   *
+   * A picker that was shown and CANCELLED must never arrive here as an absent
+   * allocation: the caller abandons the whole action instead, because booking
+   * oldest-first while the operator believes they chose is the failure the
+   * dialog exists to prevent.
+   */
+  allocation?: LotPick[] | null
 }
 
 export interface RecordSaleInput {
@@ -338,6 +357,8 @@ export interface RecordSaleInput {
   unitPrice: number
   client: string
   note?: string | null
+  /** The operator's cost-layer choice. See AdjustStockInput.allocation. */
+  allocation?: LotPick[] | null
 }
 
 export interface InventoryStats {
@@ -674,6 +695,25 @@ export interface ProductLot {
   source: string
 }
 
+/**
+ * Everything the cost-lot picker draws itself from, for one product at one
+ * location.
+ *
+ * `averageCost` rides along because the owner asked for it to stay visible while
+ * the choice is being made: "the $1,550 lot" means nothing without knowing the
+ * shelf averages $1,510. It is a REFERENCE FIGURE and nothing books against it —
+ * what books is the blend of the layers actually allocated.
+ */
+export interface LotPickerData {
+  productId: string
+  productName: string
+  unitType: UnitType
+  location: string
+  /** The product's stored weighted average per stock unit. Never the basis. */
+  averageCost: number
+  lots: CostLot[]
+}
+
 /** A row on the Daily Pricing screen (in-stock products with derived money). */
 export interface PricingRow {
   id: string
@@ -998,9 +1038,19 @@ export interface ScanCommitInput {
    * quantity N, never N commits of 1. */
   quantity?: number
   /** Inbound only. An outbound scan has no cost input at all: it consumes the
-   * FIFO lots that are there, at what they actually cost. */
+   * cost layers that are there, at what they actually cost. */
   unitCost?: number | null
   note?: string | null
+  /**
+   * Outbound only: which cost layers this scan takes its stock out of.
+   *
+   * Asked at CONFIRM time rather than when the barcode beeps, because repeat
+   * scans of one code accumulate into a single line and an allocation chosen
+   * against a count of 1 would be wrong by the time the line reads 5. Absent
+   * means there was nothing to decide and the oldest layers are consumed, as
+   * they always were.
+   */
+  allocation?: LotPick[] | null
   /** Idempotency key for a retry / double-click / future phone client. */
   clientToken?: string
 }

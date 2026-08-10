@@ -4,6 +4,7 @@ import type {
   InventoryProduct,
   InventoryStats,
   InventoryTransaction,
+  LotPickerData,
   NewInventoryProduct,
   PricingRow,
   ProductImage,
@@ -18,11 +19,14 @@ import { QTY_SNAP } from '@shared/units'
 import { LOCATION_IDS } from '@shared/inventory'
 import { normalizeUpc } from '@shared/upc'
 import { getDb } from './database'
+import type { LotPick } from '@shared/costLots'
 import {
   QTY_EPS,
   allowsFractionalQty,
-  consumeFifo,
+  consumeLots,
   createLot,
+  listOpenLots,
+  recordTxnLots,
   reverseLotReceipt,
   roundQty,
   slicesCost,
@@ -660,6 +664,42 @@ export function listLots(productId: string): ProductLot[] {
 }
 
 /**
+ * Everything the cost-lot picker needs for one (product, location), in ONE read.
+ *
+ * One call rather than three, because the dialog opens in the middle of somebody
+ * recording a break on air: three round trips over the web transport is three
+ * chances to draw a half-populated dialog, and a picker showing layers without
+ * the average to judge them against is a picker showing a list of prices with no
+ * reference point.
+ *
+ * `averageCost` is the product's stored weighted average — the reference figure
+ * the owner asked to stay visible throughout. It is deliberately NOT what any
+ * consumption books; it is what the layers on screen blend to, so a chosen
+ * allocation can be read against it at a glance.
+ *
+ * A product that no longer exists comes back null rather than as an empty shell.
+ * An empty `lots` array is a real answer — the shelf has stock recorded with no
+ * cost layer under it — and the caller must not prompt on it.
+ */
+export function lotOptions(productId: string, location: string): LotPickerData | null {
+  const db = getDb()
+  const row = db
+    .prepare('SELECT id, name, unit_type, unit_cost FROM inventory_products WHERE id = ?')
+    .get(productId) as
+    | { id: string; name: string; unit_type: string; unit_cost: number }
+    | undefined
+  if (!row) return null
+  return {
+    productId: row.id,
+    productName: row.name,
+    unitType: row.unit_type as UnitType,
+    location,
+    averageCost: row.unit_cost,
+    lots: listOpenLots(db, productId, location)
+  }
+}
+
+/**
  * In-stock products with the money needed by the Daily Pricing screen.
  *
  * Reads the layers for the cost side exactly as the dashboard does, so the
@@ -875,7 +915,15 @@ export function addStock(
   quantity: number,
   unitCost: number | null,
   note: string | null,
-  actorId: string | null
+  actorId: string | null,
+  /**
+   * Who this was bought from, when the caller knows. Only the purchase-order
+   * receipt path and the manual add-stock form do; a scan-in with no PO behind it
+   * and an incoming shipment do not, and they pass nothing rather than a guess.
+   * It travels onto the cost layer so the picker can tell two layers of the same
+   * product at different prices apart by more than their price.
+   */
+  vendor: string | null = null
 ): StockResult {
   const db = getDb()
   const run = db.transaction((): StockResult => {
@@ -902,7 +950,7 @@ export function addStock(
     // inherits the current average so it doesn't move the basis.
     const lotCost =
       unitCost != null && Number.isFinite(unitCost) && unitCost >= 0 ? unitCost : row.unit_cost
-    const lotId = createLot(db, productId, location, qty, lotCost, nowIso(), 'restock', note)
+    const lotId = createLot(db, productId, location, qty, lotCost, nowIso(), 'restock', note, vendor)
     syncProductAvgCost(db, productId)
 
     const txnId = insertTxn(productId, 'restock', qty, unitCost, null, note, actorId, location)
@@ -944,13 +992,24 @@ export function reverseStockReceipt(
   return insertTxn(args.productId, 'adjustment', -qty, null, null, args.note, args.actorId, args.location)
 }
 
-/** Correct a location's count up or down (never below zero). */
+/**
+ * Correct a location's count up or down (never below zero).
+ *
+ * `allocation` names the cost layers a DOWNWARD correction comes out of, when an
+ * operator was asked. Null is not a failed picker — it is the ordinary case where
+ * there was nothing to decide (one layer, or several all at the same unit cost),
+ * and it is what every non-interactive caller passes: a purchase-order
+ * cancellation, a count-sheet reset, a replayed scan. Those keep the oldest-first
+ * behaviour they have always had. Ignored entirely on an upward correction, which
+ * OPENS a layer rather than consuming one.
+ */
 export function adjustStock(
   productId: string,
   location: string,
   quantityChange: number,
   note: string | null,
-  actorId: string | null
+  actorId: string | null,
+  allocation?: LotPick[] | null
 ): StockResult {
   const db = getDb()
   const run = db.transaction((): StockResult => {
@@ -966,9 +1025,11 @@ export function adjustStock(
       return { product: getProduct(productId), error: 'Adjustment would make stock negative.' }
     }
     bumpStock(productId, location, delta)
+    let slices: ReturnType<typeof consumeLots> = []
     if (delta < 0) {
-      // Shrinkage / correction down — consume the oldest lots.
-      consumeFifo(db, productId, location, -delta)
+      // Shrinkage / correction down — the layers the operator chose, or the
+      // oldest when nothing had to be decided.
+      slices = consumeLots(db, productId, location, -delta, allocation)
     } else {
       // Found stock — value it at the current average so the basis is undistorted.
       const row = db.prepare('SELECT unit_cost FROM inventory_products WHERE id = ?').get(productId) as
@@ -977,13 +1038,28 @@ export function adjustStock(
       createLot(db, productId, location, delta, row?.unit_cost ?? 0, nowIso(), 'adjustment', note)
     }
     syncProductAvgCost(db, productId)
-    insertTxn(productId, 'adjustment', delta, null, null, note, actorId, location)
+    // The COST of a correction down has always been left off the ledger row —
+    // an adjustment is a count correction, not a sale — and that is unchanged.
+    // What is new is the COMPOSITION beside it: the exact layers this movement
+    // took. Written from the same slice list that decremented them, so the
+    // valuation and this record cannot come apart.
+    const txnId = insertTxn(productId, 'adjustment', delta, null, null, note, actorId, location)
+    recordTxnLots(db, txnId, slices, !!allocation && allocation.length > 0)
     return { product: getProduct(productId) }
   })
   return run()
 }
 
-/** Sell from a location's stock: atomic check + decrement + ledger entry. */
+/**
+ * Sell from a location's stock: atomic check + decrement + ledger entry.
+ *
+ * `allocation` is the operator's cost-layer choice; null means there was nothing
+ * to choose and FIFO runs, exactly as it always has. The COGS booked on the
+ * ledger row is computed from the slices that were actually consumed, whichever
+ * of the two produced them — the number on the transaction and the decrement on
+ * the layers come from one variable, so a sale cannot be worth one thing to the
+ * P&L and another to the valuation.
+ */
 export function recordSale(
   productId: string,
   location: string,
@@ -991,7 +1067,8 @@ export function recordSale(
   unitPrice: number,
   client: string,
   note: string | null,
-  actorId: string | null
+  actorId: string | null,
+  allocation?: LotPick[] | null
 ): StockResult {
   const db = getDb()
   const run = db.transaction((): StockResult => {
@@ -1011,10 +1088,23 @@ export function recordSale(
       return { product: getProduct(productId), error: `Only ${have} in ${location}.` }
     }
     bumpStock(productId, location, -qty)
-    // Consume the oldest cost lots first (FIFO); the consumed cost is the COGS.
-    const cogs = slicesCost(consumeFifo(db, productId, location, qty))
+    // The layers the operator allocated, or the oldest first when there was
+    // nothing to decide. Their cost IS the COGS — not a re-derivation of it.
+    const slices = consumeLots(db, productId, location, qty, allocation)
+    const cogs = slicesCost(slices)
     syncProductAvgCost(db, productId)
-    insertTxn(productId, 'sale', -qty, unitPrice, client.trim() || null, note, actorId, location, cogs)
+    const txnId = insertTxn(
+      productId,
+      'sale',
+      -qty,
+      unitPrice,
+      client.trim() || null,
+      note,
+      actorId,
+      location,
+      cogs
+    )
+    recordTxnLots(db, txnId, slices, !!allocation && allocation.length > 0)
     return { product: getProduct(productId) }
   })
   return run()

@@ -2466,6 +2466,104 @@ function migrate(database: Database.Database): void {
   })
   setMeta(database, 'schema_version', '60')
 
+  // v61: the cost-lot picker — which layer a consumption actually came out of.
+  //
+  // ## What was wrong
+  //
+  // Three cases at $1,400, five at $1,550, two at $1,600. Taking stock out
+  // consumed the oldest layer and told nobody. Rip the $1,600 case, book $1,400,
+  // and that break's margin is wrong — and so is the per-break P&L built on it,
+  // which sums exactly the cost each line recorded. The figure that is wrong is
+  // one nobody was ever shown, so nobody looks.
+  //
+  // The operator is now asked, and may split a consumption across layers. Three
+  // schema pieces make that answer durable rather than cosmetic.
+  //
+  // ## vendor on a cost layer
+  //
+  // The picker has to let somebody tell two layers apart, and price alone does
+  // not do it once two suppliers happen to charge the same. Only a purchase-order
+  // receipt knows a supplier, so the column is nullable and stays null for an
+  // opening balance, a count-sheet correction or a found-stock adjustment —
+  // see lotLabel in @shared/costLots for what those print instead. A default of
+  // "Unknown" would have been a value, and a value is something a report can sum.
+  addColumnIfMissing(database, 'inventory_lots', 'vendor', 'TEXT')
+
+  // Which layers one ledger movement took, and whether a human chose them.
+  //
+  // inventory_transactions already carries the COST of a sale or an adjustment.
+  // What it never carried is the composition of that cost, and without it the
+  // three things that have to agree — the P&L, the valuation, and the layers
+  // themselves — agree only by re-deriving the same FIFO walk, which is exactly
+  // the assumption the picker breaks. These rows are written from the same slice
+  // list whose cost was booked and whose qty_remaining was decremented, so the
+  // three cannot drift.
+  //
+  // picked separates "an operator allocated this" from "nothing had to be
+  // decided, so FIFO ran". Investigating a wrong margin months later, those are
+  // the two cases that need telling apart, and they are indistinguishable from
+  // the amounts alone.
+  //
+  // lot_id is deliberately NOT a foreign key, for the same reason
+  // stream_item_lots does without one: layers cascade away with their product and
+  // the record of what a movement took has to outlive that.
+  //
+  // Streaming lines are absent on purpose — stream_item_lots already holds their
+  // slices, and it does a second job this table does not (handing back exactly
+  // what a removed line took).
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS inventory_txn_lots (
+      id         TEXT PRIMARY KEY,
+      txn_id     TEXT NOT NULL,
+      lot_id     TEXT NOT NULL,
+      quantity   REAL NOT NULL,
+      unit_cost  REAL NOT NULL DEFAULT 0,
+      -- 1 when an operator allocated it in the picker, 0 when FIFO ran unasked.
+      picked     INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (txn_id) REFERENCES inventory_transactions (id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_inv_txn_lots_txn
+      ON inventory_txn_lots (txn_id);
+  `)
+
+  // The same flag on the streaming side. A break line already names its layers;
+  // what it could not say is whether the operator picked them, and a giveaway
+  // booked at the oldest layer looks identical either way.
+  addColumnIfMissing(database, 'stream_item_lots', 'picked', 'INTEGER NOT NULL DEFAULT 0')
+
+  // Fill in the vendor for every layer a purchase order opened.
+  //
+  // po_line_receipts is the authoritative record of which lot a receipt created,
+  // and its PO carries the supplier — so this is a join, not a guess. Every other
+  // layer keeps its null, which is the truth about it. Without this pass the
+  // picker would show a blank vendor column for the entire existing warehouse and
+  // read as broken on the day it shipped.
+  runOnce(database, 'inventory_lots_vendor_backfill_v1', () => {
+    database
+      .prepare(
+        `UPDATE inventory_lots
+            SET vendor = (
+              SELECT TRIM(po.supplier)
+                FROM po_line_receipts r
+                JOIN purchase_orders po ON po.id = r.po_id
+               WHERE r.lot_id = inventory_lots.id
+               ORDER BY r.created_at ASC
+               LIMIT 1
+            )
+          WHERE vendor IS NULL
+            AND EXISTS (
+              SELECT 1
+                FROM po_line_receipts r
+                JOIN purchase_orders po ON po.id = r.po_id
+               WHERE r.lot_id = inventory_lots.id
+                 AND TRIM(COALESCE(po.supplier, '')) <> ''
+            )`
+      )
+      .run()
+  })
+  setMeta(database, 'schema_version', '61')
+
   // Payroll, once, for whoever owns the company.
   //
   // Seeded rather than left to be typed because the owner named it, named its

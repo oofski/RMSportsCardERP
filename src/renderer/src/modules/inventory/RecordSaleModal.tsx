@@ -6,6 +6,7 @@ import { formatUnitCount } from '../../lib/productUnits'
 import { useToast } from '../../components/Toast'
 import { Button, Field, Input, Modal, Select } from '../../components/ui'
 import { formatMoney } from '../../lib/format'
+import { useLotPicker } from './LotPicker'
 
 export function RecordSaleModal({
   products,
@@ -19,6 +20,9 @@ export function RecordSaleModal({
   onSaved: () => void | Promise<void>
 }): JSX.Element {
   const toast = useToast()
+  // A sale takes stock at a real cost, so it is one of the four places the
+  // operator gets asked which layer that cost comes out of.
+  const { picker, askAllocation } = useLotPicker()
   const sellable = useMemo(() => products.filter((p) => p.quantity > 0), [products])
   const [productId, setProductId] = useState(presetProductId ?? sellable[0]?.id ?? '')
   const selected = products.find((p) => p.id === productId) ?? null
@@ -55,13 +59,19 @@ export function RecordSaleModal({
     }
     setBusy(true)
     try {
+      // Asked BEFORE anything is written, and a cancel abandons the sale
+      // outright rather than falling through to oldest-first — booking a cost
+      // the operator declined to choose is the failure the dialog exists for.
+      const choice = await askAllocation({ productId, location, quantity: qtyNum })
+      if (!choice) return
       const res = await api.inventory.recordSale({
         productId,
         location,
         quantity: qtyNum,
         unitPrice: priceNum,
         client,
-        note: note.trim() || null
+        note: note.trim() || null,
+        allocation: choice.allocation
       })
       if (!res.ok) {
         setError(res.error ?? 'Could not record the sale.')
@@ -75,72 +85,78 @@ export function RecordSaleModal({
   }
 
   return (
-    <Modal
-      title="Record a sale"
-      onClose={onClose}
-      footer={
-        <>
-          <Button variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button variant="primary" icon="ShoppingCart" loading={busy} onClick={submit} disabled={!selected}>
-            Record sale · {formatMoney(total)}
-          </Button>
-        </>
-      }
-    >
-      {error && <div className="auth-alert">{error}</div>}
+    <>
+      <Modal
+        title="Record a sale"
+        onClose={onClose}
+        footer={
+          <>
+            <Button variant="ghost" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button variant="primary" icon="ShoppingCart" loading={busy} onClick={submit} disabled={!selected}>
+              Record sale · {formatMoney(total)}
+            </Button>
+          </>
+        }
+      >
+        {error && <div className="auth-alert">{error}</div>}
 
-      {sellable.length === 0 ? (
-        <p className="muted">Nothing in stock to sell yet. Add stock first.</p>
-      ) : (
-        <>
-          <Field label="Product">
-            <Select value={productId} onChange={(e) => onProductChange(e.target.value)}>
-              {products.map((p) => (
-                <option key={p.id} value={p.id} disabled={p.quantity <= 0}>
-                  {p.name} · {p.sku}
-                </option>
-              ))}
-            </Select>
-          </Field>
+        {sellable.length === 0 ? (
+          <p className="muted">Nothing in stock to sell yet. Add stock first.</p>
+        ) : (
+          <>
+            <Field label="Product">
+              <Select value={productId} onChange={(e) => onProductChange(e.target.value)}>
+                {products.map((p) => (
+                  <option key={p.id} value={p.id} disabled={p.quantity <= 0}>
+                    {p.name} · {p.sku}
+                  </option>
+                ))}
+              </Select>
+            </Field>
 
-          <Field label="Sell from">
-            <div className="loc-pills">
-              {LOCATIONS.map((l) => {
-                const have = selected?.quantityByLocation[l.id] ?? 0
-                return (
-                  <button
-                    key={l.id}
-                    type="button"
-                    className={`loc-pill ${location === l.id ? 'active' : ''}`}
-                    onClick={() => setLocation(l.id)}
-                  >
-                    {l.label}
-                    <div className="lp-sub">{formatUnitCount(have)} on hand</div>
-                  </button>
-                )
-              })}
+            <Field label="Sell from">
+              <div className="loc-pills">
+                {LOCATIONS.map((l) => {
+                  const have = selected?.quantityByLocation[l.id] ?? 0
+                  return (
+                    <button
+                      key={l.id}
+                      type="button"
+                      className={`loc-pill ${location === l.id ? 'active' : ''}`}
+                      onClick={() => setLocation(l.id)}
+                    >
+                      {l.label}
+                      <div className="lp-sub">{formatUnitCount(have)} on hand</div>
+                    </button>
+                  )
+                })}
+              </div>
+            </Field>
+
+            <div className="field-row">
+              <Field label="Quantity" hint={`${formatUnitCount(available)} available in ${location}`}>
+                <Input type="number" min={1} max={available} value={quantity} onChange={(e) => setQuantity(e.target.value)} />
+              </Field>
+              <Field label="Sale price (each)">
+                <Input type="number" min={0} step="0.01" value={unitPrice} onChange={(e) => setUnitPrice(e.target.value)} placeholder="0.00" />
+              </Field>
             </div>
-          </Field>
 
-          <div className="field-row">
-            <Field label="Quantity" hint={`${formatUnitCount(available)} available in ${location}`}>
-              <Input type="number" min={1} max={available} value={quantity} onChange={(e) => setQuantity(e.target.value)} />
+            <Field label="Client">
+              <Input value={client} onChange={(e) => setClient(e.target.value)} placeholder="Buyer name" required />
             </Field>
-            <Field label="Sale price (each)">
-              <Input type="number" min={0} step="0.01" value={unitPrice} onChange={(e) => setUnitPrice(e.target.value)} placeholder="0.00" />
+            <Field label="Note" hint="Optional">
+              <Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. eBay order #1234" />
             </Field>
-          </div>
-
-          <Field label="Client">
-            <Input value={client} onChange={(e) => setClient(e.target.value)} placeholder="Buyer name" required />
-          </Field>
-          <Field label="Note" hint="Optional">
-            <Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="e.g. eBay order #1234" />
-          </Field>
-        </>
-      )}
-    </Modal>
+          </>
+        )}
+      </Modal>
+      {/* AFTER the sale modal, never inside it: the two overlays share a
+          z-index, so the one later in the DOM is the one on top. Rendered first
+          it would open behind the modal that asked for it. */}
+      {picker}
+    </>
   )
 }

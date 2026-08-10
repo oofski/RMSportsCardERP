@@ -892,4 +892,46 @@
   .ts-cover {
     font-size: 11px;
   }
+
+  /* ------------------------------------------------------------------------
+     12. The cost-lot picker
+
+     Three columns on a desktop — vendor, price, stepper — and three columns is
+     one too many at 390px: the vendor ellipses to nothing and the two numbers
+     end up shoulder to shoulder, which is exactly the pair that must not be
+     confused for each other.
+
+     So the row becomes two lines. Who and what it cost on the first, the
+     stepper alone on the second, full width, with buttons a thumb can actually
+     hit — this is the control that gets pressed repeatedly, and it is pressed
+     by somebody holding a case in their other hand.
+     ------------------------------------------------------------------------ */
+  .lotpick-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    row-gap: 10px;
+  }
+  .lotpick-step {
+    grid-column: 1 / -1;
+    justify-content: space-between;
+  }
+  .lotpick-btn {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: var(--rm-tap);
+    height: var(--rm-tap);
+  }
+  /* The count sits between two stretched buttons, so it needs a width of its
+     own or it collapses to the digit and the two buttons meet in the middle. */
+  .lotpick-qty {
+    min-width: 64px;
+    font-size: 16px;
+  }
+  /* A supplier name is longer than a phone is wide, and truncating it to
+     "Card Distri…" leaves two rows that look identical — which is the one thing
+     this dialog exists to stop. */
+  .lotpick-vendor {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+  }
 }

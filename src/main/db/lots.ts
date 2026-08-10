@@ -1,5 +1,6 @@
 import type { Database } from 'better-sqlite3'
 import { QTY_SNAP, quantizationSlack } from '@shared/units'
+import { normPickQty, validatePicks, type CostLot, type LotPick } from '@shared/costLots'
 import { newId, nowIso } from '../util'
 
 /**
@@ -132,7 +133,15 @@ export function allowsFractionalQty(db: Database, productId: string | null | und
 
 /** Insert one cost lot (qty_received === qty_remaining === qty). Returns the new
  * lot's id (empty string when nothing was inserted) so a caller can record
- * exactly which cost layer a receipt created and reverse that one later. */
+ * exactly which cost layer a receipt created and reverse that one later.
+ *
+ * `vendor` is who the stock was bought from, and it is OPTIONAL because most
+ * ways a layer comes into existence genuinely do not know: an opening balance, a
+ * count-sheet correction and a found-stock adjustment have no supplier behind
+ * them. Only a purchase-order receipt does, and only that path passes one. The
+ * cost-lot picker prints it so an operator choosing between two layers at
+ * different prices can tell which case is which — see `lotLabel` in
+ * @shared/costLots for what a layer without one shows instead. */
 export function createLot(
   db: Database,
   productId: string,
@@ -141,7 +150,8 @@ export function createLot(
   unitCost: number,
   receivedAt: string,
   source: LotSource,
-  note: string | null
+  note: string | null,
+  vendor: string | null = null
 ): string {
   // Whole units unless this exact product is flagged for fractions. The flag is
   // read here rather than taken from the caller so that every existing call site
@@ -157,9 +167,21 @@ export function createLot(
   // permanently into the one thing the app treats as the truth.
   db.prepare(
     `INSERT INTO inventory_lots
-       (id, product_id, location, qty_received, qty_remaining, unit_cost, received_at, source, note, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(id, productId, location, q, q, unitMoney(Math.max(0, unitCost)), receivedAt, source, note, nowIso())
+       (id, product_id, location, qty_received, qty_remaining, unit_cost, received_at, source, note, vendor, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    id,
+    productId,
+    location,
+    q,
+    q,
+    unitMoney(Math.max(0, unitCost)),
+    receivedAt,
+    source,
+    note,
+    (vendor ?? '').trim() || null,
+    nowIso()
+  )
   return id
 }
 
@@ -250,6 +272,177 @@ export function consumeFifo(db: Database, productId: string, location: string, q
     throw new Error(`Not enough cost lots to consume ${qty} at ${location} (short ${need}).`)
   }
   return slices
+}
+
+/**
+ * The open cost layers for one (product, location), oldest first — what the
+ * picker puts on screen.
+ *
+ * A READ, and the only one the dialog gets. It is re-read inside the write's
+ * transaction before anything is consumed (see consumePicked), because between
+ * the operator opening the dialog and pressing Confirm another station can have
+ * emptied one of these layers, and honouring a stale row would take stock out of
+ * a lot that no longer has it.
+ */
+export function listOpenLots(db: Database, productId: string, location: string): CostLot[] {
+  const rows = db
+    .prepare(
+      `SELECT id, unit_cost, qty_remaining, received_at, source, note, vendor
+         FROM inventory_lots
+        WHERE product_id = ? AND location = ? AND qty_remaining > 0
+        ORDER BY received_at ASC, rowid ASC`
+    )
+    .all(productId, location) as Array<{
+    id: string
+    unit_cost: number
+    qty_remaining: number
+    received_at: string
+    source: string
+    note: string | null
+    vendor: string | null
+  }>
+  return rows.map((r) => ({
+    lotId: r.id,
+    vendor: r.vendor,
+    unitCost: r.unit_cost,
+    qtyRemaining: r.qty_remaining,
+    receivedAt: r.received_at,
+    source: r.source,
+    note: r.note
+  }))
+}
+
+/**
+ * Consume EXACTLY the layers the operator chose, in the quantities they chose.
+ *
+ * The other half of the picker. `consumeFifo` answers "which layers?" by itself;
+ * this one is told, and its whole job is to be told faithfully — the cost it
+ * returns is the cost that gets booked, so a silent deviation here would put the
+ * app back where it started, only with a dialog in front of it pretending
+ * otherwise.
+ *
+ * THROWS rather than falling back, in every failure case:
+ *
+ *  - a layer that has gone (deleted product, emptied by another station),
+ *  - a layer that no longer holds what was asked of it,
+ *  - a total that does not match the quantity being consumed.
+ *
+ * Every one of those means the operator's answer no longer describes the shelf.
+ * Quietly walking FIFO instead would book a cost they did not choose while they
+ * believe they chose it, which is strictly worse than never having asked — the
+ * throw rolls the caller's transaction back and the consumption is retried
+ * against fresh numbers.
+ *
+ * MUST be called inside the caller's db.transaction().
+ */
+export function consumePicked(
+  db: Database,
+  productId: string,
+  location: string,
+  qty: number,
+  picks: LotPick[]
+): LotSlice[] {
+  const want = roundQty(qty, allowsFractionalQty(db, productId))
+  if (!(want > 0)) return []
+
+  // Re-read inside the transaction. The list the dialog was drawn from is a
+  // snapshot from before the operator started reading it.
+  const check = validatePicks(listOpenLots(db, productId, location), picks, want)
+  if (!check.ok) throw new Error(check.error)
+
+  const read = db.prepare(
+    'SELECT qty_remaining, unit_cost FROM inventory_lots WHERE id = ? AND product_id = ? AND location = ?'
+  )
+  const set = db.prepare('UPDATE inventory_lots SET qty_remaining = ? WHERE id = ?')
+  const slices: LotSlice[] = []
+  let taken = 0
+  for (const pick of picks) {
+    const lot = read.get(pick.lotId, productId, location) as
+      | { qty_remaining: number; unit_cost: number }
+      | undefined
+    if (!lot) throw new Error('That cost layer is no longer on the shelf — choose again.')
+    // Clamped to what the layer holds, exactly as the FIFO walk does. A
+    // fractional ask is a full-precision 1/N against a balance re-rounded to four
+    // places, so asking for a hair more than the layer stores is arithmetic, not
+    // an error — validatePicks has already refused anything bigger than that.
+    const take = normQty(Math.min(normPickQty(pick.qty), lot.qty_remaining))
+    if (!(take > 0)) continue
+    // Same snap-to-zero as consumeFifo: for divisors whose 1/N rounds down at
+    // four places, taking all N pieces otherwise leaves the layer holding 0.0001
+    // forever — an open cost layer for stock that is gone, and a product still
+    // reporting a fraction no UI can enter to clear.
+    const left = normQty(lot.qty_remaining - take)
+    set.run(left > QTY_SNAP ? left : 0, pick.lotId)
+    slices.push({ lotId: pick.lotId, qty: take, unitCost: lot.unit_cost })
+    taken = normQty(taken + take)
+  }
+  // The clamp above can shave a few ten-thousandths off a fractional take, so
+  // the comparison carries the same quantization slack every other quantity
+  // comparison in this file does. Anything larger is a real shortfall and the
+  // caller must not book a cost for stock the layers could not supply.
+  if (Math.abs(taken - want) > quantizationSlack(want)) {
+    throw new Error(`Those cost layers cover ${taken}, not ${want}. Choose again.`)
+  }
+  return slices
+}
+
+/**
+ * The ONE door every consumption goes through: take the operator's allocation
+ * when there is one, walk FIFO when there is not.
+ *
+ * `picks` being null is not a fallback for a failed picker — it is the ordinary
+ * case where there was nothing to decide (one layer, or several all at the same
+ * unit cost) and no dialog was ever shown. It is also what the non-interactive
+ * paths pass: a count-sheet reset, a purchase-order cancellation, a scan-out
+ * replayed from its token. Those have no operator in front of them, and FIFO is
+ * the behaviour they have always had.
+ *
+ * A picker that was shown and CANCELLED never reaches here at all: the renderer
+ * abandons the whole action. Arriving here with null after a cancel would book
+ * oldest-first while the operator believed they had chosen, which is the exact
+ * failure the dialog exists to prevent.
+ */
+export function consumeLots(
+  db: Database,
+  productId: string,
+  location: string,
+  qty: number,
+  picks: LotPick[] | null | undefined
+): LotSlice[] {
+  const chosen = picks && picks.length > 0
+  return chosen
+    ? consumePicked(db, productId, location, qty, picks as LotPick[])
+    : consumeFifo(db, productId, location, qty)
+}
+
+/**
+ * Record which layers a ledger movement took, against that movement.
+ *
+ * The audit half of the picker, and the reason a later reader cannot be told a
+ * different story by the P&L, the valuation and the layers themselves: the rows
+ * written here are the SAME slices whose cost was booked on the transaction and
+ * whose qty_remaining was decremented. One set of numbers, written three places,
+ * from one variable.
+ *
+ * `picked` says whether an operator chose this allocation or the FIFO walk
+ * produced it. Without that flag a $1,400 booking against a $1,600 case looks
+ * identical whether somebody decided it or nobody was asked, and those are the
+ * two cases anybody investigating a wrong margin needs to tell apart.
+ *
+ * Streaming lines do not use this — they have `stream_item_lots`, which predates
+ * it and additionally has to survive the product being deleted so a removed line
+ * can hand back exactly what it took.
+ *
+ * MUST be called inside the caller's db.transaction().
+ */
+export function recordTxnLots(db: Database, txnId: string, slices: LotSlice[], picked: boolean): void {
+  if (!txnId || slices.length === 0) return
+  const ins = db.prepare(
+    `INSERT INTO inventory_txn_lots (id, txn_id, lot_id, quantity, unit_cost, picked, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  )
+  const ts = nowIso()
+  for (const s of slices) ins.run(newId(), txnId, s.lotId, s.qty, s.unitCost, picked ? 1 : 0, ts)
 }
 
 /**

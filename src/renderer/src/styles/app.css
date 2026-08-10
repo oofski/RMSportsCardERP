@@ -20831,3 +20831,176 @@ button.sor-team:focus-visible {
   margin-top: 3px;
   color: var(--text-3);
 }
+
+/* ==========================================================================
+   Cost-lot picker — "which case did this come out of?"
+   ==========================================================================
+   The dialog appears only when two layers with stock left carry different unit
+   costs, so every row on screen is a real alternative. The layout is therefore
+   three columns that answer three questions in the order they get asked: who we
+   bought it from, what it cost, how many of them are going. */
+
+/* The reference figure, kept visible for the whole decision. Blue, not amber:
+   nothing here is a warning, and wearing the warning tint would make an
+   ordinary question look like a problem. --text ink on the tint for the same
+   reason every other tinted block takes it — --info on --info-bg is under
+   4.5:1 in light. */
+.lotpick-avg {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin-bottom: 12px;
+  padding: 9px 11px;
+  border: 1px solid var(--brand-300);
+  border-radius: var(--radius-sm);
+  background: var(--info-bg);
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.lotpick-avg > svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--brand-600);
+}
+
+.lotpick-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lotpick-row {
+  display: grid;
+  /* The vendor takes the slack; the price and the stepper are fixed, so the
+     numbers stay in a column the eye can run down. A price that shifted
+     left and right per row is a price nobody compares. */
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+/* A layer this allocation is taking from. The accent border is the only thing
+   on screen that says "these two rows, not the other three" once the dialog is
+   scrolled and the running total is out of view. */
+.lotpick-row.is-taking {
+  border-color: var(--brand-500);
+  background: var(--brand-soft);
+}
+
+.lotpick-who {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.lotpick-vendor {
+  font-weight: 650;
+  font-size: 13.5px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lotpick-sub {
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+
+.lotpick-cost {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+/* Tabular figures: $1,400.00 and $1,550.00 must line up digit for digit, or
+   telling them apart at a glance stops working — which is the entire job of
+   this column. */
+.lotpick-price {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.lotpick-step {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.lotpick-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+}
+.lotpick-btn:hover:not(:disabled) {
+  border-color: var(--brand-500);
+  color: var(--brand-600);
+}
+/* Disabled means one of two true things — the layer is empty, or the whole
+   quantity is already placed — and both are visible elsewhere in the row, so
+   the button just recedes rather than explaining itself twice. */
+.lotpick-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+/* Fixed width so pressing + does not shuffle the buttons sideways under the
+   finger that is pressing them. */
+.lotpick-qty {
+  min-width: 34px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.lotpick-total {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.lotpick-total > svg {
+  flex: none;
+  margin-top: 2px;
+}
+/* Green only once the allocation is exact. Until then the block is deliberately
+   neutral: a coloured "nearly" is read as "done" at arm's length, and this is
+   the one thing the Confirm button is gated on. */
+.lotpick-total.is-done {
+  border-color: var(--success);
+  background: var(--success-bg);
+  color: var(--success-strong);
+}
+.lotpick-total-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.lotpick-total-body b {
+  color: inherit;
+}
+.lotpick-hint {
+  font-size: 11.5px;
+  color: var(--text-3);
+}

@@ -29,13 +29,14 @@ import { boxCost, breakToStock, giveawayToStock, packCost, quantizationSlack, ty
 import { getDb } from './database'
 import {
   QTY_EPS,
-  consumeFifo,
+  consumeLots,
   restoreFifo,
   roundQty,
   slicesCost,
   syncProductAvgCost,
   type LotSlice
 } from './lots'
+import { tidyPicks, type LotPick } from '@shared/costLots'
 // Shared with db/inventory.ts rather than reimplemented: a stream line moves
 // stock the same way a sale does, and one implementation is the only way that
 // stays true.
@@ -833,6 +834,11 @@ export function addItem(input: NewStreamItem, actorId: string | null): Result<St
   // Per unit of ENTRY, not per case — see NewStreamItem.casePrice for why the
   // field kept the older name.
   const statedPrice = priceGiven ? parseMoneyInput(input.casePrice) : NaN
+  // The operator's cost-layer choice, with its empty rows dropped. The dialog
+  // holds a quantity for every layer on screen and most of them are zero; a zero
+  // row would put a slice in this line's record claiming a layer supplied
+  // nothing. Empty after tidying is the same as none given.
+  const allocation: LotPick[] = tidyPicks(Array.isArray(input?.allocation) ? input.allocation : [])
 
   const run = db.transaction((): Result<StreamSessionDetail> => {
     const session = db
@@ -901,6 +907,17 @@ export function addItem(input: NewStreamItem, actorId: string | null): Result<St
         error: `That show is not history yet — its stock is still on the shelf and costs what it cost. Leave the ${
           units ? units.unitType : 'stated'
         } price out; the line books the real cost of the stock it takes.`
+      }
+    }
+    // The mirror of that check, for the other input that only makes sense in one
+    // mode. A reconciliation consumes no cost layer, so an allocation against it
+    // describes layers it is not touching — refused rather than ignored, because
+    // a picked allocation silently dropped is a decision the operator watched
+    // themselves make and that never happened.
+    if (reconcile && allocation.length > 0) {
+      return {
+        ok: false,
+        error: 'That show is already history, so there are no cost layers left to take this from. Enter what one cost instead.'
       }
     }
 
@@ -1102,11 +1119,13 @@ export function addItem(input: NewStreamItem, actorId: string | null): Result<St
         costTotal
       )
     } else {
-      // The exact sequence recordSale uses: drop the count, consume the oldest
-      // cost layers, re-average what is left, then write the ledger row. A stream
-      // line and a sale are the same movement and must be valued identically.
+      // The exact sequence recordSale uses: drop the count, consume the cost
+      // layers, re-average what is left, then write the ledger row. A stream line
+      // and a sale are the same movement and must be valued identically —
+      // including which layers they may be told to take, which is why both go
+      // through consumeLots rather than one of them reaching for consumeFifo.
       bumpStock(productId, location, -qty)
-      slices = consumeFifo(db, productId, location, qty)
+      slices = consumeLots(db, productId, location, qty, allocation)
       costTotal = slicesCost(slices)
       syncProductAvgCost(db, productId)
       insertTxn(
@@ -1183,11 +1202,20 @@ export function addItem(input: NewStreamItem, actorId: string | null): Result<St
 
     // Empty for a reconciliation, and correctly so: no layer was consumed, so
     // there is no layer to name and nothing for a later removal to give back.
+    //
+    // `picked` says whether an operator allocated these layers or the FIFO walk
+    // produced them unasked. Investigating a break whose margin looks wrong, that
+    // is the one thing the amounts cannot tell you: a $1,400 cost against a
+    // $1,600 case reads identically whether somebody chose it or nobody was
+    // asked, and only one of those is a costing bug.
+    const picked = allocation.length > 0 ? 1 : 0
     const insertLot = db.prepare(
-      `INSERT INTO stream_item_lots (id, item_id, lot_id, quantity, unit_cost, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`
+      `INSERT INTO stream_item_lots (id, item_id, lot_id, quantity, unit_cost, picked, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
     )
-    for (const slice of slices) insertLot.run(newId(), id, slice.lotId, slice.qty, slice.unitCost, ts)
+    for (const slice of slices) {
+      insertLot.run(newId(), id, slice.lotId, slice.qty, slice.unitCost, picked, ts)
+    }
 
     return { ok: true, data: getSessionDetail(sessionId) as StreamSessionDetail }
   })
