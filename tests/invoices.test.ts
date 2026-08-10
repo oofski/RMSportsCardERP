@@ -590,33 +590,33 @@ const {
 
 ok(hasAddress(null) === false, 'no address is no address')
 ok(hasAddress(EMPTY_ADDRESS) === false, 'and neither is one with every field blank')
-ok(hasAddress({ ...EMPTY_ADDRESS, city: 'Burbank' }) === true, 'a city alone counts')
+ok(hasAddress({ ...EMPTY_ADDRESS, city: 'Marlow' }) === true, 'a city alone counts')
 // Whitespace is not an address. If it counted, the posting code would decide it
 // HAS one and send QuickBooks a blank BillAddr, erasing the address they hold.
 ok(hasAddress({ ...EMPTY_ADDRESS, city: '   ' }) === false, 'and spaces do not')
 
-const burbankAddr = {
-  line1: '1234 W Olive Ave',
+const kestrelAddr = {
+  line1: '18 Kestrel Row',
   line2: null,
-  city: 'Burbank',
+  city: 'Marlow',
   region: 'CA',
-  postalCode: '91506',
+  postalCode: '43000',
   country: null
 }
-const ryan = repo.saveCustomer({
-  name: 'Ryan Veres (Burbank Sportscards)',
-  email: 'ryan@burbankcards.com',
+const iris = repo.saveCustomer({
+  name: 'Iris Vandermeer (Kestrel Sportscards)',
+  email: 'iris@kestrelcards.example',
   terms: 'Due on receipt',
-  billAddr: burbankAddr
+  billAddr: kestrelAddr
 })
-ok(ryan.billAddr?.city === 'Burbank', 'a buyer keeps their bill-to', String(ryan.billAddr?.city))
-ok(ryan.billAddr?.region === 'CA', 'including the state')
+ok(iris.billAddr?.city === 'Marlow', 'a buyer keeps their bill-to', String(iris.billAddr?.city))
+ok(iris.billAddr?.region === 'CA', 'including the state')
 
 // AN EDIT THAT CARRIES NO ADDRESS LEAVES THE STORED ONE ALONE. Saving a
 // customer from the invoice screen passes a name and an email and nothing else,
 // and that must not wipe an address somebody typed on the buyer form.
-const ryanAgain = repo.saveCustomer({ id: ryan.id, name: ryan.name, email: 'ryan@burbankcards.com' })
-ok(ryanAgain.billAddr?.line1 === '1234 W Olive Ave', 'an address survives an unrelated edit')
+const irisAgain = repo.saveCustomer({ id: iris.id, name: iris.name, email: 'iris@kestrelcards.example' })
+ok(irisAgain.billAddr?.line1 === '18 Kestrel Row', 'an address survives an unrelated edit')
 
 // A catalog product, so a line can be picked rather than typed.
 const stamp13 = new Date().toISOString()
@@ -630,9 +630,9 @@ db.prepare(
 const parity = repo.saveInvoice(
   {
     invoiceNumber: '2258',
-    customerId: ryan.id,
-    customerName: 'Ryan Veres (Burbank Sportscards)',
-    email: 'ryan@burbankcards.com',
+    customerId: iris.id,
+    customerName: 'Iris Vandermeer (Kestrel Sportscards)',
+    email: 'iris@kestrelcards.example',
     terms: 'Due on receipt',
     invoiceDate: '2026-08-09',
     lines: [
@@ -654,10 +654,10 @@ ok(parity.lines[0].sku === 'TOPPS-2024-HOB', 'the SKU fills itself in', String(p
 ok(parity.lines[0].productId === 'prod_topps', 'and the product stays linked')
 // The bill-to is SNAPSHOTTED off the buyer, not joined. Otherwise a buyer who
 // moves next year silently rewrites where last year's document says it went.
-ok(parity.billAddr?.line1 === '1234 W Olive Ave', 'the invoice snapshots the bill-to')
-repo.saveCustomer({ id: ryan.id, name: ryan.name, billAddr: { ...burbankAddr, city: 'Glendale' } })
+ok(parity.billAddr?.line1 === '18 Kestrel Row', 'the invoice snapshots the bill-to')
+repo.saveCustomer({ id: iris.id, name: iris.name, billAddr: { ...kestrelAddr, city: 'Glendale' } })
 ok(
-  repo.getInvoice(parity.id).billAddr?.city === 'Burbank',
+  repo.getInvoice(parity.id).billAddr?.city === 'Marlow',
   'and moving the buyer does not rewrite it',
   String(repo.getInvoice(parity.id).billAddr?.city)
 )
@@ -694,7 +694,7 @@ const parityItems = new Map([
 ])
 const full = toQboInvoice(
   parityDetail,
-  { id: '77', name: 'Ryan Veres (Burbank Sportscards)' },
+  { id: '77', name: 'Iris Vandermeer (Kestrel Sportscards)' },
   parityItems,
   {
     termRef: { value: '3', name: 'Due on receipt' },
@@ -706,8 +706,8 @@ const full = toQboInvoice(
 
 ok(full.DocNumber === '2258', 'the invoice number travels', String(full.DocNumber))
 ok(full.CustomerRef.value === '77', 'the customer is an id')
-ok(full.CustomerRef.name === 'Ryan Veres (Burbank Sportscards)', 'with the display name beside it')
-ok(full.BillEmail?.Address === 'ryan@burbankcards.com', 'the email is on the invoice')
+ok(full.CustomerRef.name === 'Iris Vandermeer (Kestrel Sportscards)', 'with the display name beside it')
+ok(full.BillEmail?.Address === 'iris@kestrelcards.example', 'the email is on the invoice')
 ok(full.TxnDate === '2026-08-09', 'the invoice date')
 ok(full.DueDate === '2026-08-09', 'and due on receipt means the same day', String(full.DueDate))
 // TERMS ARE A REFERENCE, NEVER THE WORDS. Sending "Due on receipt" as a string
@@ -717,10 +717,10 @@ ok(full.DueDate === '2026-08-09', 'and due on receipt means the same day', Strin
 ok(full.SalesTermRef?.value === '3', 'the terms are a SalesTermRef', JSON.stringify(full.SalesTermRef))
 // BILL-TO, field by field. CountrySubDivisionCode is Intuit's name for the
 // state; putting the zip in it is the kind of mistake that posts happily.
-ok(full.BillAddr?.Line1 === '1234 W Olive Ave', 'the street', String(full.BillAddr?.Line1))
-ok(full.BillAddr?.City === 'Burbank', 'the city')
+ok(full.BillAddr?.Line1 === '18 Kestrel Row', 'the street', String(full.BillAddr?.Line1))
+ok(full.BillAddr?.City === 'Marlow', 'the city')
 ok(full.BillAddr?.CountrySubDivisionCode === 'CA', 'the STATE goes in CountrySubDivisionCode')
-ok(full.BillAddr?.PostalCode === '91506', 'and the zip in PostalCode')
+ok(full.BillAddr?.PostalCode === '43000', 'and the zip in PostalCode')
 ok(full.BillAddr?.Line2 === undefined, 'a blank line is omitted, not sent empty')
 ok(full.Line[0].SalesItemLineDetail.ItemRef.value === '42', 'the product resolves to an id')
 ok(full.Line[0].Description === 'Sealed hobby box', 'the description travels')
@@ -748,7 +748,7 @@ ok(fellBack.BillEmail?.Address === 'fallback@example.com', 'and so does a missin
 const ownWins = toQboInvoice(parityDetail, { id: '77' }, parityItems, {
   billAddr: { ...EMPTY_ADDRESS, line1: '9 QuickBooks Way' }
 })
-ok(ownWins.BillAddr?.Line1 === '1234 W Olive Ave', "the invoice's own address wins")
+ok(ownWins.BillAddr?.Line1 === '18 Kestrel Row', "the invoice's own address wins")
 
 // ---------------------------------------------------------------------------
 console.log('\n=== 14. the SKU decides which item a line points at ===')

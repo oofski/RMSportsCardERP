@@ -71,7 +71,7 @@ export function ContactTypeahead({
       <Field label={label} hint={hint}>
         <Input
           value={value}
-          placeholder="e.g. Steel City Collectibles"
+          placeholder="Start typing a supplier or contact…"
           onFocus={() => setOpen(true)}
           onChange={(e) => {
             onChange(e.target.value)

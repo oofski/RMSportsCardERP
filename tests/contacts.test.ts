@@ -110,7 +110,7 @@ const REPORT: string[][] = [
   ],
   ['Cal Ohashi', '', 'cal@example.net', '', '4400 Wren Ave Apt 2 Marlow OH 43000', ''],
   // The last row of every QuickBooks report: a timestamp, alone.
-  [' Sunday, August 09, 2026 04:04 PM GMT-05:00', '', '', '', '', '']
+  [' Tuesday, March 04, 2025 09:12 AM GMT-06:00', '', '', '', '', '']
 ]
 
 const header = findHeaderRow(REPORT)
