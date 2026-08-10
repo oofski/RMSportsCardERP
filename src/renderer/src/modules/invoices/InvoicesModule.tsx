@@ -39,7 +39,7 @@ export function InvoicesModule(): JSX.Element {
             className={`seg ${tab === 'invoices' ? 'on' : ''}`}
             onClick={() => setTab('invoices')}
           >
-            Sales Order
+            Sales Orders
           </button>
           <button className={`seg ${tab === 'buyers' ? 'on' : ''}`} onClick={() => setTab('buyers')}>
             Buyers

@@ -95,8 +95,8 @@ export const MODULES: AppModule[] = [
     // `invoices` — the owner renamed what the screen is CALLED, not what it is.
     // Renaming the id would orphan saved nav state and every reference to it
     // for a change nobody asked for.
-    name: 'Sales Order',
-    shortName: 'Sales Order',
+    name: 'Sales Orders',
+    shortName: 'Sales Orders',
     description: 'Billing buyers: who they are, what they bought, and who has paid.',
     icon: 'ReceiptText',
     // The same permission the buy side uses. Somebody who may commit this
