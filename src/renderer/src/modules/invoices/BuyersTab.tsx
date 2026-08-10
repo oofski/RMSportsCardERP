@@ -160,7 +160,10 @@ export function BuyersTab(): JSX.Element {
         />
       ) : (
         <div className="table-wrap">
-          <table className="data">
+          {/* Eight columns — name, three contact fields, terms and two money
+              figures — so on a phone it stacks into one card per buyer. See
+              section 3 of styles/mobile.css. */}
+          <table className="data as-cards">
             <thead>
               <tr>
                 <th>Name</th>
@@ -183,12 +186,22 @@ export function BuyersTab(): JSX.Element {
                     style={{ cursor: 'pointer' }}
                   >
                     <td style={{ fontWeight: 600 }}>{b.name}</td>
-                    <td className="muted">{b.email || '—'}</td>
-                    <td className="muted">{b.phone || b.mobile || '—'}</td>
-                    <td className="muted">{whereFrom(b) || '—'}</td>
-                    <td className="muted">{b.terms}</td>
-                    <td style={{ textAlign: 'right' }}>{t?.count ?? 0}</td>
-                    <td style={{ textAlign: 'right', fontWeight: 600 }}>
+                    <td className="muted" data-label="Email">
+                      {b.email || '—'}
+                    </td>
+                    <td className="muted" data-label="Phone">
+                      {b.phone || b.mobile || '—'}
+                    </td>
+                    <td className="muted" data-label="Where">
+                      {whereFrom(b) || '—'}
+                    </td>
+                    <td className="muted" data-label="Terms">
+                      {b.terms}
+                    </td>
+                    <td style={{ textAlign: 'right' }} data-label="Invoices">
+                      {t?.count ?? 0}
+                    </td>
+                    <td style={{ textAlign: 'right', fontWeight: 600 }} data-label="Billed">
                       {formatMoney(t?.value ?? 0)}
                     </td>
                     <td onClick={(e) => e.stopPropagation()}>

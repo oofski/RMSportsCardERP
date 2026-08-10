@@ -59,7 +59,14 @@ export function BreakPnl({ streamDate }: { streamDate: string }): JSX.Element {
         </div>
       )}
 
-      <table className="bpnl-table">
+      {/* `as-cards` stacks this into one card per break on a phone, with each
+          figure printed against its column header — see section 3 of
+          styles/mobile.css. Five money columns at 390px would otherwise be a
+          sideways scroll through numbers with no idea which break you are on,
+          which is the exact question this table exists to answer. Inert on the
+          desktop: nothing outside that media query matches the class or the
+          data-labels. */}
+      <table className="bpnl-table as-cards">
         <thead>
           <tr>
             <th>Break</th>
@@ -93,8 +100,10 @@ export function BreakPnl({ streamDate }: { streamDate: string }): JSX.Element {
                   </span>
                 )}
               </td>
-              <td className="num mono">{formatMoney(r.grossSales)}</td>
-              <td className="num mono">
+              <td className="num mono" data-label="Sales">
+                {formatMoney(r.grossSales)}
+              </td>
+              <td className="num mono" data-label="Cost">
                 {r.costKnown ? (
                   // A DERIVED cost is a real number the app worked out — boxes
                   // off the listing title times the night's per-box price —
@@ -119,8 +128,13 @@ export function BreakPnl({ streamDate }: { streamDate: string }): JSX.Element {
                   </span>
                 )}
               </td>
-              <td className="num mono">{formatMoney(r.totalFees)}</td>
-              <td className={`num mono ${r.netProfit !== null && r.netProfit < 0 ? 'neg' : 'pos'}`}>
+              <td className="num mono" data-label="Fees">
+                {formatMoney(r.totalFees)}
+              </td>
+              <td
+                className={`num mono ${r.netProfit !== null && r.netProfit < 0 ? 'neg' : 'pos'}`}
+                data-label="Net"
+              >
                 {r.netProfit === null ? <span className="bpnl-unknown">—</span> : formatMoney(r.netProfit)}
               </td>
             </tr>
@@ -133,9 +147,18 @@ export function BreakPnl({ streamDate }: { streamDate: string }): JSX.Element {
         <tfoot>
           <tr>
             <td>All breaks</td>
-            <td className="num mono">{formatMoney(split.grossSales)}</td>
-            <td className="num mono">{split.cogs ? formatMoney(-split.cogs) : '—'}</td>
-            <td className="num mono">{formatMoney(split.totalFees)}</td>
+            <td className="num mono" data-label="Sales">
+              {formatMoney(split.grossSales)}
+            </td>
+            <td className="num mono" data-label="Cost">
+              {split.cogs ? formatMoney(-split.cogs) : '—'}
+            </td>
+            <td className="num mono" data-label="Fees">
+              {formatMoney(split.totalFees)}
+            </td>
+            {/* Deliberately blank — see the note above the tfoot. On a phone the
+                stacked card drops it rather than printing an empty "Net" line
+                that would read as a figure that failed to load. */}
             <td />
           </tr>
         </tfoot>

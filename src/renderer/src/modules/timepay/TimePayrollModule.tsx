@@ -175,7 +175,10 @@ export function TimePayrollModule(): JSX.Element {
         <EmptyState icon="Clock" title="No employees to show" />
       ) : (
         <div className="table-wrap">
-          <table className="data">
+          {/* Stacks into one card per person on a phone — see section 3 of
+              styles/mobile.css. Both the class and the data-labels are inert
+              on the desktop. */}
+          <table className="data as-cards">
             <thead>
               <tr>
                 <th>Employee</th>
@@ -203,10 +206,18 @@ export function TimePayrollModule(): JSX.Element {
                         <span style={{ fontWeight: 600 }}>{s.employeeName}</span>
                       </div>
                     </td>
-                    <td className="mono">{s.companyId}</td>
-                    <td style={{ fontWeight: 600 }}>{formatHours(s.totalMinutes)}</td>
-                    <td className="muted">{s.entryCount}</td>
-                    <td className="muted">{formatDateTime(s.lastEntryAt)}</td>
+                    <td className="mono" data-label="Company ID">
+                      {s.companyId}
+                    </td>
+                    <td style={{ fontWeight: 600 }} data-label="Total hours">
+                      {formatHours(s.totalMinutes)}
+                    </td>
+                    <td className="muted" data-label="Entries">
+                      {s.entryCount}
+                    </td>
+                    <td className="muted" data-label="Last entry">
+                      {formatDateTime(s.lastEntryAt)}
+                    </td>
                     <td>
                       <div className="cell-actions">
                         <Button size="sm" variant="ghost" icon="ChevronRight" onClick={open}>

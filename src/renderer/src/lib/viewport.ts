@@ -37,13 +37,18 @@ export const PHONE_MEDIA_QUERY = `(max-width: ${PHONE_MAX_WIDTH}px)`
 /**
  * Is a viewport this wide getting the phone layout?
  *
- * Inclusive at the boundary, because `max-width: 820px` is. A width that is not
- * a real measurement — NaN from an unmeasurable element, a negative from a
- * window mid-teardown — is answered "no": guessing "phone" there would run
- * phone-only behaviour on a desktop, and the whole point of this file is that
- * that cannot happen.
+ * Inclusive at the top, because `max-width: 820px` is: at exactly 820 the CSS
+ * applies, so this must agree or the two disagree on one pixel.
+ *
+ * The lower bound is doing two jobs and neither is decoration. A NEGATIVE width
+ * — a window mid-teardown, an element measured before it is laid out — sails
+ * through `<= 820` as "phone". And NaN, which is what an unmeasurable element
+ * reports, fails EVERY comparison including this one, so it falls out here as
+ * "not a phone" without needing a guard of its own. Both answers are the same
+ * answer: a width that is not a real measurement must never be read as a phone,
+ * because that would run phone-only behaviour on a desktop, and the whole point
+ * of this file is that that cannot happen.
  */
 export function isPhoneWidth(width: number): boolean {
-  if (!Number.isFinite(width) || width < 0) return false
-  return width <= PHONE_MAX_WIDTH
+  return width >= 0 && width <= PHONE_MAX_WIDTH
 }

@@ -52,7 +52,10 @@ export function ActivityTab(): JSX.Element {
         </div>
       </div>
       <div className="table-wrap">
-        <table className="data">
+        {/* Eight columns, so on a phone it stacks into one card per movement —
+            see section 3 of styles/mobile.css. The product is the headline and
+            carries no label; everything else prints its column header. */}
+        <table className="data as-cards">
           <thead>
             <tr>
               <th>When</th>
@@ -68,24 +71,35 @@ export function ActivityTab(): JSX.Element {
           <tbody>
             {txns.map((t) => (
               <tr key={t.id}>
-                <td className="muted">{formatDateTime(t.createdAt)}</td>
+                <td className="muted" data-label="When">
+                  {formatDateTime(t.createdAt)}
+                </td>
+                {/* The only cell that says WHICH thing moved, so it is the
+                    card's headline rather than another labelled line. */}
                 <td>
                   <div style={{ fontWeight: 600 }}>{t.productName}</div>
                   <div className="p-sub mono">{t.sku}</div>
                 </td>
-                <td>
+                <td data-label="Type">
                   <TxnBadge type={t.type} />
                 </td>
-                <td>
+                <td data-label="Location">
                   <LocBadge location={t.location} />
                 </td>
-                <td style={{ fontWeight: 600, color: t.quantityChange < 0 ? 'var(--danger)' : 'var(--success)' }}>
+                <td
+                  style={{ fontWeight: 600, color: t.quantityChange < 0 ? 'var(--danger)' : 'var(--success)' }}
+                  data-label="Change"
+                >
                   {t.quantityChange > 0 ? '+' : ''}
                   {t.quantityChange}
                 </td>
-                <td className="money">{t.unitPrice != null ? formatMoney(t.unitPrice) : '—'}</td>
-                <td>{t.counterparty || <span className="muted">—</span>}</td>
-                <td className="muted">{t.actorName || '—'}</td>
+                <td className="money" data-label="Unit price">
+                  {t.unitPrice != null ? formatMoney(t.unitPrice) : '—'}
+                </td>
+                <td data-label="Client / vendor">{t.counterparty || <span className="muted">—</span>}</td>
+                <td className="muted" data-label="By">
+                  {t.actorName || '—'}
+                </td>
               </tr>
             ))}
           </tbody>

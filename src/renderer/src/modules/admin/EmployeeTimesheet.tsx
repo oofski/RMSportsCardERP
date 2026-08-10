@@ -238,7 +238,10 @@ export function EmployeeTimesheet({
         </div>
       ) : (
         <div className="table-wrap">
-          <table className="data">
+          {/* One card per punch on a phone, with the day headings kept as flat
+              rules between them — see section 3 of styles/mobile.css. The clock
+              in time is the headline and carries no label. */}
+          <table className="data as-cards">
             <thead>
               <tr>
                 <th>Clock in</th>
@@ -259,18 +262,25 @@ export function EmployeeTimesheet({
                   </tr>
                   {g.list.map((e) => (
                     <tr key={e.id}>
-                      <td className="mono">{timeWithSeconds(e.clockIn)}</td>
-                      <td className="mono">
+                      {/* Labelled, unlike the leading cell in most of these
+                          tables: nothing in a punch IDENTIFIES it — it is two
+                          times and a duration — so a headline reading
+                          "09:14:22" with no word beside it says nothing. The
+                          day heading above the group is the identity here. */}
+                      <td className="mono" data-label="Clock in">
+                        {timeWithSeconds(e.clockIn)}
+                      </td>
+                      <td className="mono" data-label="Clock out">
                         {e.clockOut ? (
                           timeWithSeconds(e.clockOut)
                         ) : (
                           <span className="badge badge-invited">In progress</span>
                         )}
                       </td>
-                      <td style={{ fontWeight: 600 }}>
+                      <td style={{ fontWeight: 600 }} data-label="Hours">
                         {e.clockOut ? formatHours(entryMinutes(e)) : '—'}
                       </td>
-                      <td className="muted">
+                      <td className="muted" data-label="Location">
                         {e.clockInLocation.place ? (
                           <span className="row" style={{ gap: 5 }}>
                             <Icon name="MapPin" size={13} />

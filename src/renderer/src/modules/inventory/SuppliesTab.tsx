@@ -123,7 +123,10 @@ export function SuppliesTab({ canManage }: { canManage: boolean }): JSX.Element 
         />
       ) : (
         <div className="table-wrap supplies-table">
-          <table className="data">
+          {/* Stacks into one card per supply on a phone — see section 3 of
+              styles/mobile.css. The supply (thumbnail, name, pack size) is the
+              headline; the five action buttons get their own full-width row. */}
+          <table className="data as-cards">
             <thead>
               <tr>
                 <th>Supply</th>
@@ -166,7 +169,7 @@ export function SuppliesTab({ canManage }: { canManage: boolean }): JSX.Element 
                       </div>
                     </div>
                   </td>
-                  <td style={{ textAlign: 'right' }}>
+                  <td style={{ textAlign: 'right' }} data-label="On hand">
                     <span className={`supply-onhand ${s.lowStock ? 'low' : ''}`}>{s.quantity}</span>
                     <span className="supply-unit"> {UNIT_LABEL[s.unit] ?? s.unit}</span>
                     {s.lowStock && (
@@ -175,7 +178,7 @@ export function SuppliesTab({ canManage }: { canManage: boolean }): JSX.Element 
                       </div>
                     )}
                   </td>
-                  <td className="money" style={{ textAlign: 'right' }}>
+                  <td className="money" style={{ textAlign: 'right' }} data-label="Cost">
                     {s.unitCost > 0 ? (
                       s.itemsPerUnit > 1 ? (
                         <>
@@ -189,10 +192,10 @@ export function SuppliesTab({ canManage }: { canManage: boolean }): JSX.Element 
                       <span className="muted">—</span>
                     )}
                   </td>
-                  <td className="money" style={{ textAlign: 'right' }}>
+                  <td className="money" style={{ textAlign: 'right' }} data-label="Stock value">
                     {formatMoney(s.stockValue)}
                   </td>
-                  <td style={{ textAlign: 'right' }}>
+                  <td style={{ textAlign: 'right' }} data-label="Reorder at">
                     {s.reorderPoint > 0 ? s.reorderPoint : <span className="muted">—</span>}
                   </td>
                   {canManage && (

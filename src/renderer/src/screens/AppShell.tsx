@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { MODULES, inWorkspace } from '@shared/modules'
+import { isPhoneWidth } from '../lib/viewport'
 import { StreamingModule } from '../modules/streaming/StreamingModule'
 import { FinanceModule } from '../modules/finance/FinanceModule'
 import { useSession } from '../lib/session'
@@ -43,6 +44,7 @@ export function AppShell(): JSX.Element {
   const [wsOpen, setWsOpen] = useState(false)
   const [search, setSearch] = useState('')
   const [activeId, setActiveId] = useState<string>('home')
+  const navRef = useRef<HTMLElement | null>(null)
   const [workspace, setWorkspace] = useState<WorkspaceId>(() => {
     const saved = localStorage.getItem('rmops.workspace')
     return saved === 'shipping' ? 'shipping' : 'ops'
@@ -75,6 +77,21 @@ export function AppShell(): JSX.Element {
     window.addEventListener('rmops:check-updates', handler)
     return () => window.removeEventListener('rmops:check-updates', handler)
   }, [])
+
+  // On a phone this same <nav> is a horizontally scrolling bottom bar (see
+  // styles/mobile.css), and a module is often opened from somewhere OTHER than
+  // the bar — a Home quick action, a cross-workspace link, the workspace switch
+  // landing you on a different default. The newly active item is then off the
+  // edge of a strip nobody has scrolled, so the app looks like it swallowed the
+  // tap. Guarded on the width rather than left to be harmless, so the desktop
+  // provably never runs it: there the nav is a full-height column with no
+  // sideways scroll to perform.
+  useEffect(() => {
+    if (!isPhoneWidth(window.innerWidth)) return
+    navRef.current
+      ?.querySelector('.nav-item.active')
+      ?.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' })
+  }, [activeId, workspace])
 
   // Modules live in workspaces, and `visible` is filtered by the active one —
   // so setting activeId alone silently no-ops when the target is in the OTHER
@@ -181,7 +198,7 @@ export function AppShell(): JSX.Element {
             )}
           </div>
 
-          <nav className="nav">
+          <nav className="nav" ref={navRef}>
             <button
               className={`nav-item ${activeId === 'home' ? 'active' : ''}`}
               onClick={() => navigate('home')}

@@ -6,6 +6,11 @@ import '@fontsource/inter/600.css'
 import '@fontsource/inter/700.css'
 import './styles/theme.css'
 import './styles/app.css'
+// LAST, and it has to be: every rule in it is an override of something app.css
+// just said, and both live at the same specificity. Imported first it would
+// lose every one of those and the phone layout would silently be the desktop
+// one. Nothing in it can reach a desktop window — see the file's own header.
+import './styles/mobile.css'
 import App from './App'
 import { SessionProvider } from './lib/session'
 import { ToastProvider } from './components/Toast'

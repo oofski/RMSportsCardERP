@@ -53,7 +53,11 @@ export function HoursTab(): JSX.Element {
         <EmptyState icon="Clock" title="No employees to show" />
       ) : (
         <div className="table-wrap">
-          <table className="data">
+          {/* `as-cards` + the data-labels below are inert on the desktop — no
+              rule outside styles/mobile.css matches either — and are what let a
+              phone stack this into one card per person with the column header
+              printed beside each value. See section 3 of that file. */}
+          <table className="data as-cards">
             <thead>
               <tr>
                 <th>Employee</th>
@@ -78,10 +82,18 @@ export function HoursTab(): JSX.Element {
                       <span style={{ fontWeight: 600 }}>{s.employeeName}</span>
                     </div>
                   </td>
-                  <td className="mono">{s.companyId}</td>
-                  <td style={{ fontWeight: 600 }}>{formatHours(s.totalMinutes)}</td>
-                  <td className="muted">{s.entryCount}</td>
-                  <td className="muted">{formatDateTime(s.lastEntryAt)}</td>
+                  <td className="mono" data-label="Company ID">
+                    {s.companyId}
+                  </td>
+                  <td style={{ fontWeight: 600 }} data-label="Total hours">
+                    {formatHours(s.totalMinutes)}
+                  </td>
+                  <td className="muted" data-label="Entries">
+                    {s.entryCount}
+                  </td>
+                  <td className="muted" data-label="Last entry">
+                    {formatDateTime(s.lastEntryAt)}
+                  </td>
                 </tr>
               ))}
             </tbody>

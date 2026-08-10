@@ -1324,7 +1324,12 @@ function InventoryDetail({
         <EmptyState icon="Boxes" title="Nothing to show here yet" />
       ) : (
         <div className="table-wrap">
-          <table className="data">
+          {/* The widest table in the app — product, structure, one column per
+              location, then six money columns. On a phone it stacks into one
+              card per product with each figure printed against its own header;
+              see section 3 of styles/mobile.css. The location labels come from
+              LOCATIONS so a new site cannot end up with an unlabelled line. */}
+          <table className="data as-cards">
             <thead>
               <tr>
                 <th>Product</th>
@@ -1355,22 +1360,35 @@ function InventoryDetail({
                     <div style={{ fontWeight: 600 }}>{p.name}</div>
                     <div className="p-sub mono">{p.sku}</div>
                   </td>
-                  <td>
+                  <td data-label="Structure">
                     <UnitBadge unit={p.unitType} />
                   </td>
                   {LOCATIONS.map((l) => (
-                    <td key={l.id} style={{ textAlign: 'center' }} className="mono">
+                    <td key={l.id} style={{ textAlign: 'center' }} className="mono" data-label={l.label}>
                       {formatUnitCount(p.quantityByLocation[l.id] ?? 0)}
                     </td>
                   ))}
-                  <td style={{ fontWeight: 700, textAlign: 'center' }}>{formatUnitCount(p.quantity)}</td>
-                  <td className="money">{m.hasBid ? formatMoney(m.marketUnit) : dash}</td>
-                  <td className="money">{p.quantity > 0 ? formatMoney(m.invValue) : dash}</td>
-                  <td className="money">{m.hasCost ? formatUnitMoney(m.avgCost) : dash}</td>
-                  <td className="money">{m.hasCost && p.quantity > 0 ? formatMoney(m.totalCost) : dash}</td>
+                  <td style={{ fontWeight: 700, textAlign: 'center' }} data-label="Total">
+                    {formatUnitCount(p.quantity)}
+                  </td>
+                  <td className="money" data-label="High bid">
+                    {m.hasBid ? formatMoney(m.marketUnit) : dash}
+                  </td>
+                  <td className="money" data-label="Inv. value">
+                    {p.quantity > 0 ? formatMoney(m.invValue) : dash}
+                  </td>
+                  <td className="money" data-label="Avg cost">
+                    {m.hasCost ? formatUnitMoney(m.avgCost) : dash}
+                  </td>
+                  <td className="money" data-label="Total cost">
+                    {m.hasCost && p.quantity > 0 ? formatMoney(m.totalCost) : dash}
+                  </td>
                   {/* A dash, never $0.00, for a box the Spread excludes: zero is
                       a spread somebody measured, and this one has not been. */}
-                  <td className={`money ${m.hasCost ? (m.spread < 0 ? 'neg' : m.spread > 0 ? 'pos' : '') : ''}`}>
+                  <td
+                    className={`money ${m.hasCost ? (m.spread < 0 ? 'neg' : m.spread > 0 ? 'pos' : '') : ''}`}
+                    data-label="Spread"
+                  >
                     {m.hasCost && !m.outsideSpread && p.quantity > 0 ? formatMoney(m.spread) : dash}
                   </td>
                 </tr>
@@ -1381,11 +1399,22 @@ function InventoryDetail({
                 <td colSpan={3 + LOCATIONS.length} style={{ fontWeight: 700 }}>
                   Total
                 </td>
+                {/* Spacers holding the High bid and Avg cost columns open —
+                    neither has a meaningful total. Empty, so the stacked phone
+                    card drops them rather than printing a labelless blank line
+                    that would read as a figure that failed to load. */}
                 <td />
-                <td className="money">{formatMoney(totals.value)}</td>
+                <td className="money" data-label="Inv. value">
+                  {formatMoney(totals.value)}
+                </td>
                 <td />
-                <td className="money">{formatMoney(totals.cost)}</td>
-                <td className={`money ${totals.spread < 0 ? 'neg' : totals.spread > 0 ? 'pos' : ''}`}>
+                <td className="money" data-label="Total cost">
+                  {formatMoney(totals.cost)}
+                </td>
+                <td
+                  className={`money ${totals.spread < 0 ? 'neg' : totals.spread > 0 ? 'pos' : ''}`}
+                  data-label="Spread"
+                >
                   {formatMoney(totals.spread)}
                 </td>
               </tr>

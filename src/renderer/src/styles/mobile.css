@@ -1,0 +1,895 @@
+/* ==========================================================================
+   RM Operations App — the phone layer
+
+   ONE renderer bundle serves the Electron desktop app and the web app, and the
+   web app is now installed to a home screen as a PWA. Until this file existed
+   every screen was laid out for a desktop window: a 244px sidebar, multi-column
+   grids, tables ten columns wide, modals sized in fixed pixels. On a phone all
+   of it rendered and none of it could be read.
+
+   ## The rule this file exists to keep
+
+   THE DESKTOP MUST NOT CHANGE. Not "must not change much" — must not change.
+   That is achieved structurally rather than by being careful:
+
+     · every rule in this file is inside `@media (max-width: 820px)`;
+     · the Electron window is created with `minWidth: 1040` (src/main/index.ts),
+       so a desktop window cannot be narrow enough to match one of them;
+     · nothing in app.css or theme.css was moved, rewritten or "shared" to make
+       this work. This file only ever ADDS an override that the desktop cannot
+       see, which is why `git diff` on those two files is empty.
+
+   tests/mobileLayout.test.ts enforces the first point mechanically: it parses
+   this file and fails if a single declaration sits outside the query, or if any
+   query in here is wider than the breakpoint, or if a colour literal has crept
+   in. See src/renderer/src/lib/viewport.ts for why the number is 820.
+
+   ## The shape it builds
+
+   Bottom bar, not a sidebar — thumbs reach the bottom of a phone and not the
+   top. The bar is the SAME `<aside class="sidebar">` the desktop draws, turned
+   on its side by CSS: no second navigation to keep in sync, no markup fork, and
+   nothing extra to render on the desktop.
+
+   Section order below matches the order somebody hits the problems: chrome,
+   then navigation, then the things inside a screen (tables, modals, forms),
+   then the handful of screens that are used standing up.
+   ========================================================================== */
+
+@media (max-width: 820px) {
+  /* ------------------------------------------------------------------------
+     Tokens for this layer only.
+
+     Declared inside the query on purpose: on a desktop they do not exist at
+     all, so a stray reference to one from outside this file resolves to
+     nothing and shows up immediately rather than quietly shifting a layout.
+
+     The safe-area values are the reason index.html carries `viewport-fit=cover`
+     — without it iOS reports every inset as 0 and letterboxes the page instead,
+     which looks like the insets working and is why this is easy to get wrong.
+     ------------------------------------------------------------------------ */
+  :root {
+    /* The visible height of the bottom bar, excluding the home-indicator gap. */
+    --rm-bar-h: 62px;
+    --rm-safe-t: env(safe-area-inset-top, 0px);
+    --rm-safe-b: env(safe-area-inset-bottom, 0px);
+    --rm-safe-l: env(safe-area-inset-left, 0px);
+    --rm-safe-r: env(safe-area-inset-right, 0px);
+    /* Apple's and Google's floor for anything a finger has to hit. Every
+       min-height in this file points at it so raising it is one edit. */
+    --rm-tap: 44px;
+    /* How much room the bottom bar takes out of the bottom of every screen. */
+    --rm-bar-clear: calc(var(--rm-bar-h) + var(--rm-safe-b));
+  }
+
+  /* ------------------------------------------------------------------------
+     1. The shell
+
+     `.shell` is a two-column grid on the desktop. Here the sidebar leaves the
+     grid entirely (it becomes a fixed bar) so the grid must be told it has one
+     column — otherwise `.main` would be laid into the 244px sidebar track and
+     the whole app would render in a strip down the left-hand side.
+     ------------------------------------------------------------------------ */
+  .shell {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* --- The sidebar, turned into a bottom bar ---------------------------- */
+  .sidebar {
+    position: fixed;
+    inset: auto 0 0 0;
+    /* Above the page, below a modal (.modal-overlay is 60). A sheet that let
+       the nav bar sit on top of its buttons would be unusable in exactly the
+       moment somebody is trying to confirm something. */
+    z-index: 45;
+    height: calc(var(--rm-bar-h) + var(--rm-safe-b));
+    flex-direction: row;
+    align-items: stretch;
+    gap: 4px;
+    border-right: 0;
+    border-top: 1px solid var(--border);
+    /* The bottom padding is the home indicator. Without it the row of icons
+       sits under the bar iOS draws over the app and half of them stop being
+       tappable — which reads as the app ignoring taps, not as a layout fault. */
+    padding: 4px calc(8px + var(--rm-safe-r)) calc(4px + var(--rm-safe-b))
+      calc(8px + var(--rm-safe-l));
+  }
+
+  /* The wordmark and the "Modules" caption are desktop furniture: neither is an
+     action, and on a 62px bar every pixel belongs to something somebody taps.
+     Whose app this is has already been settled by the icon they tapped to open
+     it. */
+  .sidebar-brand,
+  .nav-section-label {
+    display: none;
+  }
+
+  /* The version chip is KEPT, and that is not sentimentality. It is the only
+     place the running version is printed, and an installed PWA sitting behind a
+     service worker is precisely where "which build am I actually on?" gets
+     asked — a stale worker serves an old app that looks completely normal.
+     Reduced to the glyph and the number; the words beside them ("Web app",
+     "Check for updates") are what would not fit. */
+  .sidebar-footer {
+    flex: none;
+    margin: 0;
+    padding: 0;
+    border-top: 0;
+  }
+  .sidebar-update {
+    flex-direction: column;
+    justify-content: center;
+    gap: 2px;
+    width: auto;
+    min-width: 52px;
+    min-height: var(--rm-tap);
+    height: 100%;
+    padding: 6px;
+    text-align: center;
+  }
+  .sidebar-update > span:not(.ver) {
+    display: none;
+  }
+  .sidebar-update .ver {
+    margin-left: 0;
+    font-size: 9.5px;
+  }
+
+  /* --- The module strip -------------------------------------------------- */
+  .nav {
+    flex-direction: row;
+    align-items: stretch;
+    gap: 2px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    /* A sideways swipe that runs off the end of the strip must not become the
+       browser's back gesture — that would leave the app entirely. */
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    scroll-snap-type: x proximity;
+  }
+  .nav::-webkit-scrollbar {
+    display: none;
+  }
+  .nav-item {
+    position: relative;
+    flex: 0 0 auto;
+    flex-direction: column;
+    justify-content: center;
+    gap: 3px;
+    width: auto;
+    min-width: 62px;
+    min-height: var(--rm-tap);
+    padding: 6px 8px;
+    text-align: center;
+    scroll-snap-align: center;
+  }
+  .nav-item > span {
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 1.15;
+    letter-spacing: 0.01em;
+  }
+  /* Lifted OUT of the flow rather than made smaller. `margin-left: auto` put it
+     at the right-hand end of a horizontal row on the desktop; in this column it
+     becomes a third line, which is more than the 62px bar has and would push
+     the icon and the label out of a strip that clips them. */
+  .nav-item .soon {
+    position: absolute;
+    top: 1px;
+    right: 2px;
+    margin-left: 0;
+    font-size: 8px;
+    padding: 1px 3px;
+  }
+
+  /* --- The workspace switcher ------------------------------------------- */
+  /* It keeps its place in the bar because it is the ONLY route to the shipping
+     workspace — the sidebar filters modules by workspace, so losing this button
+     would strand a packer in Operations with no way out. */
+  .ws-switch {
+    flex: none;
+    display: flex;
+  }
+  .workspace {
+    flex-direction: column;
+    justify-content: center;
+    gap: 3px;
+    width: auto;
+    min-width: 62px;
+    min-height: var(--rm-tap);
+    margin: 0;
+    padding: 6px 8px;
+    text-align: center;
+  }
+  .workspace .ws-meta {
+    flex: none;
+  }
+  /* 26px plus a caption plus this button's own border is a pixel over the
+     bar's inner height, and `.nav` clips what does not fit — so the tile
+     shrinks to the same visual weight as a module's icon instead. */
+  .workspace .ws-ico {
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+  }
+  /* The caption is the word "Workspace", not the workspace's name. Both names
+     begin "RM Cardz", so a 62px column truncates them to the same eight
+     characters — a label that cannot tell you which of the two you are in is
+     worse than one that says what the button does. Which one is current is
+     shown, with a tick, in the sheet the button opens. */
+  .workspace .ws-label {
+    font-size: 10px;
+    letter-spacing: 0.01em;
+    text-transform: none;
+    color: var(--text-2);
+  }
+  .workspace .ws-name,
+  .workspace > svg {
+    display: none;
+  }
+  /* Anchored ABOVE the bar. The desktop pins it 54px below the button, which
+     from a bar sitting on the bottom edge is entirely off the screen. */
+  .ws-pop {
+    top: auto;
+    bottom: calc(100% + 8px);
+    left: 0;
+    right: auto;
+    width: min(280px, calc(100vw - 20px));
+  }
+  .ws-item {
+    min-height: var(--rm-tap);
+  }
+
+  /* --- The top bar ------------------------------------------------------- */
+  /* Two rows: the module's name and the account controls, then the search on a
+     line of its own. The search stays rather than being hidden because it is
+     the only filter Admin → Employees has — dropping it would silently remove
+     a feature on the surface least able to spare one. */
+  .topbar {
+    height: auto;
+    min-height: 52px;
+    flex-wrap: wrap;
+    gap: 8px 10px;
+    padding: calc(8px + var(--rm-safe-t)) calc(14px + var(--rm-safe-r)) 8px
+      calc(14px + var(--rm-safe-l));
+  }
+  .topbar .title-block {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .topbar .title-block h1 {
+    font-size: 16px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  /* The one-line module description is orientation for somebody meeting the
+     app; it is prose, it wraps to three lines here, and it costs a row of the
+     screen on every single page. */
+  .topbar .title-block p {
+    display: none;
+  }
+  .topsearch {
+    order: 3;
+    flex: 1 0 100%;
+    max-width: none;
+  }
+  .topsearch input {
+    height: var(--rm-tap);
+  }
+  .topbar-actions {
+    gap: 6px;
+  }
+  /* The avatar and the caret are the button; the first name beside them is
+     three more characters competing with the module title for the same row. */
+  .usermenu-btn .um-name {
+    display: none;
+  }
+  /* Hung off the bottom of the button rather than a fixed 48px, because the
+     button is now a bare avatar and shorter than the desktop's chip. Capped at
+     the viewport: a 200px menu opening from a control near the right edge of a
+     390px screen has room, but only just. */
+  .usermenu-pop {
+    top: calc(100% + 6px);
+    min-width: min(260px, calc(100vw - 28px));
+  }
+  .menu-item {
+    min-height: var(--rm-tap);
+  }
+
+  /* --- The scrolling page ------------------------------------------------ */
+  /* The bottom bar is `position: fixed`, so it covers whatever the page ends
+     with unless the page reserves the space. Without this the last row of every
+     list — the newest invoice, the last team to bag — is permanently behind the
+     nav and looks like it failed to load. */
+  .content {
+    padding: 16px calc(14px + var(--rm-safe-r)) calc(24px + var(--rm-bar-clear))
+      calc(14px + var(--rm-safe-l));
+  }
+  /* Inventory and Shipping scroll in a region of their own rather than in
+     `.content`, but that region is `height: 100%` of `.content`'s CONTENT box —
+     which the padding above has already shortened — so they clear the bar
+     without a second reservation. Adding one here would reserve it twice and
+     leave 62px of dead space under every list.
+
+     Nothing may make the page itself scroll sideways. `.content` is the scroll
+     container — the document is height-locked — so a too-wide child scrolls
+     inside it rather than moving the page; these are the elements that could
+     defeat that by refusing to shrink. */
+  img,
+  video,
+  canvas,
+  pre {
+    max-width: 100%;
+  }
+
+  /* ------------------------------------------------------------------------
+     2. Tab strips and segmented rows
+
+     Every module puts its screens in a `.tabs` pill group, up to six wide with
+     an icon and a full label each. At 390px that is roughly double the
+     available width, and an inline-flex row simply overflows its parent with no
+     way to reach what is off the edge.
+     ------------------------------------------------------------------------ */
+  .tabs,
+  .seg-row {
+    display: flex;
+    /* Both are `inline-flex` on the desktop, which sizes to max-content. As a
+       flex item — `.tabs` sits in `.ship-topbar` and `.inv-header` — that base
+       size refuses to shrink without `min-width: 0`, and the strip pushes its
+       own container wide instead of scrolling inside it. */
+    min-width: 0;
+    max-width: 100%;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .tabs::-webkit-scrollbar,
+  .seg-row::-webkit-scrollbar {
+    display: none;
+  }
+  .tab,
+  .seg {
+    flex: 0 0 auto;
+    min-height: var(--rm-tap);
+    white-space: nowrap;
+  }
+  .ship-topbar {
+    gap: 10px;
+  }
+  /* The event/package/card/value strip is reference, not action. Left beside
+     the tabs it competes for the same row and wraps to four lines. */
+  .ship-topmeta {
+    margin-left: 0;
+    gap: 10px;
+    font-size: 12px;
+  }
+
+  /* ------------------------------------------------------------------------
+     3. Wide tables become one card per row
+
+     THE BIGGEST SINGLE READABILITY PROBLEM. A ten-column table inside a
+     horizontally scrolling wrapper is technically visible and practically
+     useless: you read a name, scroll four screens right, and no longer know
+     which row you are on.
+
+     The convention, and it is worth stating because the markup carries half of
+     it: a table opts in with `as-cards`, and every cell that needs its column
+     header to make sense carries `data-label="…"`. The FIRST cell — the one
+     that identifies the row — deliberately has no label; it becomes the card's
+     headline. A cell with no label and no identity (an actions cell) simply
+     renders full width.
+
+     Tables that are genuinely a grid of numbers — the per-person performance
+     matrix, the week rota, the line-item editors — keep their columns and
+     scroll inside their own container. Stacking those would destroy the
+     comparison that is the entire reason they are a grid.
+     ------------------------------------------------------------------------ */
+  table.as-cards,
+  table.as-cards > thead,
+  table.as-cards > tbody,
+  table.as-cards > tfoot,
+  table.as-cards > tbody > tr,
+  table.as-cards > tfoot > tr,
+  table.as-cards td {
+    display: block;
+    width: auto;
+  }
+  /* The headers are not lost — they are reprinted against each value below. */
+  table.as-cards > thead {
+    display: none;
+  }
+  table.as-cards > tbody > tr,
+  table.as-cards > tfoot > tr {
+    margin: 0 0 10px;
+    padding: 6px 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+    box-shadow: var(--shadow-sm);
+  }
+  table.as-cards td {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 6px 14px;
+    border: 0;
+    text-align: right;
+  }
+  table.as-cards td[data-label]::before {
+    content: attr(data-label);
+    flex: 0 0 auto;
+    max-width: 46%;
+    text-align: left;
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--text-3);
+  }
+  /* The headline cell, and any actions cell: full width, left aligned, and
+     never given a label chip it has no header for. */
+  table.as-cards td:not([data-label]) {
+    display: block;
+    text-align: left;
+  }
+  table.as-cards td:not([data-label]):first-child {
+    padding-top: 8px;
+    padding-bottom: 8px;
+    font-size: 14px;
+  }
+  /* A `colspan` cell is a spanning heading — a day in a timesheet, a totals
+     label. It has no single column and so no label of its own. */
+  table.as-cards td[colspan] {
+    display: block;
+    text-align: left;
+    font-weight: 700;
+  }
+  table.as-cards td[colspan]::before {
+    content: none;
+  }
+  /* A cell React rendered as `<td />` — a spacer holding a column open under a
+     total. There is no column left to hold open, so an empty label-less line is
+     all it can contribute. */
+  table.as-cards td:empty {
+    display: none;
+  }
+  /* A grouping row inside the body — the day a run of punches belongs to, with
+     that day's total on the right. It is a rule between cards rather than a
+     card, and both of its cells are short, so it stays on one line. */
+  table.as-cards > tbody > tr.matrix-group-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 6px;
+    padding: 6px 2px;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+    font-weight: 700;
+  }
+  /* The closing totals row stays a CARD rather than a line: it carries three or
+     four labelled money figures, and side by side at this width they run off
+     the edge of the screen. Tinted so it is not mistaken for one more record. */
+  table.as-cards > tfoot > tr {
+    border-color: var(--border-strong);
+    background: var(--surface-2);
+    font-weight: 700;
+  }
+  /* The row's buttons, once they have a full-width line of their own rather
+     than an 90px column. Left-aligned and wrapping: right-aligned they read as
+     belonging to whatever is below them, and three of them ("Resend", "PIN",
+     "Edit") do not fit one line at this width. */
+  table.as-cards .cell-actions,
+  table.as-cards .supply-actions {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    gap: 8px;
+    padding: 2px 0 4px;
+  }
+
+  /* A table that stays a grid scrolls inside its own box, and keeps the
+     wrapper's frame to say that is what it is doing. */
+  .table-wrap,
+  .perf-tablewrap {
+    max-width: 100%;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+  /* ...but around a stack of cards that frame is a box drawn around boxes, and
+     the `overflow-x` above would clip the cards' own shadows. Wins over the
+     rule it follows on specificity as well as order — `:has()` takes the
+     specificity of its argument.
+
+     `:has()` rather than a second class on the wrapper because there is nothing
+     for a second class to say that the table has not already said. Electron 31
+     (Chromium 126) and iOS 16.4 — the floor this app already sets for
+     notifications — both support it, and a browser that does not simply keeps
+     the old frame, which is untidy rather than broken. */
+  .table-wrap:has(> table.as-cards) {
+    overflow: visible;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+  }
+
+  /* ------------------------------------------------------------------------
+     4. Modals become sheets
+
+     `.modal` is capped at 520px and centred with 24px of backdrop around it.
+     On a 390px screen that is a floating card with its footer buttons pushed
+     off the bottom by any real amount of content — the confirm button on a
+     destructive action becoming unreachable is the worst version of this.
+
+     A sheet fills the screen under the notch, scrolls in its body, and pins its
+     actions to the bottom edge where a thumb already is.
+     ------------------------------------------------------------------------ */
+  .modal-overlay {
+    align-items: stretch;
+    padding: var(--rm-safe-t) 0 0;
+  }
+  .modal,
+  .modal-lg {
+    width: 100%;
+    max-width: none;
+    height: 100%;
+    max-height: none;
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+    animation: rm-sheet-in 0.18s ease;
+  }
+  @keyframes rm-sheet-in {
+    from {
+      transform: translateY(24px);
+      opacity: 0;
+    }
+  }
+  .modal-head {
+    padding: 16px 18px;
+  }
+  .modal-body {
+    flex: 1 1 auto;
+    padding: 16px 18px 20px;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+  /* Stacked and full width, in DOM order — which puts the confirming action
+     last, nearest the thumb, and Cancel above it where a mis-tap is harmless.
+     The desktop's right-aligned wrapping row leaves three long labels in an
+     unpredictable order on a narrow screen. */
+  .modal-foot {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    padding: 12px 18px calc(12px + var(--rm-safe-b));
+  }
+  .modal-close {
+    /* An 18px glyph with 4px of padding is a 26px target. */
+    min-width: var(--rm-tap);
+    min-height: var(--rm-tap);
+    align-items: center;
+    justify-content: center;
+    margin: -8px -8px -8px 0;
+  }
+
+  /* ------------------------------------------------------------------------
+     5. Touch targets
+
+     44×44 is the floor. Most of these are 30–38px on the desktop, which is
+     right for a cursor and a coin-toss for a finger — and several of the
+     worst offenders are the ticks on the packing bench, pressed thirty times
+     in a row by somebody holding cards.
+     ------------------------------------------------------------------------ */
+  .btn,
+  .btn-sm {
+    min-height: var(--rm-tap);
+  }
+  .btn-sm {
+    padding: 0 13px;
+    font-size: 13px;
+  }
+  .icon-btn {
+    width: var(--rm-tap);
+    height: var(--rm-tap);
+  }
+  .ts-clear {
+    padding: 11px;
+  }
+  .checkbox {
+    min-height: var(--rm-tap);
+  }
+  .bench-tick,
+  .bench-tick.sm {
+    min-width: var(--rm-tap);
+    min-height: var(--rm-tap);
+    align-items: center;
+    justify-content: center;
+    margin-top: 0;
+  }
+  .po-card-foot .po-move,
+  .bench-gate-go {
+    min-height: var(--rm-tap);
+  }
+  .qa-chip {
+    min-height: 56px;
+  }
+
+  /* ------------------------------------------------------------------------
+     6. Forms
+
+     Two things, and the second one is the classic iOS bug: Safari zooms the
+     whole page when a field smaller than 16px takes focus, and it does not zoom
+     back out. Every field in the app is 11.5–14px, so a single tap on a search
+     box left the app at 1.3× with the navigation off-screen.
+     ------------------------------------------------------------------------ */
+  .field-row,
+  .cd-readonly,
+  .qbo-form,
+  .qbo-map-grid,
+  .sync-setup,
+  .sync-link-form,
+  .fin-rate-form,
+  .cd-grid,
+  .dash-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .sync-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .sync-reject-list li,
+  .sync-sub-list li,
+  .ci-list li,
+  .barlist-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* `!important` on exactly one property, and it is load bearing. The zoom is
+     triggered by the COMPUTED font size of whatever gets focus, so a single
+     control anywhere in twenty modules with a more specific rule — and there
+     are dozens: .inv-field input, .chk-status-select, .po-qty-input — brings
+     the bug back for the whole page. Listing every selector is a list that goes
+     stale; this cannot. It is unreachable from the desktop either way. */
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+  .input,
+  .select {
+    height: var(--rm-tap);
+  }
+
+  /* ------------------------------------------------------------------------
+     7. Home and the time clock
+
+     The first screen anybody opens on a phone, and the reason most of them open
+     it at all: clocking in and out. The punch button is a 156×48 control at the
+     right-hand end of a row on the desktop; here it is the full width of the
+     card, under the timer, which is where a thumb is.
+     ------------------------------------------------------------------------ */
+  .greeting {
+    margin-bottom: 14px;
+  }
+  .greeting h2 {
+    font-size: 19px;
+  }
+  .timeclock {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 14px;
+  }
+  .tc-left {
+    gap: 14px;
+  }
+  .tc-ring {
+    width: 48px;
+    height: 48px;
+  }
+  .tc-timer {
+    font-size: 32px;
+  }
+  .tc-sub {
+    gap: 6px 14px;
+  }
+  .tc-cta {
+    width: 100%;
+    height: 54px;
+    min-height: 54px;
+    font-size: 16px;
+  }
+  .panel-card {
+    padding: 14px 14px;
+  }
+
+  /* ------------------------------------------------------------------------
+     8. The packing bench
+
+     Read at arm's length by somebody with cards in both hands. The team row is
+     a five-item flex line — tick, sticker position, team, buyer, order number —
+     which at 390px crushes the team and the buyer to a few characters each.
+     Matching one to the other IS the job, and a mismatch here puts a stranger's
+     card in somebody's mailer, so both get a full line.
+     ------------------------------------------------------------------------ */
+  .bench-team {
+    display: grid;
+    grid-template-columns: var(--rm-tap) auto minmax(0, 1fr);
+    /* The three rows are EXPLICIT and that is not cosmetic: a negative grid
+       line only ever addresses the explicit grid, so `grid-row: 1 / -1` on the
+       tick below would resolve against a zero-track grid and silently collapse
+       to a single row. The third track is empty for a team with no order id,
+       which costs one 2px gap. */
+    grid-template-rows: auto auto auto;
+    align-items: center;
+    column-gap: 10px;
+    row-gap: 2px;
+    padding: 7px 2px;
+  }
+  .bench-team .bench-tick {
+    grid-column: 1;
+    grid-row: 1 / -1;
+  }
+  .bench-team-seq {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .bench-team-name {
+    grid-column: 3;
+    grid-row: 1;
+    min-width: 0;
+  }
+  .bench-team-who {
+    grid-column: 2 / -1;
+    grid-row: 2;
+    /* The desktop truncates a long handle to keep the row on one line. Here
+       the row is already two lines and the handle is half of the match being
+       checked, so it wraps instead of being cut off. */
+    white-space: normal;
+    overflow: visible;
+    word-break: break-word;
+  }
+  .bench-team-order {
+    grid-column: 2 / -1;
+    grid-row: 3;
+  }
+  /* The pick list. Each row is one card being found and ticked off a slip, and
+     the whole row is the button — 36px of it on the desktop, which is a coin
+     toss for a thumb belonging to somebody already holding something. */
+  .walk-team {
+    min-height: var(--rm-tap);
+    padding: 10px 12px;
+  }
+  .walk-team-name {
+    /* A player name is long and the price beside it is four characters. On the
+       desktop the row is wide enough for both; here the name wraps rather than
+       being truncated to something that could be two different cards. */
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  /* Prev/next between orders: pushed to the right of a shared row on the
+     desktop, its own full-width pair here. Moving on is the action this screen
+     exists for and it should not be two 60px buttons in a corner. */
+  .walk-nav {
+    display: flex;
+    flex: 1 1 100%;
+    margin-left: 0;
+  }
+  .walk-nav .btn {
+    flex: 1 1 auto;
+  }
+  .walk-prog {
+    margin-left: 0;
+  }
+  .floor-back {
+    min-height: var(--rm-tap);
+  }
+  .floor-idle-actions .btn,
+  .floor-actbar .btn {
+    flex: 1 1 auto;
+  }
+  .bench-head {
+    flex-wrap: wrap;
+  }
+  .bench-bar {
+    flex: 1 1 100%;
+    max-width: none;
+    margin-left: 0;
+  }
+  .bench-step {
+    padding: 9px 12px;
+  }
+  .bench-gate {
+    flex-wrap: wrap;
+  }
+
+  /* ------------------------------------------------------------------------
+     9. Admin → Notifications
+
+     Opened on the phone by definition: it is the screen that turns push on for
+     the phone you are holding, and the one that explains the Home Screen step
+     when iOS refuses. The banner puts its action beside two lines of text,
+     which at this width squeezes "Turn on" to a two-line button in a 70px
+     column.
+     ------------------------------------------------------------------------ */
+  .sync-state {
+    flex-wrap: wrap;
+    align-items: flex-start;
+    padding: 14px;
+  }
+  .sync-dot {
+    margin-top: 6px;
+  }
+  .sync-state-actions {
+    flex: 1 0 100%;
+    flex-wrap: wrap;
+  }
+  .sync-state-actions .btn {
+    flex: 1 1 auto;
+  }
+  .sync-card {
+    padding: 14px;
+  }
+  .sync-reject-list li {
+    gap: 2px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .sync-reject-list li:last-child {
+    border-bottom: 0;
+  }
+  .sync-reject-list code {
+    /* A push endpoint is a 200-character URL. Truncated it says nothing;
+       wrapped it says which service, which is the whole point of printing it. */
+    white-space: normal;
+    word-break: break-all;
+  }
+
+  /* ------------------------------------------------------------------------
+     10. Invoices and the P&L, as read surfaces
+
+     Both are already close: the invoice board collapses to one lane at 620px
+     and the statement is a two-column table that fits any width. What is left
+     is the furniture around them.
+     ------------------------------------------------------------------------ */
+  .po-page-actions .btn {
+    flex: 1 1 auto;
+  }
+  /* `margin-left: auto` pushes the three counts to the right of the heading
+     they share a row with. Wrapped onto their own line that leaves them jammed
+     against the right edge with a third of the screen blank beside them. */
+  .po-page-stats {
+    margin-left: 0;
+    gap: 18px;
+    flex: 1 1 100%;
+  }
+  .fin-pnl td {
+    padding-left: 12px;
+  }
+  /* The per-break split is five columns of money. It stacks (see section 3),
+     and the note above it and the caveat below it are the parts a reader has to
+     have before quoting any of it. */
+  .bpnl {
+    padding: 4px 0 10px;
+  }
+
+  /* ------------------------------------------------------------------------
+     11. Month grids
+
+     Seven columns is what a week IS — collapsing it would destroy the shape
+     that makes it readable at all. It stays a grid and gets smaller type.
+     ------------------------------------------------------------------------ */
+  .hcal-grid,
+  .fin-cal-grid,
+  .stm-cal-grid,
+  .sb-cal-grid,
+  .mh-grid,
+  .ts-cover {
+    font-size: 11px;
+  }
+}

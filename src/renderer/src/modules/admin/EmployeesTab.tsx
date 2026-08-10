@@ -152,7 +152,11 @@ export function EmployeesTab({
       </div>
 
       <div className="table-wrap">
-        <table className="data">
+        {/* One card per person on a phone — see section 3 of
+            styles/mobile.css. The name cell is the headline and so carries no
+            data-label; the three action buttons get a full-width row of their
+            own rather than being crushed into a 90px column. */}
+        <table className="data as-cards">
           <thead>
             <tr>
               <th>Name</th>
@@ -185,15 +189,19 @@ export function EmployeesTab({
                     </div>
                   </div>
                 </td>
-                <td className="mono">{e.companyId}</td>
-                <td>{e.title || '—'}</td>
-                <td>
+                <td className="mono" data-label="Company ID">
+                  {e.companyId}
+                </td>
+                <td data-label="Title">{e.title || '—'}</td>
+                <td data-label="Role">
                   <RoleBadge role={e.role} />
                 </td>
-                <td>
+                <td data-label="Status">
                   <StatusBadge status={e.status} />
                 </td>
-                <td className="muted">{formatDate(e.createdAt)}</td>
+                <td className="muted" data-label="Added">
+                  {formatDate(e.createdAt)}
+                </td>
                 {canManage && (
                   <td>
                     <div className="cell-actions">
