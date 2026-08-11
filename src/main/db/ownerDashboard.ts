@@ -494,6 +494,18 @@ function employeesToday(): OwnerEmployeeToday[] {
   // the rest: in Chicago, somebody clocking in at 7:30pm is stored as
   // 2026-08-08T00:30:00Z and would drop off tonight's card and reappear on
   // tomorrow's. The evening is exactly when this warehouse is busy.
+  // STILL CLOCKED IN COUNTS, WHATEVER DAY IT STARTED.
+  //
+  // This window was clock_in >= local midnight and nothing else, so somebody
+  // who started before midnight and never clocked out vanished from the card
+  // at 00:00 while they were standing in the building. It also lost anyone
+  // whose shift began the previous evening — which is when this warehouse is
+  // busy — and anyone whose row synced from another machine after the fact.
+  //
+  // An entry with no clock_out is an open shift by definition. It is on the
+  // card because the person is HERE, not because of when they arrived. The
+  // date window still bounds everything that has already ended, so the query
+  // does not widen into history.
   const dayStart = new Date()
   dayStart.setHours(0, 0, 0, 0)
   const from = dayStart.toISOString()
@@ -503,7 +515,7 @@ function employeesToday(): OwnerEmployeeToday[] {
               t.clock_in AS clock_in, t.clock_out AS clock_out
          FROM time_entries t
          JOIN employees e ON e.id = t.employee_id
-        WHERE t.clock_in >= ?
+        WHERE (t.clock_in >= ? OR t.clock_out IS NULL)
           AND e.status != 'disabled'`
     )
     .all(from) as Array<{
