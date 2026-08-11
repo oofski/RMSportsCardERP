@@ -3,6 +3,7 @@ import { useChrome } from '../../lib/chrome'
 import { IS_WEB } from '../../lib/api'
 import { Icon } from '../../components/Icon'
 import { TimeClock } from '../../components/TimeClock'
+import { GoLiveCard } from './GoLiveCard'
 import { OwnerBoard } from './OwnerBoard'
 import { StaffBoard } from './StaffBoard'
 
@@ -67,10 +68,13 @@ export function HomeModule(): JSX.Element {
    * ticked `module.finance` for one afternoon would be a worse screen for them,
    * not a more generous one.
    *
-   * Staff and Shipping are siblings, not a rung apart — same rank, different
-   * job — so both get the floor's board.
+   * Staff, Shipping and Breaker are siblings, not rungs apart — same rank,
+   * different jobs — so all three get the floor's board. A breaker works the
+   * bench between shows like everybody else; what is different about their day
+   * is the one card above it.
    */
-  const onTheFloor = user?.role === 'staff' || user?.role === 'shipping'
+  const onTheFloor =
+    user?.role === 'staff' || user?.role === 'shipping' || user?.role === 'breaker'
 
   if (onTheFloor) {
     return (
@@ -84,6 +88,11 @@ export function HomeModule(): JSX.Element {
         <div style={{ marginBottom: 16 }}>
           <TimeClock />
         </div>
+
+        {/* ABOVE the board, and above nothing else on this page: going on air
+            is the first thing a breaker does and the last thing they undo, and
+            it renders nothing at all for anybody without the permission. */}
+        <GoLiveCard />
 
         {/* No quick actions below it. The two modules the floor can open are in
             the sidebar at all times, and this app has no router — an action can
@@ -105,6 +114,12 @@ export function HomeModule(): JSX.Element {
       <div style={{ marginBottom: 16 }}>
         <TimeClock />
       </div>
+
+      {/* The same card for whoever runs the shows. `streaming.manage` includes
+          the right to open one, so a manager gets the button here as well as
+          the bar inside the module — the module is three clicks away and this
+          is the page they are already on at seven o'clock. */}
+      <GoLiveCard />
 
       {/* The sketch, in full. Renders nothing for somebody whose permissions
           cover none of its sections, so the floor's home page stays simple. */}

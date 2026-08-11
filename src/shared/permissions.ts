@@ -7,7 +7,7 @@
  * stay in one place.
  */
 
-export type Role = 'owner' | 'operations' | 'staff' | 'shipping'
+export type Role = 'owner' | 'operations' | 'staff' | 'shipping' | 'breaker'
 
 export interface RoleDefinition {
   id: Role
@@ -44,6 +44,19 @@ export const ROLES: RoleDefinition[] = [
     id: 'shipping',
     label: 'Shipping',
     description: 'Works the packing floor: the picking and packing bench.',
+    rank: 1
+  },
+  // The person in front of the camera. Everything Shipping can do — they work
+  // the floor between shows like everybody else — plus the one thing nobody
+  // else on that floor may do: put the business on air and take it off again.
+  //
+  // Same rank as Shipping and Staff, and a sibling rather than a rung: opening
+  // a stream is a different JOB, not more authority. Ranking it above Shipping
+  // would only mean a breaker could hand the role out.
+  {
+    id: 'breaker',
+    label: 'Breaker',
+    description: 'Runs the shows. The packing floor, plus starting and ending a stream.',
     rank: 1
   }
 ]
@@ -92,6 +105,7 @@ export type Permission =
   | 'finance.manage'
   | 'module.streaming'
   | 'streaming.manage'
+  | 'streaming.run'
 
 export interface PermissionDefinition {
   key: Permission
@@ -178,6 +192,13 @@ export const PERMISSIONS: PermissionDefinition[] = [
     group: 'Modules'
   },
   {
+    key: 'streaming.run',
+    label: 'Start and end a stream',
+    description:
+      'Put the business on air and take it off again. Does NOT open the Streaming module, which carries the cost of every box opened.',
+    group: 'Modules'
+  },
+  {
     key: 'streaming.manage',
     label: 'Manage streams',
     description: 'Start and end streams, add stream times, and record breaks and giveaways (which consume stock).',
@@ -231,6 +252,23 @@ export const PERMISSIONS: PermissionDefinition[] = [
 
 const ALL_PERMISSIONS: Permission[] = PERMISSIONS.map((p) => p.key)
 
+/**
+ * The floor, plus the camera.
+ *
+ * Everything Shipping has, and `streaming.run` on top — which is start and end,
+ * and deliberately nothing else. A breaker does NOT get `module.streaming`:
+ * that module is the P&L, the cost of every box opened and the giveaway losses,
+ * and none of it is theirs to read. What they get is one button on their own
+ * home page.
+ */
+const BREAKER_PERMISSIONS: Permission[] = [
+  'updates.check',
+  'module.fulfillment',
+  'shipping.find',
+  'shipping.pack',
+  'streaming.run'
+]
+
 const OPERATIONS_PERMISSIONS: Permission[] = [
   'admin.access',
   'admin.employees.view',
@@ -249,6 +287,7 @@ const OPERATIONS_PERMISSIONS: Permission[] = [
   'module.finance',
   'module.streaming',
   'streaming.manage',
+  'streaming.run',
   'finance.manage'
 ]
 
@@ -282,7 +321,8 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   owner: ALL_PERMISSIONS,
   operations: OPERATIONS_PERMISSIONS,
   staff: STAFF_PERMISSIONS,
-  shipping: SHIPPING_PERMISSIONS
+  shipping: SHIPPING_PERMISSIONS,
+  breaker: BREAKER_PERMISSIONS
 }
 
 /**

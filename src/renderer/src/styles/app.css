@@ -22128,3 +22128,78 @@ button.sor-team:focus-visible {
   background: var(--warning-bg);
   color: var(--text);
 }
+
+/* ---------------------------------------------------------------------------
+   Go live — the breaker's one button, on their own home page.
+
+   Deliberately a single row rather than a panel with a header: it is one
+   decision with two states, and dressing it as a section would imply there is
+   something else inside it.
+   --------------------------------------------------------------------------- */
+.golive {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius, 10px);
+  background: var(--surface);
+}
+.golive.is-loading {
+  color: var(--text-3);
+  font-size: 13px;
+}
+.golive-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.golive-title {
+  font-size: 14.5px;
+  color: var(--text);
+}
+.golive-sub {
+  font-size: 12px;
+  color: var(--text-3);
+}
+.golive-name {
+  margin-left: auto;
+  max-width: 260px;
+}
+/* On air. Tinted rather than merely labelled: this is the one state on the page
+   that has to be readable from across a room, because the cost of not noticing
+   it is a show recorded against the wrong session — or a second one started on
+   top of it. */
+.golive.is-live {
+  border-color: var(--danger);
+  background: var(--danger-bg);
+}
+.golive.is-live .golive-title {
+  color: var(--danger-strong);
+  font-weight: 700;
+}
+.golive.is-live .golive-sub {
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+.golive.is-live .btn {
+  margin-left: auto;
+}
+.golive-dot {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--danger-strong);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger) 25%, transparent);
+  animation: golive-pulse 2s ease-in-out infinite;
+}
+@keyframes golive-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .golive-dot { animation: none; }
+}

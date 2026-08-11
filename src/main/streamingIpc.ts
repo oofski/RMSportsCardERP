@@ -59,6 +59,34 @@ function can(permission: Permission): boolean {
 }
 
 /** Every write in this module goes through here. */
+/**
+ * Who may put the business on air.
+ *
+ * `streaming.run` on its own is the BREAKER's grant: start and end, and nothing
+ * else in the module. `streaming.manage` includes it, because somebody who may
+ * edit a session's costs may obviously open one — writing the narrower
+ * permission into every manager's role as well would be a second place to
+ * forget it.
+ *
+ * Deliberately separate from `requireManage`: start/end is the one write on
+ * this module that does not touch money, and the rest — items, costs, deleting
+ * a night — must stay with whoever runs the shows.
+ */
+function requireRun(): { id: string } {
+  const user = currentUser()
+  if (!user) throw new Error('You are not signed in.')
+  if (!user.permissions.includes('streaming.run') && !user.permissions.includes('streaming.manage')) {
+    throw new Error('You do not have permission to start a stream.')
+  }
+  return { id: user.id }
+}
+
+/** True for anyone who may see whether a stream is live — including a breaker,
+ *  whose home button has to know which state it is in. */
+function canSeeLive(): boolean {
+  return can('module.streaming') || can('streaming.run')
+}
+
 function requireManage(): { id: string } {
   const user = currentUser()
   if (!user) throw new Error('You are not signed in.')
@@ -105,8 +133,10 @@ function emptyMonth(month: string): StreamCalendarMonth {
 
 export function registerStreamingIpc(): void {
   // ---- Reads (module.streaming) -------------------------------------------
+  // Readable by a breaker as well: their home page has one button, and it
+  // cannot say "Start" or "End" without knowing whether a show is on.
   ipcMain.handle(IPC.streamActive, (): StreamSession | null =>
-    can('module.streaming') ? getActiveSession() : null
+    canSeeLive() ? getActiveSession() : null
   )
 
   ipcMain.handle(IPC.streamCalendar, (_e, month: string): StreamCalendarMonth => {
@@ -131,7 +161,7 @@ export function registerStreamingIpc(): void {
     IPC.streamStart,
     (_e, input: { title: string; hostId: string | null; note: string | null }): Result<StreamSession> => {
       try {
-        const actor = requireManage()
+        const actor = requireRun()
         return startSession(
           {
             title: str(input?.title),
@@ -148,7 +178,7 @@ export function registerStreamingIpc(): void {
 
   ipcMain.handle(IPC.streamEnd, (_e, id: string): Result<StreamSession> => {
     try {
-      const actor = requireManage()
+      const actor = requireRun()
       return endSession(str(id).trim(), actor.id)
     } catch (err) {
       return fail(err)
