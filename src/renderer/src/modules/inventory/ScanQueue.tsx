@@ -27,6 +27,8 @@ export function ScanQueue({
   onLocation,
   onUnitCost,
   onRemove,
+  onAcceptOverage,
+  onKeepToOrder,
   onClear,
   onConfirm
 }: {
@@ -34,6 +36,9 @@ export function ScanQueue({
   direction: ScanDirection
   busy: boolean
   onQuantity: (key: string, quantity: number) => void
+  /** Answers to the over-scan question. See the note where it is rendered. */
+  onAcceptOverage: (key: string) => void
+  onKeepToOrder: (key: string) => void
   onLocation: (key: string, location: string) => void
   onUnitCost: (key: string, unitCost: number | null) => void
   onRemove: (key: string) => void
@@ -60,6 +65,8 @@ export function ScanQueue({
           line={line}
           busy={busy}
           onQuantity={onQuantity}
+          onAcceptOverage={onAcceptOverage}
+          onKeepToOrder={onKeepToOrder}
           onLocation={onLocation}
           onUnitCost={onUnitCost}
           onRemove={onRemove}
@@ -103,6 +110,8 @@ function QueueRow({
   line,
   busy,
   onQuantity,
+  onAcceptOverage,
+  onKeepToOrder,
   onLocation,
   onUnitCost,
   onRemove
@@ -110,6 +119,8 @@ function QueueRow({
   line: PendingLine
   busy: boolean
   onQuantity: (key: string, quantity: number) => void
+  onAcceptOverage: (key: string) => void
+  onKeepToOrder: (key: string) => void
   onLocation: (key: string, location: string) => void
   onUnitCost: (key: string, unitCost: number | null) => void
   onRemove: (key: string) => void
@@ -206,12 +217,60 @@ function QueueRow({
           </span>
         )}
 
-        {line.overflow && (
+        {/* THE OVER-SCAN QUESTION.
+            This used to be a chip beside a number that had quietly stopped
+            moving: every beep still sounded like a success and the count simply
+            froze. It is a decision now, and nothing on the list commits until
+            it is answered — see commitBlockedReason. */}
+        {line.needsDecision === 'overage' && (
+          <span className="scan-overask">
+            <span className="scan-overask-text">
+              <Icon name="AlertTriangle" size={14} />
+              <b>
+                {line.scans} scanned, {line.max} {line.kind === 'so_line' || line.kind === 'remove_stock'
+                  ? 'available'
+                  : 'ordered'}
+                .
+              </b>{' '}
+              {line.kind === 'po_line'
+                ? `${line.poNumber} only asked for ${line.max}.`
+                : line.kind === 'so_line'
+                  ? `${line.invoiceNumber || 'That order'} only asked for ${line.max}.`
+                  : `Only ${line.max} on hand in ${line.location}.`}
+            </span>
+            <span className="scan-overask-btns">
+              <button type="button" className="btn btn-sm" disabled={busy} onClick={() => onKeepToOrder(line.key)}>
+                Keep {line.max}
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm btn-primary"
+                disabled={busy}
+                onClick={() => onAcceptOverage(line.key)}
+              >
+                Take all {line.scans}
+              </button>
+            </span>
+          </span>
+        )}
+        {line.overflow && line.needsDecision === null && (
           <span className="scan-warn scan-queue-cap">
             <Icon name="AlertTriangle" size={13} />
             {line.kind === 'po_line'
-              ? `Only ${line.max} outstanding on ${line.poNumber} — extra scans were not counted.`
-              : `Only ${line.max} on hand in ${line.location} — extra scans were not counted.`}
+              ? `Only ${line.max} outstanding on ${line.poNumber}.`
+              : `Only ${line.max} on hand in ${line.location}.`}
+          </span>
+        )}
+        {line.override === 'overage' && (
+          <span className="scan-warn scan-queue-over">
+            <Icon name="AlertTriangle" size={13} />
+            More than the order asked for — this will be flagged as an overage.
+          </span>
+        )}
+        {line.override === 'no_order' && (
+          <span className="scan-warn scan-queue-over">
+            <Icon name="AlertTriangle" size={13} />
+            On no open order — recorded as an override.
           </span>
         )}
       </span>

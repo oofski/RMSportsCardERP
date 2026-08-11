@@ -2,6 +2,7 @@ import type {
   InventoryProduct,
   ScanCommitInput,
   ScanCommitKind,
+  ScanOverride,
   ScanCommitResult,
   ScanDirection,
   ScanMode,
@@ -12,6 +13,10 @@ import { LOCATION_IDS, isLocation } from '@shared/inventory'
 import { tidyPicks } from '@shared/costLots'
 import { cleanScan, normalizeUpc } from '@shared/upc'
 import { getDb } from './database'
+import {
+  fulfilSalesLine,
+  outstandingSalesLinesForProduct
+} from './invoices'
 import {
   addStock,
   adjustStock,
@@ -86,6 +91,7 @@ export function resolveScan(rawCode: string, dir: ScanDirection = 'in'): ScanRes
     product: null,
     imageUrl: null,
     candidates: [],
+    soCandidates: [],
     defaultLineId: null,
     productMatches: [],
     suggestedQuantity: 1,
@@ -121,29 +127,55 @@ export function resolveScan(rawCode: string, dir: ScanDirection = 'in'): ScanRes
     suggestedUnitCost: product.unitCost > 0 ? product.unitCost : null
   }
 
-  // Taking stock OUT never looks at purchase orders — a PO is a promise about
-  // stock coming in, and nothing about it changes when stock leaves. There is no
-  // cost input either: the FIFO lots already say what the units cost.
+  // OUT matches a SALES order, exactly as IN matches a purchase order. A PO is a
+  // promise about stock coming in and nothing about it changes when stock
+  // leaves, so purchase orders are never read here. There is no cost input
+  // either: the FIFO lots already say what the units cost.
   if (direction === 'out') {
     const location = fullestLocation(product)
-    return {
+    const out: ScanResolution = {
       ...found,
-      status: 'product',
       suggestedUnitCost: null,
-      suggestedLocation: location,
-      message:
-        product.quantity > 0
-          ? `${product.quantity} on hand — confirm the count to take stock out of ${location}.`
-          : 'None of this is on hand, so there is nothing to take out.'
+      suggestedLocation: location
+    }
+    if (product.quantity <= 0) {
+      return {
+        ...out,
+        status: 'no_order',
+        message: 'None of this is on hand, so there is nothing to take out.'
+      }
+    }
+    const soCandidates = outstandingSalesLinesForProduct(product.id)
+    if (soCandidates.length === 0) {
+      // A QUESTION, not a silent stock movement. Stock walking out of the
+      // building against no order is the thing somebody has to decide to do —
+      // and the decision is recorded, so the movement can be explained later.
+      return {
+        ...out,
+        status: 'no_order',
+        message: `${product.quantity} on hand, but this is on no open sales order.`
+      }
+    }
+    const firstSo = soCandidates[0]
+    return {
+      ...out,
+      status: 'so_line',
+      soCandidates,
+      defaultLineId: firstSo.lineId,
+      message: `${firstSo.invoiceNumber || 'Sales order'} · ${firstSo.qtyOutstanding} still to go out${
+        firstSo.customerName ? ` for ${firstSo.customerName}` : ''
+      }`
     }
   }
 
   const candidates = outstandingLinesForProduct(product.id)
   if (candidates.length === 0) {
+    // Same question on the way in: a box that is on no purchase order is stock
+    // arriving that nobody ordered, which is worth a person saying yes to.
     return {
       ...found,
-      status: 'product',
-      message: 'No open purchase order — confirm quantity and cost to add stock.'
+      status: 'no_order',
+      message: 'This is on no open purchase order.'
     }
   }
   // Oldest PO first. The UI preselects it and only asks when there is more than
@@ -264,6 +296,11 @@ interface ScanInsert {
   poCompleted?: boolean
   poPrevStatus?: string | null
   poPrevReceivedAt?: string | null
+  invoiceId?: string | null
+  invoiceNumber?: string | null
+  invoiceLineId?: string | null
+  /** Why a scan that did not fit was allowed through. Null is the normal case. */
+  override?: ScanOverride | null
   clientToken?: string | null
   actorId: string | null
 }
@@ -276,11 +313,15 @@ function insertScan(args: ScanInsert): string {
       `INSERT INTO inventory_scans
          (id, raw_code, normalized_code, mode, outcome, product_id, product_name, sku,
           po_id, po_number, po_line_id, location, quantity, unit_cost, lot_id, txn_id,
-          po_completed, po_prev_status, po_prev_received_at, client_token, actor_id, created_at)
+          po_completed, po_prev_status, po_prev_received_at,
+          invoice_id, invoice_number, invoice_line_id, override_kind,
+          client_token, actor_id, created_at)
        VALUES
          (@id, @raw_code, @normalized_code, @mode, @outcome, @product_id, @product_name, @sku,
           @po_id, @po_number, @po_line_id, @location, @quantity, @unit_cost, @lot_id, @txn_id,
-          @po_completed, @po_prev_status, @po_prev_received_at, @client_token, @actor_id, @created_at)`
+          @po_completed, @po_prev_status, @po_prev_received_at,
+          @invoice_id, @invoice_number, @invoice_line_id, @override_kind,
+          @client_token, @actor_id, @created_at)`
     )
     .run({
       id,
@@ -294,6 +335,10 @@ function insertScan(args: ScanInsert): string {
       po_id: args.poId ?? null,
       po_number: args.poNumber ?? null,
       po_line_id: args.poLineId ?? null,
+      invoice_id: args.invoiceId ?? null,
+      invoice_number: args.invoiceNumber ?? null,
+      invoice_line_id: args.invoiceLineId ?? null,
+      override_kind: args.override ?? null,
       location: args.location ?? null,
       quantity: args.quantity ?? 0,
       unit_cost: args.unitCost ?? null,
@@ -376,6 +421,14 @@ export function commitScan(
       if (prior) return replayResult(prior)
     }
 
+    // The operator's answer to a scan that did not fit, if they gave one. Never
+    // inferred from the numbers: an override is a decision somebody made, and a
+    // commit that worked one out for itself would be the silent behaviour this
+    // whole change exists to remove.
+    const override = input.override === 'overage' || input.override === 'no_order'
+      ? input.override
+      : null
+
     if (input.kind === 'po_line') {
       // Commit NEVER re-resolves and re-picks a candidate: the client must say
       // which line, which is what removes any resolve→commit race.
@@ -384,7 +437,14 @@ export function commitScan(
       const qty = Number.isFinite(input.quantity as number)
         ? Number(input.quantity)
         : Number.POSITIVE_INFINITY // "receive the rest" — receivePoLine clamps
-      const received = receivePoLine(db, lineId, qty, input.note ?? null, actorId)
+      const received = receivePoLine(
+        db,
+        lineId,
+        qty,
+        input.note ?? null,
+        actorId,
+        override === 'overage'
+      )
       const done = completePoIfFullyReceived(db, received.poId)
       const product = getProduct(received.productId)
       const scanId = insertScan({
@@ -406,11 +466,13 @@ export function commitScan(
         poCompleted: done.completed,
         poPrevStatus: done.completed ? done.prevStatus : null,
         poPrevReceivedAt: done.completed ? done.prevReceivedAt : null,
+        override,
         clientToken: token,
         actorId
       })
       const message =
         `Received ${received.quantity} × ${received.productName} into ${received.location} for ${received.poNumber}.` +
+        (override === 'overage' ? ' Flagged as more than was ordered.' : '') +
         (done.completed ? ` ${received.poNumber} is complete.` : '')
       return {
         scanId,
@@ -426,6 +488,64 @@ export function commitScan(
       }
     }
 
+    // --- A sales order line: stock leaves the building against an order -----
+    if (input.kind === 'so_line') {
+      const lineId = input.lineId?.trim()
+      if (!lineId) throw new Error('No sales order line specified.')
+      const qty = Number.isFinite(input.quantity as number) ? Number(input.quantity) : 1
+      const soLocation = isLocation(input.location) ? input.location : LOCATION_IDS[0]
+
+      // The order line is decremented FIRST, so a refusal there — voided order,
+      // already fulfilled — costs nothing and never leaves stock adjusted
+      // against an order that would not take it.
+      const fulfilled = fulfilSalesLine(db, lineId, qty, override === 'overage')
+      const res = adjustStock(
+        fulfilled.productId,
+        soLocation,
+        -fulfilled.quantity,
+        input.note ?? `Scanned out for ${fulfilled.invoiceNumber}`,
+        actorId,
+        tidyPicks(Array.isArray(input.allocation) ? input.allocation : [])
+      )
+      // adjustStock RETURNS its errors; throwing turns that into a rollback, so
+      // the line's fulfilled count is put back with it.
+      if (res.error) throw new Error(res.error)
+      const soProduct = res.product as InventoryProduct
+      const scanId = insertScan({
+        rawCode: raw,
+        normalizedCode: normalized,
+        mode,
+        outcome: 'so_line',
+        productId: soProduct.id,
+        productName: soProduct.name,
+        sku: soProduct.sku,
+        invoiceId: fulfilled.invoiceId,
+        invoiceNumber: fulfilled.invoiceNumber,
+        invoiceLineId: fulfilled.lineId,
+        location: soLocation,
+        // Stored positive; 'so_line' is what says which way it went.
+        quantity: fulfilled.quantity,
+        override,
+        clientToken: token,
+        actorId
+      })
+      return {
+        scanId,
+        kind: 'so_line',
+        product: soProduct,
+        quantity: fulfilled.quantity,
+        unitCost: null,
+        location: soLocation,
+        po: null,
+        poCompleted: false,
+        replayed: false,
+        message:
+          `${fulfilled.quantity} × ${soProduct.name} out of ${soLocation} for ${fulfilled.invoiceNumber}.` +
+          (override === 'overage' ? ' Flagged as more than the order asked for.' : '') +
+          (fulfilled.completesOrder ? ` ${fulfilled.invoiceNumber} is fully picked.` : '')
+      }
+    }
+
     // --- Direct product line (no PO): add stock, or take it out -------------
     const productId = input.productId?.trim()
     if (!productId) throw new Error('Select a product.')
@@ -433,6 +553,17 @@ export function commitScan(
     const quantity = input.quantity ?? 1
     if (!Number.isInteger(quantity) || quantity < 1) {
       throw new Error('Quantity must be a whole number of at least 1.')
+    }
+
+    // A bare stock movement is now only reachable by an explicit override: the
+    // resolve step routes anything with no matching order to a question, and
+    // this is the commit refusing to be the place that quietly answers it.
+    if (!override) {
+      throw new Error(
+        input.kind === 'remove_stock'
+          ? 'This is on no open sales order. Choose an override to take it out anyway.'
+          : 'This is on no open purchase order. Choose an override to add it anyway.'
+      )
     }
 
     if (input.kind === 'remove_stock') {
@@ -467,6 +598,7 @@ export function commitScan(
         location,
         // Stored positive; 'remove_stock' is what says which way it went.
         quantity,
+        override,
         clientToken: token,
         actorId
       })
@@ -525,6 +657,7 @@ export function commitScan(
       unitCost,
       lotId: res.lotId,
       txnId: res.txnId,
+      override,
       clientToken: token,
       actorId
     })
@@ -571,7 +704,11 @@ export function undoScan(scanId: string, actorId: string | null): { record?: Sca
     // re-layered; putting the units back would have to invent a cost for them.
     // The honest answer is to scan them back IN (or adjust), which prices the
     // return explicitly instead of silently.
-    if (row.outcome === 'remove_stock') {
+    // A sales-order scan is outbound too, and the same thing is true of it: the
+    // layers it consumed have moved on. Its ORDER line would also have to be
+    // credited back, and doing half of that — stock without the order, or the
+    // order without the stock — is worse than refusing both.
+    if (row.outcome === 'remove_stock' || row.outcome === 'so_line') {
       throw new Error('A scan-out cannot be undone automatically — scan the items back in instead.')
     }
     if (!row.lot_id || !row.product_id || !row.location || row.quantity <= 0) {

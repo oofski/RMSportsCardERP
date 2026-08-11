@@ -17,6 +17,8 @@ import { ScanNewProduct } from './ScanNewProduct'
 import { ScanPreview, type ScanPick } from './ScanPreview'
 import { ScanQueue } from './ScanQueue'
 import {
+  acceptOverage,
+  keepToOrder,
   lineFromScan,
   mergeScan,
   queueTotals,
@@ -193,9 +195,15 @@ export function ScanStation({
           return
         }
 
-        // Genuinely needs a person: which of two products on one barcode, or
-        // which of several open orders this box belongs to.
-        if (res.status === 'ambiguous_product' || (res.status === 'po_line' && res.candidates.length > 1)) {
+        // Genuinely needs a person: which of two products on one barcode, which
+        // of several open orders this box belongs to, or — the case that used
+        // to slip through silently — a product on NO open order at all.
+        if (
+          res.status === 'ambiguous_product' ||
+          res.status === 'no_order' ||
+          (res.status === 'po_line' && res.candidates.length > 1) ||
+          (res.status === 'so_line' && res.soCandidates.length > 1)
+        ) {
           setSeq((s) => s + 1)
           setResolution(res)
           return
@@ -216,7 +224,8 @@ export function ScanStation({
             product,
             direction: dir,
             mode: from,
-            candidate: res.candidates[0] ?? null
+            candidate: res.candidates[0] ?? null,
+            soCandidate: res.soCandidates[0] ?? null
           })
         )
       } finally {
@@ -238,7 +247,11 @@ export function ScanStation({
       draining.current = true
       void (async () => {
         try {
-          while (inbox.current.length > 0 && mounted.current) {
+          // PAUSES on an open question rather than resolving past it. The rest
+          // of the burst stays in the FIFO — scanning a stack where box two
+          // needs a decision used to keep going and overwrite the question with
+          // box three, so the operator never saw what they were being asked.
+          while (inbox.current.length > 0 && mounted.current && !resolutionRef.current) {
             const next = inbox.current.shift() as { raw: string; from: ScanMode }
             await handleScan(next.raw, next.from)
           }
@@ -278,6 +291,26 @@ export function ScanStation({
     setAdding(null)
     setManual('')
   }
+
+  // The FIFO stops while a question is up (see `feed`), so answering one has to
+  // start it again — otherwise the rest of the burst sits in the buffer and the
+  // pause becomes the drop it was built to prevent.
+  useEffect(() => {
+    if (resolution || busy) return
+    if (inbox.current.length === 0) return
+    if (draining.current) return
+    draining.current = true
+    void (async () => {
+      try {
+        while (inbox.current.length > 0 && mounted.current && !resolutionRef.current) {
+          const next = inbox.current.shift() as { raw: string; from: ScanMode }
+          await handleScan(next.raw, next.from)
+        }
+      } finally {
+        draining.current = false
+      }
+    })()
+  }, [resolution, busy, handleScan])
 
   /**
    * The operator filled in the inline form. The new product joins the pending
@@ -333,11 +366,36 @@ export function ScanStation({
       )
       return
     }
+    if (choice.kind === 'so_line') {
+      const product = res.product
+      if (!product) return
+      enqueue(
+        lineFromScan({
+          resolution: res,
+          product,
+          direction,
+          mode: scanMode,
+          soCandidate: choice.candidate
+        })
+      )
+      return
+    }
     if (direction === 'out' && choice.product.quantity <= 0) {
       setScanError(`${choice.product.name} has nothing on hand, so there is nothing to take out.`)
       return
     }
-    enqueue(lineFromScan({ resolution: res, product: choice.product, direction, mode: scanMode }))
+    // 'override' is the recorded answer to "this is on no open order". It
+    // carries onto the line and rides to the commit, which refuses a bare
+    // stock movement without one.
+    enqueue(
+      lineFromScan({
+        resolution: res,
+        product: choice.product,
+        direction,
+        mode: scanMode,
+        override: choice.kind === 'override' ? 'no_order' : null
+      })
+    )
   }
 
   /**
@@ -352,6 +410,7 @@ export function ScanStation({
     if (pending.length === 0 || busy) return
     setBusy(true)
     const done: ScanCommitResult[] = []
+    const failed: string[] = []
     try {
       for (const line of pending) {
         /**
@@ -374,8 +433,12 @@ export function ScanStation({
             productName: line.productName
           })
           if (!choice) {
+            // A deliberate skip, not an error: the operator cancelled the layer
+            // picker for THIS line. It stays on the list, and the rest of the
+            // run continues — cancelling one line never meant abandoning the
+            // others.
             toast.toast(`${line.productName} was left on the list — nothing was taken out for it.`)
-            break
+            continue
           }
           allocation = choice.allocation
         }
@@ -383,12 +446,18 @@ export function ScanStation({
         try {
           res = await api.inventory.scanCommit(toCommitInput(line, allocation))
         } catch (err) {
-          toast.error(err instanceof Error ? err.message : 'Could not scan that in.')
-          break
+          // CARRY ON to the next line. This used to stop the whole run: one bad
+          // row — a PO cancelled since the beep, a product deleted — abandoned
+          // every line after it, which reads as "scanning several things at once
+          // does not work". Each commit is its own transaction, so the ones that
+          // succeed are correct whatever happens to their neighbours; the ones
+          // that fail stay on the list with their reason.
+          failed.push(`${line.productName}: ${err instanceof Error ? err.message : 'could not be scanned.'}`)
+          continue
         }
         if (!res.ok || !res.data) {
-          toast.error(`${line.productName}: ${res.error ?? 'could not be scanned in.'}`)
-          break
+          failed.push(`${line.productName}: ${res.error ?? 'could not be scanned.'}`)
+          continue
         }
         done.push(res.data)
         // Drop as we go, so an error part-way leaves exactly the unapplied lines.
@@ -397,7 +466,18 @@ export function ScanStation({
     } finally {
       if (mounted.current) setBusy(false)
     }
-    if (!mounted.current || done.length === 0) return
+    if (!mounted.current) return
+    // Every failure, named. One toast per bad line would bury the successes
+    // under a stack of red; one sentence naming them all is readable and the
+    // rows are still on the list to look at.
+    if (failed.length > 0) {
+      toast.error(
+        failed.length === 1
+          ? failed[0]
+          : `${failed.length} lines could not be scanned: ${failed.join(' · ')}`
+      )
+    }
+    if (done.length === 0) return
     setLast(done)
     toast.success(
       done.length === 1
@@ -530,6 +610,8 @@ export function ScanStation({
                   onLocation={(key, location) => setPending((l) => setLocation(l, key, location))}
                   onUnitCost={(key, unitCost) => setPending((l) => setUnitCost(l, key, unitCost))}
                   onRemove={(key) => setPending((l) => removeLine(l, key))}
+                onAcceptOverage={(key) => setPending((l) => acceptOverage(l, key))}
+                onKeepToOrder={(key) => setPending((l) => keepToOrder(l, key))}
                   onClear={() => setPending([])}
                   onConfirm={() => void confirm()}
                 />

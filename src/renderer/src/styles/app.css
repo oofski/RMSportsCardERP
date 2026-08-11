@@ -22071,3 +22071,60 @@ button.sor-team:focus-visible {
   gap: 6px;
   margin-left: auto;
 }
+
+/* ---------------------------------------------------------------------------
+   Scanning: the two questions a scan can raise.
+
+   Both used to be silent. A count that had hit its ceiling simply stopped
+   moving while the beeps kept coming, and a product on no open order simply
+   became a stock movement. Neither is a thing software should decide.
+   --------------------------------------------------------------------------- */
+
+/* "You scanned 4, the order asked for 1." Sits inside the queue row, under the
+   product name, and nothing on the list commits while it is unanswered. */
+.scan-overask {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-top: 7px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm, 8px);
+  background: var(--warning-bg);
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.scan-overask-text {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+.scan-overask-text svg {
+  flex: none;
+  color: var(--warning);
+  align-self: center;
+}
+.scan-overask-btns {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+/* Already answered, and answered the way that needs saying out loud. */
+.scan-queue-over {
+  color: var(--danger-strong);
+}
+
+/* "This is on no open order." The whole panel, in place of the plan a matched
+   scan would show. */
+.scan-result-override .scan-override-note {
+  margin: 10px 0 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-2);
+}
+.scan-chip-warn {
+  background: var(--warning-bg);
+  color: var(--text);
+}

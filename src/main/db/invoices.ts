@@ -19,6 +19,8 @@ import {
   type NewInvoice,
   type QboInvoiceObservation
 } from '@shared/invoices'
+import type { ScanSoCandidate } from '@shared/types'
+import type Database from 'better-sqlite3'
 import { asCarrier, asPaymentTiming, detectCarrier } from '@shared/freight'
 import { asShipStatus } from '@shared/tracking'
 import { getDb } from './database'
@@ -422,6 +424,8 @@ interface LineRow {
   amount: number
   tax_rate: string | null
   class_name: string | null
+  qty_fulfilled: number
+  fulfilled_at: string | null
 }
 
 function asStatus(v: string): InvoiceStatus {
@@ -496,7 +500,10 @@ function toLine(r: LineRow): InvoiceLine {
     rate: r.rate,
     amount: r.amount,
     taxRate: r.tax_rate,
-    className: r.class_name
+    className: r.class_name,
+    qtyFulfilled: r.qty_fulfilled ?? 0,
+    qtyOutstanding: Math.max(0, r.quantity - (r.qty_fulfilled ?? 0)),
+    fulfilledAt: r.fulfilled_at ?? null
   }
 }
 
@@ -515,7 +522,7 @@ const INVOICE_COLS = `id, invoice_number, customer_id, customer_name, email, ter
                       created_by, created_at, updated_at`
 
 const LINE_COLS = `id, invoice_id, position, item, product_id, sku, description, quantity, rate,
-                   amount, tax_rate, class_name`
+                   amount, tax_rate, class_name, qty_fulfilled, fulfilled_at`
 
 /** Newest first — an invoice list is read from the top. */
 export function listInvoices(limit = 200): Invoice[] {
@@ -995,3 +1002,166 @@ export function invoiceStats(): {
     thisMonth: money(thisMonth)
   }
 }
+
+// ---------------------------------------------------------------------------
+// Fulfilment — matching stock scanned OUT against an open sales order
+// ---------------------------------------------------------------------------
+
+/**
+ * Open sales order lines this product could be scanned out against.
+ *
+ * The mirror of `outstandingLinesForProduct` on the buy side, and it makes the
+ * same two judgements for the same reasons:
+ *
+ * VOID IS EXCLUDED, PAID IS NOT. A void order is cancelled and nothing should
+ * ship against it. A PAID one is the ordinary case for this business — money
+ * arrives before the boxes go out — so refusing to fulfil a paid order would
+ * refuse most of the work.
+ *
+ * A DRAFT COUNTS. Somebody who wrote the order up and is now standing at the
+ * shelf with the boxes has a real order; making them post it to QuickBooks
+ * first would put an accounting step in the middle of a physical one.
+ *
+ * Oldest order first, so the queue that has waited longest is offered first.
+ */
+export function outstandingSalesLinesForProduct(productId: string): ScanSoCandidate[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT l.id AS line_id, l.invoice_id, l.quantity, l.qty_fulfilled, l.rate,
+              i.invoice_number, i.customer_name, i.status, i.invoice_date,
+              (SELECT COUNT(*) FROM invoice_lines x WHERE x.invoice_id = l.invoice_id)
+                AS lines_total,
+              (SELECT COUNT(*) FROM invoice_lines x
+                WHERE x.invoice_id = l.invoice_id AND x.qty_fulfilled < x.quantity)
+                AS lines_outstanding
+         FROM invoice_lines l
+         JOIN invoices i ON i.id = l.invoice_id
+        WHERE l.product_id = ?
+          AND i.status != 'void'
+          AND l.qty_fulfilled < l.quantity
+        ORDER BY i.invoice_date ASC, i.invoice_number ASC, l.position ASC`
+    )
+    .all(productId) as Array<{
+    line_id: string
+    invoice_id: string
+    quantity: number
+    qty_fulfilled: number
+    rate: number
+    invoice_number: string | null
+    customer_name: string | null
+    status: string
+    invoice_date: string
+    lines_total: number
+    lines_outstanding: number
+  }>
+  return rows.map((r) => ({
+    lineId: r.line_id,
+    invoiceId: r.invoice_id,
+    invoiceNumber: r.invoice_number ?? '',
+    customerName: r.customer_name,
+    status: r.status as InvoiceStatus,
+    quantity: r.quantity,
+    qtyFulfilled: r.qty_fulfilled,
+    qtyOutstanding: Math.max(0, r.quantity - r.qty_fulfilled),
+    unitPrice: r.rate,
+    invoiceDate: r.invoice_date,
+    completesOrder: r.lines_outstanding === 1,
+    orderLinesTotal: r.lines_total,
+    orderLinesOutstanding: r.lines_outstanding
+  }))
+}
+
+/** What one scan took off a sales order line, for the audit row. */
+export interface FulfilledSalesLine {
+  lineId: string
+  invoiceId: string
+  invoiceNumber: string
+  productId: string
+  quantity: number
+  /** True when this scan finished the last outstanding line on the order. */
+  completesOrder: boolean
+}
+
+/**
+ * Take units off ONE sales order line. Call inside the caller's transaction.
+ *
+ * `allowOverage` is the operator's recorded answer to "you have scanned more
+ * than this order asked for". Without it the ask is clamped to what is
+ * outstanding, exactly as receiving is — the clamp is right for a scan, where
+ * each beep is one unit and it is what stops a double-beep double-counting.
+ * With it, the line goes past its ordered quantity and reads as over-fulfilled,
+ * which the progress bars already paint as a discrepancy rather than as done.
+ */
+export function fulfilSalesLine(
+  db: Database.Database,
+  lineId: string,
+  qty: number,
+  allowOverage: boolean
+): FulfilledSalesLine {
+  const row = db
+    .prepare(
+      `SELECT l.id, l.invoice_id, l.product_id, l.quantity, l.qty_fulfilled,
+              i.invoice_number, i.status
+         FROM invoice_lines l
+         JOIN invoices i ON i.id = l.invoice_id
+        WHERE l.id = ?`
+    )
+    .get(lineId) as
+    | {
+        id: string
+        invoice_id: string
+        product_id: string | null
+        quantity: number
+        qty_fulfilled: number
+        invoice_number: string | null
+        status: string
+      }
+    | undefined
+  if (!row) throw new Error('That sales order line no longer exists.')
+  // Re-read inside the transaction, so an order voided between resolve and
+  // commit is caught here and rolls the whole thing back.
+  if (row.status === 'void') throw new Error('That sales order was voided.')
+
+  const outstanding = Math.max(0, row.quantity - row.qty_fulfilled)
+  if (outstanding <= 0 && !allowOverage) {
+    throw new Error('That line has already been fully fulfilled.')
+  }
+  const want = Number.isFinite(qty) ? Math.round(qty) : outstanding
+  // Refused rather than trimmed, for the reason `receivePoLine` gives on the
+  // buy side: a number somebody sent is a claim, and quietly booking less of it
+  // leaves them believing the rest went out.
+  if (!allowOverage && Number.isFinite(qty) && want > outstanding) {
+    throw new Error(
+      `Only ${outstanding} of ${row.quantity} ${
+        outstanding === 1 ? 'is' : 'are'
+      } still to go out on ${row.invoice_number ?? 'that order'}, so ${want} cannot be fulfilled.`
+    )
+  }
+  const take = allowOverage ? Math.max(1, want) : Math.min(Math.max(1, want), outstanding)
+
+  const ts = nowIso()
+  db.prepare(
+    `UPDATE invoice_lines
+        SET qty_fulfilled = qty_fulfilled + @take,
+            fulfilled_at  = CASE WHEN qty_fulfilled + @take >= quantity THEN @ts ELSE fulfilled_at END,
+            updated_at    = @ts
+      WHERE id = @id`
+  ).run({ take, ts, id: lineId })
+
+  const left = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM invoice_lines
+        WHERE invoice_id = ? AND qty_fulfilled < quantity`
+    )
+    .get(row.invoice_id) as { n: number }
+
+  return {
+    lineId,
+    invoiceId: row.invoice_id,
+    invoiceNumber: row.invoice_number ?? '',
+    productId: row.product_id ?? '',
+    quantity: take,
+    completesOrder: left.n === 0
+  }
+}
+

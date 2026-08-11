@@ -2,6 +2,7 @@ import type { CostLot, LotPick } from './costLots'
 import type { Carrier, PaymentTiming } from './freight'
 import type { ShipStatusCode } from './shippingTypes'
 import type { Permission, Role } from './permissions'
+import type { InvoiceStatus } from './invoices'
 
 export type EmployeeStatus = 'invited' | 'active' | 'disabled'
 
@@ -966,11 +967,40 @@ export type ScanMode = 'wedge' | 'camera' | 'manual'
  */
 export type ScanDirection = 'in' | 'out'
 
-/** What resolveScan made of a barcode. */
-export type ScanStatus = 'po_line' | 'product' | 'unknown' | 'ambiguous_product'
+/**
+ * What resolveScan made of a barcode.
+ *
+ *   po_line            inbound, and it matched an open purchase order line
+ *   so_line            outbound, and it matched an open sales order line
+ *   no_order           the product is known but nothing open matches it. NOT an
+ *                      error and NOT a silent stock movement — a question, with
+ *                      an override the operator has to choose.
+ *   product            known product, no order matching applies
+ *   unknown            the barcode is in no catalog row
+ *   ambiguous_product  one barcode, two catalog rows (legacy data)
+ */
+export type ScanStatus =
+  | 'po_line'
+  | 'so_line'
+  | 'no_order'
+  | 'product'
+  | 'unknown'
+  | 'ambiguous_product'
 
 /** What commitScan did — also the stored `inventory_scans.outcome`. */
-export type ScanCommitKind = 'po_line' | 'add_stock' | 'remove_stock'
+export type ScanCommitKind = 'po_line' | 'so_line' | 'add_stock' | 'remove_stock'
+
+/**
+ * Why a scan that did not fit was allowed through anyway.
+ *
+ * Stored on the scan row, never inferred. A stock movement whose reason lives
+ * only in somebody's memory is the one nobody can explain a month later.
+ */
+export type ScanOverride =
+  /** More units than the order asked for, taken in (or out) regardless. */
+  | 'overage'
+  /** The barcode matched no open order and the operator moved it anyway. */
+  | 'no_order'
 
 /** An outstanding PO line a scanned product can be received against. */
 export interface ScanPoCandidate {
@@ -992,6 +1022,32 @@ export interface ScanPoCandidate {
   completesPo: boolean
   poLinesTotal: number
   poLinesOutstanding: number
+}
+
+/**
+ * An open SALES order line a scanned product can be fulfilled against — the
+ * mirror of ScanPoCandidate on the way out of the building.
+ *
+ * Same shape, deliberately: the two directions are one job with the sign
+ * flipped, and a screen that had to speak two vocabularies to say "3 of 5" in
+ * each would grow two of everything.
+ */
+export interface ScanSoCandidate {
+  lineId: string
+  invoiceId: string
+  invoiceNumber: string
+  customerName: string | null
+  status: InvoiceStatus
+  quantity: number
+  qtyFulfilled: number
+  qtyOutstanding: number
+  /** What it is being sold for. Never a cost — outbound never touches basis. */
+  unitPrice: number
+  invoiceDate: string
+  /** Advisory: this is the order's last outstanding line. */
+  completesOrder: boolean
+  orderLinesTotal: number
+  orderLinesOutstanding: number
 }
 
 /** One of several catalog products sharing a normalised UPC (dirty legacy data). */
@@ -1020,7 +1076,9 @@ export interface ScanResolution {
   imageUrl: string | null
   /** Outstanding PO lines, oldest PO first (purchase-side FIFO). */
   candidates: ScanPoCandidate[]
-  /** candidates[0].lineId — the preselected choice. */
+  /** Outstanding SALES order lines, oldest order first. Outbound only. */
+  soCandidates: ScanSoCandidate[]
+  /** candidates[0].lineId / soCandidates[0].lineId — the preselected choice. */
   defaultLineId: string | null
   /** Populated only for 'ambiguous_product'. */
   productMatches: ScanProductMatch[]
@@ -1035,8 +1093,18 @@ export interface ScanCommitInput {
   kind: ScanCommitKind
   rawCode: string
   mode: ScanMode
-  /** Required for 'po_line'. Commit never re-resolves and re-picks a line. */
+  /** Required for 'po_line' and 'so_line'. Commit never re-resolves and
+   * re-picks a line. */
   lineId?: string
+  /**
+   * The operator's answer to a scan that did not fit.
+   *
+   * Required to exceed an order's outstanding quantity, and required to move
+   * stock for a product no open order covers. Absent means the scan fitted, and
+   * the commit refuses anything that does not — an override has to be chosen,
+   * never assumed from the numbers.
+   */
+  override?: ScanOverride | null
   /** Required for 'add_stock' and 'remove_stock'. */
   productId?: string
   location?: string

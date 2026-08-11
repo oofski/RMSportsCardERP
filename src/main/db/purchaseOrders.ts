@@ -430,7 +430,14 @@ export function receivePoLine(
   lineId: string,
   qty: number,
   note: string | null,
-  actorId: string | null
+  actorId: string | null,
+  /**
+   * The operator's recorded answer to "you have scanned more than this order
+   * asked for". Off by default, and deliberately not inferable: the clamp below
+   * is what stops a double-beep double-adding, so lifting it has to be a
+   * decision somebody made rather than something the numbers implied.
+   */
+  allowOverage = false
 ): ReceivedPoLine {
   const row = db
     .prepare(
@@ -464,11 +471,29 @@ export function receivePoLine(
   // of the same box serialise (better-sqlite3 is synchronous), and the second
   // sees the first's qty_received.
   const outstanding = row.quantity - row.qty_received
-  if (outstanding <= 0) throw new Error('That line has already been fully received.')
-  // No quantity (or a nonsense one) means "receive the rest"; over-receiving is
-  // impossible because the ask is clamped to what's outstanding.
+  if (outstanding <= 0 && !allowOverage) {
+    throw new Error('That line has already been fully received.')
+  }
+  // No quantity (or a nonsense one) means "receive the rest". The ask is clamped
+  // to what is outstanding UNLESS the operator explicitly took the overage, in
+  // which case the line goes past its ordered quantity and reads as an
+  // over-receipt — which the progress bars paint as a discrepancy, not as done.
   const want = Number.isFinite(qty) ? Math.round(qty) : outstanding
-  const take = Math.min(Math.max(1, want), outstanding)
+  // AN EXPLICIT QUANTITY THAT DOES NOT FIT IS REFUSED, NOT TRIMMED.
+  //
+  // Clamping is right for "receive the rest" — no quantity given, take what is
+  // left — and wrong for a number somebody sent: quietly booking 2 against a
+  // stated 4 leaves them believing 4 landed, which is the silence this whole
+  // path was rebuilt to remove. The scanner's answer to that is the overage
+  // override; without one, the refusal names both numbers.
+  if (!allowOverage && Number.isFinite(qty) && want > outstanding) {
+    throw new Error(
+      `${row.product_name}: only ${outstanding} of ${row.quantity} ${
+        outstanding === 1 ? 'is' : 'are'
+      } still outstanding on ${row.po_number}, so ${want} cannot be received.`
+    )
+  }
+  const take = allowOverage ? Math.max(1, want) : Math.min(Math.max(1, want), outstanding)
 
   // The one money path: FIFO lot + moving weighted-average cost + ledger entry.
   // The supplier travels onto the cost layer this receipt opens. It is the one

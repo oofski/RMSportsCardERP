@@ -4,8 +4,10 @@ import type {
   ScanCommitKind,
   ScanDirection,
   ScanMode,
+  ScanOverride,
   ScanPoCandidate,
-  ScanResolution
+  ScanResolution,
+  ScanSoCandidate
 } from '@shared/types'
 import type { LotPick } from '@shared/costLots'
 
@@ -66,11 +68,33 @@ export interface PendingLine {
   /** The first scan's raw code / latest scan's input mode, for the audit row. */
   rawCode: string
   mode: ScanMode
-  /** PO context ('po_line' only). */
+  /** Order context: the PO line ('po_line') or the sales order line ('so_line'). */
   lineId?: string
   poId?: string
   poNumber?: string
   completesPo?: boolean
+  /** Sales order context ('so_line' only). */
+  invoiceId?: string
+  invoiceNumber?: string
+  customerName?: string | null
+  /**
+   * The operator's recorded answer to a scan that did not fit, once they have
+   * given one. Null until then — and a line that NEEDS one cannot commit, so an
+   * override is never assumed from the numbers.
+   */
+  override: ScanOverride | null
+  /**
+   * A question this line is waiting on, if any.
+   *
+   * 'overage'  more beeps landed here than the order has outstanding
+   * 'no_order' the product matched no open order at all
+   *
+   * The station opens a modal on this and does not merge further scans into the
+   * line until it is answered. It used to clamp silently: the count stopped
+   * moving while `scans` kept climbing, every beep still sounded like a success,
+   * and the only sign was a chip beside a number that had frozen.
+   */
+  needsDecision: ScanOverride | null
   /** Ceiling the operator cannot scan past: the PO's outstanding units inbound,
    * on-hand at the location outbound. null = no ceiling. */
   max: number | null
@@ -105,13 +129,13 @@ function onHandOf(product: InventoryProduct): Record<string, number> {
  * and stock cannot go out that is not there. */
 function ceilingOf(
   kind: ScanCommitKind,
-  candidate: ScanPoCandidate | null | undefined,
+  outstanding: number | null,
   onHand: Record<string, number>,
   location: string
 ): number | null {
-  if (kind === 'po_line') return candidate ? candidate.qtyOutstanding : null
+  if (kind === 'po_line' || kind === 'so_line') return outstanding
   if (kind === 'remove_stock') return Math.max(0, onHand[location] ?? 0)
-  return null // an inbound stock-in has no natural ceiling
+  return null // an override'd stock-in has no natural ceiling
 }
 
 /**
@@ -125,22 +149,40 @@ export function lineFromScan(args: {
   product: InventoryProduct
   direction: ScanDirection
   mode: ScanMode
+  /** The open PURCHASE order line this inbound scan is against. */
   candidate?: ScanPoCandidate | null
+  /** The open SALES order line this outbound scan is against. */
+  soCandidate?: ScanSoCandidate | null
+  /** Set when the operator has already answered "this is on no open order". */
+  override?: ScanOverride | null
   imageUrl?: string | null
   now?: number
 }): PendingLine {
   const { resolution, product, direction, mode } = args
   const candidate = args.candidate ?? null
-  const kind: ScanCommitKind = candidate ? 'po_line' : direction === 'out' ? 'remove_stock' : 'add_stock'
+  const soCandidate = args.soCandidate ?? null
+  const override = args.override ?? null
+  const kind: ScanCommitKind = candidate
+    ? 'po_line'
+    : soCandidate
+      ? 'so_line'
+      : direction === 'out'
+        ? 'remove_stock'
+        : 'add_stock'
   const onHand = onHandOf(product)
   const location = candidate
     ? candidate.location
     : isKnownLocation(resolution.suggestedLocation, onHand)
       ? resolution.suggestedLocation
       : Object.keys(onHand)[0] ?? resolution.suggestedLocation
-  const max = ceilingOf(kind, candidate, onHand, location)
+  const outstanding = candidate
+    ? candidate.qtyOutstanding
+    : soCandidate
+      ? soCandidate.qtyOutstanding
+      : null
+  const max = ceilingOf(kind, outstanding, onHand, location)
   return {
-    key: lineKey(kind, product.id, candidate?.lineId),
+    key: lineKey(kind, product.id, candidate?.lineId ?? soCandidate?.lineId),
     token: newToken(),
     kind,
     direction,
@@ -157,13 +199,21 @@ export function lineFromScan(args: {
     // A PO line carries the order's price and outbound never touches cost, so
     // only a bare inbound scan can be missing one — and only when the product
     // has no average to inherit.
-    costRequired: !candidate && direction === 'in' && !(product.unitCost > 0),
+    costRequired:
+      !candidate && !soCandidate && direction === 'in' && !(product.unitCost > 0),
     rawCode: resolution.rawCode,
     mode,
-    lineId: candidate?.lineId,
+    lineId: candidate?.lineId ?? soCandidate?.lineId,
     poId: candidate?.poId,
     poNumber: candidate?.poNumber,
     completesPo: candidate?.completesPo,
+    invoiceId: soCandidate?.invoiceId,
+    invoiceNumber: soCandidate?.invoiceNumber,
+    customerName: soCandidate?.customerName ?? null,
+    override,
+    // A first scan onto a line with no room left is already the over-scan
+    // question — it does not need a second beep to become one.
+    needsDecision: !override && max != null && max < 1 ? 'overage' : null,
     max,
     onHand,
     overflow: max != null && max < 1,
@@ -190,11 +240,21 @@ export function mergeScan(lines: PendingLine[], incoming: PendingLine): PendingL
   if (at < 0) return [...lines, incoming]
   const prev = lines[at]
   // The ceiling follows the freshly-resolved reality, but the location, cost and
-  // any hand-typed count stay the operator's.
-  const max = prev.kind === 'remove_stock' ? Math.max(0, incoming.onHand[prev.location] ?? 0) : incoming.max
+  // any hand-typed count stay the operator's. An override already given lifts
+  // the ceiling entirely — that is what the operator agreed to.
+  const max = prev.override
+    ? null
+    : prev.kind === 'remove_stock'
+      ? Math.max(0, incoming.onHand[prev.location] ?? 0)
+      : incoming.max
   const wanted = prev.quantity + 1
+  const over = max != null && wanted > max
+
   const merged: PendingLine = {
     ...prev,
+    // Held at the ceiling while the question is open. The count is not the lie
+    // — the SILENCE was. `scans` says how many beeps landed and `needsDecision`
+    // puts the difference in front of a person instead of dropping it.
     quantity: clamp(wanted, max),
     scans: prev.scans + 1,
     max,
@@ -203,12 +263,57 @@ export function mergeScan(lines: PendingLine[], incoming: PendingLine): PendingL
     costRequired: incoming.costRequired,
     rawCode: prev.rawCode,
     mode: incoming.mode,
-    overflow: max != null && wanted > max,
+    needsDecision: over ? 'overage' : prev.needsDecision,
+    overflow: over,
     bumpedAt: incoming.bumpedAt
   }
   const next = [...lines]
   next[at] = merged
   return next
+}
+
+/**
+ * The operator answered an over-scan: take everything that was beeped.
+ *
+ * The ceiling comes off for good on this line — they have said the extra units
+ * are really there — and the count jumps to the number of scans, which is what
+ * they physically counted. The override rides to the commit, which refuses to
+ * exceed an order without one.
+ */
+export function acceptOverage(lines: PendingLine[], key: string): PendingLine[] {
+  return lines.map((l) =>
+    l.key === key
+      ? {
+          ...l,
+          override: 'overage' as ScanOverride,
+          quantity: Math.max(l.quantity, l.scans),
+          max: null,
+          needsDecision: null,
+          overflow: false
+        }
+      : l
+  )
+}
+
+/**
+ * The operator answered an over-scan the other way: stick to the order.
+ *
+ * The count stays at the ceiling and the extra beeps are dropped — but they were
+ * SHOWN first, which is the whole difference from what this replaced. `scans` is
+ * reset to the count so the row stops claiming a discrepancy that has been
+ * settled.
+ */
+export function keepToOrder(lines: PendingLine[], key: string): PendingLine[] {
+  return lines.map((l) =>
+    l.key === key
+      ? { ...l, scans: l.quantity, needsDecision: null, overflow: false }
+      : l
+  )
+}
+
+/** Is anything on the list waiting on a person? Nothing commits while it is. */
+export function firstUndecided(lines: PendingLine[]): PendingLine | null {
+  return lines.find((l) => l.needsDecision !== null) ?? null
 }
 
 /** Hand-edit the count. Clamped to the same ceiling a scan obeys, so a typo
@@ -258,6 +363,14 @@ export function linesNeedingCost(lines: PendingLine[]): PendingLine[] {
  */
 export function commitBlockedReason(lines: PendingLine[]): string | null {
   if (lines.length === 0) return null
+  // An unanswered question outranks everything: the whole point of raising it
+  // is that nothing goes through until a person has settled it.
+  const undecided = firstUndecided(lines)
+  if (undecided) {
+    return undecided.needsDecision === 'overage'
+      ? `${undecided.productName}: more was scanned than the order asked for. Answer that first.`
+      : `${undecided.productName} is on no open order. Answer that first.`
+  }
   if (lines.some((l) => l.quantity < 1)) return 'Every line needs a count of at least 1.'
   const needCost = linesNeedingCost(lines)
   if (needCost.length === 0) return null
@@ -282,9 +395,22 @@ export function toCommitInput(line: PendingLine, allocation?: LotPick[] | null):
     rawCode: line.rawCode,
     mode: line.mode,
     quantity: line.quantity,
+    // Carried on every kind. The main process refuses a bare stock movement
+    // without one, and refuses to exceed an order's outstanding without one, so
+    // dropping it here would turn an answered question back into a refusal.
+    override: line.override,
     clientToken: line.token
   }
   if (line.kind === 'po_line') return { ...base, kind: 'po_line', lineId: line.lineId }
+  if (line.kind === 'so_line') {
+    return {
+      ...base,
+      kind: 'so_line',
+      lineId: line.lineId,
+      location: line.location,
+      allocation: allocation ?? null
+    }
+  }
   if (line.kind === 'remove_stock') {
     return {
       ...base,

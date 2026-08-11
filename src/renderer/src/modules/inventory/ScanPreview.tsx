@@ -1,5 +1,10 @@
 import { useState } from 'react'
-import type { InventoryProduct, ScanPoCandidate, ScanResolution } from '@shared/types'
+import type {
+  InventoryProduct,
+  ScanPoCandidate,
+  ScanResolution,
+  ScanSoCandidate
+} from '@shared/types'
 import { Button } from '../../components/ui'
 import { Icon } from '../../components/Icon'
 import { formatMoney } from '../../lib/format'
@@ -9,7 +14,17 @@ import { structureLabel } from './helpers'
 /** What the operator settled, handed back for ScanStation to put on the list. */
 export type ScanPick =
   | { kind: 'po_line'; candidate: ScanPoCandidate }
+  | { kind: 'so_line'; candidate: ScanSoCandidate }
   | { kind: 'product'; product: InventoryProduct }
+  /**
+   * "It is on no open order — move it anyway."
+   *
+   * A recorded decision rather than the default. This used to be what happened
+   * silently: a barcode on no purchase order simply became a stock-in, and one
+   * on no sales order simply left the building, with nothing on the row to say
+   * that nobody had ordered it.
+   */
+  | { kind: 'override'; product: InventoryProduct }
 
 /**
  * The questions a barcode can raise that ONLY a person can answer:
@@ -48,6 +63,63 @@ export function ScanPreview({
         resolution={resolution}
         onDismiss={onDismiss}
         onAdd={onAdd}
+      />
+    )
+  }
+
+  // ON NO OPEN ORDER — a question, not a silent movement.
+  if (resolution.status === 'no_order' && resolution.product) {
+    const p = resolution.product
+    const outbound = resolution.direction === 'out'
+    const nothingLeft = outbound && p.quantity <= 0
+    return (
+      <div className="scan-result scan-result-override">
+        <ProductHero
+          name={p.name}
+          sku={p.sku}
+          upc={p.upc}
+          category={p.category}
+          structure={structureLabel(p)}
+          imageUrl={resolution.imageUrl}
+          tag={{ label: outbound ? 'No sales order' : 'No purchase order', tone: 'warn' }}
+        />
+        <div className="scan-banner scan-banner-warn">
+          <Icon name="AlertTriangle" size={16} />
+          {resolution.message}
+        </div>
+        <p className="scan-override-note">
+          {nothingLeft
+            ? 'There is none of this on the shelf, so there is nothing to take out.'
+            : outbound
+              ? 'Taking it out anyway is recorded as an override, so the movement can be explained later.'
+              : 'Adding it anyway is recorded as an override, so the stock can be explained later.'}
+        </p>
+        <div className="scan-actions">
+          <Button variant="ghost" onClick={onDismiss}>
+            Cancel
+          </Button>
+          {!nothingLeft && (
+            <Button
+              variant="primary"
+              icon={outbound ? 'PackageOpen' : 'PackagePlus'}
+              onClick={() => onPick({ kind: 'override', product: p })}
+            >
+              {outbound ? 'Take it out anyway' : 'Add it anyway'}
+            </Button>
+          )}
+        </div>
+      </div>
+    )
+  }
+
+  // Several open SALES orders want this product — which customer's is this box?
+  if (resolution.status === 'so_line' && resolution.product) {
+    return (
+      <SalesOrderChoice
+        resolution={resolution}
+        product={resolution.product}
+        onPick={onPick}
+        onDismiss={onDismiss}
       />
     )
   }
@@ -309,7 +381,7 @@ function ProductHero({
   category: string
   structure: string
   imageUrl: string | null
-  tag: { label: string; tone: 'brand' | 'info' }
+  tag: { label: string; tone: 'brand' | 'info' | 'warn' }
 }): JSX.Element {
   return (
     <div className="scan-hero">
@@ -340,4 +412,79 @@ function relativeDay(iso: string): string {
   if (days === 1) return 'yesterday'
   if (days < 30) return `${days} days ago`
   return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
+/**
+ * Which open sales order this box is going out against.
+ *
+ * The mirror of the purchase-order chooser above, and deliberately the same
+ * shape: one list, one preselected row, one plan sentence. The operator is
+ * answering the same question in both directions — "which order is this?" — and
+ * making them read two different layouts for it would be a needless second
+ * thing to learn.
+ */
+function SalesOrderChoice({
+  resolution,
+  product,
+  onPick,
+  onDismiss
+}: {
+  resolution: ScanResolution
+  product: InventoryProduct
+  onPick: (pick: ScanPick) => void
+  onDismiss: () => void
+}): JSX.Element {
+  const candidates = resolution.soCandidates
+  const [lineId, setLineId] = useState<string | null>(resolution.defaultLineId)
+  const chosen = candidates.find((c) => c.lineId === lineId) ?? null
+  return (
+    <div className="scan-result scan-result-po">
+      <ProductHero
+        name={product.name}
+        sku={product.sku}
+        upc={product.upc}
+        category={product.category}
+        structure={structureLabel(product)}
+        imageUrl={resolution.imageUrl}
+        tag={{ label: `${candidates.length} open sales orders`, tone: 'brand' }}
+      />
+      <div className="scan-choose-label">
+        More than one open order wants this — choose whose it is.
+      </div>
+      <div className="scan-candidates">
+        {candidates.map((c) => (
+          <button
+            key={c.lineId}
+            type="button"
+            className={`scan-candidate ${lineId === c.lineId ? 'active' : ''}`}
+            onClick={() => setLineId(c.lineId)}
+          >
+            <span className="scan-cand-radio" aria-hidden />
+            <span className="scan-cand-main">
+              <span className="scan-cand-title">
+                <span className="mono">{c.invoiceNumber || 'Sales order'}</span>
+                {c.customerName ? ` · ${c.customerName}` : ''}
+              </span>
+              <span className="scan-cand-sub">
+                {c.qtyOutstanding} of {c.quantity} still to go out · {formatMoney(c.unitPrice)} each
+              </span>
+            </span>
+          </button>
+        ))}
+      </div>
+      <div className="scan-actions">
+        <Button variant="ghost" onClick={onDismiss}>
+          Cancel
+        </Button>
+        <Button
+          variant="primary"
+          icon="PackageOpen"
+          disabled={!chosen}
+          onClick={() => chosen && onPick({ kind: 'so_line', candidate: chosen })}
+        >
+          {chosen ? `Take out for ${chosen.invoiceNumber || 'this order'}` : 'Pick an order'}
+        </Button>
+      </div>
+    </div>
+  )
 }

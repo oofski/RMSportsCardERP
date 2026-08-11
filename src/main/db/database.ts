@@ -2722,6 +2722,43 @@ function migrate(database: Database.Database): void {
   })
   setMeta(database, 'schema_version', '64')
 
+  // v65: SCANNING OUT MATCHES A SALES ORDER, and an override is a recorded fact.
+  //
+  // Scanning IN has always matched a purchase order and counted units off its
+  // lines. Scanning OUT did not match anything — it just decremented stock — so
+  // the sell side had no equivalent of "23 of 38 received" and no way to tell a
+  // box that went out against an order from one that simply left.
+  //
+  // `qty_fulfilled` is the mirror of purchase_order_lines.qty_received, and it
+  // is on the LINE for the same reason: an order can go out in two vans as
+  // easily as it can come in on two.
+  //
+  // ## Two overrides, both recorded rather than assumed
+  //
+  // A scan that does not fit is a question for a person, and the answer has to
+  // survive on the row — a stock movement whose reason lives only in somebody's
+  // memory is the one nobody can explain a month later. `override_kind` says
+  // which question was answered:
+  //
+  //   'overage'  more units arrived than the order asked for, and the operator
+  //              chose to take them in anyway. The line goes over 100%, which
+  //              the receiving progress already paints as a discrepancy.
+  //   'no_order' the barcode matched no open order at all, and the operator
+  //              chose to move the stock regardless.
+  //
+  // Null is the ordinary case: it matched, it fitted, nobody had to decide.
+  addColumnIfMissing(database, 'invoice_lines', 'qty_fulfilled', 'REAL NOT NULL DEFAULT 0')
+  addColumnIfMissing(database, 'invoice_lines', 'fulfilled_at', 'TEXT')
+  addColumnIfMissing(database, 'inventory_scans', 'invoice_id', 'TEXT')
+  addColumnIfMissing(database, 'inventory_scans', 'invoice_number', 'TEXT')
+  addColumnIfMissing(database, 'inventory_scans', 'invoice_line_id', 'TEXT')
+  addColumnIfMissing(database, 'inventory_scans', 'override_kind', 'TEXT')
+  database.exec(
+    `CREATE INDEX IF NOT EXISTS idx_inv_scans_so_line ON inventory_scans (invoice_line_id);
+     CREATE INDEX IF NOT EXISTS idx_invoice_lines_product ON invoice_lines (product_id);`
+  )
+  setMeta(database, 'schema_version', '65')
+
   // Payroll, once, for whoever owns the company.
   //
   // Seeded rather than left to be typed because the owner named it, named its

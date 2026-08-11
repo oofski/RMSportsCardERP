@@ -143,6 +143,20 @@ export interface InvoiceCustomer {
 export interface InvoiceLine {
   id: string
   invoiceId: string
+  /**
+   * Units already scanned out against this line — the sell-side mirror of a
+   * purchase order line's `qtyReceived`.
+   *
+   * An order goes out in two vans as easily as one arrives in two, so this is a
+   * running count rather than a done flag. Zero on a line that was never
+   * scanned, including every line written before scanning-out matched orders at
+   * all.
+   */
+  qtyFulfilled: number
+  /** quantity − qtyFulfilled, floored at 0. */
+  qtyOutstanding: number
+  /** When the LAST unit went out. Null while any is still owed. */
+  fulfilledAt: string | null
   /** Order on the document. Rebuilt on every save, so it can never have gaps. */
   position: number
   /** QuickBooks "Product/Service". Required by Intuit. */
