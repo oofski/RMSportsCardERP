@@ -635,13 +635,22 @@ export function EditField({
   value,
   onCommit,
   type = 'text',
-  required = false
+  required = false,
+  ariaLabel
 }: {
   label: string
   value: string
   onCommit: (v: string) => void
   type?: string
   required?: boolean
+  /**
+   * The name a screen reader announces, when the visible label is carried by
+   * something else — a column header in the missing-identifier table, where a
+   * label above every cell would double the height of every row. Passing an
+   * empty `label` alone would leave the control with no accessible name at all,
+   * which is a field nobody using a reader can tell from the one beside it.
+   */
+  ariaLabel?: string
 }): JSX.Element {
   const [v, setV] = useState(value)
   useEffect(() => {
@@ -679,7 +688,13 @@ export function EditField({
 
   return (
     <Field label={label}>
-      <Input type={type} value={v} onChange={(e) => setV(e.target.value)} onBlur={commit} />
+      <Input
+        type={type}
+        aria-label={ariaLabel}
+        value={v}
+        onChange={(e) => setV(e.target.value)}
+        onBlur={commit}
+      />
     </Field>
   )
 }

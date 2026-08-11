@@ -133,6 +133,9 @@ export function InventoryModule(): JSX.Element {
           <InventoryOverview
             stats={stats}
             categories={categories}
+            // The dashboard's missing-identifier tile counts off this same
+            // array, so it can never promise a number the Catalog does not hold.
+            products={products}
             canManage={canManage}
             onChanged={reload}
             onScan={() => setScanning(true)}

@@ -2890,6 +2890,134 @@ table.data tfoot .data-total td {
   gap: 10px;
 }
 
+/* The missing-identifiers tile: the same card as a category, on purpose, because
+   it sits in the same grid and is read in the same sweep. Only two things say it
+   is not one — a dashed edge, and the fact that its --cat is the warning (or the
+   success) token rather than a sport's colour. Anything louder would make a
+   count of data gaps compete with the money on the tiles above it. */
+.cat-ident {
+  border-style: dashed;
+}
+.cat-ident .cc-cases {
+  color: var(--cat);
+}
+
+/* ---------- Missing identifiers, the drill-down ---------- */
+/* Filter chips. These are NOT category filters — every one of them cuts across
+   the categories — so they are deliberately not the Catalog's category Select:
+   the whole value is seeing the three counts side by side without opening
+   anything. */
+.ident-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 14px;
+}
+.ident-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 11px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.ident-chip:hover {
+  border-color: var(--brand-300);
+}
+.ident-chip.active {
+  border-color: var(--brand-500);
+  background: var(--brand-soft);
+  color: var(--brand-600);
+}
+.ident-chip-n {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+}
+.ident-chip.active .ident-chip-n {
+  color: var(--brand-600);
+}
+.ident-name {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+}
+.ident-logo {
+  flex: none;
+  margin-top: 2px;
+}
+.ident-open {
+  margin-left: 0;
+  padding: 0;
+  text-align: left;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.ident-open:hover {
+  color: var(--brand-600);
+}
+.ident-cat {
+  margin-top: 2px;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+.ident-badge {
+  white-space: nowrap;
+}
+/* Three states, three temperatures. "Neither" is the only one that reads as an
+   alarm, because it is the only one where BOTH the scanner and the QuickBooks
+   item lookup are out of options at once. */
+.ident-both {
+  background: var(--danger-bg);
+  color: var(--danger-strong);
+}
+.ident-sku,
+.ident-upc {
+  background: var(--warning-bg);
+  color: var(--text);
+}
+/* A row put right on this screen, still on it. See the note above
+   MissingIdentifiers: it stays so a two-field fix cannot lose its second field
+   to the list re-deriving mid-edit, and so the save is visibly confirmed. */
+.ident-fixed {
+  background: var(--success-bg);
+  color: var(--success-strong);
+}
+/* Said out loud on the row: a SKU field that is not empty but reads "BOX" looks
+   like this screen listing a product it had no business listing. */
+.ident-why {
+  display: block;
+  margin-top: 3px;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+.ident-saved {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 8px;
+  color: var(--success-strong);
+  font-weight: 600;
+}
+/* The two fields that close the gap, sized to the column instead of to a form.
+   Same EditField the Catalog uses, so the save path, the trimming and the
+   commit-on-blur are one behaviour rather than a second implementation. */
+.ident-table .field {
+  margin: 0;
+}
+.ident-table .input {
+  width: 100%;
+  min-width: 108px;
+  height: 28px;
+  padding: 0 9px;
+  font-size: 12.5px;
+}
+
 /* Typeahead */
 .typeahead {
   position: relative;

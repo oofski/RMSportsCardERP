@@ -16,6 +16,7 @@ import type {
   PurchaseOrderStatus
 } from '@shared/types'
 import { CATEGORY_ORDER, LOCATIONS, categoryColor } from '@shared/inventory'
+import { countIdentifierGaps } from '@shared/identifiers'
 import { BarList } from '../../components/charts'
 import { Icon } from '../../components/Icon'
 import { Button, CenterLoader, EmptyState } from '../../components/ui'
@@ -26,16 +27,23 @@ import { formatUnitCount } from '../../lib/productUnits'
 import { UnitBadge, productMetrics } from './helpers'
 import { EditField } from './ProductsTab'
 import { CategoryLogo } from './CategoryLogo'
+import { GAP_META, MissingIdentifiers } from './MissingIdentifiers'
 import { IncomingModal } from './IncomingModal'
 import { ProductHoverCard, type ProductCardData } from './ProductCases'
 import { PO_STAGE_META } from '../invoicing/helpers'
 
 type MetricKind = 'value' | 'cost' | 'spread' | 'cases' | 'skus'
-type Detail = { kind: 'category'; category: string; label: string } | { kind: MetricKind; label: string }
+type Detail =
+  | { kind: 'category'; category: string; label: string }
+  | { kind: MetricKind; label: string }
+  // A VIEW across the categories, not one of them — see @shared/identifiers for
+  // why a data gap must never become a stored category.
+  | { kind: 'identifiers'; label: string }
 
 export function InventoryOverview({
   stats,
   categories,
+  products,
   canManage,
   onChanged,
   onScan,
@@ -44,6 +52,10 @@ export function InventoryOverview({
 }: {
   stats: InventoryStats
   categories: CategorySummary[]
+  /** The whole catalog, already loaded by the module for the Catalog tab. The
+   *  missing-identifier tile counts from THIS array rather than from a second
+   *  query, so its number and the list it opens are the same derivation. */
+  products: InventoryProduct[]
   canManage: boolean
   onChanged: () => Promise<void>
   /** Opens the scan station (owned by InventoryModule). */
@@ -138,6 +150,11 @@ export function InventoryOverview({
   const outsideRows = useMemo(() => stats.zeroCost.filter((z) => z.outsideSpread), [stats.zeroCost])
   const inflatingRows = useMemo(() => stats.zeroCost.filter((z) => !z.outsideSpread), [stats.zeroCost])
 
+  // Live off the same catalog array the Catalog tab renders, so the tile moves
+  // the moment a SKU is typed anywhere in the module rather than waiting for a
+  // stats query that does not know about it.
+  const identifierGaps = useMemo(() => countIdentifierGaps(products), [products])
+
   const valueByCategory = useMemo(
     () =>
       [...categories]
@@ -148,6 +165,21 @@ export function InventoryOverview({
   )
 
   if (detail) {
+    // The identifier view is the one drill-down that does NOT re-read from the
+    // database: it is a lens over the catalog array this component was handed,
+    // which the module reloads after every save. Giving it its own fetch would
+    // let the tile and the list disagree about how many products need work.
+    if (detail.kind === 'identifiers') {
+      return (
+        <MissingIdentifiers
+          products={products}
+          canManage={canManage}
+          onOpenProduct={onOpenProduct}
+          onChanged={onChanged}
+          onBack={() => setDetail(null)}
+        />
+      )
+    }
     // refreshKey is threaded in so the drill-down re-reads on every module
     // reload: a scan committed while this view is open (the Scan button lives
     // in the module header and stays reachable here) changes the average cost,
@@ -362,6 +394,58 @@ export function InventoryOverview({
               </div>
             </button>
           ))}
+
+          {/* A VIEW sitting beside the categories, not another category.
+              Deliberately last, so the real categories keep the order the
+              dashboard has always shown them in, and deliberately the same
+              `.cat-card` markup, so it reads as part of the grid rather than as
+              a warning bolted underneath it.
+
+              WHY IT IS NOT A CATEGORY. Filing a product with no SKU under
+              "Missing identifiers" would move it out of Football — and the
+              category cards, the value-by-category chart and every total on this
+              screen sum straight off the stored category column, so its cases
+              and its market value would go with it. The gap is a fact ABOUT a
+              Football product, not a different kind of product. See
+              @shared/identifiers.
+
+              It stays on screen at zero rather than disappearing: this is the
+              screen somebody comes to in order to CHECK, and a tile that only
+              exists while something is wrong cannot be found by anyone asking
+              whether anything is. */}
+          <button
+            className="cat-card cat-ident"
+            style={
+              {
+                '--cat': identifierGaps.total > 0 ? 'var(--warning)' : 'var(--success)'
+              } as CSSProperties
+            }
+            onClick={() => openDetail({ kind: 'identifiers', label: 'Missing identifiers' })}
+          >
+            <div className="cc-head">
+              <span className="cc-ico">
+                <Icon name="ScanBarcode" size={20} />
+              </span>
+              <span className="cc-name">Missing identifiers</span>
+            </div>
+            <div className="cc-cases">
+              {identifierGaps.total}{' '}
+              <small>{identifierGaps.total === 1 ? 'product' : 'products'}</small>
+            </div>
+            {/* Three numbers, never one. They are three different jobs: no SKU
+                is a product an invoice can only match by name, no barcode is a
+                product no scanner can find, and neither is both at once. Worded
+                from GAP_META so the tile, the chips behind it and the badge on
+                each row cannot end up calling the same number two things. */}
+            <div className="cc-sub">
+              <span>
+                {identifierGaps.sku} {GAP_META.sku.noun} · {identifierGaps.upc} {GAP_META.upc.noun}
+              </span>
+              <span>
+                {identifierGaps.both} {GAP_META.both.noun}
+              </span>
+            </div>
+          </button>
         </div>
       )}
 

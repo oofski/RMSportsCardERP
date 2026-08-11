@@ -1,6 +1,7 @@
 import type { Database } from 'better-sqlite3'
 import { createHash } from 'crypto'
 import { nowIso } from '../util'
+import { isMatchableSku } from '@shared/identifiers'
 import { boxesPerCaseFromName } from '@shared/units'
 import { brandOf, unitTypeOf, yearOf } from './inventorySeed'
 
@@ -339,17 +340,17 @@ const CATALOG_V3: Array<[string, string, string]> = [
 const CATEGORY_ALIASES: Record<string, string> = { Combat: 'UFC' }
 
 /**
- * SKUs that identify nothing. `BOX` is the placeholder the list uses for any
- * single box (27 rows share it) and `n/a` speaks for itself — matching on
- * either would make the first row swallow every later one. Compared upper-cased.
+ * Is this SKU a real identifier, i.e. worth matching an existing product on?
+ *
+ * The rule — `BOX` and its friends identify nothing, and neither does anything
+ * under three characters — moved to @shared/identifiers when the dashboard grew
+ * a "Missing identifiers" view, because that screen has to agree with this
+ * importer about what counts as a SKU or it reports 27 rows sharing the word BOX
+ * as fully identified. Re-exported rather than re-implemented: two copies of
+ * this predicate are two things that must change together forever, and the
+ * cost-of-drift here is an import that silently swallows a product.
  */
-const PLACEHOLDER_SKUS = new Set(['BOX', 'N/A', 'NA', 'NONE', '-'])
-
-/** Is this SKU a real identifier, i.e. worth matching an existing product on? */
-export function isMatchableSku(sku: string): boolean {
-  const s = (sku || '').trim().toUpperCase()
-  return s.length >= 3 && !PLACEHOLDER_SKUS.has(s)
-}
+export { isMatchableSku }
 
 /**
  * The key two product names are compared on. Case, punctuation and spacing all

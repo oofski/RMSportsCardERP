@@ -191,6 +191,10 @@ function topLevel(css: string): { blocks: { prelude: string; body: string }[]; b
     'src/renderer/src/modules/finance/BreakPnl.tsx',
     'src/renderer/src/modules/inventory/SuppliesTab.tsx',
     'src/renderer/src/modules/inventory/InventoryOverview.tsx',
+    // The missing-identifier drill-down: four columns, two of them fields
+    // somebody types into, so it has to stack rather than scroll sideways on a
+    // phone or the fix is unreachable on the device most likely to be holding it.
+    'src/renderer/src/modules/inventory/MissingIdentifiers.tsx',
     'src/renderer/src/modules/timepay/TimePayrollModule.tsx'
   ]
   for (const file of stacked) {
