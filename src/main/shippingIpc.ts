@@ -135,6 +135,7 @@ import {
   setShipmentNotes,
   setShipmentStatus,
   setTeamSlotChecked,
+  setSlotPicked,
   setTeamSlotTopSleeved,
   unassignBreak,
   bulkSetShipmentStatusByTracking
@@ -930,6 +931,27 @@ export function registerShippingIpc(): void {
         const actor = requireFind()
         const id = requireId(payload?.id, 'card')
         return { ok: true, data: setTeamSlotChecked(id, !!payload?.checked, actor.id) }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  /**
+   * Step 4's per-card tick, from the order walker.
+   *
+   * A separate channel from shipSlotChecked because they assert different
+   * things about the same card — bagged at the bench, versus collected into
+   * this buyer's package — and one endpoint serving both is exactly how they
+   * came to share a column in the first place.
+   */
+  ipcMain.handle(
+    IPC.shipSlotPicked,
+    (_e, payload: { id: string; picked: boolean }): Result<ShipOrderRow> => {
+      try {
+        const actor = requireFind()
+        const id = requireId(payload?.id, 'card')
+        return { ok: true, data: setSlotPicked(id, !!payload?.picked, actor.id) }
       } catch (err) {
         return fail(err)
       }

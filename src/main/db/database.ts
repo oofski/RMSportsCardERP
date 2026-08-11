@@ -2675,6 +2675,53 @@ function migrate(database: Database.Database): void {
   )
   setMeta(database, 'schema_version', '63')
 
+  // v64: BAGGED AND PICKED ARE TWO DIFFERENT FACTS ABOUT THE SAME CARD.
+  //
+  // ship_team_slots.checked_off was doing both jobs, and the two are not the
+  // same job on this floor:
+  //
+  //   BAGGED (step 3, per BREAK)  — this team is out of the tray, in a bag,
+  //                                 stickered with the buyer's handle.
+  //   PICKED (step 4, per ORDER)  — that bag has been gathered out of the break
+  //                                 trays and into this buyer's package.
+  //
+  // A break's bags stay scattered across the bench until somebody walks the
+  // order and collects them, so one does not imply the other. Sharing a column
+  // meant the break bench's "Check all" — one click, every card in the break —
+  // reported every order it touched as fully picked. A floor with the breaks
+  // bagged and nothing packed read as 57 of 83 orders waiting at the mailing
+  // bench, and the owner's dashboard showed 0 cards left on each of them.
+  //
+  // So picking gets a column of its own. checked_off keeps its meaning and
+  // every break-side screen keeps reading it; the picking station, the order
+  // rows and the dashboard move onto this one.
+  //
+  // ## The backfill starts everything unpicked, deliberately
+  //
+  // Existing checked_off values cannot be trusted to mean "picked" — the whole
+  // reason for this migration is that most of them do not. The only rows that
+  // certainly WERE picked are the ones whose package already went out: a packed
+  // shipment cannot have been packed without its cards being gathered. Those
+  // keep their timestamp and their attribution. Everything else starts at zero,
+  // which is the true state of a floor whose breaks are bagged and whose orders
+  // are not yet collected.
+  addColumnIfMissing(database, 'ship_team_slots', 'picked_at', 'TEXT')
+  addColumnIfMissing(database, 'ship_team_slots', 'picked_by', 'TEXT')
+  runOnce(database, 'ship_slots_picked_split_v1', () => {
+    database
+      .prepare(
+        `UPDATE ship_team_slots
+            SET picked_at = checked_off_at,
+                picked_by = checked_off_by
+          WHERE checked_off = 1
+            AND customer_id IN (
+              SELECT customer_id FROM ship_shipments WHERE packed_at IS NOT NULL
+            )`
+      )
+      .run()
+  })
+  setMeta(database, 'schema_version', '64')
+
   // Payroll, once, for whoever owns the company.
   //
   // Seeded rather than left to be typed because the owner named it, named its

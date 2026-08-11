@@ -219,7 +219,11 @@ export function OrderWalker({
   const toggleSlot = async (slotId: string, checked: boolean): Promise<void> => {
     setBusy(slotId)
     try {
-      const res = await api.shipping.setSlotChecked(slotId, checked)
+      // PICKED, not bagged. This is the order walker — step 4 — where a tick
+      // means "that team's bag is now in this buyer's package". The break
+      // bench's own tick, which means "this team is bagged", is a different
+      // call and a different column.
+      const res = await api.shipping.setSlotPicked(slotId, checked)
       if (!res.ok) {
         toast.error(res.error ?? 'That did not save.')
         return

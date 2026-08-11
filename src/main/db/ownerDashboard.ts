@@ -430,14 +430,14 @@ function ordersToShip(): { items: OwnerOrderToShip[]; remaining: number; importe
   const rows = db
     .prepare(
       `SELECT s.customer_id AS cid, c.whatnot_handle AS handle, c.real_name AS name,
-              COALESCE(SUM(CASE WHEN t.checked_off = 1 THEN 1 ELSE 0 END), 0) AS done,
+              COALESCE(SUM(CASE WHEN t.picked_at IS NOT NULL THEN 1 ELSE 0 END), 0) AS done,
               COUNT(t.id) AS total
          FROM ship_shipments s
          JOIN ship_customers c ON c.id = s.customer_id
          LEFT JOIN ship_team_slots t ON t.customer_id = s.customer_id
         WHERE COALESCE(s.on_hold, 0) = 0 AND s.packed_at IS NULL
         GROUP BY s.customer_id, c.whatnot_handle, c.real_name
-        ORDER BY (COUNT(t.id) - COALESCE(SUM(CASE WHEN t.checked_off = 1 THEN 1 ELSE 0 END), 0)) DESC,
+        ORDER BY (COUNT(t.id) - COALESCE(SUM(CASE WHEN t.picked_at IS NOT NULL THEN 1 ELSE 0 END), 0)) DESC,
                  c.whatnot_handle
         LIMIT 5`
     )

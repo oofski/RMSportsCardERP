@@ -313,11 +313,26 @@ ok(
 // ---------------------------------------------------------------------------
 console.log('\n=== 9. send back ===')
 // ---------------------------------------------------------------------------
-// Everything is off the bench by now, so the next box comes from the PACK
-// queue rather than the picking run — there is nothing left to pick.
+// Bagging every break no longer hands anything to packing: collecting a
+// buyer's bags out of the trays is a separate pass, and until somebody makes
+// it the pack queue is empty however finished the bench is. That is the whole
+// point of the split, so it gets an assertion of its own before the rest of
+// this section pushes past it.
+ok(
+  stations.pickableOrders().length > 0,
+  'with every break bagged there is still picking to do',
+  String(stations.pickableOrders().length)
+)
+
+// So collect ONE, the way a picker would, and it reaches the packing bench.
+const head = stations.pickableOrders()[0]
+stations.claimOrder(head.orderId, head.customerId, 'pick', 'user2')
+stations.pickAdvance(head.customerId, 'user2')
+
 const toPack = stations.packNext('user2')
 const nextPick = toPack
-ok(toPack?.customerId === nextPick.customerId, 'a second order reaches packing')
+ok(!!toPack, 'and NOW an order reaches packing', String(toPack?.customerId))
+ok(toPack?.customerId === head.customerId, 'the one that was just picked', String(toPack?.customerId))
 ok(stations.sendBack(nextPick.customerId, 'missing the Yankees card') === true, 'the packer can send it back')
 ok(stations.packQueue().length === 0, 'it leaves the pack queue', String(stations.packQueue().length))
 ok(
@@ -354,11 +369,12 @@ for (const st of ['STATION-B', 'STATION-C', 'STATION-P', 'STATION-Q']) {
 }
 getDb().prepare(`UPDATE sync_state SET value = 'STATION-B' WHERE key = 'device_id'`).run()
 
-// A box nobody is holding. Chosen from the queue rather than from listOrders
-// because a whole break now finishes at once, so several boxes are pack-ready
-// together and more of them carry a claim than used to.
+// A box nobody is holding. Taken from what is still TO PICK rather than from
+// the pack queue: since bagging and picking were split, an unpicked order is
+// not in that queue at all, and the two stations below are about to pick it and
+// then reject it — which is the sequence this case exists to exercise.
 const third = stations
-  .packQueue()
+  .pickableOrders()
   .filter((o: any) => !o.mine && !o.heldByStation)
   .map((o: any) => ({ id: o.orderId, customerId: o.customerId }))
   .find((o: any) => o.customerId !== first.customerId && o.customerId !== nextPick.customerId)
@@ -770,8 +786,14 @@ for (const st of ['STATION-A', 'STATION-P', 'STATION-Q', 'STATION-R', 'STATION-S
   stations.releaseAllForStation('reset for the board checks')
 }
 
-// Tick every card, then pack everything EXCEPT two orders kept back for the two
-// cases below. What is left is only what each case introduces.
+// Finish the BENCH first, then pick every order, then pack everything EXCEPT
+// two kept back for the two cases below.
+//
+// The bench step is not decoration: packing is refused while any break the
+// package touches still has teams unbagged, and picking an order no longer
+// bags anything. While the two shared a column, ticking the cards below
+// happened to finish the bagging too, and this fixture leaned on that.
+finishAllBenches('bench')
 getDb().prepare(`UPDATE sync_state SET value = 'STATION-Z' WHERE key = 'device_id'`).run()
 for (const o of domain.listOrders() as any[]) {
   if (o.onHold) continue

@@ -153,9 +153,28 @@ export interface ShipTeamSlot {
   sleeved: boolean
   sleevedAt: string | null
   sleevedBy: string | null
+  /**
+   * BAGGED — step 3, per break. This team is out of the tray, in a bag,
+   * stickered with the buyer's handle.
+   *
+   * NOT "picked". See `picked` below: the two used to share this column and
+   * that is the bug they were split to fix.
+   */
   checkedOff: boolean
   checkedOffAt: string | null
   checkedOffBy: string | null
+  /**
+   * PICKED — step 4, per order. That bag has been gathered out of the break
+   * trays and into this buyer's package.
+   *
+   * A break's bags sit on the bench until somebody walks the order and collects
+   * them, so bagging never implies picking. While these were one column, the
+   * bench's "Check all" (one click, every card in a break) reported every order
+   * it touched as fully picked and pushed it to the mailing bench.
+   */
+  picked: boolean
+  pickedAt: string | null
+  pickedBy: string | null
   /**
    * Where this card printed on the paperwork: the page, then the line.
    *
@@ -183,6 +202,9 @@ export interface ShipTeamSlotDraft {
   checkedOff?: boolean
   checkedOffAt?: string | null
   checkedOffBy?: string | null
+  picked?: boolean
+  pickedAt?: string | null
+  pickedBy?: string | null
   slipPage?: number | null
   slipPosition?: number | null
 }
@@ -509,7 +531,10 @@ export interface ShipDataCounts {
   orders: number
   shipments: number
   warnings: number
+  /** Cards BAGGED at the break bench (step 3). */
   checkedSlots: number
+  /** Cards PICKED into their buyer's package (step 4). A different fact. */
+  pickedSlots: number
 }
 
 /** Progress emitted while a big PDF parses (a 200-page export takes 10–30s). */

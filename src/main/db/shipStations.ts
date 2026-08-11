@@ -25,7 +25,7 @@ import {
   type ClaimRow
 } from './shipClaims'
 import { deviceId } from './sync'
-import { listBreakIdsForCustomer, setCustomerSlotsChecked } from './shipping'
+import { listBreakIdsForCustomer, setCustomerSlotsPicked } from './shipping'
 import { _orderRow, _recomputeBreakStatus, listOrders, setOrderStage } from './shippingDomain'
 import { getShipShipmentByCustomer } from './shipping'
 import { newId, nowIso } from '../util'
@@ -50,9 +50,9 @@ import { newId, nowIso } from '../util'
  * ## Claims are advisory
  *
  * Delete this whole table and the night is unchanged. Picking lives in
- * `ship_team_slots.checked_off`; packing lives in `ship_shipments.packed_at`.
+ * `ship_team_slots.picked_at`; packing lives in `ship_shipments.packed_at`.
  * A claim only answers "who has this right now", so a race costs duplicated
- * effort and never a lost card — `setCustomerSlotsChecked`'s `onlyUnchecked`
+ * effort and never a lost card — `setCustomerSlotsPicked`'s `onlyUnpicked`
  * guard already keeps the first finder's name and timestamp.
  *
  * ## Where the reads went
@@ -169,7 +169,7 @@ export function endStationSession(): void {
  * The station account AUTHORISES; the person ATTRIBUTES. Never the reverse —
  * the operator id is never an input to a permission decision, so choosing a
  * name from the roster grants nothing. It only changes whose name lands in
- * `checked_off_by`.
+ * `picked_by`.
  *
  * Without this, a bench shared by three people all evening stamps one login on
  * every card, and every attribution column in the module quietly becomes
@@ -333,8 +333,8 @@ function myClaim(role: ShipStationRole): ShipWorkClaim | null {
 function lastCheckedAtFor(customerId: string): string | null {
   const r = getDb()
     .prepare(
-      `SELECT MAX(checked_off_at) AS t FROM ship_team_slots
-        WHERE customer_id = ? AND checked_off = 1`
+      `SELECT MAX(picked_at) AS t FROM ship_team_slots
+        WHERE customer_id = ? AND picked_at IS NOT NULL`
     )
     .get(customerId) as { t: string | null } | undefined
   return r?.t ?? null
@@ -485,7 +485,10 @@ export function pickAdvance(customerId: string, loginUserId: string | null): Adv
 
   const run = db.transaction(() => {
     const breakIds = listBreakIdsForCustomer(customerId)
-    setCustomerSlotsChecked(customerId, true, operator, true)
+    // PICKED, not bagged. Pressing "Picked · next order" says the buyer's cards
+    // are collected into their package; it says nothing about the bagging the
+    // break bench recorded for itself.
+    setCustomerSlotsPicked(customerId, true, operator, true)
     for (const id of breakIds) _recomputeBreakStatus(id)
     if (mine && mine.customerId === customerId) {
       db.prepare(`UPDATE ship_work_claims SET finished_at = ? WHERE id = ? AND station_id = ?`).run(

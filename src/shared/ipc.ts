@@ -327,6 +327,8 @@ export const IPC = {
   shipOrderCheckAll: 'shipping:orders:check-all',
   shipBreakSetStatus: 'shipping:breaks:set-status',
   shipSlotChecked: 'shipping:teamslot:checked',
+  /** Step 4's per-card tick: gathered into the buyer's package. NOT bagging. */
+  shipSlotPicked: 'shipping:teamslot:picked',
   shipSlotTopSleeved: 'shipping:teamslot:top-sleeved',
   // The bench checklist: sleeve, sort, then team-bag every team in the break.
   shipBenchStates: 'shipping:bench:states',

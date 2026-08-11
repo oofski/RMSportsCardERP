@@ -92,9 +92,17 @@ export interface ShipOrderTeam {
   slotId: string
   teamName: string
   price: number
+  /** Bagged at the break bench (step 3). Break-side screens read this. */
   checkedOff: boolean
   checkedOffAt: string | null
   checkedOffBy: string | null
+  /**
+   * Gathered into this buyer's package (step 4). ORDER-side screens read this,
+   * and it is what an order's `pick` count is made of.
+   */
+  picked: boolean
+  pickedAt: string | null
+  pickedBy: string | null
   topSleeved: boolean
   isGiveaway: boolean
   orderId: string | null

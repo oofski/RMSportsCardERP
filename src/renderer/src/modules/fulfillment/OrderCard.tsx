@@ -135,22 +135,22 @@ export function OrderCard({
                 <button
                   key={t.slotId}
                   type="button"
-                  className={`walk-team ${t.checkedOff ? 'checked' : ''}`}
+                  className={`walk-team ${t.picked ? 'checked' : ''}`}
                   disabled={!canAct || busySlot === t.slotId}
-                  aria-pressed={t.checkedOff}
+                  aria-pressed={t.picked}
                   title={
                     canAct
-                      ? t.checkedOff
+                      ? t.picked
                         ? `Un-check ${t.teamName}`
                         : `Check off ${t.teamName}`
                       : noActReason
                   }
-                  onClick={() => void onToggleSlot(t.slotId, !t.checkedOff)}
+                  onClick={() => void onToggleSlot(t.slotId, !t.picked)}
                 >
                   <Icon
-                    name={t.checkedOff ? 'CheckCircle2' : 'Circle'}
+                    name={t.picked ? 'CheckCircle2' : 'Circle'}
                     size={15}
-                    strokeWidth={t.checkedOff ? 2.4 : 1.9}
+                    strokeWidth={t.picked ? 2.4 : 1.9}
                   />
                   <span className="walk-team-name">{t.teamName}</span>
                   {t.isGiveaway && <span className="ship-chip mini">Giveaway</span>}

@@ -95,10 +95,11 @@ import {
   listBreakIdsForCustomer,
   getShipTeamSlot,
   setBreakSlotsChecked,
-  setCustomerSlotsChecked,
+  setCustomerSlotsPicked,
   setBreakSlotsTopSleeved,
   setBreakStatus,
   setTeamSlotChecked as storeSetTeamSlotChecked,
+  setTeamSlotPicked,
   setTeamSlotTopSleeved as storeSetTeamSlotTopSleeved,
   setTeamSlotSleeve as storeSetTeamSlotSleeve,
   updateShipment
@@ -238,6 +239,9 @@ function orderBreaksFor(slots: ShipTeamSlot[]): ShipOrderBreak[] {
       checkedOff: s.checkedOff,
       checkedOffAt: s.checkedOffAt,
       checkedOffBy: s.checkedOffBy,
+      picked: s.picked,
+      pickedAt: s.pickedAt,
+      pickedBy: s.pickedBy,
       topSleeved: s.topSleeved,
       isGiveaway: s.isGiveaway,
       orderId: s.orderId
@@ -245,7 +249,10 @@ function orderBreaksFor(slots: ShipTeamSlot[]): ShipOrderBreak[] {
     g.teams.push(team)
     g.value = cents(g.value + s.price)
     g.total += 1
-    if (s.checkedOff) g.checked += 1
+    // PICKED, not bagged. This is an ORDER's view of a break — "how much of
+    // my package have I collected out of break 11" — and bagging that break
+    // collects nothing into anybody's package.
+    if (s.picked) g.checked += 1
   }
   // Break-less giveaways (breakNumber === null) sort to the bottom.
   return [...groups.values()].sort((a, b) => {
@@ -276,7 +283,9 @@ export function _orderRow(sh: ShipShipment, ctx?: DerivationContext): ShipOrderR
     value += s.price
     if (s.topSleeved) topSleevedCount += 1
     if (s.isGiveaway) giveawayCount += 1
-    if (s.checkedOff) checked += 1
+    // The order's pick count, which is what the picking station, the pack queue
+    // and the owner's dashboard all read. Bagging a break must never move it.
+    if (s.picked) checked += 1
     if (s.orderId && !seenOrderIds.has(s.orderId)) {
       seenOrderIds.add(s.orderId)
       orderIds.push(s.orderId)
@@ -1075,9 +1084,10 @@ export function setOrderChecked(
   // Read the breaks BEFORE the write: they do not change, but reading after
   // would depend on the update having landed, which is a needless coupling.
   const breakIds = listBreakIdsForCustomer(customerId)
-  // "Next order" writes the same flag step 3 does, across every break the
-  // package touches, so it answers to the same gate. Un-picking never does —
-  // a correction must stay possible whatever state the bench is in.
+  // Still gated on the bench, and for a physical reason rather than a shared
+  // column: you cannot collect a bag out of a tray that has not been sorted and
+  // bagged. Un-picking is never gated — a correction must stay possible
+  // whatever state the bench is in.
   if (checked) {
     for (const id of breakIds) {
       const state = getBreakStepState(id)
@@ -1086,8 +1096,35 @@ export function setOrderChecked(
       }
     }
   }
-  setCustomerSlotsChecked(customerId, checked, userId, onlyUnchecked)
+  // PICKED, not bagged. This is step 4 — "I have this buyer's cards in front of
+  // me and the package is built" — and it says nothing about whether the teams
+  // in those breaks got bagged, which the bench already recorded for itself.
+  setCustomerSlotsPicked(customerId, checked, userId, onlyUnchecked)
   for (const id of breakIds) _recomputeBreakStatus(id)
+  return _orderRow(shipment)
+}
+
+/**
+ * Gather one card into its buyer's package — the per-card tick in the order
+ * walker, as opposed to the per-card tick on the break bench.
+ *
+ * Two functions for what looks like one gesture, because they assert different
+ * things: `setSlotChecked` says "this team is bagged", this says "that bag is
+ * in the package". The screens are different too — the bench's is per BREAK,
+ * this one is per ORDER.
+ */
+export function setSlotPicked(slotId: string, picked: boolean, userId: string | null): ShipOrderRow {
+  const slot = getShipTeamSlot(slotId)
+  if (!slot) throw new Error('That card is no longer there.')
+  if (picked) {
+    const state = getBreakStepState(slot.breakId)
+    if (state && !canStartStep('bag', state)) {
+      throw new Error(blockedReason('bag', state) ?? 'That break is not ready to be bagged.')
+    }
+  }
+  setTeamSlotPicked(slotId, picked, userId)
+  const shipment = getShipShipmentByCustomer(slot.customerId)
+  if (!shipment) throw new Error('That package is no longer there.')
   return _orderRow(shipment)
 }
 

@@ -728,8 +728,12 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       // ---- Checker -----------------------------------------------------------
       breaks: (): Promise<ShipBreakSummary[]> => ipcRenderer.invoke(IPC.shipBreaksList),
       break: (id: string): Promise<ShipBreakDetail | null> => ipcRenderer.invoke(IPC.shipBreakGet, id),
+      /** Bagged at the break bench — step 3. Break-side screens call this. */
       setSlotChecked: (id: string, checked: boolean): Promise<Result<ShipSlotUpdate>> =>
         ipcRenderer.invoke(IPC.shipSlotChecked, { id, checked }),
+      /** Gathered into the buyer's package — step 4. The order walker calls this. */
+      setSlotPicked: (id: string, picked: boolean): Promise<Result<ShipOrderRow>> =>
+        ipcRenderer.invoke(IPC.shipSlotPicked, { id, picked }),
       setSlotTopSleeved: (id: string, topSleeved: boolean): Promise<Result<ShipSlotUpdate>> =>
         ipcRenderer.invoke(IPC.shipSlotTopSleeved, { id, topSleeved }),
       /**

@@ -1058,14 +1058,20 @@ function BreakDetailView({
         />
       )}
 
+      {/* "Bag all", not "Check all". This button writes step 3 for every card in
+          the break at once, and while bagging and picking shared a column that
+          made it silently mark every order it touched as picked and ready to
+          pack. The column is split now; the label says which of the two it is
+          so nobody has to remember. */}
       <div className="chk-actions">
         <Button
           size="sm"
           icon="CheckCheck"
+          title="Mark every team in this break bagged and stickered. Collecting them into buyers’ packages is step 4, on the order screen."
           disabled={!canFind || busy || done || detail.slots.length === 0}
           onClick={() => onCheckAll(true)}
         >
-          Check all
+          Bag all
         </Button>
         <Button
           size="sm"
@@ -1073,7 +1079,7 @@ function BreakDetailView({
           disabled={!canFind || busy || detail.checkedTeams === 0}
           onClick={() => onCheckAll(false)}
         >
-          Un-check all
+          Un-bag all
         </Button>
         <Button
           size="sm"

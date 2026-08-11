@@ -227,7 +227,7 @@ const alphaBefore = domain
 ok(alphaBefore?.pick.total === 3, "alpha's package holds three cards", String(alphaBefore?.pick.total))
 ok(alphaBefore?.pick.checked === 0, 'none of them picked yet')
 
-// One of them is already found, by somebody else — that must survive.
+// One of them is already BAGGED, by somebody else, at the break bench.
 const firstSlot = alphaBefore.breaks[0].teams[0].slotId
 domain.setTeamSlotChecked(firstSlot, true, 'maya')
 const beforeWho = domain
@@ -237,6 +237,16 @@ const beforeWho = domain
   .find((t: { slotId: string }) => t.slotId === firstSlot)
 ok(beforeWho.checkedOffBy === 'maya', 'and it carries her name', String(beforeWho.checkedOffBy))
 
+// THE SEPARATION. Bagging a card at the break bench does not pick it into
+// anybody's package — the bag is still sitting in the break's tray. While these
+// shared one column, this line read 1, and a floor that had bagged its breaks
+// reported most of its orders as fully picked and waiting at the mailing bench.
+const stillUnpicked = domain
+  .listOrders()
+  .find((o: { customerId: string }) => o.customerId === 'alpha')
+ok(stillUnpicked.pick.checked === 0, 'bagging a card does NOT pick it', String(stillUnpicked.pick.checked))
+ok(beforeWho.picked === false, 'and the card itself says so')
+
 const after = domain.setOrderChecked('alpha', true, 'sam', true)
 ok(after.pick.checked === after.pick.total, 'one press picks the whole package',
   `${after.pick.checked}/${after.pick.total}`)
@@ -244,25 +254,26 @@ const keptWho = after.breaks
   .flatMap((b: { teams: unknown[] }) => b.teams)
   .find((t: { slotId: string }) => t.slotId === firstSlot)
 ok(keptWho.checkedOffBy === 'maya',
-  "a card somebody else found keeps THEIR name, not the person walking past",
+  "a card somebody else bagged keeps THEIR name on the bagging",
   String(keptWho.checkedOffBy))
+ok(keptWho.pickedBy === 'sam', 'while the person who collected it owns the pick', String(keptWho.pickedBy))
 
-// The part that matters beyond this one screen: the breaks it touched.
+// THE OTHER HALF OF THE SEPARATION. Picking a package collects bags out of the
+// trays; it bags nothing. The break bench's own progress must not move, or a
+// sorter would be told work was done that nobody did.
 const breaksAfter = domain.listBreaks()
 const b4 = breaksAfter.find((b: { breakLabel: string }) => b.breakLabel === '4')
 const b5 = breaksAfter.find((b: { breakLabel: string }) => b.breakLabel === '5')
-ok(b4.checkedTeams === 1, "break #4's progress moved with it", String(b4.checkedTeams))
-ok(b5.checkedTeams === 1, "and so did break #5's", String(b5.checkedTeams))
-ok(b4.status === 'picking' && b5.status === 'picking',
-  'and both breaks are picking rather than pending',
-  `${b4.status}/${b5.status}`)
+ok(b4.checkedTeams === 1, "break #4 still shows only the one team maya bagged", String(b4.checkedTeams))
+ok(b5.checkedTeams === 0, 'and break #5 shows none, because none were bagged', String(b5.checkedTeams))
+ok(b5.status === 'pending', 'picking an order leaves the break where it was', String(b5.status))
 
-// The break-less giveaway on the same package counts too.
+// The whole-show bagging counts are bench counts, and they did not move either.
 const summaryAfter = domain.getWorkspaceSummary()
-ok(summaryAfter.looseChecked === 1,
-  "the package's break-less giveaway is picked as well", String(summaryAfter.looseChecked))
-ok(summaryAfter.counts.checkedSlots === 3,
-  'three cards picked across the whole show', String(summaryAfter.counts.checkedSlots))
+ok(summaryAfter.looseChecked === 0,
+  "the package's break-less giveaway was picked, not bagged", String(summaryAfter.looseChecked))
+ok(summaryAfter.counts.checkedSlots === 1,
+  'one card bagged across the whole show — the one that was', String(summaryAfter.counts.checkedSlots))
 
 // Idempotent: pressing it again on a finished package changes nothing.
 const again = domain.setOrderChecked('alpha', true, 'sam', true)
@@ -270,7 +281,7 @@ ok(again.pick.checked === again.pick.total, 'pressing it again is harmless')
 ok(
   again.breaks
     .flatMap((b: { teams: unknown[] }) => b.teams)
-    .find((t: { slotId: string }) => t.slotId === firstSlot).checkedOffBy === 'maya',
+    .find((t: { slotId: string }) => t.slotId === firstSlot).pickedBy === 'sam',
   'and still does not steal attribution'
 )
 

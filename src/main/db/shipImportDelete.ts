@@ -209,7 +209,12 @@ export function planShipImportDelete(id: string): ShipImportDeletePlan | null {
     ? listShipSnapshots().filter((s) => localDateKey(s.createdAt) === importDay).length
     : 0
 
-  const cardsPicked = counts?.checkedSlots ?? 0
+  // "Is there real work in this show that a delete would throw away?" Either
+  // fact answers yes: a bagged break is a night's sorting, a picked order is a
+  // night's collecting, and losing either without a warning is the thing this
+  // number exists to prevent. Counted as the larger of the two rather than
+  // summed — a card that was both bagged and picked is still one card.
+  const cardsPicked = Math.max(counts?.checkedSlots ?? 0, counts?.pickedSlots ?? 0)
   const packagesPacked = shipments.filter((s) => !!s.packedAt).length
 
   return {

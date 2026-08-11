@@ -101,6 +101,8 @@ interface TeamSlotRow {
   checked_off: number
   checked_off_at: string | null
   checked_off_by: string | null
+  picked_at: string | null
+  picked_by: string | null
   slip_page: number | null
   slip_position: number | null
 }
@@ -264,6 +266,11 @@ function toTeamSlot(r: TeamSlotRow): ShipTeamSlot {
     checkedOff: bool(r.checked_off),
     checkedOffAt: r.checked_off_at ?? null,
     checkedOffBy: r.checked_off_by ?? null,
+    // Picked has no boolean column of its own: the stamp IS the fact, and one
+    // fewer column is one fewer way for a flag and its timestamp to disagree.
+    picked: !!r.picked_at,
+    pickedAt: r.picked_at ?? null,
+    pickedBy: r.picked_by ?? null,
     slipPage: r.slip_page ?? null,
     slipPosition: r.slip_position ?? null
   }
@@ -484,6 +491,7 @@ const SLOT_SELECT = `
          is_giveaway, top_sleeved, top_sleeved_at, top_sleeved_by,
          sleeved, sleeved_at, sleeved_by,
          checked_off, checked_off_at, checked_off_by,
+         picked_at, picked_by,
          slip_page, slip_position
   FROM ship_team_slots
 `
@@ -679,7 +687,11 @@ export function getShipDataCounts(): ShipDataCounts {
     // badge sitting at its original number forever — which is how a badge stops
     // meaning anything and people stop opening the tab.
     warnings: countOf(database, 'ship_warnings', "WHERE status != 'handled'"),
-    checkedSlots: countOf(database, 'ship_team_slots', 'WHERE checked_off = 1')
+    // BAGGED at the bench (step 3) and PICKED into a package (step 4) are two
+    // different facts about a card — see the v64 note in database.ts. Both are
+    // real work somebody did, so both are counted, separately.
+    checkedSlots: countOf(database, 'ship_team_slots', 'WHERE checked_off = 1'),
+    pickedSlots: countOf(database, 'ship_team_slots', 'WHERE picked_at IS NOT NULL')
   }
 }
 
@@ -860,6 +872,47 @@ export function setCustomerSlotsChecked(
         WHERE customer_id = ?${guard}`
     )
     .run(flag(checked), checked ? nowIso() : null, checked ? by : null, customerId).changes
+}
+
+// ---------------------------------------------------------------------------
+// Picking — step 4, per ORDER. A different fact from bagging; see the v64 note
+// in database.ts for why these are not the same column.
+// ---------------------------------------------------------------------------
+
+/** Gather (or un-gather) ONE card into its buyer's package. */
+export function setTeamSlotPicked(id: string, picked: boolean, by: string | null): ShipTeamSlot | null {
+  const res = getDb()
+    .prepare(
+      `UPDATE ship_team_slots SET picked_at = ?, picked_by = ? WHERE id = ?`
+    )
+    .run(picked ? nowIso() : null, picked ? by : null, id)
+  if (res.changes === 0) return null
+  return getShipTeamSlot(id)
+}
+
+/**
+ * Gather (or un-gather) every card in ONE customer's package.
+ *
+ * One statement rather than a loop, for the reason `setCustomerSlotsChecked`
+ * gives: an order can hold forty-seven cards and forty-seven writes is
+ * forty-seven chances to be interrupted half way.
+ *
+ * `onlyUnpicked` leaves an already-gathered card exactly as it was — its
+ * timestamp and who did it intact — so walking past a package does not rewrite
+ * the record of who collected what.
+ */
+export function setCustomerSlotsPicked(
+  customerId: string,
+  picked: boolean,
+  by: string | null,
+  onlyUnpicked = false
+): number {
+  const guard = onlyUnpicked ? (picked ? ' AND picked_at IS NULL' : ' AND picked_at IS NOT NULL') : ''
+  return getDb()
+    .prepare(
+      `UPDATE ship_team_slots SET picked_at = ?, picked_by = ? WHERE customer_id = ?${guard}`
+    )
+    .run(picked ? nowIso() : null, picked ? by : null, customerId).changes
 }
 
 /** The breaks a customer's cards sit in — what has to be re-derived after. */
@@ -1605,8 +1658,10 @@ function carryForwardOperatorState(
   // --- team slots, by handle|breakNumber|teamName (duplicates in order) -----
   const queues = new Map<string, ShipTeamSlot[]>()
   for (const s of prevSlots) {
-    // Nothing to carry for a slot that was never touched.
-    if (!s.checkedOff && !s.topSleeved) continue
+    // Nothing to carry for a slot that was never touched. `picked` counts as
+    // touched: a re-import mid-night must not throw away the collecting a
+    // packer has already done.
+    if (!s.checkedOff && !s.topSleeved && !s.picked) continue
     const key = slotKey(s.customerId, s.breakLabel, s.teamName)
     const list = queues.get(key)
     if (list) list.push(s)
@@ -1615,7 +1670,8 @@ function carryForwardOperatorState(
   if (queues.size > 0) {
     const updSlot = database.prepare(
       `UPDATE ship_team_slots
-          SET checked_off = ?, checked_off_at = ?, checked_off_by = ?, top_sleeved = ?
+          SET checked_off = ?, checked_off_at = ?, checked_off_by = ?, top_sleeved = ?,
+              picked_at = ?, picked_by = ?
         WHERE id = ?`
     )
     const cursor = new Map<string, number>()
@@ -1642,6 +1698,8 @@ function carryForwardOperatorState(
         prev.checkedOff ? prev.checkedOffAt : null,
         prev.checkedOff ? prev.checkedOffBy : null,
         flag(prev.topSleeved),
+        prev.picked ? prev.pickedAt : null,
+        prev.picked ? prev.pickedBy : null,
         row.id
       )
     }
