@@ -492,3 +492,21 @@ function emailToStore(supplied: string | undefined, stored: string, companyId: s
   // only invent a value nobody wrote.
   return stored.toLowerCase().startsWith(NO_EMAIL_PREFIX) ? placeholderEmailFor(companyId) : stored
 }
+
+/**
+ * Promote a person who has just proved they are here.
+ *
+ * Called on a successful sign-in — see `login`. Deliberately narrow: it moves
+ * ONLY 'invited', so it can never reinstate somebody an admin switched off, and
+ * it touches nothing else on the row. `updated_at` moves so the change reaches
+ * the other machines through the ordinary sync rather than sitting local.
+ */
+export function activateEmployee(id: string): void {
+  getDb()
+    .prepare(
+      `UPDATE employees
+          SET status = 'active', updated_at = ?
+        WHERE id = ? AND status = 'invited'`
+    )
+    .run(new Date().toISOString(), id)
+}

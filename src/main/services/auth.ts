@@ -9,7 +9,8 @@ import {
   toEmployee,
   verifyPassword,
   companyIdExists,
-  emailExists
+  emailExists,
+  activateEmployee
 } from '../db/employees'
 import { isValidEmail } from '../util'
 import { contextUserId } from './session'
@@ -119,6 +120,22 @@ export function login(identifier: string, password: string): AuthResult {
   }
   if (!verifyPassword(row, password)) {
     return { ok: false, error: 'Incorrect credentials.' }
+  }
+
+  // SIGNING IN IS PROOF OF ACTIVITY, and until now it was not treated as such.
+  //
+  // A person created with an email starts 'invited', and the ONLY thing that
+  // promoted them was choosing their own password. Anybody who arrived by some
+  // other route — onboarded on the website, given a password by an admin, or
+  // signing in with the one they were issued — worked every shift while the
+  // roster still called them invited. That is not cosmetic: 'invited' reads as
+  // "has not turned up yet" on the screens that hand out work.
+  //
+  // Whoever just authenticated has demonstrably turned up. 'disabled' was
+  // already refused above, so this can only ever move invited -> active, never
+  // reinstate somebody who was switched off.
+  if (employee.status === 'invited') {
+    activateEmployee(employee.id)
   }
 
   currentUserId = employee.id
