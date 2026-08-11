@@ -140,16 +140,17 @@ export function allLiveClaims(): ShipWorkClaim[] {
  * so it hides the order in somebody else's hands, and the last two pickers in
  * the room would each see an empty run while the other was still working.
  *
- * A sent-back order counts, even though every card in it is ticked. The whole
- * point of the rejection is that one of those ticks is wrong, so picking is not
- * finished while one is outstanding.
+ * Counted by the HANDOVER, not by the ticks. An order is still the picking
+ * side's to finish until somebody walks it to a packer, and that holds for the
+ * two cases the tick count got wrong: one ticked off from the Orders screen but
+ * never handed to anybody, and one a packer REJECTED — whose cards are all
+ * still ticked, because that is exactly what makes a rejection different from
+ * an un-pick. `handedOverAt` discards handoffs older than the last rejection,
+ * so the second comes back into this count on its own.
  */
 export function pickingRemaining(): number {
   return listOrders().filter(
-    (o) =>
-      !o.onHold &&
-      !o.packedAt &&
-      (o.pick.checked < o.pick.total || needsRepick(claimsForOrder(o.id, o.customerId)))
+    (o) => !o.onHold && !o.packedAt && handedOverAt(claimsForOrder(o.id, o.customerId)) === null
   ).length
 }
 

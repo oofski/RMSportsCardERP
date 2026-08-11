@@ -3,7 +3,6 @@ import {
   STATION_SESSION_MAX_MS,
   claimState,
   holderOf,
-  needsRepick,
   readyToPackAt,
   sendBackReason,
   supersededIds,
@@ -331,16 +330,6 @@ function myClaim(role: ShipStationRole): ShipWorkClaim | null {
   return null
 }
 
-function lastCheckedAtFor(customerId: string): string | null {
-  const r = getDb()
-    .prepare(
-      `SELECT MAX(picked_at) AS t FROM ship_team_slots
-        WHERE customer_id = ? AND picked_at IS NOT NULL`
-    )
-    .get(customerId) as { t: string | null } | undefined
-  return r?.t ?? null
-}
-
 /**
  * `withDetail` is off by default, and that default is the load-bearing part.
  *
@@ -370,12 +359,7 @@ function toStationOrder(o: ShipOrderRow, now: number, withDetail = false): ShipS
     heldByStation: held && held.stationId !== station ? held.stationId : null,
     heldStale: held ? claimState(held, dead, now) === 'stale' : false,
     mine: held?.stationId === station,
-    readyAt: readyToPackAt({
-      claims,
-      cardsTotal: o.cardCount,
-      cardsChecked: o.pick.checked,
-      lastCheckedAt: lastCheckedAtFor(o.customerId)
-    }),
+    readyAt: readyToPackAt({ claims }),
     sentBackReason: sendBackReason(claims),
     detail: withDetail ? o : null
   }
@@ -408,14 +392,19 @@ export function pickableOrders(): ShipStationOrder[] {
   const now = Date.now()
   return (
     listOrders()
-      // Still to pick, OR sent back. A rejected order has every card ticked —
-      // the whole point is that one of them is wrong — so filtering on "not
-      // finished" alone would leave it in neither queue, and it would simply be
-      // forgotten.
       .filter((o) => !o.onHold && !o.packedAt)
-      .filter(
-        (o) => o.pick.checked < o.pick.total || needsRepick(claimsForOrder(o.id, o.customerId))
-      )
+      // NOT HANDED OVER YET — the same boundary the pack queue reads from the
+      // other side, so an order is always in exactly one of the two lists.
+      //
+      // Deliberately not "some card is unticked". Ticking is progress inside an
+      // order, not the decision to pass it on: an order whose cards were all
+      // ticked from the Orders screen has still not been walked to a packer,
+      // and one a packer REJECTED has every card ticked and is the most urgent
+      // thing in the run. Keying on the ticks put the first in neither list and
+      // needed `needsRepick` bolted on to rescue the second. `handedOverAt`
+      // already discards handoffs older than the last rejection, so a sent-back
+      // order comes back here on its own.
+      .filter((o) => readyToPackAt({ claims: claimsForOrder(o.id, o.customerId) }) === null)
       .map((o) => toStationOrder(o, now))
       .filter((o) => o.mine || (!o.heldByName && !o.heldByStation))
       .filter((o) => o.readyAt === null || o.mine)
@@ -657,14 +646,7 @@ export function getStationBoard(): ShipStationBoard {
     // arguing with itself about how many orders are picked is worse than no
     // number at all.
     picked: live.filter(
-      (o) =>
-        !!o.packedAt ||
-        readyToPackAt({
-          claims: claimsForOrder(o.id, o.customerId),
-          cardsTotal: o.cardCount,
-          cardsChecked: o.pick.checked,
-          lastCheckedAt: lastCheckedAtFor(o.customerId)
-        }) !== null
+      (o) => !!o.packedAt || readyToPackAt({ claims: claimsForOrder(o.id, o.customerId) }) !== null
     ).length,
     packed: live.filter((o) => !!o.packedAt).length
   }

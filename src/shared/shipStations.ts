@@ -148,28 +148,38 @@ export function sendBackReason(claims: readonly ShipWorkClaim[]): string | null 
 /**
  * When this order became ready to pack, or null if it is not.
  *
- * Two ways in, and the second is why an EMPTY order cannot slip through: an
- * order with no cards at all is a real and counted case, and deriving readiness
- * purely from "every card is checked" would put every one of them in the pack
- * queue the moment the PDF landed. So a zero-card order can only arrive by the
- * explicit handoff.
+ * ONE way in: a person pressed "Picked · next order" at a bench. There is no
+ * inference from the state of the cards.
  *
- * A SEND-BACK OUTRANKS BOTH. Without that, a packer who rejects an order for a
- * missing card watches it reappear in their own queue a second later — because
- * every card in it is still ticked, and "all checked" reads as ready. The
- * rejection has to survive until somebody hands the order over again.
+ * There used to be a second way — every card ticked read as ready — and it was
+ * removed on purpose. Handing an order to the packing bench is a decision
+ * somebody makes while holding it, not a threshold a counter crosses. The
+ * inference was wrong in three separate ways:
+ *
+ *   IT FIRED WITHOUT A PICKER. Anything that ticked the last card put the order
+ *   in the pack queue, whoever did it and from whichever screen — which is how
+ *   a floor with its breaks bagged reported orders waiting at a mailing bench
+ *   nobody had walked an order to.
+ *
+ *   IT COULD NOT SEE AN EMPTY ORDER. An order with no cards has "every card
+ *   ticked" vacuously true, so the rule needed a zero guard that existed only
+ *   to stop the rule.
+ *
+ *   IT FOUGHT THE REJECTION. A packer who sends an order back leaves every card
+ *   still ticked — that is what makes a rejection different from an un-pick —
+ *   so the fallback tried to hand the same order straight back, and a
+ *   send-back check had to sit in front of it holding it off.
+ *
+ * `handedOverAt` already discards handoffs older than the last rejection, so
+ * the rejection now wins by construction rather than by a guard.
+ *
+ * The pair this must stay consistent with is `pickableOrders`: an order is in
+ * the picking run until it is handed over, and in the pack queue after. One
+ * boundary, read the same way from both sides — which is what stops an order
+ * falling out of both lists and never shipping.
  */
-export function readyToPackAt(args: {
-  claims: readonly ShipWorkClaim[]
-  cardsTotal: number
-  cardsChecked: number
-  lastCheckedAt: string | null
-}): string | null {
-  const handoff = handedOverAt(args.claims)
-  if (handoff) return handoff
-  if (sentBackAt(args.claims)) return null
-  if (args.cardsTotal > 0 && args.cardsChecked >= args.cardsTotal) return args.lastCheckedAt
-  return null
+export function readyToPackAt(args: { claims: readonly ShipWorkClaim[] }): string | null {
+  return handedOverAt(args.claims)
 }
 
 /**

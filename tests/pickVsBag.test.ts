@@ -182,7 +182,10 @@ domain.setSlotPicked(bravoSlot, true, 'sam')
 const bravoAfter = orders().find((o) => o.customerId === 'bravo')
 ok(bravoAfter.pick.checked === 1, 'one card picked out of the package', String(bravoAfter.pick.checked))
 ok(bravoAfter.pick.checked < bravoAfter.pick.total, 'and the package is not finished')
-ok(board().packQueue === 1, 'a part-picked order does NOT join the pack queue', String(board().packQueue))
+// Nothing is in the pack queue: alpha was picked whole in section 3 and bravo
+// is one card in, and NEITHER was walked to a packer. Ticking cards is progress
+// inside an order; the handover is a person deciding to pass it on.
+ok(board().packQueue === 0, 'ticking cards never fills the pack queue', String(board().packQueue))
 
 // The bench's tick, on the same card, is a different write.
 domain.setTeamSlotChecked(bravoSlot, false, 'maya')
@@ -252,18 +255,18 @@ console.log('\n=== 7b. the floor counts forwards: 0 picked, 0 packed of N ===')
 // DONE. "26 to pick" is the same fact upside down and cannot say whether the
 // packing has started at all.
 //
-// Note where this sits. Section 2 bagged every break — which must count for
-// nothing here. Section 3 picked alpha whole, and section 7 picked one more
-// through the station. So "picked" is 2: not 4, which is what bagging would
-// have given, and not 0. bravo is one card of two and does not count — a
-// part-picked order has not left the picking bench.
+// Note where this sits. Section 2 bagged every break — nothing. Section 3
+// ticked alpha's cards from the Orders screen — also nothing, because ticking
+// is not handing over. Section 7 walked ONE order to a packer through the
+// station. So "picked" is 1: not 4, which is what bagging would have given, and
+// not 2, which is what counting ticked-off orders would have given.
 //
 // "Picked" is deliberately the SAME test the pack queue keys on, so the header
 // and the queue beside it can never report different numbers.
 const p1 = board().progress
 ok(p1.total === 4, 'four live orders on the floor', String(p1.total))
-ok(p1.picked === 2, 'two picked — one whole, one through the station', String(p1.picked))
-ok(p1.picked === board().packQueue + 0, 'and it agrees with the pack queue', `${p1.picked} vs ${board().packQueue}`)
+ok(p1.picked === 1, 'one picked — the one somebody handed over', String(p1.picked))
+ok(p1.picked === board().packQueue, 'and it agrees with the pack queue', `${p1.picked} vs ${board().packQueue}`)
 ok(p1.packed === 0, 'and none packed', String(p1.packed))
 
 // Packing that order moves ONE counter, not both.
@@ -272,7 +275,7 @@ ok(!!pack, 'the packer is handed the queued order', String(pack?.customerId))
 stations.packDone(pack.customerId, null)
 const p2 = board().progress
 ok(p2.packed === 1, 'now one is packed', String(p2.packed))
-ok(p2.picked === 2, 'and packing does not change how many were picked', String(p2.picked))
+ok(p2.picked === 1, 'and packing does not change how many were picked', String(p2.picked))
 ok(p2.total === 4, 'out of the same four', String(p2.total))
 
 // A held order is nobody's work tonight, so it leaves the denominator rather

@@ -116,38 +116,29 @@ ok(CLAIM_LEASE_MS === 600000, 'the lease is ten minutes', String(CLAIM_LEASE_MS)
 // ---------------------------------------------------------------------------
 console.log('\n=== 3. readiness to pack ===')
 // ---------------------------------------------------------------------------
-// An EMPTY order can only arrive by the explicit handoff. Deriving readiness
-// from "every card is checked" alone would put every zero-card order in the
-// pack queue the instant the PDF landed — and empty orders are a real, counted
-// case, not a hypothetical.
+// ONE way into the pack queue: somebody pressed "Picked · next order" at a
+// bench. There is no inference from the state of the cards, and the three
+// assertions below are the three ways the old inference was wrong.
+ok(readyToPackAt({ claims: [] }) === null, 'no handoff, not ready')
 ok(
-  readyToPackAt({ claims: [], cardsTotal: 0, cardsChecked: 0, lastCheckedAt: null }) === null,
-  'a zero-card order is NOT automatically ready'
+  readyToPackAt({ claims: [mkClaim({ finishedAt: '2026-08-01T10:00:20.000Z' })] }) ===
+    '2026-08-01T10:00:20.000Z',
+  'an explicit handoff makes it ready, and stamps when'
 )
+// (a) It fired without a picker. Every card ticked — from the Orders screen,
+// from anywhere — used to put the order in front of a packer nobody had walked
+// it to. This is the assertion the fallback removal exists for.
 ok(
-  readyToPackAt({
-    claims: [mkClaim({ finishedAt: '2026-08-01T10:00:20.000Z' })],
-    cardsTotal: 0,
-    cardsChecked: 0,
-    lastCheckedAt: null
-  }) === '2026-08-01T10:00:20.000Z',
-  'but an explicit handoff makes it ready'
+  readyToPackAt({ claims: [] }) === null,
+  'a fully-ticked order with no handoff is NOT ready — ticks are not a handover'
 )
+// (b) It could not see an empty order: "every card is ticked" is vacuously true
+// of an order with no cards, so a zero-card order used to need a guard that
+// existed only to hold the rule off.
+ok(readyToPackAt({ claims: [] }) === null, 'and a zero-card order is not ready either')
+// (c) It fought the rejection — a sent-back order has every card still ticked.
 ok(
-  readyToPackAt({ claims: [], cardsTotal: 3, cardsChecked: 3, lastCheckedAt: 'T' }) === 'T',
-  'a fully-checked order is ready even without a handoff'
-)
-ok(
-  readyToPackAt({ claims: [], cardsTotal: 3, cardsChecked: 2, lastCheckedAt: 'T' }) === null,
-  'a half-picked one is not'
-)
-ok(
-  readyToPackAt({
-    claims: [mkClaim({ finishedAt: 'T1', releasedAt: 'T2' })],
-    cardsTotal: 3,
-    cardsChecked: 1,
-    lastCheckedAt: null
-  }) === null,
+  readyToPackAt({ claims: [mkClaim({ finishedAt: 'T1', releasedAt: 'T2' })] }) === null,
   'a handoff that was sent back stops counting'
 )
 // The rejection outranks every handoff BEFORE it, not merely the earliest one.
@@ -168,10 +159,7 @@ ok(
         note: 'sent back: missing card'
       }),
       mkClaim({ id: 'h2', finishedAt: '2026-08-01T10:00:20.000Z' })
-    ],
-    cardsTotal: 3,
-    cardsChecked: 3,
-    lastCheckedAt: '2026-08-01T10:00:01.000Z'
+    ]
   }) === '2026-08-01T10:00:20.000Z',
   'and the repick after it is ready again, with the first handoff still standing'
 )
