@@ -223,6 +223,31 @@ export interface BreakBenchDetail {
   shipGate: ShipGate
 }
 
+/**
+ * The floor's PACKAGE counts — steps 4 and 5's denominator.
+ *
+ * This is a different number from anything on the bench, and that is the whole
+ * reason it exists. Steps 1-3 are counted in teams inside one break; steps 4
+ * and 5 are counted in packages across the whole floor, and one has no
+ * arithmetic relationship to the other — thirty teams bagged in break 11 does
+ * not put a single package on the pack bench, because a package is one buyer's
+ * cards gathered from every break they bought in.
+ *
+ * Reading the bench as though it did was the bug: finishing the breaks made
+ * steps 4 and 5 look like they had come along too, when nothing had been packed
+ * at all. So they carry their own count, and it starts at zero.
+ */
+export interface FloorPackages {
+  /** Every package in the dataset — the whole order amount. */
+  total: number
+  /** Built and set aside. A shipped package is also a packed one. */
+  packed: number
+  /** Scanned out and gone. */
+  shipped: number
+}
+
+export const NO_PACKAGES: FloorPackages = { total: 0, packed: 0, shipped: 0 }
+
 // ---------------------------------------------------------------------------
 // Ordering
 // ---------------------------------------------------------------------------
@@ -418,13 +443,26 @@ export type ShipGateStatus = 'locked' | 'waiting' | 'go'
 export interface ShipGate {
   status: ShipGateStatus
   reason: string
+  /**
+   * How many packages there are and how far they have got.
+   *
+   * Carried on the gate rather than fetched separately by the screen so that
+   * "am I allowed to pack" and "how much packing is there" arrive together and
+   * cannot be rendered a render apart, showing a green go over a stale zero.
+   */
+  packages: FloorPackages
 }
 
-export function shipGate(breakId: string, all: BreakStepState[]): ShipGate {
+export function shipGate(
+  breakId: string,
+  all: BreakStepState[],
+  packages: FloorPackages
+): ShipGate {
   const mine = all.find((s) => s.breakId === breakId) ?? null
   if (!mine || !isBreakReady(mine)) {
     const step = mine ? currentStep(mine) : null
     return {
+      packages,
       status: 'locked',
       reason: step
         ? `Finish this break first — step ${breakStep(step).n}, ${breakStep(step).label.toLowerCase()}.`
@@ -434,11 +472,87 @@ export function shipGate(breakId: string, all: BreakStepState[]): ShipGate {
   const others = all.filter((s) => s.breakId !== breakId && !isBreakReady(s))
   if (others.length) {
     return {
+      packages,
       status: 'waiting',
       reason: `This break is boxed. ${notReadyMessage(others)}`
     }
   }
-  return { status: 'go', reason: 'Every break is off the bench — packing can start.' }
+  return {
+    packages,
+    status: 'go',
+    reason: 'Every break is off the bench — packing can start.'
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Steps 4 and 5, as the bench shows them
+// ---------------------------------------------------------------------------
+
+/**
+ * `locked` nothing can be done here yet. `ready` it can be started. `done`
+ * every package has been through it.
+ *
+ * `done` is deliberately reachable ONLY through the package count, never
+ * through the gate. The gate opening means "you are allowed to pack now",
+ * which is the opposite of "packing is finished" — and the screen that
+ * conflated the two is the one being fixed.
+ */
+export type ShipStepStatus = 'locked' | 'ready' | 'done'
+
+export interface ShipStepView extends ShipStepDef {
+  status: ShipStepStatus
+  /** Packages through this step, and packages there are. Starts at 0 of N. */
+  done: number
+  total: number
+  /** Why it cannot be started. Null when it can, or is already finished. */
+  reason: string | null
+}
+
+/**
+ * What steps 4 and 5 read on the bench, counted in packages.
+ *
+ * Step 5 has a second gate of its own: a package that has not been built cannot
+ * be scanned out, so scanning stays locked until packing is finished, and says
+ * how many packages are still to pack rather than repeating the bench's reason
+ * — by then the bench is not what is holding it up.
+ */
+export function shipStepViews(gate: ShipGate): ShipStepView[] {
+  const p = gate.packages
+  const complete = (n: number): boolean => p.total > 0 && n >= p.total
+  const open = gate.status === 'go'
+
+  return SHIP_STEPS.map((s) => {
+    if (s.id === 'pack') {
+      const status: ShipStepStatus = complete(p.packed) ? 'done' : open ? 'ready' : 'locked'
+      return {
+        ...s,
+        status,
+        done: p.packed,
+        total: p.total,
+        reason: status === 'locked' ? gate.reason : null
+      }
+    }
+    const packingLeft = Math.max(0, p.total - p.packed)
+    const status: ShipStepStatus = complete(p.shipped)
+      ? 'done'
+      : open && p.total > 0 && packingLeft === 0
+        ? 'ready'
+        : 'locked'
+    return {
+      ...s,
+      status,
+      done: p.shipped,
+      total: p.total,
+      reason:
+        status !== 'locked'
+          ? null
+          : !open
+            ? gate.reason
+            : p.total === 0
+              ? 'No packages on the floor yet.'
+              : `${packingLeft} of ${p.total} ${packingLeft === 1 ? 'package is' : 'packages are'} still to pack.`
+    }
+  })
 }
 
 // ---------------------------------------------------------------------------

@@ -6,7 +6,9 @@ import type {
   SupplyOrderStatus
 } from '@shared/types'
 import { PO_STAGES, PO_TRANSITIONS, canTransition } from '@shared/purchaseOrders'
+import { receiveProgress } from '@shared/receiving'
 import { Icon } from '../../components/Icon'
+import { ReceiveBar } from '../../components/ReceiveProgress'
 import { FreightLine, TrackingLine } from '../../components/FreightFields'
 import { formatMoney } from '../../lib/format'
 import { PO_MOVE_LABEL, PO_STAGE_META } from './helpers'
@@ -198,6 +200,11 @@ function PoCard({
    * is the correct next step, and the one the refusal used to have to explain.
    */
   const deletable = onDelete !== undefined && po.receivedUnits === 0
+  // Only worth a rail once something has actually landed. A whole column of
+  // empty bars on orders still with the supplier is noise that makes the ONE
+  // half-arrived shipment harder to pick out, which is the opposite of the job.
+  const received = receiveProgress(po.orderedUnits, po.receivedUnits)
+  const showProgress = received.state !== 'none' && po.status !== 'cancelled'
   return (
     <div
       className={`po-card${dragging ? ' po-card-dragging' : ''}`}
@@ -229,8 +236,13 @@ function PoCard({
         <span className="po-card-total mono">{formatMoney(po.total)}</span>
         <span className="po-card-meta">
           {po.lineCount} {po.lineCount === 1 ? 'item' : 'items'}
+          {/* Units, next to items, because they are different numbers and the
+              gap between them is where a partial delivery hides: nine items can
+              be thirty-eight units. */}
+          {po.orderedUnits > 0 && ` · ${po.orderedUnits} ${po.orderedUnits === 1 ? 'unit' : 'units'}`}
         </span>
       </div>
+      {showProgress && <ReceiveBar progress={received} compact className="po-card-recv" />}
       <FreightLine
         carrier={po.carrier}
         service={po.service}

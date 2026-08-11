@@ -866,6 +866,15 @@ export interface PurchaseOrder {
    * button whose only outcome is a refusal.
    */
   receivedUnits: number
+  /**
+   * Total UNITS on the order — Σ(line quantity), the denominator receivedUnits
+   * is measured against.
+   *
+   * Distinct from lineCount, and the distinction is the whole reason partial
+   * receiving needed a number of its own: nine items can be thirty-eight units,
+   * and "9 items" says nothing about whether twenty-three of them turned up.
+   */
+  orderedUnits: number
   createdAt: string
   updatedAt: string
   orderedAt: string | null

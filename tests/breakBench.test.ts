@@ -55,6 +55,7 @@ const {
   orderSeq,
   SHIP_STEPS,
   shipGate,
+  shipStepViews,
   sortBagRows,
   stepsClearedBy,
   teamSlug
@@ -478,11 +479,14 @@ const openState = (bid: string): Record<string, unknown> => ({
   baggedTeams: 11
 })
 
-const alone = shipGate('a', [doneState('a')])
+// Steps 4 and 5 count PACKAGES. The floor below has none of them anywhere.
+const noPackages = { total: 12, packed: 0, shipped: 0 }
+
+const alone = shipGate('a', [doneState('a')], noPackages)
 ok(alone.status === 'go', 'a finished break with nothing else outstanding says go', alone.status)
 ok(alone.reason.includes('packing can start'), 'and says so in words')
 
-const mineOpen = shipGate('a', [openState('a'), doneState('b')])
+const mineOpen = shipGate('a', [openState('a'), doneState('b')], noPackages)
 ok(mineOpen.status === 'locked', 'an unfinished break is locked', mineOpen.status)
 ok(/step 3/.test(mineOpen.reason), 'and is told which step it is on', mineOpen.reason)
 // It must NOT be told about other breaks while its own work is outstanding —
@@ -491,13 +495,70 @@ ok(!mineOpen.reason.includes('#B'), 'and not about anyone else’s break yet', m
 
 // THE state this was built for. A break that is finished, with others still
 // going, used to read as a flat "locked" — which says the work failed.
-const waiting = shipGate('a', [doneState('a'), openState('b'), openState('c')])
+const waiting = shipGate('a', [doneState('a'), openState('b'), openState('c')], noPackages)
 ok(waiting.status === 'waiting', 'a finished break waiting on others is its own state', waiting.status)
 ok(waiting.reason.startsWith('This break is boxed'), 'and is told its own work is done', waiting.reason)
 ok(waiting.reason.includes('#B') && waiting.reason.includes('#C'), 'and which breaks to go help', waiting.reason)
 
 // A break the caller does not know about cannot be reported as ready.
-ok(shipGate('nope', [doneState('a')]).status === 'locked', 'an unknown break is locked, not go')
+ok(
+  shipGate('nope', [doneState('a')], noPackages).status === 'locked',
+  'an unknown break is locked, not go'
+)
+
+// ---------------------------------------------------------------------------
+// Section 8 — steps 4 and 5 are counted in PACKAGES, and they start at zero
+//
+// The bug this pins: the bench derived steps 4 and 5 from nothing but whether
+// the breaks were off it. So a floor where every break was bagged and boxed
+// showed both steps unlocked and looking under way, while not one package had
+// been built. They are unrelated numbers — a package is one buyer's cards
+// gathered from every break they bought in, so thirty teams bagged in break 11
+// puts nothing on the pack bench — and the bench has to say so.
+// ---------------------------------------------------------------------------
+console.log('\n8. steps 4 and 5 count packages\n')
+
+// Every break off the bench, nothing packed. The state that used to lie.
+const cleanFloor = shipStepViews(shipGate('a', [doneState('a')], noPackages))
+ok(cleanFloor.length === 2, 'two ship steps come back')
+ok(cleanFloor[0].done === 0, 'packing starts at zero with the whole bench finished', String(cleanFloor[0].done))
+ok(cleanFloor[0].total === 12, 'against the whole order amount', String(cleanFloor[0].total))
+ok(cleanFloor[0].status === 'ready', 'packing is allowed to start', cleanFloor[0].status)
+// The one that matters most: allowed to start is NOT finished.
+ok(cleanFloor[0].status !== 'done', 'but an open gate never reads as done')
+// And scanning is locked behind packing, not behind the bench.
+ok(cleanFloor[1].status === 'locked', 'scanning is still locked', cleanFloor[1].status)
+ok(/12 of 12 packages are still to pack/.test(cleanFloor[1].reason ?? ''), 'and says what is holding it', String(cleanFloor[1].reason))
+
+// The bench holding it up is a different reason, aimed at a different person.
+const benchOpen = shipStepViews(shipGate('a', [openState('a')], noPackages))
+ok(benchOpen[0].status === 'locked', 'packing is locked while the bench is open', benchOpen[0].status)
+ok(benchOpen[0].done === 0 && benchOpen[0].total === 12, 'and still states the count it will be measured against')
+ok(/step 3/.test(benchOpen[1].reason ?? ''), 'and scanning points at the bench too', String(benchOpen[1].reason))
+
+// Half packed: neither step done, and the remaining count is exact.
+const halfway = shipStepViews(shipGate('a', [doneState('a')], { total: 12, packed: 5, shipped: 0 }))
+ok(halfway[0].done === 5 && halfway[0].status === 'ready', 'part-packed is ready, not done', halfway[0].status)
+ok(/7 of 12 packages are still to pack/.test(halfway[1].reason ?? ''), 'seven left to pack', String(halfway[1].reason))
+
+// One left, phrased as one.
+const nearlyThere = shipStepViews(shipGate('a', [doneState('a')], { total: 12, packed: 11, shipped: 0 }))
+ok(/1 of 12 package is still to pack/.test(nearlyThere[1].reason ?? ''), 'singular when one is left', String(nearlyThere[1].reason))
+
+// All packed: scanning opens, and only then.
+const allPacked = shipStepViews(shipGate('a', [doneState('a')], { total: 12, packed: 12, shipped: 3 }))
+ok(allPacked[0].status === 'done', 'packing is done when every package is packed', allPacked[0].status)
+ok(allPacked[1].status === 'ready', 'and scanning opens', allPacked[1].status)
+ok(allPacked[1].done === 3, 'counting the ones already gone', String(allPacked[1].done))
+
+const allGone = shipStepViews(shipGate('a', [doneState('a')], { total: 12, packed: 12, shipped: 12 }))
+ok(allGone[1].status === 'done', 'and is done when the last one ships', allGone[1].status)
+
+// An empty floor: zero of zero is not "finished", it is "there is nothing here".
+const emptyFloor = shipStepViews(shipGate('a', [doneState('a')], { total: 0, packed: 0, shipped: 0 }))
+ok(emptyFloor[0].status !== 'done', 'zero of zero is not done', emptyFloor[0].status)
+ok(emptyFloor[1].status === 'locked', 'and nothing can be scanned', emptyFloor[1].status)
+ok(/No packages/.test(emptyFloor[1].reason ?? ''), 'said plainly', String(emptyFloor[1].reason))
 
 // And the real thing, off the database rather than hand-built. Section 6 has
 // just re-imported this break for a new show, which resets it — so the gate
@@ -507,6 +568,47 @@ const liveGate = domain.getBench(id).shipGate
 ok(!!liveGate, 'the bench detail carries a gate')
 ok(liveGate.status === 'locked', 'and the re-imported break is locked again', String(liveGate.status))
 ok(/step 1/.test(liveGate.reason), 'back at step 1', liveGate.reason)
+
+// The live counts come off the shipments table, not off the bench. This dataset
+// has packages in it and none of them have been packed, so the number the
+// screen prints under step 4 is a real zero rather than a placeholder.
+const livePkgs = liveGate.packages
+ok(!!livePkgs, 'and carries the package counts')
+ok(livePkgs.total === ship.listShipShipments().length, 'totalling every package on the floor', String(livePkgs.total))
+ok(livePkgs.total > 0, 'which this dataset has', String(livePkgs.total))
+ok(livePkgs.packed === 0, 'none of them packed, whatever the bench says', String(livePkgs.packed))
+ok(livePkgs.shipped === 0, 'and none shipped', String(livePkgs.shipped))
+
+// Pack one, and only the package count moves.
+const firstShipment = ship.listShipShipments()[0]
+ship.updateShipment(firstShipment.id, { packedAt: '2026-08-09T18:00:00.000Z', packedBy: 'emp1' })
+const afterPack = bench.floorPackages()
+ok(afterPack.packed === 1, 'packing one package moves the packed count', String(afterPack.packed))
+ok(afterPack.shipped === 0, 'and not the shipped one', String(afterPack.shipped))
+
+// A printed label counts as packed even with NO pack stamp — the box was built,
+// whatever order the two facts arrived in. Same rule the Orders tab derives its
+// stage from, so the two screens cannot report different numbers.
+ship.updateShipment(firstShipment.id, { packedAt: null, packedBy: null })
+ok(bench.floorPackages().packed === 0, 'un-packing takes it back off the count', String(bench.floorPackages().packed))
+ship.updateShipment(firstShipment.id, {
+  manualStatus: { code: 'label_created', setAt: '2026-08-09T18:05:00.000Z', setBy: 'emp1' }
+})
+ok(bench.floorPackages().packed === 1, 'a printed label counts as packed', String(bench.floorPackages().packed))
+ok(bench.floorPackages().shipped === 0, 'but not as shipped — it has not left', String(bench.floorPackages().shipped))
+
+// In transit and beyond is gone, and a gone package is also a packed one.
+ship.updateShipment(firstShipment.id, {
+  manualStatus: { code: 'in_transit', setAt: '2026-08-09T19:00:00.000Z', setBy: 'emp1' }
+})
+ok(bench.floorPackages().shipped === 1, 'in transit is shipped', String(bench.floorPackages().shipped))
+ok(bench.floorPackages().packed === 1, 'and still counted as packed', String(bench.floorPackages().packed))
+
+// The terminal states that are not success still left the building.
+ship.updateShipment(firstShipment.id, {
+  manualStatus: { code: 'returned', setAt: '2026-08-10T19:00:00.000Z', setBy: 'emp1' }
+})
+ok(bench.floorPackages().shipped === 1, 'a returned package still went out', String(bench.floorPackages().shipped))
 
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

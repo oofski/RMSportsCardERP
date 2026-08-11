@@ -74,6 +74,7 @@ function toSummary(row: PoHeaderRow): PurchaseOrder {
     lineCount: row.line_count,
     receivedLineCount: row.received_line_count,
     receivedUnits: row.received_units,
+    orderedUnits: row.ordered_units,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     orderedAt: row.ordered_at,
@@ -121,7 +122,9 @@ const PO_SELECT = `
          (SELECT COUNT(*) FROM purchase_order_lines l
            WHERE l.po_id = po.id AND l.qty_received >= l.quantity) AS received_line_count,
          (SELECT COALESCE(SUM(l.qty_received), 0) FROM purchase_order_lines l
-           WHERE l.po_id = po.id) AS received_units
+           WHERE l.po_id = po.id) AS received_units,
+         (SELECT COALESCE(SUM(l.quantity), 0) FROM purchase_order_lines l
+           WHERE l.po_id = po.id) AS ordered_units
   FROM purchase_orders po
 `
 
@@ -139,6 +142,7 @@ type PoHeaderRow = PoRow & {
   line_count: number
   received_line_count: number
   received_units: number
+  ordered_units: number
 }
 
 export function listPurchaseOrders(): PurchaseOrder[] {
@@ -666,6 +670,110 @@ export function scanInPurchaseOrder(id: string, actorId: string | null): ScanInR
     }
     // Stamps status/received_at/scanned_at once every line is in (a zero-line PO
     // is left alone), so the whole-PO and per-line paths complete identically.
+    completePoIfFullyReceived(db, id)
+    return { po: getPurchaseOrder(id) }
+  })
+  try {
+    return run()
+  } catch (err) {
+    return { po: getPurchaseOrder(id), error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+/** One line of a delivery: how many of THIS line turned up. */
+export interface PoReceiptItem {
+  lineId: string
+  quantity: number
+}
+
+/**
+ * Receive PART of a purchase order — the delivery that turns up in two vans.
+ *
+ * The receiving arithmetic has always been partial-aware (`qty_received` adds
+ * up, `received_at` is stamped only when a line reaches its ordered quantity,
+ * and the PO completes only when every line does). What did not exist was any
+ * way to SAY "twenty-three of the thirty-eight came today" — the only controls
+ * were a UPC scan, which needs a barcode most of this catalog does not have,
+ * and "Scanned in", which takes the whole order at once. So a half delivery had
+ * to be either recorded as complete, which invents fifteen units of stock at a
+ * cost basis, or left untouched, which hides twenty-three real ones.
+ *
+ * ## Over-receipt is refused, not clamped
+ *
+ * `receivePoLine` clamps quantities, which is right for a scan — each beep is
+ * one unit and the clamp is what stops a double-beep double-adding. It is wrong
+ * for a typed number: somebody who enters 12 against a line with 8 outstanding
+ * has miscounted or is looking at the wrong line, and quietly booking 8 leaves
+ * them believing 12 landed. Refusing names the line and both numbers.
+ *
+ * The whole delivery is one transaction. A refusal on line seven rolls back
+ * lines one to six, because half a delivery recorded from a form somebody is
+ * about to correct is worse than none.
+ */
+export function receivePurchaseOrderLines(
+  id: string,
+  items: PoReceiptItem[],
+  actorId: string | null
+): ScanInResult {
+  const db = getDb()
+  const run = db.transaction((): ScanInResult => {
+    const h = db
+      .prepare('SELECT id, status, po_number FROM purchase_orders WHERE id = ?')
+      .get(id) as { id: string; status: PurchaseOrderStatus; po_number: string } | undefined
+    if (!h) return { po: null, error: 'Purchase order not found.' }
+    if (h.status === 'cancelled') {
+      return { po: getPurchaseOrder(id), error: 'This purchase order was cancelled.' }
+    }
+
+    const lines = db
+      .prepare(
+        `SELECT l.id, l.quantity, l.qty_received, p.name AS product_name
+           FROM purchase_order_lines l
+           JOIN inventory_products p ON p.id = l.product_id
+          WHERE l.po_id = ?`
+      )
+      .all(id) as Array<{ id: string; quantity: number; qty_received: number; product_name: string }>
+    const byId = new Map(lines.map((l) => [l.id, l]))
+
+    // Validate the WHOLE form before writing any of it, so a bad number on the
+    // last line does not leave the operator staring at a rolled-back toast
+    // wondering which of the earlier ones went in. (Nothing would have, but the
+    // message should not require knowing that.)
+    const wanted: Array<{ lineId: string; take: number }> = []
+    for (const item of items ?? []) {
+      const line = byId.get(String(item?.lineId ?? ''))
+      if (!line) return { po: getPurchaseOrder(id), error: 'That line is not on this purchase order.' }
+      const take = Math.round(Number(item?.quantity))
+      if (!Number.isFinite(take) || take < 0) {
+        return { po: getPurchaseOrder(id), error: `Enter a whole number for ${line.product_name}.` }
+      }
+      if (take === 0) continue // "none of this one came" — a normal answer, not an error
+      const outstanding = Math.max(0, line.quantity - line.qty_received)
+      if (outstanding === 0) {
+        return {
+          po: getPurchaseOrder(id),
+          error: `${line.product_name} is already fully received.`
+        }
+      }
+      if (take > outstanding) {
+        return {
+          po: getPurchaseOrder(id),
+          error: `${line.product_name}: only ${outstanding} of ${line.quantity} ${
+            outstanding === 1 ? 'is' : 'are'
+          } still outstanding, so ${take} cannot be received.`
+        }
+      }
+      wanted.push({ lineId: line.id, take })
+    }
+    if (!wanted.length) {
+      return { po: getPurchaseOrder(id), error: 'Enter how many of at least one item arrived.' }
+    }
+
+    for (const w of wanted) {
+      receivePoLine(db, w.lineId, w.take, `Received against ${h.po_number}`, actorId)
+    }
+    // Only completes if this delivery happened to finish the order. A partial
+    // one leaves the PO exactly where it was, still open, still in its column.
     completePoIfFullyReceived(db, id)
     return { po: getPurchaseOrder(id) }
   })

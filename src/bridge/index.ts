@@ -555,6 +555,17 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       incomingBoxes: (): Promise<PurchaseOrderDetail[]> => ipcRenderer.invoke(IPC.poIncomingBoxes),
       scanIn: (id: string): Promise<Result<PurchaseOrderDetail>> =>
         ipcRenderer.invoke(IPC.poScanIn, { id }),
+      /**
+       * Record a partial delivery — how many of each line turned up today.
+       *
+       * Lines left at zero are simply absent from `items`; "none of that one
+       * came" is an ordinary answer, not something to send a zero for.
+       */
+      receiveLines: (
+        id: string,
+        items: Array<{ lineId: string; quantity: number }>
+      ): Promise<Result<PurchaseOrderDetail>> =>
+        ipcRenderer.invoke(IPC.poReceiveLines, { id, items }),
       cogsList: (): Promise<CogsEntry[]> => ipcRenderer.invoke(IPC.poCogsList),
       remove: (id: string): Promise<Result<null>> => ipcRenderer.invoke(IPC.poDelete, id),
       /** Delete a PO the ordinary path refuses. `removeStock` decides whether its

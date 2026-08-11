@@ -4892,7 +4892,7 @@ tr.hoverable-row:hover {
 }
 .po-receipt-line {
   display: grid;
-  grid-template-columns: 46px 1fr 60px 110px 120px;
+  grid-template-columns: 46px 1fr 52px 84px 104px 116px;
   align-items: center;
   gap: 12px;
   padding: 11px 4px;
@@ -4908,6 +4908,7 @@ tr.hoverable-row:hover {
   color: var(--text-3);
 }
 .po-receipt-line-head .po-rl-qty,
+.po-receipt-line-head .po-rl-recv,
 .po-receipt-line-head .po-rl-price,
 .po-receipt-line-head .po-rl-total {
   text-align: right;
@@ -4954,6 +4955,292 @@ tr.hoverable-row:hover {
 }
 .po-rl-total {
   font-weight: 600;
+}
+.po-rl-recv {
+  display: flex;
+  justify-content: flex-end;
+}
+/* A line still owed gets a rail down its left edge. Colour alone on a pill at
+   the far side of a wide row is missable when nine lines are being scanned
+   down; an edge marker is not. */
+.po-receipt-line[data-recv='partial'] {
+  box-shadow: inset 3px 0 0 var(--warning);
+}
+.po-receipt-line[data-recv='over'] {
+  box-shadow: inset 3px 0 0 var(--danger);
+}
+
+/* ---------------------------------------------------------------------------
+   Receiving progress — how much of a purchase order has actually landed.
+   Shared by the PO board card, the receipt, and the Incoming Inventory panel,
+   so all three answer "is this shipment all here?" in one vocabulary.
+
+   GREEN IS RESERVED FOR COMPLETE. A part-received order in green reads as
+   finished to anybody not counting units, which is precisely the mistake this
+   was built to stop. Partial is amber; over-receipt is red, because more
+   arriving than was ordered is a discrepancy, not progress.
+   --------------------------------------------------------------------------- */
+.recv {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  --recv-ink: var(--text-2);
+  --recv-fill: var(--text-3);
+}
+.recv[data-tone='partial'] {
+  --recv-ink: var(--warning);
+  --recv-fill: var(--warning);
+}
+.recv[data-tone='done'] {
+  --recv-ink: var(--success-strong);
+  --recv-fill: var(--success);
+}
+.recv[data-tone='over'] {
+  --recv-ink: var(--danger-strong);
+  --recv-fill: var(--danger);
+}
+.recv-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--recv-ink);
+}
+.recv-text {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+.recv-text .mono {
+  font-variant-numeric: tabular-nums;
+}
+.recv-of {
+  color: var(--text-3);
+}
+.recv-pct {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.recv-rail {
+  height: 5px;
+  border-radius: 999px;
+  background: var(--surface-3, var(--surface-2));
+  overflow: hidden;
+}
+.recv-rail > span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--recv-fill);
+  transition: width 0.2s ease;
+}
+.recv-compact .recv-line {
+  font-size: 11.5px;
+}
+.recv-compact .recv-rail {
+  height: 4px;
+}
+.po-card-recv,
+.po-ship-recv {
+  margin-top: 7px;
+}
+
+/* The per-line form: a count, not a bar. A line is a handful of units and a bar
+   five pixels wide tells nobody anything; "2 of 5" tells them everything. */
+.recv-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+.recv-pill[data-tone='partial'] {
+  background: var(--warning-bg);
+  color: var(--text);
+}
+.recv-pill[data-tone='done'] {
+  background: var(--success-bg);
+  color: var(--success-strong);
+}
+.recv-pill[data-tone='over'] {
+  background: var(--danger-bg);
+  color: var(--danger-strong);
+}
+.recv-pill .recv-of {
+  font-size: 11px;
+}
+
+/* ---------------------------------------------------------------------------
+   "How many arrived?" — the part-delivery form.
+
+   Every box starts at zero, deliberately. A form pre-filled with the whole
+   remainder is the all-or-nothing button with extra steps, and one careless
+   click from booking stock that never turned up. The two shortcuts ("All" per
+   line, "Everything arrived") cover the ordinary case where it all did land.
+   --------------------------------------------------------------------------- */
+.po-deliv {
+  margin: 14px 0 4px;
+  padding: 12px 14px 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius, 10px);
+  background: var(--surface-2);
+}
+.po-deliv-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.po-deliv-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+.po-deliv-title svg {
+  color: var(--text-3);
+}
+.po-deliv-hint {
+  margin: 5px 0 10px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+.po-deliv-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.po-deliv-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 6px;
+  border-radius: var(--radius-sm, 8px);
+}
+/* A row somebody has put a number in is the one they are working on. */
+.po-deliv-row.has {
+  background: var(--surface);
+  box-shadow: inset 2px 0 0 var(--brand-500);
+}
+.po-deliv-name {
+  font-size: 12.5px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.po-deliv-left {
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+.po-deliv-left em {
+  font-style: normal;
+  color: var(--success-strong);
+}
+.po-deliv-step {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.po-deliv-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 8px);
+  background: var(--surface);
+  color: var(--text-2);
+  cursor: pointer;
+}
+.po-deliv-btn:not(:disabled):hover {
+  border-color: var(--brand-500);
+  color: var(--brand-500);
+}
+.po-deliv-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.po-deliv-num {
+  width: 46px;
+  height: 26px;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 8px);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+.po-deliv-fill {
+  padding: 0 8px;
+  height: 26px;
+  border: 0;
+  border-radius: var(--radius-sm, 8px);
+  background: none;
+  color: var(--text-3);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.po-deliv-fill:not(:disabled):hover {
+  color: var(--brand-500);
+}
+.po-deliv-fill:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.po-deliv-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 11px;
+  padding-top: 11px;
+  border-top: 1px solid var(--border);
+}
+.po-deliv-sum {
+  font-size: 12px;
+  color: var(--text-2);
+}
+.po-deliv-sum .mono {
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+/* Inside the Incoming panel it is a narrow column, so the rows stack. */
+.po-ship-box .po-deliv {
+  margin: 0 10px 10px;
+  padding: 10px;
+}
+.po-ship-box .po-deliv-row {
+  grid-template-columns: 1fr auto;
+  row-gap: 4px;
+}
+.po-ship-box .po-deliv-step {
+  grid-column: 1 / -1;
+  justify-content: flex-end;
+}
+.po-ship-box .po-deliv-foot {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+.po-ship-part {
+  margin-left: 8px;
 }
 .po-grand-total {
   display: flex;
@@ -20641,8 +20928,60 @@ button.sor-team:focus-visible {
   cursor: default;
   color: var(--text-3);
 }
-.bench-after[data-gate='go'] .bench-tick.static {
+/* Coloured off the STEP, not off the gate. The gate opening means "you may
+   start packing"; colouring both static icons on that alone made step 5 look
+   live while every package was still unbuilt. */
+.bench-after .bench-step:not(.locked) .bench-tick.static {
   color: var(--brand-500);
+}
+.bench-after .bench-step.done .bench-tick.static {
+  color: var(--success-strong);
+}
+/* Steps 4 and 5 count PACKAGES, and the count sits where step 3's does. */
+.bench-after-count {
+  margin-left: auto;
+  padding-left: 10px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+}
+.bench-after .bench-step.done .bench-after-count {
+  color: var(--success-strong);
+}
+.bench-after .bench-step-label {
+  display: flex;
+  align-items: baseline;
+  width: 100%;
+}
+.bench-after .bench-step-text {
+  flex: 1;
+}
+/* Half-opacity was fine when these rows carried no information. They now carry
+   the count somebody is looking for, and a number is worth reading even on a
+   step that cannot be started yet. */
+.bench-after .bench-step.locked {
+  opacity: 0.72;
+}
+/* Deliberately drawn even at zero: an empty rail is the reading "none of this
+   has happened", which is exactly what a floor of bagged breaks needed to see.
+   A bar that only appeared once work started would leave that state blank. */
+.bench-after-bar {
+  display: block;
+  height: 4px;
+  margin-top: 6px;
+  border-radius: 999px;
+  background: var(--surface-3, var(--surface-2));
+  overflow: hidden;
+}
+.bench-after-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--brand-500);
+  transition: width 0.2s ease;
+}
+.bench-after .bench-step.done .bench-after-bar > span {
+  background: var(--success-strong);
 }
 /* One sentence about the floor, under both steps rather than repeated on each. */
 .bench-gate {

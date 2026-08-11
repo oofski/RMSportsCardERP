@@ -2,14 +2,14 @@ import { useCallback, useEffect, useState } from 'react'
 import type { BreakBagRow, BreakBenchDetail, BreakStepId } from '@shared/breakSteps'
 import {
   BREAK_STEPS,
-  SHIP_STEPS,
   blockedReason,
   breakProgress,
   canStartStep,
   currentStep,
   isBreakReady,
   isStamped,
-  isStepDone
+  isStepDone,
+  shipStepViews
 } from '@shared/breakSteps'
 import { api } from '../../lib/api'
 import { Icon } from '../../components/Icon'
@@ -264,22 +264,43 @@ export function BreakBench({
 
           Never tickable here. Packing happens per PACKAGE at the pack station
           and scanning at the ship station; a checkbox on a break's page would
-          be claiming one break can mark a package packed. */}
+          be claiming one break can mark a package packed.
+
+          They carry their OWN counts, in packages, over the whole floor. That
+          is a different denominator from steps 1-3 and it is unrelated to them:
+          bagging every team in every break puts zero packages on the pack
+          bench, because a package is one buyer's cards gathered from all the
+          breaks they bought in. Showing these two as simply "unlocked" once the
+          bench was clear read as though they had come along with it. Now they
+          say 0 of 118 until somebody actually packs something. */}
       <ol className="bench-steps bench-after" data-gate={detail.shipGate.status}>
-        {SHIP_STEPS.map((s) => (
-          <li key={s.id} className={`bench-step ${detail.shipGate.status === 'go' ? '' : 'locked'}`}>
-            <span className="bench-tick static" aria-hidden="true">
+        {shipStepViews(detail.shipGate).map((s) => (
+          <li key={s.id} className={`bench-step ${s.status === 'done' ? 'done' : ''} ${
+            s.status === 'locked' ? 'locked' : ''
+          }`}>
+            <span className="bench-tick static" aria-hidden="true" title={s.reason ?? undefined}>
               <Icon
-                name={detail.shipGate.status === 'go' ? 'ArrowRight' : 'Lock'}
+                name={
+                  s.status === 'done' ? 'CheckCircle2' : s.status === 'ready' ? 'ArrowRight' : 'Lock'
+                }
                 size={22}
-                strokeWidth={2}
+                strokeWidth={s.status === 'done' ? 2.5 : 2}
               />
             </span>
             <div className="bench-step-text">
               <span className="bench-step-label">
                 <b>{s.n}.</b> {s.label}
+                {/* The count, on the label line, where step 3's count is. It is
+                    the answer to "how much of this is left", and it must be
+                    legible without opening another screen. */}
+                <span className="bench-after-count mono">
+                  {s.done}/{s.total}
+                </span>
               </span>
               <span className="bench-step-detail">{s.detail}</span>
+              <span className="bench-after-bar" aria-hidden="true">
+                <span style={{ width: `${s.total > 0 ? Math.round((s.done / s.total) * 100) : 0}%` }} />
+              </span>
             </div>
           </li>
         ))}

@@ -34,10 +34,12 @@ import {
   listPurchaseOrders,
   listSupplierSuggestions,
   listVendors,
+  receivePurchaseOrderLines,
   scanInPurchaseOrder,
   setPurchaseOrderFreight,
   setPurchaseOrderStatus
 } from './db/purchaseOrders'
+import type { PoReceiptItem } from './db/purchaseOrders'
 import { listCogsEntries } from './db/finance'
 import { getProduct, productThumbnails, searchCatalog } from './db/inventory'
 import { importVendorFile } from './vendorsImport'
@@ -190,6 +192,34 @@ export function registerPurchaseOrdersIpc(): void {
       return fail(err)
     }
   })
+
+  /**
+   * A partial delivery: how many of each line arrived today.
+   *
+   * Same audience as poScanIn — the person unpacking boxes is on the inventory
+   * side, not necessarily the one who raised the order — because this is the
+   * same physical act, only counted.
+   */
+  ipcMain.handle(
+    IPC.poReceiveLines,
+    (_e, payload: { id: string; items: PoReceiptItem[] }): Result<PurchaseOrderDetail> => {
+      try {
+        if (!can('module.inventory') && !can('module.invoicing'))
+          return { ok: false, error: 'You do not have access to receive purchase orders.' }
+        const id = String(payload?.id ?? '')
+        if (!id) return { ok: false, error: 'No purchase order specified.' }
+        if (!Array.isArray(payload?.items) || payload.items.length === 0) {
+          return { ok: false, error: 'Enter how many of at least one item arrived.' }
+        }
+        const res = receivePurchaseOrderLines(id, payload.items, currentUser()?.id ?? null)
+        return res.error
+          ? { ok: false, error: res.error }
+          : { ok: true, data: res.po as PurchaseOrderDetail }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
 
   ipcMain.handle(
     IPC.poSetStatus,

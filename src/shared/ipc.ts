@@ -201,6 +201,8 @@ export const IPC = {
   poThumbnails: 'po:thumbnails',
   poIncomingBoxes: 'po:incoming-boxes',
   poScanIn: 'po:scan-in',
+  /** Record a PARTIAL delivery: how many of each line turned up today. */
+  poReceiveLines: 'po:receive-lines',
   poCogsList: 'po:cogs-list',
   poDelete: 'po:delete',
   poForceDelete: 'po:forceDelete',

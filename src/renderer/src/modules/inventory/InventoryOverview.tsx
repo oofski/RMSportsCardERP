@@ -17,8 +17,10 @@ import type {
 } from '@shared/types'
 import { CATEGORY_ORDER, LOCATIONS, categoryColor } from '@shared/inventory'
 import { countIdentifierGaps } from '@shared/identifiers'
+import { receiveProgressOf } from '@shared/receiving'
 import { BarList } from '../../components/charts'
 import { Icon } from '../../components/Icon'
+import { ReceiveBar } from '../../components/ReceiveProgress'
 import { Button, CenterLoader, EmptyState } from '../../components/ui'
 import { useToast } from '../../components/Toast'
 import { api } from '../../lib/api'
@@ -31,6 +33,7 @@ import { GAP_META, MissingIdentifiers } from './MissingIdentifiers'
 import { IncomingModal } from './IncomingModal'
 import { ProductHoverCard, type ProductCardData } from './ProductCases'
 import { PO_STAGE_META } from '../invoicing/helpers'
+import { DeliveryPanel } from '../invoicing/DeliveryPanel'
 
 type MetricKind = 'value' | 'cost' | 'spread' | 'cases' | 'skus'
 type Detail =
@@ -917,6 +920,7 @@ function IncomingPanel({
                   canManage={canManage}
                   busy={busy.has(b.id)}
                   onScan={() => scanIn(b)}
+                  onReceived={load}
                 />
               ))}
             </div>
@@ -997,23 +1001,27 @@ function PurchaseOrderBox({
   thumbnails,
   canManage,
   busy,
-  onScan
+  onScan,
+  onReceived
 }: {
   box: PurchaseOrderDetail
   thumbnails: Record<string, string>
   canManage: boolean
   busy: boolean
   onScan: () => void | Promise<void>
+  /** Re-read the panel after a part delivery, so the counts and bars move. */
+  onReceived: () => void | Promise<void>
 }): JSX.Element {
   const [open, setOpen] = useState(false)
+  const [counting, setCounting] = useState(false)
   const meta = PO_STAGE_META[box.status]
-  // Both are "still to come" so the box, the panel headline and the expanded
-  // line list always report the same number.
-  const units = box.lines.reduce((s, l) => s + l.qtyOutstanding, 0)
-  const outstanding = units
-  // A PO can now be received a line at a time by UPC scan, so a box in this
-  // panel may be part-way done. Say so rather than showing the full order.
-  const partial = box.receivedLineCount > 0 && box.receivedLineCount < box.lineCount
+  // Counted in UNITS, off the lines. The old test — receivedLineCount between
+  // 0 and lineCount — could only see a partial delivery once a whole LINE had
+  // completed, so an order with twenty-three of thirty-eight units in, spread
+  // across nine part-filled lines, reported receivedLineCount 0 and rendered as
+  // though the truck had not arrived.
+  const got = receiveProgressOf(box.lines)
+  const outstanding = got.outstanding
   return (
     <div className={`po-ship-box po-ship-${box.status}`}>
       <button
@@ -1035,14 +1043,15 @@ function PurchaseOrderBox({
           </span>
           <span className="po-ship-sub">
             {box.supplier || 'No supplier'} · → {box.location} ·{' '}
-            {partial
-              ? `${box.receivedLineCount} of ${box.lineCount} items received · ${outstanding} unit${
-                  outstanding === 1 ? '' : 's'
-                } left`
-              : `${box.lineCount} ${box.lineCount === 1 ? 'item' : 'items'} · ${units} unit${
-                  units === 1 ? '' : 's'
-                }`}
+            {got.state === 'none'
+              ? `${box.lineCount} ${box.lineCount === 1 ? 'item' : 'items'} · ${got.ordered} unit${
+                  got.ordered === 1 ? '' : 's'
+                }`
+              : `${got.received} of ${got.ordered} units in · ${outstanding} left`}
           </span>
+          {/* Only once something has landed. A rail at zero on every box still
+              with the supplier buries the one that is half here. */}
+          {got.state !== 'none' && <ReceiveBar progress={got} compact className="po-ship-recv" />}
         </span>
         <Icon name={open ? 'ChevronDown' : 'ChevronRight'} size={16} className="po-ship-exp" />
       </button>
@@ -1074,12 +1083,34 @@ function PurchaseOrderBox({
           })}
         </div>
       )}
+      {/* The count-it-in form, on the same panel the boxes are listed on.
+          A part delivery is unpacked at the shelf, not at the desk with the
+          purchase order board open, so the form has to be reachable from here —
+          otherwise the only control within reach is the all-or-nothing one, and
+          the twenty-three units that turned up get booked as thirty-eight. */}
+      {canManage && counting && (
+        <DeliveryPanel po={box} onReceived={() => void onReceived()} />
+      )}
       {canManage && (
         <div className="po-ship-foot">
           <button type="button" className="btn btn-sm po-ship-scan" disabled={busy} onClick={onScan}>
             <Icon name="PackageCheck" size={14} />{' '}
-            {busy ? 'Scanning…' : partial ? 'Receive all remaining' : 'Scanned in'}
+            {busy
+              ? 'Scanning…'
+              : got.state === 'partial'
+                ? `Receive remaining ${outstanding}`
+                : 'All of it arrived'}
           </button>
+          {outstanding > 0 && (
+            <button
+              type="button"
+              className="btn btn-sm po-ship-part"
+              disabled={busy}
+              onClick={() => setCounting((v) => !v)}
+            >
+              {counting ? 'Cancel' : 'Only part of it'}
+            </button>
+          )}
         </div>
       )}
     </div>

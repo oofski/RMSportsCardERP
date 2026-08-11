@@ -20,7 +20,7 @@ happen when asked for.
 
 `npm run typecheck && npm run build && npm test` — all three, every time. CI
 runs typecheck and build but **never runs the tests**, so a suite that breaks
-only fails locally. `npm test` is currently 37 suites.
+only fails locally. `npm test` is currently 42 suites.
 
 ## Traps this repo has fallen into
 

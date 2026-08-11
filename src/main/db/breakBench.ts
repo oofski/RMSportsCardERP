@@ -25,11 +25,13 @@
  * ship_break_team_bags.
  */
 import type { ShipBreak, ShipCustomer, ShipTeamSlot } from '@shared/shippingTypes'
+import { SHIP_STATUS_RANK } from '@shared/shippingTypes'
 import type {
   BreakBagRow,
   BreakBenchDetail,
   BreakStepId,
-  BreakStepState
+  BreakStepState,
+  FloorPackages
 } from '@shared/breakSteps'
 import {
   bagRowId,
@@ -51,6 +53,7 @@ import {
   listBreakTeamBags,
   listShipBreakAudit,
   listShipBreaks,
+  listShipShipments,
   listShipTeamSlots,
   listShipTeamSlotsByBreak,
   setBreakStepStamp,
@@ -84,6 +87,35 @@ function stateFrom(br: ShipBreak, slots: ShipTeamSlot[], unsoldBagged: number): 
     baggedTeams: checked + unsoldBagged,
     totalTeams: slateSize(br.breakLabel, slots.length)
   }
+}
+
+/**
+ * Steps 4 and 5's counts: how many packages there are, and how many are through.
+ *
+ * Counted in PACKAGES, over the whole floor. Nothing on the bench feeds this —
+ * see FloorPackages for why the two numbers are unrelated — so a floor with
+ * every break bagged and boxed still reports 0 packed, which is the true answer
+ * and the one the bench used to get wrong.
+ *
+ * `packed` is the union of two facts, not one: a package is packed if somebody
+ * stamped it at the pack bench, and ALSO if a label has been printed for it.
+ * A label means the box was built, whatever order the two happened in — the
+ * same rule `_deriveStage` uses, so the bench and the Orders tab cannot report
+ * different numbers for the same floor.
+ */
+export function floorPackages(): FloorPackages {
+  let packed = 0
+  let shipped = 0
+  const all = listShipShipments()
+  for (const sh of all) {
+    const rank = SHIP_STATUS_RANK[sh.manualStatus?.code ?? 'not_shipped'] ?? 0
+    // label_created and beyond.
+    if (sh.packedAt || rank >= 1) packed++
+    // in_transit and beyond — it has physically left. delivered, exception and
+    // returned all sit above this, and every one of them means the package went.
+    if (rank >= 2) shipped++
+  }
+  return { total: all.length, packed, shipped }
 }
 
 /** One break's checklist state. */
@@ -189,7 +221,7 @@ export function getBreakBench(breakId: string): BreakBenchDetail | null {
     state,
     rows: sortBagRows(rows),
     bagBlockedReason: blockedReason('bag', state),
-    shipGate: shipGate(breakId, listBreakStepStates())
+    shipGate: shipGate(breakId, listBreakStepStates(), floorPackages())
   }
 }
 

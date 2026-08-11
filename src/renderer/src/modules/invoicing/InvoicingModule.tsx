@@ -292,6 +292,7 @@ export function InvoicingModule(): JSX.Element {
           thumbnails={thumbnails}
           onMove={move}
           onDelete={canManage ? removePo : undefined}
+          canReceive={canManage}
           onClose={() => setReceiptId(null)}
           onSaved={reload}
         />

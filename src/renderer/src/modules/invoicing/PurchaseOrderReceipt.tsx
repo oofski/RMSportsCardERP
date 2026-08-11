@@ -2,13 +2,16 @@ import { useEffect, useState } from 'react'
 import type { PurchaseOrderDetail, PurchaseOrderLine, PurchaseOrderStatus } from '@shared/types'
 import type { Freight } from '@shared/freight'
 import { PO_TRANSITIONS } from '@shared/purchaseOrders'
+import { receiveProgress, receiveProgressOf } from '@shared/receiving'
 import { api } from '../../lib/api'
 import { Button, CenterLoader, Modal } from '../../components/ui'
 import { useToast } from '../../components/Toast'
 import { FreightFields } from '../../components/FreightFields'
+import { ReceiveBar, ReceivePill } from '../../components/ReceiveProgress'
 import { Icon } from '../../components/Icon'
 import { formatDate, formatMoney } from '../../lib/format'
 import { CategoryLogo } from '../inventory/CategoryLogo'
+import { DeliveryPanel } from './DeliveryPanel'
 import { PO_MOVE_LABEL, PO_STAGE_META } from './helpers'
 
 /**
@@ -29,6 +32,7 @@ export function PurchaseOrderReceipt({
   thumbnails,
   onMove,
   onDelete,
+  canReceive = false,
   onClose,
   onSaved
 }: {
@@ -37,6 +41,13 @@ export function PurchaseOrderReceipt({
   onMove: (id: string, to: PurchaseOrderStatus) => void | Promise<void>
   /** Absent for users who cannot manage POs, which hides the action entirely. */
   onDelete?: (id: string, poNumber: string) => void | Promise<void>
+  /**
+   * Whether this person may book a delivery into stock.
+   *
+   * The main process gates it too — this only decides whether to draw a form
+   * whose only outcome would be a refusal.
+   */
+  canReceive?: boolean
   onClose: () => void
   /**
    * Re-read the board.
@@ -148,6 +159,22 @@ export function PurchaseOrderReceipt({
           <TimeRow icon="PackageCheck" label="Received" date={detail.receivedAt} />
         </div>
 
+        {/* What has actually landed, directly under the dates.
+            The "Received" date above is stamped only when the LAST unit lands,
+            so on a half-arrived order it reads "—" — which is true and useless.
+            This is the line that answers the question that was actually asked. */}
+        <ReceiveBar progress={receiveProgressOf(detail.lines)} className="po-receipt-recv" />
+
+        {canReceive && (
+          <DeliveryPanel
+            po={detail}
+            onReceived={(fresh) => {
+              setDetail(fresh)
+              void onSaved()
+            }}
+          />
+        )}
+
         {detail.notes && <div className="po-receipt-notes">{detail.notes}</div>}
 
         <FreightEditor
@@ -163,6 +190,7 @@ export function PurchaseOrderReceipt({
             <span className="po-rl-img" aria-hidden="true" />
             <span className="po-rl-name">Product</span>
             <span className="po-rl-qty">Qty</span>
+            <span className="po-rl-recv">In</span>
             <span className="po-rl-price">Unit price</span>
             <span className="po-rl-total">Line total</span>
           </div>
@@ -280,8 +308,12 @@ function ReceiptLine({
   line: PurchaseOrderLine
   thumb: string | undefined
 }): JSX.Element {
+  // Per LINE, not per order. A shipment that arrives in two vans is not evenly
+  // spread across the order — five of one item and none of another is the
+  // ordinary case, and the order-level percentage cannot show it.
+  const got = receiveProgress(line.quantity, line.qtyReceived)
   return (
-    <div className="po-receipt-line">
+    <div className="po-receipt-line" data-recv={got.state}>
       <span className="po-rl-img po-line-img">
         {thumb ? (
           <img src={thumb} alt={line.productName} />
@@ -294,6 +326,9 @@ function ReceiptLine({
         <span className="po-rl-sku mono">{line.sku}</span>
       </span>
       <span className="po-rl-qty">{line.quantity}</span>
+      <span className="po-rl-recv">
+        <ReceivePill progress={got} />
+      </span>
       <span className="po-rl-price mono">{formatMoney(line.unitPrice)}</span>
       <span className="po-rl-total mono">{formatMoney(line.lineTotal)}</span>
     </div>
