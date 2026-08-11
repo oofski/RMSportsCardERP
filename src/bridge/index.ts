@@ -461,6 +461,10 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       connect: (): Promise<Result<QboStatus>> => ipcRenderer.invoke(IPC.qboConnect),
       disconnect: (): Promise<Result<QboStatus>> => ipcRenderer.invoke(IPC.qboDisconnect),
       forget: (): Promise<Result<QboStatus>> => ipcRenderer.invoke(IPC.qboForget),
+      /** The owner's one-time move of an existing local connection to the relay. */
+      promote: (): Promise<
+        Result<{ status: QboStatus; companyName: string; localCleared: boolean }>
+      > => ipcRenderer.invoke(IPC.qboPromote),
       test: (): Promise<Result<{ companyName: string; realmId: string }>> =>
         ipcRenderer.invoke(IPC.qboTest),
       authorizeUrl: (): Promise<Result<{ url: string; redirectUri: string }>> =>

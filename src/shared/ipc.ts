@@ -376,6 +376,13 @@ export const IPC = {
   qboDisconnect: 'qbo:disconnect',
   qboForget: 'qbo:forget',
   qboTest: 'qbo:test',
+  /**
+   * Move the connection this machine already holds onto the cloud relay. Run
+   * ONCE, by the owner, on the one laptop that is connected today — after which
+   * no machine holds QuickBooks credentials at all. See the handler for why the
+   * order (relay first, erase last) is the whole safety of it.
+   */
+  qboPromote: 'qbo:promote',
   // Diagnostics + the manual (OAuth Playground) token path.
   qboAuthorizeUrl: 'qbo:authorize-url',
   qboExchangeCode: 'qbo:exchange-code',

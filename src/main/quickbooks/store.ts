@@ -15,10 +15,12 @@
  */
 import { safeStorage } from 'electron'
 import type { QboConfig, QboEnvironment, QboTokens } from '@shared/quickbooks'
+import type { QboRelayProbe } from '@shared/quickbooksRelay'
 import { getDb, getMeta, setMeta } from '../db/database'
 
 const CONFIG_KEY = 'qbo_config'
 const TOKENS_KEY = 'qbo_tokens'
+const RELAY_KEY = 'qbo_relay_state'
 
 function encAvailable(): boolean {
   try {
@@ -101,4 +103,48 @@ export function setQboTokens(tokens: QboTokens): void {
 
 export function clearQboTokens(): void {
   setMeta(getDb(), TOKENS_KEY, '')
+}
+
+// ---------------------------------------------------------------------------
+// What the relay last said
+// ---------------------------------------------------------------------------
+
+/**
+ * The relay's answer, remembered on this machine.
+ *
+ * NOT a cache for speed — a cache for CORRECTNESS. Once a laptop has learned
+ * that the relay is holding the connection, it must keep believing that while
+ * the relay is unreachable. The alternative is that a five-minute Cloudflare
+ * wobble makes the app fall back to whatever stale tokens happen to be sitting
+ * in this machine's keychain, and those tokens refreshing is precisely the
+ * rotation race the relay exists to remove. So an unreachable relay is reported
+ * as an unreachable relay, and nothing quietly promotes itself to second holder.
+ *
+ * Plain JSON rather than sealed: it holds no secret. The last four of a client
+ * id, a company name and two timestamps are all that is in it. Deliberately NOT
+ * synced either — it is this machine's record of a conversation it had, and
+ * pushing it around would mean one laptop's outage becoming everybody's.
+ */
+export interface QboRelayMemo extends QboRelayProbe {
+  /** ISO, when this answer was received. */
+  checkedAt: string
+}
+
+export function getQboRelayMemo(): QboRelayMemo | null {
+  const raw = getMeta(getDb(), RELAY_KEY)
+  if (!raw) return null
+  try {
+    const parsed = JSON.parse(raw) as QboRelayMemo
+    return typeof parsed?.checkedAt === 'string' ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+export function setQboRelayMemo(memo: QboRelayMemo): void {
+  setMeta(getDb(), RELAY_KEY, JSON.stringify(memo))
+}
+
+export function clearQboRelayMemo(): void {
+  setMeta(getDb(), RELAY_KEY, '')
 }

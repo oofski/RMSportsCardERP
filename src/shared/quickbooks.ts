@@ -3,9 +3,11 @@
  *
  * Kept in @shared so the renderer can type the settings screen without pulling
  * in anything from the main process. NOTHING secret lives here: the client id
- * and secret are entered by the operator and stored encrypted on their machine
- * (see main/quickbooks/store.ts).
+ * and secret are entered by the operator and stored encrypted — on the relay
+ * once it has been set up there (cloud/worker.js, Job 6), and on the operator's
+ * own machine before that (see main/quickbooks/store.ts).
  */
+import type { QboHolder, QboRelayProbe } from './quickbooksRelay'
 
 export type QboEnvironment = 'sandbox' | 'production'
 
@@ -36,6 +38,14 @@ export interface QboTokens {
 
 /** What the settings screen renders. Never includes the secret or the tokens. */
 export interface QboStatus {
+  /**
+   * Are there keys and a grant ON THIS MACHINE?
+   *
+   * Kept as the LOCAL answer even now that the relay is normally the holder,
+   * because the migration screen has to be able to say "this computer still has
+   * a copy" — and a flag that meant "somewhere" could not distinguish the one
+   * machine that needs cleaning up from the nine that never had anything.
+   */
   configured: boolean
   connected: boolean
   environment: QboEnvironment
@@ -54,6 +64,29 @@ export interface QboStatus {
    * travels in the address bar on every consent.
    */
   redirectUri: string
+
+  // -------------------------------------------------------------------------
+  // Where the connection actually lives
+  // -------------------------------------------------------------------------
+
+  /**
+   * Who holds the grant the next invoice will be raised with.
+   *
+   * 'relay' is the answer everybody should see. 'local' means this machine is
+   * still a holder — either the owner's original setup before it was promoted,
+   * or a standalone build with no relay. 'none' means nothing is connected
+   * anywhere.
+   */
+  holder: QboHolder
+  /** What the relay says about itself. Null when this build has no relay. */
+  relay: QboRelayProbe | null
+  /**
+   * Is there a local connection that could be MOVED to the relay? The owner's
+   * one-time migration button hangs off this.
+   */
+  canPromote: boolean
+  /** Why the move is unavailable, in a sentence. Null when it is available. */
+  promoteBlocked: string | null
 }
 
 // ---------------------------------------------------------------------------

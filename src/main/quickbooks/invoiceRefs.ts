@@ -23,8 +23,7 @@
  * class id — which resolves to nothing, or to something.
  */
 import type { QboClassPlacement, QboRef } from '@shared/invoices'
-import { qboRequest } from './client'
-import { getQboTokens } from './store'
+import { activeRealmId, qboRequest } from './client'
 
 /** The class every invoice from this app belongs to. The owner's instruction. */
 export const RM_CLASS_NAME = 'United States'
@@ -48,8 +47,16 @@ async function queryAll<T>(entity: string, where = ''): Promise<T[]> {
   }
 }
 
+/**
+ * Which company these ids belong to.
+ *
+ * Asked through the client rather than read straight out of local tokens,
+ * because a laptop with the relay holding the connection HAS no local tokens —
+ * and a cache that keyed every company under 'unknown' would hand one company's
+ * class id to another's invoice the first time two were ever seen.
+ */
 function realm(): string {
-  return getQboTokens()?.realmId ?? 'unknown'
+  return activeRealmId() ?? 'unknown'
 }
 
 function norm(v: string | null | undefined): string {
@@ -81,6 +88,22 @@ interface Cached<T> {
 function fresh<T>(entry: Cached<T> | undefined): T | undefined {
   if (!entry) return undefined
   return entry.until > Date.now() ? entry.value : undefined
+}
+
+/**
+ * Store an answer, unless we do not know whose books it came from.
+ *
+ * 'unknown' is what `realm()` returns in one narrow window: the very first
+ * QuickBooks call on a laptop that has never asked the relay which company it is
+ * holding. The answer resolved in that window is perfectly correct — the request
+ * went to the right company — but the KEY is not, and an entry filed under
+ * 'unknown' would be handed to a different company's invoice if this app ever
+ * pointed at two. Recomputing it one extra time is free; a class id from the
+ * wrong books is not.
+ */
+function keep<T>(cache: Map<string, Cached<T>>, key: string, entry: Cached<T>): void {
+  if (key === 'unknown') return
+  cache.set(key, entry)
 }
 
 // ---------------------------------------------------------------------------
@@ -171,7 +194,7 @@ export async function resolveInvoiceClass(): Promise<RefResult> {
   // extra round trips and an identical refusal each time. But only for a while —
   // the operator is being told to go and change that setting, and an answer
   // cached for the life of the process would outlive the fix.
-  classCache.set(key, { value: result, until: result.ref ? Infinity : Date.now() + NEGATIVE_TTL_MS })
+  keep(classCache, key, { value: result, until: result.ref ? Infinity : Date.now() + NEGATIVE_TTL_MS })
   return result
 }
 
@@ -232,7 +255,7 @@ export async function resolveClassPlacement(): Promise<QboClassPlacement> {
     placement = 'both'
     settled = false
   }
-  placementCache.set(key, {
+  keep(placementCache, key, {
     value: placement,
     until: settled ? Infinity : Date.now() + NEGATIVE_TTL_MS
   })
@@ -280,7 +303,7 @@ async function loadTerms(): Promise<Map<string, QboRef>> {
   // find is something the operator can go and ADD in QuickBooks, and a list
   // cached for the session would keep reporting it missing afterwards. One extra
   // query every ten minutes is not a cost worth optimising against that.
-  termCache.set(key, { value: byName, until: Date.now() + NEGATIVE_TTL_MS })
+  keep(termCache, key, { value: byName, until: Date.now() + NEGATIVE_TTL_MS })
   return byName
 }
 

@@ -10,6 +10,7 @@ import {
   validateRealmId,
   validateRefreshToken
 } from '@shared/quickbooks'
+import { promotionSummary } from '@shared/quickbooksRelay'
 import { api } from '../../lib/api'
 import { Button, CenterLoader, Field, Input } from '../../components/ui'
 import { Icon } from '../../components/Icon'
@@ -34,9 +35,18 @@ const INTUIT_APPS_URL = 'https://developer.intuit.com/app/developer/myapps'
  * conditional lives under Advanced, and the redirect URI has a default that
  * works on production rather than a warning about the one that does not.
  *
- * The secret is still write-only: typed here, sent once, stored encrypted by
- * the main process, never read back. "Saved" shows as the last four of the
- * client id rather than by echoing anything sensitive into the DOM.
+ * The secret is still write-only: typed here, sent once, stored encrypted,
+ * never read back. "Saved" shows as the last four of the client id rather than
+ * by echoing anything sensitive into the DOM.
+ *
+ * ## And it is now set up ONCE, for the whole company
+ *
+ * On a build wired to the cloud relay these three steps write to the RELAY, not
+ * to this computer. Every admin on every machine, and the web app, then raises
+ * invoices through it with nothing to set up — which is the entire point, and is
+ * why the screen leads with a strip saying where the connection lives rather
+ * than leaving somebody to infer it. `promote` is the one-time move for the
+ * machine that was connected before the relay existed.
  */
 export function QuickBooksTab(): JSX.Element {
   const toast = useToast()
@@ -48,7 +58,7 @@ export function QuickBooksTab(): JSX.Element {
   /** The whole address the browser landed on. Parsed here, not by the operator. */
   const [landed, setLanded] = useState('')
   const [busy, setBusy] = useState<
-    'save' | 'connect' | 'test' | 'disconnect' | 'forget' | 'paste' | 'code' | null
+    'save' | 'connect' | 'test' | 'disconnect' | 'forget' | 'paste' | 'code' | 'promote' | null
   >(null)
   const [advanced, setAdvanced] = useState(false)
   const [redirectUri, setRedirectUri] = useState('')
@@ -111,12 +121,122 @@ export function QuickBooksTab(): JSX.Element {
   const paste = landed.trim() ? readConsentPaste(landed) : null
   const pasteError = paste && !paste.ok ? paste.error : null
 
-  // Connected: the steps have nothing left to say, so they go away entirely and
-  // the screen becomes the thing that is actually useful from then on — the
-  // account mapping.
-  if (status.connected) {
+  const onRelay = status.holder === 'relay'
+  const relayBuild = !!status.relay
+
+  /**
+   * Has step 1 been done — ON THE HOLDER THIS SETUP IS WRITING TO?
+   *
+   * Not `status.configured`, which is deliberately the LOCAL answer. On a relay
+   * build the keys go to Cloudflare and nothing lands on this machine, so
+   * reading the local flag would leave step 1 showing as never done and step 2
+   * greyed out forever, immediately after a save that worked perfectly.
+   */
+  const keysSaved = relayBuild ? status.relay?.hasConfig === true : status.configured
+
+  /**
+   * WHERE THE CONNECTION LIVES — the first thing on the page, in both states.
+   *
+   * It leads because it is the question this whole change is the answer to, and
+   * because the two possible answers demand completely different actions from
+   * whoever is reading. "In the cloud relay" means nobody does anything, ever.
+   * "On this computer" means exactly one person has one job left to do.
+   */
+  const whereItLives = (
+    <div className="qbo-where" data-holder={status.holder}>
+      <Icon name={onRelay ? 'UploadCloud' : status.holder === 'local' ? 'Lock' : 'Info'} size={16} />
+      <div>
+        {onRelay ? (
+          <>
+            <b>The QuickBooks connection lives in the cloud relay.</b> Nothing about QuickBooks is
+            set up on this computer, or on anyone else&rsquo;s. Every admin raises invoices through
+            it, including from the web app.
+          </>
+        ) : status.holder === 'local' ? (
+          <>
+            <b>The QuickBooks connection is on THIS computer only.</b>{' '}
+            {relayBuild
+              ? 'Nobody else can raise invoices into QuickBooks, and this machine has to be the one that does it. Move it to the relay below and that stops being true.'
+              : 'This copy of the app is not wired to a cloud relay, so there is nowhere else it could live.'}
+          </>
+        ) : (
+          <>
+            <b>QuickBooks is not connected.</b>{' '}
+            {relayBuild
+              ? 'Set it up once, here, and it is done for everybody.'
+              : 'This copy of the app is not wired to a cloud relay, so the connection will live on this computer.'}
+          </>
+        )}
+        {onRelay && status.relay?.encryption === 'shared' && (
+          <div className="qbo-where-warn">
+            The relay is encrypting the stored tokens with the shared sync key rather than a key of
+            their own. That key is compiled into every laptop&rsquo;s build. Add a Worker secret
+            named <code>QBO_ENC_KEY</code> (any long random string) and reconnect — see
+            docs/CLOUDFLARE.md.
+          </div>
+        )}
+      </div>
+    </div>
+  )
+
+  /**
+   * The one-time move, offered only on the machine that has something to move.
+   *
+   * Every consequence is listed BEFORE the button, including the irreversible
+   * one, because deleting the local copy is the half nobody can undo and "are
+   * you sure?" is not a description of what is about to happen.
+   */
+  const promotePanel = status.canPromote ? (
+    <section className="qbo-promote">
+      <div className="qbo-promote-head">
+        <Icon name="UploadCloud" size={16} />
+        <div>
+          <b>Move this connection to the cloud relay</b>
+          <p>Once. After this, no admin ever sets QuickBooks up on a laptop again.</p>
+        </div>
+      </div>
+      <ul>
+        {promotionSummary(status.companyName).map((line) => (
+          <li key={line}>{line}</li>
+        ))}
+      </ul>
+      <Button
+        variant="primary"
+        icon="UploadCloud"
+        loading={busy === 'promote'}
+        disabled={busy !== null}
+        onClick={() => {
+          if (
+            !window.confirm(
+              'Move the QuickBooks connection to the cloud relay?\n\n' +
+                'The keys and tokens are copied there and verified against QuickBooks first. ' +
+                'Once that works they are DELETED from this computer.'
+            )
+          ) {
+            return
+          }
+          void run(
+            'promote',
+            async () => {
+              const res = await api.quickbooks.promote()
+              return res.ok ? { ok: true } : res
+            },
+            'Moved. QuickBooks now runs from the relay, and this computer holds nothing.'
+          )
+        }}
+      >
+        Move it to the relay
+      </Button>
+    </section>
+  ) : null
+
+  // Connected — by whoever holds it. The steps have nothing left to say, so they
+  // go away entirely and the screen becomes the thing that is actually useful
+  // from then on: the account mapping.
+  if (status.holder !== 'none') {
     return (
       <div className="qbo-page">
+        {whereItLives}
         <div className="qbo-state" data-connected="true">
           <span className="qbo-dot" />
           <div className="qbo-state-main">
@@ -142,7 +262,23 @@ export function QuickBooksTab(): JSX.Element {
             icon="Ban"
             loading={busy === 'disconnect'}
             disabled={busy !== null}
-            onClick={() => void run('disconnect', () => api.quickbooks.disconnect(), 'Disconnected.')}
+            onClick={() => {
+              // Disconnecting the relay disconnects EVERY admin, not just this
+              // screen. Said out loud, because the button looks identical to the
+              // one that used to affect one laptop.
+              if (
+                onRelay &&
+                !window.confirm(
+                  'Disconnect QuickBooks for EVERYONE?\n\n' +
+                    'The connection lives in the relay, so this stops invoices reaching ' +
+                    'QuickBooks from every machine and from the web app until somebody ' +
+                    'approves again.'
+                )
+              ) {
+                return
+              }
+              void run('disconnect', () => api.quickbooks.disconnect(), 'Disconnected.')
+            }}
           >
             Disconnect
           </Button>
@@ -155,6 +291,8 @@ export function QuickBooksTab(): JSX.Element {
           </div>
         )}
 
+        {promotePanel}
+
         <QboAccountMapping connected />
       </div>
     )
@@ -162,8 +300,11 @@ export function QuickBooksTab(): JSX.Element {
 
   return (
     <div className="qbo-page">
+      {whereItLives}
       <div className="qbo-lede">
-        Three steps. Everything is on one page in the Intuit developer portal —
+        Three steps, done once by the owner
+        {relayBuild ? ', and they set QuickBooks up for everybody' : ''}. Everything is on one page
+        in the Intuit developer portal —
         <button
           type="button"
           className="link-btn"
@@ -182,8 +323,8 @@ export function QuickBooksTab(): JSX.Element {
       )}
 
       {/* ---------------------------------------------------------------- 1 */}
-      <section className="qbo-step" data-done={status.configured ? 'true' : 'false'}>
-        <div className="qbo-step-num">{status.configured ? <Icon name="Check" size={15} /> : 1}</div>
+      <section className="qbo-step" data-done={keysSaved ? 'true' : 'false'}>
+        <div className="qbo-step-num">{keysSaved ? <Icon name="Check" size={15} /> : 1}</div>
         <div className="qbo-step-body">
           <h3>Paste your two keys</h3>
           <p>
@@ -214,7 +355,7 @@ export function QuickBooksTab(): JSX.Element {
                 data-lpignore="true"
                 data-form-type="other"
                 invalid={touched.id && !!idError}
-                placeholder={status.configured ? `Saved — ends …${status.clientIdHint}` : 'ABxxxxxxxx…'}
+                placeholder={keysSaved ? `Saved — ends …${status.clientIdHint}` : 'ABxxxxxxxx…'}
                 onChange={(e) => setClientId(e.target.value)}
                 onBlur={() => setTouched((t) => ({ ...t, id: true }))}
               />
@@ -234,7 +375,7 @@ export function QuickBooksTab(): JSX.Element {
                 data-lpignore="true"
                 data-form-type="other"
                 invalid={touched.secret && !!secretError}
-                placeholder={status.configured ? 'Saved — type to replace' : 'Forty characters'}
+                placeholder={keysSaved ? 'Saved — type to replace' : 'Forty characters'}
                 onChange={(e) => setClientSecret(e.target.value)}
                 onBlur={() => setTouched((t) => ({ ...t, secret: true }))}
               />
@@ -268,9 +409,9 @@ export function QuickBooksTab(): JSX.Element {
                 )
               }
             >
-              {status.configured ? 'Replace keys' : 'Save keys'}
+              {keysSaved ? 'Replace keys' : 'Save keys'}
             </Button>
-            {status.configured && (
+            {keysSaved && (
               <span className="qbo-step-ok">
                 <Icon name="Check" size={13} /> Saved — ends …{status.clientIdHint}
               </span>
@@ -280,7 +421,7 @@ export function QuickBooksTab(): JSX.Element {
       </section>
 
       {/* ---------------------------------------------------------------- 2 */}
-      <section className="qbo-step" data-ready={status.configured ? 'true' : 'false'}>
+      <section className="qbo-step" data-ready={keysSaved ? 'true' : 'false'}>
         <div className="qbo-step-num">2</div>
         <div className="qbo-step-body">
           <h3>Approve in your browser</h3>
@@ -291,10 +432,10 @@ export function QuickBooksTab(): JSX.Element {
           </p>
           <div className="qbo-step-acts">
             <Button
-              variant={status.configured ? 'primary' : 'secondary'}
+              variant={keysSaved ? 'primary' : 'secondary'}
               icon="ExternalLink"
               loading={busy === 'connect'}
-              disabled={busy !== null || !status.configured}
+              disabled={busy !== null || !keysSaved}
               onClick={async () => {
                 // The loopback redirect is the only one this app can catch by
                 // itself; anything else — including the default — finishes at
@@ -320,14 +461,14 @@ export function QuickBooksTab(): JSX.Element {
             >
               Open QuickBooks consent
             </Button>
-            {!status.configured && <span className="qbo-step-wait">Save your keys first</span>}
+            {!keysSaved && <span className="qbo-step-wait">Save your keys first</span>}
           </div>
         </div>
       </section>
 
       {/* ---------------------------------------------------------------- 3 */}
       {!isLoopbackRedirect(redirectUri) && (
-        <section className="qbo-step" data-ready={status.configured ? 'true' : 'false'}>
+        <section className="qbo-step" data-ready={keysSaved ? 'true' : 'false'}>
           <div className="qbo-step-num">3</div>
           <div className="qbo-step-body">
             <h3>Paste the address it landed on</h3>
@@ -440,7 +581,7 @@ export function QuickBooksTab(): JSX.Element {
                 >
                   Use the built-in loopback instead
                 </button>
-                {status.configured && (
+                {keysSaved && (
                   <button
                     type="button"
                     className="link-btn"
@@ -567,14 +708,23 @@ export function QuickBooksTab(): JSX.Element {
             </Button>
           </div>
 
-          {status.configured && (
+          {keysSaved && (
             <Button
               variant="danger"
               icon="Trash2"
               loading={busy === 'forget'}
               disabled={busy !== null}
               onClick={() => {
-                if (!window.confirm('Forget the QuickBooks keys on this machine?')) return
+                if (
+                  !window.confirm(
+                    relayBuild
+                      ? 'Forget the QuickBooks keys IN THE RELAY?\n\nThat removes them for ' +
+                        'everybody, and the whole three-step setup has to be done again.'
+                      : 'Forget the QuickBooks keys on this machine?'
+                  )
+                ) {
+                  return
+                }
                 void run('forget', () => api.quickbooks.forget(), 'Keys removed.')
               }}
             >
@@ -584,7 +734,7 @@ export function QuickBooksTab(): JSX.Element {
         </div>
       )}
 
-      <QboAccountMapping connected={status.connected} />
+      <QboAccountMapping connected={status.holder !== 'none'} />
     </div>
   )
 }

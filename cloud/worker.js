@@ -16,6 +16,12 @@
  *   4. CLOCK-IN PUSH NOTIFICATIONS.  Real W3C Web Push, signed and encrypted
  *      here. See the "Job 4" section for why it is HERE and not in the app.
  *
+ *   6. THE QUICKBOOKS CONNECTION.  The only holder of the accounting grant. The
+ *      laptops have no client secret and no tokens; they ask this Worker to make
+ *      the Intuit call. See the "Job 6" section — Intuit rotates the refresh
+ *      token on every refresh, and one holder is the only arrangement in which
+ *      that cannot silently kill somebody's connection.
+ *
  * What this Worker is NOT: it does not run the business. It holds no logic about
  * cost, stock or orders, and it never decides anything — it stores rows and hands
  * them back in order. Every rule lives in the app, on the laptops, where it can
@@ -33,6 +39,11 @@
  *                     which is where the public half normally lives. Not a secret
  *   VAPID_SUBJECT     optional; a mailto: or https: URI a push service can use to
  *                     contact whoever runs this. Defaults to VAPID_SUBJECT_DEFAULT below
+ *   QBO_ENC_KEY       secret; any long random string. What the stored QuickBooks client
+ *                     secret and tokens are encrypted with at rest. Strongly recommended
+ *                     and not required: without it they are sealed under SHARED_KEY
+ *                     instead, which is weaker because SHARED_KEY is compiled into every
+ *                     laptop's build. NEVER in the repo. See the "Job 6" section
  *
  * No R2. R2 stores files, and nothing here is a file — the rows travel as JSON
  * in D1. R2 only becomes necessary the day product photos should travel too.
@@ -112,6 +123,13 @@ export default {
       if (path === '/v1/push-notify/generate-keys' && request.method === 'POST') {
         return generateVapidKeys()
       }
+
+      // ---- Job 6: QuickBooks. Behind the shared key, because these routes ARE
+      // the accounting connection: whoever can call them can raise an invoice in
+      // the owner's real books. Nothing here ever hands a token back — the app
+      // asks the relay to make a call, it does not ask for the credentials to
+      // make one itself. That asymmetry is the whole feature.
+      if (path.startsWith('/v1/qbo/')) return qboApi(request, env, path)
 
       return json({ ok: false, error: 'Not found.' }, 404)
     } catch (err) {
@@ -2327,6 +2345,814 @@ async function generateVapidKeys() {
       'Changing either one invalidates every phone already subscribed; they have to turn ' +
       'notifications off and on again.'
   })
+}
+
+// ---------------------------------------------------------------------------
+// Job 6 — THE QUICKBOOKS CONNECTION
+//
+// This relay is the only holder of the QuickBooks grant. Not one of several: the
+// only one. The laptops and the web app have no client secret, no access token
+// and no refresh token, and after the owner's one-time setup they never will.
+//
+// ## Why it moved here, in two sentences that are worth keeping
+//
+// 1. INTUIT ROTATES THE REFRESH TOKEN ON EVERY REFRESH. A refresh answers with a
+//    new refresh token and retires the one that was sent. Two machines holding
+//    the same grant will eventually refresh within the same hour, and the loser
+//    is left holding a token that is already dead — which it does not discover
+//    for another hour, at which point somebody is halfway through raising an
+//    invoice. One holder does not mitigate that race; it removes it.
+// 2. THE CLIENT SECRET WOULD OTHERWISE BE ON EVERY LAPTOP. Which means rotating
+//    it and reconnecting everybody the day somebody leaves, and it means the
+//    secret exists in as many places as there are admins.
+//
+// ## Everything sensitive is encrypted before it touches D1
+//
+// D1 rows are readable in the Cloudflare dashboard by anybody who can open the
+// account, and a D1 export is a plain file. So the client secret and both tokens
+// are sealed with AES-GCM under a key derived from a WORKER SECRET, which the
+// dashboard cannot display back and which no laptop has a copy of. See qboSeal.
+//
+// ## Nothing here ever logs a token
+//
+// Not on success, not on failure, not in an error message handed back to the
+// app. Worker logs are readable in the dashboard and stream to anybody running
+// `wrangler tail`; a refresh token in one is a permanent, silent compromise of
+// somebody's accounting system. Errors carry Intuit's own fault text, which
+// names the problem and never the credential.
+// ---------------------------------------------------------------------------
+
+/**
+ * Production, always — there is no sandbox switch here and there must not be.
+ *
+ * This business has one set of books. An environment toggle is a way to point a
+ * night's real billing at a test company and not notice until somebody asks
+ * where the invoices went. The app made the same decision (see setQboConfig);
+ * these two agreeing is not a coincidence to be tidied away later.
+ */
+const QBO_API_BASE = 'https://quickbooks.api.intuit.com'
+const QBO_TOKEN_URL = 'https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer'
+const QBO_REVOKE_URL = 'https://developer.api.intuit.com/v2/oauth2/tokens/revoke'
+const QBO_AUTHORIZE_URL = 'https://appcenter.intuit.com/connect/oauth2'
+/** Accounting only. Widening this is a deliberate act, not a default. */
+const QBO_SCOPE = 'com.intuit.quickbooks.accounting'
+/** Pinned, so a minor-version bump at Intuit cannot change response shapes
+ *  underneath a relay nobody is watching. Must match QBO_MINOR_VERSION in
+ *  src/shared/quickbooks.ts. */
+const QBO_MINOR_VERSION = '75'
+/**
+ * Intuit's OAuth Playground redirect, which Intuit has already registered
+ * against every app. Production keys cannot register a loopback URI at all, so
+ * this is the default the app uses and therefore the default here.
+ */
+const QBO_DEFAULT_REDIRECT_URI = 'https://developer.intuit.com/v2/OAuth2Playground/RedirectUrl'
+
+/** Refresh this far ahead of expiry, so a call starting just under the wire does
+ *  not land just over it. Matches QBO_REFRESH_SKEW_MS in the app. */
+const QBO_REFRESH_SKEW_MS = 5 * 60 * 1000
+
+/**
+ * How long one invocation may hold the refresh lease.
+ *
+ * Short, because it is a crash window: a Worker killed mid-refresh leaves the
+ * lease set, and nothing else may refresh until it lapses. Thirty seconds is
+ * far longer than a token round trip and short enough that a crash costs one
+ * unlucky call rather than an outage.
+ */
+const QBO_REFRESH_LEASE_MS = 30 * 1000
+
+/** How long a waiter will sit out somebody else's refresh before giving up. */
+const QBO_REFRESH_WAIT_MS = 6 * 1000
+const QBO_REFRESH_POLL_MS = 250
+
+let qboTableReady = false
+
+/**
+ * Created on first use, like portal_lockout and push_subscriptions above and for
+ * the same reason: cloud/schema.d1.sql is pasted into the D1 console by hand,
+ * and a feature that only works after somebody remembers a SECOND paste is a
+ * feature that appears broken with no error to search for.
+ *
+ * One row, forced by the CHECK. There is one company and there is one grant; a
+ * table that could hold two would need a rule for which one an invoice goes to,
+ * and no such rule exists.
+ */
+async function ensureQboTable(env) {
+  if (qboTableReady) return
+  await env.DB.prepare(
+    `CREATE TABLE IF NOT EXISTS qbo_connection (
+       id                 INTEGER PRIMARY KEY CHECK (id = 1),
+       client_id          TEXT,
+       client_secret      TEXT,
+       redirect_uri       TEXT,
+       realm_id           TEXT,
+       company_name       TEXT,
+       access_token       TEXT,
+       refresh_token      TEXT,
+       expires_at         INTEGER NOT NULL DEFAULT 0,
+       refresh_expires_at INTEGER NOT NULL DEFAULT 0,
+       refresh_lock_until INTEGER NOT NULL DEFAULT 0,
+       last_error         TEXT,
+       updated_at         TEXT
+     )`
+  ).run()
+  qboTableReady = true
+}
+
+// ---------------------------------------------------------------------------
+// Encryption at rest
+// ---------------------------------------------------------------------------
+
+/**
+ * Which secret is protecting the stored credentials.
+ *
+ * QBO_ENC_KEY is the one to set, and it is strictly better than the fallback for
+ * a reason worth stating: SHARED_KEY is compiled into every laptop's build, so a
+ * stolen laptop plus a D1 export would be enough to open the tokens. QBO_ENC_KEY
+ * exists only inside Cloudflare and is on no machine anybody carries.
+ *
+ * The fallback exists anyway because the alternative is worse. Refusing to store
+ * anything until a second secret is set turns "connect QuickBooks" into a step
+ * that fails with a configuration error in the middle of the one setup the owner
+ * is ever asked to do. So it works either way, the envelope RECORDS which key
+ * sealed it, and /v1/qbo/status reports the mode so the screen can say plainly
+ * that the better one is not set yet.
+ */
+function qboEncryptionMode(env) {
+  if (String(env.QBO_ENC_KEY || '').trim()) return 'dedicated'
+  if (String(env.SHARED_KEY || env.CLINIC_KEY || '').trim()) return 'shared'
+  return 'none'
+}
+
+function qboSecretFor(env, source) {
+  const secret =
+    source === 'd'
+      ? String(env.QBO_ENC_KEY || '').trim()
+      : String(env.SHARED_KEY || env.CLINIC_KEY || '').trim()
+  if (!secret) {
+    throw new Error(
+      source === 'd'
+        ? 'The stored QuickBooks credentials were encrypted with QBO_ENC_KEY, and that secret is ' +
+          'no longer set on this Worker. Put it back, or disconnect and connect QuickBooks again.'
+        : 'This Worker has no SHARED_KEY, so nothing stored can be decrypted.'
+    )
+  }
+  return secret
+}
+
+/**
+ * A per-record AES-256 key, derived rather than used directly.
+ *
+ * HKDF and not PBKDF2, deliberately: the input is a high-entropy random secret,
+ * not a password, so stretching buys nothing — and this Worker is on a plan that
+ * kills an invocation after 10ms of CPU, which a real iteration count would eat
+ * on every single invoice.
+ *
+ * The salt is fresh per record and travels in the envelope, so the two sealed
+ * fields never share a key and re-sealing the same value twice produces two
+ * different ciphertexts.
+ */
+async function qboWrapKey(env, source, salt) {
+  const raw = await hkdf(salt, enc.encode(qboSecretFor(env, source)), enc.encode('rmops-qbo-v1'), 32)
+  return crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt'])
+}
+
+/**
+ * Seal one value for storage.
+ *
+ * Format: qbo1.<key source>.<salt>.<iv>.<ciphertext>, all base64url. The key
+ * SOURCE is in there because the fallback above means two different secrets can
+ * be in play over the lifetime of one database — and a record sealed under the
+ * shared key that is later opened with the dedicated one does not fail with a
+ * clear message, it fails as an AES-GCM tag mismatch that names nothing.
+ */
+export async function qboSeal(env, value) {
+  const source = qboEncryptionMode(env) === 'dedicated' ? 'd' : 's'
+  const salt = crypto.getRandomValues(new Uint8Array(16))
+  const iv = crypto.getRandomValues(new Uint8Array(12))
+  const key = await qboWrapKey(env, source, salt)
+  const ct = new Uint8Array(
+    await crypto.subtle.encrypt({ name: 'AES-GCM', iv, tagLength: 128 }, key, enc.encode(String(value)))
+  )
+  return `qbo1.${source}.${b64urlFromBytes(salt)}.${b64urlFromBytes(iv)}.${b64urlFromBytes(ct)}`
+}
+
+export async function qboOpen(env, sealed) {
+  const text = String(sealed || '')
+  if (!text) return null
+  const parts = text.split('.')
+  if (parts.length !== 5 || parts[0] !== 'qbo1') {
+    throw new Error('A stored QuickBooks credential is not in a format this Worker understands.')
+  }
+  const source = parts[1] === 'd' ? 'd' : 's'
+  const key = await qboWrapKey(env, source, bytesFromB64url(parts[2]))
+  try {
+    const plain = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: bytesFromB64url(parts[3]), tagLength: 128 },
+      key,
+      bytesFromB64url(parts[4])
+    )
+    return new TextDecoder().decode(plain)
+  } catch {
+    // AES-GCM refuses with nothing useful, so say what actually causes this.
+    // Never echo any part of the ciphertext.
+    throw new Error(
+      'The stored QuickBooks credentials could not be decrypted, which means the Worker secret ' +
+        'that sealed them has changed. Disconnect and connect QuickBooks again.'
+    )
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The stored connection
+// ---------------------------------------------------------------------------
+
+async function qboRow(env) {
+  await ensureQboTable(env)
+  return env.DB.prepare('SELECT * FROM qbo_connection WHERE id = 1').first()
+}
+
+/**
+ * The row with its sealed fields opened. Null when there is no connection.
+ *
+ * Everything that talks to Intuit goes through this, so there is exactly one
+ * place where plaintext credentials come into existence and it is a local
+ * variable that dies with the invocation.
+ */
+export async function qboConnection(env) {
+  const row = await qboRow(env)
+  if (!row) return null
+  return {
+    clientId: String(row.client_id || ''),
+    clientSecret: row.client_secret ? await qboOpen(env, row.client_secret) : '',
+    redirectUri: String(row.redirect_uri || '') || QBO_DEFAULT_REDIRECT_URI,
+    realmId: String(row.realm_id || ''),
+    companyName: String(row.company_name || ''),
+    accessToken: row.access_token ? await qboOpen(env, row.access_token) : '',
+    refreshToken: row.refresh_token ? await qboOpen(env, row.refresh_token) : '',
+    expiresAt: Number(row.expires_at) || 0,
+    refreshExpiresAt: Number(row.refresh_expires_at) || 0,
+    lastError: row.last_error ? String(row.last_error) : null
+  }
+}
+
+function qboIso(ms) {
+  const n = Number(ms)
+  return Number.isFinite(n) && n > 0 ? new Date(n).toISOString() : null
+}
+
+/** What the app is told. Never a token, never the secret, never the client id in
+ *  full — the last four is enough to tell two app registrations apart. */
+async function qboStatusBody(env) {
+  const row = await qboRow(env)
+  const clientId = row ? String(row.client_id || '') : ''
+  const hasConfig = !!clientId && !!(row && row.client_secret)
+  const connected = hasConfig && !!(row && row.refresh_token) && !!(row && row.realm_id)
+  return {
+    ok: true,
+    hasConfig,
+    connected,
+    realmId: row && row.realm_id ? String(row.realm_id) : null,
+    companyName: row && row.company_name ? String(row.company_name) : null,
+    clientIdHint: clientId ? clientId.slice(-4) : null,
+    expiresAt: row ? qboIso(row.expires_at) : null,
+    refreshExpiresAt: row ? qboIso(row.refresh_expires_at) : null,
+    encryption: qboEncryptionMode(env),
+    lastError: row && row.last_error ? String(row.last_error) : null
+  }
+}
+
+async function qboNoteError(env, message) {
+  await ensureQboTable(env)
+  await env.DB.prepare('UPDATE qbo_connection SET last_error = ?1 WHERE id = 1')
+    .bind(message ? String(message).slice(0, 500) : null)
+    .run()
+}
+
+// ---------------------------------------------------------------------------
+// Talking to Intuit
+// ---------------------------------------------------------------------------
+
+function qboBasicAuth(conn) {
+  return 'Basic ' + btoa(`${conn.clientId}:${conn.clientSecret}`)
+}
+
+async function qboPostToken(conn, form) {
+  const res = await fetch(QBO_TOKEN_URL, {
+    method: 'POST',
+    headers: {
+      authorization: qboBasicAuth(conn),
+      'content-type': 'application/x-www-form-urlencoded',
+      accept: 'application/json'
+    },
+    body: form.toString()
+  })
+  const text = await res.text()
+  let parsed = {}
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    // Intuit answers some failures with HTML. The status is the useful part, and
+    // the body is not echoed — it can contain the request that was sent.
+    throw new Error(`QuickBooks rejected the token request (HTTP ${res.status}).`)
+  }
+  if (!res.ok || parsed.error) {
+    throw new Error(
+      parsed.error_description || parsed.error || `QuickBooks rejected the token request (HTTP ${res.status}).`
+    )
+  }
+  return parsed
+}
+
+/**
+ * Store a token response, keeping what a refresh response does not carry.
+ *
+ * A REFRESH reply contains neither the company nor, always, a new refresh token.
+ * Dropping either would silently disconnect the integration an hour later, which
+ * is the single most expensive way this can go wrong: everything keeps working
+ * until the access token lapses, and then nothing does.
+ */
+async function qboStoreTokens(env, conn, body, realmId) {
+  const now = Date.now()
+  const refreshToken = body.refresh_token || conn.refreshToken
+  if (!body.access_token || !refreshToken) {
+    throw new Error('QuickBooks did not return a usable token.')
+  }
+  const expiresAt = now + (Number(body.expires_in) || 3600) * 1000
+  const refreshExpiresAt = now + (Number(body.x_refresh_token_expires_in) || 8726400) * 1000
+  await env.DB.prepare(
+    `UPDATE qbo_connection
+        SET access_token = ?1, refresh_token = ?2, realm_id = ?3,
+            expires_at = ?4, refresh_expires_at = ?5,
+            refresh_lock_until = 0, last_error = NULL, updated_at = ?6
+      WHERE id = 1`
+  )
+    .bind(
+      await qboSeal(env, body.access_token),
+      await qboSeal(env, refreshToken),
+      String(realmId || conn.realmId || ''),
+      expiresAt,
+      refreshExpiresAt,
+      new Date().toISOString()
+    )
+    .run()
+  return {
+    ...conn,
+    accessToken: body.access_token,
+    refreshToken,
+    realmId: String(realmId || conn.realmId || ''),
+    expiresAt,
+    refreshExpiresAt
+  }
+}
+
+/**
+ * Swap the refresh token for a fresh access token, ONCE, even when several
+ * invocations want one at the same moment.
+ *
+ * ## Why a lease and not just "refresh when stale"
+ *
+ * Moving the connection here removed the race BETWEEN MACHINES. It does not by
+ * itself remove the race between two Worker invocations: three admins pressing
+ * "send to QuickBooks" in the same second, an hour after the last refresh, are
+ * three concurrent fetches that all see an expired access token. Each would call
+ * Intuit, each would be issued a rotated refresh token, and the last write would
+ * win — leaving two perfectly good tokens that Intuit has already retired and a
+ * stored one that may not be the newest. So one invocation claims the right to
+ * refresh with a conditional UPDATE, and the others WAIT for it and then use
+ * what it stored.
+ *
+ * The claim is `WHERE refresh_lock_until < now`, which is atomic in D1 because
+ * it is a single statement. The waiter polls the row rather than sleeping a
+ * fixed time, so the common case costs a couple of hundred milliseconds.
+ *
+ * If the waiter times out it refreshes anyway. A duplicate refresh is a real but
+ * survivable problem — Intuit accepts the previous refresh token for a short
+ * grace window — whereas refusing to refresh means an invoice fails for a reason
+ * nobody can act on.
+ */
+export async function qboEnsureFresh(env, conn, force) {
+  const now = Date.now()
+  if (!force && conn.accessToken && conn.expiresAt - QBO_REFRESH_SKEW_MS > now) return conn
+  if (!conn.refreshToken) throw new Error('QuickBooks is not connected on the relay.')
+  if (conn.refreshExpiresAt > 0 && conn.refreshExpiresAt <= now) {
+    throw new Error(
+      'The QuickBooks connection has expired and has to be re-authorised. Open Invoices → ' +
+        'QuickBooks and approve again.'
+    )
+  }
+
+  const claim = await env.DB.prepare(
+    'UPDATE qbo_connection SET refresh_lock_until = ?1 WHERE id = 1 AND refresh_lock_until < ?2'
+  )
+    .bind(now + QBO_REFRESH_LEASE_MS, now)
+    .run()
+  const claimed = !!(claim && claim.meta && Number(claim.meta.changes) > 0)
+
+  if (!claimed) {
+    const waited = await qboWaitForRefresh(env, conn)
+    if (waited) return waited
+  }
+
+  try {
+    const body = await qboPostToken(
+      conn,
+      new URLSearchParams({ grant_type: 'refresh_token', refresh_token: conn.refreshToken })
+    )
+    return await qboStoreTokens(env, conn, body, conn.realmId)
+  } catch (err) {
+    // Release the lease on the way out. Holding it after a failure would make
+    // every later call wait the full lease for a refresh that already failed.
+    await env.DB.prepare('UPDATE qbo_connection SET refresh_lock_until = 0 WHERE id = 1').run()
+    throw err
+  }
+}
+
+/** Poll for somebody else's refresh to land. Null if it does not. */
+async function qboWaitForRefresh(env, conn) {
+  const deadline = Date.now() + QBO_REFRESH_WAIT_MS
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, QBO_REFRESH_POLL_MS))
+    const fresh = await qboConnection(env)
+    if (!fresh) return null
+    // A token that is comfortably in date, and not the one we started with, is
+    // evidence somebody else finished. Comparing expiry rather than the token
+    // itself avoids ever holding two tokens side by side to compare.
+    if (fresh.accessToken && fresh.expiresAt > conn.expiresAt) return fresh
+  }
+  return null
+}
+
+/**
+ * One Accounting API call against the connected company.
+ *
+ * The 401 retry is deliberately once. A token still rejected after a forced
+ * refresh is not a timing problem, and retrying again turns a clear failure into
+ * a slow one.
+ */
+async function qboFetch(env, conn, call) {
+  let live = await qboEnsureFresh(env, conn, false)
+
+  const send = async (state) => {
+    const url = new URL(`${QBO_API_BASE}/v3/company/${state.realmId}/${call.path}`)
+    url.searchParams.set('minorversion', QBO_MINOR_VERSION)
+    for (const [k, v] of Object.entries(call.query || {})) url.searchParams.set(k, String(v))
+    return fetch(url.toString(), {
+      method: call.method || 'GET',
+      headers: {
+        authorization: `Bearer ${state.accessToken}`,
+        accept: 'application/json',
+        ...(call.body !== undefined && call.body !== null ? { 'content-type': 'application/json' } : {})
+      },
+      body: call.body !== undefined && call.body !== null ? JSON.stringify(call.body) : undefined
+    })
+  }
+
+  let res = await send(live)
+  if (res.status === 401) {
+    live = await qboEnsureFresh(env, live, true)
+    res = await send(live)
+  }
+  const text = await res.text()
+  return { status: res.status, ok: res.ok, text }
+}
+
+/**
+ * Turn an Intuit fault into one useful sentence.
+ *
+ * Their faults nest as { Fault: { Error: [{ Message, Detail }] } } and the
+ * Detail is usually the part that says what actually went wrong. Mirrors
+ * describeQboError in src/main/quickbooks/client.ts, because the app can no
+ * longer see the raw response when the relay is the caller.
+ */
+export function describeQboFault(status, body) {
+  try {
+    const parsed = JSON.parse(body)
+    const err = (parsed.Fault && parsed.Fault.Error && parsed.Fault.Error[0]) ||
+      (parsed.fault && parsed.fault.error && parsed.fault.error[0])
+    if (err) {
+      const parts = [err.Message || err.message, err.Detail || err.detail].filter(Boolean)
+      if (parts.length > 0) return `QuickBooks: ${parts.join(' — ')}`
+    }
+  } catch {
+    // Not JSON; the status is what is left.
+  }
+  if (status === 403) return 'QuickBooks refused the request (403). Check the app has accounting scope.'
+  if (status === 429) return 'QuickBooks is rate limiting requests. Try again shortly.'
+  return `QuickBooks request failed (HTTP ${status}).`
+}
+
+/**
+ * Is this a path the relay is willing to call?
+ *
+ * The mirror of isSafeQboPath in src/shared/quickbooksRelay.ts, and it is here
+ * for a different reason than the one there. The app-side check catches a bug in
+ * the app; THIS one is the only thing standing between somebody holding the
+ * shared key and a request aimed outside the connected company — a leading
+ * slash, a scheme or a '..' segment would each escape /v3/company/{realm}/.
+ */
+export function qboSafePath(path) {
+  const p = String(path || '').trim()
+  if (!p || p.length > 300) return false
+  if (p.startsWith('/') || p.startsWith('\\')) return false
+  if (/^[a-z][a-z0-9+.-]*:/i.test(p)) return false
+  if (p.includes('..')) return false
+  return /^[A-Za-z0-9/_-]+$/.test(p)
+}
+
+// ---------------------------------------------------------------------------
+// Routes
+// ---------------------------------------------------------------------------
+
+async function qboApi(request, env, path) {
+  const route = path.slice('/v1/qbo/'.length)
+
+  if (route === 'status' && request.method === 'GET') {
+    return json(await qboStatusBody(env))
+  }
+
+  // ---- Setup, done once, by the owner -------------------------------------
+  if (route === 'config' && request.method === 'POST') {
+    const body = await readJson(request)
+    const clientId = String(body.clientId || '').trim()
+    const clientSecret = String(body.clientSecret || '').trim()
+    const redirectUri = String(body.redirectUri || '').trim() || QBO_DEFAULT_REDIRECT_URI
+    if (!clientId || !clientSecret) {
+      return json({ ok: false, error: 'Send both clientId and clientSecret.' }, 400)
+    }
+    await ensureQboTable(env)
+    const existing = await qboRow(env)
+    // Changing the app registration invalidates any grant already stored: tokens
+    // minted by one Intuit app are meaningless to another, and keeping them would
+    // leave the relay claiming a connection whose first call 401s.
+    const keepGrant = existing && String(existing.client_id || '') === clientId
+    await env.DB.prepare(
+      `INSERT INTO qbo_connection (id, client_id, client_secret, redirect_uri, updated_at)
+       VALUES (1, ?1, ?2, ?3, ?4)
+       ON CONFLICT (id) DO UPDATE SET
+         client_id = excluded.client_id,
+         client_secret = excluded.client_secret,
+         redirect_uri = excluded.redirect_uri,
+         updated_at = excluded.updated_at,
+         last_error = NULL`
+    )
+      .bind(clientId, await qboSeal(env, clientSecret), redirectUri, new Date().toISOString())
+      .run()
+    if (!keepGrant) {
+      await env.DB.prepare(
+        `UPDATE qbo_connection
+            SET access_token = NULL, refresh_token = NULL, realm_id = NULL, company_name = NULL,
+                expires_at = 0, refresh_expires_at = 0, refresh_lock_until = 0
+          WHERE id = 1`
+      ).run()
+    }
+    return json(await qboStatusBody(env))
+  }
+
+  /**
+   * The consent URL, built HERE.
+   *
+   * The app needs somewhere to send the browser and the URL carries the client
+   * id — so building it here is what lets the client id stay on the relay
+   * instead of being handed back to every machine that wants to connect. It is
+   * not a secret (it travels in the address bar either way), but a value that
+   * never leaves cannot be pasted into the wrong box by mistake.
+   */
+  if (route === 'authorize-url' && request.method === 'GET') {
+    const conn = await qboRow(env)
+    if (!conn || !conn.client_id) {
+      return json({ ok: false, error: 'The relay has no QuickBooks keys yet.' }, 400)
+    }
+    const url = new URL(request.url)
+    const redirectUri =
+      String(url.searchParams.get('redirect') || '').trim() ||
+      String(conn.redirect_uri || '') ||
+      QBO_DEFAULT_REDIRECT_URI
+    const state = String(url.searchParams.get('state') || '').trim() || crypto.randomUUID()
+    const params = new URLSearchParams({
+      client_id: String(conn.client_id),
+      response_type: 'code',
+      scope: QBO_SCOPE,
+      redirect_uri: redirectUri,
+      state
+    })
+    return json({ ok: true, url: `${QBO_AUTHORIZE_URL}?${params.toString()}`, redirectUri })
+  }
+
+  /**
+   * Finish consent. The relay does the EXCHANGE, so the client secret never
+   * leaves it and the tokens are never on a laptop even for a moment.
+   *
+   * The redirect URI sent here MUST equal the one sent with the authorize
+   * request — Intuit compares them and refuses otherwise, which is a confusing
+   * failure precisely because consent appeared to work.
+   */
+  if (route === 'exchange' && request.method === 'POST') {
+    const body = await readJson(request)
+    const code = String(body.code || '').trim()
+    const realmId = String(body.realmId || '').trim()
+    if (!code || !/^[0-9]{6,25}$/.test(realmId)) {
+      return json({ ok: false, error: 'Send the authorization code and a numeric realmId.' }, 400)
+    }
+    const conn = await qboConnection(env)
+    if (!conn || !conn.clientId || !conn.clientSecret) {
+      return json({ ok: false, error: 'The relay has no QuickBooks keys yet.' }, 400)
+    }
+    const redirectUri = String(body.redirectUri || '').trim() || conn.redirectUri
+    try {
+      const token = await qboPostToken(
+        conn,
+        new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri: redirectUri })
+      )
+      const stored = await qboStoreTokens(env, conn, token, realmId)
+      // Prove the grant works before calling it connected. A stored token that
+      // 401s on first use is worse than an honest failure now.
+      await qboRefreshCompanyName(env, stored)
+    } catch (err) {
+      const message = String((err && err.message) || err)
+      await qboNoteError(env, message)
+      return json({ ok: false, error: message }, 400)
+    }
+    return json(await qboStatusBody(env))
+  }
+
+  /**
+   * Adopt a token pair minted somewhere else.
+   *
+   * Two callers, one route. The owner PROMOTING the connection they already have
+   * on their laptop, and anybody pasting tokens out of Intuit's OAuth Playground.
+   * Both are the same act: the tokens belong to the SAME app registration, so
+   * once stored the ordinary refresh cycle takes over and it is never repeated.
+   *
+   * expiresAt is forced to 0 so the very first call MUST refresh. That proves the
+   * refresh token and the stored client credentials work together before any of
+   * this is called connected, and replaces guessed lifetimes with the real ones
+   * Intuit hands back.
+   */
+  if (route === 'adopt' && request.method === 'POST') {
+    const body = await readJson(request)
+    const refreshToken = String(body.refreshToken || '').trim()
+    const realmId = String(body.realmId || '').trim()
+    if (!refreshToken || !/^[0-9]{6,25}$/.test(realmId)) {
+      return json({ ok: false, error: 'Send a refreshToken and a numeric realmId.' }, 400)
+    }
+    const conn = await qboConnection(env)
+    if (!conn || !conn.clientId || !conn.clientSecret) {
+      return json({ ok: false, error: 'Send the client id and secret first.' }, 400)
+    }
+    await env.DB.prepare(
+      `UPDATE qbo_connection
+          SET refresh_token = ?1, access_token = NULL, realm_id = ?2,
+              expires_at = 0, refresh_expires_at = ?3, refresh_lock_until = 0,
+              last_error = NULL, updated_at = ?4
+        WHERE id = 1`
+    )
+      .bind(
+        await qboSeal(env, refreshToken),
+        realmId,
+        Number(body.refreshExpiresAt) || Date.now() + 100 * 24 * 60 * 60 * 1000,
+        new Date().toISOString()
+      )
+      .run()
+    try {
+      const stored = await qboConnection(env)
+      await qboRefreshCompanyName(env, await qboEnsureFresh(env, stored, true))
+    } catch (err) {
+      const message = String((err && err.message) || err)
+      await qboNoteError(env, message)
+      return json({ ok: false, error: message }, 400)
+    }
+    return json(await qboStatusBody(env))
+  }
+
+  // ---- The connection test, and the company name --------------------------
+  if (route === 'company' && request.method === 'GET') {
+    const conn = await qboConnection(env)
+    if (!conn || !conn.refreshToken) {
+      return json({ ok: false, error: 'QuickBooks is not connected on the relay.' }, 409)
+    }
+    try {
+      const info = await qboRefreshCompanyName(env, await qboEnsureFresh(env, conn, false))
+      return json({ ok: true, companyName: info.name, realmId: conn.realmId, info: info.raw })
+    } catch (err) {
+      const message = String((err && err.message) || err)
+      await qboNoteError(env, message)
+      return json({ ok: false, error: message }, 502)
+    }
+  }
+
+  // ---- Everything the app actually does day to day ------------------------
+  if (route === 'request' && request.method === 'POST') {
+    const body = await readJson(request)
+    const method = String(body.method || 'GET').toUpperCase()
+    if (method !== 'GET' && method !== 'POST') {
+      return json({ ok: false, error: 'Only GET and POST are allowed.' }, 400)
+    }
+    if (!qboSafePath(body.path)) {
+      return json({ ok: false, error: 'That is not a QuickBooks path this relay will call.' }, 400)
+    }
+    const conn = await qboConnection(env)
+    if (!conn || !conn.refreshToken || !conn.realmId) {
+      return json(
+        {
+          ok: false,
+          error:
+            'QuickBooks is not connected on the relay. The owner sets this up once, under ' +
+            'Invoices → QuickBooks.'
+        },
+        409
+      )
+    }
+    let result
+    try {
+      result = await qboFetch(env, conn, {
+        method,
+        path: String(body.path).trim(),
+        query: body.query && typeof body.query === 'object' ? body.query : {},
+        body: body.body
+      })
+    } catch (err) {
+      const message = String((err && err.message) || err)
+      await qboNoteError(env, message)
+      return json({ ok: false, error: message }, 502)
+    }
+    if (!result.ok) {
+      const message = describeQboFault(result.status, result.text)
+      await qboNoteError(env, message)
+      return json({ ok: false, error: message, status: result.status }, 200)
+    }
+    await qboNoteError(env, null)
+    let parsed = {}
+    try {
+      parsed = result.text ? JSON.parse(result.text) : {}
+    } catch {
+      return json({ ok: false, error: 'QuickBooks returned something that is not JSON.' }, 502)
+    }
+    return json({ ok: true, status: result.status, body: parsed })
+  }
+
+  // ---- Taking it apart again ----------------------------------------------
+  if (route === 'disconnect' && request.method === 'POST') {
+    const conn = await qboConnection(env)
+    if (conn && conn.refreshToken && conn.clientId && conn.clientSecret) {
+      // Tell Intuit if we can, but never let that stop the disconnect — a network
+      // failure must not leave the relay stuck claiming a connection.
+      try {
+        await fetch(QBO_REVOKE_URL, {
+          method: 'POST',
+          headers: {
+            authorization: qboBasicAuth(conn),
+            'content-type': 'application/json',
+            accept: 'application/json'
+          },
+          body: JSON.stringify({ token: conn.refreshToken })
+        })
+      } catch {
+        /* best effort */
+      }
+    }
+    await env.DB.prepare(
+      `UPDATE qbo_connection
+          SET access_token = NULL, refresh_token = NULL, realm_id = NULL, company_name = NULL,
+              expires_at = 0, refresh_expires_at = 0, refresh_lock_until = 0, last_error = NULL
+        WHERE id = 1`
+    ).run()
+    return json(await qboStatusBody(env))
+  }
+
+  /** Forget the app registration too, secret included. */
+  if (route === 'forget' && request.method === 'POST') {
+    await ensureQboTable(env)
+    await env.DB.prepare('DELETE FROM qbo_connection WHERE id = 1').run()
+    return json(await qboStatusBody(env))
+  }
+
+  return json({ ok: false, error: 'Not found.' }, 404)
+}
+
+/**
+ * The cheapest authenticated read there is, used as the connection test — and
+ * the only place the company name is learned.
+ *
+ * Stored rather than fetched per status call: the status route is polled by
+ * every screen that mentions QuickBooks, and an Intuit round trip behind each
+ * one would burn the rate limit on rendering a label.
+ */
+async function qboRefreshCompanyName(env, conn) {
+  const result = await qboFetch(env, conn, { path: `companyinfo/${conn.realmId}` })
+  if (!result.ok) throw new Error(describeQboFault(result.status, result.text))
+  let info = {}
+  try {
+    info = JSON.parse(result.text || '{}')
+  } catch {
+    info = {}
+  }
+  const company = (info && info.CompanyInfo) || {}
+  const name = String(company.CompanyName || company.LegalName || '')
+  await env.DB.prepare('UPDATE qbo_connection SET company_name = ?1, last_error = NULL WHERE id = 1')
+    .bind(name)
+    .run()
+  return { name, raw: company }
 }
 
 // ---------------------------------------------------------------------------

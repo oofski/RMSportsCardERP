@@ -20402,6 +20402,102 @@ button.sor-team:focus-visible {
 }
 
 /* ---------------------------------------------------------------------------
+   Where the connection lives, and the one-time move.
+
+   The strip leads the page because it is the only thing on it that changes what
+   the reader has to DO: "in the relay" means nothing, ever again; "on this
+   computer" means one person has one job left. It is coloured like a fact
+   rather than like an alert — it is true in both states, and a permanent red
+   banner stops being read within a week.
+   --------------------------------------------------------------------------- */
+.qbo-where {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 12px 15px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-2);
+}
+.qbo-where svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--text-3);
+}
+.qbo-where b {
+  color: var(--text);
+}
+.qbo-where[data-holder='relay'] {
+  border-color: var(--success);
+  background: var(--success-bg);
+}
+.qbo-where[data-holder='relay'] svg {
+  color: var(--success);
+}
+.qbo-where[data-holder='local'] {
+  border-color: var(--warning, var(--border));
+}
+.qbo-where-warn {
+  margin-top: 7px;
+  padding-top: 7px;
+  border-top: 1px solid var(--border);
+  color: var(--text-2);
+}
+.qbo-where-warn code {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11.5px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.qbo-promote {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px 18px;
+  border: 1px solid var(--accent, var(--border));
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.qbo-promote-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+}
+.qbo-promote-head svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--accent, var(--text-2));
+}
+.qbo-promote-head b {
+  display: block;
+  font-size: 14.5px;
+  color: var(--text);
+}
+.qbo-promote-head p {
+  margin: 2px 0 0;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.qbo-promote ul {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-2);
+  max-width: 68ch;
+}
+
+/* ---------------------------------------------------------------------------
    Steps 4 and 5 on a break's checklist.
 
    Not this break's to tick — packing is per package and scanning happens at the

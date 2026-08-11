@@ -19,10 +19,8 @@ import type { QboConfig, QboTokens } from '@shared/quickbooks'
 import {
   QBO_DEFAULT_REDIRECT_URI,
   QBO_REDIRECT_PORT,
-  QBO_REDIRECT_URI,
   QBO_REVOKE_URL,
-  QBO_TOKEN_URL,
-  buildAuthorizeUrl
+  QBO_TOKEN_URL
 } from '@shared/quickbooks'
 
 /** How long the operator gets to finish consenting before the listener closes. */
@@ -58,8 +56,14 @@ function closingPage(title: string, message: string): string {
  *
  * `state` is generated here and checked on the way back: without it, anything
  * that can reach localhost could feed this listener a code of its choosing.
+ *
+ * The URL is BUILT BY THE CALLER, from the state this function mints. That
+ * indirection exists because the client id may not be on this machine any more
+ * — when the relay holds the connection it builds the consent URL itself, so
+ * that the client id never has to be handed back to a laptop just to open a
+ * browser. The listener half is identical either way.
  */
-export function authorize(config: QboConfig): Promise<AuthorizeResult> {
+export function authorize(makeUrl: (state: string) => Promise<string> | string): Promise<AuthorizeResult> {
   return new Promise<AuthorizeResult>((resolve, reject) => {
     const state = randomUUID()
     let server: Server | null = null
@@ -132,10 +136,13 @@ export function authorize(config: QboConfig): Promise<AuthorizeResult> {
         () => finish(new Error('The QuickBooks connection timed out waiting for consent.')),
         CONSENT_TIMEOUT_MS
       )
-      // Explicitly the loopback URI: this listener is the only thing that can
-      // receive it, and `authorize()` is only ever called when that is the
-      // configured redirect. The default is now the Playground's.
-      void shell.openExternal(buildAuthorizeUrl(config.clientId, state, QBO_REDIRECT_URI))
+      // The caller always builds this against the loopback URI: this listener is
+      // the only thing that can receive it, and `authorize()` is only ever
+      // called when that is the configured redirect. The default is the
+      // Playground's, which lands somewhere this app cannot read.
+      void Promise.resolve(makeUrl(state))
+        .then((url) => shell.openExternal(url))
+        .catch((err: unknown) => finish(err instanceof Error ? err : new Error(String(err))))
     })
   })
 }

@@ -1,0 +1,581 @@
+/**
+ * QuickBooks, held by the relay instead of by a laptop.
+ *
+ * The connection moved into cloud/worker.js so that ONE holder exists. That
+ * change is mostly invisible when it works and expensive when it does not, and
+ * three parts of it fail silently by construction:
+ *
+ *   · THE ENCRYPTION AT REST. A wrong key derivation still produces a
+ *     ciphertext, still stores, and only fails on the day somebody tries to
+ *     read it back — which is the day the owner's invoices stop. So the round
+ *     trip is exercised for real, through the actual Worker functions, plus the
+ *     case that gets people: an envelope sealed under one key source being
+ *     opened after a second one is added.
+ *   · THE REFRESH RACE. Intuit rotates the refresh token on every refresh. Two
+ *     concurrent Worker invocations both finding a stale access token is
+ *     exactly the situation that used to exist between two laptops, and moving
+ *     the code to Cloudflare does not by itself fix it — the lease does.
+ *     Section 4 runs two refreshes at once and insists Intuit is called once.
+ *   · THE ROUTING DECISION. An unreachable relay must NOT make a machine fall
+ *     back to whatever stale tokens it still has. That would recreate the second
+ *     holder during an outage, when nobody is watching.
+ *
+ * Plus the two mirrored implementations. `isSafeQboPath` (app) and
+ * `qboSafePath` (Worker) are the same rule written twice in files that cannot
+ * import each other, which is the shape that drifts — so section 3 runs both
+ * over the same cases and fails if they ever disagree.
+ *
+ * No real credential is in this file. Every key, token and company id here is
+ * invented, and the encryption keys are generated inline.
+ *
+ * Run: npm run test:qbo-relay
+ */
+/* eslint-disable @typescript-eslint/no-var-requires */
+const {
+  chooseQboHolder,
+  describePromotionBlock,
+  describeRelayFailure,
+  explainQboRelayProblem,
+  isRelayTransportFailure,
+  isSafeQboPath,
+  promotionBlock,
+  promotionSummary,
+  qboNotConnectedReason
+} = require('../src/shared/quickbooksRelay')
+
+// The Worker itself, not a reimplementation of it. These named exports exist
+// purely so this suite can reach them; Cloudflare only ever calls fetch().
+const worker = require('../cloud/worker.js')
+const { describeQboFault, qboConnection, qboEnsureFresh, qboOpen, qboSafePath, qboSeal } = worker
+
+let pass = 0
+let fail = 0
+const ok = (c: boolean, n: string, e = ''): void => {
+  if (c) {
+    pass++
+    console.log('  ok   ' + n)
+  } else {
+    fail++
+    console.log(`  FAIL ${n}${e ? ' — ' + e : ''}`)
+  }
+}
+
+// Invented throughout. Shapes only.
+const FAKE_CLIENT_ID = 'ABtest0000000000000000000000000000000'
+const FAKE_SECRET = 'secret-that-is-not-real-0000000000000000'
+const FAKE_REFRESH_1 = 'refresh-token-one-0000000000000000000000'
+const FAKE_REFRESH_2 = 'refresh-token-two-1111111111111111111111'
+const FAKE_ACCESS_1 = 'access-token-one-000000000000'
+const FAKE_ACCESS_2 = 'access-token-two-111111111111'
+const FAKE_REALM = '9341454816183285'
+const ENC_KEY = 'enc-key-for-tests-only-aaaaaaaaaaaaaaaaaaaa'
+const SHARED = 'shared-key-for-tests-only-bbbbbbbbbbbbbbbb'
+
+// ---------------------------------------------------------------------------
+// A D1 stand-in.
+//
+// One row, and an interpreter over exactly the statements Job 6 issues. Real
+// enough for the thing under test: `changes` on a conditional UPDATE is what the
+// refresh lease is built on, so it is reported honestly rather than always 1.
+// ---------------------------------------------------------------------------
+interface Row {
+  client_id: string | null
+  client_secret: string | null
+  redirect_uri: string | null
+  realm_id: string | null
+  company_name: string | null
+  access_token: string | null
+  refresh_token: string | null
+  expires_at: number
+  refresh_expires_at: number
+  refresh_lock_until: number
+  last_error: string | null
+  updated_at: string | null
+}
+
+function makeDb(row: Row | null): { DB: unknown; peek: () => Row | null } {
+  let stored: Row | null = row ? { ...row } : null
+
+  const exec = (sql: string, args: unknown[]): { results: unknown[]; meta: { changes: number } } => {
+    const one = (n: number): unknown => args[n - 1]
+    if (sql.includes('CREATE TABLE')) return { results: [], meta: { changes: 0 } }
+    if (sql.includes('SELECT * FROM qbo_connection')) {
+      return { results: stored ? [stored] : [], meta: { changes: 0 } }
+    }
+    if (!stored) return { results: [], meta: { changes: 0 } }
+    if (sql.includes('SET refresh_lock_until = ?1') && sql.includes('refresh_lock_until < ?2')) {
+      // The claim. Conditional, and this is the whole point of the fake.
+      if (stored.refresh_lock_until < Number(one(2))) {
+        stored.refresh_lock_until = Number(one(1))
+        return { results: [], meta: { changes: 1 } }
+      }
+      return { results: [], meta: { changes: 0 } }
+    }
+    if (sql.includes('SET refresh_lock_until = 0 WHERE id = 1')) {
+      stored.refresh_lock_until = 0
+      return { results: [], meta: { changes: 1 } }
+    }
+    if (sql.includes('SET access_token = ?1, refresh_token = ?2')) {
+      stored.access_token = one(1) as string
+      stored.refresh_token = one(2) as string
+      stored.realm_id = one(3) as string
+      stored.expires_at = Number(one(4))
+      stored.refresh_expires_at = Number(one(5))
+      stored.refresh_lock_until = 0
+      stored.last_error = null
+      stored.updated_at = one(6) as string
+      return { results: [], meta: { changes: 1 } }
+    }
+    if (sql.includes('SET last_error = ?1')) {
+      stored.last_error = (one(1) as string) ?? null
+      return { results: [], meta: { changes: 1 } }
+    }
+    if (sql.includes('SET company_name = ?1')) {
+      stored.company_name = one(1) as string
+      return { results: [], meta: { changes: 1 } }
+    }
+    throw new Error('the D1 stand-in does not know this statement: ' + sql.slice(0, 60))
+  }
+
+  return {
+    peek: () => (stored ? { ...stored } : null),
+    DB: {
+      prepare(sql: string) {
+        let bound: unknown[] = []
+        const stmt = {
+          bind(...a: unknown[]) {
+            bound = a
+            return stmt
+          },
+          async run() {
+            return exec(sql, bound)
+          },
+          async first() {
+            return exec(sql, bound).results[0] ?? null
+          },
+          async all() {
+            return exec(sql, bound)
+          }
+        }
+        return stmt
+      },
+      async batch(list: Array<{ run: () => Promise<unknown> }>) {
+        const out = []
+        for (const s of list) out.push(await s.run())
+        return out
+      }
+    }
+  }
+}
+
+async function main(): Promise<void> {
+  // -------------------------------------------------------------------------
+  console.log('=== 1. encryption at rest ===')
+  // -------------------------------------------------------------------------
+  const encEnv = { DB: makeDb(null).DB, QBO_ENC_KEY: ENC_KEY, SHARED_KEY: SHARED }
+  const sealed = await qboSeal(encEnv, FAKE_REFRESH_1)
+
+  ok(typeof sealed === 'string' && sealed.startsWith('qbo1.d.'), 'the dedicated key is preferred')
+  ok(!sealed.includes(FAKE_REFRESH_1), 'and the plaintext is nowhere in the envelope')
+  ok((await qboOpen(encEnv, sealed)) === FAKE_REFRESH_1, 'it round-trips')
+
+  const again = await qboSeal(encEnv, FAKE_REFRESH_1)
+  ok(again !== sealed, 'sealing the same value twice gives two different envelopes')
+  ok((await qboOpen(encEnv, again)) === FAKE_REFRESH_1, 'and both open')
+
+  // The salt is per record; without it, two fields sealed under one secret would
+  // share a key and an AES-GCM nonce, which is the one thing GCM does not survive.
+  ok(sealed.split('.')[2] !== again.split('.')[2], 'because the salt is fresh each time')
+
+  const sharedOnly = { DB: makeDb(null).DB, SHARED_KEY: SHARED }
+  const sharedSealed = await qboSeal(sharedOnly, FAKE_SECRET)
+  ok(sharedSealed.startsWith('qbo1.s.'), 'with no dedicated key it falls back to the shared one')
+  ok((await qboOpen(sharedOnly, sharedSealed)) === FAKE_SECRET, 'and that round-trips too')
+
+  // THE CASE THAT BREAKS A NAIVE IMPLEMENTATION. The owner sets QBO_ENC_KEY
+  // after connecting. Everything already stored was sealed under SHARED_KEY, and
+  // an implementation that simply used "the best key available" would fail to
+  // open any of it — as an AES-GCM tag mismatch, which names nothing.
+  const upgraded = { DB: makeDb(null).DB, QBO_ENC_KEY: ENC_KEY, SHARED_KEY: SHARED }
+  ok(
+    (await qboOpen(upgraded, sharedSealed)) === FAKE_SECRET,
+    'an envelope sealed under the shared key still opens after a dedicated key is added'
+  )
+  ok(
+    (await qboSeal(upgraded, FAKE_SECRET)).startsWith('qbo1.d.'),
+    'while anything sealed from then on uses the better key'
+  )
+
+  let changedKeyError = ''
+  try {
+    await qboOpen({ DB: encEnv.DB, QBO_ENC_KEY: ENC_KEY + 'x', SHARED_KEY: SHARED }, sealed)
+  } catch (err) {
+    changedKeyError = (err as Error).message
+  }
+  ok(changedKeyError !== '', 'a changed encryption key refuses rather than returning rubbish')
+  ok(
+    /secret .*has changed|could not be decrypted/i.test(changedKeyError),
+    'and says the secret changed, which is the only thing that causes it',
+    changedKeyError
+  )
+  ok(!changedKeyError.includes(FAKE_REFRESH_1), 'and never echoes the value it failed on')
+
+  let malformed = ''
+  try {
+    await qboOpen(encEnv, 'not-an-envelope')
+  } catch (err) {
+    malformed = (err as Error).message
+  }
+  ok(malformed !== '', 'a malformed envelope is refused')
+
+  // -------------------------------------------------------------------------
+  console.log('\n=== 2. Intuit faults, described the same on both sides ===')
+  // -------------------------------------------------------------------------
+  const fault = JSON.stringify({
+    Fault: { Error: [{ Message: 'Invalid Reference Id', Detail: 'Names element id not found' }] }
+  })
+  ok(
+    describeQboFault(400, fault) === 'QuickBooks: Invalid Reference Id — Names element id not found',
+    'the message and the detail both survive',
+    describeQboFault(400, fault)
+  )
+  ok(
+    describeQboFault(400, JSON.stringify({ fault: { error: [{ message: 'Nope' }] } })) ===
+      'QuickBooks: Nope',
+    'and the lower-case variant Intuit also sends is read'
+  )
+  ok(/accounting scope/.test(describeQboFault(403, 'not json')), 'a 403 names the likely cause')
+  ok(/rate limiting/.test(describeQboFault(429, '')), 'a 429 says to try again')
+  ok(/HTTP 500/.test(describeQboFault(500, '<html>')), 'and anything else falls back to the status')
+
+  // -------------------------------------------------------------------------
+  console.log('\n=== 3. path safety — two implementations, one rule ===')
+  // -------------------------------------------------------------------------
+  const paths: Array<[string, boolean]> = [
+    ['invoice', true],
+    ['query', true],
+    ['invoice/123', true],
+    ['companyinfo/9341454816183285', true],
+    ['preferences', true],
+    ['', false],
+    ['/invoice', false],
+    ['\\invoice', false],
+    ['../v3/company/999/invoice', false],
+    ['invoice/../../other', false],
+    ['https://evil.example/invoice', false],
+    ['invoice?operation=delete', false],
+    ['invoice 123', false],
+    ['inv oice', false],
+    ['a'.repeat(400), false]
+  ]
+  for (const [path, expected] of paths) {
+    const label = path.length > 30 ? path.slice(0, 27) + '…' : path || '(empty)'
+    ok(isSafeQboPath(path) === expected, `app: ${label} → ${expected}`)
+    ok(qboSafePath(path) === expected, `worker: ${label} → ${expected}`)
+  }
+
+  // -------------------------------------------------------------------------
+  console.log('\n=== 4. the refresh race, which is the reason for all of this ===')
+  // -------------------------------------------------------------------------
+  const staleRow = async (env: { QBO_ENC_KEY?: string; SHARED_KEY?: string; DB: unknown }): Promise<Row> => ({
+    client_id: FAKE_CLIENT_ID,
+    client_secret: await qboSeal(env, FAKE_SECRET),
+    redirect_uri: null,
+    realm_id: FAKE_REALM,
+    company_name: 'Invented Cards LLC',
+    access_token: await qboSeal(env, FAKE_ACCESS_1),
+    refresh_token: await qboSeal(env, FAKE_REFRESH_1),
+    // An hour ago: stale by any measure, including the five-minute skew.
+    expires_at: Date.now() - 60 * 60 * 1000,
+    refresh_expires_at: Date.now() + 90 * 24 * 60 * 60 * 1000,
+    refresh_lock_until: 0,
+    last_error: null,
+    updated_at: new Date().toISOString()
+  })
+
+  const realFetch = globalThis.fetch
+  let tokenCalls = 0
+  const intuitAnswers = (): void => {
+    globalThis.fetch = (async () => {
+      tokenCalls++
+      // A LITTLE SLOWER THAN INSTANT, on purpose. A fetch that resolves in the
+      // same microtask never lets a second caller reach the claim, so the race
+      // this section exists to test would not occur.
+      await new Promise((r) => setTimeout(r, 60))
+      return new Response(
+        JSON.stringify({
+          access_token: FAKE_ACCESS_2,
+          refresh_token: FAKE_REFRESH_2,
+          expires_in: 3600,
+          x_refresh_token_expires_in: 8726400
+        }),
+        { status: 200 }
+      )
+    }) as typeof fetch
+  }
+
+  try {
+    // -- one caller, stale token -> exactly one refresh, rotation stored ------
+    {
+      const db = makeDb(null)
+      const env = { DB: db.DB, QBO_ENC_KEY: ENC_KEY }
+      const seeded = makeDb(await staleRow(env))
+      const env2 = { DB: seeded.DB, QBO_ENC_KEY: ENC_KEY }
+      tokenCalls = 0
+      intuitAnswers()
+      const conn = await qboConnection(env2)
+      const fresh = await qboEnsureFresh(env2, conn, false)
+      ok(tokenCalls === 1, 'a stale access token is refreshed once', String(tokenCalls))
+      ok(fresh.accessToken === FAKE_ACCESS_2, 'and the new access token comes back')
+      const after = seeded.peek() as Row
+      ok(
+        (await qboOpen(env2, after.refresh_token)) === FAKE_REFRESH_2,
+        'THE ROTATED REFRESH TOKEN IS STORED — keeping the old one works once more and then stops'
+      )
+      ok(after.refresh_lock_until === 0, 'and the lease is released')
+      ok(after.expires_at > Date.now(), 'and the new expiry is in the future')
+    }
+
+    // -- two callers at once -> still exactly one refresh ---------------------
+    {
+      const seeded = makeDb(await staleRow({ DB: makeDb(null).DB, QBO_ENC_KEY: ENC_KEY }))
+      const env = { DB: seeded.DB, QBO_ENC_KEY: ENC_KEY }
+      tokenCalls = 0
+      intuitAnswers()
+      const go = async (): Promise<{ accessToken: string }> =>
+        qboEnsureFresh(env, await qboConnection(env), false)
+      const [a, b] = await Promise.all([go(), go()])
+      ok(
+        tokenCalls === 1,
+        'two admins pressing send in the same second produce ONE call to Intuit',
+        `${tokenCalls} calls`
+      )
+      ok(
+        a.accessToken === FAKE_ACCESS_2 && b.accessToken === FAKE_ACCESS_2,
+        'and both of them end up with the token that was actually issued'
+      )
+      ok(
+        (await qboOpen(env, (seeded.peek() as Row).refresh_token)) === FAKE_REFRESH_2,
+        'and the stored refresh token is the single rotation, not a discarded second one'
+      )
+    }
+
+    // -- a token that is still good is left alone -----------------------------
+    {
+      const row = await staleRow({ DB: makeDb(null).DB, QBO_ENC_KEY: ENC_KEY })
+      row.expires_at = Date.now() + 60 * 60 * 1000
+      const seeded = makeDb(row)
+      const env = { DB: seeded.DB, QBO_ENC_KEY: ENC_KEY }
+      tokenCalls = 0
+      intuitAnswers()
+      const conn = await qboConnection(env)
+      const same = await qboEnsureFresh(env, conn, false)
+      ok(tokenCalls === 0, 'a live access token is not refreshed for nothing')
+      ok(same.accessToken === FAKE_ACCESS_1, 'and is used as it stands')
+    }
+
+    // -- a token inside the skew IS refreshed ---------------------------------
+    {
+      const row = await staleRow({ DB: makeDb(null).DB, QBO_ENC_KEY: ENC_KEY })
+      // Two minutes left: valid, and inside the five-minute skew. A call that
+      // starts here would otherwise land just the wrong side of expiry.
+      row.expires_at = Date.now() + 2 * 60 * 1000
+      const seeded = makeDb(row)
+      const env = { DB: seeded.DB, QBO_ENC_KEY: ENC_KEY }
+      tokenCalls = 0
+      intuitAnswers()
+      await qboEnsureFresh(env, await qboConnection(env), false)
+      ok(tokenCalls === 1, 'a token about to expire is refreshed before it is used')
+    }
+
+    // -- a failed refresh releases the lease ----------------------------------
+    {
+      const seeded = makeDb(await staleRow({ DB: makeDb(null).DB, QBO_ENC_KEY: ENC_KEY }))
+      const env = { DB: seeded.DB, QBO_ENC_KEY: ENC_KEY }
+      globalThis.fetch = (async () =>
+        new Response(JSON.stringify({ error: 'invalid_grant' }), { status: 400 })) as typeof fetch
+      let threw = ''
+      try {
+        await qboEnsureFresh(env, await qboConnection(env), false)
+      } catch (err) {
+        threw = (err as Error).message
+      }
+      ok(threw !== '', 'a refused refresh throws')
+      ok(
+        (seeded.peek() as Row).refresh_lock_until === 0,
+        'AND RELEASES THE LEASE — holding it would make every later call wait for a refresh that already failed'
+      )
+    }
+
+    // -- an expired refresh token does not even try ---------------------------
+    {
+      const row = await staleRow({ DB: makeDb(null).DB, QBO_ENC_KEY: ENC_KEY })
+      row.refresh_expires_at = Date.now() - 1000
+      const seeded = makeDb(row)
+      const env = { DB: seeded.DB, QBO_ENC_KEY: ENC_KEY }
+      tokenCalls = 0
+      intuitAnswers()
+      let threw = ''
+      try {
+        await qboEnsureFresh(env, await qboConnection(env), false)
+      } catch (err) {
+        threw = (err as Error).message
+      }
+      ok(/re-authorised|approve again/i.test(threw), 'an expired grant says to approve again', threw)
+      ok(tokenCalls === 0, 'without spending a call on a token Intuit has already retired')
+    }
+  } finally {
+    globalThis.fetch = realFetch
+  }
+
+  // -------------------------------------------------------------------------
+  console.log('\n=== 5. which holder answers the next call ===')
+  // -------------------------------------------------------------------------
+  const holder = (relayConfigured: boolean, relayHolds: boolean, localConnected: boolean): string =>
+    chooseQboHolder({ relayConfigured, relayHolds, localConnected })
+
+  ok(holder(true, true, false) === 'relay', 'a laptop with nothing of its own uses the relay')
+  ok(holder(true, true, true) === 'relay', 'AND SO DOES ONE THAT STILL HAS LOCAL TOKENS')
+  ok(holder(true, false, true) === 'local', 'a relay holding nothing leaves the local grant in charge')
+  ok(holder(false, false, true) === 'local', 'a standalone build uses its own')
+  ok(holder(true, false, false) === 'none', 'and nothing anywhere is nothing')
+  ok(holder(false, true, false) === 'none', 'a relay this build is not wired to does not count')
+
+  // The rule that keeps the guarantee during an outage. `relayHolds` is what the
+  // relay LAST said, so an unreachable relay does not change the answer — the
+  // laptop reports the relay as unreachable instead of quietly promoting itself
+  // to second holder and refreshing a grant Intuit rotates.
+  ok(
+    holder(true, true, true) === 'relay',
+    'an unreachable relay does not hand the grant back to a laptop'
+  )
+
+  const reason = qboNotConnectedReason({
+    relayConfigured: true,
+    relayHolds: false,
+    localConnected: false
+  })
+  ok(/relay/i.test(reason) && /once/i.test(reason), 'the not-connected message points at the relay', reason)
+  ok(
+    !/this computer/i.test(reason) || /not on this computer/i.test(reason),
+    'and does not send an admin to set anything up on their own machine',
+    reason
+  )
+  const standalone = qboNotConnectedReason({
+    relayConfigured: false,
+    relayHolds: false,
+    localConnected: false
+  })
+  ok(
+    /Cloud sync/.test(standalone),
+    'while a standalone build is told where the relay setting is',
+    standalone
+  )
+
+  // -------------------------------------------------------------------------
+  console.log('\n=== 6. a failure that names the relay, not QuickBooks ===')
+  // -------------------------------------------------------------------------
+  const outdated = explainQboRelayProblem('Relay error 404.')
+  ok(/older copy of cloud\/worker\.js/.test(outdated), 'a 404 names the stale paste', outdated)
+  ok(/CLOUDFLARE\.md/.test(outdated), 'and the document with the four clicks in it')
+
+  const unauthorised = explainQboRelayProblem('Relay error 401.')
+  ok(
+    /shared key/i.test(unauthorised) && /not QuickBooks/i.test(unauthorised),
+    'a 401 is the relay refusing us, and says so',
+    unauthorised
+  )
+
+  const dead = explainQboRelayProblem('fetch failed')
+  ok(/cloud relay/i.test(dead), 'anything else is still attributed to the relay', dead)
+  ok(
+    /invoice itself is saved/i.test(dead),
+    'AND SAYS THE INVOICE IS SAFE — that is the sentence that stops somebody raising it twice',
+    dead
+  )
+  ok(dead.startsWith('fetch failed'), 'while keeping the original text rather than inventing one')
+  ok(explainQboRelayProblem('') !== '', 'an empty error still says something')
+
+  ok(isRelayTransportFailure('fetch failed'), 'a dead socket is a transport failure')
+  ok(isRelayTransportFailure('Relay error 500.'), 'and so is a relay 500')
+  ok(
+    !isRelayTransportFailure('QuickBooks: Invalid Reference Id — Names element id not found'),
+    'AND AN INTUIT REFUSAL IS NOT — retrying that unchanged never works'
+  )
+  ok(
+    !isRelayTransportFailure('QuickBooks has no customer called “Nobody”.'),
+    'nor is a missing customer'
+  )
+
+  // The attribution itself, which is the decision the two above exist to make.
+  const missingCustomer = 'QuickBooks has no customer called “Nobody”. Add them in QuickBooks first.'
+  ok(
+    describeRelayFailure(missingCustomer) === missingCustomer,
+    'a business refusal is passed through word for word — it is the actionable one',
+    describeRelayFailure(missingCustomer)
+  )
+  ok(
+    describeRelayFailure('QuickBooks: Invalid Reference Id — Names element id not found') ===
+      'QuickBooks: Invalid Reference Id — Names element id not found',
+    'and so is an Intuit fault'
+  )
+  ok(
+    describeRelayFailure('QuickBooks is not connected on the relay.').startsWith('QuickBooks is not'),
+    'and so is the relay saying nobody has connected it'
+  )
+  ok(
+    /cloud relay/i.test(describeRelayFailure('fetch failed')),
+    'while a dead socket is named as the relay'
+  )
+  ok(
+    /older copy of cloud\/worker\.js/.test(describeRelayFailure('Relay error 404.')),
+    'and a stale Worker is named as a stale Worker'
+  )
+
+  // -------------------------------------------------------------------------
+  console.log('\n=== 7. the one-time move ===')
+  // -------------------------------------------------------------------------
+  const block = (r: boolean, rc: boolean, lc: boolean, lt: boolean): string | null =>
+    promotionBlock({
+      relayConfigured: r,
+      relayConnected: rc,
+      localConfigured: lc,
+      localConnected: lt
+    })
+
+  ok(block(true, false, true, true) === null, 'the owner’s connected laptop can move it')
+  ok(block(false, false, true, true) === 'no-relay', 'a standalone build has nowhere to move it to')
+  ok(block(true, true, true, true) === 'already-there', 'a relay already holding one needs no move')
+  ok(block(true, false, false, false) === 'no-local-config', 'no keys here means nothing to move')
+  ok(block(true, false, true, false) === 'no-local-tokens', 'keys without a grant is not a move')
+  ok(describePromotionBlock(null) === null, 'and a clear path has nothing to explain')
+  ok(
+    /Cloud sync/.test(describePromotionBlock('no-relay') as string),
+    'each refusal says what to do instead'
+  )
+
+  const summary = promotionSummary('Invented Cards LLC')
+  ok(summary.length >= 4, 'the summary lists what will happen')
+  ok(summary.some((l: string) => l.includes('Invented Cards LLC')), 'and names the company')
+  ok(
+    summary.some((l: string) => /ERASED|erased|deleted/.test(l)),
+    'AND SAYS THE LOCAL COPY IS ERASED — before the button, because that half cannot be undone'
+  )
+  ok(
+    summary.some((l: string) => /nothing is changed|stays connected/i.test(l)),
+    'and that a failure changes nothing'
+  )
+  ok(
+    promotionSummary(null).every((l: string) => !l.includes('undefined') && !l.includes('null')),
+    'an unnamed company does not leak a placeholder into the sentence'
+  )
+
+  // -------------------------------------------------------------------------
+  console.log(`\n${pass} passed, ${fail} failed`)
+  if (fail > 0) process.exit(1)
+}
+
+void main().catch((err) => {
+  console.error(err)
+  process.exit(1)
+})

@@ -492,6 +492,131 @@ that machine's clock or timezone is wrong, not the relay.
 
 ---
 
+## QuickBooks — connect once, for everybody
+
+This is the section that answers "I do not want to touch the QuickBooks invoice
+setup on any admin laptop after I set it up once."
+
+After the steps below, the connection lives in the Worker. Every admin, on any
+machine, and the web app, raise invoices that reach QuickBooks. Nobody sets
+anything up. Nobody is handed a client secret. A new admin joining does nothing
+at all.
+
+### Why it is not simply copied onto every laptop
+
+Two reasons, and the first is the one that bites.
+
+**Intuit rotates the refresh token every time it is used.** A refresh hands back
+a *new* refresh token and retires the one that was sent. Put the same connection
+on three laptops and two of them will eventually refresh inside the same hour:
+whichever stored last is the only one still holding a live token, and the others
+do not find out for another hour — in the middle of somebody raising an invoice,
+as an authentication error that mentions none of this. One holder does not
+reduce that risk. It removes it.
+
+**The client secret would be on every machine.** Which means rotating it and
+reconnecting everybody the day somebody leaves.
+
+### Step Q1 — Set the encryption secret (do this first)
+
+D1 rows are readable in this dashboard by anybody who can open the account, and
+a D1 export is a plain file. So the client secret and both tokens are encrypted
+before they are stored. The key comes from a Worker secret.
+
+1. Worker → **Settings** → **Variables and Secrets** → **Add**.
+2. Type: **Secret**. Name: `QBO_ENC_KEY`.
+3. Value: any long random string. Thirty-plus characters. Generate it in a
+   password manager; you never type it again and nothing needs a copy of it.
+4. **Deploy**.
+
+**Do this before connecting, not after.** Anything already stored was sealed
+with the old key and stays readable — the Worker records which key sealed what —
+but the point is to have the good key in force from the start.
+
+**Do not lose it and do not change it.** Losing it means disconnecting and
+approving again, which is the three steps below and about two minutes. It does
+not put anything in QuickBooks at risk.
+
+If you skip this entirely, it still works: the tokens are sealed with
+`SHARED_KEY` instead, and the QuickBooks screen in the app says so in plain
+words. That is weaker because `SHARED_KEY` is compiled into every laptop's
+build, so a stolen laptop plus a database export would be enough to open them.
+`QBO_ENC_KEY` exists only here.
+
+### Step Q2 — Re-paste cloud/worker.js
+
+The QuickBooks routes live in that file. A Worker deployed before this feature
+existed answers them with a 404, and the app will tell you exactly that if you
+forget. Worker → **Edit code** → select all → paste the current
+`cloud/worker.js` → **Deploy**.
+
+There is **no table to create.** The Worker makes `qbo_connection` the first
+time anything is stored, the same way it makes the notification and lockout
+tables.
+
+### Step Q3 — Connect, in the app, once
+
+On any admin machine: **Invoices → QuickBooks**. Three steps, unchanged from
+before — but they now write to the relay rather than to that computer.
+
+1. Paste the Client ID and Client Secret from the Intuit developer portal
+   (**Keys & credentials**, Production tab).
+2. **Open QuickBooks consent**, approve, pick the company.
+3. Paste the whole address the browser landed on.
+
+The strip at the top of that screen then reads *"The QuickBooks connection lives
+in the cloud relay."* That is the finished state. Nothing further happens on any
+machine.
+
+### Already connected on one laptop? Move it instead
+
+If QuickBooks is connected on your machine today, do **not** disconnect and
+start over — there is a one-time button that moves the existing connection
+across, keeping the grant you already approved.
+
+**Invoices → QuickBooks → "Move it to the relay"**, on the machine that is
+connected. In order:
+
+1. The client id, the client secret and the live grant are copied to the relay
+   and encrypted there.
+2. The relay immediately refreshes the token and calls QuickBooks with it. This
+   proves the grant works *through the relay* before anything else happens.
+3. **Only if that succeeds**, the keys and the tokens are erased from that
+   computer.
+
+If step 2 fails, nothing is changed and that laptop stays connected exactly as
+it was. If it succeeds, that machine holds no QuickBooks credentials at all —
+which is the entire point, because a laptop still holding a grant Intuit rotates
+is a second holder.
+
+### What everybody else does
+
+Nothing. Not now, not when they get a new laptop, not when they join. An admin
+who opens **Invoices → QuickBooks** sees the same green strip and no fields.
+
+### When something goes wrong
+
+**"The relay does not have the QuickBooks routes…"** — Step Q2. The Worker is
+running an older paste of `cloud/worker.js`, and nothing in this dashboard says
+so.
+
+**"…That is the cloud relay, not QuickBooks — the invoice itself is saved
+here."** — Cloudflare could not be reached. The invoice is on the laptop with
+`Retry` beside it, and QuickBooks is fine. Press retry when the connection is
+back.
+
+**"The stored QuickBooks credentials could not be decrypted…"** — `QBO_ENC_KEY`
+was changed or removed. Put it back, or disconnect and run Step Q3 again.
+
+**"The QuickBooks connection has expired…"** — Intuit's refresh tokens last
+about 100 days and are renewed on every use, so this only appears after a long
+silence. Run Step Q3 again; there is nothing to repair.
+
+**Disconnecting disconnects everyone.** That is what one holder means, and the
+app asks before doing it.
+
+---
+
 ## The customer form
 
 1. **Admin → Cloud sync → Customer form links**.
