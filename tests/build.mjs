@@ -18,6 +18,32 @@ if (!entry || !outfile) {
   process.exit(1)
 }
 
+/**
+ * THE SUITES RUN ON THE BUSINESS'S CLOCK, not the developer's.
+ *
+ * RM operates in US Central, and that is what @shared/businessTime measures
+ * every business day and every ledger instant against. The suites, though, build
+ * their fixtures with `new Date(2026, 6, 12, 19)` and render their fake Whatnot
+ * exports with local getters — the MACHINE's zone on both sides. That is
+ * self-consistent wherever it runs, which is exactly why it could never see the
+ * bug it was hiding: on a UTC machine the fixture means 7pm UTC while the ledger
+ * parser correctly reads "7:00 PM" as 7pm Central, and a show matches none of
+ * its own sales. The suite went green on the owner's laptop and red in a
+ * container, for the same reason the web app did.
+ *
+ * Pinning the zone here makes every suite deterministic and makes the fixtures
+ * mean what they say. It is set as a BANNER so it runs before any module in the
+ * bundle touches a date — Node re-reads TZ on assignment, but only for dates
+ * created afterwards.
+ *
+ * `RMOPS_TEST_TZ_PASSTHROUGH` is the deliberate escape hatch, and exactly one
+ * caller uses it: tests/businessTime.test.ts spawns itself in three different
+ * zones to prove desktop and web now agree. Forcing the zone on those children
+ * would make that proof vacuous.
+ */
+const TZ_BANNER =
+  "if (!process.env.RMOPS_TEST_TZ_PASSTHROUGH) process.env.TZ = process.env.RMOPS_TEST_TZ || 'America/Chicago';"
+
 await build({
   entryPoints: [resolve(ROOT, entry)],
   outfile: resolve(ROOT, outfile),
@@ -25,6 +51,7 @@ await build({
   platform: 'node',
   format: 'cjs',
   logLevel: 'warning',
+  banner: { js: TZ_BANNER },
   // Native module: must stay a real require, not be inlined.
   external: ['better-sqlite3'],
   plugins: [

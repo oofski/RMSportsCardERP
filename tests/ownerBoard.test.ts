@@ -376,8 +376,22 @@ ok(dana?.dueAt === '16:00', 'and still carrying when they were due', String(dana
 
 // A CLOSED entry the same day adds to the total rather than creating a second
 // person — somebody who clocks out for lunch is still one person.
-const outIso = new Date(Date.now() - 60 * 60 * 1000).toISOString()
-const inIso = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString()
+// ANCHORED TO LOCAL MIDNIGHT, not to "three hours ago".
+//
+// `employeesToday` counts entries whose clock_in falls on the local day, so a
+// pair placed three hours back stops being today's for the first three hours
+// after midnight — and this suite now runs on the business's Central clock,
+// where that window is a real time of night somebody might run the tests. The
+// assertion was not wrong, it was only true for 21 hours a day.
+//
+// 01:00 to 03:00 local is inside today at every hour of every day. The clock_out
+// is in the future when the suite runs before 3am, which the board handles: a
+// closed entry is scored by subtracting its two stored instants, never against
+// the wall clock.
+const midnight = new Date()
+midnight.setHours(0, 0, 0, 0)
+const inIso = new Date(midnight.getTime() + 60 * 60 * 1000).toISOString()
+const outIso = new Date(midnight.getTime() + 3 * 60 * 60 * 1000).toISOString()
 getDb()
   .prepare(
     `INSERT INTO time_entries (id, employee_id, clock_in, clock_out, note, source, created_at)

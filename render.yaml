@@ -36,6 +36,17 @@ services:
         value: production
       - key: RMOPS_DATA_DIR
         value: /data
+      # THE BUSINESS CLOCK. Every business day and every ledger instant is
+      # measured against this, and it must NOT be left to the container — Docker
+      # gives this image UTC, and a ledger row is a naked wall clock with no
+      # offset. Parsed as UTC, an evening show's sales land five hours before the
+      # show itself and match nothing, while the same file imported on the
+      # owner's laptop matched fine. That divergence is the whole reason this
+      # key exists. `America/Chicago` is also the code default, so this line is
+      # documentation as much as configuration; change both together if the
+      # business ever moves.
+      - key: RMOPS_BUSINESS_TZ
+        value: America/Chicago
       # Render terminates TLS and forwards x-forwarded-for, so those headers can
       # be believed here. Off by default, because on a directly-reachable machine
       # they are whatever the caller typed and the login throttle is worthless.

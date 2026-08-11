@@ -19,6 +19,7 @@ import { registerScheduleIpc } from './scheduleIpc'
 import { registerInvoicesIpc } from './invoicesIpc'
 import { registerPerformanceIpc } from './performanceIpc'
 import { getDb, closeDb } from './db/database'
+import { configureBusinessTimeZone } from './util'
 import { initUpdater } from './services/updater'
 import { initCloudSync, stopCloudSync } from './services/cloudSync'
 
@@ -103,6 +104,9 @@ app.whenReady().then(() => {
     electronIpcMain.handle(channel, handler as Parameters<typeof electronIpcMain.handle>[1])
   })
 
+  // Name the business clock BEFORE anything reads or writes a date. Every
+  // business day and every ledger instant is measured against it.
+  configureBusinessTimeZone()
   // Initialise the database up front so a failure surfaces early.
   getDb()
   // Before the window opens, so the new password is on screen at the same time

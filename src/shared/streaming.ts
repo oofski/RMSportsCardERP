@@ -18,6 +18,7 @@
  * ambiguous, and there would be no correct way to resolve it later.
  */
 
+import { businessDayOf } from './businessTime'
 import type { LotPick } from './costLots'
 import type { StockUnit } from './units'
 
@@ -329,17 +330,19 @@ export interface SetStreamItemCost {
 // ---------------------------------------------------------------------------
 
 /**
- * The LOCAL calendar date of an instant, as YYYY-MM-DD.
+ * The BUSINESS calendar date of an instant, as YYYY-MM-DD.
  *
- * Deliberately local rather than UTC. A show that starts at 9pm Eastern is
- * dated 02:00 UTC the NEXT day, so a UTC key would file every evening stream
- * under tomorrow — precisely the bug this module exists to avoid.
+ * Measured in the business timezone (@shared/businessTime), never in UTC and
+ * never in the running machine's zone. A show that starts at 9pm Central is
+ * 02:00 UTC the NEXT day, so a UTC key files every evening stream under
+ * tomorrow — precisely the bug this module exists to avoid.
+ *
+ * "The machine's zone" used to stand in for the business zone, and it is right
+ * only on the owner's own laptop. The identical code runs on Render in a
+ * container whose zone is UTC, where it dated every evening show a day late.
  */
 export function streamDateOf(iso: string): string {
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return ''
-  const pad = (n: number): string => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+  return businessDayOf(iso)
 }
 
 /**

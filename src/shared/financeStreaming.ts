@@ -42,6 +42,7 @@
 // back for costing. Taken from the unit contract rather than restated, so a
 // price typed into the P&L means exactly what the same price typed into the
 // Streaming module means.
+import { businessStamp, instantFromWallClock } from './businessTime'
 import type { StockUnit } from './units'
 
 // ---------------------------------------------------------------------------
@@ -355,9 +356,17 @@ const LEDGER_DATE_RE = /^([A-Z][a-z]{2})\s+(\d{1,2}),\s*(\d{4}),\s*(\d{1,2}):(\d
  * locale, and a silent misparse here would move money between days without any
  * error surfacing. An explicit regex fails loudly instead.
  *
- * The string carries no offset, so it is interpreted in the MACHINE'S local
- * zone, which is correct for a desktop app used in one place: the operator's
- * clock and Whatnot's display agree.
+ * The string carries NO OFFSET, so a zone has to be supplied, and it is the
+ * BUSINESS zone (@shared/businessTime) — the clock Whatnot's export is written
+ * against, because it is the clock the seller's account is set to.
+ *
+ * It used to be the MACHINE'S zone, on the reasoning that a desktop app is used
+ * in one place. That reasoning does not survive the web build: the same import
+ * runs on Render, whose container zone is UTC, and every row parsed there landed
+ * five hours before the show that earned it. Sessions are written by the browser
+ * on the owner's laptop and were therefore correct, so the two sides disagreed
+ * and an evening show matched none of its own sales. Naming the zone makes the
+ * desktop and the server produce identical instants for identical bytes.
  *
  * Returns null when the shape is unrecognised — the caller must quarantine that
  * row rather than guess at it.
@@ -371,12 +380,21 @@ export function parseLedgerDate(value: string): string | null {
   const year = Number(m[3])
   let hour = Number(m[4]) % 12
   if (m[7] === 'PM') hour += 12
-  const d = new Date(year, month, day, hour, Number(m[5]), Number(m[6]), 0)
-  if (Number.isNaN(d.getTime())) return null
   // Reject a date the calendar rolled over (e.g. "Feb 31") rather than
-  // accepting JS's silent normalisation to March 3.
-  if (d.getDate() !== day || d.getMonth() !== month || d.getFullYear() !== year) return null
-  return d.toISOString()
+  // accepting a silent normalisation to March 3. Checked on the WALL CLOCK,
+  // before it becomes an instant, because that is where the rollover happens.
+  const dim = new Date(Date.UTC(year, month + 1, 0)).getUTCDate()
+  if (day < 1 || day > dim) return null
+  const ms = instantFromWallClock({
+    year,
+    month: month + 1,
+    day,
+    hour,
+    minute: Number(m[5]),
+    second: Number(m[6])
+  })
+  if (!Number.isFinite(ms)) return null
+  return new Date(ms).toISOString()
 }
 
 /**
@@ -414,17 +432,20 @@ export function parseLedgerAmount(value: string): number | null {
  * month abbreviation — would make every stored row look new and silently
  * double the archive on the next upload.
  *
- * Built from local wall-clock parts rather than the instant, so a machine that
- * changes timezone does not re-identify every row it already has.
+ * Built from BUSINESS wall-clock parts rather than the instant, so a machine
+ * that changes timezone does not re-identify every row it already has.
+ *
+ * It must move in lockstep with `parseLedgerDate`, and that is what makes this
+ * change safe to ship against an existing database. Both used to read the
+ * machine's zone; both now read the business zone. The digits are the CSV's own
+ * wall clock either way — parse in a zone, format in the same zone, and the
+ * original characters come back — so every fingerprint already stored still
+ * matches, on the desktop AND on the server. Changing only one of the two would
+ * re-identify every row in the archive and silently double it on the next
+ * upload.
  */
 export function canonicalLedgerTimestamp(iso: string): string {
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return ''
-  const p = (n: number, w = 2): string => String(n).padStart(w, '0')
-  return (
-    p(d.getFullYear(), 4) + p(d.getMonth() + 1) + p(d.getDate()) +
-    p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds())
-  )
+  return businessStamp(iso)
 }
 
 /**
@@ -453,13 +474,40 @@ export function ledgerFingerprintSource(
   message: string,
   txnType: string
 ): string {
+  return ledgerFingerprintSourceStamped(
+    canonicalLedgerTimestamp(occurredAtIso),
+    amount,
+    listingId,
+    orderId,
+    message,
+    txnType
+  )
+}
+
+/**
+ * The same identity, with the timestamp component SUPPLIED rather than derived.
+ *
+ * The timezone repair in main/db/financeStreaming.ts has to ask "would this
+ * row's fingerprint come out right if its instant had been read in THAT zone",
+ * which needs the stamp injected. It goes through this function rather than
+ * rebuilding the join, because the separator below is load-bearing and two
+ * copies of it would eventually stop agreeing.
+ */
+export function ledgerFingerprintSourceStamped(
+  stamp: string,
+  amount: number,
+  listingId: string,
+  orderId: string,
+  message: string,
+  txnType: string
+): string {
   const c = Math.round(amount * 100)
   // Joined on the ASCII unit separator, which cannot occur in any of these
   // fields. An empty join would leave the boundaries ambiguous — ("ab","cdef")
   // and ("abc","def") would hash identically — and the failure mode is a real
   // row silently swallowed as a duplicate: money gone, no error anywhere.
   return [
-    canonicalLedgerTimestamp(occurredAtIso),
+    stamp,
     String(c),
     (listingId || '').trim(),
     (orderId || '').trim(),

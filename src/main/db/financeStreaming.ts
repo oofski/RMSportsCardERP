@@ -140,6 +140,7 @@ import {
   emptyDayFinance,
   findCarryBackSession,
   ledgerFingerprintSource,
+  ledgerFingerprintSourceStamped,
   mergeCogsItems,
   mergeMarketplaceItems,
   mergeRateSlices,
@@ -149,6 +150,7 @@ import {
   pnlChecksum,
   rowInSession
 } from '@shared/financeStreaming'
+import { businessStamp, instantFromWallClock, wallClockOf } from '@shared/businessTime'
 import { computePackagingCosts } from '@shared/packagingCosts'
 import type { StreamSession } from '@shared/streaming'
 import { durationMinutes, isSuspiciouslyLong, streamDateOf } from '@shared/streaming'
@@ -1285,6 +1287,130 @@ export interface ReattributeSummary {
   inWindow: number
   carriedBack: number
   unattributed: number
+  /** Sessions whose business day was re-derived from their start instant. */
+  sessionsRedated: number
+  /** Rows whose instant was proved to have been parsed in the wrong zone. */
+  rowsRezoned: number
+  /**
+   * Rows whose stored fingerprint matches NEITHER hypothesis. Left untouched on
+   * purpose — an instant nothing can vouch for is not one to rewrite.
+   */
+  rowsUnprovable: number
+  /** Business days whose total changed, and by how many cents. */
+  centsMovedByDay: Array<{ day: string; cents: number }>
+}
+
+/**
+ * THE HISTORICAL HALF: an instant that was parsed in the wrong zone.
+ *
+ * Whatnot's export writes a naked wall clock. Whoever imported it turned that
+ * into an instant using their own zone — Central on the owner's laptop, UTC in
+ * the Render container — so a file uploaded through the web app stored every row
+ * five hours early, and the shows those rows belonged to matched none of them.
+ *
+ * Those stored instants look identical to honest ones. `2026-08-06T18:20:00Z`
+ * could be a desktop import of 1:20 PM or a server import of 6:20 PM, and the
+ * instant alone cannot tell you which. Guessing would move real money onto the
+ * wrong day permanently.
+ *
+ * THE FINGERPRINT SETTLES IT, and this is why the repair is safe to run.
+ *
+ * A row's fingerprint is a sha256 over its ORIGINAL wall-clock digits plus five
+ * fields that are all still stored on the row. The digits are the CSV's own
+ * characters whichever zone parsed them — parse in a zone, format in the same
+ * zone, and the original comes back — so the fingerprint is a witness to what
+ * the file actually said, and it survived the bug intact.
+ *
+ * So each row is TESTED rather than assumed. Read its stored instant back in the
+ * business zone and rebuild the fingerprint: a match means the importer's clock
+ * agreed with the business clock and the instant is right. Read it in UTC and
+ * rebuild again: a match means it was parsed by the container, and the true
+ * instant is those same digits re-read in the business zone. A row that matches
+ * neither is left exactly as it is and counted, because the alternative is
+ * inventing a timestamp.
+ *
+ * Two consequences worth stating. On a desktop-only database every row passes
+ * the first test, nothing is written, and this costs one hash per row. And the
+ * repair is idempotent: once a row is corrected it matches the business-zone
+ * hypothesis, so a second run leaves it alone.
+ */
+interface FingerprintableRow {
+  occurred_at: string
+  amount: number
+  listing_id: string | null
+  order_id: string | null
+  message: string
+  txn_type: string
+  fingerprint: string
+}
+
+/** Does the row's own fingerprint confirm its instant was read in OUR zone? */
+function fingerprintVouchesFor(r: FingerprintableRow): boolean {
+  return (
+    createHash('sha256')
+      .update(
+        ledgerFingerprintSourceStamped(
+          businessStamp(r.occurred_at),
+          r.amount,
+          r.listing_id || '',
+          r.order_id || '',
+          r.message,
+          r.txn_type
+        )
+      )
+      .digest('hex') === r.fingerprint
+  )
+}
+
+/**
+ * Revenue per business day, in cents — the before/after of the repair.
+ *
+ * Deliberately the same shape on both sides of the change, so the difference is
+ * a real movement of money and not two different questions being compared.
+ */
+function dayTotals(db: Database): Map<string, number> {
+  const rows = db
+    .prepare(
+      `SELECT stream_date AS day, SUM(amount) AS total
+         FROM ledger_rows
+        WHERE stream_date IS NOT NULL AND bucket <> 'payout'
+        GROUP BY stream_date`
+    )
+    .all() as Array<{ day: string; total: number }>
+  const out = new Map<string, number>()
+  for (const r of rows) out.set(r.day, Math.round((r.total ?? 0) * 100))
+  return out
+}
+
+function rezonedInstant(r: FingerprintableRow): string | null {
+  const fpWith = (stamp: string): string =>
+    createHash('sha256')
+      .update(
+        ledgerFingerprintSourceStamped(
+          stamp,
+          r.amount,
+          r.listing_id || '',
+          r.order_id || '',
+          r.message,
+          r.txn_type
+        )
+      )
+      .digest('hex')
+
+  // Hypothesis 1 — imported by a clock that agreed with the business zone.
+  if (fpWith(businessStamp(r.occurred_at)) === r.fingerprint) return null
+
+  // Hypothesis 2 — imported by the UTC container. Its wall-clock reading IS the
+  // CSV's original text, so re-reading that text in the business zone gives the
+  // instant the row should always have had.
+  const utcStamp = businessStamp(r.occurred_at, 'UTC')
+  if (fpWith(utcStamp) !== r.fingerprint) return null
+  const wc = wallClockOf(new Date(r.occurred_at).getTime(), 'UTC')
+  if (!wc) return null
+  const ms = instantFromWallClock(wc)
+  if (!Number.isFinite(ms)) return null
+  const iso = new Date(ms).toISOString()
+  return iso === r.occurred_at ? null : iso
 }
 
 /**
@@ -1301,6 +1427,72 @@ export function reattributeAll(actorId: string | null): Result<ReattributeSummar
   void actorId
   const db = getDb()
   const run = db.transaction((): Result<ReattributeSummary> => {
+    /**
+     * STEP 1 — the sessions' business day, re-derived.
+     *
+     * `stream_date` is DERIVED from `started_at`, and the container computed it
+     * in UTC: a show that began at 8pm Central was filed under the next day.
+     * The instants themselves are untouched here and never need to be — they
+     * were written by the BROWSER, on the owner's own laptop, and were correct
+     * all along. Only the day label was wrong, and it is recomputed rather than
+     * guessed.
+     */
+    let sessionsRedated = 0
+    {
+      const all = db
+        .prepare('SELECT id, started_at, stream_date FROM stream_sessions')
+        .all() as Array<{ id: string; started_at: string; stream_date: string }>
+      const fix = db.prepare('UPDATE stream_sessions SET stream_date = ? WHERE id = ?')
+      for (const s of all) {
+        const want = streamDateOf(s.started_at)
+        if (want && want !== s.stream_date) {
+          fix.run(want, s.id)
+          sessionsRedated += 1
+        }
+      }
+    }
+
+    /**
+     * STEP 2 — instants that were parsed in the wrong zone, where the stored
+     * fingerprint proves it. See `rezonedInstant`. Rows it cannot vouch for are
+     * left exactly as they are.
+     */
+    let rowsRezoned = 0
+    let rowsUnprovable = 0
+    {
+      const all = db
+        .prepare(
+          `SELECT id, occurred_at, amount, listing_id, order_id, message, txn_type, fingerprint
+             FROM ledger_rows`
+        )
+        .all() as Array<{
+        id: string
+        occurred_at: string
+        amount: number
+        listing_id: string | null
+        order_id: string | null
+        message: string
+        txn_type: string
+        fingerprint: string
+      }>
+      const fix = db.prepare('UPDATE ledger_rows SET occurred_at = ? WHERE id = ?')
+      for (const r of all) {
+        const corrected = rezonedInstant(r)
+        if (corrected) {
+          fix.run(corrected, r.id)
+          rowsRezoned += 1
+        } else if (!fingerprintVouchesFor(r)) {
+          rowsUnprovable += 1
+        }
+      }
+    }
+
+    // What every business day held BEFORE re-attribution, so the operator can be
+    // told how much money moved rather than asked to take it on trust.
+    const beforeByDay = dayTotals(db)
+
+    // Loaded AFTER the re-dating above, so the windows carry their corrected
+    // business day.
     const sessions = loadSessions(db, null, null)
     const rows = db
       .prepare(
@@ -1333,7 +1525,11 @@ export function reattributeAll(actorId: string | null): Result<ReattributeSummar
       rowsReclassified: 0,
       inWindow: 0,
       carriedBack: 0,
-      unattributed: 0
+      unattributed: 0,
+      sessionsRedated,
+      rowsRezoned,
+      rowsUnprovable,
+      centsMovedByDay: []
     }
 
     for (const r of rows) {
@@ -1398,6 +1594,17 @@ export function reattributeAll(actorId: string | null): Result<ReattributeSummar
       )
       if (movedNow) summary.rowsMoved += 1
       if (reclassedNow) summary.rowsReclassified += 1
+    }
+
+    // The numbers the owner actually has to trust: which days changed, and by
+    // how much. Surfaced on the summary rather than left in a log, because
+    // "1,254 rows moved" is not something anybody can check and "6 Aug gained
+    // $12,904.11" is.
+    const afterByDay = dayTotals(db)
+    const days = new Set([...beforeByDay.keys(), ...afterByDay.keys()])
+    for (const day of [...days].sort()) {
+      const delta = (afterByDay.get(day) ?? 0) - (beforeByDay.get(day) ?? 0)
+      if (delta !== 0) summary.centsMovedByDay.push({ day, cents: delta })
     }
     return { ok: true, data: summary }
   })

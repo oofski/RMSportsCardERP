@@ -1,5 +1,31 @@
 import { randomBytes, randomUUID } from 'crypto'
+import { DEFAULT_BUSINESS_TIME_ZONE, setBusinessTimeZone } from '@shared/businessTime'
 import type { UploadedFile } from '@shared/types'
+
+/**
+ * Point the app at the business timezone, once, at boot.
+ *
+ * Called by BOTH entry points — `main/index.ts` for the desktop app and
+ * `server/index.ts` for the web build — because the whole class of bug this
+ * guards against is the two disagreeing. The desktop inherits a Central laptop
+ * and the Render container is UTC, and until the zone was named the ledger
+ * importer used whichever one it happened to be running on.
+ *
+ * `RMOPS_BUSINESS_TZ` is the override, so moving the business or adding a second
+ * location is an environment change rather than a code change. An unrecognised
+ * value is REFUSED and reported, leaving the default in force: silently falling
+ * back to the machine's zone is the exact failure being eliminated.
+ */
+export function configureBusinessTimeZone(): string {
+  const wanted = (process.env.RMOPS_BUSINESS_TZ ?? '').trim()
+  if (!wanted) return DEFAULT_BUSINESS_TIME_ZONE
+  if (setBusinessTimeZone(wanted)) return wanted
+  console.error(
+    `[businessTime] RMOPS_BUSINESS_TZ="${wanted}" is not a timezone this platform knows. ` +
+      `Falling back to ${DEFAULT_BUSINESS_TIME_ZONE}.`
+  )
+  return DEFAULT_BUSINESS_TIME_ZONE
+}
 
 export function newId(): string {
   return randomUUID()

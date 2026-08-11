@@ -4,6 +4,7 @@ import { statSync } from 'node:fs'
 import { BYTES_TAG, IPC } from '@shared/ipc'
 import { effectivePermissions, type Permission } from '@shared/permissions'
 import { getDb } from '../main/db/database'
+import { configureBusinessTimeZone } from '../main/util'
 import { getEmployeeById } from '../main/db/employees'
 import { runAs } from '../main/services/session'
 import { invokeHandler, registeredHandlers, setRegistrationSink } from '../main/ipcRegistry'
@@ -811,6 +812,19 @@ function assertDurableStorage(): void {
 
 export function startServer(options: ServerOptions = {}): Server {
   assertDurableStorage()
+
+  /**
+   * The business clock, named before a single date is read or written.
+   *
+   * This line is the whole difference between the two builds. The container
+   * has no TZ set — `node:22-bookworm-slim` is UTC — so everything that used
+   * the machine's zone was measuring the company's day five hours early. A
+   * ledger CSV uploaded through the browser was parsed HERE while the show it
+   * belonged to was written by the browser on a Central laptop, and the two
+   * never lined up: an evening show matched none of its own sales.
+   */
+  const zone = configureBusinessTimeZone()
+  console.log(`[businessTime] business day and ledger instants measured in ${zone}.`)
 
   // Collect the handlers without binding them to Electron — there is none here.
   setRegistrationSink(() => {})
