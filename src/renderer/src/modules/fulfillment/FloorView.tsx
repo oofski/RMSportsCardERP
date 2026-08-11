@@ -124,6 +124,24 @@ export function FloorView({ canFind, canPack, onGoTo, onChanged }: ShipTabProps)
         {who && (
           <>
             <h3 className="floor-ask">What are you doing?</h3>
+            {/* The night's state, before choosing. Counted FORWARDS out of the
+                floor's total, because "0 of 100 picked" is what somebody
+                arriving wants to know and "100 to pick" is the same fact
+                phrased as a warning. Both jobs are shown to both people: a
+                packer with nothing in the queue needs to see that the picking
+                has not started, not an empty screen. */}
+            <div className="floor-progress">
+              <ProgressStat
+                label="Picked"
+                done={board?.progress.picked ?? 0}
+                total={board?.progress.total ?? 0}
+              />
+              <ProgressStat
+                label="Packed"
+                done={board?.progress.packed ?? 0}
+                total={board?.progress.total ?? 0}
+              />
+            </div>
             <div className="floor-jobs">
               <JobButton
                 icon="ListChecks"
@@ -164,18 +182,21 @@ export function FloorView({ canFind, canPack, onGoTo, onChanged }: ShipTabProps)
           <b>{session.operatorName ?? 'Someone'}</b>
           <em>{session.role === 'pick' ? 'picking' : 'packing'}</em>
         </span>
+        {/* Both counters, on both jobs, all evening. A picker who cannot see
+            the packing falling behind cannot decide to go and help, and a
+            packer who cannot see the picking has no idea whether an empty
+            queue means "wait" or "we are done". */}
         <span className="floor-counts">
-          {session.role === 'pick' ? (
-            <>
-              <b>{board?.toPick ?? 0}</b> to pick
-              {(board?.packQueue ?? 0) > 0 && (
-                <span className="floor-behind">· {board?.packQueue} waiting to pack</span>
-              )}
-            </>
-          ) : (
-            <>
-              <b>{board?.packQueue ?? 0}</b> waiting
-            </>
+          <span className={`floor-count ${session.role === 'pick' ? 'mine' : ''}`}>
+            <b className="mono">{board?.progress.picked ?? 0}</b>
+            <span className="floor-count-of mono">/{board?.progress.total ?? 0}</span> picked
+          </span>
+          <span className={`floor-count ${session.role === 'pack' ? 'mine' : ''}`}>
+            <b className="mono">{board?.progress.packed ?? 0}</b>
+            <span className="floor-count-of mono">/{board?.progress.total ?? 0}</span> packed
+          </span>
+          {(board?.packQueue ?? 0) > 0 && (
+            <span className="floor-behind">{board?.packQueue} in the pack queue</span>
           )}
         </span>
         <Button size="sm" variant="ghost" icon="RotateCcw" disabled={busy} onClick={() => void switchJob()}>
@@ -217,6 +238,7 @@ export function FloorView({ canFind, canPack, onGoTo, onChanged }: ShipTabProps)
           }}
           onSendBack={() => void doSendBack(current)}
           onAdvance={() => void advance(current)}
+          upNext={session.role === 'pack' ? board?.upNext ?? [] : []}
         />
       ) : (
         <Idle
@@ -366,6 +388,41 @@ export function FloorView({ canFind, canPack, onGoTo, onChanged }: ShipTabProps)
   }
 }
 
+/**
+ * One job's progress, counted forwards: "0 / 100 picked".
+ *
+ * The rail is drawn even at zero. An empty rail is the reading "none of this
+ * has happened", which is the true state at the start of a night and the one
+ * the old backlog counters could not express — "100 to pick" and "0 picked" are
+ * the same fact, and only one of them tells somebody where the night is.
+ */
+function ProgressStat({
+  label,
+  done,
+  total
+}: {
+  label: string
+  done: number
+  total: number
+}): JSX.Element {
+  const pct = total > 0 ? Math.round((done / total) * 100) : 0
+  const complete = total > 0 && done >= total
+  return (
+    <div className={`floor-stat ${complete ? 'done' : ''}`}>
+      <div className="floor-stat-top">
+        <span className="floor-stat-label">{label}</span>
+        <span className="floor-stat-n mono">
+          <b>{done}</b>
+          <span className="floor-stat-of">/{total}</span>
+        </span>
+      </div>
+      <span className="floor-stat-rail" aria-hidden="true">
+        <span style={{ width: `${pct}%` }} />
+      </span>
+    </div>
+  )
+}
+
 function JobButton({
   icon,
   title,
@@ -492,7 +549,8 @@ function OrderPane({
   onStartSendBack,
   onCancelSendBack,
   onSendBack,
-  onAdvance
+  onAdvance,
+  upNext
 }: {
   order: ShipStationOrder
   role: ShipStationRole
@@ -508,6 +566,8 @@ function OrderPane({
   onCancelSendBack: () => void
   onSendBack: () => void
   onAdvance: () => void
+  /** The packing queue behind this box, oldest first. Empty for a picker. */
+  upNext: Array<{ customerId: string; handle: string; realName: string | null; cards: number }>
 }): JSX.Element {
   const detail = order.detail
 
@@ -611,9 +671,45 @@ function OrderPane({
         )}
 
         {/* The customer's own slip. A picker who cannot see the paper cannot do
-            the job the paper is for. */}
+            the job the paper is for. Every page of it: a slip that runs onto a
+            second sheet is one order, and showing only the first hides half the
+            cards from the person collecting them. */}
         <SlipPane pages={order.pages} label={`@${order.handle}`} />
       </div>
+
+      {/* WHAT IS BEHIND THIS BOX.
+          The packer used to see one order and a number, which reads as work
+          appearing out of nowhere and gives no sense of whether the bench is
+          keeping up. The queue is strictly the order the pickers handed things
+          over in — the first one sent stays at the front until it is packed —
+          so this is a look down the line, not a list to choose from. It is
+          deliberately not clickable: taking things out of order is how two
+          people end up packing the same box. */}
+      {upNext.length > 0 && (
+        <div className="floor-queue">
+          <div className="floor-queue-head">
+            <Icon name="Layers" size={14} />
+            <b>Next in the queue</b>
+            <span className="floor-queue-note">
+              in the order the pickers sent them
+            </span>
+          </div>
+          <ol className="floor-queue-list">
+            {upNext
+              .filter((o) => o.customerId !== order.customerId)
+              .map((o, i) => (
+                <li key={o.customerId}>
+                  <span className="floor-queue-n mono">{i + 1}</span>
+                  <b>@{o.handle}</b>
+                  {o.realName && <em>{o.realName}</em>}
+                  <span className="floor-queue-cards mono">
+                    {o.cards} {o.cards === 1 ? 'card' : 'cards'}
+                  </span>
+                </li>
+              ))}
+          </ol>
+        </div>
+      )}
     </>
   )
 }

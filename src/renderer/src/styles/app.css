@@ -18610,19 +18610,165 @@ button.sor-team:focus-visible {
   font-size: 11.5px;
   font-weight: 700;
 }
+/* Two counters, both jobs, counted FORWARDS. The one belonging to the job this
+   person is doing is the loud one; the other is context they still need — a
+   picker deciding whether to go and help pack, a packer deciding whether an
+   empty queue means "wait" or "we are finished". */
 .floor-counts {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
   margin-left: auto;
   font-size: 13px;
   color: var(--text-3);
 }
+.floor-count {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+}
 .floor-counts b {
   font-size: 17px;
-  color: var(--text);
+  color: var(--text-3);
   font-variant-numeric: tabular-nums;
 }
+.floor-count.mine b {
+  color: var(--text);
+}
+.floor-count-of {
+  color: var(--text-3);
+  font-size: 13px;
+}
 .floor-behind {
-  margin-left: 6px;
   font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface-2);
+}
+
+/* The night's state on the way in, before picking a job. */
+.floor-progress {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  width: min(560px, 100%);
+  margin: 0 auto 14px;
+}
+.floor-stat {
+  padding: 11px 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius, 10px);
+  background: var(--surface);
+}
+.floor-stat-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+.floor-stat-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+.floor-stat-n {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+}
+.floor-stat-n b {
+  font-size: 19px;
+  color: var(--text);
+}
+.floor-stat.done .floor-stat-n b {
+  color: var(--success-strong);
+}
+.floor-stat-of {
+  font-size: 13px;
+}
+/* Drawn at zero on purpose — an empty rail is "none of this has happened",
+   which is the true reading at the start of a night. */
+.floor-stat-rail {
+  display: block;
+  height: 5px;
+  margin-top: 8px;
+  border-radius: 999px;
+  background: var(--surface-3, var(--surface-2));
+  overflow: hidden;
+}
+.floor-stat-rail > span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--brand-500);
+  transition: width 0.2s ease;
+}
+.floor-stat.done .floor-stat-rail > span {
+  background: var(--success-strong);
+}
+
+/* What is stacked up behind the box in the packer's hands.
+   Strictly the order the pickers handed things over in, and deliberately NOT
+   clickable — taking one out of the middle is how two people end up packing
+   the same box. */
+.floor-queue {
+  margin: 14px 0 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius, 10px);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.floor-queue-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 13px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px;
+  color: var(--text);
+}
+.floor-queue-head svg {
+  color: var(--text-3);
+}
+.floor-queue-note {
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+.floor-queue-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.floor-queue-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  padding: 6px 13px;
+  font-size: 13px;
+}
+.floor-queue-n {
+  flex: none;
+  width: 18px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+  font-size: 12px;
+}
+.floor-queue-list em {
+  font-style: normal;
+  color: var(--text-2);
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.floor-queue-cards {
+  margin-left: auto;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
 }
 .floor-strip {
   display: flex;

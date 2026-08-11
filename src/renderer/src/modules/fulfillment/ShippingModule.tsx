@@ -26,7 +26,7 @@ import { WithSlipMode } from './WithSlipMode'
  *         the slip prints them, which is how both picking and mailing are really
  *         done. The whole-night list is still here, one click away, for a lead
  *         scanning what is left.
- * Bench   picking or packing, one order in front of you
+ * Fulfillment  picking or packing, one order in front of you
  *
  * Flags, Setup and History left for Admin, where a lead already goes to run the
  * show. None of the three is a thing anybody does with cards in their hands, and
@@ -156,7 +156,7 @@ export function ShippingModule(): JSX.Element {
     // The bench. Deliberately its own tab rather than a mode of Orders: a
     // picker and a packer are doing different jobs on different screens, and
     // the whole point is that neither is looking at the other's list.
-    { id: 'floor', label: 'Bench', icon: 'Boxes', badge: 0 }
+    { id: 'floor', label: 'Fulfillment', icon: 'Boxes', badge: 0 }
   ]
 
   const tabProps: ShipTabProps = { summary, canManage, canFind, canPack, onChanged: reload, onGoTo: setTab }

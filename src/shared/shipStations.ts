@@ -303,6 +303,29 @@ export interface ShipStationSession {
   startedAt: string
 }
 
+/**
+ * The night's progress, in ORDERS, counted forwards.
+ *
+ * The bench used to report only what was left — "26 to pick", "57 waiting" —
+ * which is the same information upside down and answers a different question.
+ * Somebody starting a shift wants to know how much of the night is done, and at
+ * the start of fulfilment the true answer is 0 picked and 0 packed out of 100,
+ * whatever the breaks look like.
+ *
+ * Two separate jobs, so two separate counters. An order is PICKED when its
+ * picker handed it over, and PACKED when it is in a mailer with a label. One
+ * never implies the other, and a single "done" number could not say which had
+ * happened.
+ */
+export interface ShipFloorProgress {
+  /** Every live order on the floor — on-hold ones are nobody's work tonight. */
+  total: number
+  /** Handed over to packing (or already past it). */
+  picked: number
+  /** In a mailer, labelled, finished. */
+  packed: number
+}
+
 /** The whole floor view in one read. */
 export interface ShipStationBoard {
   session: ShipStationSession | null
@@ -310,6 +333,18 @@ export interface ShipStationBoard {
   toPick: number
   /** Handed over and waiting for a packer. */
   packQueue: number
+  /** How much of the night is DONE, for both jobs. Starts at 0 of N. */
+  progress: ShipFloorProgress
+  /**
+   * The packing queue itself, oldest handover first.
+   *
+   * A depth alone was not enough: a packer needs to see that four boxes are
+   * stacked up behind the one in their hands, and whose they are, or the bench
+   * feels like it is feeding them one order out of nowhere. Capped, because
+   * this is a glance at what is next and not the night's list — the count above
+   * is the honest total.
+   */
+  upNext: Array<{ customerId: string; handle: string; realName: string | null; cards: number }>
   /**
    * Orders the bench still owes a mailer, whoever is holding them.
    *

@@ -11,6 +11,7 @@ import {
   type ShipStationOrder,
   type ShipStationRole,
   type ShipStationSession,
+  type ShipFloorProgress,
   type ShipWorkClaim
 } from '@shared/shipStations'
 import type { ShipOrderRow } from '@shared/shippingViews'
@@ -642,10 +643,47 @@ export function getStationBoard(): ShipStationBoard {
       orderHandle: orders.find((o) => o.customerId === c.customerId)?.customer.handle ?? null
     }))
 
+  // Counted forwards, in orders, over the whole floor. An on-hold order is not
+  // tonight's work and is left out of the total rather than sitting in it as a
+  // package nobody may touch — which would make the night unfinishable.
+  const live = orders.filter((o) => !o.onHold)
+  const progress: ShipFloorProgress = {
+    total: live.length,
+    // Picked = it has left the picking bench, by THE SAME TEST the pack queue
+    // uses. Not a count of ticked cards and not a count of handovers: an order
+    // finished on the Orders screen has no claim, and one a packer rejected has
+    // every card still ticked. Either of those read on its own puts a number on
+    // this header that disagrees with the queue beside it — and a screen
+    // arguing with itself about how many orders are picked is worse than no
+    // number at all.
+    picked: live.filter(
+      (o) =>
+        !!o.packedAt ||
+        readyToPackAt({
+          claims: claimsForOrder(o.id, o.customerId),
+          cardsTotal: o.cardCount,
+          cardsChecked: o.pick.checked,
+          lastCheckedAt: lastCheckedAtFor(o.customerId)
+        }) !== null
+    ).length,
+    packed: live.filter((o) => !!o.packedAt).length
+  }
+
+  // Oldest handover first — the order sent first is the one a packer should be
+  // holding, and the rest queue behind it in the order they arrived.
+  const upNext = queue.slice(0, 12).map((o) => ({
+    customerId: o.customerId,
+    handle: o.handle,
+    realName: o.realName,
+    cards: o.cardsTotal
+  }))
+
   return {
     session,
     toPick,
     packQueue: queue.length,
+    progress,
+    upNext,
     // The room's figure, not this bench's: `queue` is what a packer standing
     // here may take, so it hides an order somebody else is holding. Anything
     // asking "is the packing finished" reads this one, because that is a

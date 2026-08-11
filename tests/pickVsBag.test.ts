@@ -56,7 +56,7 @@ const domain = require('../src/main/db/shippingDomain')
 const stations = require('../src/main/db/shipStations')
 const owner = require('../src/main/db/ownerDashboard')
 const { parsePages } = require('../src/main/shipping/parser')
-const { readyAllBreaks } = require('./support/bench')
+const { bagUnsoldTeams, readyAllBreaks } = require('./support/bench')
 
 let pass = 0
 let fail = 0
@@ -134,7 +134,10 @@ ok(board().toPick === 4, 'ALL FOUR are still to pick', String(board().toPick))
 ok(board().packQueue === 0, 'and the pack queue is still empty', String(board().packQueue))
 ok(orders().every((o) => o.pick.checked === 0), 'no order reads as part-picked')
 
-// The break's own progress DID move — that work really happened.
+// The break's own progress DID move — that work really happened. "Check all"
+// only reaches the cards somebody bought, so the teams nobody bought are bagged
+// separately, exactly as they are on a real bench. Both are step 3.
+bagUnsoldTeams('maya')
 const anyBreak = domain.listBreaks()[0]
 ok(anyBreak.checkedTeams === anyBreak.totalTeams, 'the bench recorded its own work', String(anyBreak.checkedTeams))
 
@@ -241,6 +244,45 @@ const picked = getDb()
   .prepare('SELECT COUNT(*) AS n FROM ship_team_slots WHERE customer_id = ? AND picked_at IS NOT NULL')
   .get(head.customerId) as { n: number }
 ok(picked.n > 0, 'with a picked stamp on its cards', String(picked.n))
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 7b. the floor counts forwards: 0 picked, 0 packed of N ===')
+// ---------------------------------------------------------------------------
+// The number somebody arriving at a bench wants is how much of the night is
+// DONE. "26 to pick" is the same fact upside down and cannot say whether the
+// packing has started at all.
+//
+// Note where this sits. Section 2 bagged every break — which must count for
+// nothing here. Section 3 picked alpha whole, and section 7 picked one more
+// through the station. So "picked" is 2: not 4, which is what bagging would
+// have given, and not 0. bravo is one card of two and does not count — a
+// part-picked order has not left the picking bench.
+//
+// "Picked" is deliberately the SAME test the pack queue keys on, so the header
+// and the queue beside it can never report different numbers.
+const p1 = board().progress
+ok(p1.total === 4, 'four live orders on the floor', String(p1.total))
+ok(p1.picked === 2, 'two picked — one whole, one through the station', String(p1.picked))
+ok(p1.picked === board().packQueue + 0, 'and it agrees with the pack queue', `${p1.picked} vs ${board().packQueue}`)
+ok(p1.packed === 0, 'and none packed', String(p1.packed))
+
+// Packing that order moves ONE counter, not both.
+const pack = stations.packNext(null)
+ok(!!pack, 'the packer is handed the queued order', String(pack?.customerId))
+stations.packDone(pack.customerId, null)
+const p2 = board().progress
+ok(p2.packed === 1, 'now one is packed', String(p2.packed))
+ok(p2.picked === 2, 'and packing does not change how many were picked', String(p2.picked))
+ok(p2.total === 4, 'out of the same four', String(p2.total))
+
+// A held order is nobody's work tonight, so it leaves the denominator rather
+// than sitting in it as a package that can never be finished — which would
+// make the night permanently incomplete.
+const holdMe = orders().find((o: any) => !o.packedAt && !o.onHold)
+domain.setOrderHold(holdMe.id, true, 'damaged mailer')
+ok(board().progress.total === 3, 'a held order leaves the total', String(board().progress.total))
+domain.setOrderHold(holdMe.id, false, null)
+ok(board().progress.total === 4, 'and comes back when the hold lifts', String(board().progress.total))
 
 // ---------------------------------------------------------------------------
 console.log('\n=== 8. the v64 backfill, run against a floor mid-flight ===')
