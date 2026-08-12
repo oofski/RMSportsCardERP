@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 import type { InventoryProduct } from '@shared/types'
 import type { Freight } from '@shared/freight'
 import { LOCATION_IDS } from '@shared/inventory'
@@ -9,12 +9,11 @@ import { Button, Field, Input, Modal } from '../../components/ui'
 import { Icon } from '../../components/Icon'
 import { formatMoney } from '../../lib/format'
 import { FreightFields } from '../../components/FreightFields'
-import { ContactTypeahead } from './ContactTypeahead'
-import { DestinationPicker } from './DestinationPicker'
-import { LineDetailModal } from './LineDetailModal'
+import { DestinationSelect, SupplierSelect } from './PartySelect'
+import { LineSplitEditor } from './LineSplitEditor'
 import { POCatalogTypeahead } from './POCatalogTypeahead'
 import { PasteOfferPanel, type OfferDraftLine } from './PasteOfferPanel'
-import { splitProblem, splitTotal, type DraftLine } from './helpers'
+import { splitProblem, splitTotal, type DraftAllocation, type DraftLine } from './helpers'
 
 /**
  * Build a purchase order from catalog line items: a supplier + destination +
@@ -22,13 +21,9 @@ import { splitProblem, splitTotal, type DraftLine } from './helpers'
  * buy price with a live running total. Saves via api.purchaseOrders.create — the
  * new PO lands in the Ordered column.
  *
- * The supplier box searches the contact list and the suppliers already used on
- * previous POs, and picking one only fills the box in: the value sent is still
- * the free text this form has always sent. See ContactTypeahead.
- *
  * ## The destination is no longer a shelf
  *
- * It was a two-entry dropdown over RM and AM. It is now a picker over every
+ * It was a two-entry dropdown over RM and AM. It is now a dropdown over every
  * vendor and every invoice customer as well, because a purchase can be shipped
  * straight from the supplier to whoever bought it — and when it is, no box ever
  * arrives here and nothing is ever checked into stock. Nothing on this form
@@ -38,8 +33,24 @@ import { splitProblem, splitTotal, type DraftLine } from './helpers'
  * Each LINE can override the header, and each line can be SPLIT across several
  * destinations. The table shows both columns muted while they are inherited and
  * solid once they are not, so "everything goes to RM" and "this one line goes
- * somewhere else" are told apart without opening anything. The pop-out behind
- * the product cell is where the split is built — see LineDetailModal.
+ * somewhere else" are told apart without opening anything.
+ *
+ * ## Nothing here opens a second dialog
+ *
+ * The split editor used to be a modal stacked on this one, which covered the
+ * order while you were routing part of it. It is now a panel that expands under
+ * the row it belongs to, in this same table — see LineSplitEditor — and a line
+ * that is already split, or already going somewhere that does not hold stock,
+ * opens itself. Every control on this form is a control you can see.
+ *
+ * ## Nothing here is typed into either
+ *
+ * Supplier and destination are native <select>s, on the header, on every line
+ * and on every split, with an `Other…` option that reveals a text box for the
+ * first order from a new distributor. See PartySelect for why native rather than
+ * the typeaheads these replaced — the short version is that a floating menu
+ * inside a scrolling modal is a positioning bug waiting to happen, and the OS
+ * draws a <select>'s menu outside the page entirely.
  *
  * Two ways in, one way out. PasteOfferPanel reads a supplier's text message
  * into a review the operator confirms, and the typeahead adds one product at a
@@ -66,8 +77,15 @@ export function CreatePurchaseOrderModal({
     paymentTiming: null
   })
   const [lines, setLines] = useState<DraftLine[]>([])
-  /** The line whose pop-out is open, by product id. */
-  const [detailId, setDetailId] = useState<string | null>(null)
+  /**
+   * The rows somebody has pressed open or pressed shut, by product id.
+   *
+   * An OVERRIDE map rather than the set of open rows, because most rows are
+   * neither: `autoOpen` below decides for them, and a row that has never been
+   * touched has to keep following that decision. Storing "open" alone would mean
+   * a row could be opened by the rule and never closed by hand.
+   */
+  const [openOverride, setOpenOverride] = useState<Record<string, boolean>>({})
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -147,7 +165,65 @@ export function CreatePurchaseOrderModal({
 
   const removeLine = (productId: string): void => {
     setLines((prev) => prev.filter((l) => l.productId !== productId))
-    setDetailId((id) => (id === productId ? null : id))
+    // Otherwise a product removed and re-added would come back carrying whatever
+    // had been decided about a row that no longer exists.
+    setOpenOverride((o) => {
+      const next = { ...o }
+      delete next[productId]
+      return next
+    })
+  }
+
+  /**
+   * A row that is already doing something unusual is already open.
+   *
+   * "If you know it is a drop ship" was the complaint this answers: a line that
+   * has been split, or sent somewhere that does not hold stock, has detail the
+   * operator has to see, and making them click for it is exactly the pop-out
+   * that was removed.
+   *
+   * Deliberately the LINE's own destination and not its effective one. Inherited
+   * lines follow the header, so an order whose header is a drop-ship would open
+   * every row at once the moment that header was chosen — nine panels unfolding
+   * under a single click, telling nobody anything they had not just typed. The
+   * header already says where an inherited line is going; only a line that
+   * disagrees with it has something extra to show.
+   */
+  const autoOpen = (l: DraftLine): boolean =>
+    l.allocations.length > 0 || (l.destination !== null && !destinationHoldsStock(l.destination))
+
+  const isOpen = (l: DraftLine): boolean => openOverride[l.productId] ?? autoOpen(l)
+
+  const toggleLine = (l: DraftLine): void => {
+    const next = !isOpen(l)
+    setOpenOverride((o) => ({ ...o, [l.productId]: next }))
+  }
+
+  /**
+   * Re-route a line, without the panel moving underneath the hand that did it.
+   *
+   * `autoOpen` opens a row the moment its destination stops holding stock, which
+   * is the whole point of it — but read in the other direction it also SHUTS one
+   * the moment the destination goes back to a shelf, and a panel folding up
+   * because somebody corrected a dropdown is the row moving for a reason nobody
+   * asked for. So a row that was open when it was re-routed stays open, by hand
+   * from then on. Used for the supplier too, where it changes nothing, because a
+   * rule that applies to one of two identical-looking cells is a rule the next
+   * person will get wrong.
+   */
+  const routeLine = (l: DraftLine, patch: Partial<DraftLine>): void => {
+    const wasOpen = isOpen(l)
+    patchLine(l.productId, patch)
+    if (wasOpen) setOpenOverride((o) => ({ ...o, [l.productId]: true }))
+  }
+
+  const setAllocations = (l: DraftLine, allocations: DraftAllocation[]): void => {
+    patchLine(l.productId, { allocations })
+    // A split that was just added must be visible even if this row had been
+    // pressed shut — the Add split button lives inside the panel, so the only
+    // way to get here with a closed row is a race, but a closed row holding a
+    // half-built split is the one state this form must never sit in.
+    if (allocations.length > 0) setOpenOverride((o) => ({ ...o, [l.productId]: true }))
   }
 
   const grandTotal = useMemo(
@@ -159,6 +235,29 @@ export function CreatePurchaseOrderModal({
       }, 0),
     [lines]
   )
+
+  /**
+   * Why Create PO is refused, or null when it is not.
+   *
+   * I1 and I5, live rather than on submit. The pop-out used to hold this rule
+   * behind its own Save button; with the editor inline there is only one Save on
+   * this form, so the rule attaches to it — and the button carries the reason as
+   * its title, because a disabled control with no stated cause is the failure
+   * this codebase keeps writing down. `submit` re-checks anyway: it is also the
+   * guard for quantity and price, and it is the last thing between this form and
+   * a whole order the main process would refuse.
+   */
+  const blocked = useMemo(() => {
+    for (const l of lines) {
+      const bad = splitProblem(l.allocations, parseInt(l.quantity, 10) || 0)
+      if (bad) return `${l.productName}: ${bad}`
+    }
+    // Only reachable through the destination's Other… box, left empty. The
+    // dropdown itself cannot produce it: its blank option is disabled precisely
+    // because an order has to go somewhere.
+    if (!location.trim()) return 'Choose where this order is going.'
+    return null
+  }, [lines, location])
 
   /**
    * How many of this order's units are actually coming here.
@@ -186,21 +285,6 @@ export function CreatePurchaseOrderModal({
     }
     return { stock, drop }
   }, [lines, location])
-
-  const detailLine = detailId ? lines.find((l) => l.productId === detailId) ?? null : null
-
-  /**
-   * Escape belongs to whichever dialog is on top.
-   *
-   * `Modal` listens on `window`, so BOTH dialogs hear the key while the line
-   * pop-out is open — and the outer one closing takes the whole draft with it,
-   * including every line the operator has added. So the shell ignores a close
-   * while something is stacked on it and lets the pop-out have the keystroke.
-   */
-  const closeShell = (): void => {
-    if (detailId) return
-    onClose()
-  }
 
   const submit = async (): Promise<void> => {
     if (lines.length === 0) {
@@ -271,105 +355,150 @@ export function CreatePurchaseOrderModal({
   }
 
   return (
-    <>
-      <Modal
-        title="New purchase order"
-        subtitle="Paste a supplier's message or search the catalog, then check the lines."
-        onClose={closeShell}
-        wide
-        // Two more columns than this table used to carry, and both of them hold a
-        // party name rather than a number. At 620px the money fields squeezed to
-        // three characters wide.
-        className="modal-xl"
-        footer={
-          <>
-            <Button variant="ghost" onClick={onClose}>
-              Cancel
-            </Button>
-            <Button
-              variant="primary"
-              icon="ReceiptText"
-              loading={busy}
-              disabled={lines.length === 0}
-              onClick={submit}
-            >
-              Create PO
-            </Button>
-          </>
-        }
-      >
-        {error && <div className="auth-alert">{error}</div>}
+    <Modal
+      title="New purchase order"
+      subtitle="Paste a supplier's message or search the catalog, then check the lines."
+      onClose={onClose}
+      wide
+      // Two more columns than this table used to carry, and both of them hold a
+      // party name rather than a number. At 620px the money fields squeezed to
+      // three characters wide.
+      className="modal-xl"
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            variant="primary"
+            icon="ReceiptText"
+            loading={busy}
+            disabled={lines.length === 0 || blocked !== null}
+            title={blocked ?? (lines.length === 0 ? 'Add at least one line item.' : undefined)}
+            onClick={submit}
+          >
+            Create PO
+          </Button>
+        </>
+      }
+    >
+      {error && <div className="auth-alert">{error}</div>}
 
-        <div className="field-row">
-          <ContactTypeahead value={supplier} onChange={setSupplier} />
-          <DestinationPicker
-            value={location}
-            onChange={setLocation}
-            hint="RM or AM to stock it; anyone else drop-ships"
+      <div className="po-head-row">
+        <Field label="Supplier" hint="Who this is being bought from">
+          <SupplierSelect
+            value={supplier || null}
+            ariaLabel="Supplier"
+            blankLabel="No supplier named"
+            onChange={(name) => setSupplier(name ?? '')}
           />
-          <Field label="Notes" hint="Optional">
-            <Input
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              placeholder="e.g. Net-30, split shipment"
-            />
-          </Field>
-        </div>
+        </Field>
+        <Field label="Destination" hint="RM or AM to stock it; anyone else drop-ships">
+          <DestinationSelect
+            value={location}
+            ariaLabel="Destination"
+            drop={location.trim().length > 0 && !destinationHoldsStock(location)}
+            // The ONE place a pin can be set, now that the typeahead's per-row
+            // star is gone. Without it the Pinned group could only ever shrink.
+            pinnable
+            onChange={(dest) => setLocation(dest ?? '')}
+          />
+        </Field>
+        <Field label="Notes" hint="Optional">
+          <Input
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            placeholder="e.g. Net-30, split shipment"
+          />
+        </Field>
+      </div>
 
-        <FreightFields
-          {...freight}
-          hint="Who is bringing it"
-          onChange={(patch) => setFreight((f) => ({ ...f, ...patch }))}
-        />
+      <FreightFields
+        {...freight}
+        hint="Who is bringing it"
+        onChange={(patch) => setFreight((f) => ({ ...f, ...patch }))}
+      />
 
-        <PasteOfferPanel onApply={addReviewedLines} />
+      <PasteOfferPanel onApply={addReviewedLines} />
 
-        <POCatalogTypeahead onSelect={addLine} />
+      <POCatalogTypeahead onSelect={addLine} />
 
-        {lines.length === 0 ? (
-          <div className="po-lines-empty">No line items yet — search above to add products.</div>
-        ) : (
-          <div className="po-lines">
-            <table className="data po-lines-table po-lines-routed">
-              <thead>
-                <tr>
-                  <th>Product</th>
-                  <th className="num">Qty</th>
-                  <th className="num">Unit price</th>
-                  <th className="num">Line total</th>
-                  <th>Supplier</th>
-                  <th>Destination</th>
-                  <th aria-label="Remove" />
-                </tr>
-              </thead>
-              <tbody>
-                {lines.map((l) => {
-                  const qty = parseInt(l.quantity, 10) || 0
-                  const price = parseFloat(l.unitPrice) || 0
-                  const split = l.allocations.length > 0
-                  const dest = l.destination ?? location
-                  // A split line has no single destination to print, so the cell
-                  // names the split instead — and the drop marker follows the
-                  // allocations rather than the header it no longer obeys.
-                  const drop = split
-                    ? l.allocations.some((a) => !destinationHoldsStock(a.destination))
-                    : !destinationHoldsStock(dest)
-                  return (
-                    <tr key={l.productId}>
-                      {/* The product cell is the way into the pop-out. A button
-                          rather than a click handler on the <td>, so it is
+      {lines.length === 0 ? (
+        <div className="po-lines-empty">No line items yet — search above to add products.</div>
+      ) : (
+        <div className="po-lines">
+          <table className="data po-lines-table po-lines-routed">
+            {/* FIXED WIDTHS, declared once. The money columns used to be sized by
+                whatever text happened to be in them, so typing a longer supplier
+                name shoved the price field sideways and every row in the table
+                re-flowed under the cursor. Every column but the product is now a
+                stated width and the product takes the slack. */}
+            <colgroup>
+              <col />
+              <col className="po-col-qty" />
+              <col className="po-col-price" />
+              <col className="po-col-total" />
+              <col className="po-col-supplier" />
+              <col className="po-col-dest" />
+              <col className="po-col-remove" />
+            </colgroup>
+            <thead>
+              <tr>
+                <th>Product</th>
+                <th className="num">Qty</th>
+                <th className="num">Unit price</th>
+                <th className="num">Line total</th>
+                <th>Supplier</th>
+                <th>Destination</th>
+                <th aria-label="Remove" />
+              </tr>
+            </thead>
+            <tbody>
+              {lines.map((l) => {
+                const qty = parseInt(l.quantity, 10) || 0
+                const price = parseFloat(l.unitPrice) || 0
+                const split = l.allocations.length > 0
+                const dest = l.destination ?? location
+                const open = isOpen(l)
+                // A split line has no single destination to print, so the cell
+                // names the split instead — and the drop marker follows the
+                // allocations rather than the header it no longer obeys.
+                const drop = split
+                  ? l.allocations.some((a) => !destinationHoldsStock(a.destination))
+                  : !destinationHoldsStock(dest)
+                const destinations = split
+                  ? new Set(l.allocations.map((a) => a.destination.trim().toLowerCase())).size
+                  : 1
+                return (
+                  <Fragment key={l.productId}>
+                    <tr className={open ? 'is-open' : undefined}>
+                      {/* The product cell is the way in and out of the panel. A
+                          button rather than a click handler on the <td>, so it is
                           reachable from the keyboard and announces itself. */}
                       <td>
                         <button
                           type="button"
                           className="po-line-open"
-                          title="Open this line — price, supplier, destination and splits"
-                          onClick={() => setDetailId(l.productId)}
+                          aria-expanded={open}
+                          title={
+                            open
+                              ? 'Close this line'
+                              : 'Open this line — split it across several destinations'
+                          }
+                          onClick={() => toggleLine(l)}
                         >
-                          <span className="po-line-name">{l.productName}</span>
-                          <span className="po-line-sub">
-                            <span className="mono">{l.sku}</span>
-                            {l.category && <span> · {l.category}</span>}
+                          <span className="po-line-caret">
+                            <Icon name="ChevronRight" size={14} />
+                          </span>
+                          {/* NAME, then SKU, then category, then the split
+                              indicator — one under the next. All four used to run
+                              together on a single sub-line, where the SKU and the
+                              category were separated by a dot and read as one
+                              string. */}
+                          <span className="po-line-main">
+                            <span className="po-line-name">{l.productName}</span>
+                            <span className="po-line-sku mono">{l.sku}</span>
+                            {l.category && <span className="po-line-cat">{l.category}</span>}
                             {split && (
                               <span className="po-line-splits">
                                 <Icon name="Split" size={12} />
@@ -385,6 +514,7 @@ export function CreatePurchaseOrderModal({
                           min={1}
                           step={1}
                           value={l.quantity}
+                          aria-label={`Quantity for ${l.productName}`}
                           onChange={(e) => patchLine(l.productId, { quantity: e.target.value })}
                           className="po-qty-input"
                         />
@@ -395,115 +525,156 @@ export function CreatePurchaseOrderModal({
                           min={0}
                           step="0.01"
                           value={l.unitPrice}
+                          aria-label={`Unit price for ${l.productName}`}
                           onChange={(e) => patchLine(l.productId, { unitPrice: e.target.value })}
                           placeholder="0.00"
                           className="po-price-input"
                         />
                       </td>
                       <td className="num mono">{formatMoney(qty * price)}</td>
-                      {/* Both routing cells are placeholder-inherited: empty means
-                          "same as the header", and the header's value is what the
-                          placeholder prints. Muted while inherited, solid once
-                          overridden — the difference between an order that all
-                          goes one place and one that does not, readable down the
-                          column without opening a row. */}
+                      {/* Both routing cells are inheritance-first: their opening
+                          option IS "same as the order", it is what a new line is
+                          set to, and choosing it stores NULL rather than a copy of
+                          the header. Muted while inherited, solid once overridden —
+                          the difference between an order that all goes one place
+                          and one that does not, readable down the column without
+                          opening a row. */}
                       <td>
-                        <Input
-                          className={`po-route-input${l.supplier === null ? ' is-inherited' : ''}`}
-                          value={l.supplier ?? ''}
-                          placeholder={supplier.trim() || 'No supplier'}
-                          aria-label={`Supplier for ${l.productName}`}
-                          onChange={(e) =>
-                            patchLine(l.productId, {
-                              supplier: e.target.value.trim() ? e.target.value : null
-                            })
+                        <SupplierSelect
+                          className={`po-route-party${l.supplier === null ? ' is-inherited' : ''}`}
+                          ariaLabel={`Supplier for ${l.productName}`}
+                          value={l.supplier}
+                          blankLabel={
+                            supplier.trim()
+                              ? `Same as order (${supplier.trim()})`
+                              : 'Same as order (none)'
                           }
+                          onChange={(name) => routeLine(l, { supplier: name })}
                         />
                       </td>
                       <td>
                         {split ? (
-                          <button
-                            type="button"
-                            className="po-route-split"
-                            title="Split across several destinations — open the line to change it"
-                            onClick={() => setDetailId(l.productId)}
-                          >
-                            <Icon name="Split" size={13} />
-                            {new Set(l.allocations.map((a) => a.destination.trim().toLowerCase())).size}{' '}
-                            destinations
-                            {drop && <span className="po-drop-chip">Drop</span>}
-                          </button>
-                        ) : (
+                          // A split line has no single destination, so the cell
+                          // names the split and opens the panel that owns it. The
+                          // chip sits UNDER the pill rather than inside it: at 196px
+                          // the two together did not fit, and a chip that wraps on
+                          // some rows and not others changes the row height for a
+                          // reason nobody watching can see.
                           <span className="po-route-cell">
-                            <Input
-                              className={`po-route-input${l.destination === null ? ' is-inherited' : ''}`}
-                              value={l.destination ?? ''}
-                              placeholder={location || 'RM'}
-                              aria-label={`Destination for ${l.productName}`}
-                              onChange={(e) =>
-                                patchLine(l.productId, {
-                                  destination: e.target.value.trim() ? e.target.value : null
-                                })
-                              }
-                            />
+                            <button
+                              type="button"
+                              className="po-route-split"
+                              aria-expanded={open}
+                              title="Split across several destinations — open the line to change it"
+                              onClick={() => toggleLine(l)}
+                            >
+                              <Icon name="Split" size={13} />
+                              {destinations} destinations
+                            </button>
                             {drop && <span className="po-drop-chip">Drop</span>}
                           </span>
+                        ) : (
+                          <DestinationSelect
+                            className={`po-route-party${l.destination === null ? ' is-inherited' : ''}`}
+                            ariaLabel={`Destination for ${l.productName}`}
+                            value={l.destination}
+                            blankLabel={`Same as order (${location || 'RM'})`}
+                            drop={drop}
+                            onChange={(d) => routeLine(l, { destination: d })}
+                          />
                         )}
                       </td>
-                      <td className="num">
+                      <td className="num po-line-remove-cell">
                         <button
                           type="button"
-                          className="btn btn-ghost btn-sm"
+                          className="btn btn-ghost btn-sm po-line-remove"
                           title="Remove line"
+                          aria-label={`Remove ${l.productName}`}
                           onClick={() => removeLine(l.productId)}
                         >
                           <Icon name="Trash2" size={15} />
                         </button>
                       </td>
                     </tr>
-                  )
-                })}
-              </tbody>
-            </table>
 
-            <div className="po-total">
-              <span>Grand total</span>
-              <span className="mono">{formatMoney(grandTotal)}</span>
-            </div>
-            {/* Stated before the order exists, not discovered on the receipt
-                afterwards. The total above covers every unit — drop-shipped ones
-                are bought and paid for exactly like the rest — and this is the
-                line that says how many of them will ever be checked in here. */}
-            {receivable.drop > 0 && (
-              <div className="po-lines-dropnote">
-                <Icon name="Truck" size={14} />
-                {receivable.stock > 0
-                  ? `${receivable.stock} unit${receivable.stock === 1 ? '' : 's'} will arrive here; ${receivable.drop} drop-ship straight to their destination and are never checked into stock.`
-                  : `All ${receivable.drop} unit${receivable.drop === 1 ? '' : 's'} drop-ship straight to their destination. Nothing on this order arrives here.`}
-              </div>
-            )}
+                    {/* THE PANEL, in the same table, under the row it belongs to.
+                        Two <tr>s rather than one tall cell, so the columns above
+                        it keep their widths and nothing in the row moves when it
+                        opens. Rendered only while open — an always-present row
+                        with a collapsed height still owns a border and a hover
+                        state, and the table grew a hairline under every line. */}
+                    {open && (
+                      <tr className="po-line-detail">
+                        <td colSpan={7}>
+                          <div className="po-line-panel">
+                            <div className="po-line-panel-in">
+                              <div className="po-line-panel-body">
+                                {/* The two columns the phone layer hides, because
+                                    seven of them do not fit in 390px. Inert at a
+                                    desktop width, where the cells above carry
+                                    them — see .po-line-route in styles/app.css. */}
+                                <div className="po-line-route">
+                                  <label className="po-line-route-field">
+                                    <span className="po-ld-key">Supplier</span>
+                                    <SupplierSelect
+                                      value={l.supplier}
+                                      ariaLabel={`Supplier for ${l.productName}`}
+                                      blankLabel={
+                                        supplier.trim()
+                                          ? `Same as order (${supplier.trim()})`
+                                          : 'Same as order (none)'
+                                      }
+                                      onChange={(name) => routeLine(l, { supplier: name })}
+                                    />
+                                  </label>
+                                  <label className="po-line-route-field">
+                                    <span className="po-ld-key">Destination</span>
+                                    <DestinationSelect
+                                      value={l.destination}
+                                      ariaLabel={`Destination for ${l.productName}`}
+                                      blankLabel={`Same as order (${location || 'RM'})`}
+                                      drop={drop}
+                                      onChange={(d) => routeLine(l, { destination: d })}
+                                    />
+                                  </label>
+                                </div>
+
+                                <LineSplitEditor
+                                  line={l}
+                                  headerSupplier={supplier.trim()}
+                                  headerDestination={location}
+                                  onChange={(allocations) => setAllocations(l, allocations)}
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                )
+              })}
+            </tbody>
+          </table>
+
+          <div className="po-total">
+            <span>Grand total</span>
+            <span className="mono">{formatMoney(grandTotal)}</span>
           </div>
-        )}
-
-      </Modal>
-
-      {/* A SIBLING of the form's dialog, not a child of it. Both overlays sit at
-          the same z-index, so whichever is later in the DOM is the one the
-          operator can reach — the arrangement the scan station already uses for
-          its lot picker, and the one that keeps a `position: fixed` overlay out
-          of the scrolling modal body it would otherwise be laid out inside. */}
-      {detailLine && (
-        <LineDetailModal
-          line={detailLine}
-          headerSupplier={supplier.trim()}
-          headerDestination={location}
-          onClose={() => setDetailId(null)}
-          onSave={(next) => {
-            patchLine(next.productId, next)
-            setDetailId(null)
-          }}
-        />
+          {/* Stated before the order exists, not discovered on the receipt
+              afterwards. The total above covers every unit — drop-shipped ones
+              are bought and paid for exactly like the rest — and this is the
+              line that says how many of them will ever be checked in here. */}
+          {receivable.drop > 0 && (
+            <div className="po-lines-dropnote">
+              <Icon name="Truck" size={14} />
+              {receivable.stock > 0
+                ? `${receivable.stock} unit${receivable.stock === 1 ? '' : 's'} will arrive here; ${receivable.drop} drop-ship straight to their destination and are never checked into stock.`
+                : `All ${receivable.drop} unit${receivable.drop === 1 ? '' : 's'} drop-ship straight to their destination. Nothing on this order arrives here.`}
+            </div>
+          )}
+        </div>
       )}
-    </>
+    </Modal>
   )
 }

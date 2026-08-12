@@ -13,6 +13,23 @@ import { Icon } from '../../components/Icon'
 /**
  * Where these units are going.
  *
+ * ## NOTHING MOUNTS THE PICKER BELOW ANY MORE — read this before deleting it
+ *
+ * The purchase-order form asked for dropdowns rather than boxes you type into,
+ * so its three destination controls are now native <select>s (see PartySelect),
+ * and `useOrderParties` is what they read the list from. That hook is the live
+ * half of this file and is imported by both of them.
+ *
+ * The `DestinationPicker` component underneath is kept for one reason: its menu
+ * carries the STAR, and the star is the only thing anywhere in the app that
+ * calls `api.purchaseOrders.pinParty`. A <select> cannot hold a second button
+ * per row, so with the picker unmounted the `Pinned` group in the new dropdowns
+ * can be read but no longer written — the six pins somebody has already set
+ * still lead the list, and a seventh cannot be added. Deleting this component
+ * makes that permanent and orphans `setPartyPinned` in the main process along
+ * with its tests, so it is a decision to take deliberately rather than a tidy-up
+ * to do on the way past.
+ *
  * ## Why this is not the location <Select> it replaced
  *
  * A destination used to be RM or AM and nothing else, so a two-entry dropdown

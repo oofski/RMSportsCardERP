@@ -630,6 +630,7 @@
      box left the app at 1.3× with the navigation off-screen.
      ------------------------------------------------------------------------ */
   .field-row,
+  .po-head-row,
   .cd-readonly,
   .qbo-form,
   .qbo-map-grid,
@@ -972,21 +973,21 @@
 
      A purchase order line can now carry its own supplier and destination, and
      can be split across several of both. On the desktop that is a seven-column
-     pop-out and a two-column-wider lines table. On a phone seven columns is
-     ~900px of content in a 390px viewport, and the failure mode is the one this
-     whole file exists to prevent: a row that scrolls sideways, so the control
-     somebody needs is off the right-hand edge with nothing to say it is there.
+     table with a split editor that unfolds under whichever row is being routed.
+     On a phone seven columns is ~900px of content in a 390px viewport, and the
+     failure mode is the one this whole file exists to prevent: a row that
+     scrolls sideways, so the control somebody needs is off the right-hand edge
+     with nothing to say it is there.
 
-     So the pop-out becomes a stack — one field under the next, one CARD per
-     allocation — rather than a grid that scrolls. Nothing is hidden, because
-     every field in it is one somebody came here to change.
+     So the table drops the two routing columns and the unfolding panel — one
+     tap on the product name — becomes the only way to them. NOTHING IS LOST BY
+     THAT, but only because of .po-line-route: the panel carries a stacked copy
+     of the line's own supplier and destination that is `display: none` at every
+     desktop width, where the columns above already hold them. Turn one of those
+     two off without the other and a phone can no longer route a line at all.
 
-     The lines table goes the other way. Its two new columns are a convenience
-     on the desktop (glance down a column, spot the line that disagrees with the
-     header) and they are the same two fields the pop-out holds properly. On a
-     phone the glance is impossible either way, so the columns come off the
-     table and the pop-out — one tap on the product name — is the way in. The
-     table keeps the five columns it has always had at this width.
+     The panel itself stacks: one field under the next, one CARD per allocation,
+     rather than a grid that scrolls.
      ------------------------------------------------------------------------ */
   .po-lines-routed th:nth-child(5),
   .po-lines-routed td:nth-child(5),
@@ -995,18 +996,62 @@
     display: none;
   }
 
-  /* Seven columns become one. `align-items: stretch` so a field spans the
-     width rather than shrink-wrapping its own text in the middle of nowhere. */
-  .po-ld-cols {
+  /* The desktop's <colgroup> has to come off with them. Under
+     `table-layout: fixed` a column's width comes from its <col> and NOT from
+     what is in it, so two columns whose cells are all hidden would still hold
+     364px of empty gutter on a 390px screen — the sideways scroll this rule
+     exists to remove, reintroduced by the rule that removes it. Auto layout
+     sizes the five that are left from their own content. */
+  .po-lines-routed {
+    table-layout: auto;
+  }
+  .po-col-qty,
+  .po-col-price,
+  .po-col-total,
+  .po-col-supplier,
+  .po-col-dest,
+  .po-col-remove {
+    width: auto;
+  }
+
+  /* The desktop puts every control in a lines row at one 32px height so the row
+     has a single baseline. That rule is two classes deep, so it OUT-SPECIFIES
+     the `.input, .select { height: var(--rm-tap) }` above and would quietly
+     shrink these four back below the tap floor — the one thing this file is not
+     allowed to let happen. Matched depth for depth, on the same four controls.
+     If the desktop rule is ever renamed, this has to move with it. */
+  .po-lines-routed .po-qty-input,
+  .po-lines-routed .po-price-input,
+  .po-lines-routed .po-party-select,
+  .po-lines-routed .po-party-other,
+  .po-lines-routed .po-route-split {
+    height: var(--rm-tap);
+  }
+  /* Narrowed to 32px on the desktop so a 52px column can hold it. `.btn` above
+     already gives it the tap HEIGHT; this is the other half. */
+  .po-line-remove {
+    min-width: var(--rm-tap);
+  }
+  /* `width: 100%` is how the two money fields fill a column of a STATED width.
+     With the colgroup off, the column is sized from its content instead, and a
+     percentage measured against a width that is itself measuring the percentage
+     is how a field ends up a few characters wide. Fixed, as it was here before
+     the desktop table went to fixed columns. */
+  .po-lines-routed .po-qty-input,
+  .po-lines-routed .po-price-input {
+    width: 74px;
+  }
+
+  /* The panel's copy of the two hidden columns. Stacked, full width, and the
+     only routing controls that exist at this width. */
+  .po-line-route {
+    display: grid;
     grid-template-columns: minmax(0, 1fr);
-    gap: 16px;
+    gap: 14px;
+    margin-bottom: 16px;
   }
-  .po-ld-num {
-    align-items: stretch;
-    text-align: left;
-  }
-  .po-ld-total {
-    padding-top: 0;
+  .po-line-panel-body {
+    padding: 12px;
   }
 
   /* ONE CARD PER ALLOCATION. The quantity stepper, then the supplier, then the
@@ -1031,11 +1076,17 @@
     min-width: var(--rm-tap);
     min-height: var(--rm-tap);
   }
+  /* The scoped 30px the desktop row uses to line four controls up is a target
+     nobody can hit with a thumb, so the tap floor wins back here. */
+  .po-ld-step .po-deliv-btn,
+  .po-ld-step .po-deliv-num,
+  .po-ld-splitfield .po-party-select,
+  .po-ld-splitfield .po-party-other,
+  .po-ld-splitdrop {
+    height: var(--rm-tap);
+  }
   .po-ld-splitdrop {
     width: 100%;
-  }
-  .po-ld-splits {
-    padding: 12px;
   }
   .po-ld-splits-head {
     flex-wrap: wrap;

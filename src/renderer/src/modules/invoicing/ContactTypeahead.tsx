@@ -6,6 +6,17 @@ import { Field, Input } from '../../components/ui'
 /**
  * The supplier box, backed by the contact list.
  *
+ * ## NOTHING MOUNTS THIS ANY MORE
+ *
+ * The purchase-order form asked for a dropdown rather than a box you type into,
+ * so every supplier control on it — header, line and split — is now a native
+ * <select> over the same `api.purchaseOrders.suppliers()` list, with an `Other…`
+ * option that reveals a text box for a distributor nobody has bought from yet.
+ * See PartySelect. This file is left in place because that decision is a matter
+ * of taste rather than of correctness and the argument below is the one worth
+ * keeping either way: a supplier is free text on the document, and any control
+ * that puts it there is as valid as any other.
+ *
  * ## What this does NOT do
  *
  * It does not attach a record to the purchase order. A PO's supplier is a

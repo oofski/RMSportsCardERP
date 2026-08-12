@@ -22226,10 +22226,11 @@ button.sor-team:focus-visible {
    already owns. See the header of mobile.css and tests/mobileLayout.test.ts.
    ========================================================================== */
 
-/* A dialog that lays out a TABLE of columns rather than a column of fields.
-   Two screens use it and both earned it by growing a seventh column: the create
-   form (product, qty, price, total, supplier, destination, remove) and the line
-   pop-out. At 620px their money fields squeezed to three characters wide.
+/* A dialog that lays out a TABLE of columns rather than a column of fields. The
+   create form earned it by growing a seventh column (product, qty, price,
+   total, supplier, destination, remove); at 620px its money fields squeezed to
+   three characters wide. It has since had to hold the split editor as well,
+   inline under the row being split, which is the other reason it cannot narrow.
    The phone layer sizes .modal and .modal-lg to the whole screen and wins on
    source order, so this is a desktop width and cannot reach a phone. */
 .modal-xl {
@@ -22362,18 +22363,133 @@ button.sor-team:focus-visible {
   max-height: 220px;
 }
 
+/* ---------- The create form's header ---------- */
+/* Supplier, destination and notes as ONE band of three. `.field-row` is a
+   two-column grid, so the third field dropped onto a row of its own and sat at
+   half width with a hole beside it — which read as a field that had lost its
+   partner rather than as a deliberate layout. */
+.po-head-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+/* ---------- Supplier and destination, as dropdowns ---------- */
+/* Native <select>, deliberately, and the reason is as much about where the menu
+   is DRAWN as about not typing. A typeahead's menu is an absolutely positioned
+   panel, and this form is a table inside a modal body that scrolls: a menu
+   opened from the last row has to be positioned against a scrolling ancestor,
+   is clipped by the panel it is drawn inside, and slides out from under the
+   pointer the moment the body moves. The OS draws a <select>'s menu outside the
+   page altogether, so every one of those bugs is deleted rather than fixed.
+   See modules/invoicing/PartySelect.tsx. */
+.po-party {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.po-party-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.po-party-select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+/* The chip's own margin is for sitting after a run of text. Here the row's gap
+   already does that job, and both together read as a chip that has drifted. */
+.po-party-row .po-drop-chip {
+  margin-left: 0;
+}
+/* THE ESCAPE HATCH, and it only exists while Other… is the choice. Under the
+   control rather than beside it: a 180px table cell has no room for two boxes
+   side by side, and a field that appears where the row already ends cannot push
+   anything sideways. */
+.po-party-other {
+  width: 100%;
+}
+
 /* ---------- The create form's lines table ---------- */
+/* FIXED COLUMNS, stated once in the <colgroup>. `table-layout: auto` sized every
+   column from whatever text happened to be in it, so choosing a longer supplier
+   name moved the price field, which moved the total, which re-flowed every row
+   in the table while somebody was still typing. Only the product column — the
+   one holding prose — takes the slack now. */
 .po-lines-routed {
-  table-layout: auto;
+  table-layout: fixed;
+}
+.po-lines-routed th,
+.po-lines-routed td {
+  padding: 10px 12px;
+}
+/* `table.data` keeps its headings on one line, which is right for a table that
+   can size its own columns and wrong for one that cannot: a heading wider than
+   its stated column would spill over the next one instead of pushing it along.
+   Two words on two lines is the honest outcome, and the height it costs is paid
+   once by the header rather than by every row. */
+.po-lines-routed th {
+  white-space: normal;
+}
+.po-col-qty {
+  width: 80px;
+}
+.po-col-price {
+  width: 100px;
+}
+.po-col-total {
+  width: 96px;
+}
+.po-col-supplier {
+  width: 168px;
+}
+/* Wider than the supplier column by exactly the Drop chip, which only this one
+   can carry. Without the difference the chip appearing on a line would squeeze
+   the select beside it and the two columns would stop lining up. */
+.po-col-dest {
+  width: 196px;
+}
+/* Wide enough for the button and nothing else. The cell's own padding comes off
+   with it: 12px each side of a 32px button in a 44px column is how a trash icon
+   ends up hanging over the edge of the table. */
+.po-col-remove {
+  width: 52px;
+}
+.po-lines-routed .po-line-remove-cell {
+  padding-left: 2px;
+  padding-right: 8px;
+}
+.po-line-remove {
+  width: 32px;
+  padding: 0;
+  justify-content: center;
+}
+/* ONE CONTROL HEIGHT ACROSS THE ROW. Four controls at three heights read as a
+   row that has not settled, and it is the specific thing "janky" meant here. */
+.po-lines-routed .po-qty-input,
+.po-lines-routed .po-price-input,
+.po-lines-routed .po-party-select,
+.po-lines-routed .po-party-other {
+  width: 100%;
+  height: 32px;
+  font-size: 12.5px;
 }
 .po-lines-routed .po-qty-input,
 .po-lines-routed .po-price-input {
-  width: 74px;
+  padding: 0 8px;
 }
-/* The product cell is the door to the pop-out, so it has to look like one and
-   be reachable from the keyboard. A whole-<td> click handler is neither. */
+.po-lines-routed .po-party-select {
+  padding: 0 4px 0 8px;
+}
+
+/* The product cell is the door to the panel, so it has to look like one and be
+   reachable from the keyboard. A whole-<td> click handler is neither. */
 .po-line-open {
-  display: block;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
   width: 100%;
   padding: 2px 4px 2px 0;
   border: none;
@@ -22382,57 +22498,114 @@ button.sor-team:focus-visible {
   cursor: pointer;
   border-radius: var(--radius-sm);
 }
+.po-line-open:focus-visible {
+  outline: 2px solid var(--brand-400);
+  outline-offset: 2px;
+}
+/* Rotated rather than swapped for a second glyph, so the marker MOVES between
+   the two states instead of one icon vanishing and another appearing in its
+   place — and it is a fixed 18px box either way, so the product name beside it
+   never shifts by the difference between two icons' widths. */
+.po-line-caret {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  color: var(--text-3);
+  transition: transform 0.16s ease, color 0.16s ease;
+}
+.po-line-open:hover .po-line-caret,
 .po-line-open:hover .po-line-name {
   color: var(--brand-600);
-  text-decoration: underline;
+}
+.po-line-open[aria-expanded='true'] .po-line-caret {
+  transform: rotate(90deg);
+  color: var(--brand-600);
+}
+@media (prefers-reduced-motion: reduce) {
+  .po-line-caret {
+    transition: none;
+  }
+}
+/* ONE FACT PER LINE. The name, the SKU, the category and the split count used to
+   run together on a single sub-line separated by dots, where the SKU and the
+   category read as one string and neither was findable at a glance. They are now
+   four stacked rows with real space between them, and the column is a stated
+   width so a long name wraps instead of widening the table. */
+.po-line-main {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  min-width: 0;
+}
+.po-line-main .po-line-name {
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.po-line-sku {
+  font-size: 12px;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+.po-line-cat {
+  font-size: 12px;
+  color: var(--text-3);
 }
 .po-line-splits {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  margin-left: 8px;
+  margin-top: 2px;
   padding: 1px 7px;
   border-radius: 999px;
   background: var(--brand-soft);
   color: var(--brand-700);
+  font-size: 11.5px;
   font-weight: 700;
 }
 /* INHERITED IS MUTED, OVERRIDDEN IS SOLID. The whole reason both columns are on
-   the table rather than only in the pop-out: "all of this goes to RM" and "this
+   the table rather than only in the panel: "all of this goes to RM" and "this
    one line goes somewhere else" have to be told apart down a column without
-   opening anything. Inherited cells print the header's value as a placeholder,
-   which is the honest rendering — the cell really is empty, and what it shows
-   is what it will follow. */
-.po-route-cell {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-.po-route-input {
-  width: 100%;
-  min-width: 96px;
-  height: 32px;
-  font-size: 12.5px;
-}
-.po-route-input.is-inherited {
+   opening anything. An inherited cell is dashed and muted because it really is
+   unset — its first option reads `Same as order (RM)` and stores NULL, which is
+   what makes the line keep following the header when the header changes. */
+.po-route-party.is-inherited .po-party-select {
   background: var(--surface-2);
   border-style: dashed;
-}
-.po-route-input.is-inherited::placeholder {
   color: var(--text-3);
-  font-style: italic;
+}
+/* A split line has no single destination to print, so the cell names the split
+   and the Drop chip sits under it rather than beside it — side by side the two
+   did not fit the column, and a chip that wraps on some rows and not others is
+   the row height changing for no reason the operator can see. */
+.po-route-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+  min-width: 0;
+}
+.po-route-cell .po-drop-chip {
+  margin-left: 0;
 }
 .po-route-split {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 5px 9px;
+  max-width: 100%;
+  height: 32px;
+  padding: 0 10px;
   border: 1px solid var(--brand-300);
   border-radius: 999px;
   background: var(--brand-soft);
   color: var(--brand-700);
   font-size: 12px;
   font-weight: 600;
+  white-space: nowrap;
   cursor: pointer;
 }
 .po-route-split:hover {
@@ -22454,18 +22627,69 @@ button.sor-team:focus-visible {
   color: var(--warning);
 }
 
-/* ---------- The line pop-out ---------- */
-/* Seven columns, in the order somebody fills them in: what it is, how many,
-   what each costs, what that comes to, who from, where to, and how it splits.
-   The product column takes the slack because it is the only one holding prose;
-   everything else is sized to its content so the money stays readable. */
-.po-ld-cols {
-  display: grid;
-  grid-template-columns: minmax(180px, 1.6fr) 84px 100px 96px minmax(140px, 1fr) minmax(140px, 1fr) 132px;
-  gap: 14px;
-  align-items: start;
+/* ---------- The line panel ---------- */
+/* THIS USED TO BE A SECOND MODAL ON TOP OF THE FIRST, and covering the order
+   while you routed part of it was the whole complaint. It is now a real <tr> in
+   the same table, which is what makes it impossible to misposition: it is laid
+   out by the table, at the table's width, under the row it belongs to, and the
+   row above keeps its own columns while it is open.
+
+   The open row and its panel are one object, so the hairline between them goes
+   and both sit on the second surface — otherwise the pair reads as two
+   unrelated lines that happen to be adjacent. */
+.po-lines-routed tbody tr.is-open > td {
+  background: var(--surface-2);
+  border-bottom-color: transparent;
 }
-.po-ld-col {
+.po-line-detail > td {
+  padding: 0 12px 12px;
+  background: var(--surface-2);
+}
+/* Height is animated with a 0fr → 1fr grid track rather than a max-height,
+   because a max-height has to be guessed and a line split five ways is taller
+   than any guess — and clipping the guard rail is worse than not animating at
+   all. Engines that do not interpolate an fr track simply land on the end state
+   and keep the fade, which is a degradation nobody files a bug about. */
+.po-line-panel {
+  display: grid;
+  grid-template-rows: 1fr;
+  animation: po-line-unfold 0.18s ease;
+}
+.po-line-panel-in {
+  min-height: 0;
+  overflow: hidden;
+}
+.po-line-panel-body {
+  padding: 13px 14px 15px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+@keyframes po-line-unfold {
+  from {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
+  to {
+    grid-template-rows: 1fr;
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .po-line-panel {
+    animation: none;
+  }
+}
+/* The two columns the phone layer takes off the table — seven of them is ~900px
+   of controls in a 390px viewport. OFF at every desktop width, where the cells
+   above carry them and a second copy would be two controls for one value.
+   styles/mobile.css turns this on; without it, hiding those columns on a phone
+   would leave a line's own supplier and destination unreachable, because the
+   pop-out that used to hold them is gone. */
+.po-line-route {
+  display: none;
+}
+.po-line-route-field {
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -22478,87 +22702,10 @@ button.sor-team:focus-visible {
   text-transform: uppercase;
   color: var(--text-3);
 }
-.po-ld-num {
-  align-items: flex-end;
-  text-align: right;
-}
-.po-ld-total {
-  padding-top: 7px;
-  font-size: 15px;
-  font-weight: 700;
-  color: var(--text);
-}
-.po-ld-prod {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-.po-ld-img {
-  width: 40px;
-  height: 40px;
-  flex: none;
-}
-.po-ld-prod-main {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-.po-ld-prod-name {
-  font-weight: 600;
-  color: var(--text);
-  line-height: 1.3;
-}
-.po-ld-prod-sub {
-  margin-top: 2px;
-  font-size: 12px;
-  color: var(--text-3);
-}
-/* What this field will do if it is left alone. A placeholder alone cannot say
-   it, because a placeholder disappears the moment somebody types a space. */
-.po-ld-inherit {
-  font-size: 11.5px;
-  color: var(--text-3);
-  line-height: 1.35;
-}
-.po-ld-splitbtn {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-  height: 34px;
-  padding: 0 10px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--surface-2);
-  color: var(--text);
-  font-size: 12.5px;
-  font-weight: 600;
-  cursor: pointer;
-}
-.po-ld-splitbtn:hover {
-  background: var(--surface-3);
-}
-.po-ld-splitbtn.is-split {
-  border-color: var(--brand-300);
-  background: var(--brand-soft);
-  color: var(--brand-700);
-}
-.po-ld-splitbtn > svg:last-child {
-  margin-left: auto;
-}
 
-/* The allocation editor, full width under the columns rather than inside the
-   seventh one: three controls and a remove button per row do not fit in a
-   132px column, and squeezing them there is how a split becomes something
-   nobody attempts twice. */
-.po-ld-splits {
-  margin-top: 18px;
-  padding: 14px 16px 16px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface-2);
-}
+/* The allocation editor. Three controls and a remove button per row, at one
+   height, on a row that is the panel's full width — squeezed into a column
+   instead, a split becomes something nobody attempts twice. */
 .po-ld-splits-head {
   display: flex;
   align-items: center;
@@ -22592,13 +22739,13 @@ button.sor-team:focus-visible {
 }
 .po-ld-splitrow {
   display: grid;
-  grid-template-columns: 22px 148px minmax(120px, 1fr) minmax(120px, 1fr) 34px;
+  grid-template-columns: 22px 128px minmax(110px, 1fr) minmax(110px, 1fr) 34px;
   align-items: center;
   gap: 10px;
   padding: 8px 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  background: var(--surface);
+  background: var(--surface-2);
 }
 /* A rail down the edge, matching the receipt's treatment of a line still owed:
    a chip at the far side of a wide row is missable when three rows are being
@@ -22621,8 +22768,24 @@ button.sor-team:focus-visible {
 .po-ld-splitfield {
   min-width: 0;
 }
+/* Scoped to this row rather than retuned globally: .po-deliv-btn is the
+   receiving form's stepper too, and that screen's row is built around 26px. */
+.po-ld-step .po-deliv-btn {
+  width: 30px;
+  height: 30px;
+}
+.po-ld-step .po-deliv-num {
+  height: 30px;
+}
+.po-ld-splitfield .po-party-select,
+.po-ld-splitfield .po-party-other {
+  height: 30px;
+  font-size: 12.5px;
+}
 .po-ld-splitdrop {
   justify-content: center;
+  height: 30px;
+  padding: 0;
 }
 /* ONE line of copy, under the FIRST drop row only. Repeated per row it would
    become wallpaper, and this is the one consequence of this screen that is
@@ -22645,8 +22808,8 @@ button.sor-team:focus-visible {
   color: var(--warning);
 }
 /* THE GUARD RAIL. Both numbers on screen while somebody types, because the ask
-   is to make two of them match — and Save stays refused until they do, so this
-   is the only place the reason can be read. */
+   is to make two of them match — and Create PO stays refused until they do, so
+   this is the only place the reason can be read. */
 .po-ld-guard {
   display: flex;
   align-items: center;
@@ -23054,4 +23217,57 @@ button.sor-team:focus-visible {
 }
 .incoming-scroll::-webkit-scrollbar-track {
   background: transparent;
+}
+
+/* ---------------------------------------------------------------------------
+   Pinning a destination
+
+   Moving the destination box from a typeahead to a native <select> took the
+   per-row star with it, and that star was the ONLY thing in the app that wrote
+   a pin — leaving a Pinned group that could be read, could shrink, and could
+   never gain a member again.
+
+   A native select cannot hold a button inside its options, so the toggle sits
+   beside the box and acts on whatever is currently chosen. One control on the
+   order header rather than one per line: pinning is a statement about a shop,
+   not about a line, so repeating it on every row would be offering the same
+   switch nine times.
+   --------------------------------------------------------------------------- */
+.po-dest-with-pin {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.po-dest-with-pin > :first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.po-pin-btn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-3);
+  cursor: pointer;
+  transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+}
+.po-pin-btn:hover {
+  color: var(--warning);
+  border-color: color-mix(in srgb, var(--warning) 45%, var(--border));
+}
+/* Filled and coloured once pinned, so the state is readable without hovering
+   for the tooltip — the same star means two different things otherwise. */
+.po-pin-btn.is-pinned {
+  color: var(--warning);
+  border-color: color-mix(in srgb, var(--warning) 45%, var(--border));
+  background: var(--warning-bg);
+}
+.po-pin-btn.is-pinned svg {
+  fill: currentColor;
 }
