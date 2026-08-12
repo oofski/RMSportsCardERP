@@ -497,9 +497,18 @@ export function ScanStation({
       <Modal
         title={out ? 'Scan items out' : 'Scan items in'}
         subtitle={
-          out
+          // The BUNDLE's version, on the screen where the work happens.
+          //
+          // A browser tab holding a stale bundle behaves exactly like a bug that
+          // was never fixed, and the two are diagnosed in completely different
+          // places — one by refreshing, the other by reading code. Neither
+          // /health nor the desktop's about box answers "which JavaScript is
+          // THIS tab running", so a screenshot of this screen never could
+          // either. Now it can, and a photo of the scanner settles it.
+          (out
             ? 'Taking stock off the shelf — scan each item, or scan one item repeatedly to count it up'
-            : 'Scan each box with the handheld scanner — scan one repeatedly to count it up'
+            : 'Scan each box with the handheld scanner — scan one repeatedly to count it up') +
+          ` · v${__APP_VERSION__}`
         }
         wide
         onClose={onClose}
