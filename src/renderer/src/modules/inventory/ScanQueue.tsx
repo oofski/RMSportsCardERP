@@ -180,6 +180,16 @@ function QueueRow({
             {line.scans} scan{line.scans === 1 ? '' : 's'}
             {line.scans > line.quantity && ` · only ${line.quantity} fits`}
           </span>
+          {/* MORE ARRIVED THAN WAS ORDERED, said plainly and not in the way.
+              Inbound the count follows the boxes, so this is a note about the
+              paperwork being behind — a supplier shipped an extra case, or the
+              order was raised short. It is worth seeing before the receipt is
+              made, and worth nobody's time to answer a dialog about. */}
+          {line.direction === 'in' && line.overflow && line.max != null && (
+            <span className="scan-count-extra">
+              {line.quantity - line.max} more than {line.poNumber ?? 'the order'} expected
+            </span>
+          )}
         </span>
 
         {/* Editable per-line detail. A PO line's location and price come from

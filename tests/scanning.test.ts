@@ -160,25 +160,34 @@ ok(over[0].quantity === 2 && over[0].needsDecision === null, 'two fits')
 over = beep(over, '0000000000017')
 over = beep(over, '0000000000017')
 
-// THE BUG. The count holds at the ceiling — but it now SAYS so and stops the run.
+// A BEEP IS A BOX, and inbound the count is simply how many were beeped.
+//
+// This used to hold at the order's ceiling and stop to ask. The owner, twice:
+// "3 scans means that I am scanning 3 individual boxes" and "if i scan
+// something 3 times that means there are 3 of those products". That is the
+// right way round — the boxes on the pallet are the fact, and the order is only
+// what somebody expected to arrive. When they disagree it is usually the order
+// that is behind: a supplier shipped an extra case, or it was raised short.
 ok(over[0].scans === 4, 'four beeps landed', String(over[0].scans))
-ok(over[0].quantity === 2, 'the count holds at the ceiling', String(over[0].quantity))
-ok(over[0].needsDecision === 'overage', 'and raises a question', String(over[0].needsDecision))
-ok(!!firstUndecided(over), 'which the list reports as outstanding')
-ok(
-  /more was scanned than the order asked for/i.test(commitBlockedReason(over) ?? ''),
-  'and nothing commits until it is answered',
-  String(commitBlockedReason(over))
-)
+ok(over[0].quantity === 4, 'and the count is four — one per box', String(over[0].quantity))
+ok(over[0].needsDecision === null, 'no question is raised', String(over[0].needsDecision))
+ok(!firstUndecided(over), 'nothing is waiting on a person')
+ok(commitBlockedReason(over) === null, 'and it commits', String(commitBlockedReason(over)))
 
-// Answer A: stick to the order.
+// The override is carried anyway, because the main process refuses to exceed an
+// order's outstanding without one. Setting it here is what turns "count what was
+// scanned" into a receipt that actually lands rather than a number refused at
+// the last step.
+ok(over[0].override === 'overage', 'carrying the override the commit needs', String(over[0].override))
+ok(over[0].overflow === true, 'and flagged as more than the order expected')
+ok(over[0].max === 2, 'while still remembering what WAS expected', String(over[0].max))
+
+// Both answers remain available for a hand correction: the count is a plain
+// field, and these are what the two buttons do if the operator uses them.
 const kept = keepToOrder(over, over[0].key)
-ok(kept[0].quantity === 2, 'keeping to the order leaves the count at 2', String(kept[0].quantity))
-ok(kept[0].needsDecision === null, 'and closes the question')
-ok(kept[0].override === null, 'with no override recorded — nothing was overridden')
-ok(commitBlockedReason(kept) === null, 'the list commits again')
+ok(kept[0].quantity === 2, 'keeping to the order trims to what was ordered', String(kept[0].quantity))
+ok(kept[0].needsDecision === null, 'and closes any question')
 
-// Answer B: take the overage.
 const took = acceptOverage(over, over[0].key)
 ok(took[0].quantity === 4, 'taking the overage counts every beep', String(took[0].quantity))
 ok(took[0].override === 'overage', 'and records WHY', String(took[0].override))
@@ -382,19 +391,15 @@ let pallet: any[] = []
 for (let i = 0; i < 3; i++) pallet = beep(pallet, '0000000000031')
 
 ok(pallet[0].scans === 3, 'three beeps are three boxes', String(pallet[0].scans))
-ok(pallet[0].quantity === 1, 'and the count holds at what the order asked for', String(pallet[0].quantity))
-ok(pallet[0].needsDecision === 'overage', 'the difference becomes a question')
-ok(
-  (commitBlockedReason(pallet) ?? '').includes('more was scanned'),
-  'and nothing saves until it is answered',
-  String(commitBlockedReason(pallet))
-)
+ok(pallet[0].quantity === 3, 'AND THE COUNT IS THREE', String(pallet[0].quantity))
+ok(pallet[0].needsDecision === null, 'with nothing to answer first')
+ok(commitBlockedReason(pallet) === null, 'and nothing in the way of saving',
+  String(commitBlockedReason(pallet)))
+ok(pallet[0].overflow === true, 'though the line does say it is more than the order expected')
 
-// "Take all 3" — the boxes really are on the pallet.
-const takeAll = acceptOverage(pallet, pallet[0].key)
-ok(takeAll[0].quantity === 3, 'Take all 3 raises the count to every box scanned', String(takeAll[0].quantity))
-ok(takeAll[0].override === 'overage', 'recording that a person chose the overage')
-ok(commitBlockedReason(takeAll) === null, 'and the save is free')
+const takeAll = pallet
+ok(takeAll[0].quantity === 3, 'three boxes, three units', String(takeAll[0].quantity))
+ok(takeAll[0].override === 'overage', 'carrying the override the commit needs')
 const stockBefore = inv.stockQty('p_c', 'RM')
 const done = commit(takeAll[0])
 ok(!done.error, 'it commits', String(done.error))
@@ -414,9 +419,9 @@ ok(!!otherPo.id, 'a second one-unit order exists to answer the other way')
 let pallet2: any[] = []
 for (let i = 0; i < 3; i++) pallet2 = beep(pallet2, '0000000000031')
 const keptOne = keepToOrder(pallet2, pallet2[0].key)
-ok(keptOne[0].quantity === 1, 'Keep 1 takes only what was ordered', String(keptOne[0].quantity))
-ok(keptOne[0].scans === 1, 'and stops claiming three beeps are outstanding', String(keptOne[0].scans))
-ok(commitBlockedReason(keptOne) === null, 'the save is free either way')
+ok(keptOne[0].quantity === 1, 'trimming by hand still takes only what was ordered',
+  String(keptOne[0].quantity))
+ok(commitBlockedReason(keptOne) === null, 'and saves')
 
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

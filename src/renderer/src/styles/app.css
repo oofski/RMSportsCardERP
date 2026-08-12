@@ -23279,3 +23279,11 @@ button.sor-team:focus-visible {
   color: var(--warning);
   font-weight: 600;
 }
+
+/* Inbound, the count follows the boxes — so exceeding the order is a note about
+   the paperwork being behind, not a warning about the scan. Stated calmly and
+   in the flow of the line, because it needs seeing rather than answering. */
+.scan-count-extra {
+  color: var(--warning);
+  font-weight: 600;
+}

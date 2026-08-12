@@ -224,7 +224,10 @@ export function lineFromScan(args: {
     category: product.category,
     imageUrl: args.imageUrl ?? resolution.imageUrl,
     location,
-    quantity: max != null ? Math.min(1, Math.max(0, max)) : 1,
+    // One beep is one box, whatever the order says. Inbound never starts below
+    // 1: a scan of something already fully received is still a box in somebody's
+    // hands, and starting at 0 would make the first beep look like it missed.
+    quantity: direction === 'in' ? 1 : max != null ? Math.min(1, Math.max(0, max)) : 1,
     scans: 1,
     unitCost: candidate ? candidate.unitPrice : direction === 'out' ? null : resolution.suggestedUnitCost,
     costLocked: !!candidate,
@@ -243,10 +246,16 @@ export function lineFromScan(args: {
     invoiceId: soCandidate?.invoiceId,
     invoiceNumber: soCandidate?.invoiceNumber,
     customerName: soCandidate?.customerName ?? null,
-    override,
-    // A first scan onto a line with no room left is already the over-scan
-    // question — it does not need a second beep to become one.
-    needsDecision: !override && max != null && max < 1 ? 'overage' : null,
+    // A first scan onto a line with no room left is already past the order.
+    // OUTBOUND that is a question; inbound it is simply a box in somebody's
+    // hands — see mergeScan for why the two directions differ.
+    needsDecision:
+      direction !== 'in' && !override && max != null && max < 1 ? 'overage' : null,
+    // An inbound scan onto an order with nothing left outstanding is already
+    // past it, so it carries the override from the first beep — otherwise the
+    // main process would refuse the receipt it was told to make.
+    override:
+      direction === 'in' && !override && max != null && max < 1 ? 'overage' : override,
     max,
     onHand,
     overflow: max != null && max < 1,
@@ -275,20 +284,50 @@ export function mergeScan(lines: PendingLine[], incoming: PendingLine): PendingL
   // The ceiling follows the freshly-resolved reality, but the location, cost and
   // any hand-typed count stay the operator's. An override already given lifts
   // the ceiling entirely — that is what the operator agreed to.
-  const max = prev.override
-    ? null
-    : prev.kind === 'remove_stock'
-      ? Math.max(0, incoming.onHand[prev.location] ?? 0)
-      : incoming.max
+  // INBOUND KEEPS ITS CEILING AS A FACT, not as a limit.
+  //
+  // An override used to null the ceiling outright, because the ceiling's only
+  // job was to clamp and an answered question meant "stop clamping". Now that an
+  // inbound count is never clamped, throwing the number away would cost the one
+  // thing worth saying afterwards — how many MORE arrived than were ordered —
+  // and `keepToOrder` would have nothing to trim back to.
+  //
+  // Outbound is unchanged: there the override really does lift a limit.
+  const max =
+    prev.direction === 'in'
+      ? incoming.max
+      : prev.override
+        ? null
+        : prev.kind === 'remove_stock'
+          ? Math.max(0, incoming.onHand[prev.location] ?? 0)
+          : incoming.max
   const wanted = prev.quantity + 1
   const over = max != null && wanted > max
+  /**
+   * A BEEP IS A BOX. Inbound, the count is simply how many were scanned.
+   *
+   * The owner, twice: "3 scans means that I am scanning 3 individual boxes",
+   * and "if i scan something 3 times that means there are 3 of those products".
+   * That is the right way round. The boxes on the pallet are the fact; the
+   * purchase order is what somebody EXPECTED to arrive, and when the two
+   * disagree it is usually the order that is behind — a supplier shipped an
+   * extra case, or the order was raised short.
+   *
+   * So an inbound scan past the order's quantity no longer stops to ask. It
+   * counts what was scanned and SAYS that it is more than the order expected,
+   * which is a note on a line rather than a gate in front of it.
+   *
+   * OUTBOUND still stops, and that asymmetry is deliberate: receiving more than
+   * expected is a discrepancy the paperwork can absorb, but shipping more than
+   * is on the shelf drives stock negative — a number that is not merely
+   * surprising but impossible, and that every cost and valuation figure is
+   * computed from afterwards.
+   */
+  const countsFreely = prev.direction === 'in'
 
   const merged: PendingLine = {
     ...prev,
-    // Held at the ceiling while the question is open. The count is not the lie
-    // — the SILENCE was. `scans` says how many beeps landed and `needsDecision`
-    // puts the difference in front of a person instead of dropping it.
-    quantity: clamp(wanted, max),
+    quantity: countsFreely ? wanted : clamp(wanted, max),
     scans: prev.scans + 1,
     max,
     onHand: incoming.onHand,
@@ -296,7 +335,12 @@ export function mergeScan(lines: PendingLine[], incoming: PendingLine): PendingL
     costRequired: incoming.costRequired,
     rawCode: prev.rawCode,
     mode: incoming.mode,
-    needsDecision: over ? 'overage' : prev.needsDecision,
+    // Inbound: no question, but the line still carries the OVERRIDE, because the
+    // main process refuses to exceed an order's outstanding without one. Setting
+    // it here is what turns "count what was scanned" into a receipt that
+    // actually commits, rather than a number that is refused at the last step.
+    needsDecision: over && !countsFreely ? 'overage' : prev.needsDecision,
+    override: over && countsFreely ? 'overage' : prev.override,
     overflow: over,
     bumpedAt: incoming.bumpedAt
   }
@@ -337,11 +381,22 @@ export function acceptOverage(lines: PendingLine[], key: string): PendingLine[] 
  * settled.
  */
 export function keepToOrder(lines: PendingLine[], key: string): PendingLine[] {
-  return lines.map((l) =>
-    l.key === key
-      ? { ...l, scans: l.quantity, needsDecision: null, overflow: false }
-      : l
-  )
+  return lines.map((l) => {
+    if (l.key !== key) return l
+    // TRIMS the count now, rather than merely accepting one already clamped.
+    // Inbound no longer clamps, so "keep to the order" has to do the trimming
+    // itself — and it drops the override with it, because once the count is
+    // back inside the order there is nothing left to have overridden.
+    const quantity = l.max != null ? Math.max(1, Math.min(l.quantity, l.max)) : l.quantity
+    return {
+      ...l,
+      quantity,
+      scans: quantity,
+      override: l.override === 'overage' ? null : l.override,
+      needsDecision: null,
+      overflow: false
+    }
+  })
 }
 
 /** Is anything on the list waiting on a person? Nothing commits while it is. */
