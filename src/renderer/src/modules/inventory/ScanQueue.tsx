@@ -170,8 +170,15 @@ function QueueRow({
           )}
           {line.unitCost != null && <span>{formatMoney(line.unitCost)} each</span>}
           {out && <span>{line.onHand[line.location] ?? 0} on hand</span>}
-          <span>
+          {/* SCANS ARE BOXES. Three beeps is three boxes off the pallet, so a
+              count that says 3 beside a quantity that says 1 has to explain
+              itself where the eye already is — not only in the banner below it.
+              The clamp is correct (the order asked for fewer) but silent
+              disagreement between the two numbers reads as the app losing
+              scans, which is exactly what it was accused of. */}
+          <span className={line.scans > line.quantity ? 'scan-count-short' : undefined}>
             {line.scans} scan{line.scans === 1 ? '' : 's'}
+            {line.scans > line.quantity && ` · only ${line.quantity} fits`}
           </span>
         </span>
 

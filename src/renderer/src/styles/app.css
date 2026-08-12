@@ -23271,3 +23271,11 @@ button.sor-team:focus-visible {
 .po-pin-btn.is-pinned svg {
   fill: currentColor;
 }
+
+/* Three beeps is three boxes. When the order asked for fewer, the count and the
+   quantity disagree on purpose — and the disagreement has to be visible at the
+   number itself, because a silent one reads as the scanner dropping scans. */
+.scan-count-short {
+  color: var(--warning);
+  font-weight: 600;
+}
