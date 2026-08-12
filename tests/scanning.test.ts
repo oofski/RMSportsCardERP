@@ -462,5 +462,43 @@ if (outLine.length > 0 && outLine[0].max != null) {
     `${pushed[0].quantity} vs ${outLine[0].max}`)
 }
 
+// ---------------------------------------------------------------------------
+console.log('\n=== N+2. the count is DERIVED from the tally, and self-heals ===')
+// ---------------------------------------------------------------------------
+// Three fixes to the increment, and a live app still showed 1 against 2 scans
+// with the ceiling at 3 — a state the increment cannot produce, and one that
+// never reproduced here. So the count stopped being incremented and started
+// being DERIVED: inbound it IS the number of beeps, which has no independent
+// value left to lose, whatever else on the page touches the line.
+//
+// Reconstructed from the owner's screenshot exactly: q1, s2, m3.
+const desynced: any = {
+  key: 'po:x:', token: 't', kind: 'po_line', direction: 'in', productId: 'p_c',
+  productName: 'Charlie Hobby Box', sku: 'CCC-1', category: 'Baseball', imageUrl: null,
+  location: 'RM', quantity: 1, scans: 2, unitCost: 1900, costLocked: true, costRequired: false,
+  rawCode: '0000000000031', mode: 'scanner', override: null, needsDecision: null, max: 3,
+  onHand: { RM: 0 }, overflow: false, bumpedAt: 1, handCounted: false
+}
+const healed = mergeScan([desynced], { ...desynced, bumpedAt: 2 })[0]
+ok(healed.scans === 3, 'a third beep lands', String(healed.scans))
+ok(healed.quantity === 3, 'AND THE COUNT SNAPS BACK ONTO THE TALLY', String(healed.quantity))
+ok(healed.quantity === healed.scans, 'the two can no longer disagree inbound')
+
+// A typed number still leads — deriving must not mean overriding a person.
+const typedFirst = setQuantity([desynced], desynced.key, 10)
+ok(typedFirst[0].quantity === 10, 'typing 10 gives 10', String(typedFirst[0].quantity))
+ok(typedFirst[0].handCounted === true, 'and records that a person said so')
+const thenBeeped = mergeScan(typedFirst, { ...desynced, bumpedAt: 3 })[0]
+ok(thenBeeped.quantity === 11, 'a beep after that adds to THEIR number, not the tally',
+  String(thenBeeped.quantity))
+
+// Outbound is untouched: it still clamps to what is on the shelf.
+const shelfLine: any = { ...desynced, direction: 'out', kind: 'remove_stock', quantity: 1, scans: 1,
+  max: 2, onHand: { RM: 2 } }
+const outAfter = mergeScan([shelfLine], { ...shelfLine, bumpedAt: 2 })[0]
+ok(outAfter.quantity === 2, 'outbound counts up to the shelf', String(outAfter.quantity))
+const outPast = mergeScan([outAfter], { ...shelfLine, bumpedAt: 3 })[0]
+ok(outPast.quantity === 2, 'and no further — stock cannot go negative', String(outPast.quantity))
+
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

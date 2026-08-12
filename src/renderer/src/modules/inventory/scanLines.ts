@@ -118,6 +118,20 @@ export interface PendingLine {
   overflow: boolean
   /** Bumped on every scan that lands here; the row flashes on change. */
   bumpedAt: number
+  /**
+   * Has a PERSON set this count, as opposed to the scanner having counted it?
+   *
+   * Inbound, the count is derived from `scans` rather than incremented, so it
+   * cannot drift from the number of beeps no matter what else touches the line.
+   * Three separate fixes to the increment left a live app still showing one
+   * against two scans, and the mechanism never reproduced here — so the answer
+   * stopped being "find the writer" and became "make the number impossible to
+   * desynchronise". A count that is DERIVED has no independent value to lose.
+   *
+   * A typed number has to win, though, which is what this records: once a person
+   * says four, four is the answer, and further beeps go on from there.
+   */
+  handCounted: boolean
 }
 
 /** crypto.randomUUID is available in the Electron renderer; the fallback only
@@ -259,7 +273,8 @@ export function lineFromScan(args: {
     max,
     onHand,
     overflow: max != null && max < 1,
-    bumpedAt: args.now ?? Date.now()
+    bumpedAt: args.now ?? Date.now(),
+    handCounted: false
   }
 }
 
@@ -327,7 +342,14 @@ export function mergeScan(lines: PendingLine[], incoming: PendingLine): PendingL
 
   const merged: PendingLine = {
     ...prev,
-    quantity: countsFreely ? wanted : clamp(wanted, max),
+    // DERIVED, not incremented. `scans` is the number of beeps, and inbound
+    // that IS the count — so no other writer can leave the two disagreeing.
+    // Once somebody has typed a number, their number leads and beeps add to it.
+    quantity: countsFreely
+      ? prev.handCounted
+        ? wanted
+        : prev.scans + 1
+      : clamp(wanted, max),
     scans: prev.scans + 1,
     max,
     onHand: incoming.onHand,
@@ -428,6 +450,9 @@ export function setQuantity(lines: PendingLine[], key: string, quantity: number)
     return {
       ...l,
       quantity: next,
+      // From here the operator's number leads; further beeps add to it rather
+      // than resetting it to the tally.
+      handCounted: true,
       // Past the order carries the override the commit needs, exactly as a scan
       // past it does — otherwise the main process refuses the very number the
       // operator just typed.

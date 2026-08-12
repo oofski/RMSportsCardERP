@@ -344,7 +344,23 @@ function QueueRow({
             setQty(e.target.value)
             commitQty(e.target.value)
           }}
-          onBlur={() => commitQty(qty)}
+          // BLUR RE-SYNCS THE FIELD. IT MUST NEVER WRITE.
+          //
+          // This used to commit the draft, and that is what made a scan appear
+          // to be swallowed. The scanner is a keyboard wedge: it reads
+          // keystrokes wherever focus happens to be, so a beep can land while
+          // this input holds focus. The merge raises the count to 2, and blur
+          // then fires with the draft captured by the render that attached the
+          // handler -- still "1" -- and writes it straight back over the new
+          // value. The count sat at 1 while `scans` climbed, which is precisely
+          // the symptom that survived three rounds of fixes to the counting
+          // logic, because the counting logic was never wrong.
+          //
+          // onChange already commits every keystroke, so there is nothing left
+          // for blur to save. All it does now is put the field back in step with
+          // the line, which is what somebody who half-typed a number and clicked
+          // away actually wants.
+          onBlur={() => setQty(String(line.quantity))}
         />
         <button
           type="button"
