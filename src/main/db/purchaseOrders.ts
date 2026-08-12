@@ -1,17 +1,28 @@
 import type Database from 'better-sqlite3'
 import type {
   NewPurchaseOrder,
+  PoRoutingPatch,
   PurchaseOrder,
+  PurchaseOrderAllocation,
   PurchaseOrderDetail,
   PurchaseOrderLine,
   PurchaseOrderStatus,
   ScanPoCandidate
 } from '@shared/types'
-import { canTransition, type SupplierSuggestion, type VendorSummary } from '@shared/purchaseOrders'
+import {
+  canTransition,
+  canonicalDestination,
+  destinationHoldsStock,
+  orderKindOf,
+  type OrderParty,
+  type OrderPartyKind,
+  type SupplierSuggestion,
+  type VendorSummary
+} from '@shared/purchaseOrders'
 import type { Carrier, PaymentTiming } from '@shared/freight'
 import { asCarrier, asPaymentTiming, detectCarrier } from '@shared/freight'
 import { asShipStatus } from '@shared/tracking'
-import { LOCATION_IDS, isLocation } from '@shared/inventory'
+import { LOCATION_IDS } from '@shared/inventory'
 import { getDb, getMeta, setMeta } from './database'
 import { addStock, adjustStock, reverseStockReceipt, stockQty } from './inventory'
 import { recordPoCogs, voidPoCogs } from './finance'
@@ -57,12 +68,75 @@ interface PoLineRow {
   position: number
   qty_received: number
   received_at: string | null
+  header_supplier: string | null
+  header_destination: string
 }
+
+/** One row of po_unit_destinations: some units, one supplier, one destination. */
+interface UnitRow {
+  po_id: string
+  po_line_id: string
+  /** NULL for an unsplit line — the one implicit allocation (invariant I3). */
+  allocation_id: string | null
+  quantity: number
+  qty_received: number
+  position: number
+  supplier: string | null
+  destination: string
+  received_at: string | null
+}
+
+/**
+ * "May units bound here be checked into stock?", as SQL — GENERATED from
+ * LOCATION_IDS rather than typed out beside it.
+ *
+ * The alternative is a hard-coded IN ('RM','AM') in eight queries, which is
+ * eight copies of a rule that lives in @shared/inventory. Generating it means
+ * the SQL and the TypeScript cannot drift apart at all, rather than being
+ * checked for drift after the fact; tests/dropship.test.ts (T13) still pins the
+ * exact string, so widening LOCATION_IDS fails a test rather than silently
+ * turning a new value into a stock-holding shelf everywhere at once.
+ *
+ * The alias exists because purchase_order_lines now has a `destination` column
+ * of its own, so an unqualified name is ambiguous in any query that joins it.
+ */
+const stockDest = (alias = ''): string =>
+  `${alias}destination IN (${LOCATION_IDS.map((id) => `'${id}'`).join(', ')})`
+
+/** The generated stock-bound predicate, exported so a test can pin it. */
+export const STOCK_DESTINATION_SQL = stockDest()
 
 /** Round to whole cents so line totals never carry float drift. */
 const cents = (n: number): number => Math.round(n * 100) / 100
 
+/**
+ * STORE THE INHERITANCE, NOT A COPY.
+ *
+ * A line or an allocation that says the same thing as the row above it stores
+ * NULL, which means "same as the header". Copying the value instead would go
+ * stale the first time the header changed, and it would also make every row
+ * raised before v67 read differently from every row raised after — NULL there
+ * has always meant exactly this, which is why the migration writes nothing.
+ *
+ * Case-insensitive, because a supplier box and a destination box are both free
+ * text and "steel city" typed under a header of "Steel City" is the same
+ * answer, not an override.
+ */
+function inheritable(value: string | null | undefined, inherited: string | null): string | null {
+  const v = String(value ?? '').trim()
+  if (!v) return null
+  if (inherited && v.toLowerCase() === inherited.trim().toLowerCase()) return null
+  return v
+}
+
 function toSummary(row: PoHeaderRow): PurchaseOrder {
+  const orderedUnits = row.ordered_units
+  const receivableUnits = row.receivable_units
+  // Derived from where the units are going, never stored. A stored flag would be
+  // a second source of truth that drifts the first time a line is re-routed, and
+  // the failure mode is a dropship that still says PO and gets received onto a
+  // shelf.
+  const dropshipUnits = Math.max(0, orderedUnits - receivableUnits)
   return {
     id: row.id,
     poNumber: row.po_number,
@@ -74,7 +148,11 @@ function toSummary(row: PoHeaderRow): PurchaseOrder {
     lineCount: row.line_count,
     receivedLineCount: row.received_line_count,
     receivedUnits: row.received_units,
-    orderedUnits: row.ordered_units,
+    orderedUnits,
+    orderKind: orderKindOf(receivableUnits, dropshipUnits, row.location),
+    receivableUnits,
+    dropshipUnits,
+    destinationCount: row.destination_count,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     orderedAt: row.ordered_at,
@@ -95,7 +173,50 @@ function toSummary(row: PoHeaderRow): PurchaseOrder {
   }
 }
 
-function toLine(row: PoLineRow): PurchaseOrderLine {
+function toAllocation(u: UnitRow): PurchaseOrderAllocation {
+  const destination = canonicalDestination(u.destination)
+  return {
+    id: String(u.allocation_id),
+    quantity: u.quantity,
+    supplier: u.supplier?.trim() || null,
+    destination,
+    holdsStock: destinationHoldsStock(destination),
+    qtyReceived: u.qty_received,
+    qtyOutstanding: Math.max(0, u.quantity - u.qty_received),
+    receivedAt: u.received_at
+  }
+}
+
+/**
+ * A line, plus where its units are going.
+ *
+ * `units` are this line's rows from po_unit_destinations — one per allocation
+ * for a split line, exactly one for a line that was never split. THE SECOND CASE
+ * IS THE IMPORTANT ONE: it carries the whole quantity at the header's
+ * destination, which is precisely what every purchase order raised before
+ * dropship existed produces. So `qtyReceivable === quantity` and `allocations`
+ * is empty for all of them, and every progress bar, completion test and incoming
+ * count reads the number it read before.
+ */
+function toLine(row: PoLineRow, units: UnitRow[]): PurchaseOrderLine {
+  // Defensive only: the view's second arm guarantees at least one row per line.
+  const rows: UnitRow[] = units.length
+    ? units
+    : [
+        {
+          po_id: row.po_id,
+          po_line_id: row.id,
+          allocation_id: null,
+          quantity: row.quantity,
+          qty_received: row.qty_received,
+          position: row.position,
+          supplier: row.header_supplier,
+          destination: row.header_destination,
+          received_at: row.received_at
+        }
+      ]
+  const destinations = [...new Set(rows.map((u) => canonicalDestination(u.destination)))]
+  const suppliers = [...new Set(rows.map((u) => u.supplier?.trim() || ''))]
   return {
     id: row.id,
     productId: row.product_id,
@@ -107,9 +228,28 @@ function toLine(row: PoLineRow): PurchaseOrderLine {
     lineTotal: cents(row.quantity * row.unit_price),
     qtyReceived: row.qty_received,
     qtyOutstanding: Math.max(0, row.quantity - row.qty_received),
-    receivedAt: row.received_at
+    receivedAt: row.received_at,
+    // Null when the splits disagree: there is no one answer to show in one cell,
+    // and picking the first would be a quiet lie about the other half.
+    supplier: suppliers.length === 1 ? suppliers[0] || null : null,
+    destination: destinations.length === 1 ? destinations[0] : null,
+    qtyReceivable: rows.reduce((n, u) => n + (destinationHoldsStock(u.destination) ? u.quantity : 0), 0),
+    // Empty for an unsplit line — never a single full-quantity row, so the
+    // unsplit state stores nothing at all and stays byte-identical to a legacy
+    // line.
+    allocations: rows.filter((u) => u.allocation_id !== null).map(toAllocation)
   }
 }
+
+/** Units bound for a shelf, over the whole order. */
+const RECEIVABLE_UNITS_SQL = `
+  (SELECT COALESCE(SUM(CASE WHEN ${stockDest('d.')} THEN d.quantity ELSE 0 END), 0)
+     FROM po_unit_destinations d WHERE d.po_id = po.id)`
+
+/** Units that are never coming here. */
+const DROP_UNITS_SQL = `
+  (SELECT COALESCE(SUM(CASE WHEN ${stockDest('d.')} THEN 0 ELSE d.quantity END), 0)
+     FROM po_unit_destinations d WHERE d.po_id = po.id)`
 
 const PO_SELECT = `
   SELECT po.id, po.po_number, po.supplier, po.notes, po.status, po.location, po.total,
@@ -124,18 +264,38 @@ const PO_SELECT = `
          (SELECT COALESCE(SUM(l.qty_received), 0) FROM purchase_order_lines l
            WHERE l.po_id = po.id) AS received_units,
          (SELECT COALESCE(SUM(l.quantity), 0) FROM purchase_order_lines l
-           WHERE l.po_id = po.id) AS ordered_units
+           WHERE l.po_id = po.id) AS ordered_units,
+         ${RECEIVABLE_UNITS_SQL} AS receivable_units,
+         (SELECT COUNT(DISTINCT d.destination) FROM po_unit_destinations d
+           WHERE d.po_id = po.id) AS destination_count
   FROM purchase_orders po
 `
 
 const LINE_SELECT = `
   SELECT l.id, l.po_id, l.product_id, p.name AS product_name, p.sku AS sku,
          p.category AS category, l.quantity, l.unit_price, l.position,
-         l.qty_received, l.received_at
+         l.qty_received, l.received_at,
+         po.supplier AS header_supplier, po.location AS header_destination
   FROM purchase_order_lines l
   JOIN inventory_products p ON p.id = l.product_id
+  JOIN purchase_orders po ON po.id = l.po_id
   WHERE l.po_id = ?
   ORDER BY l.position ASC, l.created_at ASC
+`
+
+/**
+ * Where every unit of an order is going, in one read.
+ *
+ * received_at comes from the allocation row because the view deliberately does
+ * not carry it: the view's job is the destination arithmetic, and a column only
+ * one of its two arms could ever fill would invite readers to treat the other
+ * arm's NULL as "not received" rather than "not applicable".
+ */
+const UNIT_SELECT = `
+  SELECT d.po_id, d.po_line_id, d.allocation_id, d.quantity, d.qty_received, d.position,
+         d.supplier, d.destination, a.received_at
+    FROM po_unit_destinations d
+    LEFT JOIN purchase_order_allocations a ON a.id = d.allocation_id
 `
 
 type PoHeaderRow = PoRow & {
@@ -143,6 +303,22 @@ type PoHeaderRow = PoRow & {
   received_line_count: number
   received_units: number
   ordered_units: number
+  receivable_units: number
+  destination_count: number
+}
+
+/** This order's unit rows, grouped by line, in allocation order. */
+function unitsByLine(db: Database.Database, poId: string): Map<string, UnitRow[]> {
+  const rows = db
+    .prepare(`${UNIT_SELECT} WHERE d.po_id = ? ORDER BY d.position ASC, d.allocation_id ASC`)
+    .all(poId) as UnitRow[]
+  const byLine = new Map<string, UnitRow[]>()
+  for (const r of rows) {
+    const list = byLine.get(r.po_line_id)
+    if (list) list.push(r)
+    else byLine.set(r.po_line_id, [r])
+  }
+  return byLine
 }
 
 export function listPurchaseOrders(): PurchaseOrder[] {
@@ -151,9 +327,13 @@ export function listPurchaseOrders(): PurchaseOrder[] {
 }
 
 export function getPurchaseOrder(id: string): PurchaseOrderDetail | null {
-  const header = getDb().prepare(`${PO_SELECT} WHERE po.id = ?`).get(id) as PoHeaderRow | undefined
+  const db = getDb()
+  const header = db.prepare(`${PO_SELECT} WHERE po.id = ?`).get(id) as PoHeaderRow | undefined
   if (!header) return null
-  const lines = (getDb().prepare(LINE_SELECT).all(id) as PoLineRow[]).map(toLine)
+  const units = unitsByLine(db, id)
+  const lines = (db.prepare(LINE_SELECT).all(id) as PoLineRow[]).map((l) =>
+    toLine(l, units.get(l.id) ?? [])
+  )
   return { ...toSummary(header), lines }
 }
 
@@ -175,14 +355,80 @@ export function listActivePurchaseOrderBoxes(): PurchaseOrderDetail[] {
        WHERE po.status != 'cancelled'
          AND po.scanned_at IS NULL
          AND (po.status != 'received' OR po.received_at IS NULL OR po.received_at >= @cutoff)
+         AND NOT (${RECEIVABLE_UNITS_SQL} = 0 AND ${DROP_UNITS_SQL} > 0)
        ORDER BY po.created_at DESC`
     )
     .all({ cutoff }) as PoHeaderRow[]
   const lineStmt = db.prepare(LINE_SELECT)
-  return headers.map((h) => ({
-    ...toSummary(h),
-    lines: (lineStmt.all(h.id) as PoLineRow[]).map(toLine)
-  }))
+  return headers.map((h) => {
+    const units = unitsByLine(db, h.id)
+    return {
+      ...toSummary(h),
+      // A wholly-drop line is still RETURNED — the box has to be able to explain
+      // why its count is 12 when the order says 20 — but it carries
+      // qtyReceivable 0 and contributes nothing to any total.
+      lines: (lineStmt.all(h.id) as PoLineRow[]).map((l) => toLine(l, units.get(l.id) ?? []))
+    }
+  })
+}
+
+/** The routing a draft line asks for, canonicalised and validated. */
+interface DraftSplit {
+  quantity: number
+  supplier: string | null
+  destination: string
+}
+
+/**
+ * Invariants I1 and I5, checked BEFORE anything is written.
+ *
+ * SQLite cannot express a cross-row sum, so the write path is the only place
+ * these can live. Checked over the whole draft rather than line by line for the
+ * reason receivePurchaseOrderLines gives about its own form: a bad number on the
+ * last line must not leave somebody wondering which of the earlier ones went in.
+ * (Nothing would have — this runs before the transaction opens — but the message
+ * should not require knowing that.)
+ */
+function validateSplits(
+  db: Database.Database,
+  lines: NewPurchaseOrder['lines']
+): Map<number, DraftSplit[]> {
+  const byIndex = new Map<number, DraftSplit[]>()
+  const nameStmt = db.prepare('SELECT name FROM inventory_products WHERE id = ?')
+  lines.forEach((line, i) => {
+    const raw = Array.isArray(line.allocations) ? line.allocations : []
+    if (raw.length === 0) return // NOT SPLIT — writes no rows at all. The whole back-compat mechanism.
+    const productName =
+      (nameStmt.get(line.productId) as { name: string } | undefined)?.name ?? 'That product'
+    const quantity = Math.round(line.quantity)
+    const splits: DraftSplit[] = raw.map((a) => ({
+      quantity: Math.round(Number(a?.quantity)),
+      supplier: typeof a?.supplier === 'string' && a.supplier.trim() ? a.supplier.trim() : null,
+      destination: canonicalDestination(String(a?.destination ?? ''))
+    }))
+    for (const s of splits) {
+      // I5. A zero-quantity split is deleted, never stored: a row for no units is
+      // a destination somebody stopped choosing, and keeping it would make the
+      // line read as split when it is not.
+      if (!Number.isFinite(s.quantity) || s.quantity < 1) {
+        throw new Error(
+          `${productName}: every split needs a whole quantity of at least 1. Remove the empty one, or give it units.`
+        )
+      }
+      if (!s.destination) {
+        throw new Error(`${productName}: every split needs a destination.`)
+      }
+    }
+    const sum = splits.reduce((n, s) => n + s.quantity, 0)
+    // I1. Named with both numbers, in the style receivePurchaseOrderLines uses.
+    if (sum !== quantity) {
+      throw new Error(
+        `${productName}: the splits add up to ${sum} of ${quantity} ordered, so this order cannot be saved.`
+      )
+    }
+    byIndex.set(i, splits)
+  })
+  return byIndex
 }
 
 export function createPurchaseOrder(
@@ -190,7 +436,21 @@ export function createPurchaseOrder(
   actorId: string | null
 ): PurchaseOrderDetail {
   const db = getDb()
-  const location = isLocation(input.location) ? input.location : LOCATION_IDS[0]
+  /**
+   * THE LINE THAT USED TO KILL THIS FEATURE.
+   *
+   * It read `isLocation(input.location) ? input.location : LOCATION_IDS[0]`,
+   * which silently rewrote every destination that is not RM or AM to 'RM' — so
+   * every dropship became an RM purchase order and every unit landed on the
+   * shelf, with the cost-basis consequence described in the v67 migration.
+   *
+   * An unrecognised name is KEPT, not coerced: a one-off drop to a shop that is
+   * not in the directory yet must not require a detour into a contacts screen
+   * first, which is the rule ContactTypeahead already states for suppliers. Only
+   * an empty destination falls back to RM, exactly as before.
+   */
+  const location = canonicalDestination(String(input.location ?? '').trim()) || LOCATION_IDS[0]
+  const splitsByIndex = validateSplits(db, input.lines)
   const create = db.transaction((): string => {
     const id = newId()
     const ts = nowIso()
@@ -201,6 +461,30 @@ export function createPurchaseOrder(
     const total = cents(
       input.lines.reduce((sum, l) => sum + cents(Math.round(l.quantity) * Math.max(0, l.unitPrice)), 0)
     )
+    /**
+     * A header supplier the operator did not type, when every line agrees on one.
+     *
+     * The common shape of a multi-destination order is ONE supplier shipping to
+     * several places, and leaving the header blank there would drop the whole
+     * order out of listVendors' figures — a vendor screen that understates spend
+     * because of where the boxes went. Only stamped when the answer is
+     * unanimous; a genuinely multi-supplier order leaves it alone rather than
+     * inventing an apportionment of money across suppliers, which is a separate
+     * change with its own reconciliation (see Open risks in the spec).
+     */
+    const typedSupplier = input.supplier?.trim() || null
+    const lineSuppliers = new Set(
+      input.lines.flatMap((line, i) => {
+        const splits = splitsByIndex.get(i)
+        if (splits) return splits.map((s) => s.supplier?.trim() || '')
+        return [line.supplier?.trim() || '']
+      })
+    )
+    // An empty string in the set means "inherit", so a set of exactly one empty
+    // string yields null and the header stays blank — which is every order
+    // raised without line-level suppliers, i.e. all of them until now.
+    const unanimous = lineSuppliers.size === 1 ? [...lineSuppliers][0] || null : null
+    const headerSupplier = typedSupplier ?? unanimous
     db.prepare(
       `INSERT INTO purchase_orders
          (id, po_number, supplier, notes, status, location, total, created_by, created_at, updated_at, ordered_at,
@@ -211,7 +495,7 @@ export function createPurchaseOrder(
     ).run({
       id,
       po_number: poNumber,
-      supplier: input.supplier?.trim() || null,
+      supplier: headerSupplier,
       notes: input.notes?.trim() || null,
       location,
       total,
@@ -228,11 +512,54 @@ export function createPurchaseOrder(
 
     const insertLine = db.prepare(
       `INSERT INTO purchase_order_lines
-         (id, po_id, product_id, quantity, unit_price, position, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
+         (id, po_id, product_id, quantity, unit_price, position, created_at, supplier, destination)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
+    const insertAllocation = db.prepare(
+      `INSERT INTO purchase_order_allocations
+         (id, po_id, po_line_id, quantity, supplier, destination, position, qty_received, received_at, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL, ?)`
+    )
+    const headerDestination = location
     input.lines.forEach((line, i) => {
-      insertLine.run(newId(), id, line.productId, Math.round(line.quantity), Math.max(0, line.unitPrice), i, ts)
+      const lineId = newId()
+      // NULL means "same as the header" — the inheritance is stored, not a copy
+      // of the value. A copy would go stale the moment the header changed, and
+      // it is also what makes every line raised before today read correctly:
+      // NULL there has always meant exactly this.
+      const lineSupplier = inheritable(line.supplier ?? null, headerSupplier)
+      const lineDestination = inheritable(
+        line.destination ? canonicalDestination(line.destination) : null,
+        headerDestination
+      )
+      insertLine.run(
+        lineId,
+        id,
+        line.productId,
+        Math.round(line.quantity),
+        Math.max(0, line.unitPrice),
+        i,
+        ts,
+        lineSupplier,
+        lineDestination
+      )
+      // AN UNSPLIT LINE WRITES ZERO ALLOCATION ROWS. Not one row of the whole
+      // quantity — zero. That is what makes an ordinary order identical to one
+      // raised before this feature existed, byte for byte.
+      const splits = splitsByIndex.get(i)
+      if (!splits) return
+      splits.forEach((s, pos) => {
+        insertAllocation.run(
+          newId(),
+          id,
+          lineId,
+          s.quantity,
+          inheritable(s.supplier, lineSupplier ?? headerSupplier),
+          s.destination,
+          pos,
+          ts
+        )
+      })
     })
     // Record the purchase as a Cost-of-Goods-Sold ledger entry (same rounded
     // total, same creation timestamp), atomic with the PO insert.
@@ -373,18 +700,31 @@ export function setPurchaseOrderStatus(
       // of which actually moved inventory.
       // Only OUTSTANDING quantity is received, so a PO that was partially
       // scanned in is topped up rather than double-counted.
+      //
+      // STOCK ALLOCATIONS ONLY. For a pure-drop order this returns nothing, so
+      // moving it to Received stamps the status and books no stock — which is
+      // the manual way a Drop order is closed, and the only way, because it can
+      // never auto-complete.
       const outstanding = db
         .prepare(
-          `SELECT id, quantity - qty_received AS outstanding
-             FROM purchase_order_lines
-            WHERE po_id = ? AND qty_received < quantity
-            ORDER BY position, rowid`
+          `SELECT allocation_id, po_line_id, quantity - qty_received AS outstanding
+             FROM po_unit_destinations
+            WHERE po_id = ? AND ${stockDest()} AND qty_received < quantity
+            ORDER BY position, po_line_id`
         )
-        .all(id) as Array<{ id: string; outstanding: number }>
+        .all(id) as Array<{ allocation_id: string | null; po_line_id: string; outstanding: number }>
       for (const l of outstanding) {
         // Throws on failure so the whole transaction (including the status
         // change above) rolls back — never a "Received" PO with partial stock.
-        receivePoLine(db, l.id, l.outstanding, `Received ${row.po_number}`, actorId)
+        receivePoLine(
+          db,
+          l.po_line_id,
+          l.outstanding,
+          `Received ${row.po_number}`,
+          actorId,
+          false,
+          l.allocation_id
+        )
       }
       // Stamps scanned_at once every line is in, which also retires the PO's box
       // from the Incoming panel.
@@ -407,7 +747,10 @@ export interface ReceivedPoLine {
   poNumber: string
   productId: string
   productName: string
+  /** The ALLOCATION's destination — always RM or AM, never the header's name. */
   location: string
+  /** Which slice this landed against. Null for an unsplit line. */
+  allocationId: string | null
   /** Units actually received on this call (clamped to the outstanding amount). */
   quantity: number
   unitCost: number
@@ -437,7 +780,13 @@ export function receivePoLine(
    * is what stops a double-beep double-adding, so lifting it has to be a
    * decision somebody made rather than something the numbers implied.
    */
-  allowOverage = false
+  allowOverage = false,
+  /**
+   * Which slice of the line this receipt is against. Null resolves the line's
+   * STOCK allocations in position order — which for an unsplit line is the one
+   * implicit allocation, i.e. exactly today's behaviour.
+   */
+  allocationId: string | null = null
 ): ReceivedPoLine {
   const row = db
     .prepare(
@@ -467,10 +816,68 @@ export function receivePoLine(
   // Re-read inside the transaction, so a PO cancelled between resolve and commit
   // is caught here and rolls the whole commit back.
   if (row.status === 'cancelled') throw new Error('That purchase order was cancelled.')
+
+  /**
+   * WHICH UNITS THIS RECEIPT IS AGAINST — asked PER ALLOCATION, never per order.
+   *
+   * There is no "this is a dropship PO" branch anywhere in this file, because a
+   * mixed order is both at once. The only question ever asked is whether THIS
+   * slice of THIS line is bound for a shelf, and the answer comes from the one
+   * view that defines it.
+   *
+   * For a line that was never split this returns exactly one row carrying the
+   * whole quantity at the header's destination — so everything below is, for
+   * every order raised before v67, the code that was here before.
+   */
+  const stockUnits = db
+    .prepare(
+      `SELECT allocation_id, quantity, qty_received, position, supplier, destination
+         FROM po_unit_destinations
+        WHERE po_line_id = ? AND ${stockDest()}
+        ORDER BY position, allocation_id`
+    )
+    .all(lineId) as UnitRow[]
+
+  if (stockUnits.length === 0) {
+    // EVERY allocation on this line is a drop. Throwing (rather than returning)
+    // matches the existing contract and rolls the caller's transaction back, so
+    // a delivery form naming a drop line commits none of its other lines either.
+    const going = db
+      .prepare(`SELECT DISTINCT destination FROM po_unit_destinations WHERE po_line_id = ?`)
+      .all(lineId) as Array<{ destination: string }>
+    const where = going.map((g) => canonicalDestination(g.destination)).join(', ') || 'another party'
+    throw new Error(
+      `${row.product_name} on ${row.po_number} is drop-shipped to ${where}; it is not received into stock.`
+    )
+  }
+
+  const target = allocationId
+    ? stockUnits.find((u) => u.allocation_id === allocationId)
+    : stockUnits.find((u) => u.quantity - u.qty_received > 0) ?? stockUnits[0]
+  if (!target) {
+    // Either the allocation is not on this line, or it is a DROP allocation and
+    // was filtered out above. Both are the same answer to the caller: these
+    // units are not the ones being checked in.
+    throw new Error(
+      `${row.product_name} on ${row.po_number}: that split is not one this order receives into stock.`
+    )
+  }
+  // Belt and braces on the load-bearing invariant. The SQL above already
+  // guarantees it; this is what would catch a future edit that loosened the
+  // filter, BEFORE addStock — which does not validate its location — opened a
+  // phantom cost layer at a customer's name.
+  const destination = canonicalDestination(target.destination)
+  if (!destinationHoldsStock(destination)) {
+    throw new Error(
+      `${row.product_name} on ${row.po_number} is going to ${destination}, which does not hold stock.`
+    )
+  }
+
   // THIS is the real double-add guard — not the header's scanned_at. Two scans
   // of the same box serialise (better-sqlite3 is synchronous), and the second
-  // sees the first's qty_received.
-  const outstanding = row.quantity - row.qty_received
+  // sees the first's qty_received. MEASURED AGAINST THE ALLOCATION, which for an
+  // unsplit line is the line.
+  const outstanding = target.quantity - target.qty_received
   if (outstanding <= 0 && !allowOverage) {
     throw new Error('That line has already been fully received.')
   }
@@ -488,7 +895,7 @@ export function receivePoLine(
   // override; without one, the refusal names both numbers.
   if (!allowOverage && Number.isFinite(qty) && want > outstanding) {
     throw new Error(
-      `${row.product_name}: only ${outstanding} of ${row.quantity} ${
+      `${row.product_name}: only ${outstanding} of ${target.quantity} ${
         outstanding === 1 ? 'is' : 'are'
       } still outstanding on ${row.po_number}, so ${want} cannot be received.`
     )
@@ -501,18 +908,34 @@ export function receivePoLine(
   // it the picker's vendor column would be blank for every case in the building —
   // leaving an operator to choose between "$1,400" and "$1,600" with nothing else
   // to go on.
+  //
+  // BOTH ARGUMENTS COME FROM THE ALLOCATION, not the header. The location is
+  // where these particular units are going, and the vendor is who these
+  // particular units were bought from — which fixes a real defect the moment
+  // lines can carry their own supplier, because the cost layer would otherwise
+  // name the wrong vendor in the lot picker.
   const res = addStock(
     row.product_id,
-    row.location,
+    destination,
     take,
     row.unit_price,
     note ?? `Scanned in ${row.po_number}`,
     actorId,
-    row.supplier
+    target.supplier?.trim() || null
   )
   if (res.error) throw new Error(res.error) // THROW so the outer txn rolls back every prior line (atomic)
 
   const ts = nowIso()
+  // I2: the allocation's counter and the line's move together, or the two
+  // disagree the first time anything is undone.
+  if (target.allocation_id) {
+    db.prepare(
+      `UPDATE purchase_order_allocations
+          SET qty_received = qty_received + @take,
+              received_at  = CASE WHEN qty_received + @take >= quantity THEN @ts ELSE received_at END
+        WHERE id = @id`
+    ).run({ take, ts, id: target.allocation_id })
+  }
   db.prepare(
     `UPDATE purchase_order_lines
         SET qty_received = qty_received + @take,
@@ -525,11 +948,16 @@ export function receivePoLine(
   // several commits gets several rows, each naming its own lot — which is what
   // makes an exact reversal possible. (lot_id above is kept only so a database
   // written by the one build that had it can still be read.)
+  //
+  // The location is stored ON THE RECEIPT because that is the only place it
+  // stays true: the three reversal paths used to re-read it from the PO header,
+  // which with per-line destinations unwinds against the wrong shelf.
   if (res.lotId) {
     db.prepare(
-      `INSERT INTO po_line_receipts (id, po_id, po_line_id, lot_id, quantity, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    ).run(newId(), row.po_id, lineId, res.lotId, take, ts)
+      `INSERT INTO po_line_receipts
+         (id, po_id, po_line_id, lot_id, quantity, created_at, allocation_id, location)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(newId(), row.po_id, lineId, res.lotId, take, ts, target.allocation_id, destination)
   }
 
   return {
@@ -538,7 +966,8 @@ export function receivePoLine(
     poNumber: row.po_number,
     productId: row.product_id,
     productName: row.product_name,
-    location: row.location,
+    location: destination,
+    allocationId: target.allocation_id,
     quantity: take,
     unitCost: row.unit_price,
     lotId: res.lotId ?? '',
@@ -575,15 +1004,28 @@ export function completePoIfFullyReceived(db: Database.Database, poId: string): 
     prevReceivedAt: h?.received_at ?? null
   }
   if (!h || h.scanned_at) return unchanged
+  // THE DENOMINATOR IS WHAT IS COMING HERE, not what was ordered.
+  //
+  // A line with drop units is finished the moment its stock-bound units are in;
+  // waiting for the rest would leave a fully-arrived mixed order open for ever,
+  // with the receiving desk chasing boxes that were never addressed to this
+  // building. On every line raised before v67 the receivable figure IS the
+  // quantity, so this is the previous rule verbatim.
   const c = db
     .prepare(
       `SELECT COUNT(*) AS total,
-              COALESCE(SUM(CASE WHEN qty_received >= quantity THEN 1 ELSE 0 END), 0) AS done
-       FROM purchase_order_lines WHERE po_id = ?`
+              COALESCE(SUM(CASE WHEN r.received >= r.receivable THEN 1 ELSE 0 END), 0) AS done
+         FROM (SELECT po_line_id,
+                      SUM(CASE WHEN ${stockDest()} THEN quantity     ELSE 0 END) AS receivable,
+                      SUM(CASE WHEN ${stockDest()} THEN qty_received ELSE 0 END) AS received
+                 FROM po_unit_destinations WHERE po_id = ? GROUP BY po_line_id) r
+        WHERE r.receivable > 0`
     )
     .get(poId) as { total: number; done: number }
   // total > 0 guard: over zero rows SUM and COUNT are both 0, so an empty PO
-  // would otherwise auto-complete itself.
+  // would otherwise auto-complete itself. It now covers the pure-drop case as
+  // well — no receivable lines means no auto-completion, ever, which is why a
+  // Drop order is closed by hand on the board.
   if (c.total === 0 || c.done < c.total) return unchanged
   const ts = nowIso()
   db.prepare(
@@ -604,28 +1046,50 @@ export function completePoIfFullyReceived(db: Database.Database, poId: string): 
  * scannable. Cancelled POs are excluded entirely.
  */
 export function outstandingLinesForProduct(productId: string): ScanPoCandidate[] {
+  // ONE CANDIDATE PER STOCK ALLOCATION, and none at all for a drop one.
+  //
+  // The old query copied the HEADER's destination onto every candidate, which
+  // the ScanQueue draws as a pill and the commit uses as the shelf. Under
+  // per-line destinations that is wrong twice over: it would offer a shelf the
+  // units are not going to, and it would offer units that are not in the
+  // building. A product ordered only for dropship now produces zero candidates,
+  // so a scan of it resolves as no_order — the honest answer.
+  //
+  // A line split 6 to RM and 6 to AM therefore yields TWO candidates. That is
+  // deliberate: which shelf six boxes land on is the operator's call, and
+  // silently picking the first would misplace them with no way to notice.
+  const receivableLines = `
+    SELECT po_line_id,
+           SUM(CASE WHEN ${stockDest()} THEN quantity     ELSE 0 END) AS receivable,
+           SUM(CASE WHEN ${stockDest()} THEN qty_received ELSE 0 END) AS received
+      FROM po_unit_destinations WHERE po_id = l.po_id GROUP BY po_line_id`
   const rows = getDb()
     .prepare(
-      `SELECT l.id AS line_id, l.po_id, l.quantity, l.qty_received, l.unit_price, l.position,
-              po.po_number, po.status, po.supplier, po.location, po.created_at,
-              (SELECT COUNT(*) FROM purchase_order_lines x WHERE x.po_id = l.po_id) AS po_lines_total,
-              (SELECT COUNT(*) FROM purchase_order_lines x
-                WHERE x.po_id = l.po_id AND x.qty_received < x.quantity) AS po_lines_outstanding
-       FROM purchase_order_lines l
+      `SELECT l.id AS line_id, l.po_id, d.allocation_id, d.quantity, d.qty_received,
+              l.unit_price, l.position, d.position AS alloc_position,
+              po.po_number, po.status, d.supplier, d.destination AS location, po.created_at,
+              (SELECT COUNT(*) FROM (${receivableLines}) r WHERE r.receivable > 0) AS po_lines_total,
+              (SELECT COUNT(*) FROM (${receivableLines}) r
+                WHERE r.receivable > 0 AND r.received < r.receivable) AS po_lines_outstanding
+       FROM po_unit_destinations d
+       JOIN purchase_order_lines l ON l.id = d.po_line_id
        JOIN purchase_orders po ON po.id = l.po_id
        WHERE l.product_id = ?
          AND po.status != 'cancelled'
          AND po.scanned_at IS NULL
-         AND l.qty_received < l.quantity
-       ORDER BY po.created_at ASC, po.po_number ASC, l.position ASC`
+         AND ${stockDest('d.')}
+         AND d.qty_received < d.quantity
+       ORDER BY po.created_at ASC, po.po_number ASC, l.position ASC, d.position ASC`
     )
     .all(productId) as Array<{
     line_id: string
     po_id: string
+    allocation_id: string | null
     quantity: number
     qty_received: number
     unit_price: number
     position: number
+    alloc_position: number
     po_number: string
     status: PurchaseOrderStatus
     supplier: string | null
@@ -638,9 +1102,14 @@ export function outstandingLinesForProduct(productId: string): ScanPoCandidate[]
     lineId: r.line_id,
     poId: r.po_id,
     poNumber: r.po_number,
+    // The ALLOCATION's effective supplier: on a multi-supplier order the header
+    // names only one of them, and the cost layer this scan opens is going to be
+    // stamped with whoever actually sold these units.
     supplier: r.supplier,
     status: r.status,
-    location: r.location,
+    allocationId: r.allocation_id,
+    // Always RM or AM by construction — the query cannot return anything else.
+    location: canonicalDestination(r.location),
     quantity: r.quantity,
     qtyReceived: r.qty_received,
     qtyOutstanding: Math.max(0, r.quantity - r.qty_received),
@@ -681,17 +1150,44 @@ export function scanInPurchaseOrder(id: string, actorId: string | null): ScanInR
     if (h.scanned_at)
       return { po: getPurchaseOrder(id), error: 'This purchase order has already been scanned in.' } // fast path
     const lines = db
-      .prepare('SELECT id, quantity, qty_received FROM purchase_order_lines WHERE po_id = ?')
-      .all(id) as Array<{ id: string; quantity: number; qty_received: number }>
+      .prepare('SELECT id FROM purchase_order_lines WHERE po_id = ?')
+      .all(id) as Array<{ id: string }>
     // A PO with no lines can never auto-complete (see completePoIfFullyReceived),
     // so say so rather than appearing to do nothing.
     if (lines.length === 0) {
       return { po: getPurchaseOrder(id), error: 'This purchase order has no line items to receive.' }
     }
-    for (const l of lines) {
-      const outstanding = l.quantity - l.qty_received
-      if (outstanding <= 0) continue // already received by UPC scan — never add it twice
-      receivePoLine(db, l.id, outstanding, `Scanned in ${h.po_number}`, actorId)
+    // Stock allocations only, so "All of it arrived" on a mixed order takes in
+    // the twelve that came and never tries to receive the eight that went
+    // straight to the shop. For a line that was never split this is the line.
+    const units = db
+      .prepare(
+        `SELECT allocation_id, po_line_id, quantity - qty_received AS outstanding
+           FROM po_unit_destinations
+          WHERE po_id = ? AND ${stockDest()} AND qty_received < quantity
+          ORDER BY position, po_line_id`
+      )
+      .all(id) as Array<{ allocation_id: string | null; po_line_id: string; outstanding: number }>
+    if (units.length === 0) {
+      // Every unit on this order is drop-shipped, so there is nothing here to
+      // check in. Close it on the board instead — see setPurchaseOrderStatus.
+      return {
+        po: getPurchaseOrder(id),
+        error: 'Every unit on this purchase order is drop-shipped, so there is nothing to receive into stock.'
+      }
+    }
+    for (const u of units) {
+      // already received by UPC scan — never add it twice
+      if (u.outstanding <= 0) continue
+      receivePoLine(
+        db,
+        u.po_line_id,
+        u.outstanding,
+        `Scanned in ${h.po_number}`,
+        actorId,
+        false,
+        u.allocation_id
+      )
     }
     // Stamps status/received_at/scanned_at once every line is in (a zero-line PO
     // is left alone), so the whole-PO and per-line paths complete identically.
@@ -709,6 +1205,13 @@ export function scanInPurchaseOrder(id: string, actorId: string | null): ScanInR
 export interface PoReceiptItem {
   lineId: string
   quantity: number
+  /**
+   * Which slice of the line, when a line is split across two shelves and the
+   * operator picked. Omitted or null takes the line's stock allocations in
+   * position order, which for an unsplit line is the one implicit allocation —
+   * i.e. exactly what every delivery form did before dropship existed.
+   */
+  allocationId?: string | null
 }
 
 /**
@@ -750,21 +1253,36 @@ export function receivePurchaseOrderLines(
       return { po: getPurchaseOrder(id), error: 'This purchase order was cancelled.' }
     }
 
+    // The receivable figure, not the ordered one: on a mixed line of 20 with 12
+    // coming here, "20 arrived" is a miscount and has to be refused with the
+    // number that is actually due. Every line raised before v67 has receivable
+    // equal to quantity, so the arithmetic below is unchanged for all of them.
     const lines = db
       .prepare(
-        `SELECT l.id, l.quantity, l.qty_received, p.name AS product_name
+        `SELECT l.id, l.quantity, l.qty_received, p.name AS product_name,
+                COALESCE((SELECT SUM(CASE WHEN ${stockDest('d.')} THEN d.quantity ELSE 0 END)
+                            FROM po_unit_destinations d WHERE d.po_line_id = l.id), 0) AS receivable,
+                COALESCE((SELECT SUM(CASE WHEN ${stockDest('d.')} THEN d.qty_received ELSE 0 END)
+                            FROM po_unit_destinations d WHERE d.po_line_id = l.id), 0) AS received
            FROM purchase_order_lines l
            JOIN inventory_products p ON p.id = l.product_id
           WHERE l.po_id = ?`
       )
-      .all(id) as Array<{ id: string; quantity: number; qty_received: number; product_name: string }>
+      .all(id) as Array<{
+      id: string
+      quantity: number
+      qty_received: number
+      product_name: string
+      receivable: number
+      received: number
+    }>
     const byId = new Map(lines.map((l) => [l.id, l]))
 
     // Validate the WHOLE form before writing any of it, so a bad number on the
     // last line does not leave the operator staring at a rolled-back toast
     // wondering which of the earlier ones went in. (Nothing would have, but the
     // message should not require knowing that.)
-    const wanted: Array<{ lineId: string; take: number }> = []
+    const wanted: Array<{ lineId: string; take: number; allocationId: string | null }> = []
     for (const item of items ?? []) {
       const line = byId.get(String(item?.lineId ?? ''))
       if (!line) return { po: getPurchaseOrder(id), error: 'That line is not on this purchase order.' }
@@ -773,7 +1291,17 @@ export function receivePurchaseOrderLines(
         return { po: getPurchaseOrder(id), error: `Enter a whole number for ${line.product_name}.` }
       }
       if (take === 0) continue // "none of this one came" — a normal answer, not an error
-      const outstanding = Math.max(0, line.quantity - line.qty_received)
+      const allocationId = item?.allocationId?.trim() || null
+      // A wholly drop-shipped line has nothing due here at all, and saying so is
+      // more use than "already fully received", which would be a lie about a
+      // line that never arrives.
+      if (line.receivable === 0) {
+        return {
+          po: getPurchaseOrder(id),
+          error: `${line.product_name} is drop-shipped, so none of it is received into stock here.`
+        }
+      }
+      const outstanding = Math.max(0, line.receivable - line.received)
       if (outstanding === 0) {
         return {
           po: getPurchaseOrder(id),
@@ -783,19 +1311,19 @@ export function receivePurchaseOrderLines(
       if (take > outstanding) {
         return {
           po: getPurchaseOrder(id),
-          error: `${line.product_name}: only ${outstanding} of ${line.quantity} ${
+          error: `${line.product_name}: only ${outstanding} of ${line.receivable} ${
             outstanding === 1 ? 'is' : 'are'
           } still outstanding, so ${take} cannot be received.`
         }
       }
-      wanted.push({ lineId: line.id, take })
+      wanted.push({ lineId: line.id, take, allocationId })
     }
     if (!wanted.length) {
       return { po: getPurchaseOrder(id), error: 'Enter how many of at least one item arrived.' }
     }
 
     for (const w of wanted) {
-      receivePoLine(db, w.lineId, w.take, `Received against ${h.po_number}`, actorId)
+      receivePoLine(db, w.lineId, w.take, `Received against ${h.po_number}`, actorId, false, w.allocationId)
     }
     // Only completes if this delivery happened to finish the order. A partial
     // one leaves the PO exactly where it was, still open, still in its column.
@@ -836,27 +1364,37 @@ function reverseReceivedLines(
     product_id: string
     qty_received: number
     lot_id: string | null
+    /** The HEADER's destination — a last-resort fallback only. See below. */
     location: string
   }>
 
   for (const line of lines) {
     // Newest receipt first: unwinding in reverse order of arrival means a lot
     // is never left half-open behind a later one.
+    //
+    // EACH RECEIPT NAMES ITS OWN SHELF. Re-reading the destination from the PO
+    // header was correct only while an order had exactly one; with per-line
+    // destinations it unwinds against the wrong shelf and the refusal message
+    // names a cause that is not the real one. Every receipt written before v67
+    // was backfilled with the header location, which is what this code was
+    // reading anyway, so cancelling a legacy order behaves identically.
     const receipts = db
       .prepare(
-        'SELECT lot_id, quantity FROM po_line_receipts WHERE po_line_id = ? ORDER BY created_at DESC, rowid DESC'
+        `SELECT lot_id, quantity, location FROM po_line_receipts
+          WHERE po_line_id = ? ORDER BY created_at DESC, rowid DESC`
       )
-      .all(line.id) as Array<{ lot_id: string; quantity: number }>
+      .all(line.id) as Array<{ lot_id: string; quantity: number; location: string | null }>
 
     // No receipt rows: either this line predates v20, or it was received by the
     // single build that recorded only lot_id. Fall back to that column when it
     // accounts for the whole quantity, and refuse otherwise rather than reverse
-    // the wrong cost layer.
-    const plan =
+    // the wrong cost layer. A line in that state predates per-line destinations
+    // entirely, so the header's location IS its shelf.
+    const plan: Array<{ lot_id: string; quantity: number; location: string }> =
       receipts.length > 0
-        ? receipts
+        ? receipts.map((r) => ({ ...r, location: r.location ?? line.location }))
         : line.lot_id
-          ? [{ lot_id: line.lot_id, quantity: line.qty_received }]
+          ? [{ lot_id: line.lot_id, quantity: line.qty_received, location: line.location }]
           : []
 
     if (plan.length === 0) {
@@ -880,7 +1418,7 @@ function reverseReceivedLines(
     for (const r of plan) {
       reverseStockReceipt(db, {
         productId: line.product_id,
-        location: line.location,
+        location: r.location,
         quantity: r.quantity,
         lotId: r.lot_id,
         note: `Cancelled ${poNumber}`,
@@ -888,6 +1426,12 @@ function reverseReceivedLines(
       })
     }
   }
+
+  // Every allocation's counter goes back with the line's, or I2 breaks and a
+  // re-received order would start from a number that no longer matches.
+  db.prepare(
+    `UPDATE purchase_order_allocations SET qty_received = 0, received_at = NULL WHERE po_id = ?`
+  ).run(poId)
 
   // The lines are open again, and the header must not keep claiming a receipt.
   db.prepare('DELETE FROM po_line_receipts WHERE po_id = ?').run(poId)
@@ -964,19 +1508,36 @@ export function forceDeletePurchaseOrder(
       }>
 
       for (const line of lines) {
+        // Each receipt names the shelf it landed on. The header's location is a
+        // fallback for rows written before v67 only — and those were backfilled
+        // with exactly that value, so it is never actually needed.
         const receipts = db
           .prepare(
-            'SELECT lot_id, quantity FROM po_line_receipts WHERE po_line_id = ? ORDER BY created_at DESC, rowid DESC'
+            `SELECT lot_id, quantity, location FROM po_line_receipts
+              WHERE po_line_id = ? ORDER BY created_at DESC, rowid DESC`
           )
-          .all(line.id) as Array<{ lot_id: string; quantity: number }>
-        const plan =
+          .all(line.id) as Array<{ lot_id: string; quantity: number; location: string | null }>
+        const plan: Array<{ lot_id: string; quantity: number; location: string }> =
           receipts.length > 0
-            ? receipts
+            ? receipts.map((r) => ({ ...r, location: r.location ?? line.location }))
             : line.lot_id
-              ? [{ lot_id: line.lot_id, quantity: line.qty_received }]
+              ? [{ lot_id: line.lot_id, quantity: line.qty_received, location: line.location }]
               : []
 
         let outstanding = line.qty_received
+        /**
+         * What could not be reversed against its exact layer, PER SHELF.
+         *
+         * The hand-adjustment fallback below has to name a location, and once a
+         * line can be split across RM and AM there is no single "the line's
+         * location" to use — taking six units off RM because the header says RM
+         * when they are sitting on AM would leave both shelves wrong. So the
+         * shortfall is tracked against the shelf each receipt actually used.
+         */
+        const shortfall = new Map<string, number>()
+        const note = (location: string, qty: number): void => {
+          if (qty > 0) shortfall.set(location, (shortfall.get(location) ?? 0) + qty)
+        }
 
         /**
          * Prefer the EXACT layer wherever it is known — same reasoning as
@@ -994,12 +1555,17 @@ export function forceDeletePurchaseOrder(
           const lot = db
             .prepare('SELECT qty_remaining FROM inventory_lots WHERE id = ?')
             .get(r.lot_id) as { qty_remaining: number } | undefined
-          const take = Math.min(r.quantity, outstanding, lot?.qty_remaining ?? 0)
-          if (take <= 0) continue
+          const want = Math.min(r.quantity, outstanding)
+          const take = Math.min(want, lot?.qty_remaining ?? 0)
+          if (take <= 0) {
+            note(r.location, want)
+            outstanding -= want
+            continue
+          }
           try {
             reverseStockReceipt(db, {
               productId: line.product_id,
-              location: line.location,
+              location: r.location,
               quantity: take,
               lotId: r.lot_id,
               note: `Force-deleted ${row.po_number}`,
@@ -1007,11 +1573,21 @@ export function forceDeletePurchaseOrder(
             })
             outstanding -= take
             removed += take
+            note(r.location, want - take)
+            outstanding -= want - take
           } catch {
             // The layer will not give these units back. Fall through to the
             // correction below rather than abandoning the whole operation.
+            note(r.location, want)
+            outstanding -= want
           }
         }
+        // Units the plan never accounted for at all (a line whose receipts add
+        // up to less than qty_received). Nothing names their shelf, so the
+        // header's destination is the only answer left — and a line in that
+        // state predates per-line destinations, where the header WAS the shelf.
+        note(line.location, outstanding)
+        outstanding = 0
 
         /**
          * Whatever is left has no traceable layer, or its layer would not give
@@ -1024,27 +1600,27 @@ export function forceDeletePurchaseOrder(
          * split against the real on-hand figure, and only the genuine shortfall
          * is reported as sold.
          */
-        if (outstanding > 0) {
-          const have = stockQty(line.product_id, line.location)
-          const take = Math.min(outstanding, Math.max(0, have))
+        for (const [location, wanted] of shortfall) {
+          let left = wanted
+          const have = stockQty(line.product_id, location)
+          const take = Math.min(left, Math.max(0, have))
           if (take > 0) {
             const res = adjustStock(
               line.product_id,
-              line.location,
+              location,
               -take,
               `Force-deleted ${row.po_number} — received stock removed`,
               actorId
             )
             if (!res.error) {
               removed += take
-              outstanding -= take
+              left -= take
             }
           }
           // Anything still outstanding genuinely cannot come back out. Every
           // unit of the line is now accounted for exactly once, so
           // removed + sold always equals what was received.
-          sold += outstanding
-          outstanding = 0
+          sold += left
         }
       }
 
@@ -1053,6 +1629,9 @@ export function forceDeletePurchaseOrder(
         `UPDATE purchase_order_lines
             SET qty_received = 0, received_at = NULL, lot_id = NULL
           WHERE po_id = ?`
+      ).run(id)
+      db.prepare(
+        `UPDATE purchase_order_allocations SET qty_received = 0, received_at = NULL WHERE po_id = ?`
       ).run(id)
     }
 
@@ -1196,6 +1775,23 @@ export function listSupplierSuggestions(): SupplierSuggestion[] {
         : `${u.n} purchase ${u.n === 1 ? 'order' : 'orders'}`,
       source: contact ? 'contact' : 'history',
       usedOnOrders: u.n
+    })
+  }
+
+  // Suppliers named on a LINE rather than on a header. Same fourth source
+  // listVendors gained, and the same limit: a name and nothing more, because the
+  // order count on the right of this box is a count of DOCUMENTS naming them and
+  // a line does not make one.
+  for (const s of lineSupplierNames(db)) {
+    const key = s.name.toLowerCase()
+    if (claimed.has(key)) continue
+    claimed.add(key)
+    const contact = contacts.find((c) => c.name.toLowerCase() === key)
+    out.push({
+      name: contact?.name ?? s.name,
+      detail: contact ? contactDetail(contact) : null,
+      source: contact ? 'contact' : 'history',
+      usedOnOrders: 0
     })
   }
 
@@ -1372,6 +1968,24 @@ export function listVendors(): VendorSummary[] {
     noteSeen(row, r.last_at)
   }
 
+  /**
+   * The fourth source: a supplier named on a LINE rather than on the header.
+   *
+   * NAMES AND DATES ONLY. Apportioning a header total across line suppliers
+   * cannot be reconciled against the stored purchase_orders.total without
+   * double counting, so `orders` and `ordered` stay header-derived and a
+   * genuinely multi-supplier order still attributes its money to the header
+   * name. That is a known limit, written down rather than half-fixed: quietly
+   * changing this screen's money figures is not part of the dropship change.
+   *
+   * A supplier who is only ever named on a line would otherwise be invisible on
+   * the one screen whose job is to list who this business buys from.
+   */
+  for (const s of lineSupplierNames(db)) {
+    const row = rowFor(s.name)
+    noteSeen(row, s.last_at)
+  }
+
   // The directory, last, and it brings no figures — only the fact that somebody
   // put this business on the list of people we buy from, and what they file them
   // under. A name in here with nothing above it is a vendor with no activity,
@@ -1409,4 +2023,401 @@ export function listVendors(): VendorSummary[] {
     const when = (b.lastAt ?? '').localeCompare(a.lastAt ?? '')
     return when !== 0 ? when : a.name.toLowerCase().localeCompare(b.name.toLowerCase())
   })
+}
+
+/* -------------------------------------------------------------------------- */
+/* Destinations: who units can be sent to, and which ones sit at the top       */
+/* -------------------------------------------------------------------------- */
+
+/** Names already used as a line-level or allocation-level supplier. */
+function lineSupplierNames(db: Database.Database): Array<{ name: string; last_at: string }> {
+  return db
+    .prepare(
+      `SELECT TRIM(d.supplier) AS name, MAX(po.created_at) AS last_at
+         FROM po_unit_destinations d
+         JOIN purchase_orders po ON po.id = d.po_id
+        WHERE d.supplier IS NOT NULL AND TRIM(d.supplier) != ''
+        GROUP BY TRIM(d.supplier) COLLATE NOCASE`
+    )
+    .all() as Array<{ name: string; last_at: string }>
+}
+
+/** The pin id is DERIVED from the name, so two laptops write the same row. */
+const pinId = (name: string): string => 'pin:' + name.trim().toLowerCase()
+
+/**
+ * Everywhere units can be SENT.
+ *
+ * ## Not listSupplierSuggestions under another name
+ *
+ * That answers "who do we buy from". A dropship destination is very often
+ * somebody this business SELLS to — that is the whole point of the feature — so
+ * this merges the vendor directory and the buyer directory into one list, on the
+ * name, case-insensitively, exactly as listVendors merges its own sources. A
+ * business that both buys and sells is ONE row with kind 'both', which is the
+ * v62 decision honoured rather than re-argued.
+ *
+ * ## RM and AM are not pins
+ *
+ * They are prepended in code, they are the only rows with holdsStock true, and
+ * they cannot be unpinned. Everything downstream reads that flag rather than
+ * re-testing the name, so there is exactly one place the rule lives.
+ *
+ * Ordering: RM, AM, then the operator's pins in the order they chose, then
+ * everyone else most-recently-dealt-with first and alphabetically after that.
+ * The tiebreak is the one listVendors already uses and exists for the same
+ * reason: without it every never-used directory name shares a null date and
+ * comes back in map-insertion order.
+ */
+export function listOrderParties(): OrderParty[] {
+  const db = getDb()
+
+  const contacts = db
+    .prepare(
+      `SELECT name, email, phone, mobile, bill_city, bill_region, is_vendor, is_customer
+         FROM invoice_customers
+        WHERE active = 1
+        ORDER BY name COLLATE NOCASE ASC`
+    )
+    .all() as Array<{
+    name: string
+    email: string | null
+    phone: string | null
+    mobile: string | null
+    bill_city: string | null
+    bill_region: string | null
+    is_vendor: number
+    is_customer: number
+  }>
+
+  // Names on documents that are in no directory: a supplier typed onto a
+  // purchase order, a destination typed into the picker for a one-off drop, a
+  // vendor written onto a cost layer. Dropping them would make the box worse
+  // than the plain text field it replaces — most of the regular distributors
+  // were typed straight onto orders long before any directory existed.
+  const history = [
+    ...(db
+      .prepare(
+        `SELECT TRIM(supplier) AS name, MAX(created_at) AS last_at
+           FROM purchase_orders
+          WHERE supplier IS NOT NULL AND TRIM(supplier) != ''
+          GROUP BY TRIM(supplier) COLLATE NOCASE`
+      )
+      .all() as Array<{ name: string; last_at: string }>),
+    ...lineSupplierNames(db),
+    ...(db
+      .prepare(
+        `SELECT TRIM(d.destination) AS name, MAX(po.created_at) AS last_at
+           FROM po_unit_destinations d
+           JOIN purchase_orders po ON po.id = d.po_id
+          WHERE TRIM(d.destination) != ''
+          GROUP BY TRIM(d.destination) COLLATE NOCASE`
+      )
+      .all() as Array<{ name: string; last_at: string }>),
+    ...(db
+      .prepare(
+        `SELECT TRIM(vendor) AS name, MAX(received_at) AS last_at
+           FROM inventory_lots
+          WHERE vendor IS NOT NULL AND TRIM(vendor) != ''
+          GROUP BY TRIM(vendor) COLLATE NOCASE`
+      )
+      .all() as Array<{ name: string; last_at: string }>)
+  ]
+
+  const pins = db
+    .prepare('SELECT id, name, position FROM order_party_pins ORDER BY position ASC, created_at ASC')
+    .all() as Array<{ id: string; name: string; position: number }>
+  const pinOrder = new Map(pins.map((p, i) => [p.name.trim().toLowerCase(), i]))
+
+  const merged = new Map<string, OrderParty>()
+  const rowFor = (name: string, kind: OrderPartyKind): OrderParty => {
+    const key = name.trim().toLowerCase()
+    const found = merged.get(key)
+    if (found) return found
+    const fresh: OrderParty = {
+      name: name.trim(),
+      kind,
+      detail: null,
+      // NEVER true for anything but RM and AM, which are added separately below.
+      holdsStock: false,
+      pinned: pinOrder.has(key),
+      pinnable: true,
+      lastAt: null
+    }
+    merged.set(key, fresh)
+    return fresh
+  }
+  const noteSeen = (row: OrderParty, when: string | null): void => {
+    if (when && (!row.lastAt || when > row.lastAt)) row.lastAt = when
+  }
+
+  for (const c of contacts) {
+    // A shelf is not a party. A contact somehow named RM would otherwise be
+    // folded into the location row and its units would become receivable — see
+    // the note on canonicalDestination in @shared/purchaseOrders.
+    if (destinationHoldsStock(c.name)) continue
+    const kind: OrderPartyKind =
+      c.is_vendor === 1 && c.is_customer === 1 ? 'both' : c.is_vendor === 1 ? 'vendor' : 'customer'
+    const row = rowFor(c.name, kind)
+    // THE DIRECTORY'S SPELLING WINS, the same rule listVendors applies: a
+    // directory record is curated, where a name on a document is free text
+    // typed at speed.
+    row.name = c.name.trim()
+    row.kind = kind
+    row.detail = contactDetail(c)
+  }
+
+  for (const h of history) {
+    if (!h.name || destinationHoldsStock(h.name)) continue
+    const row = rowFor(h.name, 'history')
+    noteSeen(row, h.last_at)
+  }
+  // A pinned name that exists nowhere else still has to appear, or unpinning it
+  // would be the only way to see it again.
+  for (const p of pins) {
+    if (destinationHoldsStock(p.name)) continue
+    rowFor(p.name, 'history')
+  }
+
+  const rest = [...merged.values()].sort((a, b) => {
+    const ap = pinOrder.get(a.name.toLowerCase())
+    const bp = pinOrder.get(b.name.toLowerCase())
+    if (ap !== undefined || bp !== undefined) {
+      if (ap === undefined) return 1
+      if (bp === undefined) return -1
+      return ap - bp
+    }
+    const when = (b.lastAt ?? '').localeCompare(a.lastAt ?? '')
+    return when !== 0 ? when : a.name.toLowerCase().localeCompare(b.name.toLowerCase())
+  })
+
+  // RM and AM first, always, and never removable.
+  const shelves: OrderParty[] = LOCATION_IDS.map((id) => ({
+    name: id,
+    kind: 'location' as OrderPartyKind,
+    detail: null,
+    holdsStock: true,
+    pinned: true,
+    pinnable: false,
+    lastAt: null
+  }))
+  return [...shelves, ...rest]
+}
+
+/**
+ * Pin a party to the top of the picker, or take the pin off.
+ *
+ * The row's id is derived from the lower-cased name rather than minted, so two
+ * laptops pinning the same shop write the SAME row and last-write-wins only ever
+ * compares that row against an older copy of itself. Minting a UUID here would
+ * leave two rows for one shop and a picker that showed it twice.
+ */
+export function setPartyPinned(name: string, pinned: boolean): OrderParty[] {
+  const db = getDb()
+  const clean = String(name ?? '').trim()
+  if (!clean) throw new Error('Pick a name to pin.')
+  // RM and AM are locations, not pins. They are prepended in code, they are the
+  // only destinations that hold stock, and an operator who could unpin them
+  // would be one click from an order with nowhere to receive into.
+  if (destinationHoldsStock(clean)) {
+    throw new Error(`${canonicalDestination(clean)} is a stock location, so it is always at the top and cannot be unpinned.`)
+  }
+  const id = pinId(clean)
+  const ts = nowIso()
+  if (pinned) {
+    const next = db.prepare('SELECT COALESCE(MAX(position), -1) + 1 AS n FROM order_party_pins').get() as {
+      n: number
+    }
+    db.prepare(
+      `INSERT INTO order_party_pins (id, name, position, created_at, updated_at)
+       VALUES (@id, @name, @position, @ts, @ts)
+       ON CONFLICT (id) DO UPDATE SET name = @name, updated_at = @ts`
+    ).run({ id, name: clean, position: next.n, ts })
+  } else {
+    db.prepare('DELETE FROM order_party_pins WHERE id = ?').run(id)
+  }
+  return listOrderParties()
+}
+
+/**
+ * Change where an EXISTING order's units are going.
+ *
+ * ## Refused once anything has landed
+ *
+ * Re-routing units that are already on a shelf would mean MOVING STOCK, which is
+ * Inventory's job and not a paperwork edit — a destination change here writes no
+ * inventory row at all, so an order re-routed after receipt would leave the
+ * boxes where they are and the document claiming otherwise. Refused by name, and
+ * the message says where the operation actually lives.
+ *
+ * ## Splits are replaced, not patched
+ *
+ * A partial patch would need a rule for what happens to the rows it did not
+ * mention, and every such rule can leave the allocation sum out of step with the
+ * line quantity (I1) behind somebody's back. An empty allocations array means
+ * "not split": the rows are deleted and the line goes back to being one implicit
+ * allocation, which is how a split is undone and why the unsplit state stores
+ * nothing rather than one full-quantity row.
+ */
+export function setPurchaseOrderRouting(poId: string, patch: PoRoutingPatch): PoStatusResult {
+  const db = getDb()
+  const run = db.transaction((): PoStatusResult => {
+    const header = db
+      .prepare('SELECT id, po_number, status, supplier, location FROM purchase_orders WHERE id = ?')
+      .get(poId) as
+      | { id: string; po_number: string; status: PurchaseOrderStatus; supplier: string | null; location: string }
+      | undefined
+    if (!header) return { po: null, error: 'Purchase order not found.' }
+    if (header.status === 'cancelled') {
+      return { po: getPurchaseOrder(poId), error: 'This purchase order was cancelled.' }
+    }
+
+    const lines = db
+      .prepare(
+        `SELECT l.id, l.quantity, l.qty_received, p.name AS product_name
+           FROM purchase_order_lines l
+           JOIN inventory_products p ON p.id = l.product_id
+          WHERE l.po_id = ?`
+      )
+      .all(poId) as Array<{ id: string; quantity: number; qty_received: number; product_name: string }>
+    const byId = new Map(lines.map((l) => [l.id, l]))
+
+    const touched = new Set<string>([
+      ...(patch.lines ?? []).map((l) => String(l?.lineId ?? '')),
+      ...(patch.splits ?? []).map((s) => String(s?.lineId ?? ''))
+    ])
+    for (const lineId of touched) {
+      const line = byId.get(lineId)
+      if (!line) return { po: getPurchaseOrder(poId), error: 'That line is not on this purchase order.' }
+      if (line.qty_received > 0) {
+        return {
+          po: getPurchaseOrder(poId),
+          error: `${line.qty_received} unit(s) of ${line.product_name} on ${header.po_number} have already been checked in; re-route them by adjusting stock in Inventory.`
+        }
+      }
+    }
+
+    for (const patchLine of patch.lines ?? []) {
+      const line = byId.get(String(patchLine?.lineId ?? ''))
+      if (!line) continue
+      const sets: string[] = []
+      const params: Record<string, unknown> = { id: line.id }
+      if (patchLine.supplier !== undefined) {
+        sets.push('supplier = @supplier')
+        params.supplier = inheritable(patchLine.supplier, header.supplier)
+      }
+      if (patchLine.destination !== undefined) {
+        const dest = patchLine.destination ? canonicalDestination(patchLine.destination) : null
+        sets.push('destination = @destination')
+        params.destination = inheritable(dest, header.location)
+      }
+      if (sets.length) {
+        db.prepare(`UPDATE purchase_order_lines SET ${sets.join(', ')} WHERE id = @id`).run(params)
+      }
+    }
+
+    // Re-read the lines' own routing AFTER the patch above, so an allocation
+    // that repeats what its line now says stores NULL rather than a copy.
+    const routing = new Map(
+      (
+        db
+          .prepare('SELECT id, supplier, destination FROM purchase_order_lines WHERE po_id = ?')
+          .all(poId) as Array<{ id: string; supplier: string | null; destination: string | null }>
+      ).map((r) => [r.id, r])
+    )
+
+    const ts = nowIso()
+    for (const split of patch.splits ?? []) {
+      const line = byId.get(String(split?.lineId ?? ''))
+      if (!line) continue
+      const rows = Array.isArray(split.allocations) ? split.allocations : []
+      const cleaned = rows.map((a) => ({
+        id: typeof a?.id === 'string' && a.id.trim() ? a.id.trim() : newId(),
+        quantity: Math.round(Number(a?.quantity)),
+        supplier: typeof a?.supplier === 'string' && a.supplier.trim() ? a.supplier.trim() : null,
+        destination: canonicalDestination(String(a?.destination ?? ''))
+      }))
+      for (const a of cleaned) {
+        // I5, and the same refusal createPurchaseOrder gives.
+        if (!Number.isFinite(a.quantity) || a.quantity < 1) {
+          return {
+            po: getPurchaseOrder(poId),
+            error: `${line.product_name}: every split needs a whole quantity of at least 1. Remove the empty one, or give it units.`
+          }
+        }
+        if (!a.destination) {
+          return { po: getPurchaseOrder(poId), error: `${line.product_name}: every split needs a destination.` }
+        }
+      }
+      const sum = cleaned.reduce((n, a) => n + a.quantity, 0)
+      // I1.
+      if (cleaned.length > 0 && sum !== line.quantity) {
+        return {
+          po: getPurchaseOrder(poId),
+          error: `${line.product_name}: the splits add up to ${sum} of ${line.quantity} ordered, so this order cannot be saved.`
+        }
+      }
+      db.prepare('DELETE FROM purchase_order_allocations WHERE po_line_id = ?').run(line.id)
+      const own = routing.get(line.id)
+      const inheritedSupplier = own?.supplier ?? header.supplier
+      cleaned.forEach((a, pos) => {
+        db.prepare(
+          `INSERT INTO purchase_order_allocations
+             (id, po_id, po_line_id, quantity, supplier, destination, position, qty_received, received_at, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL, ?)`
+        ).run(a.id, poId, line.id, a.quantity, inheritable(a.supplier, inheritedSupplier), a.destination, pos, ts)
+      })
+    }
+
+    db.prepare('UPDATE purchase_orders SET updated_at = ? WHERE id = ?').run(ts, poId)
+    return { po: getPurchaseOrder(poId) }
+  })
+  try {
+    return run()
+  } catch (err) {
+    return { po: getPurchaseOrder(poId), error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+/**
+ * The address to print on a dropship PDF, when the destination is somebody this
+ * business already has on file.
+ *
+ * Name only when it is not. A one-off drop to a shop that is not in the
+ * directory yet is a normal thing to raise — that is the whole reason
+ * createPurchaseOrder keeps an unrecognised destination rather than coercing it
+ * — so the document prints what it knows and does not pretend to an address.
+ */
+export function lookupPartyAddress(name: string): string[] | null {
+  const clean = String(name ?? '').trim()
+  if (!clean) return null
+  const row = getDb()
+    .prepare(
+      `SELECT name, bill_line1, bill_line2, bill_city, bill_region, bill_postal, bill_country
+         FROM invoice_customers
+        WHERE LOWER(TRIM(name)) = LOWER(?) AND active = 1
+        LIMIT 1`
+    )
+    .get(clean) as
+    | {
+        name: string
+        bill_line1: string | null
+        bill_line2: string | null
+        bill_city: string | null
+        bill_region: string | null
+        bill_postal: string | null
+        bill_country: string | null
+      }
+    | undefined
+  if (!row) return null
+  const city = [row.bill_city, row.bill_region].filter(Boolean).join(', ')
+  const lines = [
+    row.bill_line1,
+    row.bill_line2,
+    [city, row.bill_postal].filter(Boolean).join(' '),
+    row.bill_country
+  ]
+    .map((l) => (l ?? '').trim())
+    .filter(Boolean)
+  return lines.length ? lines : null
 }

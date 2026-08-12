@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
 import type { PurchaseOrderDetail } from '@shared/types'
-import { receiveProgressOf } from '@shared/receiving'
+import { receivableProgressOf } from '@shared/receiving'
 import { api } from '../../lib/api'
 import { Button } from '../../components/ui'
 import { useToast } from '../../components/Toast'
 import { Icon } from '../../components/Icon'
+import { receivableOutstanding } from './helpers'
 
 /**
  * "How many turned up today?"
@@ -30,6 +31,21 @@ import { Icon } from '../../components/Icon'
  * A line already fully received is not part of today's delivery and cannot take
  * another unit, so it is not offered. It stays visible in the receipt below,
  * ticked, which is where "what did we already get" belongs.
+ *
+ * ## Only units that are COMING HERE
+ *
+ * Every count on this form is the RECEIVABLE remainder, never the ordered one.
+ * A line of twenty with eight going straight from the supplier to a shop offers
+ * twelve, and its "All" fills twelve. Offering twenty would put a Record button
+ * in front of somebody for boxes that were never addressed to this building —
+ * and `receivePoLine` throws on a drop allocation, so pressing it produces a
+ * refusal and nothing else. On every line raised before dropship existed the two
+ * figures are the same number, so this form behaves exactly as it always has.
+ *
+ * ## This is now the only place a delivery can be recorded
+ *
+ * It used to sit inside the purchase order receipt as well. The receipt shows
+ * what arrived; it does not book it.
  */
 export function DeliveryPanel({
   po,
@@ -42,7 +58,12 @@ export function DeliveryPanel({
   const [counts, setCounts] = useState<Record<string, number>>({})
   const [busy, setBusy] = useState(false)
 
-  const open = po.lines.filter((l) => l.qtyOutstanding > 0)
+  // Every line with something still due HERE, paired with how much that is. A
+  // wholly drop-shipped line has a receivable remainder of zero and drops out,
+  // which is what makes a pure-drop order show no form at all.
+  const open = po.lines
+    .map((l) => ({ line: l, left: receivableOutstanding(l) }))
+    .filter((l) => l.left > 0)
 
   // Reset when a different PO is shown, and after a delivery lands — the lines
   // that were just received are gone from `open`, and a leftover count keyed to
@@ -56,13 +77,13 @@ export function DeliveryPanel({
   const set = (lineId: string, n: number, max: number): void =>
     setCounts((c) => ({ ...c, [lineId]: Math.max(0, Math.min(max, Math.round(n) || 0)) }))
 
-  const entered = open.reduce((sum, l) => sum + (counts[l.id] ?? 0), 0)
-  const remaining = open.reduce((sum, l) => sum + l.qtyOutstanding, 0)
+  const entered = open.reduce((sum, l) => sum + (counts[l.line.id] ?? 0), 0)
+  const remaining = open.reduce((sum, l) => sum + l.left, 0)
   const wholeOrder = entered === remaining && entered > 0
 
   const submit = async (): Promise<void> => {
     const items = open
-      .map((l) => ({ lineId: l.id, quantity: counts[l.id] ?? 0 }))
+      .map((l) => ({ lineId: l.line.id, quantity: counts[l.line.id] ?? 0 }))
       .filter((i) => i.quantity > 0)
     if (!items.length) {
       toast.error('Enter how many of at least one item arrived.')
@@ -75,7 +96,7 @@ export function DeliveryPanel({
         toast.error(res.error ?? 'Could not record that delivery.')
         return
       }
-      const after = receiveProgressOf(res.data.lines)
+      const after = receivableProgressOf(res.data.lines)
       toast.success(
         after.state === 'complete'
           ? `${po.poNumber} is fully received — all ${after.ordered} units are in stock.`
@@ -102,7 +123,7 @@ export function DeliveryPanel({
             setCounts(
               wholeOrder
                 ? {}
-                : Object.fromEntries(open.map((l) => [l.id, l.qtyOutstanding]))
+                : Object.fromEntries(open.map((l) => [l.line.id, l.left]))
             )
           }
         >
@@ -115,16 +136,21 @@ export function DeliveryPanel({
       </p>
 
       <div className="po-deliv-rows">
-        {open.map((l) => {
+        {open.map(({ line: l, left }) => {
           const n = counts[l.id] ?? 0
+          const dropped = l.quantity - l.qtyReceivable
           return (
             <div className={`po-deliv-row ${n > 0 ? 'has' : ''}`} key={l.id}>
               <span className="po-deliv-name" title={l.productName}>
                 {l.productName}
               </span>
               <span className="po-deliv-left mono">
-                {l.qtyOutstanding} left
+                {left} left
                 {l.qtyReceived > 0 && <em> · {l.qtyReceived} in</em>}
+                {/* Non-counting, and said here so the number beside it
+                    reconciles against the receipt without opening the order:
+                    twelve left of a twenty-unit line is not a miscount. */}
+                {dropped > 0 && <em> · {dropped} drop-shipped</em>}
               </span>
               <span className="po-deliv-step">
                 <button
@@ -132,7 +158,7 @@ export function DeliveryPanel({
                   className="po-deliv-btn"
                   aria-label={`One fewer ${l.productName}`}
                   disabled={busy || n <= 0}
-                  onClick={() => set(l.id, n - 1, l.qtyOutstanding)}
+                  onClick={() => set(l.id, n - 1, left)}
                 >
                   <Icon name="Minus" size={14} />
                 </button>
@@ -142,22 +168,22 @@ export function DeliveryPanel({
                   value={String(n)}
                   aria-label={`Units of ${l.productName} received`}
                   disabled={busy}
-                  onChange={(e) => set(l.id, Number(e.target.value.replace(/\D+/g, '')), l.qtyOutstanding)}
+                  onChange={(e) => set(l.id, Number(e.target.value.replace(/\D+/g, '')), left)}
                 />
                 <button
                   type="button"
                   className="po-deliv-btn"
                   aria-label={`One more ${l.productName}`}
-                  disabled={busy || n >= l.qtyOutstanding}
-                  onClick={() => set(l.id, n + 1, l.qtyOutstanding)}
+                  disabled={busy || n >= left}
+                  onClick={() => set(l.id, n + 1, left)}
                 >
                   <Icon name="Plus" size={14} />
                 </button>
                 <button
                   type="button"
                   className="po-deliv-fill"
-                  disabled={busy || n >= l.qtyOutstanding}
-                  onClick={() => set(l.id, l.qtyOutstanding, l.qtyOutstanding)}
+                  disabled={busy || n >= left}
+                  onClick={() => set(l.id, left, left)}
                 >
                   All
                 </button>

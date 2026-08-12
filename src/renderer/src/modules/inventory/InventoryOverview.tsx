@@ -17,7 +17,8 @@ import type {
 } from '@shared/types'
 import { CATEGORY_ORDER, LOCATIONS, categoryColor } from '@shared/inventory'
 import { countIdentifierGaps } from '@shared/identifiers'
-import { receiveProgressOf } from '@shared/receiving'
+import { destinationSummary } from '@shared/purchaseOrders'
+import { receivableProgressOf } from '@shared/receiving'
 import { BarList } from '../../components/charts'
 import { Icon } from '../../components/Icon'
 import { ReceiveBar } from '../../components/ReceiveProgress'
@@ -32,7 +33,12 @@ import { CategoryLogo } from './CategoryLogo'
 import { GAP_META, MissingIdentifiers } from './MissingIdentifiers'
 import { IncomingModal } from './IncomingModal'
 import { ProductHoverCard, type ProductCardData } from './ProductCases'
-import { PO_STAGE_META } from '../invoicing/helpers'
+import {
+  PO_STAGE_META,
+  dropDestinations,
+  lineIsWhollyDrop,
+  receivableOutstanding
+} from '../invoicing/helpers'
 import { DeliveryPanel } from '../invoicing/DeliveryPanel'
 
 type MetricKind = 'value' | 'cost' | 'spread' | 'cases' | 'skus'
@@ -699,6 +705,23 @@ function useIncomingFeed(refreshKey: number): IncomingFeed {
 }
 
 /**
+ * Is any of this order coming to this building at all?
+ *
+ * Phrased as "pure dropship" rather than "has receivable units" on purpose, and
+ * it is the same test the main process compiles into its SQL: a purchase order
+ * with NO LINES has both figures at zero and must keep appearing here exactly as
+ * it does today. Only an order with drop units and no receivable ones vanishes.
+ *
+ * Repeated in the renderer rather than trusted from the query because the panel
+ * also holds boxes it read before an order was re-routed on another machine, and
+ * a box offering "All of it arrived" for units that are not coming is the one
+ * mistake this whole feature exists to prevent.
+ */
+function arrivesHere(box: PurchaseOrderDetail): boolean {
+  return !(box.receivableUnits === 0 && box.dropshipUnits > 0)
+}
+
+/**
  * Fold the raw incoming reads into "what is still on order".
  *
  * Counts what is OUTSTANDING, not what was ordered: a part-scanned PO has
@@ -706,6 +729,14 @@ function useIncomingFeed(refreshKey: number): IncomingFeed {
  * overstate both the tile and its summary. Money is `qtyOutstanding ×
  * unitPrice` — the agreed buy price on the line, which is exactly the cost
  * basis addStock will open the lot at when the box is checked in.
+ *
+ * Every unit figure here is the STOCK-BOUND one. A mixed line of twenty with
+ * eight drop-shipped contributes twelve, never twenty — this panel answers "what
+ * is arriving at this building", and eight boxes going straight from a supplier
+ * to a shop are not. The money follows the same restriction for the same reason:
+ * no lot will ever be opened for those eight, so no cost basis is waiting on
+ * them. (The ORDER's total still covers them — they are bought and paid for.
+ * That figure lives on the purchase order, which is where the money is.)
  */
 function summariseIncoming(
   boxes: PurchaseOrderDetail[],
@@ -713,18 +744,23 @@ function summariseIncoming(
 ): IncomingSummary {
   const orders: OutstandingOrder[] = []
   for (const b of boxes) {
-    const open = b.lines.filter((l) => l.qtyOutstanding > 0)
-    const units = open.reduce((n, l) => n + l.qtyOutstanding, 0)
+    if (!arrivesHere(b)) continue
+    const open = b.lines
+      .map((l) => ({ line: l, left: receivableOutstanding(l) }))
+      .filter((l) => l.left > 0)
+    const units = open.reduce((n, l) => n + l.left, 0)
     if (units <= 0) continue
     orders.push({
       id: b.id,
       source: 'po',
       title: b.poNumber,
-      detail: `${b.supplier || 'No supplier'} · → ${b.location}`,
+      detail: `${b.supplier || 'No supplier'} · → ${
+        b.destinationCount > 1 ? `${b.destinationCount} destinations` : b.location
+      }`,
       status: b.status,
       itemCount: open.length,
       units,
-      value: open.reduce((sum, l) => sum + l.qtyOutstanding * l.unitPrice, 0)
+      value: open.reduce((sum, l) => sum + l.left * l.line.unitPrice, 0)
     })
   }
   for (const s of manual) {
@@ -808,7 +844,11 @@ function IncomingPanel({
     })
   }
 
-  const boxes = feed.boxes ?? []
+  // A pure-drop order's box does not appear at all — not greyed, not collapsed,
+  // absent. Those boxes are not coming to the building, so there is nothing on
+  // this panel for them to be: no count to add, no delivery to record, no
+  // "All of it arrived" that could mean anything.
+  const boxes = (feed.boxes ?? []).filter(arrivesHere)
   const manual = feed.manual ?? []
   const totalUnits = summary.totalUnits
   const empty = !loading && boxes.length === 0 && manual.length === 0
@@ -834,7 +874,14 @@ function IncomingPanel({
     try {
       const res = await api.purchaseOrders.scanIn(box.id)
       if (res.ok) {
-        toast.success(`Scanned in ${box.poNumber} into ${box.location}.`)
+        // Named per DESTINATION, not per order: "into RM" on an order whose
+        // units went to two shelves says something that is only half true, and
+        // the half it leaves out is where six boxes went.
+        toast.success(
+          box.destinationCount > 1
+            ? `Scanned in ${box.poNumber} — its units went to their own destinations.`
+            : `Scanned in ${box.poNumber} into ${box.location}.`
+        )
         await loadBoxes()
         await onReceived()
       } else {
@@ -1020,8 +1067,14 @@ function PurchaseOrderBox({
   // completed, so an order with twenty-three of thirty-eight units in, spread
   // across nine part-filled lines, reported receivedLineCount 0 and rendered as
   // though the truck had not arrived.
-  const got = receiveProgressOf(box.lines)
+  //
+  // Against the RECEIVABLE units, so a mixed order's box counts the twelve that
+  // are coming here and not the twenty that were ordered. Twenty is the truth
+  // about the purchase; twelve is the truth about the delivery, and this is a
+  // panel about deliveries.
+  const got = receivableProgressOf(box.lines)
   const outstanding = got.outstanding
+  const drops = dropDestinations(box)
   return (
     <div className={`po-ship-box po-ship-${box.status}`}>
       <button
@@ -1042,7 +1095,8 @@ function PurchaseOrderBox({
             </span>
           </span>
           <span className="po-ship-sub">
-            {box.supplier || 'No supplier'} · → {box.location} ·{' '}
+            {box.supplier || 'No supplier'} · →{' '}
+            {box.destinationCount > 1 ? `${box.destinationCount} destinations` : box.location} ·{' '}
             {got.state === 'none'
               ? `${box.lineCount} ${box.lineCount === 1 ? 'item' : 'items'} · ${got.ordered} unit${
                   got.ordered === 1 ? '' : 's'
@@ -1058,9 +1112,16 @@ function PurchaseOrderBox({
       {open && (
         <div className="po-ship-lines">
           {box.lines.map((l) => {
-            const done = l.qtyOutstanding <= 0
+            const left = receivableOutstanding(l)
+            const wholly = lineIsWhollyDrop(l)
+            const done = !wholly && left <= 0
             return (
-              <div className={`po-ship-line ${done ? 'po-ship-line-done' : ''}`} key={l.id}>
+              <div
+                className={`po-ship-line ${done ? 'po-ship-line-done' : ''}${
+                  wholly ? ' po-ship-line-drop' : ''
+                }`}
+                key={l.id}
+              >
                 <span className="po-ship-thumb">
                   {thumbnails[l.productId] ? (
                     <img src={thumbnails[l.productId]} alt="" />
@@ -1071,16 +1132,43 @@ function PurchaseOrderBox({
                 <span className="po-ship-name" title={l.productName}>
                   {l.productName}
                 </span>
-                <span className="po-ship-qty mono" title={done ? 'Received' : 'Still outstanding'}>
-                  {done ? (
+                {/* A wholly drop-shipped line stays on the list — the box has to
+                    account for every line on the order or its counts look like a
+                    bug — but it carries a marker instead of a count, because
+                    there is no quantity of it arriving to count down. */}
+                <span
+                  className="po-ship-qty mono"
+                  title={
+                    wholly
+                      ? 'Drop-shipped — never arrives here'
+                      : done
+                        ? 'Received'
+                        : 'Still outstanding'
+                  }
+                >
+                  {wholly ? (
+                    <span className="po-drop-chip">Drop</span>
+                  ) : done ? (
                     <Icon name="PackageCheck" size={14} className="po-ship-tick" />
                   ) : (
-                    `×${l.qtyOutstanding}${l.qtyReceived > 0 ? ` of ${l.quantity}` : ''}`
+                    `×${left}${l.qtyReceived > 0 ? ` of ${l.qtyReceivable}` : ''}`
                   )}
                 </span>
               </div>
             )
           })}
+        </div>
+      )}
+
+      {/* NON-COUNTING, and it exists precisely so the count above reconciles
+          against the receipt without anybody opening the purchase order: a box
+          that says twelve against an order that says twenty is a discrepancy
+          until this sentence explains it. It must never be added to any total —
+          those units are not on their way anywhere near this building. */}
+      {box.dropshipUnits > 0 && (
+        <div className="po-ship-dropnote">
+          {box.dropshipUnits} unit{box.dropshipUnits === 1 ? '' : 's'} drop-shipped to{' '}
+          {destinationSummary(drops) || 'another destination'} — not arriving here.
         </div>
       )}
       {/* The count-it-in form, on the same panel the boxes are listed on.

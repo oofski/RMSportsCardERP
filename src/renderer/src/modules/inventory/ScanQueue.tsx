@@ -158,7 +158,16 @@ function QueueRow({
         <span className="scan-meta scan-queue-sub">
           <span className="mono">{line.sku}</span>
           {line.poNumber && <span className="mono">{line.poNumber}</span>}
-          {line.kind === 'po_line' && <span className="badge loc-badge">{line.location}</span>}
+          {/* The ALLOCATION's destination, which for an unsplit line is the
+              line's and for a legacy one is the header's — the same shelf this
+              pill has always shown. On a line split across both shelves it is
+              the half the operator chose, and it is the only thing on the row
+              that says which. */}
+          {line.kind === 'po_line' && (
+            <span className="badge loc-badge" title={`These units go to ${line.location}`}>
+              {line.location}
+            </span>
+          )}
           {line.unitCost != null && <span>{formatMoney(line.unitCost)} each</span>}
           {out && <span>{line.onHand[line.location] ?? 0} on hand</span>}
           <span>

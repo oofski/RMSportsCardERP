@@ -5,7 +5,7 @@ import type {
   SupplyOrder,
   SupplyOrderStatus
 } from '@shared/types'
-import { PO_STAGES, PO_TRANSITIONS, canTransition } from '@shared/purchaseOrders'
+import { PO_STAGES, PO_TRANSITIONS, canTransition, displayOrderNumber } from '@shared/purchaseOrders'
 import { receiveProgress } from '@shared/receiving'
 import { Icon } from '../../components/Icon'
 import { ReceiveBar } from '../../components/ReceiveProgress'
@@ -203,11 +203,30 @@ function PoCard({
   // Only worth a rail once something has actually landed. A whole column of
   // empty bars on orders still with the supplier is noise that makes the ONE
   // half-arrived shipment harder to pick out, which is the opposite of the job.
-  const received = receiveProgress(po.orderedUnits, po.receivedUnits)
-  const showProgress = received.state !== 'none' && po.status !== 'cancelled'
+  //
+  // Measured against RECEIVABLE units, so a pure dropship shows no rail at all:
+  // its denominator is zero, nothing is arriving, and a bar is a promise that
+  // something will.
+  const received = receiveProgress(po.receivableUnits, po.receivedUnits)
+  const showProgress =
+    po.receivableUnits > 0 && received.state !== 'none' && po.status !== 'cancelled'
+
+  /**
+   * The glow is a class on the EXISTING card, not a second kind of card.
+   *
+   * A dropship is a purchase order: same columns, same moves, same money, same
+   * counter. What differs is where its boxes go, and that is a property of the
+   * order rather than a different sort of document — so it gets a tint and a
+   * prefix, not a component of its own.
+   */
+  const kindClass =
+    po.orderKind === 'drop' ? ' po-card-drop' : po.orderKind === 'mixed' ? ' po-card-mixed' : ''
+  const multi = po.destinationCount > 1
+  const destination = multi ? `${po.destinationCount} destinations` : po.location
+
   return (
     <div
-      className={`po-card${dragging ? ' po-card-dragging' : ''}`}
+      className={`po-card${kindClass}${dragging ? ' po-card-dragging' : ''}`}
       draggable
       onDragStart={(e) => {
         e.dataTransfer.setData('text/plain', po.id)
@@ -226,9 +245,22 @@ function PoCard({
       tabIndex={0}
     >
       <div className="po-card-top">
-        <span className="po-card-num mono">{po.poNumber}</span>
-        <span className="po-card-dest" title={`Boxes land at ${po.location}`}>
-          → {po.location}
+        {/* Drop-0042 for an order where nothing is coming here; PO-0042 for
+            everything else, MIXED INCLUDED. The prefix answers exactly one
+            question — are boxes coming to this building? — and on a mixed order
+            they are. See displayOrderNumber. */}
+        <span className="po-card-num mono">{displayOrderNumber(po.poNumber, po.orderKind)}</span>
+        <span
+          className="po-card-dest"
+          title={
+            multi
+              ? `Its units go to ${po.destinationCount} destinations — open the order for the list. Default: ${po.location}`
+              : po.receivableUnits > 0
+                ? `Boxes land at ${po.location}`
+                : `Ships straight to ${po.location} — nothing arrives here`
+          }
+        >
+          → {destination}
         </span>
       </div>
       <div className="po-card-supplier">{po.supplier || 'No supplier'}</div>
@@ -242,6 +274,17 @@ function PoCard({
           {po.orderedUnits > 0 && ` · ${po.orderedUnits} ${po.orderedUnits === 1 ? 'unit' : 'units'}`}
         </span>
       </div>
+      {/* The split, named on the card. The glow says part of this order never
+          arrives; this says how much and stops the receiving desk counting the
+          whole ordered figure off the line above. */}
+      {po.dropshipUnits > 0 && (
+        <div className="po-card-drops">
+          <Icon name="Truck" size={12} />
+          {po.receivableUnits > 0
+            ? `${po.receivableUnits} here · ${po.dropshipUnits} drop-shipped`
+            : `${po.dropshipUnits} ${po.dropshipUnits === 1 ? 'unit' : 'units'} drop-shipped — none arrive here`}
+        </div>
+      )}
       {showProgress && <ReceiveBar progress={received} compact className="po-card-recv" />}
       <FreightLine
         carrier={po.carrier}

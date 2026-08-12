@@ -356,17 +356,27 @@ function incomingOrders(scope: {
   // listed four purchase orders arriving.
   if (scope.invoicing || scope.inventory) {
     for (const po of listActivePurchaseOrderBoxes()) {
-      const open = po.lines.filter((l) => l.qtyOutstanding > 0)
-      const units = open.reduce((n, l) => n + l.qtyOutstanding, 0)
+      // STOCK-BOUND outstanding, not ordered-minus-received. A drop-shipped unit
+      // is ordered and paid for and is never arriving here, so counting it would
+      // say stock is on the way to a building it was never addressed to — the
+      // same failure as counting units that have already landed, from the other
+      // end. On every order raised before dropship existed qtyReceivable equals
+      // quantity, so this is the figure this loop has always produced.
+      const outstanding = (l: { qtyReceivable: number; qtyReceived: number }): number =>
+        Math.max(0, l.qtyReceivable - l.qtyReceived)
+      const open = po.lines.filter((l) => outstanding(l) > 0)
+      const units = open.reduce((n, l) => n + outstanding(l), 0)
       if (units <= 0) continue
       orders.push({
         id: po.id,
         source: 'po',
         title: po.poNumber,
-        detail: `${po.supplier || 'No supplier'} → ${po.location}`,
+        detail: `${po.supplier || 'No supplier'} → ${
+          po.destinationCount > 1 ? `${po.destinationCount} destinations` : po.location
+        }`,
         itemCount: open.length,
         units,
-        value: money(open.reduce((sum, l) => sum + l.qtyOutstanding * l.unitPrice, 0))
+        value: money(open.reduce((sum, l) => sum + outstanding(l) * l.unitPrice, 0))
       })
     }
   }

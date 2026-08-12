@@ -7,6 +7,7 @@ import type {
   CogsEntry,
   InventoryProduct,
   NewPurchaseOrder,
+  PoRoutingPatch,
   PurchaseOrder,
   PurchaseOrderDetail,
   PurchaseOrderStatus,
@@ -16,6 +17,7 @@ import type {
 import type { ContactImportResult } from '@shared/contacts'
 import {
   isPurchaseOrderStatus,
+  type OrderParty,
   type SupplierSuggestion,
   type VendorSummary
 } from '@shared/purchaseOrders'
@@ -31,12 +33,15 @@ import {
   forceDeletePurchaseOrder,
   getPurchaseOrder,
   listActivePurchaseOrderBoxes,
+  listOrderParties,
   listPurchaseOrders,
   listSupplierSuggestions,
   listVendors,
   receivePurchaseOrderLines,
   scanInPurchaseOrder,
+  setPartyPinned,
   setPurchaseOrderFreight,
+  setPurchaseOrderRouting,
   setPurchaseOrderStatus
 } from './db/purchaseOrders'
 import type { PoReceiptItem } from './db/purchaseOrders'
@@ -83,6 +88,61 @@ export function registerPurchaseOrdersIpc(): void {
   ipcMain.handle(IPC.poSuppliers, (): SupplierSuggestion[] =>
     can('module.invoicing') ? listSupplierSuggestions() : []
   )
+  /**
+   * Everywhere units can be SENT — the destination picker's whole list.
+   *
+   * Gated on the same single permission as poSuppliers and for the identical
+   * stated reason: it discloses contact detail, which module.invoicing already
+   * grants via the Buyers tab. A read, so an empty list is the honest answer to
+   * a caller who is not permitted rather than a thrown error.
+   */
+  ipcMain.handle(IPC.poParties, (): OrderParty[] =>
+    can('module.invoicing') ? listOrderParties() : []
+  )
+
+  /**
+   * Pin or unpin a destination. A WRITE — it adds a row to a synced table — so
+   * it takes requireInvoicing rather than the softer `can` the reads use.
+   */
+  ipcMain.handle(
+    IPC.poPartyPin,
+    (_e, payload: { name: string; pinned: boolean }): Result<OrderParty[]> => {
+      try {
+        requireInvoicing()
+        const name = String(payload?.name ?? '').trim()
+        if (!name) return { ok: false, error: 'Pick a name to pin.' }
+        return { ok: true, data: setPartyPinned(name, !!payload?.pinned) }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  /**
+   * Re-route an existing order's lines or splits.
+   *
+   * Gated exactly like every other PO write. What makes it safe is not a
+   * stricter gate but the refusal inside setPurchaseOrderRouting: a line with
+   * units already checked in cannot be re-routed, because that would mean moving
+   * stock, which is Inventory's job.
+   */
+  ipcMain.handle(
+    IPC.poSetRouting,
+    (_e, payload: { id: string; patch: PoRoutingPatch }): Result<PurchaseOrderDetail> => {
+      try {
+        requireInvoicing()
+        const id = String(payload?.id ?? '')
+        if (!id) return { ok: false, error: 'No purchase order specified.' }
+        const res = setPurchaseOrderRouting(id, payload?.patch ?? {})
+        return res.error
+          ? { ok: false, error: res.error }
+          : { ok: true, data: res.po as PurchaseOrderDetail }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
   // Admin → Vendors. Same single permission, and for the same reason the line
   // above gives: the list carries contact detail for anyone who has one, so it
   // is the same disclosure as the customer list, which module.invoicing already

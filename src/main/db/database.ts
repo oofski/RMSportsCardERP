@@ -2909,6 +2909,136 @@ function migrate(database: Database.Database): void {
   })
   setMeta(database, 'schema_version', '66')
 
+  // v67: DROPSHIP — a purchase order's units can go somewhere that is not a shelf.
+  //
+  // ## Two words that must not merge
+  //
+  //   location    RM or AM. A shelf. Stock can exist here, and isLocation in
+  //               @shared/inventory is the only thing that decides.
+  //   destination where units are going: a location, OR a vendor or customer
+  //               name. Every location is a destination; most destinations are
+  //               not locations.
+  //
+  // isLocation is NOT widened by this migration or by anything downstream of it.
+  // addStock does not validate its location argument, so given a customer's name
+  // it would open a real inventory_stock row and a real FIFO layer keyed to that
+  // name — and lotWeightedAvgCost averages inventory_lots across ALL locations,
+  // so a phantom layer at a shop's name would move the unit cost, and therefore
+  // the reported margin, of boxes physically sitting on the RM shelf.
+  // assertStockLotsConsistent would still pass, because the phantom row is
+  // internally consistent with itself. Nothing in the app would catch it.
+  //
+  // ## THE MIGRATION WRITES NO ALLOCATION ROW FOR ANY EXISTING ORDER. EVER.
+  //
+  // That single fact is the whole back-compat contract. A line with zero
+  // allocation rows IS one implicit allocation of its whole quantity at the
+  // line's effective supplier and destination (invariant I3), and the view's
+  // second arm below is that invariant written in SQL. An order raised before
+  // today has NULL in both new line columns and RM or AM in its header, so it
+  // materialises exactly the rows it materialised before, at exactly the
+  // destination the old code read off the header.
+  //
+  // Nullable columns, no defaults: NULL means "same as the header", which is
+  // what every existing row already meant.
+  addColumnIfMissing(database, 'purchase_order_lines', 'supplier', 'TEXT')
+  addColumnIfMissing(database, 'purchase_order_lines', 'destination', 'TEXT')
+  // Which slice of the line a receipt was against, and WHICH SHELF IT LANDED ON.
+  //
+  // The location column is required for correctness rather than tidiness. Three
+  // reversal paths in db/purchaseOrders.ts used to re-read the shelf from the PO
+  // header; once a line can carry its own destination, a header-derived location
+  // unwinds against the wrong shelf and the refusal message names a cause that is
+  // not the real one. All three now read this column.
+  addColumnIfMissing(database, 'po_line_receipts', 'allocation_id', 'TEXT')
+  addColumnIfMissing(database, 'po_line_receipts', 'location', 'TEXT')
+  // Undo decrements purchase_order_lines.qty_received; it has to decrement the
+  // allocation's counter too, or I2 breaks after any undo of a scan against a
+  // split line.
+  addColumnIfMissing(database, 'inventory_scans', 'po_allocation_id', 'TEXT')
+  database.exec(
+    `CREATE TABLE IF NOT EXISTS purchase_order_allocations (
+       id           TEXT PRIMARY KEY,
+       po_id        TEXT NOT NULL,
+       po_line_id   TEXT NOT NULL,
+       quantity     INTEGER NOT NULL,
+       supplier     TEXT,
+       destination  TEXT NOT NULL,
+       position     INTEGER NOT NULL DEFAULT 0,
+       qty_received INTEGER NOT NULL DEFAULT 0,
+       received_at  TEXT,
+       created_at   TEXT NOT NULL,
+       FOREIGN KEY (po_id)      REFERENCES purchase_orders (id)      ON DELETE CASCADE,
+       FOREIGN KEY (po_line_id) REFERENCES purchase_order_lines (id) ON DELETE CASCADE
+     );
+     CREATE INDEX IF NOT EXISTS idx_po_alloc_po   ON purchase_order_allocations (po_id);
+     CREATE INDEX IF NOT EXISTS idx_po_alloc_line ON purchase_order_allocations (po_line_id);
+
+     -- The operator's favourite destinations. RM and AM are NOT rows here: they
+     -- are locations, not parties, they are prepended in code and they cannot be
+     -- unpinned.
+     --
+     -- The id is DERIVED from the lower-cased name rather than minted, so two
+     -- laptops pinning the same shop write the same row and last-write-wins only
+     -- ever compares that row against an older copy of itself. Same reasoning as
+     -- availability in syncTables.ts.
+     CREATE TABLE IF NOT EXISTS order_party_pins (
+       id         TEXT PRIMARY KEY,
+       name       TEXT NOT NULL,
+       position   INTEGER NOT NULL DEFAULT 0,
+       created_at TEXT NOT NULL,
+       updated_at TEXT NOT NULL
+     );
+
+     CREATE INDEX IF NOT EXISTS idx_inv_scans_po_alloc ON inventory_scans (po_allocation_id);
+
+     -- THE one definition of where each unit is going. Every query reads this,
+     -- so there is no second place to get it wrong.
+     --
+     -- First arm: lines that were split, one row per allocation.
+     -- Second arm: lines that were not, one row carrying the whole quantity —
+     -- invariant I3 in SQL. A legacy purchase order produces exactly the rows it
+     -- produced before, with destination equal to its header location.
+     --
+     -- Inheritance is allocation, then line, then header, and the header's
+     -- destination is purchase_orders.location — a column that keeps its name
+     -- deliberately. Renaming it would break sync in a way nobody would diagnose
+     -- from the symptom: upsertFor discovers columns via PRAGMA table_info and
+     -- silently drops any the receiving database does not have.
+     --
+     -- The stock-bound test in SQL is destination IN (RM, AM), which duplicates
+     -- LOCATION_IDS; tests/dropship.test.ts asserts the two agree.
+     CREATE VIEW IF NOT EXISTS po_unit_destinations AS
+       SELECT l.po_id, l.id AS po_line_id, a.id AS allocation_id,
+              a.quantity, a.qty_received, a.position,
+              COALESCE(a.supplier,    l.supplier,    po.supplier) AS supplier,
+              COALESCE(a.destination, l.destination, po.location) AS destination
+         FROM purchase_order_lines l
+         JOIN purchase_orders po ON po.id = l.po_id
+         JOIN purchase_order_allocations a ON a.po_line_id = l.id
+       UNION ALL
+       SELECT l.po_id, l.id, NULL, l.quantity, l.qty_received, l.position,
+              COALESCE(l.supplier, po.supplier),
+              COALESCE(l.destination, po.location)
+         FROM purchase_order_lines l
+         JOIN purchase_orders po ON po.id = l.po_id
+        WHERE NOT EXISTS (SELECT 1 FROM purchase_order_allocations a WHERE a.po_line_id = l.id);`
+  )
+  // Every receipt written before today landed on the header's shelf, because
+  // that was the only shelf a purchase order had. Backfilled rather than left
+  // NULL so the reversal paths can read one column and never fall back to a
+  // join that would be wrong for anything raised after today.
+  //
+  // Not runOnce: it is a cheap self-heal (normally zero rows), and it is scoped
+  // to rows that have no location, so it can never overwrite one.
+  database
+    .prepare(
+      `UPDATE po_line_receipts
+          SET location = (SELECT po.location FROM purchase_orders po WHERE po.id = po_line_receipts.po_id)
+        WHERE location IS NULL`
+    )
+    .run()
+  setMeta(database, 'schema_version', '67')
+
   // v41: re-derive every product's average cost from its remaining cost layers.
   //
   // The average used to be stored rounded to the cent, back when every total in

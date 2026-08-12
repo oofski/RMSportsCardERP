@@ -156,7 +156,8 @@ export function Modal({
   onClose,
   children,
   footer,
-  wide
+  wide,
+  className = ''
 }: {
   title: string
   subtitle?: string
@@ -164,6 +165,15 @@ export function Modal({
   children: ReactNode
   footer?: ReactNode
   wide?: boolean
+  /**
+   * An extra class on the dialog itself — in practice `.modal-xl`, for the two
+   * screens that lay out a table of columns rather than a column of fields.
+   *
+   * Additive on purpose: the phone layer sizes `.modal` and `.modal-lg` to the
+   * whole screen and wins on source order, so a width set here is a desktop
+   * width and cannot reach a phone.
+   */
+  className?: string
 }): JSX.Element {
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
@@ -176,7 +186,7 @@ export function Modal({
   return (
     <div className="modal-overlay" onMouseDown={onClose}>
       <div
-        className={`modal ${wide ? 'modal-lg' : ''}`}
+        className={`modal ${wide ? 'modal-lg' : ''} ${className}`.trim()}
         onMouseDown={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"

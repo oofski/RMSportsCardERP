@@ -169,6 +169,16 @@ export const SYNCED_TABLES: SyncedTable[] = [
   // they have to travel: an invoice raised on the office laptop for a buyer
   // added at the bench would otherwise have nobody to address it to.
   { table: 'invoice_customers', key: ['id'], tier: 0 },
+  // The operator's favourite destinations, beside the directory they are drawn
+  // from. Tier 0: a pin points at nothing — it is a NAME, deliberately, so a pin
+  // survives the contact record being renamed or retired.
+  //
+  // The id is DERIVED from the lower-cased name rather than minted, which is
+  // what makes last-write-wins the right arbiter here rather than a coin toss:
+  // two laptops pinning the same shop write the same row, so the relay only ever
+  // compares it against an older copy of itself. A UUID would leave two rows and
+  // a picker showing the shop twice. Same reasoning as availability below.
+  { table: 'order_party_pins', key: ['id'], tier: 0 },
   // The invoice itself. Tier 0 because its customer id is allowed to dangle by
   // design — the buyer's name is snapshotted onto the row, so an invoice whose
   // customer record is gone still reads correctly and must still apply.
@@ -259,6 +269,15 @@ export const SYNCED_TABLES: SyncedTable[] = [
 
   // Tier 2 — children of a tier-1 row.
   { table: 'po_line_receipts', key: ['id'], tier: 2 },
+  // Where each slice of a purchase-order line is going. Tier 2 beside the
+  // receipts, and for the same reason: it names a LINE, and an allocation
+  // arriving before the line it splits would be a routing attached to nothing.
+  //
+  // po_unit_destinations is deliberately NOT here and must never be: it is a
+  // VIEW, created by the migration on every machine, so it is schema rather than
+  // data. Syncing a view's rows would carry a machine's own derivation to
+  // everyone else and let last-write-wins arbitrate a computed answer.
+  { table: 'purchase_order_allocations', key: ['id'], tier: 2 },
   // Invoice lines. Tier 2 so they land after the invoice they belong to on the
   // row-at-a-time recovery path.
   { table: 'invoice_lines', key: ['id'], tier: 2 },

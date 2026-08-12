@@ -70,6 +70,18 @@ export interface PendingLine {
   mode: ScanMode
   /** Order context: the PO line ('po_line') or the sales order line ('so_line'). */
   lineId?: string
+  /**
+   * Which SLICE of that PO line these units are against ('po_line' only).
+   *
+   * Null for an unsplit line — the one implicit allocation — which is every line
+   * raised before dropship existed, so this rides along as null and the commit
+   * behaves exactly as it always has.
+   *
+   * A line split 6 → RM and 6 → AM produces two candidates and therefore two
+   * separate pending lines, because they land on different shelves and the
+   * operator has to say which. That is why it is part of `lineKey`.
+   */
+  allocationId?: string | null
   poId?: string
   poNumber?: string
   completesPo?: boolean
@@ -116,8 +128,23 @@ export function newToken(): string {
   return `t-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`
 }
 
-export function lineKey(kind: ScanCommitKind, productId: string, lineId?: string): string {
-  return kind === 'po_line' ? `po:${lineId ?? ''}` : `${kind}:${productId}`
+/**
+ * One pending line per thing being decided.
+ *
+ * For a purchase order that is the ALLOCATION, not the line. A line split six to
+ * RM and six to AM is two shelves and two decisions; merging both onto one row
+ * would let six boxes silently take the other six's place, and there would be
+ * nothing on screen to notice it by. An unsplit line has no allocation id, so
+ * its key is what it always was with an empty suffix — the same one row per line
+ * every existing order produces.
+ */
+export function lineKey(
+  kind: ScanCommitKind,
+  productId: string,
+  lineId?: string,
+  allocationId?: string | null
+): string {
+  return kind === 'po_line' ? `po:${lineId ?? ''}:${allocationId ?? ''}` : `${kind}:${productId}`
 }
 
 /** On-hand map for a product, defaulted so a missing location reads 0. */
@@ -182,7 +209,12 @@ export function lineFromScan(args: {
       : null
   const max = ceilingOf(kind, outstanding, onHand, location)
   return {
-    key: lineKey(kind, product.id, candidate?.lineId ?? soCandidate?.lineId),
+    key: lineKey(
+      kind,
+      product.id,
+      candidate?.lineId ?? soCandidate?.lineId,
+      candidate?.allocationId ?? null
+    ),
     token: newToken(),
     kind,
     direction,
@@ -204,6 +236,7 @@ export function lineFromScan(args: {
     rawCode: resolution.rawCode,
     mode,
     lineId: candidate?.lineId ?? soCandidate?.lineId,
+    allocationId: candidate?.allocationId ?? null,
     poId: candidate?.poId,
     poNumber: candidate?.poNumber,
     completesPo: candidate?.completesPo,
@@ -401,7 +434,13 @@ export function toCommitInput(line: PendingLine, allocation?: LotPick[] | null):
     override: line.override,
     clientToken: line.token
   }
-  if (line.kind === 'po_line') return { ...base, kind: 'po_line', lineId: line.lineId }
+  if (line.kind === 'po_line') {
+    // The allocation rides along so the receipt lands against the slice the
+    // operator picked. Null resolves the line's stock allocations in position
+    // order, which for an unsplit line is the one implicit allocation — i.e.
+    // exactly the behaviour every scan had before dropship existed.
+    return { ...base, kind: 'po_line', lineId: line.lineId, allocationId: line.allocationId ?? null }
+  }
   if (line.kind === 'so_line') {
     return {
       ...base,

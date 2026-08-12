@@ -22203,3 +22203,638 @@ button.sor-team:focus-visible {
 @media (prefers-reduced-motion: reduce) {
   .golive-dot { animation: none; }
 }
+
+/* ==========================================================================
+   Destinations, dropship and per-line routing
+
+   A purchase order used to go one place, and that place was a shelf. It can now
+   go anywhere — RM, AM, a vendor, a customer — and a single LINE can be split
+   across several of them at once. Everything below exists to make one question
+   answerable at a glance on every screen that shows an order: is this coming
+   here, or is it not?
+
+   ONE VISUAL VOCABULARY, used everywhere. The `Drop` chip means the same thing
+   on the board, on the receipt, in the picker and in the split editor: these
+   units never reach RM or AM stock. It is amber rather than red because a
+   dropship is not a fault — it is a perfectly ordinary purchase whose boxes go
+   somewhere else — and red is already spoken for by over-receipt, which IS a
+   discrepancy somebody has to go and look at.
+
+   NONE OF THESE NAMES APPEARS IN styles/mobile.css. The glow classes in
+   particular (.po-card-drop, .po-card-mixed, .po-receipt-drop) are desktop-only
+   by rule: the phone layer adjusts the cards it needs to through names it
+   already owns. See the header of mobile.css and tests/mobileLayout.test.ts.
+   ========================================================================== */
+
+/* A dialog that lays out a TABLE of columns rather than a column of fields.
+   Two screens use it and both earned it by growing a seventh column: the create
+   form (product, qty, price, total, supplier, destination, remove) and the line
+   pop-out. At 620px their money fields squeezed to three characters wide.
+   The phone layer sizes .modal and .modal-lg to the whole screen and wins on
+   source order, so this is a desktop width and cannot reach a phone. */
+.modal-xl {
+  max-width: 940px;
+}
+
+/* The one marker. Small, amber, and always adjacent to the thing it qualifies
+   — never floating at the end of a row where it could be read as applying to
+   the line above. */
+.po-drop-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--warning-bg);
+  color: var(--warning);
+  border: 1px solid color-mix(in srgb, var(--warning) 32%, transparent);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* ---------- The destination picker ---------- */
+/* Built on .typeahead / .ta-menu / .ta-item so it inherits the supplier box's
+   look and its keyboard behaviour rather than growing a second set of both. */
+.dp-box {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.dp-box .input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.dp-inline .dp-box .input {
+  height: 32px;
+  font-size: 12.5px;
+}
+/* A row is the .ta-item button plus a star OVER it, not a flex container
+   holding two buttons: a button inside a button is invalid markup, and moving
+   the row off .ta-item would lose the hover and focus treatment this menu
+   shares with every other typeahead in the app. */
+.dp-row {
+  position: relative;
+}
+.dp-row .ta-item {
+  padding-right: 36px;
+}
+.dp-row .ta-item.active {
+  background: var(--brand-soft);
+}
+.dp-star {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+}
+.dp-star:not(:disabled):hover {
+  background: var(--surface-3);
+  color: var(--warning);
+}
+.dp-star.is-pinned {
+  color: var(--warning);
+}
+.dp-star.is-pinned svg {
+  fill: currentColor;
+}
+/* RM and AM are locations, not pins. The star is filled and inert on them for
+   the same reason setPartyPinned refuses them: they are always first and they
+   cannot be removed. Not hidden — a missing star reads as a row that forgot
+   one, a disabled filled star reads as a decision. */
+.dp-star:disabled {
+  cursor: default;
+  color: var(--brand-400);
+  opacity: 0.75;
+}
+.dp-star:disabled svg {
+  fill: currentColor;
+}
+.dp-sep {
+  padding: 9px 11px 4px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.dp-more {
+  width: 100%;
+  margin-top: 4px;
+  padding: 9px 11px;
+  border: none;
+  border-top: 1px solid var(--border);
+  border-radius: 0 0 8px 8px;
+  background: transparent;
+  color: var(--brand-600);
+  font-size: 12.5px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.dp-more:hover {
+  background: var(--surface-3);
+}
+.dp-menu .ta-name {
+  display: flex;
+  align-items: center;
+}
+/* An inline typeahead has no Field around it, so its menu has nothing to hang
+   under and would otherwise sit on top of the control it belongs to. */
+.dp-inline .ta-menu,
+.ct-inline .ta-menu {
+  margin-top: 4px;
+  max-height: 220px;
+}
+
+/* ---------- The create form's lines table ---------- */
+.po-lines-routed {
+  table-layout: auto;
+}
+.po-lines-routed .po-qty-input,
+.po-lines-routed .po-price-input {
+  width: 74px;
+}
+/* The product cell is the door to the pop-out, so it has to look like one and
+   be reachable from the keyboard. A whole-<td> click handler is neither. */
+.po-line-open {
+  display: block;
+  width: 100%;
+  padding: 2px 4px 2px 0;
+  border: none;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+.po-line-open:hover .po-line-name {
+  color: var(--brand-600);
+  text-decoration: underline;
+}
+.po-line-splits {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--brand-soft);
+  color: var(--brand-700);
+  font-weight: 700;
+}
+/* INHERITED IS MUTED, OVERRIDDEN IS SOLID. The whole reason both columns are on
+   the table rather than only in the pop-out: "all of this goes to RM" and "this
+   one line goes somewhere else" have to be told apart down a column without
+   opening anything. Inherited cells print the header's value as a placeholder,
+   which is the honest rendering — the cell really is empty, and what it shows
+   is what it will follow. */
+.po-route-cell {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.po-route-input {
+  width: 100%;
+  min-width: 96px;
+  height: 32px;
+  font-size: 12.5px;
+}
+.po-route-input.is-inherited {
+  background: var(--surface-2);
+  border-style: dashed;
+}
+.po-route-input.is-inherited::placeholder {
+  color: var(--text-3);
+  font-style: italic;
+}
+.po-route-split {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 9px;
+  border: 1px solid var(--brand-300);
+  border-radius: 999px;
+  background: var(--brand-soft);
+  color: var(--brand-700);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.po-route-split:hover {
+  background: var(--brand-soft-2);
+}
+/* Said before the order is created, not discovered on its receipt afterwards. */
+.po-lines-dropnote {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+  background: var(--warning-bg);
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+.po-lines-dropnote svg {
+  flex: none;
+  color: var(--warning);
+}
+
+/* ---------- The line pop-out ---------- */
+/* Seven columns, in the order somebody fills them in: what it is, how many,
+   what each costs, what that comes to, who from, where to, and how it splits.
+   The product column takes the slack because it is the only one holding prose;
+   everything else is sized to its content so the money stays readable. */
+.po-ld-cols {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.6fr) 84px 100px 96px minmax(140px, 1fr) minmax(140px, 1fr) 132px;
+  gap: 14px;
+  align-items: start;
+}
+.po-ld-col {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.po-ld-key {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.po-ld-num {
+  align-items: flex-end;
+  text-align: right;
+}
+.po-ld-total {
+  padding-top: 7px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+}
+.po-ld-prod {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.po-ld-img {
+  width: 40px;
+  height: 40px;
+  flex: none;
+}
+.po-ld-prod-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.po-ld-prod-name {
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.3;
+}
+.po-ld-prod-sub {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+/* What this field will do if it is left alone. A placeholder alone cannot say
+   it, because a placeholder disappears the moment somebody types a space. */
+.po-ld-inherit {
+  font-size: 11.5px;
+  color: var(--text-3);
+  line-height: 1.35;
+}
+.po-ld-splitbtn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.po-ld-splitbtn:hover {
+  background: var(--surface-3);
+}
+.po-ld-splitbtn.is-split {
+  border-color: var(--brand-300);
+  background: var(--brand-soft);
+  color: var(--brand-700);
+}
+.po-ld-splitbtn > svg:last-child {
+  margin-left: auto;
+}
+
+/* The allocation editor, full width under the columns rather than inside the
+   seventh one: three controls and a remove button per row do not fit in a
+   132px column, and squeezing them there is how a split becomes something
+   nobody attempts twice. */
+.po-ld-splits {
+  margin-top: 18px;
+  padding: 14px 16px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+.po-ld-splits-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.po-ld-splits-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+.po-ld-splits-title svg {
+  color: var(--brand-600);
+}
+.po-ld-add {
+  margin-left: auto;
+}
+.po-ld-nosplit {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+.po-ld-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.po-ld-splitrow {
+  display: grid;
+  grid-template-columns: 22px 148px minmax(120px, 1fr) minmax(120px, 1fr) 34px;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+/* A rail down the edge, matching the receipt's treatment of a line still owed:
+   a chip at the far side of a wide row is missable when three rows are being
+   read down, an edge marker is not. */
+.po-ld-splitrow.is-drop {
+  border-color: color-mix(in srgb, var(--warning) 34%, var(--border));
+  box-shadow: inset 3px 0 0 var(--warning);
+}
+.po-ld-splitn {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-3);
+  text-align: center;
+}
+.po-ld-step {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.po-ld-splitfield {
+  min-width: 0;
+}
+.po-ld-splitdrop {
+  justify-content: center;
+}
+/* ONE line of copy, under the FIRST drop row only. Repeated per row it would
+   become wallpaper, and this is the one consequence of this screen that is
+   invisible everywhere else: these units are on the order, they are paid for,
+   and no box ever arrives to be checked in. */
+.po-ld-dropnote {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0 2px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--warning-bg);
+  color: var(--text-2);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.po-ld-dropnote svg {
+  flex: none;
+  color: var(--warning);
+}
+/* THE GUARD RAIL. Both numbers on screen while somebody types, because the ask
+   is to make two of them match — and Save stays refused until they do, so this
+   is the only place the reason can be read. */
+.po-ld-guard {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--success-bg);
+  color: var(--success-strong);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.po-ld-guard.is-bad {
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+.po-ld-guard svg {
+  flex: none;
+}
+
+/* ---------- The board card ---------- */
+/* A GLOW ON THE EXISTING CARD, not a second kind of card. A dropship is a
+   purchase order — same columns, same moves, same money, same counter — and
+   what differs is where its boxes go. Amber for a pure drop (nothing arrives),
+   a lighter left rail for mixed (some of it does), and the number itself
+   already says which: Drop-0042 against PO-0042. */
+.po-card-drop {
+  border-color: color-mix(in srgb, var(--warning) 42%, var(--border));
+  background: linear-gradient(180deg, var(--warning-bg) 0%, var(--surface) 62%);
+}
+.po-card-drop .po-card-num {
+  color: var(--warning);
+}
+.po-card-mixed {
+  border-left: 3px solid var(--warning);
+}
+.po-card-drops {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--warning);
+}
+.po-card-drops svg {
+  flex: none;
+}
+
+/* ---------- The receipt ---------- */
+.po-receipt-drop .po-rh-num {
+  color: var(--warning);
+}
+.po-receipt-drop .po-receipt-head {
+  border-bottom-color: color-mix(in srgb, var(--warning) 40%, var(--border));
+}
+/* Said in words under the rail, because "Received" on a mixed order means only
+   that everything DUE HERE is here. There is no signal in this app for "the
+   shop got theirs" and no screen to enter one. */
+.po-receipt-dropline {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin-top: 12px;
+  padding: 10px 13px;
+  border-radius: var(--radius-sm);
+  background: var(--warning-bg);
+  color: var(--text-2);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.po-receipt-dropline svg {
+  flex: none;
+  margin-top: 1px;
+  color: var(--warning);
+}
+/* The seventh column arrives only when there is more than one answer to give —
+   the same rule the PDF follows. A single-destination order keeps the six
+   columns it has always printed. */
+.po-receipt-lines-routed .po-receipt-line {
+  grid-template-columns: 46px minmax(0, 1fr) 44px 82px 128px 92px 104px;
+}
+.po-receipt-lines-routed .po-receipt-line-head .po-rl-dest {
+  text-align: left;
+}
+.po-rl-dest {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.po-rl-destname {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.po-rl-splitbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border: 1px solid var(--brand-300);
+  border-radius: 999px;
+  background: var(--brand-soft);
+  color: var(--brand-700);
+  font-size: 11.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.po-rl-splitbtn:hover {
+  background: var(--brand-soft-2);
+}
+/* A wholly drop-shipped line gets its own edge marker, beside the amber one
+   used for a part-arrived line — the two states are opposites and must not
+   share a colour: one is "still coming", this one is "never coming". */
+.po-receipt-line[data-recv='drop'] {
+  box-shadow: inset 3px 0 0 var(--warning);
+  background: color-mix(in srgb, var(--warning-bg) 45%, transparent);
+}
+/* The split, opened out. No money is repeated: allocations divide the line's
+   UNITS, not its total, and printing a share of the money against each would
+   invite somebody to add them up and reconcile them against a figure that was
+   never apportioned. */
+.po-receipt-alloc {
+  display: grid;
+  grid-template-columns: 46px minmax(120px, 1fr) minmax(120px, 1fr) 150px;
+  align-items: center;
+  gap: 12px;
+  margin-left: 58px;
+  padding: 7px 4px;
+  border-bottom: 1px dashed var(--border);
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.po-ra-qty {
+  font-weight: 700;
+  color: var(--text);
+  text-align: right;
+}
+.po-ra-dest {
+  display: flex;
+  align-items: center;
+  color: var(--text);
+}
+.po-ra-in {
+  text-align: right;
+  color: var(--text-3);
+}
+/* A multi-supplier order is one document and has to read as one. A SINGLE
+   supplier — which is every order raised before lines could carry their own —
+   renders with no subheading at all. */
+.po-receipt-group-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 14px;
+  padding: 8px 4px 6px;
+  border-bottom: 1px solid var(--border-strong);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+}
+.po-receipt-group-head svg {
+  color: var(--text-3);
+}
+.po-receipt-group-head em {
+  margin-left: auto;
+  font-style: normal;
+  font-weight: 600;
+  color: var(--text-3);
+}
+
+/* ---------- Incoming Inventory ---------- */
+/* NON-COUNTING, and it exists so the box's twelve reconciles against the
+   order's twenty without anybody opening the purchase order. It must never be
+   added to any total on this panel. Muted and outside the box's own counts for
+   exactly that reason. */
+.po-ship-dropnote {
+  padding: 8px 14px 10px 46px;
+  border-top: 1px dashed var(--border);
+  color: var(--text-3);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+.po-ship-line-drop .po-ship-name {
+  color: var(--text-3);
+}

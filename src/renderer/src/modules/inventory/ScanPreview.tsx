@@ -205,8 +205,19 @@ function MultiPoResult({
   const candidates = resolution.candidates
   // Each line carries its own unit price, so guessing would write the wrong cost
   // basis onto the wrong order. The choice goes on the list the moment it is made.
-  const [lineId, setLineId] = useState<string | null>(null)
-  const chosen = candidates.find((c) => c.lineId === lineId) ?? null
+  //
+  // Identified by LINE AND ALLOCATION, because one line split six to RM and six
+  // to AM comes back as two candidates that share a line id and differ only in
+  // which shelf they land on. Keying on the line alone would make the two rows
+  // indistinguishable to this component and silently pick the first — misplacing
+  // six boxes with nothing on screen to notice it by.
+  const [pickedKey, setPickedKey] = useState<string | null>(null)
+  const chosen = candidates.find((c) => candidateKey(c) === pickedKey) ?? null
+
+  // Two slices of ONE order reads differently from two separate orders: the
+  // question is not "which box is this" but "which shelf do these go on".
+  const oneOrder = new Set(candidates.map((c) => c.poId)).size === 1
+  const oneLine = oneOrder && new Set(candidates.map((c) => c.lineId)).size === 1
 
   return (
     <div className="scan-result scan-result-po">
@@ -217,25 +228,35 @@ function MultiPoResult({
         category={product.category}
         structure={structureLabel(product)}
         imageUrl={resolution.imageUrl}
-        tag={{ label: `${candidates.length} open PO lines`, tone: 'brand' }}
+        tag={{
+          label: oneLine
+            ? `Split across ${candidates.length} destinations`
+            : `${candidates.length} open PO lines`,
+          tone: 'brand'
+        }}
       />
 
       <div className="scan-choose-label">
-        This barcode is on more than one open order — choose which one arrived.
+        {oneLine
+          ? 'This line is split across more than one shelf — choose where these go.'
+          : 'This barcode is on more than one open order — choose which one arrived.'}
       </div>
       <div className="scan-candidates">
         {candidates.map((c) => (
           <button
-            key={c.lineId}
+            key={candidateKey(c)}
             type="button"
-            className={`scan-candidate ${lineId === c.lineId ? 'active' : ''}`}
-            onClick={() => setLineId(c.lineId)}
+            className={`scan-candidate ${pickedKey === candidateKey(c) ? 'active' : ''}`}
+            onClick={() => setPickedKey(candidateKey(c))}
           >
             <span className="scan-cand-radio" aria-hidden />
             <span className="scan-cand-main">
               <span className="scan-cand-title">
                 <span className="mono">{c.poNumber}</span>
                 {c.supplier ? ` · ${c.supplier}` : ''}
+                {/* The shelf leads the title when the order is the same on every
+                    row: it is the only thing being chosen between. */}
+                {oneLine && <span className="badge loc-badge">{c.location}</span>}
               </span>
               <span className="scan-cand-sub">
                 {c.qtyOutstanding} of {c.quantity} outstanding · {formatMoney(c.unitPrice)} each · →{' '}
@@ -270,6 +291,16 @@ function MultiPoResult({
   )
 }
 
+/**
+ * A candidate's identity for this chooser.
+ *
+ * Line plus allocation, never the line alone — see the note in MultiPoResult.
+ * An unsplit line has no allocation id and keys as it always did.
+ */
+function candidateKey(c: ScanPoCandidate): string {
+  return `${c.lineId}:${c.allocationId ?? ''}`
+}
+
 /** Spells out, in words, what putting this order on the list means. */
 function PlanBlock({ candidate }: { candidate: ScanPoCandidate }): JSX.Element {
   return (
@@ -289,6 +320,9 @@ function PlanBlock({ candidate }: { candidate: ScanPoCandidate }): JSX.Element {
       </div>
       <div className="scan-plan-row">
         <span className="scan-plan-key">Into</span>
+        {/* The ALLOCATION's shelf, not the order's. A line can carry its own
+            destination now, and on a split line the header's would be the wrong
+            shelf for at least one of the two candidates. */}
         <span className="scan-plan-val">
           <span className="badge loc-badge">{candidate.location}</span>
         </span>

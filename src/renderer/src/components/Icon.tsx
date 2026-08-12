@@ -143,6 +143,10 @@ import {
   Gauge,
   // --- Admin -> Developer, whose tile draws an empty badge without it ---
   Terminal,
+  // --- Destinations: the party picker's pin, and a line split across shelves ---
+  Star,
+  Split,
+  Store,
   type LucideIcon
 } from 'lucide-react'
 
@@ -289,7 +293,11 @@ const MAP: Record<string, LucideIcon> = {
   CheckSquare,
   // --- Employee performance ---
   Gauge,
-  Terminal
+  Terminal,
+  // --- Destinations: the party picker's pin, and a line split across shelves ---
+  Star,
+  Split,
+  Store
 }
 
 export function Icon({

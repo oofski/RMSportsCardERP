@@ -966,4 +966,124 @@
     flex: 1 1 0;
     min-height: var(--rm-tap);
   }
+
+  /* ------------------------------------------------------------------------
+     14. Per-line routing: the split editor, and the seventh column
+
+     A purchase order line can now carry its own supplier and destination, and
+     can be split across several of both. On the desktop that is a seven-column
+     pop-out and a two-column-wider lines table. On a phone seven columns is
+     ~900px of content in a 390px viewport, and the failure mode is the one this
+     whole file exists to prevent: a row that scrolls sideways, so the control
+     somebody needs is off the right-hand edge with nothing to say it is there.
+
+     So the pop-out becomes a stack — one field under the next, one CARD per
+     allocation — rather than a grid that scrolls. Nothing is hidden, because
+     every field in it is one somebody came here to change.
+
+     The lines table goes the other way. Its two new columns are a convenience
+     on the desktop (glance down a column, spot the line that disagrees with the
+     header) and they are the same two fields the pop-out holds properly. On a
+     phone the glance is impossible either way, so the columns come off the
+     table and the pop-out — one tap on the product name — is the way in. The
+     table keeps the five columns it has always had at this width.
+     ------------------------------------------------------------------------ */
+  .po-lines-routed th:nth-child(5),
+  .po-lines-routed td:nth-child(5),
+  .po-lines-routed th:nth-child(6),
+  .po-lines-routed td:nth-child(6) {
+    display: none;
+  }
+
+  /* Seven columns become one. `align-items: stretch` so a field spans the
+     width rather than shrink-wrapping its own text in the middle of nowhere. */
+  .po-ld-cols {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+  .po-ld-num {
+    align-items: stretch;
+    text-align: left;
+  }
+  .po-ld-total {
+    padding-top: 0;
+  }
+
+  /* ONE CARD PER ALLOCATION. The quantity stepper, then the supplier, then the
+     destination, each on its own line at full width, with the remove button
+     last where a mis-tap is least costly. */
+  .po-ld-splitrow {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+    padding: 12px;
+  }
+  .po-ld-splitn {
+    text-align: left;
+  }
+  .po-ld-step {
+    justify-content: space-between;
+  }
+  .po-ld-step .po-deliv-num {
+    flex: 1 1 auto;
+  }
+  .po-deliv-btn,
+  .po-deliv-fill {
+    min-width: var(--rm-tap);
+    min-height: var(--rm-tap);
+  }
+  .po-ld-splitdrop {
+    width: 100%;
+  }
+  .po-ld-splits {
+    padding: 12px;
+  }
+  .po-ld-splits-head {
+    flex-wrap: wrap;
+  }
+  .po-ld-add {
+    margin-left: 0;
+    width: 100%;
+  }
+
+  /* The receipt's seventh column folds onto a second row of the SAME grid
+     rather than being dropped: where a line's units are going is the reason
+     this column exists, and a receipt that omits it on a phone answers a
+     narrower question than the one it is titled with. Explicit areas rather
+     than auto-flow, so the two rows land the same way every time. */
+  .po-receipt-lines-routed .po-receipt-line {
+    grid-template-columns: 40px minmax(0, 1fr) 64px 80px;
+    grid-template-areas:
+      'img name qty in'
+      'img dest price total';
+    row-gap: 4px;
+    gap: 8px;
+  }
+  .po-receipt-lines-routed .po-rl-img {
+    grid-area: img;
+  }
+  .po-receipt-lines-routed .po-rl-name {
+    grid-area: name;
+  }
+  .po-receipt-lines-routed .po-rl-qty {
+    grid-area: qty;
+  }
+  .po-receipt-lines-routed .po-rl-recv {
+    grid-area: in;
+  }
+  .po-receipt-lines-routed .po-rl-dest {
+    grid-area: dest;
+  }
+  .po-receipt-lines-routed .po-rl-price {
+    grid-area: price;
+  }
+  .po-receipt-lines-routed .po-rl-total {
+    grid-area: total;
+  }
+  /* An allocation row indented 58px under a 40px thumbnail is a column of text
+     two words wide. */
+  .po-receipt-alloc {
+    grid-template-columns: 40px minmax(0, 1fr);
+    margin-left: 0;
+    row-gap: 2px;
+  }
 }

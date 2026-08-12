@@ -26,6 +26,7 @@ import {
   reverseStockReceipt
 } from './inventory'
 import {
+  STOCK_DESTINATION_SQL,
   completePoIfFullyReceived,
   getPurchaseOrder,
   outstandingLinesForProduct,
@@ -206,6 +207,8 @@ interface ScanRow {
   po_id: string | null
   po_number: string | null
   po_line_id: string | null
+  /** Which slice of the line this scan received. Null for an unsplit line. */
+  po_allocation_id: string | null
   location: string | null
   quantity: number
   unit_cost: number | null
@@ -288,6 +291,7 @@ interface ScanInsert {
   poId?: string | null
   poNumber?: string | null
   poLineId?: string | null
+  poAllocationId?: string | null
   location?: string | null
   quantity?: number
   unitCost?: number | null
@@ -312,13 +316,13 @@ function insertScan(args: ScanInsert): string {
     .prepare(
       `INSERT INTO inventory_scans
          (id, raw_code, normalized_code, mode, outcome, product_id, product_name, sku,
-          po_id, po_number, po_line_id, location, quantity, unit_cost, lot_id, txn_id,
+          po_id, po_number, po_line_id, po_allocation_id, location, quantity, unit_cost, lot_id, txn_id,
           po_completed, po_prev_status, po_prev_received_at,
           invoice_id, invoice_number, invoice_line_id, override_kind,
           client_token, actor_id, created_at)
        VALUES
          (@id, @raw_code, @normalized_code, @mode, @outcome, @product_id, @product_name, @sku,
-          @po_id, @po_number, @po_line_id, @location, @quantity, @unit_cost, @lot_id, @txn_id,
+          @po_id, @po_number, @po_line_id, @po_allocation_id, @location, @quantity, @unit_cost, @lot_id, @txn_id,
           @po_completed, @po_prev_status, @po_prev_received_at,
           @invoice_id, @invoice_number, @invoice_line_id, @override_kind,
           @client_token, @actor_id, @created_at)`
@@ -335,6 +339,7 @@ function insertScan(args: ScanInsert): string {
       po_id: args.poId ?? null,
       po_number: args.poNumber ?? null,
       po_line_id: args.poLineId ?? null,
+      po_allocation_id: args.poAllocationId ?? null,
       invoice_id: args.invoiceId ?? null,
       invoice_number: args.invoiceNumber ?? null,
       invoice_line_id: args.invoiceLineId ?? null,
@@ -437,13 +442,21 @@ export function commitScan(
       const qty = Number.isFinite(input.quantity as number)
         ? Number(input.quantity)
         : Number.POSITIVE_INFINITY // "receive the rest" — receivePoLine clamps
+      // WHICH SLICE the operator picked, when a line is split across two
+      // shelves. Null is the ordinary case and resolves the line's stock
+      // allocations in position order — which for an unsplit line is the one
+      // implicit allocation, i.e. exactly the behaviour every scan had before
+      // dropship existed. Commit never re-resolves and re-picks, so a candidate
+      // list showing 6 to RM and 6 to AM sends back the one that was chosen.
+      const allocationId = input.allocationId?.trim() || null
       const received = receivePoLine(
         db,
         lineId,
         qty,
         input.note ?? null,
         actorId,
-        override === 'overage'
+        override === 'overage',
+        allocationId
       )
       const done = completePoIfFullyReceived(db, received.poId)
       const product = getProduct(received.productId)
@@ -458,6 +471,11 @@ export function commitScan(
         poId: received.poId,
         poNumber: received.poNumber,
         poLineId: received.lineId,
+        // Recorded so undo can put the ALLOCATION's counter back too. Without it
+        // an undone scan against a split line would leave the line's count and
+        // its allocations' counts disagreeing (I2), and the difference would
+        // never be visible until the order failed to complete.
+        poAllocationId: received.allocationId,
         location: received.location,
         quantity: received.quantity,
         unitCost: received.unitCost,
@@ -731,6 +749,15 @@ export function undoScan(scanId: string, actorId: string | null): { record?: Sca
       db.prepare(
         'UPDATE purchase_order_lines SET qty_received = MAX(0, qty_received - ?), received_at = NULL WHERE id = ?'
       ).run(row.quantity, row.po_line_id)
+      // THE ALLOCATION'S COUNTER GOES BACK WITH THE LINE'S, or invariant I2
+      // breaks: the line would say 0 received while its allocations still added
+      // up to 5, and the order would then refuse to complete when the real units
+      // arrived, for a reason nothing on any screen could explain.
+      if (row.po_allocation_id) {
+        db.prepare(
+          'UPDATE purchase_order_allocations SET qty_received = MAX(0, qty_received - ?), received_at = NULL WHERE id = ?'
+        ).run(row.quantity, row.po_allocation_id)
+      }
       // This receipt's lot has just been reversed, so its row must go too —
       // otherwise cancelling the PO later would try to hand back stock that is
       // already gone, and refuse for a reason that is not the real one.
@@ -759,8 +786,16 @@ export function undoScan(scanId: string, actorId: string | null): { record?: Sca
       // status is left alone rather than inventing one this scan never recorded:
       // 'received' with scanned_at NULL is exactly the "pipeline stage, stock
       // not taken in yet" state the eligibility query already understands.
+      // Counted over STOCK allocations only. A mixed order's drop units are
+      // outstanding for ever by construction, so counting them here would clear
+      // scanned_at on every undo against such an order — putting a fully
+      // received box back into the Incoming panel with nothing left to receive.
       const open = db
-        .prepare('SELECT COUNT(*) AS n FROM purchase_order_lines WHERE po_id = ? AND qty_received < quantity')
+        .prepare(
+          `SELECT COUNT(*) AS n
+             FROM po_unit_destinations
+            WHERE po_id = ? AND ${STOCK_DESTINATION_SQL} AND qty_received < quantity`
+        )
         .get(row.po_id) as { n: number }
       if (open.n > 0) {
         db.prepare(

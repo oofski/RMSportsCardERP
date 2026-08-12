@@ -17,7 +17,9 @@ import { writeFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import type { PurchaseOrderDetail } from '@shared/types'
+import { displayOrderNumber } from '@shared/purchaseOrders'
 import { productThumbnails } from './db/inventory'
+import { lookupPartyAddress } from './db/purchaseOrders'
 import { RM_LOGO_DATA_URI } from './brand'
 import { shipMeta } from './freightPdf'
 
@@ -53,15 +55,89 @@ const STATUS_LABEL: Record<string, string> = {
  * points, and a table head that repeats across pages so a 40-line PO is
  * readable on paper rather than losing its column headings after page one.
  */
+/**
+ * Every destination this order's units are going to, and every supplier they
+ * are bought from — after inheritance, in line order, deduped.
+ *
+ * Read off the detail rather than re-derived from the header: the header is only
+ * the DEFAULT now, and a line or an allocation may say otherwise.
+ */
+function routingOf(po: PurchaseOrderDetail): { destinations: string[]; suppliers: string[] } {
+  const destinations = new Set<string>()
+  const suppliers = new Set<string>()
+  for (const line of po.lines) {
+    if (line.allocations.length) {
+      for (const a of line.allocations) {
+        destinations.add(a.destination)
+        if (a.supplier) suppliers.add(a.supplier)
+      }
+    } else {
+      destinations.add(line.destination ?? po.location)
+      if (line.supplier ?? po.supplier) suppliers.add((line.supplier ?? po.supplier) as string)
+    }
+  }
+  if (destinations.size === 0) destinations.add(po.location)
+  if (suppliers.size === 0 && po.supplier) suppliers.add(po.supplier)
+  return { destinations: [...destinations], suppliers: [...suppliers] }
+}
+
+/**
+ * A print document, not a screen. Deliberately plain: black on white, real
+ * points, and a table head that repeats across pages so a 40-line PO is
+ * readable on paper rather than losing its column headings after page one.
+ */
 export function buildPoHtml(po: PurchaseOrderDetail): string {
   // Product photos, keyed by product id. Read once for the whole document —
   // these are base64 data URLs and re-reading per line would balloon a 40-line
   // PO. A product with no photo simply gets no cell content.
   const thumbs = productThumbnails()
 
+  // THE NUMBER ON THE DOCUMENT, which is not always the number in the database.
+  // purchase_orders.po_number stores PO-0042 for a dropship too — one counter,
+  // no gaps, no branches — and the Drop spelling is computed here and stored
+  // nowhere.
+  const number = displayOrderNumber(po.poNumber, po.orderKind)
+  const { destinations, suppliers } = routingOf(po)
+  const drop = po.orderKind === 'drop' || po.orderKind === 'mixed'
+  /**
+   * The extra columns appear ONLY when the document would otherwise be
+   * ambiguous — more than one destination, or more than one supplier.
+   *
+   * A single-supplier, single-destination order — which is every purchase order
+   * raised before this feature — renders the existing five-column table,
+   * unchanged, because two columns repeating the same two words on every row
+   * make a document harder to read, not easier.
+   */
+  const routed = destinations.length > 1 || suppliers.length > 1
+  const shipTo = destinations.length > 1 ? 'Multiple — see lines' : destinations[0]
+  const address = destinations.length === 1 ? lookupPartyAddress(destinations[0]) : null
+  const span = routed ? 7 : 5
+
   const rows = po.lines
-    .map(
-      (l, i) => `
+    .map((l, i) => {
+      const dest = l.destination ?? (l.allocations.length ? 'Multiple' : po.location)
+      const supplier = l.supplier ?? po.supplier ?? (l.allocations.length ? 'Multiple' : '')
+      // A split line prints its allocations underneath, with no repeated money:
+      // the quantity, who it comes from and where it goes are what the supplier
+      // needs, and repeating the price per row invites it being read as an extra
+      // charge.
+      const splits = routed
+        ? l.allocations
+            .map(
+              (a) => `
+      <tr class="alloc">
+        <td></td>
+        <td class="sub">↳ ${a.quantity} × ${esc(a.destination)}</td>
+        <td class="num sub">${a.quantity}</td>
+        <td class="sub">${esc(a.supplier ?? supplier ?? '—')}</td>
+        <td class="sub">${esc(a.destination)}</td>
+        <td></td>
+        <td></td>
+      </tr>`
+            )
+            .join('')
+        : ''
+      return `
       <tr>
         <td class="num">${i + 1}</td>
         <td>
@@ -74,16 +150,18 @@ export function buildPoHtml(po: PurchaseOrderDetail): string {
           </div>
         </td>
         <td class="num">${l.quantity}</td>
+        ${routed ? `<td>${esc(supplier || '—')}</td><td>${esc(dest)}</td>` : ''}
         <td class="num">${money(l.unitPrice)}</td>
         <td class="num strong">${money(l.quantity * l.unitPrice)}</td>
-      </tr>`
-    )
+      </tr>${splits}`
+    })
     .join('')
 
+  // The whole order, drop lines included — the same figure it has always been.
   const units = po.lines.reduce((sum, l) => sum + l.quantity, 0)
 
   return `<!doctype html>
-<html><head><meta charset="utf-8"><title>${esc(po.poNumber)}</title>
+<html><head><meta charset="utf-8"><title>${esc(number)}</title>
 <style>
   @page { size: A4; margin: 16mm 14mm; }
   * { box-sizing: border-box; }
@@ -143,6 +221,20 @@ export function buildPoHtml(po: PurchaseOrderDetail): string {
     border-top: 1.5pt solid #111; margin-top: 4pt; padding-top: 7pt;
     font-size: 13pt; font-weight: 700;
   }
+  /* The dropship banner and the address block under it. Bordered rather than
+     filled, so it survives a black-and-white printer and a fax. */
+  .drop-banner {
+    margin: 12pt 0 10pt; padding: 8pt 10pt; border: 1.5pt solid #111; border-radius: 3pt;
+  }
+  .drop-banner .t { font-size: 11pt; font-weight: 700; letter-spacing: 0.6pt; text-transform: uppercase; }
+  .drop-banner .s { font-size: 9.5pt; margin-top: 3pt; }
+  .shipto { margin: 0 0 14pt; font-size: 10pt; }
+  .shipto .k { color: #666; text-transform: uppercase; letter-spacing: 0.6pt; font-size: 8pt; margin-bottom: 3pt; }
+  .shipto .who { font-weight: 700; font-size: 11.5pt; }
+  .shipto .addr { margin-top: 2pt; white-space: pre-line; }
+  .alloc td { border-bottom: 0.5pt dotted #ddd; padding-top: 3pt; padding-bottom: 3pt; }
+  .sub { color: #555; font-size: 9pt; }
+
   .notes { margin-top: 18pt; font-size: 9.5pt; }
   .notes .k { color: #666; text-transform: uppercase; letter-spacing: 0.6pt; font-size: 8pt; margin-bottom: 3pt; }
   .notes p { margin: 0; white-space: pre-wrap; }
@@ -153,7 +245,7 @@ export function buildPoHtml(po: PurchaseOrderDetail): string {
     <img class="logo" src="${RM_LOGO_DATA_URI}" alt="RM Sportscards">
     <div>
       <div class="org">RM Sportscards</div>
-      <h1>${esc(po.poNumber)}</h1>
+      <h1>${esc(number)}</h1>
     </div>
     <div class="right">
       <span class="status ${esc(po.status)}">${esc(STATUS_LABEL[po.status] ?? po.status)}</span>
@@ -163,9 +255,23 @@ export function buildPoHtml(po: PurchaseOrderDetail): string {
   <div class="meta">
     <div><div class="k">Supplier</div><div class="v">${esc(po.supplier || '—')}</div></div>
     <div><div class="k">Ordered</div><div class="v">${date(po.orderedAt ?? po.createdAt)}</div></div>
-    <div><div class="k">Destination</div><div class="v">${esc(po.location)}</div></div>
+    <div><div class="k">Ship to</div><div class="v">${esc(shipTo)}</div></div>
     ${shipMeta(po, { key: 'k', value: 'v' })}
   </div>
+
+  ${
+    drop
+      ? `<div class="drop-banner">
+    <div class="t">Drop ship</div>
+    <div class="s">Ship directly to the address below. Do not ship to RM Sportscards.</div>
+  </div>
+  <div class="shipto">
+    <div class="k">Ship to</div>
+    <div class="who">${esc(shipTo)}</div>
+    ${address ? `<div class="addr">${esc(address.join('\n'))}</div>` : ''}
+  </div>`
+      : ''
+  }
 
   <table>
     <thead>
@@ -173,11 +279,12 @@ export function buildPoHtml(po: PurchaseOrderDetail): string {
         <th class="num" style="width:22pt">#</th>
         <th>Item</th>
         <th class="num" style="width:46pt">Qty</th>
+        ${routed ? '<th style="width:90pt">Supplier</th><th style="width:90pt">Destination</th>' : ''}
         <th class="num" style="width:70pt">Unit</th>
         <th class="num" style="width:80pt">Amount</th>
       </tr>
     </thead>
-    <tbody>${rows || '<tr><td colspan="5" style="color:#777;padding:14pt 6pt">No lines on this purchase order.</td></tr>'}</tbody>
+    <tbody>${rows || `<tr><td colspan="${span}" style="color:#777;padding:14pt 6pt">No lines on this purchase order.</td></tr>`}</tbody>
   </table>
 
   <div class="totals">
@@ -189,7 +296,7 @@ export function buildPoHtml(po: PurchaseOrderDetail): string {
 
   ${po.notes ? `<div class="notes"><div class="k">Notes</div><p>${esc(po.notes)}</p></div>` : ''}
 
-  <div class="foot">${esc(po.poNumber)} · generated ${date(new Date().toISOString())} · RM Sportscards</div>
+  <div class="foot">${esc(number)} · generated ${date(new Date().toISOString())} · RM Sportscards</div>
 </body></html>`
 }
 
@@ -261,6 +368,11 @@ export function renderDocumentForExport(html: string): Promise<RenderedDocument>
   return renderDocument(html)
 }
 
+/** What this document is called: Drop-0042 for a pure dropship, PO-0042 else. */
+export function documentName(po: PurchaseOrderDetail): string {
+  return displayOrderNumber(po.poNumber, po.orderKind)
+}
+
 export interface PoPdfResult {
   ok: boolean
   path?: string
@@ -277,7 +389,9 @@ export interface PoPdfResult {
 export async function openPoPdf(po: PurchaseOrderDetail): Promise<PoPdfResult> {
   try {
     const doc = await renderDocument(buildPoHtml(po))
-    const file = join(tmpdir(), `${po.poNumber.replace(/[^\w.-]/g, '_')}${doc.extension}`)
+    // The FILENAME follows the document, so a dropship saved to a desktop is
+    // findable by the number printed on it.
+    const file = join(tmpdir(), `${documentName(po).replace(/[^\w.-]/g, '_')}${doc.extension}`)
     writeFileSync(file, doc.bytes)
     const err = await shell.openPath(file)
     // openPath resolves to a NON-EMPTY string when it failed — an empty string
@@ -295,8 +409,8 @@ export async function savePoPdf(po: PurchaseOrderDetail): Promise<PoPdfResult> {
     const doc = await renderDocument(buildPoHtml(po))
     const win = BrowserWindow.getFocusedWindow()
     const opts = {
-      title: `Save ${po.poNumber}`,
-      defaultPath: `${po.poNumber.replace(/[^\w.-]/g, '_')}${doc.extension}`,
+      title: `Save ${documentName(po)}`,
+      defaultPath: `${documentName(po).replace(/[^\w.-]/g, '_')}${doc.extension}`,
       filters: [{ name: doc.extension === '.pdf' ? 'PDF' : 'Web page', extensions: [doc.extension.slice(1)] }]
     }
     const picked = win ? await dialog.showSaveDialog(win, opts) : await dialog.showSaveDialog(opts)

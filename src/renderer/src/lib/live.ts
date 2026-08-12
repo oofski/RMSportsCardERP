@@ -40,6 +40,15 @@ export const LIVE = {
     'purchase_orders',
     'purchase_order_lines',
     'po_line_receipts',
+    // Where a line's units are going, sliced. Without it the board does not
+    // repaint when somebody on another machine re-routes a split, so a card
+    // keeps saying "→ RM" — and keeps its PO prefix and its progress rail —
+    // after every one of its units has become a dropship.
+    'purchase_order_allocations',
+    // The destination picker's pins. Pinned on the office laptop, wanted at the
+    // bench a minute later; the list is read on mount, so a screen already open
+    // needs to be told.
+    'order_party_pins',
     'inventory_incoming',
     'inventory_products'
   ],

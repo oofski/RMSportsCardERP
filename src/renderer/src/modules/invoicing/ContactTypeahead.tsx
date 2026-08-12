@@ -31,12 +31,26 @@ export function ContactTypeahead({
   value,
   onChange,
   label = 'Supplier',
-  hint = 'Search your contacts, or type any name'
+  hint = 'Search your contacts, or type any name',
+  placeholder = 'Start typing a supplier or contact…',
+  /**
+   * Drop the Field wrapper.
+   *
+   * For a split row, where the column heading above already names the field and
+   * a second label per row would be four words of furniture repeated per
+   * allocation. The typeahead itself is unchanged — same markup, same keyboard
+   * behaviour, same free-text rule.
+   */
+  inline = false,
+  ariaLabel
 }: {
   value: string
   onChange: (name: string) => void
   label?: string
   hint?: string
+  placeholder?: string
+  inline?: boolean
+  ariaLabel?: string
 }): JSX.Element {
   const [options, setOptions] = useState<SupplierSuggestion[]>([])
   const [open, setOpen] = useState(false)
@@ -66,21 +80,24 @@ export function ContactTypeahead({
   // An exact hit needs no menu: the box already says what would be picked.
   const settled = matches.length === 1 && matches[0].name.toLowerCase() === value.trim().toLowerCase()
 
+  const box = (
+    <Input
+      value={value}
+      placeholder={placeholder}
+      aria-label={ariaLabel ?? (inline ? label : undefined)}
+      onFocus={() => setOpen(true)}
+      onChange={(e) => {
+        onChange(e.target.value)
+        setOpen(true)
+      }}
+      // Late enough that a click on a result lands before the list closes.
+      onBlur={() => window.setTimeout(() => setOpen(false), 160)}
+    />
+  )
+
   return (
-    <div className="typeahead">
-      <Field label={label} hint={hint}>
-        <Input
-          value={value}
-          placeholder="Start typing a supplier or contact…"
-          onFocus={() => setOpen(true)}
-          onChange={(e) => {
-            onChange(e.target.value)
-            setOpen(true)
-          }}
-          // Late enough that a click on a result lands before the list closes.
-          onBlur={() => window.setTimeout(() => setOpen(false), 160)}
-        />
-      </Field>
+    <div className={`typeahead${inline ? ' ct-inline' : ''}`}>
+      {inline ? box : <Field label={label} hint={hint}>{box}</Field>}
 
       {open && !settled && matches.length > 0 && (
         <div className="ta-menu">
