@@ -106,6 +106,71 @@ const stockDest = (alias = ''): string =>
 /** The generated stock-bound predicate, exported so a test can pin it. */
 export const STOCK_DESTINATION_SQL = stockDest()
 
+/**
+ * Break "N units of this line arrived" into one receipt per shelf.
+ *
+ * A line split 6 to RM and 6 to AM has two allocations, and receivePoLine books
+ * against exactly one of them — deliberately, because which shelf a box lands on
+ * is a physical fact and not something to average. But the delivery form asks
+ * one question per line, so somebody answering 12 means "all of it", not "12
+ * against whichever allocation you find first".
+ *
+ * Filling in position order is a GUESS about which shelf got what, and it is the
+ * same guess the whole-order button and the scan-in path already make. It is the
+ * right one when the whole line arrives, which is the ordinary case; when only
+ * part of it has, an operator who cares which shelf it went to can say so by
+ * passing an explicit allocation id, which short-circuits this entirely.
+ *
+ * An unsplit line has exactly one stock allocation with a NULL id, so this
+ * returns a single part and the caller makes the single call it always made.
+ */
+function spreadAcrossStockAllocations(
+  db: Database.Database,
+  lineId: string,
+  take: number,
+  allocationId: string | null
+): Array<{ allocationId: string | null; take: number }> {
+  // An explicit choice is honoured as-is: the operator has told us the shelf,
+  // and re-deriving it would throw that answer away.
+  if (allocationId) return [{ allocationId, take }]
+
+  const rows = db
+    .prepare(
+      `SELECT allocation_id, quantity, qty_received
+         FROM po_unit_destinations
+        WHERE po_line_id = ? AND ${stockDest()}
+        ORDER BY position, allocation_id`
+    )
+    .all(lineId) as Array<{ allocation_id: string | null; quantity: number; qty_received: number }>
+
+  // No stock allocation at all is a wholly drop-shipped line. Return the ask
+  // unchanged so receivePoLine throws its own message, which names the product
+  // and where the units are actually going — better than anything this function
+  // could say about a line it was never meant to handle.
+  if (rows.length <= 1) return [{ allocationId: rows[0]?.allocation_id ?? null, take }]
+
+  const parts: Array<{ allocationId: string | null; take: number }> = []
+  let left = take
+  for (const r of rows) {
+    if (left <= 0) break
+    const outstanding = Math.max(0, r.quantity - r.qty_received)
+    if (outstanding <= 0) continue
+    const part = Math.min(outstanding, left)
+    parts.push({ allocationId: r.allocation_id, take: part })
+    left -= part
+  }
+  // Anything still unplaced means the ask exceeds what the line's shelves have
+  // outstanding. Hand the remainder to the first allocation so receivePoLine
+  // raises the over-receipt refusal it would have raised anyway, naming both
+  // numbers — swallowing it here would book less than was stated, which is the
+  // exact silence this path was rebuilt to remove.
+  if (left > 0) {
+    if (parts.length > 0) parts[parts.length - 1].take += left
+    else parts.push({ allocationId: rows[0].allocation_id, take })
+  }
+  return parts
+}
+
 /** Round to whole cents so line totals never carry float drift. */
 const cents = (n: number): number => Math.round(n * 100) / 100
 
@@ -1329,7 +1394,32 @@ export function receivePurchaseOrderLines(
     }
 
     for (const w of wanted) {
-      receivePoLine(db, w.lineId, w.take, `Received against ${h.po_number}`, actorId, false, w.allocationId)
+      // A quantity against a SPLIT line is spread across its shelves, in
+      // position order, rather than pushed at one of them.
+      //
+      // The form asks one question per line — "how many arrived?" — and
+      // validates the answer against the line's whole receivable figure. But
+      // receivePoLine books against ONE allocation and refuses anything larger
+      // than that allocation's own outstanding. Handing it the line's total
+      // therefore refused every delivery of a line split across RM and AM, with
+      // a message quoting numbers ("only 6 of 6") that appear nowhere on the
+      // screen the operator is looking at, which says 12.
+      //
+      // Spreading is the same rule the whole-order button and the scan-in path
+      // already follow, so all three now agree. For a line that was never split
+      // this yields exactly one part with a null allocation id — byte for byte
+      // the single call that was here before.
+      for (const part of spreadAcrossStockAllocations(db, w.lineId, w.take, w.allocationId)) {
+        receivePoLine(
+          db,
+          w.lineId,
+          part.take,
+          `Received against ${h.po_number}`,
+          actorId,
+          false,
+          part.allocationId
+        )
+      }
     }
     // Only completes if this delivery happened to finish the order. A partial
     // one leaves the PO exactly where it was, still open, still in its column.
@@ -1692,7 +1782,25 @@ export function deletePurchaseOrder(
   const received = db
     .prepare('SELECT COALESCE(SUM(qty_received), 0) AS n FROM purchase_order_lines WHERE po_id = ?')
     .get(id) as { n: number }
-  if (row.status === 'received' || received.n > 0) {
+  // A PURE-DROP order reaches Received with nothing in stock, and moving it
+  // there by hand is the documented — and only — way to close one. Refusing
+  // Delete on the status alone would mean the act of closing a Drop order is
+  // also the act of losing the Delete button, and the receipt's own tooltip
+  // promises the opposite ("nothing on it ever arrives here, so no stock is
+  // affected"). The refusal exists to protect stock that has a cost record;
+  // where no unit was ever checked in there is nothing to protect.
+  //
+  // Deliberately keyed on receivable units rather than on orderKind: an order
+  // that COULD have received stock and simply has not is still an order whose
+  // status is the thing being trusted, and this must not widen to it.
+  const receivable = db
+    .prepare(
+      `SELECT COALESCE(SUM(CASE WHEN ${stockDest()} THEN quantity ELSE 0 END), 0) AS n
+         FROM po_unit_destinations WHERE po_id = ?`
+    )
+    .get(id) as { n: number }
+  const closedDropOrder = row.status === 'received' && received.n === 0 && receivable.n === 0
+  if ((row.status === 'received' && !closedDropOrder) || received.n > 0) {
     return {
       ok: false,
       error:
