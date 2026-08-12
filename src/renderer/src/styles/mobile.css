@@ -1086,4 +1086,22 @@
     margin-left: 0;
     row-gap: 2px;
   }
+
+  /* 15. Incoming inventory scrolls with the page on a phone
+
+     The desktop caps this list and gives it its own scrollbar, so a few orders
+     sit in view without the whole page moving. On a phone that turns into a
+     scroll region inside a scrolling page: a drag that starts on an order card
+     moves the list, the same drag two millimetres left moves the page, and
+     reaching the bottom of the inner list silently stops the gesture. There is
+     also no second column here to protect — the panel is already full width
+     and everything below it is a scroll away regardless.
+
+     So the cap comes off and the orders flow into the page, which is the one
+     scroll a thumb can rely on. */
+  .incoming-scroll {
+    max-height: none;
+    overflow-y: visible;
+    padding-right: 0;
+  }
 }

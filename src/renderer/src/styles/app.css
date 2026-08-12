@@ -23007,3 +23007,51 @@ button.sor-team:focus-visible {
   font-size: 12px;
   color: var(--text-2);
 }
+
+/* ---------------------------------------------------------------------------
+   Incoming inventory: the orders scroll, the page does not
+
+   The list grew without limit, so with a normal number of purchase orders open
+   the only way to read it was to scroll the whole Inventory page — past the
+   category cards and the value chart. Worse, the stat tiles at the top of this
+   panel scrolled away too, and those are the totals somebody is checking the
+   list against.
+
+   A cap and its own scrollbar fixes both: a few orders sit in view without
+   moving the screen, the tiles and the Log-a-shipment button stay put, and the
+   rest is a flick away instead of a page away.
+
+   Sized in vh rather than px so a tall monitor shows more orders and a laptop
+   does not lose the chart below. The min-height stops it collapsing to a sliver
+   on a short window, which would be worse than the original problem.
+   --------------------------------------------------------------------------- */
+.incoming-scroll {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: clamp(260px, 42vh, 620px);
+  overflow-y: auto;
+  /* Room for the scrollbar so it never sits on top of the cards' right edge,
+     and a hair of bottom padding so the last card does not look clipped when
+     the list is scrolled to the end. */
+  padding-right: 4px;
+  padding-bottom: 2px;
+  scrollbar-width: thin;
+}
+/* Chromium reads none of scrollbar-width, and this app is Chromium in both of
+   its forms — the desktop shell and every browser it is opened in. Styled to
+   sit quietly against the panel rather than as a grey system bar down the
+   middle of the card. */
+.incoming-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+.incoming-scroll::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 999px;
+}
+.incoming-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--text-3);
+}
+.incoming-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}

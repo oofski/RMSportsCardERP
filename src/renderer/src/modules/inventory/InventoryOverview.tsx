@@ -957,6 +957,15 @@ function IncomingPanel({
         </div>
       ) : (
         <>
+          {/* THE ORDERS SCROLL, THE PANEL DOES NOT.
+              With enough purchase orders open this list grew without limit, so
+              reading it meant scrolling the whole Inventory page — past the
+              category cards and the chart — and the stat tiles above scrolled
+              away with it, which are the numbers somebody is checking the list
+              against. Capped instead, with its own scrollbar: a few orders sit
+              in view, the tiles and the Log-a-shipment button stay put, and the
+              rest is a flick away rather than a page away. */}
+          <div className="incoming-scroll">
           {boxes.length > 0 && (
             <div className="po-ship-list">
               {boxes.map((b) => (
@@ -1016,6 +1025,7 @@ function IncomingPanel({
             ))}
           </div>
           )}
+          </div>
           {canManage && (
             <button type="button" className="incoming-add" onClick={() => setAdding(true)}>
               <Icon name="Plus" size={14} /> Log a shipment
