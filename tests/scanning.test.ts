@@ -362,5 +362,61 @@ ok(!replay.error, 'a retry is accepted', String(replay.error))
 ok(replay.result.replayed === true, 'as a REPLAY', String(replay.result?.replayed))
 ok(inv.stockQty('p_b', 'RM') === before, 'and moves no stock', String(inv.stockQty('p_b', 'RM')))
 
+// ---------------------------------------------------------------------------
+console.log('\n=== N. three boxes onto a one-unit order, both answers ===')
+// ---------------------------------------------------------------------------
+// The owner, on a real pallet: "3 scans means that I am scanning 3 individual
+// boxes" — and the queue was showing 3 scans beside a quantity of 1 with no
+// explanation, which reads as the scanner dropping two of them.
+//
+// It is not dropping them. The order asked for one, so the count is held there
+// and the difference becomes a QUESTION. What this pins is that the question is
+// actually raised, that it blocks the save until answered, and that BOTH answers
+// do what their labels say — because a prompt that appears and then does the
+// wrong thing is worse than the silence it replaced.
+const onePo = poRepo.createPurchaseOrder(
+  { supplier: 'Steel City', location: 'RM', lines: [{ productId: 'p_c', quantity: 1, unitPrice: 1900 }] },
+  null
+)
+let pallet: any[] = []
+for (let i = 0; i < 3; i++) pallet = beep(pallet, '0000000000031')
+
+ok(pallet[0].scans === 3, 'three beeps are three boxes', String(pallet[0].scans))
+ok(pallet[0].quantity === 1, 'and the count holds at what the order asked for', String(pallet[0].quantity))
+ok(pallet[0].needsDecision === 'overage', 'the difference becomes a question')
+ok(
+  (commitBlockedReason(pallet) ?? '').includes('more was scanned'),
+  'and nothing saves until it is answered',
+  String(commitBlockedReason(pallet))
+)
+
+// "Take all 3" — the boxes really are on the pallet.
+const takeAll = acceptOverage(pallet, pallet[0].key)
+ok(takeAll[0].quantity === 3, 'Take all 3 raises the count to every box scanned', String(takeAll[0].quantity))
+ok(takeAll[0].override === 'overage', 'recording that a person chose the overage')
+ok(commitBlockedReason(takeAll) === null, 'and the save is free')
+const stockBefore = inv.stockQty('p_c', 'RM')
+const done = commit(takeAll[0])
+ok(!done.error, 'it commits', String(done.error))
+ok(inv.stockQty('p_c', 'RM') - stockBefore === 3, 'putting all THREE on the shelf',
+  String(inv.stockQty('p_c', 'RM') - stockBefore))
+const grown = poRepo.getPurchaseOrder(onePo.id)
+ok(grown.lines[0].qtyReceived === 3, 'and booking three against the order', String(grown.lines[0].qtyReceived))
+// An over-receipt is a discrepancy the order carries honestly, not a silent trim.
+ok(grown.lines[0].quantity === 1, 'which still only ORDERED one — the gap is visible')
+
+// "Keep 1" — the other answer, on its own order.
+const otherPo = poRepo.createPurchaseOrder(
+  { supplier: 'Steel City', location: 'RM', lines: [{ productId: 'p_c', quantity: 1, unitPrice: 1900 }] },
+  null
+)
+ok(!!otherPo.id, 'a second one-unit order exists to answer the other way')
+let pallet2: any[] = []
+for (let i = 0; i < 3; i++) pallet2 = beep(pallet2, '0000000000031')
+const keptOne = keepToOrder(pallet2, pallet2[0].key)
+ok(keptOne[0].quantity === 1, 'Keep 1 takes only what was ordered', String(keptOne[0].quantity))
+ok(keptOne[0].scans === 1, 'and stops claiming three beeps are outstanding', String(keptOne[0].scans))
+ok(commitBlockedReason(keptOne) === null, 'the save is free either way')
+
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

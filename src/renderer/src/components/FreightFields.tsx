@@ -187,7 +187,12 @@ export function FreightFields({
    */
   const pickCarrier = (value: string): void => {
     const next = (value || null) as Carrier | null
-    const keeps = !service || servicesFor(next).includes(service)
+    // CLEARING the carrier keeps the service; only MOVING to a different carrier
+    // can invalidate one. Now that no-carrier offers no services, treating the
+    // two the same would mean a stray click on the dash silently erased a
+    // service somebody had chosen — losing a fact to a gesture that was only
+    // ever meant to say "I do not know who is carrying it yet".
+    const keeps = !service || next === null || servicesFor(next).includes(service)
     onChange({ carrier: next, ...(keeps ? {} : { service: null }) })
   }
 
@@ -205,9 +210,13 @@ export function FreightFields({
           </Select>
         </Field>
 
-        <Field label="Service" hint="Ground, Next Day Air…">
+        <Field
+          label="Service"
+          hint={carrier ? `${carrierLabel(carrier)} services` : 'Pick a shipping company first'}
+        >
           <Select
             value={service ?? ''}
+            disabled={!carrier && !service}
             onChange={(e) => onChange({ service: e.target.value || null })}
           >
             <option value="">—</option>
@@ -216,6 +225,16 @@ export function FreightFields({
                 {s}
               </option>
             ))}
+            {/* An older order's service, kept visible.
+                Services were free text before this list existed, so orders on
+                disk hold whatever somebody typed — and a <select> renders a
+                value it has no option for as BLANK, which would read as the
+                service having been wiped. It is offered as its own entry so the
+                record still says what it always said; re-picking from the list
+                above is what replaces it. */}
+            {service && !servicesFor(carrier).includes(service) && (
+              <option value={service}>{service}</option>
+            )}
           </Select>
         </Field>
 

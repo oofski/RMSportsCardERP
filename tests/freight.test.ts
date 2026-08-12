@@ -150,12 +150,17 @@ ok(carrierLabel('fedex') === 'FedEx', 'carriers print with their own capitals')
 ok(carrierLabel(null) === '', 'and nothing prints as nothing')
 ok(paymentLabel('delivery') === 'Upon delivery', 'payment prints in words')
 
-// The service list follows the carrier, and falls back to the three the owner
-// named when no carrier has been picked yet.
+// The service list follows the carrier, and offers NOTHING until there is one.
+//
+// This used to fall back to three names the owner had mentioned, so the box was
+// never empty. That was the wrong kindness: "Next Day Air" is UPS's name for the
+// service, so choosing it before naming a carrier wrote a UPS service onto a
+// shipment that might turn out to be FedEx. The two questions have an order, and
+// the field now respects it.
 ok(servicesFor('ups').includes('Next Day Air'), 'UPS sells Next Day Air')
 ok(servicesFor('usps').includes('Priority Mail'), 'USPS sells Priority Mail')
 ok(!servicesFor('usps').includes('Next Day Air'), 'and USPS does not sell UPS services')
-ok(servicesFor(null).includes('Ground'), 'with no carrier, the common three are offered')
+ok(servicesFor(null).length === 0, 'with no carrier, nothing is offered yet')
 
 // ---------------------------------------------------------------------------
 console.log('\n=== 4. a purchase order remembers it ===')
@@ -343,6 +348,58 @@ const nasty = shipMeta(
 )
 ok(!nasty.includes('<script>'), 'a script tag in a service name is escaped')
 ok(nasty.includes('&lt;script&gt;'), 'and rendered as text')
+
+// ---------------------------------------------------------------------------
+console.log('\n=== N. every carrier sells only its OWN services ===')
+// ---------------------------------------------------------------------------
+// The owner: "if I click USPS only the USPS shipping options come, and same for
+// the other two. Also the only thing in service type of shipping should be like
+// 3 Day Select or Ground not like the long random tag lines."
+//
+// A service on the wrong carrier is a line on a document that cannot be bought,
+// and nobody finds out until the supplier rings back to ask what it means.
+const USPS = ['Priority Mail Express', 'Priority Mail', 'Ground Advantage', 'First-Class Mail']
+const FEDEX = ['SameDay', 'SameDay City', 'First Overnight', 'Priority Overnight',
+  'Standard Overnight', '2Day A.M.', '2Day', 'Express Saver', 'Ground', 'Home Delivery',
+  'Ground Economy']
+const UPS = ['Express Critical', 'Next Day Air Early', 'Next Day Air', 'Next Day Air Saver',
+  '2nd Day Air A.M.', '2nd Day Air', '3 Day Select', 'Ground', 'SurePost']
+
+ok(servicesFor('usps').join('|') === USPS.join('|'), 'USPS offers exactly its four',
+  JSON.stringify(servicesFor('usps')))
+ok(servicesFor('fedex').join('|') === FEDEX.join('|'), 'FedEx offers exactly its eleven',
+  JSON.stringify(servicesFor('fedex')))
+ok(servicesFor('ups').join('|') === UPS.join('|'), 'UPS offers exactly its nine',
+  JSON.stringify(servicesFor('ups')))
+
+// The names that belong to ONE carrier and must never appear under another.
+const owned: Array<[string, string]> = [
+  ['Ground Advantage', 'usps'],
+  ['First-Class Mail', 'usps'],
+  ['SurePost', 'ups'],
+  ['3 Day Select', 'ups'],
+  ['Express Critical', 'ups'],
+  ['Ground Economy', 'fedex'],
+  ['Home Delivery', 'fedex'],
+  ['Express Saver', 'fedex']
+]
+for (const [name, owner] of owned) {
+  const wrong = ['usps', 'fedex', 'ups'].filter((c) => c !== owner && servicesFor(c).includes(name))
+  ok(wrong.length === 0, `"${name}" belongs to ${owner} alone`, JSON.stringify(wrong))
+}
+
+// NAMES ONLY. A service that carries its delivery promise is a service nobody
+// can read back to a supplier, and it is what the owner asked to be rid of.
+for (const c of ['usps', 'fedex', 'ups']) {
+  const wordy = servicesFor(c).filter((s: string) => s.length > 22 || /[—:(]|business day|by \d/i.test(s))
+  ok(wordy.length === 0, `${c} lists names, not descriptions`, JSON.stringify(wordy))
+}
+
+// Nothing is offered before a carrier is named. "Next Day Air" is UPS's name for
+// it, so offering it first would let a UPS service land on a FedEx shipment.
+ok(servicesFor(null).length === 0, 'no carrier offers no services', JSON.stringify(servicesFor(null)))
+ok(servicesFor(undefined).length === 0, 'and neither does an absent one')
+ok(servicesFor('dhl').length === 0, 'nor a carrier this business does not use')
 
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

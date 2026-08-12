@@ -40,32 +40,81 @@ export interface CarrierDef {
 }
 
 /**
- * The three carriers this business uses, and the services worth naming.
+ * The three carriers this business uses, and every service each one sells.
  *
- * Deliberately short. A dropdown listing every service each carrier publishes
- * is a dropdown somebody has to read; these are the ones that get used, and the
- * field accepts anything typed if a fourth is ever needed.
+ * ## Names only, and the carrier's own name for it
+ *
+ * "3 Day Select", not "3 Day Select — day-definite delivery within 3 business
+ * days across the contiguous U.S." The delivery promise belongs on the carrier's
+ * rate page; what goes on a purchase order is the label somebody reads back to a
+ * supplier over the phone, and it has to match what the carrier calls it exactly.
+ *
+ * ## Listed fastest first, deliberately
+ *
+ * Not alphabetically and not most-used-first. Somebody choosing a service is
+ * deciding how fast this needs to arrive, so the list reads as a speed ladder
+ * and the choice is a position on it. Ground sits near the bottom of each even
+ * though it is the commonest, because scanning past four overnight options is
+ * cheaper than picking the wrong tier.
+ *
+ * ## Each list is the carrier's OWN
+ *
+ * There is deliberately no shared pool. "Ground Advantage" is USPS's, "SurePost"
+ * is UPS's, "Ground Economy" is FedEx's, and a service attached to the wrong
+ * carrier is a line on a document that cannot be bought — which nobody notices
+ * until the supplier rings back. Picking a carrier narrows the list to that
+ * carrier and nothing else; see `servicesFor`.
  */
 export const CARRIERS: CarrierDef[] = [
   {
+    id: 'usps',
+    label: 'USPS',
+    services: ['Priority Mail Express', 'Priority Mail', 'Ground Advantage', 'First-Class Mail']
+  },
+  {
     id: 'fedex',
     label: 'FedEx',
-    services: ['Ground', 'Home Delivery', '2Day', 'Standard Overnight', 'Priority Overnight']
+    services: [
+      'SameDay',
+      'SameDay City',
+      'First Overnight',
+      'Priority Overnight',
+      'Standard Overnight',
+      '2Day A.M.',
+      '2Day',
+      'Express Saver',
+      'Ground',
+      'Home Delivery',
+      'Ground Economy'
+    ]
   },
   {
     id: 'ups',
     label: 'UPS',
-    services: ['Ground', '3 Day Select', '2nd Day Air', 'Next Day Air', 'Next Day Air Saver']
-  },
-  {
-    id: 'usps',
-    label: 'USPS',
-    services: ['Ground Advantage', 'Priority Mail', 'Priority Mail Express', 'First-Class']
+    services: [
+      'Express Critical',
+      'Next Day Air Early',
+      'Next Day Air',
+      'Next Day Air Saver',
+      '2nd Day Air A.M.',
+      '2nd Day Air',
+      '3 Day Select',
+      'Ground',
+      'SurePost'
+    ]
   }
 ]
 
-/** The services somebody asked for, offered whatever the carrier. */
-export const COMMON_SERVICES = ['Ground', 'Next Day Air', '2nd Day Air']
+/**
+ * Offered when no carrier has been chosen yet — which is NOTHING.
+ *
+ * It used to be a mixed handful (Ground, Next Day Air, 2nd Day Air) so the box
+ * was never empty, and that was the wrong kindness: "Next Day Air" is UPS's
+ * name, so picking it before naming a carrier wrote a UPS service onto a
+ * shipment that might turn out to be FedEx. The service field is now simply not
+ * answerable until the carrier is, which is the real order of the two questions.
+ */
+export const COMMON_SERVICES: string[] = []
 
 export function carrierLabel(id: string | null | undefined): string {
   return CARRIERS.find((c) => c.id === id)?.label ?? ''
