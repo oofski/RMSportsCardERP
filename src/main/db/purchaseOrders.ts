@@ -705,6 +705,10 @@ export function setPurchaseOrderStatus(
       // moving it to Received stamps the status and books no stock — which is
       // the manual way a Drop order is closed, and the only way, because it can
       // never auto-complete.
+      // Ordered to be REPEATABLE, not meaningful: the view's position means the
+      // allocation's place within its line on one arm and the line's place in
+      // the order on the other, so this is not a cross-line sequence. It does
+      // not need to be — every row selected is received, in one transaction.
       const outstanding = db
         .prepare(
           `SELECT allocation_id, po_line_id, quantity - qty_received AS outstanding
@@ -1160,6 +1164,8 @@ export function scanInPurchaseOrder(id: string, actorId: string | null): ScanInR
     // Stock allocations only, so "All of it arrived" on a mixed order takes in
     // the twelve that came and never tries to receive the eight that went
     // straight to the shop. For a line that was never split this is the line.
+    // Ordered to be repeatable rather than meaningful — see the note on the same
+    // query in setPurchaseOrderStatus.
     const units = db
       .prepare(
         `SELECT allocation_id, po_line_id, quantity - qty_received AS outstanding

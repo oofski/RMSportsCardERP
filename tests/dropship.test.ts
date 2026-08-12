@@ -91,17 +91,19 @@ const mkProduct = (id: string, name: string, sku: string): void => {
   mkProduct(`p_${k}`, `Case Product ${k.toUpperCase()}`, `DRP-00${i + 1}`)
 )
 
-// Joined to the line for its POSITION. Ordering by po_line_id would order by
-// UUID, which is stable within one run and arbitrary between them — the exact
-// shape of flake that passes locally and fails in CI every other Tuesday.
+/**
+ * This order's view rows. DELIBERATELY UNORDERED, and every assertion over them
+ * is written to not care.
+ *
+ * The obvious ORDER BY po_line_id sorts by UUID, which is stable within a run
+ * and arbitrary between them — a flake that passes locally and fails in CI every
+ * other Tuesday. Ordering by the view's `position` is no better: that column
+ * means the LINE's place in the order on one arm and the ALLOCATION's place
+ * within its line on the other, so it is not a total order across lines at all.
+ * The invariant worth pinning is per row, so it is asserted per row.
+ */
 const unitRows = (poId: string): Array<Record<string, unknown>> =>
-  db
-    .prepare(
-      `SELECT d.* FROM po_unit_destinations d
-         JOIN purchase_order_lines l ON l.id = d.po_line_id
-        WHERE d.po_id = ? ORDER BY l.position, d.position`
-    )
-    .all(poId)
+  db.prepare('SELECT * FROM po_unit_destinations WHERE po_id = ?').all(poId)
 const allocationCount = (poId: string): number =>
   (db.prepare('SELECT COUNT(*) AS n FROM purchase_order_allocations WHERE po_id = ?').get(poId) as {
     n: number
@@ -147,10 +149,21 @@ ok(
   'T2 at the header location, with no allocation id',
   JSON.stringify(legacyUnits.map((u) => [u.destination, u.allocation_id]))
 )
+// Each row carries the quantity of the LINE IT POINTS AT — checked by looking
+// the line up, not by trusting the order rows come back in.
+const lineQty = (id: unknown): number =>
+  (db.prepare('SELECT quantity FROM purchase_order_lines WHERE id = ?').get(id) as {
+    quantity: number
+  }).quantity
 ok(
-  legacyUnits.map((u) => u.quantity).join(',') === '5,3',
-  'T2 each carrying its own line quantity',
-  JSON.stringify(legacyUnits.map((u) => u.quantity))
+  legacyUnits.every((u) => u.quantity === lineQty(u.po_line_id)),
+  'T2 each carrying the quantity of the line it points at',
+  JSON.stringify(legacyUnits.map((u) => [u.quantity, lineQty(u.po_line_id)]))
+)
+ok(
+  legacyUnits.map((u) => u.quantity).reduce((a, b) => (a as number) + (b as number), 0) === 8,
+  'T2 and the eight ordered units are materialised exactly once',
+  String(legacyUnits.map((u) => u.quantity).reduce((a, b) => (a as number) + (b as number), 0))
 )
 ok(
   legacyUnits.every((u) => u.supplier === 'Steel City'),

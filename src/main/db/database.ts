@@ -3007,6 +3007,25 @@ function migrate(database: Database.Database): void {
      --
      -- The stock-bound test in SQL is destination IN (RM, AM), which duplicates
      -- LOCATION_IDS; tests/dropship.test.ts asserts the two agree.
+     --
+     -- POSITION MEANS TWO DIFFERENT THINGS, one per arm, and nothing may order
+     -- by it alone and expect a meaningful cross-line sequence:
+     --
+     --   split arm    a.position, the allocation's place WITHIN ITS LINE (0..n)
+     --   unsplit arm  l.position, the line's place in the ORDER
+     --
+     -- So it is a total order only within one line, which is the only place any
+     -- reader uses it as one: receivePoLine resolves a single line's stock
+     -- allocations by it, and outstandingLinesForProduct sorts by the line's
+     -- position first and uses this one only to break ties inside that line.
+     -- The two whole-order loops (setPurchaseOrderStatus and
+     -- scanInPurchaseOrder) sort by it merely to be repeatable — they receive
+     -- every row they select, in one transaction, so the sequence between lines
+     -- has no effect on the result.
+     --
+     -- Left as it is rather than made a global sequence: the split arm's
+     -- position is what the allocation editor stores and reorders, and giving
+     -- this column a second meaning would put the two out of step.
      CREATE VIEW IF NOT EXISTS po_unit_destinations AS
        SELECT l.po_id, l.id AS po_line_id, a.id AS allocation_id,
               a.quantity, a.qty_received, a.position,
