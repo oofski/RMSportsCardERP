@@ -762,6 +762,73 @@ const STATUS_TS_COLUMN: Record<PurchaseOrderStatus, string> = {
   cancelled: 'cancelled_at'
 }
 
+/**
+ * Record that a purchase order has been paid — WITHOUT moving it.
+ *
+ * ## Why this is not a stage move
+ *
+ * Stock regularly arrives before the invoice is settled, so an order sits in
+ * Received while the money is still owed. Answering that with a transition —
+ * adding 'paid' to what a received PO may become — would drag the card back
+ * into the Paid column, where it reads as "not received yet" to everybody
+ * looking at the board, and would re-run the received branch's stock handling
+ * on the way back in. The order has not gone backwards; one more fact is known
+ * about it.
+ *
+ * So payment is a date on the order, not a place in the pipeline. The Paid
+ * COLUMN still means "paid and not yet here", which is the ordinary sequence
+ * and worth keeping visible; `paid_at` means "the money has gone", wherever the
+ * card happens to be sitting.
+ *
+ * ## What it deliberately does not touch
+ *
+ * No stock, no cost layer, no COGS. Money left the bank; nothing moved on a
+ * shelf. COGS was booked once when the order was raised and is voided only by
+ * cancel or delete — paying an invoice is not one of those events, and adding a
+ * second booking point here would double-count every order paid this way.
+ *
+ * Reversible on purpose. A payment marked against the wrong order has to be
+ * removable, and the alternative — cancelling the PO to clear it — would hand
+ * back stock that is really on the shelf.
+ */
+export function setPurchaseOrderPaid(id: string, paid: boolean): PoStatusResult {
+  const db = getDb()
+  const run = db.transaction((): PoStatusResult => {
+    const row = db
+      .prepare('SELECT id, status, po_number, paid_at FROM purchase_orders WHERE id = ?')
+      .get(id) as
+      | { id: string; status: PurchaseOrderStatus; po_number: string; paid_at: string | null }
+      | undefined
+    if (!row) return { po: null, error: 'Purchase order not found.' }
+    // A cancelled order is the one terminal stage, and its money has already
+    // been taken back out of COGS. Stamping a payment on it would assert a
+    // spend the ledger no longer carries.
+    if (row.status === 'cancelled') {
+      return {
+        po: getPurchaseOrder(id),
+        error: `${row.po_number} was cancelled, so it cannot be marked paid.`
+      }
+    }
+    // Idempotent: pressing it twice is one payment, not two, and a repeated
+    // press must not move the date it already carries.
+    if (paid && row.paid_at) return { po: getPurchaseOrder(id) }
+    if (!paid && !row.paid_at) return { po: getPurchaseOrder(id) }
+
+    const ts = nowIso()
+    db.prepare('UPDATE purchase_orders SET paid_at = ?, updated_at = ? WHERE id = ?').run(
+      paid ? ts : null,
+      ts,
+      id
+    )
+    return { po: getPurchaseOrder(id) }
+  })
+  try {
+    return run()
+  } catch (err) {
+    return { po: getPurchaseOrder(id), error: (err as Error).message }
+  }
+}
+
 export function setPurchaseOrderStatus(
   id: string,
   status: PurchaseOrderStatus,

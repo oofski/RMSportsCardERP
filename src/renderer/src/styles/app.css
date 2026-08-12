@@ -22838,3 +22838,63 @@ button.sor-team:focus-visible {
 .po-ship-line-drop .po-ship-name {
   color: var(--text-3);
 }
+
+/* ---------------------------------------------------------------------------
+   Marking a purchase order paid
+
+   Payment is a fact about an order, not a place in the pipeline: stock often
+   turns up before the invoice is settled, so an order sits in Received owing
+   money. These two live beside the stage badge because that is where somebody
+   looks to ask "where is this order" — and "have we paid for it" is the
+   question they ask next.
+
+   Deliberately quieter than the stage badge. The stage is the headline; this is
+   a second fact about the same order, and giving it equal weight would make
+   every card read as two competing statuses.
+   --------------------------------------------------------------------------- */
+.po-rh-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.po-badge.po-badge-paid {
+  background: var(--success-bg);
+  border-color: color-mix(in srgb, var(--success) 40%, var(--border));
+  color: var(--success);
+}
+.po-markpaid {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.5;
+  border: 1px dashed color-mix(in srgb, var(--success) 45%, var(--border));
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-2);
+}
+/* Dashed until pressed, solid after: the border itself says "this has not
+   happened yet", so the button and the chip that replaces it read as two states
+   of one thing rather than as two unrelated controls. */
+.po-markpaid:hover:not(:disabled) {
+  border-style: solid;
+  background: var(--success-bg);
+  color: var(--success);
+}
+.po-markpaid:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.po-move.po-move-paid {
+  color: var(--text-2);
+  border-style: dashed;
+}
+.po-card-foot .po-move.po-move-paid:hover {
+  border-style: solid;
+  background: var(--success-bg);
+  border-color: color-mix(in srgb, var(--success) 45%, var(--border));
+  color: var(--success);
+}

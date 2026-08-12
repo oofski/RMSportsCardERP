@@ -115,6 +115,24 @@ export function InvoicingModule(): JSX.Element {
     [reload, toast]
   )
 
+  /**
+   * Record a payment. Deliberately NOT `move` with a 'paid' argument — the card
+   * does not go anywhere, because an order that arrived before it was paid for
+   * has not gone backwards up the board.
+   */
+  const markPaid = useCallback(
+    async (id: string, poNumber: string) => {
+      const res = await api.purchaseOrders.setPaid(id, true)
+      if (!res.ok) {
+        toast.error(res.error ?? 'Could not record the payment.')
+        return
+      }
+      toast.success(`${poNumber} is marked paid.`)
+      await reload()
+    },
+    [reload, toast]
+  )
+
   const moveSupply = useCallback(
     async (order: SupplyOrder, to: SupplyOrderStatus) => {
       const res = await api.supplies.setOrderStatus(order.id, to)
@@ -273,6 +291,7 @@ export function InvoicingModule(): JSX.Element {
             supplyOrders={supplyOrders}
             canManageSupplies={canManageSupplies}
             onDeletePo={canManage ? removePo : undefined}
+            onMarkPaid={markPaid}
             thumbnails={thumbnails}
             onMove={move}
             onOpen={(id) => setReceiptId(id)}

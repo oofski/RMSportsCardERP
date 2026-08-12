@@ -508,6 +508,17 @@ export function createBridge(ipcRenderer: BridgeTransport) {
         ipcRenderer.invoke(IPC.poCreate, input),
       setStatus: (id: string, status: PurchaseOrderStatus): Promise<Result<PurchaseOrderDetail>> =>
         ipcRenderer.invoke(IPC.poSetStatus, { id, status }),
+      /**
+       * Mark an order paid, or take the mark back off. Does NOT move it.
+       *
+       * Payment is a date on the order, not a place in the pipeline: goods
+       * regularly arrive before the invoice is settled, and an order that has
+       * been received and then paid has not gone backwards. Reversible, because
+       * a payment recorded against the wrong order has to come off without
+       * cancelling the order and handing back stock that is really on the shelf.
+       */
+      setPaid: (id: string, paid: boolean): Promise<Result<PurchaseOrderDetail>> =>
+        ipcRenderer.invoke(IPC.poSetPaid, { id, paid }),
       /** Shipping + payment details. Omitted keys are left as they are. */
       setFreight: (id: string, patch: FreightPatch): Promise<Result<PurchaseOrderDetail>> =>
         ipcRenderer.invoke(IPC.poSetFreight, { id, ...patch }),

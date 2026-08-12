@@ -59,6 +59,7 @@ export function PurchaseOrderBoard({
   onMove,
   onOpen,
   onDeletePo,
+  onMarkPaid,
   onMoveSupply,
   onDeleteSupply
 }: {
@@ -74,6 +75,8 @@ export function PurchaseOrderBoard({
   /** Undefined without the manage permission — the button is then not rendered
    *  at all rather than rendered and refused. */
   onDeletePo?: (id: string, poNumber: string) => void
+  /** Record a payment without moving the card. See `payable` in PoCard. */
+  onMarkPaid?: (id: string, poNumber: string) => void
   onMoveSupply: (order: SupplyOrder, to: SupplyOrderStatus) => void
   onDeleteSupply: (order: SupplyOrder) => void
 }): JSX.Element {
@@ -137,6 +140,7 @@ export function PurchaseOrderBoard({
                       onMove={onMove}
                       onOpen={onOpen}
                       onDelete={onDeletePo}
+                      onMarkPaid={onMarkPaid}
                       dragging={dragId === po.id}
                       onDragStart={setDragId}
                       onDragEnd={() => {
@@ -169,6 +173,7 @@ function PoCard({
   onMove,
   onOpen,
   onDelete,
+  onMarkPaid,
   dragging,
   onDragStart,
   onDragEnd
@@ -177,6 +182,7 @@ function PoCard({
   onMove: (id: string, to: PurchaseOrderStatus) => void
   onOpen: (id: string) => void
   onDelete?: (id: string, poNumber: string) => void
+  onMarkPaid?: (id: string, poNumber: string) => void
   dragging: boolean
   onDragStart: (id: string) => void
   onDragEnd: () => void
@@ -200,6 +206,21 @@ function PoCard({
    * is the correct next step, and the one the refusal used to have to explain.
    */
   const deletable = onDelete !== undefined && po.receivedUnits === 0
+  /**
+   * "Mark paid" is offered wherever the money is still owed — which is most
+   * often on an order sitting in RECEIVED.
+   *
+   * Stock regularly turns up before the invoice is settled. Until now the only
+   * way to record that payment was the Paid stage, and a received order cannot
+   * move backwards into it, so the payment simply went unrecorded; worse, the
+   * habit it created was clicking Paid on arrival to unblock Received, which
+   * made the paid date on those orders mean nothing at all.
+   *
+   * So it is not a stage button. It stamps a date and the card stays exactly
+   * where it is. Hidden once paid — the chip in the header says so from then on
+   * — and hidden on a cancelled order, whose money is already back out of COGS.
+   */
+  const payable = onMarkPaid !== undefined && !po.paidAt && po.status !== 'cancelled'
   // Only worth a rail once something has actually landed. A whole column of
   // empty bars on orders still with the supplier is noise that makes the ONE
   // half-arrived shipment harder to pick out, which is the opposite of the job.
@@ -299,8 +320,18 @@ function PoCard({
         attemptedAt={po.trackingAttemptedAt}
         hasTracking={!!po.trackingNumber}
       />
-      {(moves.length > 0 || deletable) && (
+      {(moves.length > 0 || deletable || payable) && (
         <div className="po-card-foot" onClick={(e) => e.stopPropagation()}>
+          {payable && (
+            <button
+              type="button"
+              className="btn po-move po-move-paid"
+              title={`Record that ${po.poNumber} has been paid. It stays where it is — this is the payment, not a stage.`}
+              onClick={() => onMarkPaid?.(po.id, po.poNumber)}
+            >
+              Mark paid
+            </button>
+          )}
           {moves.map((to) => (
             <button
               key={to}

@@ -177,6 +177,11 @@ export const IPC = {
   poGet: 'po:get',
   poCreate: 'po:create',
   poSetStatus: 'po:set-status',
+  // Record that an order has been paid, WITHOUT moving it along the board.
+  // Stock often lands before the invoice is settled, so an order sits in
+  // Received owing money; making that a stage move would drag the card back to
+  // Paid, where it reads as not-yet-arrived to everybody looking at the board.
+  poSetPaid: 'po:set-paid',
   poSetFreight: 'po:set-freight',
   // Carrier status: the hourly sweep, forced by hand.
   trackingCheckNow: 'tracking:check-now',

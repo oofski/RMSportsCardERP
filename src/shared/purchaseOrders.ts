@@ -18,9 +18,16 @@ export const PO_STAGES: { id: PurchaseOrderStatus; label: string }[] = [
  * record. Cancelling a received PO hands its stock back by reversing the exact
  * FIFO lot each line opened — see setPurchaseOrderStatus — and is refused when
  * that stock has already been sold. Cancelled is the one terminal stage.
+ *
+ * Ordered goes straight to Received as well as through Paid, because stock
+ * regularly turns up before the invoice is settled. While that move did not
+ * exist, the only way to record a delivery was to click Paid first — stamping a
+ * payment that had not happened — which made the paid date on every such order
+ * worth nothing. See setPurchaseOrderPaid: payment is now recorded as its own
+ * fact, and this is the other half of that change.
  */
 export const PO_TRANSITIONS: Record<PurchaseOrderStatus, PurchaseOrderStatus[]> = {
-  ordered: ['paid', 'cancelled'],
+  ordered: ['paid', 'received', 'cancelled'],
   paid: ['ordered', 'received', 'cancelled'],
   received: ['cancelled'],
   cancelled: []

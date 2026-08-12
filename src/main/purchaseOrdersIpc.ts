@@ -42,6 +42,7 @@ import {
   setPartyPinned,
   setPurchaseOrderFreight,
   setPurchaseOrderRouting,
+  setPurchaseOrderPaid,
   setPurchaseOrderStatus
 } from './db/purchaseOrders'
 import type { PoReceiptItem } from './db/purchaseOrders'
@@ -289,6 +290,26 @@ export function registerPurchaseOrdersIpc(): void {
         if (!payload?.id) return { ok: false, error: 'No purchase order specified.' }
         if (!isPurchaseOrderStatus(payload.status)) return { ok: false, error: 'Invalid stage.' }
         const res = setPurchaseOrderStatus(payload.id, payload.status, actor.id)
+        return res.error
+          ? { ok: false, error: res.error }
+          : { ok: true, data: res.po as PurchaseOrderDetail }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  // Marking an order paid is a PO write like any other, so it sits behind the
+  // same single permission every other one does — no new gate, nothing extra to
+  // grant, and nobody who can move a PO along the board is unable to say it was
+  // paid.
+  ipcMain.handle(
+    IPC.poSetPaid,
+    (_e, payload: { id: string; paid: boolean }): Result<PurchaseOrderDetail> => {
+      try {
+        requireInvoicing()
+        if (!payload?.id) return { ok: false, error: 'No purchase order specified.' }
+        const res = setPurchaseOrderPaid(payload.id, payload.paid !== false)
         return res.error
           ? { ok: false, error: res.error }
           : { ok: true, data: res.po as PurchaseOrderDetail }

@@ -83,6 +83,33 @@ export function PurchaseOrderReceipt({
   const toast = useToast()
   const [detail, setDetail] = useState<PurchaseOrderDetail | null>(null)
   const [pdfBusy, setPdfBusy] = useState(false)
+  const [payBusy, setPayBusy] = useState(false)
+
+  /**
+   * Record the payment and refresh in place.
+   *
+   * Not `onMove(id, 'paid')`. The order does not move: one sitting in Received
+   * that has now been paid for has not gone backwards, and sending it to the
+   * Paid column would tell everyone looking at the board that its stock had not
+   * arrived. `onSaved` repaints the card behind this modal, for the same reason
+   * editing the carrier does.
+   */
+  const markPaid = async (): Promise<void> => {
+    if (!detail) return
+    setPayBusy(true)
+    try {
+      const res = await api.purchaseOrders.setPaid(detail.id, true)
+      if (!res.ok || !res.data) {
+        toast.error(res.error ?? 'Could not record the payment.')
+        return
+      }
+      setDetail(res.data)
+      toast.success(`${res.data.poNumber} is marked paid.`)
+      await onSaved()
+    } finally {
+      setPayBusy(false)
+    }
+  }
 
   useEffect(() => {
     let active = true
@@ -200,10 +227,35 @@ export function PurchaseOrderReceipt({
               {formatDate(detail.createdAt)} · {shipsTo(detail.orderKind, destinations)}
             </div>
           </div>
-          <span className={`badge po-badge po-badge-${meta.tone}`}>
-            <Icon name={meta.icon} size={13} />
-            {meta.label}
-          </span>
+          <div className="po-rh-right">
+            <span className={`badge po-badge po-badge-${meta.tone}`}>
+              <Icon name={meta.icon} size={13} />
+              {meta.label}
+            </span>
+            {/* The stage badge answers "where is this order"; this answers
+                "have we paid for it", and on an order that arrived before the
+                invoice was settled those are different questions. Shown as a
+                button while the money is owed and as a chip once it is not, so
+                the same spot always carries the answer. */}
+            {detail.status !== 'cancelled' &&
+              (detail.paidAt ? (
+                <span className="badge po-badge po-badge-paid" title={`Paid ${formatDate(detail.paidAt)}`}>
+                  <Icon name="DollarSign" size={13} />
+                  Paid
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  className="btn po-markpaid"
+                  disabled={payBusy}
+                  title={`Record that ${detail.poNumber} has been paid. It stays in ${meta.label} — this is the payment, not a stage.`}
+                  onClick={() => void markPaid()}
+                >
+                  <Icon name="DollarSign" size={13} />
+                  Mark paid
+                </button>
+              ))}
+          </div>
         </div>
 
         <div className="po-receipt-timeline">
