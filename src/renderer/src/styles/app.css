@@ -23287,3 +23287,12 @@ button.sor-team:focus-visible {
   color: var(--warning);
   font-weight: 600;
 }
+
+/* Only ever rendered when the count and the scans disagree, which since v0.0.166
+   inbound should be impossible. Small and monospaced because its only job is to
+   be photographed and sent. */
+.scan-count-why {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 10px;
+  opacity: 0.75;
+}

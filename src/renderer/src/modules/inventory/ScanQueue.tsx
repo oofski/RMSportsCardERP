@@ -182,7 +182,23 @@ function QueueRow({
               scans, which is exactly what it was accused of. */}
           <span className={line.scans > line.quantity ? 'scan-count-short' : undefined}>
             {line.scans} scan{line.scans === 1 ? '' : 's'}
-            {line.scans > line.quantity && ` · only ${line.quantity} fits`}
+            {/* THIS SHOULD NEVER APPEAR INBOUND, and that is the point.
+                Since v0.0.166 an inbound beep always raises the count, so scans
+                and quantity can only disagree here if a hand-edit trimmed it —
+                or if something is wrong that three rounds of local reproduction
+                could not surface. Printing the state that decides it turns the
+                next report from "it still does not work" into four values that
+                say which branch ran, without anybody opening a console. */}
+            {line.scans > line.quantity && (
+              <>
+                {` · only ${line.quantity} fits`}
+                <span className="scan-count-why" title="Internal state — send this if the count looks wrong">
+                  {` [q${line.quantity} s${line.scans} m${String(line.max)} ${line.direction} ${line.kind}${
+                    line.override ? ' ovr' : ''
+                  }${line.needsDecision ? ' ask' : ''} v${__APP_VERSION__}]`}
+                </span>
+              </>
+            )}
           </span>
           {/* MORE ARRIVED THAN WAS ORDERED, said plainly and not in the way.
               Inbound the count follows the boxes, so this is a note about the
