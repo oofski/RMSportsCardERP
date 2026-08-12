@@ -1159,8 +1159,16 @@ export interface ScanPoCandidate {
   /** Per-unit buy price on this line — the FIFO cost basis it will book at. */
   unitPrice: number
   poCreatedAt: string
-  /** Advisory: this is the PO's last outstanding line. Auto-completion is
-   * decided inside the commit transaction, never from this flag. */
+  /**
+   * Advisory: this is the PO's last outstanding SLICE, so receiving it in full
+   * leaves nothing else due at this building. Auto-completion is decided inside
+   * the commit transaction, never from this flag.
+   *
+   * Per allocation, not per line. A line split 6 → RM and 6 → AM is one
+   * outstanding line and two outstanding candidates; counting lines told both
+   * candidates they finished the order, and the operator saw "completes this
+   * PO" on a scan that leaves six boxes still due.
+   */
   completesPo: boolean
   poLinesTotal: number
   poLinesOutstanding: number

@@ -910,6 +910,542 @@ ok(!!marlow, 'T42 a line-level supplier appears on the vendor list')
 ok(marlow.orders === 0 && marlow.ordered === 0, 'T42 with no money attributed to it — names and dates only', JSON.stringify(marlow))
 ok(!!marlow.lastAt, 'T42 but a date, so it sorts among the active ones', String(marlow.lastAt))
 
+// ---------------------------------------------------------------------------
+console.log('\n=== 10. the delivery form against a line split across two shelves ===')
+// ---------------------------------------------------------------------------
+
+// Products of their own, so an assertion about one section's shelves can never
+// be answered by another section's stock.
+;['g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w'].forEach(
+  (k, i) => mkProduct(`p_${k}`, `Case Product ${k.toUpperCase()}`, `DRP-1${String(i + 1).padStart(2, '0')}`)
+)
+
+/**
+ * T44. A LINE SPLIT ACROSS RM AND AM RECEIVES FROM THE ONE BOX THE FORM DRAWS.
+ *
+ * The form asks one question per line — "how many arrived?" — and validates the
+ * answer against the line's whole RECEIVABLE figure, which for a 6/6 split is
+ * 12. `receivePoLine` books against ONE allocation and refuses anything larger
+ * than that allocation's own outstanding, which is 6. So the honest answer to
+ * the question on the screen was refused with "only 6 of 6", two numbers that
+ * appear nowhere on it — and every delivery of a two-shelf line was unbookable.
+ *
+ * The quantity is now spread across the line's stock allocations in position
+ * order, the same guess "Scanned in" and the scan queue already make. If that
+ * spreading is ever lost, this section fails at the first assertion; if it is
+ * ever applied to an unsplit line, T5 and tests/receiving.test.ts fail instead.
+ */
+const splitFull = poRepo.createPurchaseOrder(
+  {
+    supplier: 'Steel City',
+    location: 'RM',
+    lines: [
+      {
+        productId: 'p_g',
+        quantity: 12,
+        unitPrice: 10,
+        allocations: [
+          { quantity: 6, supplier: null, destination: 'RM' },
+          { quantity: 6, supplier: null, destination: 'AM' }
+        ]
+      }
+    ]
+  },
+  ACTOR
+)
+const splitFullReceipt = poRepo.receivePurchaseOrderLines(
+  splitFull.id,
+  [{ lineId: splitFull.lines[0].id, quantity: 12 }],
+  ACTOR
+)
+ok(!splitFullReceipt.error, 'T44 all twelve of a 6/6 line are accepted in one answer', String(splitFullReceipt.error))
+const splitFullAfter = poRepo.getPurchaseOrder(splitFull.id)
+ok(splitFullAfter.lines[0].qtyReceived === 12, 'T44 and all twelve are booked', String(splitFullAfter.lines[0].qtyReceived))
+ok(
+  inv.stockQty('p_g', 'RM') === 6 && inv.stockQty('p_g', 'AM') === 6,
+  'T44 six on each shelf — never twelve on the first one',
+  `RM=${inv.stockQty('p_g', 'RM')} AM=${inv.stockQty('p_g', 'AM')}`
+)
+ok(
+  splitFullAfter.lines[0].allocations.every((a: { qtyOutstanding: number }) => a.qtyOutstanding === 0),
+  'T44 with both allocations counted out (I2)',
+  JSON.stringify(splitFullAfter.lines[0].allocations.map((a: { qtyReceived: number }) => a.qtyReceived))
+)
+ok(splitFullAfter.status === 'received', 'T44 and the order completes itself', String(splitFullAfter.status))
+
+// A PART delivery fills in position order and stops. Asserted because the
+// spreading is a GUESS about which shelf got what, and the guess is only
+// defensible if it is the same one everywhere: first shelf first, no averaging.
+const splitPart = poRepo.createPurchaseOrder(
+  {
+    supplier: 'Steel City',
+    location: 'RM',
+    lines: [
+      {
+        productId: 'p_h',
+        quantity: 12,
+        unitPrice: 10,
+        allocations: [
+          { quantity: 6, supplier: null, destination: 'RM' },
+          { quantity: 6, supplier: null, destination: 'AM' }
+        ]
+      }
+    ]
+  },
+  ACTOR
+)
+const partReceipt = poRepo.receivePurchaseOrderLines(
+  splitPart.id,
+  [{ lineId: splitPart.lines[0].id, quantity: 8 }],
+  ACTOR
+)
+ok(!partReceipt.error, 'T44 eight of the twelve are accepted too', String(partReceipt.error))
+ok(poRepo.getPurchaseOrder(splitPart.id).lines[0].qtyReceived === 8, 'T44 booking eight')
+ok(
+  inv.stockQty('p_h', 'RM') === 6 && inv.stockQty('p_h', 'AM') === 2,
+  'T44 filling the first shelf before the second, and stopping',
+  `RM=${inv.stockQty('p_h', 'RM')} AM=${inv.stockQty('p_h', 'AM')}`
+)
+ok(poRepo.getPurchaseOrder(splitPart.id).status === 'ordered', 'T44 and a part delivery does NOT close the order')
+
+// THE GUARD THAT STOPS THE FIX BEING A HOLE. Spreading must not turn an
+// over-receipt into something that quietly fits: 13 against 12 is still refused,
+// still names both numbers, and still books nothing at all.
+const splitOver = poRepo.createPurchaseOrder(
+  {
+    supplier: 'Steel City',
+    location: 'RM',
+    lines: [
+      {
+        productId: 'p_i',
+        quantity: 12,
+        unitPrice: 10,
+        allocations: [
+          { quantity: 6, supplier: null, destination: 'RM' },
+          { quantity: 6, supplier: null, destination: 'AM' }
+        ]
+      },
+      { productId: 'p_j', quantity: 5, unitPrice: 10 }
+    ]
+  },
+  ACTOR
+)
+const overLine = splitOver.lines.find((l: { productId: string }) => l.productId === 'p_i')
+const plainLine = splitOver.lines.find((l: { productId: string }) => l.productId === 'p_j')
+const overRes = poRepo.receivePurchaseOrderLines(
+  splitOver.id,
+  [{ lineId: plainLine.id, quantity: 5 }, { lineId: overLine.id, quantity: 13 }],
+  ACTOR
+)
+ok(!!overRes.error, 'T44 GUARD thirteen of twelve is still refused', String(overRes.error))
+ok(/12/.test(overRes.error ?? '') && /13/.test(overRes.error ?? ''), 'T44 GUARD naming both numbers', String(overRes.error))
+ok(
+  poRepo.getPurchaseOrder(splitOver.id).lines.every((l: { qtyReceived: number }) => l.qtyReceived === 0),
+  'T44 GUARD and the WHOLE form rolls back — the good line books nothing either'
+)
+ok(
+  inv.stockQty('p_i', 'RM') === 0 && inv.stockQty('p_i', 'AM') === 0 && inv.stockQty('p_j', 'RM') === 0,
+  'T44 GUARD with no stock moved by the refused delivery'
+)
+
+// The same atomicity, proven from INSIDE the write loop rather than from the
+// form's validation: three answers of 6 against a 12-unit line each pass
+// validation on their own, the first two book, and the third finds nothing
+// outstanding and throws. Everything the transaction had already written goes.
+const overSpill = poRepo.receivePurchaseOrderLines(
+  splitOver.id,
+  [
+    { lineId: overLine.id, quantity: 6 },
+    { lineId: overLine.id, quantity: 6 },
+    { lineId: overLine.id, quantity: 6 }
+  ],
+  ACTOR
+)
+ok(!!overSpill.error, 'T44 GUARD an over-receipt spread across three answers is refused', String(overSpill.error))
+ok(
+  poRepo.getPurchaseOrder(splitOver.id).lines.every((l: { qtyReceived: number }) => l.qtyReceived === 0),
+  'T44 GUARD and the two answers that had already booked are rolled back'
+)
+ok(
+  inv.stockQty('p_i', 'RM') === 0 && inv.stockQty('p_i', 'AM') === 0,
+  'T44 GUARD with both shelves left exactly as they were',
+  `RM=${inv.stockQty('p_i', 'RM')} AM=${inv.stockQty('p_i', 'AM')}`
+)
+ok(strayStockRows() === 0, 'T44 and nothing anywhere off-shelf')
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 11. deleting a Drop order that was closed the documented way ===')
+// ---------------------------------------------------------------------------
+
+/**
+ * T45. A PURE-DROP ORDER THAT WAS MOVED TO RECEIVED CAN STILL BE DELETED.
+ *
+ * A Drop order can never auto-complete — there is no receivable line to finish —
+ * so moving it to Received by hand is the documented and only way to close one.
+ * Refusing Delete on the status alone therefore made closing a Drop order the
+ * same act as losing its Delete button, while the receipt's own tooltip promised
+ * the opposite. The refusal exists to protect stock that carries a cost record;
+ * on an order where no unit was ever checked in there is nothing to protect.
+ */
+const closedDrop = poRepo.createPurchaseOrder(
+  { supplier: 'Steel City', location: DROP, lines: [{ productId: 'p_k', quantity: 10, unitPrice: 10 }] },
+  ACTOR
+)
+poRepo.setPurchaseOrderStatus(closedDrop.id, 'paid', ACTOR)
+const closedDropReceived = poRepo.setPurchaseOrderStatus(closedDrop.id, 'received', ACTOR)
+ok(!closedDropReceived.error, 'T45 a Drop order is closed by moving it to Received', String(closedDropReceived.error))
+const closedDropDelete = poRepo.deletePurchaseOrder(closedDrop.id, ACTOR)
+ok(closedDropDelete.ok, 'T45 and it can still be deleted afterwards', String(closedDropDelete.error))
+ok(poRepo.getPurchaseOrder(closedDrop.id) === null, 'T45 the order is gone')
+ok(cogsFor(closedDrop.id) === null, 'T45 and its COGS row went with it')
+
+// THE GUARD. An order that really did take stock in is still refused, in the
+// same words — the fix keys on units received, never on the order looking like a
+// dropship, so an order that COULD have received stock and simply has not is
+// still an order whose status is the thing being trusted.
+const realReceived = poRepo.createPurchaseOrder(
+  { supplier: 'Steel City', location: 'RM', lines: [{ productId: 'p_l', quantity: 4, unitPrice: 10 }] },
+  ACTOR
+)
+poRepo.setPurchaseOrderStatus(realReceived.id, 'paid', ACTOR)
+poRepo.setPurchaseOrderStatus(realReceived.id, 'received', ACTOR)
+const realDelete = poRepo.deletePurchaseOrder(realReceived.id, ACTOR)
+ok(!realDelete.ok, 'T45 GUARD a genuinely received order still refuses Delete')
+ok(
+  /Cancel it instead/.test(realDelete.error ?? ''),
+  'T45 GUARD with the same wording it always used',
+  String(realDelete.error)
+)
+ok(!!poRepo.getPurchaseOrder(realReceived.id), 'T45 GUARD and the order is still there')
+ok(inv.stockQty('p_l', 'RM') === 4, 'T45 GUARD with its stock untouched', String(inv.stockQty('p_l', 'RM')))
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 12. re-routing an order that has already been closed ===')
+// ---------------------------------------------------------------------------
+
+/**
+ * T46. A CLOSED ORDER'S ROUTING IS FROZEN, INCLUDING ITS DROP LINES.
+ *
+ * The per-line refusal keys on qty_received, and a drop line's counter is 0 for
+ * ever by construction (I4) — so it waves through exactly the line that must not
+ * move. A mixed order auto-completes when its RECEIVABLE units are in; re-route
+ * one of its drop lines to RM afterwards and those units are stranded
+ * permanently: the box is gone from Incoming and there are no scan candidates
+ * (both filter on scanned_at IS NULL), scanInPurchaseOrder refuses with "already
+ * been scanned in", and a received order transitions only to cancelled, so there
+ * is no way to reopen it either. The document would say units are coming and
+ * nothing in the app could ever check them in.
+ */
+const closedMixed = poRepo.createPurchaseOrder(
+  {
+    supplier: 'Steel City',
+    location: 'RM',
+    lines: [
+      { productId: 'p_m', quantity: 5, unitPrice: 10 },
+      { productId: 'p_n', quantity: 4, unitPrice: 10, destination: DROP }
+    ]
+  },
+  ACTOR
+)
+const closedMixedStock = closedMixed.lines.find((l: { productId: string }) => l.productId === 'p_m')
+const closedMixedDrop = closedMixed.lines.find((l: { productId: string }) => l.productId === 'p_n')
+const closedMixedReceipt = poRepo.receivePurchaseOrderLines(
+  closedMixed.id,
+  [{ lineId: closedMixedStock.id, quantity: 5 }],
+  ACTOR
+)
+ok(!closedMixedReceipt.error, 'T46 the five receivable units go in', String(closedMixedReceipt.error))
+ok(closedMixedReceipt.po.status === 'received', 'T46 and the mixed order auto-completes', String(closedMixedReceipt.po.status))
+ok(!!closedMixedReceipt.po.scannedAt, 'T46 stamped scanned-in, so its box has left Incoming')
+// The trap, demonstrated before the guard is asserted: nothing could receive
+// those four units if they were re-routed here.
+ok(
+  poRepo.outstandingLinesForProduct('p_n').length === 0,
+  'T46 a closed order offers no scan candidate at all',
+  String(poRepo.outstandingLinesForProduct('p_n').length)
+)
+ok(
+  /already been scanned in/.test(String(poRepo.scanInPurchaseOrder(closedMixed.id, ACTOR).error)),
+  'T46 and Scanned in refuses it outright',
+  String(poRepo.scanInPurchaseOrder(closedMixed.id, ACTOR).error)
+)
+const closedRoute = poRepo.setPurchaseOrderRouting(closedMixed.id, {
+  lines: [{ lineId: closedMixedDrop.id, destination: 'RM' }]
+})
+ok(!!closedRoute.error, 'T46 so re-routing its untouched drop line is refused', String(closedRoute.error))
+ok(/PO-/.test(closedRoute.error ?? ''), 'T46 by name', String(closedRoute.error))
+ok(/received and closed/.test(closedRoute.error ?? ''), 'T46 saying what is wrong with it', String(closedRoute.error))
+ok(
+  (db.prepare('SELECT destination FROM purchase_order_lines WHERE id = ?').get(closedMixedDrop.id) as {
+    destination: string | null
+  }).destination === DROP,
+  'T46 and the line still goes where it went'
+)
+ok(
+  poRepo.getPurchaseOrder(closedMixed.id).receivableUnits === 5,
+  'T46 with no unit invented on a shelf nothing could deliver to',
+  String(poRepo.getPurchaseOrder(closedMixed.id).receivableUnits)
+)
+ok(inv.stockQty('p_n', 'RM') === 0, 'T46 and no stock written by the refusal')
+
+/**
+ * T47. RE-ROUTING CAN BE THE ACT THAT FINISHES AN ORDER.
+ *
+ * The mirror of T46. Send the last line with units still due here off to a shop
+ * and everything receivable is already in — but nothing runs the completion test
+ * on a routing change, so the order stays open for ever showing a Receive panel
+ * with nothing in it, and no button anywhere can close it.
+ */
+const finishByRoute = poRepo.createPurchaseOrder(
+  {
+    supplier: 'Steel City',
+    location: 'RM',
+    lines: [
+      { productId: 'p_o', quantity: 3, unitPrice: 10 },
+      { productId: 'p_p', quantity: 5, unitPrice: 10 }
+    ]
+  },
+  ACTOR
+)
+const finishFirst = finishByRoute.lines.find((l: { productId: string }) => l.productId === 'p_o')
+const finishSecond = finishByRoute.lines.find((l: { productId: string }) => l.productId === 'p_p')
+poRepo.receivePurchaseOrderLines(finishByRoute.id, [{ lineId: finishFirst.id, quantity: 3 }], ACTOR)
+ok(
+  poRepo.getPurchaseOrder(finishByRoute.id).status === 'ordered',
+  'T47 with one line still due the order stays open',
+  String(poRepo.getPurchaseOrder(finishByRoute.id).status)
+)
+const finishRoute = poRepo.setPurchaseOrderRouting(finishByRoute.id, {
+  lines: [{ lineId: finishSecond.id, destination: DROP }]
+})
+ok(!finishRoute.error, 'T47 routing the last outstanding line to a shop is accepted', String(finishRoute.error))
+ok(finishRoute.po.status === 'received', 'T47 and THAT completes the order', String(finishRoute.po.status))
+ok(!!finishRoute.po.scannedAt, 'T47 stamping scanned-in, so the empty box leaves Incoming')
+ok(
+  !poRepo.listActivePurchaseOrderBoxes().some((b: { id: string }) => b.id === finishByRoute.id),
+  'T47 and it really is gone from the Incoming panel'
+)
+ok(finishRoute.po.receivedUnits === 3 && finishRoute.po.dropshipUnits === 5, 'T47 three received, five drop-shipped', `${finishRoute.po.receivedUnits}/${finishRoute.po.dropshipUnits}`)
+ok(cogsFor(finishByRoute.id) === finishRoute.po.total, 'T47 and completing on a re-route books no second COGS row', String(cogsFor(finishByRoute.id)))
+
+// THE GUARD. Completion is still the same test it always was: an order with
+// units genuinely still due here is NOT closed by a routing change.
+const stillDue = poRepo.createPurchaseOrder(
+  {
+    supplier: 'Steel City',
+    location: 'RM',
+    lines: [
+      { productId: 'p_q', quantity: 2, unitPrice: 10 },
+      { productId: 'p_w', quantity: 6, unitPrice: 10 }
+    ]
+  },
+  ACTOR
+)
+const stillDueRoute = poRepo.setPurchaseOrderRouting(stillDue.id, {
+  lines: [
+    {
+      lineId: stillDue.lines.find((l: { productId: string }) => l.productId === 'p_w').id,
+      destination: DROP
+    }
+  ]
+})
+ok(!stillDueRoute.error, 'T47 GUARD a line can be routed away on an open order', String(stillDueRoute.error))
+ok(stillDueRoute.po.status === 'ordered', 'T47 GUARD which stays open — two units are still coming', String(stillDueRoute.po.status))
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 13. a fully-arrived mixed line is a finished line ===')
+// ---------------------------------------------------------------------------
+
+/**
+ * T48. `receivedAt` AND `receivedLineCount` MEASURE AGAINST RECEIVABLE UNITS.
+ *
+ * Both used to compare against the ORDERED quantity, drop units included. A
+ * 20-unit line split 12 to RM and 8 to a shop can never reach 20 — the other
+ * eight were never addressed to this building — so a delivery that landed in
+ * full left received_at NULL for ever and reported "0 of 1 lines received" on an
+ * order whose own status says Received. Every line raised before v67 has
+ * receivable === quantity, which is why this changes nothing for any of them.
+ */
+const mixedDone = poRepo.createPurchaseOrder(
+  {
+    supplier: 'Steel City',
+    location: 'RM',
+    lines: [
+      {
+        productId: 'p_r',
+        quantity: 20,
+        unitPrice: 10,
+        allocations: [
+          { quantity: 12, supplier: null, destination: 'RM' },
+          { quantity: 8, supplier: null, destination: DROP }
+        ]
+      }
+    ]
+  },
+  ACTOR
+)
+poRepo.receivePurchaseOrderLines(mixedDone.id, [{ lineId: mixedDone.lines[0].id, quantity: 5 }], ACTOR)
+const mixedHalf = poRepo.getPurchaseOrder(mixedDone.id)
+ok(mixedHalf.lines[0].receivedAt === null, 'T48 five of the twelve leaves the line unstamped', String(mixedHalf.lines[0].receivedAt))
+ok(mixedHalf.receivedLineCount === 0, 'T48 and counted as no line finished', String(mixedHalf.receivedLineCount))
+poRepo.receivePurchaseOrderLines(mixedDone.id, [{ lineId: mixedDone.lines[0].id, quantity: 7 }], ACTOR)
+const mixedWhole = poRepo.getPurchaseOrder(mixedDone.id)
+ok(!!mixedWhole.lines[0].receivedAt, 'T48 the twelfth unit stamps received_at on the line', String(mixedWhole.lines[0].receivedAt))
+ok(mixedWhole.receivedLineCount === 1, 'T48 and the line counts as received', String(mixedWhole.receivedLineCount))
+ok(
+  mixedWhole.receivedLineCount === mixedWhole.lineCount,
+  'T48 so the order reads "1 of 1", matching the Received it just stamped',
+  `${mixedWhole.receivedLineCount}/${mixedWhole.lineCount}`
+)
+ok(mixedWhole.lines[0].quantity === 20 && mixedWhole.receivedUnits === 12, 'T48 while the order still says 20 ordered and 12 in', `${mixedWhole.lines[0].quantity}/${mixedWhole.receivedUnits}`)
+
+// GUARD ONE: a legacy line is untouched, because receivable IS quantity there.
+const legacyStamp = poRepo.createPurchaseOrder(
+  { supplier: 'Steel City', location: 'RM', lines: [{ productId: 'p_s', quantity: 4, unitPrice: 10 }] },
+  ACTOR
+)
+poRepo.receivePurchaseOrderLines(legacyStamp.id, [{ lineId: legacyStamp.lines[0].id, quantity: 2 }], ACTOR)
+ok(
+  poRepo.getPurchaseOrder(legacyStamp.id).lines[0].receivedAt === null &&
+    poRepo.getPurchaseOrder(legacyStamp.id).receivedLineCount === 0,
+  'T48 GUARD half an unsplit line is still not a finished line'
+)
+poRepo.receivePurchaseOrderLines(legacyStamp.id, [{ lineId: legacyStamp.lines[0].id, quantity: 2 }], ACTOR)
+ok(
+  !!poRepo.getPurchaseOrder(legacyStamp.id).lines[0].receivedAt &&
+    poRepo.getPurchaseOrder(legacyStamp.id).receivedLineCount === 1,
+  'T48 GUARD and all of it still is'
+)
+
+// GUARD TWO: a line with NOTHING due here is not counted as finished either.
+// Measuring against receivable without this would make 0 >= 0 true and report a
+// pure-drop order as fully received the moment it was raised.
+const dropCount = poRepo.createPurchaseOrder(
+  { supplier: 'Steel City', location: DROP, lines: [{ productId: 'p_t', quantity: 6, unitPrice: 10 }] },
+  ACTOR
+)
+ok(
+  poRepo.getPurchaseOrder(dropCount.id).receivedLineCount === 0,
+  'T48 GUARD a pure-drop order reports zero lines received, not all of them',
+  String(poRepo.getPurchaseOrder(dropCount.id).receivedLineCount)
+)
+ok(poRepo.getPurchaseOrder(dropCount.id).lineCount === 1, 'T48 GUARD out of the one line it has')
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 14. "this one finishes the order" is counted per slice ===')
+// ---------------------------------------------------------------------------
+
+/**
+ * T49. `completesPo` MEANS THE LAST OUTSTANDING SLICE, NOT THE LAST LINE.
+ *
+ * It was counted per LINE, so a line split 6 to RM and 6 to AM — one outstanding
+ * line, two outstanding candidates — told BOTH candidates they were the last
+ * thing the order was waiting for. The scan queue draws that as "completes this
+ * PO" on a scan that leaves six boxes still due, which is the kind of quiet
+ * wrongness this whole feature exists to remove. Advisory either way:
+ * auto-completion is decided inside the commit transaction and this flag is
+ * never asked, which is why getting it wrong was survivable and still worth
+ * fixing.
+ */
+const sliceSplit = poRepo.createPurchaseOrder(
+  {
+    supplier: 'Steel City',
+    location: 'RM',
+    lines: [
+      {
+        productId: 'p_u',
+        quantity: 12,
+        unitPrice: 10,
+        allocations: [
+          { quantity: 6, supplier: null, destination: 'RM' },
+          { quantity: 6, supplier: null, destination: 'AM' }
+        ]
+      }
+    ]
+  },
+  ACTOR
+)
+const sliceCandidates = poRepo
+  .outstandingLinesForProduct('p_u')
+  .filter((c: { poId: string }) => c.poId === sliceSplit.id)
+ok(sliceCandidates.length === 2, 'T49 a 6/6 split offers two candidates', String(sliceCandidates.length))
+ok(
+  sliceCandidates.every((c: { completesPo: boolean }) => c.completesPo === false),
+  'T49 and NEITHER of them completes the order',
+  JSON.stringify(sliceCandidates.map((c: { location: string; completesPo: boolean }) => [c.location, c.completesPo]))
+)
+ok(
+  sliceCandidates.every((c: { poLinesOutstanding: number }) => c.poLinesOutstanding === 1),
+  'T49 while the LINE count still says one outstanding line — that figure is unchanged',
+  JSON.stringify(sliceCandidates.map((c: { poLinesOutstanding: number }) => c.poLinesOutstanding))
+)
+// Take one slice in full; the other becomes the last one, and now it does.
+const firstSlice = sliceCandidates.find((c: { location: string }) => c.location === 'RM')
+poRepo.receivePurchaseOrderLines(
+  sliceSplit.id,
+  [{ lineId: firstSlice.lineId, quantity: 6, allocationId: firstSlice.allocationId }],
+  ACTOR
+)
+const lastSlice = poRepo
+  .outstandingLinesForProduct('p_u')
+  .filter((c: { poId: string }) => c.poId === sliceSplit.id)
+ok(lastSlice.length === 1, 'T49 one candidate is left', String(lastSlice.length))
+ok(lastSlice[0].completesPo === true, 'T49 and THAT one does complete the order', String(lastSlice[0]?.completesPo))
+// The flag agreed with what actually happened, which is the only test of an
+// advisory figure that means anything.
+poRepo.receivePurchaseOrderLines(
+  sliceSplit.id,
+  [{ lineId: lastSlice[0].lineId, quantity: 6, allocationId: lastSlice[0].allocationId }],
+  ACTOR
+)
+ok(
+  poRepo.getPurchaseOrder(sliceSplit.id).status === 'received',
+  'T49 receiving it really did complete it',
+  String(poRepo.getPurchaseOrder(sliceSplit.id).status)
+)
+
+// GUARD ONE: an unsplit single-line order is exactly what it always was — one
+// slice, one line, and the flag says true.
+const soleLine = poRepo.createPurchaseOrder(
+  { supplier: 'Steel City', location: 'RM', lines: [{ productId: 'p_v', quantity: 5, unitPrice: 10 }] },
+  ACTOR
+)
+const soleCandidates = poRepo
+  .outstandingLinesForProduct('p_v')
+  .filter((c: { poId: string }) => c.poId === soleLine.id)
+ok(soleCandidates.length === 1 && soleCandidates[0].completesPo === true, 'T49 GUARD an unsplit sole line still completes its PO')
+ok(soleCandidates[0].allocationId === null, 'T49 GUARD as the one implicit allocation it always was')
+
+// GUARD TWO: drop slices are not outstanding candidates, so a mixed line's stock
+// half is the last slice even though eight units will never arrive.
+const mixedSlice = poRepo.createPurchaseOrder(
+  {
+    supplier: 'Steel City',
+    location: 'RM',
+    lines: [
+      {
+        productId: 'p_v',
+        quantity: 20,
+        unitPrice: 10,
+        allocations: [
+          { quantity: 12, supplier: null, destination: 'RM' },
+          { quantity: 8, supplier: null, destination: DROP }
+        ]
+      }
+    ]
+  },
+  ACTOR
+)
+const mixedSliceCandidates = poRepo
+  .outstandingLinesForProduct('p_v')
+  .filter((c: { poId: string }) => c.poId === mixedSlice.id)
+ok(mixedSliceCandidates.length === 1, 'T49 GUARD a mixed line offers only its stock slice', String(mixedSliceCandidates.length))
+ok(
+  mixedSliceCandidates[0].completesPo === true,
+  'T49 GUARD which does complete the order — the eight drop units are not waited for',
+  String(mixedSliceCandidates[0]?.completesPo)
+)
+
 // The load-bearing invariant, over the whole database, at the end of everything
 // this suite did. If ONE row of stock, ONE cost layer or ONE ledger movement
 // exists at a destination that is not a shelf, the cost basis of real inventory

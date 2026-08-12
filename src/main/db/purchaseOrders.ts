@@ -87,6 +87,21 @@ interface UnitRow {
 }
 
 /**
+ * The columns a RECEIPT reads off that view — six of the nine.
+ *
+ * receivePoLine selects only what it uses, and casting that result to UnitRow
+ * would promise three fields the SELECT never fetched: po_id, po_line_id and
+ * received_at would all be `undefined` at runtime while the type said otherwise.
+ * Nothing reads them today, so the type is narrowed to match the query rather
+ * than the query widened to match the type — the next reader who needs one of
+ * the three gets a compile error instead of an undefined.
+ */
+type StockUnitRow = Pick<
+  UnitRow,
+  'allocation_id' | 'quantity' | 'qty_received' | 'position' | 'supplier' | 'destination'
+>
+
+/**
  * "May units bound here be checked into stock?", as SQL — GENERATED from
  * LOCATION_IDS rather than typed out beside it.
  *
@@ -99,6 +114,16 @@ interface UnitRow {
  *
  * The alias exists because purchase_order_lines now has a `destination` column
  * of its own, so an unqualified name is ambiguous in any query that joins it.
+ *
+ * KNOWN AND DELIBERATELY LEFT: this test is CASE-SENSITIVE (SQLite compares
+ * TEXT byte for byte by default) while `destinationHoldsStock` folds case
+ * through `canonicalDestination`, so a stored destination of 'rm' would read as
+ * a drop here and as a shelf there. Nothing can store one: every destination
+ * goes through `canonicalDestination` at the door, in createPurchaseOrder and in
+ * setPurchaseOrderRouting, which rewrites 'rm' to 'RM' before it is saved (T8
+ * pins that). Adding COLLATE NOCASE here would make a destination named "rm
+ * Collectibles" no more correct and would cost the index on every query that
+ * uses this predicate, so the door is the place it is fixed.
  */
 const stockDest = (alias = ''): string =>
   `${alias}destination IN (${LOCATION_IDS.map((id) => `'${id}'`).join(', ')})`
@@ -316,6 +341,31 @@ const DROP_UNITS_SQL = `
   (SELECT COALESCE(SUM(CASE WHEN ${stockDest('d.')} THEN 0 ELSE d.quantity END), 0)
      FROM po_unit_destinations d WHERE d.po_id = po.id)`
 
+/**
+ * Lines that are FULLY ARRIVED, measured against what each line can ever
+ * receive — the same denominator completePoIfFullyReceived uses, and for the
+ * same reason.
+ *
+ * The obvious `l.qty_received >= l.quantity` counts a mixed line only when its
+ * drop units arrive too, which is never: a 20-unit line split 12 to RM and 8 to
+ * a shop stays uncounted for ever, so an order whose whole delivery has landed
+ * reports 0 of 1 lines received while its status says Received.
+ *
+ * A line with NO receivable units is not counted at all, rather than counted as
+ * complete on 0 >= 0. A pure-drop order therefore still reports zero received
+ * lines, which is what it reported before this existed and what the board draws.
+ *
+ * Every line raised before v67 has receivable === quantity, so this is the old
+ * count verbatim for all of them.
+ */
+const RECEIVED_LINE_COUNT_SQL = `
+  (SELECT COUNT(*) FROM
+     (SELECT d.po_line_id,
+             SUM(CASE WHEN ${stockDest('d.')} THEN d.quantity     ELSE 0 END) AS receivable,
+             SUM(CASE WHEN ${stockDest('d.')} THEN d.qty_received ELSE 0 END) AS received
+        FROM po_unit_destinations d WHERE d.po_id = po.id GROUP BY d.po_line_id) r
+    WHERE r.receivable > 0 AND r.received >= r.receivable)`
+
 const PO_SELECT = `
   SELECT po.id, po.po_number, po.supplier, po.notes, po.status, po.location, po.total,
          po.created_by, po.created_at, po.updated_at,
@@ -324,8 +374,7 @@ const PO_SELECT = `
          po.tracking_status, po.tracking_status_detail, po.tracking_status_at, po.tracking_checked_at,
          po.tracking_error, po.tracking_attempted_at,
          (SELECT COUNT(*) FROM purchase_order_lines l WHERE l.po_id = po.id) AS line_count,
-         (SELECT COUNT(*) FROM purchase_order_lines l
-           WHERE l.po_id = po.id AND l.qty_received >= l.quantity) AS received_line_count,
+         ${RECEIVED_LINE_COUNT_SQL} AS received_line_count,
          (SELECT COALESCE(SUM(l.qty_received), 0) FROM purchase_order_lines l
            WHERE l.po_id = po.id) AS received_units,
          (SELECT COALESCE(SUM(l.quantity), 0) FROM purchase_order_lines l
@@ -905,7 +954,7 @@ export function receivePoLine(
         WHERE po_line_id = ? AND ${stockDest()}
         ORDER BY position, allocation_id`
     )
-    .all(lineId) as UnitRow[]
+    .all(lineId) as StockUnitRow[]
 
   if (stockUnits.length === 0) {
     // EVERY allocation on this line is a drop. Throwing (rather than returning)
@@ -1005,13 +1054,22 @@ export function receivePoLine(
         WHERE id = @id`
     ).run({ take, ts, id: target.allocation_id })
   }
+  // THE LINE IS FINISHED WHEN ITS RECEIVABLE UNITS ARE IN, not when its ordered
+  // quantity is. A line of 20 split 12 to RM and 8 to a shop is complete at 12:
+  // the other eight were never addressed to this building and no receipt can
+  // ever arrive for them, so measuring against `quantity` would leave
+  // received_at NULL for ever on a line that is, in every sense the receiving
+  // desk cares about, done. Every line raised before v67 has exactly one
+  // implicit stock allocation of its whole quantity, so this sum IS `quantity`
+  // for all of them and the stamp lands on the receipt it always landed on.
+  const receivable = stockUnits.reduce((n, u) => n + u.quantity, 0)
   db.prepare(
     `UPDATE purchase_order_lines
         SET qty_received = qty_received + @take,
-            received_at  = CASE WHEN qty_received + @take >= quantity THEN @ts ELSE received_at END,
+            received_at  = CASE WHEN qty_received + @take >= @receivable THEN @ts ELSE received_at END,
             lot_id       = @lotId
       WHERE id = @id`
-  ).run({ take, ts, id: lineId, lotId: res.lotId ?? null })
+  ).run({ take, ts, id: lineId, lotId: res.lotId ?? null, receivable })
 
   // The authoritative record of what this receipt took in. A line received in
   // several commits gets several rows, each naming its own lot — which is what
@@ -1080,6 +1138,18 @@ export function completePoIfFullyReceived(db: Database.Database, poId: string): 
   // with the receiving desk chasing boxes that were never addressed to this
   // building. On every line raised before v67 the receivable figure IS the
   // quantity, so this is the previous rule verbatim.
+  //
+  // KNOWN LIMITATION, deliberately not fixed here: the test is a SUM over a
+  // line's allocations, so an OVER-receipt against one of them can cover
+  // another's outstanding units — 12 taken against a 6-unit RM slice with the
+  // overage override on makes received (12) >= receivable (12) while the AM
+  // slice still has 6 due, and the order completes and retires its box with
+  // those six stranded. It is unreachable today: the only caller that passes
+  // allowOverage is a scan commit carrying an explicit 'overage' override, and
+  // receivePoLine's own clamp is per allocation, so an override can only ever
+  // push ONE slice past its own quantity for a scan the operator chose to force.
+  // Fixing it properly means per-slice completion arithmetic, which is a change
+  // to what "received" means and belongs in its own spec.
   const c = db
     .prepare(
       `SELECT COUNT(*) AS total,
@@ -1132,6 +1202,20 @@ export function outstandingLinesForProduct(productId: string): ScanPoCandidate[]
            SUM(CASE WHEN ${stockDest()} THEN quantity     ELSE 0 END) AS receivable,
            SUM(CASE WHEN ${stockDest()} THEN qty_received ELSE 0 END) AS received
       FROM po_unit_destinations WHERE po_id = l.po_id GROUP BY po_line_id`
+  /**
+   * Outstanding SLICES on this order, which is what "will this scan finish it?"
+   * actually turns on.
+   *
+   * Counted per allocation, never per line: a line split 6 to RM and 6 to AM is
+   * ONE outstanding line and TWO outstanding candidates, so a line-based count
+   * told both of them they were the last thing the order was waiting for, and
+   * the operator saw "completes this PO" on a scan that leaves six boxes still
+   * due. Every candidate row is itself an outstanding slice, so a count of 1
+   * means this row is the one.
+   */
+  const outstandingSlices = `
+    (SELECT COUNT(*) FROM po_unit_destinations o
+      WHERE o.po_id = l.po_id AND ${stockDest('o.')} AND o.qty_received < o.quantity)`
   const rows = getDb()
     .prepare(
       `SELECT l.id AS line_id, l.po_id, d.allocation_id, d.quantity, d.qty_received,
@@ -1139,7 +1223,8 @@ export function outstandingLinesForProduct(productId: string): ScanPoCandidate[]
               po.po_number, po.status, d.supplier, d.destination AS location, po.created_at,
               (SELECT COUNT(*) FROM (${receivableLines}) r WHERE r.receivable > 0) AS po_lines_total,
               (SELECT COUNT(*) FROM (${receivableLines}) r
-                WHERE r.receivable > 0 AND r.received < r.receivable) AS po_lines_outstanding
+                WHERE r.receivable > 0 AND r.received < r.receivable) AS po_lines_outstanding,
+              ${outstandingSlices} AS po_slices_outstanding
        FROM po_unit_destinations d
        JOIN purchase_order_lines l ON l.id = d.po_line_id
        JOIN purchase_orders po ON po.id = l.po_id
@@ -1166,6 +1251,7 @@ export function outstandingLinesForProduct(productId: string): ScanPoCandidate[]
     created_at: string
     po_lines_total: number
     po_lines_outstanding: number
+    po_slices_outstanding: number
   }>
   return rows.map((r) => ({
     lineId: r.line_id,
@@ -1184,7 +1270,12 @@ export function outstandingLinesForProduct(productId: string): ScanPoCandidate[]
     qtyOutstanding: Math.max(0, r.quantity - r.qty_received),
     unitPrice: r.unit_price,
     poCreatedAt: r.created_at,
-    completesPo: r.po_lines_outstanding === 1,
+    // Advisory, and still advisory: the commit transaction decides completion
+    // for itself. What this now promises is what its name says — receive this
+    // slice in full and the order has nothing left due here.
+    completesPo: r.po_slices_outstanding === 1,
+    // Both figures stay per LINE. They are drawn as "line 2 of 5" on the scan
+    // queue, where a line is what an operator counts.
     poLinesTotal: r.po_lines_total,
     poLinesOutstanding: r.po_lines_outstanding
   }))
@@ -1682,7 +1773,21 @@ export function forceDeletePurchaseOrder(
         // up to less than qty_received). Nothing names their shelf, so the
         // header's destination is the only answer left — and a line in that
         // state predates per-line destinations, where the header WAS the shelf.
-        note(line.location, outstanding)
+        //
+        // GUARDED, because since v67 the header is a DESTINATION and a
+        // destination can be a party name. This is the last place in this file
+        // where a non-location string could still reach stockQty and adjustStock
+        // — neither of which validates what it is handed, so adjustStock would
+        // open a real inventory_stock row at a customer's name and
+        // lotWeightedAvgCost would then average that phantom layer into the unit
+        // cost of boxes sitting on the RM shelf. It is safe today only because
+        // nothing ever writes stock at a party name, which is a fact about the
+        // rest of the file rather than anything this line checks. Now it checks.
+        //
+        // Units the guard rejects are counted as unrecoverable rather than
+        // dropped, so removed + sold still equals what the line received.
+        if (destinationHoldsStock(line.location)) note(canonicalDestination(line.location), outstanding)
+        else sold += outstanding
         outstanding = 0
 
         /**
@@ -2364,6 +2469,25 @@ export function setPartyPinned(name: string, pinned: boolean): OrderParty[] {
  * boxes where they are and the document claiming otherwise. Refused by name, and
  * the message says where the operation actually lives.
  *
+ * ## Refused once the order is CLOSED, even where nothing landed
+ *
+ * A per-line check is not enough on its own. A mixed order auto-completes when
+ * its receivable units are in, and its drop lines still read qty_received 0 for
+ * ever — so the per-line guard waves them through on an order the receiving desk
+ * has already finished with. Routing such a line back to RM invents units that
+ * nothing can ever check in: the box is gone from Incoming and there are no scan
+ * candidates (both filter on scanned_at IS NULL), and scanInPurchaseOrder
+ * refuses with "already been scanned in". A closed order cannot be reopened
+ * either — 'received' transitions only to 'cancelled' — so the units would be
+ * stranded permanently, on a document that says they are coming.
+ *
+ * ## It completes the order when re-routing is what finished it
+ *
+ * The mirror of the same problem. Sending the last line with units still due
+ * here off to a shop leaves the order open with an empty Receive panel and
+ * nothing that can ever close it, so the completion test runs at the end of this
+ * transaction exactly as it does after a receipt.
+ *
  * ## Splits are replaced, not patched
  *
  * A partial patch would need a rule for what happens to the rows it did not
@@ -2377,9 +2501,16 @@ export function setPurchaseOrderRouting(poId: string, patch: PoRoutingPatch): Po
   const db = getDb()
   const run = db.transaction((): PoStatusResult => {
     const header = db
-      .prepare('SELECT id, po_number, status, supplier, location FROM purchase_orders WHERE id = ?')
+      .prepare('SELECT id, po_number, status, supplier, location, scanned_at FROM purchase_orders WHERE id = ?')
       .get(poId) as
-      | { id: string; po_number: string; status: PurchaseOrderStatus; supplier: string | null; location: string }
+      | {
+          id: string
+          po_number: string
+          status: PurchaseOrderStatus
+          supplier: string | null
+          location: string
+          scanned_at: string | null
+        }
       | undefined
     if (!header) return { po: null, error: 'Purchase order not found.' }
     if (header.status === 'cancelled') {
@@ -2408,6 +2539,18 @@ export function setPurchaseOrderRouting(poId: string, patch: PoRoutingPatch): Po
           po: getPurchaseOrder(poId),
           error: `${line.qty_received} unit(s) of ${line.product_name} on ${header.po_number} have already been checked in; re-route them by adjusting stock in Inventory.`
         }
+      }
+    }
+
+    // AFTER the per-line check, not before it: a line with units on a shelf gets
+    // the refusal that names the product and counts them, which is the more
+    // useful of the two answers and the one T29 pins. This one catches the case
+    // that check cannot see — a drop line, permanently at qty_received 0, on an
+    // order that has already been received and retired from Incoming.
+    if (header.scanned_at || header.status === 'received') {
+      return {
+        po: getPurchaseOrder(poId),
+        error: `${header.po_number} has already been received and closed, so its routing can no longer be changed; units re-routed here would have nothing left that could check them in. Raise a new order for them, or move stock in Inventory.`
       }
     }
 
@@ -2484,6 +2627,14 @@ export function setPurchaseOrderRouting(poId: string, patch: PoRoutingPatch): Po
     }
 
     db.prepare('UPDATE purchase_orders SET updated_at = ? WHERE id = ?').run(ts, poId)
+    // Re-routing can be the act that FINISHES an order: send the last line with
+    // units still due here off to a shop and everything receivable is already
+    // in, with nothing left that could ever close it. Same primitive the receipt
+    // paths call, inside this transaction, so the routing change and the
+    // completion commit together or not at all. It writes no COGS, and a
+    // now-pure-drop order still does not auto-complete (no receivable line to
+    // finish), which is why one is closed by hand on the board.
+    completePoIfFullyReceived(db, poId)
     return { po: getPurchaseOrder(poId) }
   })
   try {
