@@ -417,6 +417,20 @@ export interface CatalogImportResult {
  * to cover the run would silently drop the second of the pair.
  */
 export function seedCatalogV3(database: Database): CatalogImportResult {
+  return seedCatalogRows(database, CATALOG_V3)
+}
+
+/**
+ * The insert-only import, over any list of [name, sku, category] rows.
+ *
+ * Split out of `seedCatalogV3` when a second list arrived: the rules below are
+ * the load-bearing part and having two copies of them is how a later list
+ * quietly acquires different behaviour from the first.
+ */
+export function seedCatalogRows(
+  database: Database,
+  rows: ReadonlyArray<readonly [string, string, string]>
+): CatalogImportResult {
   const ts = nowIso()
   const existing = database
     .prepare('SELECT id, name, sku FROM inventory_products')
@@ -444,14 +458,14 @@ export function seedCatalogV3(database: Database): CatalogImportResult {
   const idTaken = database.prepare('SELECT 1 AS one FROM inventory_products WHERE id = ?')
 
   const result: CatalogImportResult = {
-    considered: CATALOG_V3.length,
+    considered: rows.length,
     inserted: 0,
     skippedByName: 0,
     skippedBySku: 0
   }
 
   const run = database.transaction(() => {
-    for (const [name, sku, rawCategory] of CATALOG_V3) {
+    for (const [name, sku, rawCategory] of rows) {
       const key = catalogNameKey(name)
       if (!key) continue
       if (names.has(key)) {

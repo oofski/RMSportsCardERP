@@ -7,6 +7,7 @@ import { boxesPerCaseFromName } from '@shared/units'
 import { seedCatalog } from './inventorySeed'
 import { seedSnapshot } from './inventorySnapshot'
 import { seedCatalogExpansion } from './inventoryCatalogV2'
+import { fixTransposedSku, seedCatalogV4 } from './inventoryCatalogV4'
 import { seedCatalogV3 } from './inventoryCatalogV3'
 import { dedupeProducts } from './dedupe'
 import { backfillLots, resyncProductAvgCosts } from './lots'
@@ -2759,6 +2760,29 @@ function migrate(database: Database.Database): void {
   )
   setMeta(database, 'schema_version', '65')
 
+  // v66: the owner's catalog as it stood in August 2026 — the 35 rows the v3
+  // list did not have, and one transposed SKU.
+  //
+  // ## Nothing already in the catalog is modified
+  //
+  // The import is insert-only (see seedCatalogRows), so every existing product
+  // keeps its stock, cost basis, barcode, images and every edit anyone has made
+  // to it. That was the owner's first instruction and it is enforced by the
+  // code rather than promised in a comment: there is no UPDATE in that path.
+  //
+  // ## The one correction, and why it is safe
+  //
+  // `2025-26 Panini Select Road to FIFA World Cup Soccer Hobby 12-Box Case`
+  // was entered as 19837; the distributor's sheet says 19387. Two digits
+  // transposed, and the wrong one matches no product at that distributor.
+  //
+  // Guarded three ways rather than run as a blanket update: the row must still
+  // hold the wrong value, and it must have NO BARCODE — a scannable product is
+  // one somebody has already been through, and correcting a field underneath
+  // them is exactly what was asked not to happen. A product carrying a UPC is
+  // left alone even though the SKU is wrong, and this note is the record of
+  // that trade.
+
   // Payroll, once, for whoever owns the company.
   //
   // Seeded rather than left to be typed because the owner named it, named its
@@ -2868,6 +2892,22 @@ function migrate(database: Database.Database): void {
     setMeta(database, 'catalog_import_v3_inserted', String(r.inserted))
     setMeta(database, 'catalog_import_v3_skipped', String(r.skippedByName + r.skippedBySku))
   })
+
+  // v66: the August 2026 top-up — 35 rows the v3 list did not have.
+  //
+  // MUST run after catalog_import_v3, not at the v65 marker where it was first
+  // written: the SKU correction below edits a row that import creates, and a
+  // guarded UPDATE against a table that does not hold the row yet is a silent
+  // no-op that looks exactly like success.
+  runOnce(database, 'catalog_import_v4', () => {
+    const r = seedCatalogV4(database)
+    setMeta(database, 'catalog_import_v4_inserted', String(r.inserted))
+    setMeta(database, 'catalog_import_v4_skipped', String(r.skippedByName + r.skippedBySku))
+  })
+  runOnce(database, 'catalog_sku_fix_v4', () => {
+    setMeta(database, 'catalog_sku_fix_v4_rows', String(fixTransposedSku(database)))
+  })
+  setMeta(database, 'schema_version', '66')
 
   // v41: re-derive every product's average cost from its remaining cost layers.
   //
