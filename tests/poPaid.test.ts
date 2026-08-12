@@ -195,5 +195,121 @@ const u = po.getPurchaseOrder(undone.id)
 ok(u.paidAt === null, 'undoing Paid back to Ordered still clears the date')
 ok(!canTransition('received', 'ordered'), 'and Received has no route back to Ordered to wipe one')
 
+// ---------------------------------------------------------------------------
+console.log('\n=== 7. reverting a cancelled order ===')
+// ---------------------------------------------------------------------------
+// A PO cancelled by mistake had no way back at all: 'cancelled' was terminal,
+// so the only remedy was retyping the whole order under a new number, losing
+// the original number, its dates and any paperwork already sent.
+const oops = make()
+po.setPurchaseOrderStatus(oops.id, 'received', ACTOR)
+const stockBeforeCancel = stockAt('RM')
+po.setPurchaseOrderStatus(oops.id, 'cancelled', ACTOR)
+ok(cogsFor(oops.id) === null, 'cancelling voids the COGS row')
+ok(stockAt('RM') === stockBeforeCancel - 4, 'and hands the stock back', String(stockAt('RM')))
+
+const back = po.setPurchaseOrderStatus(oops.id, 'ordered', ACTOR)
+ok(!back.error, 'and it can now be reverted', String(back.error))
+const r = po.getPurchaseOrder(oops.id)
+ok(r.status === 'ordered', 'landing in Ordered', r.status)
+ok(r.cancelledAt === null, 'with the cancellation cleared')
+
+// THE POINT OF THE WHOLE THING. Cancelling deleted the purchase from the money
+// book; making it a live order again without putting the cost back would leave
+// the board showing an open order the accounts have no record of.
+ok(cogsFor(oops.id) === 100, 'and its cost back in the money book', String(cogsFor(oops.id)))
+ok(
+  (db.prepare('SELECT COUNT(*) AS n FROM finance_cogs WHERE po_id = ?').get(oops.id) as { n: number }).n === 1,
+  'exactly once — a second row would double-count the purchase in every P&L'
+)
+// Booked on the day the money was committed, not the day somebody fixed the
+// mistake: today's date would move the purchase into this month and silently
+// restate two months at once.
+ok(
+  (db.prepare('SELECT occurred_at AS o FROM finance_cogs WHERE po_id = ?').get(oops.id) as { o: string }).o ===
+    r.orderedAt,
+  'on the date the order was raised, not today'
+)
+
+// The stock is deliberately NOT restored: the cancel handed every unit back and
+// zeroed the lines, so the order really does have nothing checked in. It is
+// receivable again from scratch, which is the only state its lines can describe.
+ok(stockAt('RM') === stockBeforeCancel - 4, 'the stock stays handed back', String(stockAt('RM')))
+ok(r.receivedUnits === 0, 'and the order reports nothing received', String(r.receivedUnits))
+ok(r.orderedUnits === 4, 'while still ordering its 4 units', String(r.orderedUnits))
+
+// Reverting twice must not book the cost twice.
+po.setPurchaseOrderStatus(oops.id, 'cancelled', ACTOR)
+po.setPurchaseOrderStatus(oops.id, 'ordered', ACTOR)
+ok(
+  (db.prepare('SELECT COUNT(*) AS n FROM finance_cogs WHERE po_id = ?').get(oops.id) as { n: number }).n === 1,
+  'a second round trip still leaves exactly one COGS row'
+)
+
+// Cancelled reverts to Ordered and NOWHERE else — Received would claim stock
+// that was handed back when it was cancelled.
+ok(canTransition('cancelled', 'ordered'), 'cancelled may go back to Ordered')
+ok(!canTransition('cancelled', 'received'), 'but NOT straight to Received')
+ok(!canTransition('cancelled', 'paid'), 'nor to Paid')
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 8. the PDF actually renders ===')
+// ---------------------------------------------------------------------------
+// v0.0.158 shipped with EVERY purchase-order PDF throwing, because
+// lookupPartyAddress selected a column (bill_postal) that does not exist —
+// invoice_customers calls it bill_postal_code. Nothing caught it: the query is
+// a hand-written string, so it typechecks, builds, and only fails when somebody
+// presses the button.
+//
+// buildPoHtml is the whole document-generating path short of Chromium's
+// printToPDF, which needs Electron and cannot run here. Exercising it on each
+// SHAPE of order is what would have caught that, and is the point of this
+// section — not the HTML it produces.
+const { buildPoHtml } = require('../src/main/poPdf')
+db.prepare(
+  `INSERT INTO invoice_customers (id, name, terms, active, created_at, updated_at,
+                                  bill_line1, bill_city, bill_region, bill_postal_code)
+   VALUES ('c_pdf', 'Fenwick Cards', 'Net 30', 1, '2026-01-01T00:00:00.000Z',
+           '2026-01-01T00:00:00.000Z', '12 Mill Road', 'Dayton', 'OH', '45402')`
+).run()
+
+const renders = (label: string, id: string, wants: string[]): void => {
+  try {
+    const html = buildPoHtml(po.getPurchaseOrder(id))
+    const missing = wants.filter((w) => !html.includes(w))
+    ok(missing.length === 0, label, JSON.stringify(missing))
+  } catch (err) {
+    ok(false, label, `THREW ${(err as Error).message}`)
+  }
+}
+
+const plain = make()
+renders('an ordinary order renders', plain.id, ['<html', 'RM Sportscards', 'class="status'])
+
+// The top-right block. The owner asked for it by name — "that was a feature we
+// had, don't get rid of it" — so it is pinned rather than left to survive by
+// luck through the next edit to this header.
+renders('with the status in the top right', plain.id, ['class="right"'])
+po.setPurchaseOrderPaid(plain.id, true)
+renders('and PAID beside it once it is paid', plain.id, ['paidmark'])
+
+// The shape that actually broke: a destination that is a party, which is the
+// only path that reaches lookupPartyAddress at all.
+const dropPdf = po.createPurchaseOrder(
+  { supplier: 'Steel City', location: 'Fenwick Cards',
+    lines: [{ productId: 'p_pay', quantity: 2, unitPrice: 50 }] },
+  ACTOR
+)
+renders('a dropship renders, address and all', dropPdf.id, ['Drop ship', '12 Mill Road', '45402'])
+
+// A destination with no contact record must not throw — most one-off drops are
+// to somebody who was typed straight onto the order.
+const stranger = po.createPurchaseOrder(
+  { supplier: 'Steel City', location: 'Somebody Not On File',
+    lines: [{ productId: 'p_pay', quantity: 1, unitPrice: 10 }] },
+  ACTOR
+)
+renders('and so does one to a party with no address on file', stranger.id, ['Somebody Not On File'])
+
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

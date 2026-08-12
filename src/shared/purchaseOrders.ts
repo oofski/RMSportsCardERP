@@ -30,7 +30,18 @@ export const PO_TRANSITIONS: Record<PurchaseOrderStatus, PurchaseOrderStatus[]> 
   ordered: ['paid', 'received', 'cancelled'],
   paid: ['ordered', 'received', 'cancelled'],
   received: ['cancelled'],
-  cancelled: []
+  // Cancelled is no longer the end of the road. A PO cancelled by mistake had
+  // no way back, and the only remedy was to retype the whole order under a new
+  // number — which loses the original number, the dates and the paperwork
+  // anybody had already been sent.
+  //
+  // It reverts to ORDERED and nowhere else, because that is the only stage the
+  // cancel left it able to occupy: cancelling reverses every received unit,
+  // zeroes qty_received and deletes the receipts, so the order genuinely has
+  // nothing checked in any more. Reverting to Received would claim stock that
+  // was handed back. See setPurchaseOrderStatus, which re-books the COGS row
+  // the cancel voided.
+  cancelled: ['ordered']
 }
 
 export function isPurchaseOrderStatus(value: unknown): value is PurchaseOrderStatus {

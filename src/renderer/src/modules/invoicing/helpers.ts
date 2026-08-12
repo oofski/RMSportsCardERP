@@ -19,8 +19,13 @@ export const PO_STAGE_META: Record<
 
 /** The short verb shown on a card's move button for a given target stage. */
 export const PO_MOVE_LABEL: Record<PurchaseOrderStatus, string> = {
+  // From cancelled this is the way back, and "Reopen" is what it does there.
   ordered: 'Reopen',
-  paid: 'Mark paid',
+  // Kept for the stage move only — the CARD does not render it. Payment has its
+  // own button that stamps the date without moving anything, and offering both
+  // put two "Mark paid" buttons on every ordered card, one of which quietly
+  // moved the order to a different column. See `moves` in PoCard.
+  paid: 'Move to Paid',
   received: 'Receive',
   cancelled: 'Cancel'
 }

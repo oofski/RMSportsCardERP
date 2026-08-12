@@ -852,8 +852,49 @@ export function setPurchaseOrderStatus(
     // reflect the PO's current stage (no stale paid_at on a reopened PO).
     if (status === 'ordered') {
       db.prepare(
-        'UPDATE purchase_orders SET status = ?, paid_at = NULL, received_at = NULL, updated_at = ? WHERE id = ?'
+        'UPDATE purchase_orders SET status = ?, paid_at = NULL, received_at = NULL, cancelled_at = NULL, updated_at = ? WHERE id = ?'
       ).run(status, ts, id)
+      // UN-CANCELLING PUTS THE MONEY BACK.
+      //
+      // Cancelling is the single void point for a PO's COGS row: the purchase
+      // stops being a cost because it stopped being a purchase. Reverting makes
+      // it a live order again, so the cost has to come back with it — otherwise
+      // the board shows an open order for stock that is on its way while the
+      // money book has no record of committing to it, and the two disagree for
+      // ever with nothing to point at.
+      //
+      // The stock is deliberately NOT restored. The cancel handed every
+      // received unit back and zeroed qty_received, so the order really does
+      // have nothing checked in; it is receivable again from scratch, which is
+      // both true and the only state its lines can now describe.
+      if (row.status === 'cancelled') {
+        const head = db
+          .prepare('SELECT po_number, total, ordered_at, created_at FROM purchase_orders WHERE id = ?')
+          .get(id) as {
+          po_number: string
+          total: number
+          ordered_at: string | null
+          created_at: string
+        }
+        // Guarded rather than assumed: force-delete also voids the row, and a
+        // second INSERT would double-count the purchase in every P&L that sums
+        // this table.
+        const already = db
+          .prepare('SELECT COUNT(*) AS n FROM finance_cogs WHERE po_id = ?')
+          .get(id) as { n: number }
+        if (already.n === 0) {
+          recordPoCogs(db, {
+            poId: id,
+            poNumber: head.po_number,
+            amount: head.total,
+            // The date the money was committed, not the date somebody fixed the
+            // mistake — booking it today would move the purchase into this
+            // month's costs and silently restate two months at once.
+            occurredAt: head.ordered_at ?? head.created_at,
+            note: `Purchase order ${head.po_number}`
+          })
+        }
+      }
     } else {
       db.prepare(
         `UPDATE purchase_orders SET status = ?, ${tsCol} = ?, updated_at = ? WHERE id = ?`
@@ -2725,7 +2766,7 @@ export function lookupPartyAddress(name: string): string[] | null {
   if (!clean) return null
   const row = getDb()
     .prepare(
-      `SELECT name, bill_line1, bill_line2, bill_city, bill_region, bill_postal, bill_country
+      `SELECT name, bill_line1, bill_line2, bill_city, bill_region, bill_postal_code, bill_country
          FROM invoice_customers
         WHERE LOWER(TRIM(name)) = LOWER(?) AND active = 1
         LIMIT 1`
@@ -2737,7 +2778,7 @@ export function lookupPartyAddress(name: string): string[] | null {
         bill_line2: string | null
         bill_city: string | null
         bill_region: string | null
-        bill_postal: string | null
+        bill_postal_code: string | null
         bill_country: string | null
       }
     | undefined
@@ -2746,7 +2787,7 @@ export function lookupPartyAddress(name: string): string[] | null {
   const lines = [
     row.bill_line1,
     row.bill_line2,
-    [city, row.bill_postal].filter(Boolean).join(' '),
+    [city, row.bill_postal_code].filter(Boolean).join(' '),
     row.bill_country
   ]
     .map((l) => (l ?? '').trim())

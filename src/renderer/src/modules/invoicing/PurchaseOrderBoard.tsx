@@ -10,7 +10,7 @@ import { receiveProgress } from '@shared/receiving'
 import { Icon } from '../../components/Icon'
 import { ReceiveBar } from '../../components/ReceiveProgress'
 import { FreightLine, TrackingLine } from '../../components/FreightFields'
-import { formatMoney } from '../../lib/format'
+import { formatDate, formatMoney } from '../../lib/format'
 import { PO_MOVE_LABEL, PO_STAGE_META } from './helpers'
 
 /**
@@ -187,7 +187,21 @@ function PoCard({
   onDragStart: (id: string) => void
   onDragEnd: () => void
 }): JSX.Element {
-  const moves = PO_TRANSITIONS[po.status] ?? []
+  /**
+   * ONE way to say an order has been paid, and it is not a stage move.
+   *
+   * 'paid' is filtered out here on purpose. It is still a legal transition — the
+   * Paid column exists and a card can be dragged into it — but offering it as a
+   * button put TWO "Mark paid" buttons on every ordered card: this one, which
+   * moved the order into a different column, and the payment button below,
+   * which records the payment where the order stands. Two controls with the same
+   * words and different effects is worse than either on its own.
+   *
+   * The payment button wins because it is the one that answers the question
+   * being asked — has this been paid for — without also claiming something about
+   * where the stock is.
+   */
+  const moves = (PO_TRANSITIONS[po.status] ?? []).filter((to) => to !== 'paid')
 
   /**
    * DELETE LIVES ON THE CARD NOW, and only where it can succeed.
@@ -240,6 +254,22 @@ function PoCard({
    * order rather than a different sort of document — so it gets a tint and a
    * prefix, not a component of its own.
    */
+  /**
+   * CARDS ARE CLOSED UNTIL ASKED.
+   *
+   * There are enough purchase orders now that a column of fully-detailed cards
+   * is a column nobody can scan: the progress rail, the tracking line, the
+   * dropship split and five buttons on every one of them, so finding the order
+   * you came for means reading all of them. Closed, a card carries the five
+   * things somebody scans a board FOR — which order, who from, how much, how
+   * many, and who is carrying it — and nothing else.
+   *
+   * Per card, and not remembered between visits: expanding one is a question
+   * about that order right now ("what can I do with this?"), not a preference,
+   * and restoring six open cards on the next load would recreate the wall this
+   * exists to remove.
+   */
+  const [open, setOpen] = useState(false)
   const kindClass =
     po.orderKind === 'drop' ? ' po-card-drop' : po.orderKind === 'mixed' ? ' po-card-mixed' : ''
   const multi = po.destinationCount > 1
@@ -255,15 +285,16 @@ function PoCard({
         onDragStart(po.id)
       }}
       onDragEnd={() => onDragEnd()}
-      onClick={() => onOpen(po.id)}
+      onClick={() => setOpen((o) => !o)}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault()
-          onOpen(po.id)
+          setOpen((o) => !o)
         }
       }}
       role="button"
       tabIndex={0}
+      aria-expanded={open}
     >
       <div className="po-card-top">
         {/* Drop-0042 for an order where nothing is coming here; PO-0042 for
@@ -283,6 +314,20 @@ function PoCard({
         >
           → {destination}
         </span>
+        {/* Whether it has been paid for, visible WITHOUT opening the card. It is
+            the question most often asked of a board like this, and burying it
+            one click down would mean expanding every card to answer it. */}
+        {po.paidAt && po.status !== 'cancelled' && (
+          <span className="po-card-paid" title={`Paid ${formatDate(po.paidAt)}`}>
+            <Icon name="Check" size={11} />
+            Paid
+          </span>
+        )}
+        <Icon
+          name={open ? 'ChevronUp' : 'ChevronDown'}
+          size={14}
+          className="po-card-chev"
+        />
       </div>
       <div className="po-card-supplier">{po.supplier || 'No supplier'}</div>
       <div className="po-card-figs">
@@ -298,7 +343,7 @@ function PoCard({
       {/* The split, named on the card. The glow says part of this order never
           arrives; this says how much and stops the receiving desk counting the
           whole ordered figure off the line above. */}
-      {po.dropshipUnits > 0 && (
+      {open && po.dropshipUnits > 0 && (
         <div className="po-card-drops">
           <Icon name="Truck" size={12} />
           {po.receivableUnits > 0
@@ -306,22 +351,38 @@ function PoCard({
             : `${po.dropshipUnits} ${po.dropshipUnits === 1 ? 'unit' : 'units'} drop-shipped — none arrive here`}
         </div>
       )}
-      {showProgress && <ReceiveBar progress={received} compact className="po-card-recv" />}
+      {open && showProgress && <ReceiveBar progress={received} compact className="po-card-recv" />}
+      {/* Who is carrying it stays on the CLOSED card. It is one of the five
+          things the owner asked to still see, and it is what somebody chasing a
+          late delivery reads before anything else. */}
       <FreightLine
         carrier={po.carrier}
         service={po.service}
         trackingNumber={po.trackingNumber}
       />
-      <TrackingLine
-        status={po.trackingStatus}
-        checkedAt={po.trackingCheckedAt}
-        detail={po.trackingStatusDetail}
-        error={po.trackingError}
-        attemptedAt={po.trackingAttemptedAt}
-        hasTracking={!!po.trackingNumber}
-      />
-      {(moves.length > 0 || deletable || payable) && (
+      {open && (
+        <TrackingLine
+          status={po.trackingStatus}
+          checkedAt={po.trackingCheckedAt}
+          detail={po.trackingStatusDetail}
+          error={po.trackingError}
+          attemptedAt={po.trackingAttemptedAt}
+          hasTracking={!!po.trackingNumber}
+        />
+      )}
+      {open && (
         <div className="po-card-foot" onClick={(e) => e.stopPropagation()}>
+          {/* Opening the full order is now an explicit button rather than a
+              click on the card, because the click expands. Without it the
+              receipt — and with it the PDF, the freight editor and the line
+              detail — would have no way in from the board at all. */}
+          <button
+            type="button"
+            className="btn po-move po-move-open"
+            onClick={() => onOpen(po.id)}
+          >
+            Open
+          </button>
           {payable && (
             <button
               type="button"

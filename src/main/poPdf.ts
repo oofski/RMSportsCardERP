@@ -183,6 +183,10 @@ export function buildPoHtml(po: PurchaseOrderDetail): string {
     border: 1pt solid #111; font-size: 9pt; font-weight: 700; text-transform: uppercase;
     letter-spacing: 0.5pt;
   }
+  .paidmark {
+    display: block; margin-top: 5pt; font-size: 8pt; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.5pt; color: #060;
+  }
   .status.cancelled { border-color: #b00; color: #b00; }
   .status.received { border-color: #060; color: #060; }
 
@@ -249,6 +253,13 @@ export function buildPoHtml(po: PurchaseOrderDetail): string {
     </div>
     <div class="right">
       <span class="status ${esc(po.status)}">${esc(STATUS_LABEL[po.status] ?? po.status)}</span>
+      ${
+        // The stage says where the order is; this says whether it has been paid
+        // for, and since stock often lands before the invoice is settled those
+        // are different facts. Printed under the stage rather than beside it so
+        // a long status word cannot push it off the edge of the page.
+        po.paidAt ? `<span class="paidmark">Paid ${date(po.paidAt)}</span>` : ''
+      }
     </div>
   </div>
 

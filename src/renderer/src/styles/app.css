@@ -22898,3 +22898,55 @@ button.sor-team:focus-visible {
   border-color: color-mix(in srgb, var(--success) 45%, var(--border));
   color: var(--success);
 }
+
+/* ---------------------------------------------------------------------------
+   Collapsed purchase-order cards
+
+   A column of fully-detailed cards cannot be scanned once there are more than a
+   handful of orders: progress rail, tracking line, dropship split and five
+   buttons on every one, so finding the order you came for means reading all of
+   them. Closed, a card carries what somebody scans a board FOR — which order,
+   who from, how much, how many, who is carrying it — and opens on a click.
+   --------------------------------------------------------------------------- */
+.po-card-chev {
+  margin-left: 4px;
+  color: var(--text-3);
+  flex-shrink: 0;
+  transition: color 0.12s ease;
+}
+.po-card:hover .po-card-chev {
+  color: var(--text-2);
+}
+/* Whether it is paid, on the CLOSED card. It is the question most often asked
+   of this board, and putting it one click down would mean opening every card to
+   answer it. */
+.po-card-paid {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--success-bg);
+  color: var(--success);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  flex-shrink: 0;
+}
+.po-move.po-move-open {
+  color: var(--text-2);
+}
+.po-card-foot .po-move.po-move-open:hover {
+  background: var(--surface-3);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+/* Reopening a cancelled order is a recovery, not a routine move: it puts the
+   purchase back on the board AND puts its cost back in the money book. Given
+   the same weight as Receive so it does not read as an afterthought on the one
+   column where it is the only thing to do. */
+.po-card-foot .po-move.po-move-ordered:hover {
+  background: var(--success-bg);
+  border-color: color-mix(in srgb, var(--success) 45%, var(--border));
+  color: var(--success);
+}
