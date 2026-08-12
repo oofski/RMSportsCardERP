@@ -16,6 +16,23 @@ that were actually worth shipping.
 So the default is: bump nothing, commit, push. Version bumps and `[release]`
 happen when asked for.
 
+### "Ship it" means the WEB app, not an installer
+
+The owner's day-to-day target is the web app on Render, and **every push to
+`claude/rm-operations-app-initial-3sml0r` redeploys it automatically** — no
+version bump, no marker, nothing to ask for. Pushing IS shipping.
+
+So when the owner asks for something to be updated, live, out, or "in a new
+version", the finished job is: verify, commit, push. Stop there and say the web
+app is updating.
+
+The `.exe` and the `.dmg` are a SEPARATE, occasional thing that the owner asks
+for in those words — "cut a release", "I need the installers", "release it".
+Words like "push a new version" are NOT that request; they have meant the web
+app every time. When it is genuinely ambiguous, push without the marker and
+ask, because an unwanted installer cannot be taken back: it moves the
+auto-update feed and prompts everybody's installed copy.
+
 ## Verify before pushing
 
 `npm run typecheck && npm run build && npm test` — all three, every time. CI
