@@ -400,5 +400,66 @@ ok(
 )
 ok(po.getPurchaseOrder(guard.id).lineCount === 1, 'none of which added a line', String(po.getPurchaseOrder(guard.id).lineCount))
 
+// ---------------------------------------------------------------------------
+console.log('\n=== 10. RECEIVING IS NOT PAYING, by every route that receives ===')
+// ---------------------------------------------------------------------------
+// The owner: "something can be received but unpaid so make sure that if it is
+// received it does not mean that is paid".
+//
+// Stock arriving and money leaving are two different events that happen in
+// either order, and the app has four separate ways to record the first. A
+// single one of them stamping paid_at would put a payment on the record that
+// nobody made — and it would be believed, because it looks exactly like one
+// somebody did make.
+const inv = require('../src/main/db/inventory')
+const scanRepo = require('../src/main/db/scanning')
+
+// Route 1: the board's Receive button.
+const r1 = make()
+po.setPurchaseOrderStatus(r1.id, 'received', ACTOR)
+const a1 = po.getPurchaseOrder(r1.id)
+ok(a1.status === 'received', 'ROUTE 1 board move: it is received', a1.status)
+ok(a1.paidAt === null, 'and NOT paid', String(a1.paidAt))
+ok(a1.receivedUnits === 4, 'with the stock really in', String(a1.receivedUnits))
+
+// Route 2: the delivery form on Incoming Inventory.
+const r2 = make()
+const d2 = po.receivePurchaseOrderLines(r2.id, [{ lineId: r2.lines[0].id, quantity: 4 }], ACTOR)
+ok(!d2.error, 'ROUTE 2 delivery form: it books', String(d2.error))
+const a2 = po.getPurchaseOrder(r2.id)
+ok(a2.receivedUnits === 4, 'all four in', String(a2.receivedUnits))
+ok(a2.paidAt === null, 'and NOT paid', String(a2.paidAt))
+
+// Route 3: a PARTIAL delivery — the case most likely to be sitting unpaid.
+const r3 = make()
+po.receivePurchaseOrderLines(r3.id, [{ lineId: r3.lines[0].id, quantity: 2 }], ACTOR)
+const a3 = po.getPurchaseOrder(r3.id)
+ok(a3.receivedUnits === 2, 'ROUTE 3 partial: two of four in', String(a3.receivedUnits))
+ok(a3.paidAt === null, 'and NOT paid', String(a3.paidAt))
+ok(a3.status === 'ordered', 'still open, because it is not all here', a3.status)
+
+// Route 4: scan-in, which is how it happens on the floor.
+const r4 = make()
+const s4 = po.scanInPurchaseOrder(r4.id, ACTOR)
+ok(!s4.error, 'ROUTE 4 scan-in: it books', String(s4.error))
+const a4 = po.getPurchaseOrder(r4.id)
+ok(a4.receivedUnits === 4, 'all four in', String(a4.receivedUnits))
+ok(a4.paidAt === null, 'and NOT paid', String(a4.paidAt))
+
+// The reverse must hold too: paying must not make anything arrive.
+const r5 = make()
+po.setPurchaseOrderPaid(r5.id, true)
+const a5 = po.getPurchaseOrder(r5.id)
+ok(!!a5.paidAt, 'paying stamps the payment')
+ok(a5.receivedUnits === 0, 'and receives NOTHING', String(a5.receivedUnits))
+ok(a5.receivedAt === null, 'with no arrival date invented', String(a5.receivedAt))
+ok(a5.status === 'ordered', 'and the order has not moved', a5.status)
+
+// And a received order that is genuinely unpaid must SAY so, not merely omit it.
+ok(po.getPurchaseOrder(r1.id).paidAt === null, 'a received order can sit unpaid indefinitely')
+const late = po.setPurchaseOrderPaid(r1.id, true)
+ok(!late.error, 'and be paid later, from the Received column', String(late.error))
+ok(po.getPurchaseOrder(r1.id).status === 'received', 'without moving off it')
+
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

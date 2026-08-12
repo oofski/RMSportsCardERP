@@ -23296,3 +23296,19 @@ button.sor-team:focus-visible {
   font-size: 10px;
   opacity: 0.75;
 }
+
+/* Received, and still owed for. The one combination on this board worth
+   interrupting for: the stock is on the shelf and the money has not left.
+   Warning-coloured rather than danger — nothing is wrong, something is due. */
+.po-card-owed {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--warning-bg);
+  color: var(--warning);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  flex-shrink: 0;
+}

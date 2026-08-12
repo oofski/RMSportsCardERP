@@ -323,6 +323,25 @@ function PoCard({
             Paid
           </span>
         )}
+        {/* STOCK IS HERE AND WE STILL OWE FOR IT.
+            Arriving and being paid for are two events that happen in either
+            order, and the app never conflates them — but an unpaid order used
+            to be shown only by the ABSENCE of the Paid chip, and absence is not
+            something anybody scans a board for. A received order carrying a
+            balance is the one combination worth interrupting for, so it says so
+            rather than leaving the reader to notice a missing badge.
+
+            Deliberately not shown on an order that has arrived nothing yet:
+            everything on the board would wear it, and a warning on every card is
+            a warning on none. */}
+        {!po.paidAt && po.receivedUnits > 0 && po.status !== 'cancelled' && (
+          <span
+            className="po-card-owed"
+            title={`${po.receivedUnits} unit${po.receivedUnits === 1 ? '' : 's'} received and not paid for — ${formatMoney(po.total)} outstanding`}
+          >
+            Unpaid
+          </span>
+        )}
         <Icon
           name={open ? 'ChevronUp' : 'ChevronDown'}
           size={14}
