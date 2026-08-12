@@ -186,6 +186,23 @@ export const IPC = {
   // used on a PO. A PO's supplier stays free text — see @shared/purchaseOrders
   // for why it is not turned into a foreign key.
   poSuppliers: 'po:suppliers',
+  // Everywhere units can be SENT: RM and AM first, then the operator's pins,
+  // then every vendor and every invoice customer merged on the name.
+  //
+  // A WIDER question than poSuppliers or poVendors answers, and therefore a
+  // third channel rather than a filter over either: those two answer "who do we
+  // buy from", and a dropship destination is very often somebody we SELL to.
+  // Gated on module.invoicing for the same stated reason poSuppliers is — it
+  // discloses contact detail, which that permission already grants via Buyers.
+  poParties: 'po:parties',
+  // Pin or unpin a party so it sits near the top of the picker. RM and AM are
+  // refused: they are locations, not pins, and they cannot be removed.
+  poPartyPin: 'po:party-pin',
+  // Change where an EXISTING order's units are going — a line's supplier or
+  // destination, or its split into allocations. Refused once any affected line
+  // has been received, because re-routing units already on a shelf means moving
+  // stock, which is Inventory's job.
+  poSetRouting: 'po:set-routing',
   // Who this business has actually bought from, for Admin → Vendors. A NARROWER
   // question than poSuppliers answers and therefore a separate channel: that one
   // offers the whole contact list as things you might type, this one lists only

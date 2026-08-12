@@ -102,6 +102,31 @@ export function receiveProgressOf(
 }
 
 /**
+ * The same sum, but measured against the units that are actually COMING HERE.
+ *
+ * A dropship line is ordered and paid for and will never be received, because
+ * those boxes go straight from the supplier to the destination. Counting them in
+ * the denominator would leave a fully-arrived mixed order stuck at "12 of 20 ·
+ * 60%" for ever, and the receiving desk chasing eight boxes that were never
+ * addressed to this building.
+ *
+ * A wrapper rather than an edit: everything below and above it is pinned by
+ * tests/receiving.test.ts, including the 1..99 clamp that stops a
+ * nearly-complete order rounding up to a green 100%. New behaviour goes on top
+ * of that arithmetic, never through it.
+ *
+ * On every line raised before dropship existed, qtyReceivable equals quantity,
+ * so this is receiveProgressOf under a different name.
+ */
+export function receivableProgressOf(
+  lines: Array<{ qtyReceivable: number; qtyReceived: number }>
+): ReceiveProgress {
+  return receiveProgressOf(
+    lines.map((l) => ({ quantity: l.qtyReceivable, qtyReceived: l.qtyReceived }))
+  )
+}
+
+/**
  * "23 of 38 units · 61%" — the one-line answer to "where is this order".
  *
  * The raw counts lead and the percentage trails, because the number somebody

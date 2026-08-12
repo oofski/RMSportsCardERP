@@ -1,3 +1,4 @@
+import { isLocation, LOCATION_IDS } from './inventory'
 import type { PurchaseOrderStatus } from './types'
 
 export const PO_STATUSES: PurchaseOrderStatus[] = ['ordered', 'paid', 'received', 'cancelled']
@@ -149,3 +150,143 @@ export interface VendorSummary {
 export function hasVendorActivity(v: VendorSummary): boolean {
   return v.orders > 0 || v.receipts > 0
 }
+
+/* -------------------------------------------------------------------------- */
+/* Destinations and dropship                                                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A DESTINATION is wider than a LOCATION, and keeping the two words apart is
+ * the whole safety story of this feature.
+ *
+ *   location    — RM or AM. A shelf in a building. Stock can exist here, and
+ *                 `isLocation` in @shared/inventory is what decides. Nine call
+ *                 sites gate a stock write on it.
+ *   destination — where units are going: a location, OR the name of a vendor or
+ *                 a customer. Every location is a destination; most destinations
+ *                 are not locations.
+ *
+ * `isLocation` is deliberately NOT widened to accept a party name. If it were,
+ * every one of those nine gates would start letting stock be written to a
+ * customer's name, and `addStock` does not validate its location argument
+ * (`src/main/db/inventory.ts`) — it would create a real `inventory_stock` row
+ * and a real FIFO layer keyed to that name. `syncProductAvgCost` then averages
+ * `inventory_lots` across ALL locations, so a phantom layer at "Fenwick Cards"
+ * would move the unit cost — and therefore the reported margin — of boxes
+ * physically sitting on the RM shelf. `assertStockLotsConsistent` would still
+ * pass, because the phantom row is internally consistent with itself.
+ *
+ * So: `isDestination` validates what may be TYPED IN A PICKER.
+ * `destinationHoldsStock` decides what may be WRITTEN TO STOCK, and it is a
+ * straight delegation to `isLocation` rather than a second copy of the test.
+ */
+
+/** Anything non-empty is a destination — a shelf, or somebody's name. */
+export function isDestination(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0
+}
+
+/**
+ * Fold a hand-typed location id back to its canonical spelling; leave every
+ * other name alone but trimmed.
+ *
+ * Without this, "rm" typed into the destination box becomes a dropship to a
+ * shop called rm: the units stop being receivable, no box appears in Incoming,
+ * and the PO can never complete. The failure is silent and looks like the
+ * feature is broken rather than like a typo, so it is fixed at the door.
+ */
+export function canonicalDestination(value: string): string {
+  const trimmed = String(value ?? '').trim()
+  if (!trimmed) return ''
+  const hit = LOCATION_IDS.find((id) => id.toLowerCase() === trimmed.toLowerCase())
+  return hit ?? trimmed
+}
+
+/**
+ * May units bound here be checked into stock?
+ *
+ * The single question every receiving path asks, and it is asked PER
+ * ALLOCATION — never per order. There is no "this is a dropship PO" branch
+ * anywhere in the receiving code, because a mixed order is both at once.
+ */
+export function destinationHoldsStock(destination: string): boolean {
+  return isLocation(canonicalDestination(destination))
+}
+
+/**
+ * What kind of order this is, derived from where its units are going.
+ *
+ * Never stored. A stored flag would be a second source of truth that drifts the
+ * first time somebody edits a line's destination, and the failure mode is a
+ * dropship order that still says PO and gets received onto a shelf.
+ */
+export type OrderKind = 'stock' | 'drop' | 'mixed'
+
+export function orderKindOf(receivableUnits: number, dropUnits: number, headerDestination: string): OrderKind {
+  // A PO with no lines yet has nothing to derive from, so it reads as whatever
+  // its header says. Without this an empty draft would render as a dropship the
+  // moment it was created, before anybody had chosen anything.
+  if (receivableUnits <= 0 && dropUnits <= 0) {
+    return destinationHoldsStock(headerDestination) ? 'stock' : 'drop'
+  }
+  if (dropUnits <= 0) return 'stock'
+  if (receivableUnits <= 0) return 'drop'
+  return 'mixed'
+}
+
+/**
+ * `PO-0042` becomes `Drop-0042` — for display, and nowhere else.
+ *
+ * `purchase_orders.po_number` stores `PO-0042` for a dropship too, and the two
+ * share one counter, so the sequence has no gaps and no branches. Storing the
+ * Drop spelling would mean the prefix could disagree with the destinations the
+ * moment a line was re-routed, and would put a second format through
+ * `nextPoNumber`'s UNIQUE constraint.
+ *
+ * A MIXED order keeps `PO`. The prefix answers exactly one question — are boxes
+ * coming to this building? — and on a mixed order they are. The glow says part
+ * of it never arrives. Calling it `Drop` would tell the receiving desk to expect
+ * nothing, which is worse than saying too little.
+ */
+export function displayOrderNumber(poNumber: string, kind: OrderKind): string {
+  if (kind !== 'drop') return poNumber
+  return poNumber.startsWith('PO-') ? 'Drop-' + poNumber.slice(3) : poNumber
+}
+
+/** Does this order get the dropship glow? Mixed orders do; pure stock does not. */
+export function orderGlows(kind: OrderKind): boolean {
+  return kind === 'drop' || kind === 'mixed'
+}
+
+/** How the destination reads on a card or a receipt header. */
+export function destinationSummary(destinations: string[]): string {
+  const seen = [...new Set(destinations.map(canonicalDestination).filter(Boolean))]
+  if (seen.length === 0) return ''
+  if (seen.length === 1) return seen[0]
+  return `${seen.length} destinations`
+}
+
+/**
+ * Where a party may be offered from. `both` is a business this operation buys
+ * from AND sells to — one row, not two, the same rule `listVendors` already
+ * applies when it merges its sources on a case-insensitive name.
+ */
+export type OrderPartyKind = 'location' | 'vendor' | 'customer' | 'both' | 'history'
+
+/** One row in the destination / supplier picker. */
+export interface OrderParty {
+  name: string
+  kind: OrderPartyKind
+  /** Email · phone · city, when a contact record exists under this name. */
+  detail: string | null
+  /** True only for RM and AM. Drives every stock/no-stock decision downstream. */
+  holdsStock: boolean
+  pinned: boolean
+  /** False for RM and AM: they are locations, not pins, and cannot be removed. */
+  pinnable: boolean
+  /** Most recent order or receipt, ISO. Null means never dealt with. */
+  lastAt: string | null
+}
+
+/** How many user pins are shown above the fold, before the full list. */
+export const MAX_PINNED_PARTIES = 6

@@ -56,7 +56,8 @@ import type {
 } from '@shared/invoices'
 import type { ContactImportResult } from '@shared/contacts'
 import type { ClockPushState, PushSubscriptionInput } from '@shared/webPush'
-import type { SupplierSuggestion, VendorSummary } from '@shared/purchaseOrders'
+import type { OrderParty, SupplierSuggestion, VendorSummary } from '@shared/purchaseOrders'
+import type { PoRoutingPatch } from '@shared/types'
 import type {
   ShipPickAdvanced,
   ShipStationBoard,
@@ -521,6 +522,32 @@ export function createBridge(ipcRenderer: BridgeTransport) {
        * into one record.
        */
       suppliers: (): Promise<SupplierSuggestion[]> => ipcRenderer.invoke(IPC.poSuppliers),
+      /**
+       * Everywhere units can be SENT — the destination picker's whole list.
+       *
+       * Not `suppliers()` under another name. A dropship destination is very
+       * often somebody this business SELLS to, so this merges the vendor and
+       * customer directories into one list, case-insensitively, and marks a
+       * business that is both as one row rather than two.
+       *
+       * RM and AM come back first and are the only entries with holdsStock
+       * true. Every downstream stock decision reads that flag rather than
+       * re-testing the name, so there is one place for the rule to live.
+       */
+      parties: (): Promise<OrderParty[]> => ipcRenderer.invoke(IPC.poParties),
+      /** Pin a party to the top of the picker, or take the pin off. */
+      pinParty: (name: string, pinned: boolean): Promise<Result<OrderParty[]>> =>
+        ipcRenderer.invoke(IPC.poPartyPin, { name, pinned }),
+      /**
+       * Re-route an existing order: a line's supplier or destination, or its
+       * split across destinations.
+       *
+       * Refused when the PO is cancelled or any affected line has already been
+       * received — see setPurchaseOrderRouting for why moving received units is
+       * an Inventory adjustment and not a paperwork edit.
+       */
+      setRouting: (id: string, patch: PoRoutingPatch): Promise<Result<PurchaseOrderDetail>> =>
+        ipcRenderer.invoke(IPC.poSetRouting, { id, patch }),
       /**
        * Who this business buys from — Admin → Vendors.
        *

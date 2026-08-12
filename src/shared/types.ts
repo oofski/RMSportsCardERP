@@ -3,6 +3,10 @@ import type { Carrier, PaymentTiming } from './freight'
 import type { ShipStatusCode } from './shippingTypes'
 import type { Permission, Role } from './permissions'
 import type { InvoiceStatus } from './invoices'
+// Type-only, so it is erased at compile time and the cycle with
+// ./purchaseOrders (which imports PurchaseOrderStatus from here) never exists
+// at runtime.
+import type { OrderKind } from './purchaseOrders'
 
 export type EmployeeStatus = 'invited' | 'active' | 'disabled'
 
@@ -838,6 +842,65 @@ export interface PurchaseOrderLine {
   qtyOutstanding: number
   /** ISO timestamp qtyReceived first reached quantity (null while outstanding). */
   receivedAt: string | null
+  /**
+   * Effective supplier once inheritance is resolved (allocation → line →
+   * header). Null when the line's splits name different suppliers, because
+   * there is no one answer to show in a single cell.
+   */
+  supplier: string | null
+  /** Effective destination, same inheritance. Null when the splits differ. */
+  destination: string | null
+  /**
+   * Units bound for RM or AM — the denominator every progress bar and every
+   * completion test measures against.
+   *
+   * Equals `quantity` on EVERY line that predates dropship, because a line with
+   * no allocation rows is one implicit allocation at the header's location, and
+   * every header before this feature held RM or AM. That identity is what makes
+   * the whole migration a no-op for existing orders.
+   */
+  qtyReceivable: number
+  /** Empty when the line is not split. Never a single full-quantity row. */
+  allocations: PurchaseOrderAllocation[]
+}
+
+/**
+ * A slice of a line: some of its units, going one place, bought from one party.
+ *
+ * ## Zero rows is the important case
+ *
+ * A line with NO allocations is a line with ONE implicit allocation of its
+ * whole quantity, at the line's effective supplier and destination. That is not
+ * a convenience — it is the entire back-compat mechanism. Every purchase order
+ * in the database before this feature has zero allocation rows and keeps
+ * behaving byte for byte as it did, because the code path that reads "no rows"
+ * produces exactly what the code path that read the header used to produce.
+ *
+ * The migration therefore writes NO allocation rows for any existing order.
+ *
+ * ## Invariants the write path enforces
+ *
+ * SQLite cannot express a cross-row sum, so these are checked in code before
+ * any insert, and the whole order is refused if one fails:
+ *
+ *   I1  Σ allocations.quantity = line.quantity
+ *   I2  Σ allocations.qtyReceived = line.qtyReceived
+ *   I4  qtyReceived stays 0 forever on a drop allocation — nothing receives one
+ *   I5  quantity ≥ 1; a zero-quantity split is deleted, never stored
+ */
+export interface PurchaseOrderAllocation {
+  id: string
+  quantity: number
+  /** Effective supplier after inheritance. */
+  supplier: string | null
+  /** Effective destination after inheritance. Always canonically spelled. */
+  destination: string
+  /** destinationHoldsStock(destination) — RM or AM, and nothing else. */
+  holdsStock: boolean
+  /** Always 0 on a drop allocation (I4). */
+  qtyReceived: number
+  qtyOutstanding: number
+  receivedAt: string | null
 }
 
 /** A purchase order header (list/summary row on the kanban board). */
@@ -849,7 +912,23 @@ export interface PurchaseOrder {
   supplier: string | null
   notes: string | null
   status: PurchaseOrderStatus
-  /** Destination stock location (RM/AM) its cases will be checked into. */
+  /**
+   * The order's DEFAULT destination — where units go unless a line or an
+   * allocation says otherwise.
+   *
+   * Still called `location`, and deliberately so. Renaming the column would
+   * break sync in a way nobody would diagnose from the symptom: `upsertFor`
+   * discovers columns via PRAGMA table_info and silently drops any the
+   * receiving database does not have, so during a staggered rollout a new
+   * laptop's `destination` would be dropped by an old one and an old laptop's
+   * `location` would be dropped by a new one. Both directions end with a
+   * dropship that quietly became an RM purchase order. Widening the meaning of
+   * the column costs one comment; renaming it costs a data incident.
+   *
+   * Since v67 this may hold a vendor or customer name, not only RM/AM. Ask
+   * `destinationHoldsStock` before writing stock against it — never `isLocation`
+   * on a raw header value, and never assume it is a shelf.
+   */
   location: string
   /** Σ(line qty × unit price), stored snapshot. */
   total: number
@@ -876,6 +955,21 @@ export interface PurchaseOrder {
    * and "9 items" says nothing about whether twenty-three of them turned up.
    */
   orderedUnits: number
+  /**
+   * Stock, drop or mixed — derived from where the units are going, never
+   * stored. See `orderKindOf` in @shared/purchaseOrders for why a stored flag
+   * would be a second source of truth that drifts on the first re-route.
+   */
+  orderKind: OrderKind
+  /**
+   * Units bound for RM or AM. `orderedUnits` on every order that predates
+   * dropship, and the denominator of every progress figure after it.
+   */
+  receivableUnits: number
+  /** orderedUnits − receivableUnits. Zero on every legacy order. */
+  dropshipUnits: number
+  /** How many distinct destinations the order's units are going to. */
+  destinationCount: number
   createdAt: string
   updatedAt: string
   orderedAt: string | null
@@ -928,6 +1022,41 @@ export interface NewPurchaseOrderLine {
   productId: string
   quantity: number
   unitPrice: number
+  /** Omit or null to inherit the header's supplier. Store the inheritance. */
+  supplier?: string | null
+  /** Omit or null to inherit the header's destination. */
+  destination?: string | null
+  /**
+   * Split this line's units across destinations. Omit (or pass an empty array)
+   * for an unsplit line — which writes NO allocation rows at all, and is what
+   * keeps an ordinary order identical to one raised before this feature.
+   *
+   * Σ quantity must equal the line's quantity (I1) and each must be ≥ 1 (I5);
+   * the whole order is refused by name if either fails.
+   */
+  allocations?: Array<{ quantity: number; supplier: string | null; destination: string }>
+}
+
+/**
+ * A re-route of an order that already exists.
+ *
+ * Two independent halves, either of which may be omitted: `lines` changes where
+ * a whole line goes, `splits` replaces a line's allocation set outright.
+ * Replacing rather than patching the set is deliberate — a partial patch would
+ * need a rule for what happens to the rows it did not mention, and every such
+ * rule can leave Σ allocations ≠ line.quantity (I1) behind somebody's back.
+ *
+ * An empty `allocations` array means "not split": the rows are deleted and the
+ * line goes back to being one implicit allocation. That is how a split is
+ * undone, and it is why the unsplit state stores nothing rather than storing a
+ * single full-quantity row.
+ */
+export interface PoRoutingPatch {
+  lines?: Array<{ lineId: string; supplier?: string | null; destination?: string | null }>
+  splits?: Array<{
+    lineId: string
+    allocations: Array<{ id?: string; quantity: number; supplier: string | null; destination: string }>
+  }>
 }
 
 /** Create a purchase order from catalog line items. */
@@ -1009,7 +1138,20 @@ export interface ScanPoCandidate {
   poNumber: string
   supplier: string | null
   status: PurchaseOrderStatus
-  /** Destination stock location the PO's cases check into. */
+  /**
+   * Which slice of the line this candidate is. Null for an unsplit line — the
+   * one implicit allocation — which is every line raised before dropship.
+   *
+   * A line split 6 → RM and 6 → AM produces TWO candidates with distinct ids.
+   * That is deliberate: which shelf six boxes land on is the operator's call,
+   * and silently picking the first would misplace them with no way to notice.
+   */
+  allocationId: string | null
+  /**
+   * The ALLOCATION's destination, not the header's. Always RM or AM by
+   * construction — drop allocations never become candidates, because those
+   * boxes are not in the building to be scanned.
+   */
   location: string
   quantity: number
   qtyReceived: number
@@ -1096,6 +1238,13 @@ export interface ScanCommitInput {
   /** Required for 'po_line' and 'so_line'. Commit never re-resolves and
    * re-picks a line. */
   lineId?: string
+  /**
+   * Which allocation of that line, when the operator picked between two shelves.
+   * Null or omitted resolves the line's stock allocations in position order,
+   * which for an unsplit line is the one implicit allocation — i.e. exactly the
+   * behaviour every scan had before dropship existed.
+   */
+  allocationId?: string | null
   /**
    * The operator's answer to a scan that did not fit.
    *
