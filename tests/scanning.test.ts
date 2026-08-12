@@ -58,6 +58,7 @@ const {
   keepToOrder,
   lineFromScan,
   mergeScan,
+  setQuantity,
   toCommitInput
 } = require('../src/renderer/src/modules/inventory/scanLines')
 const db = getDb()
@@ -422,6 +423,44 @@ const keptOne = keepToOrder(pallet2, pallet2[0].key)
 ok(keptOne[0].quantity === 1, 'trimming by hand still takes only what was ordered',
   String(keptOne[0].quantity))
 ok(commitBlockedReason(keptOne) === null, 'and saves')
+
+// ---------------------------------------------------------------------------
+console.log('\n=== N+1. typing the count by hand, inbound ===')
+// ---------------------------------------------------------------------------
+// The half that got missed. Scanning counted freely while the + button and the
+// typed number still snapped back to the order's quantity, so somebody who saw
+// the count stuck watched the app undo them and had no way at all to say three
+// had arrived. The owner: "i see i try visuall but does not work".
+const byHandPo = poRepo.createPurchaseOrder(
+  { supplier: 'Steel City', location: 'RM', lines: [{ productId: 'p_c', quantity: 1, unitPrice: 1900 }] },
+  null
+)
+ok(!!byHandPo.id, 'a one-unit order to type against')
+let typed = beep([], '0000000000031')
+ok(typed[0].max === 1, 'the order asked for one', String(typed[0].max))
+
+typed = setQuantity(typed, typed[0].key, 3)
+ok(typed[0].quantity === 3, 'typing 3 GIVES 3', String(typed[0].quantity))
+ok(typed[0].override === 'overage', 'carrying the override the commit needs')
+ok(typed[0].overflow === true, 'and flagged as more than expected')
+ok(commitBlockedReason(typed) === null, 'with nothing in the way of saving')
+
+// And it really commits — a number the app accepts but the main process refuses
+// would be the same dead end wearing a different hat.
+const beforeHand = inv.stockQty('p_c', 'RM')
+const handDone = commit(typed[0])
+ok(!handDone.error, 'the typed count commits', String(handDone.error))
+ok(inv.stockQty('p_c', 'RM') - beforeHand === 3, 'putting three on the shelf',
+  String(inv.stockQty('p_c', 'RM') - beforeHand))
+
+// Outbound stays clamped: a typed number cannot promise stock the shelf has not
+// got, because that ends in negative on-hand.
+const outLine = beep([], '0000000000031', 'out')
+if (outLine.length > 0 && outLine[0].max != null) {
+  const pushed = setQuantity(outLine, outLine[0].key, outLine[0].max + 5)
+  ok(pushed[0].quantity === outLine[0].max, 'outbound still clamps a typed number',
+    `${pushed[0].quantity} vs ${outLine[0].max}`)
+}
 
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

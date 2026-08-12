@@ -136,7 +136,11 @@ function QueueRow({
   useEffect(() => setCost(line.unitCost != null ? String(line.unitCost) : ''), [line.unitCost])
 
   const out = line.kind === 'remove_stock'
-  const atMax = line.max != null && line.quantity >= line.max
+  // Only OUTBOUND has a ceiling the stepper must respect. Inbound the + button
+  // stayed disabled at the order's quantity, so somebody who saw the count stuck
+  // at 1 could not fix it by hand either — the app disagreed with the boxes in
+  // their hands and offered no way to say so.
+  const atMax = line.direction !== 'in' && line.max != null && line.quantity >= line.max
   const extended = line.unitCost != null ? line.unitCost * line.quantity : null
 
   const commitQty = (value: string): void => {

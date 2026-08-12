@@ -404,14 +404,37 @@ export function firstUndecided(lines: PendingLine[]): PendingLine | null {
   return lines.find((l) => l.needsDecision !== null) ?? null
 }
 
-/** Hand-edit the count. Clamped to the same ceiling a scan obeys, so a typo
- * cannot promise stock a PO or a shelf does not have. */
+/**
+ * Hand-edit the count — the stepper and the typed number.
+ *
+ * INBOUND IT IS NOT CLAMPED, for the same reason a scan is not: the boxes on
+ * the pallet are the fact and the order is only what somebody expected. This
+ * was the half of the change that got missed — scanning counted freely while
+ * the `+` button and the typed number still snapped back to the order's
+ * quantity, so somebody correcting it by hand watched the app undo them and had
+ * no way at all to say three had arrived.
+ *
+ * OUTBOUND stays clamped. A typed number cannot promise stock the shelf does
+ * not have, because that ends in negative on-hand, which every cost and
+ * valuation figure downstream is computed from.
+ */
 export function setQuantity(lines: PendingLine[], key: string, quantity: number): PendingLine[] {
-  return lines.map((l) =>
-    l.key === key
-      ? { ...l, quantity: clamp(Math.round(quantity), l.max), overflow: l.max != null && quantity > l.max }
-      : l
-  )
+  return lines.map((l) => {
+    if (l.key !== key) return l
+    const want = Math.max(1, Math.round(quantity))
+    const free = l.direction === 'in'
+    const next = free ? want : clamp(want, l.max)
+    const over = l.max != null && next > l.max
+    return {
+      ...l,
+      quantity: next,
+      // Past the order carries the override the commit needs, exactly as a scan
+      // past it does — otherwise the main process refuses the very number the
+      // operator just typed.
+      override: over && free ? 'overage' : l.override,
+      overflow: over
+    }
+  })
 }
 
 /** Move a line to the other stock location. Outbound, the ceiling moves with it. */
