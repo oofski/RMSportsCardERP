@@ -57,7 +57,7 @@ import type {
 import type { ContactImportResult } from '@shared/contacts'
 import type { ClockPushState, PushSubscriptionInput } from '@shared/webPush'
 import type { OrderParty, SupplierSuggestion, VendorSummary } from '@shared/purchaseOrders'
-import type { PoRoutingPatch } from '@shared/types'
+import type { NewPurchaseOrderLine, PoRoutingPatch } from '@shared/types'
 import type {
   ShipPickAdvanced,
   ShipStationBoard,
@@ -519,6 +519,15 @@ export function createBridge(ipcRenderer: BridgeTransport) {
        */
       setPaid: (id: string, paid: boolean): Promise<Result<PurchaseOrderDetail>> =>
         ipcRenderer.invoke(IPC.poSetPaid, { id, paid }),
+      /**
+       * Add products to an order that already exists.
+       *
+       * Refused on a cancelled order (its cost is out of the ledger) and on a
+       * received one (closed, so the line could never be checked in). The
+       * header total and the COGS row move with it.
+       */
+      addLines: (id: string, lines: NewPurchaseOrderLine[]): Promise<Result<PurchaseOrderDetail>> =>
+        ipcRenderer.invoke(IPC.poAddLines, { id, lines }),
       /** Shipping + payment details. Omitted keys are left as they are. */
       setFreight: (id: string, patch: FreightPatch): Promise<Result<PurchaseOrderDetail>> =>
         ipcRenderer.invoke(IPC.poSetFreight, { id, ...patch }),

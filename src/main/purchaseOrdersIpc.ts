@@ -7,6 +7,7 @@ import type {
   CogsEntry,
   InventoryProduct,
   NewPurchaseOrder,
+  NewPurchaseOrderLine,
   PoRoutingPatch,
   PurchaseOrder,
   PurchaseOrderDetail,
@@ -42,6 +43,7 @@ import {
   setPartyPinned,
   setPurchaseOrderFreight,
   setPurchaseOrderRouting,
+  addPurchaseOrderLines,
   setPurchaseOrderPaid,
   setPurchaseOrderStatus
 } from './db/purchaseOrders'
@@ -310,6 +312,22 @@ export function registerPurchaseOrdersIpc(): void {
         requireInvoicing()
         if (!payload?.id) return { ok: false, error: 'No purchase order specified.' }
         const res = setPurchaseOrderPaid(payload.id, payload.paid !== false)
+        return res.error
+          ? { ok: false, error: res.error }
+          : { ok: true, data: res.po as PurchaseOrderDetail }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  ipcMain.handle(
+    IPC.poAddLines,
+    (_e, payload: { id: string; lines: NewPurchaseOrderLine[] }): Result<PurchaseOrderDetail> => {
+      try {
+        requireInvoicing()
+        if (!payload?.id) return { ok: false, error: 'No purchase order specified.' }
+        const res = addPurchaseOrderLines(payload.id, payload.lines ?? [])
         return res.error
           ? { ok: false, error: res.error }
           : { ok: true, data: res.po as PurchaseOrderDetail }

@@ -182,6 +182,11 @@ export const IPC = {
   // Received owing money; making that a stage move would drag the card back to
   // Paid, where it reads as not-yet-arrived to everybody looking at the board.
   poSetPaid: 'po:set-paid',
+  // Add product lines to an order that already exists. A PO was write-once, so
+  // a missed case meant cancelling and retyping the whole thing under a new
+  // number. Moves the stored total AND the COGS row together — see
+  // addPurchaseOrderLines for why one without the other is worse than neither.
+  poAddLines: 'po:add-lines',
   poSetFreight: 'po:set-freight',
   // Carrier status: the hourly sweep, forced by hand.
   trackingCheckNow: 'tracking:check-now',

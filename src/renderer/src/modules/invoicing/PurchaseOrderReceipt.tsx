@@ -1,5 +1,10 @@
 import { useEffect, useState } from 'react'
-import type { PurchaseOrderDetail, PurchaseOrderLine, PurchaseOrderStatus } from '@shared/types'
+import type {
+  InventoryProduct,
+  PurchaseOrderDetail,
+  PurchaseOrderLine,
+  PurchaseOrderStatus
+} from '@shared/types'
 import type { Freight } from '@shared/freight'
 import {
   PO_TRANSITIONS,
@@ -84,6 +89,7 @@ export function PurchaseOrderReceipt({
   const [detail, setDetail] = useState<PurchaseOrderDetail | null>(null)
   const [pdfBusy, setPdfBusy] = useState(false)
   const [payBusy, setPayBusy] = useState(false)
+  const [adding, setAdding] = useState(false)
 
   /**
    * Record the payment and refresh in place.
@@ -161,6 +167,18 @@ export function PurchaseOrderReceipt({
       className={routed ? 'modal-xl' : ''}
       footer={
         <>
+          {/* Adding to an order that already exists.
+              A PO was write-once: a missed case meant cancelling and retyping
+              the whole thing under a new number, losing the number, the dates
+              and any paperwork already sent to the supplier. Hidden once the
+              order is closed or cancelled, because addPurchaseOrderLines
+              refuses both — a button whose only outcome is a refusal teaches
+              people the feature is broken. */}
+          {detail.status !== 'cancelled' && detail.status !== 'received' && (
+            <Button variant="secondary" icon="Plus" onClick={() => setAdding((a) => !a)}>
+              {adding ? 'Done adding' : 'Add product'}
+            </Button>
+          )}
           {moves.map((to) => (
             <Button
               key={to}
@@ -274,6 +292,21 @@ export function PurchaseOrderReceipt({
             not started. */}
         {detail.receivableUnits > 0 && (
           <ReceiveBar progress={receivableProgressOf(detail.lines)} className="po-receipt-recv" />
+        )}
+
+        {adding && (
+          <AddLinePanel
+            poId={detail.id}
+            poNumber={number}
+            onAdded={async (fresh) => {
+              setDetail(fresh)
+              // The board holds its own copy of every PO, and the total and the
+              // item count both just moved. Without this the card behind the
+              // modal keeps the old figures and closing looks like the add was
+              // thrown away — the same reason editing freight repaints.
+              await onSaved()
+            }}
+          />
         )}
 
         {/* Said in words, because "Received" on a mixed order means only that
@@ -565,5 +598,169 @@ function ReceiptLine({
           </div>
         ))}
     </>
+  )
+}
+
+/**
+ * Add a product to an order that already exists.
+ *
+ * ## Why it lives on the receipt and not on the board
+ *
+ * The receipt is the document: it is the one place showing what was ordered,
+ * from whom, at what price, and how much of it has landed. Adding a line is an
+ * edit to that document, and doing it here means the person adding can see the
+ * lines already on the order — which is what stops the same case being added
+ * twice, the failure this feature otherwise invites.
+ *
+ * ## The price is the BUY price, and it is not guessed
+ *
+ * It defaults to the product's recorded unit cost because that is the best
+ * available answer, but it is a plain editable field with no clever behaviour:
+ * this figure becomes the FIFO cost basis of the units when they are received,
+ * so a number quietly filled in from somewhere the operator did not look at
+ * would misstate the margin on everything sold out of that layer.
+ *
+ * Stays open after each add. Somebody correcting an order usually has more than
+ * one thing to put on it, and closing after the first would make the second a
+ * fresh trip through the button.
+ */
+function AddLinePanel({
+  poId,
+  poNumber,
+  onAdded
+}: {
+  poId: string
+  poNumber: string
+  onAdded: (fresh: PurchaseOrderDetail) => void | Promise<void>
+}): JSX.Element {
+  const toast = useToast()
+  const [query, setQuery] = useState('')
+  const [hits, setHits] = useState<InventoryProduct[]>([])
+  const [picked, setPicked] = useState<InventoryProduct | null>(null)
+  const [qty, setQty] = useState('1')
+  const [price, setPrice] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    const q = query.trim()
+    if (picked || q.length < 2) {
+      setHits([])
+      return
+    }
+    // Debounced, and the result of a stale keystroke is discarded rather than
+    // rendered: typing quickly otherwise lets an earlier, slower search land
+    // last and replace the list with matches for a prefix of what is in the box.
+    let alive = true
+    const t = window.setTimeout(() => {
+      void api.purchaseOrders.searchCatalog(q).then((r) => {
+        if (alive) setHits(r.slice(0, 8))
+      })
+    }, 180)
+    return () => {
+      alive = false
+      window.clearTimeout(t)
+    }
+  }, [query, picked])
+
+  const choose = (p: InventoryProduct): void => {
+    setPicked(p)
+    setQuery(p.name)
+    setHits([])
+    // The recorded cost is a starting point, not an answer — see the note above.
+    setPrice(p.unitCost > 0 ? String(p.unitCost) : '')
+  }
+
+  const reset = (): void => {
+    setPicked(null)
+    setQuery('')
+    setQty('1')
+    setPrice('')
+  }
+
+  const n = Math.round(Number(qty))
+  const p = Number(price)
+  const problem = !picked
+    ? 'Pick a product.'
+    : !Number.isFinite(n) || n < 1
+      ? 'Quantity must be at least 1.'
+      : !Number.isFinite(p) || p < 0
+        ? 'Enter a unit price.'
+        : null
+
+  const submit = async (): Promise<void> => {
+    if (!picked || problem) return
+    setBusy(true)
+    try {
+      const res = await api.purchaseOrders.addLines(poId, [
+        { productId: picked.id, quantity: n, unitPrice: p }
+      ])
+      if (!res.ok || !res.data) {
+        toast.error(res.error ?? 'Could not add that product.')
+        return
+      }
+      toast.success(`${picked.name} added to ${poNumber}.`)
+      reset()
+      await onAdded(res.data)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="po-addline">
+      <div className="po-addline-head">Add a product to {poNumber}</div>
+      <div className="po-addline-row">
+        <div className="typeahead po-addline-search">
+          <input
+            className="input"
+            value={query}
+            placeholder="Search the catalog…"
+            disabled={busy}
+            onChange={(e) => {
+              setQuery(e.target.value)
+              setPicked(null)
+            }}
+          />
+          {hits.length > 0 && (
+            <div className="ta-menu">
+              {hits.map((h) => (
+                <button key={h.id} type="button" className="ta-item" onClick={() => choose(h)}>
+                  <span className="ta-name">{h.name}</span>
+                  <span className="ta-detail">{h.sku || h.category}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        <input
+          className="input po-addline-qty"
+          value={qty}
+          inputMode="numeric"
+          aria-label="Quantity"
+          disabled={busy}
+          onChange={(e) => setQty(e.target.value)}
+        />
+        <input
+          className="input po-addline-price"
+          value={price}
+          inputMode="decimal"
+          placeholder="Unit price"
+          aria-label="Unit price"
+          disabled={busy}
+          onChange={(e) => setPrice(e.target.value)}
+        />
+        <Button
+          variant="primary"
+          loading={busy}
+          disabled={busy || !!problem}
+          onClick={() => void submit()}
+        >
+          Add
+        </Button>
+      </div>
+      <div className="po-addline-note">
+        {problem ?? `Adds ${n} × ${formatMoney(p)} — ${formatMoney(n * p)} onto this order.`}
+      </div>
+    </div>
   )
 }

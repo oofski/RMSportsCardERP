@@ -22950,3 +22950,60 @@ button.sor-team:focus-visible {
   border-color: color-mix(in srgb, var(--success) 45%, var(--border));
   color: var(--success);
 }
+
+/* ---------------------------------------------------------------------------
+   Adding a product to an order that already exists
+
+   Sits inside the receipt, under the progress rail and above the lines, so the
+   person adding can see what is already on the order — which is what stops the
+   same case going on twice, the mistake this feature otherwise invites.
+
+   Deliberately looks like a form dropped onto a document rather than part of
+   it: a tinted panel with its own border, so nobody reads the empty inputs as
+   another line item.
+   --------------------------------------------------------------------------- */
+.po-addline {
+  margin: 14px 0 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+.po-addline-head {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-3);
+  margin-bottom: 8px;
+}
+.po-addline-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+/* The search takes whatever is left: the product name is the long value and the
+   two numbers beside it are always short. */
+.po-addline-search {
+  flex: 1 1 auto;
+  min-width: 0;
+  position: relative;
+}
+.po-addline-qty {
+  width: 68px;
+  flex: 0 0 auto;
+  text-align: right;
+}
+.po-addline-price {
+  width: 110px;
+  flex: 0 0 auto;
+  text-align: right;
+}
+/* Says what pressing Add will do, in money, before it is pressed — or names the
+   one thing still missing. The same line carries both, so the space does not
+   jump as the form is filled in. */
+.po-addline-note {
+  margin-top: 7px;
+  font-size: 12px;
+  color: var(--text-2);
+}

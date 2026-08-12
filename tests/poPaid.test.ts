@@ -311,5 +311,94 @@ const stranger = po.createPurchaseOrder(
 )
 renders('and so does one to a party with no address on file', stranger.id, ['Somebody Not On File'])
 
+// ---------------------------------------------------------------------------
+console.log('\n=== 9. adding a product to an order that already exists ===')
+// ---------------------------------------------------------------------------
+// A PO was write-once: a missed case meant cancelling and retyping the whole
+// order under a new number, losing the number, the dates and any paperwork
+// already sent to the supplier.
+//
+// The header total is a STORED SNAPSHOT and a COGS row was written from it, so
+// the risk here is not the line — it is those two drifting apart. A receipt and
+// a set of accounts quoting different figures for the same document, with
+// nothing on either screen to say which is right, is worse than no edit button.
+db.prepare(
+  `INSERT INTO inventory_products (id, sku, name, category, unit_cost, created_at, updated_at)
+   VALUES ('p_add', 'SKU-ADD', 'Added Case', 'Football', 60,
+           '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`
+).run()
+
+const grow = make()   // 4 x 25 = 100
+ok(po.getPurchaseOrder(grow.id).total === 100, 'the order starts at 100', String(po.getPurchaseOrder(grow.id).total))
+ok(cogsFor(grow.id) === 100, 'and its COGS row agrees')
+
+const added = po.addPurchaseOrderLines(grow.id, [{ productId: 'p_add', quantity: 3, unitPrice: 60 }])
+ok(!added.error, 'a product can be added to a live order', String(added.error))
+const g = po.getPurchaseOrder(grow.id)
+ok(g.lineCount === 2, 'the line is on the order', String(g.lineCount))
+ok(g.orderedUnits === 7, 'the units follow — 4 + 3', String(g.orderedUnits))
+ok(g.total === 280, 'THE HEADER TOTAL FOLLOWS — 100 + 180', String(g.total))
+ok(cogsFor(grow.id) === 280, 'AND SO DOES THE MONEY BOOK', String(cogsFor(grow.id)))
+ok(
+  (db.prepare('SELECT COUNT(*) AS n FROM finance_cogs WHERE po_id = ?').get(grow.id) as { n: number }).n === 1,
+  'as one row, not a second entry'
+)
+// Booked on the day the order was raised. Re-writing the row would move the
+// cost to today and restate two months at once.
+ok(
+  (db.prepare('SELECT occurred_at AS o FROM finance_cogs WHERE po_id = ?').get(grow.id) as { o: string }).o ===
+    g.orderedAt,
+  'still dated when the order was raised'
+)
+// The new line inherits the header rather than copying it — NULL is what every
+// line written before line-level routing existed carries, and what keeps a
+// later change of header destination from leaving stale values behind.
+const rawAdded = db
+  .prepare(`SELECT supplier, destination, position FROM purchase_order_lines WHERE po_id = ? AND product_id = 'p_add'`)
+  .get(grow.id) as { supplier: string | null; destination: string | null; position: number }
+ok(rawAdded.supplier === null && rawAdded.destination === null, 'inheriting the header, not copying it')
+ok(rawAdded.position === 1, 'and landing after the lines already there', String(rawAdded.position))
+// It is a real, receivable line — not decoration on the header.
+ok(g.lines.find((l: { productId: string }) => l.productId === 'p_add')?.qtyReceivable === 3,
+  'and it is receivable like any other')
+
+// Adding a line is paperwork; the units have not turned up. Asserted on the
+// ADDED product, whose stock must still be nothing at all — measuring the other
+// product against a baseline taken at the top of this file would only prove
+// that the sections in between behaved, which is not what this is about.
+const addedStock = (db
+  .prepare(`SELECT COALESCE(SUM(quantity), 0) AS q FROM inventory_stock WHERE product_id = 'p_add'`)
+  .get() as { q: number }).q
+ok(addedStock === 0, 'no stock moved — the boxes have not arrived', String(addedStock))
+ok(
+  (db.prepare(`SELECT COUNT(*) AS n FROM inventory_lots WHERE product_id = 'p_add'`).get() as { n: number }).n === 0,
+  'and no cost layer was opened'
+)
+
+// The two refusals, and why each one.
+const closed = make()
+po.setPurchaseOrderStatus(closed.id, 'received', ACTOR)
+const onClosed = po.addPurchaseOrderLines(closed.id, [{ productId: 'p_add', quantity: 1, unitPrice: 10 }])
+ok(!!onClosed.error, 'a RECEIVED order refuses — the line could never be checked in')
+ok(po.getPurchaseOrder(closed.id).lineCount === 1, 'and nothing was written')
+
+const killed = make()
+po.setPurchaseOrderStatus(killed.id, 'cancelled', ACTOR)
+const onDead = po.addPurchaseOrderLines(killed.id, [{ productId: 'p_add', quantity: 1, unitPrice: 10 }])
+ok(!!onDead.error, 'a CANCELLED order refuses — its cost is out of the ledger')
+ok(cogsFor(killed.id) === null, 'and no COGS row was resurrected by the attempt')
+
+// Junk in must not corrupt the total.
+const guard = make()
+const noProduct = po.addPurchaseOrderLines(guard.id, [{ productId: 'nope', quantity: 1, unitPrice: 10 }])
+ok(!!noProduct.error, 'an unknown product is named, not silently dropped')
+ok(po.getPurchaseOrder(guard.id).total === 100, 'and the total is untouched', String(po.getPurchaseOrder(guard.id).total))
+ok(!!po.addPurchaseOrderLines(guard.id, []).error, 'an empty add is refused')
+ok(
+  !!po.addPurchaseOrderLines(guard.id, [{ productId: 'p_add', quantity: 0, unitPrice: 10 }]).error,
+  'so is a zero quantity'
+)
+ok(po.getPurchaseOrder(guard.id).lineCount === 1, 'none of which added a line', String(po.getPurchaseOrder(guard.id).lineCount))
+
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

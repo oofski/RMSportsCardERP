@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3'
 import type {
   NewPurchaseOrder,
+  NewPurchaseOrderLine,
   PoRoutingPatch,
   PurchaseOrder,
   PurchaseOrderAllocation,
@@ -791,6 +792,125 @@ const STATUS_TS_COLUMN: Record<PurchaseOrderStatus, string> = {
  * removable, and the alternative — cancelling the PO to clear it — would hand
  * back stock that is really on the shelf.
  */
+/**
+ * Add product lines to an order that already exists.
+ *
+ * A purchase order was write-once: get a line wrong, or find a second case you
+ * meant to include, and the only remedy was to cancel and retype the whole
+ * thing under a new number — losing the number, the dates, and any paperwork
+ * already sent to the supplier.
+ *
+ * ## The total and the money book move together
+ *
+ * `purchase_orders.total` is a STORED SNAPSHOT, not a sum computed on read, and
+ * a COGS row was written from it when the order was raised. Adding a line has
+ * to move both, in the same transaction. Updating one without the other leaves
+ * the receipt and the accounts quoting different figures for the same document,
+ * with nothing on either screen to say which is right.
+ *
+ * The total is recomputed from EVERY line with the identical expression
+ * `createPurchaseOrder` uses — per-line rounding to cents, then summed — rather
+ * than added to the stored figure. Adding to it would let a rounding difference
+ * accumulate silently across edits until the header disagreed with the lines it
+ * is made of.
+ *
+ * ## What it refuses, and why those two
+ *
+ * A CANCELLED order: its money is already back out of COGS, and adding a line
+ * would assert a purchase the ledger no longer carries.
+ *
+ * A RECEIVED order: it is closed, its box is gone from Incoming and its scan
+ * queue is empty (both filter on `scanned_at IS NULL`), so a line added here
+ * would be immediately unreceivable — outstanding for ever with no screen able
+ * to take it in. Reopen it first; that is a decision with a visible effect on
+ * the board, and it should be made deliberately rather than as a side effect of
+ * adding a product.
+ */
+export function addPurchaseOrderLines(
+  poId: string,
+  lines: NewPurchaseOrderLine[]
+): PoStatusResult {
+  const db = getDb()
+  const run = db.transaction((): PoStatusResult => {
+    const head = db
+      .prepare('SELECT id, po_number, status, supplier, location FROM purchase_orders WHERE id = ?')
+      .get(poId) as
+      | { id: string; po_number: string; status: PurchaseOrderStatus; supplier: string | null; location: string }
+      | undefined
+    if (!head) return { po: null, error: 'Purchase order not found.' }
+    if (head.status === 'cancelled') {
+      return {
+        po: getPurchaseOrder(poId),
+        error: `${head.po_number} was cancelled. Reopen it before adding anything.`
+      }
+    }
+    if (head.status === 'received') {
+      return {
+        po: getPurchaseOrder(poId),
+        error: `${head.po_number} is closed, so anything added now could never be checked in. Move it back to Ordered first.`
+      }
+    }
+    const wanted = (lines ?? []).filter((l) => l && l.productId && Math.round(l.quantity) > 0)
+    if (!wanted.length) return { po: getPurchaseOrder(poId), error: 'Choose a product and a quantity.' }
+
+    // Named, not silently dropped: a product deleted from the catalog between
+    // opening the form and saving it is rare and utterly baffling if the line
+    // just fails to appear.
+    for (const l of wanted) {
+      const exists = db
+        .prepare('SELECT name FROM inventory_products WHERE id = ?')
+        .get(l.productId) as { name: string } | undefined
+      if (!exists) return { po: getPurchaseOrder(poId), error: 'That product is no longer in the catalog.' }
+    }
+
+    const ts = nowIso()
+    const nextPos = (
+      db.prepare('SELECT COALESCE(MAX(position), -1) AS p FROM purchase_order_lines WHERE po_id = ?').get(poId) as {
+        p: number
+      }
+    ).p
+    const insertLine = db.prepare(
+      `INSERT INTO purchase_order_lines
+         (id, po_id, product_id, quantity, unit_price, position, created_at, supplier, destination)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    wanted.forEach((l, i) => {
+      insertLine.run(
+        newId(),
+        poId,
+        l.productId,
+        Math.round(l.quantity),
+        Math.max(0, l.unitPrice),
+        nextPos + 1 + i,
+        ts,
+        // NULL means "same as the header", exactly as it does on a line written
+        // at creation. Storing the inheritance rather than a copy is what keeps
+        // a later change of header destination from leaving stale values behind.
+        inheritable(l.supplier ?? null, head.supplier),
+        inheritable(l.destination ? canonicalDestination(l.destination) : null, head.location)
+      )
+    })
+
+    const all = db
+      .prepare('SELECT quantity, unit_price FROM purchase_order_lines WHERE po_id = ?')
+      .all(poId) as Array<{ quantity: number; unit_price: number }>
+    const total = cents(
+      all.reduce((sum, l) => sum + cents(Math.round(l.quantity) * Math.max(0, l.unit_price)), 0)
+    )
+    db.prepare('UPDATE purchase_orders SET total = ?, updated_at = ? WHERE id = ?').run(total, ts, poId)
+    // The ledger follows the document. UPDATE rather than void-and-rewrite so
+    // the row keeps the date the purchase was committed — re-booking it today
+    // would move the cost into this month and restate two months at once.
+    db.prepare('UPDATE finance_cogs SET amount = ? WHERE po_id = ?').run(total, poId)
+    return { po: getPurchaseOrder(poId) }
+  })
+  try {
+    return run()
+  } catch (err) {
+    return { po: getPurchaseOrder(poId), error: (err as Error).message }
+  }
+}
+
 export function setPurchaseOrderPaid(id: string, paid: boolean): PoStatusResult {
   const db = getDb()
   const run = db.transaction((): PoStatusResult => {
