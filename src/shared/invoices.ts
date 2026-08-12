@@ -776,6 +776,178 @@ export function resolveLineItemRef(
   return itemsByName.get(trimLower(line.item)) ?? null
 }
 
+/**
+ * Something the invoice names that the connected company does not have.
+ *
+ * `sku` is carried because it is what a fix should be made ON: creating the item
+ * with our SKU makes the NEXT invoice match by SKU, which survives somebody
+ * renaming it in QuickBooks afterwards. Creating it by name alone matches once
+ * and then breaks the first time the name is tidied.
+ */
+export interface QboMissingTarget {
+  kind: 'customer' | 'item'
+  /** Exactly the string that was looked up, so a fix can be made against it. */
+  name: string
+  /** Ours, for an item. Null for a customer and for a line that carries none. */
+  sku: string | null
+}
+
+/**
+ * What a company would refuse about this invoice, asked before it is sent.
+ *
+ * Only ever reports things that would STOP the post. The class and the payment
+ * terms are deliberately not checked here: both are wanted rather than required,
+ * both merely add a note when they miss, and putting them in front of somebody
+ * as part of a readiness list would make an invoice that is completely fine look
+ * like it has two problems.
+ */
+export interface QboInvoicePreflight {
+  /** True when nothing is missing — the post would not be refused. */
+  ready: boolean
+  customerName: string
+  /** False means QuickBooks has no customer by that name. */
+  customerFound: boolean
+  missingItems: QboMissingTarget[]
+  /**
+   * SKU disagreements. NOT blockers — the invoice posts — but worth reading
+   * before rather than after, because the fix is on the QuickBooks item and
+   * doing it first means the document is right the first time.
+   */
+  notes: string[]
+}
+
+/**
+ * Every line QuickBooks cannot resolve — the ONE place that decides that.
+ *
+ * Both the pre-flight check and the payload builder call this. That is the whole
+ * point of it existing: the check that runs while somebody is still typing and
+ * the refusal that fires at post time have to agree, and two functions applying
+ * "the same" rule is how they come to disagree about a line with a SKU that
+ * matches and a name that does not. One function, two callers, no drift.
+ *
+ * Deduplicated by SKU-then-name. The same missing case on four lines of one
+ * invoice is one thing to go and create, and saying it four times reads as four
+ * problems.
+ */
+export function missingQboItems(
+  lines: readonly { item: string; sku?: string | null }[],
+  itemsByName: Map<string, QboItemMatch>,
+  itemsBySku?: Map<string, QboItemMatch>
+): QboMissingTarget[] {
+  const out: QboMissingTarget[] = []
+  const seen = new Set<string>()
+  for (const line of lines) {
+    if (resolveLineItemRef(line, itemsByName, itemsBySku)) continue
+    const sku = (line.sku ?? '').trim()
+    const key = sku ? `s:${sku.toLowerCase()}` : `n:${trimLower(line.item)}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push({ kind: 'item', name: line.item, sku: sku || null })
+  }
+  return out
+}
+
+/**
+ * The refusal, in one sentence, from a list of misses.
+ *
+ * Shared with the pre-flight panel so the warning somebody sees BEFORE pressing
+ * Send is word for word the error they would have got after — the two reading
+ * differently is what makes a warning feel like a different, second problem.
+ */
+export function describeMissingQboItems(missing: readonly QboMissingTarget[]): string {
+  return (
+    `QuickBooks has no product or service called ${missing
+      .map((m) => `“${m.name}”`)
+      .join(', ')}. Add it in QuickBooks first, or export the CSV instead.`
+  )
+}
+
+/** Intuit's own limit on Item.Name. Longer is refused with a numbered fault. */
+export const QBO_ITEM_NAME_MAX = 100
+
+/**
+ * The body that creates a Product/Service.
+ *
+ * Pure, and separate from the call, for the same reason `toQboInvoice` is: the
+ * two decisions encoded here are about somebody's real books, and both should be
+ * pinned by a test rather than discovered in an accountant's report.
+ *
+ * NON-INVENTORY. QuickBooks would also take `Inventory`, and that would make it
+ * track quantity on hand and value the stock — a job this app already does
+ * against FIFO cost lots, per location. Two systems counting the same boxes
+ * disagree the moment one of them is not told something. `Inventory` also
+ * requires an asset account and an inventory start date, which is a balance
+ * sheet decision that a button beside an invoice line has no business making.
+ * A NonInventory item sells identically on an invoice; it just does not claim to
+ * know where the stock is.
+ *
+ * THE INCOME ACCOUNT IS PASSED IN, NEVER PICKED. An account id this app invented
+ * posts real revenue somewhere nobody chose — the same rule the whole
+ * integration runs on. A blank one throws here rather than defaulting.
+ */
+export function toQboItemPayload(input: {
+  name: string
+  incomeAccountId: string
+  sku?: string | null
+  rate?: number | null
+  description?: string | null
+}): Record<string, unknown> {
+  const name = (input.name ?? '').trim()
+  if (!name) throw new Error('An item needs a name.')
+  if (name.length > QBO_ITEM_NAME_MAX) {
+    throw new Error(
+      `QuickBooks item names stop at ${QBO_ITEM_NAME_MAX} characters. Shorten it and try again.`
+    )
+  }
+  const income = (input.incomeAccountId ?? '').trim()
+  if (!income) {
+    throw new Error(
+      'Pick the “Break sales income” account first — Invoices → QuickBooks → Account mapping. ' +
+        'A new product has to post its revenue somewhere, and this app will not choose that for ' +
+        'you.'
+    )
+  }
+  const sku = (input.sku ?? '').trim()
+  const description = (input.description ?? '').trim()
+  return {
+    Name: name,
+    Type: 'NonInventory',
+    IncomeAccountRef: { value: income },
+    // The SKU is why creating it from here beats creating it by hand: the NEXT
+    // invoice matches on it, and a SKU match survives the item being renamed in
+    // QuickBooks afterwards. A name match does not.
+    ...(sku ? { Sku: sku } : {}),
+    ...(description ? { Description: description } : {}),
+    ...(typeof input.rate === 'number' && Number.isFinite(input.rate) && input.rate > 0
+      ? { UnitPrice: input.rate }
+      : {})
+  }
+}
+
+/**
+ * The body that creates a customer.
+ *
+ * DisplayName and nothing else by default, because DisplayName is the field an
+ * invoice matches on. Setting GivenName/FamilyName instead would have
+ * QuickBooks compose a display name in an order that may not be the one written
+ * here, and the very next send would fail to find the customer just created.
+ */
+export function toQboCustomerPayload(input: {
+  name: string
+  email?: string | null
+  billAddr?: InvoiceAddress | null
+}): Record<string, unknown> {
+  const name = (input.name ?? '').trim()
+  if (!name) throw new Error('A customer needs a name.')
+  const email = (input.email ?? '').trim()
+  const addr = input.billAddr && hasAddress(input.billAddr) ? toQboAddress(input.billAddr) : null
+  return {
+    DisplayName: name,
+    ...(email ? { PrimaryEmailAddr: { Address: email } } : {}),
+    ...(addr ? { BillAddr: addr } : {})
+  }
+}
+
 function toQboAddress(a: InvoiceAddress): QboAddress {
   const put = (v: string | null): string | undefined => {
     const s = (v ?? '').trim()
@@ -817,16 +989,8 @@ export function toQboInvoice(
   itemRefs: Map<string, QboItemMatch>,
   refs: QboInvoiceRefs = {}
 ): QboInvoicePayload {
-  const missing = invoice.lines.filter(
-    (l) => !resolveLineItemRef(l, itemRefs, refs.itemsBySku)
-  )
-  if (missing.length > 0) {
-    throw new Error(
-      `QuickBooks has no product or service called ${missing
-        .map((l) => `“${l.item}”`)
-        .join(', ')}. Add it in QuickBooks first, or export the CSV instead.`
-    )
-  }
+  const missing = missingQboItems(invoice.lines, itemRefs, refs.itemsBySku)
+  if (missing.length > 0) throw new Error(describeMissingQboItems(missing))
 
   const classOn = refs.classOn ?? 'none'
   const classRef = refs.classRef ?? null

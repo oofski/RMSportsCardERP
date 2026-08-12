@@ -152,6 +152,16 @@ export const IPC = {
   invoiceQboCustomers: 'invoices:qbo:customers',
   invoiceQboItems: 'invoices:qbo:items',
   invoiceCreateInQbo: 'invoices:qbo:create',
+  // Would QuickBooks take this invoice? Asked WHILE it is being written, so a
+  // missing product is a thing to go and fix rather than a toast after the save.
+  // Reads only — two queries, nothing written — which is what makes it safe to
+  // run on every edit against live books.
+  invoiceQboPreflight: 'invoices:qbo:preflight',
+  // Add the missing product or buyer to QuickBooks. A SEPARATE press, never part
+  // of a send: see the note above createQboItem for why posting an invoice must
+  // never create things as a side effect.
+  invoiceQboCreateItem: 'invoices:qbo:create-item',
+  invoiceQboCreateCustomer: 'invoices:qbo:create-customer',
   invoiceSendFromQbo: 'invoices:qbo:send',
   invoiceOpenInQbo: 'invoices:qbo:open',
   // Save it here, then put it in QuickBooks — one gesture, two steps, in that

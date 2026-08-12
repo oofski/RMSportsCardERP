@@ -37,7 +37,7 @@ auto-update feed and prompts everybody's installed copy.
 
 `npm run typecheck && npm run build && npm test` — all three, every time. CI
 runs typecheck and build but **never runs the tests**, so a suite that breaks
-only fails locally. `npm test` is currently 48 suites.
+only fails locally. `npm test` is currently 49 suites.
 
 ## Traps this repo has fallen into
 

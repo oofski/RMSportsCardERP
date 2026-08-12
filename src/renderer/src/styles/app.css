@@ -12272,6 +12272,103 @@ button.sor-team:focus-visible {
   line-height: 1.45;
   color: var(--text-2);
 }
+/* ---- Will QuickBooks take this invoice? --------------------------------
+   Sits under the invoice lines. Toned by ANSWER, not by severity: a pass is
+   quiet green, a blocker is amber, and a check that could not run is neutral —
+   because "we could not ask" and "the answer is no" need different reactions,
+   and colouring them the same is how a failed check gets read as a pass. */
+.qbo-ready {
+  margin-top: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  padding: 11px 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.qbo-ready[data-tone='ready'] {
+  border-color: var(--success);
+  background: var(--success-bg);
+}
+.qbo-ready[data-tone='blocked'] {
+  border-color: var(--warning);
+  background: var(--warning-bg);
+}
+.qbo-ready-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.qbo-ready-head b {
+  font-size: 12.5px;
+  color: var(--text);
+}
+/* Pushes Re-check to the right without a spacer element. */
+.qbo-ready-head > .btn {
+  margin-left: auto;
+}
+.qbo-ready-head > svg {
+  flex-shrink: 0;
+  color: var(--text-3);
+}
+.qbo-ready[data-tone='ready'] .qbo-ready-head > svg {
+  color: var(--success-strong);
+}
+.qbo-ready[data-tone='blocked'] .qbo-ready-head > svg {
+  color: var(--warning);
+}
+/* The spinning icon while a check is in flight, so a slow company's books do
+   not look like a screen that has stopped. */
+.qbo-ready[data-tone='checking'] .qbo-ready-head > svg {
+  animation: spin 1.1s linear infinite;
+}
+.qbo-ready-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.qbo-ready-row > div {
+  min-width: 0;
+  flex: 1;
+}
+.qbo-ready-row b {
+  display: block;
+  font-size: 12.5px;
+  color: var(--text);
+  /* A case name is long and must not push the button off the row. */
+  overflow-wrap: anywhere;
+}
+.qbo-ready-row span {
+  display: block;
+  margin-top: 2px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-2);
+}
+.qbo-ready-row > .btn {
+  flex-shrink: 0;
+}
+.qbo-ready-note,
+.qbo-ready-foot {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+@media (max-width: 620px) {
+  /* The button under the name rather than beside it — at this width a case name
+     and a button side by side leaves the name two characters wide. */
+  .qbo-ready-row {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 8px;
+  }
+}
+
 .qbo-map-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;

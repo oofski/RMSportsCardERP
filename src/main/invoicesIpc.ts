@@ -12,7 +12,11 @@ import type {
   InvoiceStatus,
   NewInvoice
 } from '@shared/invoices'
-import type { InvoicePushResult, QboInvoiceObservation } from '@shared/invoices'
+import type {
+  InvoicePushResult,
+  QboInvoiceObservation,
+  QboInvoicePreflight
+} from '@shared/invoices'
 import { invoicesToCsv, nextStageFromQbo } from '@shared/invoices'
 import { currentUser } from './services/auth'
 import {
@@ -40,10 +44,13 @@ import { importContactFile } from './contactsImport'
 import { uploadedBytes, uploadedName } from './util'
 import { openInvoicePdf, saveInvoicePdf } from './invoicePdf'
 import {
+  createQboCustomer,
   createQboInvoice,
+  createQboItem,
   deleteQboInvoice,
   fetchQboCustomers,
   fetchQboItems,
+  preflightQboInvoice,
   sendQboInvoice,
   type QboCustomerRef,
   type QboItemRef
@@ -401,6 +408,93 @@ export function registerInvoicesIpc(): void {
       return fail(err)
     }
   })
+
+  /**
+   * What QuickBooks would refuse about this invoice, before it is sent.
+   *
+   * Takes the invoice AS TYPED rather than an id, which is the whole point: the
+   * answer is wanted while the form is still open and before anything has been
+   * saved, so there is no row to point at yet.
+   */
+  ipcMain.handle(
+    IPC.invoiceQboPreflight,
+    async (
+      _e,
+      payload: { customerName?: unknown; lines?: unknown }
+    ): Promise<Result<QboInvoicePreflight>> => {
+      try {
+        requireInvoicing()
+        const raw = Array.isArray(payload?.lines) ? payload.lines : []
+        const lines = raw
+          .map((l) => {
+            const line = (l ?? {}) as { item?: unknown; sku?: unknown }
+            return { item: str(line.item), sku: str(line.sku) || null }
+          })
+          // A blank row in a half-typed form is not a missing product, and
+          // reporting it as one would put a scary red panel in front of somebody
+          // for the entirely normal state of not having finished.
+          .filter((l) => l.item !== '')
+        return {
+          ok: true,
+          data: await preflightQboInvoice({ customerName: str(payload?.customerName), lines })
+        }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  /**
+   * Create the missing Product/Service, then answer with what QuickBooks made.
+   *
+   * Deliberately not folded into the send. See createQboItem for the reason —
+   * briefly, an invoice that silently invents six items in somebody's books is
+   * not something an error message can take back.
+   */
+  ipcMain.handle(
+    IPC.invoiceQboCreateItem,
+    async (
+      _e,
+      payload: { name?: unknown; sku?: unknown; rate?: unknown; description?: unknown }
+    ): Promise<Result<QboItemRef>> => {
+      try {
+        requireInvoicing()
+        const rate = Number(payload?.rate)
+        return {
+          ok: true,
+          data: await createQboItem({
+            name: str(payload?.name),
+            sku: str(payload?.sku) || null,
+            rate: Number.isFinite(rate) && rate > 0 ? rate : null,
+            description: str(payload?.description) || null
+          })
+        }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  ipcMain.handle(
+    IPC.invoiceQboCreateCustomer,
+    async (
+      _e,
+      payload: { name?: unknown; email?: unknown }
+    ): Promise<Result<QboCustomerRef>> => {
+      try {
+        requireInvoicing()
+        return {
+          ok: true,
+          data: await createQboCustomer({
+            name: str(payload?.name),
+            email: str(payload?.email) || null
+          })
+        }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
 
   /**
    * Create it in QuickBooks, then open the browser on it.

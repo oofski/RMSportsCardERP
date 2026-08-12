@@ -52,7 +52,8 @@ import type {
   InvoicePushResult,
   InvoiceStatus,
   InvoiceTerms,
-  NewInvoice
+  NewInvoice,
+  QboInvoicePreflight
 } from '@shared/invoices'
 import type { ContactImportResult } from '@shared/contacts'
 import type { ClockPushState, PushSubscriptionInput } from '@shared/webPush'
@@ -1409,6 +1410,38 @@ export function createBridge(ipcRenderer: BridgeTransport) {
           }>
         >
       > => ipcRenderer.invoke(IPC.invoiceQboItems),
+
+      /**
+       * Would QuickBooks take this, as typed? Two reads, nothing written.
+       *
+       * Takes the form's CURRENT contents rather than a saved id, because the
+       * answer is wanted while somebody can still act on it — which is before
+       * there is anything on disk to refer to.
+       */
+      qboPreflight: (input: {
+        customerName: string
+        lines: Array<{ item: string; sku: string | null }>
+      }): Promise<Result<QboInvoicePreflight>> =>
+        ipcRenderer.invoke(IPC.invoiceQboPreflight, input),
+
+      /**
+       * Add the missing Product/Service to QuickBooks. A WRITE to real books,
+       * and always its own press — never a hidden step inside a send.
+       */
+      qboCreateItem: (input: {
+        name: string
+        sku?: string | null
+        rate?: number | null
+        description?: string | null
+      }): Promise<Result<{ id: string; name: string; sku: string | null }>> =>
+        ipcRenderer.invoke(IPC.invoiceQboCreateItem, input),
+
+      /** Add the missing buyer. Same rule: explicit, never a side effect. */
+      qboCreateCustomer: (input: {
+        name: string
+        email?: string | null
+      }): Promise<Result<{ id: string; name: string }>> =>
+        ipcRenderer.invoke(IPC.invoiceQboCreateCustomer, input),
 
       /**
        * Save it and put it in QuickBooks, in that order — the everyday gesture.

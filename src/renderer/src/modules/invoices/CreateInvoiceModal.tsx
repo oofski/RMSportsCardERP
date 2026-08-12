@@ -20,6 +20,7 @@ import { FreightFields } from '../../components/FreightFields'
 import { CategoryLogo } from '../inventory/CategoryLogo'
 import { POCatalogTypeahead } from '../invoicing/POCatalogTypeahead'
 import { CustomerTypeahead } from './CustomerTypeahead'
+import { QboReadiness } from './QboReadiness'
 import { InvoiceStatusChip, formatDay } from './helpers'
 
 /**
@@ -659,6 +660,11 @@ export function CreateInvoiceModal({
               </div>
             </div>
           )}
+
+          {/* Directly under the lines, because that is what it is about. The
+              refusal it predicts used to arrive after Save as a toast, by which
+              point the invoice existed here and not there. */}
+          <QboReadiness customerName={customerName} lines={lines} email={email} />
 
           {/* ---- What it says -------------------------------------------- */}
           <div className="field-row">

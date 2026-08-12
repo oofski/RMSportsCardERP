@@ -1,6 +1,19 @@
-import type { InvoiceAddress, InvoiceDetail, QboItemMatch } from '@shared/invoices'
-import { qboInvoiceUrl, resolveLineItemRef, toQboInvoice } from '@shared/invoices'
-import { qboRequest } from './client'
+import type {
+  InvoiceAddress,
+  InvoiceDetail,
+  QboInvoicePreflight,
+  QboItemMatch
+} from '@shared/invoices'
+import {
+  missingQboItems,
+  qboInvoiceUrl,
+  resolveLineItemRef,
+  toQboCustomerPayload,
+  toQboInvoice,
+  toQboItemPayload
+} from '@shared/invoices'
+import { activeRealmId, qboRequest } from './client'
+import { getAccountMap } from './mapping'
 import { getQboConfig } from './store'
 import {
   RM_CLASS_NAME,
@@ -198,6 +211,100 @@ function itemLookups(items: QboItemRef[]): {
   return { byName, bySku }
 }
 
+/**
+ * Everything an invoice names, looked up against the live company at once.
+ *
+ * EXTRACTED SO THERE IS ONE ANSWER. The pre-flight panel and the post itself
+ * both ask this, so "ready to send" and "actually sent" cannot come apart —
+ * which they would within a month if the check re-implemented the matching, and
+ * the failure would be the worst kind: a green tick followed by a refusal.
+ *
+ * The two sweeps run TOGETHER. They are independent queries against different
+ * entities, and running them in series — which is what this did when only the
+ * post needed them — made every invoice wait for the customer list before it
+ * even asked for the items. Now that somebody sits and watches this run while
+ * typing, that wait is in front of a person rather than behind a button.
+ */
+export interface QboInvoiceTargets {
+  /** The matched buyer, or null when the company has nobody by that name. */
+  customer: QboCustomerRef | null
+  byName: Map<string, QboItemMatch>
+  bySku: Map<string, QboItemMatch>
+  /** Lines with nowhere to point. Empty means the post would not be refused. */
+  missingItems: ReturnType<typeof missingQboItems>
+  /** SKU disagreements — never blockers, always worth saying. */
+  skuNotes: string[]
+}
+
+export async function resolveQboInvoiceTargets(invoice: {
+  customerName: string
+  lines: readonly { item: string; sku?: string | null }[]
+}): Promise<QboInvoiceTargets> {
+  const [customers, items] = await Promise.all([fetchQboCustomers(), fetchQboItems()])
+
+  const wanted = invoice.customerName.trim().toLowerCase()
+  const customer = customers.find((c) => c.name.trim().toLowerCase() === wanted) ?? null
+  const { byName, bySku } = itemLookups(items)
+
+  // A line that matched an item by NAME whose SKU disagrees with ours is the one
+  // case worth saying out loud. The invoice is fine and posts against the item
+  // the name found — but the SKU printed on it will be QuickBooks', not ours,
+  // and somebody reconciling the two lists later needs to know which won.
+  const skuNotes: string[] = []
+  for (const line of invoice.lines) {
+    const ours = (line.sku ?? '').trim()
+    if (!ours) continue
+    const ref = resolveLineItemRef(line, byName, bySku)
+    const theirs = (ref?.sku ?? '').trim()
+    if (ref && theirs && theirs.toLowerCase() !== ours.toLowerCase()) {
+      skuNotes.push(
+        `“${line.item}” is SKU ${ours} here and ${theirs} in QuickBooks. The invoice will show ` +
+          `${theirs}, because the SKU on an invoice belongs to the QuickBooks item.`
+      )
+    } else if (ref && !theirs) {
+      skuNotes.push(
+        `The QuickBooks item for “${line.item}” has no SKU, so SKU ${ours} will not appear on ` +
+          'the invoice. Set it on the item in QuickBooks.'
+      )
+    }
+  }
+
+  return {
+    customer,
+    byName,
+    bySku,
+    missingItems: missingQboItems(invoice.lines, byName, bySku),
+    skuNotes
+  }
+}
+
+/**
+ * Would QuickBooks take this invoice? Asked while it is still being written.
+ *
+ * READS ONLY. Two queries, no writes, nothing recorded — safe to run on every
+ * edit, and safe to run against live books by somebody who has not decided to
+ * send anything yet.
+ *
+ * This exists because the refusal it predicts used to arrive at the worst
+ * possible moment: after Save, from a button labelled "Send to QuickBooks", by
+ * which point the invoice is on the books here and the operator is looking at a
+ * toast about a product name. The information was always knowable before the
+ * press. Now it is shown there.
+ */
+export async function preflightQboInvoice(invoice: {
+  customerName: string
+  lines: readonly { item: string; sku?: string | null }[]
+}): Promise<QboInvoicePreflight> {
+  const targets = await resolveQboInvoiceTargets(invoice)
+  return {
+    ready: !!targets.customer && targets.missingItems.length === 0,
+    customerName: invoice.customerName,
+    customerFound: !!targets.customer,
+    missingItems: targets.missingItems,
+    notes: targets.skuNotes
+  }
+}
+
 export interface QboInvoiceResult {
   qboId: string
   docNumber: string | null
@@ -244,9 +351,9 @@ export async function createQboInvoice(invoice: InvoiceDetail): Promise<QboInvoi
     throw new Error('That invoice is already in QuickBooks.')
   }
 
-  const wanted = invoice.customerName.trim().toLowerCase()
-  const customers = await fetchQboCustomers()
-  const customer = customers.find((c) => c.name.trim().toLowerCase() === wanted)
+  // The same lookup the pre-flight panel runs, so a screen that said "ready"
+  // and a post that refuses cannot disagree about what is in the company.
+  const { customer, byName, bySku, skuNotes } = await resolveQboInvoiceTargets(invoice)
   if (!customer) {
     throw new Error(
       `QuickBooks has no customer called “${invoice.customerName}”. Add them in QuickBooks ` +
@@ -254,10 +361,7 @@ export async function createQboInvoice(invoice: InvoiceDetail): Promise<QboInvoi
     )
   }
 
-  const items = await fetchQboItems()
-  const { byName, bySku } = itemLookups(items)
-
-  const notes: string[] = []
+  const notes: string[] = [...skuNotes]
 
   // The class, the terms and where a class goes. All three are WANTED rather
   // than required, so each is asked for independently and a failure contributes
@@ -274,28 +378,6 @@ export async function createQboInvoice(invoice: InvoiceDetail): Promise<QboInvoi
       `Class tracking is switched off in QuickBooks, so the “${RM_CLASS_NAME}” class was not ` +
         'put on this invoice. Turn on Settings → Advanced → Categories → Track classes.'
     )
-  }
-
-  // A line that matched an item by NAME whose SKU disagrees with ours is the one
-  // case worth saying out loud. The invoice is fine and posts against the item
-  // the name found — but the SKU printed on it will be QuickBooks', not ours,
-  // and somebody reconciling the two lists later needs to know which won.
-  for (const line of invoice.lines) {
-    const ours = (line.sku ?? '').trim()
-    if (!ours) continue
-    const ref = resolveLineItemRef(line, byName, bySku)
-    const theirs = (ref?.sku ?? '').trim()
-    if (ref && theirs && theirs.toLowerCase() !== ours.toLowerCase()) {
-      notes.push(
-        `“${line.item}” is SKU ${ours} here and ${theirs} in QuickBooks. The invoice will show ` +
-          `${theirs}, because the SKU on an invoice belongs to the QuickBooks item.`
-      )
-    } else if (ref && !theirs) {
-      notes.push(
-        `The QuickBooks item for “${line.item}” has no SKU, so SKU ${ours} will not appear on ` +
-          'the invoice. Set it on the item in QuickBooks.'
-      )
-    }
   }
 
   // Throws, by name, on any line QuickBooks could not resolve — before a single
@@ -331,6 +413,104 @@ export async function createQboInvoice(invoice: InvoiceDetail): Promise<QboInvoi
     url: qboInvoiceUrl(config?.environment ?? 'production', String(qboId)),
     numberChanged: !!invoice.invoiceNumber && !!docNumber && docNumber !== invoice.invoiceNumber,
     notes
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Creating what is missing
+//
+// THE RULE THIS DOES NOT BREAK. `createQboInvoice` still refuses to invent a
+// customer or an item as a SIDE EFFECT of posting — see its doc comment, and the
+// reason stands: a misspelling that quietly becomes a permanent contact in
+// somebody's accounting system is a mess no error message can undo.
+//
+// What changed is that "add it in QuickBooks first" now has a button, and the
+// button is a SEPARATE, DELIBERATE press with the name it is about to create
+// written on it. That is a different act from a send that silently creates six
+// items nobody reviewed. The distinction is the whole design here, so anything
+// added later must keep it: no creation from inside a post.
+// ---------------------------------------------------------------------------
+
+/**
+ * Add a Product/Service, so the next send resolves instead of refusing.
+ *
+ * ## NonInventory, deliberately
+ *
+ * QuickBooks would also take `Inventory`, and it is the wrong choice here. An
+ * Inventory item makes QuickBooks track quantity on hand and value it — a job
+ * this app already does, against FIFO cost lots, per location. Two systems
+ * counting the same boxes disagree the first time one of them is not told
+ * something, and the one people would then trust is the accounting system,
+ * which has never seen a break. `Inventory` also demands an asset account and
+ * an inventory start date, which is a decision about somebody's balance sheet
+ * that a button beside an invoice line has no business making.
+ *
+ * NonInventory sells exactly the same on an invoice. It just does not pretend to
+ * know where the stock is.
+ *
+ * ## The income account is NOT guessed
+ *
+ * Same rule as everywhere else in this integration: an account id this app
+ * invented posts real revenue somewhere nobody chose. It comes from the
+ * operator's own mapping, and when that is unset the answer is a sentence saying
+ * where to set it — not a plausible-looking Income account picked off the list.
+ */
+export async function createQboItem(input: {
+  name: string
+  sku?: string | null
+  rate?: number | null
+  description?: string | null
+}): Promise<QboItemRef> {
+  const realmId = activeRealmId()
+  // Throws by name on a blank one. The mapping screen is where that is chosen,
+  // and the message says so — nothing here picks an Income account.
+  const body = toQboItemPayload({
+    ...input,
+    incomeAccountId: (realmId ? getAccountMap(realmId).salesIncome : '') ?? ''
+  })
+
+  const res = await qboRequest<{ Item?: RawItem }>({ method: 'POST', path: 'item', body })
+
+  const created = res.Item
+  if (!created?.Id) {
+    throw new Error('QuickBooks created the item but did not say what its id is.')
+  }
+  return {
+    id: String(created.Id),
+    name: String(created.FullyQualifiedName || created.Name || input.name.trim()),
+    rate: typeof created.UnitPrice === 'number' ? created.UnitPrice : null,
+    description: created.Description ?? null,
+    sku: (created.Sku ?? '').trim() || null
+  }
+}
+
+/**
+ * Add a customer.
+ *
+ * DisplayName is the field the invoice matches on, so it is the field that is
+ * set — not GivenName/FamilyName, which QuickBooks would then compose a display
+ * name from in an order that may not be the one written here.
+ */
+export async function createQboCustomer(input: {
+  name: string
+  email?: string | null
+  billAddr?: InvoiceAddress | null
+}): Promise<QboCustomerRef> {
+  const res = await qboRequest<{ Customer?: RawCustomer }>({
+    method: 'POST',
+    path: 'customer',
+    body: toQboCustomerPayload(input)
+  })
+
+  const created = res.Customer
+  if (!created?.Id) {
+    throw new Error('QuickBooks created the customer but did not say what its id is.')
+  }
+  return {
+    id: String(created.Id),
+    name: String(created.DisplayName || name),
+    email: created.PrimaryEmailAddr?.Address ?? null,
+    billAddr: fromRawAddress(created.BillAddr)
   }
 }
 
