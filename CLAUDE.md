@@ -46,6 +46,16 @@ literal.** `src/main/db/database.ts` is one enormous template string, and this
 has broken it five separate times — always as a baffling `TS1005: ',' expected`
 hundreds of lines away. Never write `` `column_name` `` in a migration comment.
 
+**A literal control character in source is invisible until it is pasted.** A
+regex class in `cloud/worker.js` was written with a real NUL and a real U+001F
+where a space and a hyphen belonged. Node accepted it — the class read as the
+ascending range U+0000–U+001F — so `node --check` passed and it shipped.
+Cloudflare's editor strips the NUL on paste, which left the hyphen between `/`
+(U+002F) and U+001F: a descending range, and the Worker would not save. The
+relay suite now fails on any literal control character in that file, because no
+editor, diff or review can see one. Write every character class member as an
+escape.
+
 **Secrets must never be committed.** The repo is PUBLIC. The cloud-sync relay
 URL and key are injected at build time from the GitHub secrets `RMOPS_SYNC_URL`
 and `RMOPS_SYNC_KEY`; the QuickBooks OAuth client id and secret are entered by

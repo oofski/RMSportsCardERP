@@ -2964,11 +2964,28 @@ export function qboAttachmentBytes(base64) {
  * odd file name. Stripped rather than rejected: the name is cosmetic, and
  * failing an upload over a punctuation mark in a customer's name would be a
  * worse outcome than a slightly tidied file name.
+ *
+ * EVERY CHARACTER IN THIS CLASS IS WRITTEN AS AN ESCAPE, and that is not style.
+ * The first version of this line contained two LITERAL control characters where a
+ * space and a hyphen belonged. Node accepted it — the class read as the ascending
+ * range U+0000 to U+001F — so "node --check" passed and it shipped. Cloudflare's
+ * editor then stripped the invisible NUL on paste, which left the hyphen between
+ * the forward slash (U+002F) and U+001F, a DESCENDING range, and the Worker
+ * refused to save with
+ * "Range out of order in character class".
+ *
+ * A control character is invisible in every editor and diff it passes through, so
+ * the only defence is never to have one: escapes here, and a test that fails if a
+ * literal one appears anywhere in this file again.
  */
 export function qboAttachmentName(name, fallback) {
   const cleaned = String(name || '')
-    .replace(/[\r\n"\\/ -]+/g, '_')
-    .trim()
+    // Control characters and DEL, the quote and both slashes that would break the
+    // Content-Disposition framing, the characters Windows refuses in a name, and
+    // any whitespace. Hyphens survive deliberately — they are the separator this
+    // app puts in its own file names, as in invoice-2293.pdf.
+    .replace(/[\u0000-\u001f\u007f"\\\/:*?<>|\s]+/g, '_')
+    .replace(/^[._]+|[._]+$/g, '')
     .slice(0, 120)
   return cleaned || fallback
 }

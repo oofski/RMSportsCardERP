@@ -571,6 +571,58 @@ async function main(): Promise<void> {
   )
 
   // -------------------------------------------------------------------------
+  console.log('\n=== the Worker survives being PASTED ===')
+  // -------------------------------------------------------------------------
+  // HOW THE RELAY IS DEPLOYED IS PART OF ITS CONTRACT. cloud/worker.js is not
+  // bundled or uploaded by a tool — somebody opens the Cloudflare dashboard and
+  // pastes the file into a browser editor. So "it parses in Node" is NOT the
+  // property that matters; "it survives a paste" is.
+  //
+  // This exists because of one shipped bug. A regex character class was written
+  // with two LITERAL control characters where a space and a hyphen belonged.
+  // Node accepted it — the class read as the ascending range U+0000 to U+001F —
+  // so `node --check cloud/worker.js` passed and it went out. Cloudflare's editor
+  // then stripped the invisible NUL on paste, which left the hyphen sitting
+  // between `/` (U+002F) and U+001F: a DESCENDING range, and the Worker refused
+  // to save with "Range out of order in character class".
+  //
+  // A control character is invisible in every editor, every diff and every code
+  // review it passes through. Nothing but a byte-level check can see one.
+  const workerSource: string = require('node:fs').readFileSync(
+    require('node:path').join(process.cwd(), 'cloud/worker.js'),
+    'utf8'
+  )
+  const controlChars: string[] = []
+  workerSource.split('\n').forEach((line: string, i: number) => {
+    for (const ch of line) {
+      const code = ch.codePointAt(0) ?? 0
+      // Tab is legitimate whitespace; the split already consumed the newlines.
+      if ((code < 32 && code !== 9) || code === 127) {
+        controlChars.push(`line ${i + 1}: U+${code.toString(16).padStart(4, '0')}`)
+      }
+    }
+  })
+  ok(
+    controlChars.length === 0,
+    'cloud/worker.js contains no literal control characters',
+    controlChars.slice(0, 5).join(', ')
+  )
+
+  // And every regex in it actually compiles — the failure the control characters
+  // caused, checked directly rather than only via its cause.
+  const literals = workerSource.match(/\/\[[^\n]*?\]([gimsuy]*)/g) ?? []
+  const broken: string[] = []
+  for (const lit of literals) {
+    const body = lit.slice(1).replace(/\/[gimsuy]*$/, '')
+    try {
+      new RegExp(body)
+    } catch (err) {
+      broken.push(`${lit}: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+  ok(broken.length === 0, 'and every character class in it compiles', broken.slice(0, 3).join(' | '))
+
+  // -------------------------------------------------------------------------
   console.log('\n=== attachments: what the relay will and will not carry ===')
   // -------------------------------------------------------------------------
   // The relay is the boundary. The app checks these too, but THIS check is the
@@ -614,6 +666,23 @@ async function main(): Promise<void> {
     'quotes and newlines cannot escape the Content-Disposition header'
   )
   ok(worker.qboAttachmentName('', 'document') === 'document', 'a blank name falls back')
+  // HYPHENS SURVIVE. They are the separator this app puts in its own file names,
+  // and the first version of this stripped them — turning invoice-2293.pdf into
+  // invoice_2293.pdf on every attachment.
+  ok(
+    worker.qboAttachmentName('invoice-2293.pdf', 'doc') === 'invoice-2293.pdf',
+    'the name this app actually generates comes back untouched',
+    worker.qboAttachmentName('invoice-2293.pdf', 'doc')
+  )
+  ok(
+    !/[/\\:*?<>|]/.test(worker.qboAttachmentName('a/b\\c:d*e?f<g>h|i', 'doc')),
+    'and every character a filesystem or a header would object to is gone',
+    worker.qboAttachmentName('a/b\\c:d*e?f<g>h|i', 'doc')
+  )
+  ok(
+    worker.qboAttachmentName('...', 'doc') === 'doc',
+    'a name that is nothing but punctuation falls back rather than becoming an empty file name'
+  )
   ok(
     worker.qboAttachmentName('x'.repeat(400), 'doc').length <= 120,
     'and an absurd one is trimmed rather than sent'
