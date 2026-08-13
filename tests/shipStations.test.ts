@@ -861,5 +861,117 @@ const finished = stations.getStationBoard()
 ok(finished.packingRemaining === 0, 'the last mailer closes the count', String(finished.packingRemaining))
 ok(finished.allDone === true, 'and the night is over', JSON.stringify(finished.allDone))
 
+// ---------------------------------------------------------------------------
+console.log('\n=== 9. a station is a BENCH, not the database ===')
+// ---------------------------------------------------------------------------
+// THE BUG THE FLOOR WAS HITTING, and it is worth stating precisely because the
+// symptom named none of it.
+//
+// A station used to be `deviceId()`, which lives in the database. On a desktop
+// that is right: one machine, one database, one bench. On the shared web server
+// there is ONE database for the whole building, so every browser read the same
+// id and the entire floor collapsed into a single station.
+//
+// ship_station_sessions is keyed on station_id, so there was one session row for
+// the company. The second person to press Picking overwrote the first person's
+// session AND released the order they were holding — so the first person's next
+// refresh found somebody else's job on screen and empty hands. Reported as "it
+// kicks me out after every order"; actually "it kicks me out every time anybody
+// else touches the screen".
+//
+// Everything above this line simulates two stations by rewriting device_id,
+// which is the DESKTOP model and still correct. This section is the SERVER one:
+// one database, one device id, two benches, told apart by the request context.
+
+const { runAs } = require('../src/main/services/session')
+
+// One shared database, exactly as the server has.
+getDb().prepare(`UPDATE sync_state SET value = 'SERVER-DB' WHERE key = 'device_id'`).run()
+
+const T2 = new Date().toISOString()
+getDb()
+  .prepare(
+    `INSERT INTO employees (id, first_name, last_name, company_id, title, email, role,
+       status, password_hash, must_change_password, created_at, updated_at)
+     VALUES ('emp_packer2', 'Second', 'Bench', 'RM-901', 'Packer', 'bench2@example.test', 'employee',
+       'active', 'x', 0, ?, ?)`
+  )
+  .run(T2, T2)
+getDb()
+  .prepare(
+    `INSERT INTO time_entries (id, employee_id, clock_in, clock_out, source, created_at)
+     VALUES ('te_packer2', 'emp_packer2', ?, NULL, 'manual', ?)`
+  )
+  .run(T2, T2)
+
+/** Run something as a request from a named bench. */
+const atBench = <T,>(station: string, fn: () => T): T =>
+  runAs({ userId: null, origin: 'test', stationId: station }, fn)
+
+// Two people, two browsers, one server.
+const aSession = atBench('BENCH-A', () =>
+  stations.startStationSession('emp_picker', 'pick', null)
+)
+ok(!!aSession, 'bench A starts a session')
+ok(aSession?.stationId === 'BENCH-A', 'filed under bench A, not under the database')
+
+const bSession = atBench('BENCH-B', () =>
+  stations.startStationSession('emp_packer2', 'pack', null)
+)
+ok(!!bSession, 'bench B starts one too')
+ok(bSession?.stationId === 'BENCH-B', 'filed under bench B')
+
+// THE ASSERTION THIS WHOLE SECTION EXISTS FOR. Before the fix, B's start
+// overwrote the single shared row and A came back to somebody else's job.
+const aAfter = atBench('BENCH-A', () => stations.getStationSession())
+ok(!!aAfter, 'and bench A STILL HAS ITS SESSION — this is the bug that kicked people out')
+ok(aAfter?.operatorId === 'emp_picker', 'still the same person', String(aAfter?.operatorId))
+ok(aAfter?.role === 'pick', 'still doing the same job', String(aAfter?.role))
+
+const bAfter = atBench('BENCH-B', () => stations.getStationSession())
+ok(bAfter?.operatorId === 'emp_packer2', 'and bench B has its own', String(bAfter?.operatorId))
+ok(bAfter?.role === 'pack', 'doing the other job', String(bAfter?.role))
+
+// Ending one bench is not ending the other. Same failure, other direction.
+atBench('BENCH-B', () => stations.endStationSession())
+ok(
+  atBench('BENCH-B', () => stations.getStationSession()) === null,
+  'ending bench B ends bench B'
+)
+ok(
+  !!atBench('BENCH-A', () => stations.getStationSession()),
+  'and leaves bench A exactly where it was'
+)
+
+// ---- the desktop is untouched ---------------------------------------------
+// No request context is the installed app, where deviceId() was always right.
+// If this ever stopped falling back, every desktop bench would lose its session.
+ok(stations.stationKey() === 'SERVER-DB', 'with no request context the station IS the device')
+ok(
+  stations.getStationSession() === null,
+  'so the desktop sees neither browser bench'
+)
+const desktop = stations.startStationSession('emp_picker', 'pick', null)
+ok(desktop?.stationId === 'SERVER-DB', 'and files its own session under the device id')
+ok(
+  !!atBench('BENCH-A', () => stations.getStationSession()),
+  'without disturbing a browser bench'
+)
+
+// A blank or malformed id must fall back rather than mint a junk bench that
+// nothing can ever address again.
+ok(
+  atBench('', () => stations.stationKey()) === 'SERVER-DB',
+  'a blank station id falls back to the device'
+)
+ok(
+  atBench('   ', () => stations.stationKey()) === 'SERVER-DB',
+  'and so does whitespace'
+)
+ok(
+  runAs({ userId: null, origin: 'test' }, () => stations.stationKey()) === 'SERVER-DB',
+  'and a context that carries no station at all'
+)
+
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

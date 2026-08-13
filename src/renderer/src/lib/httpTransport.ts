@@ -28,6 +28,50 @@ import type { BridgeTransport } from '../../../bridge'
 /** Sent on every call. See REQUEST_HEADER in server/index.ts. */
 const REQUEST_HEADER = 'x-rmops-request'
 
+/** Which bench this browser is. See STATION_HEADER in server/index.ts. */
+const STATION_HEADER = 'x-rmops-station'
+const STATION_KEY = 'rmops.stationId'
+
+/**
+ * A stable id for THIS browser, minted once and kept.
+ *
+ * The shipping floor claims work per bench, and on a shared server the bench
+ * cannot be the database — there is only one of those, so every browser in the
+ * building looked like the same station and each person's session overwrote the
+ * last. This is the browser saying which bench it is.
+ *
+ * localStorage rather than the session cookie, deliberately: a bench is a
+ * PHYSICAL place that outlives a login. Somebody signing out at the end of the
+ * night and back in the next morning is standing at the same bench, and should
+ * still be holding whatever that bench was holding.
+ *
+ * It grants nothing — see stationKey() in main/db/shipStations.ts — so a
+ * private window that cannot persist one simply gets a fresh bench per session,
+ * which is the honest description of what a private window is.
+ */
+function stationId(): string {
+  try {
+    const held = window.localStorage.getItem(STATION_KEY)
+    if (held && held.trim()) return held.trim()
+    const minted =
+      typeof crypto?.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : `st-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+    window.localStorage.setItem(STATION_KEY, minted)
+    return minted
+  } catch {
+    // Storage disabled or full. A per-tab id is still better than every browser
+    // sharing one, which is the bug this exists to fix.
+    return memoStation
+  }
+}
+
+/** The fallback when localStorage refuses. Per page load, which is per tab. */
+const memoStation =
+  typeof crypto?.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `st-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+
 interface CallEnvelope {
   ok: boolean
   data?: unknown
@@ -96,7 +140,11 @@ async function call(channel: string, args: unknown[]): Promise<unknown> {
   const res = await fetch(`/api/call/${encodeURIComponent(channel)}`, {
     method: 'POST',
     credentials: 'same-origin',
-    headers: { 'content-type': 'application/json', [REQUEST_HEADER]: '1' },
+    headers: {
+      'content-type': 'application/json',
+      [REQUEST_HEADER]: '1',
+      [STATION_HEADER]: stationId()
+    },
     body: JSON.stringify({ args })
   })
 

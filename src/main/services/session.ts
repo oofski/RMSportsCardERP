@@ -30,6 +30,26 @@ export interface RequestContext {
   userId: string | null
   /** Where the request came from, for audit and debugging. */
   origin?: string
+  /**
+   * WHICH BENCH this request came from, on a shared server.
+   *
+   * The shipping floor claims work per STATION — a physical bench with a person
+   * standing at it — and a station used to be identified by `deviceId()`, which
+   * is stored in the database. On the desktop that is exactly right: one machine,
+   * one database, one bench.
+   *
+   * On the server it is exactly wrong. There is ONE database, so `deviceId()`
+   * returns the same value to every browser in the building and the whole floor
+   * collapses into a single station. `ship_station_sessions` is keyed on it, so
+   * the second person to start a job overwrote the first person's session and
+   * released the order they were holding — which is precisely the "it kicks me
+   * out after every order" everybody was hitting.
+   *
+   * So the browser tells us which bench it is. Untrusted and deliberately so:
+   * it grants nothing, is never an input to a permission decision, and the worst
+   * a forged one can do is share a bench with somebody. See stationKey().
+   */
+  stationId?: string | null
 }
 
 const storage = new AsyncLocalStorage<RequestContext>()

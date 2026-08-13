@@ -73,13 +73,25 @@ export function FloorView({ canFind, canPack, onGoTo, onChanged }: ShipTabProps)
     }
   }, [load])
 
-  // Keep this station's claims alive while somebody is genuinely here. Local
-  // and cheap — no network — so it costs nothing to run all evening.
+  /**
+   * Keep this station's claims alive while somebody is genuinely here.
+   *
+   * DEPENDS ON WHETHER THERE IS A SESSION, not on the session OBJECT. It used to
+   * be `[board?.session]`, and `board` is replaced by every load — every SSE
+   * refresh, every tick of a team, every order finished anywhere on the floor.
+   * So the interval was cleared and restarted before it ever reached thirty
+   * seconds, on a busy night it never fired ONCE, and the claim it exists to
+   * renew quietly aged out after ten minutes and was taken by somebody else.
+   *
+   * A boolean cannot change identity, so the timer now survives the reloads it
+   * is supposed to outlive.
+   */
+  const hasSession = !!board?.session
   useEffect(() => {
-    if (!board?.session) return
+    if (!hasSession) return
     const t = window.setInterval(() => void api.shipping.stationHeartbeat(), CLAIM_BEAT_MS)
     return () => window.clearInterval(t)
-  }, [board?.session])
+  }, [hasSession])
 
   if (loading) return <CenterLoader />
 

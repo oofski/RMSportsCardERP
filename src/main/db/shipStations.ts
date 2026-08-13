@@ -25,6 +25,7 @@ import {
   type ClaimRow
 } from './shipClaims'
 import { deviceId } from './sync'
+import { currentContext } from '../services/session'
 import { listBreakIdsForCustomer, setCustomerSlotsPicked } from './shipping'
 import { _orderRow, _recomputeBreakStatus, listOrders, setOrderStage } from './shippingDomain'
 import { getShipShipmentByCustomer } from './shipping'
@@ -112,10 +113,46 @@ function stillClockedIn(operatorId: string): boolean {
   return !!row
 }
 
+/**
+ * WHICH BENCH is asking. The one identity this whole file turns on.
+ *
+ * ## The bug this replaced
+ *
+ * It used to be `deviceId()`, full stop. That is a value stored in the DATABASE,
+ * and on the desktop it is exactly right — one machine, one database, one bench,
+ * and two laptops are two stations because they are two databases.
+ *
+ * On the shared server it is exactly wrong. There is ONE database, so every
+ * browser in the building read the SAME device id and the entire floor collapsed
+ * into a single station. `ship_station_sessions` is keyed on station_id, so
+ * there was one session row for the whole company: the second person to press
+ * Picking overwrote the first person's session AND released the order they were
+ * holding, and the first person's next refresh found a session that was not
+ * theirs and an empty pair of hands. That is the "it kicks me out after every
+ * order" the floor was reporting — not one bug per order, one bug per BENCH,
+ * firing every time anybody else touched the screen.
+ *
+ * ## Why the browser's answer is trusted
+ *
+ * It grants nothing. A station id is never an input to a permission decision —
+ * `operatorFor` says the login AUTHORISES and the person ATTRIBUTES, and this is
+ * neither. The worst a forged one can do is share a bench with somebody, which
+ * is a thing two real people can already do by standing at the same computer.
+ *
+ * ## The fallback is the desktop
+ *
+ * No request context means the desktop app, where `deviceId()` was always the
+ * right answer and still is. Nothing about an installed copy changes.
+ */
+export function stationKey(): string {
+  const fromRequest = (currentContext()?.stationId ?? '').trim()
+  return fromRequest || deviceId()
+}
+
 export function getStationSession(): ShipStationSession | null {
   const row = getDb()
     .prepare(`SELECT * FROM ship_station_sessions WHERE station_id = ?`)
-    .get(deviceId()) as SessionRow | undefined
+    .get(stationKey()) as SessionRow | undefined
   if (!row || row.ended_at) return null
   // Three ways a session stops being true, all checked on read rather than
   // swept by a timer: they punched out, half a day went by, or somebody ended
@@ -152,7 +189,7 @@ export function startStationSession(
          login_user_id = excluded.login_user_id, started_at = excluded.started_at,
          seen_at = excluded.seen_at, ended_at = NULL`
     )
-    .run({ station: deviceId(), op: operatorId, role, login: loginUserId, ts })
+    .run({ station: stationKey(), op: operatorId, role, login: loginUserId, ts })
   return getStationSession()
 }
 
@@ -160,7 +197,7 @@ export function endStationSession(): void {
   releaseAllForStation('left the bench')
   getDb()
     .prepare(`UPDATE ship_station_sessions SET ended_at = ? WHERE station_id = ?`)
-    .run(nowIso(), deviceId())
+    .run(nowIso(), stationKey())
 }
 
 /**
@@ -204,7 +241,7 @@ export function claimOrder(
   role: ShipStationRole,
   loginUserId: string | null
 ): ClaimOutcome {
-  const station = deviceId()
+  const station = stationKey()
   const chain = liveImportChain()
   if (chain.length === 0) return { ok: false, claim: null, error: 'No show is loaded.' }
   const now = Date.now()
@@ -266,7 +303,7 @@ export function releaseClaim(claimId: string, note?: string): boolean {
         `UPDATE ship_work_claims SET released_at = ?, note = COALESCE(?, note)
           WHERE id = ? AND station_id = ? AND released_at IS NULL`
       )
-      .run(nowIso(), note ?? null, claimId, deviceId()).changes > 0
+      .run(nowIso(), note ?? null, claimId, stationKey()).changes > 0
   )
 }
 
@@ -276,7 +313,7 @@ export function releaseAllForStation(note?: string): number {
       `UPDATE ship_work_claims SET released_at = ?, note = COALESCE(?, note)
         WHERE station_id = ? AND released_at IS NULL AND finished_at IS NULL`
     )
-    .run(nowIso(), note ?? null, deviceId()).changes
+    .run(nowIso(), note ?? null, stationKey()).changes
 }
 
 /** Keep this station's live claims alive. Cheap, local, no network. */
@@ -286,7 +323,7 @@ export function heartbeatStation(): number {
       `UPDATE ship_work_claims SET heartbeat_at = ?
         WHERE station_id = ? AND released_at IS NULL AND finished_at IS NULL`
     )
-    .run(nowIso(), deviceId()).changes
+    .run(nowIso(), stationKey()).changes
 }
 
 /**
@@ -297,7 +334,7 @@ export function heartbeatStation(): number {
  * row from another machine.
  */
 export function reconcileClaims(): string[] {
-  const station = deviceId()
+  const station = stationKey()
   const now = Date.now()
   const mine = allLiveClaims().filter(
     (c) => c.stationId === station && !c.releasedAt && !c.finishedAt
@@ -318,7 +355,7 @@ export function reconcileClaims(): string[] {
 // ---------------------------------------------------------------------------
 
 function myClaim(role: ShipStationRole): ShipWorkClaim | null {
-  const station = deviceId()
+  const station = stationKey()
   const now = Date.now()
   const mine = allLiveClaims().filter(
     (c) => c.stationId === station && c.role === role && !c.releasedAt && !c.finishedAt
@@ -341,7 +378,7 @@ function myClaim(role: ShipStationRole): ShipWorkClaim | null {
  */
 function toStationOrder(o: ShipOrderRow, now: number, withDetail = false): ShipStationOrder {
   const claims = claimsForOrder(o.id, o.customerId)
-  const station = deviceId()
+  const station = stationKey()
   const pickHolder = holderOf(claims, 'pick', now)
   const packHolder = holderOf(claims, 'pack', now)
   const held = packHolder ?? pickHolder
@@ -484,7 +521,7 @@ export function pickAdvance(customerId: string, loginUserId: string | null): Adv
       db.prepare(`UPDATE ship_work_claims SET finished_at = ? WHERE id = ? AND station_id = ?`).run(
         nowIso(),
         mine.id,
-        deviceId()
+        stationKey()
       )
     } else {
       // Finished an order this station never claimed — somebody worked ahead of
@@ -498,7 +535,7 @@ export function pickAdvance(customerId: string, loginUserId: string | null): Adv
              (id, order_id, customer_id, import_id, role, station_id, operator_id,
               login_user_id, claimed_at, heartbeat_at, finished_at)
            VALUES (?, ?, ?, ?, 'pick', ?, ?, ?, ?, ?, ?)`
-        ).run(newId(), shipment.id, customerId, chain[0], deviceId(), operator, loginUserId, ts, ts, ts)
+        ).run(newId(), shipment.id, customerId, chain[0], stationKey(), operator, loginUserId, ts, ts, ts)
       }
     }
   })
@@ -569,7 +606,7 @@ export function packDone(customerId: string, loginUserId: string | null): ShipOr
   if (mine && mine.customerId === customerId) {
     getDb()
       .prepare(`UPDATE ship_work_claims SET finished_at = ? WHERE id = ? AND station_id = ?`)
-      .run(nowIso(), mine.id, deviceId())
+      .run(nowIso(), mine.id, stationKey())
   }
   return row
 }
@@ -591,7 +628,7 @@ export function sendBack(customerId: string, reason: string): boolean {
   // drop straight back into the pack queue instead of the picking run.
   const claims = claimsForOrder(mine.orderId, mine.customerId)
   for (const c of claims) {
-    if (c.role === 'pick' && c.finishedAt && !c.releasedAt && c.stationId === deviceId()) {
+    if (c.role === 'pick' && c.finishedAt && !c.releasedAt && c.stationId === stationKey()) {
       releaseClaim(c.id, 'sent back')
     }
   }
@@ -622,7 +659,7 @@ export function getStationBoard(): ShipStationBoard {
       })()
     : null
 
-  const station = deviceId()
+  const station = stationKey()
   const others = allLiveClaims()
     .filter((c) => c.stationId !== station && !c.releasedAt && !c.finishedAt)
     .filter((c) => claimState(c, supersededIds(allLiveClaims()), now) !== 'expired')

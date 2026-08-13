@@ -111,6 +111,30 @@ const SESSION_COOKIE = 'rmops_session'
  */
 const REQUEST_HEADER = 'x-rmops-request'
 
+/**
+ * WHICH BENCH sent this request.
+ *
+ * The shipping floor claims work per station, and a station is a physical bench
+ * with a person at it. On the desktop that is the machine's own database id; on
+ * this server there is one database for the whole building, so every browser
+ * read the same id and the entire floor collapsed into a single station — the
+ * second person to start a job overwrote the first person's session and released
+ * the order they were holding. See stationKey() in main/db/shipStations.ts.
+ *
+ * Untrusted by design. It is never an input to a permission decision and grants
+ * nothing; the worst a forged one can do is share a bench with somebody, which
+ * two people can already do by standing at the same screen. Length-capped
+ * because it is stored, and stripped of anything but the shape a browser mints.
+ */
+const STATION_HEADER = 'x-rmops-station'
+
+function readStationId(req: IncomingMessage): string | null {
+  const raw = req.headers[STATION_HEADER]
+  const value = (Array.isArray(raw) ? raw[0] : raw) ?? ''
+  const clean = value.trim().slice(0, 64)
+  return /^[A-Za-z0-9._-]{8,64}$/.test(clean) ? clean : null
+}
+
 // ---------------------------------------------------------------------------
 // Live updates
 // ---------------------------------------------------------------------------
@@ -697,7 +721,9 @@ async function handleCall(
     // runAs is what makes ten simultaneous callers safe: everything the handler
     // touches, at any depth and across any await, sees THIS user.
     const { value, actions } = await collectClientActions(async () =>
-      runAs({ userId: employeeId, origin: 'http' }, () => invokeHandler(channel, args))
+      runAs({ userId: employeeId, origin: 'http', stationId: readStationId(req) }, () =>
+        invokeHandler(channel, args)
+      )
     )
 
     // Files the handler "saved" through a save dialog, plus anything it asked
