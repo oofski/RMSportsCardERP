@@ -52,6 +52,7 @@ import {
   fetchQboItems,
   preflightQboInvoice,
   sendQboInvoice,
+  setQboItemSku,
   type QboCustomerRef,
   type QboItemRef
 } from './quickbooks/invoices'
@@ -469,6 +470,22 @@ export function registerInvoicesIpc(): void {
             description: str(payload?.description) || null
           })
         }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  /**
+   * Fill in a blank Item.Sku from ours. Refuses if QuickBooks has since been
+   * given a different one — checked against the live record, not the screen.
+   */
+  ipcMain.handle(
+    IPC.invoiceQboSetItemSku,
+    async (_e, payload: { itemId?: unknown; sku?: unknown }): Promise<Result<QboItemRef>> => {
+      try {
+        requireInvoicing()
+        return { ok: true, data: await setQboItemSku(str(payload?.itemId), str(payload?.sku)) }
       } catch (err) {
         return fail(err)
       }

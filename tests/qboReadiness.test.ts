@@ -47,6 +47,7 @@ const {
   describeMissingQboItems,
   missingQboItems,
   resolveLineItemRef,
+  skuReconciliation,
   toQboCustomerPayload,
   toQboInvoice,
   toQboItemPayload
@@ -279,6 +280,87 @@ ok(
   resolveLineItemRef({ item: 'Grading submission fee', sku: null }, byName, bySku).id === '11',
   'a service with no SKU resolves by name'
 )
+
+// ---------------------------------------------------------------------------
+console.log('=== 2b. SKUs: whose wins, and which are fixable ===')
+// ---------------------------------------------------------------------------
+// THERE IS NO SKU FIELD ON AN INVOICE LINE. SalesItemLineDetail has no room for
+// one, so the SKU printed on a QuickBooks invoice is the ITEM's. That means our
+// SKU reaches the document only by the line pointing at an item that HAS it —
+// which is why a blank one is worth a button and not just a shrug.
+
+// Matched by name; QuickBooks has no SKU on it. Fixable in one press.
+const blank = skuReconciliation(
+  [{ item: 'Grading submission fee', sku: 'GRADE-SUB' }],
+  byName,
+  bySku
+)
+ok(blank.fixes.length === 1, 'a matched item with no SKU is offered as a fix')
+ok(blank.fixes[0].itemId === '11', 'carrying the QuickBooks item id to write to')
+ok(blank.fixes[0].sku === 'GRADE-SUB', 'and the SKU to write')
+ok(blank.notes.length === 1, 'and says so in words too')
+ok(
+  blank.notes[0].includes('will not appear'),
+  'naming the consequence — it does not print',
+  blank.notes[0]
+)
+
+// Matched by name; QuickBooks has a DIFFERENT SKU. A sentence, and NO button.
+// Theirs may be what an accountant reconciles against, and overwriting it from
+// an invoice screen is not this app's decision to make.
+const conflict = skuReconciliation(
+  [{ item: 'Renamed in QuickBooks', sku: 'OURS-123' }],
+  byName,
+  new Map()
+)
+ok(conflict.notes.length === 1, 'a disagreement is reported')
+ok(conflict.fixes.length === 0, 'but NEVER offered as a one-press overwrite')
+ok(
+  conflict.notes[0].includes('OLD-SKU') && conflict.notes[0].includes('OURS-123'),
+  'and the note names both, so somebody can decide which is right',
+  conflict.notes[0]
+)
+
+// Agreement is silent. A panel that comments on every correct line is a panel
+// nobody reads.
+const agreed = skuReconciliation(
+  [{ item: '2024 Topps Series 1 Hobby Box', sku: 'TS1-HOB' }],
+  byName,
+  bySku
+)
+ok(agreed.notes.length === 0 && agreed.fixes.length === 0, 'a SKU that already agrees says nothing')
+ok(
+  skuReconciliation([{ item: 'Renamed in QuickBooks', sku: 'old-sku' }], byName, bySku).notes
+    .length === 0,
+  'and case alone is not a disagreement'
+)
+
+// A line with no SKU of our own has nothing to say about theirs.
+ok(
+  skuReconciliation([{ item: 'Grading submission fee', sku: null }], byName, bySku).fixes.length ===
+    0,
+  'a line with no SKU offers no fix'
+)
+
+// A line that matches NOTHING is a missing-item problem, not a SKU problem. It
+// must not appear in both places, or one invoice reads as two faults.
+ok(
+  skuReconciliation([{ item: MEGA, sku: 'BOWDR-25-MEGA' }], byName, bySku).notes.length === 0,
+  'an unmatched line is not also reported as a SKU problem'
+)
+
+// One item on three lines is ONE thing to fix — three buttons writing the same
+// item would have the second fail on a stale SyncToken.
+const repeatedFix = skuReconciliation(
+  [
+    { item: 'Grading submission fee', sku: 'GRADE-SUB' },
+    { item: 'Grading submission fee', sku: 'GRADE-SUB' },
+    { item: 'Grading submission fee', sku: 'GRADE-SUB' }
+  ],
+  byName,
+  bySku
+)
+ok(repeatedFix.fixes.length === 1, 'the same item on three lines is one fix')
 
 // ---------------------------------------------------------------------------
 console.log('=== 3. creating the missing item ===')

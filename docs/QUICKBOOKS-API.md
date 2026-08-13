@@ -56,8 +56,10 @@ Verified against `src/main/quickbooks/`. This is the entire surface.
 | `POST /invoice/{id}/send` | `sendQboInvoice` | Asks QuickBooks to email it. Separate from creating on purpose. |
 | `POST /customer` | `createQboCustomer` | Added v0.0.171. Explicit press only. |
 | `POST /item` | `createQboItem` | Added v0.0.171. NonInventory, against the mapped income account. |
+| `POST /item` (sparse) | `setQboItemSku` | Added v0.0.173. Fills a BLANK `Item.Sku` from ours. Never overwrites one that disagrees. |
+| `GET /item/{id}` | `setQboItemSku` | The SyncToken, read immediately before the write. |
 
-**That is all of it.** Nine reads, five writes.
+**That is all of it.** Ten reads, six writes.
 
 ---
 
@@ -105,17 +107,38 @@ order it would be worth building for this business:
 
 ---
 
+## A SKU travels on the ITEM, not the line
+
+Not a limitation — a plumbing detail worth stating plainly, because reading it as
+"QuickBooks cannot do SKUs" is wrong. **SKUs do print on QuickBooks invoices.**
+
+`SalesItemLineDetail` carries ItemRef, ClassRef, TaxCodeRef, MarkupInfo,
+ItemAccountRef, ServiceDate, Qty, UnitPrice, TaxClassificationRef,
+TaxInclusiveAmt, DiscountAmt and DiscountRate — and no SKU. The SKU column on a
+printed QuickBooks invoice is read off the **Item** (`Item.Sku`). So the way to
+get the right SKU onto the document is to point the line at the right item,
+which is why matching resolves by SKU before name. It is the sturdier design:
+what prints is the item's real SKU, not a string typed onto one invoice.
+
+Three things have to line up, and the readiness panel reports all three:
+
+1. The line resolves to an item — otherwise the invoice is refused outright.
+2. That item has a SKU. Items added in QuickBooks by hand often do not. The panel
+   offers **Set SKU** for a blank one, which writes `Item.Sku` as a sparse update
+   against the current SyncToken.
+3. The SKU column is switched on in QuickBooks — Settings → Account and settings
+   → Sales → Products and services → *Show SKU column*. Off by default on some
+   plans, and while it is off the SKU is stored correctly on every item and
+   simply is not displayed.
+
+A SKU that DISAGREES with ours is reported and never fixed automatically. Theirs
+may be what an accountant reconciles against, and overwriting it from an invoice
+screen is not this app's decision to make.
+
 ## What it genuinely cannot do
 
 These are limits, not gaps. Several were learned the hard way and are already
 written into the code.
-
-**There is no SKU field on an invoice line.** `SalesItemLineDetail` carries
-ItemRef, ClassRef, TaxCodeRef, MarkupInfo, ItemAccountRef, ServiceDate, Qty,
-UnitPrice, TaxClassificationRef, TaxInclusiveAmt, DiscountAmt and DiscountRate —
-that is the whole list. The SKU printed on a QuickBooks invoice is read off the
-**Item** (`Item.Sku`). The only way to get the right SKU on the document is to
-point the line at the right item, which is why matching resolves by SKU first.
 
 **Our invoice number is not guaranteed to survive.** QuickBooks silently
 replaces `DocNumber` unless the company has *Custom transaction numbers* switched

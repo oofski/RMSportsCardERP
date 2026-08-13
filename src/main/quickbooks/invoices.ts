@@ -7,7 +7,7 @@ import type {
 import {
   missingQboItems,
   qboInvoiceUrl,
-  resolveLineItemRef,
+  skuReconciliation,
   toQboCustomerPayload,
   toQboInvoice,
   toQboItemPayload
@@ -234,6 +234,8 @@ export interface QboInvoiceTargets {
   missingItems: ReturnType<typeof missingQboItems>
   /** SKU disagreements — never blockers, always worth saying. */
   skuNotes: string[]
+  /** The blank-SKU subset of those, each fixable in one press. */
+  skuFixes: ReturnType<typeof skuReconciliation>['fixes']
 }
 
 export async function resolveQboInvoiceTargets(invoice: {
@@ -246,35 +248,17 @@ export async function resolveQboInvoiceTargets(invoice: {
   const customer = customers.find((c) => c.name.trim().toLowerCase() === wanted) ?? null
   const { byName, bySku } = itemLookups(items)
 
-  // A line that matched an item by NAME whose SKU disagrees with ours is the one
-  // case worth saying out loud. The invoice is fine and posts against the item
-  // the name found — but the SKU printed on it will be QuickBooks', not ours,
-  // and somebody reconciling the two lists later needs to know which won.
-  const skuNotes: string[] = []
-  for (const line of invoice.lines) {
-    const ours = (line.sku ?? '').trim()
-    if (!ours) continue
-    const ref = resolveLineItemRef(line, byName, bySku)
-    const theirs = (ref?.sku ?? '').trim()
-    if (ref && theirs && theirs.toLowerCase() !== ours.toLowerCase()) {
-      skuNotes.push(
-        `“${line.item}” is SKU ${ours} here and ${theirs} in QuickBooks. The invoice will show ` +
-          `${theirs}, because the SKU on an invoice belongs to the QuickBooks item.`
-      )
-    } else if (ref && !theirs) {
-      skuNotes.push(
-        `The QuickBooks item for “${line.item}” has no SKU, so SKU ${ours} will not appear on ` +
-          'the invoice. Set it on the item in QuickBooks.'
-      )
-    }
-  }
+  // What the SKUs say about the items behind them. One shared function, so the
+  // sentence shown before the send and the note recorded after it agree.
+  const { notes: skuNotes, fixes: skuFixes } = skuReconciliation(invoice.lines, byName, bySku)
 
   return {
     customer,
     byName,
     bySku,
     missingItems: missingQboItems(invoice.lines, byName, bySku),
-    skuNotes
+    skuNotes,
+    skuFixes
   }
 }
 
@@ -301,7 +285,8 @@ export async function preflightQboInvoice(invoice: {
     customerName: invoice.customerName,
     customerFound: !!targets.customer,
     missingItems: targets.missingItems,
-    notes: targets.skuNotes
+    notes: targets.skuNotes,
+    skuFixes: targets.skuFixes
   }
 }
 
@@ -481,6 +466,71 @@ export async function createQboItem(input: {
     rate: typeof created.UnitPrice === 'number' ? created.UnitPrice : null,
     description: created.Description ?? null,
     sku: (created.Sku ?? '').trim() || null
+  }
+}
+
+/**
+ * Give an existing Product/Service the SKU we hold for it.
+ *
+ * ## Why this is a separate press and not part of posting
+ *
+ * It edits a record in somebody's accounting system. The rule this integration
+ * runs on is that posting an invoice never changes anything else as a side
+ * effect, and "it is only a blank field" is exactly the reasoning that ends with
+ * a send quietly rewriting six items nobody looked at.
+ *
+ * ## Sparse, and with the CURRENT SyncToken
+ *
+ * A full update would blank every field not sent — name, price, income account,
+ * the lot. `sparse: true` changes only what is named. The SyncToken is
+ * QuickBooks' optimistic-lock version and it moves every time anything touches
+ * the item, including edits made over there, so it is read immediately before
+ * the write rather than cached and hoped over. A stale one is refused outright,
+ * which is the correct outcome — it means somebody else changed the item since
+ * this screen last looked.
+ *
+ * The caller only ever offers this for an item whose SKU is BLANK; see
+ * skuReconciliation for why a disagreement gets a sentence instead of a button.
+ */
+export async function setQboItemSku(itemId: string, sku: string): Promise<QboItemRef> {
+  const id = (itemId ?? '').trim()
+  // Interpolated into a path, so it is checked rather than trusted.
+  if (!/^[0-9]+$/.test(id)) throw new Error('That is not a QuickBooks item id.')
+  const value = (sku ?? '').trim()
+  if (!value) throw new Error('There is no SKU to set.')
+
+  const read = await qboRequest<{ Item?: RawItem & { SyncToken?: string } }>({
+    path: `item/${id}`
+  })
+  const current = read?.Item
+  if (!current?.Id) throw new Error('That item is no longer in QuickBooks.')
+  if (current.SyncToken === undefined) {
+    throw new Error('QuickBooks did not return a version for that item, so it was not changed.')
+  }
+  // Re-checked against what QuickBooks says RIGHT NOW, not against what the
+  // screen was showing. Somebody may have set it by hand in the meantime, and
+  // overwriting a real SKU is the one thing this must not do.
+  const theirs = (current.Sku ?? '').trim()
+  if (theirs && theirs.toLowerCase() !== value.toLowerCase()) {
+    throw new Error(
+      `That item already has SKU ${theirs} in QuickBooks. Change it there if ${value} is the ` +
+        'one you want — this app will not overwrite a SKU somebody set.'
+    )
+  }
+
+  const res = await qboRequest<{ Item?: RawItem }>({
+    method: 'POST',
+    path: 'item',
+    body: { Id: id, SyncToken: current.SyncToken, sparse: true, Sku: value }
+  })
+
+  const saved = res.Item
+  return {
+    id: String(saved?.Id ?? id),
+    name: String(saved?.FullyQualifiedName || saved?.Name || current.Name || ''),
+    rate: typeof saved?.UnitPrice === 'number' ? saved.UnitPrice : null,
+    description: saved?.Description ?? null,
+    sku: (saved?.Sku ?? value).trim() || null
   }
 }
 

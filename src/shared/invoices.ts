@@ -848,6 +848,8 @@ export interface QboInvoicePreflight {
    * doing it first means the document is right the first time.
    */
   notes: string[]
+  /** The subset of those that are a blank SKU, which is fixable in one press. */
+  skuFixes: QboSkuFix[]
 }
 
 /**
@@ -879,6 +881,74 @@ export function missingQboItems(
     out.push({ kind: 'item', name: line.item, sku: sku || null })
   }
   return out
+}
+
+/**
+ * A QuickBooks item that this invoice could give a SKU to.
+ *
+ * ONLY EVER RAISED FOR A BLANK ONE. An item whose SKU disagrees with ours is a
+ * genuine conflict — theirs may be the one their accountant reconciles against —
+ * and silently overwriting it from an invoice would be this app deciding a
+ * question it has no standing to decide. That case gets a sentence and no
+ * button; this one gets a button, because filling in a blank field takes nothing
+ * away.
+ */
+export interface QboSkuFix {
+  itemId: string
+  itemName: string
+  /** Ours, from the line — what the item's blank Sku would be set to. */
+  sku: string
+}
+
+/**
+ * What the SKUs on this invoice say about the items behind them.
+ *
+ * There is NO SKU field on an invoice line — SalesItemLineDetail carries
+ * ItemRef, ClassRef, TaxCodeRef, MarkupInfo, ItemAccountRef, ServiceDate, Qty,
+ * UnitPrice, TaxClassificationRef, TaxInclusiveAmt, DiscountAmt and
+ * DiscountRate, and that is the whole list. The SKU column on a printed
+ * QuickBooks invoice is read off the ITEM. So "send the SKU with the line" is
+ * not a thing that can be done, and getting the SKU right means getting the
+ * ITEM right — which is why matching resolves by SKU first, and why an item
+ * with no SKU is worth saying out loud rather than leaving to be noticed on a
+ * document in front of a customer.
+ *
+ * Neither outcome blocks the invoice. Both change what PRINTS on it.
+ */
+export function skuReconciliation(
+  lines: readonly { item: string; sku?: string | null }[],
+  itemsByName: Map<string, QboItemMatch>,
+  itemsBySku?: Map<string, QboItemMatch>
+): { notes: string[]; fixes: QboSkuFix[] } {
+  const notes: string[] = []
+  const fixes: QboSkuFix[] = []
+  // One item can be on several lines; it is still one item to fix.
+  const seen = new Set<string>()
+
+  for (const line of lines) {
+    const ours = (line.sku ?? '').trim()
+    if (!ours) continue
+    const ref = resolveLineItemRef(line, itemsByName, itemsBySku)
+    if (!ref) continue
+    const theirs = (ref.sku ?? '').trim()
+
+    if (theirs && theirs.toLowerCase() !== ours.toLowerCase()) {
+      notes.push(
+        `“${line.item}” is SKU ${ours} here and ${theirs} in QuickBooks. The invoice will show ` +
+          `${theirs}, because the SKU on an invoice belongs to the QuickBooks item.`
+      )
+    } else if (!theirs) {
+      notes.push(
+        `The QuickBooks item for “${line.item}” has no SKU, so SKU ${ours} will not appear on ` +
+          'the invoice.'
+      )
+      if (!seen.has(ref.id)) {
+        seen.add(ref.id)
+        fixes.push({ itemId: ref.id, itemName: ref.name ?? line.item, sku: ours })
+      }
+    }
+  }
+  return { notes, fixes }
 }
 
 /**

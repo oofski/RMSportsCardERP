@@ -1436,6 +1436,19 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       }): Promise<Result<{ id: string; name: string; sku: string | null }>> =>
         ipcRenderer.invoke(IPC.invoiceQboCreateItem, input),
 
+      /**
+       * Give an existing QuickBooks item the SKU we hold for it.
+       *
+       * There is no SKU field on an invoice LINE — the SKU printed on a
+       * QuickBooks invoice is the ITEM's — so this is what actually gets our SKU
+       * onto their document. Only offered when theirs is blank.
+       */
+      qboSetItemSku: (
+        itemId: string,
+        sku: string
+      ): Promise<Result<{ id: string; name: string; sku: string | null }>> =>
+        ipcRenderer.invoke(IPC.invoiceQboSetItemSku, { itemId, sku }),
+
       /** Add the missing buyer. Same rule: explicit, never a side effect. */
       qboCreateCustomer: (input: {
         name: string

@@ -162,6 +162,10 @@ export const IPC = {
   // never create things as a side effect.
   invoiceQboCreateItem: 'invoices:qbo:create-item',
   invoiceQboCreateCustomer: 'invoices:qbo:create-customer',
+  // Give an existing QuickBooks item the SKU we hold for it. Offered only when
+  // theirs is BLANK — see skuReconciliation for why a disagreement is a sentence
+  // rather than a button.
+  invoiceQboSetItemSku: 'invoices:qbo:set-item-sku',
   invoiceSendFromQbo: 'invoices:qbo:send',
   invoiceOpenInQbo: 'invoices:qbo:open',
   // Save it here, then put it in QuickBooks — one gesture, two steps, in that

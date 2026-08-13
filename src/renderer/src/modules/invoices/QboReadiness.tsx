@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { QboInvoicePreflight, QboMissingTarget } from '@shared/invoices'
+import type { QboInvoicePreflight, QboMissingTarget, QboSkuFix } from '@shared/invoices'
 import { api } from '../../lib/api'
 import { Button } from '../../components/ui'
 import { Icon } from '../../components/Icon'
@@ -156,6 +156,28 @@ export function QboReadiness({
     }
   }
 
+  /**
+   * Put our SKU on their item.
+   *
+   * The SKU column on a QuickBooks invoice is read off the ITEM — there is no
+   * SKU field on a line — so this is the thing that actually gets our SKU onto
+   * their document.
+   */
+  const setSku = async (fix: QboSkuFix): Promise<void> => {
+    setCreating(`sku:${fix.itemId}`)
+    try {
+      const res = await api.invoices.qboSetItemSku(fix.itemId, fix.sku)
+      if (!res.ok) {
+        toast.error(res.error ?? 'QuickBooks would not set that SKU.')
+        return
+      }
+      toast.success(`“${fix.itemName}” is now SKU ${fix.sku} in QuickBooks.`)
+      await run()
+    } finally {
+      setCreating(null)
+    }
+  }
+
   const createCustomer = async (): Promise<void> => {
     setCreating('__customer')
     try {
@@ -250,6 +272,34 @@ export function QboReadiness({
             onClick={() => void createItem(miss)}
           >
             Add to QuickBooks
+          </Button>
+        </div>
+      ))}
+
+      {/* A QuickBooks item with a blank SKU. Not a blocker — the invoice posts —
+          but the SKU column on their document is read off the ITEM, so ours
+          never prints until this is filled in. One press, and only ever offered
+          for a BLANK one: an item whose SKU disagrees with ours gets a sentence
+          below instead, because overwriting a SKU somebody set is not this app's
+          decision to make. */}
+      {report?.skuFixes.map((fix) => (
+        <div className="qbo-ready-row" key={fix.itemId}>
+          <div>
+            <b>{fix.itemName}</b>
+            <span>
+              No SKU in QuickBooks, so <span className="mono">{fix.sku}</span> will not print on the
+              invoice.
+            </span>
+          </div>
+          <Button
+            variant="secondary"
+            icon="Tag"
+            loading={creating === `sku:${fix.itemId}`}
+            disabled={creating !== null}
+            title={`Set this item’s SKU to ${fix.sku} in QuickBooks`}
+            onClick={() => void setSku(fix)}
+          >
+            Set SKU
           </Button>
         </div>
       ))}
