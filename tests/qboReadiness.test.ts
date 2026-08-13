@@ -43,11 +43,14 @@
  */
 /* eslint-disable @typescript-eslint/no-var-requires */
 const {
+  QBO_ATTACHABLE_ENTITIES,
   QBO_ITEM_NAME_MAX,
   describeMissingQboItems,
+  readQboUploadReply,
   missingQboItems,
   resolveLineItemRef,
   skuReconciliation,
+  toQboAttachablePayload,
   toQboCustomerPayload,
   toQboInvoice,
   toQboItemPayload
@@ -485,6 +488,104 @@ ok(
 )
 
 ok(threw(() => toQboCustomerPayload({ name: '  ' })) !== null, 'a blank customer name is refused')
+
+// ---------------------------------------------------------------------------
+console.log('=== 5. attaching the document ===')
+// ---------------------------------------------------------------------------
+// THE FAILURE THAT LOOKS MOST LIKE SUCCESS. An upload with no AttachableRef is
+// accepted, gets an id, and lands in the company's Attachments list attached to
+// nothing — where nobody looking at the invoice will ever find it. The payload
+// is built in ONE place, shared by the direct and the relay paths, and this is
+// what stops that place quietly losing the link.
+const att = toQboAttachablePayload({
+  entityType: 'Invoice',
+  entityId: '145',
+  fileName: 'invoice-2293.pdf',
+  mimeType: 'application/pdf'
+})
+const refs = att.AttachableRef as Array<{ EntityRef: { type: string; value: string } }>
+ok(Array.isArray(refs) && refs.length === 1, 'the attachment carries an AttachableRef')
+ok(refs[0].EntityRef.type === 'Invoice', 'naming what it hangs off')
+ok(refs[0].EntityRef.value === '145', 'and which one, by QuickBooks’ id')
+ok(att.FileName === 'invoice-2293.pdf', 'with the file name')
+ok(att.ContentType === 'application/pdf', 'and the content type')
+
+// An entity we do not create has no business receiving an attachment from here.
+// The relay enforces the same list — that check is the boundary, this one is the
+// bug catcher.
+ok(
+  threw(() =>
+    toQboAttachablePayload({
+      entityType: 'Payment',
+      entityId: '1',
+      fileName: 'x.pdf',
+      mimeType: 'application/pdf'
+    })
+  ) !== null,
+  'an entity off the whitelist is refused'
+)
+ok(
+  threw(() =>
+    toQboAttachablePayload({
+      entityType: 'Invoice',
+      entityId: 'abc',
+      fileName: 'x.pdf',
+      mimeType: 'application/pdf'
+    })
+  ) !== null,
+  'and a non-numeric id, which would reference nothing'
+)
+ok(
+  QBO_ATTACHABLE_ENTITIES.includes('Invoice'),
+  'Invoice is on the whitelist, which is the only one used today'
+)
+
+// ---- reading the answer ---------------------------------------------------
+// /upload does not answer like the rest of the API. It returns a LIST and
+// reports a per-part Fault INSIDE a 200 — so checking the HTTP status is not
+// enough, and treating a 200 as success records an attachment that is not there.
+const good = readQboUploadReply(
+  { AttachableResponse: [{ Attachable: { Id: '77', FileName: 'invoice-2293.pdf' } }] },
+  'fallback.pdf'
+)
+ok(good.id === '77', 'a successful upload yields the attachment id')
+ok(good.fileName === 'invoice-2293.pdf', 'and the name QuickBooks stored it under')
+
+ok(
+  readQboUploadReply({ AttachableResponse: [{ Attachable: { Id: '78' } }] }, 'fallback.pdf')
+    .fileName === 'fallback.pdf',
+  'and falls back to the name we sent when they do not echo one'
+)
+
+const faulted = threw(() =>
+  readQboUploadReply(
+    {
+      AttachableResponse: [
+        { Fault: { Error: [{ Message: 'Invalid Reference Id', Detail: 'Invoice 999 not found' }] } }
+      ]
+    },
+    'x.pdf'
+  )
+)
+ok(faulted !== null, 'a Fault inside a 200 is a FAILURE, not a success')
+ok(
+  (faulted ?? '').includes('Invoice 999 not found'),
+  'and Intuit’s own detail is what gets shown',
+  faulted ?? ''
+)
+
+ok(
+  threw(() => readQboUploadReply({}, 'x.pdf')) !== null,
+  'an empty answer is a failure rather than a silent no-op'
+)
+ok(
+  threw(() => readQboUploadReply({ AttachableResponse: [] }, 'x.pdf')) !== null,
+  'and so is an empty list'
+)
+ok(
+  threw(() => readQboUploadReply({ AttachableResponse: [{ Attachable: {} }] }, 'x.pdf')) !== null,
+  'and an attachment with no id, which we could not point anybody at'
+)
 
 // ---------------------------------------------------------------------------
 console.log(`\n${pass} passed, ${fail} failed`)

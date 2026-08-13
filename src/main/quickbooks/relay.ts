@@ -24,6 +24,8 @@ import {
   emptyRelayProbe,
   explainQboRelayProblem,
   isSafeQboPath,
+  relayCanUpload,
+  RELAY_UPLOAD_UNSUPPORTED,
   type QboCallEnvelope
 } from '@shared/quickbooksRelay'
 import { call, getSyncConfig } from '../services/cloudSync'
@@ -59,6 +61,7 @@ interface RelayStatusReply {
   refreshExpiresAt?: string | null
   encryption?: string
   lastError?: string | null
+  features?: unknown
 }
 
 function toProbe(reply: RelayStatusReply): QboRelayProbe {
@@ -76,6 +79,11 @@ function toProbe(reply: RelayStatusReply): QboRelayProbe {
     refreshExpiresAt: reply.refreshExpiresAt ?? null,
     encryption,
     lastError: reply.lastError ?? null,
+    // A relay deployed before capabilities existed sends nothing here, and an
+    // empty list reads correctly as "cannot do any of it" — which is the truth.
+    features: Array.isArray(reply.features)
+      ? reply.features.filter((f): f is string => typeof f === 'string')
+      : [],
     problem: null
   }
 }
@@ -190,6 +198,48 @@ export async function relayQboRequest<T = unknown>(options: QboCallEnvelope): Pr
     throw new Error(describeRelayFailure(err instanceof Error ? err.message : String(err)))
   }
   return (reply.body ?? {}) as T
+}
+
+/**
+ * Send a file to the relay, for it to attach in QuickBooks.
+ *
+ * The bytes go up base64-encoded inside JSON rather than as a multipart body.
+ * That costs a third in transfer and buys the app not having to build a
+ * multipart body it would then have to keep in step with cloud/worker.js — the
+ * relay frames it, because the relay is the side that talks to Intuit.
+ *
+ * REFUSED EARLY when the deployed Worker predates attachments. The relay is
+ * deployed by hand and is routinely older than the app; without this check the
+ * call is a 404 arriving from a button about invoices, which reads as
+ * QuickBooks being down. See explainQboRelayProblem — the same lesson, learned
+ * expensively enough to be worth not repeating.
+ */
+export async function relayQboUpload(input: {
+  entityType: string
+  entityId: string
+  fileName: string
+  mimeType: string
+  bytes: Buffer
+}): Promise<{ id: string; fileName: string }> {
+  if (!relayConfigured()) throw new Error(NO_RELAY)
+  if (!relayCanUpload(await relayQbo())) throw new Error(RELAY_UPLOAD_UNSUPPORTED)
+
+  try {
+    const reply = (await call('/v1/qbo/upload', {
+      method: 'POST',
+      body: {
+        entityType: input.entityType,
+        entityId: input.entityId,
+        fileName: input.fileName,
+        mimeType: input.mimeType,
+        contentBase64: input.bytes.toString('base64')
+      }
+    })) as { id?: string; fileName?: string }
+    if (!reply?.id) throw new Error('The relay did not say where the file went.')
+    return { id: String(reply.id), fileName: String(reply.fileName ?? input.fileName) }
+  } catch (err) {
+    throw new Error(describeRelayFailure(err instanceof Error ? err.message : String(err)))
+  }
 }
 
 /** The cheapest authenticated read there is, used as the connection test. */

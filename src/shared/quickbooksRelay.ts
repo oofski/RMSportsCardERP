@@ -66,9 +66,39 @@ export interface QboRelayProbe {
   encryption: QboRelayEncryption
   /** The last failure the relay recorded against a QuickBooks call. */
   lastError: string | null
+  /**
+   * What the DEPLOYED Worker can do, by name.
+   *
+   * The relay is deployed by hand, separately from the app, so the two are
+   * routinely different ages and nothing in Cloudflare says the running code is
+   * older than the repository. Asking "can you do this" beats asking "are you
+   * new enough": a relay that predates a feature simply does not list it, and an
+   * older relay still answers with no `features` at all — which reads correctly
+   * as "no" without any version arithmetic.
+   */
+  features: string[]
   /** Why this probe is not usable, in a sentence. Null when it is. */
   problem: string | null
 }
+
+/**
+ * Can the deployed relay carry a file to QuickBooks?
+ *
+ * False for a relay that has not been redeployed since attachments were added.
+ * The caller uses this to say so plainly rather than letting the call 404 from
+ * behind a button that says "Send to QuickBooks" — which everybody reads as
+ * QuickBooks being down. See explainQboRelayProblem for the same lesson learned
+ * the expensive way.
+ */
+export function relayCanUpload(probe: QboRelayProbe | null): boolean {
+  return !!probe?.features?.includes('upload')
+}
+
+/** What to tell somebody whose relay is too old to carry an attachment. */
+export const RELAY_UPLOAD_UNSUPPORTED =
+  'The cloud relay is running an older copy of the Worker, which cannot carry attachments. ' +
+  'Deploy the current cloud/worker.js to Cloudflare and try again — the invoice itself is ' +
+  'already in QuickBooks.'
 
 export function emptyRelayProbe(configured: boolean, problem: string | null): QboRelayProbe {
   return {
@@ -82,6 +112,7 @@ export function emptyRelayProbe(configured: boolean, problem: string | null): Qb
     expiresAt: null,
     refreshExpiresAt: null,
     encryption: 'none',
+    features: [],
     lastError: null,
     problem
   }

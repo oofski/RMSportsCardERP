@@ -2618,7 +2618,20 @@ async function qboStatusBody(env) {
     expiresAt: row ? qboIso(row.expires_at) : null,
     refreshExpiresAt: row ? qboIso(row.refresh_expires_at) : null,
     encryption: qboEncryptionMode(env),
-    lastError: row && row.last_error ? String(row.last_error) : null
+    lastError: row && row.last_error ? String(row.last_error) : null,
+    // What this DEPLOYED copy of the Worker can do.
+    //
+    // The relay is deployed separately from the app, by hand, so the two are
+    // routinely different ages — and nothing in the Cloudflare dashboard says
+    // the running code is older than the repository. Without this, calling a
+    // route that has not been deployed yet is a 404 from a button labelled
+    // "Send to QuickBooks", which everybody reads as QuickBooks being down.
+    //
+    // Announcing capabilities by NAME rather than by version number means the
+    // app asks "can you do this" instead of "are you new enough", which is the
+    // question it actually has. A relay that predates this field answers with
+    // nothing, and absence reads correctly as "no".
+    features: ['upload']
   }
 }
 
@@ -2797,6 +2810,35 @@ async function qboFetch(env, conn, call) {
     const url = new URL(`${QBO_API_BASE}/v3/company/${state.realmId}/${call.path}`)
     url.searchParams.set('minorversion', QBO_MINOR_VERSION)
     for (const [k, v] of Object.entries(call.query || {})) url.searchParams.set(k, String(v))
+
+    // An ATTACHMENT is multipart, not JSON. Intuit's /upload wants exactly two
+    // parts with exactly these names: the Attachable record as JSON, then the
+    // bytes. FormData is rebuilt on every attempt rather than built once and
+    // reused, because the 401 path below sends a SECOND time — and a body that
+    // has already been streamed is empty the next time it is read, which would
+    // upload a zero-byte file after a token refresh.
+    if (call.upload) {
+      const form = new FormData()
+      form.append(
+        'file_metadata_01',
+        new Blob([JSON.stringify(call.upload.metadata)], { type: 'application/json' }),
+        'metadata.json'
+      )
+      form.append(
+        'file_content_01',
+        new Blob([call.upload.bytes], { type: call.upload.mimeType }),
+        call.upload.fileName
+      )
+      return fetch(url.toString(), {
+        method: 'POST',
+        // NO content-type header. fetch sets multipart/form-data WITH the
+        // boundary it generated; naming the type here without the boundary
+        // produces a body Intuit cannot parse.
+        headers: { authorization: `Bearer ${state.accessToken}`, accept: 'application/json' },
+        body: form
+      })
+    }
+
     return fetch(url.toString(), {
       method: call.method || 'GET',
       headers: {
@@ -2858,6 +2900,77 @@ export function qboSafePath(path) {
   if (/^[a-z][a-z0-9+.-]*:/i.test(p)) return false
   if (p.includes('..')) return false
   return /^[A-Za-z0-9/_-]+$/.test(p)
+}
+
+/**
+ * What an attachment may be attached TO.
+ *
+ * A whitelist rather than a pattern, because this names a transaction in a real
+ * company's books. Anything not on this list is something the app does not
+ * create and therefore has no business attaching a document to — and the check
+ * has to live HERE, not only in the app, for the same reason qboSafePath does:
+ * this is the boundary somebody holding the shared key is on the other side of.
+ */
+const QBO_ATTACHABLE_ENTITIES = new Set(['Invoice', 'PurchaseOrder', 'Bill', 'SalesReceipt', 'Estimate'])
+
+/**
+ * How large an attachment may be.
+ *
+ * Intuit's own ceiling is 100MB, which is not the number that matters here — a
+ * Worker holds the whole thing in memory and the base64 that carried it is a
+ * third larger again. An invoice PDF is tens of kilobytes; eight megabytes is
+ * generous for a scanned supplier document and small enough that a mistake
+ * cannot exhaust the isolate.
+ */
+const QBO_MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024
+
+/** Types this relay will pass on. Not a security boundary — a sanity one. */
+const QBO_ATTACHMENT_TYPES = new Set([
+  'application/pdf',
+  'text/html',
+  'text/csv',
+  'text/plain',
+  'image/png',
+  'image/jpeg'
+])
+
+/**
+ * Decode base64 to bytes, refusing anything oversized BEFORE allocating it.
+ *
+ * The length check is on the encoded string, which is why it is 4/3 of the byte
+ * cap: checking after decoding means a caller who sends 200MB has already had
+ * 200MB allocated by the time it is refused.
+ */
+export function qboAttachmentBytes(base64) {
+  const raw = String(base64 || '')
+  if (!raw) throw new Error('The attachment has no content.')
+  if (raw.length > Math.ceil((QBO_MAX_ATTACHMENT_BYTES * 4) / 3) + 8) {
+    throw new Error('That attachment is too large for the relay to carry.')
+  }
+  const binary = atob(raw)
+  if (binary.length > QBO_MAX_ATTACHMENT_BYTES) {
+    throw new Error('That attachment is too large for the relay to carry.')
+  }
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+  return bytes
+}
+
+/**
+ * A file name QuickBooks will store and a filesystem will not object to.
+ *
+ * The name travels into a Content-Disposition header, so a newline or a quote in
+ * it would break the multipart framing itself rather than merely producing an
+ * odd file name. Stripped rather than rejected: the name is cosmetic, and
+ * failing an upload over a punctuation mark in a customer's name would be a
+ * worse outcome than a slightly tidied file name.
+ */
+export function qboAttachmentName(name, fallback) {
+  const cleaned = String(name || '')
+    .replace(/[\r\n"\\/ -]+/g, '_')
+    .trim()
+    .slice(0, 120)
+  return cleaned || fallback
 }
 
 // ---------------------------------------------------------------------------
@@ -3089,6 +3202,119 @@ async function qboApi(request, env, path) {
       return json({ ok: false, error: 'QuickBooks returned something that is not JSON.' }, 502)
     }
     return json({ ok: true, status: result.status, body: parsed })
+  }
+
+  /**
+   * Attach a document to a transaction.
+   *
+   * ITS OWN ROUTE, not a flag on `request`, because it is a different KIND of
+   * call. Everything on `request` is JSON in and JSON out; this one carries
+   * bytes, has to be framed as multipart, and needs limits on size and on what
+   * it may attach to. Folding it in would have made the common path carry checks
+   * that only matter here, and made the size cap something a JSON caller could
+   * wander into by accident.
+   *
+   * The bytes arrive base64-encoded inside JSON rather than as a raw multipart
+   * body from the app. That costs a third in transfer and buys two things worth
+   * more: the relay's own request framing stays uniform (one shape, one auth
+   * check, one place that reads a body), and the app never has to build a
+   * multipart body it would then have to keep in step with this file.
+   */
+  if (route === 'upload' && request.method === 'POST') {
+    const body = await readJson(request)
+    const entityType = String(body.entityType || '').trim()
+    const entityId = String(body.entityId || '').trim()
+    const mimeType = String(body.mimeType || '').trim().toLowerCase()
+
+    if (!QBO_ATTACHABLE_ENTITIES.has(entityType)) {
+      return json({ ok: false, error: 'That is not something this relay will attach a file to.' }, 400)
+    }
+    // Ids are Intuit's own, and they are numeric. Anything else is either a bug
+    // or somebody probing, and both deserve the same flat refusal.
+    if (!/^[0-9]{1,20}$/.test(entityId)) {
+      return json({ ok: false, error: 'That is not a QuickBooks id.' }, 400)
+    }
+    if (!QBO_ATTACHMENT_TYPES.has(mimeType)) {
+      return json({ ok: false, error: `The relay will not carry a ${mimeType || 'blank'} file.` }, 400)
+    }
+
+    let bytes
+    try {
+      bytes = qboAttachmentBytes(body.contentBase64)
+    } catch (err) {
+      return json({ ok: false, error: String((err && err.message) || err) }, 400)
+    }
+
+    const fileName = qboAttachmentName(body.fileName, 'document')
+
+    const conn = await qboConnection(env)
+    if (!conn || !conn.refreshToken || !conn.realmId) {
+      return json(
+        {
+          ok: false,
+          error:
+            'QuickBooks is not connected on the relay. The owner sets this up once, under ' +
+            'Invoices → QuickBooks.'
+        },
+        409
+      )
+    }
+
+    let result
+    try {
+      result = await qboFetch(env, conn, {
+        method: 'POST',
+        path: 'upload',
+        upload: {
+          bytes,
+          fileName,
+          mimeType,
+          // The Attachable record. AttachableRef is what LINKS the file to the
+          // transaction — without it the file uploads successfully and lands
+          // nowhere anybody will find it, attached to nothing.
+          metadata: {
+            AttachableRef: [{ EntityRef: { type: entityType, value: entityId } }],
+            FileName: fileName,
+            ContentType: mimeType
+          }
+        }
+      })
+    } catch (err) {
+      const message = String((err && err.message) || err)
+      await qboNoteError(env, message)
+      return json({ ok: false, error: message }, 502)
+    }
+
+    if (!result.ok) {
+      const message = describeQboFault(result.status, result.text)
+      await qboNoteError(env, message)
+      return json({ ok: false, error: message, status: result.status }, 200)
+    }
+    await qboNoteError(env, null)
+
+    let parsed = {}
+    try {
+      parsed = result.text ? JSON.parse(result.text) : {}
+    } catch {
+      return json({ ok: false, error: 'QuickBooks returned something that is not JSON.' }, 502)
+    }
+
+    // /upload answers with a LIST, one entry per part, and a per-part Fault
+    // rather than an HTTP error — so a 200 here does not by itself mean the file
+    // landed. The entry is unwrapped and checked before this reports success.
+    const entry = Array.isArray(parsed.AttachableResponse) ? parsed.AttachableResponse[0] : null
+    const fault = entry && entry.Fault
+    if (fault) {
+      const message = describeQboFault(200, JSON.stringify({ Fault: fault }))
+      await qboNoteError(env, message)
+      return json({ ok: false, error: message }, 200)
+    }
+    const attachable = (entry && entry.Attachable) || null
+    if (!attachable || !attachable.Id) {
+      return json({ ok: false, error: 'QuickBooks accepted the file but did not say where it went.' }, 200)
+    }
+
+    return json({ ok: true, id: String(attachable.Id), fileName: String(attachable.FileName || fileName) })
   }
 
   // ---- Taking it apart again ----------------------------------------------

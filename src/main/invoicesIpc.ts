@@ -44,6 +44,7 @@ import { importContactFile } from './contactsImport'
 import { uploadedBytes, uploadedName } from './util'
 import { openInvoicePdf, saveInvoicePdf } from './invoicePdf'
 import {
+  attachInvoiceDocument,
   createQboCustomer,
   createQboInvoice,
   createQboItem,
@@ -140,6 +141,16 @@ async function pushToQbo(invoice: InvoiceDetail, open: boolean): Promise<Invoice
     const res = await createQboInvoice(invoice)
     markPosted(invoice.id, { id: res.qboId, docNumber: res.docNumber }, 'created')
 
+    // The document, onto the QuickBooks record. AFTER markPosted and never
+    // allowed to throw: the invoice is already on their books by this point, and
+    // turning a successful post into a reported failure would invite a retry
+    // that either bounces as a duplicate or creates the invoice twice. A problem
+    // here is a NOTE, which is the same weight as a missing class or an
+    // unmatched payment term — the money is right, something cosmetic is not.
+    const posted = getInvoice(invoice.id) ?? invoice
+    const attachNote = await attachInvoiceDocument(posted, res.qboId)
+    const notes = attachNote ? [...res.notes, attachNote] : res.notes
+
     // Opening the browser is a convenience, not the operation. A blocked pop-up
     // or a machine with no default browser must not turn a successfully created
     // invoice into a reported failure.
@@ -161,7 +172,7 @@ async function pushToQbo(invoice: InvoiceDetail, open: boolean): Promise<Invoice
       docNumber: res.docNumber,
       numberChanged: res.numberChanged,
       error: null,
-      notes: res.notes
+      notes
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)

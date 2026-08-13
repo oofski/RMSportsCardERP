@@ -571,6 +571,55 @@ async function main(): Promise<void> {
   )
 
   // -------------------------------------------------------------------------
+  console.log('\n=== attachments: what the relay will and will not carry ===')
+  // -------------------------------------------------------------------------
+  // The relay is the boundary. The app checks these too, but THIS check is the
+  // one standing between somebody holding the shared key and an oversized or
+  // malformed upload aimed at the connected company — the same reason
+  // qboSafePath is duplicated rather than trusted from the app side.
+
+  // The size cap is applied to the ENCODED string before anything is decoded.
+  // Checking after decoding means a caller who sends 200MB has already had 200MB
+  // allocated inside the isolate by the time it is refused.
+  /** The message a synchronous call threw, or null. */
+  const threwAsync = (fn: () => unknown): string | null => {
+    try {
+      fn()
+      return null
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err)
+    }
+  }
+
+  const tiny = Buffer.from('%PDF-1.4 hello').toString('base64')
+  ok(worker.qboAttachmentBytes(tiny).length === 14, 'a small file decodes to its bytes')
+  ok(
+    worker.qboAttachmentBytes(tiny) instanceof Uint8Array,
+    'as bytes rather than a string, which is what FormData needs'
+  )
+  ok(threwAsync(() => worker.qboAttachmentBytes('')) !== null, 'an empty attachment is refused')
+
+  // 12MB of base64 is ~9MB decoded, over the 8MB cap.
+  const oversized = 'A'.repeat(12 * 1024 * 1024)
+  const tooBig = threwAsync(() => worker.qboAttachmentBytes(oversized))
+  ok(tooBig !== null, 'an oversized attachment is refused')
+  ok((tooBig ?? '').toLowerCase().includes('too large'), 'and says why', tooBig ?? '')
+
+  // The file name travels into a Content-Disposition header, so a quote or a
+  // newline in it would break the multipart FRAMING rather than merely producing
+  // an odd name. Stripped rather than rejected — failing an upload over a
+  // punctuation mark in a customer's name is the worse outcome.
+  ok(
+    !/[\r\n"]/.test(worker.qboAttachmentName('inv "2293"\r\nX-Evil: 1', 'doc')),
+    'quotes and newlines cannot escape the Content-Disposition header'
+  )
+  ok(worker.qboAttachmentName('', 'document') === 'document', 'a blank name falls back')
+  ok(
+    worker.qboAttachmentName('x'.repeat(400), 'doc').length <= 120,
+    'and an absurd one is trimmed rather than sent'
+  )
+
+  // -------------------------------------------------------------------------
   console.log(`\n${pass} passed, ${fail} failed`)
   if (fail > 0) process.exit(1)
 }

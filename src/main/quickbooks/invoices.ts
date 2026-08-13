@@ -12,7 +12,9 @@ import {
   toQboInvoice,
   toQboItemPayload
 } from '@shared/invoices'
-import { activeRealmId, qboRequest } from './client'
+import { activeRealmId, qboRequest, qboUpload } from './client'
+import { buildInvoiceHtml } from '../invoicePdf'
+import { renderDocumentForExport } from '../poPdf'
 import { getAccountMap } from './mapping'
 import { getQboConfig } from './store'
 import {
@@ -561,6 +563,52 @@ export async function createQboCustomer(input: {
     name: String(created.DisplayName || name),
     email: created.PrimaryEmailAddr?.Address ?? null,
     billAddr: fromRawAddress(created.BillAddr)
+  }
+}
+
+/**
+ * Put our own invoice document on the QuickBooks record.
+ *
+ * ## Why our PDF and not theirs
+ *
+ * QuickBooks generates its own PDF of every invoice, so this is not about having
+ * a PDF — it is about having OURS. The document this app produces is the one the
+ * buyer was sent, with this business's layout and the SKUs as they stand here.
+ * Keeping it on the transaction means the record in the accounting system and
+ * the paper the customer holds are the same piece of paper, which is exactly the
+ * question somebody is trying to answer when they go looking a year later.
+ *
+ * ## It is never allowed to fail the invoice
+ *
+ * By the time this runs the invoice IS in QuickBooks. Throwing here would mark a
+ * successful post as failed, and a retry would then either be refused as a
+ * duplicate or — worse — create the invoice twice. So the caller treats a
+ * failure as a NOTE, and this returns the sentence rather than raising it.
+ *
+ * On the web the document may come back as HTML rather than PDF when the image
+ * has no Chromium; it is attached either way, because a readable HTML copy on
+ * the record beats nothing on the record.
+ */
+export async function attachInvoiceDocument(
+  invoice: InvoiceDetail,
+  qboId: string
+): Promise<string | null> {
+  try {
+    const doc = await renderDocumentForExport(buildInvoiceHtml(invoice))
+    const number = invoice.qboDocNumber || invoice.invoiceNumber || qboId
+    await qboUpload({
+      entityType: 'Invoice',
+      entityId: qboId,
+      fileName: `invoice-${number}${doc.extension}`,
+      // The MIME carries a charset for HTML, which Intuit stores verbatim as the
+      // ContentType. Only the type itself belongs on the record.
+      mimeType: doc.mime.split(';')[0].trim(),
+      bytes: doc.bytes
+    })
+    return null
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return `The invoice is in QuickBooks, but the PDF could not be attached: ${message}`
   }
 }
 

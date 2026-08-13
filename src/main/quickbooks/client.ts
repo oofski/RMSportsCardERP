@@ -34,7 +34,15 @@ import type { QboCallEnvelope, QboHolder } from '@shared/quickbooksRelay'
 import { chooseQboHolder, qboNotConnectedReason } from '@shared/quickbooksRelay'
 import { refreshTokens } from './oauth'
 import { getQboConfig, getQboTokens, setQboTokens } from './store'
-import { relayConfigured, relayQbo, relayQboCompany, relayQboRequest, rememberedRelayQbo } from './relay'
+import { readQboUploadReply, toQboAttachablePayload } from '@shared/invoices'
+import {
+  relayConfigured,
+  relayQbo,
+  relayQboCompany,
+  relayQboRequest,
+  relayQboUpload,
+  rememberedRelayQbo
+} from './relay'
 
 export class QboNotConnectedError extends Error {}
 export class QboReconsentRequiredError extends Error {}
@@ -173,6 +181,81 @@ export async function qboRequest<T = unknown>(options: QboRequestOptions): Promi
     throw new Error(describeQboError(res.status, text))
   }
   return (text ? JSON.parse(text) : {}) as T
+}
+
+/**
+ * Attach a document to a transaction in QuickBooks.
+ *
+ * Kept separate from `qboRequest` rather than folded into it as a flag, because
+ * it is a different kind of call: multipart rather than JSON, bytes rather than
+ * an object, and with limits on what it may attach to. One function doing both
+ * would make every ordinary call carry checks that only matter here.
+ *
+ * The multipart framing itself is Intuit's, and it is picky: exactly two parts,
+ * named `file_metadata_01` and `file_content_01`, the first being the Attachable
+ * record as JSON. The `AttachableRef` inside it is what LINKS the file to the
+ * transaction — without it the upload succeeds and the document lands attached
+ * to nothing, which is the failure that looks most like success.
+ *
+ * Routes by holder exactly as `qboRequest` does, so a machine whose grant lives
+ * in the relay uploads through the relay and never sees a token.
+ */
+export async function qboUpload(input: {
+  entityType: string
+  entityId: string
+  fileName: string
+  mimeType: string
+  bytes: Buffer
+}): Promise<{ id: string; fileName: string }> {
+  const holder = await qboHolder()
+  if (holder === 'relay') return relayQboUpload(input)
+  if (holder === 'none') throw notConnected()
+
+  const { config, tokens } = await ready()
+
+  const send = async (accessToken: string): Promise<Response> => {
+    const url = new URL(`${qboApiBase(config.environment)}/v3/company/${tokens.realmId}/upload`)
+    url.searchParams.set('minorversion', QBO_MINOR_VERSION)
+
+    // Rebuilt per attempt. The 401 path below sends a SECOND time, and a body
+    // that has already been streamed reads as empty the next time — which would
+    // upload a zero-byte file after a token refresh and report success.
+    const form = new FormData()
+    form.append(
+      'file_metadata_01',
+      new Blob([JSON.stringify(toQboAttachablePayload(input))], { type: 'application/json' }),
+      'metadata.json'
+    )
+    form.append(
+      'file_content_01',
+      new Blob([new Uint8Array(input.bytes)], { type: input.mimeType }),
+      input.fileName
+    )
+
+    return fetch(url.toString(), {
+      // NO content-type header: fetch sets multipart/form-data WITH the boundary
+      // it generated, and naming the type without the boundary produces a body
+      // Intuit cannot parse.
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
+      body: form
+    })
+  }
+
+  let res = await send(tokens.accessToken)
+  if (res.status === 401) {
+    const fresh = await refreshTokens(config, tokens)
+    setQboTokens(fresh)
+    res = await send(fresh.accessToken)
+  }
+
+  const text = await res.text()
+  if (!res.ok) throw new Error(describeQboError(res.status, text))
+
+  // /upload answers with a LIST — one entry per part — and reports a per-part
+  // Fault rather than an HTTP error, so a 200 does not by itself mean the file
+  // landed. readQboUploadReply is shared with the relay's copy of this check.
+  return readQboUploadReply(text ? JSON.parse(text) : {}, input.fileName)
 }
 
 /**

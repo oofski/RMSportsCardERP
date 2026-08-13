@@ -966,6 +966,86 @@ export function describeMissingQboItems(missing: readonly QboMissingTarget[]): s
   )
 }
 
+// ---------------------------------------------------------------------------
+// Attaching a document
+// ---------------------------------------------------------------------------
+
+/** What may carry an attachment. Mirrored in cloud/worker.js, which enforces it. */
+export const QBO_ATTACHABLE_ENTITIES = [
+  'Invoice',
+  'PurchaseOrder',
+  'Bill',
+  'SalesReceipt',
+  'Estimate'
+] as const
+export type QboAttachableEntity = (typeof QBO_ATTACHABLE_ENTITIES)[number]
+
+/**
+ * The Attachable record that goes up beside the bytes.
+ *
+ * `AttachableRef` IS THE FEATURE. Without it the file uploads perfectly, gets an
+ * id, and is attached to nothing — sitting in the company's Attachments list
+ * where nobody looking at the invoice will ever see it. That is the failure that
+ * looks most like success, so it is built in one place, shared by the direct and
+ * the relay paths, and asserted by a test.
+ */
+export function toQboAttachablePayload(input: {
+  entityType: string
+  entityId: string
+  fileName: string
+  mimeType: string
+}): Record<string, unknown> {
+  const entityType = (input.entityType ?? '').trim()
+  if (!(QBO_ATTACHABLE_ENTITIES as readonly string[]).includes(entityType)) {
+    throw new Error(`QuickBooks will not take an attachment on a ${entityType || 'blank'}.`)
+  }
+  const entityId = (input.entityId ?? '').trim()
+  // Intuit's ids are numeric. Anything else is a bug on this side, and it is
+  // worth failing on rather than posting a reference that resolves to nothing.
+  if (!/^[0-9]{1,20}$/.test(entityId)) throw new Error('That is not a QuickBooks id.')
+  const fileName = (input.fileName ?? '').trim()
+  if (!fileName) throw new Error('An attachment needs a file name.')
+  const mimeType = (input.mimeType ?? '').trim()
+  if (!mimeType) throw new Error('An attachment needs a content type.')
+
+  return {
+    AttachableRef: [{ EntityRef: { type: entityType, value: entityId } }],
+    FileName: fileName,
+    ContentType: mimeType
+  }
+}
+
+/**
+ * Read Intuit's answer to an upload, which is not shaped like their others.
+ *
+ * `/upload` returns a LIST — one entry per part — and reports a per-part `Fault`
+ * INSIDE a 200 rather than as an HTTP error. So checking the status code is not
+ * enough: a perfectly successful-looking response can contain a refusal, and
+ * treating it as a success records an attachment that is not there.
+ */
+export function readQboUploadReply(
+  body: unknown,
+  fallbackName: string
+): { id: string; fileName: string } {
+  const response = (body as { AttachableResponse?: unknown })?.AttachableResponse
+  const entry = Array.isArray(response) ? response[0] : null
+  const fault = (entry as { Fault?: { Error?: Array<{ Message?: string; Detail?: string }> } })?.Fault
+  if (fault) {
+    const first = fault.Error?.[0]
+    const parts = [first?.Message, first?.Detail].filter(Boolean)
+    throw new Error(
+      parts.length > 0 ? `QuickBooks: ${parts.join(' — ')}` : 'QuickBooks refused the attachment.'
+    )
+  }
+  const attachable = (entry as { Attachable?: { Id?: unknown; FileName?: unknown } })?.Attachable
+  const id = attachable?.Id
+  if (!id) throw new Error('QuickBooks accepted the file but did not say where it went.')
+  return {
+    id: String(id),
+    fileName: typeof attachable?.FileName === 'string' ? attachable.FileName : fallbackName
+  }
+}
+
 /** Intuit's own limit on Item.Name. Longer is refused with a numbered fault. */
 export const QBO_ITEM_NAME_MAX = 100
 
