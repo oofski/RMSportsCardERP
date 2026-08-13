@@ -141,11 +141,19 @@ export function importContacts(sheet: ParsedContactSheet, source: string): Conta
   // now turns up on the QuickBooks customer export is both, and the update below
   // says so — otherwise it would be imported successfully and still not appear on
   // the customer list, which looks exactly like the import having skipped it.
+  //
+  // Terms are the business default, DEFAULT_INVOICE_TERMS — spelled out here
+  // rather than imported because this is inside a SQL string. A contact export
+  // does not carry payment terms, so every imported row is a guess either way,
+  // and "due on receipt" is the guess that cannot quietly extend credit to
+  // somebody who was never given any. Only ever set on INSERT: the UPDATE below
+  // deliberately leaves terms alone, so re-importing never overwrites terms
+  // somebody has since agreed.
   const insert = db.prepare(
     `INSERT INTO invoice_customers
        (id, name, email, phone, mobile, terms, active, is_customer, created_at, updated_at,
         bill_line1, bill_line2, bill_city, bill_region, bill_postal_code, bill_country)
-     VALUES (@id, @name, @email, @phone, @mobile, 'Net 30', 1, 1, @stamp, @stamp,
+     VALUES (@id, @name, @email, @phone, @mobile, 'Due on receipt', 1, 1, @stamp, @stamp,
              @line1, @line2, @city, @region, @postalCode, @country)`
   )
   const update = db.prepare(

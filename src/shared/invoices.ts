@@ -80,13 +80,47 @@ export const EMPTY_ADDRESS: InvoiceAddress = {
   country: null
 }
 
-export type InvoiceTerms = 'Due on receipt' | 'Net 15' | 'Net 30' | 'Net 60'
+export type InvoiceTerms = 'Due on receipt' | 'Net 2' | 'Net 15' | 'Net 30' | 'Net 60'
 
-export const INVOICE_TERMS: InvoiceTerms[] = ['Due on receipt', 'Net 15', 'Net 30', 'Net 60']
+/**
+ * How a sale settles, shortest first.
+ *
+ * ORDERED BY DAYS, and "Due on receipt" leads because it is the default — see
+ * DEFAULT_INVOICE_TERMS. Breaks are paid up front far more often than they are
+ * financed, and a picker whose first entry is Net 30 quietly makes thirty days
+ * the answer for anybody who does not change it.
+ *
+ * "Net 2" is here because it is genuinely used: a buyer taking a case off the
+ * next stream is given the weekend, not a month.
+ *
+ * NOTHING IS EVER REMOVED FROM THIS LIST. Terms are stored on invoices and on
+ * customers as the words themselves, so dropping an entry does not tidy a menu —
+ * it orphans every record holding that value, and a `<select>` renders a value
+ * it has no option for as BLANK, which reads as the terms having been wiped.
+ */
+export const INVOICE_TERMS: InvoiceTerms[] = [
+  'Due on receipt',
+  'Net 2',
+  'Net 15',
+  'Net 30',
+  'Net 60'
+]
+
+/**
+ * What a sale is on when nobody says otherwise.
+ *
+ * ONE constant, imported by the invoice form, the new-customer form and the
+ * contact importer, because three places each writing `'Net 30'` is how they
+ * came to disagree. A buyer with terms of their own still overrides this — that
+ * is the point of storing terms on the relationship — this is only the answer
+ * for a sale where nothing else has said.
+ */
+export const DEFAULT_INVOICE_TERMS: InvoiceTerms = 'Due on receipt'
 
 /** How many days after the invoice date each term falls due. */
 export const TERM_DAYS: Record<InvoiceTerms, number> = {
   'Due on receipt': 0,
+  'Net 2': 2,
   'Net 15': 15,
   'Net 30': 30,
   'Net 60': 60

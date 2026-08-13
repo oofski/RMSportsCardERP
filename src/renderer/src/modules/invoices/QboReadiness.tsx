@@ -44,7 +44,12 @@ export function QboReadiness({
   email
 }: {
   customerName: string
-  lines: Array<{ item: string; sku: string }>
+  /**
+   * The invoice lines as typed. `rate` and `description` are read ONLY when
+   * creating a missing item — they do not affect whether it matches, which is
+   * why they are not part of the signature below.
+   */
+  lines: Array<{ item: string; sku: string; rate?: string; description?: string }>
   email?: string | null
 }): JSX.Element | null {
   const toast = useToast()
@@ -116,12 +121,29 @@ export function QboReadiness({
   const createItem = async (miss: QboMissingTarget): Promise<void> => {
     setCreating(miss.name)
     try {
+      // The line this miss came from, so the item lands in QuickBooks fully
+      // formed rather than as a bare name. Matched the same way the backend
+      // matched it — SKU first, name second — so the price that travels is the
+      // price on the line somebody is actually looking at.
+      const from =
+        (miss.sku
+          ? lines.find((l) => l.sku.trim().toLowerCase() === miss.sku?.toLowerCase())
+          : undefined) ??
+        lines.find((l) => l.item.trim().toLowerCase() === miss.name.trim().toLowerCase())
+      const rate = Number.parseFloat(from?.rate ?? '')
+
       const res = await api.invoices.qboCreateItem({
         name: miss.name,
         // The SKU is why creating it from here beats creating it by hand: the
         // NEXT invoice matches on it, and a SKU match survives the item being
         // renamed in QuickBooks. A name match does not.
-        sku: miss.sku
+        sku: miss.sku,
+        // The agreed price becomes the item's default, so the next sale of the
+        // same case starts from what this one settled at instead of zero. It is
+        // a DEFAULT and nothing more — every invoice still carries its own rate,
+        // and this one already does.
+        rate: Number.isFinite(rate) && rate > 0 ? rate : null,
+        description: from?.description?.trim() || null
       })
       if (!res.ok) {
         toast.error(res.error ?? 'QuickBooks would not create that item.')

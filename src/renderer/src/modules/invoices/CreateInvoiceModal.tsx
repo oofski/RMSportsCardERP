@@ -10,7 +10,7 @@ import type {
   InvoiceTerms,
   NewInvoiceLine
 } from '@shared/invoices'
-import { INVOICE_TERMS, dueDateFor, lineAmount, money } from '@shared/invoices'
+import { DEFAULT_INVOICE_TERMS, INVOICE_TERMS, dueDateFor, lineAmount, money } from '@shared/invoices'
 import { api } from '../../lib/api'
 import { useToast } from '../../components/Toast'
 import { Button, Field, Input, Modal, Select } from '../../components/ui'
@@ -137,9 +137,9 @@ export function CreateInvoiceModal({
   const [customerId, setCustomerId] = useState(invoice?.customerId ?? '')
   const [customerName, setCustomerName] = useState(invoice?.customerName ?? '')
   const [email, setEmail] = useState(invoice?.email ?? '')
-  const [terms, setTerms] = useState<InvoiceTerms>(invoice?.terms ?? 'Net 30')
+  const [terms, setTerms] = useState<InvoiceTerms>(invoice?.terms ?? DEFAULT_INVOICE_TERMS)
   const [invoiceDate, setInvoiceDate] = useState(invoice?.invoiceDate ?? today())
-  const [dueDate, setDueDate] = useState(invoice?.dueDate ?? dueDateFor(today(), 'Net 30'))
+  const [dueDate, setDueDate] = useState(invoice?.dueDate ?? dueDateFor(today(), DEFAULT_INVOICE_TERMS))
   const [location, setLocation] = useState(invoice?.location ?? '')
   const [className, setClassName] = useState(invoice?.className ?? '')
   const [memo, setMemo] = useState(invoice?.memo ?? '')

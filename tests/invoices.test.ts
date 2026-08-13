@@ -32,6 +32,9 @@ const { getDb } = require('../src/main/db/database')
 const repo = require('../src/main/db/invoices')
 const {
   INVOICE_CSV_HEADERS,
+  DEFAULT_INVOICE_TERMS,
+  INVOICE_TERMS,
+  TERM_DAYS,
   dueDateFor,
   invoiceTotal,
   invoicesToCsv,
@@ -95,6 +98,53 @@ ok(dueDateFor('2026-08-05', 'Net 15') === '2026-08-20', 'Net 15')
 // and round down — a due date wrong by one, twice a year.
 ok(dueDateFor('2026-03-07', 'Net 15') === '2026-03-22', 'across the spring forward')
 ok(dueDateFor('2026-10-25', 'Net 15') === '2026-11-09', 'and the fall back')
+
+// ---- Net 2, and the default ----------------------------------------------
+// A buyer taking a case off the next stream gets the weekend, not a month. Two
+// days is the shortest term that is not "now", which makes it the one most
+// exposed to the trap above: a clock shift inside a 48-hour window is half of
+// it, so an hour lost either way lands the due date on the wrong DAY.
+ok(dueDateFor('2026-08-05', 'Net 2') === '2026-08-07', 'Net 2 is two days')
+ok(dueDateFor('2026-03-07', 'Net 2') === '2026-03-09', 'Net 2 across the spring forward')
+ok(dueDateFor('2026-10-31', 'Net 2') === '2026-11-02', 'Net 2 across the fall back AND a month end')
+ok(dueDateFor('2026-12-30', 'Net 2') === '2027-01-01', 'and across a year end')
+
+// The owner's instruction: a sale settles on receipt unless somebody says
+// otherwise. Asserted as the CONSTANT rather than the string, because the whole
+// point of DEFAULT_INVOICE_TERMS is that the invoice form, the new-customer form
+// and the contact importer stop each writing their own answer.
+ok(DEFAULT_INVOICE_TERMS === 'Due on receipt', 'due on receipt is the default')
+ok(
+  INVOICE_TERMS[0] === DEFAULT_INVOICE_TERMS,
+  'and it leads the picker, so it is what nobody-changed-it means'
+)
+ok(TERM_DAYS[DEFAULT_INVOICE_TERMS] === 0, 'and it falls due the same day')
+
+// Shortest first. A picker in an arbitrary order makes somebody read all five.
+const days = INVOICE_TERMS.map((t: string) => TERM_DAYS[t])
+ok(
+  days.every((d: number, i: number) => i === 0 || d > days[i - 1]),
+  'the terms are ordered shortest first',
+  days.join(',')
+)
+
+// Every term can be dated. A term in the picker with no entry here would fall
+// back to 0 via `?? 0` and quietly bill Net 60 as due immediately.
+ok(
+  INVOICE_TERMS.every((t: string) => typeof TERM_DAYS[t] === 'number'),
+  'every term in the picker has a number of days'
+)
+
+// NOTHING IS EVER REMOVED. Terms are stored on invoices and customers as the
+// words themselves, so dropping one orphans every record holding it — and a
+// <select> renders a value it has no option for as BLANK, which reads as the
+// terms having been wiped rather than as a menu having been tidied.
+for (const historical of ['Due on receipt', 'Net 15', 'Net 30', 'Net 60']) {
+  ok(
+    INVOICE_TERMS.includes(historical),
+    `“${historical}” is still offered, so invoices on it still show it`
+  )
+}
 
 // Intuit's importer only accepts MM/DD/YYYY.
 ok(toUsDate('2022-11-21') === '11/21/2022', 'dates export American')

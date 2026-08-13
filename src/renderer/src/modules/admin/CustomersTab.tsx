@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { InvoiceCustomer, InvoiceTerms } from '@shared/invoices'
-import { INVOICE_TERMS } from '@shared/invoices'
+import { DEFAULT_INVOICE_TERMS, INVOICE_TERMS } from '@shared/invoices'
 import type { ContactImportResult } from '@shared/contacts'
 import { summarizeImport } from '@shared/contacts'
 import { api } from '../../lib/api'
@@ -295,7 +295,7 @@ function CustomerForm({
   const [email, setEmail] = useState(customer?.email ?? '')
   const [phone, setPhone] = useState(customer?.phone ?? '')
   const [mobile, setMobile] = useState(customer?.mobile ?? '')
-  const [terms, setTerms] = useState<InvoiceTerms>(customer?.terms ?? 'Net 30')
+  const [terms, setTerms] = useState<InvoiceTerms>(customer?.terms ?? DEFAULT_INVOICE_TERMS)
   const [location, setLocation] = useState(customer?.location ?? '')
   const [className, setClassName] = useState(customer?.className ?? '')
   const [message, setMessage] = useState(customer?.message ?? '')

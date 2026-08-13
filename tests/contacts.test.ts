@@ -56,6 +56,7 @@ const {
   splitPhones,
   summarizeImport
 } = require('../src/shared/contacts')
+const { DEFAULT_INVOICE_TERMS } = require('../src/shared/invoices')
 const { xlsxToGrid } = require('../src/main/xlsxGrid')
 const { importContactFile } = require('../src/main/contactsImport')
 const repo = require('../src/main/db/invoices')
@@ -470,7 +471,16 @@ ok(ada.phone === '(555) 010-1234', 'and the phone')
 // copy of the same digits is a second thing to keep in step.
 ok(ada.mobile === null, 'a mobile identical to the phone is not stored twice', String(ada.mobile))
 ok(ada.billAddr?.city === 'Greenbank' && ada.billAddr?.region === 'NC', 'and the address')
-ok(ada.terms === 'Net 30', 'terms default rather than being invented from the sheet')
+// A contact export carries no payment terms, so every imported row is a guess.
+// It is the BUSINESS default rather than a number this importer picked, and it
+// is asserted against the constant so the two cannot drift apart — "due on
+// receipt" is also the guess that cannot quietly extend credit to somebody who
+// was never given any.
+ok(
+  ada.terms === DEFAULT_INVOICE_TERMS,
+  'terms default rather than being invented from the sheet',
+  ada.terms
+)
 
 // RE-IMPORTING THE SAME FILE MUST DO NOTHING AT ALL. Not "add them again", and
 // not "rewrite 360 rows with identical values" either — invoice_customers is a
