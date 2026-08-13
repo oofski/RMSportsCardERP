@@ -9,6 +9,7 @@ import { getEmployeeById } from '../main/db/employees'
 import { runAs } from '../main/services/session'
 import { invokeHandler, registeredHandlers, setRegistrationSink } from '../main/ipcRegistry'
 import { setDocumentRenderer } from '../main/poPdf'
+import { chromiumPath, renderServerDocument } from './pdfRenderer'
 import { registerIpcHandlers } from '../main/ipc'
 import { registerInventoryIpc } from '../main/inventoryIpc'
 import { registerPurchaseOrdersIpc } from '../main/purchaseOrdersIpc'
@@ -852,13 +853,17 @@ export function startServer(options: ServerOptions = {}): Server {
     webContents: { send: (channel, payload) => pushToSubscribers(channel, payload) }
   })
 
-  // No Chromium here, so a purchase order is printed by the browser that asked
-  // for it rather than rendered server-side. Same document, different printer.
-  setDocumentRenderer(async (html) => ({
-    bytes: Buffer.from(html, 'utf8'),
-    extension: '.html',
-    mime: 'text/html; charset=utf-8'
-  }))
+  // A real PDF when this image carries Chromium, and the HTML the browser can
+  // print when it does not. The container installs one; a checkout running
+  // `npm run server` on a laptop usually has not, and still works. See
+  // pdfRenderer.ts for why the server acquired a renderer at all — briefly, the
+  // PDF gained a consumer that cannot press File → Print.
+  setDocumentRenderer(renderServerDocument)
+  console.log(
+    chromiumPath()
+      ? `[pdf] rendering with ${chromiumPath()}`
+      : '[pdf] no Chromium found — documents will be served as HTML for the browser to print'
+  )
 
   const db = getDb()
   // Many readers, one writer, and readers never block the writer. This is the

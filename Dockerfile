@@ -55,10 +55,32 @@ RUN npm prune --omit=dev --ignore-scripts
 # ---------------------------------------------------------------------------
 FROM node:22-bookworm-slim AS runtime
 
+# Chromium, to lay out a PDF.
+#
+# This image deliberately had no browser for a long time, on the grounds that
+# the viewer's own browser could print the HTML. That stopped being enough when
+# the PDF gained a consumer that is not a person: attaching an invoice to its
+# QuickBooks record needs BYTES, and nothing can press File → Print on behalf of
+# a machine.
+#
+# --no-install-recommends is what keeps this to roughly 300MB rather than a
+# gigabyte; without it apt pulls in a desktop's worth of suggestions. The fonts
+# are not optional — the documents ask for Helvetica/Arial and a container with
+# no fonts at all renders every glyph as a box.
+#
+# src/server/pdfRenderer.ts probes for the binary and falls back to serving HTML
+# if it is absent, so removing this line degrades the app rather than breaking it.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends chromium fonts-liberation fonts-dejavu-core \
+  && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 ENV NODE_ENV=production
 ENV RMOPS_PORT=8080
 ENV RMOPS_HOST=0.0.0.0
+# Where the renderer looks first. Set explicitly so the probe never has to guess
+# and a Debian rename cannot silently drop the app back to HTML documents.
+ENV RMOPS_CHROMIUM=/usr/bin/chromium
 # The mount point. Overriding this without moving the mount is the one change
 # that silently loses the database — the server checks and refuses, see
 # assertDurableStorage() in src/server/index.ts.
