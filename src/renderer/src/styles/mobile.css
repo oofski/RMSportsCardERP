@@ -74,6 +74,22 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
+  /* THE DESKTOP COLLAPSE DOES NOT APPLY HERE, and the override is deliberate
+     rather than incidental. `.nav-hidden` is remembered in localStorage, so
+     somebody who hid the nav on their laptop and then opened the same app on
+     their phone would arrive at a screen with no navigation at all and no
+     button to bring it back — the toggle is topbar furniture that this query
+     also hides. Down here the element is the bottom bar, and it always shows. */
+  .shell.nav-hidden {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .shell.nav-hidden .sidebar {
+    display: flex;
+  }
+  .nav-toggle {
+    display: none;
+  }
+
   /* --- The sidebar, turned into a bottom bar ---------------------------- */
   .sidebar {
     position: fixed;

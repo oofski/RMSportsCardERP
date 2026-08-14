@@ -3058,6 +3058,84 @@ function migrate(database: Database.Database): void {
     .run()
   setMeta(database, 'schema_version', '67')
 
+  // v68: A SALES ORDER IS A SALE. The stock leaves when the order is written.
+  //
+  // Until now a sales order was paperwork and nothing else: it named products
+  // and quantities, and the shelf did not move until somebody scanned the boxes
+  // out against it. That is a fulfilment model, and it is not how this business
+  // sells wholesale — the owner writes the order because the boxes are going,
+  // and the count on the screen has to say so.
+  //
+  // So saving an order now consumes FIFO layers exactly as `recordSale` does,
+  // and this table is the RECEIPT for that: what each line took, off which
+  // shelf, at what cost, and which ledger transaction carries the slices.
+  //
+  // ## Why it is per LINE and not per product
+  //
+  // An order may list the same box twice at two prices — three at trade, three
+  // at retail — and the Wholesale report is a line-by-line margin. Keyed on the
+  // product those two lines would share one cost figure that neither of them is.
+  // `line_position` is the line's place on the document, which `saveInvoice`
+  // rebuilds contiguously from zero on every save, so it is stable for exactly
+  // as long as the rows it describes are.
+  //
+  // ## Why the slices live on a transaction rather than here
+  //
+  // `inventory_txn_lots` already records which layers a movement took, and it is
+  // what `restoreFifo` reads to put them back exactly. Copying that into a second
+  // table would be a second thing to keep in step; `txn_id` points at the one
+  // that exists.
+  //
+  // A NULL txn_id means a legacy row — see the backfill below. It records that
+  // the units are gone without being able to say which layers they came from, so
+  // releasing it hands nothing back. That is the honest answer: those boxes left
+  // the building through a scan months ago.
+  database.exec(
+    `CREATE TABLE IF NOT EXISTS invoice_stock_moves (
+       id            TEXT PRIMARY KEY,
+       invoice_id    TEXT NOT NULL,
+       line_position INTEGER NOT NULL DEFAULT 0,
+       product_id    TEXT NOT NULL,
+       location      TEXT NOT NULL,
+       quantity      REAL NOT NULL DEFAULT 0,
+       cost_total    REAL NOT NULL DEFAULT 0,
+       txn_id        TEXT,
+       created_at    TEXT NOT NULL,
+       FOREIGN KEY (invoice_id) REFERENCES invoices (id) ON DELETE CASCADE
+     );
+     CREATE INDEX IF NOT EXISTS idx_invoice_moves_invoice
+       ON invoice_stock_moves (invoice_id);
+     CREATE INDEX IF NOT EXISTS idx_invoice_moves_product
+       ON invoice_stock_moves (product_id);`
+  )
+  // EVERY ORDER THAT ALREADY SHIPPED SOMETHING KEEPS WHAT IT TOOK.
+  //
+  // Without this the first save of an existing order would consume its whole
+  // quantity again — on top of the units a picker already scanned out — and take
+  // the shelf down twice. The backfill says "this order has already taken N",
+  // so the reconcile on the next save only moves the difference.
+  //
+  // txn_id is NULL: the scan wrote its own adjustment rows and this is not a
+  // claim on them. cost_total is 0 because those slices are not knowable from
+  // here, which means a legacy line reports no margin rather than a wrong one.
+  //
+  // runOnce, unlike the v67 self-heal above: it INSERTS, so running it twice
+  // would double every legacy order's recorded take.
+  runOnce(database, 'invoice_stock_moves_backfill_v1', () => {
+    database
+      .prepare(
+        `INSERT INTO invoice_stock_moves
+           (id, invoice_id, line_position, product_id, location, quantity, cost_total, txn_id, created_at)
+         SELECT lower(hex(randomblob(16))), l.invoice_id, l.position, l.product_id,
+                COALESCE(i.location, 'RM'), l.qty_fulfilled, 0, NULL, ?
+           FROM invoice_lines l
+           JOIN invoices i ON i.id = l.invoice_id
+          WHERE l.product_id IS NOT NULL AND l.product_id <> '' AND l.qty_fulfilled > 0`
+      )
+      .run(new Date().toISOString())
+  })
+  setMeta(database, 'schema_version', '68')
+
   // v41: re-derive every product's average cost from its remaining cost layers.
   //
   // The average used to be stored rounded to the cent, back when every total in

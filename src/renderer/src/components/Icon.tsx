@@ -147,6 +147,8 @@ import {
   Star,
   Split,
   Store,
+  PanelLeftClose,
+  PanelLeftOpen,
   type LucideIcon
 } from 'lucide-react'
 
@@ -297,7 +299,10 @@ const MAP: Record<string, LucideIcon> = {
   // --- Destinations: the party picker's pin, and a line split across shelves ---
   Star,
   Split,
-  Store
+  Store,
+  // --- Hiding and showing the left-hand nav ---
+  PanelLeftClose,
+  PanelLeftOpen
 }
 
 export function Icon({

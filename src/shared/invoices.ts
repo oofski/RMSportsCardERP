@@ -1436,3 +1436,30 @@ export function nextInvoiceNumber(existing: string[], start = INVOICE_NUMBER_STA
   const highest = numeric.length ? Math.max(...numeric) : 0
   return String(Math.max(highest + 1, start))
 }
+
+/**
+ * One product line sold on a sales order, priced against the exact FIFO layers
+ * it consumed — the Wholesale report's row.
+ *
+ * Lives here rather than beside the query because three layers name it: the main
+ * process builds it, the bridge declares it, and the screen renders it. A type
+ * that crosses the boundary belongs on the boundary.
+ */
+export interface WholesaleSaleRow {
+  invoiceId: string
+  invoiceNumber: string
+  invoiceDate: string
+  customerName: string
+  status: string
+  productId: string
+  productName: string
+  sku: string
+  location: string
+  quantity: number
+  unitPrice: number
+  revenue: number
+  cost: number
+  margin: number
+  /** False for a pre-v68 line, whose layers cannot be recovered. */
+  costKnown: boolean
+}

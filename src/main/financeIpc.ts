@@ -50,6 +50,9 @@ import {
   type LedgerRowFilter
 } from './db/financeStreaming'
 import { deleteExpense, listExpenses, saveExpense } from './db/financeExpenses'
+import { listWholesaleSales } from './db/invoiceStock'
+import type { WholesaleSaleRow } from '@shared/invoices'
+import { getDb } from './db/database'
 import { deleteRatePeriod, listRatePeriods, saveRatePeriod } from './db/whatnotRates'
 import { currentUser } from './services/auth'
 import { uploadedName, uploadedText } from './util'
@@ -297,6 +300,17 @@ export function registerFinanceIpc(): void {
 
   ipcMain.handle(IPC.finExpensesList, (): GeneralExpense[] =>
     can('module.finance') ? listExpenses() : []
+  )
+
+  /**
+   * The wholesale ledger: what went out on sales orders and what it cost.
+   *
+   * Gated on the same `module.finance` read permission as everything else on
+   * this screen, and empty rather than an error without it — the tab is one of
+   * four on a page somebody may legitimately have partial access to.
+   */
+  ipcMain.handle(IPC.finWholesale, (): WholesaleSaleRow[] =>
+    can('module.finance') ? listWholesaleSales(getDb()) : []
   )
 
   ipcMain.handle(

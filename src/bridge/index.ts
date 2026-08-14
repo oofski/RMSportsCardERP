@@ -53,7 +53,8 @@ import type {
   InvoiceStatus,
   InvoiceTerms,
   NewInvoice,
-  QboInvoicePreflight
+  QboInvoicePreflight,
+  WholesaleSaleRow
 } from '@shared/invoices'
 import type { ContactImportResult } from '@shared/contacts'
 import type { ClockPushState, PushSubscriptionInput } from '@shared/webPush'
@@ -1041,6 +1042,9 @@ export function createBridge(ipcRenderer: BridgeTransport) {
         return ipcRenderer.invoke(IPC.finLedgerImport, upload)
       },
       imports: (): Promise<LedgerImport[]> => ipcRenderer.invoke(IPC.finLedgerImports),
+      /** One row per product line sold on a sales order: what it sold for, what
+       *  those exact FIFO layers cost, and the margin between them. */
+      wholesale: (): Promise<WholesaleSaleRow[]> => ipcRenderer.invoke(IPC.finWholesale),
       /** Removes the upload and the rows NOTHING ELSE covers — a correction.
        *  Rows another import also contains are re-pointed to it and survive. */
       deleteImport: (id: string): Promise<Result<StreamingFinanceView>> =>

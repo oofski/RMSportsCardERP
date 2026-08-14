@@ -474,6 +474,47 @@ table.data tbody tr:hover {
   grid-template-columns: var(--sidebar-w) 1fr;
   height: 100%;
 }
+
+/* ---------- Hiding the left-hand nav ----------
+
+   Collapsed to NOTHING rather than to a strip of icons. A rail of unlabelled
+   glyphs is a second navigation design to maintain and to learn, and the reason
+   to press this is a wide table or a P&L that wants the width — half a sidebar
+   gives back a quarter of the room and costs the labels.
+
+   `display: none` as well as a zero track: a zero-width grid column still lays
+   its content out and lets a focus ring or a popover paint over the page. The
+   toggle lives in the topbar, so nothing needed to stay reachable in here.
+
+   The mobile query overrides both — see mobile.css. On a phone this element is
+   the bottom navigation bar, and a tab with no way to reach another screen is
+   not a collapsed sidebar, it is a broken app. */
+.shell.nav-hidden {
+  grid-template-columns: 0 1fr;
+}
+.shell.nav-hidden .sidebar {
+  display: none;
+}
+.nav-toggle {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  margin-left: -6px;
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.13s ease, color 0.13s ease, border-color 0.13s ease;
+}
+.nav-toggle:hover {
+  background: var(--surface-3);
+  border-color: var(--border);
+  color: var(--text);
+}
 .sidebar {
   background: var(--surface);
   border-right: 1px solid var(--border);
@@ -15807,6 +15848,100 @@ button.sor-team:focus-visible {
   margin: 0;
   font-size: 12.5px;
   color: var(--success-strong);
+}
+
+/* ---------- Finance → Wholesale ---------- */
+.wsale {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.wsale-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 12px;
+}
+.wsale-tile {
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+.wsale-tile-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.wsale-tile-value {
+  margin-top: 5px;
+  font-size: 21px;
+  font-weight: 650;
+  /* Tabular figures so four tiles in a row line their digits up rather than
+     drifting by the width of a 1. */
+  font-variant-numeric: tabular-nums;
+}
+.wsale-tile-sub {
+  margin-top: 3px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+.wsale-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  padding: 9px 12px;
+  border: 1px solid var(--warn-border, var(--border));
+  border-radius: var(--radius);
+  background: var(--warn-soft, var(--surface-2));
+  color: var(--text-2);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+.wsale-note svg {
+  flex: none;
+  margin-top: 2px;
+}
+.wsale-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 420px;
+  color: var(--text-3);
+}
+.wsale-search input {
+  flex: 1;
+}
+.wsale-table td,
+.wsale-table th {
+  white-space: nowrap;
+}
+.wsale-table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.wsale-date {
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+.wsale-prod {
+  display: block;
+}
+.wsale-sku {
+  display: block;
+  margin-top: 1px;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+/* A cost nobody can recover reads as ABSENT, not as zero. It is the one value on
+   this screen that must never be mistaken for a number. */
+.wsale-unknown {
+  color: var(--text-3);
+  font-style: italic;
+  font-size: 12px;
 }
 
 /* ---------- Tabs that are honestly not built ---------- */

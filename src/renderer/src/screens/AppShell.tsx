@@ -48,6 +48,38 @@ export function AppShell(): JSX.Element {
     return saved === 'shipping' ? 'shipping' : 'ops'
   })
 
+  /**
+   * Is the left-hand nav hidden?
+   *
+   * REMEMBERED, because it is a preference about how somebody wants to work
+   * rather than a transient bit of screen state. Reading a 59-column shipping
+   * table or a P&L on a laptop is the case this exists for, and having to
+   * re-collapse the nav on every reload would make it not worth pressing.
+   *
+   * Stored beside `rmops.workspace` in localStorage and read the same way: the
+   * default when the key is absent or unreadable is SHOWN, so nothing about a
+   * fresh install or a private window changes.
+   *
+   * DESKTOP ONLY, and that is enforced in CSS rather than here. On a phone this
+   * same `<aside>` is the bottom navigation bar (see mobile.css); hiding it
+   * would leave a tab with no way to reach another screen, so the mobile media
+   * query overrides the collapse and the toggle button is not drawn.
+   */
+  const [navHidden, setNavHidden] = useState<boolean>(
+    () => localStorage.getItem('rmops.nav.hidden') === '1'
+  )
+  const toggleNav = (): void => {
+    setNavHidden((hidden) => {
+      const next = !hidden
+      try {
+        localStorage.setItem('rmops.nav.hidden', next ? '1' : '0')
+      } catch {
+        /* a browser with storage denied still gets the toggle, just not the memory */
+      }
+      return next
+    })
+  }
+
   const visible = useMemo(
     () =>
       MODULES.filter(
@@ -145,7 +177,7 @@ export function AppShell(): JSX.Element {
 
   return (
     <ChromeContext.Provider value={{ search, navigate }}>
-      <div className="shell">
+      <div className={`shell${navHidden ? ' nav-hidden' : ''}`}>
         <aside className="sidebar">
           <div className="sidebar-brand">
             <Brand />
@@ -248,6 +280,18 @@ export function AppShell(): JSX.Element {
 
         <main className="main">
           <header className="topbar">
+            {/* The toggle lives HERE and not in the sidebar, because a button
+                inside the thing it hides can only ever be pressed once. */}
+            <button
+              className="nav-toggle"
+              onClick={toggleNav}
+              title={navHidden ? 'Show the menu' : 'Hide the menu'}
+              aria-label={navHidden ? 'Show the menu' : 'Hide the menu'}
+              aria-expanded={!navHidden}
+            >
+              <Icon name={navHidden ? 'PanelLeftOpen' : 'PanelLeftClose'} size={18} />
+            </button>
+
             <div className="title-block">
               <h1>{header.name}</h1>
               <p>{header.description}</p>

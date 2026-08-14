@@ -255,93 +255,131 @@ const bareRow = db
 ok(bareRow.k === 'no_order', 'recorded as an override', String(bareRow.k))
 
 // ---------------------------------------------------------------------------
-console.log('\n=== 4. REASON 3: scanning OUT against a sales order ===')
+console.log('\n=== 4. REASON 3: a sales order takes its stock when it is WRITTEN ===')
 // ---------------------------------------------------------------------------
+// THIS SECTION CHANGED SHAPE, and the change is the point.
+//
+// A sales order used to be paperwork: it named products and quantities, and the
+// shelf did not move until a picker scanned the boxes out against it. It is a
+// SALE now — saving the order consumes FIFO layers the same way a counter sale
+// does, because the owner writes the order because the boxes are going, and
+// every screen that says how many are on hand has to agree immediately.
+//
+// So the assertions below are the mirror image of the ones they replace: the
+// shelf drops at save, and the scanner is NOT offered the line, because two
+// things taking the same boxes off the same shelf is the failure this replaces.
+const stockBeforeOrder = inv.stockQty('p_a', 'RM')
+ok(stockBeforeOrder >= 4, 'there is stock to sell', String(stockBeforeOrder))
+
 const so = invoices.saveInvoice(
   {
     customerName: 'Kyla Benton',
     email: 'buyer@example.test',
     invoiceDate: '2026-08-11',
     terms: 'net30',
+    location: 'RM',
     lines: [{ item: 'Alpha Hobby Box', productId: 'p_a', sku: 'AAA-1', quantity: 4, rate: 150 }]
   },
   'emp1'
 )
 ok(!!so?.id, 'a sales order exists')
+ok(
+  inv.stockQty('p_a', 'RM') === stockBeforeOrder - 4,
+  'AND FOUR BOXES CAME OFF THE SHELF THE MOMENT IT WAS SAVED',
+  `${stockBeforeOrder} → ${inv.stockQty('p_a', 'RM')}`
+)
+ok(so.lines[0].qtyFulfilled === 4, 'the line reads fully fulfilled', String(so.lines[0].qtyFulfilled))
+ok(so.lines[0].qtyOutstanding === 0, 'with nothing left to pick', String(so.lines[0].qtyOutstanding))
 
+// The order's cost is recorded against a real ledger movement, so the margin is
+// answerable without re-deriving anything.
+const soMove = db
+  .prepare(`SELECT quantity, cost_total, txn_id FROM invoice_stock_moves WHERE invoice_id = ?`)
+  .get(so.id) as { quantity: number; cost_total: number; txn_id: string | null }
+ok(!!soMove, 'a stock receipt is written for the order')
+ok(soMove.quantity === 4, 'for the four that left', String(soMove?.quantity))
+ok(soMove.cost_total > 0, 'carrying what those four cost', String(soMove?.cost_total))
+ok(!!soMove.txn_id, 'and naming the ledger row that holds the layers')
+
+// THE SCANNER IS NOT OFFERED IT. Nothing is outstanding, so a beep on that box
+// falls through to the buy side exactly as an unsold box does.
 const outRes = scan.resolveScan('0000000000017', 'out')
-ok(outRes.status === 'so_line', 'scanning out matches the SALES order', outRes.status)
-ok(outRes.soCandidates.length === 1, 'one candidate', String(outRes.soCandidates.length))
-ok(outRes.soCandidates[0].qtyOutstanding === 4, 'four still to go out', String(outRes.soCandidates[0].qtyOutstanding))
-ok(outRes.candidates.length === 0, 'and NO purchase orders are read on the way out')
+ok(outRes.status !== 'so_line', 'a fully-taken order is NOT offered to the scanner', outRes.status)
 
-let outLines = beep([], '0000000000017', 'out')
-outLines = beep(outLines, '0000000000017', 'out')
-ok(outLines[0].kind === 'so_line', 'the line is a sales-order line', outLines[0].kind)
-ok(outLines[0].quantity === 2, 'two scanned', String(outLines[0].quantity))
-ok(outLines[0].invoiceNumber === so.invoiceNumber, 'against that order', String(outLines[0].invoiceNumber))
-
-const stockBeforeOut = inv.stockQty('p_a', 'RM')
-const outCommit = commit(outLines[0])
-ok(!outCommit.error, 'and it commits', String(outCommit.error))
-ok(
-  inv.stockQty('p_a', 'RM') === stockBeforeOut - 2,
-  'two units leave the shelf',
-  `${stockBeforeOut} → ${inv.stockQty('p_a', 'RM')}`
-)
-const soAfter = invoices.getInvoice(so.id)
-ok(soAfter.lines[0].qtyFulfilled === 2, 'the ORDER records 2 of 4 fulfilled', String(soAfter.lines[0].qtyFulfilled))
-
-// Partial, so it is still open and still offered to the next scan.
-const stillOpen = scan.resolveScan('0000000000017', 'out')
-ok(stillOpen.status === 'so_line', 'still matching', stillOpen.status)
-ok(stillOpen.soCandidates[0].qtyOutstanding === 2, 'with 2 left', String(stillOpen.soCandidates[0].qtyOutstanding))
-
-// Finish it, and it drops out of the candidates.
-let restLines = beep([], '0000000000017', 'out')
-restLines = beep(restLines, '0000000000017', 'out')
-const restCommit = commit(restLines[0])
-ok(!restCommit.error, 'the rest goes out', String(restCommit.error))
-ok(invoices.getInvoice(so.id).lines[0].qtyFulfilled === 4, 'all four fulfilled')
-ok(
-  scan.resolveScan('0000000000017', 'out').status === 'no_order',
-  'a finished order stops being offered',
-  scan.resolveScan('0000000000017', 'out').status
-)
-
-// A REPLAYED SCAN-OUT SAYS "OUT". The replay path names the outcomes that took
-// stock away, and 'so_line' was not one of them — so a dropped reply on a phone,
-// which is the ordinary reason a scan is retried, came back "Already scanned in".
-// On a bench where one gun does receiving and picking, that is the sentence that
-// sends somebody looking for stock they have just packed.
-const replayedOut = commit({ ...restLines[0], clientToken: restLines[0].clientToken })
-ok(replayedOut.result?.replayed === true, 'retrying a sales-order scan replays it', String(replayedOut.error))
-ok(
-  / out — /.test(String(replayedOut.result?.message)),
-  'AND SAYS THE STOCK WENT OUT, not in',
-  String(replayedOut.result?.message)
-)
-ok(
-  invoices.getInvoice(so.id).lines[0].qtyFulfilled === 4,
-  'while the order is still four of four — the replay moved nothing',
-  String(invoices.getInvoice(so.id).lines[0].qtyFulfilled)
-)
-
-// A voided order is not fulfillable at all.
-const voided = invoices.saveInvoice(
+// --- The one case the scan-out flow still exists for ----------------------
+// An order written the day before the pallet lands. The save is not refused —
+// that would push the work into a notebook — it takes what is there and leaves
+// the rest outstanding, which is the state the scanner already understands.
+const shortStock = inv.stockQty('p_b', 'RM')
+const ahead = invoices.saveInvoice(
   {
-    customerName: 'Nobody',
+    customerName: 'Kyla Benton',
     invoiceDate: '2026-08-11',
     terms: 'net30',
-    lines: [{ item: 'Bravo Hobby Box', productId: 'p_b', sku: 'BBB-1', quantity: 2, rate: 90 }]
+    location: 'RM',
+    lines: [
+      { item: 'Bravo Hobby Box', productId: 'p_b', sku: 'BBB-1', quantity: shortStock + 3, rate: 150 }
+    ]
   },
   'emp1'
 )
-invoices.setInvoiceStatus(voided.id, 'void', 'emp1')
+ok(inv.stockQty('p_b', 'RM') === 0, 'it takes everything the shelf had', String(inv.stockQty('p_b', 'RM')))
 ok(
-  scan.resolveScan('0000000000024', 'out').status === 'no_order',
-  'a voided order is never a candidate',
-  scan.resolveScan('0000000000024', 'out').status
+  ahead.lines[0].qtyFulfilled === shortStock,
+  'and records exactly that much as gone',
+  String(ahead.lines[0].qtyFulfilled)
+)
+ok(
+  ahead.lines[0].qtyOutstanding === 3,
+  'THE REST STAYS OUTSTANDING rather than the save being refused',
+  String(ahead.lines[0].qtyOutstanding)
+)
+ok(inv.stockQty('p_b', 'RM') >= 0, 'and the shelf never goes negative')
+
+// An empty shelf is still an empty shelf: nothing can be scanned out of it, and
+// the resolver says so rather than offering an order it cannot fill.
+const nothingYet = scan.resolveScan('0000000000024', 'out')
+ok(nothingYet.status === 'no_order', 'an empty shelf offers nothing to scan out', nothingYet.status)
+ok(/nothing to take out/i.test(nothingYet.message ?? ''), 'and says why', nothingYet.message)
+
+// The pallet lands. THIS is what keeps the scan-out flow useful under the new
+// model: the part of an order that could not be filled when it was written is
+// picked the ordinary way once the boxes are on the shelf.
+inv.addStock('p_b', 'RM', 3, 200, 'the pallet arrives', null, null)
+const stillOwed = scan.resolveScan('0000000000024', 'out')
+ok(stillOwed.status === 'so_line', 'the unfilled remainder IS offered to the scanner', stillOwed.status)
+ok(
+  stillOwed.soCandidates[0].qtyOutstanding === 3,
+  'for the three that have not gone',
+  String(stillOwed.soCandidates[0]?.qtyOutstanding)
+)
+// And picking it moves the shelf exactly once — the order already took what it
+// could, so this takes only the remainder.
+let owedLines = beep([], '0000000000024', 'out')
+owedLines = beep(owedLines, '0000000000024', 'out')
+owedLines = beep(owedLines, '0000000000024', 'out')
+const owedCommit = commit(owedLines[0])
+ok(!owedCommit.error, 'the remainder is scanned out', String(owedCommit.error))
+ok(inv.stockQty('p_b', 'RM') === 0, 'and the shelf is empty again', String(inv.stockQty('p_b', 'RM')))
+ok(
+  invoices.getInvoice(ahead.id).lines[0].qtyOutstanding === 0,
+  'with the order fully filled',
+  String(invoices.getInvoice(ahead.id).lines[0].qtyOutstanding)
+)
+
+// Voiding an order puts its boxes back — it is the moment the stock stops being
+// sold, and leaving the shelf down would strand them with no way back except a
+// count correction that invents a cost basis.
+const beforeVoid = inv.stockQty('p_a', 'RM')
+invoices.setInvoiceStatus(so.id, 'void', 'emp1')
+ok(
+  inv.stockQty('p_a', 'RM') === beforeVoid + 4,
+  'VOIDING THE ORDER PUTS THE FOUR BOXES BACK',
+  `${beforeVoid} → ${inv.stockQty('p_a', 'RM')}`
+)
+ok(
+  (db.prepare(`SELECT COUNT(*) AS n FROM invoice_stock_moves WHERE invoice_id = ?`).get(so.id) as any).n === 0,
+  'and the receipt goes with them'
 )
 
 // ---------------------------------------------------------------------------

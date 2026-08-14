@@ -494,6 +494,10 @@ export const IPC = {
   finExpensesList: 'finance:expenses:list',
   finExpenseSave: 'finance:expenses:save',
   finExpenseDelete: 'finance:expenses:delete',
+  // Wholesale: one row per product line sold on a sales order, with what those
+  // exact FIFO layers cost. A READ over invoice_stock_moves — the margin is
+  // subtracted once, in main, so no screen can arrive at a different one.
+  finWholesale: 'finance:wholesale:list',
 
   // Email
   emailComposeInvite: 'email:compose-invite',

@@ -26,6 +26,7 @@ import type Database from 'better-sqlite3'
 import { asCarrier, asPaymentTiming, detectCarrier } from '@shared/freight'
 import { asShipStatus } from '@shared/tracking'
 import { getDb } from './database'
+import { applyInvoiceStock, invoiceStockLocation, releaseInvoiceStock } from './invoiceStock'
 
 /**
  * Invoices and the people who buy from us.
@@ -735,6 +736,42 @@ export function saveInvoice(
     })
 
     /**
+     * THE SHELF. Everything this order was holding goes back, and then it takes
+     * what it now sells.
+     *
+     * A sales order is a sale — saving one moves stock, the same way recording a
+     * counter sale does. Release-then-apply rather than a per-line delta because
+     * a delta is where an off-by-one becomes a box that does not exist:
+     * `restoreFifo` puts units back into the exact layers they came from, so the
+     * re-take walks the same FIFO order and lands on the same layers at the same
+     * costs. Identical result, no arithmetic to get wrong.
+     *
+     * The release runs FIRST, so the re-take sees a shelf that already has this
+     * order's units back on it. The other order would find a shelf of 4 empty
+     * when editing an order for 4 up to 5, and take nothing.
+     *
+     * A line takes what is on the shelf and no more — see applyInvoiceStock. An
+     * order written the day before the pallet lands is a real thing somebody
+     * does, so the save is never refused; the part that could not be filled stays
+     * outstanding on the line and goes out when the stock does.
+     */
+    const stockLocation = invoiceStockLocation(input.location)
+    const stockLines = lines
+      .filter((l) => !!l.productId && l.quantity > 0)
+      .map((l) => ({ position: l.position, productId: l.productId as string, quantity: l.quantity }))
+    releaseInvoiceStock(db, id)
+    const moved = applyInvoiceStock(
+      db,
+      id,
+      clean(input.invoiceNumber),
+      input.customerName?.trim() || null,
+      stockLines,
+      stockLocation,
+      actorId
+    )
+    const movedQty = new Map(moved.map((m) => [m.position, m.quantity]))
+
+    /**
      * WHAT HAS ALREADY LEFT THE BUILDING, carried across the rewrite.
      *
      * Saving replaces every line rather than diffing them, which is fine for
@@ -761,6 +798,15 @@ export function saveInvoice(
      * The scan queue then offered three units that were already in a box on a
      * van, and the picker taking them off the shelf again is the same
      * shelf-emptying failure this carry-forward was written to stop.
+     *
+     * ## It now only governs lines that are NOT stock
+     *
+     * A line with a product is fulfilled by the block above: its stock came off
+     * the shelf as part of this save, so `qty_fulfilled` is its full quantity and
+     * there is nothing left to pick. Everything below is for the lines that never
+     * had stock behind them — a grading fee, a shipping charge, a one-off typed
+     * by hand — which nothing has ever scanned and which keep exactly the
+     * behaviour they had.
      */
     const priorFulfilled = new Map<string, { qty: number; at: string | null }>()
     if (existing) {
@@ -799,13 +845,18 @@ export function saveInvoice(
       // Never claim more picked than the line now sells. Editing 10 down to 4
       // after 6 went out is a real thing somebody may do; the honest record is
       // that the line is fully fulfilled, not that 6 of 4 left.
-      const qty = Math.min(carried?.qty ?? 0, l.quantity)
+      const carriedQty = Math.min(carried?.qty ?? 0, l.quantity)
       // Draw down rather than discard: whatever this line could not absorb is
       // still owed to the NEXT line that names the same product.
       if (carried) {
-        carried.qty -= qty
+        carried.qty -= carriedQty
         if (carried.qty <= 0) priorFulfilled.delete(key)
       }
+      // A STOCK LINE IS FULFILLED THE MOMENT ITS STOCK LEAVES, which is now this
+      // save. Reading it off `moved` rather than assuming `l.quantity` keeps the
+      // record and the shelf saying the same number even if the consumption ever
+      // takes less than it was asked for.
+      const qty = movedQty.get(l.position) ?? carriedQty
       insert.run({
         ...l,
         qtyFulfilled: qty,
@@ -1020,19 +1071,41 @@ export function setInvoiceStatus(
   status: InvoiceStatus,
   actorId: string | null = null
 ): boolean {
+  const db = getDb()
   const stamp = nowIso()
-  return (
-    getDb()
-      .prepare(
-        `UPDATE invoices
-            SET status  = ?,
-                paid_at = CASE WHEN ? = 'paid' THEN COALESCE(paid_at, ?) ELSE NULL END,
-                paid_by = CASE WHEN ? = 'paid' THEN COALESCE(paid_by, ?) ELSE NULL END,
-                updated_at = ?
-          WHERE id = ?`
-      )
-      .run(status, status, stamp, status, actorId, stamp, id).changes > 0
-  )
+  const run = db.transaction((): boolean => {
+    /**
+     * VOIDING PUTS THE BOXES BACK.
+     *
+     * Since a sales order takes its stock the moment it is saved, voiding one is
+     * the moment that stock is no longer sold — the buyer fell through, the order
+     * was a mistake, the show did not happen. Leaving the shelf down would mean
+     * an order that bills nobody is still holding four boxes nobody can sell, and
+     * the only way to get them back would be a manual count correction that
+     * invents a cost basis.
+     *
+     * `releaseInvoiceStock` restores the exact layers, so the FIFO order and
+     * every unit cost end up as if the order had never been written.
+     *
+     * Only on the way IN to void. Every other status — draft, created, sent,
+     * paid — describes where an order is in the billing cycle, and the boxes are
+     * gone in all of them.
+     */
+    if (status === 'void') releaseInvoiceStock(db, id)
+    return (
+      db
+        .prepare(
+          `UPDATE invoices
+              SET status  = ?,
+                  paid_at = CASE WHEN ? = 'paid' THEN COALESCE(paid_at, ?) ELSE NULL END,
+                  paid_by = CASE WHEN ? = 'paid' THEN COALESCE(paid_by, ?) ELSE NULL END,
+                  updated_at = ?
+            WHERE id = ?`
+        )
+        .run(status, status, stamp, status, actorId, stamp, id).changes > 0
+    )
+  })
+  return run()
 }
 
 /**
@@ -1062,6 +1135,12 @@ export function deleteInvoice(id: string): void {
   // reports what happened, so a surviving copy over there is stated rather than
   // discovered later.
   const run = db.transaction(() => {
+    // The shelf first, and BEFORE the row goes: invoice_stock_moves cascades on
+    // the invoice, so deleting the header first would take the receipt with it
+    // and there would be nothing left to say which layers to restore. The boxes
+    // would simply be gone, with a cost basis attached to a document that no
+    // longer exists.
+    releaseInvoiceStock(db, id)
     db.prepare(`DELETE FROM invoice_lines WHERE invoice_id = ?`).run(id)
     db.prepare(`DELETE FROM invoices WHERE id = ?`).run(id)
   })

@@ -4,6 +4,7 @@ import { EmptyState } from '../../components/ui'
 import { CompletePnl } from './Pnl'
 import { RatesTab } from './RatesTab'
 import { StreamingTab } from './StreamingTab'
+import { WholesaleTab } from './WholesaleTab'
 import { financeReady } from './api'
 
 /**
@@ -25,9 +26,13 @@ import { financeReady } from './api'
  * too; that is still true and the page says so at its foot, but withholding the
  * half that does exist bought nobody anything.
  *
- * Wholesale still says plainly that it is not here yet rather than showing a
- * plausible-looking zero — a finance screen that invents a number is worse than
- * one that admits it has none.
+ * Wholesale is built now, and what unblocked it was not this screen: a sales
+ * order used to move no stock, so nothing off-stream had a cost attached and any
+ * margin here would have been invented. Orders take their own FIFO layers now,
+ * so every row on that tab is a subtraction between two numbers the app holds.
+ * The rows it CANNOT price — lines shipped under the old fulfilment model — are
+ * listed and excluded from the totals rather than counted at zero, which is the
+ * same principle the placeholder was defending.
  */
 type FinanceTab = 'streaming' | 'rates' | 'wholesale' | 'pnl'
 
@@ -73,42 +78,10 @@ export function FinanceModule(): JSX.Element {
       ) : tab === 'rates' ? (
         <RatesTab />
       ) : tab === 'wholesale' ? (
-        <NotBuiltYet
-          icon="Boxes"
-          title="Wholesale is not built yet"
-          lead="Bulk and wholesale orders sold off-stream."
-        />
+        <WholesaleTab />
       ) : (
         <CompletePnl />
       )}
     </div>
-  )
-}
-
-/**
- * An honest placeholder. It says what the tab will be, why it is not here, and
- * — most importantly — that no number on it is being estimated in the meantime.
- */
-function NotBuiltYet({
-  icon,
-  title,
-  lead
-}: {
-  icon: string
-  title: string
-  lead: string
-}): JSX.Element {
-  return (
-    <section className="fin-soon">
-      <span className="fin-soon-ico">
-        <Icon name={icon} size={28} />
-      </span>
-      <h2>{title}</h2>
-      <p>{lead}</p>
-      <span className="fin-soon-tag">
-        <Icon name="Sparkles" size={14} />
-        Coming in a later release
-      </span>
-    </section>
   )
 }

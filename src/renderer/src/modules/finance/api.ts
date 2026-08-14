@@ -12,6 +12,7 @@ import type {
   WhatnotRatePeriod
 } from '@shared/financeStreaming'
 import type { PnlDetail, PnlDrillRequest } from '@shared/pnlDrill'
+import type { WholesaleSaleRow } from '@shared/invoices'
 import { api } from '../../lib/api'
 
 /** What `rows()` can be narrowed by. Every field is optional; an empty filter is
@@ -69,6 +70,10 @@ export interface FinanceApi {
    *  off. A dollar amount only; nothing here moves stock. Both writes hand back
    *  the entries and the re-derived view, because one of them changes the bottom
    *  line of the day it lands on. */
+  /** One row per product line sold on a sales order: what it sold for, what
+   *  those exact FIFO layers cost, and the margin. Read-only — a sales order is
+   *  where the numbers are entered, not here. */
+  wholesale(): Promise<WholesaleSaleRow[]>
   expenses(): Promise<GeneralExpense[]>
   saveExpense(input: GeneralExpenseInput): Promise<Result<GeneralExpenseResult>>
   deleteExpense(id: string): Promise<Result<GeneralExpenseResult>>

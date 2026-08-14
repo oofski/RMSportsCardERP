@@ -30,6 +30,8 @@ mkdirSync(DIR, { recursive: true })
 /* eslint-disable @typescript-eslint/no-var-requires */
 const { getDb } = require('../src/main/db/database')
 const repo = require('../src/main/db/invoices')
+const inv = require('../src/main/db/inventory')
+const { assertStockLotsConsistent } = require('../src/main/db/lots')
 const {
   INVOICE_CSV_HEADERS,
   DEFAULT_INVOICE_TERMS,
@@ -1264,6 +1266,304 @@ for (const term of INVOICE_TERMS) {
   ok(readBack?.terms === term, `a customer on ${term} is stored and read back as ${term}`, String(readBack?.terms))
 }
 
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 20. a sales order IS a sale: the shelf moves when it is saved ===')
+// ---------------------------------------------------------------------------
+// A sales order used to be paperwork — it named products and quantities and the
+// shelf did not move until a picker scanned the boxes out against it. It is a
+// sale now: saving one consumes FIFO layers the same way a counter sale does,
+// because the owner writes the order because the boxes are going.
+//
+// The reconcile is RELEASE-THEN-APPLY on every save rather than a per-line
+// delta, and that choice is what the section below is really testing: a delta is
+// where an off-by-one becomes a box that does not exist. Every assertion is an
+// ABSOLUTE shelf count, because a delta assertion would pass against code that
+// double-counted a create and double-released an edit.
+{
+  const shelf = (id: string): number => inv.stockQty(id, 'RM')
+  const product = inv.createProduct(
+    {
+      sku: 'SO-STOCK-1',
+      upc: null,
+      name: 'Order Stock Hobby Box',
+      category: 'Baseball',
+      brand: 'Invented',
+      setName: '',
+      year: '2026',
+      unitType: 'box',
+      boxesPerCase: null,
+      packsPerBox: null,
+      giveawayItem: false,
+      unitCost: 0,
+      highBid: null,
+      salePrice: null,
+      reorderPoint: 0,
+      notes: null
+    },
+    null
+  )
+  // Two layers at two prices, so FIFO has something to be right about.
+  inv.addStock(product.id, 'RM', 4, 100, 'first buy', null, null)
+  inv.addStock(product.id, 'RM', 2, 250, 'second buy', null, null)
+  ok(shelf(product.id) === 6, 'six on the shelf to start', String(shelf(product.id)))
+
+  const buyer = repo.saveCustomer({ id: null, name: 'Wholesale Buyer', terms: 'Net 30' })
+  const order = (id: string | null, quantity: number, rate = 200): any =>
+    repo.saveInvoice(
+      {
+        id,
+        customerId: buyer.id,
+        customerName: 'Wholesale Buyer',
+        invoiceDate: '2026-08-14',
+        terms: 'Net 30',
+        location: 'RM',
+        lines: quantity > 0
+          ? [{ item: 'Order Stock Hobby Box', productId: product.id, quantity, rate, amount: quantity * rate }]
+          : [{ item: 'Handling', productId: null, quantity: 1, rate: 10, amount: 10 }]
+      },
+      'emp_owner'
+    )
+
+  // --- Sell four of six ---------------------------------------------------
+  const sold = order(null, 4)
+  ok(shelf(product.id) === 2, 'SELLING FOUR OF SIX LEAVES TWO', String(shelf(product.id)))
+  ok(sold.lines[0].qtyFulfilled === 4, 'the line records four gone', String(sold.lines[0].qtyFulfilled))
+  ok(sold.lines[0].qtyOutstanding === 0, 'and nothing outstanding')
+  assertStockLotsConsistent(db)
+
+  // FIFO, and the cost is the OLDEST layers — four at $100, not a blend and not
+  // the dear layer. This is the number the Wholesale margin is computed from.
+  const move = db
+    .prepare(`SELECT quantity, cost_total FROM invoice_stock_moves WHERE invoice_id = ?`)
+    .get(sold.id) as { quantity: number; cost_total: number }
+  ok(move?.quantity === 4, 'the receipt says four left', String(move?.quantity))
+  ok(move?.cost_total === 400, 'AT $400 — the four oldest boxes, FIFO', String(move?.cost_total))
+
+  // --- Edit UP: 4 → 5 -----------------------------------------------------
+  // The release has to run first or this would see an empty-ish shelf and take
+  // only what was left rather than the five it now sells.
+  const up = order(sold.id, 5)
+  ok(shelf(product.id) === 1, 'editing up to five leaves one', String(shelf(product.id)))
+  ok(up.lines[0].qtyFulfilled === 5, 'and the line says five', String(up.lines[0].qtyFulfilled))
+  const upMove = db
+    .prepare(`SELECT cost_total FROM invoice_stock_moves WHERE invoice_id = ?`)
+    .get(sold.id) as { cost_total: number }
+  ok(upMove?.cost_total === 650, 'costing $650 — four at $100 and one at $250', String(upMove?.cost_total))
+  assertStockLotsConsistent(db)
+
+  // --- Edit DOWN: 5 → 1 ---------------------------------------------------
+  const down = order(sold.id, 1)
+  ok(shelf(product.id) === 5, 'editing down to one puts four back', String(shelf(product.id)))
+  ok(down.lines[0].qtyFulfilled === 1, 'and the line says one', String(down.lines[0].qtyFulfilled))
+  // The units went back into the layers they came from, so the dear layer is
+  // whole again and the next sale is priced FIFO from the top.
+  ok(
+    (db.prepare(`SELECT cost_total AS c FROM invoice_stock_moves WHERE invoice_id = ?`).get(sold.id) as any).c === 100,
+    'at $100, off the cheap layer'
+  )
+  assertStockLotsConsistent(db)
+
+  // --- Saving the SAME order again changes nothing ------------------------
+  // The one property that makes release-then-apply safe. A save that is not
+  // idempotent turns every reopened-and-closed order into a missing box.
+  order(sold.id, 1)
+  order(sold.id, 1)
+  ok(shelf(product.id) === 5, 'THREE SAVES OF THE SAME ORDER STILL LEAVE FIVE', String(shelf(product.id)))
+  assertStockLotsConsistent(db)
+
+  // --- The product line is removed entirely -------------------------------
+  order(sold.id, 0)
+  ok(shelf(product.id) === 6, 'dropping the line hands the last box back', String(shelf(product.id)))
+  ok(
+    (db.prepare(`SELECT COUNT(*) AS n FROM invoice_stock_moves WHERE invoice_id = ?`).get(sold.id) as any).n === 0,
+    'and the receipt is gone with it'
+  )
+  assertStockLotsConsistent(db)
+
+  // --- Deleting an order hands everything back ----------------------------
+  const doomed = order(null, 3)
+  ok(shelf(product.id) === 3, 'a second order takes three', String(shelf(product.id)))
+  repo.deleteInvoice(doomed.id)
+  ok(shelf(product.id) === 6, 'DELETING IT PUTS ALL THREE BACK', String(shelf(product.id)))
+  assertStockLotsConsistent(db)
+
+  // --- More than the shelf holds: clamp, never refuse and never go negative -
+  // An order written the day before the pallet lands is a real thing somebody
+  // does. Refusing the save would push the work into a notebook.
+  const ahead = order(null, 10)
+  ok(shelf(product.id) === 0, 'an order for ten takes the six that exist', String(shelf(product.id)))
+  ok(ahead.lines[0].qtyFulfilled === 6, 'recording six as gone', String(ahead.lines[0].qtyFulfilled))
+  ok(ahead.lines[0].qtyOutstanding === 4, 'and four still owed', String(ahead.lines[0].qtyOutstanding))
+  assertStockLotsConsistent(db)
+
+  // The pallet lands and the order is saved again: it takes what it is still
+  // owed, and no more.
+  inv.addStock(product.id, 'RM', 10, 120, 'the pallet', null, null)
+  const filled = order(ahead.id, 10)
+  ok(shelf(product.id) === 6, 'the next save takes the four it was owed', String(shelf(product.id)))
+  ok(filled.lines[0].qtyOutstanding === 0, 'and the order is complete')
+  assertStockLotsConsistent(db)
+
+  // --- Two lines of the same product split one shelf ----------------------
+  repo.deleteInvoice(filled.id)
+  ok(shelf(product.id) === 16, 'the shelf is back to sixteen', String(shelf(product.id)))
+  const split = repo.saveInvoice(
+    {
+      id: null,
+      customerId: buyer.id,
+      customerName: 'Wholesale Buyer',
+      invoiceDate: '2026-08-14',
+      terms: 'Net 30',
+      location: 'RM',
+      lines: [
+        { item: 'Order Stock Hobby Box', productId: product.id, quantity: 3, rate: 200, amount: 600 },
+        { item: 'Order Stock Hobby Box', productId: product.id, quantity: 2, rate: 150, amount: 300 }
+      ]
+    },
+    'emp_owner'
+  )
+  ok(shelf(product.id) === 11, 'two lines of one product take five between them', String(shelf(product.id)))
+  const moves = db
+    .prepare(`SELECT line_position, quantity FROM invoice_stock_moves WHERE invoice_id = ? ORDER BY line_position`)
+    .all(split.id) as Array<{ line_position: number; quantity: number }>
+  ok(moves.length === 2, 'with a receipt per LINE, not per product', String(moves.length))
+  ok(moves[0]?.quantity === 3 && moves[1]?.quantity === 2, 'each carrying its own line', JSON.stringify(moves))
+  ok(split.lines.every((l: any) => l.qtyOutstanding === 0), 'and both lines fully taken')
+  assertStockLotsConsistent(db)
+
+  // --- Voiding hands them back --------------------------------------------
+  repo.setInvoiceStatus(split.id, 'void', 'emp_owner')
+  ok(shelf(product.id) === 16, 'VOIDING PUTS THE FIVE BACK', String(shelf(product.id)))
+  assertStockLotsConsistent(db)
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 21. the Wholesale ledger: sold for, minus what it cost ===')
+// ---------------------------------------------------------------------------
+// The tab said "not built yet" for five releases, and the reason was honest: a
+// sales order moved no stock, so nothing sold off-stream had a cost attached and
+// any margin would have been invented. Now that an order takes its own FIFO
+// layers, every row is a subtraction between two numbers the app holds.
+//
+// The three things that would each silently misstate a month:
+//
+//   1. THE QUANTITY IS WHAT LEFT, not what was ordered. An order for ten
+//      against a shelf of six reports six units of revenue against six units of
+//      cost. Reporting the ordered quantity would show a margin nobody earned.
+//   2. ONE ROW PER LINE. The same box on two lines at two prices is two
+//      margins, and rolling them together reports one that is neither.
+//   3. A COST THAT CANNOT BE RECOVERED IS NOT ZERO. A line shipped under the old
+//      fulfilment model has no record of its layers; counting it at zero cost
+//      would overstate profit by its entire revenue.
+{
+  const { listWholesaleSales } = require('../src/main/db/invoiceStock')
+  const shelf = (id: string): number => inv.stockQty(id, 'RM')
+  const p = inv.createProduct(
+    {
+      sku: 'WS-1',
+      upc: null,
+      name: 'Wholesale Case',
+      category: 'Baseball',
+      brand: 'Invented',
+      setName: '',
+      year: '2026',
+      unitType: 'case',
+      boxesPerCase: null,
+      packsPerBox: null,
+      giveawayItem: false,
+      unitCost: 0,
+      highBid: null,
+      salePrice: null,
+      reorderPoint: 0,
+      notes: null
+    },
+    null
+  )
+  inv.addStock(p.id, 'RM', 5, 1000, 'cheap layer', null, null)
+  inv.addStock(p.id, 'RM', 5, 1400, 'dear layer', null, null)
+  const buyer = repo.saveCustomer({ id: null, name: 'Bulk Buyer', terms: 'Net 30' })
+
+  const ws = repo.saveInvoice(
+    {
+      id: null,
+      customerId: buyer.id,
+      customerName: 'Bulk Buyer',
+      invoiceNumber: 'WS-1001',
+      invoiceDate: '2026-08-14',
+      terms: 'Net 30',
+      location: 'RM',
+      lines: [
+        { item: 'Wholesale Case', productId: p.id, quantity: 3, rate: 1600, amount: 4800 },
+        { item: 'Wholesale Case', productId: p.id, quantity: 2, rate: 1500, amount: 3000 }
+      ]
+    },
+    'emp_owner'
+  )
+  ok(shelf(p.id) === 5, 'five cases went out', String(shelf(p.id)))
+
+  const mine = listWholesaleSales(db).filter((r: any) => r.invoiceNumber === 'WS-1001')
+  ok(mine.length === 2, 'ONE ROW PER LINE', String(mine.length))
+  ok(mine[0].quantity === 3 && mine[1].quantity === 2, 'each with its own quantity', JSON.stringify(mine.map((r: any) => r.quantity)))
+  ok(mine[0].revenue === 4800, 'the first line sold for $4,800', String(mine[0].revenue))
+  // FIFO: the first line takes three of the cheap layer, the second takes the
+  // last cheap case and one dear one.
+  ok(mine[0].cost === 3000, 'costing $3,000 — three at $1,000, oldest first', String(mine[0].cost))
+  ok(mine[0].margin === 1800, 'for a margin of $1,800', String(mine[0].margin))
+  ok(mine[1].revenue === 3000, 'the second line sold for $3,000', String(mine[1].revenue))
+  // Still inside the cheap layer: line one took three of the five, so line two's
+  // two cases are the last two at $1,000. The dear layer is untouched until the
+  // next order.
+  ok(mine[1].cost === 2000, 'costing $2,000 — the last two at $1,000', String(mine[1].cost))
+  ok(mine[1].margin === 1000, 'for a margin of $1,000', String(mine[1].margin))
+  ok(mine.every((r: any) => r.costKnown === true), 'and both costs are real, not assumed')
+  ok(mine[0].productName === 'Wholesale Case' && mine[0].sku === 'WS-1', 'named and SKU-ed for the report')
+
+  // --- What was ORDERED is not what is reported ---------------------------
+  const over = repo.saveInvoice(
+    {
+      id: null,
+      customerId: buyer.id,
+      customerName: 'Bulk Buyer',
+      invoiceNumber: 'WS-1002',
+      invoiceDate: '2026-08-15',
+      terms: 'Net 30',
+      location: 'RM',
+      lines: [{ item: 'Wholesale Case', productId: p.id, quantity: 9, rate: 1600, amount: 14400 }]
+    },
+    'emp_owner'
+  )
+  ok(shelf(p.id) === 0, 'it takes the five that were left', String(shelf(p.id)))
+  const overRow = listWholesaleSales(db).find((r: any) => r.invoiceNumber === 'WS-1002')
+  ok(overRow?.quantity === 5, 'THE ROW REPORTS THE FIVE THAT LEFT, not the nine ordered', String(overRow?.quantity))
+  ok(overRow?.revenue === 8000, 'so revenue is five units of it', String(overRow?.revenue))
+  // And NOW the dear layer: the cheap five are gone, so these five are $1,400
+  // each — which is exactly the point of pricing a sale against its own layers
+  // rather than against an average.
+  ok(overRow?.cost === 7000, 'against the cost of those five, all at $1,400', String(overRow?.cost))
+  ok(over.lines[0].qtyOutstanding === 4, 'and four are still owed on the order', String(over.lines[0].qtyOutstanding))
+
+  // --- A void order leaves the report entirely ----------------------------
+  repo.setInvoiceStatus(over.id, 'void', 'emp_owner')
+  ok(
+    !listWholesaleSales(db).some((r: any) => r.invoiceNumber === 'WS-1002'),
+    'VOIDING TAKES THE SALE OFF THE REPORT — its stock went back'
+  )
+  ok(shelf(p.id) === 5, 'and the five cases are on the shelf again', String(shelf(p.id)))
+
+  // --- A cost that cannot be recovered is flagged, never zero -------------
+  // What a pre-v68 line looks like: a receipt with no ledger row behind it.
+  db.prepare(
+    `INSERT INTO invoice_stock_moves
+       (id, invoice_id, line_position, product_id, location, quantity, cost_total, txn_id, created_at)
+     VALUES ('legacy-move-1', ?, 0, ?, 'RM', 2, 0, NULL, '2026-01-01T00:00:00.000Z')`
+  ).run(ws.id, p.id)
+  const legacy = listWholesaleSales(db).find((r: any) => r.costKnown === false)
+  ok(!!legacy, 'a line with no recoverable cost still appears')
+  ok(legacy.cost === 0, 'carrying no cost figure', String(legacy?.cost))
+  ok(legacy.costKnown === false, 'AND FLAGGED AS UNKNOWN, so the screen can leave it out of the totals')
+  db.prepare(`DELETE FROM invoice_stock_moves WHERE id = 'legacy-move-1'`).run()
+}
 
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

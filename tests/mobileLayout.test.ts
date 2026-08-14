@@ -286,6 +286,25 @@ function topLevel(css: string): { blocks: { prelude: string; body: string }[]; b
   ok(mobileAt > -1, 'main.tsx imports the phone layer at all')
   ok(mobileAt > appAt, 'and does it AFTER app.css, or every override loses the cascade')
 
-  console.log(`\n${pass} passed, ${fail} failed\n`)
+  // ---------------------------------------------------------------------------
+console.log('\n=== N. hiding the nav is a DESKTOP gesture only ===')
+// ---------------------------------------------------------------------------
+// `.nav-hidden` is remembered in localStorage, so the flag travels with the
+// account: hide the nav on a laptop, open the same app on a phone, and the
+// bottom bar would be gone with no button to bring it back — the toggle is
+// topbar furniture this query also hides. The override has to be INSIDE the
+// media query or the desktop rule wins everywhere.
+ok(/\.shell\.nav-hidden\s*\{[^}]*grid-template-columns:\s*0 1fr/.test(appCss),
+  'the desktop rule collapses the nav track to zero')
+ok(/\.shell\.nav-hidden \.sidebar\s*\{[^}]*display:\s*none/.test(appCss),
+  'and takes the sidebar out of the layout entirely')
+ok(/\.shell\.nav-hidden\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/.test(mobileCss),
+  'the phone gives the column back')
+ok(/\.shell\.nav-hidden \.sidebar\s*\{[^}]*display:\s*flex/.test(mobileCss),
+  'AND PUTS THE BOTTOM BAR BACK — a tab with no navigation is not a collapsed sidebar')
+ok(/\.nav-toggle\s*\{[^}]*display:\s*none/.test(mobileCss),
+  'with the toggle itself hidden, since there is nothing for it to do')
+
+console.log(`\n${pass} passed, ${fail} failed\n`)
   process.exit(fail === 0 ? 0 : 1)
 })()
