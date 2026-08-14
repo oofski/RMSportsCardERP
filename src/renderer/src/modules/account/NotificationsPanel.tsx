@@ -15,8 +15,22 @@ import {
 } from '../../lib/webPush'
 
 /**
- * Turning clock-in notifications on, for this device, for the person looking at
- * the screen.
+ * Turning notifications on, for this device, for the person looking at the
+ * screen.
+ *
+ * ## What "on" delivers depends on who is asking, and the screen says so
+ *
+ * Everybody who turns this on gets MESSAGES — somebody writing to them in
+ * Contacts, or a note sent to the whole team. That is the half that made this
+ * worth opening to every role: a packer with no phone registered is a packer
+ * nobody can reach.
+ *
+ * The CLOCK feed — a buzz every time a named colleague starts or finishes a
+ * shift — is separate and stays behind `notifications.clock`. It is a live
+ * account of when people work, which is not everybody's to read. Registering a
+ * device does not grant it; the permission travels with the subscription and the
+ * relay filters on it. So this screen must not promise punches to somebody who
+ * will never receive them, which is what `canClock` is for.
  *
  * The screen has exactly one job beyond the toggle, and it is the reason it is
  * laid out this way: WHEN THE TOGGLE CANNOT BE OFFERED, SAY WHY IN A SENTENCE
@@ -39,7 +53,7 @@ import {
  * would happily report "notifications are on" for a relay that has never been
  * able to send one.
  */
-export function NotificationsTab(): JSX.Element {
+export function NotificationsPanel({ canClock }: { canClock: boolean }): JSX.Element {
   const toast = useToast()
   const [state, setState] = useState<ClockPushState | null>(null)
   const [capability, setCapability] = useState<PushCapability | null>(null)
@@ -183,14 +197,17 @@ export function NotificationsTab(): JSX.Element {
       return {
         tone: 'ok',
         title: 'On for this device',
-        detail: 'You will get a notification when anyone clocks in or out. Not for your own punches.'
+        detail: canClock
+          ? 'Messages sent to you, and a buzz when anyone clocks in or out. Not for your own punches.'
+          : 'You will get a notification when somebody messages you, or sends a note to the whole team.'
       }
     }
     return {
       tone: 'warn',
       title: 'Off for this device',
-      detail:
-        'Turn it on and this phone gets a notification when somebody starts or finishes a shift.'
+      detail: canClock
+        ? 'Turn it on for messages, and for a buzz when somebody starts or finishes a shift.'
+        : 'Turn it on and this phone buzzes when somebody messages you or the team.'
     }
   })()
 
@@ -325,6 +342,12 @@ export function NotificationsTab(): JSX.Element {
           is no way to switch them on for somebody else, and nothing here shows whose phones anyone
           else has registered.
         </p>
+        {!canClock && (
+          <p className="sync-note">
+            You will not be sent other people&apos;s clock-ins. That is a separate permission and this
+            account does not have it — turning notifications on here does not grant it.
+          </p>
+        )}
         {state.devices.length > 0 && (
           <ul className="sync-reject-list">
             {state.devices.map((device) => (

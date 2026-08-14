@@ -6,19 +6,32 @@ import type { ClockPushState, PushSubscriptionInput } from '@shared/webPush'
 import { currentUser } from './services/auth'
 import {
   clockPushState,
+  relayEnforcesClockScope,
   subscribeToClockPush,
   testClockPush,
   unsubscribeFromClockPush
 } from './services/webPush'
 
 /**
- * Turning clock-in notifications on for YOURSELF.
+ * Turning notifications on for YOURSELF, on the device in your hand.
  *
- * Gated on 'notifications.clock' — its own permission rather than admin.access,
- * because what it grants is a live feed of when named colleagues start and
- * finish work, delivered to a personal phone. That is a privacy boundary of the
- * same kind as the customer-list export, and it deserves to be grantable and
- * refusable on its own.
+ * ## Enrolment is not a privilege; the clock feed is
+ *
+ * These two used to be one thing, and gating them together was a bug that only
+ * became visible once messages started arriving this way. `notifications.clock`
+ * is held by owners and operations alone, so every other role — staff, the
+ * packing bench, breakers — could not register a phone AT ALL. Not "could not
+ * see punches": could not receive anything. The messaging feature shipped into
+ * a floor that was structurally unreachable.
+ *
+ * So the gate moved. Registering a device now needs nothing but being signed in,
+ * because it is your device, your browser permission prompt and your consent,
+ * and nothing about it discloses anybody else. What `notifications.clock` still
+ * decides is whether the CLOCK FEED — a live account of when named colleagues
+ * start and finish work — is delivered to that device. That is the privacy
+ * boundary it was always about, and it is now enforced where the fan-out
+ * happens: the flag rides along on subscribe and the relay filters on it. See
+ * `addClockOkColumn` in cloud/worker.js.
  *
  * Every operation here acts on the CALLER and only on the caller. There is no
  * "subscribe Dana's phone" and no "list everyone's devices": the relay filters
@@ -29,12 +42,9 @@ import {
 
 class PermissionError extends Error {}
 
-function requirePermission(permission: Permission): { id: string } {
+function requireSignedIn(): { id: string; permissions: Permission[] } {
   const user = currentUser()
   if (!user) throw new PermissionError('You are not signed in.')
-  if (!user.permissions.includes(permission)) {
-    throw new PermissionError('You do not have permission to do that.')
-  }
   return user
 }
 
@@ -45,18 +55,19 @@ function fail(err: unknown): Result<never> {
 export function registerPushIpc(): void {
   ipcMain.handle(IPC.pushState, async (): Promise<ClockPushState> => {
     const user = currentUser()
-    if (!user || !user.permissions.includes('notifications.clock')) {
-      // Not an error. The screen is not reachable without the permission, and a
-      // thrown rejection here would be a red toast on a tab somebody merely
-      // has open when their role changes underneath them.
+    if (!user) {
+      // Not an error. A thrown rejection here would be a red toast on a tab
+      // somebody merely has open when their session ends underneath them.
       return {
         relayConfigured: false,
         ready: false,
-        problem: 'You do not have permission to use clock notifications.',
+        problem: 'You are not signed in.',
         publicKey: null,
         devices: []
       }
     }
+    // Scoped to the caller by the id, which comes from the session. The relay's
+    // list route filters on it, so this can only ever return your own devices.
     return clockPushState(user.id)
   })
 
@@ -64,8 +75,34 @@ export function registerPushIpc(): void {
     IPC.pushSubscribe,
     async (_e, input: PushSubscriptionInput): Promise<Result<{ ok: true }>> => {
       try {
-        const actor = requirePermission('notifications.clock')
-        const result = await subscribeToClockPush(actor.id, input)
+        const actor = requireSignedIn()
+        // Read from the SESSION, never from the renderer. The flag decides
+        // whether this device joins the clock feed, so a value posted by the
+        // page would be a permission the page granted itself.
+        const clock = actor.permissions.includes('notifications.clock')
+        // FAIL CLOSED ACROSS THE DEPLOY BOUNDARY.
+        //
+        // This app ships on every push; the relay ships when somebody pastes
+        // cloud/worker.js into Cloudflare. Between the two there is a window
+        // where this build sends `clock: false` to a relay that has never heard
+        // of the field — which drops it, keeps no column for it, and fans every
+        // punch out to every subscription it holds. Enrolling somebody there is
+        // not "notifications on with the clock feed off"; it IS the clock feed.
+        //
+        // So an unentitled device is refused until the relay can prove it will
+        // honour the flag. The cost is somebody waiting for a paste. The
+        // alternative cost is the floor holding a live record of when everybody
+        // works, with nothing on any screen to show it happened.
+        if (!clock && !(await relayEnforcesClockScope())) {
+          return {
+            ok: false,
+            error:
+              'The cloud relay is running an older version that cannot keep clock-in alerts off ' +
+              'this device, so notifications cannot be switched on yet. Whoever set up the relay ' +
+              'needs to update it — the app is ready.'
+          }
+        }
+        const result = await subscribeToClockPush(actor.id, input, clock)
         if (!result.ok) return { ok: false, error: result.error }
         return { ok: true, data: { ok: true } }
       } catch (err) {
@@ -99,7 +136,12 @@ export function registerPushIpc(): void {
     IPC.pushTest,
     async (): Promise<Result<{ sent: number; dropped: number; failed: number }>> => {
       try {
-        const actor = requirePermission('notifications.clock')
+        // Signed in is enough: a test goes to the caller's OWN devices and
+        // nowhere else, and somebody who has just switched notifications on
+        // needs to be able to prove it worked. Refusing the proof to the people
+        // most likely to be standing in a warehouse wondering why their phone is
+        // silent would be exactly backwards.
+        const actor = requireSignedIn()
         const result = await testClockPush(actor.id, 'Test notification')
         if (!result.ok) return { ok: false, error: result.error ?? 'Nothing was delivered.' }
         return {

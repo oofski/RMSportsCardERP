@@ -1571,14 +1571,62 @@ async function ensurePushTable(env) {
          auth        TEXT NOT NULL,
          label       TEXT,
          created_at  TEXT NOT NULL,
-         last_sent_at TEXT
+         last_sent_at TEXT,
+         clock_ok    INTEGER NOT NULL DEFAULT 0
        )`
     ),
     env.DB.prepare(
       'CREATE INDEX IF NOT EXISTS idx_push_subscriptions_employee ON push_subscriptions (employee_id)'
     )
   ])
+  await addClockOkColumn(env)
   pushTableReady = true
+}
+
+/**
+ * Add clock_ok to a table that predates it.
+ *
+ * ## Why the column exists
+ *
+ * Registering a phone and being allowed to see who works when are two different
+ * things, and they used to be one. The app gated ENROLMENT on the
+ * `notifications.clock` permission, which meant a packer could not turn
+ * notifications on at all — and once messages started being delivered this way,
+ * that made the entire floor unreachable. Enrolment is now open to anybody
+ * signed in, because it is their own device and their own consent.
+ *
+ * That alone would have handed every newly-enrolled phone the clock feed, which
+ * fans out to EVERY subscription but the puncher's (see subscriptionsForSend).
+ * Who clocked in and when is exactly what `notifications.clock` was protecting,
+ * so the permission moves onto the row: the app writes what the person was
+ * allowed at the moment they subscribed, and the clock query filters on it.
+ * Messages are unaffected — they are addressed to explicit employee ids and
+ * never consult this column.
+ *
+ * ## Why the two defaults disagree, on purpose
+ *
+ * CREATE TABLE says DEFAULT 0 and this ALTER says DEFAULT 1, and that is not an
+ * oversight. A brand new table has no rows to protect and should deny by
+ * default. An EXISTING table's rows were all written under the old rule, which
+ * only let owners and operations subscribe at all — every one of them was
+ * already entitled to the clock feed, so backfilling them to 1 preserves
+ * exactly what those people have today. Backfilling to 0 would silently switch
+ * off notifications for the handful of people who actually use them.
+ *
+ * ## Why PRAGMA rather than catching the error
+ *
+ * ALTER TABLE ADD COLUMN throws on the second call, and the only way to
+ * recognise that particular failure is to pattern-match an error string owned by
+ * somebody else. Asking what columns exist is deterministic, and it cannot
+ * confuse "already done" with "the database is broken".
+ */
+export async function addClockOkColumn(env) {
+  const info = await env.DB.prepare('PRAGMA table_info(push_subscriptions)').all()
+  const has = (info.results || []).some((c) => String(c.name || '') === 'clock_ok')
+  if (has) return
+  await env.DB.prepare(
+    'ALTER TABLE push_subscriptions ADD COLUMN clock_ok INTEGER NOT NULL DEFAULT 1'
+  ).run()
 }
 
 /**
@@ -1983,11 +2031,25 @@ export function notifyTargets(subscriptions, punchedBy) {
   return (subscriptions || []).filter((s) => String(s.employee_id || '') !== self)
 }
 
-async function subscriptionsForSend(env, excludeEmployeeId) {
+/**
+ * Who gets told about a punch.
+ *
+ * `clock_ok = 1` is the permission boundary and it is enforced HERE, in the
+ * query, rather than by trusting the caller to pass the right list. Anybody
+ * signed in may register a phone; only somebody who held `notifications.clock`
+ * when they registered it gets the feed that says who started a shift. See
+ * addClockOkColumn for the whole reasoning.
+ *
+ * This is the clock path only. Messages go through pushSend, which selects by
+ * explicit employee id and must NOT consult this column — being unable to see
+ * everybody's hours is no reason to stop somebody receiving a message addressed
+ * to them.
+ */
+export async function subscriptionsForSend(env, excludeEmployeeId) {
   await ensurePushTable(env)
   const result = await env.DB.prepare(
     `SELECT endpoint, employee_id, p256dh, auth FROM push_subscriptions
-      WHERE employee_id <> ?1
+      WHERE employee_id <> ?1 AND clock_ok = 1
       ORDER BY created_at ASC LIMIT ?2`
   )
     .bind(String(excludeEmployeeId || ''), PUSH_MAX_SUBSCRIPTIONS)
@@ -2171,7 +2233,25 @@ async function pushKey(env) {
     subject: vapidSubject(env),
     // Carried all the way to the screen. Without it the app can only say
     // "notifications are on" while the relay quietly sends nothing.
-    problem: configured ? null : VAPID_MISSING_MESSAGE
+    problem: configured ? null : VAPID_MISSING_MESSAGE,
+    /**
+     * What THIS deployment can enforce.
+     *
+     * This file is installed by a person opening the Cloudflare dashboard and
+     * pasting it in. The app, meanwhile, redeploys on every push. So the two
+     * halves of any rule that spans them ship on different clocks, and the app
+     * has no other way to find out which version it is talking to — every route
+     * it needs already existed, so a stale relay answers 200 and drops the
+     * fields it has never heard of, in silence.
+     *
+     * `clock-scope` says: this relay understands `clock` on subscribe and
+     * filters the punch feed on it. An app that cannot see this string must
+     * assume the relay is older and REFUSE to enrol anybody who is not entitled
+     * to the feed — because on that relay, enrolling them IS subscribing them.
+     * Failing closed costs somebody a notification until the paste happens;
+     * failing open hands the floor a live record of when everybody works.
+     */
+    capabilities: ['clock-scope']
   })
 }
 
@@ -2182,6 +2262,11 @@ async function pushSubscribe(request, env) {
   const p256dh = String(body.p256dh || '').trim()
   const auth = String(body.auth || '').trim()
   const label = String(body.label || '').trim().slice(0, 80) || null
+  // Whether this person may receive the clock feed, decided by the app from the
+  // permissions of whoever is signed in and recorded on the row. Absent means
+  // no: an older app build that does not send the flag is asking only to be
+  // reachable, and the safe reading of silence is the narrower one.
+  const clockOk = body.clock === true ? 1 : 0
 
   if (!employeeId) return json({ ok: false, error: 'Who is subscribing?' }, 400)
   let audience
@@ -2202,15 +2287,21 @@ async function pushSubscribe(request, env) {
   await ensurePushTable(env)
   const now = new Date().toISOString()
   await env.DB.prepare(
-    `INSERT INTO push_subscriptions (endpoint, employee_id, p256dh, auth, label, created_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+    `INSERT INTO push_subscriptions (endpoint, employee_id, p256dh, auth, label, created_at, clock_ok)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
      ON CONFLICT (endpoint) DO UPDATE SET
        employee_id = excluded.employee_id,
        p256dh      = excluded.p256dh,
        auth        = excluded.auth,
-       label       = excluded.label`
+       label       = excluded.label,
+       -- Re-subscribing REFRESHES the permission rather than keeping the old
+       -- one. A browser re-registers on its own after a permission change or an
+       -- update, and a phone that changed hands, or a person whose role was
+       -- narrowed, must not keep a feed they are no longer entitled to because
+       -- the row happened to predate the change.
+       clock_ok    = excluded.clock_ok`
   )
-    .bind(endpoint, employeeId, p256dh, auth, label, now)
+    .bind(endpoint, employeeId, p256dh, auth, label, now, clockOk)
     .run()
 
   return json({ ok: true, id: await subscriptionId(endpoint), service: audience })

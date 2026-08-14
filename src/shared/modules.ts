@@ -61,6 +61,28 @@ export const MODULES: AppModule[] = [
     workspace: 'both'
   },
   {
+    /**
+     * YOUR account, and the only module in this file with no permission on it.
+     *
+     * `permission: null` is deliberate and is the whole point. Everything here
+     * acts on the person looking at it and discloses nobody else: their own
+     * password, their own phone. Both used to sit behind a gate — the password
+     * behind "ask an administrator", the notification toggle behind
+     * `admin.access` — and in both cases the gate protected nothing while
+     * locking out exactly the people the feature was for.
+     */
+    id: 'account',
+    name: 'My account',
+    shortName: 'Account',
+    description: 'Your password, and notifications on your phone.',
+    icon: 'UserCog',
+    permission: null,
+    status: 'active',
+    // BOTH workspaces, for the same reason Contacts is: somebody on the packing
+    // floor must not have to switch companies to change their own password.
+    workspace: 'both'
+  },
+  {
     id: 'admin',
     name: 'Admin',
     shortName: 'Admin',

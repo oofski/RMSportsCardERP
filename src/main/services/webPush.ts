@@ -80,9 +80,46 @@ export async function clockPushState(employeeId: string): Promise<ClockPushState
   }
 }
 
+/**
+ * Register a device against an employee.
+ *
+ * `clock` is the caller's `notifications.clock` permission, resolved from the
+ * session by the IPC handler and stored on the row. It decides one thing: does
+ * the clock feed reach this device. Messages do not consult it — they are
+ * addressed to explicit employee ids — so a packer who cannot see everybody's
+ * hours still gets a message sent to them.
+ *
+ * Sent on EVERY subscribe rather than only the first, because a browser
+ * re-registers on its own and the relay refreshes the flag from what arrives.
+ * That is what makes a narrowed role take effect on the phone that is already
+ * enrolled, instead of grandfathering a feed somebody is no longer entitled to.
+ */
+/**
+ * Does the deployed relay know how to keep the clock feed off this device?
+ *
+ * The app redeploys on every push; cloud/worker.js is installed by somebody
+ * pasting it into the Cloudflare dashboard. So the app can be a version ahead of
+ * the relay, and the routes it needs all existed beforehand — a stale relay
+ * answers 200 and drops the `clock` field without a word. This is the only way
+ * to tell, and a relay that does not answer at all is treated as unable, which
+ * is the safe reading.
+ */
+export async function relayEnforcesClockScope(): Promise<boolean> {
+  if (!relayConfigured()) return false
+  try {
+    const key = (await call('/v1/push-notify/key', { method: 'GET' })) as {
+      capabilities?: unknown
+    }
+    return Array.isArray(key.capabilities) && key.capabilities.includes('clock-scope')
+  } catch {
+    return false
+  }
+}
+
 export async function subscribeToClockPush(
   employeeId: string,
-  input: PushSubscriptionInput
+  input: PushSubscriptionInput,
+  clock: boolean
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   if (!relayConfigured()) return { ok: false, error: NO_RELAY }
   try {
@@ -93,7 +130,8 @@ export async function subscribeToClockPush(
         endpoint: input.endpoint,
         p256dh: input.p256dh,
         auth: input.auth,
-        label: input.label ?? null
+        label: input.label ?? null,
+        clock
       }
     })
     return { ok: true }

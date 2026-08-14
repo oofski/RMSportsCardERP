@@ -11,7 +11,6 @@ import { VendorsTab } from './VendorsTab'
 import { OnboardingTab } from './OnboardingTab'
 import { RolesTab } from './RolesTab'
 import { ActivityTab } from './ActivityTab'
-import { NotificationsTab } from './NotificationsTab'
 import { DeveloperTab } from './DeveloperTab'
 
 type SectionId =
@@ -20,7 +19,6 @@ type SectionId =
   | 'vendors'
   | 'onboarding'
   | 'roles'
-  | 'notifications'
   | 'activity'
   | 'developer'
 
@@ -220,18 +218,6 @@ export function AdminModule(): JSX.Element {
       count: null,
       hint: 'What each role may reach'
     },
-    // Its own permission rather than admin.access — see 'notifications.clock'.
-    // No figure: the only count available is how many devices the person
-    // LOOKING has turned on, it costs a round-trip to the relay to find out,
-    // and 0 means both "switched off" and "there is no relay in this build".
-    {
-      id: 'notifications',
-      label: 'Notifications',
-      icon: 'Bell',
-      visible: can('notifications.clock'),
-      count: null,
-      hint: 'Who is told when a shift starts'
-    },
     // ---- Everything else ----------------------------------------------------
     // No figure: the screen reads the last 300 movements and there is no count
     // behind it, so anything printed here would either be the page size dressed
@@ -296,7 +282,6 @@ export function AdminModule(): JSX.Element {
         {open.id === 'vendors' && <VendorsTab />}
         {open.id === 'onboarding' && <OnboardingTab />}
         {open.id === 'roles' && <RolesTab employees={employees} onChanged={loadEmployees} />}
-        {open.id === 'notifications' && <NotificationsTab />}
         {open.id === 'activity' && <ActivityTab />}
         {open.id === 'developer' && <DeveloperTab />}
       </div>
