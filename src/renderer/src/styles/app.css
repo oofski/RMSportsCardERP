@@ -489,8 +489,15 @@ table.data tbody tr:hover {
    The mobile query overrides both — see mobile.css. On a phone this element is
    the bottom navigation bar, and a tab with no way to reach another screen is
    not a collapsed sidebar, it is a broken app. */
+/* ONE COLUMN, not a zero-width one followed by 1fr.
+   `display: none` takes the sidebar OUT OF THE GRID, so `.main` becomes the
+   first grid item — and with two tracks declared it was laid into the first,
+   which was 0px wide. The whole app rendered as a sliver down the left edge
+   with its content overflowing: the topbar crushed into ~600px, every card a
+   vertical strip. The same reasoning the mobile query already spells out, for
+   the same reason: a grid must be told how many columns it actually has. */
 .shell.nav-hidden {
-  grid-template-columns: 0 1fr;
+  grid-template-columns: minmax(0, 1fr);
 }
 .shell.nav-hidden .sidebar {
   display: none;
@@ -514,6 +521,15 @@ table.data tbody tr:hover {
   background: var(--surface-3);
   border-color: var(--border);
   color: var(--text);
+}
+/* The app's own focus ring, matching every other keyboard-reachable control.
+   Without it the browser draws its default — a heavy dark rounded box that
+   stays on screen after the click and reads as a rendering fault rather than as
+   focus, which is half of why this looked wrong. */
+.nav-toggle:focus-visible {
+  outline: 2px solid var(--brand-500);
+  outline-offset: 1px;
+  border-color: transparent;
 }
 .sidebar {
   background: var(--surface);

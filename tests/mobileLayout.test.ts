@@ -294,8 +294,14 @@ console.log('\n=== N. hiding the nav is a DESKTOP gesture only ===')
 // bottom bar would be gone with no button to bring it back — the toggle is
 // topbar furniture this query also hides. The override has to be INSIDE the
 // media query or the desktop rule wins everywhere.
-ok(/\.shell\.nav-hidden\s*\{[^}]*grid-template-columns:\s*0 1fr/.test(appCss),
-  'the desktop rule collapses the nav track to zero')
+// ONE COLUMN, not `0 1fr`. `display: none` takes the sidebar out of the grid, so
+// `.main` becomes the first item — and against two declared tracks it was laid
+// into the first, which was 0px wide. The app rendered as a sliver down the left
+// edge with everything overflowing out of it.
+ok(/\.shell\.nav-hidden\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/.test(appCss),
+  'the desktop rule gives the page ONE full-width column')
+ok(!/\.shell\.nav-hidden\s*\{[^}]*grid-template-columns:\s*0 /.test(appCss),
+  'and never a zero-width track for main to fall into')
 ok(/\.shell\.nav-hidden \.sidebar\s*\{[^}]*display:\s*none/.test(appCss),
   'and takes the sidebar out of the layout entirely')
 ok(/\.shell\.nav-hidden\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/.test(mobileCss),
