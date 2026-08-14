@@ -752,6 +752,15 @@ export function saveInvoice(
      * matching on id would carry nothing. A line with no product (a service, a
      * one-off) falls back to its item name. Anything that matches nothing starts
      * at 0, which is correct — it is a line that did not exist before.
+     *
+     * It is a POOL PER PRODUCT, drawn down line by line, and that matters as soon
+     * as an order lists the same box twice — two lines of three at different
+     * prices, which is an ordinary thing to type. The first version handed the
+     * whole pool to the first matching line and then DELETED the key, so a 3+3
+     * order that had shipped all six came back as 3 fulfilled and 3 outstanding.
+     * The scan queue then offered three units that were already in a box on a
+     * van, and the picker taking them off the shelf again is the same
+     * shelf-emptying failure this carry-forward was written to stop.
      */
     const priorFulfilled = new Map<string, { qty: number; at: string | null }>()
     if (existing) {
@@ -791,7 +800,12 @@ export function saveInvoice(
       // after 6 went out is a real thing somebody may do; the honest record is
       // that the line is fully fulfilled, not that 6 of 4 left.
       const qty = Math.min(carried?.qty ?? 0, l.quantity)
-      priorFulfilled.delete(key)
+      // Draw down rather than discard: whatever this line could not absorb is
+      // still owed to the NEXT line that names the same product.
+      if (carried) {
+        carried.qty -= qty
+        if (carried.qty <= 0) priorFulfilled.delete(key)
+      }
       insert.run({
         ...l,
         qtyFulfilled: qty,

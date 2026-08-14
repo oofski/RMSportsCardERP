@@ -309,6 +309,24 @@ ok(
   scan.resolveScan('0000000000017', 'out').status
 )
 
+// A REPLAYED SCAN-OUT SAYS "OUT". The replay path names the outcomes that took
+// stock away, and 'so_line' was not one of them — so a dropped reply on a phone,
+// which is the ordinary reason a scan is retried, came back "Already scanned in".
+// On a bench where one gun does receiving and picking, that is the sentence that
+// sends somebody looking for stock they have just packed.
+const replayedOut = commit({ ...restLines[0], clientToken: restLines[0].clientToken })
+ok(replayedOut.result?.replayed === true, 'retrying a sales-order scan replays it', String(replayedOut.error))
+ok(
+  / out — /.test(String(replayedOut.result?.message)),
+  'AND SAYS THE STOCK WENT OUT, not in',
+  String(replayedOut.result?.message)
+)
+ok(
+  invoices.getInvoice(so.id).lines[0].qtyFulfilled === 4,
+  'while the order is still four of four — the replay moved nothing',
+  String(invoices.getInvoice(so.id).lines[0].qtyFulfilled)
+)
+
 // A voided order is not fulfillable at all.
 const voided = invoices.saveInvoice(
   {

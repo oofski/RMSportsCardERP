@@ -1176,6 +1176,81 @@ ok(repo.getInvoice(doomed.id) === null, 'and being posted does not stop it going
   ok(small.qtyOutstanding === 0, 'and nothing is left outstanding', String(small.qtyOutstanding))
 }
 
+// ---- TWO LINES OF THE SAME PRODUCT, and the carry-forward that split them --
+// The carry-forward is keyed on the PRODUCT, because the rewrite mints new line
+// ids and nothing else survives it. That makes it a POOL, and the first version
+// handed the whole pool to the first matching line and then dropped the key —
+// so an order listing the same box twice, three at one price and three at
+// another, came back from a memo edit as 3 fulfilled and 3 outstanding after all
+// six had shipped.
+//
+// That is not a display problem. `outstandingSalesLinesForProduct` reads exactly
+// this column, so the scan queue offered three units that were already in a box
+// on a van, and the picker taking them off the shelf again is the same
+// stock-emptying failure the carry-forward was written to stop.
+{
+  const buyer = repo.saveCustomer({ id: null, name: 'Split Line Buyer', terms: 'Net 30' })
+  const twoLines = [
+    { item: 'Split Case', productId: 'prod-split', sku: 'SPLIT-1', quantity: 3, rate: 100, amount: 300 },
+    { item: 'Split Case', productId: 'prod-split', sku: 'SPLIT-1', quantity: 3, rate: 80, amount: 240 }
+  ]
+  const order = repo.saveInvoice(
+    {
+      id: null,
+      customerId: buyer.id,
+      customerName: 'Split Line Buyer',
+      invoiceDate: '2026-08-13',
+      terms: 'Net 30',
+      lines: twoLines
+    },
+    null
+  )
+  ok(order.lines.length === 2, 'an order may list the same product twice at two prices')
+
+  // All six ship.
+  for (const l of order.lines) {
+    db.prepare(`UPDATE invoice_lines SET qty_fulfilled = 3, fulfilled_at = ? WHERE id = ?`)
+      .run('2026-08-13T18:00:00.000Z', l.id)
+  }
+
+  const edited = repo.saveInvoice(
+    {
+      id: order.id,
+      customerId: buyer.id,
+      customerName: 'Split Line Buyer',
+      invoiceDate: '2026-08-13',
+      terms: 'Net 30',
+      memo: 'customer asked for a copy',
+      lines: twoLines
+    },
+    null
+  )
+  const shipped = edited.lines.reduce((n: number, l: any) => n + l.qtyFulfilled, 0)
+  const owed = edited.lines.reduce((n: number, l: any) => n + l.qtyOutstanding, 0)
+  ok(shipped === 6, 'ALL SIX ARE STILL RECORDED AS PICKED after the edit', String(shipped))
+  ok(owed === 0, 'and the scan queue is offered nothing to pick again', String(owed))
+  ok(
+    edited.lines.every((l: any) => l.qtyFulfilled === 3),
+    'the pool is drawn down line by line rather than spent on the first',
+    JSON.stringify(edited.lines.map((l: any) => l.qtyFulfilled))
+  )
+
+  // A pool bigger than the lines can absorb still clamps rather than overflows.
+  const shrunk2 = repo.saveInvoice(
+    {
+      id: order.id,
+      customerId: buyer.id,
+      customerName: 'Split Line Buyer',
+      invoiceDate: '2026-08-13',
+      terms: 'Net 30',
+      lines: [{ item: 'Split Case', productId: 'prod-split', sku: 'SPLIT-1', quantity: 2, rate: 100, amount: 200 }]
+    },
+    null
+  )
+  ok(shrunk2.lines[0].qtyFulfilled === 2, 'a single shorter line clamps to what it now sells', String(shrunk2.lines[0].qtyFulfilled))
+  ok(shrunk2.lines[0].qtyOutstanding === 0, 'with nothing left owed')
+}
+
 // ---- terms survive a round trip through the DATABASE ----------------------
 // The suite used to test dueDateFor('...', 'Net 2') as a pure function and stop
 // there. It passed while `asTerms` in main/db/invoices.ts — a second, hand-typed

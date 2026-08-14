@@ -263,16 +263,36 @@ export function acceptIntakeSubmission(id: string, reviewer: string | null): Rev
       | { id: string }
       | undefined
     if (existing) {
-      // Fill blanks and update what the customer just told us. This is the
-      // moment a person decided to trust it, which is what makes overwriting a
-      // stored address acceptable here and not acceptable at the form.
+      /**
+       * Fill blanks and update what the customer just told us. This is the
+       * moment a person decided to trust it, which is what makes overwriting a
+       * stored address acceptable here and not acceptable at the form.
+       *
+       * THE ADDRESS IS GUARDED ON THE STREET, not on the composed string. The
+       * guard used to be "is the composed line non-empty", and a form submitted
+       * with nothing but a state and a zip composes to "IL · 62701" — non-empty,
+       * so it REPLACED a complete stored address with two fragments, and the
+       * next packing slip for that buyer had nowhere to send the cards. A
+       * mailing address without a street is not a correction to an existing one;
+       * it is an empty form with two boxes filled in.
+       *
+       * `address1` is the load-bearing line. When it is there, everything the
+       * customer typed lands together; when it is not, theirs is left alone.
+       */
       db.prepare(
         `UPDATE ship_customers
            SET whatnot_handle = ?,
                real_name = CASE WHEN ? <> '' THEN ? ELSE real_name END,
                address   = CASE WHEN ? <> '' THEN ? ELSE address   END
          WHERE id = ?`
-      ).run(row.handle.trim() || handle, row.real_name, row.real_name, address, address, handle)
+      ).run(
+        row.handle.trim() || handle,
+        row.real_name,
+        row.real_name,
+        row.address1.trim(),
+        address,
+        handle
+      )
     } else {
       db.prepare(
         `INSERT INTO ship_customers (id, whatnot_handle, real_name, address, is_new)
@@ -297,6 +317,26 @@ export function acceptIntakeSubmission(id: string, reviewer: string | null): Rev
   return { ok: true, submission: toSubmission(updated) }
 }
 
+/**
+ * Turn a submission down.
+ *
+ * ## Why it refuses one that was already accepted
+ *
+ * Accepting is not a label — it WRITES a row into `ship_customers`, keyed on the
+ * Whatnot handle, and that row is what every packing slip joins against.
+ * Rejecting afterwards left the customer sitting in the shipping list while the
+ * submission that created them read "rejected", with `customer_id` still naming
+ * the row somebody had just declined. Nothing on either screen said the two
+ * disagreed, and the record of WHY that customer exists pointed at a rejection.
+ *
+ * `acceptIntakeSubmission` already refuses to re-accept for the same reason.
+ * This is the other half of that guard, and it was missing: two reviewers
+ * working the same queue, or one person double-taking, is all it needs.
+ *
+ * The refusal is deliberately not a silent no-op. Somebody pressed Reject and
+ * has to be told the customer is already in the list, or they will believe the
+ * contact was turned away.
+ */
 export function rejectIntakeSubmission(
   id: string,
   note: string,
@@ -304,6 +344,17 @@ export function rejectIntakeSubmission(
 ): ReviewResult {
   const db = getDb()
   const at = nowIso()
+  const current = db.prepare('SELECT status FROM intake_submissions WHERE id = ?').get(id) as
+    | { status: string }
+    | undefined
+  if (!current) return { ok: false, error: 'That submission no longer exists.' }
+  if (current.status === 'accepted') {
+    return {
+      ok: false,
+      error:
+        'That submission was already accepted and the customer is in the shipping list. Remove them there if they should not be.'
+    }
+  }
   const info = db
     .prepare(
       `UPDATE intake_submissions

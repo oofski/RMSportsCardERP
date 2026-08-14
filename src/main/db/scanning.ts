@@ -387,7 +387,12 @@ export function logScanMiss(rawCode: string, mode: ScanMode, actorId: string | n
 
 /** Rebuild the result of an earlier commit for a replayed clientToken. */
 function replayResult(row: ScanRow): ScanCommitResult {
-  const out = row.outcome === 'remove_stock'
+  // WHICH WAY THE STOCK WENT, and both outcomes that take it out have to be
+  // named. 'so_line' was missing, so replaying a sales-order scan — the ordinary
+  // consequence of a dropped reply on a phone — told the picker their boxes had
+  // been scanned IN. On a bench where the same gun does receiving and picking,
+  // that is the sentence that sends somebody to look for stock they just packed.
+  const out = row.outcome === 'remove_stock' || row.outcome === 'so_line'
   return {
     scanId: row.id,
     kind: row.outcome as ScanCommitKind,
