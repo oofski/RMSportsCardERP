@@ -525,6 +525,127 @@ void (async (): Promise<void> => {
   // A PDF begins %PDF-, and that is exactly what pdf.js checks first.
   ok(decoded.subarray(0, 5).toString('latin1') === '%PDF-', 'starting with a real PDF header')
 
+  // -------------------------------------------------------------------------
+  console.log('\n=== 12. changing a password ends every other session ===')
+  // -------------------------------------------------------------------------
+  // A SESSION PROVES SOMEBODY LOGGED IN ONCE, not that they still know the
+  // password. So writing a new hash used to leave every existing token working —
+  // for up to thirty days — which is exactly backwards: the reason anybody
+  // changes a password in a hurry is that they believe somebody else has it, and
+  // the thief's tab kept answering. `revokeAllForEmployee` existed for this and
+  // had zero callers.
+  {
+    const OLD = 'bench-password'
+    const NEW = 'bench-password-two'
+
+    // Three tabs, all signed in as the same bench account.
+    const tabA = new Client(base)
+    const tabB = new Client(base)
+    const tabC = new Client(base)
+    for (const [name, tab] of [['A', tabA], ['B', tabB], ['C', tabC]] as const) {
+      const res = await tab.call('auth:login', [{ identifier: 'RM-BENCH', password: OLD }])
+      ok((res.body.data as { ok: boolean }).ok === true, `tab ${name} is signed in`)
+    }
+    ok((await tabB.call('shipping:summary')).status === 200, 'and tab B is working')
+
+    const changed = await tabA.call('auth:change-password', [
+      { currentPassword: OLD, newPassword: NEW }
+    ])
+    ok((changed.body.data as { ok: boolean }).ok === true, 'tab A changes the password')
+
+    // THE ASSERTION THIS SECTION EXISTS FOR.
+    const bAfter = await tabB.call('shipping:summary')
+    const cAfter = await tabC.call('shipping:summary')
+    ok(bAfter.status === 401, 'TAB B IS SIGNED OUT — its token was issued against the old password', String(bAfter.status))
+    ok(cAfter.status === 401, 'and so is tab C', String(cAfter.status))
+
+    // And the one that did the changing is NOT thrown out mid-gesture.
+    const aAfter = await tabA.call('shipping:summary')
+    ok(aAfter.status === 200, 'while tab A carries on — the session that changed it is spared', String(aAfter.status))
+
+    // The new password is the one that works now.
+    const oldPw = new Client(base)
+    await oldPw.call('auth:login', [{ identifier: 'RM-BENCH', password: OLD }])
+    ok(oldPw.cookie === null, 'the old password no longer signs anybody in')
+    const newPw = new Client(base)
+    const withNew = await newPw.call('auth:login', [{ identifier: 'RM-BENCH', password: NEW }])
+    ok((withNew.body.data as { ok: boolean }).ok === true, 'and the new one does')
+
+    // An ADMINISTRATOR resetting somebody else's password spares nothing: they
+    // are a different person, so there is no session of theirs to keep, and the
+    // case it exists for is an account believed compromised.
+    ok((await newPw.call('shipping:summary')).status === 200, 'the bench is working again')
+    // `owner` was deliberately signed out in section 9, so this needs its own
+    // session — and getting one is itself worth asserting, since the change
+    // above must not have touched an account it was not about.
+    const admin = new Client(base)
+    await admin.call('auth:login', [
+      { identifier: 'RM-OWNER', password: 'a-long-enough-password' }
+    ])
+    ok(admin.cookie !== null, 'the owner signs in, unaffected by somebody else’s change')
+    const benchId = (hire.body.data as { data: { employee: { id: string } } }).data.employee.id
+    const reset = await admin.call('employees:reset-password', [{ id: benchId }])
+    ok((reset.body.data as { ok: boolean }).ok === true, 'an owner can reset the bench password', JSON.stringify(reset.body.data))
+    const afterReset = await newPw.call('shipping:summary')
+    ok(afterReset.status === 401, 'AND EVERY SESSION OF THE RESET ACCOUNT IS DEAD', String(afterReset.status))
+    // The administrator running the reset is untouched.
+    ok((await admin.call('inventory:stats')).status === 200, 'while the administrator stays signed in')
+  }
+
+  // -------------------------------------------------------------------------
+  console.log('\n=== 13. the login throttle cannot be spent with a header ===')
+  // -------------------------------------------------------------------------
+  // PROXIES APPEND. `x-forwarded-for: 1.2.3.4, 203.0.113.9` means the CLIENT
+  // wrote 1.2.3.4 and the hop we trust wrote 203.0.113.9 — so reading the FIRST
+  // entry, which is what this did, handed the caller its own identity. Every
+  // request could claim a new address, so the per-client bucket never filled and
+  // the throttle that exists to stop password guessing did nothing.
+  //
+  // The identifier is varied on every attempt as well, so the per-ACCOUNT bucket
+  // cannot be what stops it. Only reading the last entry can.
+  {
+    const { resetRateLimits } = require('../src/server/rateLimit')
+    resetRateLimits()
+    process.env.RMOPS_TRUST_PROXY = '1'
+
+    const guess = async (n: number): Promise<number> => {
+      const res = await fetch(`${base}/api/call/${encodeURIComponent('auth:login')}`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-rmops-request': '1',
+          // A different claimed address every time, and the same real one.
+          'x-forwarded-for': `10.0.0.${n}, 203.0.113.9`
+        },
+        body: JSON.stringify({ args: [{ identifier: `RM-NOBODY-${n}`, password: 'wrong' }] })
+      })
+      return res.status
+    }
+
+    let throttled = 0
+    for (let i = 1; i <= 14; i++) {
+      if ((await guess(i)) === 429) throttled++
+    }
+    ok(throttled > 0, 'FOURTEEN GUESSES BEHIND FOURTEEN FORGED ADDRESSES ARE THROTTLED', String(throttled))
+    ok(throttled === 4, 'and exactly the four past the limit of ten', String(throttled))
+
+    // A genuinely different last hop is a genuinely different client, and is not
+    // punished for the one above.
+    const other = await fetch(`${base}/api/call/${encodeURIComponent('auth:login')}`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-rmops-request': '1',
+        'x-forwarded-for': '10.0.0.1, 198.51.100.4'
+      },
+      body: JSON.stringify({ args: [{ identifier: 'RM-OWNER', password: 'wrong' }] })
+    })
+    ok(other.status !== 429, 'a different real client still gets its own allowance', String(other.status))
+
+    resetRateLimits()
+    delete process.env.RMOPS_TRUST_PROXY
+  }
+
   server.close()
   console.log(`\n${pass} passed, ${fail} failed\n`)
   process.exit(fail === 0 ? 0 : 1)

@@ -1,7 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { getDb } from '../main/db/database'
 import { login as verifyCredentials } from '../main/services/auth'
-import { getEmployeeById } from '../main/db/employees'
+import { getEmployeeById, revokeSessionsForEmployee } from '../main/db/employees'
 import type { AuthResult } from '@shared/types'
 
 /**
@@ -124,9 +124,23 @@ export function signOut(token: string | null | undefined): void {
   if (token) revokeByHash(hashToken(token))
 }
 
-/** Sign a person out everywhere — used when an account is disabled. */
+/**
+ * Sign a person out everywhere — used when an account is disabled.
+ *
+ * Delegates rather than repeating the DELETE, because the other caller is the
+ * one that matters: `setChosenPassword` and `setTemporaryPassword` revoke from
+ * inside the write that changes the credential, so a new password path cannot be
+ * added without the revocation coming with it. Two copies of this statement is
+ * how it came to have no callers at all.
+ */
 export function revokeAllForEmployee(employeeId: string): number {
-  return getDb().prepare('DELETE FROM server_sessions WHERE employee_id = ?').run(employeeId).changes
+  return revokeSessionsForEmployee(employeeId, null)
+}
+
+/** The stored form of a token, for callers that need to name a session without
+ *  holding the credential. */
+export function tokenHash(token: string | null | undefined): string | null {
+  return token ? hashToken(token) : null
 }
 
 /** Drop expired rows. Cheap, and called on a timer so the table cannot grow

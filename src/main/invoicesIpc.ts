@@ -20,6 +20,7 @@ import type {
 import { invoicesToCsv, nextStageFromQbo } from '@shared/invoices'
 import { currentUser } from './services/auth'
 import {
+  claimPushSlot,
   deleteInvoice,
   getInvoice,
   getInvoices,
@@ -30,7 +31,6 @@ import {
   listPostedInvoices,
   markPosted,
   markPushFailed,
-  markPushPending,
   recordQboObservation,
   recordQboStatusFailure,
   removeCustomer,
@@ -102,6 +102,27 @@ function str(v: unknown): string {
 }
 
 /**
+ * Invoices this process is posting RIGHT NOW.
+ *
+ * The other half of the duplicate-post guard, and the half that catches the case
+ * that actually happens: two calls arriving while the first is still in the air.
+ * `claimPushSlot` cannot see that one — the winning push does not write its
+ * QuickBooks id until the reply comes back, so for the two or three seconds the
+ * HTTP call is outstanding the row still looks unposted to anybody who asks.
+ *
+ * A Set in module scope is enough because there is exactly one process. The
+ * desktop app has one main process; the web build has one Node server that every
+ * browser talks to. Two tabs, two operators and a double-clicked button all
+ * arrive here as overlapping calls in the SAME event loop, and a synchronous
+ * check-then-add in a single-threaded runtime cannot interleave.
+ *
+ * It is deliberately not persisted. A crash empties it, which is right: after a
+ * restart nothing is in flight, and the 'pending' row left behind is the durable
+ * record that a human should look before pushing again.
+ */
+const pushesInFlight = new Set<string>()
+
+/**
  * Put a saved invoice into QuickBooks, recording how it went either way.
  *
  * ## The local row is never harmed by a remote failure
@@ -111,6 +132,24 @@ function str(v: unknown): string {
  * and touches nothing else. So the worst outcome of a dead network, an expired
  * grant, a missing item or an Intuit outage is an invoice sitting in draft with
  * a sentence saying why, which is a thing somebody can retry.
+ *
+ * ## It posts once, and that takes TWO guards
+ *
+ * Creating the same invoice twice in a real company's books is the worst thing
+ * in this file — it doubles revenue, doubles what a buyer is asked for, and is
+ * cleaned up by hand in QuickBooks rather than here. `invoice.qboId` alone never
+ * prevented it: it is read off a snapshot taken before an `await`, so two
+ * overlapping calls both read "not posted yet" and both post.
+ *
+ * So the two windows are closed separately, because they are different windows:
+ *
+ *   · ALREADY LANDED — `claimPushSlot` asks and acts in one atomic statement.
+ *     The second caller loses the UPDATE and is told the invoice is already
+ *     there. This is what catches a stale board, a retry from a page that has
+ *     not reloaded, and any path that reaches here with an old snapshot.
+ *   · STILL IN THE AIR — the in-flight set. The window between the request
+ *     leaving and the id coming back is invisible to the database, and it is
+ *     precisely the window a double-click lands in.
  *
  * ## Why 'pending' is stamped BEFORE the call
  *
@@ -135,9 +174,32 @@ async function pushToQbo(invoice: InvoiceDetail, open: boolean): Promise<Invoice
   if (invoice.qboId) {
     return { ...base, error: 'That invoice is already in QuickBooks.' }
   }
+  if (pushesInFlight.has(invoice.id)) {
+    return {
+      ...base,
+      error: 'That invoice is already on its way to QuickBooks. Give it a moment.'
+    }
+  }
 
-  markPushPending(invoice.id)
+  // Held from here to the `finally`. Nothing between this line and the claim may
+  // await, or the pair stops being one indivisible step and the guard is worth
+  // nothing.
+  pushesInFlight.add(invoice.id)
   try {
+    if (!claimPushSlot(invoice.id)) {
+      // Lost the claim: between the read that produced `invoice` and this line,
+      // something else posted it, voided it or deleted it. Re-read so the screen
+      // shows what is actually true rather than the stale copy it asked with.
+      const now = getInvoice(invoice.id)
+      return {
+        ...base,
+        invoice: now ?? invoice,
+        error: now?.qboId
+          ? 'That invoice is already in QuickBooks.'
+          : 'That invoice can no longer be sent to QuickBooks.'
+      }
+    }
+
     const res = await createQboInvoice(invoice)
     markPosted(invoice.id, { id: res.qboId, docNumber: res.docNumber }, 'created')
 
@@ -178,6 +240,8 @@ async function pushToQbo(invoice: InvoiceDetail, open: boolean): Promise<Invoice
     const message = err instanceof Error ? err.message : String(err)
     markPushFailed(invoice.id, message)
     return { ...base, invoice: getInvoice(invoice.id) ?? invoice, error: message }
+  } finally {
+    pushesInFlight.delete(invoice.id)
   }
 }
 

@@ -1,6 +1,6 @@
 {
   "name": "rm-operations-app",
-  "version": "0.0.178",
+  "version": "0.0.179",
   "description": "RM Operations App — the internal operations platform for RM Cardz.",
   "author": {
     "name": "RM Cardz"
@@ -27,7 +27,7 @@
     "web": "npm run build && npm run build:server && node out/server/index.cjs",
     "test:parser": "esbuild tests/shippingParser.test.ts --bundle --platform=node --format=cjs --alias:@shared=./src/shared --outfile=out/tests/shippingParser.cjs --log-level=warning && node out/tests/shippingParser.cjs",
     "test:labels": "node tests/build.mjs tests/shippingLabels.test.ts out/tests/shippingLabels.cjs && node out/tests/shippingLabels.cjs",
-    "test": "npm run test:parser && npm run test:labels && npm run test:board && npm run test:supplies && npm run test:pnl && npm run test:fees-sync && npm run test:fees && npm run test:marketplace && npm run test:owner && npm run test:stations && npm run test:catalog && npm run test:shipping-role && npm run test:reset && npm run test:import-delete && npm run test:stream-reconcile && npm run test:business-time && npm run test:valuation && npm run test:cost-lots && npm run test:recovery && npm run test:portal && npm run test:push && npm run test:reminders && npm run test:packaging && npm run test:doc-sync && npm run test:home-tasks && npm run test:staff-board && npm run test:invoices && npm run test:contacts && npm run test:vendors && npm run test:freight && npm run test:bench && npm run test:tracking && npm run test:qbo-setup && npm run test:qbo-relay && npm run test:qbo-readiness && npm run test:server-pdf && npm run test:break-pnl && npm run test:performance && npm run test:work-log && npm run test:mobile && npm run test:offers && npm run test:identifiers && npm run test:receiving && npm run test:dropship && npm run test:po-paid && npm run test:pick-vs-bag && npm run test:scanning && npm run test:breaker && npm run test:catalog-v4 && npm run test:web",
+    "test": "npm run test:parser && npm run test:labels && npm run test:board && npm run test:supplies && npm run test:pnl && npm run test:fees-sync && npm run test:fees && npm run test:marketplace && npm run test:owner && npm run test:stations && npm run test:catalog && npm run test:shipping-role && npm run test:reset && npm run test:import-delete && npm run test:stream-reconcile && npm run test:business-time && npm run test:valuation && npm run test:cost-lots && npm run test:recovery && npm run test:portal && npm run test:push && npm run test:reminders && npm run test:packaging && npm run test:doc-sync && npm run test:home-tasks && npm run test:staff-board && npm run test:invoices && npm run test:contacts && npm run test:vendors && npm run test:freight && npm run test:bench && npm run test:tracking && npm run test:qbo-setup && npm run test:qbo-relay && npm run test:qbo-readiness && npm run test:qbo-duplicate && npm run test:product-merge && npm run test:server-pdf && npm run test:break-pnl && npm run test:performance && npm run test:work-log && npm run test:mobile && npm run test:offers && npm run test:identifiers && npm run test:receiving && npm run test:dropship && npm run test:po-paid && npm run test:pick-vs-bag && npm run test:scanning && npm run test:breaker && npm run test:catalog-v4 && npm run test:web",
     "test:board": "node tests/build.mjs tests/shippingBoard.test.ts out/tests/shippingBoard.cjs && node out/tests/shippingBoard.cjs",
     "test:supplies": "esbuild tests/shippingSupplies.test.ts --bundle --platform=node --format=cjs --outfile=out/tests/shippingSupplies.cjs --log-level=warning && node out/tests/shippingSupplies.cjs",
     "test:pnl": "node tests/build.mjs tests/pnlPacking.test.ts out/tests/pnlPacking.cjs && node out/tests/pnlPacking.cjs",
@@ -62,6 +62,8 @@
     "test:qbo-relay": "node tests/build.mjs tests/quickbooksRelay.test.ts out/tests/qboRelay.cjs && node out/tests/qboRelay.cjs",
     "test:server-pdf": "node tests/build.mjs tests/serverPdf.test.ts out/tests/serverPdf.cjs && node out/tests/serverPdf.cjs && RMOPS_TEST_NO_BROWSER=1 node out/tests/serverPdf.cjs",
     "test:qbo-readiness": "node tests/build.mjs tests/qboReadiness.test.ts out/tests/qboReadiness.cjs && node out/tests/qboReadiness.cjs",
+    "test:qbo-duplicate": "node tests/build.mjs tests/qboDuplicatePost.test.ts out/tests/qboDuplicatePost.cjs && node out/tests/qboDuplicatePost.cjs",
+    "test:product-merge": "node tests/build.mjs tests/productMerge.test.ts out/tests/productMerge.cjs && node out/tests/productMerge.cjs",
     "test:tracking": "node tests/build.mjs tests/tracking.test.ts out/tests/tracking.cjs && node out/tests/tracking.cjs",
     "test:freight": "node tests/build.mjs tests/freight.test.ts out/tests/freight.cjs && node out/tests/freight.cjs",
     "test:doc-sync": "node tests/build.mjs tests/shipDocumentSync.test.ts out/tests/shipDocumentSync.cjs && node out/tests/shipDocumentSync.cjs",

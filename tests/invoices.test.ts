@@ -901,7 +901,7 @@ const pushMe = repo.saveInvoice(
 ok(pushMe.qboPushState === 'none', 'a fresh invoice has never been pushed', pushMe.qboPushState)
 ok(pushMe.qboPushAttempts === 0, 'and has no attempts')
 
-repo.markPushPending(pushMe.id)
+ok(repo.claimPushSlot(pushMe.id) === true, 'the push slot is there to be claimed')
 const pending = repo.getInvoice(pushMe.id)
 // PENDING IS STAMPED BEFORE THE CALL, on purpose. A process killed mid-flight
 // leaves a row saying "this may be in QuickBooks", which is what makes somebody

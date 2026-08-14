@@ -681,7 +681,26 @@ export function createPurchaseOrder(
     recordPoCogs(db, { poId: id, poNumber, amount: total, occurredAt: ts, note: `Purchase order ${poNumber}` })
     return id
   })
-  const id = create()
+
+  // RETRY THE NUMBER, NOT THE ORDER. `nextPoNumber` reads the table, so the only
+  // way to land on a taken number is for one to arrive between the read and the
+  // insert — a sync applying in another tick, or a second process on the same
+  // file. Each attempt runs in its own transaction and allocates afresh, so the
+  // retry picks up whatever just landed. Three is generous: two writers colliding
+  // three times in a row is not a thing that happens, and an unbounded loop
+  // against a genuinely broken table would hang the app instead of reporting.
+  let id: string | null = null
+  let lastErr: unknown = null
+  for (let attempt = 0; attempt < 3 && id === null; attempt++) {
+    try {
+      id = create()
+    } catch (err) {
+      lastErr = err
+      const message = err instanceof Error ? err.message : String(err)
+      if (!/UNIQUE constraint failed: purchase_orders\.po_number/i.test(message)) throw err
+    }
+  }
+  if (id === null) throw lastErr instanceof Error ? lastErr : new Error(String(lastErr))
   return getPurchaseOrder(id) as PurchaseOrderDetail
 }
 
@@ -2078,10 +2097,48 @@ export function forceDeletePurchaseOrder(
   }
 }
 
-/** Read + increment the shared PO sequence counter, returning "PO-0001" etc.
- * Called inside the create transaction so the bump + insert commit atomically. */
-function nextPoNumber(db: Database.Database): string {
-  const seq = Number(getMeta(db, 'po_seq') ?? '0') + 1
+/**
+ * The next free purchase-order number — "PO-0001", "PO-0002", …
+ *
+ * Called inside the create transaction so the bump and the insert commit
+ * together.
+ *
+ * ## Why it reads the TABLE and not just the counter
+ *
+ * The counter lives in `meta`, and `meta` is deliberately not synced (see the
+ * manifest in syncTables.ts): it holds this machine's own settings, its
+ * QuickBooks tokens, its schema version. So a counter is a PER-MACHINE fact,
+ * and two machines raising an order on the same afternoon both minted PO-0007.
+ *
+ * That is not a cosmetic clash. `purchase_orders.po_number` is UNIQUE, so when
+ * the second PO-0007 arrived over sync it hit a constraint the upsert has no
+ * ON CONFLICT clause for, the whole batch failed, the row-by-row retry failed
+ * too, and the order was QUARANTINED — invisible on the receiving machine, with
+ * its lines orphaned behind it. A purchase order that silently does not exist on
+ * one of two machines is money nobody can see.
+ *
+ * Taking the greater of the counter and the highest number actually on the table
+ * closes the ordinary case completely: a machine that has pulled somebody else's
+ * PO-0007 allocates PO-0008 next, without needing to be told. What it cannot fix
+ * is two machines BOTH offline, which is why sync now settles a genuine clash
+ * rather than quarantining it — see RELABEL_ON_CONFLICT in sync.ts.
+ *
+ * The counter is still the floor, so a run of deleted orders does not hand the
+ * same number out twice.
+ */
+export function nextPoNumber(db: Database.Database): string {
+  const fromCounter = Number(getMeta(db, 'po_seq') ?? '0') || 0
+  // GLOB rather than LIKE: LIKE is case-insensitive here and '[0-9]' is not a
+  // LIKE wildcard, so it would match any number-shaped string including ones
+  // this app never minted. CAST stops at the first non-digit and yields 0 for
+  // anything unparseable, which is the right answer for a hand-typed number.
+  const row = db
+    .prepare(
+      `SELECT MAX(CAST(SUBSTR(po_number, 4) AS INTEGER)) AS n
+         FROM purchase_orders WHERE po_number GLOB 'PO-[0-9]*'`
+    )
+    .get() as { n: number | null } | undefined
+  const seq = Math.max(fromCounter, Number(row?.n ?? 0) || 0) + 1
   setMeta(db, 'po_seq', String(seq))
   return 'PO-' + String(seq).padStart(4, '0')
 }

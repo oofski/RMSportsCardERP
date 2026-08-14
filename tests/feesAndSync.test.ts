@@ -499,5 +499,273 @@ ok(sync.stockDrift().length === 0, 'with nothing left disagreeing', JSON.stringi
 // A healthy database is left alone rather than churned.
 ok(sync.repairDerivedStock().changed === 0, 'a second run changes nothing')
 
+// ---------------------------------------------------------------------------
+console.log('\n=== C1. a UNIQUE column that is not the id ===')
+// ---------------------------------------------------------------------------
+// EVERY ONE OF THESE USED TO BE A ROW THAT VANISHED.
+//
+// The upsert says `ON CONFLICT (id)`. A row whose id is new but whose UNIQUE
+// column already belongs to somebody else raises a constraint that clause does
+// not cover, so the batch died, the row-by-row replay died, and the record went
+// to quarantine with the cursor already past it — present on one machine,
+// missing on the other, and nothing on either screen to say so.
+//
+// Two shapes, and they need OPPOSITE treatment. Conflating them is how a fix
+// here turns into data loss:
+//
+//   · The same real thing under two ids (a content hash, an idempotency token,
+//     a relationship). De-duplicate: one row survives.
+//   · The same LABEL on two different things (a PO number, a role). Keep BOTH:
+//     the loser is relabelled.
+const poRepo = require('../src/main/db/purchaseOrders')
+const db3 = getDb()
+const stamp = new Date().toISOString()
+
+// A product to hang orders off.
+sync.applyRows([incoming('inventory_products', 'prd_po', 40, productRow('prd_po', 'Order Fodder'))])
+
+// -- the allocator no longer mints a number the table already holds -----------
+// This is the source of the collision, and it is a per-machine counter in
+// `meta` — a table that is deliberately NOT synced. So laptop A and laptop B
+// both minted PO-0007 for two different orders.
+const mine = poRepo.createPurchaseOrder(
+  { supplier: 'Steel City', location: 'RM', lines: [{ productId: 'prd_po', quantity: 1, unitPrice: 10 }] },
+  null
+)
+ok(/^PO-\d{4}$/.test(mine.poNumber), 'a purchase order gets a numbered label', mine.poNumber)
+
+// Somebody else's order, numbered far ahead, lands over sync. The counter in
+// meta knows nothing about it.
+const peerNumber = 'PO-0900'
+const peerPo = { ...(db3.prepare('SELECT * FROM purchase_orders WHERE id = ?').get(mine.id) as any) }
+peerPo.id = 'po_from_peer'
+peerPo.po_number = peerNumber
+const landedPeer = sync.applyRows([
+  { kind: 'purchase_orders', id: peerPo.id, seq: 41, updated_at: stamp, deleted: 0, data: JSON.stringify(peerPo) }
+])
+ok(landedPeer.rejected === 0, 'a peer order with a free number just lands', JSON.stringify(landedPeer))
+
+const next = poRepo.createPurchaseOrder(
+  { supplier: 'Steel City', location: 'RM', lines: [{ productId: 'prd_po', quantity: 1, unitPrice: 10 }] },
+  null
+)
+ok(
+  next.poNumber === 'PO-0901',
+  'THE NEXT NUMBER COMES OFF THE TABLE, not off the unsynced counter',
+  next.poNumber
+)
+
+// -- a genuine clash: two machines, both offline, same number ----------------
+// Nothing can prevent this one. What matters is that both orders survive it.
+const clashing = { ...(db3.prepare('SELECT * FROM purchase_orders WHERE id = ?').get(next.id) as any) }
+// '0000…' sorts below every uuid: a uuid's first character is a hex digit, and
+// no uuid is four zeros followed by an underscore. Picking 'aaa…' here was the
+// mistake worth writing down — half of all uuids start with a DIGIT, which
+// sorts below 'a', so that id lost the comparison it was meant to win.
+clashing.id = '0000_incoming_wins'
+clashing.po_number = next.poNumber
+// Cleared so the assertion below measures what the APPLY queued, not the
+// capture trigger that fired when this machine created the order.
+db3.prepare(`DELETE FROM sync_outbox WHERE kind = 'purchase_orders'`).run()
+const settled = sync.applyRows([
+  { kind: 'purchase_orders', id: clashing.id, seq: 42, updated_at: stamp, deleted: 0, data: JSON.stringify(clashing) }
+])
+ok(settled.rejected === 0, 'A CLASHING PO NUMBER IS NOT QUARANTINED', JSON.stringify(settled))
+ok(settled.applied === 1, 'the incoming order lands', JSON.stringify(settled))
+const numbersNow = db3
+  .prepare(`SELECT id, po_number FROM purchase_orders WHERE id IN (?, ?)`)
+  .all(next.id, clashing.id) as Array<{ id: string; po_number: string }>
+ok(numbersNow.length === 2, 'BOTH ORDERS STILL EXIST — neither was deleted to settle a label')
+ok(
+  numbersNow.find((r) => r.id === clashing.id)?.po_number === 'PO-0901',
+  'the smaller id keeps the number',
+  JSON.stringify(numbersNow)
+)
+ok(
+  numbersNow.find((r) => r.id === next.id)?.po_number !== 'PO-0901',
+  'and the local one was renumbered rather than lost',
+  JSON.stringify(numbersNow)
+)
+ok(
+  (db3.prepare(`SELECT COUNT(*) AS n FROM sync_outbox WHERE kind = 'purchase_orders' AND id = ?`).get(next.id) as any).n === 1,
+  'the renumber is published, so everyone else converges on it'
+)
+
+// The other direction: the incoming row is the one with the larger id, so it
+// lands renumbered and this machine says NOTHING about it — the machine that
+// owns that order is reaching the same verdict and its version is the one that
+// counts.
+const keeper = db3.prepare('SELECT po_number FROM purchase_orders WHERE id = ?').get(next.id) as { po_number: string }
+const loser = { ...(db3.prepare('SELECT * FROM purchase_orders WHERE id = ?').get(next.id) as any) }
+loser.id = 'zzz_incoming_loses'
+loser.po_number = keeper.po_number
+db3.prepare(`DELETE FROM sync_outbox WHERE kind = 'purchase_orders'`).run()
+const settled2 = sync.applyRows([
+  { kind: 'purchase_orders', id: loser.id, seq: 43, updated_at: stamp, deleted: 0, data: JSON.stringify(loser) }
+])
+ok(settled2.rejected === 0, 'the mirror case is not quarantined either', JSON.stringify(settled2))
+ok(
+  (db3.prepare('SELECT po_number FROM purchase_orders WHERE id = ?').get(next.id) as any).po_number === keeper.po_number,
+  'the local order keeps its number'
+)
+const landedLoser = db3.prepare('SELECT po_number FROM purchase_orders WHERE id = ?').get(loser.id) as { po_number: string }
+ok(!!landedLoser, 'and the incoming order still landed')
+ok(landedLoser.po_number !== keeper.po_number, 'under a number of its own', landedLoser?.po_number)
+ok(
+  (db3.prepare(`SELECT COUNT(*) AS n FROM sync_outbox WHERE kind = 'purchase_orders' AND id = ?`).get(loser.id) as any).n === 0,
+  'and this machine does not publish a guess about somebody else’s order'
+)
+
+// ---------------------------------------------------------------------------
+console.log('\n=== C2. the same real thing under two ids ===')
+// ---------------------------------------------------------------------------
+// The opposite treatment, on tables where the UNIQUE column says what the row
+// IS rather than what it is called.
+
+// A ledger fingerprint is a content hash of one line of a Whatnot export. Two
+// machines importing the same file both insert it. It is ONE sale, and counting
+// it twice is a wrong revenue figure.
+const importRow = {
+  id: 'imp_c2',
+  filename: 'invented-export.csv',
+  rows_parsed: 1,
+  rows_imported: 1,
+  rows_duplicate: 0,
+  rows_repaired: 0,
+  rows_quarantined: 0,
+  first_occurred_at: stamp,
+  last_occurred_at: stamp,
+  warnings_json: '[]',
+  created_at: stamp,
+  created_by: null
+}
+sync.applyRows([
+  { kind: 'ledger_imports', id: importRow.id, seq: 50, updated_at: stamp, deleted: 0, data: JSON.stringify(importRow) }
+])
+const ledgerRow = (id: string): Record<string, unknown> => ({
+  id,
+  import_id: 'imp_c2',
+  occurred_at: stamp,
+  amount: 25,
+  order_id: 'ord-invented-1',
+  listing_id: null,
+  message: 'One pack',
+  txn_type: 'sale',
+  bucket: 'sales',
+  session_id: null,
+  stream_date: '2026-08-09',
+  attribution: 'unattributed',
+  break_number: null,
+  fingerprint: 'fp-invented-0001',
+  repaired: 0,
+  classifier_version: 1,
+  created_at: stamp
+})
+const first = sync.applyRows([
+  { kind: 'ledger_rows', id: 'zzz_local_ledger', seq: 51, updated_at: stamp, deleted: 0, data: JSON.stringify(ledgerRow('zzz_local_ledger')) }
+])
+ok(first.rejected === 0, 'the first copy of a sale lands', JSON.stringify(first))
+const second = sync.applyRows([
+  { kind: 'ledger_rows', id: 'aaa_peer_ledger', seq: 52, updated_at: stamp, deleted: 0, data: JSON.stringify(ledgerRow('aaa_peer_ledger')) }
+])
+ok(second.rejected === 0, 'THE SAME SALE FROM ANOTHER MACHINE IS NOT QUARANTINED', JSON.stringify(second))
+ok(second.duplicates === 1, 'it is recognised as a duplicate', JSON.stringify(second))
+ok(
+  (db3.prepare(`SELECT COUNT(*) AS n FROM ledger_rows WHERE fingerprint = 'fp-invented-0001'`).get() as any).n === 1,
+  'and the sale is counted exactly once'
+)
+
+// The QuickBooks push log. This table IS the double-post defence, so a row of it
+// going to quarantine means the app forgets it has already sent somebody a bill.
+const qboRow = (id: string): Record<string, unknown> => ({
+  id,
+  entity: 'purchase_order',
+  local_id: 'po_shared',
+  realm_id: '46200000000',
+  qbo_type: 'Bill',
+  qbo_id: '77',
+  doc_number: '1041',
+  amount: 250,
+  status: 'ok',
+  error: null,
+  payload_hash: null,
+  created_at: stamp,
+  updated_at: stamp,
+  synced_at: stamp
+})
+sync.applyRows([
+  { kind: 'qbo_sync_log', id: 'zzz_local_qbo', seq: 53, updated_at: stamp, deleted: 0, data: JSON.stringify(qboRow('zzz_local_qbo')) }
+])
+const qboSecond = sync.applyRows([
+  { kind: 'qbo_sync_log', id: 'aaa_peer_qbo', seq: 54, updated_at: stamp, deleted: 0, data: JSON.stringify(qboRow('aaa_peer_qbo')) }
+])
+ok(qboSecond.rejected === 0, 'a push log row from another machine is not quarantined', JSON.stringify(qboSecond))
+ok(
+  (db3.prepare(`SELECT COUNT(*) AS n FROM qbo_sync_log WHERE local_id = 'po_shared'`).get() as any).n === 1,
+  'and one push is recorded once, so the double-post guard still works'
+)
+
+// A COMPOSITE key matches on ALL of its columns, and only all of them. Two
+// benches assigning two DIFFERENT packers to the same break share half the key
+// and are not the same assignment; de-duplicating on the half they share would
+// throw one of the two people off the break.
+const assign = (id: string, employee: string): Record<string, unknown> => ({
+  id,
+  break_id: 'brk_c2',
+  break_number: 4,
+  employee_id: employee,
+  assigned_at: stamp,
+  assigned_by: null,
+  note: null
+})
+const twoPeople = sync.applyRows([
+  { kind: 'ship_break_assignments', id: 'zzz_a', seq: 55, updated_at: stamp, deleted: 0, data: JSON.stringify(assign('zzz_a', 'emp_one')) },
+  { kind: 'ship_break_assignments', id: 'aaa_b', seq: 56, updated_at: stamp, deleted: 0, data: JSON.stringify(assign('aaa_b', 'emp_two')) }
+])
+ok(twoPeople.rejected === 0, 'two people on one break both land', JSON.stringify(twoPeople))
+ok(
+  (db3.prepare(`SELECT COUNT(*) AS n FROM ship_break_assignments WHERE break_id = 'brk_c2'`).get() as any).n === 2,
+  'and both stay on it — half a composite key is not the key'
+)
+
+// The same person, assigned on two benches at once. NOW it is one assignment.
+const samePerson = sync.applyRows([
+  { kind: 'ship_break_assignments', id: 'aaa_dup', seq: 57, updated_at: stamp, deleted: 0, data: JSON.stringify(assign('aaa_dup', 'emp_one')) }
+])
+ok(samePerson.rejected === 0, 'the same person assigned twice is not quarantined', JSON.stringify(samePerson))
+ok(
+  (db3.prepare(`SELECT COUNT(*) AS n FROM ship_break_assignments WHERE break_id = 'brk_c2' AND employee_id = 'emp_one'`).get() as any).n === 1,
+  'and appears on the card once'
+)
+
+// ---------------------------------------------------------------------------
+console.log('\n=== C3. a role only one supply can hold ===')
+// ---------------------------------------------------------------------------
+// Only one supply is "the team bags". Two machines naming different boxes for
+// the role is a real disagreement — and the answer is to take the ROLE off the
+// loser, never the supply: that box is stock with a count on it.
+db3.prepare(`UPDATE supplies SET ship_role = 'team_bag' WHERE id = ?`).run(fresh.id)
+const rival = { ...(db3.prepare('SELECT * FROM supplies WHERE id = ?').get(fresh.id) as any) }
+rival.id = 'aaa_rival_bag'
+rival.name = 'Rival team bags'
+rival.ship_role = 'team_bag'
+const roleResult = sync.applyRows([
+  { kind: 'supplies', id: rival.id, seq: 60, updated_at: stamp, deleted: 0, data: JSON.stringify(rival) }
+])
+ok(roleResult.rejected === 0, 'a rival claim on the role is not quarantined', JSON.stringify(roleResult))
+ok(
+  (db3.prepare(`SELECT COUNT(*) AS n FROM supplies WHERE id IN (?, ?)`).get(fresh.id, rival.id) as any).n === 2,
+  'BOTH SUPPLIES SURVIVE — a label dispute never deletes stock'
+)
+ok(
+  (db3.prepare(`SELECT COUNT(*) AS n FROM supplies WHERE ship_role = 'team_bag'`).get() as any).n === 1,
+  'and exactly one of them holds the role'
+)
+ok(
+  (db3.prepare('SELECT ship_role AS r FROM supplies WHERE id = ?').get(rival.id) as any).r === 'team_bag',
+  'the smaller id keeps it, the same rule as everywhere else'
+)
+
+
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

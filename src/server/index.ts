@@ -39,7 +39,8 @@ import {
   purgeExpiredSessions,
   resolveSession,
   signIn,
-  signOut
+  signOut,
+  tokenHash
 } from './sessions'
 
 /**
@@ -367,7 +368,9 @@ function isSecureRequest(req: IncomingMessage): boolean {
   // unauthenticated oversized POST killed the whole server, repeatably.
   if ((req.socket as { encrypted?: boolean } | null)?.encrypted === true) return true
   if (!trustsProxy()) return false
-  return String(req.headers['x-forwarded-proto'] ?? '').split(',')[0].trim() === 'https'
+  // The LAST entry, for the same reason clientAddress reads the last one — see
+  // forwardedLast. The first is whatever the caller typed.
+  return forwardedLast(req, 'x-forwarded-proto') === 'https'
 }
 
 function send(
@@ -432,13 +435,39 @@ function tokenFrom(req: IncomingMessage): string | null {
   return cookieFrom(req, SESSION_COOKIE) ?? bearerFrom(req)
 }
 
+/**
+ * The LAST value in an `x-forwarded-*` header, which is the only one we know.
+ *
+ * Proxies APPEND. So a header arriving as `1.2.3.4, 203.0.113.9` means "the
+ * client claimed 1.2.3.4, and the hop we trust actually saw 203.0.113.9" — the
+ * first entry is written by whoever is calling and the last is written by the
+ * proxy in front of us.
+ *
+ * Reading the FIRST entry therefore handed the client control of its own
+ * identity. `x-forwarded-for: <anything>` made every request look like a
+ * different address, so the login throttle — which is keyed on this — could be
+ * spent an unlimited number of times from one machine, which is the entire
+ * defence against guessing a password. The same header decided whether HSTS was
+ * sent, so a forged `x-forwarded-proto: http` also suppressed that.
+ *
+ * Only the last hop is trustworthy, and only when `trustsProxy()` says something
+ * is in front of us at all. Anything further left is a claim, not a fact.
+ */
+function forwardedLast(req: IncomingMessage, header: string): string {
+  const parts = String(req.headers[header] ?? '')
+    .split(',')
+    .map((p) => p.trim())
+    .filter(Boolean)
+  return parts.length > 0 ? parts[parts.length - 1] : ''
+}
+
 /** Who the request appears to come from, for throttling. */
 function clientAddress(req: IncomingMessage): string {
   if (trustsProxy()) {
-    const forwarded = String(req.headers['x-forwarded-for'] ?? '').split(',')[0].trim()
+    const forwarded = forwardedLast(req, 'x-forwarded-for')
     if (forwarded) return forwarded
   }
-  return req.socket.remoteAddress || 'unknown'
+  return req.socket?.remoteAddress || 'unknown'
 }
 
 // ---------------------------------------------------------------------------
@@ -728,8 +757,16 @@ async function handleCall(
     // runAs is what makes ten simultaneous callers safe: everything the handler
     // touches, at any depth and across any await, sees THIS user.
     const { value, actions } = await collectClientActions(async () =>
-      runAs({ userId: employeeId, origin: 'http', stationId: readStationId(req) }, () =>
-        invokeHandler(channel, args)
+      runAs(
+        {
+          userId: employeeId,
+          origin: 'http',
+          stationId: readStationId(req),
+          // Which session is asking. Read by the password-change path so it can
+          // sign out every OTHER browser without signing out this one.
+          sessionTokenHash: tokenHash(tokenFrom(req))
+        },
+        () => invokeHandler(channel, args)
       )
     )
 

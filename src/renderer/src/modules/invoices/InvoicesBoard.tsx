@@ -387,17 +387,30 @@ export function InvoicesBoard({
                       }}
                       onMove={(to) => void move(inv, to)}
                       onRetryPush={async () => {
-                        const res = await api.invoices.retryQboPush(inv.id)
-                        if (!res.ok || !res.data) {
-                          toast.error(res.error ?? 'Could not reach QuickBooks.')
-                          return
+                        // BUSY, LIKE EVERY OTHER ACTION ON THIS CARD. This one
+                        // was the exception, and it is the one action that
+                        // WRITES TO SOMEBODY'S BOOKS: a second click while the
+                        // first push was still in the air sent a second invoice.
+                        // The main process refuses the duplicate now, but a
+                        // button that stays live during a three-second network
+                        // call still invites the click.
+                        if (busy) return
+                        setBusy(inv.id)
+                        try {
+                          const res = await api.invoices.retryQboPush(inv.id)
+                          if (!res.ok || !res.data) {
+                            toast.error(res.error ?? 'Could not reach QuickBooks.')
+                            return
+                          }
+                          if (!res.data.pushed) {
+                            toast.error(res.data.error ?? 'QuickBooks refused it again.')
+                          } else {
+                            toast.success(`Now in QuickBooks as invoice ${res.data.docNumber}.`)
+                          }
+                          await load()
+                        } finally {
+                          setBusy(null)
                         }
-                        if (!res.data.pushed) {
-                          toast.error(res.data.error ?? 'QuickBooks refused it again.')
-                        } else {
-                          toast.success(`Now in QuickBooks as invoice ${res.data.docNumber}.`)
-                        }
-                        await load()
                       }}
                       onDelete={() => setDeleting(inv)}
                       onPdf={() => void api.invoices.openPdf(inv.id)}

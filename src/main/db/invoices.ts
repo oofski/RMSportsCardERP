@@ -832,29 +832,60 @@ export function markPosted(
 }
 
 /**
- * About to try. Stamped BEFORE the network call, and that ordering is the point.
+ * Take the right to push this invoice, or report that somebody else has it.
  *
- * A process killed between the request leaving and the reply arriving leaves a
- * row reading 'pending', which says "this may be in QuickBooks" — the state that
- * makes somebody check before pushing again. Written after the call it would
- * read 'none', and "never tried" is the one claim that leads straight to a
- * duplicate invoice in a real company's books.
+ * ## Why this is a claim and not a stamp
  *
- * The attempt COUNTER climbs here rather than on failure for the same reason: an
- * attempt that vanished mid-flight still happened.
+ * It used to be `markPushPending` — an unconditional UPDATE — and the only thing
+ * standing between an invoice and TWO copies of it in a real company's books was
+ * the caller reading `invoice.qboId` off a snapshot taken before an `await`. Two
+ * overlapping pushes both read that snapshot, both saw no id, and both posted.
+ * A double-clicked Retry button was enough; two browser tabs on the web build
+ * were certain.
+ *
+ * The WHERE clause is the fix, and it is the fix because SQLite applies it and
+ * reports the row count atomically. The caller no longer asks "is this already
+ * posted?" and then acts on the answer — the question and the act are one
+ * statement, so the second caller loses and is told it lost.
+ *
+ * Returns false when the row is gone, already carries a QuickBooks id, or has
+ * been voided. All three mean "do not post this", which is the only answer the
+ * caller needs.
+ *
+ * ## What it deliberately does NOT refuse
+ *
+ * A row already reading 'pending'. That state survives a process killed
+ * mid-flight and is the flag that says "this may be in QuickBooks" — the whole
+ * reason `listInvoicesNeedingPush` includes it. Refusing here would make a
+ * crashed push unretryable for ever. Concurrency inside one process is held off
+ * by the in-flight set in invoicesIpc, which is where "right now" is knowable;
+ * this statement is what stops a push against a row that has ALREADY landed.
+ *
+ * ## The ordering that has not changed
+ *
+ * 'pending' is still written BEFORE the network call. A process killed between
+ * the request leaving and the reply arriving leaves a row saying "this may be in
+ * QuickBooks", which is what makes somebody look before pushing again. Written
+ * after the call it would read 'none' — "never tried" — and that claim leads
+ * straight to the duplicate. The attempt COUNTER climbs here rather than on
+ * failure for the same reason: an attempt that vanished mid-flight still
+ * happened.
  */
-export function markPushPending(id: string): void {
+export function claimPushSlot(id: string): boolean {
   const stamp = nowIso()
-  getDb()
+  const res = getDb()
     .prepare(
       `UPDATE invoices
           SET qbo_push_state = 'pending',
               qbo_push_attempted_at = ?,
               qbo_push_attempts = COALESCE(qbo_push_attempts, 0) + 1,
               updated_at = ?
-        WHERE id = ?`
+        WHERE id = ?
+          AND (qbo_id IS NULL OR qbo_id = '')
+          AND status != 'void'`
     )
     .run(stamp, stamp, id)
+  return res.changes === 1
 }
 
 /**

@@ -18,6 +18,7 @@ import {
 } from '@shared/portalPin'
 import { getDb } from './database'
 import { deleteImageFile, imageDataUrl, importImage, type ImageSource } from '../services/media'
+import { currentContext } from '../services/session'
 import { newId, nowIso } from '../util'
 
 const BCRYPT_ROUNDS = 12
@@ -322,7 +323,47 @@ export function setTemporaryPassword(id: string, temporaryPassword: string): boo
        WHERE id = ?`
     )
     .run(hash, mustChange, reset, nowIso(), id)
+  // EVERY session, with nothing spared. An administrator resetting somebody's
+  // password is a different person from the account being reset, so there is no
+  // "current" session of theirs to keep — and the case this exists for is an
+  // account whose credentials are believed compromised, where a surviving token
+  // is the whole problem.
+  if (info.changes > 0) revokeSessionsForEmployee(id, null)
   return info.changes > 0
+}
+
+/**
+ * Sign this employee out of the web app.
+ *
+ * ## Why a password change is not finished until this runs
+ *
+ * `server_sessions` holds bearer tokens that were issued against the OLD
+ * password, and nothing about writing a new hash invalidates them — a session
+ * proves "this browser logged in once", not "this browser knows the current
+ * password". So changing a password left every existing session working, which
+ * is precisely backwards: the reason somebody changes a password in a hurry is
+ * that they think somebody else has it, and the thief's tab kept working for up
+ * to thirty days afterwards. `revokeAllForEmployee` existed for this and had
+ * ZERO callers.
+ *
+ * `exceptTokenHash` spares the caller's own session, so changing your own
+ * password does not log you out of the tab you are typing in. Passing null
+ * revokes everything, which is what an administrator resetting somebody else's
+ * password means.
+ *
+ * Lives here rather than in server/sessions.ts because this is where a
+ * credential changes, and a revocation that a caller has to remember to make is
+ * the same missing call all over again. The desktop keeps no server sessions, so
+ * there it is a no-op against an empty table.
+ */
+export function revokeSessionsForEmployee(id: string, exceptTokenHash?: string | null): number {
+  const keep = exceptTokenHash?.trim() || null
+  return getDb()
+    .prepare(
+      `DELETE FROM server_sessions
+        WHERE employee_id = @id AND (@keep IS NULL OR token_hash <> @keep)`
+    )
+    .run({ id, keep }).changes
 }
 
 /** Change a password to one the employee chose. Clears the must-change flag. */
@@ -340,6 +381,10 @@ export function setChosenPassword(id: string, newPassword: string): boolean {
        WHERE id = ?`
     )
     .run(hash, nowIso(), id)
+  // Every OTHER browser this person is signed in on. The one making the change
+  // is spared, so the gesture does not end by throwing them out of the page they
+  // are standing on.
+  if (info.changes > 0) revokeSessionsForEmployee(id, currentContext()?.sessionTokenHash ?? null)
   return info.changes > 0
 }
 

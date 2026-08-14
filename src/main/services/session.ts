@@ -50,6 +50,22 @@ export interface RequestContext {
    * a forged one can do is share a bench with somebody. See stationKey().
    */
   stationId?: string | null
+  /**
+   * WHICH SESSION this request is presenting — the stored hash, never the token.
+   *
+   * Exists for exactly one decision: changing your own password signs out every
+   * OTHER session you have, and must not sign out the browser you are typing in.
+   * Without this the choice was between leaving old sessions alive (a stolen
+   * password stays usable after the theft is noticed, which is the whole reason
+   * anybody changes one in a hurry) and logging the person out mid-gesture.
+   *
+   * The HASH and not the token, because that is what the table holds and there
+   * is no reason for a raw credential to travel any further into the app than
+   * the request handler that received it.
+   *
+   * Absent on the desktop, where there are no server sessions to spare.
+   */
+  sessionTokenHash?: string | null
 }
 
 const storage = new AsyncLocalStorage<RequestContext>()

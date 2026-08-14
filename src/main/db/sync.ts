@@ -3,6 +3,7 @@ import type { Database } from 'better-sqlite3'
 import { getDb } from './database'
 import { SYNCED_BY_TABLE, SYNCED_TABLES, KEY_SEP, type SyncedTable } from './syncTables'
 import { normQty, lotWeightedAvgCost } from './lots'
+import { nextPoNumber } from './purchaseOrders'
 import type { StockDrift, SyncReject } from '@shared/sync'
 
 /**
@@ -237,6 +238,8 @@ const NEVER_OVERWRITE: Record<string, ReadonlySet<string>> = {
 function upsertFor(db: Database, spec: SyncedTable, data: Record<string, unknown>): {
   sql: string
   values: unknown[]
+  /** The column order `values` is in, so a retry can rebuild it after an edit. */
+  cols: string[]
 } {
   const known = columnsOf(db, spec.table)
   const cols = Object.keys(data).filter((c) => known.has(c))
@@ -252,7 +255,7 @@ function upsertFor(db: Database, spec: SyncedTable, data: Record<string, unknown
     (assignable.length > 0
       ? assignable.map((c) => `${c} = excluded.${c}`).join(', ')
       : `${spec.key[0]} = excluded.${spec.key[0]}`)
-  return { sql, values: cols.map((c) => data[c] ?? null) }
+  return { sql, values: cols.map((c) => data[c] ?? null), cols }
 }
 
 // ---------------------------------------------------------------------------
@@ -268,12 +271,76 @@ function upsertFor(db: Database, spec: SyncedTable, data: Record<string, unknown
  * arrives at B it does not conflict on the id (they differ); it conflicts on the
  * UNIQUE column that says what the thing actually IS.
  *
- * The listed columns are those natural keys.
+ * Each entry is a LIST OF KEYS, and each key is a list of columns. Matching any
+ * one key makes the rows the same thing — which is why employees has email and
+ * company_id as two separate keys rather than one pair, and why the composite
+ * ones are written as a group.
+ *
+ * ## Adding a row here DELETES data, so the bar is high
+ *
+ * `resolveTwin` deletes the losing row. That is correct only when the two rows
+ * genuinely are one thing. Every entry below is a content hash, an idempotency
+ * token, or a pair that names a relationship — never a LABEL. Two purchase
+ * orders that happen to carry the same number are two different orders and must
+ * never be deduplicated; they are handled by RELABEL_ON_CONFLICT instead.
+ *
+ * ## Why the list grew
+ *
+ * These are the UNIQUE constraints on SYNCED tables. Every one that was missing
+ * here had the same failure: the incoming row hit a constraint the upsert has no
+ * ON CONFLICT clause for, the batch died, the row-by-row retry died too, and the
+ * record was quarantined with the cursor already past it — gone for good on that
+ * machine, present on the other, with nothing on either screen to say so.
+ * `qbo_sync_log` was the worst of them, because that table IS the double-post
+ * defence: a quarantined row means the app forgets it has already sent a bill.
  */
-const NATURAL_KEYS: Record<string, string[]> = {
-  inventory_products: ['upc'],
-  employees: ['email', 'company_id'],
-  intake_links: ['token']
+const NATURAL_KEYS: Record<string, string[][]> = {
+  inventory_products: [['upc']],
+  employees: [['email'], ['company_id']],
+  intake_links: [['token']],
+  // A content hash of one line of a Whatnot export. Two machines importing the
+  // same file both insert it; they are the same sale, and de-duplicating is
+  // exactly what the fingerprint exists for.
+  ledger_rows: [['fingerprint']],
+  // The idempotency token a scanning client mints per scan. Same token, same
+  // scan — that is the entire meaning of the column.
+  inventory_scans: [['client_token']],
+  // One row per (break, person). Two benches assigning the same packer to the
+  // same break is an ordinary Saturday.
+  ship_break_assignments: [['break_id', 'employee_id']],
+  // "We pushed this local record to this company as this entity." Two machines
+  // that both pushed it hold the same fact under two ids.
+  qbo_sync_log: [['realm_id', 'entity', 'local_id']],
+  // One slice of one document. A collision requires the same document_id, which
+  // means it is the same document and the same slice of it.
+  ship_document_parts: [['document_id', 'seq']]
+}
+
+/**
+ * A UNIQUE column that is a LABEL rather than an identity.
+ *
+ * Two purchase orders numbered PO-0007 are not one purchase order. They are two
+ * real orders, raised on two machines that could not see each other, and both
+ * have to survive — so nothing here may delete a row. The clash is settled by
+ * taking the label off the loser.
+ *
+ * `relabel` returns the new value for the losing row's column. Returning null
+ * clears it, which is the right answer for a role nothing else can hold.
+ *
+ * WHO LOSES IS DECIDED THE SAME WAY EVERYWHERE: the smaller id, compared as
+ * text, keeps the label. Same rule as `resolveTwin`, for the same reason — a
+ * verdict that depended on which row arrived first would have two machines each
+ * renumber the other's order, for ever.
+ */
+const RELABEL_ON_CONFLICT: Record<
+  string,
+  { column: string; relabel: (db: Database) => string | null }
+> = {
+  purchase_orders: { column: 'po_number', relabel: (db) => nextPoNumber(db) },
+  // Only one supply may be "the team bags". A second machine naming a different
+  // box for the role loses the ROLE, never the supply: the box is real stock
+  // with a real count, and deleting it to settle a label would take that with it.
+  supplies: { column: 'ship_role', relabel: () => null }
 }
 
 /** Where a row's children point, so the loser's history can be carried over. */
@@ -289,10 +356,23 @@ const CHILD_REFS: Record<string, Array<{ table: string; column: string }>> = {
     { table: 'stream_items', column: 'product_id' }
   ],
   employees: [{ table: 'time_entries', column: 'employee_id' }]
+  // DELIBERATELY NOT ledger_rows. Its child, ledger_row_imports, is a WITHOUT
+  // ROWID table keyed on (row_id, import_id) with no `id` column, so the loop
+  // below — which selects `id` to re-queue each moved child — cannot address it.
+  // Its foreign key is ON DELETE CASCADE, so the losing row's sightings go with
+  // it, and what is lost is one line of "import 3 also saw this sale" while the
+  // SALE ITSELF survives under the winning id. That trade is the right way round:
+  // before ledger_rows was de-duplicated at all, the whole row was quarantined
+  // and the sale was simply missing from one machine's revenue.
 }
 
 /**
  * Find the local row that already claims one of the incoming row's natural keys.
+ *
+ * A key with any blank or missing part is SKIPPED rather than matched on the
+ * parts it does have. Half a composite key is not the key: two scans with no
+ * client_token are not the same scan, and a partial match here would delete one
+ * of them.
  */
 function findNaturalTwin(
   db: Database,
@@ -300,15 +380,64 @@ function findNaturalTwin(
   data: Record<string, unknown>,
   incomingId: string
 ): string | null {
-  for (const column of NATURAL_KEYS[table] ?? []) {
-    const value = data[column]
-    if (value === null || value === undefined || value === '') continue
+  for (const key of NATURAL_KEYS[table] ?? []) {
+    const values = key.map((c) => data[c])
+    if (values.some((v) => v === null || v === undefined || v === '')) continue
+    const where = key.map((c) => `${c} = ?`).join(' AND ')
     const row = db
-      .prepare(`SELECT id FROM ${table} WHERE ${column} = ? AND id <> ?`)
-      .get(value, incomingId) as { id: string } | undefined
+      .prepare(`SELECT id FROM ${table} WHERE ${where} AND id <> ?`)
+      .get(...values, incomingId) as { id: string } | undefined
     if (row) return row.id
   }
   return null
+}
+
+/**
+ * Settle a clash over a LABEL, keeping both rows.
+ *
+ * Returns the values to insert, or null when this is not a label clash and the
+ * caller should carry on to the natural-key path.
+ *
+ * The two outcomes are deliberately asymmetric about what gets PUBLISHED:
+ *
+ *   · The incoming row wins, so the LOCAL row is relabelled here. That is a
+ *     change this machine made to its own data and nobody else can derive it, so
+ *     it is queued for upload exactly as `resolveTwin` queues its re-points.
+ *   · The local row wins, so the INCOMING copy is relabelled as it lands — and
+ *     that is NOT queued. The machine that actually holds that order is applying
+ *     the same rule to the same pair right now and will reach the same verdict;
+ *     its own renumber is the authoritative one, and it arrives keyed by id and
+ *     lands on top. Publishing a guess from here as well would have two machines
+ *     trading numbers over a row only one of them owns.
+ */
+function relabelForConflict(
+  db: Database,
+  spec: SyncedTable,
+  data: Record<string, unknown>,
+  incomingId: string,
+  cols: string[]
+): unknown[] | null {
+  const rule = RELABEL_ON_CONFLICT[spec.table]
+  if (!rule) return null
+  const value = data[rule.column]
+  if (value === null || value === undefined || value === '') return null
+
+  const clash = db
+    .prepare(`SELECT id FROM ${spec.table} WHERE ${rule.column} = ? AND id <> ?`)
+    .get(value, incomingId) as { id: string } | undefined
+  if (!clash) return null
+
+  if (incomingId < clash.id) {
+    db.prepare(`UPDATE ${spec.table} SET ${rule.column} = ? WHERE id = ?`).run(
+      rule.relabel(db),
+      clash.id
+    )
+    enqueue(db, spec.table, clash.id, 0)
+    return cols.map((c) => data[c] ?? null)
+  }
+
+  const renamed = { ...data, [rule.column]: rule.relabel(db) }
+  return cols.map((c) => renamed[c] ?? null)
 }
 
 /**
@@ -459,16 +588,30 @@ export function applyRows(rows: IncomingRow[]): ApplyResult {
     }
 
     const data = JSON.parse(row.data ?? '{}') as Record<string, unknown>
-    const { sql, values } = upsertFor(db, spec, data)
+    const { sql, values, cols } = upsertFor(db, spec, data)
     try {
       db.prepare(sql).run(...values)
     } catch (err) {
-      // The id did not conflict but something that says what this row IS did —
-      // the same product created independently on two machines. Settle it and
-      // retry once; anything else is a genuine fault and belongs in rejects.
+      // The id did not conflict but something else UNIQUE did. Two shapes, and
+      // they need opposite treatment; anything that is neither is a genuine
+      // fault and belongs in rejects.
       if (!/UNIQUE constraint failed/i.test(err instanceof Error ? err.message : String(err))) {
         throw err
       }
+
+      // A LABEL clash — two real rows wanting one number. Both survive; the
+      // loser is relabelled and the row lands.
+      const relabelled = relabelForConflict(db, spec, data, row.id, cols)
+      if (relabelled) {
+        db.prepare(sql).run(...relabelled)
+        result.applied += 1
+        landed.push([row.kind, row.id])
+        kinds.add(row.kind)
+        return
+      }
+
+      // Or the same real thing under two ids — the same product created
+      // independently on two machines. Settle it and retry once.
       const twin = findNaturalTwin(db, spec.table, data, row.id)
       if (!twin) throw err
       if (resolveTwin(db, spec.table, row.id, twin) === 'local') {
