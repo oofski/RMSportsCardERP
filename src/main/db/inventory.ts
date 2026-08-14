@@ -33,7 +33,7 @@ import {
   syncProductAvgCost,
   unitMoney
 } from './lots'
-import { PRODUCT_BASIS, allCostValues, layerGaps, productCostValue } from './valuation'
+import { PRODUCT_BASIS, allCostValues, layerGaps, productCostValue, shelfBasis } from './valuation'
 import { deleteImageFile, imageDataUrl, importImage, type ImageSource } from '../services/media'
 import { newId, nowIso } from '../util'
 
@@ -1031,11 +1031,33 @@ export function adjustStock(
       // oldest when nothing had to be decided.
       slices = consumeLots(db, productId, location, -delta, allocation)
     } else {
-      // Found stock — value it at the current average so the basis is undistorted.
+      /**
+       * Found stock — valued at what THIS SHELF is already carrying.
+       *
+       * It used to open the layer at `products.unit_cost`, which is
+       * `lotWeightedAvgCost` — the average across EVERY location. For a product
+       * held in one place that is the same number. For one held in two it is a
+       * blend of both, so finding two boxes at AM, where AM's layers cost $250
+       * and RM's cost $100, opened an AM layer at about $150. The error is real
+       * money, it is permanent (a layer's cost is never re-derived), and it
+       * flows straight into COGS the next time those boxes sell.
+       *
+       * `shelfBasis` is the same expression the count-sheet reset already uses
+       * for exactly this decision — its own doc comment calls it "what a
+       * found-stock lot at that location should be valued at" — and this was the
+       * one found-stock path that did not ask it. The product average remains
+       * the fallback, for a shelf that has never had a layer at all.
+       *
+       * Read AFTER bumpStock deliberately: `lotBasis` is computed from the
+       * LAYERS, and no layer has moved yet, so the increment cannot distort the
+       * basis it is about to be valued at.
+       */
+      const shelf = shelfBasis(db, productId, location)
       const row = db.prepare('SELECT unit_cost FROM inventory_products WHERE id = ?').get(productId) as
         | { unit_cost: number }
         | undefined
-      createLot(db, productId, location, delta, row?.unit_cost ?? 0, nowIso(), 'adjustment', note)
+      const basis = shelf?.lotBasis ?? row?.unit_cost ?? 0
+      createLot(db, productId, location, delta, basis, nowIso(), 'adjustment', note)
     }
     syncProductAvgCost(db, productId)
     // The COST of a correction down has always been left off the ledger row —

@@ -96,6 +96,48 @@ export function normQty(qty: number): number {
 }
 
 /**
+ * May a layer emptied by this consumption be snapped to exactly zero?
+ *
+ * ## What the snap is for
+ *
+ * For divisors whose 1/N rounds DOWN at four places (3, 9, 11, 12, 30), taking
+ * all N pieces leaves the layer holding 0.0001 to 0.001 forever: an open cost
+ * layer for stock that is gone, and no UI can enter a fraction small enough to
+ * clear it. The layer IS empty; four decimal places just cannot say so.
+ *
+ * ## Why it is now a question rather than an unconditional rule
+ *
+ * It used to snap whenever the remainder was under QTY_SNAP, and that quietly
+ * broke `Σ lot.qty_remaining == inventory_stock.quantity` — the one invariant
+ * this whole file is built to preserve.
+ *
+ * `bumpStock` snaps too, and it snaps on a DIFFERENT question: it clears the
+ * shelf when the WHOLE SHELF comes to dust. On a one-layer shelf the two
+ * questions have the same answer, which is why this was never seen. On a shelf
+ * with a second layer behind the first they do not: emptying the front layer to
+ * 0.0004 snapped the LAYER to zero while the shelf still held five real boxes,
+ * so the stock row kept a 0.0004 no layer accounted for. `restoreFifo` then made
+ * it worse — undoing the movement handed back only what the slice recorded, so
+ * the dust was gone from the layers for good and every break-and-undo bled a
+ * little more.
+ *
+ * So the two now ask ONE question, phrased the way `bumpStock` phrases it: is
+ * the shelf about to be nothing but dust? When it is, the layer and the stock
+ * row land on zero together. When it is not, the remainder stays on the layer —
+ * where it is backed by a shelf balance that is also staying — and the next
+ * movement consumes it exactly, because a walk that needs more than 0.0004 takes
+ * all 0.0004 of it and leaves zero.
+ *
+ * For the entire non-giveaway catalog every quantity here is a whole number, so
+ * this is either 0 (and there is no remainder to snap) or ≥ 1 (and no remainder
+ * is ever under QTY_SNAP). Nothing about whole-unit stock changes.
+ */
+function maySnapShelf(open: ReadonlyArray<{ qty_remaining: number }>, want: number): boolean {
+  const total = open.reduce((sum, l) => sum + l.qty_remaining, 0)
+  return normQty(total - want) <= QTY_SNAP
+}
+
+/**
  * Does this database have the v25 flag column yet? Memoised per handle: it is a
  * property of the schema, not of a row, and probing it on every lot operation
  * would be a PRAGMA per FIFO step.
@@ -239,22 +281,14 @@ export function consumeFifo(db: Database, productId: string, location: string, q
   // Absolute, not `qty_remaining - ?`: a fractional take is re-rounded to QTY_DP
   // on the way in, so a lot can never end up holding 3.9999999999999996.
   const set = db.prepare('UPDATE inventory_lots SET qty_remaining = ? WHERE id = ?')
+  const snap = maySnapShelf(lots, need)
   const slices: LotSlice[] = []
   for (const lot of lots) {
     if (need <= QTY_EPS) break
     const take = normQty(Math.min(need, lot.qty_remaining))
     if (!(take > 0)) continue
-    /**
-     * SNAP TO ZERO once the layer is within rounding dust of empty.
-     *
-     * For divisors whose 1/N rounds DOWN at four places (3, 9, 11, 12, 30),
-     * taking all N pieces left the lot holding 0.0001 to 0.001 forever: an open
-     * cost layer, and a product still showing stock it does not have, with no UI
-     * able to enter a fraction to clear it. The layer is empty; the arithmetic
-     * just cannot say so in four decimal places.
-     */
     const left = normQty(lot.qty_remaining - take)
-    set.run(left > QTY_SNAP ? left : 0, lot.id)
+    set.run(snap && left <= QTY_SNAP ? 0 : left, lot.id)
     slices.push({ lotId: lot.id, qty: take, unitCost: lot.unit_cost })
     need = normQty(need - take)
   }
@@ -347,8 +381,17 @@ export function consumePicked(
 
   // Re-read inside the transaction. The list the dialog was drawn from is a
   // snapshot from before the operator started reading it.
-  const check = validatePicks(listOpenLots(db, productId, location), picks, want)
+  const openNow = listOpenLots(db, productId, location)
+  const check = validatePicks(openNow, picks, want)
   if (!check.ok) throw new Error(check.error)
+  // Asked of the WHOLE SHELF, not of the layers the operator picked: a pick that
+  // empties one layer while three others stay full must not clear that layer's
+  // remainder, because the stock row is keeping the matching dust. See
+  // maySnapShelf.
+  const snap = maySnapShelf(
+    openNow.map((l) => ({ qty_remaining: l.qtyRemaining })),
+    want
+  )
 
   const read = db.prepare(
     'SELECT qty_remaining, unit_cost FROM inventory_lots WHERE id = ? AND product_id = ? AND location = ?'
@@ -367,12 +410,9 @@ export function consumePicked(
     // an error — validatePicks has already refused anything bigger than that.
     const take = normQty(Math.min(normPickQty(pick.qty), lot.qty_remaining))
     if (!(take > 0)) continue
-    // Same snap-to-zero as consumeFifo: for divisors whose 1/N rounds down at
-    // four places, taking all N pieces otherwise leaves the layer holding 0.0001
-    // forever — an open cost layer for stock that is gone, and a product still
-    // reporting a fraction no UI can enter to clear.
+    // Same snap-to-zero as consumeFifo, under the same condition.
     const left = normQty(lot.qty_remaining - take)
-    set.run(left > QTY_SNAP ? left : 0, pick.lotId)
+    set.run(snap && left <= QTY_SNAP ? 0 : left, pick.lotId)
     slices.push({ lotId: pick.lotId, qty: take, unitCost: lot.unit_cost })
     taken = normQty(taken + take)
   }

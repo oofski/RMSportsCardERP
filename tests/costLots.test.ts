@@ -718,6 +718,157 @@ ok(
 assertStockLotsConsistent(db)
 
 // ===========================================================================
+console.log('\n=== 12. snapping a layer must not outrun the shelf ===')
+// ===========================================================================
+// THE INVARIANT AND THE SNAP, AND THE FACT THAT THEY ARE ONE DECISION.
+//
+// A fractional take leaves rounding dust on the layer it empties — for divisors
+// whose 1/N rounds down at four places, taking all N pieces leaves 0.0001 to
+// 0.001 behind. `consumeFifo` snaps that to zero, because an open cost layer for
+// stock that is gone can never be cleared: no UI can enter a fraction that
+// small.
+//
+// `bumpStock` snaps too, and it asks a DIFFERENT question: it clears the shelf
+// when the WHOLE SHELF comes to dust. On a one-layer shelf the two questions
+// have the same answer, which is exactly why this went unseen — every fractional
+// case in this suite and in the streaming suite has one layer.
+//
+// Put a second layer behind the first and they disagree. The front layer empties
+// to 0.0004, the layer is snapped to zero, and the shelf still holds five real
+// boxes — so the stock row keeps a 0.0004 that no layer accounts for, and
+// Σ lot.qty_remaining == inventory_stock.quantity is broken. It stays broken:
+// nothing recomputes a layer from a shelf, and undoing the movement hands back
+// only what the slice recorded, so the dust is gone from the layers for good.
+const DUST = make({
+  name: 'CL Dust Giveaway Box',
+  unitType: 'box',
+  boxesPerCase: null,
+  packsPerBox: 12,
+  giveaway: true,
+  cost: 40,
+  open: 0
+})
+// The front layer, holding what eleven twelfths of a box leaves behind, and a
+// full second layer behind it.
+addStock(DUST, 'RM', 0.0837, 40, 'front layer', null, null)
+addStock(DUST, 'RM', 5, 90, 'the rest of the shelf', null, null)
+ok(stockQty(DUST, 'RM') === 5.0837, 'the shelf holds 5.0837', String(stockQty(DUST, 'RM')))
+
+// The twelfth pack. Empties the front layer to 0.0004 and leaves the shelf with
+// five boxes on it.
+const dustSale = recordSale(DUST, 'RM', 0.0833, 5, 'Buyer', 'last pack', null, null)
+ok(!dustSale.error, 'the last pack of the front layer sells', dustSale.error)
+ok(stockQty(DUST, 'RM') === 5.0004, 'the shelf goes to 5.0004', String(stockQty(DUST, 'RM')))
+
+// THE ASSERTION THIS SECTION EXISTS FOR. Against the old code the layer reads
+// [ [90, 5] ] — the front one snapped away while its dust stayed on the shelf.
+ok(
+  JSON.stringify(layers(DUST)) === JSON.stringify([[40, 0.0004], [90, 5]]),
+  'THE DUST STAYS ON THE LAYER, because the shelf is keeping it',
+  JSON.stringify(layers(DUST))
+)
+let dustHeld = true
+try {
+  assertStockLotsConsistent(db)
+} catch (err) {
+  dustHeld = false
+  console.log('   ' + (err instanceof Error ? err.message : String(err)))
+}
+ok(dustHeld, 'and the shelf still equals the sum of its layers')
+
+// A dust layer in front of real stock is not permanent — it is consumed exactly
+// and completely by the next movement, which is why leaving it there is safe.
+const nextSale = recordSale(DUST, 'RM', 1, 120, 'Buyer', 'a whole box', null, null)
+ok(!nextSale.error, 'the next sale goes through', nextSale.error)
+ok(
+  JSON.stringify(layers(DUST)) === JSON.stringify([[90, 4.0004]]),
+  'and takes the dust layer with it, leaving nothing behind',
+  JSON.stringify(layers(DUST))
+)
+assertStockLotsConsistent(db)
+
+// THE OTHER HALF: when the shelf really is nothing but dust, the layer and the
+// stock row must still land on zero TOGETHER. This is the case the snap was
+// written for, and it has to keep working.
+const LAST = make({
+  name: 'CL Last Layer Box',
+  unitType: 'box',
+  boxesPerCase: null,
+  packsPerBox: 12,
+  giveaway: true,
+  cost: 40,
+  open: 0
+})
+addStock(LAST, 'RM', 0.0837, 40, 'the only layer', null, null)
+const lastSale = recordSale(LAST, 'RM', 0.0833, 5, 'Buyer', 'the twelfth pack', null, null)
+ok(!lastSale.error, 'the twelfth pack sells', lastSale.error)
+ok(stockQty(LAST, 'RM') === 0, 'the shelf is EMPTY, not holding 0.0004', String(stockQty(LAST, 'RM')))
+ok(layers(LAST).length === 0, 'and no open layer is left behind', JSON.stringify(layers(LAST)))
+assertStockLotsConsistent(db)
+
+// And the whole-unit catalog is untouched by any of it: every quantity is an
+// integer, so there is never a remainder small enough to snap.
+const WHOLE = make({ name: 'CL Whole Units Box', unitType: 'box', cost: 100, open: 0 })
+addStock(WHOLE, 'RM', 3, 100, 'first', null, null)
+addStock(WHOLE, 'RM', 4, 150, 'second', null, null)
+recordSale(WHOLE, 'RM', 3, 200, 'Buyer', null, null, null)
+ok(
+  JSON.stringify(layers(WHOLE)) === JSON.stringify([[150, 4]]),
+  'a whole-unit sale empties the first layer exactly',
+  JSON.stringify(layers(WHOLE))
+)
+ok(stockQty(WHOLE, 'RM') === 4, 'and the shelf agrees', String(stockQty(WHOLE, 'RM')))
+assertStockLotsConsistent(db)
+
+// ===========================================================================
+console.log('\n=== 13. found stock is valued at the shelf that found it ===')
+// ===========================================================================
+// `products.unit_cost` is the weighted average across EVERY location. For a
+// product held in one place that is the shelf's own basis. For one held in two
+// it is a blend, and opening a found-stock layer at it prices boxes at neither
+// of the two prices they could possibly have cost.
+//
+// The count-sheet reset already asks `shelfBasis` for exactly this decision —
+// its doc comment calls it "what a found-stock lot at that location should be
+// valued at". The everyday Adjust form was the one found-stock path that did
+// not, so the same correction typed on two screens produced two different cost
+// bases for the same boxes.
+const SPLIT = make({ name: 'CL Two Shelves Box', unitType: 'box', cost: 0, open: 0 })
+addStock(SPLIT, 'RM', 10, 100, 'cheap shelf', null, null)
+addStock(SPLIT, 'AM', 2, 250, 'dear shelf', null, null)
+// The product average is the blend of the two — 12 boxes for $1,500.
+ok(eq(getProduct(SPLIT).unitCost, 125), 'the product average blends both shelves', String(getProduct(SPLIT).unitCost))
+
+const found = adjustStock(SPLIT, 'AM', 2, 'found two more at AM', null, null)
+ok(!found.error, 'two more boxes are found at AM', found.error)
+ok(
+  JSON.stringify(layers(SPLIT, 'AM')) === JSON.stringify([[250, 2], [250, 2]]),
+  'AND THEY ARE VALUED AT $250 — what the AM shelf carries, not the $125 blend',
+  JSON.stringify(layers(SPLIT, 'AM'))
+)
+ok(
+  JSON.stringify(layers(SPLIT, 'RM')) === JSON.stringify([[100, 10]]),
+  'while the RM shelf is untouched by a correction made at AM',
+  JSON.stringify(layers(SPLIT, 'RM'))
+)
+assertStockLotsConsistent(db)
+
+// A shelf that has never had a layer at all still falls back on the product
+// average: there is nothing better to say, and zero would be a lie.
+const found2 = adjustStock(SPLIT, 'Fenwick Cards', 1, 'found one at a dropship stop', null, null)
+ok(!found2.error, 'stock found somewhere with no layer history is accepted', found2.error)
+const fenwick = (
+  db
+    .prepare(
+      `SELECT unit_cost AS c FROM inventory_lots WHERE product_id = ? AND location = 'Fenwick Cards'`
+    )
+    .all(SPLIT) as Array<{ c: number }>
+).map((r) => r.c)
+ok(fenwick.length === 1, 'and opens one layer', String(fenwick.length))
+ok(fenwick[0] > 0, 'valued at the product average rather than at nothing', String(fenwick[0]))
+assertStockLotsConsistent(db)
+
+// ===========================================================================
 console.log('\n=== 11. the engine invariant survives all of it ===')
 // ===========================================================================
 // Σ lot.qty_remaining == inventory_stock.quantity, per (product, location). A
