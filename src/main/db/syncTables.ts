@@ -183,6 +183,12 @@ export const SYNCED_TABLES: SyncedTable[] = [
   // design — the buyer's name is snapshotted onto the row, so an invoice whose
   // customer record is gone still reads correctly and must still apply.
   { table: 'invoices', key: ['id'], tier: 0 },
+  // Messages. The thread is tier 0 because everything else points at it; the
+  // participants and the messages are tier 1 so they land after it in the same
+  // batch. The MESSAGE is the record — the push notification is only the buzz
+  // that says to come and look, and a phone that was off must not cost somebody
+  // a conversation.
+  { table: 'message_threads', key: ['id'], tier: 0 },
   { table: 'qbo_sync_log', key: ['id'], tier: 0 },
   { table: 'intake_links', key: ['id'], tier: 0 },
   // The owner's inbox, and it had to start travelling. Every reminder is a note
@@ -238,6 +244,8 @@ export const SYNCED_TABLES: SyncedTable[] = [
   { table: 'inventory_incoming', key: ['id'], tier: 1 },
   { table: 'inventory_lots', key: ['id'], tier: 1 },
   { table: 'inventory_scans', key: ['id'], tier: 1 },
+  { table: 'message_participants', key: ['id'], tier: 1 },
+  { table: 'messages', key: ['id'], tier: 1 },
   { table: 'purchase_order_lines', key: ['id'], tier: 1 },
   { table: 'supply_transactions', key: ['id'], tier: 1 },
   { table: 'supply_orders', key: ['id'], tier: 1 },

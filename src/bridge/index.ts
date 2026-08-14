@@ -208,6 +208,13 @@ import type {
   WhatnotRatePeriod
 } from '@shared/financeStreaming'
 import type {
+  Contact,
+  NewThreadInput,
+  SendResult,
+  ThreadDetail,
+  ThreadSummary
+} from '@shared/messages'
+import type {
   OrderHistoryYears,
   PurchaseOrderHistoryRow,
   SalesOrderHistoryRow
@@ -1323,6 +1330,41 @@ export function createBridge(ipcRenderer: BridgeTransport) {
      * are the only ones that leave the machine, and `createInQbo` is the only
      * one anywhere in this API that WRITES to somebody's accounting system.
      */
+    /**
+     * Messages, and the contact list they are addressed from.
+     *
+     * Every one of these is a plain database operation. The push notification is
+     * sent by main as a side effect of a send and reported back in the result —
+     * a relay that is down costs the buzz and never the message.
+     */
+    messages: {
+      contacts: (): Promise<Contact[]> => ipcRenderer.invoke(IPC.contactsList),
+      threads: (): Promise<ThreadSummary[]> => ipcRenderer.invoke(IPC.messageThreads),
+      thread: (id: string): Promise<ThreadDetail | null> =>
+        ipcRenderer.invoke(IPC.messageThread, id),
+      /** Everything unread, across every conversation — the sidebar badge. */
+      unread: (): Promise<number> => ipcRenderer.invoke(IPC.messageUnread),
+      /** Start one. Needs messages.broadcast: it puts a message in front of
+       *  somebody who did not ask for it. */
+      create: (input: NewThreadInput): Promise<Result<ThreadSummary>> =>
+        ipcRenderer.invoke(IPC.messageThreadCreate, input),
+      /** Everybody at once, in a thread of its own. */
+      broadcast: (
+        title: string,
+        body: string
+      ): Promise<Result<{ thread: ThreadSummary; notified: number; notifyProblem: string | null }>> =>
+        ipcRenderer.invoke(IPC.messageBroadcast, { title, body }),
+      /** Reply. Unprivileged — being in the thread IS the permission. */
+      send: (threadId: string, body: string): Promise<Result<SendResult>> =>
+        ipcRenderer.invoke(IPC.messageSend, { threadId, body }),
+      markRead: (threadId: string): Promise<Result> =>
+        ipcRenderer.invoke(IPC.messageMarkRead, threadId),
+      add: (threadId: string, employeeIds: string[]): Promise<Result<ThreadSummary>> =>
+        ipcRenderer.invoke(IPC.messageThreadAdd, { threadId, employeeIds }),
+      leave: (threadId: string): Promise<Result> =>
+        ipcRenderer.invoke(IPC.messageThreadLeave, threadId)
+    },
+
     invoices: {
       list: (): Promise<Invoice[]> => ipcRenderer.invoke(IPC.invoicesList),
       get: (id: string): Promise<InvoiceDetail | null> => ipcRenderer.invoke(IPC.invoiceGet, id),

@@ -3136,6 +3136,86 @@ function migrate(database: Database.Database): void {
   })
   setMeta(database, 'schema_version', '68')
 
+  // v69: MESSAGES. The company's own way of reaching people.
+  //
+  // ## Why the message lives HERE and not in the notification
+  //
+  // The obvious build is to put the text in the push payload and be done. It is
+  // also the one that loses messages: a phone that was off, a browser that
+  // dropped the subscription, a person who read the banner on the lock screen
+  // and swiped it away — in every one of those the message is gone and there is
+  // nothing to go back to. A push notification is a DOORBELL. It is unreliable
+  // by design, it is capped at a few kilobytes, and it is not a record.
+  //
+  // So the message is an ordinary synced row like everything else in this
+  // database, and the push is the buzz that says to come and look. Deliver the
+  // buzz or not, the conversation is on every device that syncs, in order, with
+  // who said it and when — and it works on a laptop with notifications switched
+  // off entirely.
+  //
+  // ## Three tables and no more
+  //
+  // A thread is the conversation. Participants is who is in it. Messages is what
+  // was said. A "direct message" is a two-person thread and needs no separate
+  // shape — collapsing it into a fourth table would mean two code paths for
+  // reading the same thing.
+  //
+  // `last_read_at` sits on the PARTICIPANT rather than on the message, because
+  // "have I read this" is a fact about a person and a thread, not about a
+  // message: five people in a thread would otherwise need five rows per message
+  // to answer one question per person.
+  //
+  // The unique index on (thread_id, employee_id) is what makes a participant row
+  // a natural key for sync — two machines adding the same person to the same
+  // thread write the same fact, and NATURAL_KEYS in sync.ts settles them into
+  // one row instead of quarantining the second. See the composite-key support
+  // added in v0.0.179.
+  database.exec(
+    `CREATE TABLE IF NOT EXISTS message_threads (
+       id              TEXT PRIMARY KEY,
+       title           TEXT NOT NULL DEFAULT '',
+       kind            TEXT NOT NULL DEFAULT 'group',
+       created_by      TEXT,
+       created_at      TEXT NOT NULL,
+       updated_at      TEXT NOT NULL,
+       -- Denormalised so the thread list sorts and previews without touching the
+       -- messages table. Written by sendMessage, in the same transaction.
+       last_message_at TEXT,
+       last_message_by TEXT,
+       last_message    TEXT
+     );
+     CREATE INDEX IF NOT EXISTS idx_msg_threads_activity
+       ON message_threads (last_message_at DESC);
+
+     CREATE TABLE IF NOT EXISTS message_participants (
+       id           TEXT PRIMARY KEY,
+       thread_id    TEXT NOT NULL,
+       employee_id  TEXT NOT NULL,
+       added_at     TEXT NOT NULL,
+       added_by     TEXT,
+       last_read_at TEXT,
+       updated_at   TEXT NOT NULL,
+       FOREIGN KEY (thread_id) REFERENCES message_threads (id) ON DELETE CASCADE
+     );
+     CREATE UNIQUE INDEX IF NOT EXISTS idx_msg_participant_pair
+       ON message_participants (thread_id, employee_id);
+     CREATE INDEX IF NOT EXISTS idx_msg_participant_employee
+       ON message_participants (employee_id);
+
+     CREATE TABLE IF NOT EXISTS messages (
+       id         TEXT PRIMARY KEY,
+       thread_id  TEXT NOT NULL,
+       author_id  TEXT,
+       body       TEXT NOT NULL,
+       created_at TEXT NOT NULL,
+       updated_at TEXT NOT NULL,
+       FOREIGN KEY (thread_id) REFERENCES message_threads (id) ON DELETE CASCADE
+     );
+     CREATE INDEX IF NOT EXISTS idx_messages_thread
+       ON messages (thread_id, created_at);`
+  )
+  setMeta(database, 'schema_version', '69')
+
   // v41: re-derive every product's average cost from its remaining cost layers.
   //
   // The average used to be stored rounded to the cent, back when every total in

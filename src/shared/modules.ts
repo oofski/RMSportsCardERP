@@ -35,6 +35,32 @@ export interface AppModule {
 
 export const MODULES: AppModule[] = [
   {
+    /**
+     * CONTACTS, not "Messages", and the name is the feature.
+     *
+     * What somebody opens this for is a person — who works here, how to reach
+     * them, and the conversation they are already having with them. Naming it
+     * after the transport would put the list of colleagues one level down inside
+     * something called Messages, which is the wrong way round: the roster is the
+     * front door and the thread is what you get when you pick a name.
+     *
+     * `module.messages` rather than a Contacts permission, because they are one
+     * thing: a directory you cannot write to is a phone book, and this is not
+     * one. Everybody has it — being reachable is not a privilege.
+     */
+    id: 'contacts',
+    name: 'Contacts',
+    shortName: 'Contacts',
+    description: 'Everybody who works here, and the conversations you are in.',
+    icon: 'Users',
+    permission: 'module.messages',
+    status: 'active',
+    // BOTH workspaces. A packer needs to reach the office and the office needs
+    // to reach the floor; filing this under one of the two would mean switching
+    // companies to answer a question about tonight's show.
+    workspace: 'both'
+  },
+  {
     id: 'admin',
     name: 'Admin',
     shortName: 'Admin',

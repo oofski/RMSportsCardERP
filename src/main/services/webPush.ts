@@ -152,3 +152,55 @@ export async function testClockPush(
     return { ok: false, error: err instanceof Error ? err.message : String(err) }
   }
 }
+
+/**
+ * Buzz these people's phones about a message.
+ *
+ * ## It never throws, and the caller never waits on the answer being good
+ *
+ * The MESSAGE is already committed by the time this runs — that ordering is the
+ * whole design (see db/messages.ts). This is the doorbell, and a doorbell that
+ * fails is a doorbell that fails: the conversation is on every device that
+ * syncs regardless. So a dead relay, a missing VAPID key or a phone that
+ * unsubscribed last week all come back as a REPORT rather than as an exception
+ * that would roll back a message somebody has already sent.
+ *
+ * ## What travels
+ *
+ * A title, a trimmed body and the thread id — no more. A push payload is a few
+ * kilobytes after encryption and it lands on a lock screen, so the full message
+ * is neither sendable nor something to display on a phone somebody has put down
+ * on a bench. The id is what lets a tap open the right conversation.
+ */
+export async function notifyMessage(input: {
+  employeeIds: string[]
+  title: string
+  body: string
+  threadId: string
+}): Promise<{ notified: number; problem: string | null }> {
+  const ids = [...new Set(input.employeeIds.filter((id) => !!id?.trim()))]
+  // Nobody to tell is not a problem. A one-person thread, or everybody else
+  // having left it, is an ordinary state and not worth a red banner.
+  if (ids.length === 0) return { notified: 0, problem: null }
+  if (!relayConfigured()) return { notified: 0, problem: NO_RELAY }
+  try {
+    const reply = (await call('/v1/push-notify/send', {
+      method: 'POST',
+      body: {
+        employeeIds: ids,
+        title: input.title,
+        body: input.body,
+        threadId: input.threadId
+      }
+    })) as { ok?: boolean; sent?: number; error?: string }
+    return {
+      notified: Number(reply.sent ?? 0) || 0,
+      // A relay that is too old to know this route answers 404, and the message
+      // still landed. Saying so beats a silent zero that reads as "nobody has
+      // notifications on".
+      problem: reply.ok === false ? (reply.error ?? 'The relay would not send it.') : null
+    }
+  } catch (err) {
+    return { notified: 0, problem: err instanceof Error ? err.message : String(err) }
+  }
+}

@@ -505,6 +505,23 @@ export const IPC = {
   finHistoryPos: 'finance:history:purchase-orders',
   finHistorySos: 'finance:history:sales-orders',
 
+  // Messages, and the contact list they are addressed from.
+  //
+  // The MESSAGE is an ordinary synced row; the push notification is only the
+  // buzz that says to come and look. So every one of these is a plain database
+  // operation, and the relay being unreachable costs a notification rather than
+  // a conversation.
+  contactsList: 'contacts:list',
+  messageThreads: 'messages:threads',
+  messageThread: 'messages:thread',
+  messageUnread: 'messages:unread',
+  messageThreadCreate: 'messages:thread:create',
+  messageThreadAdd: 'messages:thread:add',
+  messageThreadLeave: 'messages:thread:leave',
+  messageSend: 'messages:send',
+  messageMarkRead: 'messages:read',
+  messageBroadcast: 'messages:broadcast',
+
   // Email
   emailComposeInvite: 'email:compose-invite',
   emailOpenExternal: 'email:open-external',

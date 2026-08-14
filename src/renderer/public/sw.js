@@ -127,6 +127,27 @@ function describe(data) {
     }
   }
 
+  /**
+   * Somebody said something.
+   *
+   * ONE TAG PER CONVERSATION, so three messages in a thread while a phone is in
+   * a pocket collapse into one notification carrying the latest, rather than
+   * three stacked ones about the same conversation. renotify keeps each new one
+   * audible — replacing the text silently would mean a message nobody noticed.
+   *
+   * The body is the trimmed line the relay sent, never the whole message: this
+   * lands on a lock screen, and a phone left face-up on a packing bench should
+   * not display a conversation to the room.
+   */
+  if (data.kind === 'message') {
+    return {
+      title: name,
+      body: typeof data.body === 'string' && data.body ? data.body : 'Tap to read it.',
+      tag: 'rmops-msg-' + (data.threadId || 'x'),
+      renotify: true
+    }
+  }
+
   if (data.kind === 'test') {
     return {
       title: 'Notifications are working',
@@ -192,10 +213,18 @@ self.addEventListener('push', function (event) {
  */
 self.addEventListener('notificationclick', function (event) {
   event.notification.close()
+  // Which conversation to open, when the notification was about one. Posted to
+  // the focused window rather than encoded in a URL: this app has no routes, so
+  // a query string would be read once at boot and then be wrong for the rest of
+  // the session.
+  var thread = event.notification.data && event.notification.data.threadId
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function (windows) {
       for (let i = 0; i < windows.length; i++) {
-        if ('focus' in windows[i]) return windows[i].focus()
+        if ('focus' in windows[i]) {
+          if (thread) windows[i].postMessage({ type: 'rmops-open-thread', threadId: thread })
+          return windows[i].focus()
+        }
       }
       if (self.clients.openWindow) return self.clients.openWindow('/')
       return undefined

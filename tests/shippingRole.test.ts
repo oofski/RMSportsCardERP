@@ -83,8 +83,17 @@ ok(rankOf('shipping') === rankOf('staff'), 'it ranks level with staff')
 
 // The whole point of the role, spelled out. If this list ever grows by accident
 // the diff is the alarm.
+//
+// `module.messages` is deliberately in here, and it is the one entry that is not
+// about the bench. Messaging is only worth building if it reaches the people who
+// are not at a desk — a packer who never opens Inventory is exactly who the
+// owner needs to be able to buzz. It is the READING half only: starting a
+// conversation and notifying the whole team are `messages.broadcast`, which this
+// role does not have, so a packer can answer but cannot put a message in front
+// of anybody who did not already include them.
 const EXPECTED = [
   'updates.check',
+  'module.messages',
   'module.fulfillment',
   'shipping.find',
   'shipping.pack'

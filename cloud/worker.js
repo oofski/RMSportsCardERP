@@ -120,6 +120,12 @@ export default {
       if (path === '/v1/push-notify/test' && request.method === 'POST') {
         return pushTest(request, env)
       }
+      // Messages. The app posts who to tell and a one-line summary; the message
+      // itself travels as an ordinary synced row, because a push notification is
+      // a doorbell rather than a record.
+      if (path === '/v1/push-notify/send' && request.method === 'POST') {
+        return pushSend(request, env)
+      }
       if (path === '/v1/push-notify/generate-keys' && request.method === 'POST') {
         return generateVapidKeys()
       }
@@ -2312,6 +2318,74 @@ async function pushTest(request, env) {
           ? 'The push service says this device no longer exists. Turn notifications off and on again.'
           : 'The push service refused the notification.'
   })
+}
+
+/**
+ * Notify a named list of people about a message.
+ *
+ * ## Why the message text is not the payload
+ *
+ * It would fit, usually. It would also make the notification the record, and a
+ * push notification is the worst possible record: unreliable by design, capped
+ * at a few kilobytes after encryption, and gone the moment somebody swipes it.
+ * The message is an ordinary synced row on the app's side; this is the buzz that
+ * says to come and look, carrying only enough to be worth reading on a lock
+ * screen — who, a trimmed line, and which conversation to open.
+ *
+ * ## Deduplicated by employee, not by device
+ *
+ * One person with a phone and a tablet gets both, which is right — they may be
+ * holding either. What must not happen is the same employee id appearing twice
+ * in the list and being sent to twice per device, so the ids are made unique
+ * before the query rather than trusted.
+ *
+ * The cap is PUSH_MAX_SUBSCRIPTIONS across the whole send, the same ceiling
+ * every other route here uses. A team of thirty with two devices each sits well
+ * inside it; the cap exists so a bad caller cannot turn one request into an
+ * unbounded fan-out.
+ */
+async function pushSend(request, env) {
+  if (!vapidConfigured(env)) return json({ ok: false, error: VAPID_MISSING_MESSAGE }, 400)
+  const body = await readJson(request)
+  const ids = Array.isArray(body.employeeIds)
+    ? [...new Set(body.employeeIds.map((v) => String(v || '').trim()).filter(Boolean))]
+    : []
+  if (ids.length === 0) return json({ ok: true, sent: 0, failed: 0, dropped: 0 })
+
+  const threadId = String(body.threadId || '').slice(0, 64)
+  const title = String(body.title || 'New message').slice(0, 80)
+  const text = String(body.body || '').slice(0, 300)
+
+  await ensurePushTable(env)
+  const placeholders = ids.map((_, i) => '?' + (i + 1)).join(', ')
+  const result = await env.DB.prepare(
+    `SELECT endpoint, employee_id, p256dh, auth FROM push_subscriptions
+      WHERE employee_id IN (${placeholders})
+      ORDER BY created_at ASC LIMIT ?${ids.length + 1}`
+  )
+    .bind(...ids, PUSH_MAX_SUBSCRIPTIONS)
+    .all()
+  const subscriptions = result.results || []
+  // Nobody has notifications on. Not an error: the message landed, and this
+  // route's job was only to buzz whoever could be buzzed.
+  if (subscriptions.length === 0) return json({ ok: true, sent: 0, failed: 0, dropped: 0 })
+
+  const bytes = enc.encode(
+    JSON.stringify({ v: 1, kind: 'message', name: title, body: text, threadId, at: new Date().toISOString() })
+  )
+  const outcome = await deliverPush({
+    subscriptions,
+    send: (subscription) => sendOnePush(env, subscription, bytes),
+    drop: (endpoint) => dropSubscription(env, endpoint),
+    touch: (endpoint) => markSent(env, endpoint)
+  })
+  if (outcome.failed > 0 || outcome.dropped > 0) {
+    console.log(
+      `push: message — sent ${outcome.sent}, failed ${outcome.failed}, ` +
+        `removed ${outcome.dropped} dead subscription(s).`
+    )
+  }
+  return json({ ok: true, ...outcome })
 }
 
 /**

@@ -313,7 +313,12 @@ const NATURAL_KEYS: Record<string, string[][]> = {
   qbo_sync_log: [['realm_id', 'entity', 'local_id']],
   // One slice of one document. A collision requires the same document_id, which
   // means it is the same document and the same slice of it.
-  ship_document_parts: [['document_id', 'seq']]
+  ship_document_parts: [['document_id', 'seq']],
+  // One row per (thread, person). Two machines adding the same colleague to the
+  // same conversation are recording the same fact, and the second must merge
+  // rather than be quarantined — a participant row that never lands is somebody
+  // who silently does not get the message.
+  message_participants: [['thread_id', 'employee_id']]
 }
 
 /**

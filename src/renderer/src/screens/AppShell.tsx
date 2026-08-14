@@ -22,6 +22,7 @@ import { ScheduleModule } from '../modules/schedule/ScheduleModule'
 import { InventoryModule } from '../modules/inventory/InventoryModule'
 import { InvoicingModule } from '../modules/invoicing/InvoicingModule'
 import { InvoicesModule } from '../modules/invoices/InvoicesModule'
+import { ContactsModule } from '../modules/contacts/ContactsModule'
 import { ShippingModule } from '../modules/fulfillment/ShippingModule'
 import { ComingSoon } from '../modules/ComingSoon'
 
@@ -402,6 +403,8 @@ export function AppShell(): JSX.Element {
               <InvoicingModule />
             ) : activeModule?.id === 'invoices' ? (
               <InvoicesModule />
+            ) : activeModule?.id === 'contacts' ? (
+              <ContactsModule />
             ) : activeModule?.id === 'fulfillment' ? (
               <ShippingModule />
             ) : activeModule ? (

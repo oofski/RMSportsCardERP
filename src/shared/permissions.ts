@@ -102,6 +102,8 @@ export type Permission =
   | 'shipping.pack'
   | 'module.invoicing'
   | 'module.finance'
+  | 'module.messages'
+  | 'messages.broadcast'
   | 'finance.manage'
   | 'module.streaming'
   | 'streaming.manage'
@@ -160,6 +162,38 @@ export const PERMISSIONS: PermissionDefinition[] = [
     description:
       'Turn on push notifications to your own phone when anyone clocks in or out. Shows who and when.',
     group: 'Administration'
+  },
+  /**
+   * TWO PERMISSIONS, because sending and being reachable are different powers.
+   *
+   * `module.messages` is the ordinary one: read the threads you are in, reply to
+   * them, and see who else works here. Everybody who works here needs it, the
+   * way everybody needs to be reachable — a rota that cannot be told about a
+   * changed start time is a rota that gets told by phone instead.
+   *
+   * `messages.broadcast` is the supervisory one: start a NEW conversation with
+   * anybody, and buzz the whole team's phones at once. That is a capability that
+   * reaches every personal device in the business, and the fastest way to teach
+   * people to turn notifications off is to let anyone use it for anything. It is
+   * grantable on its own, so a shift lead can have it without the Admin module.
+   *
+   * Replying inside a thread you are already in is NOT gated by it: somebody was
+   * put in that conversation deliberately, and a conversation you cannot answer
+   * is an announcement, which is the other feature.
+   */
+  {
+    key: 'module.messages',
+    label: 'Messages',
+    description:
+      'Read and reply to conversations you have been added to, and see the company contact list.',
+    group: 'Modules'
+  },
+  {
+    key: 'messages.broadcast',
+    label: 'Start conversations and notify the team',
+    description:
+      "Start a new conversation with anyone, and send a notification to everybody's phone at once.",
+    group: 'Modules'
   },
   {
     key: 'updates.check',
@@ -263,6 +297,8 @@ const ALL_PERMISSIONS: Permission[] = PERMISSIONS.map((p) => p.key)
  */
 const BREAKER_PERMISSIONS: Permission[] = [
   'updates.check',
+  // Being reachable is not a privilege. See the note on module.messages.
+  'module.messages',
   'module.fulfillment',
   'shipping.find',
   'shipping.pack',
@@ -271,6 +307,8 @@ const BREAKER_PERMISSIONS: Permission[] = [
 
 const OPERATIONS_PERMISSIONS: Permission[] = [
   'admin.access',
+  'module.messages',
+  'messages.broadcast',
   'admin.employees.view',
   'admin.employees.manage',
   'admin.hours.view',
@@ -298,6 +336,8 @@ const OPERATIONS_PERMISSIONS: Permission[] = [
 // with whoever runs the show.
 const STAFF_PERMISSIONS: Permission[] = [
   'updates.check',
+  // Being reachable is not a privilege. See the note on module.messages.
+  'module.messages',
   'module.inventory',
   'module.fulfillment',
   'shipping.find',
@@ -311,6 +351,8 @@ const STAFF_PERMISSIONS: Permission[] = [
 // not reopen it.
 const SHIPPING_PERMISSIONS: Permission[] = [
   'updates.check',
+  // Being reachable is not a privilege. See the note on module.messages.
+  'module.messages',
   'module.fulfillment',
   'shipping.find',
   'shipping.pack'

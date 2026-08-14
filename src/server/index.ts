@@ -22,6 +22,7 @@ import { registerPushIpc } from '../main/pushIpc'
 import { registerOwnerIpc } from '../main/ownerIpc'
 import { registerScheduleIpc } from '../main/scheduleIpc'
 import { registerInvoicesIpc } from '../main/invoicesIpc'
+import { registerMessagesIpc } from '../main/messagesIpc'
 import { registerPerformanceIpc } from '../main/performanceIpc'
 import { initCloudSync, stopCloudSync } from '../main/services/cloudSync'
 import { collectClientActions, type PendingDownload } from './clientActions'
@@ -913,6 +914,7 @@ export function startServer(options: ServerOptions = {}): Server {
   registerOwnerIpc()
   registerScheduleIpc()
   registerInvoicesIpc()
+  registerMessagesIpc()
   registerPerformanceIpc()
 
   // The three modules that push do it by walking the window list. Give them one

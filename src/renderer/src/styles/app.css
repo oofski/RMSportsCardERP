@@ -15866,6 +15866,317 @@ button.sor-team:focus-visible {
   color: var(--success-strong);
 }
 
+/* ---------- Contacts & messages ---------- */
+.ct-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  /* The list and the thread are a fixed pane: the conversation scrolls inside
+     itself, not the page. A page that grows with the thread means the compose
+     box walks off the bottom of the screen as soon as anybody says anything. */
+  height: calc(100vh - var(--topbar-h) - 46px);
+  min-height: 420px;
+}
+.ct-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  flex: none;
+}
+.ct-panes {
+  display: inline-flex;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+.ct-pane {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 0;
+  border-radius: calc(var(--radius) - 3px);
+  background: transparent;
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.ct-pane.active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
+}
+.ct-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--brand-500);
+}
+.ct-n {
+  font-size: 11.5px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.ct-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 200px;
+  max-width: 340px;
+  color: var(--text-3);
+}
+.ct-search input {
+  flex: 1;
+}
+.ct-actions {
+  display: inline-flex;
+  gap: 8px;
+  margin-left: auto;
+}
+.ct-body {
+  display: grid;
+  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
+  gap: 14px;
+  flex: 1;
+  min-height: 0;
+}
+.ct-list {
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+.ct-thread {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 8px;
+  width: 100%;
+  padding: 11px 14px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.ct-thread:hover {
+  background: var(--surface-2);
+}
+.ct-thread.active {
+  background: var(--brand-soft);
+}
+.ct-thread-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.ct-thread-name {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13.5px;
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ct-unread {
+  min-width: 19px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--brand-500);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+}
+.ct-thread-last {
+  grid-column: 1 / -1;
+  font-size: 12.5px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ct-thread-when {
+  grid-column: 1 / -1;
+  font-size: 11px;
+  color: var(--text-3);
+}
+.ct-person {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.ct-person-id {
+  flex: 1;
+  min-width: 0;
+}
+.ct-person-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+.ct-you {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--text-3);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+.ct-person-sub {
+  font-size: 12px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ct-pane-right {
+  display: flex;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+.ct-thread-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.ct-thread-head {
+  flex: none;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.ct-thread-head h2 {
+  margin: 0;
+  font-size: 15px;
+}
+.ct-thread-head p {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ct-messages {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+}
+.ct-msg {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: 78%;
+  padding: 8px 11px;
+  border-radius: 12px;
+  background: var(--surface-2);
+  align-self: flex-start;
+}
+/* Yours on the right, in brand ink. The one visual job this view has is making
+   "who said that" answerable without reading a name on every line. */
+.ct-msg.mine {
+  align-self: flex-end;
+  background: var(--brand-soft);
+}
+.ct-msg-who {
+  font-size: 11.5px;
+  font-weight: 650;
+  color: var(--text-3);
+}
+.ct-msg-body {
+  font-size: 13.5px;
+  line-height: 1.5;
+  /* Newlines somebody typed are newlines. A message pasted from a list that
+     collapses to one paragraph is a message they have to send again. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.ct-msg-when {
+  font-size: 10.5px;
+  color: var(--text-3);
+  align-self: flex-end;
+}
+.ct-nomsg {
+  margin: auto;
+  font-size: 13px;
+  color: var(--text-3);
+}
+.ct-compose {
+  flex: none;
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+}
+.ct-compose textarea {
+  flex: 1;
+  resize: none;
+}
+.ct-pick {
+  max-height: 260px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 10px;
+}
+.ct-pick-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 11px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+.ct-pick-row.on {
+  background: var(--brand-soft);
+}
+.ct-pick-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+.ct-pick-sub {
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+.ct-warn {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 0 10px;
+  padding: 9px 12px;
+  border: 1px solid var(--warn-border, var(--border));
+  border-radius: var(--radius);
+  background: var(--warn-soft, var(--surface-2));
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-2);
+}
+.ct-warn svg {
+  flex: none;
+  margin-top: 2px;
+}
+
 /* ---------- Finance → History ---------- */
 .hist {
   display: flex;

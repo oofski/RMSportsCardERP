@@ -17,6 +17,7 @@ import { registerPushIpc } from './pushIpc'
 import { registerOwnerIpc } from './ownerIpc'
 import { registerScheduleIpc } from './scheduleIpc'
 import { registerInvoicesIpc } from './invoicesIpc'
+import { registerMessagesIpc } from './messagesIpc'
 import { registerPerformanceIpc } from './performanceIpc'
 import { getDb, closeDb } from './db/database'
 import { configureBusinessTimeZone } from './util'
@@ -127,6 +128,7 @@ app.whenReady().then(() => {
   registerOwnerIpc()
   registerScheduleIpc()
   registerInvoicesIpc()
+  registerMessagesIpc()
   registerPerformanceIpc()
   initUpdater()
   // Starts the push/pull loop only if sync has been switched on; a standalone
