@@ -51,6 +51,16 @@ import {
 } from './db/financeStreaming'
 import { deleteExpense, listExpenses, saveExpense } from './db/financeExpenses'
 import { listWholesaleSales } from './db/invoiceStock'
+import {
+  listPurchaseOrderHistory,
+  listSalesOrderHistory,
+  orderHistoryYears
+} from './db/orderHistory'
+import type {
+  OrderHistoryYears,
+  PurchaseOrderHistoryRow,
+  SalesOrderHistoryRow
+} from '@shared/orderHistory'
 import type { WholesaleSaleRow } from '@shared/invoices'
 import { getDb } from './db/database'
 import { deleteRatePeriod, listRatePeriods, saveRatePeriod } from './db/whatnotRates'
@@ -312,6 +322,33 @@ export function registerFinanceIpc(): void {
   ipcMain.handle(IPC.finWholesale, (): WholesaleSaleRow[] =>
     can('module.finance') ? listWholesaleSales(getDb()) : []
   )
+
+  /**
+   * The year's ledger of orders, both sides.
+   *
+   * Reads, gated on `module.finance` like everything else on this screen. The
+   * year is coerced rather than trusted: it goes into a LIKE prefix, and a
+   * caller sending something that is not a year should get an empty list rather
+   * than a query built out of it.
+   */
+  ipcMain.handle(IPC.finHistoryYears, (): OrderHistoryYears => {
+    if (!can('module.finance')) return { purchase: [], sales: [] }
+    return orderHistoryYears(getDb())
+  })
+
+  ipcMain.handle(IPC.finHistoryPos, (_e, year: unknown): PurchaseOrderHistoryRow[] => {
+    if (!can('module.finance')) return []
+    const y = Math.trunc(Number(year))
+    if (!Number.isInteger(y) || y < 1970 || y > 9999) return []
+    return listPurchaseOrderHistory(getDb(), y)
+  })
+
+  ipcMain.handle(IPC.finHistorySos, (_e, year: unknown): SalesOrderHistoryRow[] => {
+    if (!can('module.finance')) return []
+    const y = Math.trunc(Number(year))
+    if (!Number.isInteger(y) || y < 1970 || y > 9999) return []
+    return listSalesOrderHistory(getDb(), y)
+  })
 
   ipcMain.handle(
     IPC.finExpenseSave,

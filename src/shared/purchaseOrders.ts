@@ -48,6 +48,51 @@ export function isPurchaseOrderStatus(value: unknown): value is PurchaseOrderSta
   return PO_STATUSES.includes(value as PurchaseOrderStatus)
 }
 
+/**
+ * How long a fully-received order stays on the board after the boxes land.
+ *
+ * TWO DAYS, and the two days are the point rather than the number. A received
+ * order is not finished with the moment it is checked in: a short shipment turns
+ * up the next morning, a scan gets corrected, somebody notices the price on the
+ * invoice does not match the line. Sweeping it off the board the instant the
+ * last box is counted would put the one order most likely to need a correction
+ * behind a search.
+ *
+ * After that it is history. The board is a place where work is done, and an
+ * order with nothing left to do on it is clutter that makes the orders that DO
+ * need attention harder to see — which is the whole reason this exists.
+ */
+export const PO_SETTLE_DAYS = 2
+
+/**
+ * Is this order finished with — off the board, into the year's ledger?
+ *
+ * DERIVED, never stored, and that is deliberate. A stored `archived` flag needs
+ * something to set it: a background job, a check on every read, or a button
+ * somebody has to remember. All three can be wrong, and the first two can be
+ * wrong on one machine and right on another — sync would then carry the wrong
+ * answer across. Computed from `received_at` it is simply a fact about the
+ * clock, identical everywhere, correct on a laptop that has been shut for a
+ * month, and needs no migration to change if the two days ever become five.
+ *
+ * Keyed on `receivedAt` rather than on `status`, because an order can be both
+ * received AND paid and the status column only holds one of those. The
+ * timestamp is what records that the boxes arrived.
+ *
+ * A cancelled order is NOT settled by this. Cancelling reverses every received
+ * unit and is reversible in turn; it belongs on the board where somebody can see
+ * what they did.
+ */
+export function isSettledPurchaseOrder(
+  po: { status: PurchaseOrderStatus; receivedAt: string | null },
+  now: number = Date.now()
+): boolean {
+  if (po.status === 'cancelled' || !po.receivedAt) return false
+  const at = Date.parse(po.receivedAt)
+  if (!Number.isFinite(at)) return false
+  return now - at >= PO_SETTLE_DAYS * 24 * 60 * 60 * 1000
+}
+
 export function canTransition(from: PurchaseOrderStatus, to: PurchaseOrderStatus): boolean {
   return PO_TRANSITIONS[from]?.includes(to) ?? false
 }

@@ -4,6 +4,7 @@ import { EmptyState } from '../../components/ui'
 import { CompletePnl } from './Pnl'
 import { RatesTab } from './RatesTab'
 import { StreamingTab } from './StreamingTab'
+import { HistoryTab } from './HistoryTab'
 import { WholesaleTab } from './WholesaleTab'
 import { financeReady } from './api'
 
@@ -26,6 +27,11 @@ import { financeReady } from './api'
  * too; that is still true and the page says so at its foot, but withholding the
  * half that does exist bought nobody anything.
  *
+ * History is the year's ledger of orders, both sides. It exists because a
+ * purchase order that has been received and settled has no work left on it, so
+ * it leaves the board two days later — and something has to be the place it goes.
+ * Nothing is deleted: every line, date and price is still on the row.
+ *
  * Wholesale is built now, and what unblocked it was not this screen: a sales
  * order used to move no stock, so nothing off-stream had a cost attached and any
  * margin here would have been invented. Orders take their own FIFO layers now,
@@ -34,12 +40,13 @@ import { financeReady } from './api'
  * listed and excluded from the totals rather than counted at zero, which is the
  * same principle the placeholder was defending.
  */
-type FinanceTab = 'streaming' | 'rates' | 'wholesale' | 'pnl'
+type FinanceTab = 'streaming' | 'rates' | 'wholesale' | 'history' | 'pnl'
 
 const TABS: Array<{ id: FinanceTab; label: string; icon: string }> = [
   { id: 'streaming', label: 'Streaming', icon: 'Activity' },
   { id: 'rates', label: 'Fees & rates', icon: 'Percent' },
   { id: 'wholesale', label: 'Wholesale', icon: 'Boxes' },
+  { id: 'history', label: 'History', icon: 'ClipboardList' },
   { id: 'pnl', label: 'Complete P&L', icon: 'BarChart3' }
 ]
 
@@ -79,6 +86,8 @@ export function FinanceModule(): JSX.Element {
         <RatesTab />
       ) : tab === 'wholesale' ? (
         <WholesaleTab />
+      ) : tab === 'history' ? (
+        <HistoryTab />
       ) : (
         <CompletePnl />
       )}

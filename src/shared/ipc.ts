@@ -498,6 +498,12 @@ export const IPC = {
   // exact FIFO layers cost. A READ over invoice_stock_moves — the margin is
   // subtracted once, in main, so no screen can arrive at a different one.
   finWholesale: 'finance:wholesale:list',
+  // History: the year's ledger of orders, both sides. A purchase order leaves
+  // the board two days after it is received and lands here; nothing is deleted,
+  // so every line and date stays reachable for as long as the database does.
+  finHistoryYears: 'finance:history:years',
+  finHistoryPos: 'finance:history:purchase-orders',
+  finHistorySos: 'finance:history:sales-orders',
 
   // Email
   emailComposeInvite: 'email:compose-invite',

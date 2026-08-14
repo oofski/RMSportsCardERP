@@ -207,6 +207,11 @@ import type {
   StreamingFinanceView,
   WhatnotRatePeriod
 } from '@shared/financeStreaming'
+import type {
+  OrderHistoryYears,
+  PurchaseOrderHistoryRow,
+  SalesOrderHistoryRow
+} from '@shared/orderHistory'
 import type { PnlDetail, PnlDrillRequest } from '@shared/pnlDrill'
 import type { BreakPnlSplit } from '@shared/breakPnl'
 
@@ -1045,6 +1050,14 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       /** One row per product line sold on a sales order: what it sold for, what
        *  those exact FIFO layers cost, and the margin between them. */
       wholesale: (): Promise<WholesaleSaleRow[]> => ipcRenderer.invoke(IPC.finWholesale),
+      /** Which years the ledger has anything in, newest first. */
+      historyYears: (): Promise<OrderHistoryYears> => ipcRenderer.invoke(IPC.finHistoryYears),
+      /** Every purchase order filed under one year, lines included. */
+      historyPurchaseOrders: (year: number): Promise<PurchaseOrderHistoryRow[]> =>
+        ipcRenderer.invoke(IPC.finHistoryPos, year),
+      /** Every sales order filed under one year, lines and FIFO cost included. */
+      historySalesOrders: (year: number): Promise<SalesOrderHistoryRow[]> =>
+        ipcRenderer.invoke(IPC.finHistorySos, year),
       /** Removes the upload and the rows NOTHING ELSE covers — a correction.
        *  Rows another import also contains are re-pointed to it and survive. */
       deleteImport: (id: string): Promise<Result<StreamingFinanceView>> =>

@@ -15866,6 +15866,212 @@ button.sor-team:focus-visible {
   color: var(--success-strong);
 }
 
+/* ---------- Finance → History ---------- */
+.hist {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.hist-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+.hist-sides {
+  display: inline-flex;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+.hist-side {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 0;
+  border-radius: calc(var(--radius) - 3px);
+  background: transparent;
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.hist-side.active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
+}
+.hist-years {
+  display: inline-flex;
+  gap: 4px;
+}
+.hist-year {
+  padding: 6px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 12.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.hist-year.active {
+  border-color: var(--brand-500);
+  background: var(--brand-soft);
+  color: var(--brand-700);
+}
+.hist-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 220px;
+  max-width: 380px;
+  color: var(--text-3);
+}
+.hist-search input {
+  flex: 1;
+}
+.hist-count {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+.data.hist-table th,
+.data.hist-table td {
+  white-space: nowrap;
+}
+.hist-table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+/* The whole row is the control. A caret you have to hit exactly is a caret
+   nobody uses; the row is 40px tall and the target should be all of it. */
+.hist-row {
+  cursor: pointer;
+}
+.hist-row:hover {
+  background: var(--surface-2);
+}
+.hist-caret {
+  width: 28px;
+  padding-right: 0 !important;
+}
+.hist-chev {
+  display: inline-flex;
+  color: var(--text-3);
+  transition: transform 0.12s ease;
+}
+.hist-chev.open {
+  transform: rotate(90deg);
+}
+.hist-num {
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+.hist-date {
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+.hist-stage {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--text-2);
+  font-size: 11.5px;
+  font-weight: 600;
+  text-transform: capitalize;
+}
+.hist-stage.st-received,
+.hist-stage.st-paid {
+  background: var(--success-soft, var(--surface-3));
+  color: var(--success-strong, var(--text-2));
+}
+.hist-stage.st-cancelled,
+.hist-stage.st-void {
+  background: var(--danger-soft, var(--surface-3));
+  color: var(--danger-strong, var(--text-2));
+}
+/* "This one is off the board." Said quietly — it is a fact about where the row
+   lives, not a status somebody has to act on. */
+.hist-filed {
+  margin-left: 6px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+.hist-detail-row > td {
+  padding: 0 !important;
+  background: var(--surface-2);
+}
+.hist-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 18px 16px 46px;
+  border-top: 1px solid var(--border);
+}
+.hist-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px 18px;
+  margin: 0;
+}
+.hist-facts dt {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.hist-facts dd {
+  margin: 2px 0 0;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+/* The lines table sits inside a detail row rather than in a `.table-wrap`, so it
+   carries its own frame. Tighter padding than the outer table too: it is a
+   nested list, and matching the parent's row height would make four lines look
+   like a second screen. */
+.hist-lines {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.data.hist-lines thead th {
+  padding: 8px 12px;
+}
+.data.hist-lines tbody td {
+  padding: 8px 12px;
+}
+.data.hist-lines tbody tr:last-child td {
+  border-bottom: 0;
+}
+.data.hist-lines th,
+.data.hist-lines td {
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+.hist-lines .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.hist-sku {
+  color: var(--text-3);
+}
+.hist-unknown {
+  color: var(--text-3);
+}
+.hist-noline {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+
 /* ---------- Finance → Wholesale ---------- */
 .wsale {
   display: flex;
@@ -15931,8 +16137,8 @@ button.sor-team:focus-visible {
 .wsale-search input {
   flex: 1;
 }
-.wsale-table td,
-.wsale-table th {
+.data.wsale-table td,
+.data.wsale-table th {
   white-space: nowrap;
 }
 .wsale-table .num {

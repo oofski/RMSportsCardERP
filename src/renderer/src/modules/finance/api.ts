@@ -13,6 +13,11 @@ import type {
 } from '@shared/financeStreaming'
 import type { PnlDetail, PnlDrillRequest } from '@shared/pnlDrill'
 import type { WholesaleSaleRow } from '@shared/invoices'
+import type {
+  OrderHistoryYears,
+  PurchaseOrderHistoryRow,
+  SalesOrderHistoryRow
+} from '@shared/orderHistory'
 import { api } from '../../lib/api'
 
 /** What `rows()` can be narrowed by. Every field is optional; an empty filter is
@@ -74,6 +79,12 @@ export interface FinanceApi {
    *  those exact FIFO layers cost, and the margin. Read-only — a sales order is
    *  where the numbers are entered, not here. */
   wholesale(): Promise<WholesaleSaleRow[]>
+  /** Which years the order ledger covers, newest first. */
+  historyYears(): Promise<OrderHistoryYears>
+  /** One year of purchase orders, lines included so a row expands instantly. */
+  historyPurchaseOrders(year: number): Promise<PurchaseOrderHistoryRow[]>
+  /** One year of sales orders, with what the units on them cost. */
+  historySalesOrders(year: number): Promise<SalesOrderHistoryRow[]>
   expenses(): Promise<GeneralExpense[]>
   saveExpense(input: GeneralExpenseInput): Promise<Result<GeneralExpenseResult>>
   deleteExpense(id: string): Promise<Result<GeneralExpenseResult>>

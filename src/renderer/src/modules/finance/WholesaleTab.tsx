@@ -129,7 +129,7 @@ export function WholesaleTab(): JSX.Element {
       </div>
 
       <div className="table-wrap">
-        <table className="table wsale-table">
+        <table className="data wsale-table">
           <thead>
             <tr>
               <th>Date</th>

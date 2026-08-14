@@ -14,6 +14,7 @@ import {
   canTransition,
   canonicalDestination,
   destinationHoldsStock,
+  isSettledPurchaseOrder,
   orderKindOf,
   type OrderParty,
   type OrderPartyKind,
@@ -436,9 +437,24 @@ function unitsByLine(db: Database.Database, poId: string): Map<string, UnitRow[]
   return byLine
 }
 
+/**
+ * The board: every order there is still something to do about.
+ *
+ * SETTLED ORDERS ARE LEFT OUT — fully received, and received more than
+ * PO_SETTLE_DAYS ago. They have not gone anywhere: `listPurchaseOrderHistory`
+ * is the year's ledger and shows every order regardless of stage, so an order
+ * swept off here is one search away and still carries its lines, its dates and
+ * the cost basis every FIFO layer points at.
+ *
+ * The filter is applied in JS against the shared predicate rather than as SQL,
+ * so the board and the history and any future caller cannot disagree about what
+ * "finished with" means. A few hundred rows is not a query worth optimising
+ * against a rule that has to be one rule.
+ */
 export function listPurchaseOrders(): PurchaseOrder[] {
   const rows = getDb().prepare(`${PO_SELECT} ORDER BY po.created_at DESC`).all() as PoHeaderRow[]
-  return rows.map(toSummary)
+  const now = Date.now()
+  return rows.map(toSummary).filter((po) => !isSettledPurchaseOrder(po, now))
 }
 
 export function getPurchaseOrder(id: string): PurchaseOrderDetail | null {
