@@ -1102,5 +1102,93 @@ ok(repo.getInvoice(doomed.id)?.qboId === '77', 'a posted invoice knows its Quick
 repo.deleteInvoice(doomed.id)
 ok(repo.getInvoice(doomed.id) === null, 'and being posted does not stop it going')
 
+// ---- editing a draft must not forget what has already SHIPPED -------------
+// The bug this pins lost real stock. saveInvoice replaces every line rather than
+// diffing them, and the INSERT did not name `qty_fulfilled` — whose schema
+// default is 0 — so any edit to a draft, even a memo, reset the picking to
+// nothing. The scan queue then offered the whole order again and a second
+// scan-out took the units off the shelf a second time: sixteen boxes gone
+// against a ten-box sale, with no error anywhere.
+{
+  const buyer = repo.saveCustomer({ id: null, name: 'Fulfilment Buyer', terms: 'Net 30' })
+  const inv = repo.saveInvoice(
+    {
+      id: null,
+      customerId: buyer.id,
+      customerName: 'Fulfilment Buyer',
+      invoiceDate: '2026-08-12',
+      dueDate: '2026-09-11',
+      terms: 'Net 30',
+      lines: [
+        { item: 'Mega Case', productId: null, sku: 'MEGA-1', quantity: 10, rate: 100, amount: 1000 },
+        { item: 'Grading fee', productId: null, sku: null, quantity: 2, rate: 25, amount: 50 }
+      ]
+    },
+    null
+  )
+
+  // Six of the ten are picked and physically leave the building.
+  const line = inv.lines.find((l: { item: string }) => l.item === 'Mega Case')
+  db.prepare(`UPDATE invoice_lines SET qty_fulfilled = 6, fulfilled_at = ? WHERE id = ?`)
+    .run('2026-08-12T18:00:00.000Z', line.id)
+
+  // Somebody edits the memo. Nothing else about the order changes.
+  const after = repo.saveInvoice(
+    {
+      id: inv.id,
+      customerId: buyer.id,
+      customerName: 'Fulfilment Buyer',
+      invoiceDate: '2026-08-12',
+      dueDate: '2026-09-11',
+      terms: 'Net 30',
+      memo: 'called about the address',
+      lines: [
+        { item: 'Mega Case', productId: null, sku: 'MEGA-1', quantity: 10, rate: 100, amount: 1000 },
+        { item: 'Grading fee', productId: null, sku: null, quantity: 2, rate: 25, amount: 50 }
+      ]
+    },
+    null
+  )
+  const mega = after.lines.find((l: { item: string }) => l.item === 'Mega Case')
+  const fee = after.lines.find((l: { item: string }) => l.item === 'Grading fee')
+  ok(mega.qtyFulfilled === 6, 'a memo edit does not forget the six boxes already picked', String(mega.qtyFulfilled))
+  ok(mega.qtyOutstanding === 4, 'so only the remaining four are still owed', String(mega.qtyOutstanding))
+  ok(fee.qtyFulfilled === 0, 'and a line that never shipped still reads zero', String(fee.qtyFulfilled))
+
+  // Editing the order DOWN below what already went out. The honest record is
+  // that the line is fully fulfilled, not that six of four left.
+  const shrunk = repo.saveInvoice(
+    {
+      id: inv.id,
+      customerId: buyer.id,
+      customerName: 'Fulfilment Buyer',
+      invoiceDate: '2026-08-12',
+      dueDate: '2026-09-11',
+      terms: 'Net 30',
+      lines: [
+        { item: 'Mega Case', productId: null, sku: 'MEGA-1', quantity: 4, rate: 100, amount: 400 }
+      ]
+    },
+    null
+  )
+  const small = shrunk.lines[0]
+  ok(small.qtyFulfilled === 4, 'shrinking the order below what shipped clamps rather than over-claiming', String(small.qtyFulfilled))
+  ok(small.qtyOutstanding === 0, 'and nothing is left outstanding', String(small.qtyOutstanding))
+}
+
+// ---- terms survive a round trip through the DATABASE ----------------------
+// The suite used to test dueDateFor('...', 'Net 2') as a pure function and stop
+// there. It passed while `asTerms` in main/db/invoices.ts — a second, hand-typed
+// copy of the terms list — silently mapped Net 2 to Net 30 on write AND on read,
+// so the value could never be stored and a buyer given two days got thirty.
+// A pure-function test over a value the database refuses to keep is a green
+// suite over a broken feature.
+for (const term of INVOICE_TERMS) {
+  const c = repo.saveCustomer({ id: null, name: `Terms ${term}`, terms: term })
+  const readBack = repo.listCustomers().find((x: { id: string }) => x.id === c.id)
+  ok(readBack?.terms === term, `a customer on ${term} is stored and read back as ${term}`, String(readBack?.terms))
+}
+
+
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

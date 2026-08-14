@@ -560,7 +560,12 @@ export async function createQboCustomer(input: {
   }
   return {
     id: String(created.Id),
-    name: String(created.DisplayName || name),
+    // `input.name`, NOT `name` — there is no local `name` here, and TypeScript
+    // accepted the bare identifier only because lib.dom declares a global one.
+    // The main process has no such global, so this threw a ReferenceError AFTER
+    // the customer had already been created, and the operator's natural retry
+    // made the duplicate contact this file's own comment says cannot be undone.
+    name: String(created.DisplayName || input.name),
     email: created.PrimaryEmailAddr?.Address ?? null,
     billAddr: fromRawAddress(created.BillAddr)
   }

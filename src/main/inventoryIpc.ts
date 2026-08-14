@@ -251,7 +251,12 @@ export function registerInventoryIpc(): void {
   ipcMain.handle(IPC.invScanCommit, (_e, input: ScanCommitInput): Result<ScanCommitResult> => {
     try {
       const actor = requireManage()
-      const kinds: ScanCommitKind[] = ['po_line', 'add_stock', 'remove_stock']
+      // Every kind `commitScan` implements. 'so_line' was missing, so scanning
+      // stock OUT against a sales order was refused here — "Nothing to scan." —
+      // before the backend that implements it correctly was ever reached. The
+      // scanning suite passed throughout because it calls commitScan directly
+      // and never crosses this boundary, which both transports do.
+      const kinds: ScanCommitKind[] = ['po_line', 'so_line', 'add_stock', 'remove_stock']
       if (!kinds.includes(input?.kind)) {
         return { ok: false, error: 'Nothing to scan.' }
       }

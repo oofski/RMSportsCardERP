@@ -16,14 +16,51 @@ import type { UploadedFile } from '@shared/types'
  * value is REFUSED and reported, leaving the default in force: silently falling
  * back to the machine's zone is the exact failure being eliminated.
  */
+/**
+ * Point BOTH clocks at the business.
+ *
+ * ## Why this sets process.env.TZ as well
+ *
+ * `setBusinessTimeZone` only tells `@shared/businessTime` which zone to measure
+ * against. That is enough for the code that ASKS it — and most of this app does
+ * not. Dozens of call sites use plain `new Date().getHours()/.getDate()`, which
+ * reads the MACHINE's zone.
+ *
+ * On the desktop those agree: the laptop is in Chicago. In the container they do
+ * not. `node:22-bookworm-slim` is UTC, `render.yaml` sets RMOPS_BUSINESS_TZ and
+ * nothing set TZ, so every one of those call sites ran five or six hours ahead
+ * of the floor. That is one bug in nine places: payroll bucketed overtime into
+ * the wrong week and the wrong fortnight, nobody could set availability after
+ * 19:00, the owner board's Today read zero all evening, and the shipping
+ * performance report dropped the whole evening's bench work.
+ *
+ * Node reads TZ when it constructs a Date, not once at boot, so setting it here
+ * — before any handler runs — makes the machine clock and the business clock the
+ * same clock. `businessTime` stays the right thing to call for anything that
+ * must be correct regardless of where the process runs; this makes the code that
+ * never adopted it correct too.
+ *
+ * The suites already pin TZ themselves (tests/build.mjs), which is exactly why
+ * they could never see any of this.
+ */
 export function configureBusinessTimeZone(): string {
   const wanted = (process.env.RMOPS_BUSINESS_TZ ?? '').trim()
-  if (!wanted) return DEFAULT_BUSINESS_TIME_ZONE
-  if (setBusinessTimeZone(wanted)) return wanted
+  if (!wanted) {
+    if (!process.env.TZ) process.env.TZ = DEFAULT_BUSINESS_TIME_ZONE
+    return DEFAULT_BUSINESS_TIME_ZONE
+  }
+  if (setBusinessTimeZone(wanted)) {
+    process.env.TZ = wanted
+    return wanted
+  }
   console.error(
     `[businessTime] RMOPS_BUSINESS_TZ="${wanted}" is not a timezone this platform knows. ` +
       `Falling back to ${DEFAULT_BUSINESS_TIME_ZONE}.`
   )
+  // The machine clock follows the fallback too. Leaving it on the container's
+  // UTC here would reintroduce the split this function exists to close, in the
+  // one case where somebody has already mistyped the zone.
+  process.env.TZ = DEFAULT_BUSINESS_TIME_ZONE
   return DEFAULT_BUSINESS_TIME_ZONE
 }
 

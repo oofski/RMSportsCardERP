@@ -384,7 +384,31 @@ const RE_ITEMS_NOISE = /^\d+\s*x?\s*items?$/i
  * an unanchored match starting at a line-final "USPS" token runs down the page and
  * captures the buyer's name and street address as the shipping service.
  */
-const RE_USPS_SPACED = /USPS\s+([\w ®™]+?)\s+#\s*(\d[\d ]{8,})/i
+/**
+ * A spaced tracking number, and NOT the weight printed after it.
+ *
+ * The digit-and-space class must not be greedy, and must not be allowed to end
+ * on a space. The previous form — `(\d[\d ]{8,})`, greedy — swallowed the start
+ * of the weight whenever the label and the weight shared a line, which is the
+ * layout the real Whatnot export uses:
+ *
+ *   "USPS Ground Advantage #9300120762602315706745 7.0 oz"
+ *     stored 93001207626023157067457  (23 digits, the 7 of "7.0 oz")
+ *
+ * Silent, because 22-23 digits is a plausible USPS length — so every tracking
+ * link pointed at a label that does not exist, and pasting the real numbers into
+ * the bulk status updater matched nothing.
+ *
+ * THE DISCRIMINATOR IS THE DECIMAL POINT. A weight always has one; a tracking
+ * number never does. So this matches digit GROUPS separated by single spaces and
+ * refuses to end anywhere followed by a digit or a `.`; greedy matching then
+ * backtracks off the group that belongs to the weight. A lazy match cannot do
+ * this — it stops at the first legal boundary, which is inside the number.
+ *
+ * The space is a literal rather than `\s`, for the same reason the service class
+ * below gives: `\s` lets an unanchored match run down the page across a newline.
+ */
+const RE_USPS_SPACED = /USPS\s+([\w ®™]+?)\s+#\s*(\d+(?: \d+)*)(?![\d.])/i
 const RE_USPS_STRICT = /USPS\s+([\w ®™]+?)\s+#\s*(\d{6,})/i
 const RE_WEIGHT = /([\d.]+)\s*oz\b/i
 /** Thousands separators are part of the number: `$1,250.00` is 1250, not 1. */

@@ -47,6 +47,14 @@ services:
       # business ever moves.
       - key: RMOPS_BUSINESS_TZ
         value: America/Chicago
+      # The MACHINE clock, belt and braces. configureBusinessTimeZone() sets
+      # process.env.TZ from RMOPS_BUSINESS_TZ at boot, so this is not load-
+      # bearing — but the container image is UTC, and every raw new Date()
+      # getter in the app reads the machine zone. Stating it here means the
+      # process is on the business clock from its very first line, before any
+      # code runs, rather than from whenever that function is reached.
+      - key: TZ
+        value: America/Chicago
       # Render terminates TLS and forwards x-forwarded-for, so those headers can
       # be believed here. Off by default, because on a directly-reachable machine
       # they are whatever the caller typed and the login throttle is worthless.

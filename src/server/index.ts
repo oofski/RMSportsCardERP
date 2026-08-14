@@ -358,7 +358,14 @@ function trustsProxy(): boolean {
 }
 
 function isSecureRequest(req: IncomingMessage): boolean {
-  if ((req.socket as { encrypted?: boolean }).encrypted === true) return true
+  // `req.socket` IS NULLABLE, and the one path that reaches here with a null one
+  // is the path that mattered: `readBody` throws its size-limit error from inside
+  // `for await (const chunk of req)`, which calls the iterator's return(),
+  // destroys the message and nulls the socket. The top-level catch then answers
+  // 400 — through here — and a TypeError raised inside that catch is an
+  // unhandled rejection, which Node 15+ turns into process exit. So an
+  // unauthenticated oversized POST killed the whole server, repeatably.
+  if ((req.socket as { encrypted?: boolean } | null)?.encrypted === true) return true
   if (!trustsProxy()) return false
   return String(req.headers['x-forwarded-proto'] ?? '').split(',')[0].trim() === 'https'
 }

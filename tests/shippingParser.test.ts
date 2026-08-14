@@ -1010,5 +1010,46 @@ ok(preOut.teamSlots[0]?.orderId === '1237174001', 'under the real order id', Str
 ok(preOut.teamSlots[0]?.isGiveaway === false, 'and it is not a giveaway')
 ok(preOut.warnings.length === 0, 'with nothing to warn about', JSON.stringify(preOut.warnings.map((w) => w.message)))
 
+// ---------------------------------------------------------------------------
+console.log('\n=== the tracking number is the LABEL, not the label plus the weight ===')
+// ---------------------------------------------------------------------------
+// This suite had 146 cases, used the real layout throughout, and asserted a
+// parsed tracking number ZERO times — so for months every number carried the
+// first digits of the package weight glued onto its end, and 22-or-23 digits is
+// a plausible USPS length, so nothing looked wrong. Every "track this package"
+// link pointed at a label that does not exist, and pasting the REAL numbers into
+// the bulk status updater matched nothing at all.
+//
+// The weight always contains a decimal point and a tracking number never does;
+// that is the discriminator RE_USPS_SPACED now turns on.
+const TRACK_CASES: Array<[string, string]> = [
+  // The layout the real export uses: label and weight on one line.
+  ['USPS Ground Advantage #9300120762602315706745 7.0 oz', '9300120762602315706745'],
+  // A trademark glyph in the service, and a two-digit weight.
+  ['USPS Ground Advantage\u2122 #93001207626023788195 14.0 oz', '93001207626023788195'],
+  // Grouped in fours, which is how a label actually prints it.
+  ['USPS Ground Advantage #9400 1118 9876 5432 1098 90 3.0 oz', '9400111898765432109890'],
+  // Two spaces before the weight.
+  ['USPS Ground Advantage #9300 1207 6260 2315 7067 45  12.5 oz', '9300120762602315706745'],
+  // No weight on the line at all — the case that always worked.
+  ['USPS Priority Mail #9405511899223197428490', '9405511899223197428490']
+]
+for (const [line, want] of TRACK_CASES) {
+  const page = [
+    'Whatnot Packing Slip 1/1',
+    'To: trackbuyer From: rm_cardz',
+    'Track Buyer',
+    '12 Main St. Dallas, TX. 75201. US',
+    'QTY Name & Description Attributes Subtotal',
+    '1 Dallas Cowboys Order 1111111111 $50.00',
+    '1x 2025 PRIZM FOOTBALL HOBBY BOX- Break #3',
+    '1 Items $50.00',
+    line
+  ].join('\n')
+  const out = parsePages([page], { sport: 'nfl' })
+  const got = out.shipments[0]?.trackingNumber ?? '(none)'
+  ok(got === want, `parses ${want} and not the weight after it`, got)
+}
+
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

@@ -1,5 +1,7 @@
 import { randomUUID } from 'crypto'
 import {
+  DEFAULT_INVOICE_TERMS,
+  INVOICE_TERMS,
   asPushState,
   dueDateFor,
   hasAddress,
@@ -44,8 +46,18 @@ function clean(v: string | null | undefined): string | null {
   return s === '' ? null : s
 }
 
+/**
+ * Coerce a stored/incoming terms value to one this app offers.
+ *
+ * READS THE LIST RATHER THAN RESTATING IT. The previous version spelled three of
+ * the terms out by hand, so when "Net 2" was added to INVOICE_TERMS this
+ * function silently mapped it to Net 30 — on write AND on read, so the value
+ * could never be stored or displayed and a buyer given two days got thirty. A
+ * second copy of a list is a second thing to remember to update, and this is the
+ * copy that was forgotten.
+ */
 function asTerms(v: unknown): InvoiceTerms {
-  return v === 'Due on receipt' || v === 'Net 15' || v === 'Net 60' ? v : 'Net 30'
+  return INVOICE_TERMS.includes(v as InvoiceTerms) ? (v as InvoiceTerms) : DEFAULT_INVOICE_TERMS
 }
 
 /**
@@ -722,15 +734,71 @@ export function saveInvoice(
       updatedAt: stamp
     })
 
+    /**
+     * WHAT HAS ALREADY LEFT THE BUILDING, carried across the rewrite.
+     *
+     * Saving replaces every line rather than diffing them, which is fine for
+     * everything the operator typed — but `qty_fulfilled` is not typed, it is
+     * PHYSICAL. It records boxes a picker has already scanned out, and
+     * `fulfilSalesLine` decremented real stock when it was written.
+     *
+     * The insert below did not name the column, so it took its schema default of
+     * 0 and every save silently forgot the picking. Editing a memo on an order
+     * that was 6 of 10 picked reset it to 0 of 10, the scan queue offered all ten
+     * units again, and a second scan-out took ten more boxes off the shelf
+     * against a ten-box sale. Sixteen units gone, no error anywhere.
+     *
+     * Keyed on the PRODUCT, not the line id: the rewrite mints new line ids, so
+     * matching on id would carry nothing. A line with no product (a service, a
+     * one-off) falls back to its item name. Anything that matches nothing starts
+     * at 0, which is correct — it is a line that did not exist before.
+     */
+    const priorFulfilled = new Map<string, { qty: number; at: string | null }>()
+    if (existing) {
+      const rows = db
+        .prepare(
+          `SELECT product_id, item, qty_fulfilled, fulfilled_at
+             FROM invoice_lines WHERE invoice_id = ? AND qty_fulfilled > 0`
+        )
+        .all(id) as Array<{
+        product_id: string | null
+        item: string
+        qty_fulfilled: number
+        fulfilled_at: string | null
+      }>
+      for (const r of rows) {
+        const key = r.product_id ? `p:${r.product_id}` : `i:${r.item.trim().toLowerCase()}`
+        const prev = priorFulfilled.get(key)
+        priorFulfilled.set(key, {
+          qty: (prev?.qty ?? 0) + r.qty_fulfilled,
+          at: prev?.at ?? r.fulfilled_at
+        })
+      }
+    }
+
     db.prepare(`DELETE FROM invoice_lines WHERE invoice_id = ?`).run(id)
     const insert = db.prepare(
       `INSERT INTO invoice_lines
          (id, invoice_id, position, item, product_id, sku, description, quantity, rate, amount,
-          tax_rate, class_name, created_at, updated_at)
+          tax_rate, class_name, qty_fulfilled, fulfilled_at, created_at, updated_at)
        VALUES (@id, @invoiceId, @position, @item, @productId, @sku, @description, @quantity,
-               @rate, @amount, @taxRate, @className, @stamp, @stamp)`
+               @rate, @amount, @taxRate, @className, @qtyFulfilled, @fulfilledAt, @stamp, @stamp)`
     )
-    for (const l of lines) insert.run({ ...l, stamp })
+    for (const l of lines) {
+      const key = l.productId ? `p:${l.productId}` : `i:${l.item.trim().toLowerCase()}`
+      const carried = priorFulfilled.get(key)
+      // Never claim more picked than the line now sells. Editing 10 down to 4
+      // after 6 went out is a real thing somebody may do; the honest record is
+      // that the line is fully fulfilled, not that 6 of 4 left.
+      const qty = Math.min(carried?.qty ?? 0, l.quantity)
+      priorFulfilled.delete(key)
+      insert.run({
+        ...l,
+        qtyFulfilled: qty,
+        fulfilledAt: qty > 0 ? (carried?.at ?? stamp) : null,
+        stamp
+      })
+    }
   })
   run()
 
