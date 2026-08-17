@@ -542,6 +542,35 @@ export function createBridge(ipcRenderer: BridgeTransport) {
        */
       addLines: (id: string, lines: NewPurchaseOrderLine[]): Promise<Result<PurchaseOrderDetail>> =>
         ipcRenderer.invoke(IPC.poAddLines, { id, lines }),
+      /**
+       * Correct the descriptive half: who the order is from, and its note.
+       *
+       * No status gate — this touches nothing with money attached, and the
+       * commonest moment to notice the supplier is missing is while filing an
+       * order that is already closed. Lines that never named their own supplier
+       * follow the header automatically, because they store the inheritance
+       * rather than a copy.
+       */
+      setHeader: (
+        id: string,
+        patch: { supplier?: string | null; notes?: string | null }
+      ): Promise<Result<PurchaseOrderDetail>> =>
+        ipcRenderer.invoke(IPC.poSetHeader, { id, ...patch }),
+      /**
+       * Change what a line says. Quantity may not fall below what has already
+       * been checked in, and the unit price is frozen once ANY unit has been —
+       * the stock on the shelf is costed against a lot carrying the old price,
+       * and moving one without the other would leave the two disagreeing.
+       */
+      updateLine: (
+        id: string,
+        lineId: string,
+        patch: { quantity?: number; unitPrice?: number }
+      ): Promise<Result<PurchaseOrderDetail>> =>
+        ipcRenderer.invoke(IPC.poUpdateLine, { id, lineId, ...patch }),
+      /** Take a line off. Refused once anything on it has landed, and on the last one. */
+      removeLine: (id: string, lineId: string): Promise<Result<PurchaseOrderDetail>> =>
+        ipcRenderer.invoke(IPC.poRemoveLine, { id, lineId }),
       /** Shipping + payment details. Omitted keys are left as they are. */
       setFreight: (id: string, patch: FreightPatch): Promise<Result<PurchaseOrderDetail>> =>
         ipcRenderer.invoke(IPC.poSetFreight, { id, ...patch }),

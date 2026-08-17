@@ -4993,12 +4993,23 @@ tr.hoverable-row:hover {
   flex-direction: column;
   min-width: 0;
 }
+/* WRAPS, and this is the fix for the receipt nobody could read.
+   These names are long by nature — "2025 Topps Chrome Baseball Hobby Box" — and
+   they were being ellipsed to "2025 Topp…" in a 110px column, which made nine
+   different products render as nine identical strings. A document listing what
+   was bought has exactly one job and truncating the names is failing it.
+   Two lines is enough for every name in the catalog; the third would be a
+   pathological entry and clamping keeps the row heights even. */
 .po-rl-pname {
   font-weight: 600;
   color: var(--text);
+  font-size: 13.5px;
+  line-height: 1.35;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow-wrap: anywhere;
 }
 .po-rl-sku {
   font-size: 12px;
@@ -5009,6 +5020,7 @@ tr.hoverable-row:hover {
 .po-rl-total {
   text-align: right;
   color: var(--text);
+  font-size: 13.5px;
 }
 .po-rl-total {
   font-weight: 600;
@@ -24154,4 +24166,136 @@ button.sor-team:focus-visible {
 .acct-section .sync-page {
   padding: 16px 18px;
   gap: 12px;
+}
+
+/* ---------------------------------------------------------------------------
+   The purchase-order receipt, at document width and editable in place
+   --------------------------------------------------------------------------- */
+
+/* A plain stock PO used to render at .modal-lg's 620px, which left the product
+   name about 110px and ellipsed every line to "2025 Topp…". This is the width
+   the six columns actually need. .modal-xl (940px) still takes over when there
+   is a seventh — Destination — to hold. */
+.modal-po {
+  max-width: 860px;
+}
+
+/* The remove button's column, present only while the order accepts edits. */
+.po-receipt-lines-editable .po-receipt-line {
+  grid-template-columns: 46px minmax(0, 1fr) 64px 84px 104px 116px 30px;
+}
+.po-receipt-lines-editable.po-receipt-lines-routed .po-receipt-line {
+  grid-template-columns: 46px minmax(0, 1fr) 64px 82px 128px 92px 104px 30px;
+}
+.po-rl-kill {
+  display: flex;
+  justify-content: flex-end;
+}
+.po-rl-killbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+}
+.po-rl-killbtn:hover:not(:disabled) {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: var(--danger-soft, transparent);
+}
+.po-rl-killbtn:disabled {
+  opacity: 0.28;
+  cursor: not-allowed;
+}
+
+/* An editable figure keeps the column's right alignment: the numbers have to
+   stay in one vertical line whether or not this order happens to be editable,
+   or the receipt reflows the moment somebody marks it received. */
+.po-rl-edit {
+  display: flex;
+  justify-content: flex-end;
+}
+.po-rl-input {
+  width: 100%;
+  max-width: 104px;
+  padding: 5px 7px;
+  text-align: right;
+  font-size: 13.5px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+}
+.po-rl-input:hover:not(:disabled) {
+  border-color: var(--border-strong);
+}
+.po-rl-input:focus {
+  outline: 2px solid var(--brand-500);
+  outline-offset: -1px;
+  border-color: transparent;
+}
+.po-rl-input:disabled {
+  opacity: 0.5;
+}
+/* The spinners are noise at this size and they steal width from the digits. */
+.po-rl-input::-webkit-outer-spin-button,
+.po-rl-input::-webkit-inner-spin-button {
+  appearance: none;
+  margin: 0;
+}
+.po-rl-input[type='number'] {
+  -moz-appearance: textfield;
+}
+
+/* The supplier, click-to-edit on the document itself. */
+.po-rh-supplier-edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px;
+  margin-left: -6px;
+  border: 1px dashed transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.po-rh-supplier-edit svg {
+  opacity: 0;
+  color: var(--text-3);
+}
+.po-rh-supplier-edit:hover {
+  border-color: var(--border-strong);
+}
+.po-rh-supplier-edit:hover svg,
+.po-rh-supplier-edit:focus-visible svg {
+  opacity: 1;
+}
+/* "No supplier" is a gap in the document, not a value. It gets the dashed box
+   permanently so it reads as somewhere to type rather than as a fact. */
+.po-rh-supplier-edit.is-empty {
+  border-color: var(--border-strong);
+  color: var(--text-3);
+  font-style: italic;
+}
+.po-rh-supplier-edit.is-empty svg {
+  opacity: 1;
+}
+.po-rh-supplier-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 2px 0;
+}
+.po-rh-supplier-form select,
+.po-rh-supplier-form input {
+  min-width: 190px;
 }

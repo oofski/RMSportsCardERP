@@ -22,6 +22,7 @@ import { ReceiveBar, ReceivePill } from '../../components/ReceiveProgress'
 import { Icon } from '../../components/Icon'
 import { formatDate, formatMoney } from '../../lib/format'
 import { CategoryLogo } from '../inventory/CategoryLogo'
+import { SupplierSelect } from './PartySelect'
 import {
   PO_MOVE_LABEL,
   PO_STAGE_META,
@@ -117,6 +118,46 @@ export function PurchaseOrderReceipt({
     }
   }
 
+  /**
+   * One line's quantity or price, saved and repainted.
+   *
+   * The whole order comes back from the write, so the grand total and the
+   * per-line total are the database's answer rather than one computed here —
+   * two arithmetics for one figure is how a receipt starts disagreeing with the
+   * ledger. `onSaved` repaints the card behind the modal, which prints the same
+   * total.
+   */
+  const editLine = async (
+    lineId: string,
+    patch: { quantity?: number; unitPrice?: number }
+  ): Promise<void> => {
+    const res = await api.purchaseOrders.updateLine(id, lineId, patch)
+    if (!res.ok || !res.data) {
+      // The refusals are sentences — "3 have already been checked in, so this
+      // line cannot go below 3" — so they are shown as written rather than
+      // replaced with a generic failure.
+      toast.error(res.error ?? 'Could not save that change.')
+      // Repaint from the database so the box goes back to the stored figure
+      // rather than keeping a number that was not accepted.
+      const fresh = await api.purchaseOrders.get(id)
+      if (fresh) setDetail(fresh)
+      return
+    }
+    setDetail(res.data)
+    await onSaved()
+  }
+
+  const removeLine = async (lineId: string, productName: string): Promise<void> => {
+    const res = await api.purchaseOrders.removeLine(id, lineId)
+    if (!res.ok || !res.data) {
+      toast.error(res.error ?? 'Could not remove that line.')
+      return
+    }
+    setDetail(res.data)
+    toast.success(`${productName} removed.`)
+    await onSaved()
+  }
+
   useEffect(() => {
     let active = true
     api.purchaseOrders.get(id).then((d) => {
@@ -151,6 +192,15 @@ export function PurchaseOrderReceipt({
    * always has.
    */
   const groups = groupBySupplier(detail)
+  /**
+   * Whether the lines accept edits at all.
+   *
+   * The same two states `addPurchaseOrderLines` refuses, for the same reasons: a
+   * cancelled order's cost is out of the ledger, and a received one is closed.
+   * The repository refuses either way — this only decides whether to draw
+   * controls that would be rejected.
+   */
+  const linesEditable = detail.status !== 'cancelled' && detail.status !== 'received'
   // The Destination column earns its place only when there is more than one
   // answer, the same rule the PDF follows: an ordinary order all going to RM
   // prints the five columns it has always printed.
@@ -162,9 +212,14 @@ export function PurchaseOrderReceipt({
       subtitle={`${detail.supplier || 'No supplier'} · ${meta.label}`}
       onClose={onClose}
       wide
-      // Only when there is a seventh column to hold. A plain stock PO's receipt
-      // is the document it has always been, at the width it has always been.
-      className={routed ? 'modal-xl' : ''}
+      /* ALWAYS the document width, and this was the bug.
+         `.modal-lg` is 620px. Take off the padding and the five fixed columns
+         and the product name was left with about 110px, so every line on a real
+         order read "2025 Topp…" — nine of them in a column, none of them
+         distinguishable from each other. A receipt whose whole job is to say
+         WHAT was bought cannot be narrower than the names of the things.
+         `modal-xl` when there is a Destination column to hold as well. */
+      className={routed ? 'modal-xl' : 'modal-po'}
       footer={
         <>
           {/* Adding to an order that already exists.
@@ -240,7 +295,14 @@ export function PurchaseOrderReceipt({
             {/* Drop-0042, computed here and stored nowhere. `po_number` holds
                 PO-0042 for a dropship too, and the two share one counter. */}
             <div className="po-rh-num mono">{number}</div>
-            <div className="po-rh-supplier">{detail.supplier || 'No supplier'}</div>
+            <SupplierEditor
+              po={detail}
+              onSaved={(fresh) => {
+                setDetail(fresh)
+                // The board card behind this modal prints the supplier too.
+                void onSaved()
+              }}
+            />
             <div className="po-rh-date">
               {formatDate(detail.createdAt)} · {shipsTo(detail.orderKind, destinations)}
             </div>
@@ -334,7 +396,11 @@ export function PurchaseOrderReceipt({
           }}
         />
 
-        <div className={`po-receipt-lines${routed ? ' po-receipt-lines-routed' : ''}`}>
+        <div
+          className={`po-receipt-lines${routed ? ' po-receipt-lines-routed' : ''}${
+            linesEditable ? ' po-receipt-lines-editable' : ''
+          }`}
+        >
           <div className="po-receipt-line po-receipt-line-head">
             <span className="po-rl-img" aria-hidden="true" />
             <span className="po-rl-name">Product</span>
@@ -343,6 +409,7 @@ export function PurchaseOrderReceipt({
             {routed && <span className="po-rl-dest">Destination</span>}
             <span className="po-rl-price">Unit price</span>
             <span className="po-rl-total">Line total</span>
+            {linesEditable && <span className="po-rl-kill" aria-hidden="true" />}
           </div>
           {groups.map((g) => (
             <div className="po-receipt-group" key={g.supplier}>
@@ -362,6 +429,9 @@ export function PurchaseOrderReceipt({
                   routed={routed}
                   headerDestination={detail.location}
                   thumb={thumbnails[line.productId]}
+                  editable={linesEditable}
+                  onEdit={editLine}
+                  onRemove={removeLine}
                 />
               ))}
             </div>
@@ -505,13 +575,25 @@ function ReceiptLine({
   line,
   routed,
   headerDestination,
-  thumb
+  thumb,
+  editable,
+  onEdit,
+  onRemove
 }: {
   line: PurchaseOrderLine
   /** Whether this receipt is drawing the Destination column at all. */
   routed: boolean
   headerDestination: string
   thumb: string | undefined
+  /**
+   * Whether this order is in a state that accepts edits at all. False on a
+   * cancelled or closed order, where the repository would refuse anyway — the
+   * controls are hidden rather than shown and then rejected, because a button
+   * whose only outcome is a refusal teaches people the feature is broken.
+   */
+  editable: boolean
+  onEdit: (lineId: string, patch: { quantity?: number; unitPrice?: number }) => Promise<void>
+  onRemove: (lineId: string, productName: string) => Promise<void>
 }): JSX.Element {
   const [open, setOpen] = useState(false)
   // Per LINE, not per order. A shipment that arrives in two vans is not evenly
@@ -542,7 +624,19 @@ function ReceiptLine({
           <span className="po-rl-pname">{line.productName}</span>
           <span className="po-rl-sku mono">{line.sku}</span>
         </span>
-        <span className="po-rl-qty">{line.quantity}</span>
+        {editable ? (
+          <NumberCell
+            className="po-rl-qty"
+            value={line.quantity}
+            step={1}
+            min={Math.max(1, line.qtyReceived)}
+            format={(v) => String(Math.round(v))}
+            label={`Quantity of ${line.productName}`}
+            onCommit={(v) => onEdit(line.id, { quantity: Math.round(v) })}
+          />
+        ) : (
+          <span className="po-rl-qty">{line.quantity}</span>
+        )}
         <span className="po-rl-recv">
           {/* A wholly drop-shipped line has no progress to report, so it does
               not get a progress pill. "0 of 0" would read as a delivery that has
@@ -574,8 +668,50 @@ function ReceiptLine({
             )}
           </span>
         )}
-        <span className="po-rl-price mono">{formatMoney(line.unitPrice)}</span>
+        {/* Frozen once anything has landed, and it says why on hover rather
+            than silently doing nothing. The repository refuses this too — this
+            is the courtesy, not the rule. */}
+        {editable && line.qtyReceived === 0 ? (
+          <NumberCell
+            className="po-rl-price"
+            value={line.unitPrice}
+            step={0.01}
+            min={0}
+            format={(v) => v.toFixed(2)}
+            label={`Unit price of ${line.productName}`}
+            onCommit={(v) => onEdit(line.id, { unitPrice: v })}
+          />
+        ) : (
+          <span
+            className="po-rl-price mono"
+            title={
+              editable && line.qtyReceived > 0
+                ? `${line.qtyReceived} already received at this price, which is what the stock is costed at. It cannot be changed here.`
+                : undefined
+            }
+          >
+            {formatMoney(line.unitPrice)}
+          </span>
+        )}
         <span className="po-rl-total mono">{formatMoney(line.lineTotal)}</span>
+        {editable && (
+          <span className="po-rl-kill">
+            <button
+              type="button"
+              className="po-rl-killbtn"
+              aria-label={`Remove ${line.productName} from this order`}
+              title={
+                line.qtyReceived > 0
+                  ? `${line.qtyReceived} already checked in against this line, so it cannot be removed.`
+                  : `Remove ${line.productName}`
+              }
+              disabled={line.qtyReceived > 0}
+              onClick={() => void onRemove(line.id, line.productName)}
+            >
+              <Icon name="X" size={14} />
+            </button>
+          </span>
+        )}
       </div>
 
       {/* The split, opened out. No money is repeated: the allocations divide the
@@ -598,6 +734,187 @@ function ReceiptLine({
           </div>
         ))}
     </>
+  )
+}
+
+/**
+ * One number, edited where it is displayed.
+ *
+ * ## Commits on blur and on Enter, never on keystroke
+ *
+ * Every commit is a round trip that restates the order total and the ledger
+ * row, so saving per keystroke would write five times while somebody types
+ * "1250" — and the intermediate "1", "12", "125" are all valid numbers the
+ * repository would happily accept. Escape puts back what was there, which is
+ * the only way out of a half-typed figure that does not involve guessing.
+ *
+ * Reverts on a refusal rather than keeping the typed value. The caller reports
+ * the reason in a toast; leaving the rejected number in the box would show the
+ * document saying something the database does not.
+ */
+function NumberCell({
+  value,
+  min,
+  step,
+  format,
+  label,
+  className,
+  onCommit
+}: {
+  value: number
+  min: number
+  step: number
+  format: (v: number) => string
+  label: string
+  className: string
+  onCommit: (v: number) => Promise<void>
+}): JSX.Element {
+  const [draft, setDraft] = useState(format(value))
+  const [busy, setBusy] = useState(false)
+
+  // Follow the saved value when it changes underneath — a successful commit
+  // returns the whole order, and a refusal returns the old figure.
+  useEffect(() => {
+    setDraft(format(value))
+    // `format` is a fresh closure each render; the value is what matters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value])
+
+  const commit = async (): Promise<void> => {
+    const next = Number(draft)
+    if (!Number.isFinite(next) || next === value) {
+      setDraft(format(value))
+      return
+    }
+    setBusy(true)
+    try {
+      await onCommit(next)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <span className={`${className} po-rl-edit`}>
+      <input
+        className="po-rl-input mono"
+        type="number"
+        inputMode="decimal"
+        aria-label={label}
+        min={min}
+        step={step}
+        disabled={busy}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onFocus={(e) => e.target.select()}
+        onBlur={() => void commit()}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault()
+            e.currentTarget.blur()
+          }
+          if (e.key === 'Escape') {
+            setDraft(format(value))
+            e.currentTarget.blur()
+          }
+        }}
+      />
+    </span>
+  )
+}
+
+/**
+ * Who the order is from, edited on the document itself.
+ *
+ * ## Why this is a field and not a modal
+ *
+ * The question it answers — "PO says no supplier, how do I change it to a
+ * name?" — was asked while looking straight at the words "No supplier" on this
+ * receipt. Anything that made the answer "open a different screen" would be a
+ * worse answer than the one the page can give in place.
+ *
+ * The name is FREE TEXT with suggestions, exactly as it is when an order is
+ * raised; see @shared/purchaseOrders for why a supplier is not a foreign key.
+ * So this box offers the names already used and accepts one that has never been
+ * seen before, with no difference in what gets stored.
+ */
+function SupplierEditor({
+  po,
+  onSaved
+}: {
+  po: PurchaseOrderDetail
+  onSaved: (po: PurchaseOrderDetail) => void
+}): JSX.Element {
+  const toast = useToast()
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(po.supplier ?? '')
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    setDraft(po.supplier ?? '')
+  }, [po.id, po.supplier])
+
+  const save = async (): Promise<void> => {
+    const next = draft.trim()
+    if (next === (po.supplier ?? '').trim()) {
+      setEditing(false)
+      return
+    }
+    setBusy(true)
+    try {
+      const res = await api.purchaseOrders.setHeader(po.id, { supplier: next || null })
+      if (!res.ok || !res.data) {
+        toast.error(res.error ?? 'Could not save the supplier.')
+        return
+      }
+      onSaved(res.data)
+      setEditing(false)
+      toast.success(next ? `Supplier set to ${next}.` : 'Supplier cleared.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        className={`po-rh-supplier po-rh-supplier-edit${po.supplier ? '' : ' is-empty'}`}
+        title="Click to set the supplier"
+        onClick={() => setEditing(true)}
+      >
+        {po.supplier || 'No supplier'}
+        <Icon name="Pencil" size={12} />
+      </button>
+    )
+  }
+
+  return (
+    <div className="po-rh-supplier-form">
+      {/* The SAME control the create form uses, deliberately. A supplier
+          chosen here and a supplier chosen there must be the same act, or the
+          two screens teach two different ideas of what a supplier is. It
+          already carries the "Other…" escape for a distributor nobody has
+          bought from yet, which is what keeps the field free text. */}
+      <SupplierSelect
+        value={draft || null}
+        ariaLabel="Supplier"
+        blankLabel="No supplier named"
+        onChange={(name) => setDraft(name ?? '')}
+      />
+      <Button variant="primary" loading={busy} onClick={() => void save()}>
+        Save
+      </Button>
+      <Button
+        variant="ghost"
+        onClick={() => {
+          setDraft(po.supplier ?? '')
+          setEditing(false)
+        }}
+      >
+        Cancel
+      </Button>
+    </div>
   )
 }
 

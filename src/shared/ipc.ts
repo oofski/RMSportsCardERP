@@ -201,6 +201,14 @@ export const IPC = {
   // number. Moves the stored total AND the COGS row together — see
   // addPurchaseOrderLines for why one without the other is worse than neither.
   poAddLines: 'po:add-lines',
+  // Correcting an order that already exists. Three channels rather than one
+  // "save the whole document", because the three refuse for different reasons
+  // and a single save would have to report them all at once: the header edits
+  // nothing with money attached, a line edit is bounded by what has been
+  // received, and a removal is refused outright once anything has.
+  poSetHeader: 'po:set-header',
+  poUpdateLine: 'po:update-line',
+  poRemoveLine: 'po:remove-line',
   poSetFreight: 'po:set-freight',
   // Carrier status: the hourly sweep, forced by hand.
   trackingCheckNow: 'tracking:check-now',

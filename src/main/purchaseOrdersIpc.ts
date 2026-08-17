@@ -44,6 +44,9 @@ import {
   setPurchaseOrderFreight,
   setPurchaseOrderRouting,
   addPurchaseOrderLines,
+  updatePurchaseOrderHeader,
+  updatePurchaseOrderLine,
+  removePurchaseOrderLine,
   setPurchaseOrderPaid,
   setPurchaseOrderStatus
 } from './db/purchaseOrders'
@@ -328,6 +331,74 @@ export function registerPurchaseOrdersIpc(): void {
         requireInvoicing()
         if (!payload?.id) return { ok: false, error: 'No purchase order specified.' }
         const res = addPurchaseOrderLines(payload.id, payload.lines ?? [])
+        return res.error
+          ? { ok: false, error: res.error }
+          : { ok: true, data: res.po as PurchaseOrderDetail }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  // Who the order is from, and the note on it. No status gate: this edits
+  // nothing that has money attached, and the commonest moment to notice the
+  // supplier is missing is while filing an order that is already closed.
+  ipcMain.handle(
+    IPC.poSetHeader,
+    (
+      _e,
+      payload: { id: string; supplier?: string | null; notes?: string | null }
+    ): Result<PurchaseOrderDetail> => {
+      try {
+        requireInvoicing()
+        if (!payload?.id) return { ok: false, error: 'No purchase order specified.' }
+        const patch: { supplier?: string | null; notes?: string | null } = {}
+        if ('supplier' in payload) patch.supplier = payload.supplier ?? null
+        if ('notes' in payload) patch.notes = payload.notes ?? null
+        const res = updatePurchaseOrderHeader(payload.id, patch)
+        return res.error
+          ? { ok: false, error: res.error }
+          : { ok: true, data: res.po as PurchaseOrderDetail }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  // Quantity and price on a line that already exists. The repository decides
+  // what may move — quantity never below what landed, price frozen once
+  // anything has — and returns the reason in words rather than a refusal code.
+  ipcMain.handle(
+    IPC.poUpdateLine,
+    (
+      _e,
+      payload: { id: string; lineId: string; quantity?: number; unitPrice?: number }
+    ): Result<PurchaseOrderDetail> => {
+      try {
+        requireInvoicing()
+        if (!payload?.id) return { ok: false, error: 'No purchase order specified.' }
+        if (!payload?.lineId) return { ok: false, error: 'No line specified.' }
+        const patch: { quantity?: number; unitPrice?: number } = {}
+        if (payload.quantity !== undefined) patch.quantity = Number(payload.quantity)
+        if (payload.unitPrice !== undefined) patch.unitPrice = Number(payload.unitPrice)
+        const res = updatePurchaseOrderLine(payload.id, payload.lineId, patch)
+        return res.error
+          ? { ok: false, error: res.error }
+          : { ok: true, data: res.po as PurchaseOrderDetail }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  ipcMain.handle(
+    IPC.poRemoveLine,
+    (_e, payload: { id: string; lineId: string }): Result<PurchaseOrderDetail> => {
+      try {
+        requireInvoicing()
+        if (!payload?.id) return { ok: false, error: 'No purchase order specified.' }
+        if (!payload?.lineId) return { ok: false, error: 'No line specified.' }
+        const res = removePurchaseOrderLine(payload.id, payload.lineId)
         return res.error
           ? { ok: false, error: res.error }
           : { ok: true, data: res.po as PurchaseOrderDetail }

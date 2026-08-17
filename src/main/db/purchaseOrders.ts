@@ -946,6 +946,303 @@ export function addPurchaseOrderLines(
   }
 }
 
+/**
+ * Recompute the header total and the ledger row from the lines as they now
+ * stand.
+ *
+ * Every edit below changes what the order is worth, and the total is a stored
+ * snapshot rather than a view — so it has to be restated deliberately or the
+ * document and the money disagree. UPDATE rather than void-and-rewrite, for the
+ * same reason `addPurchaseOrderLines` does it: the COGS row keeps the date the
+ * purchase was committed. Re-booking it today would move the cost into this
+ * month and silently restate two months at once.
+ */
+function restateOrderTotal(db: Database.Database, poId: string, ts: string): void {
+  const all = db
+    .prepare('SELECT quantity, unit_price FROM purchase_order_lines WHERE po_id = ?')
+    .all(poId) as Array<{ quantity: number; unit_price: number }>
+  const total = cents(
+    all.reduce((sum, l) => sum + cents(Math.round(l.quantity) * Math.max(0, l.unit_price)), 0)
+  )
+  db.prepare('UPDATE purchase_orders SET total = ?, updated_at = ? WHERE id = ?').run(total, ts, poId)
+  db.prepare('UPDATE finance_cogs SET amount = ? WHERE po_id = ?').run(total, poId)
+}
+
+/**
+ * Correct the descriptive half of an order: who it is from, and the note on it.
+ *
+ * ## Why the supplier is editable at all
+ *
+ * Because an order raised in a hurry says "No supplier" and there was no way
+ * back. A PO's supplier is free text on the document — see @shared/purchaseOrders
+ * for why it is not a foreign key — so correcting it is a correction to a label,
+ * not a re-pointing of a relationship, and nothing downstream holds a reference
+ * that could dangle.
+ *
+ * ## What changing it does to the lines
+ *
+ * Lines store their supplier as INHERITABLE: null means "same as the header".
+ * That is why this is a rename rather than a rewrite — every line that never
+ * named its own supplier follows the header automatically, and a line that DID
+ * name one keeps it. A line that explicitly repeated what the header used to say
+ * is collapsed back to inheriting, so it does not sit there naming the old
+ * vendor after the header has moved on.
+ *
+ * Allowed in every status, cancelled included. This edits nothing that has
+ * money attached — no total, no lot, no ledger row — and the commonest moment to
+ * discover the name is missing is while filing an order that is already closed.
+ */
+export function updatePurchaseOrderHeader(
+  id: string,
+  patch: { supplier?: string | null; notes?: string | null }
+): PoStatusResult {
+  const db = getDb()
+  const run = db.transaction((): PoStatusResult => {
+    const head = db
+      .prepare('SELECT id, supplier FROM purchase_orders WHERE id = ?')
+      .get(id) as { id: string; supplier: string | null } | undefined
+    if (!head) return { po: null, error: 'Purchase order not found.' }
+
+    const ts = nowIso()
+    const sets: string[] = []
+    const params: Record<string, unknown> = { id, ts }
+
+    if (patch.supplier !== undefined) {
+      const next = String(patch.supplier ?? '').trim().slice(0, 120) || null
+      sets.push('supplier = @supplier')
+      params.supplier = next
+      // A line storing NULL is INHERITING and must be left alone — that is the
+      // whole point of storing the inheritance rather than a copy, and reading
+      // its effective value here to write it back would freeze every such line
+      // to the name the order is moving away from.
+      //
+      // Only an explicit value needs a decision, and there is one: keep it,
+      // unless it now says exactly what the header says, in which case it
+      // collapses back to inheriting so the two cannot drift apart later.
+      const lines = db
+        .prepare('SELECT id, supplier FROM purchase_order_lines WHERE po_id = ? AND supplier IS NOT NULL')
+        .all(id) as Array<{ id: string; supplier: string }>
+      const setLine = db.prepare('UPDATE purchase_order_lines SET supplier = ? WHERE id = ?')
+      for (const line of lines) setLine.run(inheritable(line.supplier, next), line.id)
+    }
+    if (patch.notes !== undefined) {
+      sets.push('notes = @notes')
+      params.notes = String(patch.notes ?? '').trim().slice(0, 2000) || null
+    }
+    if (!sets.length) return { po: getPurchaseOrder(id) }
+
+    db.prepare(`UPDATE purchase_orders SET ${sets.join(', ')}, updated_at = @ts WHERE id = @id`).run(
+      params
+    )
+    return { po: getPurchaseOrder(id) }
+  })
+  try {
+    return run()
+  } catch (err) {
+    return { po: getPurchaseOrder(id), error: (err as Error).message }
+  }
+}
+
+/**
+ * Change the quantity or the unit price of a line that already exists.
+ *
+ * ## The two things this refuses, and why they are different refusals
+ *
+ * QUANTITY may not fall below what has already been checked in. Units on the
+ * shelf came from this line; typing a smaller number would not send them back,
+ * it would just make the document disagree with the building. Raising it is
+ * fine — that is a short delivery being recorded honestly — and so is lowering
+ * it to anywhere at or above what landed.
+ *
+ * UNIT PRICE may not change once ANY unit has been received, and this is the
+ * stricter rule. Receiving stamps the price into a FIFO cost lot; that lot is
+ * what every future sale of those units is costed against, and it is already
+ * out there in the valuation. Editing the line afterwards would move the header
+ * total and the COGS row while leaving the lot where it was, so the order would
+ * claim one cost and the stock would carry another. Correct a price BEFORE the
+ * boxes are booked in; after that it is a credit note, which is not this button.
+ *
+ * Refused outright on a cancelled order (its cost is out of the ledger) and on a
+ * received one (closed), which is the same pair `addPurchaseOrderLines` refuses
+ * and for the same reasons.
+ */
+export function updatePurchaseOrderLine(
+  poId: string,
+  lineId: string,
+  patch: { quantity?: number; unitPrice?: number }
+): PoStatusResult {
+  const db = getDb()
+  const run = db.transaction((): PoStatusResult => {
+    const head = db
+      .prepare('SELECT id, po_number, status FROM purchase_orders WHERE id = ?')
+      .get(poId) as { id: string; po_number: string; status: PurchaseOrderStatus } | undefined
+    if (!head) return { po: null, error: 'Purchase order not found.' }
+    if (head.status === 'cancelled') {
+      return {
+        po: getPurchaseOrder(poId),
+        error: `${head.po_number} was cancelled. Reopen it before changing anything on it.`
+      }
+    }
+    if (head.status === 'received') {
+      return {
+        po: getPurchaseOrder(poId),
+        error: `${head.po_number} is closed. Move it back to Ordered before changing what was bought.`
+      }
+    }
+
+    const line = db
+      .prepare(
+        `SELECT l.id, l.quantity, l.unit_price, l.qty_received, p.name AS product_name
+           FROM purchase_order_lines l
+           JOIN inventory_products p ON p.id = l.product_id
+          WHERE l.id = ? AND l.po_id = ?`
+      )
+      .get(lineId, poId) as
+      | { id: string; quantity: number; unit_price: number; qty_received: number; product_name: string }
+      | undefined
+    if (!line) return { po: getPurchaseOrder(poId), error: 'That line is not on this order.' }
+
+    const received = Math.max(0, Math.round(line.qty_received ?? 0))
+    const sets: string[] = []
+    const params: Record<string, unknown> = { id: lineId }
+
+    if (patch.quantity !== undefined) {
+      const qty = Math.round(Number(patch.quantity))
+      if (!Number.isFinite(qty) || qty < 1) {
+        return { po: getPurchaseOrder(poId), error: 'A quantity has to be at least 1.' }
+      }
+      if (qty < received) {
+        return {
+          po: getPurchaseOrder(poId),
+          error:
+            `${received} of ${line.product_name} ${received === 1 ? 'has' : 'have'} already been ` +
+            `checked in, so this line cannot go below ${received}. Take the stock back out first ` +
+            `if that is what happened.`
+        }
+      }
+      sets.push('quantity = @quantity')
+      params.quantity = qty
+    }
+
+    if (patch.unitPrice !== undefined) {
+      const price = Number(patch.unitPrice)
+      if (!Number.isFinite(price) || price < 0) {
+        return { po: getPurchaseOrder(poId), error: 'A unit price cannot be negative.' }
+      }
+      if (received > 0 && cents(price) !== cents(line.unit_price)) {
+        return {
+          po: getPurchaseOrder(poId),
+          error:
+            `${received} of ${line.product_name} ${received === 1 ? 'has' : 'have'} already been ` +
+            `received at ${line.unit_price.toFixed(2)}, and that price is what the stock on the ` +
+            `shelf is costed at. Changing it here would leave the order and the valuation ` +
+            `disagreeing.`
+        }
+      }
+      sets.push('unit_price = @unit_price')
+      params.unit_price = Math.max(0, price)
+    }
+
+    if (!sets.length) return { po: getPurchaseOrder(poId) }
+    db.prepare(`UPDATE purchase_order_lines SET ${sets.join(', ')} WHERE id = @id`).run(params)
+
+    const ts = nowIso()
+    // A line raised to more than has landed is outstanding again, so the stamp
+    // saying it was complete is no longer true. Left alone when it still is.
+    db.prepare(
+      `UPDATE purchase_order_lines SET received_at = NULL
+        WHERE id = ? AND qty_received < quantity`
+    ).run(lineId)
+    restateOrderTotal(db, poId, ts)
+    return { po: getPurchaseOrder(poId) }
+  })
+  try {
+    return run()
+  } catch (err) {
+    return { po: getPurchaseOrder(poId), error: (err as Error).message }
+  }
+}
+
+/**
+ * Take a line off an order.
+ *
+ * Refused once any unit on it has been checked in: those units are on a shelf,
+ * costed against a lot that points at this line's price, and deleting the row
+ * would leave stock whose origin cannot be explained. Cancel the order — which
+ * reverses receipts properly — or reduce the quantity instead.
+ *
+ * Refused on the LAST line, because an order with nothing on it is not a
+ * corrected order, it is a deleted one wearing a number. Delete or cancel it.
+ */
+export function removePurchaseOrderLine(poId: string, lineId: string): PoStatusResult {
+  const db = getDb()
+  const run = db.transaction((): PoStatusResult => {
+    const head = db
+      .prepare('SELECT id, po_number, status FROM purchase_orders WHERE id = ?')
+      .get(poId) as { id: string; po_number: string; status: PurchaseOrderStatus } | undefined
+    if (!head) return { po: null, error: 'Purchase order not found.' }
+    if (head.status === 'cancelled') {
+      return {
+        po: getPurchaseOrder(poId),
+        error: `${head.po_number} was cancelled. Reopen it before changing anything on it.`
+      }
+    }
+    if (head.status === 'received') {
+      return {
+        po: getPurchaseOrder(poId),
+        error: `${head.po_number} is closed. Move it back to Ordered before changing what was bought.`
+      }
+    }
+
+    const line = db
+      .prepare(
+        `SELECT l.id, l.qty_received, p.name AS product_name
+           FROM purchase_order_lines l
+           JOIN inventory_products p ON p.id = l.product_id
+          WHERE l.id = ? AND l.po_id = ?`
+      )
+      .get(lineId, poId) as
+      | { id: string; qty_received: number; product_name: string }
+      | undefined
+    if (!line) return { po: getPurchaseOrder(poId), error: 'That line is not on this order.' }
+
+    const received = Math.max(0, Math.round(line.qty_received ?? 0))
+    if (received > 0) {
+      return {
+        po: getPurchaseOrder(poId),
+        error:
+          `${received} of ${line.product_name} ${received === 1 ? 'is' : 'are'} already on the ` +
+          `shelf against this line, so it cannot just be removed. Cancel the order to reverse the ` +
+          `receipt, or lower the quantity instead.`
+      }
+    }
+
+    const count = (
+      db.prepare('SELECT COUNT(*) AS n FROM purchase_order_lines WHERE po_id = ?').get(poId) as {
+        n: number
+      }
+    ).n
+    if (count <= 1) {
+      return {
+        po: getPurchaseOrder(poId),
+        error: `That is the only line on ${head.po_number}. Delete or cancel the order instead.`
+      }
+    }
+
+    // The allocations go with it. They are ON DELETE CASCADE in the schema, but
+    // saying so here is what makes the intent readable at the call site: a split
+    // is part of the line, not a thing that outlives it.
+    db.prepare('DELETE FROM purchase_order_lines WHERE id = ?').run(lineId)
+    restateOrderTotal(db, poId, nowIso())
+    return { po: getPurchaseOrder(poId) }
+  })
+  try {
+    return run()
+  } catch (err) {
+    return { po: getPurchaseOrder(poId), error: (err as Error).message }
+  }
+}
+
 export function setPurchaseOrderPaid(id: string, paid: boolean): PoStatusResult {
   const db = getDb()
   const run = db.transaction((): PoStatusResult => {
