@@ -459,11 +459,17 @@ export function registerIpcHandlers(): void {
   })
 
   // ---- Hours --------------------------------------------------------------
-  ipcMain.handle(IPC.hoursSummary, (): EmployeeHoursSummary[] => {
-    const user = currentUser()
-    if (!user || !userCan(user, 'admin.hours.view')) return []
-    return hoursSummary()
-  })
+  ipcMain.handle(
+    IPC.hoursSummary,
+    (_e, range?: { start?: string; end?: string }): EmployeeHoursSummary[] => {
+      const user = currentUser()
+      if (!user || !userCan(user, 'admin.hours.view')) return []
+      // No range means all time, which is what a caller with no period picker
+      // wants. The Team tab always sends one — see the note on hoursSummary for
+      // why it had to start doing so.
+      return hoursSummary(range?.start, range?.end)
+    }
+  )
 
   ipcMain.handle(IPC.hoursList, (_e, employeeId?: string): TimeEntry[] => {
     const user = currentUser()

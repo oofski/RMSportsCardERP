@@ -51,11 +51,23 @@ export function TimePayrollModule(): JSX.Element {
   const [teamPeriod, setTeamPeriod] = useState<Period>(presets[0])
   const [exporting, setExporting] = useState(false)
 
+  /**
+   * Reload for the period on screen.
+   *
+   * `teamPeriod` is a real dependency, and leaving it out was the bug: the
+   * picker set state that only the export button read, so the table underneath
+   * it showed all-time totals no matter what was chosen — while the export sent
+   * the chosen period. Two different answers on one screen, with nothing saying
+   * so.
+   */
   const load = useCallback(async () => {
-    const [emp, sum] = await Promise.all([api.employees.list(), api.hours.summary()])
+    const [emp, sum] = await Promise.all([
+      api.employees.list(),
+      api.hours.summary({ start: teamPeriod.start, end: teamPeriod.end })
+    ])
     setEmployees(emp)
     setSummary(sum)
-  }, [])
+  }, [teamPeriod.start, teamPeriod.end])
 
   // Somebody clocking in on the warehouse machine belongs on this timesheet now,
   // not whenever an admin happens to reopen the tab.
@@ -134,9 +146,17 @@ export function TimePayrollModule(): JSX.Element {
         <MyHours />
       ) : (
       <>
+      {/* Labelled with the period, because "Total hours logged" is the sentence
+          that made the old behaviour so easy to miss — it reads as a lifetime
+          figure and it now is not one. The number and the words have to move
+          together. */}
       <div className="stat-grid">
-        <Stat icon="Clock" value={formatHours(totals.minutes)} label="Total hours logged" />
-        <Stat icon="Users" value={String(totals.tracked)} label="Employees tracked" />
+        <Stat
+          icon="Clock"
+          value={formatHours(totals.minutes)}
+          label={`Hours logged · ${teamPeriod.label.toLowerCase()}`}
+        />
+        <Stat icon="Users" value={String(totals.tracked)} label="Employees with hours" />
         <Stat icon="CalendarClock" value={String(totals.entries)} label="Time entries" />
       </div>
 

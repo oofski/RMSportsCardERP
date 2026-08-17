@@ -149,8 +149,44 @@ export function minutesInRange(employeeId: string, start: string, end: string): 
  * still count toward the entry count, so an in-progress shift is visible
  * without inflating hours.
  */
-export function hoursSummary(): EmployeeHoursSummary[] {
+/**
+ * Every employee, with the hours they logged IN A WINDOW.
+ *
+ * ## The window is the whole point, and it used to be missing
+ *
+ * This took no arguments and summed every time entry ever recorded. The Pay
+ * module's Team tab has a period picker above the table — This week, Last week,
+ * Last 14 days — and it drove nothing: the figures underneath it were all-time
+ * totals that did not move when the picker did.
+ *
+ * That is worse than a control that does nothing. The same screen's "Export
+ * team to Gusto" button DID honour the picker, so the operator read one number
+ * on screen and sent a different one to payroll, with no indication that the
+ * two were answers to different questions. A screen about hours owed cannot
+ * disagree with the file it exports.
+ *
+ * ## The bounds match `listInRange` exactly
+ *
+ * `clock_in >= start AND clock_in < end` — end exclusive, and filed by when the
+ * shift STARTED. That is the same rule `listInRange` uses, which is what the
+ * export and the per-employee timesheet are built from, so all three now count
+ * a night shift that runs past midnight into the same day. A different bound
+ * here would put the totals and the timesheet a shift apart on exactly the
+ * nights people care about.
+ *
+ * ## The filter belongs on the JOIN, not on a WHERE
+ *
+ * Moving it to a WHERE clause would drop every employee with no hours in the
+ * window out of the result entirely, so the team list would shrink and grow as
+ * the period changed. They belong on the roster with a zero beside them.
+ *
+ * With no window it still means all time, which is what the callers that have
+ * no period picker want.
+ */
+export function hoursSummary(start?: string, end?: string): EmployeeHoursSummary[] {
   const db = getDb()
+  const bounded = !!start && !!end
+  const window = bounded ? 'AND t.clock_in >= @start AND t.clock_in < @end' : ''
   const rows = db
     .prepare(
       `SELECT
@@ -167,11 +203,11 @@ export function hoursSummary(): EmployeeHoursSummary[] {
            END
          ), 0)                                  AS total_minutes
        FROM employees e
-       LEFT JOIN time_entries t ON t.employee_id = e.id
+       LEFT JOIN time_entries t ON t.employee_id = e.id ${window}
        GROUP BY e.id
        ORDER BY employee_name COLLATE NOCASE`
     )
-    .all() as Array<{
+    .all(bounded ? { start, end } : {}) as Array<{
     employee_id: string
     employee_name: string
     company_id: string

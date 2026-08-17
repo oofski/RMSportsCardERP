@@ -50,6 +50,45 @@ function hours2(minutes: number): string {
   return (minutes / 60).toFixed(2)
 }
 
+/**
+ * An hours figure for Gusto — or nothing at all, which is not the same as zero.
+ *
+ * ## Gusto's rule, in Gusto's words
+ *
+ *   · "Zeros override previously entered information — if your spreadsheet has
+ *     any, the zeros will replace any existing info."
+ *   · "Blank values have no impact on previously entered information."
+ *
+ * So in a Smart Import a zero is not a neutral way of saying "nothing to
+ * report". It is an instruction to ERASE the cell. And the export this feeds
+ * used to write `0.00` into Overtime for every employee on every run, because
+ * `toFixed(2)` has no way of saying "no answer" — which meant any overtime
+ * entered or corrected inside Gusto was wiped by the next upload, silently,
+ * with a file that looked completely ordinary.
+ *
+ * A blank is the honest rendering of "this app has nothing to say about that
+ * cell", and it is also the safe one. Nothing is lost: an app that computed no
+ * overtime is not asserting that Gusto's overtime is wrong, it simply did not
+ * measure any.
+ *
+ * ## Tested on the RENDERED value, deliberately
+ *
+ * Not on the raw minutes. Eighteen seconds of clock drift is a real, non-zero
+ * number of minutes that formats as "0.00" — and writing that would erase a
+ * genuine figure in order to report three-tenths of a minute nobody is paid
+ * for. Whatever prints as zero is treated as zero.
+ *
+ * ## If somebody genuinely needs to zero a cell
+ *
+ * They type a 0 into the sheet by hand before uploading. That is the only way
+ * to express it, by Gusto's design, and it should be a deliberate act rather
+ * than a side effect of exporting a quiet fortnight.
+ */
+function hoursCell(minutes: number): string {
+  const rendered = hours2(minutes)
+  return rendered === '0.00' ? '' : rendered
+}
+
 export interface PayrollTotals {
   totalMinutes: number
   regularMinutes: number
@@ -124,7 +163,28 @@ export interface GustoRow {
   totals: PayrollTotals
 }
 
-/** Gusto-friendly hours summary, one row per employee. */
+/**
+ * The Gusto Smart Import sheet: one row per employee who actually worked.
+ *
+ * ## Why an employee with no hours is LEFT OUT rather than written as zero
+ *
+ * The caller hands this every employee on the books, not every employee who
+ * clocked in — so a fortnight's export carries a row for the salaried office,
+ * for anyone on leave, and for anyone whose hours are keyed straight into Gusto
+ * and never touch this app. Those rows have nothing to report.
+ *
+ * Written as `0.00` they were not nothing: by Gusto's rule a zero replaces
+ * what is already there, so the export was quietly erasing the hours of exactly
+ * the people it knew least about. Written as blanks they would be harmless but
+ * pointless — a row of empty cells that invites somebody to "finish" it by
+ * typing zeros. So they are omitted, and the file says only what this app
+ * actually measured.
+ *
+ * ## What the numeric cells do
+ *
+ * See `hoursCell`. Any figure that prints as zero is written blank, so a week
+ * with no overtime leaves Gusto's overtime alone instead of clearing it.
+ */
 export function gustoCsv(rows: GustoRow[], start: string, end: string): string {
   const header = [
     'First name',
@@ -139,15 +199,18 @@ export function gustoCsv(rows: GustoRow[], start: string, end: string): string {
   ]
   const lines = [header.map(esc).join(',')]
   for (const { employee, totals } of rows) {
+    // Nothing measured, nothing to say. See the note above: a row of zeros here
+    // is an instruction to erase, not a statement that the week was quiet.
+    if (hours2(totals.totalMinutes) === '0.00') continue
     lines.push(
       [
         esc(employee.firstName),
         esc(employee.lastName),
         esc(employee.email),
         esc(employee.companyId),
-        esc(hours2(totals.regularMinutes)),
-        esc(hours2(totals.overtimeMinutes)),
-        esc(hours2(totals.totalMinutes)),
+        esc(hoursCell(totals.regularMinutes)),
+        esc(hoursCell(totals.overtimeMinutes)),
+        esc(hoursCell(totals.totalMinutes)),
         esc(localDate(start)),
         esc(localDate(end))
       ].join(',')

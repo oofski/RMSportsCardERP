@@ -304,7 +304,16 @@ export function createBridge(ipcRenderer: BridgeTransport) {
         ipcRenderer.invoke(IPC.employeesRemoveAvatar, id)
     },
     hours: {
-      summary: (): Promise<EmployeeHoursSummary[]> => ipcRenderer.invoke(IPC.hoursSummary),
+      /**
+       * Hours per employee, optionally bounded to a period.
+       *
+       * The bound is not decoration: the Team tab's period picker and its
+       * "Export team to Gusto" button have to describe the same window, and for
+       * a long time they did not — the table showed all-time totals while the
+       * export honoured the picker.
+       */
+      summary: (range?: { start: string; end: string }): Promise<EmployeeHoursSummary[]> =>
+        ipcRenderer.invoke(IPC.hoursSummary, range),
       list: (employeeId?: string): Promise<TimeEntry[]> =>
         ipcRenderer.invoke(IPC.hoursList, employeeId),
       create: (input: NewTimeEntryInput): Promise<Result<TimeEntry>> =>
