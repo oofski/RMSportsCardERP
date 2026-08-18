@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { MODULES, inWorkspace } from '@shared/modules'
+import { MODULES, TEAM_TABS, inWorkspace, teamTabFor } from '@shared/modules'
 import { isPhoneWidth } from '../lib/viewport'
 import { StreamingModule } from '../modules/streaming/StreamingModule'
 import { FinanceModule } from '../modules/finance/FinanceModule'
@@ -24,6 +24,7 @@ import { InvoicingModule } from '../modules/invoicing/InvoicingModule'
 import { InvoicesModule } from '../modules/invoices/InvoicesModule'
 import { ContactsModule } from '../modules/contacts/ContactsModule'
 import { AccountModule } from '../modules/account/AccountModule'
+import { TeamModule } from '../modules/team/TeamModule'
 import { ShippingModule } from '../modules/fulfillment/ShippingModule'
 import { ComingSoon } from '../modules/ComingSoon'
 
@@ -44,6 +45,14 @@ export function AppShell(): JSX.Element {
   const [wsOpen, setWsOpen] = useState(false)
   const [search, setSearch] = useState('')
   const [activeId, setActiveId] = useState<string>('home')
+  /**
+   * Which tab Team opens on.
+   *
+   * Held HERE rather than inside TeamModule because navigate() sets it: a Home
+   * card linking to `timepay` has to land on Pay, and TeamModule is unmounted at
+   * the moment that decision is made. Defaults to the first tab.
+   */
+  const [teamTab, setTeamTab] = useState<string>(TEAM_TABS[0].id)
   const navRef = useRef<HTMLElement | null>(null)
   const [workspace, setWorkspace] = useState<WorkspaceId>(() => {
     const saved = localStorage.getItem('rmops.workspace')
@@ -130,6 +139,15 @@ export function AppShell(): JSX.Element {
   // workspace (the render chain falls through to Home). Cross-workspace links
   // switch the sidebar first, which is what "go to that screen" has to mean.
   const navigate = (id: string): void => {
+    // Contacts, Pay and Schedule are tabs inside Team now, and their ids did not
+    // change. Every navigate('timepay') in the app — and any position a browser
+    // remembered — is translated here, once, rather than each call site being
+    // taught about the regrouping.
+    const asTab = teamTabFor(id)
+    if (asTab) {
+      setTeamTab(asTab)
+      id = 'team'
+    }
     const target = MODULES.find((m) => m.id === id)
     // A module that lives in BOTH needs no switch — it is already in the
     // sidebar wherever you are standing, and moving the whole app to another
@@ -169,7 +187,17 @@ export function AppShell(): JSX.Element {
     }
   }
 
-  const activeModule = visible.find((m) => m.id === activeId)
+  // Resolved from MODULES rather than `visible`, because a HIDDEN module is
+  // routable and is deliberately absent from the sidebar list — My account is
+  // reached from the name in the top right and would otherwise render nothing.
+  // Still workspace-checked, so a link into the other company cannot leave a
+  // screen mounted that the sidebar says is not here.
+  const activeModule = MODULES.find(
+    (m) =>
+      m.id === activeId &&
+      inWorkspace(m, workspace) &&
+      (m.permission ? can(m.permission) : true)
+  )
   const header =
     activeId === 'home'
       ? HOME
@@ -350,6 +378,25 @@ export function AppShell(): JSX.Element {
                           </span>
                         </div>
                       </div>
+                      {/* WHERE THIS BELONGS. My account came out of the sidebar,
+                          which is a list of places the WORK happens — a screen
+                          about your own password and your own phone is not one
+                          of those. Hanging it off your own name is where every
+                          other application puts it and therefore the first place
+                          anybody looks. First in the menu, above the photo
+                          actions, because it is the only entry here that opens
+                          a screen. */}
+                      <button
+                        className="menu-item"
+                        onClick={() => {
+                          setMenuOpen(false)
+                          navigate('account')
+                        }}
+                      >
+                        <Icon name="UserCog" size={16} />
+                        My account
+                      </button>
+                      <div className="menu-sep" />
                       <button className="menu-item" onClick={changePhoto}>
                         <Icon name="ImagePlus" size={16} />
                         {user.avatarUrl ? 'Change photo' : 'Add photo'}
@@ -404,6 +451,8 @@ export function AppShell(): JSX.Element {
               <InvoicingModule />
             ) : activeModule?.id === 'invoices' ? (
               <InvoicesModule />
+            ) : activeModule?.id === 'team' ? (
+              <TeamModule tab={teamTab} onTab={setTeamTab} />
             ) : activeModule?.id === 'contacts' ? (
               <ContactsModule />
             ) : activeModule?.id === 'account' ? (

@@ -44,7 +44,7 @@ const { registerPushIpc } = require('../src/main/pushIpc')
 const { registeredHandlers } = require('../src/main/ipcRegistry')
 const { IPC } = require('../src/shared/ipc')
 const { permissionsForRole, roleHas, ROLES } = require('../src/shared/permissions')
-const { MODULES, getModule } = require('../src/shared/modules')
+const { MODULES, getModule, modulesForWorkspace } = require('../src/shared/modules')
 const worker = require('../cloud/worker.js')
 const { syncStateSet } = require('../src/main/db/sync')
 const db = getDb()
@@ -156,19 +156,37 @@ const run = async (): Promise<void> => {
     ok(visible, `${r.id} can open their own account`)
   }
 
-  // The ungated set, pinned. These three are exactly the modules that are about
-  // the PERSON rather than the business — what you are owed, when you are on,
-  // and your own password — and being about the person is precisely why there is
-  // nothing to gate. A fourth name appearing here is a permission somebody
-  // removed, so this asserts the whole set rather than just the new member.
+  // The ungated set, pinned. Both are about the PERSON rather than the business,
+  // which is precisely why there is nothing to gate: Team's tabs decide for
+  // themselves (your pay and your availability are yours, Contacts needs
+  // `module.messages`, which every role holds), and My account acts only on
+  // whoever is looking at it. A third name appearing here is a permission
+  // somebody removed, so this asserts the whole set rather than one member.
+  //
+  // Pay and Schedule used to be in this list as top-level modules. They are tabs
+  // inside Team now — same ids, same absence of a permission, one door.
   const ungated = MODULES.filter((m: any) => m.permission === null)
     .map((m: any) => m.id)
     .sort()
   ok(
-    ungated.join(',') === 'account,schedule,timepay',
-    'and the ungated modules are exactly the three that are about you',
+    ungated.join(',') === 'account,team',
+    'and the ungated modules are exactly the two that are about you',
     ungated.join(', ')
   )
+
+  // My account is REACHABLE but not in the sidebar — it hangs off the name in
+  // the top right. Both halves matter: drop the id and every navigate('account')
+  // breaks; drop the flag and it is back in the list it was taken out of.
+  ok(account.hidden === true, 'AND IT IS NOT IN THE SIDEBAR', String(account.hidden))
+  ok(
+    !modulesForWorkspace('ops').some((m: any) => m.id === 'account'),
+    'so the ops sidebar does not draw it'
+  )
+  ok(
+    !modulesForWorkspace('shipping').some((m: any) => m.id === 'account'),
+    'nor the shipping one'
+  )
+  ok(!!getModule('account'), 'while it is still a real module id that navigate can find')
 
   // ---------------------------------------------------------------------------
   console.log('\n=== 2. the clock permission did NOT widen ===')

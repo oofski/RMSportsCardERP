@@ -31,33 +31,56 @@ export interface AppModule {
    * them asking a lead instead of opening the app.
    */
   workspace?: 'ops' | 'shipping' | 'both'
+  /**
+   * Reachable, but not in the sidebar.
+   *
+   * For a screen that belongs to somebody rather than to the business: it still
+   * needs an id so `navigate()` and the render chain can find it, but it does
+   * not deserve a permanent slot in a list of places the WORK happens. My
+   * account is the only one — it hangs off the name in the top right, which is
+   * where every other application puts it and therefore the first place anybody
+   * looks.
+   */
+  hidden?: boolean
 }
 
 export const MODULES: AppModule[] = [
   {
     /**
-     * CONTACTS, not "Messages", and the name is the feature.
+     * TEAM: the people, and the two things everybody asks about themselves.
      *
-     * What somebody opens this for is a person — who works here, how to reach
-     * them, and the conversation they are already having with them. Naming it
-     * after the transport would put the list of colleagues one level down inside
-     * something called Messages, which is the wrong way round: the roster is the
-     * front door and the thread is what you get when you pick a name.
+     * Contacts, Pay and Schedule were three doors in the sidebar. They are one
+     * subject — who works here, what they are owed, when they are in — and three
+     * entries spent three slots of a list somebody has to read at eight in the
+     * morning while the answer to "where is Ada's number" and "when am I in"
+     * lived two apart.
      *
-     * `module.messages` rather than a Contacts permission, because they are one
-     * thing: a directory you cannot write to is a phone book, and this is not
-     * one. Everybody has it — being reachable is not a privilege.
+     * ## Why these three and not, say, Performance
+     *
+     * Every tab here is about a PERSON and is mostly about the person looking at
+     * it. Performance is a report ABOUT people for whoever runs the floor, which
+     * is a different question with a different audience and a different
+     * permission; folding it in would have put a table comparing packers one tap
+     * from the packers it compares.
+     *
+     * ## The permission is on the TABS, not the door
+     *
+     * `permission: null`, because two of the three tabs have no permission
+     * either — your own pay and your own availability are yours. Contacts needs
+     * `module.messages`, which everybody has. So the door is open to everyone
+     * and each tab decides for itself; a role that somehow held none of them
+     * would see the module with nothing in it, which is why TEAM_TABS is
+     * filtered rather than assumed.
      */
-    id: 'contacts',
-    name: 'Contacts',
-    shortName: 'Contacts',
-    description: 'Everybody who works here, and the conversations you are in.',
+    id: 'team',
+    name: 'Team',
+    shortName: 'Team',
+    description: 'Who works here, what they are owed, and when they are in.',
     icon: 'Users',
-    permission: 'module.messages',
+    permission: null,
     status: 'active',
-    // BOTH workspaces. A packer needs to reach the office and the office needs
-    // to reach the floor; filing this under one of the two would mean switching
-    // companies to answer a question about tonight's show.
+    // BOTH workspaces. A packer needs to reach the office and check their own
+    // hours without switching companies to do it.
     workspace: 'both'
   },
   {
@@ -78,9 +101,14 @@ export const MODULES: AppModule[] = [
     icon: 'UserCog',
     permission: null,
     status: 'active',
-    // BOTH workspaces, for the same reason Contacts is: somebody on the packing
+    // BOTH workspaces, for the same reason Team is: somebody on the packing
     // floor must not have to switch companies to change their own password.
-    workspace: 'both'
+    workspace: 'both',
+    // NOT IN THE SIDEBAR. It hangs off your own name in the top right, which is
+    // where every other application puts it and therefore where people look
+    // first. Still a real module id so `navigate('account')` and the render
+    // chain work exactly as before — see `hidden` on AppModule.
+    hidden: true
   },
   {
     id: 'admin',
@@ -182,48 +210,69 @@ export const MODULES: AppModule[] = [
     permission: 'module.finance',
     status: 'active'
   },
-  // TWO DOORS, not one, and the split is by QUESTION rather than by data.
-  //
-  // "What am I owed" and "when am I in" were behind the same tab because they
-  // are both about time, which is a filing decision rather than a use one.
-  // Nobody opens an app to think about time; they open it to check their pay,
-  // or to find out whether they are working Thursday. Those are asked on
-  // different days, by different people, for different reasons — and one of
-  // them is now a place the floor WRITES to rather than only reads, which a tab
-  // called "Hours" gives no hint of.
+]
+
+/**
+ * What lives inside Team, in the order it is drawn.
+ *
+ * These were three top-level modules — `contacts`, `timepay`, `schedule` — and
+ * the ids are UNCHANGED on purpose. Every `navigate('timepay')` in the app, and
+ * any position somebody's browser remembered, still names something real; the
+ * shell translates the id into "Team, on that tab" rather than every call site
+ * being rewritten to know about the regrouping.
+ *
+ * The permission is per tab because the door has none. Two of these are yours
+ * by definition — your pay, your availability — and Contacts needs
+ * `module.messages`, which every role holds.
+ */
+export interface TeamTab {
+  id: string
+  label: string
+  icon: string
+  description: string
+  permission: Permission | null
+}
+
+export const TEAM_TABS: TeamTab[] = [
+  {
+    id: 'contacts',
+    label: 'Contacts',
+    icon: 'Users',
+    description: 'Everybody who works here, and the conversations you are in.',
+    permission: 'module.messages'
+  },
   {
     id: 'timepay',
-    name: 'Pay',
-    shortName: 'Pay',
-    description: 'Your hours and what each pay period came to.',
-    // NOT Wallet — Finance already has it, and two identical icons in one
-    // sidebar is a sidebar somebody has to read rather than glance at.
+    label: 'Pay',
     icon: 'DollarSign',
-    // NO PERMISSION. Everybody has their own hours and everybody may see them —
-    // a packer checking what they are owed is not an administrative act. The
-    // TEAM timesheet inside is still gated on admin.hours.view; what changed is
-    // that the door is no longer locked to the person whose hours are behind it.
-    permission: null,
-    status: 'active',
-    // Yours, not either business's — see the note on AppModule.workspace.
-    workspace: 'both'
+    description: 'Your hours and what each pay period came to.',
+    // NO PERMISSION. A packer checking what they are owed is not an
+    // administrative act. The TEAM timesheet inside is still gated on
+    // admin.hours.view; what is open is the door to your own figures.
+    permission: null
   },
   {
     id: 'schedule',
-    name: 'Schedule',
-    shortName: 'Schedule',
-    description: 'When you are in, and the days you can and cannot work.',
+    label: 'Schedule',
     icon: 'CalendarDays',
-    // No permission, for a stronger reason than Pay's. This is the one screen in
-    // the app the floor WRITES to about themselves, and the failure mode of an
-    // availability system is that nobody fills it in. A door somebody has to be
-    // granted is a door that goes back to being a text message.
-    permission: null,
-    status: 'active',
-    // Yours, not either business's — see the note on AppModule.workspace.
-    workspace: 'both'
+    description: 'When you are in, and the days you can and cannot work.',
+    // No permission, for a stronger reason than Pay's. This is the one screen
+    // the floor WRITES to about themselves, and the failure mode of an
+    // availability system is that nobody fills it in.
+    permission: null
   }
 ]
+
+/**
+ * The Team tab a module id names, or null if it names something else.
+ *
+ * This is what keeps `navigate('timepay')` working now that Pay is a tab rather
+ * than a door. Returning null for everything else is what lets the caller use
+ * it as a plain test.
+ */
+export function teamTabFor(moduleId: string): string | null {
+  return TEAM_TABS.some((t) => t.id === moduleId) ? moduleId : null
+}
 
 /** Whether a module shows in a given workspace's sidebar. */
 export function inWorkspace(module: AppModule, workspace: 'ops' | 'shipping'): boolean {
@@ -231,9 +280,15 @@ export function inWorkspace(module: AppModule, workspace: 'ops' | 'shipping'): b
   return home === 'both' || home === workspace
 }
 
-/** Modules belonging to a workspace ('ops' is the default for untagged ones). */
+/**
+ * Modules belonging to a workspace ('ops' is the default for untagged ones).
+ *
+ * Hidden ones are left out: this is what the SIDEBAR draws, and a module marked
+ * hidden has a home somewhere else on the chrome. It is still in MODULES, so
+ * `getModule` and `navigate` find it exactly as before.
+ */
 export function modulesForWorkspace(workspace: 'ops' | 'shipping'): AppModule[] {
-  return MODULES.filter((m) => inWorkspace(m, workspace))
+  return MODULES.filter((m) => inWorkspace(m, workspace) && !m.hidden)
 }
 
 export function getModule(id: string): AppModule | undefined {
