@@ -173,20 +173,20 @@ const toCents = (dollars: number): number => Math.round(dollars * 100)
 const toDollars = (cents: number): number => Math.round(cents) / 100
 
 /**
- * The four postage buckets as one signed figure, in cents.
+ * The four postage buckets as one signed figure, in cents — which IS
+ * `netShipping`.
  *
- * THE ONE STRIP THE RECONCILIATION STILL NEEDS, and it works on the ROW side.
- * This is ledger money — Whatnot's export carries every cent of it — that no
- * statement section reads, so the rows know about it and `netProfit` does not.
- * There was a `packagingCents` here doing the mirror job on the DAY side, for
- * money `netProfit` claimed that no ledger row carries; the packaging section
- * left the statement, packaging left `netProfit` with it, and that strip went too
- * because there is no longer anything on the day side to take off.
+ * NO LONGER A RECONCILIATION STRIP. It was one, on the row side, for as long as
+ * postage was ledger money no statement section claimed: the rows knew about it
+ * and `netProfit` did not, so the check had to hand those cents back before
+ * comparing. The shipping section is on the statement again and `netProfit`
+ * books the subtotal, so there is nothing to hand back and the strip is gone.
  *
- * `netShipping` is the same sum and is still computed, but this reads the four
- * buckets rather than the total on purpose: the strip must be the money the
- * BUCKETS carry, so a day whose `netShipping` ever failed to be its own four
- * terms would break the reconciliation instead of hiding inside it.
+ * What it still does is compute the total, from the four buckets rather than
+ * from anything pre-summed — deliberately, so `netShipping` cannot drift from
+ * being exactly its own four terms. That property now matters MORE than it did
+ * as a strip: the statement prints the four lines and this subtotal beneath
+ * them, and a subtotal that was not its own lines would be visible on screen.
  */
 function shippingCents(day: Pick<
   StreamDayFinance,
@@ -2911,6 +2911,12 @@ function buildView(db: Database): StreamingFinanceView {
     day.netProfit = toDollars(
       toCents(day.grossProfit) +
         toCents(day.totalFees) +
+        // POSTAGE IS A COST AGAIN. It was out for a release on the owner's
+        // instruction and net profit was higher by exactly this on every day and
+        // every period while it was; the four buckets behind it never stopped
+        // being computed, so putting it back is this term and the section that
+        // prints it. Its return is also what let the row-side strip below go.
+        toCents(day.netShipping) +
         toCents(day.showBoost) +
         // Its own statement section, and in the bottom line: an expense that did
         // not reduce net profit would be a note, and the owner asked for a cost.
@@ -3055,17 +3061,25 @@ function buildView(db: Database): StreamingFinanceView {
    * postage removes this strip; one that reinstates packaging puts a day-side
    * strip back.
    */
-  let unbookedShippingCents = 0
   for (const day of days) {
-    // TWO STRIPS, NOT THREE. The cost of goods and the manual expenses are money
-    // `netProfit` books that no ledger row carries, so they come back off here;
-    // the modelled packaging was a third of these until it left `netProfit`, and
-    // subtracting it now would take off money the left-hand side never added.
+    // TWO STRIPS, AND THEY ARE BOTH ON THE DAY SIDE NOW. The cost of goods and
+    // the manual expenses are money `netProfit` books that no ledger row
+    // carries, so they come back off here. The modelled packaging was a third of
+    // these until it left `netProfit`; subtracting it now would take off money
+    // the left-hand side never added.
+    //
+    // THE ROW-SIDE POSTAGE STRIP IS GONE, and its absence is the same rule
+    // running the other way. It existed because the four postage buckets were
+    // ledger money no section claimed, so the check had to hand those cents back
+    // before comparing. The statement claims them again — see the shipping
+    // section in `buildPnl` — so handing them back would now make the row side
+    // short by exactly the postage and print "these numbers do not add up" over
+    // a correct statement.
+    //
     // Getting either direction wrong does not fail loudly — it flags EVERY day
     // unreconciled, which is how an operator learns to ignore the one flag that
     // matters.
     fieldCents += toCents(day.netProfit) - toCents(day.cogs) - toCents(day.generalExpenses)
-    unbookedShippingCents += shippingCents(day)
     // `netAfterCosts` never carried the manual expenses or the packaging — it is
     // the show's LEDGER economics — so the giveaway loss is the only non-ledger
     // term there is to take back off. THE POSTAGE IS NOT STRIPPED HERE: this
@@ -3074,9 +3088,9 @@ function buildView(db: Database): StreamingFinanceView {
     ledgerFieldCents += toCents(day.netAfterCosts) - toCents(day.giveawayLoss)
   }
 
-  /** What the statement is answerable for: the money on the attributed rows,
-   *  less the postage no section of it reads. */
-  const bookedDayCents = daysCents - unbookedShippingCents
+  /** What the statement is answerable for: the money on the attributed rows.
+   *  Every cent of it, now that the postage has a section again. */
+  const bookedDayCents = daysCents
 
   /**
    * Every section subtotal of the statement, summed, must BE the bottom line.
@@ -3118,7 +3132,7 @@ function buildView(db: Database): StreamingFinanceView {
     reconciled = false
     reconcileNote =
       `The day breakdown adds to ${money(fieldCents)} before stock cost but ${money(bookedDayCents)} ` +
-      `of ledger money is attributed to those days outside postage. Either a bucket is landing in no ` +
+      `of ledger money is attributed to those days. Either a bucket is landing in no ` +
       `column, or the derived gross does not fall back to the net Whatnot paid — these totals are ` +
       `incomplete, do not book from them.`
   } else if (ledgerFieldCents !== daysCents) {

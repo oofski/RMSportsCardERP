@@ -168,14 +168,19 @@ export const PNL_DRILL_SOURCES: Readonly<Record<string, PnlDrillSource>> = {
   },
 
   // --- Shipping -------------------------------------------------------------
-  // NOTHING, because the statement prints no postage line to click. The four
-  // that were here — subsidy, postage charged back, giveaway postage, refund
-  // postage — went when `buildPnl` stopped emitting the shipping section, and
-  // they went for the reason this list exists: it is meant to be read beside
-  // that `return` as the same list in the same order, and a mapping for a line
-  // nothing emits is dead weight that makes the enumeration test look satisfied
-  // while covering one line fewer. The buckets are untouched and the rows are
-  // still there; reinstating the section reinstates these four entries with it.
+  // Four lines, four buckets, one each. Every one of them is real ledger money —
+  // Whatnot wrote the rows — so each drills straight to the rows behind it on
+  // `amount`, with no derivation in between: what the line says is what the rows
+  // add up to.
+  //
+  // These went for a release when `buildPnl` stopped emitting the shipping
+  // section, and came back with it. The buckets were never touched and the rows
+  // were never deleted, which is exactly why reinstating the section was adding
+  // a section and these four entries and nothing else.
+  shippingSubsidy: { kind: 'ledgerRows', buckets: ['shipping_subsidy'], basis: 'amount' },
+  shippingCharges: { kind: 'ledgerRows', buckets: ['shipping_charge'], basis: 'amount' },
+  giveawayShipping: { kind: 'ledgerRows', buckets: ['giveaway_shipping'], basis: 'amount' },
+  refundShipping: { kind: 'ledgerRows', buckets: ['refund_shipping'], basis: 'amount' },
 
   // --- Packaging ------------------------------------------------------------
   // NOTHING, AND FOR THE SAME REASON AS THE POSTAGE ABOVE. Sleeves, top loaders,

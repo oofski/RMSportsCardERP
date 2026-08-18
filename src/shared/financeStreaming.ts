@@ -2237,12 +2237,21 @@ export function buildPnl(d: {
    *  and no itemisation, and the section then prints them as it always did. */
   cogsBreakdown?: CogsItem[]
   whatnotFee: number; processingFee: number; totalFees: number
-  // NEITHER THE FIVE SHIPPING FIELDS NOR THE FOURTEEN PACKAGING ONES ARE ASKED
-  // FOR HERE, for the same reason and after the same decision: nothing in this
-  // function reads them any more — see the notes where those two sections used to
-  // be — and a parameter nothing reads is one somebody starts feeding from the
-  // wrong place. A caller passing a whole day is unaffected: the extra keys ride
-  // along and are ignored.
+  // THE FIVE SHIPPING FIELDS ARE BACK, because the section that reads them is.
+  // Required rather than optional: a caller that cannot supply them cannot
+  // render this statement honestly — a missing postage figure would silently
+  // print as an absent cost rather than as a gap, and net profit would be wrong
+  // by it with nothing on screen saying so.
+  shippingSubsidy: number
+  shippingCharges: number
+  giveawayShipping: number
+  refundShipping: number
+  netShipping: number
+  // THE FOURTEEN PACKAGING ONES ARE STILL NOT ASKED FOR, and the reason the
+  // postage no longer shares is that nothing in this function reads them: the
+  // packaging section is still gone. A parameter nothing reads is one somebody
+  // starts feeding from the wrong place. A caller passing a whole day is
+  // unaffected either way — the extra keys ride along and are ignored.
   showBoost: number; reversals: number; netProfit: number
   /** Optional so a caller built before manual expenses existed still
    *  type-checks. Zero then, and the section reads as an empty one. */
@@ -2593,21 +2602,46 @@ export function buildPnl(d: {
         `Whatnot pays net \u2014 these two were already deducted. Sales minus both equals the ` +
         `payout exactly.`
     },
-    // THERE IS NO SHIPPING SECTION HERE, AND ITS ABSENCE IS A DECISION.
-    //
-    // Subsidy received, postage charged back, giveaway postage and refund
-    // postage were four lines subtotalling to `netShipping` in this slot, and the
-    // owner took the whole cost off the statement: "we will add this cost in for
-    // some other way but right now not necessary." Net profit is higher by
-    // exactly what net postage came to, on every day and every period.
-    //
-    // The five fields behind those lines are still on every day and still summed
-    // through every rollup — see `StreamDayFinance`, which says why — so putting
-    // the cost back is adding a section here and nothing else. What that absence
-    // costs elsewhere is one strip: the postage is real money on real attributed
-    // ledger rows, and no section above claims a cent of it, so the day-versus-
-    // rows reconciliation in main takes those cents off the row side to match.
-
+    {
+      // POSTAGE IS BACK ON THE STATEMENT, and the four lines are the four the
+      // ledger actually carries — subsidy received, postage charged back,
+      // giveaway postage and refund postage — subtotalling to `netShipping`.
+      //
+      // It was taken off for a release on the owner's instruction ("we will add
+      // this cost in for some other way but right now not necessary") and net
+      // profit was higher by exactly this subtotal on every day and every period
+      // while it was gone. Nothing had to be recomputed to bring it back: the
+      // five fields behind these lines were never removed from a day and never
+      // stopped rolling up, which was the whole reason they were kept.
+      //
+      // FOUR LINES RATHER THAN ONE NET FIGURE, because they run opposite ways.
+      // The subsidy is money Whatnot puts in and the other three take money out;
+      // a single "shipping" line would net a contribution against a cost and
+      // leave a reader unable to tell a cheap month from a well-subsidised one.
+      //
+      // Every line here is EXPORT money — Whatnot wrote each of these rows — so
+      // the subtotal can be checked against a Whatnot screen, and each line
+      // drills to the rows behind it. That is also what let the reconciliation's
+      // row-side strip go: the statement claims this money now, so the check no
+      // longer has to hand it back.
+      key: 'shipping',
+      label: 'Shipping',
+      lines: [
+        line('shippingSubsidy', 'Shipping subsidy', d.shippingSubsidy),
+        line('shippingCharges', 'Postage charged back', d.shippingCharges),
+        // Named for the act rather than the bucket: "giveaway postage" is what
+        // it cost to MAIL a prize, and it is not the prize. That cost is
+        // `giveawayCost`, two sections up in cost of goods, and conflating the
+        // two is the mistake this label exists to prevent.
+        line('giveawayShipping', 'Giveaway postage', d.giveawayShipping),
+        line('refundShipping', 'Postage on refunds', d.refundShipping)
+      ],
+      subtotal: c2(d.netShipping),
+      subtotalLabel: 'Net shipping',
+      note:
+        `Postage Whatnot handled: what it paid toward shipping, less what it charged back. ` +
+        `Mailing a giveaway is here; what the giveaway itself cost is in cost of goods.`
+    },
     // AND THERE IS NO PACKAGING SECTION EITHER, FOR THE OPPOSITE REASON.
     //
     // Sleeves, top loaders, team bags, shipping labels, team bag stickers and

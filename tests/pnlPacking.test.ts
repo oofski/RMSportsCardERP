@@ -1,28 +1,33 @@
 /**
- * Where the money lands — and, for packaging and postage, that it lands nowhere.
+ * Where the money lands — and, for packaging, that it lands nowhere.
  *
- * Both costs are off the statement now, and they were taken off for opposite
- * reasons that this module's reconciliation feels in opposite directions. The
- * check it makes is that a day's own fields decompose the same money its
- * attributed ledger rows carry, so every figure has to be classified twice: is it
- * in `netProfit`, and is it on a ledger row.
+ * Postage and packaging were both taken off the statement in the same release,
+ * and only postage came back. They were taken off for opposite reasons that this
+ * module's reconciliation feels in opposite directions, and understanding the
+ * difference is the whole point of the file. The check it makes is that a day's
+ * own fields decompose the same money its attributed ledger rows carry, so every
+ * figure has to be classified twice: is it in `netProfit`, and is it on a ledger
+ * row.
  *
- *   - POSTAGE is on a ledger row and no longer in `netProfit`. Its cents come off
- *     the ROW side of the check, or every night that shipped a parcel reports a
- *     break that is not there.
- *   - PACKAGING is in neither. It is modelled from cards, breaks and envelopes,
- *     no ledger row has ever held a sleeve, and it left `netProfit` when the
- *     owner took the section off the statement. So NOTHING is stripped for it —
- *     and the strip that used to take it off the DAY side had to go with it, or
- *     the day side comes up short by exactly the packaging and the operator gets
- *     "these numbers do not add up" over a statement that is right to the cent.
+ *   - POSTAGE is on a ledger row AND back in `netProfit`. The four buckets have
+ *     a section again — subsidy, postage charged back, giveaway postage, refund
+ *     postage — each drilling to its own rows. Nothing is stripped for it any
+ *     more: the ROW-side strip that carried it while no section claimed it had
+ *     to go with the section's return, or the row side comes up short by exactly
+ *     the postage.
+ *   - PACKAGING is in neither, and still is not. It is modelled from cards,
+ *     breaks and envelopes, no ledger row has ever held a sleeve, and it left
+ *     `netProfit` when the owner took its section off. So NOTHING is stripped
+ *     for it — and the strip that used to take it off the DAY side had to go
+ *     with it, or the day side comes up short by exactly the packaging.
  *
  * Neither failure is loud. Both flag every day unreconciled, which is how an
  * operator learns to ignore the one flag that matters. That is what these
  * assertions exist to catch.
  *
- * `packagingCosts.test.ts` owns the arithmetic of the six figures, which is still
- * computed on every night. This file owns the fact that no section reads them.
+ * `packagingCosts.test.ts` owns the arithmetic of the six packaging figures,
+ * which is still computed on every night. This file owns the fact that no
+ * section reads them — and that four postage lines now do.
  *
  * Run: npm run test:pnl
  */
@@ -157,16 +162,38 @@ ok(PACKAGING_LINES.every((k) => pnlDrillSource(k) === null),
    'and the drill contract maps no line the statement cannot emit',
    PACKAGING_LINES.filter((k) => pnlDrillSource(k) !== null).join(', '))
 
-// POSTAGE IS OFF IT TOO, and for the other reason. Section 7 proves that money is
-// still held and still reconciles; here it is enough that nothing prints it.
-ok(sectionOf(day, 'shipping') === null,
-   'the statement has no shipping section either',
+// POSTAGE IS BACK ON, and this is the half that diverges from the packaging.
+// It was taken off for a release and returned; the four buckets never stopped
+// being computed, which is why returning it was a section and nothing else.
+const shipSection = sectionOf(day, 'shipping')
+ok(!!shipSection, 'THE STATEMENT PRINTS A SHIPPING SECTION',
    JSON.stringify(buildPnl(day).map((s: any) => s.key)))
 ok(
-  !buildPnl(day).some((s: any) => s.lines.some((l: any) => SHIPPING_LINES.includes(l.key))),
-  'and no section anywhere carries one of the four postage lines',
-  JSON.stringify(buildPnl(day).flatMap((s: any) => s.lines.map((l: any) => l.key)))
+  SHIPPING_LINES.every((k) => shipSection.lines.some((l: any) => l.key === k)),
+  'carrying all four postage lines',
+  JSON.stringify(shipSection?.lines.map((l: any) => l.key))
 )
+ok(
+  cents(shipSection.subtotal) === cents(day.netShipping),
+  'and subtotalling to net shipping',
+  `${shipSection?.subtotal} vs ${day.netShipping}`
+)
+// FOUR LINES, NOT ONE NET FIGURE. The subsidy runs the other way from the three
+// costs, and netting them would leave a reader unable to tell a cheap month from
+// a well-subsidised one.
+ok(
+  cents(
+    shipSection.lines.reduce((n: number, l: any) => n + l.amount, 0)
+  ) === cents(day.netShipping),
+  'the four lines are themselves the subtotal'
+)
+// EVERY ONE OF THEM DRILLS. They are ledger money — Whatnot wrote each row — so
+// each maps to its own bucket and nothing is derived on the way.
+for (const k of SHIPPING_LINES) {
+  const src = pnlDrillSource(k)
+  ok(!!src && src.kind === 'ledgerRows', `${k} drills to its ledger rows`, JSON.stringify(src))
+  ok(!!src && src.buckets.length === 1, `and to exactly one bucket`, JSON.stringify(src))
+}
 
 // THE BOTTOM LINE IS THE SECTIONS THAT DO PRINT, and nothing else.
 ok(
@@ -175,10 +202,10 @@ ok(
   `${pnlChecksum(buildPnl(day))} vs ${day.netProfit}`
 )
 ok(
-  cents(day.netProfit) === cents(day.grossProfit + day.totalFees + day.showBoost +
-    day.generalExpenses + day.reversals),
-  'which is gross profit, fees, show costs, expenses and adjustments — with the ' +
-    'packaging in none of them and the postage in none of them either',
+  cents(day.netProfit) === cents(day.grossProfit + day.totalFees + day.netShipping +
+    day.showBoost + day.generalExpenses + day.reversals),
+  'which is gross profit, fees, POSTAGE, show costs, expenses and adjustments — ' +
+    'with the packaging still in none of them',
   String(day.netProfit)
 )
 
@@ -707,35 +734,50 @@ ok(cents(d7.netAfterCosts) ===
    'netAfterCosts still books the postage, because it is the LEDGER economics',
    String(d7.netAfterCosts))
 
-// None of it reaches the statement — not as a section, not as a line, and not
-// as a figure the bottom line quietly carries. Nor does the packaging this night
-// certainly incurred: a sold break spot is a sleeved card.
-ok(sectionOf(d7, 'shipping') === null, 'the night prints no shipping section',
+// THE POSTAGE REACHES THE STATEMENT AND THE PACKAGING STILL DOES NOT. The two
+// were taken off together and only one came back, so this is where they part.
+const s7 = sectionOf(d7, 'shipping')
+ok(!!s7, 'the night prints a shipping section',
    JSON.stringify(buildPnl(d7).map((s: any) => s.key)))
-ok(sectionOf(d7, 'packaging') === null, 'and no packaging section',
+ok(cents(s7.subtotal) === cents(-0.9), 'subtotalling to the 90¢ of net postage',
+   String(s7?.subtotal))
+ok(
+  SHIPPING_LINES.every((k) => s7.lines.some((l: any) => l.key === k)),
+  'with a line for each of the four buckets',
+  JSON.stringify(s7?.lines.map((l: any) => l.key))
+)
+// Each line is the bucket's own money, not an apportionment.
+const lineFor = (k: string): number => cents(s7.lines.find((l: any) => l.key === k).amount)
+ok(lineFor('shippingSubsidy') === cents(9.5), 'the subsidy line is the subsidy')
+ok(lineFor('shippingCharges') === cents(-6.25), 'the charge line is the charge')
+ok(lineFor('giveawayShipping') === cents(-1.75), 'GIVEAWAY POSTAGE IS ITS OWN LINE')
+ok(lineFor('refundShipping') === cents(-2.4), 'and refund postage is its own')
+
+ok(sectionOf(d7, 'packaging') === null, 'and there is still no packaging section',
    JSON.stringify(buildPnl(d7).map((s: any) => s.key)))
 ok(
   !buildPnl(d7).some((s: any) =>
-    s.lines.some((l: any) => SHIPPING_LINES.includes(l.key) || PACKAGING_LINES.includes(l.key))),
-  'and no postage or packaging line anywhere on it'
+    s.lines.some((l: any) => PACKAGING_LINES.includes(l.key))),
+  'nor a packaging line anywhere on it'
 )
 ok(cents(d7.packagingSleeves) !== 0, 'though the night did sleeve a card and the model priced it',
    String(d7.packagingSleeves))
 ok(
-  cents(d7.netProfit) === cents(d7.grossProfit + d7.totalFees + d7.showBoost +
+  cents(d7.netProfit) === cents(d7.grossProfit + d7.totalFees + d7.netShipping + d7.showBoost +
     d7.generalExpenses + d7.reversals),
-  'net profit is the sections it does print — the 90¢ of net postage in none of them, ' +
-    'and the modelled packaging in none of them either',
+  'NET PROFIT NOW CARRIES THE POSTAGE — and the modelled packaging still in none of it',
   String(d7.netProfit)
 )
-ok([...SHIPPING_LINES, ...PACKAGING_LINES].every((k) => pnlDrillSource(k) === null),
-   'and the drill contract maps no line the statement cannot emit',
-   [...SHIPPING_LINES, ...PACKAGING_LINES].filter((k) => pnlDrillSource(k) !== null).join(', '))
+ok(SHIPPING_LINES.every((k) => pnlDrillSource(k) !== null),
+   'every postage line drills',
+   SHIPPING_LINES.filter((k) => pnlDrillSource(k) === null).join(', '))
+ok(PACKAGING_LINES.every((k) => pnlDrillSource(k) === null),
+   'and the drill contract still maps no line the statement cannot emit',
+   PACKAGING_LINES.filter((k) => pnlDrillSource(k) !== null).join(', '))
 
-// MORE POSTAGE MOVES THE RECORD AND NOT THE BOTTOM LINE. This is the owner's
-// change stated as behaviour rather than as a missing section: another subsidy
-// lands on the same night, the day's postage figure follows it, and net profit
-// does not move a cent.
+// MORE POSTAGE MOVES THE BOTTOM LINE. The mirror of what this section used to
+// assert: another subsidy lands on the same night, the day's postage figure
+// follows it, and net profit follows too — by exactly that amount.
 const netBeforePostage = cents(d7.netProfit)
 const more = importLedger(
   ledgerCsv('postage-more', [
@@ -749,8 +791,9 @@ const d7b = dayOf(v7b, NIGHT3)
 ok(v7b.reconciled === true, 'the view still reconciles with it', String(v7b.reconcileNote))
 ok(cents(d7b.shippingSubsidy) === cents(13.6), 'the subsidy on the day went up by $4.10',
    String(d7b.shippingSubsidy))
-ok(cents(d7b.netProfit) === netBeforePostage, 'and net profit did not move',
-   `${cents(d7b.netProfit)} vs ${netBeforePostage}`)
+ok(cents(d7b.netProfit) === netBeforePostage + cents(4.1),
+   'AND NET PROFIT ROSE BY EXACTLY THE $4.10 — the statement books postage again',
+   `${cents(d7b.netProfit)} vs ${netBeforePostage + cents(4.1)}`)
 
 // The identity, at all three grains, on a period that contains both the postage
 // and the packaging the statement ignores. A rollup that dropped either fails
@@ -764,12 +807,18 @@ for (const [label, row] of [
   ok(cents(pnlChecksum(buildPnl(row))) === cents(row.netProfit),
      `${label}: the statement sums to net profit with both costs outside it`,
      `${pnlChecksum(buildPnl(row))} vs ${row.netProfit}`)
-  ok(sectionOf(row, 'packaging') === null && sectionOf(row, 'shipping') === null,
-     `${label}: and prints neither section`,
+  ok(sectionOf(row, 'packaging') === null,
+     `${label}: and still prints no packaging section`,
      JSON.stringify(buildPnl(row).map((s: any) => s.key)))
+  // The postage rolls up like every other section: a rollup that dropped it
+  // would pass on the days and fail here.
+  const rolled = sectionOf(row, 'shipping')
+  ok(!!rolled && cents(rolled.subtotal) === cents(row.netShipping),
+     `${label}: the shipping section rolls up to the period's net postage`,
+     `${rolled?.subtotal} vs ${row.netShipping}`)
 }
 ok(cents(v7b.totals.netShipping) !== 0,
-   'and the postage is still there to be reinstated when the owner wants it back',
+   'and the postage is on the statement rather than waiting to be reinstated',
    String(v7b.totals.netShipping))
 ok(modelled(v7b.totals) !== 0,
    'as is every figure the packaging model priced',
