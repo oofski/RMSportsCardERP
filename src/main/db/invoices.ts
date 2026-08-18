@@ -6,9 +6,11 @@ import {
   dueDateFor,
   hasAddress,
   invoiceTotal,
+  latestPaymentDate,
   lineAmount,
   money,
   nextInvoiceNumber,
+  paymentsApplied,
   validateCustomer,
   validateInvoice,
   type Invoice,
@@ -419,6 +421,9 @@ interface InvoiceRow extends AddressRow {
   qbo_balance: number | null
   qbo_total_amt: number | null
   qbo_voided: number | null
+  qbo_paid_at: string | null
+  qbo_payments_applied: number | null
+  qbo_payment_count: number | null
   qbo_status_checked_at: string | null
   qbo_status_attempted_at: string | null
   qbo_status_error: string | null
@@ -497,6 +502,11 @@ function toInvoice(r: InvoiceRow): Invoice {
     qboBalance: r.qbo_balance ?? null,
     qboTotalAmt: r.qbo_total_amt ?? null,
     qboVoided: r.qbo_voided === 1,
+    // A CALENDAR DAY from QuickBooks, not an instant, and a different fact from
+    // paidAt below — see the column comment in the v71 migration.
+    qboPaidAt: r.qbo_paid_at ?? null,
+    qboPaymentsApplied: r.qbo_payments_applied ?? null,
+    qboPaymentCount: r.qbo_payment_count ?? null,
     qboStatusCheckedAt: r.qbo_status_checked_at ?? null,
     qboStatusAttemptedAt: r.qbo_status_attempted_at ?? null,
     qboStatusError: r.qbo_status_error ?? null,
@@ -555,7 +565,8 @@ const INVOICE_COLS = `id, invoice_number, customer_id, customer_name, email, ter
                       qbo_id, qbo_doc_number, qbo_synced_at,
                       qbo_push_state, qbo_push_error, qbo_push_attempted_at, qbo_push_attempts,
                       qbo_email_status, qbo_delivered_at, qbo_balance, qbo_total_amt,
-                      qbo_voided, qbo_status_checked_at, qbo_status_attempted_at,
+                      qbo_voided, qbo_paid_at, qbo_payments_applied, qbo_payment_count,
+                      qbo_status_checked_at, qbo_status_attempted_at,
                       qbo_status_error,
                       ${ADDRESS_COLS},
                       total, paid_at, paid_by,
@@ -1046,13 +1057,29 @@ export function listInvoicesNeedingPush(limit = 100): Invoice[] {
   ).map(toInvoice)
 }
 
-/** Everything this app has posted, so a status pull knows what to ask about. */
+/**
+ * Everything this app has posted, so a status pull knows what to ask about.
+ *
+ * PAID IS NOT THE END OF THE QUESTION any more. It used to be — an invoice that
+ * reached the last column had nothing left worth asking — but the pull now also
+ * fetches WHEN the money landed, and an invoice that arrived in paid before this
+ * existed has a date sitting in QuickBooks that nothing here has ever gone and
+ * read. So a paid invoice stays on the list until it has an answer.
+ *
+ * It stops after that answer whichever way it came out, including "there is no
+ * payment behind this" — an invoice settled in cash that QuickBooks never saw
+ * would otherwise be asked about on every refresh for the rest of its life. One
+ * extra read each, once, and the per-card refresh is always available for the
+ * one somebody is actually looking at.
+ */
 export function listPostedInvoices(limit = 200): Invoice[] {
   return (
     getDb()
       .prepare(
         `SELECT ${INVOICE_COLS} FROM invoices
-          WHERE qbo_id IS NOT NULL AND qbo_id != '' AND status != 'paid' AND status != 'void'
+          WHERE qbo_id IS NOT NULL AND qbo_id != ''
+            AND status != 'void'
+            AND NOT (status = 'paid' AND qbo_status_checked_at IS NOT NULL)
           ORDER BY invoice_date DESC LIMIT ?`
       )
       .all(Math.max(1, Math.min(1000, limit))) as InvoiceRow[]
@@ -1065,14 +1092,33 @@ export function listPostedInvoices(limit = 200): Invoice[] {
  * Facts only — this does NOT move the card. The caller decides that, through
  * nextStageFromQbo, because moving a card is a judgement about two systems and
  * recording an observation is not.
+ *
+ * ## The payment columns are written CONDITIONALLY, and that is the whole trick
+ *
+ * `payments` is empty for two completely different reasons: QuickBooks says
+ * there are none, or the second round trip that fetches them did not happen —
+ * it was throttled, refused, or the network went. Writing an empty array through
+ * unconditionally would blank a true "paid 12 August" on the strength of an
+ * answer nobody ever got, which is the same mistake recordQboStatusFailure was
+ * written to avoid.
+ *
+ * `linkedPayments` is what tells the two apart, because it comes off the invoice
+ * itself and is therefore always present. Zero links and no payments is a real
+ * answer and IS written — a payment deleted in QuickBooks should take its date
+ * with it. Links but no payments means we did not look, and leaves all three
+ * columns exactly as they were.
  */
 export function recordQboObservation(id: string, o: QboInvoiceObservation): void {
   const stamp = nowIso()
+  const looked = o.payments.length > 0 || o.linkedPayments === 0
   getDb()
     .prepare(
       `UPDATE invoices
           SET qbo_email_status = ?, qbo_delivered_at = ?, qbo_balance = ?, qbo_total_amt = ?,
               qbo_voided = ?, qbo_doc_number = COALESCE(?, qbo_doc_number),
+              qbo_paid_at = CASE WHEN ? THEN ? ELSE qbo_paid_at END,
+              qbo_payments_applied = CASE WHEN ? THEN ? ELSE qbo_payments_applied END,
+              qbo_payment_count = CASE WHEN ? THEN ? ELSE qbo_payment_count END,
               qbo_status_checked_at = ?, qbo_status_attempted_at = ?, qbo_status_error = NULL,
               updated_at = ?
         WHERE id = ?`
@@ -1084,11 +1130,146 @@ export function recordQboObservation(id: string, o: QboInvoiceObservation): void
       o.totalAmt,
       o.voided ? 1 : 0,
       o.docNumber,
+      looked ? 1 : 0,
+      latestPaymentDate(o.payments),
+      looked ? 1 : 0,
+      paymentsApplied(o.payments),
+      looked ? 1 : 0,
+      o.payments.length,
       stamp,
       stamp,
       stamp,
       id
     )
+}
+
+/**
+ * Local orders that could be bound to a QuickBooks invoice by their number.
+ *
+ * Nothing here is a match — these are the rows worth ASKING about. An order that
+ * already carries a qbo_id has its counterpart; one with no number has nothing
+ * to ask on; a void or paid order can only be moved somewhere terminal by the
+ * answer; and 'pending' is the one state where this app already suspects a
+ * QuickBooks invoice may exist for this row, which makes it the last state in
+ * which to go guessing which one.
+ *
+ * Drafts are deliberately IN. An order typed here and then invoiced in
+ * QuickBooks by hand is exactly the case this exists for, and it never left
+ * draft on this side.
+ */
+export function listInvoicesForDocNumberMatch(limit = 200): Invoice[] {
+  return (
+    getDb()
+      .prepare(
+        `SELECT ${INVOICE_COLS} FROM invoices
+          WHERE (qbo_id IS NULL OR qbo_id = '')
+            AND invoice_number IS NOT NULL AND invoice_number != ''
+            AND status NOT IN ('void', 'paid')
+            AND qbo_push_state != 'pending'
+          ORDER BY invoice_date DESC LIMIT ?`
+      )
+      .all(Math.max(1, Math.min(500, limit))) as InvoiceRow[]
+  ).map(toInvoice)
+}
+
+/**
+ * How many local rows carry each of these numbers, ACROSS EVERY STATUS.
+ *
+ * Every status on purpose. The question a match has to answer is "does this
+ * number name one document here", and a second row numbered 2301 makes the
+ * answer no whether or not that row is one this pass would otherwise consider.
+ */
+export function countInvoiceNumbers(numbers: readonly string[]): Map<string, number> {
+  const out = new Map<string, number>()
+  const clean = Array.from(new Set(numbers.map((n) => String(n ?? '').trim()).filter(Boolean)))
+  if (clean.length === 0) return out
+  const db = getDb()
+  const CHUNK = 400
+  for (let i = 0; i < clean.length; i += CHUNK) {
+    const chunk = clean.slice(i, i + CHUNK)
+    const rows = db
+      .prepare(
+        `SELECT invoice_number AS n, COUNT(*) AS c FROM invoices
+          WHERE invoice_number IN (${chunk.map(() => '?').join(',')})
+          GROUP BY invoice_number`
+      )
+      .all(...chunk) as Array<{ n: string; c: number }>
+    for (const r of rows) out.set(r.n, r.c)
+  }
+  return out
+}
+
+/**
+ * How many posted invoices came back from QuickBooks under a DIFFERENT number.
+ *
+ * The premise of matching on a number is that both systems use the same one, and
+ * QuickBooks silently replaces DocNumber unless the company has "Custom
+ * transaction numbers" switched on. This app already stores what it sent
+ * (invoice_number) beside what came back (qbo_doc_number), so the evidence costs
+ * one query and no API call: any non-zero answer means the two are separate
+ * series and a number match is a coincidence.
+ */
+export function countRenumberedInvoices(): number {
+  const row = getDb()
+    .prepare(
+      `SELECT COUNT(*) AS c FROM invoices
+        WHERE qbo_id IS NOT NULL AND qbo_id != ''
+          AND qbo_doc_number IS NOT NULL AND qbo_doc_number != ''
+          AND invoice_number IS NOT NULL AND invoice_number != ''
+          AND qbo_doc_number != invoice_number`
+    )
+    .get() as { c: number } | undefined
+  return row?.c ?? 0
+}
+
+/** Which of these QuickBooks ids some local row already holds. */
+export function claimedQboIds(qboIds: readonly string[]): Set<string> {
+  const out = new Set<string>()
+  const clean = Array.from(new Set(qboIds.map((v) => String(v ?? '').trim()).filter(Boolean)))
+  if (clean.length === 0) return out
+  const db = getDb()
+  const CHUNK = 400
+  for (let i = 0; i < clean.length; i += CHUNK) {
+    const chunk = clean.slice(i, i + CHUNK)
+    const rows = db
+      .prepare(
+        `SELECT qbo_id FROM invoices WHERE qbo_id IN (${chunk.map(() => '?').join(',')})`
+      )
+      .all(...chunk) as Array<{ qbo_id: string }>
+    for (const r of rows) out.add(r.qbo_id)
+  }
+  return out
+}
+
+/**
+ * Bind a local order to a QuickBooks invoice.
+ *
+ * GUARDED, and it returns false rather than throwing when the guard bites. The
+ * WHERE clause repeats "and this row still has no id" for the same reason
+ * claimPushSlot does: between a screen listing a proposal and somebody pressing
+ * the button, a push or another window may have given this row an id, and
+ * overwriting one qbo_id with another silently re-points Delete and Send at a
+ * different document in somebody's real books.
+ *
+ * `qbo_push_state` goes to 'ok' because that is what this codebase means by it —
+ * see the v22 backfill, which sets exactly that for every row holding an id. It
+ * is not a claim that a push happened; it is the absence of one still to do.
+ * `qbo_synced_at` is deliberately left alone: it means when this app PUT the
+ * invoice there, and this app did not.
+ */
+export function adoptQboInvoice(id: string, qboId: string, docNumber: string | null): boolean {
+  const stamp = nowIso()
+  return (
+    getDb()
+      .prepare(
+        `UPDATE invoices
+            SET qbo_id = ?, qbo_doc_number = COALESCE(?, qbo_doc_number),
+                qbo_push_state = 'ok', qbo_push_error = NULL,
+                updated_at = ?
+          WHERE id = ? AND (qbo_id IS NULL OR qbo_id = '')`
+      )
+      .run(qboId, docNumber, stamp, id).changes > 0
+  )
 }
 
 /**

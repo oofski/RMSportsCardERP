@@ -49,6 +49,7 @@ import type {
   InvoiceAddress,
   InvoiceCustomer,
   InvoiceDetail,
+  InvoiceMatchScan,
   InvoicePushResult,
   InvoiceStatus,
   InvoiceTerms,
@@ -1605,6 +1606,28 @@ export function createBridge(ipcRenderer: BridgeTransport) {
           moved: Array<{ id: string; from: InvoiceStatus; to: InvoiceStatus }>
         }>
       > => ipcRenderer.invoke(IPC.invoiceSyncQboStatus, { id: id ?? '' }),
+
+      /**
+       * Which open orders could be bound to a QuickBooks invoice by number.
+       *
+       * READ ONLY — it decides nothing and writes nothing. What comes back is a
+       * list of proposals with both sides' figures on them, plus the near
+       * misses and why they missed, for a screen to show before anybody agrees
+       * to anything.
+       */
+      qboMatchScan: (): Promise<Result<InvoiceMatchScan>> =>
+        ipcRenderer.invoke(IPC.invoiceQboMatchScan),
+
+      /**
+       * Bind these exact pairs. The write half, and it takes only pairs
+       * somebody has actually looked at — every one is re-checked against
+       * QuickBooks before it is written, because a scan is a snapshot and the
+       * books move underneath it.
+       */
+      qboMatchAdopt: (
+        pairs: Array<{ invoiceId: string; qboId: string }>
+      ): Promise<Result<{ adopted: number; refused: Array<{ invoiceId: string; why: string }> }>> =>
+        ipcRenderer.invoke(IPC.invoiceQboMatchAdopt, { pairs }),
 
       /** Post it, then open the browser on it so somebody can press Send. */
       createInQbo: (

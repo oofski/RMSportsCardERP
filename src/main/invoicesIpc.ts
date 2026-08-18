@@ -13,20 +13,34 @@ import type {
   NewInvoice
 } from '@shared/invoices'
 import type {
+  InvoiceMatchProposal,
+  InvoiceMatchRejection,
+  InvoiceMatchScan,
   InvoicePushResult,
+  QboInvoiceMatch,
   QboInvoiceObservation,
   QboInvoicePreflight
 } from '@shared/invoices'
-import { invoicesToCsv, nextStageFromQbo } from '@shared/invoices'
+import {
+  describeMatchRefusal,
+  invoicesToCsv,
+  matchInvoiceByDocNumber,
+  nextStageFromQbo
+} from '@shared/invoices'
 import { currentUser } from './services/auth'
 import {
+  adoptQboInvoice,
+  claimedQboIds,
   claimPushSlot,
+  countInvoiceNumbers,
+  countRenumberedInvoices,
   deleteInvoice,
   getInvoice,
   getInvoices,
   invoiceStats,
   listCustomers,
   listInvoices,
+  listInvoicesForDocNumberMatch,
   listInvoicesNeedingPush,
   listPostedInvoices,
   markPosted,
@@ -57,7 +71,7 @@ import {
   type QboCustomerRef,
   type QboItemRef
 } from './quickbooks/invoices'
-import { fetchQboInvoiceStatuses } from './quickbooks/invoiceStatus'
+import { fetchQboInvoiceStatuses, findQboInvoicesByDocNumber } from './quickbooks/invoiceStatus'
 
 /**
  * Invoices — the sell side.
@@ -774,6 +788,193 @@ export function registerInvoicesIpc(): void {
           }
         }
         return { ok: true, data: { checked, missing, moved } }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  /**
+   * Which open orders could be bound to a QuickBooks invoice by their number.
+   *
+   * A PURE READ. It writes nothing, decides nothing, and moves nothing — what
+   * comes back is a list of proposals with both sides' figures on them, for a
+   * person to compare. The write lives on the other channel and takes only pairs
+   * somebody agreed to.
+   *
+   * The split is not ceremony. A number is a UNIQUENESS test and never an
+   * IDENTITY test: this app takes max+1 over its own rows while QuickBooks takes
+   * max+1 over its own, so the moment the owner raises one invoice by hand the
+   * two counters offer the same next number for two unrelated documents. And the
+   * id a match would write is what Delete sends operation=delete against, what
+   * Send emails to this buyer, and what the status pull reads a stage from —
+   * where a bound VOID reads back as 'void' and moving a local order there
+   * releases its stock and erases its stock ledger, for units that may already
+   * have shipped. Every one of those is unrecoverable, so the decision is
+   * somebody's rather than a timer's.
+   */
+  ipcMain.handle(IPC.invoiceQboMatchScan, async (): Promise<Result<InvoiceMatchScan>> => {
+    try {
+      requireInvoicing()
+      const candidates = listInvoicesForDocNumberMatch()
+      const scan: InvoiceMatchScan = {
+        proposals: [],
+        rejected: [],
+        scanned: candidates.length,
+        renumbered: countRenumberedInvoices()
+      }
+      if (candidates.length === 0) return { ok: true, data: scan }
+
+      const found = await findQboInvoicesByDocNumber(
+        candidates.map((i) => i.invoiceNumber).filter(Boolean)
+      )
+      // Grouped by number rather than looked up per invoice, because the whole
+      // reason matchInvoiceByDocNumber takes a LIST is so it can see the several
+      // that come back when QuickBooks has allowed a duplicate.
+      const byNumber = new Map<string, QboInvoiceMatch[]>()
+      for (const m of found) {
+        const key = (m.docNumber ?? '').trim()
+        if (!key) continue
+        byNumber.set(key, [...(byNumber.get(key) ?? []), m])
+      }
+
+      const localsWithNumber = countInvoiceNumbers(candidates.map((i) => i.invoiceNumber))
+      const claimed = claimedQboIds(found.map((m) => m.qboId))
+
+      for (const invoice of candidates) {
+        const number = invoice.invoiceNumber.trim()
+        const list = byNumber.get(number) ?? []
+        const verdict = matchInvoiceByDocNumber(invoice, list, {
+          localsWithNumber: localsWithNumber.get(number) ?? 0,
+          claimed
+        })
+        if (verdict.ok) {
+          const proposal: InvoiceMatchProposal = {
+            invoiceId: invoice.id,
+            invoiceNumber: invoice.invoiceNumber,
+            customerName: invoice.customerName,
+            invoiceDate: invoice.invoiceDate,
+            total: invoice.total,
+            status: invoice.status,
+            match: verdict.match
+          }
+          scan.proposals.push(proposal)
+          continue
+        }
+        // 'none' is the ordinary case — most open orders were never invoiced in
+        // QuickBooks — and listing it would bury the handful that nearly matched
+        // under everything that was never a candidate.
+        if (verdict.reason === 'none') continue
+        const rejection: InvoiceMatchRejection = {
+          invoiceId: invoice.id,
+          invoiceNumber: invoice.invoiceNumber,
+          customerName: invoice.customerName,
+          reason: verdict.reason,
+          match: list.length === 1 ? list[0] : null
+        }
+        scan.rejected.push(rejection)
+      }
+      return { ok: true, data: scan }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  /**
+   * Bind these exact pairs.
+   *
+   * EVERY PAIR IS RE-CHECKED against QuickBooks before it is written, against a
+   * fresh read rather than the scan that produced it. A scan is a snapshot and
+   * somebody's books move underneath it: between the list being drawn and the
+   * button being pressed, the invoice can be voided, renumbered, paid, or
+   * deleted outright, and a second local row can take the number. Re-running the
+   * same guards on fresh figures is the difference between confirming a decision
+   * and replaying a stale one.
+   *
+   * The write itself is guarded again in SQL — see adoptQboInvoice — so a row
+   * that gained an id while this was in flight is reported rather than
+   * overwritten.
+   *
+   * ADOPTION ONLY. Nothing here moves a card. The invoice now has an id, and the
+   * ordinary status pull is what reads a stage off it on its next run, through
+   * the same forward-only machinery every other invoice goes through. Moving in
+   * the same pass would mean a freshly bound order could be voided by the very
+   * call that bound it, before anybody had seen the binding take.
+   */
+  ipcMain.handle(
+    IPC.invoiceQboMatchAdopt,
+    async (
+      _e,
+      payload?: { pairs?: unknown }
+    ): Promise<Result<{ adopted: number; refused: Array<{ invoiceId: string; why: string }> }>> => {
+      try {
+        requireInvoicing()
+        const raw = Array.isArray(payload?.pairs) ? payload.pairs : []
+        const pairs = raw
+          .map((p) => ({
+            invoiceId: str((p as { invoiceId?: unknown })?.invoiceId),
+            qboId: str((p as { qboId?: unknown })?.qboId)
+          }))
+          .filter((p) => p.invoiceId && p.qboId)
+        if (pairs.length === 0) return { ok: true, data: { adopted: 0, refused: [] } }
+
+        const invoices = new Map(
+          pairs
+            .map((p) => getInvoice(p.invoiceId))
+            .filter((i): i is InvoiceDetail => !!i)
+            .map((i) => [i.id, i])
+        )
+        const numbers = [...invoices.values()].map((i) => i.invoiceNumber).filter(Boolean)
+        const found = numbers.length > 0 ? await findQboInvoicesByDocNumber(numbers) : []
+        const byNumber = new Map<string, QboInvoiceMatch[]>()
+        for (const m of found) {
+          const key = (m.docNumber ?? '').trim()
+          if (!key) continue
+          byNumber.set(key, [...(byNumber.get(key) ?? []), m])
+        }
+        const localsWithNumber = countInvoiceNumbers(numbers)
+        const claimed = claimedQboIds(found.map((m) => m.qboId))
+
+        let adopted = 0
+        const refused: Array<{ invoiceId: string; why: string }> = []
+        for (const pair of pairs) {
+          const invoice = invoices.get(pair.invoiceId)
+          if (!invoice) {
+            refused.push({ invoiceId: pair.invoiceId, why: 'That order is gone.' })
+            continue
+          }
+          const number = invoice.invoiceNumber.trim()
+          const verdict = matchInvoiceByDocNumber(invoice, byNumber.get(number) ?? [], {
+            localsWithNumber: localsWithNumber.get(number) ?? 0,
+            claimed
+          })
+          if (!verdict.ok) {
+            refused.push({ invoiceId: pair.invoiceId, why: describeMatchRefusal(verdict.reason) })
+            continue
+          }
+          // The pair somebody pressed must be the pair the fresh check agrees
+          // with. If QuickBooks now answers with a different invoice under that
+          // number, this is no longer the decision that was reviewed.
+          if (verdict.match.qboId !== pair.qboId) {
+            refused.push({
+              invoiceId: pair.invoiceId,
+              why: 'QuickBooks now answers with a different invoice under that number. Scan again.'
+            })
+            continue
+          }
+          if (adoptQboInvoice(invoice.id, verdict.match.qboId, verdict.match.docNumber)) {
+            adopted++
+            // Claimed for the rest of THIS batch too, so two orders sharing a
+            // number cannot both be bound to one QuickBooks invoice in one press.
+            claimed.add(verdict.match.qboId)
+          } else {
+            refused.push({
+              invoiceId: pair.invoiceId,
+              why: 'That order was given a QuickBooks id while this was open.'
+            })
+          }
+        }
+        return { ok: true, data: { adopted, refused } }
       } catch (err) {
         return fail(err)
       }

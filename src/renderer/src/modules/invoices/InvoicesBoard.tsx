@@ -6,7 +6,9 @@ import { LIVE, useLiveRefresh } from '../../lib/live'
 import { Button, CenterLoader, Modal } from '../../components/ui'
 import { Icon } from '../../components/Icon'
 import { FreightLine, TrackingLine } from '../../components/FreightFields'
+import { PaymentBar } from '../../components/PaymentProgress'
 import { CheckTrackingButton } from '../../components/CheckTrackingButton'
+import { MatchByNumberModal } from './MatchByNumberModal'
 import { useToast } from '../../components/Toast'
 import { formatDate, formatMoney } from '../../lib/format'
 import { CreateInvoiceModal } from './CreateInvoiceModal'
@@ -58,6 +60,7 @@ export function InvoicesBoard({
   const [editing, setEditing] = useState<InvoiceDetail | null>(null)
   const [creatingNew, setCreatingNew] = useState(false)
   const [syncing, setSyncing] = useState(false)
+  const [matching, setMatching] = useState(false)
   const [nextNumber, setNextNumber] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
   /**
@@ -320,6 +323,14 @@ export function InvoicesBoard({
           >
             Check QuickBooks
           </Button>
+          {/* A PRESS, NOT A TIMER, and the modal explains why at length. Short
+              version: a shared invoice number is a uniqueness test, not an
+              identity test, and the id a match writes is what Delete deletes and
+              Send emails. What IS automatic is everything after — an attached
+              order moves to Paid on the ordinary check like any other. */}
+          <Button variant="secondary" icon="Link" onClick={() => setMatching(true)}>
+            Attach by number
+          </Button>
           <Button variant="primary" icon="Plus" onClick={() => setCreatingNew(true)}>
             New invoice
           </Button>
@@ -439,6 +450,20 @@ export function InvoicesBoard({
         />
       )}
 
+      {matching && (
+        <MatchByNumberModal
+          onClose={() => setMatching(false)}
+          onMatched={async () => {
+            await load()
+            // Attaching writes an id and nothing else — the card is where it
+            // was. This is the run that reads a stage off the new id, so a
+            // settled invoice lands in Paid while somebody is still looking at
+            // the board rather than a quarter of an hour later.
+            await syncStatus(false)
+          }}
+        />
+      )}
+
       {deleting && (
         <DeleteInvoiceModal
           invoice={deleting}
@@ -535,16 +560,33 @@ function InvoiceCard({
       <div className="po-card-supplier">{invoice.customerName}</div>
       <div className="po-card-figs">
         <span className="po-card-total mono">{formatMoney(invoice.total)}</span>
-        {/* paidAt is an INSTANT and dueDate is a calendar day, so they are
-            formatted by different functions on purpose. Slicing the instant to
-            ten characters and running it through formatDay would print the UTC
-            day, which after 5pm on the west coast is tomorrow. */}
+        {/* THREE DIFFERENT KINDS OF DATE, and each is formatted by the function
+            that matches what it IS.
+
+            `qboPaidAt` is QuickBooks' answer: the calendar day the money is
+            dated in the books, so formatDay. `paidAt` is an INSTANT — the
+            moment somebody on this floor ticked the box — so formatDate.
+            `dueDate` is a calendar day again. Slicing the instant to ten
+            characters and running it through formatDay would print the UTC day,
+            which after 5pm on the west coast is tomorrow.
+
+            QuickBooks' day WINS when there is one. The two routinely differ by
+            days: the money landed on the 12th and the sync that noticed ran on
+            the 18th, and it is the 12th somebody repeats to a buyer. */}
         <span className="po-card-meta">
-          {invoice.status === 'paid' && invoice.paidAt
-            ? `paid ${formatDate(invoice.paidAt)}`
+          {invoice.status === 'paid'
+            ? invoice.qboPaidAt
+              ? `paid ${formatDay(invoice.qboPaidAt)}`
+              : invoice.paidAt
+                ? `paid ${formatDate(invoice.paidAt)}`
+                : 'paid'
             : `due ${formatDay(invoice.dueDate)}`}
         </span>
       </div>
+      {/* Drawn only once QuickBooks has said something — see PaymentBar, which
+          returns nothing rather than an empty rail, because "nothing paid" on a
+          draft nobody has posted is a claim about money that nobody has made. */}
+      <PaymentBar invoice={invoice} compact className="po-card-recv" />
       <FreightLine
         carrier={invoice.carrier}
         service={invoice.service}

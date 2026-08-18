@@ -17,6 +17,7 @@ import { Button, Field, Input, Modal, Select } from '../../components/ui'
 import { Icon } from '../../components/Icon'
 import { formatDate, formatMoney } from '../../lib/format'
 import { FreightFields } from '../../components/FreightFields'
+import { PaymentBar } from '../../components/PaymentProgress'
 import { destinationHoldsStock } from '@shared/purchaseOrders'
 import { DestinationSelect, SupplierSelect } from '../invoicing/PartySelect'
 import { CategoryLogo } from '../inventory/CategoryLogo'
@@ -842,12 +843,28 @@ function InvoiceReceipt({
       <div className="po-receipt-timeline">
         <TimeRow icon="ReceiptText" label="Invoiced" value={formatDay(invoice.invoiceDate)} />
         <TimeRow icon="CalendarClock" label="Due" value={formatDay(invoice.dueDate)} />
+        {/* QuickBooks' day beats our instant when there is one. `qboPaidAt` is
+            Payment.TxnDate — the calendar day the money is dated in the books,
+            so formatDay — while `paidAt` is the instant somebody here ticked
+            the box, which is often days later and is the wrong answer to "when
+            was this paid". */}
         <TimeRow
           icon="DollarSign"
           label="Paid"
-          value={invoice.paidAt ? formatDate(invoice.paidAt) : '—'}
+          value={
+            invoice.qboPaidAt
+              ? formatDay(invoice.qboPaidAt)
+              : invoice.paidAt
+                ? formatDate(invoice.paidAt)
+                : '—'
+          }
         />
       </div>
+
+      {/* How much of it has actually been collected, on the same rail the buy
+          side draws a part-received shipment with. Absent entirely until
+          QuickBooks has said something — see PaymentBar. */}
+      <PaymentBar invoice={invoice} className="po-ship-recv" />
 
       {/* Shipping is READ-ONLY here, which is a gap rather than a decision: the
           buy side can edit a PO's carrier from its receipt because

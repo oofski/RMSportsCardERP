@@ -180,6 +180,17 @@ export const IPC = {
   // the owner asked about are genuinely in this API and two are not — see
   // @shared/invoices for which, and why the missing two are not faked.
   invoiceSyncQboStatus: 'invoices:qbo:sync-status',
+  // Bind an order written here to the QuickBooks invoice carrying the same
+  // number, so a payment recorded there can reach a card that was never pushed.
+  //
+  // TWO CHANNELS, NOT ONE, and that is the point of them. The scan is a pure
+  // read that decides nothing; the adopt is the write, and it takes the exact
+  // pairs somebody looked at and agreed to. A number is a uniqueness test rather
+  // than an identity test — the two series are counted from disjoint knowledge —
+  // and the id it would write is what Delete deletes and Send emails, so the
+  // decision belongs to a person with the evidence in front of them.
+  invoiceQboMatchScan: 'invoices:qbo:match-scan',
+  invoiceQboMatchAdopt: 'invoices:qbo:match-adopt',
   // The invoice as a document a BUYER reads. The CSV is for QuickBooks and the
   // API call is for QuickBooks; this is the only artefact in the module meant
   // for a person.

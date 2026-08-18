@@ -384,6 +384,33 @@ export interface Invoice {
   qboBalance: number | null
   qboTotalAmt: number | null
   qboVoided: boolean
+  /**
+   * The day QuickBooks says the LAST payment against this invoice landed.
+   *
+   * `YYYY-MM-DD`, and a CALENDAR DAY rather than an instant — it is
+   * Payment.TxnDate, the day the money is dated in the books. Format it with
+   * formatDay; running it through formatDate prints the day before for everybody
+   * west of Greenwich.
+   *
+   * A DIFFERENT FACT FROM `paidAt`, which is why it is a different column.
+   * `paidAt` is the instant somebody on this floor ticked the box, and plenty of
+   * invoices here settle in cash that QuickBooks never sees. This is the books'
+   * answer, and it is null on every one of those — including, importantly, on an
+   * invoice whose balance QuickBooks cleared with a CREDIT MEMO rather than
+   * money, where there is no payment and so no date to name.
+   */
+  qboPaidAt: string | null
+  /**
+   * What payments — as opposed to credits — have put against this invoice.
+   *
+   * Kept beside the balance rather than derived from it because they can
+   * disagree, and the disagreement is the interesting part: a balance that fell
+   * to zero with nothing here is an invoice cleared by a credit memo, a discount
+   * or a write-off, not one somebody paid.
+   */
+  qboPaymentsApplied: number | null
+  /** How many payments. Null means nobody has looked; 0 is a real answer. */
+  qboPaymentCount: number | null
   qboStatusCheckedAt: string | null
   qboStatusAttemptedAt: string | null
   qboStatusError: string | null
@@ -1336,6 +1363,40 @@ export function looksVoidedInQbo(raw: {
   return zeroed && (raw.privateNote ?? '').trim().toLowerCase().startsWith('voided')
 }
 
+/**
+ * One payment QuickBooks has applied to an invoice.
+ *
+ * Reached by FOLLOWING the invoice's LinkedTxn. The Invoice entity carries only
+ * `{ TxnId, TxnType: 'Payment' }` — an id and a word — and every fact worth
+ * having about the money is on the Payment entity that id points at. This app
+ * used to read that link and COUNT it, which is why it could say an invoice was
+ * paid and never when.
+ */
+export interface QboInvoicePayment {
+  /** The Payment entity's id. */
+  id: string
+  /**
+   * Payment.TxnDate — A CALENDAR DAY, `YYYY-MM-DD`, and never an instant.
+   *
+   * This is the day a payment is DATED in somebody's books: a wall-clock fact
+   * about a ledger, not a physical moment. Promoting it to an instant to sit
+   * beside `paidAt` would be the mistake written down all over this codebase — a
+   * date-only string read as local midnight and shifted lands on the day before,
+   * and on a payment that is the wrong month at every month end.
+   */
+  date: string
+  /**
+   * How much of this payment landed on THIS invoice.
+   *
+   * NOT `Payment.TotalAmt`. One payment settles several invoices — a buyer
+   * clearing three cases with one transfer is the ordinary case here — and the
+   * share belonging to this invoice is on the payment LINE that links to it.
+   * Taking the payment's total would credit every invoice in the batch with the
+   * whole transfer.
+   */
+  amount: number
+}
+
 /** What QuickBooks actually said about one invoice, verbatim where possible. */
 export interface QboInvoiceObservation {
   qboId: string
@@ -1348,8 +1409,495 @@ export interface QboInvoiceObservation {
   totalAmt: number | null
   /** LinkedTxn entries of TxnType 'Payment'. Zero is a real answer, not unknown. */
   linkedPayments: number
+  /**
+   * The payments themselves, once the linked ids have been followed.
+   *
+   * EMPTY IS AMBIGUOUS AND THAT IS DELIBERATE: it means either "no payments" or
+   * "we did not go and look", and `linkedPayments` beside it is what tells the
+   * two apart. A reader that needs to know which is which compares the two
+   * rather than being handed a third field that can fall out of step with both.
+   */
+  payments: QboInvoicePayment[]
   /** The zeroed-and-annotated signature described above. A heuristic. */
   voided: boolean
+}
+
+/**
+ * The day of the LATEST payment, or null when there is none to name.
+ *
+ * Latest rather than first, because the question being asked is "when was this
+ * settled" and an invoice paid in three instalments was settled on the third.
+ * The first instalment is still visible — every payment is carried — this is
+ * only which one gets to be the date on the card.
+ *
+ * Compared as strings, which is exact for `YYYY-MM-DD` and avoids parsing a
+ * calendar day into an instant to sort it. Anything not shaped like a day is
+ * skipped rather than coerced: QuickBooks always sends one, and a value that is
+ * not one is better absent than silently ordered as NaN.
+ */
+export function latestPaymentDate(payments: readonly QboInvoicePayment[]): string | null {
+  let latest: string | null = null
+  for (const p of payments) {
+    // ZERO-AMOUNT LINES DO NOT GET TO BE THE DATE, and this is the subtle one.
+    // QuickBooks materialises the application of a CREDIT MEMO as a Payment of
+    // $0.00 carrying a perfectly real TxnDate. Following the link and taking that
+    // date would print "paid 12 Aug" on an invoice against which no money has
+    // ever moved — the single most misleading thing this feature could do, since
+    // the whole point of it is to answer when the money arrived.
+    if (!((Number(p?.amount) || 0) > 0)) continue
+    const day = (p?.date ?? '').trim()
+    if (!DAY_RE.test(day)) continue
+    if (latest === null || day > latest) latest = day
+  }
+  return latest
+}
+
+/** What payments — as opposed to credits — have actually put against an invoice. */
+export function paymentsApplied(payments: readonly QboInvoicePayment[]): number {
+  return money(payments.reduce((sum, p) => sum + (Number(p?.amount) || 0), 0))
+}
+
+// ---------------------------------------------------------------------------
+// How far through being paid an invoice is
+//
+// THE SELL-SIDE MIRROR OF RECEIVING PROGRESS, and deliberately the same shape as
+// @shared/receiving so the two rails on the two boards are one idea seen from
+// each end: a purchase order asks how much of what we ordered has ARRIVED, and a
+// sales order asks how much of what we billed has been PAID. Same component,
+// same colours, same rounding rule — money in place of units.
+// ---------------------------------------------------------------------------
+
+export type InvoicePaymentState = 'unknown' | 'unpaid' | 'partial' | 'paid' | 'over'
+
+export interface InvoicePaymentProgress {
+  state: InvoicePaymentState
+  /**
+   * Where these numbers came from, because the two are not the same kind of fact.
+   *
+   *   quickbooks  a balance read off the books
+   *   local       the tick somebody put on the board — their word that the money
+   *               arrived, which is real and useful and is NOT a reconciliation
+   *   none        nobody has said anything either way
+   */
+  source: 'quickbooks' | 'local' | 'none'
+  total: number
+  paid: number
+  /** What is still owed. Never negative — see `excess` for the other direction. */
+  outstanding: number
+  /** How much MORE than the invoice arrived. 0 in every ordinary case. */
+  excess: number
+  /** 0..1, clamped. For a bar's width. */
+  fraction: number
+  /** 0..100, for print. Pinned inside 1..99 while partial — see below. */
+  percent: number
+  /** The day QuickBooks says the last payment landed. Null when unknown. */
+  paidOn: string | null
+}
+
+/**
+ * How far through being paid this invoice is.
+ *
+ * ## The thresholds are the stage machinery's, not new ones
+ *
+ * `balance <= 0` against a positive total is paid, exactly as `observedPaid`
+ * decides it. Inventing a cent of tolerance here would let the rail read "paid"
+ * on a card the board still has sitting in Sent, and two screens disagreeing
+ * about the same invoice is worse than either being slightly conservative.
+ *
+ * ## The rounding rule, which is the only subtle thing here
+ *
+ * Copied from `receiveProgress` for the same reason it exists there. $999.50 of
+ * $1000 is 99.95%, which rounds to 100 — and a "100%" on an invoice with money
+ * still owed is the reading that stops somebody chasing it. Fifty cents of
+ * $1000 is 0.05%, which rounds to 0 — and "0%" on an invoice that has started
+ * being paid sends somebody chasing a buyer who has already sent something. So
+ * a PARTIAL payment is pinned inside 1..99, and 0 and 100 are reserved for the
+ * two states that really are none and all.
+ */
+export function invoicePaymentProgress(invoice: {
+  status: InvoiceStatus
+  total: number
+  qboBalance: number | null
+  qboTotalAmt: number | null
+  qboVoided: boolean
+  qboPaidAt: string | null
+}): InvoicePaymentProgress {
+  const paidOn = (invoice.qboPaidAt ?? '').trim() || null
+  const total = money(Number(invoice.qboTotalAmt) || 0)
+  const readable =
+    invoice.qboTotalAmt !== null && invoice.qboBalance !== null && !invoice.qboVoided && total > 0
+
+  if (!readable) {
+    // No balance to read. The only other fact available is the tick on the
+    // board, and it is a different KIND of fact — somebody's word that the money
+    // arrived — so it is labelled as one rather than dressed up as a reading.
+    if (invoice.status === 'paid') {
+      const local = money(Number(invoice.total) || 0)
+      return {
+        state: 'paid',
+        source: 'local',
+        total: local,
+        paid: local,
+        outstanding: 0,
+        excess: 0,
+        fraction: 1,
+        percent: 100,
+        paidOn
+      }
+    }
+    return {
+      state: 'unknown',
+      source: 'none',
+      total: 0,
+      paid: 0,
+      outstanding: 0,
+      excess: 0,
+      fraction: 0,
+      percent: 0,
+      paidOn
+    }
+  }
+
+  const balance = money(Number(invoice.qboBalance) || 0)
+  const paid = money(total - balance)
+  const state: InvoicePaymentState =
+    balance < 0 ? 'over' : balance === 0 ? 'paid' : paid <= 0 ? 'unpaid' : 'partial'
+  const fraction = Math.max(0, Math.min(1, paid / total))
+  const percent =
+    state === 'partial'
+      ? Math.min(99, Math.max(1, Math.round(fraction * 100)))
+      : Math.round(fraction * 100)
+
+  return {
+    state,
+    source: 'quickbooks',
+    total,
+    paid,
+    outstanding: money(Math.max(0, balance)),
+    excess: money(Math.max(0, -balance)),
+    fraction,
+    percent,
+    paidOn
+  }
+}
+
+/**
+ * The tone a screen paints this in.
+ *
+ * GREEN ONLY WHEN IT IS SETTLED, the same rule the receiving rail follows. A
+ * part-paid invoice in green reads as collected to anybody not reading the
+ * figures, which is precisely the mistake worth preventing on a screen whose job
+ * is "who still owes us". Over-payment is the danger tone because more money
+ * than the invoice is a discrepancy to go and look at, not progress.
+ */
+export function paymentTone(p: InvoicePaymentProgress): 'idle' | 'partial' | 'done' | 'over' {
+  switch (p.state) {
+    case 'paid':
+      return 'done'
+    case 'partial':
+      return 'partial'
+    case 'over':
+      return 'over'
+    default:
+      return 'idle'
+  }
+}
+
+/**
+ * The rail's sentence, in one place so the card and its tooltip agree.
+ *
+ * Takes the money formatter rather than importing one: formatting lives in the
+ * renderer, this file is shared with the main process, and a second rounding
+ * rule invented here to avoid the import is how two screens come to print the
+ * same figure differently.
+ */
+export function paymentSummary(
+  p: InvoicePaymentProgress,
+  fmt: (n: number) => string
+): string {
+  switch (p.state) {
+    case 'unknown':
+      return 'QuickBooks has not said anything about this invoice yet'
+    case 'unpaid':
+      return `Nothing paid of ${fmt(p.total)}`
+    case 'partial':
+      return `${fmt(p.paid)} of ${fmt(p.total)} paid · ${fmt(p.outstanding)} still owed`
+    case 'over':
+      return `${fmt(p.paid)} received against ${fmt(p.total)} — ${fmt(p.excess)} more than the invoice`
+    default:
+      return p.source === 'local'
+        ? `${fmt(p.total)} — marked paid here, not read from QuickBooks`
+        : `${fmt(p.total)} paid in full`
+  }
+}
+
+/**
+ * Ticked paid on this board while QuickBooks still shows money owing.
+ *
+ * Not an error, and deliberately not something that moves the card: paid is
+ * operator-recorded here and plenty of these settle in cash QuickBooks never
+ * sees, which is exactly why `nextStageFromQbo` refuses to drag a paid invoice
+ * back. But a card sitting in Paid above a half-full rail looks like a bug
+ * unless something says why, so this is the flag that lets the screen say it.
+ */
+export function paidHereNotThere(invoice: {
+  status: InvoiceStatus
+  qboBalance: number | null
+  qboTotalAmt: number | null
+  qboVoided: boolean
+}): boolean {
+  if (invoice.status !== 'paid' || invoice.qboVoided) return false
+  if (invoice.qboBalance === null || invoice.qboTotalAmt === null) return false
+  return invoice.qboTotalAmt > 0 && invoice.qboBalance > 0
+}
+
+/**
+ * Settled, but not by anybody sending money.
+ *
+ * A balance reaching zero is what `observedPaid` reads, and at least three
+ * things get it there without a payment: a CREDIT MEMO applied against the
+ * invoice, a bad-debt WRITE-OFF, and a DISCOUNT or deposit recorded on the
+ * document. In every one of them the invoice is genuinely closed and genuinely
+ * unpaid, and a card reading "Paid" with no date beside it looks like the date
+ * is missing rather than like there was never a payment to date.
+ *
+ * Null `qboPaymentsApplied` means nobody has looked, which is not evidence of
+ * anything, so it is deliberately NOT reported as a clearance.
+ */
+export function clearedWithoutPayment(invoice: {
+  qboBalance: number | null
+  qboTotalAmt: number | null
+  qboVoided: boolean
+  qboPaymentsApplied: number | null
+}): boolean {
+  if (invoice.qboVoided) return false
+  if (invoice.qboBalance === null || invoice.qboTotalAmt === null) return false
+  if (!(invoice.qboTotalAmt > 0 && invoice.qboBalance <= 0)) return false
+  if (invoice.qboPaymentsApplied === null) return false
+  return money(invoice.qboPaymentsApplied) < money(invoice.qboTotalAmt)
+}
+
+// ---------------------------------------------------------------------------
+// Binding a local order to a QuickBooks invoice by the number on it
+//
+// THE PROBLEM THIS SOLVES: an order written here that was invoiced in QuickBooks
+// by hand has no `qboId`, so nothing on this side ever hears that it was paid.
+// The number is the only thing the two documents have in common.
+//
+// THE REASON IT IS NOT AUTOMATIC: a number is a UNIQUENESS test, never an
+// IDENTITY test. The two series are computed from disjoint knowledge — this app
+// takes max+1 over its own rows (see nextInvoiceNumber) while QuickBooks takes
+// max+1 over its own — so the moment the owner raises one invoice by hand the
+// two counters both offer the same next number for two unrelated documents.
+// That is not an edge case; it is what both counters do when they are working.
+//
+// And a wrong binding is not a wrong label. `qboId` is what Delete sends
+// `operation=delete` against, what Send emails to this buyer, and what the
+// status pull reads a stage from — and a QuickBooks invoice that has been voided
+// reads back as `void`, which on this side calls releaseInvoiceStock and DELETES
+// the order's stock ledger. Every one of those is unrecoverable.
+//
+// So the app finds the candidates, checks everything it can check, and shows its
+// working to somebody who presses the button. What is automatic is what happens
+// AFTER: once an order is bound, the ordinary status pull moves it to paid the
+// moment QuickBooks says the balance is clear. The dangerous half is the press;
+// the useful half is free.
+// ---------------------------------------------------------------------------
+
+/** A QuickBooks invoice offered as the counterpart of a local one. */
+export interface QboInvoiceMatch {
+  qboId: string
+  docNumber: string | null
+  /** CustomerRef.name — the only customer key this app actually has. */
+  customerName: string | null
+  /** TxnDate, a calendar day. */
+  txnDate: string | null
+  totalAmt: number | null
+  balance: number | null
+  voided: boolean
+}
+
+/**
+ * Why a candidate was refused. Each one is shown to somebody, so each one is a
+ * distinct thing that could be true rather than a general "no".
+ */
+export type InvoiceMatchRefusal =
+  | 'no-number'
+  | 'not-eligible'
+  | 'none'
+  | 'ambiguous-there'
+  | 'ambiguous-here'
+  | 'claimed'
+  | 'voided'
+  | 'customer'
+  | 'total'
+  | 'date'
+
+/** How far apart the two dates may be before the match is refused. */
+export const MATCH_DAY_WINDOW = 7
+
+export type InvoiceMatchVerdict =
+  | { ok: true; match: QboInvoiceMatch }
+  | { ok: false; reason: InvoiceMatchRefusal }
+
+function dayGap(a: string, b: string): number | null {
+  const ta = Date.parse(`${a}T12:00:00Z`)
+  const tb = Date.parse(`${b}T12:00:00Z`)
+  if (!Number.isFinite(ta) || !Number.isFinite(tb)) return null
+  return Math.abs(Math.round((ta - tb) / DAY_MS))
+}
+
+/**
+ * Whether this local order may be bound to one of these QuickBooks invoices.
+ *
+ * `candidates` is every QuickBooks invoice carrying this local one's number —
+ * every one, including the several that come back when a company has custom
+ * transaction numbers switched off and QuickBooks has allowed a duplicate.
+ * Narrowing that list before it arrives here would hide the ambiguity from the
+ * only code equipped to refuse it.
+ *
+ * Refuses on the FIRST thing that is wrong, in the order somebody would check
+ * them, so the reason reported is the most fundamental one rather than whichever
+ * test happened to run last.
+ */
+export function matchInvoiceByDocNumber(
+  local: {
+    invoiceNumber: string
+    customerName: string
+    invoiceDate: string
+    total: number
+    status: InvoiceStatus
+    qboPushState: InvoicePushState
+  },
+  candidates: readonly QboInvoiceMatch[],
+  context: {
+    /** How many LOCAL rows carry this number, across every status. */
+    localsWithNumber: number
+    /** QuickBooks ids some local row already holds. */
+    claimed: ReadonlySet<string>
+  }
+): InvoiceMatchVerdict {
+  const number = (local.invoiceNumber ?? '').trim()
+  if (!number) return { ok: false, reason: 'no-number' }
+
+  // A voided order has already released its stock and a paid one is terminal;
+  // binding either can only cause a move that cannot be taken back. 'pending'
+  // means a push may be in flight or may have died mid-flight — the one state
+  // where this app already believes a QuickBooks invoice might exist for this
+  // row, and the last state in which to go guessing which one it is.
+  if (local.status === 'void' || local.status === 'paid') {
+    return { ok: false, reason: 'not-eligible' }
+  }
+  if (local.qboPushState === 'pending') return { ok: false, reason: 'not-eligible' }
+
+  if (candidates.length === 0) return { ok: false, reason: 'none' }
+  if (candidates.length > 1) return { ok: false, reason: 'ambiguous-there' }
+  // Checked across every status, not just the ones offered for matching: two
+  // local rows numbered 2301 means binding one of them is a coin toss, and which
+  // row is processed first is arbitrary.
+  if (context.localsWithNumber !== 1) return { ok: false, reason: 'ambiguous-here' }
+
+  const match = candidates[0]
+  if (context.claimed.has(match.qboId)) return { ok: false, reason: 'claimed' }
+
+  // NEVER A VOID SHELL. This is the guard standing between a string comparison
+  // and a deleted stock ledger: a bound void reads back as stage 'void', and
+  // moving a local order there restores its FIFO layers and erases its stock
+  // moves, for units a picker may already have shipped.
+  if (match.voided) return { ok: false, reason: 'voided' }
+
+  const here = (local.customerName ?? '').trim().toLowerCase()
+  const there = (match.customerName ?? '').trim().toLowerCase()
+  // The same key the push itself matches customers on. InvoiceCustomer.qboId
+  // exists on the type but nothing in this app ever writes it, so a check
+  // against it would either block everything or do nothing.
+  if (!here || !there || here !== there) return { ok: false, reason: 'customer' }
+
+  // TO THE CENT, and this is the guard that kills the case nothing else catches:
+  // one local order billed as TWO QuickBooks invoices. Exactly one of them
+  // carries the number, its balance clears, and the whole order would be
+  // reported collected while half of it is still owed.
+  if (match.totalAmt === null || money(match.totalAmt) !== money(local.total)) {
+    return { ok: false, reason: 'total' }
+  }
+
+  const gap = match.txnDate ? dayGap(match.txnDate, local.invoiceDate) : null
+  if (gap === null || gap > MATCH_DAY_WINDOW) return { ok: false, reason: 'date' }
+
+  return { ok: true, match }
+}
+
+/** One local order, and the QuickBooks invoice it could be bound to. */
+export interface InvoiceMatchProposal {
+  invoiceId: string
+  invoiceNumber: string
+  customerName: string
+  invoiceDate: string
+  total: number
+  status: InvoiceStatus
+  /** The QuickBooks side, exactly as it came back, so a person can compare. */
+  match: QboInvoiceMatch
+}
+
+/** A local order that was looked at and refused, and what stopped it. */
+export interface InvoiceMatchRejection {
+  invoiceId: string
+  invoiceNumber: string
+  customerName: string
+  reason: InvoiceMatchRefusal
+  /** The candidate refused, when exactly one could be named. */
+  match: QboInvoiceMatch | null
+}
+
+/** What a scan for matchable orders found. A pure READ — nothing is bound by it. */
+export interface InvoiceMatchScan {
+  proposals: InvoiceMatchProposal[]
+  /**
+   * Refusals worth putting in front of somebody. 'none' is left out: an order
+   * QuickBooks has never heard of is the ordinary case, not a problem, and a
+   * list mostly made of it would bury the four that nearly matched.
+   */
+  rejected: InvoiceMatchRejection[]
+  scanned: number
+  /**
+   * How many invoices this app has posted whose QuickBooks number came back
+   * DIFFERENT from the one sent.
+   *
+   * The premise of matching on a number is that both systems use the same one.
+   * QuickBooks silently replaces DocNumber unless the company has "Custom
+   * transaction numbers" switched on — and when it does, `invoice_number` and
+   * `DocNumber` are two unrelated series and every match found here is a
+   * coincidence. This app already records both, so the evidence is free: any
+   * non-zero count means the screen should say so before anybody presses a
+   * button.
+   */
+  renumbered: number
+}
+
+/** The refusal in words, for the screen that lists what was and was not matched. */
+export function describeMatchRefusal(reason: InvoiceMatchRefusal): string {
+  switch (reason) {
+    case 'no-number':
+      return 'This order has no invoice number to match on.'
+    case 'not-eligible':
+      return 'Only orders that are still open can be matched — this one is paid, void, or mid-push.'
+    case 'none':
+      return 'QuickBooks has no invoice with this number.'
+    case 'ambiguous-there':
+      return 'QuickBooks has more than one invoice with this number, so which one this is cannot be told from the number alone.'
+    case 'ambiguous-here':
+      return 'More than one order here carries this number.'
+    case 'claimed':
+      return 'That QuickBooks invoice is already attached to another order.'
+    case 'voided':
+      return 'That QuickBooks invoice has been voided.'
+    case 'customer':
+      return 'The buyer on the QuickBooks invoice is a different name.'
+    case 'total':
+      return 'The QuickBooks invoice is for a different amount.'
+    default:
+      return `The QuickBooks invoice is dated more than ${MATCH_DAY_WINDOW} days from this one.`
+  }
 }
 
 /**

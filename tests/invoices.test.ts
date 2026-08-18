@@ -957,6 +957,10 @@ const seen = (over: any = {}): any => ({
   balance: null,
   totalAmt: null,
   linkedPayments: 0,
+  // Empty is AMBIGUOUS on purpose — "there are none" and "we did not follow the
+  // links" look the same, and linkedPayments beside it is what separates them.
+  // See tests/qboPaid.test.ts, which is where that pair is exercised properly.
+  payments: [],
   voided: false,
   ...over
 })

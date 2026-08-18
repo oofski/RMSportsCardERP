@@ -3239,6 +3239,37 @@ function migrate(database: Database.Database): void {
   addColumnIfMissing(database, 'invoice_lines', 'supplier', 'TEXT')
   setMeta(database, 'schema_version', '70')
 
+  // v71: WHEN an invoice was paid, and how much of it has been.
+  //
+  // The app could already say WHETHER: QuickBooks reports a balance against a
+  // total, and a balance of zero is settled. It could never say when, because
+  // there is no paid date on the Invoice entity to read. What the invoice
+  // carries is LinkedTxn, a list of { TxnId, TxnType } — and the date lives on
+  // the Payment entity that TxnId points at, as its TxnDate. The status reader
+  // used to count those links and throw the ids away, which is exactly why the
+  // board could show Paid and never show a date.
+  //
+  // A CALENDAR DAY, NOT AN INSTANT. qbo_paid_at is Payment.TxnDate as
+  // QuickBooks gave it, YYYY-MM-DD: the day the money is dated in somebody's
+  // books, which is a wall-clock fact about a ledger rather than a physical
+  // moment. It is deliberately a different column from paid_at, which is the
+  // instant somebody on this floor ticked the box — the two routinely disagree
+  // by days, and plenty of invoices here settle in cash QuickBooks never sees.
+  //
+  // qbo_payments_applied is what PAYMENTS have put against the invoice, which is
+  // not the same as what the balance says. A balance can reach zero with no
+  // money at all — a credit memo, a write-off, a discount — and keeping the two
+  // apart is what lets a card say "cleared, but not by a payment" instead of
+  // showing a settled invoice with a mysteriously missing date.
+  //
+  // All three NULLABLE, and null is not zero. "QuickBooks says there are no
+  // payments" and "nobody has looked" are different facts, and a count defaulted
+  // to 0 reads as the first while meaning the second.
+  addColumnIfMissing(database, 'invoices', 'qbo_paid_at', 'TEXT')
+  addColumnIfMissing(database, 'invoices', 'qbo_payments_applied', 'REAL')
+  addColumnIfMissing(database, 'invoices', 'qbo_payment_count', 'INTEGER')
+  setMeta(database, 'schema_version', '71')
+
   // v41: re-derive every product's average cost from its remaining cost layers.
   //
   // The average used to be stored rounded to the cent, back when every total in
