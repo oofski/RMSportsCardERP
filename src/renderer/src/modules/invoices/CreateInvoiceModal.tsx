@@ -17,6 +17,8 @@ import { Button, Field, Input, Modal, Select } from '../../components/ui'
 import { Icon } from '../../components/Icon'
 import { formatDate, formatMoney } from '../../lib/format'
 import { FreightFields } from '../../components/FreightFields'
+import { destinationHoldsStock } from '@shared/purchaseOrders'
+import { DestinationSelect, SupplierSelect } from '../invoicing/PartySelect'
 import { CategoryLogo } from '../inventory/CategoryLogo'
 import { POCatalogTypeahead } from '../invoicing/POCatalogTypeahead'
 import { CustomerTypeahead } from './CustomerTypeahead'
@@ -81,6 +83,16 @@ interface DraftLine {
   amount: string
   /** True once somebody types an amount that is not quantity × rate. */
   amountEdited: boolean
+  /**
+   * Where this line is fulfilled FROM. Empty means the order's location.
+   *
+   * The sell-side mirror of a purchase order line's destination. 'RM' or 'AM'
+   * draws that shelf down; any other name is a DROPSHIP — the supplier sent it
+   * straight to the buyer and no stock moves here.
+   */
+  destination: string
+  /** Who shipped a dropshipped line. Empty means nobody has said. */
+  supplier: string
 }
 
 function today(): string {
@@ -163,7 +175,12 @@ export function CreateInvoiceModal({
       quantity: String(l.quantity),
       rate: String(l.rate),
       amount: String(l.amount),
-      amountEdited: money(l.amount) !== lineAmount(l.quantity, l.rate)
+      amountEdited: money(l.amount) !== lineAmount(l.quantity, l.rate),
+      // Read back RESOLVED — `toLine` has already turned an inherited NULL into
+      // the order's location — so the picker shows what the line actually says
+      // rather than a blank that means "ask the header".
+      destination: l.destination ?? '',
+      supplier: l.supplier ?? ''
     }))
   )
   const [error, setError] = useState('')
@@ -243,7 +260,11 @@ export function CreateInvoiceModal({
           // somebody types over either field.
           rate: p.salePrice ? String(p.salePrice) : '',
           amount: '',
-          amountEdited: false
+          amountEdited: false,
+          // Empty inherits the order's location, which is what nearly every line
+          // wants. Somebody drop-shipping changes this one line.
+          destination: '',
+          supplier: ''
         })
       ]
     })
@@ -299,7 +320,9 @@ export function CreateInvoiceModal({
         rate: parseFloat(l.rate) || 0,
         amount: parseFloat(l.amount) || 0,
         taxRate: null,
-        className: null
+        className: null,
+        destination: l.destination || null,
+        supplier: l.supplier || null
       })
     )
   })
@@ -446,6 +469,12 @@ export function CreateInvoiceModal({
       }
       onClose={onClose}
       wide
+      // THE SAME WIDTH AS A PURCHASE ORDER, and for the same stated reason.
+      // At .modal-lg's 620px the money columns were squeezed to three characters
+      // and the description had to be exiled under the product name. The two
+      // documents are mirror images and are entered by the same person on the
+      // same afternoon; they should not be two different shapes.
+      className="modal-xl"
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>
@@ -571,18 +600,44 @@ export function CreateInvoiceModal({
             </div>
           ) : (
             <div className="po-lines">
-              <table className="data po-lines-table">
+              <table className="data po-lines-table po-lines-routed">
+                {/* THE SAME COLGROUP AS A PURCHASE ORDER. Fixed widths declared
+                    once, product takes the slack — without it the money columns
+                    were sized by whatever text happened to be in them, so typing
+                    a longer supplier name shoved the rate field sideways and
+                    every row re-flowed under the cursor. */}
+                <colgroup>
+                  <col />
+                  <col className="po-col-qty" />
+                  <col className="po-col-price" />
+                  <col className="po-col-total" />
+                  <col className="po-col-supplier" />
+                  <col className="po-col-dest" />
+                  <col className="po-col-remove" />
+                </colgroup>
                 <thead>
                   <tr>
                     <th>Product</th>
                     <th className="num">Qty</th>
                     <th className="num">Rate</th>
                     <th className="num">Amount</th>
+                    <th>Supplier</th>
+                    {/* "Fulfilled from", not "Destination". On a purchase order
+                        the column is where the goods GO; on a sales order they
+                        always go to the buyer, so the open question is where they
+                        COME FROM — our shelf, or a supplier who ships direct. */}
+                    <th>Fulfilled from</th>
                     <th aria-label="Remove" />
                   </tr>
                 </thead>
                 <tbody>
-                  {lines.map((l) => (
+                  {lines.map((l) => {
+                    const from = l.destination || location || 'RM'
+                    // DERIVED from where it comes from, exactly as the buy side
+                    // derives it. A stored flag would be a second truth that
+                    // drifts the first time a line is re-routed.
+                    const drop = !destinationHoldsStock(from)
+                    return (
                     <tr key={l.key}>
                       <td>
                         <div className="po-line-name">{l.item}</div>
@@ -640,6 +695,31 @@ export function CreateInvoiceModal({
                           }
                         />
                       </td>
+                      {/* Both routing cells are inheritance-first, the same as a
+                          purchase order's: the opening option IS "same as the
+                          order", it is what a new line is set to, and choosing it
+                          stores NULL rather than a copy of the header. Muted
+                          while inherited, solid once overridden — readable down
+                          the column without opening a row. */}
+                      <td>
+                        <SupplierSelect
+                          className={`po-route-party${l.supplier ? '' : ' is-inherited'}`}
+                          ariaLabel={`Supplier for ${l.item}`}
+                          value={l.supplier || null}
+                          blankLabel={drop ? 'Who ships it?' : 'Off our own shelf'}
+                          onChange={(name) => patch(l.key, { supplier: name ?? '' })}
+                        />
+                      </td>
+                      <td>
+                        <DestinationSelect
+                          className={`po-route-party${l.destination ? '' : ' is-inherited'}`}
+                          ariaLabel={`Fulfilled from, for ${l.item}`}
+                          value={l.destination || null}
+                          blankLabel={`Same as order (${location || 'RM'})`}
+                          drop={drop}
+                          onChange={(d) => patch(l.key, { destination: d ?? '' })}
+                        />
+                      </td>
                       <td className="num">
                         <button
                           type="button"
@@ -651,7 +731,8 @@ export function CreateInvoiceModal({
                         </button>
                       </td>
                     </tr>
-                  ))}
+                    )
+                  })}
                 </tbody>
               </table>
               <div className="po-total">

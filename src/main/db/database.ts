@@ -3216,6 +3216,29 @@ function migrate(database: Database.Database): void {
   )
   setMeta(database, 'schema_version', '69')
 
+  // v70: a sales order line can be DROP-SHIPPED, exactly as a purchase order
+  // line can.
+  //
+  // The buy side has had this since dropship shipped: a PO line carries a
+  // destination, and one naming somebody who is not RM or AM means the units go
+  // from the supplier straight to them and never touch a shelf here. The sell
+  // side had no equivalent, so an order for stock this business never holds had
+  // to be typed as an ordinary sale — which drew the units down from a shelf
+  // that did not have them.
+  //
+  // MIRROR IMAGE, and the direction is the only thing that differs. On a PO the
+  // destination is where the goods GO. On a sales order they always go to the
+  // buyer, so it is where they COME FROM: RM or AM draws the shelf down as
+  // before, and any other name is a dropship that moves no stock and records who
+  // shipped it in `supplier`.
+  //
+  // Both NULLABLE and both meaning "same as the header", the same inheritance a
+  // PO line uses. Storing the inheritance rather than a copy is what keeps a
+  // later change of the order's location from leaving stale values on the lines.
+  addColumnIfMissing(database, 'invoice_lines', 'destination', 'TEXT')
+  addColumnIfMissing(database, 'invoice_lines', 'supplier', 'TEXT')
+  setMeta(database, 'schema_version', '70')
+
   // v41: re-derive every product's average cost from its remaining cost layers.
   //
   // The average used to be stored rounded to the cent, back when every total in

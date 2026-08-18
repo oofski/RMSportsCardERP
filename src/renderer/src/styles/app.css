@@ -24399,3 +24399,56 @@ button.sor-team:focus-visible {
     width: 100%;
   }
 }
+
+/* Where the tracking input would be, on a shipment that has no number to give.
+   Sized to match the input beside it so the row does not change height when
+   somebody switches to Pickup. */
+.freight-local {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 8px 11px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text-3);
+  font-size: 12.5px;
+  line-height: 1.35;
+}
+.freight-local svg {
+  flex-shrink: 0;
+}
+
+/* ---------------------------------------------------------------------------
+   Sales order lines — same seven columns as a purchase order, and short enough
+   that several of them fit on screen at once
+   --------------------------------------------------------------------------- */
+
+/* A sales order row carries one thing a purchase order row does not: the
+   optional description. That plus a product name wrapping to three lines made
+   each row ~95px tall, so a six-line order showed two lines and a scrollbar —
+   on the one screen where the whole point is checking what is on the order.
+   The name clamps to two lines and the description box is shorter; the row
+   settles at a fixed height, which also means rows stop changing height as
+   somebody types. */
+.po-lines-table .po-line-name {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  line-height: 1.3;
+}
+.inv-line-desc {
+  margin-top: 5px;
+  height: 26px;
+  font-size: 12px;
+  padding-top: 2px;
+  padding-bottom: 2px;
+}
+/* The two routing selects do not need the width a PO's do — a sales order is
+   fulfilled from RM, AM or a named supplier, never from a split — so the room
+   goes to the product name, which is the column somebody actually reads. */
+.po-lines-table .po-route-party {
+  height: 32px;
+  font-size: 12.5px;
+}

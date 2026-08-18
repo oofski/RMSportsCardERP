@@ -238,6 +238,19 @@ export function FreightFields({
           </Select>
         </Field>
 
+        {/* NO TRACKING ON A PICKUP, and the field is removed rather than
+            disabled. A box somebody collects from the counter has no number and
+            never will, so an empty input sitting there reads as something still
+            to be filled in — which is exactly the ambiguity choosing "Pickup /
+            hand delivery" was meant to resolve. */}
+        {carrier === 'local' ? (
+          <Field label="Tracking number" hint="Not tracked">
+            <div className="freight-local">
+              <Icon name="Handshake" size={15} />
+              <span>Collected or dropped off — there is no number to follow.</span>
+            </div>
+          </Field>
+        ) : (
         <Field label="Tracking number" hint="Paste it — the carrier fills itself in">
           <div className="freight-track">
             <Input
@@ -265,6 +278,7 @@ export function FreightFields({
             </Button>
           </div>
         </Field>
+        )}
       </div>
 
       {/* ---- Payment ------------------------------------------------------ */}

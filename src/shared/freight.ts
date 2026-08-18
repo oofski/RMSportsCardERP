@@ -30,7 +30,7 @@
  * API integration would need.
  */
 
-export type Carrier = 'fedex' | 'ups' | 'usps'
+export type Carrier = 'fedex' | 'ups' | 'usps' | 'local'
 
 export interface CarrierDef {
   id: Carrier
@@ -91,17 +91,44 @@ export const CARRIERS: CarrierDef[] = [
   {
     id: 'ups',
     label: 'UPS',
+    // Express Critical and SurePost are deliberately absent. UPS sells both;
+    // this business does not use either, and a service nobody picks is a line in
+    // a speed ladder somebody has to read past on every order. An order already
+    // on disk that names one still shows it — see the fallback <option> in
+    // FreightFields — so removing them from the list costs no history.
     services: [
-      'Express Critical',
       'Next Day Air Early',
       'Next Day Air',
       'Next Day Air Saver',
       '2nd Day Air A.M.',
       '2nd Day Air',
       '3 Day Select',
-      'Ground',
-      'SurePost'
+      'Ground'
     ]
+  },
+  {
+    /**
+     * NOT A CARRIER, and it sits in this list anyway.
+     *
+     * Plenty of what leaves this building never goes near a carrier: a local
+     * buyer collects, or somebody drops a box off on the way home. Before this
+     * there was no way to say so — the shipping company was left blank, which
+     * reads identically to "nobody has filled this in yet", and there is no
+     * later moment when a tracking number turns up to resolve the ambiguity.
+     *
+     * Modelled as a carrier because the question it answers is the carrier
+     * question — "how is this getting there" — and because doing so means the
+     * service list, the fallback for old values and the two forms that render
+     * all of it work unchanged. A separate boolean beside the carrier would have
+     * been a second field that has to be kept consistent with the first.
+     *
+     * It sells no tracking, which the rest of the file already handles: there is
+     * no pattern for it in `detectCarrier`, so a pasted number never guesses it,
+     * and `trackingUrl` has no case for it, so the Track button stays dead.
+     */
+    id: 'local',
+    label: 'Pickup / hand delivery',
+    services: ['Customer pickup', 'Hand delivery']
   }
 ]
 
@@ -226,8 +253,16 @@ export function asPaymentTiming(v: unknown): PaymentTiming | null {
   return v === 'front' || v === 'delivery' ? v : null
 }
 
+/**
+ * Validated against CARRIERS rather than a hand-written list.
+ *
+ * It used to name the three literally, which meant adding a fourth silently
+ * nulled it at every write boundary — the value would round-trip through the
+ * form, be saved as NULL, and come back blank with nothing erroring. Reading the
+ * list is what makes the list the single place a carrier is declared.
+ */
 export function asCarrier(v: unknown): Carrier | null {
-  return v === 'fedex' || v === 'ups' || v === 'usps' ? v : null
+  return CARRIERS.some((c) => c.id === v) ? (v as Carrier) : null
 }
 
 /** The four facts, as they travel together on both sides of the money. */

@@ -27,6 +27,22 @@ import { asCarrier, asPaymentTiming, detectCarrier } from '@shared/freight'
 import { asShipStatus } from '@shared/tracking'
 import { getDb } from './database'
 import { applyInvoiceStock, invoiceStockLocation, releaseInvoiceStock } from './invoiceStock'
+import { destinationHoldsStock } from '@shared/purchaseOrders'
+
+/**
+ * What to STORE in a line's destination column.
+ *
+ * Null when it is the same as the order's, which is the ordinary case and is
+ * what makes the value inherit. Trimmed, and compared case-insensitively,
+ * because "rm" typed into a box and "RM" chosen from a list are the same shelf
+ * and storing one of them as an override would make the line stop following the
+ * header for no reason anybody could see.
+ */
+function lineDestination(value: string | null | undefined, headerLocation: string): string | null {
+  const v = String(value ?? '').trim()
+  if (!v) return null
+  return v.toLowerCase() === headerLocation.trim().toLowerCase() ? null : v
+}
 
 /**
  * Invoices and the people who buy from us.
@@ -439,6 +455,9 @@ interface LineRow {
   class_name: string | null
   qty_fulfilled: number
   fulfilled_at: string | null
+  /** NULL means "the order's location" — see toLine. */
+  destination: string | null
+  supplier: string | null
 }
 
 function asStatus(v: string): InvoiceStatus {
@@ -500,7 +519,13 @@ function toInvoice(r: InvoiceRow): Invoice {
   }
 }
 
-function toLine(r: LineRow): InvoiceLine {
+/**
+ * `headerLocation` is where the ORDER is fulfilled from, and it is what an empty
+ * `destination` column means. Resolved here so no screen has to know the rule —
+ * the same reason a purchase order line's destination is resolved on read.
+ */
+function toLine(r: LineRow, headerLocation: string): InvoiceLine {
+  const destination = (r.destination ?? '').trim() || headerLocation
   return {
     id: r.id,
     invoiceId: r.invoice_id,
@@ -516,7 +541,12 @@ function toLine(r: LineRow): InvoiceLine {
     className: r.class_name,
     qtyFulfilled: r.qty_fulfilled ?? 0,
     qtyOutstanding: Math.max(0, r.quantity - (r.qty_fulfilled ?? 0)),
-    fulfilledAt: r.fulfilled_at ?? null
+    fulfilledAt: r.fulfilled_at ?? null,
+    destination,
+    supplier: (r.supplier ?? '').trim() || null,
+    // DERIVED, never stored. A stored flag is a second source of truth that
+    // drifts the first time a line is re-routed.
+    dropship: !destinationHoldsStock(destination)
   }
 }
 
@@ -535,7 +565,8 @@ const INVOICE_COLS = `id, invoice_number, customer_id, customer_name, email, ter
                       created_by, created_at, updated_at`
 
 const LINE_COLS = `id, invoice_id, position, item, product_id, sku, description, quantity, rate,
-                   amount, tax_rate, class_name, qty_fulfilled, fulfilled_at`
+                   amount, tax_rate, class_name, qty_fulfilled, fulfilled_at,
+                   destination, supplier`
 
 /** Newest first — an invoice list is read from the top. */
 export function listInvoices(limit = 200): Invoice[] {
@@ -558,7 +589,8 @@ export function getInvoice(id: string): InvoiceDetail | null {
   const lines = db
     .prepare(`SELECT ${LINE_COLS} FROM invoice_lines WHERE invoice_id = ? ORDER BY position ASC`)
     .all(id) as LineRow[]
-  return { ...toInvoice(row), lines: lines.map(toLine) }
+  const head = toInvoice(row)
+  return { ...head, lines: lines.map((l) => toLine(l, invoiceStockLocation(head.location))) }
 }
 
 /** Several invoices with their lines, for the CSV export. */
@@ -661,7 +693,11 @@ export function saveInvoice(
       // suggestion. See the note on InvoiceLine.amount.
       amount: money(l.amount ?? lineAmount(l.quantity, l.rate)),
       taxRate: clean(l.taxRate),
-      className: clean(l.className)
+      className: clean(l.className),
+      // Carried through as typed; `lineDestination` decides what is actually
+      // stored, because "same as the header" has to become NULL to inherit.
+      destination: clean(l.destination),
+      supplier: clean(l.supplier)
     }
   })
 
@@ -757,7 +793,17 @@ export function saveInvoice(
      */
     const stockLocation = invoiceStockLocation(input.location)
     const stockLines = lines
-      .filter((l) => !!l.productId && l.quantity > 0)
+      .filter((l) => {
+        if (!l.productId || !(l.quantity > 0)) return false
+        // A DROPSHIPPED LINE MOVES NO STOCK, and this is the assertion the whole
+        // feature rests on. The units went from the supplier straight to the
+        // buyer; this business never held them, so drawing a shelf down for them
+        // would invent a sale out of inventory that was never there — and on a
+        // product carried in stock it would quietly consume somebody else's
+        // boxes.
+        const dest = lineDestination(l.destination, stockLocation) ?? stockLocation
+        return destinationHoldsStock(dest)
+      })
       .map((l) => ({ position: l.position, productId: l.productId as string, quantity: l.quantity }))
     releaseInvoiceStock(db, id)
     const moved = applyInvoiceStock(
@@ -835,9 +881,11 @@ export function saveInvoice(
     const insert = db.prepare(
       `INSERT INTO invoice_lines
          (id, invoice_id, position, item, product_id, sku, description, quantity, rate, amount,
-          tax_rate, class_name, qty_fulfilled, fulfilled_at, created_at, updated_at)
+          tax_rate, class_name, qty_fulfilled, fulfilled_at, created_at, updated_at,
+          destination, supplier)
        VALUES (@id, @invoiceId, @position, @item, @productId, @sku, @description, @quantity,
-               @rate, @amount, @taxRate, @className, @qtyFulfilled, @fulfilledAt, @stamp, @stamp)`
+               @rate, @amount, @taxRate, @className, @qtyFulfilled, @fulfilledAt, @stamp, @stamp,
+               @destination, @supplier)`
     )
     for (const l of lines) {
       const key = l.productId ? `p:${l.productId}` : `i:${l.item.trim().toLowerCase()}`
@@ -861,7 +909,12 @@ export function saveInvoice(
         ...l,
         qtyFulfilled: qty,
         fulfilledAt: qty > 0 ? (carried?.at ?? stamp) : null,
-        stamp
+        stamp,
+        // NULL means "the order's location", the same inheritance a PO line
+        // stores. Keeping the inheritance rather than a copy is what stops a
+        // later change of the order's location leaving stale values behind.
+        destination: lineDestination(l.destination, stockLocation),
+        supplier: (l.supplier ?? '').trim() || null
       })
     }
   })

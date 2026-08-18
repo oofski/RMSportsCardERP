@@ -228,6 +228,25 @@ export interface InvoiceLine {
    * what was agreed.
    */
   amount: number
+  /**
+   * Where this line was fulfilled FROM, once inheritance is resolved.
+   *
+   * Never null on a line that has been read back: an empty column means "the
+   * order's location", and this is that answer already worked out, so no screen
+   * has to know the rule. See NewInvoiceLine.destination for the direction.
+   */
+  destination: string
+  /** Who shipped a dropshipped line. Null when it came off our own shelf. */
+  supplier: string | null
+  /**
+   * Did this line move stock?
+   *
+   * DERIVED from the destination rather than stored, for the same reason a PO's
+   * dropship flag is: a stored boolean is a second source of truth that drifts
+   * the first time a line is re-routed, and the failure mode is a dropship that
+   * still draws a shelf down.
+   */
+  dropship: boolean
   /** Passed through to the export verbatim; this app does no tax arithmetic. */
   taxRate: string | null
   className: string | null
@@ -439,6 +458,19 @@ export interface NewInvoiceLine {
   amount?: number | null
   taxRate?: string | null
   className?: string | null
+  /**
+   * Where this line is fulfilled FROM. Null means the order's location.
+   *
+   * The sell-side mirror of a purchase order line's destination, and the
+   * direction is the only difference: on a PO it is where the goods go, and on a
+   * sales order they always go to the buyer, so this is where they come from.
+   * 'RM' or 'AM' draws that shelf down. Any other name is a DROPSHIP — the
+   * supplier sent it straight to the customer, this business never held it, and
+   * no stock moves.
+   */
+  destination?: string | null
+  /** Who shipped it, on a dropshipped line. Null means the order's supplier. */
+  supplier?: string | null
 }
 
 export interface NewInvoice {

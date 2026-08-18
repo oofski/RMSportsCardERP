@@ -362,14 +362,24 @@ const USPS = ['Priority Mail Express', 'Priority Mail', 'Ground Advantage', 'Fir
 const FEDEX = ['SameDay', 'SameDay City', 'First Overnight', 'Priority Overnight',
   'Standard Overnight', '2Day A.M.', '2Day', 'Express Saver', 'Ground', 'Home Delivery',
   'Ground Economy']
-const UPS = ['Express Critical', 'Next Day Air Early', 'Next Day Air', 'Next Day Air Saver',
-  '2nd Day Air A.M.', '2nd Day Air', '3 Day Select', 'Ground', 'SurePost']
+// Express Critical and SurePost are deliberately absent: UPS sells both, this
+// business uses neither, and a service nobody picks is a rung somebody reads
+// past on every order. An order already on disk naming one still displays it —
+// see the fallback <option> in FreightFields — so the removal costs no history.
+const UPS = ['Next Day Air Early', 'Next Day Air', 'Next Day Air Saver',
+  '2nd Day Air A.M.', '2nd Day Air', '3 Day Select', 'Ground']
+// Not a carrier, and in the list anyway: plenty of what leaves this building is
+// collected or dropped off by hand, and before this there was no way to say so —
+// a blank shipping company reads identically to "nobody has filled this in".
+const LOCAL = ['Customer pickup', 'Hand delivery']
 
 ok(servicesFor('usps').join('|') === USPS.join('|'), 'USPS offers exactly its four',
   JSON.stringify(servicesFor('usps')))
 ok(servicesFor('fedex').join('|') === FEDEX.join('|'), 'FedEx offers exactly its eleven',
   JSON.stringify(servicesFor('fedex')))
-ok(servicesFor('ups').join('|') === UPS.join('|'), 'UPS offers exactly its nine',
+ok(servicesFor('local').join('|') === LOCAL.join('|'), 'pickup offers collect or hand-deliver',
+  JSON.stringify(servicesFor('local')))
+ok(servicesFor('ups').join('|') === UPS.join('|'), 'UPS offers exactly its seven',
   JSON.stringify(servicesFor('ups')))
 
 // The names that belong to ONE carrier and must never appear under another.
