@@ -24351,3 +24351,63 @@ button.sor-team:focus-visible {
   margin: 6px 0;
   background: var(--border);
 }
+
+/* ---------------------------------------------------------------------------
+   "Every order is packed" — the one moment the bench is told it can stop
+   --------------------------------------------------------------------------- */
+
+/* Sits above the tab content, on every tab, because the night being over is
+   true wherever the operator is standing. Green rather than amber: this is the
+   good news, and the collision strip directly above it owns the alarming
+   colour — two warning-coloured bars stacked would flatten the difference
+   between "well done" and "something is wrong". */
+.ship-finish-strip {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  margin-bottom: 14px;
+  border: 1px solid var(--success, #16a34a);
+  border-radius: var(--radius);
+  background: var(--success-soft, rgba(22, 163, 74, 0.08));
+  color: var(--text);
+  font-size: 13.5px;
+}
+.ship-finish-strip svg {
+  flex-shrink: 0;
+  color: var(--success, #16a34a);
+}
+.ship-finish-strip span {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.45;
+}
+.ship-finish-strip .btn {
+  flex-shrink: 0;
+}
+
+.ship-finish-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.ship-finish-body p {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+.ship-finish-body p.muted {
+  color: var(--text-3);
+  font-size: 12.5px;
+}
+
+@media (max-width: 720px) {
+  /* The button drops under the sentence rather than squeezing it to two words
+     a column wide. */
+  .ship-finish-strip {
+    flex-wrap: wrap;
+  }
+  .ship-finish-strip .btn {
+    width: 100%;
+  }
+}

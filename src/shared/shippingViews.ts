@@ -442,6 +442,53 @@ export interface ShipWorkspaceSummary {
   lastImport: ShipImportRecord | null
 }
 
+/**
+ * Is the night's packing done?
+ *
+ * ## PACKED, not picked, and that is the whole distinction
+ *
+ * `to_pick` is an order nobody has pulled the cards for. Everything past it —
+ * `put_together`, `sent`, `all_good` — has been PACKED: the cards are in a
+ * bag with a slip and the paper has done its job. So the test is that nothing
+ * is still waiting to be picked, not that everything has shipped. Waiting for
+ * `sent` would mean the button never appeared until the carrier scans came
+ * back, which is the next morning at best and days later at worst — long after
+ * the bench has gone home and the paper is in the way.
+ *
+ * ## The side states are deliberately not counted
+ *
+ * `exception` and `returned` are not stages on the way to anywhere; they are
+ * where an order goes when something is wrong with it. An order held for a
+ * missing card can sit there for a week, and blocking the whole night on it
+ * would mean the one screen that says "you are finished" never says it on any
+ * night that had a single problem — which is most nights.
+ *
+ * ## Zero orders is not "finished"
+ *
+ * An empty dataset trivially has nothing left to pick. Offering to finish a
+ * night that never started would put a destructive button in front of somebody
+ * who has just opened the app.
+ */
+export function allOrdersPacked(summary: {
+  hasDataset: boolean
+  counts: { orders: number }
+  stageCounts: Record<ShipFulfillmentStage, number>
+} | null): boolean {
+  if (!summary || !summary.hasDataset) return false
+  if ((summary.counts?.orders ?? 0) <= 0) return false
+  return (summary.stageCounts?.to_pick ?? 0) === 0
+}
+
+/** What finishing a night actually did, so the screen can say it. */
+export interface ShipFinishResult {
+  /** The capture that became the report. */
+  snapshotId: string
+  snapshotName: string
+  /** How many document rows were dropped — 0 when the slip was already put away. */
+  documentsCleared: number
+  orders: number
+}
+
 // ---------------------------------------------------------------------------
 // Background parse job
 // ---------------------------------------------------------------------------

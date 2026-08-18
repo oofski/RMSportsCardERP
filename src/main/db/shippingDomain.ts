@@ -47,6 +47,7 @@ import {
   type ShipBulkStatusResult,
   type ShipCustomerRow,
   type ShipExportKind,
+  type ShipFinishResult,
   type ShipFulfillmentStage,
   type ShipLedgerRow,
   type ShipOrderBreak,
@@ -63,6 +64,7 @@ import {
 } from '@shared/shippingViews'
 import {
   assignShipBreak,
+  clearShipDocument,
   countShipBreakAssignments,
   createShipSnapshot,
   deleteShipBreakAssignment,
@@ -75,7 +77,9 @@ import {
   getShipEvent,
   getShipShipment,
   getShipShipmentByCustomer,
+  getShipTeamSlot,
   hasShipDataset,
+  listBreakIdsForCustomer,
   listShipBatchUrls,
   listShipBreakAssignments,
   listShipBreakAssignmentsByBreak,
@@ -89,19 +93,17 @@ import {
   listShipTeamSlotsByCustomer,
   listShipTrackingNumbers,
   listShipWarnings,
-  setShipWarningStatus,
   recomputeBreakStatus,
   resetShipQueueOrder,
-  listBreakIdsForCustomer,
-  getShipTeamSlot,
   setBreakSlotsChecked,
-  setCustomerSlotsPicked,
   setBreakSlotsTopSleeved,
   setBreakStatus,
+  setCustomerSlotsPicked,
+  setShipWarningStatus,
   setTeamSlotChecked as storeSetTeamSlotChecked,
   setTeamSlotPicked,
-  setTeamSlotTopSleeved as storeSetTeamSlotTopSleeved,
   setTeamSlotSleeve as storeSetTeamSlotSleeve,
+  setTeamSlotTopSleeved as storeSetTeamSlotTopSleeved,
   updateShipment
 } from './shipping'
 import {
@@ -1709,6 +1711,50 @@ export function createSnapshot(name: string): ShipSnapshot {
   const contents = snapshotContents()
   const label = (name ?? '').trim() || `${contents.event.name || 'Snapshot'} ${contents.createdAt.slice(0, 10)}`
   return createShipSnapshot(label, contents as unknown as Record<string, unknown>)
+}
+
+/**
+ * Close the night: capture it as a report, then put the paper away.
+ *
+ * ## What "finish" is, and what it is emphatically not
+ *
+ * It is not a delete. Every package, card, claim and assignment stays exactly
+ * where it is — the dataset is still live, the orders still have their stages,
+ * and a package that has not shipped yet can still be tracked. What goes is the
+ * PDF: a megabyte of scanned slips whose only job was to be read at the bench
+ * while the cards were being pulled, and which is dead weight on every machine
+ * in the building the moment the last order is bagged.
+ *
+ * ## Why the capture comes FIRST, and why they share a transaction
+ *
+ * The snapshot is what the Reports tab reads. Clearing the document before
+ * capturing would leave a window where the paper is gone and nothing has been
+ * written down; capturing without clearing leaves the night reported and the
+ * megabyte still sitting there. Neither half is useful alone, so a failure in
+ * either rolls both back and the operator presses the button again.
+ *
+ * ## The snapshot survives a re-import, which is the point
+ *
+ * `ship_snapshots` holds a rendered CAPTURE rather than pointers into the live
+ * tables (see createShipSnapshot). So tomorrow's upload can overwrite the
+ * dataset — which is what an import does — and tonight's report still opens and
+ * still exports. That property is what makes it safe to say the night is
+ * finished rather than merely quiet.
+ */
+export function finishNight(name: string): ShipFinishResult {
+  const database = getDb()
+  const run = database.transaction((): ShipFinishResult => {
+    const contents = snapshotContents()
+    const snapshot = createSnapshot(name)
+    const documentsCleared = clearShipDocument()
+    return {
+      snapshotId: snapshot.id,
+      snapshotName: snapshot.name,
+      documentsCleared,
+      orders: Array.isArray(contents.orders) ? contents.orders.length : 0
+    }
+  })
+  return run()
 }
 
 // ---------------------------------------------------------------------------

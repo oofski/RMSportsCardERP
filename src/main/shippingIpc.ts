@@ -57,6 +57,7 @@ import {
   type ShipCalendarMonth,
   type ShipCustomerRow,
   type ShipExportKind,
+  type ShipFinishResult,
   type ShipFulfillmentStage,
   type ShipImportDeletePlan,
   type ShipImportDeleteResult,
@@ -97,6 +98,7 @@ import {
   buildSnapshotCsv,
   clearBreak,
   createSnapshot,
+  finishNight,
   getAssignmentBoard,
   getBreak,
   getEvent,
@@ -1270,6 +1272,39 @@ export function registerShippingIpc(): void {
       try {
         requireManage()
         return { ok: true, data: createSnapshot(str(payload?.name)) }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  /**
+   * The night is over.
+   *
+   * Guarded on the SAME test the button uses, and that is not belt-and-braces:
+   * a screen can be stale — somebody else on another machine can push an order
+   * back to picking between the summary rendering and the click landing — and
+   * this is the boundary that decides. Refusing with the count in words means
+   * the operator learns what changed rather than watching a button do nothing.
+   */
+  ipcMain.handle(
+    IPC.shipFinishNight,
+    (_e, payload?: { name?: string }): Result<ShipFinishResult> => {
+      try {
+        requireManage()
+        const summary = getWorkspaceSummary()
+        if (!summary.hasDataset) return { ok: false, error: 'There is no dataset to finish.' }
+        if ((summary.counts?.orders ?? 0) <= 0) {
+          return { ok: false, error: 'There are no orders on this dataset.' }
+        }
+        const left = summary.stageCounts?.to_pick ?? 0
+        if (left > 0) {
+          return {
+            ok: false,
+            error: `${left} order${left === 1 ? ' is' : 's are'} still waiting to be picked, so the slip is still needed.`
+          }
+        }
+        return { ok: true, data: finishNight(str(payload?.name)) }
       } catch (err) {
         return fail(err)
       }

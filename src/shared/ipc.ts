@@ -415,6 +415,11 @@ export const IPC = {
   shipSnapshotsList: 'shipping:snapshots:list',
   shipSnapshotGet: 'shipping:snapshots:get',
   shipSnapshotCreate: 'shipping:snapshots:create',
+  // The night is over: capture it, then put the paper away. One channel rather
+  // than "snapshot" followed by "clear document", because a capture that
+  // succeeded and a clear that did not is a night reported twice, and the
+  // reverse is a report that lost the only copy of what it was reporting on.
+  shipFinishNight: 'shipping:finish-night',
   shipSnapshotRename: 'shipping:snapshots:rename',
   shipSnapshotDelete: 'shipping:snapshots:delete',
   shipExport: 'shipping:export',

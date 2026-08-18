@@ -8,6 +8,8 @@ import { Icon } from '../../components/Icon'
 import { Button, CenterLoader, EmptyState } from '../../components/ui'
 import { CheckerTab } from './CheckerTab'
 import { TodayTab } from './TodayTab'
+import { HistoryTab } from './HistoryTab'
+import { FinishNightBar } from './FinishNightBar'
 import { FloorView } from './FloorView'
 import { WithSlipMode } from './WithSlipMode'
 
@@ -35,7 +37,7 @@ import { WithSlipMode } from './WithSlipMode'
  * places rather than deleted: the collision strip below still says a lead has to
  * look, and Today's empty state says who imports the show.
  */
-export type ShipTabId = 'today' | 'find' | 'floor'
+export type ShipTabId = 'today' | 'find' | 'floor' | 'reports'
 
 /**
  * The prop contract every tab in this workspace takes. FRONTEND-2's Checker /
@@ -158,6 +160,17 @@ export function ShippingModule(): JSX.Element {
     // the whole point is that neither is looking at the other's list.
     { id: 'floor', label: 'Fulfillment', icon: 'Boxes', badge: 0 }
   ]
+  // REPORTS, and only for whoever runs the show. It is the calendar, the
+  // snapshots and the CSV exports — the record of what happened rather than a
+  // tool for making it happen — and it can delete an import, which on the active
+  // dataset takes the whole show with it. A packing bench does not need it and
+  // must not be one mis-tap from it.
+  //
+  // It was already built and was mounted only inside Streaming, which is a
+  // strange place to look for last night's shipping numbers.
+  if (canManage) {
+    tabs.push({ id: 'reports', label: 'Reports', icon: 'BarChart3', badge: 0 })
+  }
 
   const tabProps: ShipTabProps = { summary, canManage, canFind, canPack, onChanged: reload, onGoTo: setTab }
   const event = summary?.event
@@ -221,6 +234,12 @@ export function ShippingModule(): JSX.Element {
         </div>
       )}
 
+      {/* Above the tabs' content rather than inside one of them: "the packing is
+          done" is true wherever the operator happens to be standing, and burying
+          it on Today would mean the bench finishes the last order on Fulfillment
+          and sees nothing. */}
+      <FinishNightBar summary={summary} canManage={canManage} onFinished={reload} />
+
       <div className="ship-scroll">
         {tab === 'today' && <TodayTab {...tabProps} />}
         {tab === 'find' && (
@@ -229,6 +248,7 @@ export function ShippingModule(): JSX.Element {
           </WithSlipMode>
         )}
         {tab === 'floor' && <FloorView {...tabProps} />}
+        {tab === 'reports' && <HistoryTab {...tabProps} />}
       </div>
     </div>
   )

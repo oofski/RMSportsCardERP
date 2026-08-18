@@ -171,6 +171,7 @@ import type {
   ShipCalendarMonth,
   ShipCustomerRow,
   ShipExportKind,
+  ShipFinishResult,
   ShipFulfillmentStage,
   ShipImportDeletePlan,
   ShipImportDeleteResult,
@@ -938,6 +939,17 @@ export function createBridge(ipcRenderer: BridgeTransport) {
         ipcRenderer.invoke(IPC.shipSnapshotGet, id),
       createSnapshot: (name?: string): Promise<Result<ShipSnapshot>> =>
         ipcRenderer.invoke(IPC.shipSnapshotCreate, { name: name ?? '' }),
+      /**
+       * Close the night: capture it as a report, then put the paper away.
+       *
+       * NOT a delete. Every package, card, claim and assignment stays where it
+       * is — what goes is the PDF, whose only job was to be read at the bench
+       * while the cards were being pulled. The capture is written first and both
+       * happen in one transaction, because a report with no paper and a
+       * cleared slip with no report are each worse than doing nothing.
+       */
+      finishNight: (name?: string): Promise<Result<ShipFinishResult>> =>
+        ipcRenderer.invoke(IPC.shipFinishNight, { name: name ?? '' }),
       renameSnapshot: (id: string, name: string): Promise<Result<ShipSnapshot>> =>
         ipcRenderer.invoke(IPC.shipSnapshotRename, { id, name }),
       deleteSnapshot: (id: string): Promise<Result> =>
