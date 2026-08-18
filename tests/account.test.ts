@@ -141,52 +141,54 @@ function fakeDb(columns: string[]): { env: any; sql: string[]; ran: string[]; ar
 
 const run = async (): Promise<void> => {
   // ---------------------------------------------------------------------------
-  console.log('=== 1. the module everybody can open ===')
+  console.log('=== 1. no module, no permission, no gate ===')
   // ---------------------------------------------------------------------------
-  const account = getModule('account')
-  ok(!!account, 'there is an account module')
-  ok(account.permission === null, 'AND IT HAS NO PERMISSION ON IT', String(account?.permission))
-  ok(account.workspace === 'both', 'in both workspaces', String(account?.workspace))
-  ok(account.status === 'active', 'and it is a real screen, not a placeholder')
-
-  // The whole point, stated per role rather than in the abstract: there is no
-  // role in the file that this module is hidden from.
-  for (const r of ROLES) {
-    const visible = account.permission === null || roleHas(r.id, account.permission)
-    ok(visible, `${r.id} can open their own account`)
+  // My account is NOT a screen. It was one briefly and should not have been: the
+  // sidebar is a list of places the WORK happens, and a password is housekeeping
+  // somebody opens twice a year. It is a panel the shell opens over whatever you
+  // were looking at, from the name in the top right.
+  ok(!getModule('account'), 'THERE IS NO ACCOUNT MODULE')
+  ok(
+    !MODULES.some((m: any) => m.id === 'account'),
+    'and nothing named account is in the registry at all'
+  )
+  for (const ws of ['ops', 'shipping']) {
+    ok(
+      !modulesForWorkspace(ws).some((m: any) => m.id === 'account'),
+      `nor in the ${ws} sidebar`
+    )
   }
 
-  // The ungated set, pinned. Both are about the PERSON rather than the business,
-  // which is precisely why there is nothing to gate: Team's tabs decide for
-  // themselves (your pay and your availability are yours, Contacts needs
-  // `module.messages`, which every role holds), and My account acts only on
-  // whoever is looking at it. A third name appearing here is a permission
-  // somebody removed, so this asserts the whole set rather than one member.
-  //
-  // Pay and Schedule used to be in this list as top-level modules. They are tabs
-  // inside Team now — same ids, same absence of a permission, one door.
-  const ungated = MODULES.filter((m: any) => m.permission === null)
-    .map((m: any) => m.id)
-    .sort()
+  // It is reached from the name menu, and the panel is what holds the content.
+  const shellSrc = require('node:fs').readFileSync(
+    join(process.cwd(), 'src/renderer/src/screens/AppShell.tsx'),
+    'utf8'
+  )
+  ok(shellSrc.includes('My account'), 'the name menu offers it')
+  ok(shellSrc.includes('setAccountOpen(true)'), 'AND OPENS IT IN PLACE')
+  ok(shellSrc.includes('<AccountPanel'), 'mounting the panel')
   ok(
-    ungated.join(',') === 'account,team',
-    'and the ungated modules are exactly the two that are about you',
-    ungated.join(', ')
+    !/navigate\('account'\)/.test(shellSrc),
+    'nothing navigates to it, because there is nowhere to navigate to'
+  )
+  ok(
+    require('node:fs').existsSync(
+      join(process.cwd(), 'src/renderer/src/modules/account/AccountPanel.tsx')
+    ),
+    'and the panel is a real file'
   )
 
-  // My account is REACHABLE but not in the sidebar — it hangs off the name in
-  // the top right. Both halves matter: drop the id and every navigate('account')
-  // breaks; drop the flag and it is back in the list it was taken out of.
-  ok(account.hidden === true, 'AND IT IS NOT IN THE SIDEBAR', String(account.hidden))
-  ok(
-    !modulesForWorkspace('ops').some((m: any) => m.id === 'account'),
-    'so the ops sidebar does not draw it'
+  // The whole point of the feature, restated where it can fail: nothing about
+  // reaching your own password or your own phone is gated on anything. There is
+  // no permission to check because there is no module to gate.
+  const panelSrc = require('node:fs').readFileSync(
+    join(process.cwd(), 'src/renderer/src/modules/account/AccountPanel.tsx'),
+    'utf8'
   )
   ok(
-    !modulesForWorkspace('shipping').some((m: any) => m.id === 'account'),
-    'nor the shipping one'
+    !/can\('admin/.test(panelSrc),
+    'THE PANEL CHECKS NO ADMIN PERMISSION — every gate here protected nothing and locked out the floor'
   )
-  ok(!!getModule('account'), 'while it is still a real module id that navigate can find')
 
   // ---------------------------------------------------------------------------
   console.log('\n=== 2. the clock permission did NOT widen ===')
@@ -419,7 +421,7 @@ const run = async (): Promise<void> => {
   // `setChosenPassword` revokes every other session for the same employee id,
   // so the other benches are signed out mid-shift.
   const acctSrc = require('node:fs').readFileSync(
-    join(process.cwd(), 'src/renderer/src/modules/account/AccountModule.tsx'),
+    join(process.cwd(), 'src/renderer/src/modules/account/AccountPanel.tsx'),
     'utf8'
   )
   ok(

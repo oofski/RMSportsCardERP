@@ -23,7 +23,7 @@ import { InventoryModule } from '../modules/inventory/InventoryModule'
 import { InvoicingModule } from '../modules/invoicing/InvoicingModule'
 import { InvoicesModule } from '../modules/invoices/InvoicesModule'
 import { ContactsModule } from '../modules/contacts/ContactsModule'
-import { AccountModule } from '../modules/account/AccountModule'
+import { AccountPanel } from '../modules/account/AccountPanel'
 import { TeamModule } from '../modules/team/TeamModule'
 import { ShippingModule } from '../modules/fulfillment/ShippingModule'
 import { ComingSoon } from '../modules/ComingSoon'
@@ -42,6 +42,15 @@ export function AppShell(): JSX.Element {
   const toast = useToast()
   const [showUpdates, setShowUpdates] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
+  /**
+   * Your own account, opened where it was clicked.
+   *
+   * State on the SHELL rather than a route, because there is no screen: the
+   * sidebar is a list of places the work happens and a password is housekeeping.
+   * Opening it must not replace whatever the person was looking at — nobody
+   * navigates away from a half-finished order to change a password.
+   */
+  const [accountOpen, setAccountOpen] = useState(false)
   const [wsOpen, setWsOpen] = useState(false)
   const [search, setSearch] = useState('')
   const [activeId, setActiveId] = useState<string>('home')
@@ -390,7 +399,7 @@ export function AppShell(): JSX.Element {
                         className="menu-item"
                         onClick={() => {
                           setMenuOpen(false)
-                          navigate('account')
+                          setAccountOpen(true)
                         }}
                       >
                         <Icon name="UserCog" size={16} />
@@ -455,8 +464,6 @@ export function AppShell(): JSX.Element {
               <TeamModule tab={teamTab} onTab={setTeamTab} />
             ) : activeModule?.id === 'contacts' ? (
               <ContactsModule />
-            ) : activeModule?.id === 'account' ? (
-              <AccountModule />
             ) : activeModule?.id === 'fulfillment' ? (
               <ShippingModule />
             ) : activeModule ? (
@@ -468,6 +475,9 @@ export function AppShell(): JSX.Element {
         </main>
 
         {showUpdates && <UpdatePanel onClose={() => setShowUpdates(false)} />}
+        {/* Opened from the name in the top right, over whatever is on screen.
+            Deliberately not a route: see the note on AccountPanel. */}
+        {accountOpen && <AccountPanel onClose={() => setAccountOpen(false)} />}
       </div>
     </ChromeContext.Provider>
   )

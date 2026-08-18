@@ -18,12 +18,12 @@
  * 2 is that assertion, and section 3 checks the real call sites still name
  * something the translation understands.
  *
- * ## The other half: My account left the sidebar but stayed reachable
+ * ## The other half: My account stopped being a screen
  *
- * It hangs off the name in the top right now. That needs BOTH halves to be
- * true — absent from what the sidebar draws, present in the registry so
- * `navigate('account')` and the render chain find it. Dropping either one is a
- * silent break in a different direction. Section 4.
+ * Not moved, not hidden — gone. It is a panel the shell opens over whatever you
+ * were looking at, from the name in the top right, because nobody navigates AWAY
+ * from a half-finished order to change a password. Section 4 pins that there is
+ * no module left to find and no route left to take.
  *
  * Run: npm run test:team
  */
@@ -138,30 +138,35 @@ for (const id of ['timepay', 'schedule']) {
 }
 
 // ---------------------------------------------------------------------------
-console.log('\n=== 4. My account left the sidebar but not the app ===')
+console.log('\n=== 4. My account is not a screen at all ===')
 // ---------------------------------------------------------------------------
-const account = getModule('account')
-ok(!!account, 'the module still exists')
-ok(account.hidden === true, 'marked hidden')
+// It was a module briefly, then a hidden module, and now neither. The sidebar
+// is a list of places the WORK happens; a password is housekeeping somebody
+// opens twice a year, and it belongs where every other application puts it —
+// off your own name, opening over whatever you were looking at rather than
+// replacing it.
+ok(!getModule('account'), 'THERE IS NO ACCOUNT MODULE')
+ok(!MODULES.some((m: any) => m.id === 'account'), 'nothing named account is in the registry')
 ok(
   !modulesForWorkspace('ops').some((m: any) => m.id === 'account'),
-  'AND THE SIDEBAR DOES NOT DRAW IT'
+  'so no sidebar can draw it'
 )
+ok(shell.includes('My account'), 'the name menu offers it')
+ok(shell.includes('setAccountOpen(true)'), 'AND OPENS IT WHERE IT WAS CLICKED')
+ok(shell.includes('<AccountPanel'), 'mounting the panel over the page')
 ok(
-  inWorkspace(account, 'ops') && inWorkspace(account, 'shipping'),
-  'while still belonging to both workspaces, so the route works from either'
+  !/navigate\('account'\)/.test(shell),
+  'and nothing navigates to it — there is nowhere to navigate to'
 )
-ok(
-  shell.includes("navigate('account')"),
-  'THE NAME MENU IN THE TOP RIGHT OPENS IT — which is where it went'
-)
-ok(shell.includes('My account'), 'and says so in words')
-ok(shell.includes('<AccountModule'), 'and the shell still renders it')
 
-// Exactly one module is hidden. A second would want arguing about rather than
-// discovering.
-const hidden = MODULES.filter((m: any) => m.hidden).map((m: any) => m.id)
-ok(hidden.join(',') === 'account', 'it is the only hidden module', hidden.join(','))
+// The `hidden` flag existed for exactly one module. With that module gone it is
+// dead code, and a dead extension point rots: the next person to need one will
+// find a half-remembered mechanism nothing exercises.
+ok(
+  !MODULES.some((m: any) => 'hidden' in m),
+  'and the hidden flag went with it rather than being left lying around',
+  MODULES.filter((m: any) => 'hidden' in m).map((m: any) => m.id).join(',')
+)
 
 // ---------------------------------------------------------------------------
 console.log('\n=== 5. nobody lost a screen they had ===')

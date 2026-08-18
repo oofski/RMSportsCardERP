@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Button, Field, Input } from '../../components/ui'
+import { Button, Field, Input, Modal } from '../../components/ui'
 import { Icon } from '../../components/Icon'
 import { useSession } from '../../lib/session'
 import { useToast } from '../../components/Toast'
@@ -8,47 +8,57 @@ import { roleLabel } from '@shared/permissions'
 import { NotificationsPanel } from './NotificationsPanel'
 
 /**
- * Your own account: the two things every person here needs to be able to do for
- * themselves, and previously could not.
+ * Your own account, in a panel off your own name.
  *
- * ## Why this module exists at all
+ * ## Why this is not a screen
  *
- * Both halves already worked. Neither was reachable.
+ * It was one, briefly, and it should not have been. The sidebar is a list of
+ * places the WORK happens; your password and your phone are not work, they are
+ * housekeeping, and giving them a permanent slot in that list put them
+ * alongside Inventory and Finance as though somebody might spend their morning
+ * there. It is opened perhaps twice a year.
  *
- * Changing a password existed only as the FORCED screen an invited employee
- * meets once, before they are let into the app — after that there was no route
- * back to it. Somebody who thought their password had been seen over their
- * shoulder had to ask an administrator to reset it, which means the fix for a
- * compromised credential ran through a second person and a conversation.
+ * So it hangs off the name in the top right, which is where every other
+ * application puts it and therefore the first place anybody looks — and it
+ * opens where it was clicked rather than replacing the screen behind it.
+ * Nobody navigates AWAY from what they were doing to change a password.
  *
- * Turning notifications on lived in Admin, behind `admin.access`, which is
- * exactly the set of people who are already at a desk. The floor — the people a
- * notification is FOR — could not open the screen, and the IPC underneath it
- * refused them anyway. See src/main/pushIpc.ts for that half of the fix.
+ * ## A modal rather than the menu itself
  *
- * So: no permission on this module. `permission: null` in the registry, and it
- * is deliberate rather than an omission. There is nothing here to gate — it is
- * your password and your phone, and every gate that was ever put in front of
- * either turned out to be protecting nothing while locking out the person the
- * feature was built for.
+ * The obvious reading of "put it under the dropdown" is to inline it, and it
+ * does not survive contact with the content: three password fields, a
+ * notification toggle, a device list, the iOS home-screen instructions in full
+ * and a note about where the notifications go. That is a popover taller than
+ * the window, anchored to a corner, scrolling inside itself. The menu holds the
+ * ENTRY; the panel holds the content.
+ *
+ * ## What is inside is unchanged
+ *
+ * Both halves already worked and neither was reachable. Changing a password
+ * existed only as the FORCED screen an invited employee meets once, so the fix
+ * for a credential somebody thought was seen ran through an administrator and a
+ * conversation. Turning notifications on lived in Admin behind `admin.access` —
+ * exactly the people already at a desk — and the IPC underneath refused the
+ * floor anyway. See src/main/pushIpc.ts for that half.
+ *
+ * No permission on any of it. It is your password and your phone, and every
+ * gate ever put in front of either turned out to be protecting nothing while
+ * locking out the person the feature was built for.
  */
-export function AccountModule(): JSX.Element {
+export function AccountPanel({ onClose }: { onClose: () => void }): JSX.Element {
   const { user, can } = useSession()
 
   return (
-    <div className="content-narrow acct">
-      <section className="acct-who">
-        <div className="acct-who-id">
-          <h2>
-            {user ? `${user.firstName} ${user.lastName}`.trim() || 'Your account' : 'Your account'}
-          </h2>
-          <p>
-            {[user ? roleLabel(user.role) : null, user?.title, user?.companyId, user?.email]
-              .filter(Boolean)
-              .join(' · ')}
-          </p>
-        </div>
-      </section>
+    <Modal
+      title="My account"
+      subtitle={[user ? roleLabel(user.role) : null, user?.title, user?.companyId, user?.email]
+        .filter(Boolean)
+        .join(' · ')}
+      onClose={onClose}
+      wide
+      className="acct-modal"
+    >
+    <div className="acct">
 
       {/* THE PACKING BENCH DOES NOT GET THIS, and it is the one exception in a
           module whose whole argument is that there is nothing here to gate.
@@ -94,6 +104,7 @@ export function AccountModule(): JSX.Element {
         <NotificationsPanel canClock={can('notifications.clock')} />
       </section>
     </div>
+    </Modal>
   )
 }
 

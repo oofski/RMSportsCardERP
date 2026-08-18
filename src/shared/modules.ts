@@ -31,17 +31,6 @@ export interface AppModule {
    * them asking a lead instead of opening the app.
    */
   workspace?: 'ops' | 'shipping' | 'both'
-  /**
-   * Reachable, but not in the sidebar.
-   *
-   * For a screen that belongs to somebody rather than to the business: it still
-   * needs an id so `navigate()` and the render chain can find it, but it does
-   * not deserve a permanent slot in a list of places the WORK happens. My
-   * account is the only one — it hangs off the name in the top right, which is
-   * where every other application puts it and therefore the first place anybody
-   * looks.
-   */
-  hidden?: boolean
 }
 
 export const MODULES: AppModule[] = [
@@ -82,33 +71,6 @@ export const MODULES: AppModule[] = [
     // BOTH workspaces. A packer needs to reach the office and check their own
     // hours without switching companies to do it.
     workspace: 'both'
-  },
-  {
-    /**
-     * YOUR account, and the only module in this file with no permission on it.
-     *
-     * `permission: null` is deliberate and is the whole point. Everything here
-     * acts on the person looking at it and discloses nobody else: their own
-     * password, their own phone. Both used to sit behind a gate — the password
-     * behind "ask an administrator", the notification toggle behind
-     * `admin.access` — and in both cases the gate protected nothing while
-     * locking out exactly the people the feature was for.
-     */
-    id: 'account',
-    name: 'My account',
-    shortName: 'Account',
-    description: 'Your password, and notifications on your phone.',
-    icon: 'UserCog',
-    permission: null,
-    status: 'active',
-    // BOTH workspaces, for the same reason Team is: somebody on the packing
-    // floor must not have to switch companies to change their own password.
-    workspace: 'both',
-    // NOT IN THE SIDEBAR. It hangs off your own name in the top right, which is
-    // where every other application puts it and therefore where people look
-    // first. Still a real module id so `navigate('account')` and the render
-    // chain work exactly as before — see `hidden` on AppModule.
-    hidden: true
   },
   {
     id: 'admin',
@@ -209,7 +171,7 @@ export const MODULES: AppModule[] = [
     icon: 'Wallet',
     permission: 'module.finance',
     status: 'active'
-  },
+  }
 ]
 
 /**
@@ -283,12 +245,14 @@ export function inWorkspace(module: AppModule, workspace: 'ops' | 'shipping'): b
 /**
  * Modules belonging to a workspace ('ops' is the default for untagged ones).
  *
- * Hidden ones are left out: this is what the SIDEBAR draws, and a module marked
- * hidden has a home somewhere else on the chrome. It is still in MODULES, so
- * `getModule` and `navigate` find it exactly as before.
+ * Every module in this file is a place the WORK happens and every one of them
+ * is drawn. My account used to be an exception — a module marked hidden,
+ * reachable only from the name menu — and carrying a flag for one entry was
+ * worse than the thing it bought: it is not a screen at all now, it is a panel
+ * the shell opens over whatever you were doing. See AccountPanel.
  */
 export function modulesForWorkspace(workspace: 'ops' | 'shipping'): AppModule[] {
-  return MODULES.filter((m) => inWorkspace(m, workspace) && !m.hidden)
+  return MODULES.filter((m) => inWorkspace(m, workspace))
 }
 
 export function getModule(id: string): AppModule | undefined {

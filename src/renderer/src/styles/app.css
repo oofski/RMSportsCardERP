@@ -24096,26 +24096,14 @@ button.sor-team:focus-visible {
 .acct {
   display: flex;
   flex-direction: column;
-  gap: 18px;
-  padding-bottom: 32px;
+  gap: 16px;
 }
-.acct-who {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 16px 18px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-}
-.acct-who-id h2 {
-  margin: 0;
-  font-size: 17px;
-}
-.acct-who-id p {
-  margin: 3px 0 0;
-  font-size: 12.5px;
-  color: var(--text-3);
+/* Roomier than .modal-lg's 620px: the notifications half carries the iOS
+   home-screen instructions in full, and squeezing a numbered list into a narrow
+   column is how a support answer stops being read. Capped by the modal's own
+   max-height, so it scrolls rather than growing off the screen. */
+.acct-modal {
+  max-width: 720px;
 }
 .acct-section {
   background: var(--surface);
