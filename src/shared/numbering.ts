@@ -112,6 +112,20 @@ export interface SeriesState {
   issued: number
   /** The lowest value `setSeriesStart` will accept right now. */
   minimum: number
+  /**
+   * INVOICES ONLY: how many this app posted that QuickBooks renumbered.
+   *
+   * The number set here is sent as `DocNumber`, and QuickBooks silently replaces
+   * it unless the company has "Custom transaction numbers" switched on — which
+   * is exactly what Intuit's own import template warns about. So an operator can
+   * set 7000 here, watch the app say 7000, and have the buyer receive 1043.
+   *
+   * This is the evidence, taken from their own posted invoices rather than from
+   * a setting this app cannot read: any non-zero answer means the two systems
+   * are running separate series right now. Undefined on the other two, which
+   * never leave this app.
+   */
+  renumbered?: number
 }
 
 /**

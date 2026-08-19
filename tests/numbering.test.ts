@@ -240,5 +240,60 @@ const bogus = numbering.setSeriesStart('not_a_series' as any, 10)
 ok(bogus.ok === false, 'an unknown series is refused')
 ok(state('purchase_order').next === 5003, 'and nothing else moved', String(state('purchase_order').next))
 
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 8. the invoice number is the one QuickBooks is SENT ===')
+// ---------------------------------------------------------------------------
+/**
+ * The owner's question: does the number set here become the invoice number in
+ * QuickBooks?
+ *
+ * It is what gets SENT — `toQboInvoice` puts it in `DocNumber` — and QuickBooks
+ * silently replaces it unless the company has "Custom transaction numbers"
+ * switched on. So the app cannot promise the buyer sees it, and this pins both
+ * halves: the number does travel, and the divergence is counted so the screen
+ * can say when it is not being honoured.
+ */
+const { toQboInvoice } = require('../src/shared/invoices')
+
+const posted = invRepo.getInvoice(inv1.id)
+// itemRefs is a Map keyed on the lower-cased item name — toQboInvoice throws by
+// name on any line QuickBooks could not resolve, before a byte is posted, so the
+// one line on this invoice has to be resolvable for the payload to be built.
+const itemRefs = new Map<string, any>([['numbering case', { id: '99', name: 'Numbering Case' }]])
+const payload = toQboInvoice(posted, { id: '1', name: 'Invented Buyer' }, itemRefs, {})
+ok(payload.DocNumber === '7000', 'the number set here is sent as DocNumber', String(payload.DocNumber))
+
+// No number, no DocNumber — rather than sending an empty one, which QuickBooks
+// would treat as "assign your own" in a way that looks like ours was rejected.
+const unnumbered = { ...posted, invoiceNumber: null }
+ok(
+  !('DocNumber' in toQboInvoice(unnumbered, { id: '1', name: 'B' }, itemRefs, {})),
+  'an invoice with no number sends no DocNumber at all'
+)
+
+// The evidence the screen shows. Nothing has been posted in this test database,
+// so the honest answer is zero rather than an assumption either way.
+ok(state('invoice').renumbered === 0, 'nothing has come back renumbered here', String(state('invoice').renumbered))
+ok(state('purchase_order').renumbered === undefined, 'and the count is invoice-only')
+
+// Now prove the counter actually detects a divergence: a posted invoice whose
+// returned DocNumber differs from what was sent is exactly the state that means
+// QuickBooks is running its own series.
+db.prepare(
+  `UPDATE invoices SET qbo_id = 'qbo_1', qbo_doc_number = '1043' WHERE id = ?`
+).run(inv1.id)
+ok(
+  state('invoice').renumbered === 1,
+  'a returned number that differs from ours is counted',
+  String(state('invoice').renumbered)
+)
+db.prepare(`UPDATE invoices SET qbo_doc_number = '7000' WHERE id = ?`).run(inv1.id)
+ok(
+  state('invoice').renumbered === 0,
+  'and one that matches is not',
+  String(state('invoice').renumbered)
+)
+
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail > 0) process.exit(1)

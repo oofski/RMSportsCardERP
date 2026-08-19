@@ -25728,6 +25728,30 @@ button.sor-team:focus-visible {
 .num-issued {
   color: var(--text-3);
 }
+/* The QuickBooks caveat, once it is a live problem rather than a note. Warning
+   rather than danger: nothing is broken, but what this screen promises is not
+   what the buyer will receive until a setting is changed over there. */
+.num-warn {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 10px 0 0;
+  padding: 9px 11px;
+  border-radius: 7px;
+  background: var(--warning-bg);
+  color: var(--warning);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.num-warn svg,
+.num-issued svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+.num-issued {
+  align-items: flex-start;
+  line-height: 1.5;
+}
 
 .num-foot {
   display: flex;

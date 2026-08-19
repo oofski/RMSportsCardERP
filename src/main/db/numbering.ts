@@ -4,7 +4,7 @@ import type { Result } from '@shared/types'
 import { getDb, setMeta } from './database'
 import { ceilingSeq, dealTicketIssued } from './dealTickets'
 import { poCeiling, poIssued } from './purchaseOrders'
-import { invoiceIssued, invoiceStart } from './invoices'
+import { countRenumberedInvoices, invoiceIssued, invoiceStart } from './invoices'
 
 /**
  * Reading and moving the three document counters.
@@ -65,7 +65,12 @@ function readSeries(series: NumberSeries): SeriesState {
         series,
         next: Math.max(issued + 1, start),
         issued,
-        minimum: Math.max(issued + 1, seriesFloor(series))
+        minimum: Math.max(issued + 1, seriesFloor(series)),
+        // Counted from posted invoices where what we sent and what came back
+        // disagree. It costs one query and no API call, and it is the only
+        // honest answer to "will the number I set here be the number my customer
+        // sees" — the setting that decides it lives in QuickBooks, not here.
+        renumbered: countRenumberedInvoices()
       }
     }
     default:

@@ -173,6 +173,37 @@ function SeriesCard({
         </Button>
       </div>
 
+      {/* THE HALF THIS SCREEN DOES NOT CONTROL.
+          The number set here is sent to QuickBooks as DocNumber, and QuickBooks
+          silently replaces it unless the company has "Custom transaction
+          numbers" switched on — Intuit's own import template warns about this.
+          Somebody can set 7000, watch the app say 7000, and have the buyer
+          receive 1043. The setting lives over there, so the honest thing is to
+          say where it is and then show what has actually been happening. */}
+      {state.series === 'invoice' && (
+        <p className={state.renumbered ? 'num-warn' : 'num-issued'}>
+          <Icon name={state.renumbered ? 'AlertTriangle' : 'Info'} size={13} />
+          {state.renumbered ? (
+            <span>
+              <b>
+                QuickBooks has renumbered {state.renumbered} invoice
+                {state.renumbered === 1 ? '' : 's'} this app posted
+              </b>{' '}
+              — so it is not honouring the number sent, and what you set here will not be what
+              the buyer receives. Turn on <b>Custom transaction numbers</b> in QuickBooks:
+              Settings → Account and settings → Sales → Sales form content.
+            </span>
+          ) : (
+            <span>
+              This number is sent to QuickBooks as the invoice number. It is only honoured if{' '}
+              <b>Custom transaction numbers</b> is on over there — Settings → Account and
+              settings → Sales → Sales form content. Nothing posted so far has come back
+              renumbered.
+            </span>
+          )}
+        </p>
+      )}
+
       {problem ? (
         <p className="num-problem">
           <Icon name="AlertTriangle" size={13} />
