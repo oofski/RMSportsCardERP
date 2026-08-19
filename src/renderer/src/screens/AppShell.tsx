@@ -298,10 +298,26 @@ export function AppShell(): JSX.Element {
               was out of date, and offer a macOS installer a tab cannot run. */}
           <div className="sidebar-footer">
             {IS_WEB ? (
-              <div className="sidebar-update" title="The web app is always the deployed version">
+              /* THE BUILD, not just the version.
+                 The version moves when an installer is cut; this app redeploys
+                 on every push. Showing only the version meant a day of shipping
+                 read as the same number all day, and "is my change live?" had no
+                 answer on this screen — see buildId(). The commit is appended
+                 when the host names one, and quietly absent when it does not. */
+              <div
+                className="sidebar-update"
+                title={
+                  appInfo?.build
+                    ? `Deployed from commit ${appInfo.build}. This is always the latest deploy.`
+                    : 'The web app is always the deployed version'
+                }
+              >
                 <Icon name="Cloud" size={16} />
                 <span>Web app</span>
-                <span className="ver">v{appInfo?.version ?? '—'}</span>
+                <span className="ver">
+                  v{appInfo?.version ?? '—'}
+                  {appInfo?.build && <span className="ver-build">·{appInfo.build}</span>}
+                </span>
               </div>
             ) : (
               <button

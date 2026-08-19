@@ -780,6 +780,15 @@ table.data tbody tr:hover {
   margin-left: auto;
   font-size: 11px;
   color: var(--text-3);
+  white-space: nowrap;
+}
+/* The commit, beside the release label. Quieter than the version because it is
+   the answer to a rarer question ("is my push live?") — but tabular, because the
+   whole use of it is comparing seven characters against seven others by eye. */
+.sidebar-update .ver-build {
+  margin-left: 2px;
+  opacity: 0.7;
+  font-variant-numeric: tabular-nums;
 }
 .update-dot {
   width: 7px;

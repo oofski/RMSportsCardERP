@@ -669,7 +669,18 @@ export type IpcChannel = (typeof IPC)[keyof typeof IPC]
 
 export interface AppInfo {
   name: string
+  /** The RELEASE label from package.json. Moves only when an installer is cut. */
   version: string
+  /**
+   * The short commit this build came from, when the host says.
+   *
+   * A different fact from `version`, not a refinement of it. The web app
+   * redeploys on every push while the version moves only on release days, so a
+   * whole day of shipping reports one version — and "is my change live?" has no
+   * answer. This is the field that moves. Absent on a desktop build and on a
+   * local checkout, where the release label already identifies the build.
+   */
+  build?: string
   platform: NodeJS.Platform
   isPackaged: boolean
 }

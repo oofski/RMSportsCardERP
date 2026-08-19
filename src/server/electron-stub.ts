@@ -87,6 +87,8 @@ function readVersion(): string {
   return (cachedVersion = '0.0.0')
 }
 
+
+
 function unavailable(what: string): never {
   throw new Error(
     `${what} is not available on the server — the browser sends the file up instead.`

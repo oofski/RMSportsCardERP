@@ -48,9 +48,15 @@ certificate.
 ## Check it worked
 
 - **Logs** should show `listening ... 232 operations`.
-- Visit `/health` — expect `{"ok":true,"version":"0.0.101",...}`. **The version is
-  the answer to "did my deploy land?"** — it is the running build's, so compare it
-  against the latest release before believing anything else on this page.
+- Visit `/health` — expect `{"ok":true,"version":"0.0.194","build":"99f372d",...}`.
+  **`build` is the answer to "did my deploy land?"** — it is the commit the running
+  container was built from, so compare it against what you last pushed.
+
+  **Do not use `version` for this.** It is the release label from `package.json`
+  and it only moves when somebody cuts an installer, so a whole day of pushes
+  reports the same number and a failed deploy is indistinguishable from a landed
+  one. That is exactly the confusion `build` exists to end. The same pair is shown
+  in the bottom-left of the app itself, as `v0.0.194 ·99f372d`.
 - Wait a minute for the first sync, then sign in with your **existing** company
   ID and password. If it asks you to create an Owner account, stop and read
   "When it breaks" below.

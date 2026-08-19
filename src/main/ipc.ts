@@ -1,5 +1,6 @@
 import { shell, app, dialog, BrowserWindow, type OpenDialogOptions } from 'electron'
 import { ipcMain } from './ipcRegistry'
+import { buildId } from './buildId'
 import { writeFileSync } from 'fs'
 import { IPC, type AppInfo } from '@shared/ipc'
 import type {
@@ -137,6 +138,11 @@ export function registerIpcHandlers(): void {
     return {
       name: app.getName(),
       version: app.getVersion(),
+      // Present only where a host names the commit — which in practice means the
+      // web build. The version alone cannot say which deploy is running, because
+      // it moves on release days and the web app redeploys on every push. See
+      // buildId().
+      ...(buildId() ? { build: buildId() as string } : {}),
       platform: process.platform,
       isPackaged: app.isPackaged
     }

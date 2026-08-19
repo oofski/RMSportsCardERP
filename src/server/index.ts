@@ -34,6 +34,7 @@ import {
   setBroadcastWindow,
   takeSpooledDownloads
 } from './electron-stub'
+import { buildId } from '../main/buildId'
 import { loginAllowed, loginFailed, loginSucceeded, purgeRateLimits } from './rateLimit'
 import { rendererExists, serveStatic } from './staticFiles'
 import {
@@ -509,6 +510,12 @@ async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise
       // needs a session, which is exactly what you cannot get when a deploy has
       // gone wrong.
       version: app.getVersion(),
+      // WHICH BUILD, as opposed to which release. The version only moves when an
+      // installer is cut, so on a branch that redeploys on every push it cannot
+      // tell a landed deploy from a failed one — see buildId(). Omitted rather
+      // than sent as null when nothing says, so a local checkout's /health is
+      // the shape it always was.
+      ...(buildId() ? { build: buildId() } : {}),
       operations: registeredHandlers().size,
       sessions: activeSessionCount(),
       uptimeSeconds: Math.round(process.uptime())
