@@ -462,6 +462,20 @@ export function CreateInvoiceModal({
           ? `Saved here, but QuickBooks refused it: ${res.data.error}`
           : 'Saved here, but it did not reach QuickBooks. Retry it from the invoice card.'
       )
+    } else if (
+      // THE NUMBER MOVED BEFORE IT EVER LEFT THIS APP. saveInvoice claims the
+      // number inside its transaction, so a value this form pre-filled can turn
+      // out to be taken — by an order raised at another bench, or by the
+      // dropship step, which fetches its own suggestion independently. Saying
+      // nothing would leave somebody looking at a board row that disagrees with
+      // the form they just filled in.
+      invoiceNumber.trim() &&
+      res.data.invoice.invoiceNumber &&
+      res.data.invoice.invoiceNumber !== invoiceNumber.trim()
+    ) {
+      toast.success(
+        `${invoiceNumber.trim()} was already taken, so this order is ${res.data.invoice.invoiceNumber}.`
+      )
     } else if (res.data.numberChanged) {
       // QuickBooks assigns its own document numbers and will not always take
       // ours. Silently keeping the old one on screen means the number in the

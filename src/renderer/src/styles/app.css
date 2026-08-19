@@ -4052,16 +4052,34 @@ tr.hoverable-row:hover {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  /* Flex items are min-content wide by default, which is what let an
+     unshrinkable chip force the row wider than the card and push the number
+     onto a second line. Same fix the shipment row needed. */
+  min-width: 0;
 }
 .po-card-num {
   font-size: 14.5px;
   font-weight: 700;
   letter-spacing: -0.01em;
   color: var(--brand-700);
+  /* THE NUMBER NEVER WRAPS AND NEVER SHRINKS. It is the card's identity and the
+     thing somebody scans a column for. The chip beside it used to be the
+     unshrinkable one, so a long destination squeezed this instead and broke
+     "Drop-0039" across two lines mid-token. The two rules are a pair: whichever
+     of them refuses to give way, the other one has to. */
+  white-space: nowrap;
+  flex: 0 0 auto;
 }
-/* Where the boxes land — a quiet chip so the number keeps the line's weight. */
+/* Where the boxes land — a quiet chip so the number keeps the line's weight.
+
+   IT TRUNCATES RATHER THAN PUSHING. A destination is a party name and party
+   names are arbitrarily long ("Shawn Smucker (PA-ROBIN) StreetRobin"); this used
+   to be flex-shrink: 0, so the whole name demanded its width and the ORDER
+   NUMBER gave way, wrapping mid-token. The full text is already on the title
+   attribute, so an ellipsis costs nothing a hover does not recover. */
 .po-card-dest {
-  flex-shrink: 0;
+  min-width: 0;
+  flex: 0 1 auto;
   padding: 3px 9px;
   border-radius: 999px;
   background: var(--surface-3);
@@ -4069,17 +4087,25 @@ tr.hoverable-row:hover {
   font-size: 11.5px;
   font-weight: 700;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
+/* The party this order is with, on its own line.
+
+   ONE LINE, TRUNCATED. It was clamped to two, which is how a card carrying
+   "Shawn Smucker (PA-ROBIN) StreetRobin" grew a second line and every card in
+   the column stopped lining up with its neighbours. A name that does not fit is
+   a name to hover, not a reason to make the card taller — and a ragged column is
+   harder to scan than a trimmed one, which is the whole job of a board. */
 .po-card-supplier {
   margin-top: 8px;
   font-size: 14.5px;
   font-weight: 600;
   line-height: 1.35;
   color: var(--text);
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
+  white-space: nowrap;
   overflow: hidden;
+  text-overflow: ellipsis;
 }
 .po-card-figs {
   display: flex;

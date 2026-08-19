@@ -721,15 +721,64 @@ export function invoiceStart(): number {
   return Number.isInteger(raw) && raw > 0 ? raw : INVOICE_NUMBER_START
 }
 
-/** The next number in the series, so the editor opens with one filled in. */
-export function suggestInvoiceNumber(): string {
-  const rows = getDb()
+/**
+ * The next number NOTHING ELSE ALREADY HOLDS.
+ *
+ * `nextInvoiceNumber` answers max+1, which is right until a number in the middle
+ * of the range is taken — by a hand-typed one, or by an order that arrived from
+ * another machine. This walks up from that answer until it finds a free one, so
+ * the value handed out is one that can actually be saved.
+ *
+ * Takes the caller's transaction so `saveInvoice` can look and write without a
+ * gap in between.
+ */
+function freeInvoiceNumber(db: Database.Database, from: number, exceptId: string): string {
+  const taken = db.prepare(
+    `SELECT 1 FROM invoices WHERE invoice_number = ? AND id <> ? LIMIT 1`
+  )
+  let n = Math.max(1, Math.trunc(from))
+  // Bounded so a corrupt table can never spin forever. Ten thousand consecutive
+  // taken numbers is not a state this business reaches; it is a state something
+  // is badly wrong in, and looping is the wrong response to that.
+  for (let i = 0; i < 10000; i++) {
+    if (!taken.get(String(n), exceptId)) return String(n)
+    n += 1
+  }
+  return String(n)
+}
+
+/**
+ * The next number in the series, on a caller's handle.
+ *
+ * Split from the public function so the save path can ask INSIDE its own
+ * transaction. Asking through getDb() from in there would be a second
+ * connection reading a table the transaction is midway through writing.
+ */
+function suggestInvoiceNumberIn(db: Database.Database): string {
+  const rows = db
     .prepare(`SELECT invoice_number FROM invoices WHERE invoice_number IS NOT NULL`)
     .all() as Array<{ invoice_number: string }>
   return nextInvoiceNumber(
     rows.map((r) => r.invoice_number),
     invoiceStart()
   )
+}
+
+/**
+ * The next number nothing holds, on a caller's handle.
+ *
+ * The relabel hook sync calls when two machines mint the same one — see
+ * RELABEL_ON_CONFLICT. It has to walk past taken numbers rather than take max+1,
+ * because the row that lost the collision is still sitting in the table holding
+ * the number being replaced.
+ */
+export function nextFreeInvoiceNumber(db: Database.Database): string {
+  return freeInvoiceNumber(db, Number(suggestInvoiceNumberIn(db)) || 1, '')
+}
+
+/** The next number in the series, so the editor opens with one filled in. */
+export function suggestInvoiceNumber(): string {
+  return suggestInvoiceNumberIn(getDb())
 }
 
 /**
@@ -804,7 +853,65 @@ export function saveInvoice(
     }
   })
 
+  /**
+   * Set when the number asked for was already taken and this save had to move.
+   * Reported back so the screen can say so — silently changing the number on a
+   * document somebody is looking at is the failure this whole guard exists to
+   * avoid a worse version of.
+   */
+  let renumberedFrom: string | null = null
   const run = db.transaction(() => {
+    /**
+     * CLAIM THE NUMBER HERE, not on the screen that suggested it.
+     *
+     * `suggestInvoiceNumber` is a READ. It reserves nothing, and two places call
+     * it independently — the board holds one from its last refresh, and the
+     * dropship step fetches its own when that flow starts. Nothing had been
+     * saved in between, so both were handed the same number and both saved it:
+     * two sales orders answering to 2337, which then go to QuickBooks as the
+     * same DocNumber and produce two documents claiming one number.
+     *
+     * There was no guard anywhere. The column had no UNIQUE constraint and this
+     * function stored whatever the form sent, so the collision was silent on
+     * both sides.
+     *
+     * Resolved by MOVING rather than refusing. The operator did nothing wrong —
+     * they filled in a form the app pre-filled — and failing their save would
+     * lose the order to protect a label. The number moves up to the first free
+     * one and `renumberedFrom` says so, which the screen reports.
+     *
+     * A number somebody TYPED is treated exactly the same. There is no way to
+     * tell a typed number from a suggested one by the time it arrives here, and
+     * two invoices sharing a number is the wrong outcome either way.
+     */
+    const asked = clean(input.invoiceNumber)
+    let numberToStore = asked
+    if (asked) {
+      const clash = db
+        .prepare(`SELECT 1 FROM invoices WHERE invoice_number = ? AND id <> ? LIMIT 1`)
+        .get(asked, id)
+      if (clash) {
+        // Walk up from what they asked for when it is a number, so the result is
+        // recognisably next to it. A non-numeric label falls back to the series.
+        const from = Number(asked)
+        numberToStore = freeInvoiceNumber(
+          db,
+          Number.isFinite(from) && from > 0 ? from + 1 : Number(suggestInvoiceNumberIn(db)),
+          id
+        )
+        renumberedFrom = asked
+      }
+    }
+    // ON THE ORDER'S OWN HISTORY, so the gap in the sequence is explainable a
+    // year later. A number that silently moved is exactly the kind of thing
+    // somebody rediscovers while reconciling and cannot account for.
+    if (renumberedFrom) {
+      recordOrderEvent('so', id, 'note', {
+        detail: `Number ${renumberedFrom} was already taken, so this order is ${numberToStore}`,
+        actorId,
+        db
+      })
+    }
     db.prepare(
       `INSERT INTO invoices
          (id, invoice_number, customer_id, customer_name, email, terms, invoice_date, due_date,
@@ -846,7 +953,7 @@ export function saveInvoice(
          updated_at     = excluded.updated_at`
     ).run({
       id,
-      invoiceNumber: clean(input.invoiceNumber),
+      invoiceNumber: numberToStore,
       customerId: clean(input.customerId),
       customerName: input.customerName.trim(),
       email: clean(input.email),

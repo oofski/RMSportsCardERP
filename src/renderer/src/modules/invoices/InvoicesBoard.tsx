@@ -618,7 +618,10 @@ function InvoiceCard({
           </span>
         )}
       </div>
-      <div className="po-card-supplier">{invoice.customerName}</div>
+      {/* The full name on hover, since the line now truncates. */}
+      <div className="po-card-supplier" title={invoice.customerName}>
+        {invoice.customerName}
+      </div>
       <div className="po-card-figs">
         <span className="po-card-total mono">{formatMoney(invoice.total)}</span>
         {/* THREE DIFFERENT KINDS OF DATE, and each is formatted by the function

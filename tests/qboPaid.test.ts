@@ -511,9 +511,13 @@ ok(
   'and one that already has an id is not'
 )
 
-// Counted across EVERY status, because a second row numbered 4001 makes the
-// number ambiguous whether or not that row is one this pass would consider.
-const twin = repo.saveInvoice(
+/**
+ * A TWIN CAN NO LONGER BE MADE, which is the v77 change: saveInvoice claims the
+ * number inside its transaction and a partial unique index backs it up. Asking
+ * for a number somebody already holds moves this order rather than duplicating
+ * it — that is what stopped 2337 appearing in two columns at once.
+ */
+const wouldBeTwin = repo.saveInvoice(
   {
     invoiceNumber: '4001',
     customerName: 'Someone Else',
@@ -522,13 +526,47 @@ const twin = repo.saveInvoice(
   },
   'emp_owner'
 )
-db.prepare(`UPDATE invoices SET status = 'void' WHERE id = ?`).run(twin.id)
+ok(
+  wouldBeTwin.invoiceNumber !== '4001',
+  'ASKING FOR A TAKEN NUMBER MOVES THE NEW ORDER instead of making a twin',
+  String(wouldBeTwin.invoiceNumber)
+)
+ok(
+  repo.countInvoiceNumbers(['4001']).get('4001') === 1,
+  'so the number still names exactly one document',
+  String(repo.countInvoiceNumbers(['4001']).get('4001'))
+)
+db.prepare(`DELETE FROM invoices WHERE id = ?`).run(wouldBeTwin.id)
+
+/**
+ * The ambiguity guard itself still has to WORK, because the constraint is what
+ * prevents the situation and a guard that is never exercised is a guard nobody
+ * knows is broken. The index is lifted for exactly as long as it takes to build
+ * the state it defends against — a duplicate is otherwise unreachable now, and
+ * an untested branch here would be one that silently rots.
+ *
+ * Counted across EVERY status: a voided second row still makes the number name
+ * two documents, so it must not be discounted.
+ */
+db.exec('DROP INDEX IF EXISTS idx_invoices_number_unique')
+const twinId = 'inv_forced_twin'
+db.prepare(
+  `INSERT INTO invoices (id, invoice_number, customer_name, invoice_date, due_date,
+                         terms, status, total, created_at, updated_at)
+   VALUES (?, '4001', 'Someone Else', '2026-08-05', '2026-08-05', 'net_30', 'void', 800,
+           '2026-08-05T00:00:00.000Z', '2026-08-05T00:00:00.000Z')`
+).run(twinId)
 ok(
   repo.countInvoiceNumbers(['4001']).get('4001') === 2,
   'A VOIDED TWIN STILL COUNTS — it still makes the number name two documents',
   String(repo.countInvoiceNumbers(['4001']).get('4001'))
 )
-db.prepare(`DELETE FROM invoices WHERE id = ?`).run(twin.id)
+db.prepare(`DELETE FROM invoices WHERE id = ?`).run(twinId)
+db.exec(
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_invoices_number_unique
+     ON invoices (invoice_number)
+   WHERE invoice_number IS NOT NULL AND invoice_number != ''`
+)
 ok(repo.countInvoiceNumbers(['4001']).get('4001') === 1, 'and one row is one row again')
 ok(repo.countInvoiceNumbers([]).size === 0, 'asking about nothing asks nothing')
 

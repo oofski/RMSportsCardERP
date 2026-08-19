@@ -3744,6 +3744,79 @@ function migrate(database: Database.Database): void {
   addColumnIfMissing(database, 'invoices', 'allow_credit_card', 'INTEGER NOT NULL DEFAULT 1')
   setMeta(database, 'schema_version', '76')
 
+  /**
+   * v77: two sales orders can no longer answer to the same number.
+   *
+   * ## What went wrong
+   *
+   * `suggestInvoiceNumber` is a READ that reserves nothing, and two places call
+   * it independently: the board holds one from its last refresh, and the
+   * dropship step fetches its own when that flow begins. With nothing saved in
+   * between, both were handed the same number — and `saveInvoice` stored
+   * whatever the form sent, on a column with no UNIQUE constraint. The result is
+   * two orders both numbered 2337, which then post to QuickBooks under the same
+   * DocNumber and leave two documents claiming one number.
+   *
+   * ## The duplicates already in the database are fixed first
+   *
+   * Adding the index to a table that already violates it would fail, and a
+   * migration that throws takes the whole app down on next launch. So the
+   * duplicates are resolved here: the OLDEST row of each clashing number keeps
+   * it — it is the one most likely to have been sent to somebody — and the rest
+   * move up to numbers nothing holds.
+   *
+   * A row already in QuickBooks is never renumbered even if it is the newer one.
+   * Its number exists in somebody else's system and changing it here would only
+   * make the two disagree; the local label is the one with room to move.
+   *
+   * ## Why a partial index
+   *
+   * A draft carries NULL until somebody names it, and several drafts at once is
+   * ordinary. SQLite already lets NULLs repeat under UNIQUE, but an empty string
+   * is a value and would collide, so both are excluded explicitly.
+   */
+  runOnce(database, 'invoice_number_dedupe_v1', () => {
+    const dupes = database
+      .prepare(
+        `SELECT invoice_number AS n FROM invoices
+          WHERE invoice_number IS NOT NULL AND invoice_number != ''
+          GROUP BY invoice_number HAVING COUNT(*) > 1`
+      )
+      .all() as Array<{ n: string }>
+    if (dupes.length === 0) return
+    const taken = new Set(
+      (
+        database
+          .prepare(`SELECT invoice_number AS n FROM invoices WHERE invoice_number IS NOT NULL`)
+          .all() as Array<{ n: string }>
+      ).map((r) => r.n)
+    )
+    const update = database.prepare(`UPDATE invoices SET invoice_number = ? WHERE id = ?`)
+    for (const d of dupes) {
+      // Oldest first, and anything already posted ahead of anything that is not,
+      // so the row that KEEPS the number is the one it would cost most to move.
+      const rows = database
+        .prepare(
+          `SELECT id FROM invoices WHERE invoice_number = ?
+            ORDER BY CASE WHEN qbo_id IS NOT NULL AND qbo_id != '' THEN 0 ELSE 1 END,
+                     created_at ASC, id ASC`
+        )
+        .all(d.n) as Array<{ id: string }>
+      for (const row of rows.slice(1)) {
+        let next = (Number(d.n) || 0) + 1
+        while (taken.has(String(next))) next += 1
+        update.run(String(next), row.id)
+        taken.add(String(next))
+      }
+    }
+  })
+  database.exec(
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_invoices_number_unique
+       ON invoices (invoice_number)
+     WHERE invoice_number IS NOT NULL AND invoice_number != '';`
+  )
+  setMeta(database, 'schema_version', '77')
+
   // v41: re-derive every product's average cost from its remaining cost layers.
   //
   // The average used to be stored rounded to the cent, back when every total in

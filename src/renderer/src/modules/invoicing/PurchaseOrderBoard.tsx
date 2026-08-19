@@ -348,7 +348,11 @@ function PoCard({
           className="po-card-chev"
         />
       </div>
-      <div className="po-card-supplier">{po.supplier || 'No supplier'}</div>
+      {/* The full name on hover. Truncating without this would LOSE the tail
+          of a long party name rather than fold it. */}
+      <div className="po-card-supplier" title={po.supplier || 'No supplier'}>
+        {po.supplier || 'No supplier'}
+      </div>
       <div className="po-card-figs">
         <span className="po-card-total mono">{formatMoney(po.total)}</span>
         <span className="po-card-meta">
@@ -479,7 +483,9 @@ function SupplyCard({
         <span className="po-card-dest">{SUPPLY_STATUS_LABEL[order.status]}</span>
       </div>
 
-      <div className="po-card-supplier">{order.supplyName}</div>
+      <div className="po-card-supplier" title={order.supplyName}>
+        {order.supplyName}
+      </div>
 
       <div className="po-card-figs">
         <span className="po-card-total mono">{formatMoney(order.total)}</span>

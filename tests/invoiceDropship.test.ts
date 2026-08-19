@@ -586,5 +586,120 @@ ok(
   'a posted invoice says when card was withheld — it is read-only, so this is the only place to find out'
 )
 
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 9. two sales orders cannot share a number ===')
+// ---------------------------------------------------------------------------
+/**
+ * THE BUG THE OWNER SAW: 2337 in the Draft column and 2337 in In QuickBooks,
+ * two different orders under one number.
+ *
+ * `suggestInvoiceNumber` is a READ that reserves nothing, and two places call it
+ * independently — the board holds one from its last refresh, and the dropship
+ * step fetches its own when that flow begins. With nothing saved in between,
+ * both are handed the same number. `saveInvoice` then stored whatever the form
+ * sent, on a column with no UNIQUE constraint, so the collision was silent on
+ * both sides — and both orders post to QuickBooks under the same DocNumber.
+ *
+ * The number is now claimed inside the save transaction. It MOVES rather than
+ * being refused: the operator filled in a form the app pre-filled, and failing
+ * their save to protect a label would lose the order.
+ */
+const first = inv.saveInvoice(
+  {
+    invoiceNumber: '9100',
+    customerName: 'Invented Buyer',
+    invoiceDate: '2026-05-01',
+    location: 'RM',
+    lines: [{ item: 'Dropship Hobby Box', productId: 'p_d', quantity: 1, rate: 100 }]
+  },
+  null
+)
+ok(first.invoiceNumber === '9100', 'the first order takes the number it asked for', String(first.invoiceNumber))
+
+// The exact race: a second form still holding the same suggestion.
+const second = inv.saveInvoice(
+  {
+    invoiceNumber: '9100',
+    customerName: 'Invented Buyer',
+    invoiceDate: '2026-05-02',
+    location: 'RM',
+    lines: [{ item: 'Dropship Hobby Box', productId: 'p_d', quantity: 1, rate: 100 }]
+  },
+  null
+)
+ok(second.id !== first.id, 'the second order is a different order')
+ok(second.invoiceNumber !== '9100', 'AND IT DOES NOT GET 9100', String(second.invoiceNumber))
+ok(second.invoiceNumber === '9101', 'it moves up to the next free number', String(second.invoiceNumber))
+ok(
+  inv.getInvoice(first.id).invoiceNumber === '9100',
+  'the order that had it KEEPS it — the newer one moves'
+)
+
+// The move is on the order's own history, so the gap is explainable later.
+const events = require('../src/main/db/orderExtras').listOrderEvents('so', second.id)
+ok(
+  events.some((e: any) => /9100 was already taken/i.test(e.detail ?? '')),
+  'and the renumber is recorded on the order',
+  events.map((e: any) => e.detail).join(' | ')
+)
+
+// It walks PAST a taken number rather than colliding with the next one too.
+const third = inv.saveInvoice(
+  {
+    invoiceNumber: '9100',
+    customerName: 'Invented Buyer',
+    invoiceDate: '2026-05-03',
+    location: 'RM',
+    lines: [{ item: 'Dropship Hobby Box', productId: 'p_d', quantity: 1, rate: 100 }]
+  },
+  null
+)
+ok(third.invoiceNumber === '9102', 'a third walks past both', String(third.invoiceNumber))
+
+// EDITING AN ORDER KEEPS ITS OWN NUMBER. The clash check excludes the row being
+// saved, or every edit would push the order up by one.
+inv.saveInvoice(
+  {
+    id: first.id,
+    invoiceNumber: '9100',
+    customerName: 'Invented Buyer',
+    invoiceDate: '2026-05-01',
+    location: 'RM',
+    lines: [{ item: 'Dropship Hobby Box', productId: 'p_d', quantity: 2, rate: 100 }]
+  },
+  null
+)
+ok(
+  inv.getInvoice(first.id).invoiceNumber === '9100',
+  'editing an order does not renumber it',
+  String(inv.getInvoice(first.id).invoiceNumber)
+)
+
+// A DRAFT WITH NO NUMBER IS FINE, and several at once are fine — the unique
+// index is partial for exactly this reason.
+const d1 = inv.saveInvoice(
+  { customerName: 'Invented Buyer', invoiceDate: '2026-05-04', location: 'RM',
+    lines: [{ item: 'Dropship Hobby Box', productId: 'p_d', quantity: 1, rate: 10 }] },
+  null
+)
+const d2 = inv.saveInvoice(
+  { customerName: 'Invented Buyer', invoiceDate: '2026-05-05', location: 'RM',
+    lines: [{ item: 'Dropship Hobby Box', productId: 'p_d', quantity: 1, rate: 10 }] },
+  null
+)
+ok(!!d1.id && !!d2.id, 'two unnumbered drafts both save')
+ok(!inv.getInvoice(d1.id).invoiceNumber, 'and stay unnumbered')
+
+// The database itself refuses a duplicate now, which is the backstop under all
+// of the above.
+let indexHeld = false
+try {
+  db.prepare(`UPDATE invoices SET invoice_number = '9100' WHERE id = ?`).run(third.id)
+} catch {
+  indexHeld = true
+}
+ok(indexHeld, 'THE UNIQUE INDEX REFUSES A DUPLICATE even by raw SQL')
+
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail > 0) process.exit(1)

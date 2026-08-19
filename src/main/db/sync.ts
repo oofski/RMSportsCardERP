@@ -5,6 +5,7 @@ import { SYNCED_BY_TABLE, SYNCED_TABLES, KEY_SEP, type SyncedTable } from './syn
 import { normQty, lotWeightedAvgCost } from './lots'
 import { nextPoNumber } from './purchaseOrders'
 import { nextDealTicketNumber } from './dealTickets'
+import { nextFreeInvoiceNumber } from './invoices'
 import type { StockDrift, SyncReject } from '@shared/sync'
 
 /**
@@ -350,6 +351,16 @@ const RELABEL_ON_CONFLICT: Record<
   // row arriving from the other laptop advanced this machine's ceiling without
   // touching its counter, and the replacement must land above both.
   deal_tickets: { column: 'number', relabel: (db) => nextDealTicketNumber(db) },
+  // An invoice number is a label too, and it is now UNIQUE (v77) — so without
+  // this a sales order raised offline on two laptops under the same number would
+  // hit the constraint, die in the batch, die again in the row-by-row retry, and
+  // be quarantined with the cursor already past it: present on one machine and
+  // gone for ever on the other. Renumbering the loser is the same answer
+  // purchase_orders has always had, for the same reason.
+  //
+  // NEVER a natural key. Two invoices carrying 2337 are two different sales and
+  // de-duplicating them would delete one.
+  invoices: { column: 'invoice_number', relabel: (db) => nextFreeInvoiceNumber(db) },
   // Only one supply may be "the team bags". A second machine naming a different
   // box for the role loses the ROLE, never the supply: the box is real stock
   // with a real count, and deleting it to settle a label would take that with it.
