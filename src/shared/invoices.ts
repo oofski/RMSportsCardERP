@@ -37,6 +37,8 @@
  */
 
 /** Payment terms, as QuickBooks names them. */
+import { destinationHoldsStock } from './purchaseOrders'
+import { LOCATION_IDS } from './inventory'
 import type { Carrier, PaymentTiming } from './freight'
 import type { ShipStatusCode } from './shippingTypes'
 
@@ -2143,4 +2145,60 @@ export interface WholesaleSaleRow {
   margin: number
   /** False for a pre-v68 line, whose layers cannot be recovered. */
   costKnown: boolean
+}
+
+// ---------------------------------------------------------------------------
+// Adding a product to an order that already has it
+// ---------------------------------------------------------------------------
+
+/** The parts of a draft line that decide how it is fulfilled. */
+export interface FulfilmentLine {
+  /** Stable identity of the row on screen. */
+  key: string
+  productId: string
+  /** Where it is fulfilled FROM. Empty inherits the order's location. */
+  destination: string
+}
+
+/**
+ * The line a newly picked product should be ADDED TO, or undefined for a new one.
+ *
+ * ## One order can sell the same product two ways at once
+ *
+ * A dropship of three cases straight from the supplier, plus two off our own
+ * shelf, is one sale to one buyer — and it has to be two lines, because only one
+ * of them draws stock. `saveInvoice` has always decided that per line, and
+ * `tests/invoiceDropship.test.ts` pins it with the same product on both halves.
+ *
+ * The screen was the half that could not express it. Picking a product already
+ * on the order bumped whichever line held it, so on a dropship-prefilled order
+ * the only way to add two from stock was to turn three dropshipped cases into
+ * five — which invoices the buyer for the right total by accident while drawing
+ * no stock at all, leaving the shelf up for units that have been sold.
+ *
+ * ## The rule
+ *
+ * A pick merges only into a line fulfilled the way the new line would be: off
+ * our own shelf. A dropship line is never absorbed, which is what makes the
+ * second line possible. `destinationHoldsStock` is the same test the save path
+ * applies, so the screen cannot disagree with the stock engine about which lines
+ * are which.
+ *
+ * Returns ONE line. The rule this replaced mapped across every line carrying the
+ * product, so once an order legitimately held two of them a single pick added
+ * one to both.
+ */
+export function stockLineForProduct<T extends FulfilmentLine>(
+  lines: readonly T[],
+  productId: string,
+  orderLocation: string
+): T | undefined {
+  // An empty id is a saved or hand-typed line with no catalog link. Treating
+  // those as matches would collapse every one of them onto the first pick.
+  if (!productId) return undefined
+  return lines.find(
+    (l) =>
+      l.productId === productId &&
+      destinationHoldsStock(l.destination || orderLocation || LOCATION_IDS[0])
+  )
 }

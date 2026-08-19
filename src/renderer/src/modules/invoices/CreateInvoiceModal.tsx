@@ -17,7 +17,8 @@ import {
   INVOICE_TERMS,
   dueDateFor,
   lineAmount,
-  money
+  money,
+  stockLineForProduct
 } from '@shared/invoices'
 import { api } from '../../lib/api'
 import { useToast } from '../../components/Toast'
@@ -286,13 +287,43 @@ export function CreateInvoiceModal({
    * were indistinguishable on the finished document — which is the whole reason
    * the PO rows carry a SKU under the name.
    */
+  /**
+   * Add a product, or add one to the line that is already selling it THE SAME
+   * WAY.
+   *
+   * ## Why "the same way" is the whole rule
+   *
+   * One order can sell the same product from two different places at once. A
+   * dropship of three cases straight from the supplier, plus two off our own
+   * shelf, is one sale to one buyer — and it is two lines, because the two
+   * halves are fulfilled differently and only one of them draws stock.
+   * `saveInvoice` already decides that per LINE, and the backend has always
+   * handled it.
+   *
+   * The screen did not. Picking a product that was already on the order bumped
+   * the quantity of whatever line held it, so on a dropship-prefilled order the
+   * only way to add two from stock was to turn three dropshipped cases into
+   * five — invoicing the buyer correctly by accident while drawing no stock at
+   * all, and leaving the shelf up for units that had been sold.
+   *
+   * So a pick merges only into a line fulfilled the way the NEW line would be:
+   * from our own shelf. A dropship line is never absorbed, which is what makes
+   * the second line possible at all. `destinationHoldsStock` is the same test
+   * the save path uses, so the screen and the stock engine cannot disagree
+   * about which lines are which.
+   *
+   * Merging targets ONE line by key rather than every line with that product.
+   * The old rule mapped across all of them, so once an order legitimately held
+   * two lines of a product, a single pick added one to BOTH.
+   */
   const addLine = (p: InventoryProduct): void => {
     setLines((prev) => {
       // Only a real id counts as "already here". Saved lines carry an empty one
       // and would otherwise all collapse onto whichever was picked first.
-      if (p.id && prev.some((l) => l.productId === p.id)) {
+      const mergeInto = stockLineForProduct(prev, p.id ?? '', location)
+      if (mergeInto) {
         return prev.map((l) =>
-          l.productId === p.id
+          l.key === mergeInto.key
             ? withAmount({ ...l, quantity: String((parseFloat(l.quantity) || 0) + 1) })
             : l
         )

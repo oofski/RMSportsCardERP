@@ -283,5 +283,111 @@ ok(
   'and uses the routed layout, so the columns line up between the two'
 )
 
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 5. adding your own stock to a dropship order ===')
+// ---------------------------------------------------------------------------
+/**
+ * THE SCREEN'S HALF OF SECTION 2.
+ *
+ * The backend has always billed a mixed order correctly. The picker could not
+ * express one: picking a product already on the order bumped whatever line held
+ * it, so on a dropship-prefilled order the only way to add two off the shelf was
+ * to turn three dropshipped cases into five. That invoices the buyer for the
+ * right money by accident while drawing NO stock at all, and leaves the shelf up
+ * for units that have been sold.
+ *
+ * `stockLineForProduct` is the rule the picker now asks. It is tested here
+ * rather than beside the component because it is the same question `saveInvoice`
+ * answers per line, and the two must never diverge.
+ */
+const { stockLineForProduct } = require('../src/shared/invoices')
+
+const dropLineDraft = { key: 'pre_0', productId: 'p_d', destination: 'Fenwick Distribution' }
+const shelfLineDraft = { key: 'k1', productId: 'p_d', destination: '' }
+const otherShelfDraft = { key: 'k2', productId: 'p_other', destination: 'RM' }
+
+// The case the owner described: three cases dropshipped, then two off our shelf.
+ok(
+  stockLineForProduct([dropLineDraft], 'p_d', '') === undefined,
+  'a DROPSHIP line is never merged into — so the shelf sale becomes its own line'
+)
+ok(
+  stockLineForProduct([shelfLineDraft], 'p_d', '') === shelfLineDraft,
+  'but a shelf line for the same product IS merged into'
+)
+ok(
+  stockLineForProduct([dropLineDraft, shelfLineDraft], 'p_d', '') === shelfLineDraft,
+  'and with both present the pick finds the shelf one, not the dropship'
+)
+ok(
+  stockLineForProduct([otherShelfDraft], 'p_d', '') === undefined,
+  'a different product is never merged into'
+)
+ok(
+  stockLineForProduct([{ key: 'k3', productId: '', destination: '' }], '', '') === undefined,
+  'and a freehand line with no product never absorbs a pick'
+)
+
+// An explicit 'RM' and an inherited blank are the same shelf, so both merge.
+ok(
+  stockLineForProduct([{ key: 'k4', productId: 'p_d', destination: 'RM' }], 'p_d', '') !== undefined,
+  'an explicitly RM line merges too — it is the same shelf as inheriting'
+)
+// Inheritance follows the ORDER's location, so a blank line on a dropship-headed
+// order is itself a dropship and must not absorb a shelf pick.
+ok(
+  stockLineForProduct([shelfLineDraft], 'p_d', 'Fenwick Distribution') === undefined,
+  'a blank line inherits the ORDER location, so on a dropship-headed order it is not a shelf line'
+)
+// Only ONE line comes back. The rule this replaced mapped across every match, so
+// an order legitimately holding two lines of a product got both incremented.
+const twoShelf = [
+  { key: 'a', productId: 'p_d', destination: '' },
+  { key: 'b', productId: 'p_d', destination: 'RM' }
+]
+ok(stockLineForProduct(twoShelf, 'p_d', '') === twoShelf[0], 'exactly one line is returned, the first')
+
+/**
+ * END TO END: the order the owner described, saved.
+ *
+ * Three dropshipped from the supplier plus two off our own shelf, SAME product,
+ * one buyer, one order. The buyer is billed for five; the shelf gives up two.
+ */
+const shelfBefore = qtyAt('RM')
+const combined = inv.saveInvoice(
+  {
+    customerName: 'Invented Buyer',
+    invoiceDate: '2026-04-03',
+    location: 'RM',
+    lines: [
+      {
+        item: 'Dropship Hobby Box',
+        productId: 'p_d',
+        quantity: 3,
+        rate: 200,
+        destination: 'Fenwick Distribution',
+        supplier: 'Steel City'
+      },
+      { item: 'Dropship Hobby Box', productId: 'p_d', quantity: 2, rate: 200 }
+    ]
+  },
+  null
+)
+const combinedLines = inv.getInvoice(combined.id).lines
+ok(combined.total === 1000, 'the buyer is billed for all five units', String(combined.total))
+ok(
+  qtyAt('RM') === shelfBefore - 2,
+  'but only the two off the shelf are drawn down',
+  `${qtyAt('RM')} vs ${shelfBefore - 2}`
+)
+ok(combinedLines[0].dropship === true, 'the supplier-shipped line reads as a dropship')
+ok(combinedLines[1].dropship === false, 'and the shelf line does not')
+ok(
+  combinedLines[0].qtyFulfilled === 0 && combinedLines[1].qtyFulfilled === 2,
+  'only the shelf line counts as fulfilled from stock',
+  `${combinedLines[0].qtyFulfilled}/${combinedLines[1].qtyFulfilled}`
+)
+
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail > 0) process.exit(1)

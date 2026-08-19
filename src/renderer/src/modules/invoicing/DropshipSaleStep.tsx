@@ -218,8 +218,19 @@ export function DropshipSaleStep({
               ? 'the whole order'
               : `not the ${po.orderedUnits - dropUnits} coming to your own shelf, which you sell separately`}
             . The lines come across already marked as shipped by{' '}
-            {po.supplier ?? 'the supplier'}, so no stock moves —{' '}
-            <b>the only thing to type is what you are selling it for.</b>
+            {po.supplier ?? 'the supplier'}, so <b>no stock moves for them</b>.
+          </p>
+          {/* THE ORDER IS NOT SEALED. It opens as an ordinary sales order form,
+              so anything else going to the same buyer in the same box belongs on
+              it — which is the common case, not an edge one. Said here because
+              the previous wording ("the only thing to type is the price") read
+              as a closed form and nobody looked for the search box. */}
+          <p className="fin-confirm-lead">
+            You can <b>add more lines</b> on the next screen — search your inventory the same way
+            you do on a purchase order. Anything you add is <b>sold off your own shelf</b> and
+            draws stock normally, so a dropship of {dropUnits} plus a few of your own goes out as
+            one order to one buyer. Each line says where it is <b>fulfilled from</b>, and only the
+            ones coming off a shelf move any stock.
           </p>
         </>
       )}
