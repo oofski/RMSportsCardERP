@@ -60,7 +60,7 @@ export function AccountPanel({ onClose }: { onClose: () => void }): JSX.Element 
     >
     <div className="acct">
 
-      {/* THE PACKING BENCH DOES NOT GET THIS, and it is the one exception in a
+      {/* A SHARED BENCH DOES NOT GET THIS, and it is the one exception in a
           module whose whole argument is that there is nothing here to gate.
           A bench account is SHARED — `insertEmployee` types a password and
           reads it out rather than generating one, and `setTemporaryPassword`
@@ -73,8 +73,15 @@ export function AccountPanel({ onClose }: { onClose: () => void }): JSX.Element 
           it is one person taking a shared one hostage.
 
           Not a permission, because it is not about trust or rank — it is about
-          the account being a place rather than a person. */}
-      {user?.role === 'shipping' ? (
+          the account being a place rather than a person.
+
+          THAT IS NOW READ FROM THE ACCOUNT, NOT THE ROLE. This tested
+          `role === 'shipping'`, which is the role real packers work on, so every
+          actual employee on the floor was refused their own credential and no
+          administrator could grant it. `sharedAccount` is the fact itself; see
+          the v75 migration. The refusal is also enforced in changeOwnPassword,
+          because hiding a form is not the same as saying no. */}
+      {user?.sharedAccount ? (
         <section className="acct-section">
           <header className="acct-head">
             <Icon name="KeyRound" size={17} />

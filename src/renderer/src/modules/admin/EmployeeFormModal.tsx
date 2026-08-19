@@ -5,7 +5,7 @@ import { useSession } from '../../lib/session'
 import { api } from '../../lib/api'
 import { initials } from '../../lib/format'
 import { useToast } from '../../components/Toast'
-import { Avatar, Button, Field, Input, Modal, Select } from '../../components/ui'
+import { Avatar, Button, Checkbox, Field, Input, Modal, Select } from '../../components/ui'
 
 const STATUS_OPTIONS: { value: EmployeeStatus; label: string }[] = [
   { value: 'invited', label: 'Invited' },
@@ -36,6 +36,7 @@ export function EmployeeFormModal({
     email: employee?.email ?? '',
     role: (employee?.role ?? 'staff') as Role,
     status: (employee?.status ?? 'invited') as EmployeeStatus,
+    sharedAccount: employee?.sharedAccount ?? false,
     password: ''
   })
   const [error, setError] = useState('')
@@ -121,7 +122,8 @@ export function EmployeeFormModal({
           title: form.title,
           email: form.email,
           role: form.role,
-          status: form.status
+          status: form.status,
+          sharedAccount: form.sharedAccount
         })
         if (!res.ok) {
           setError(res.error ?? 'Could not update employee.')
@@ -261,6 +263,23 @@ export function EmployeeFormModal({
             </Field>
           )}
         </div>
+
+        {/* WHAT THIS ACCOUNT IS, not what it may do.
+            A packing bench is one login several people sit at, and its password
+            is nobody's to change — pressing it signs out everybody else on it.
+            That used to be assumed from the shipping role, which is the role real
+            packers work on, so every actual employee was refused their own
+            credential. It is a property of the ACCOUNT, so it is set here.
+            Edit only: a bench is recognised as one after it exists, and adding a
+            fourth decision to the create form for a rare case is noise. */}
+        {isEdit && (
+          <Checkbox
+            checked={form.sharedAccount}
+            onChange={(next) => setForm((f) => ({ ...f, sharedAccount: next }))}
+            label="Shared bench account"
+            hint="Several people sign in on this one. They cannot change its password — you set it and read it out."
+          />
+        )}
 
         {needsPassword && (
           <Field

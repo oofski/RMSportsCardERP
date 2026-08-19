@@ -37,6 +37,7 @@ interface EmployeeRow {
   permissions_json: string | null
   avatar: string | null
   account_kind: string | null
+  shared_account: number | null
   portal_pin_hash: string | null
   portal_pin_set_at: string | null
   created_at: string
@@ -76,6 +77,7 @@ function toEmployee(row: EmployeeRow): Employee {
     // same column. Reporting what the row actually says is cheaper than
     // pretending the distinction never existed.
     accountKind: row.account_kind === 'station' ? 'station' : 'person',
+    sharedAccount: row.shared_account === 1,
     // WHETHER there is a portal PIN, never the hash. This object reaches the
     // renderer, and a credential that only the Worker and this file ever need
     // to see has no business travelling to a screen that renders it. A boolean
@@ -243,6 +245,10 @@ export function updateEmployee(input: UpdateEmployeeInput): Employee | null {
     email: emailToStore(suppliedEmail, existing.email, companyId),
     role: input.role ?? (existing.role as Role),
     status: input.status ?? (existing.status as EmployeeStatus),
+    // Undefined leaves it as it was. Only an explicit boolean moves it, so a
+    // form that does not show the box cannot silently un-share a bench.
+    shared_account:
+      input.sharedAccount === undefined ? existing.shared_account ?? 0 : input.sharedAccount ? 1 : 0,
     updated_at: nowIso(),
     id: input.id
   }
@@ -256,6 +262,7 @@ export function updateEmployee(input: UpdateEmployeeInput): Employee | null {
        email      = @email,
        role       = @role,
        status     = @status,
+       shared_account = @shared_account,
        updated_at = @updated_at
      WHERE id = @id`
   ).run(next)

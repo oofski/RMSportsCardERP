@@ -3682,6 +3682,52 @@ function migrate(database: Database.Database): void {
   })
   setMeta(database, 'schema_version', '74')
 
+  /**
+   * v75: whether an account is a PLACE rather than a person.
+   *
+   * ## The bug this fixes
+   *
+   * "My account" refused to let anybody on the shipping role change their own
+   * password, on the reasoning that a packing bench is shared: four people use
+   * one login, `setChosenPassword` revokes every other session for that
+   * employee id, and one packer pressing the button would sign the rest of the
+   * floor out mid-shift.
+   *
+   * All of that is true OF A BENCH. It is not true of a person, and the role was
+   * standing in for the distinction. A business with real employees on the
+   * shipping role — which is the ordinary case — had every one of them locked
+   * out of their own credential with no way for an administrator to grant it.
+   *
+   * The comment on that block already said the right thing: it is about "the
+   * account being a place rather than a person". This is that, as a column,
+   * rather than as a guess made from the role.
+   *
+   * ## Why not reuse account_kind = 'station'
+   *
+   * It looks like the same fact and is not. That value ALSO removes a row from
+   * the bench roster (db/shipStations.ts) and from the messaging contact list
+   * (db/messages.ts). Marking a live packing account 'station' to protect its
+   * password would take it off the roster of the very floor it works on.
+   *
+   * ## The backfill is deliberately narrow
+   *
+   * Only the historical `station` rows become shared, because those are the only
+   * accounts this database can prove are a place. Every other account — every
+   * person on the shipping role — comes out as NOT shared and gets their
+   * password back, which is the reported bug. An administrator marks a genuine
+   * shared bench from the employee form; nothing else can tell the two apart.
+   */
+  addColumnIfMissing(database, 'employees', 'shared_account', 'INTEGER NOT NULL DEFAULT 0')
+  runOnce(database, 'employees_shared_account_backfill_v1', () => {
+    database
+      .prepare(
+        `UPDATE employees SET shared_account = 1
+          WHERE COALESCE(account_kind, 'person') = 'station'`
+      )
+      .run()
+  })
+  setMeta(database, 'schema_version', '75')
+
   // v41: re-derive every product's average cost from its remaining cost layers.
   //
   // The average used to be stored rounded to the cent, back when every total in

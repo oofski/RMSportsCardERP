@@ -411,27 +411,96 @@ const run = async (): Promise<void> => {
   )
 
   // ---------------------------------------------------------------------------
-  console.log('\n=== 6b. the shared bench is NOT given that button ===')
+  console.log('\n=== 6b. a shared bench, and everybody who is NOT one ===')
   // ---------------------------------------------------------------------------
-  // A bench account is a PLACE, not a person: `insertEmployee` types its
-  // password and reads it out, and `setTemporaryPassword` skips the
-  // must-change prompt, both because "the four people using the computer"
-  // cannot agree on one. Handing that account a change-password form lets
-  // whoever sits down first take a shared credential hostage — and
-  // `setChosenPassword` revokes every other session for the same employee id,
-  // so the other benches are signed out mid-shift.
+  /**
+   * THE BUG THIS SECTION EXISTS FOR.
+   *
+   * "My account" refused a password change to anybody on the SHIPPING ROLE, on
+   * the reasoning that a packing bench is shared and one packer changing it
+   * signs the rest of the floor out. All of that is true of a bench and none of
+   * it is true of a person — and shipping is the role real packers work on, so
+   * every actual employee on the floor was locked out of their own credential
+   * with no way for an administrator to grant it.
+   *
+   * It is now a property of the ACCOUNT (`shared_account`, v75), and it is
+   * enforced in changeOwnPassword rather than by hiding a form: the handler had
+   * no check of its own, so the protection was decoration.
+   */
+
+  // An ordinary person on the shipping role. This is the reported bug.
+  signInWith('RM-100', PASSWORD)
+  const packerChange = auth.changeOwnPassword(PASSWORD, 'packers-own-password')
+  ok(
+    packerChange.ok === true,
+    'A PERSON ON THE SHIPPING ROLE CAN CHANGE THEIR OWN PASSWORD',
+    packerChange.error ?? ''
+  )
+  ok(auth.login('RM-100', 'packers-own-password').ok === true, 'and the new one works')
+
+  // Now make that same account a shared bench and try again.
+  employees.updateEmployee({ id: PACKER, sharedAccount: true })
+  signInWith('RM-100', 'packers-own-password')
+  const benchChange = auth.changeOwnPassword('packers-own-password', 'taken-hostage')
+  ok(benchChange.ok === false, 'A SHARED BENCH IS REFUSED')
+  ok(
+    /shared bench/i.test(benchChange.error ?? ''),
+    'and told why, rather than being given a silent no',
+    benchChange.error ?? ''
+  )
+  ok(
+    auth.login('RM-100', 'packers-own-password').ok === true,
+    'the password really did not change'
+  )
+  ok(
+    auth.login('RM-100', 'taken-hostage').ok === false,
+    'and the one it was refused is not usable'
+  )
+
+  // REFUSED IN THE HANDLER, NOT ON THE SCREEN. Hiding the form is a courtesy;
+  // this is the boundary, and it is the half that was missing entirely.
+  ok(
+    require('node:fs')
+      .readFileSync(join(process.cwd(), 'src/main/services/auth.ts'), 'utf8')
+      .includes('sharedAccount'),
+    'the refusal lives in changeOwnPassword'
+  )
+
+  // The flag is reversible, so an account marked by mistake is not stranded.
+  employees.updateEmployee({ id: PACKER, sharedAccount: false })
+  signInWith('RM-100', 'packers-own-password')
+  ok(
+    auth.changeOwnPassword('packers-own-password', 'back-to-normal').ok === true,
+    'clearing the flag hands the password back'
+  )
+
+  // An omitted flag must not silently un-share a bench — every existing caller
+  // and every form without the box passes nothing.
+  employees.updateEmployee({ id: PACKER, sharedAccount: true })
+  employees.updateEmployee({ id: PACKER, title: 'Bench 1' })
+  ok(
+    employees.getEmployeeById(PACKER).sharedAccount === true,
+    'an unrelated edit leaves the flag alone'
+  )
+  employees.updateEmployee({ id: PACKER, sharedAccount: false })
+
   const acctSrc = require('node:fs').readFileSync(
     join(process.cwd(), 'src/renderer/src/modules/account/AccountPanel.tsx'),
     'utf8'
   )
   ok(
-    acctSrc.includes("user?.role === 'shipping'"),
-    'THE ACCOUNT SCREEN CHECKS FOR THE SHARED BENCH before offering the form'
+    acctSrc.includes('user?.sharedAccount'),
+    'THE ACCOUNT SCREEN READS THE ACCOUNT, not the role'
+  )
+  ok(
+    !acctSrc.includes("user?.role === 'shipping'"),
+    'and no longer assumes every packer is a bench'
   )
   ok(
     /shared bench account/i.test(acctSrc),
-    'and says so in words rather than showing an empty space'
+    'a real bench is still told so in words rather than shown an empty space'
   )
+
   // The rule it mirrors, asserted at the source so the two cannot drift apart.
   signIn('RM-001')
   const benchReset = employees.setTemporaryPassword(PACKER, 'another-long-password')

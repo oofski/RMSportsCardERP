@@ -50,6 +50,7 @@ function sessionUserFor(id: string): SessionUser | null {
     email: employee.email,
     role: employee.role,
     permissions: effectivePermissions(employee.role, employee.extraPermissions),
+    sharedAccount: employee.sharedAccount,
     mustChangePassword: employee.mustChangePassword,
     avatarUrl: employee.avatarUrl
   }
@@ -163,7 +164,30 @@ export function changeOwnPassword(currentPassword: string, newPassword: string):
   if (newPassword.length < 8) {
     return { ok: false, error: 'New password must be at least 8 characters.' }
   }
-  const row = getEmployeeRowForAuth(getEmployeeById(currentUserId)?.companyId ?? '')
+  const me = getEmployeeById(currentUserId)
+  /**
+   * A SHARED BENCH CANNOT CHANGE ITS OWN PASSWORD, and this is where that is
+   * decided — not on the screen.
+   *
+   * "My account" hid the form, which is not the same thing as refusing: this
+   * handler had no check of its own, so anything that could reach the channel
+   * changed the password regardless. The screen is a courtesy; this is the
+   * boundary.
+   *
+   * Keyed on the ACCOUNT rather than the role. Real people work on the shipping
+   * role, and treating the role as the answer is exactly what locked all of them
+   * out of a credential that is genuinely theirs. See the v75 migration.
+   */
+  if (me?.sharedAccount) {
+    return {
+      ok: false,
+      error:
+        'This is a shared bench login, so its password is not one person’s to change — ' +
+        'everybody signed in on it would be signed out. Ask whoever runs the floor to set a ' +
+        'new one.'
+    }
+  }
+  const row = getEmployeeRowForAuth(me?.companyId ?? '')
   if (!row) return { ok: false, error: 'Account not found.' }
   if (!verifyPassword(row, currentPassword)) {
     return { ok: false, error: 'Current password is incorrect.' }

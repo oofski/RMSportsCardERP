@@ -35,6 +35,19 @@ export interface Employee {
   /** A person, or a legacy shared bench computer. See AccountKind. */
   accountKind: AccountKind
   /**
+   * True when this login is a PLACE rather than a person — a shared packing
+   * bench that several people sit at under one set of details.
+   *
+   * Its holder cannot change the password: `setChosenPassword` revokes every
+   * other session for the account, so one packer pressing it signs the rest of
+   * the floor out mid-shift. An administrator sets a new one and reads it out.
+   *
+   * Deliberately NOT derived from the role. Real employees work on the shipping
+   * role, and treating the role as the answer locked every one of them out of
+   * their own credential. See the v75 migration.
+   */
+  sharedAccount: boolean
+  /**
    * Can this person clock in on the web portal — i.e. has a PIN been set?
    *
    * Deliberately a boolean and not the hash. The credential is needed by the
@@ -94,6 +107,13 @@ export interface UpdateEmployeeInput {
   email?: string
   role?: Role
   status?: EmployeeStatus
+  /**
+   * Mark this login as a shared bench, or clear it.
+   *
+   * Omitted leaves it alone, so every existing caller — and every form that does
+   * not show the box — keeps whatever the account already said.
+   */
+  sharedAccount?: boolean
 }
 
 /** Returned when an employee is created — carries the one-time temp password. */
@@ -805,6 +825,8 @@ export interface SessionUser {
   role: Role
   permissions: Permission[]
   mustChangePassword: boolean
+  /** True for a shared bench login, which cannot change its own password. */
+  sharedAccount: boolean
   /** Profile picture as a ready-to-use data URL, or null if none set. */
   avatarUrl: string | null
 }
