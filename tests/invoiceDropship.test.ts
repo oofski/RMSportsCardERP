@@ -389,5 +389,81 @@ ok(
   `${combinedLines[0].qtyFulfilled}/${combinedLines[1].qtyFulfilled}`
 )
 
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 7. the board can SEE a dropship sale ===')
+// ---------------------------------------------------------------------------
+/**
+ * The owner's words: "if a sales order is part of a drop ship ... it is also
+ * highlighted in yellow on the sales order tab".
+ *
+ * A dropship is one deal with two documents, and only the purchase order looked
+ * like one. The Sales Orders board had no way to show that an order's boxes
+ * never touch a shelf here — which is the fact that decides whether the packing
+ * floor should expect it at all.
+ *
+ * The colour is a class, so what is pinned here is the DATA the class is derived
+ * from: the unit split has to reach the board row, and the rule has to answer
+ * the same three ways the buy side does.
+ */
+const { salesOrderKindOf, isDropshipSale } = require('../src/shared/invoices')
+
+const listed = (id: string): any => inv.listInvoices(500).find((r: any) => r.id === id)
+
+// The plain sale from section 1 — every unit off our own shelf.
+ok(listed(normal.id).dropshipUnits === 0, 'a shelf sale reports no dropshipped units')
+ok(listed(normal.id).stockUnits === 3, 'and reports its shelf units', String(listed(normal.id).stockUnits))
+ok(salesOrderKindOf(listed(normal.id)) === 'stock', 'so it reads as ordinary stock')
+ok(isDropshipSale(listed(normal.id)) === false, 'and is not a dropship')
+
+// The wholly-dropshipped sale from section 2.
+ok(listed(drop.id).stockUnits === 0, 'a full dropship reports no shelf units')
+ok(listed(drop.id).dropshipUnits === 4, 'and reports all four as dropshipped', String(listed(drop.id).dropshipUnits))
+ok(salesOrderKindOf(listed(drop.id)) === 'drop', 'THE WHOLE ORDER READS AS A DROPSHIP')
+ok(isDropshipSale(listed(drop.id)) === true, 'and is one')
+
+// The mixed order from section 5 — three from the supplier, two off the shelf.
+ok(listed(combined.id).stockUnits === 2, 'a mixed order reports its shelf units', String(listed(combined.id).stockUnits))
+ok(listed(combined.id).dropshipUnits === 3, 'and its dropshipped units', String(listed(combined.id).dropshipUnits))
+ok(
+  salesOrderKindOf(listed(combined.id)) === 'mixed',
+  'AND READS AS MIXED — part of a dropship without being one',
+  salesOrderKindOf(listed(combined.id))
+)
+ok(isDropshipSale(listed(combined.id)) === true, 'which still counts as a dropship for the board')
+
+// A LINKED sale counts even with nothing routed to a supplier. source_po_id is
+// somebody declaring the pair, and an order whose lines were later re-pointed at
+// a shelf is still the sale that purchase was raised for.
+db.prepare(`UPDATE invoices SET source_po_id = 'po_somewhere' WHERE id = ?`).run(normal.id)
+ok(
+  salesOrderKindOf(listed(normal.id)) === 'mixed',
+  'a linked sale with only shelf units still shows on the board',
+  salesOrderKindOf(listed(normal.id))
+)
+db.prepare(`UPDATE invoices SET source_po_id = NULL WHERE id = ?`).run(normal.id)
+ok(salesOrderKindOf(listed(normal.id)) === 'stock', 'and goes back to plain when unlinked')
+
+// An order with no lines yet derives from the link alone rather than reading as
+// a dropship the moment it is created.
+ok(
+  salesOrderKindOf({ stockUnits: 0, dropshipUnits: 0, sourcePoId: null }) === 'stock',
+  'an empty draft is not a dropship'
+)
+ok(
+  salesOrderKindOf({ stockUnits: 0, dropshipUnits: 0, sourcePoId: 'po_1' }) === 'drop',
+  'unless it was raised from one'
+)
+
+// The board applies the SAME classes the purchase order board uses, so the two
+// colours cannot drift apart.
+const boardSrc = require('node:fs').readFileSync(
+  join(process.cwd(), 'src/renderer/src/modules/invoices/InvoicesBoard.tsx'),
+  'utf8'
+)
+ok(boardSrc.includes('po-card-drop'), 'the sales board uses the buy side dropship class')
+ok(boardSrc.includes('po-card-mixed'), 'and its mixed one')
+ok(boardSrc.includes('salesOrderKindOf'), 'derived, never stored')
+
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail > 0) process.exit(1)

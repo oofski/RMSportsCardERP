@@ -442,6 +442,8 @@ interface InvoiceRow extends AddressRow {
   ready_to_ship_at: string | null
   ready_to_ship_by: string | null
   source_po_id: string | null
+  stock_units: number | null
+  drop_units: number | null
   carrier: string | null
   service: string | null
   tracking_number: string | null
@@ -531,6 +533,8 @@ function toInvoice(r: InvoiceRow): Invoice {
     readyToShipAt: r.ready_to_ship_at ?? null,
     readyToShipBy: r.ready_to_ship_by ?? null,
     sourcePoId: r.source_po_id ?? null,
+    stockUnits: Number(r.stock_units) || 0,
+    dropshipUnits: Number(r.drop_units) || 0,
     carrier: asCarrier(r.carrier),
     service: r.service,
     trackingNumber: r.tracking_number,
@@ -593,7 +597,35 @@ const INVOICE_COLS = `id, invoice_number, customer_id, customer_name, email, ter
                       carrier, service, tracking_number, payment_timing,
                       tracking_status, tracking_status_detail, tracking_status_at,
                       tracking_checked_at, tracking_error, tracking_attempted_at,
-                      created_by, created_at, updated_at`
+                      created_by, created_at, updated_at,
+                      -- HOW MUCH OF THIS SALE COMES OFF OUR OWN SHELF, and how
+                      -- much a supplier ships direct. Two figures rather than a
+                      -- flag, because after mixed sales orders landed an order
+                      -- can be part of a dropship without being one -- which is
+                      -- exactly the distinction the buy side already draws (see
+                      -- orderKindOf) and the board now mirrors.
+                      --
+                      -- Written against invoices.id rather than an alias so this
+                      -- one definition works in all six queries that select these
+                      -- columns, none of which aliases the table. NO BACKTICKS in
+                      -- these comments: this whole block is a template literal,
+                      -- and one would end it hundreds of lines from the error.
+                      --
+                      -- The destination test is the same one listAwaitingShipment
+                      -- uses: a blank line destination inherits the order's, and a
+                      -- blank order location means RM. Spelling it differently
+                      -- here is how a board comes to disagree with the stock
+                      -- engine about which lines are a dropship.
+                      (SELECT COALESCE(SUM(CASE WHEN UPPER(COALESCE(NULLIF(TRIM(l.destination), ''),
+                                                                    invoices.location, 'RM'))
+                                                     IN ('RM', 'AM')
+                                                THEN l.quantity ELSE 0 END), 0)
+                         FROM invoice_lines l WHERE l.invoice_id = invoices.id) AS stock_units,
+                      (SELECT COALESCE(SUM(CASE WHEN UPPER(COALESCE(NULLIF(TRIM(l.destination), ''),
+                                                                    invoices.location, 'RM'))
+                                                     IN ('RM', 'AM')
+                                                THEN 0 ELSE l.quantity END), 0)
+                         FROM invoice_lines l WHERE l.invoice_id = invoices.id) AS drop_units`
 
 const LINE_COLS = `id, invoice_id, position, item, product_id, sku, description, quantity, rate,
                    amount, tax_rate, class_name, qty_fulfilled, fulfilled_at,

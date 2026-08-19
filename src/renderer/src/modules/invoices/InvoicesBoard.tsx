@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { Invoice, InvoiceCustomer, InvoiceDetail, InvoiceStatus } from '@shared/invoices'
-import { INVOICE_STAGES, canMoveInvoice } from '@shared/invoices'
+import { INVOICE_STAGES, canMoveInvoice, salesOrderKindOf } from '@shared/invoices'
 import { api } from '../../lib/api'
 import { LIVE, useLiveRefresh } from '../../lib/live'
 import { Button, CenterLoader, Modal } from '../../components/ui'
@@ -563,10 +563,25 @@ function InvoiceCard({
   // local one — see the IPC handler for why that order is not interchangeable.
   const deletable = true
   const settled = invoice.status === 'paid' || invoice.status === 'void'
+  /**
+   * THE SAME YELLOW THE BUY SIDE USES, and deliberately the same class names.
+   *
+   * A dropship is one deal with two documents, and until now only the purchase
+   * order looked like one. Somebody scanning the Sales Orders board had no way
+   * to tell that an order's boxes never touch a shelf here — which is exactly
+   * the thing that decides whether the packing floor should expect it.
+   *
+   * `po-card-drop` and `po-card-mixed` are reused rather than mirrored under new
+   * names: this card already renders as `po-card`, so the two boards are the
+   * same component family and a parallel set of sell-side classes would be two
+   * definitions of one colour, drifting the first time either is adjusted.
+   */
+  const kind = salesOrderKindOf(invoice)
+  const kindClass = kind === 'drop' ? ' po-card-drop' : kind === 'mixed' ? ' po-card-mixed' : ''
 
   return (
     <div
-      className="po-card"
+      className={`po-card${kindClass}`}
       data-status={invoice.status}
       draggable
       onDragStart={onDragStart}
@@ -578,6 +593,23 @@ function InvoiceCard({
         <span className="po-card-num mono">
           {invoice.qboDocNumber || invoice.invoiceNumber || 'Draft'}
         </span>
+        {/* NAMED, not just tinted. A purchase order can say it in the number —
+            displayOrderNumber turns PO-0042 into Drop-0042 — and an invoice
+            number cannot, because it is the string QuickBooks receives. So the
+            sell side carries the word instead, and says which of the two it is:
+            the whole order, or only part of it. */}
+        {kind !== 'stock' && (
+          <span
+            className="po-drop-chip"
+            title={
+              kind === 'drop'
+                ? 'Every unit ships straight from the supplier — nothing comes off a shelf here'
+                : 'Part of this order ships straight from the supplier; the rest comes off a shelf here'
+            }
+          >
+            {kind === 'drop' ? 'Drop' : 'Part drop'}
+          </span>
+        )}
         {/* An unpaid invoice past its due date is the one thing on this board
             somebody would act on today, so it is the only badge. */}
         {overdue && (

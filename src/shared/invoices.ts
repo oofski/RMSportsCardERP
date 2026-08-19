@@ -522,6 +522,10 @@ export interface Invoice {
    * order inherited it.
    */
   sourcePoId: string | null
+  /** Units on this order coming off our own shelf (RM or AM). */
+  stockUnits: number
+  /** Units a supplier ships straight to the buyer. Never touch a shelf here. */
+  dropshipUnits: number
   /** How it ships, and when it settles. See @shared/freight. */
   carrier: Carrier | null
   service: string | null
@@ -2201,4 +2205,53 @@ export function stockLineForProduct<T extends FulfilmentLine>(
       l.productId === productId &&
       destinationHoldsStock(l.destination || orderLocation || LOCATION_IDS[0])
   )
+}
+
+/**
+ * What kind of sale this is, derived from where its units come FROM.
+ *
+ * The exact mirror of `orderKindOf` on the buy side, and derived for the same
+ * reason: a stored flag would be a second truth that drifts the first time
+ * somebody re-routes a line, and the failure mode is a sale that still looks
+ * like ordinary stock while drawing none.
+ *
+ * Three answers rather than two, because after mixed sales orders landed an
+ * order can be PART of a dropship without being one — three cases shipped
+ * direct from the supplier plus two off our own shelf is one sale to one buyer.
+ * The board colours those differently: a full dropship is the warm card, a mixed
+ * one gets the stripe, exactly as a purchase order does.
+ *
+ * A LINKED SALE COUNTS EVEN WITH NO DROPSHIPPED UNITS. `sourcePoId` is set when
+ * somebody declares this sale to be the other half of a purchase order, and that
+ * is a statement about the deal rather than about the routing on its lines. An
+ * order whose lines were later re-pointed at a shelf is still the sale that
+ * purchase was raised for, and hiding that on the board would lose the only
+ * on-screen trace of the pair.
+ */
+export type SalesOrderKind = 'stock' | 'drop' | 'mixed'
+
+export function salesOrderKindOf(invoice: {
+  stockUnits: number
+  dropshipUnits: number
+  sourcePoId: string | null
+}): SalesOrderKind {
+  const stock = Number(invoice.stockUnits) || 0
+  const drop = Number(invoice.dropshipUnits) || 0
+  // An order with no lines yet has nothing to derive from. It reads as ordinary
+  // stock unless it is LINKED, which is a fact somebody asserted rather than one
+  // inferred from an empty list — without this an empty draft raised from a
+  // dropship would show as plain until its first line was typed.
+  if (stock <= 0 && drop <= 0) return invoice.sourcePoId ? 'drop' : 'stock'
+  if (drop <= 0) return invoice.sourcePoId ? 'mixed' : 'stock'
+  if (stock <= 0) return 'drop'
+  return 'mixed'
+}
+
+/** True when any part of this sale is a dropship — either routing or a link. */
+export function isDropshipSale(invoice: {
+  stockUnits: number
+  dropshipUnits: number
+  sourcePoId: string | null
+}): boolean {
+  return salesOrderKindOf(invoice) !== 'stock'
 }
