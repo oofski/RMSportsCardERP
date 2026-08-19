@@ -55,6 +55,8 @@ const {
 } = require('../src/shared/orders')
 const { validateInvoicePayment, awaitingShipment } = require('../src/shared/invoices')
 const { destinationHoldsStock } = require('../src/shared/purchaseOrders')
+const mailer = require('../src/main/services/orderEmail')
+const { redactEmailSettings, validateEmailSettings } = require('../src/shared/emailSettings')
 const db = getDb()
 
 let pass = 0
@@ -558,6 +560,97 @@ ok(
   'AND DOES NOT CLAIM AN ATTACHMENT WHEN THERE IS NONE — an email somebody believes has a label on it is worse than no email',
   noLabel.body.slice(0, 90)
 )
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 12. the address already on file ===')
+// ---------------------------------------------------------------------------
+// A purchase order's supplier is a NAME on a document with no record behind it,
+// which is deliberate: a distributor is somebody this business buys from and
+// never bills. But the contact directory the supplier box already searches IS
+// the customer table, and it usually holds an email under that name — so the
+// address can be FOUND at the moment somebody wants to email a label, without
+// either document owning a copy that then goes stale.
+inv.saveCustomer({ name: 'Fenwick Distribution', email: 'ship@fenwick.invalid' })
+ok(
+  po.lookupPartyEmail('Fenwick Distribution') === 'ship@fenwick.invalid',
+  'a supplier with a contact record hands back their address',
+  String(po.lookupPartyEmail('Fenwick Distribution'))
+)
+ok(
+  po.lookupPartyEmail('  fenwick distribution  ') === 'ship@fenwick.invalid',
+  'MATCHED CASE-INSENSITIVELY AND TRIMMED — the same folding every other party lookup uses'
+)
+ok(po.lookupPartyEmail('Nobody At All') === null, 'somebody with no record hands back nothing')
+ok(po.lookupPartyEmail('') === null, 'and so does no name at all')
+
+// A contact whose email is an EMPTY STRING is not an address. Written straight
+// into the table because saveCustomer normalises '' to NULL, so going through it
+// would test the null path twice and never the blank one — which is the shape a
+// row imported from a spreadsheet actually arrives in.
+//
+// Returning '' here would fill the To box with nothing and read as a lookup that
+// worked, which is worse than one that plainly found nobody.
+inv.saveCustomer({ name: 'Quiet Partner', email: 'placeholder@example.invalid' })
+db.prepare(`UPDATE invoice_customers SET email = '' WHERE name = 'Quiet Partner'`).run()
+ok(
+  po.lookupPartyEmail('Quiet Partner') === null,
+  'A CONTACT WHOSE EMAIL IS BLANK IS NOT AN ADDRESS',
+  JSON.stringify(po.lookupPartyEmail('Quiet Partner'))
+)
+inv.saveCustomer({ name: 'Silent Partner', email: 'x@example.invalid' })
+db.prepare(`UPDATE invoice_customers SET email = '   ' WHERE name = 'Silent Partner'`).run()
+ok(
+  po.lookupPartyEmail('Silent Partner') === null,
+  'and neither is one that is only whitespace',
+  JSON.stringify(po.lookupPartyEmail('Silent Partner'))
+)
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 13. the mail account, and the password that must not be lost ===')
+// ---------------------------------------------------------------------------
+ok(mailer.emailConfigured() === false, 'nothing is configured to begin with')
+ok(mailer.getEmailSettings() === null, 'so there is nothing to read')
+
+const account = {
+  host: 'smtp.example.invalid',
+  port: 465,
+  secure: true,
+  user: 'ada@example.invalid',
+  password: 'an-app-password',
+  fromName: 'Ada Invented',
+  fromAddress: 'ada@example.invalid'
+}
+ok(mailer.setEmailSettings(account).ok === true, 'a complete account saves')
+ok(mailer.emailConfigured() === true, 'and the app knows it can send')
+ok(mailer.getEmailSettings().host === 'smtp.example.invalid', 'reading it back gives the host')
+
+// THE ONE THAT WOULD HURT. The renderer is never sent the password, so the box
+// is always drawn blank — and a save that read that blank as "clear it" would
+// wipe the account every time somebody corrected a port number.
+const redacted = redactEmailSettings(mailer.getEmailSettings())
+ok(redacted.password === null, 'THE PASSWORD NEVER TRAVELS')
+ok(redacted.hasPassword === true, 'but the form is told one is stored, so it can say so')
+ok(redacted.host === 'smtp.example.invalid', 'while everything else does travel')
+
+ok(
+  validateEmailSettings({ ...account, host: '' }) !== null,
+  'an account with no server is refused'
+)
+ok(
+  validateEmailSettings({ ...account, fromAddress: 'not-an-address' }) !== null,
+  'and one with a from-address that is not an address'
+)
+ok(validateEmailSettings(account) === null, 'a complete one passes')
+// The two go together and getting them apart is the failure that reports itself
+// worst: a handshake at the wrong port does not error, it hangs.
+ok(
+  validateEmailSettings({ ...account, port: 587, secure: true }) !== null,
+  'IMPLICIT TLS ON THE STARTTLS PORT IS REFUSED — the symptom otherwise is a send that hangs'
+)
+
+mailer.clearEmailSettings()
+ok(mailer.emailConfigured() === false, 'and it can be removed again')
+ok(mailer.getEmailSettings() === null, 'leaving nothing behind')
 
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail > 0) process.exit(1)

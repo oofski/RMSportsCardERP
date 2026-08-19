@@ -6,6 +6,7 @@ import { Button, Field, Input, Modal } from '../../components/ui'
 import { Icon } from '../../components/Icon'
 import { useToast } from '../../components/Toast'
 import { formatDate } from '../../lib/format'
+import { MailAccountPanel } from './MailAccountPanel'
 
 /**
  * The shipping label, and getting it to whoever is doing the shipping.
@@ -31,12 +32,22 @@ export function OrderLabels({
   side,
   orderId,
   defaultTo,
+  lookupName,
   canEdit
 }: {
   side: OrderSide
   orderId: string
   /** Who this would go to — the supplier on a purchase, the buyer on a sale. */
   defaultTo: string | null
+  /**
+   * The party's NAME, when the address is not already known.
+   *
+   * A purchase order's supplier is a string on the document with no record
+   * behind it, so there is no email to pass down — but the contact directory the
+   * supplier box already searches usually holds one under that name. This is
+   * what lets the To box fill itself in anyway. See lookupPartyEmail.
+   */
+  lookupName?: string | null
   canEdit: boolean
 }): JSX.Element {
   const toast = useToast()
@@ -212,6 +223,7 @@ export function OrderLabels({
           orderId={orderId}
           document={emailing}
           defaultTo={defaultTo}
+          lookupName={lookupName ?? null}
           onClose={() => setEmailing(null)}
         />
       )}
@@ -232,17 +244,42 @@ function EmailLabelModal({
   orderId,
   document: doc,
   defaultTo,
+  lookupName,
   onClose
 }: {
   side: OrderSide
   orderId: string
   document: OrderDocument
   defaultTo: string | null
+  lookupName: string | null
   onClose: () => void
 }): JSX.Element {
   const toast = useToast()
   const [to, setTo] = useState(defaultTo ?? '')
   const [note, setNote] = useState('')
+  const [setup, setSetup] = useState(false)
+
+  /**
+   * Fill the To box from the contact of the same name, when nothing was passed.
+   *
+   * Only when the box is still EMPTY. An address the caller already knew — the
+   * buyer's, off the sales order itself — is the better answer and must not be
+   * overwritten by a directory lookup a moment later, which is exactly the race
+   * that would put somebody else's address in front of a person about to press
+   * Send.
+   */
+  useEffect(() => {
+    const name = (lookupName ?? '').trim()
+    if (!name || (defaultTo ?? '').trim()) return
+    let active = true
+    void api.orders.partyEmail(name).then((res) => {
+      if (!active || !res.email) return
+      setTo((current) => (current.trim() ? current : res.email as string))
+    })
+    return () => {
+      active = false
+    }
+  }, [lookupName, defaultTo])
   const [sending, setSending] = useState(false)
   const [fallback, setFallback] = useState<{ url: string; body: string; problem: string | null } | null>(
     null
@@ -289,6 +326,15 @@ function EmailLabelModal({
           </Button>
           {fallback ? (
             <>
+              {/* OFFERED AT THE MOMENT IT IS WANTED. Somebody discovers the app
+                  cannot send on its own precisely here — pressing Send and being
+                  handed a fallback — and a settings screen buried elsewhere is
+                  one they have to go and find later, if they remember. */}
+              {!fallback.problem && (
+                <Button variant="secondary" icon="Settings" onClick={() => setSetup(true)}>
+                  Set up sending
+                </Button>
+              )}
               <Button
                 variant="secondary"
                 icon="FileText"
@@ -329,6 +375,18 @@ function EmailLabelModal({
           onChange={(e) => setNote(e.target.value)}
         />
       </Field>
+
+      {setup && (
+        <MailAccountPanel
+          onClose={() => {
+            setSetup(false)
+            // Cleared so the dialog goes back to offering Send. An account may
+            // now exist, and leaving the fallback up would keep showing the
+            // route around a problem that has just been fixed.
+            setFallback(null)
+          }}
+        />
+      )}
 
       {fallback && (
         <div className="ord-lbl-fallback">

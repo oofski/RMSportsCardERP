@@ -65,6 +65,7 @@ import type {
   OrderShipment,
   OrderSide
 } from '@shared/orders'
+import type { EmailSettings, RedactedEmailSettings } from '@shared/emailSettings'
 import type { ContactImportResult } from '@shared/contacts'
 import type { ClockPushState, PushSubscriptionInput } from '@shared/webPush'
 import type { OrderParty, SupplierSuggestion, VendorSummary } from '@shared/purchaseOrders'
@@ -1525,7 +1526,38 @@ export function createBridge(ipcRenderer: BridgeTransport) {
 
       /** Record that a purchase order and a sales order are the same deal. */
       linkDropship: (poId: string, invoiceId: string): Promise<Result<{ linked: true }>> =>
-        ipcRenderer.invoke(IPC.orderLinkDropship, { poId, invoiceId })
+        ipcRenderer.invoke(IPC.orderLinkDropship, { poId, invoiceId }),
+
+      /**
+       * The address already on file for a party, so the To box fills itself in.
+       *
+       * A SUGGESTION. A purchase order's supplier is a string with no record
+       * behind it, and this finds the contact of the same name — two suppliers
+       * can share a name and a contact's address can be old, so it is typed over
+       * freely. Null when nobody of that name is on file, which is the ordinary
+       * case for a distributor nobody has entered.
+       */
+      partyEmail: (name: string): Promise<{ email: string | null }> =>
+        ipcRenderer.invoke(IPC.orderPartyEmail, name),
+
+      /**
+       * The mail account labels are sent from.
+       *
+       * The password NEVER comes back — `hasPassword` says whether one is
+       * stored, and saving with the box blank keeps it. A form that had to be
+       * drawn with a password in it would be putting one in a browser tab's
+       * memory for no reason.
+       */
+      emailSettings: (): Promise<RedactedEmailSettings | null> =>
+        ipcRenderer.invoke(IPC.emailSettingsGet),
+      saveEmailSettings: (
+        input: Partial<EmailSettings>
+      ): Promise<Result<RedactedEmailSettings>> => ipcRenderer.invoke(IPC.emailSettingsSave, input),
+      clearEmailSettings: (): Promise<Result<{ cleared: true }>> =>
+        ipcRenderer.invoke(IPC.emailSettingsClear),
+      /** Prove it works NOW, rather than when a supplier is waiting for a label. */
+      verifyEmailSettings: (): Promise<Result<{ ok: true }>> =>
+        ipcRenderer.invoke(IPC.emailSettingsVerify)
     },
 
     invoices: {

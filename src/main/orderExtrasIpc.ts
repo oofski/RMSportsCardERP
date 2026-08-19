@@ -34,9 +34,18 @@ import {
   recordInvoicePayment,
   setInvoiceReadyToShip
 } from './db/invoices'
-import { getPurchaseOrder } from './db/purchaseOrders'
+import { getPurchaseOrder, lookupPartyEmail } from './db/purchaseOrders'
 import { uploadedBytes, uploadedName } from './util'
-import { emailConfigured, sendLabelEmail } from './services/orderEmail'
+import type { EmailSettings, RedactedEmailSettings } from '@shared/emailSettings'
+import { redactEmailSettings } from '@shared/emailSettings'
+import {
+  clearEmailSettings,
+  emailConfigured,
+  getEmailSettings,
+  sendLabelEmail,
+  setEmailSettings,
+  verifyEmailSettings
+} from './services/orderEmail'
 
 /**
  * The things a purchase order and a sales order both have: a history, parcels,
@@ -450,6 +459,101 @@ export function registerOrderExtrasIpc(): void {
       }
     }
   )
+
+  /**
+   * The address already on file for a party.
+   *
+   * Answers null rather than failing when there is no contact of that name,
+   * which is the ordinary case for a distributor nobody has filed — the To box
+   * simply opens empty and gets typed into, exactly as it did before.
+   */
+  ipcMain.handle(IPC.orderPartyEmail, (_e, name: unknown): { email: string | null } => {
+    try {
+      requireInvoicing()
+      return { email: lookupPartyEmail(str(name)) }
+    } catch {
+      return { email: null }
+    }
+  })
+
+  // ---- The mail account labels are sent from ------------------------------
+
+  /**
+   * What is configured, WITHOUT the password.
+   *
+   * The redaction is not politeness. This value crosses into a renderer that may
+   * be a browser tab, and an SMTP password living in a page's memory — where an
+   * extension, a devtools heap snapshot or a stray error report can reach it —
+   * buys nothing, because the form never needs to display it. `hasPassword`
+   * tells the form which of the two blank states it is in: "saved, leave it
+   * alone" or "still needs one".
+   */
+  ipcMain.handle(IPC.emailSettingsGet, (): RedactedEmailSettings | null => {
+    try {
+      requireInvoicing()
+      const settings = getEmailSettings()
+      return settings ? redactEmailSettings(settings) : null
+    } catch {
+      return null
+    }
+  })
+
+  ipcMain.handle(
+    IPC.emailSettingsSave,
+    (_e, input: Partial<EmailSettings>): Result<RedactedEmailSettings> => {
+      try {
+        requireInvoicing()
+        // A BLANK PASSWORD MEANS KEEP THE STORED ONE. The renderer is never sent
+        // the password, so the box is always drawn empty — and a save that read
+        // that empty box as "clear it" would wipe the account every time
+        // somebody corrected a port number.
+        const existing = getEmailSettings()
+        const password = (input.password ?? '').trim() || existing?.password || ''
+        const settings: EmailSettings = {
+          host: (input.host ?? '').trim(),
+          port: Number(input.port),
+          secure: input.secure !== false,
+          user: (input.user ?? '').trim(),
+          password,
+          fromName: (input.fromName ?? '').trim(),
+          fromAddress: (input.fromAddress ?? '').trim()
+        }
+        const res = setEmailSettings(settings)
+        if (!res.ok) return { ok: false, error: res.error ?? 'Those settings were refused.' }
+        return { ok: true, data: redactEmailSettings(settings) }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  ipcMain.handle(IPC.emailSettingsClear, (): Result<{ cleared: true }> => {
+    try {
+      requireInvoicing()
+      clearEmailSettings()
+      return { ok: true, data: { cleared: true } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  /**
+   * Try the account now.
+   *
+   * Tests what is STORED rather than what is on screen, so what is proved is
+   * exactly what a send will use. Save, then verify — which is also the order
+   * the screen presents them in.
+   */
+  ipcMain.handle(IPC.emailSettingsVerify, async (): Promise<Result<{ ok: true }>> => {
+    try {
+      requireInvoicing()
+      const res = await verifyEmailSettings()
+      if (!res.ok) return { ok: false, error: res.error ?? 'The mail server would not accept it.' }
+      return { ok: true, data: { ok: true } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
 
   // ---- Paid up front, and the packing queue -------------------------------
 

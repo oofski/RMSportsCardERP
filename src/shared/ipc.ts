@@ -222,6 +222,21 @@ export const IPC = {
   // fallback is a mailto: — which cannot carry an attachment, and an email
   // somebody believes has a label on it is worse than no email at all.
   orderEmailLabel: 'order:email-label',
+  // The address already on file for a party, so the To box fills itself in.
+  // A SUGGESTION: the supplier on a purchase order is a string with no record
+  // behind it, and this finds the contact of the same name. Two suppliers can
+  // share a name and a contact's address can be old, so it is typed over freely.
+  orderPartyEmail: 'order:party-email',
+  // The mail account labels are sent from. Its password NEVER travels to the
+  // renderer — see redactEmailSettings — because a form that has to be drawn
+  // with a password in it is a form that puts one in a browser's memory for no
+  // reason. Saving with the password box left blank keeps the stored one.
+  emailSettingsGet: 'email:settings:get',
+  emailSettingsSave: 'email:settings:save',
+  emailSettingsClear: 'email:settings:clear',
+  // Prove the account works NOW, while somebody is looking at the form — rather
+  // than at the moment a label fails to reach a supplier who is waiting for it.
+  emailSettingsVerify: 'email:settings:verify',
   // Bind the two halves of a dropship. The sale is already saved by the time
   // this is called: the second screen writes an ordinary sales order through the
   // ordinary path, and this only records that the two are the same deal.

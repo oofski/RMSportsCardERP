@@ -970,6 +970,7 @@ function InvoiceReceipt({
         // on the document. On a dropship the label usually goes to the SUPPLIER
         // instead, which is why this is a default rather than a fixed value.
         defaultTo={invoice.email}
+        lookupName={invoice.customerName}
         canEdit={invoice.status !== 'void'}
       />
       <OrderHistory side="so" orderId={invoice.id} stageLabel={invoiceStageLabel} />

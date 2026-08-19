@@ -3313,6 +3313,43 @@ export function setPurchaseOrderRouting(poId: string, patch: PoRoutingPatch): Po
  * createPurchaseOrder keeps an unrecognised destination rather than coercing it
  * — so the document prints what it knows and does not pretend to an address.
  */
+/**
+ * The email address already on file for a party, by name.
+ *
+ * ## Why a lookup and not a column
+ *
+ * A purchase order's supplier is a STRING on the document — no id, no table,
+ * nothing pointing at it — which is deliberate and written down at length beside
+ * `SupplierSuggestion`: a distributor is somebody this business buys from and
+ * never bills, so making them a foreign key into the customer table would assert
+ * a relationship the data does not have.
+ *
+ * But the contact directory the supplier box already searches IS that table, and
+ * it holds an email for most of the people in it. So the address can be FOUND by
+ * name at the moment somebody wants to email a label, without either document
+ * having to own a copy of it that then goes stale.
+ *
+ * A suggestion, never an assertion. It fills the To box in and the operator can
+ * type over it — because two suppliers can share a name, a contact's address can
+ * be old, and a label going to the wrong party is somebody else's parcel.
+ *
+ * Matched case-insensitively on the trimmed name, the same way every other party
+ * lookup in this file matches, so "fenwick distribution" typed on a Tuesday
+ * finds the record filed as "Fenwick Distribution".
+ */
+export function lookupPartyEmail(name: string): string | null {
+  const clean = String(name ?? '').trim()
+  if (!clean) return null
+  const row = getDb()
+    .prepare(
+      `SELECT email FROM invoice_customers
+        WHERE LOWER(TRIM(name)) = LOWER(?) AND active = 1 AND email IS NOT NULL AND email != ''
+        LIMIT 1`
+    )
+    .get(clean) as { email: string | null } | undefined
+  return row?.email?.trim() || null
+}
+
 export function lookupPartyAddress(name: string): string[] | null {
   const clean = String(name ?? '').trim()
   if (!clean) return null

@@ -465,9 +465,11 @@ export function PurchaseOrderReceipt({
           side="po"
           orderId={detail.id}
           // The supplier is who ships a purchase, so they are who a label goes
-          // to. There is no email on a PO supplier — it is a name on a document,
-          // not a record — so this is a starting point, not an address.
+          // to. A PO's supplier is a NAME on a document rather than a record, so
+          // there is no address to hand down — but the contact directory usually
+          // holds one under that name, and lookupName is what finds it.
           defaultTo={null}
+          lookupName={detail.supplier}
           canEdit={linesEditable}
         />
         <OrderHistory side="po" orderId={detail.id} stageLabel={poStageLabel} />
