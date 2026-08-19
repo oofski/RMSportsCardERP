@@ -196,44 +196,78 @@ export function validateRecurring(input: {
 /**
  * When payroll runs, and therefore what a "period" is.
  *
- * The same anchor and stride the recurring reminder uses — every second
- * Wednesday from 5 August 2026 — because they have to be the same thing. A
- * timesheet that adds up over a different fortnight from the one payroll pays is
- * worse than no timesheet.
+ * ## Three dates, not two
+ *
+ * A fortnight of work has a beginning, an end, a day the run happens and a day
+ * the money lands, and they are FOUR different days:
+ *
+ *     work        Sun 02 Aug  →  Sat 15 Aug     (14 days)
+ *     run on      Wed 19 Aug                    (end + 4)
+ *     paid on     Fri 21 Aug                    (end + 6)
+ *
+ *     next        Sun 16 Aug  →  Sat 29 Aug
+ *     run on      Wed 02 Sep
+ *     paid on     Fri 04 Sep
+ *
+ * This used to collapse the run and the payment into one field and put the
+ * period boundary on the run date, so a period read as "05/08 → 19/08, paid the
+ * 19th". That describes a fortnight nobody works: the floor's week runs Sunday
+ * to Saturday, the run is a Wednesday four days after the timesheet closes, and
+ * the money arrives the Friday after that. Every one of those gaps is real, and
+ * an export that assumes the period ends the day it is paid hands Gusto a
+ * fortnight shifted three days off the one the hours were worked in.
+ *
+ * ## Why the lag is measured from `end`
+ *
+ * Because that is what the lag IS — the office needs four days after the
+ * timesheet closes to approve it, and the bank needs two more to move the money.
+ * Measured from `start` the same two numbers would be 17 and 19, which are
+ * arithmetic rather than reasons, and would silently need changing if the
+ * fortnight ever became something else.
  */
-export const PAYROLL_ANCHOR = '2026-08-05'
+export const PAYROLL_ANCHOR = '2026-08-02'
 export const PAYROLL_EVERY_DAYS = 14
+/** Days after the period ENDS that payroll is run. Saturday close → Wednesday run. */
+export const PAYROLL_RUN_LAG_DAYS = 4
+/** Days after the period ENDS that the money lands. Saturday close → Friday pay. */
+export const PAYROLL_PAY_LAG_DAYS = 6
 
 export interface PayrollPeriod {
-  /** First day of work in the period, inclusive. */
+  /** First day of work in the period, inclusive. A Sunday. */
   start: string
-  /** Last day of work in the period, inclusive. */
+  /** Last day of work in the period, inclusive. A Saturday. */
   end: string
-  /** The payroll date that closes it — the day after `end`. */
+  /** The day payroll is RUN for this period — four days after it closes. */
+  runOn: string
+  /** The day the money lands — six days after it closes, two after the run. */
   paidOn: string
   /** True for the period the given day falls inside. */
   current: boolean
 }
 
+/** The three derived dates for a period that starts on `start`. */
+function periodFrom(start: string, current: boolean): PayrollPeriod {
+  const end = addDays(start, PAYROLL_EVERY_DAYS - 1)
+  return {
+    start,
+    end,
+    runOn: addDays(end, PAYROLL_RUN_LAG_DAYS),
+    paidOn: addDays(end, PAYROLL_PAY_LAG_DAYS),
+    current
+  }
+}
+
 /**
  * The period a day belongs to.
  *
- * Half-open by construction: a period runs from one payroll date up to, but not
- * including, the next. So "05/08 → 19/08" is thirteen days of work ending on the
- * 18th and paid on the 19th — which is what the boundary dates mean, and is why
- * `end` is stated separately from `paidOn` rather than left to be inferred.
+ * Half-open by construction: a period runs from one period start up to, but not
+ * including, the next. A day that IS a start opens the fortnight ahead rather
+ * than closing the one behind — work done that Sunday belongs to the new period.
  */
 export function payrollPeriodFor(day: string): PayrollPeriod {
   const next = nextOccurrence(PAYROLL_ANCHOR, PAYROLL_EVERY_DAYS, day)
-  // A day that IS a payroll date opens the period it starts, rather than closing
-  // the one before: work done that Wednesday belongs to the fortnight ahead.
   const start = next === day ? day : addDays(next, -PAYROLL_EVERY_DAYS)
-  return {
-    start,
-    end: addDays(start, PAYROLL_EVERY_DAYS - 1),
-    paidOn: addDays(start, PAYROLL_EVERY_DAYS),
-    current: false
-  }
+  return periodFrom(start, false)
 }
 
 /** The `count` most recent periods, newest first, ending with the one `today` is in. */
@@ -241,13 +275,19 @@ export function recentPayrollPeriods(today: string, count: number): PayrollPerio
   const here = payrollPeriodFor(today)
   const out: PayrollPeriod[] = []
   for (let i = 0; i < Math.max(1, count); i++) {
-    const start = addDays(here.start, -i * PAYROLL_EVERY_DAYS)
-    out.push({
-      start,
-      end: addDays(start, PAYROLL_EVERY_DAYS - 1),
-      paidOn: addDays(start, PAYROLL_EVERY_DAYS),
-      current: i === 0
-    })
+    out.push(periodFrom(addDays(here.start, -i * PAYROLL_EVERY_DAYS), i === 0))
   }
   return out
+}
+
+/**
+ * The most recently CLOSED period — the one an export is almost always for.
+ *
+ * Not the period `today` sits in: that one is still being worked and its hours
+ * are not final. "Last payroll" means the fortnight whose timesheet has closed,
+ * which is the one immediately before the current fortnight.
+ */
+export function lastClosedPayrollPeriod(today: string): PayrollPeriod {
+  const here = payrollPeriodFor(today)
+  return periodFrom(addDays(here.start, -PAYROLL_EVERY_DAYS), false)
 }

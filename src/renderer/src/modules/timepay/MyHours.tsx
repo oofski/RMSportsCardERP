@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { PAYROLL_ANCHOR, PAYROLL_EVERY_DAYS, dayKey } from '@shared/homeTasks'
+import {
+  PAYROLL_ANCHOR,
+  PAYROLL_EVERY_DAYS,
+  PAYROLL_PAY_LAG_DAYS,
+  PAYROLL_RUN_LAG_DAYS,
+  dayKey
+} from '@shared/homeTasks'
 import { api } from '../../lib/api'
 import { LIVE, useLiveRefresh } from '../../lib/live'
 import { CenterLoader, EmptyState } from '../../components/ui'
@@ -26,7 +32,14 @@ import { formatHours } from '../../lib/format'
 
 interface Hours {
   days: Array<{ day: string; minutes: number; shifts: number }>
-  periods: Array<{ start: string; end: string; paidOn: string; current: boolean; minutes: number }>
+  periods: Array<{
+    start: string
+    end: string
+    runOn: string
+    paidOn: string
+    current: boolean
+    minutes: number
+  }>
   totalMinutes: number
   firstDay: string | null
 }
@@ -181,7 +194,7 @@ export function MyHours(): JSX.Element {
           <div className="panel-head">
             <div>
               <h3>Pay periods</h3>
-              <span className="ph-sub">Every second Wednesday</span>
+              <span className="ph-sub">Sunday to Saturday, every fortnight</span>
             </div>
           </div>
           <div className="metric-list">
@@ -196,9 +209,10 @@ export function MyHours(): JSX.Element {
             ))}
           </div>
           <p className="mh-note">
-            A period runs from one payroll Wednesday to the day before the next, and is paid on the
-            Wednesday that closes it. The series starts {shortDate(PAYROLL_ANCHOR)} and repeats every{' '}
-            {PAYROLL_EVERY_DAYS} days.
+            A period is {PAYROLL_EVERY_DAYS} days of work, Sunday to Saturday. Payroll is run{' '}
+            {PAYROLL_RUN_LAG_DAYS} days after it closes and the money lands{' '}
+            {PAYROLL_PAY_LAG_DAYS} days after it closes — so a fortnight ending on a Saturday is run
+            that Wednesday and paid that Friday. The series starts {shortDate(PAYROLL_ANCHOR)}.
           </p>
         </div>
       </div>

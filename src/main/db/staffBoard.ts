@@ -148,6 +148,7 @@ function periodHours(employeeId: string): StaffPeriodHours {
   return {
     start: period.start,
     end: period.end,
+    runOn: period.runOn,
     paidOn: period.paidOn,
     minutes,
     daysWorked: days.size,

@@ -226,7 +226,13 @@ function HoursCard({ board, onOpen }: { board: Board; onOpen: () => void }): JSX
         </span>
       </div>
 
-      <p className="ob-foot">Paid on {dayLabel(h.paidOn)}.</p>
+      {/* Both dates, because they are two different days and the gap between
+          them is the question people actually ask. "Paid on the 19th" when the
+          money arrives on the 21st is the kind of wrong that gets noticed at
+          the bank rather than here. */}
+      <p className="ob-foot">
+        Run on {dayLabel(h.runOn)}, paid on {dayLabel(h.paidOn)}.
+      </p>
     </div>
   )
 }

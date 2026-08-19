@@ -53,6 +53,9 @@ export interface StaffSorting {
 export interface StaffPeriodHours {
   start: string
   end: string
+  /** The day payroll is RUN for this fortnight — four days after it closes. */
+  runOn: string
+  /** The day the money lands — two days after the run. */
   paidOn: string
   minutes: number
   /** Days inside the period they actually worked. */

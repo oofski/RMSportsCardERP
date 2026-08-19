@@ -1322,6 +1322,7 @@ export function createBridge(ipcRenderer: BridgeTransport) {
         periods: Array<{
           start: string
           end: string
+          runOn: string
           paidOn: string
           current: boolean
           minutes: number

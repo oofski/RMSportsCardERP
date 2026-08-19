@@ -1,4 +1,5 @@
 import type { TimeEntry } from '@shared/types'
+import { addDays, dayKey, lastClosedPayrollPeriod, payrollPeriodFor } from '@shared/homeTasks'
 
 /** A pay-period / date range. `end` is exclusive (start of the following day). */
 export interface Period {
@@ -12,6 +13,24 @@ function startOfDay(d: Date): Date {
   const x = new Date(d)
   x.setHours(0, 0, 0, 0)
   return x
+}
+
+/**
+ * Local midnight of a yyyy-mm-dd day, as an ISO instant.
+ *
+ * The `T00:00:00` with no zone is what makes this LOCAL — the boundary of a pay
+ * period is a wall-clock day on this floor, not a UTC one. Parsing it as UTC
+ * would put a shift worked at 7pm on the last day of a fortnight into the next
+ * one for anybody west of Greenwich.
+ */
+function localStart(day: string): string {
+  return startOfDay(new Date(`${day}T00:00:00`)).toISOString()
+}
+
+/** "2 Aug" — enough to recognise a fortnight, short enough for a dropdown. */
+function shortDay(day: string): string {
+  const d = new Date(`${day}T12:00:00`)
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
 function mondayOf(d: Date): Date {
@@ -37,17 +56,45 @@ export function presetPeriods(now: Date = new Date()): Period[] {
   const nextFirst = new Date(today.getFullYear(), today.getMonth() + 1, 1)
   const lastFirst = new Date(today.getFullYear(), today.getMonth() - 1, 1)
 
-  const last14 = new Date(today)
-  last14.setDate(today.getDate() - 13)
+  /**
+   * The two payroll fortnights, ALIGNED to the ones payroll actually pays.
+   *
+   * This used to be a single "Last 14 days" — a rolling window ending today.
+   * That window is fourteen days long and is otherwise unrelated to payroll: run
+   * it on a Thursday and it starts on a Friday, spanning the back half of one
+   * fortnight and the front half of another. Exported to Gusto that is not a pay
+   * period at all, it is fourteen days of hours that belong to two of them, and
+   * nothing downstream can tell.
+   *
+   * So both entries are computed from `payrollPeriodFor` — the same function the
+   * staff board and the timesheet use — and they name the dates they cover, so
+   * what is about to be exported is legible before it is exported.
+   *
+   * "Last payroll" is the CLOSED fortnight, not the one in progress, because
+   * that is the one whose hours are final and therefore the one an export is
+   * almost always for.
+   */
+  const todayKey = dayKey(today)
+  const current = payrollPeriodFor(todayKey)
+  const last = lastClosedPayrollPeriod(todayKey)
+  const span = (p: { start: string; end: string }): string =>
+    `${shortDay(p.start)} – ${shortDay(p.end)}`
 
   return [
     { id: 'this-week', label: 'This week', start: thisMon.toISOString(), end: nextMon.toISOString() },
     { id: 'last-week', label: 'Last week', start: lastMon.toISOString(), end: thisMon.toISOString() },
     {
-      id: 'last-14',
-      label: 'Last 14 days',
-      start: last14.toISOString(),
-      end: tomorrow.toISOString()
+      id: 'last-payroll',
+      label: `Last payroll (${span(last)})`,
+      start: localStart(last.start),
+      // Exclusive, so the whole of the last day is inside the window.
+      end: localStart(addDays(last.end, 1))
+    },
+    {
+      id: 'this-payroll',
+      label: `Current payroll (${span(current)})`,
+      start: localStart(current.start),
+      end: localStart(addDays(current.end, 1))
     },
     {
       id: 'this-month',

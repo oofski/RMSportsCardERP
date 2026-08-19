@@ -277,7 +277,14 @@ export function myHours(
   periods = 8
 ): {
   days: Array<{ day: string; minutes: number; shifts: number }>
-  periods: Array<{ start: string; end: string; paidOn: string; current: boolean; minutes: number }>
+  periods: Array<{
+    start: string
+    end: string
+    runOn: string
+    paidOn: string
+    current: boolean
+    minutes: number
+  }>
   totalMinutes: number
   firstDay: string | null
 } {
@@ -316,7 +323,14 @@ export function myHours(
     for (const d of days) {
       if (d.day >= p.start && d.day <= p.end) minutes += d.minutes
     }
-    return { start: p.start, end: p.end, paidOn: p.paidOn, current: p.current, minutes }
+    return {
+      start: p.start,
+      end: p.end,
+      runOn: p.runOn,
+      paidOn: p.paidOn,
+      current: p.current,
+      minutes
+    }
   })
 
   return { days, periods: windows, totalMinutes: total, firstDay }
