@@ -62,6 +62,8 @@ import type {
   SalesOrderHistoryRow
 } from '@shared/orderHistory'
 import type { WholesaleSaleRow } from '@shared/invoices'
+import type { DealTicketRow } from '@shared/dealTickets'
+import { dealTicketYears, listDealTickets, peekNextDealTicket } from './db/dealTickets'
 import { getDb } from './db/database'
 import { deleteRatePeriod, listRatePeriods, saveRatePeriod } from './db/whatnotRates'
 import { currentUser } from './services/auth'
@@ -348,6 +350,29 @@ export function registerFinanceIpc(): void {
     const y = Math.trunc(Number(year))
     if (!Number.isInteger(y) || y < 1970 || y > 9999) return []
     return listSalesOrderHistory(getDb(), y)
+  })
+
+  /**
+   * The deal ticket register.
+   *
+   * Same gate and the same year coercion as the two above. A year outside the
+   * band drops to null — "the whole register" — rather than to an empty list,
+   * because the caller that sends no year at all is asking for exactly that and
+   * the two must not be told apart by an accident of coercion.
+   */
+  ipcMain.handle(IPC.finDealTickets, (_e, year: unknown): DealTicketRow[] => {
+    if (!can('module.finance')) return []
+    const y = Math.trunc(Number(year))
+    const valid = Number.isInteger(y) && y >= 1970 && y <= 9999
+    return listDealTickets(valid ? y : null)
+  })
+
+  ipcMain.handle(IPC.finDealTicketYears, (): { years: number[]; next: string } => {
+    if (!can('module.finance')) return { years: [], next: '' }
+    // The next number rides along with the years so the empty state can say
+    // what the register WILL call the next movement. A second channel for one
+    // string would be a second round trip on every open.
+    return { years: dealTicketYears(), next: peekNextDealTicket() }
   })
 
   ipcMain.handle(

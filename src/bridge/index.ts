@@ -230,6 +230,7 @@ import type {
   PurchaseOrderHistoryRow,
   SalesOrderHistoryRow
 } from '@shared/orderHistory'
+import type { DealTicketRow } from '@shared/dealTickets'
 import type { PnlDetail, PnlDrillRequest } from '@shared/pnlDrill'
 import type { BreakPnlSplit } from '@shared/breakPnl'
 
@@ -1125,6 +1126,12 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       /** Every sales order filed under one year, lines and FIFO cost included. */
       historySalesOrders: (year: number): Promise<SalesOrderHistoryRow[]> =>
         ipcRenderer.invoke(IPC.finHistorySos, year),
+      /** The deal ticket register for one year, or the whole thing for null. */
+      dealTickets: (year: number | null): Promise<DealTicketRow[]> =>
+        ipcRenderer.invoke(IPC.finDealTickets, year),
+      /** Which years the register covers, and what it will call the next one. */
+      dealTicketYears: (): Promise<{ years: number[]; next: string }> =>
+        ipcRenderer.invoke(IPC.finDealTicketYears),
       /** Removes the upload and the rows NOTHING ELSE covers — a correction.
        *  Rows another import also contains are re-pointed to it and survive. */
       deleteImport: (id: string): Promise<Result<StreamingFinanceView>> =>

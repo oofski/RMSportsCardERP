@@ -8,6 +8,7 @@ import { Icon } from '../../components/Icon'
 import { CenterLoader, EmptyState, Input } from '../../components/ui'
 import { Money } from './bits'
 import { finance } from './api'
+import { DealTicketsTab } from './DealTicketsTab'
 
 /**
  * Finance → History: the year's ledger of orders, both sides.
@@ -38,7 +39,14 @@ import { finance } from './api'
  * expands in place rather than opening anything: the question being asked is
  * "what was on it", and that is four lines of text, not a screen.
  */
-type Side = 'purchase' | 'sales'
+/**
+ * The third value is not a third KIND of order — it is the same movements read
+ * by their deal ticket instead of by their document. It lives beside the other
+ * two because that is where somebody goes looking for an order they can only
+ * name by its ticket, and it renders its own component because it shares none of
+ * the columns, expansion or totals the two document views share.
+ */
+type Side = 'purchase' | 'sales' | 'tickets'
 
 export function HistoryTab(): JSX.Element {
   const [side, setSide] = useState<Side>('purchase')
@@ -48,6 +56,16 @@ export function HistoryTab(): JSX.Element {
   const [sos, setSos] = useState<SalesOrderHistoryRow[] | null>(null)
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState<string | null>(null)
+  /**
+   * The register's own years, and its own selected year.
+   *
+   * SEPARATE from `year` on purpose. The register starts at DT-000337 with no
+   * history behind it, so it covers a different — usually much shorter — set of
+   * years than the order ledger does. Sharing one selection would open the
+   * tickets view on a year it has nothing in and read as broken.
+   */
+  const [ticketYears, setTicketYears] = useState<{ years: number[]; next: string } | null>(null)
+  const [ticketYear, setTicketYear] = useState<number | null>(null)
 
   useEffect(() => {
     void finance.historyYears().then((y) => {
@@ -58,10 +76,31 @@ export function HistoryTab(): JSX.Element {
     })
   }, [])
 
+  /**
+   * The register's years, fetched the first time the tab is opened.
+   *
+   * LAZY, unlike the order years above. Every visit to Finance → History pays
+   * for that call; this one is only owed by somebody who actually asks for the
+   * register, and the answer does not change while they are looking at it.
+   */
+  useEffect(() => {
+    if (side !== 'tickets' || ticketYears !== null) return
+    void finance.dealTicketYears().then((r) => {
+      setTicketYears(r)
+      // dealTicketYears always includes the current year, so this cannot leave
+      // the view with nothing selected on a register that has issued nothing.
+      setTicketYear(r.years[0] ?? new Date().getFullYear())
+    })
+  }, [side, ticketYears])
+
   // Re-read on every (side, year) change. Both lists are kept so flipping back
   // and forth does not refetch, and both are cleared when the year moves.
   useEffect(() => {
     if (year === null) return
+    // The register fetches its own rows from its own year — see DealTicketsTab.
+    // Without this guard the sales branch below would fire a second, pointless
+    // read of the whole sales ledger every time somebody opened the tickets tab.
+    if (side === 'tickets') return
     let alive = true
     if (side === 'purchase') {
       setPos(null)
@@ -75,7 +114,13 @@ export function HistoryTab(): JSX.Element {
     }
   }, [side, year])
 
-  const yearsFor = side === 'purchase' ? (years?.purchase ?? []) : (years?.sales ?? [])
+  const yearsFor =
+    side === 'tickets'
+      ? (ticketYears?.years ?? [])
+      : side === 'purchase'
+        ? (years?.purchase ?? [])
+        : (years?.sales ?? [])
+  const activeYear = side === 'tickets' ? ticketYear : year
   const rows: Array<PurchaseOrderHistoryRow | SalesOrderHistoryRow> | null =
     side === 'purchase' ? pos : sos
 
@@ -124,15 +169,26 @@ export function HistoryTab(): JSX.Element {
             <Icon name="ReceiptText" size={15} />
             Sales orders
           </button>
+          <button
+            className={`hist-side ${side === 'tickets' ? 'active' : ''}`}
+            onClick={() => {
+              setSide('tickets')
+              setOpen(null)
+            }}
+          >
+            <Icon name="Hash" size={15} />
+            Deal tickets
+          </button>
         </div>
 
         <div className="hist-years">
           {yearsFor.map((y) => (
             <button
               key={y}
-              className={`hist-year ${y === year ? 'active' : ''}`}
+              className={`hist-year ${y === activeYear ? 'active' : ''}`}
               onClick={() => {
-                setYear(y)
+                if (side === 'tickets') setTicketYear(y)
+                else setYear(y)
                 setOpen(null)
               }}
             >
@@ -144,14 +200,26 @@ export function HistoryTab(): JSX.Element {
         <div className="hist-search">
           <Icon name="Search" size={15} />
           <Input
-            placeholder="Number, name or product…"
+            placeholder={
+              side === 'tickets' ? 'DT-000337, an order number, or a name…' : 'Number, name or product…'
+            }
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
         </div>
       </div>
 
-      {rows === null ? (
+      {side === 'tickets' ? (
+        ticketYear === null ? (
+          <CenterLoader />
+        ) : (
+          <DealTicketsTab
+            year={ticketYear}
+            query={query}
+            nextNumber={ticketYears?.next ?? ''}
+          />
+        )
+      ) : rows === null ? (
         <CenterLoader />
       ) : shown.length === 0 ? (
         <EmptyState

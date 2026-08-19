@@ -586,6 +586,11 @@ export const IPC = {
   finHistoryYears: 'finance:history:years',
   finHistoryPos: 'finance:history:purchase-orders',
   finHistorySos: 'finance:history:sales-orders',
+  // The deal ticket register — one number per commercial movement, both sides.
+  // Reads only: a ticket is struck by the thing it names, never by a screen, so
+  // there is deliberately no channel here that can mint one.
+  finDealTickets: 'finance:deal-tickets:list',
+  finDealTicketYears: 'finance:deal-tickets:years',
 
   // Messages, and the contact list they are addressed from.
   //

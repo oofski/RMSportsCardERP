@@ -4,6 +4,7 @@ import { existsSync, mkdirSync } from 'fs'
 import Database from 'better-sqlite3'
 import { normalizeUpc } from '@shared/upc'
 import { boxesPerCaseFromName } from '@shared/units'
+import { DEAL_TICKET_FLOOR } from '@shared/dealTickets'
 import { seedCatalog } from './inventorySeed'
 import { seedSnapshot } from './inventorySnapshot'
 import { seedCatalogExpansion } from './inventoryCatalogV2'
@@ -3577,6 +3578,109 @@ function migrate(database: Database.Database): void {
     }
   })
   setMeta(database, 'schema_version', '73')
+
+  /**
+   * v74: deal tickets — one number per commercial movement, across both sides.
+   *
+   * A purchase order and a sales order each carry their own per-side sequence,
+   * so "0042" is ambiguous until somebody also says which side of the business
+   * they mean. This is ONE sequence over both, struck automatically the moment a
+   * document is created, so a movement can be named in a single token.
+   *
+   * ## Nothing here is a workflow
+   *
+   * There is no stage, no owner, no approval and no due date, because nobody
+   * works a deal ticket — it is struck and then it is history. The register is
+   * append-mostly: the only field that ever changes after issue is the kind,
+   * when two documents are later declared to be the two halves of one dropship.
+   *
+   * ## The snapshot columns are copies ON PURPOSE
+   *
+   * document_number, party and amount record what the document was called and
+   * what it was worth when the deal was struck. Sync REWRITES po_number when two
+   * offline machines mint the same one (RELABEL_ON_CONFLICT in sync.ts) and an
+   * invoice number is editable until it posts, so a register that joined for
+   * those would silently rewrite its own history. The live values are joined at
+   * read time and shown beside these, which is the only way both questions —
+   * what was it then, where did it end up — can be answered off one row.
+   *
+   * ## No foreign key to the document
+   *
+   * A ticket OUTLIVES the thing it names. A number that was issued was issued;
+   * cascading it away on a deleted draft would leave a gap in the sequence that
+   * nothing could explain, and reusing the number would make two deals share a
+   * name. The read model reports a missing document instead.
+   */
+  database.exec(
+    `-- THERE IS NO seq COLUMN, and its absence is deliberate.
+     --
+     -- The obvious design stores the integer beside the label so sorting and
+     -- MAX() are cheap. It is wrong here: sync RELABELS this number when two
+     -- offline machines strike the same one, and a relabel rewrites one column.
+     -- A stored integer would silently stop agreeing with the label beside it,
+     -- and every ordering, ceiling and comparison in the register would then be
+     -- reading a number that is no longer the ticket's number.
+     --
+     -- So the label is the single truth. Zero-padding to six digits is what
+     -- makes that affordable: the strings sort exactly as the integers do, so
+     -- ORDER BY number is the numeric order, and the one place that genuinely
+     -- needs arithmetic casts on the way past.
+     CREATE TABLE IF NOT EXISTS deal_tickets (
+       id                TEXT PRIMARY KEY,
+       number            TEXT NOT NULL UNIQUE,
+       kind              TEXT NOT NULL,
+       document_kind     TEXT NOT NULL,
+       document_id       TEXT NOT NULL,
+       document_number   TEXT,
+       party             TEXT,
+       amount            REAL NOT NULL DEFAULT 0,
+       paired_ticket_id  TEXT,
+       issued_at         TEXT NOT NULL,
+       issued_by         TEXT,
+       created_at        TEXT NOT NULL,
+       updated_at        TEXT NOT NULL
+     );
+
+     -- ONE TICKET PER DOCUMENT, enforced by the database rather than by the
+     -- caller remembering to look first. Every issue path runs inside a
+     -- transaction that also writes the document, and a second save of the same
+     -- order must not strike a second number.
+     CREATE UNIQUE INDEX IF NOT EXISTS idx_deal_tickets_document
+       ON deal_tickets (document_kind, document_id);
+
+     -- The register is read newest-first and filtered by year, which is this
+     -- index and nothing else.
+     CREATE INDEX IF NOT EXISTS idx_deal_tickets_issued
+       ON deal_tickets (issued_at);
+
+     -- The ceiling lookup on every issue, and the register's sort order.
+     CREATE INDEX IF NOT EXISTS idx_deal_tickets_number
+       ON deal_tickets (number);
+
+     -- Answering "what did we dropship in July" without a scan.
+     CREATE INDEX IF NOT EXISTS idx_deal_tickets_kind
+       ON deal_tickets (kind, issued_at);`
+  )
+
+  /**
+   * The counter starts life believing 336 numbers are already spent.
+   *
+   * The business has been keeping this register by hand and has reached 336, so
+   * the first number the app issues must be 337. Seeded ONCE rather than on
+   * every launch, because the counter climbs with every ticket and re-seeding it
+   * would hand out 337 a second time.
+   *
+   * Deliberately NOT a backfill. Minting numbers onto the orders already in the
+   * database would produce a second register over a period the operator's own
+   * book already covers, with the app calling a March purchase order DT-000337
+   * while the book calls it something else. The register starts empty and fills
+   * itself within a day of trading, which is the honest reading of "tickets
+   * start at 337".
+   */
+  runOnce(database, 'deal_ticket_seq_seed_v1', () => {
+    setMeta(database, 'deal_ticket_seq', String(DEAL_TICKET_FLOOR))
+  })
+  setMeta(database, 'schema_version', '74')
 
   // v41: re-derive every product's average cost from its remaining cost layers.
   //

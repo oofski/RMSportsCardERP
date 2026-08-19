@@ -16465,6 +16465,79 @@ button.sor-team:focus-visible {
   font-size: 11px;
   color: var(--text-3);
 }
+
+/* ---- Deal tickets ------------------------------------------------------- */
+
+/* The ticket number is the thing this table is FOR, so it is the one column
+   that gets weight and a monospaced-ish alignment. Tabular figures matter more
+   here than anywhere else on the screen: the whole value of a register is being
+   able to see at a glance that the sequence has no holes in it, and proportional
+   digits break that scan. */
+.dt-number {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+
+/* Which way the goods moved. The arrow carries the meaning and the colour only
+   reinforces it, so this still reads correctly in monochrome or to somebody who
+   cannot separate the two hues. */
+.dt-kind {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12.5px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+.dt-kind.in {
+  color: var(--accent);
+}
+.dt-kind.out {
+  color: var(--text-2);
+}
+
+.dt-pair {
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--text-3);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.dt-doc {
+  font-variant-numeric: tabular-nums;
+}
+
+/* The number this document USED to carry, before a sync collision renumbered
+   it. Shown small and grey because it is history — but shown, because it is
+   what the printed paperwork in somebody's hand still says. */
+.dt-was {
+  margin-left: 6px;
+  color: var(--text-3);
+  font-size: 11px;
+}
+
+/* The order behind this ticket is gone. Warning rather than danger: nothing is
+   broken and nothing needs fixing — the register is telling the truth about a
+   number that was spent on a deal which did not survive. */
+.dt-gone {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--warning-bg);
+  color: var(--warning);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+/* A row whose document is gone recedes, so a scan down the register lands on
+   the live movements first. Not hidden — see DealTicketsTab for why. */
+.dt-row.gone .dt-number,
+.dt-row.gone .dt-doc {
+  color: var(--text-3);
+}
 .hist-detail-row > td {
   padding: 0 !important;
   background: var(--surface-2);

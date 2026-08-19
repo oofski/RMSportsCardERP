@@ -18,6 +18,7 @@ import type {
   PurchaseOrderHistoryRow,
   SalesOrderHistoryRow
 } from '@shared/orderHistory'
+import type { DealTicketRow } from '@shared/dealTickets'
 import { api } from '../../lib/api'
 
 /** What `rows()` can be narrowed by. Every field is optional; an empty filter is
@@ -85,6 +86,10 @@ export interface FinanceApi {
   historyPurchaseOrders(year: number): Promise<PurchaseOrderHistoryRow[]>
   /** One year of sales orders, with what the units on them cost. */
   historySalesOrders(year: number): Promise<SalesOrderHistoryRow[]>
+  /** The deal ticket register for one year, or the whole thing for null. */
+  dealTickets(year: number | null): Promise<DealTicketRow[]>
+  /** Which years the register covers, and what the next number will be. */
+  dealTicketYears(): Promise<{ years: number[]; next: string }>
   expenses(): Promise<GeneralExpense[]>
   saveExpense(input: GeneralExpenseInput): Promise<Result<GeneralExpenseResult>>
   deleteExpense(id: string): Promise<Result<GeneralExpenseResult>>

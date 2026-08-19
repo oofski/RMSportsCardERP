@@ -4,6 +4,7 @@ import { getDb } from './database'
 import { SYNCED_BY_TABLE, SYNCED_TABLES, KEY_SEP, type SyncedTable } from './syncTables'
 import { normQty, lotWeightedAvgCost } from './lots'
 import { nextPoNumber } from './purchaseOrders'
+import { nextDealTicketNumber } from './dealTickets'
 import type { StockDrift, SyncReject } from '@shared/sync'
 
 /**
@@ -342,6 +343,13 @@ const RELABEL_ON_CONFLICT: Record<
   { column: string; relabel: (db: Database) => string | null }
 > = {
   purchase_orders: { column: 'po_number', relabel: (db) => nextPoNumber(db) },
+  // A deal ticket number is a label on a movement, exactly like a PO number, and
+  // two offline machines both striking DT-000412 have recorded two different
+  // deals. The loser is renumbered from the local counter — which is why
+  // nextDealTicketSeq maxes the counter against the TABLE as well: the winning
+  // row arriving from the other laptop advanced this machine's ceiling without
+  // touching its counter, and the replacement must land above both.
+  deal_tickets: { column: 'number', relabel: (db) => nextDealTicketNumber(db) },
   // Only one supply may be "the team bags". A second machine naming a different
   // box for the role loses the ROLE, never the supply: the box is real stock
   // with a real count, and deleting it to settle a label would take that with it.

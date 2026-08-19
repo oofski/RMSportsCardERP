@@ -207,6 +207,23 @@ export const SYNCED_TABLES: SyncedTable[] = [
   // design — the buyer's name is snapshotted onto the row, so an invoice whose
   // customer record is gone still reads correctly and must still apply.
   { table: 'invoices', key: ['id'], tier: 0 },
+  // THE DEAL TICKET REGISTER. One number per commercial movement, across both
+  // sides of the business.
+  //
+  // Tier 0 despite naming a purchase order or an invoice, and for the strongest
+  // form of the reason order_events gives: a ticket is DESIGNED to outlive its
+  // document. Everything a reader needs — the number, the party, the amount, the
+  // kind — is snapshotted onto the row, so a ticket whose order was deleted is
+  // still a correct register entry. Waiting for a parent that is never coming
+  // would silently drop numbers out of a sequence whose whole value is that it
+  // has none missing.
+  //
+  // The `number` column is UNIQUE and it is a LABEL, so two machines trading
+  // offline WILL mint the same one. That is settled by RELABEL_ON_CONFLICT in
+  // sync.ts exactly as purchase_orders is — never by NATURAL_KEYS, because two
+  // tickets carrying DT-000412 are two different deals and de-duplicating them
+  // would delete one.
+  { table: 'deal_tickets', key: ['id'], tier: 0 },
   // Messages. The thread is tier 0 because everything else points at it; the
   // participants and the messages are tier 1 so they land after it in the same
   // batch. The MESSAGE is the record — the push notification is only the buzz

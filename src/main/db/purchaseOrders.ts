@@ -29,6 +29,7 @@ import { getDb, getMeta, setMeta } from './database'
 import { addStock, adjustStock, reverseStockReceipt, stockQty } from './inventory'
 import { recordPoCogs, voidPoCogs } from './finance'
 import { adoptLegacyFreight, deleteOrderExtras, recordOrderEvent } from './orderExtras'
+import { issueDealTicket } from './dealTickets'
 import { newId, nowIso } from '../util'
 
 interface PoRow {
@@ -653,6 +654,22 @@ export function createPurchaseOrder(
       detail: `Raised as ${poNumber}`,
       actorId,
       db
+    })
+
+    // The deal ticket, struck in THIS transaction. Goods committed to come in
+    // is a movement, and every movement gets a number — see @shared/dealTickets.
+    // Inside the transaction so a purchase order can never exist without one:
+    // nothing afterwards would know a number was owed, and the register would
+    // have a hole it could not detect, let alone repair.
+    issueDealTicket(db, {
+      kind: 'purchase_order',
+      documentKind: 'po',
+      documentId: id,
+      documentNumber: poNumber,
+      party: headerSupplier,
+      amount: total,
+      issuedAt: ts,
+      actorId
     })
 
     // Freight typed on the form becomes the order's first PARCEL. Without this

@@ -34,6 +34,7 @@ import { getDb } from './database'
 import { applyInvoiceStock, invoiceStockLocation, releaseInvoiceStock } from './invoiceStock'
 import { destinationHoldsStock } from '@shared/purchaseOrders'
 import { adoptLegacyFreight, deleteOrderExtras, recordOrderEvent } from './orderExtras'
+import { issueDealTicket, markDropshipPair } from './dealTickets'
 
 /**
  * What to STORE in a line's destination column.
@@ -810,6 +811,28 @@ export function saveInvoice(
         actorId,
         db
       })
+
+      // The deal ticket, struck on the same condition and in the same
+      // transaction — see @shared/dealTickets, and createPurchaseOrder for the
+      // matching call on the buy side.
+      //
+      // ON FIRST SAVE, INCLUDING A DRAFT. A draft sales order is already a real
+      // commitment on this floor: it is on the board, it is being picked
+      // against, and it is the thing somebody rings up about. Waiting for it to
+      // post would leave the movement everybody is discussing without the number
+      // they would discuss it by. A draft later abandoned burns its number, and
+      // that is correct — a gap in a register means a deal that fell through,
+      // which is a fact worth being able to see.
+      issueDealTicket(db, {
+        kind: 'sales_order',
+        documentKind: 'so',
+        documentId: id,
+        documentNumber: clean(input.invoiceNumber),
+        party: input.customerName.trim(),
+        amount: invoiceTotal(lines),
+        issuedAt: stamp,
+        actorId
+      })
     }
 
     // Same rule on the sell side: the carrier box on the form is the order's
@@ -1266,6 +1289,12 @@ export function linkDropshipPair(
       actorId,
       db
     })
+
+    // Both tickets keep their numbers and change their KIND. The two documents
+    // have just been declared one deal, and the register is where somebody asks
+    // what was dropshipped — see markDropshipPair for why re-issuing would be
+    // the wrong repair.
+    markDropshipPair(db, poId, invoiceId)
     return { ok: true }
   })
   return run()
