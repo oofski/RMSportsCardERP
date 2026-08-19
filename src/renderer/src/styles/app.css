@@ -25766,3 +25766,22 @@ button.sor-team:focus-visible {
   flex: 0 0 auto;
   margin-top: 2px;
 }
+
+/* A posted invoice that deliberately withheld the card button. Said quietly and
+   only when it is true — see CreateInvoiceModal. */
+.inv-nocard {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 12px 0 0;
+  padding: 9px 12px;
+  border-radius: 7px;
+  background: var(--warning-bg);
+  color: var(--warning);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.inv-nocard svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}

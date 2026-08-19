@@ -515,6 +515,32 @@ export interface Invoice {
   readyToShipAt: string | null
   readyToShipBy: string | null
   /**
+   * May the buyer pay this invoice by CARD in QuickBooks?
+   *
+   * ## What it actually does
+   *
+   * Sent to Intuit as `AllowOnlineCreditCardPayment`. Unticked, the Pay-by-card
+   * button does not appear on the invoice the buyer opens, so the only routes
+   * left are the ones that cost this business nothing to receive.
+   *
+   * ## Why it is per invoice and not a setting
+   *
+   * Card fees are a percentage, so they scale with the invoice. A few percent is
+   * noise on a single box and is real money on a wholesale case order — which is
+   * exactly the split this business bills across, and exactly why the answer
+   * cannot be one company-wide switch.
+   *
+   * ## It needs QuickBooks Payments to mean anything
+   *
+   * The field governs which online methods QuickBooks OFFERS. A company with no
+   * Payments connection offers none of them, so the flag changes nothing there —
+   * it is not broken, there was simply no button either way.
+   *
+   * Defaults to TRUE so nothing changes for invoices raised before the box
+   * existed, and so the common case stays one fewer decision.
+   */
+  allowCreditCard: boolean
+  /**
    * The purchase order this sale came from, on a dropship. Null otherwise.
    *
    * By ID and never by number: sync REWRITES po_number on a cross-machine
@@ -608,6 +634,13 @@ export interface NewInvoiceLine {
 }
 
 export interface NewInvoice {
+  /**
+   * May the buyer pay by card? Omit to allow it — see Invoice.allowCreditCard.
+   *
+   * Omitted rather than required so every existing caller keeps working and
+   * behaves the way it did before the box existed.
+   */
+  allowCreditCard?: boolean
   invoiceNumber?: string | null
   customerId?: string | null
   customerName: string
@@ -903,6 +936,17 @@ export interface QboInvoicePayload {
   ClassRef?: QboRef
   CustomerMemo?: { value: string }
   PrivateNote?: string
+  /**
+   * Whether QuickBooks offers the buyer a Pay-by-card button.
+   *
+   * Always sent, never omitted-when-true. Leaving it off would hand the decision
+   * back to the company default, so an invoice deliberately marked no-card would
+   * silently offer one — and the screen would have said otherwise.
+   *
+   * Inert without a QuickBooks Payments connection: with no online methods
+   * configured there is no button to suppress.
+   */
+  AllowOnlineCreditCardPayment?: boolean
   Line: QboInvoiceLine[]
 }
 
@@ -1364,6 +1408,12 @@ export function toQboInvoice(
     // what Intuit's own template warns about — so `qboDocNumber` records what
     // came back rather than assuming ours survived.
     ...(invoice.invoiceNumber ? { DocNumber: invoice.invoiceNumber } : {}),
+    // ALWAYS SENT, both ways. Omitting it when true would hand the decision back
+    // to the QuickBooks company default, so an invoice the operator deliberately
+    // marked no-card could still show a Pay-by-card button — with this app's own
+    // screen saying otherwise. Inert on a company with no QuickBooks Payments
+    // connection, which offers no online methods to suppress.
+    AllowOnlineCreditCardPayment: invoice.allowCreditCard !== false,
     TxnDate: invoice.invoiceDate,
     DueDate: invoice.dueDate,
     CustomerRef: { value: customerRef.id, ...(customerRef.name ? { name: customerRef.name } : {}) },

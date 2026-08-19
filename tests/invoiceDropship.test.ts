@@ -465,5 +465,126 @@ ok(boardSrc.includes('po-card-drop'), 'the sales board uses the buy side dropshi
 ok(boardSrc.includes('po-card-mixed'), 'and its mixed one')
 ok(boardSrc.includes('salesOrderKindOf'), 'derived, never stored')
 
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 8. whether the buyer may pay by card ===')
+// ---------------------------------------------------------------------------
+/**
+ * The owner's words: "there should be around the payment section a check mark
+ * that says allow for credit card, if that is not checked paying with a credit
+ * card should not be an option in quickbooks when the person sees it".
+ *
+ * Card fees are a percentage, so they scale with the invoice — noise on a single
+ * box, real money on a wholesale case order. It is sent to Intuit as
+ * AllowOnlineCreditCardPayment.
+ *
+ * The field is ALWAYS sent, both ways. Omitting it when true would hand the
+ * decision back to the QuickBooks company default, so an invoice deliberately
+ * marked no-card could still show a Pay-by-card button while this app's screen
+ * said otherwise. That is the failure worth a test.
+ */
+const { toQboInvoice } = require('../src/shared/invoices')
+const cardRefs = new Map<string, any>([['dropship hobby box', { id: '77', name: 'Dropship Hobby Box' }]])
+const payloadFor = (id: string): any =>
+  toQboInvoice(inv.getInvoice(id), { id: '1', name: 'Invented Buyer' }, cardRefs, {})
+
+// Omitted means allowed, so nothing that predates the box changes behaviour.
+ok(inv.getInvoice(normal.id).allowCreditCard === true, 'an order raised without the box allows card')
+ok(
+  payloadFor(normal.id).AllowOnlineCreditCardPayment === true,
+  'and says so explicitly to QuickBooks rather than staying silent',
+  String(payloadFor(normal.id).AllowOnlineCreditCardPayment)
+)
+
+const noCard = inv.saveInvoice(
+  {
+    customerName: 'Invented Buyer',
+    invoiceDate: '2026-04-04',
+    location: 'RM',
+    allowCreditCard: false,
+    lines: [{ item: 'Dropship Hobby Box', productId: 'p_d', quantity: 1, rate: 400 }]
+  },
+  null
+)
+ok(inv.getInvoice(noCard.id).allowCreditCard === false, 'unticking it is stored')
+ok(
+  payloadFor(noCard.id).AllowOnlineCreditCardPayment === false,
+  'AND QUICKBOOKS IS TOLD NOT TO OFFER A CARD',
+  String(payloadFor(noCard.id).AllowOnlineCreditCardPayment)
+)
+
+// It survives an edit, and can be turned back on.
+inv.saveInvoice(
+  {
+    id: noCard.id,
+    customerName: 'Invented Buyer',
+    invoiceDate: '2026-04-04',
+    location: 'RM',
+    allowCreditCard: false,
+    lines: [{ item: 'Dropship Hobby Box', productId: 'p_d', quantity: 2, rate: 400 }]
+  },
+  null
+)
+ok(inv.getInvoice(noCard.id).allowCreditCard === false, 'and survives an edit')
+inv.saveInvoice(
+  {
+    id: noCard.id,
+    customerName: 'Invented Buyer',
+    invoiceDate: '2026-04-04',
+    location: 'RM',
+    allowCreditCard: true,
+    lines: [{ item: 'Dropship Hobby Box', productId: 'p_d', quantity: 2, rate: 400 }]
+  },
+  null
+)
+ok(inv.getInvoice(noCard.id).allowCreditCard === true, 'and can be turned back on')
+
+// A DROPSHIP IS BILLED THE SAME WAY. The goods coming from a supplier says
+// nothing about how the buyer may pay, and quietly changing it would be a
+// decision nobody made.
+const dropNoCard = inv.saveInvoice(
+  {
+    customerName: 'Invented Buyer',
+    invoiceDate: '2026-04-05',
+    location: 'RM',
+    allowCreditCard: false,
+    lines: [
+      {
+        item: 'Dropship Hobby Box',
+        productId: 'p_d',
+        quantity: 2,
+        rate: 400,
+        destination: 'Fenwick Distribution',
+        supplier: 'Steel City'
+      }
+    ]
+  },
+  null
+)
+ok(
+  inv.getInvoice(dropNoCard.id).allowCreditCard === false,
+  'a dropship sales order carries the same choice'
+)
+ok(
+  payloadFor(dropNoCard.id).AllowOnlineCreditCardPayment === false,
+  'and sends it the same way'
+)
+ok(
+  salesOrderKindOf(listed(dropNoCard.id)) === 'drop',
+  'while still reading as a dropship for the board'
+)
+
+// The form offers it, and the receipt says so when it was withheld.
+const modalSrc = require('node:fs').readFileSync(
+  join(process.cwd(), 'src/renderer/src/modules/invoices/CreateInvoiceModal.tsx'),
+  'utf8'
+)
+ok(/Allow payment by credit card/i.test(modalSrc), 'the sales order form offers the choice')
+ok(modalSrc.includes('allowCreditCard'), 'and sends it with the order')
+ok(
+  modalSrc.includes('invoice.allowCreditCard === false'),
+  'a posted invoice says when card was withheld — it is read-only, so this is the only place to find out'
+)
+
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail > 0) process.exit(1)

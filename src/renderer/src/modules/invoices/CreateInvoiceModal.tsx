@@ -22,7 +22,7 @@ import {
 } from '@shared/invoices'
 import { api } from '../../lib/api'
 import { useToast } from '../../components/Toast'
-import { Button, Field, Input, Modal, Select } from '../../components/ui'
+import { Button, Checkbox, Field, Input, Modal, Select } from '../../components/ui'
 import { Icon } from '../../components/Icon'
 import { formatDate, formatMoney } from '../../lib/format'
 import { FreightFields } from '../../components/FreightFields'
@@ -196,6 +196,11 @@ export function CreateInvoiceModal({
   const [paymentTiming, setPaymentTiming] = useState<PaymentTiming | null>(
     invoice?.paymentTiming ?? null
   )
+  // Defaults to allowed on a new order, and reads the saved answer on an
+  // existing one. Never derived from the prefill: a dropship is billed the same
+  // way as anything else, and quietly changing how a buyer may pay because the
+  // goods came from a supplier would be a decision nobody made.
+  const [allowCreditCard, setAllowCreditCard] = useState(invoice?.allowCreditCard ?? true)
   const [lines, setLines] = useState<DraftLine[]>(() => {
     // A PREFILLED ORDER SEEDS ITS OWN LINES, and every one of them carries the
     // destination the purchase order implied. That destination is what makes
@@ -389,6 +394,7 @@ export function CreateInvoiceModal({
     service: service?.trim() || null,
     trackingNumber: trackingNumber?.trim() || null,
     paymentTiming,
+    allowCreditCard,
     // productId and sku travel with every line. They are what makes the SKU
     // under a product name survive a reload — and what lets the posting code
     // match a QuickBooks Item on its SKU before falling back to a name somebody
@@ -678,6 +684,25 @@ export function CreateInvoiceModal({
             }}
           />
 
+          {/* ---- How the buyer is allowed to pay -------------------------- */}
+          {/* BESIDE the payment box, not inside FreightFields: that component is
+              shared with purchase orders, and how a BUYER may pay has no meaning
+              on an order where we are the ones paying.
+
+              Card fees are a percentage, so they scale with the invoice — noise
+              on a single box, real money on a wholesale case order. That is the
+              split this business bills across, which is why it is per order. */}
+          <Checkbox
+            checked={allowCreditCard}
+            onChange={setAllowCreditCard}
+            label="Allow payment by credit card"
+            hint={
+              allowCreditCard
+                ? 'QuickBooks shows this buyer a Pay-by-card button. Untick it and the card fee goes with it.'
+                : 'QuickBooks will NOT offer this buyer a card. Bank transfer and anything arranged off-invoice still work.'
+            }
+          />
+
           {/* ---- What they are buying ------------------------------------ */}
           <POCatalogTypeahead onSelect={addLine} />
 
@@ -946,6 +971,21 @@ function InvoiceReceipt({
           }
         />
       </div>
+
+      {/* SHOWN ONLY WHEN CARD WAS WITHHELD. A posted invoice is read-only, so
+          this is the one place somebody can find out why a buyer is telling them
+          there is no Pay-by-card button — and printing "cards allowed" on the
+          overwhelming majority of invoices would be a line of noise on every
+          receipt to serve the rare one. */}
+      {invoice.allowCreditCard === false && (
+        <p className="inv-nocard">
+          <Icon name="AlertTriangle" size={13} />
+          <span>
+            Paying by <b>card was not offered</b> on this invoice. QuickBooks shows the buyer
+            the other methods only.
+          </span>
+        </p>
+      )}
 
       {/* How much of it has actually been collected, on the same rail the buy
           side draws a part-received shipment with. Absent entirely until

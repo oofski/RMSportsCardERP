@@ -3728,6 +3728,22 @@ function migrate(database: Database.Database): void {
   })
   setMeta(database, 'schema_version', '75')
 
+  /**
+   * v76: whether QuickBooks offers this buyer a Pay-by-card button.
+   *
+   * Card fees are a percentage, so they scale with the invoice: noise on a
+   * single box, real money on a wholesale case order. That is the split this
+   * business bills across, which is why the answer is per invoice rather than
+   * one company-wide switch.
+   *
+   * DEFAULT 1, so every invoice raised before the box existed keeps behaving
+   * exactly as it did. The app previously sent nothing for this field and let
+   * the QuickBooks company default decide; defaulting to 0 would have silently
+   * withdrawn card payment from orders nobody had made that decision about.
+   */
+  addColumnIfMissing(database, 'invoices', 'allow_credit_card', 'INTEGER NOT NULL DEFAULT 1')
+  setMeta(database, 'schema_version', '76')
+
   // v41: re-derive every product's average cost from its remaining cost layers.
   //
   // The average used to be stored rounded to the cent, back when every total in

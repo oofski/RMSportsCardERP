@@ -442,6 +442,7 @@ interface InvoiceRow extends AddressRow {
   ready_to_ship_at: string | null
   ready_to_ship_by: string | null
   source_po_id: string | null
+  allow_credit_card: number | null
   stock_units: number | null
   drop_units: number | null
   carrier: string | null
@@ -532,6 +533,10 @@ function toInvoice(r: InvoiceRow): Invoice {
     paymentReference: r.payment_reference ?? null,
     readyToShipAt: r.ready_to_ship_at ?? null,
     readyToShipBy: r.ready_to_ship_by ?? null,
+    // Absent reads as ALLOWED, matching the column default. A NULL here means a
+    // row written before v76, and those were raised under whatever the
+    // QuickBooks company default was — which is the same thing 'allowed' sends.
+    allowCreditCard: r.allow_credit_card !== 0,
     sourcePoId: r.source_po_id ?? null,
     stockUnits: Number(r.stock_units) || 0,
     dropshipUnits: Number(r.drop_units) || 0,
@@ -593,7 +598,7 @@ const INVOICE_COLS = `id, invoice_number, customer_id, customer_name, email, ter
                       ${ADDRESS_COLS},
                       total, paid_at, paid_by,
                       paid_up_front, payment_method, payment_reference,
-                      ready_to_ship_at, ready_to_ship_by, source_po_id,
+                      ready_to_ship_at, ready_to_ship_by, source_po_id, allow_credit_card,
                       carrier, service, tracking_number, payment_timing,
                       tracking_status, tracking_status_detail, tracking_status_at,
                       tracking_checked_at, tracking_error, tracking_attempted_at,
@@ -804,12 +809,13 @@ export function saveInvoice(
       `INSERT INTO invoices
          (id, invoice_number, customer_id, customer_name, email, terms, invoice_date, due_date,
           location, memo, message, send_later, class_name, status, qbo_id, qbo_doc_number,
-          qbo_synced_at, total, carrier, service, tracking_number, payment_timing,
+          qbo_synced_at, total, carrier, service, tracking_number, payment_timing, allow_credit_card,
           bill_line1, bill_line2, bill_city, bill_region, bill_postal_code, bill_country,
           created_by, created_at, updated_at)
        VALUES (@id, @invoiceNumber, @customerId, @customerName, @email, @terms, @invoiceDate,
                @dueDate, @location, @memo, @message, @sendLater, @className, 'draft',
                NULL, NULL, NULL, @total, @carrier, @service, @trackingNumber, @paymentTiming,
+               @allowCreditCard,
                @billLine1, @billLine2, @billCity, @billRegion, @billPostalCode, @billCountry,
                @createdBy, @createdAt, @updatedAt)
        ON CONFLICT(id) DO UPDATE SET
@@ -836,6 +842,7 @@ export function saveInvoice(
          service        = excluded.service,
          tracking_number= excluded.tracking_number,
          payment_timing = excluded.payment_timing,
+         allow_credit_card = excluded.allow_credit_card,
          updated_at     = excluded.updated_at`
     ).run({
       id,
@@ -858,6 +865,10 @@ export function saveInvoice(
       service: clean(input.service),
       trackingNumber: clean(input.trackingNumber),
       paymentTiming: asPaymentTiming(input.paymentTiming),
+      // OMITTED MEANS ALLOWED. Every caller that predates the box — the dropship
+      // prefill, the tests, anything sending a bare NewInvoice — keeps the
+      // behaviour it had, and only an explicit false withdraws the card button.
+      allowCreditCard: input.allowCreditCard === false ? 0 : 1,
       ...addressParams(billAddr),
       total: invoiceTotal(lines),
       // Null on an edit. The ON CONFLICT branch does not touch created_by, so
