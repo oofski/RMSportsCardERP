@@ -2,6 +2,7 @@ import { addDays, dayKey, daysBetween } from '@shared/homeTasks'
 import {
   AVAILABILITY_HORIZON_DAYS,
   effectiveAvailability,
+  shiftNeedsPublishing,
   sortShifts,
   upcomingFrom,
   validateAvailability,
@@ -43,6 +44,7 @@ interface Row {
   start_time: string | null
   end_time: string | null
   note: string | null
+  published_at: string | null
   created_by: string | null
   created_at: string
   updated_at: string
@@ -56,24 +58,36 @@ function toShift(r: Row): Shift {
     startTime: r.start_time,
     endTime: r.end_time,
     note: r.note,
+    publishedAt: r.published_at ?? null,
     createdBy: r.created_by,
     createdAt: r.created_at,
     updatedAt: r.updated_at
   }
 }
 
+const SHIFT_COLS = `id, employee_id, shift_date, start_time, end_time, note, published_at,
+                    created_by, created_at, updated_at`
+
 function nowIso(): string {
   return new Date().toISOString()
 }
 
-/** Everything on one person's rota, oldest first. */
+/**
+ * Everything on one person's rota, oldest first.
+ *
+ * PUBLISHED ONLY, and that filter is the whole of the draft feature as far as
+ * the floor is concerned. A shift a lead is still deciding about does not exist
+ * on the phone of the person it might be about — which is the difference between
+ * a rota and a lead thinking out loud.
+ *
+ * An EDIT to an already-published shift is visible immediately, and that is
+ * deliberate rather than an oversight: once somebody has been told they are in
+ * at 4pm, the worst thing this screen can show them is the old time. The
+ * publishing pass exists to send the message about the change, not to hide it.
+ */
 export function myShifts(employeeId: string): Shift[] {
   const rows = getDb()
-    .prepare(
-      `SELECT id, employee_id, shift_date, start_time, end_time, note, created_by,
-              created_at, updated_at
-         FROM shifts WHERE employee_id = ?`
-    )
+    .prepare(`SELECT ${SHIFT_COLS} FROM shifts WHERE employee_id = ? AND published_at IS NOT NULL`)
     .all(employeeId) as Row[]
   return sortShifts(rows.map(toShift))
 }
@@ -89,12 +103,18 @@ export function upcomingShifts(employeeId: string, limit = 8): Shift[] {
   return upcomingFrom(myShifts(employeeId), dayKey(new Date()), limit)
 }
 
-/** The whole team's rota across a date range, with names. */
+/**
+ * The whole team's rota across a date range, with names.
+ *
+ * DRAFTS INCLUDED, unlike `myShifts`. This is the lead's read and the screen it
+ * feeds is the one where the week is built — hiding the unpublished rows from it
+ * would hide the work in progress from the person doing the work.
+ */
 export function listShifts(from: string, to: string): ShiftWithPerson[] {
   const rows = getDb()
     .prepare(
       `SELECT s.id, s.employee_id, s.shift_date, s.start_time, s.end_time, s.note,
-              s.created_by, s.created_at, s.updated_at,
+              s.published_at, s.created_by, s.created_at, s.updated_at,
               e.first_name AS first, e.last_name AS last
          FROM shifts s
          LEFT JOIN employees e ON e.id = s.employee_id
@@ -142,8 +162,12 @@ export function createShift(input: NewShift, actorId: string | null): Shift {
   // from before this scheme existed, and the week view draws both so either can
   // be removed — a state somebody can see and fix rather than one sync chokes on.
   const existing = db
-    .prepare(`SELECT id, created_at FROM shifts WHERE employee_id = ? AND shift_date = ?`)
-    .get(input.employeeId, input.day) as { id: string; created_at: string } | undefined
+    .prepare(
+      `SELECT id, created_at, published_at FROM shifts WHERE employee_id = ? AND shift_date = ?`
+    )
+    .get(input.employeeId, input.day) as
+    | { id: string; created_at: string; published_at: string | null }
+    | undefined
 
   const stamp = nowIso()
   const shift: Shift = {
@@ -159,6 +183,12 @@ export function createShift(input: NewShift, actorId: string | null): Shift {
     startTime: clean(input.startTime),
     endTime: clean(input.endTime),
     note: clean(input.note),
+    // A NEW shift is a draft; an edit KEEPS whatever publishing state it had.
+    // Clearing it on edit would look tidier and would be wrong twice over: the
+    // person working it would lose the shift off their screen entirely because
+    // a lead corrected a note, and `updatedAt` moving past `publishedAt` already
+    // records that the change is unsent — see shiftNeedsPublishing.
+    publishedAt: existing?.published_at ?? null,
     createdBy: actorId,
     createdAt: existing?.created_at ?? stamp,
     updatedAt: stamp
@@ -166,8 +196,10 @@ export function createShift(input: NewShift, actorId: string | null): Shift {
 
   db.prepare(
     `INSERT INTO shifts
-       (id, employee_id, shift_date, start_time, end_time, note, created_by, created_at, updated_at)
-     VALUES (@id, @employeeId, @day, @startTime, @endTime, @note, @createdBy, @createdAt, @updatedAt)
+       (id, employee_id, shift_date, start_time, end_time, note, published_at,
+        created_by, created_at, updated_at)
+     VALUES (@id, @employeeId, @day, @startTime, @endTime, @note, @publishedAt,
+             @createdBy, @createdAt, @updatedAt)
      ON CONFLICT(id) DO UPDATE SET
        shift_date = excluded.shift_date,
        start_time = excluded.start_time,
@@ -176,6 +208,48 @@ export function createShift(input: NewShift, actorId: string | null): Shift {
        updated_at = excluded.updated_at`
   ).run(shift)
   return shift
+}
+
+/**
+ * Shifts in a range that still owe somebody a message.
+ *
+ * Never published, or published and changed since. See shiftNeedsPublishing for
+ * why the second case is not an afterthought: a shift moved after it was
+ * announced leaves the person holding an answer that is no longer true, and they
+ * have no reason to go and look.
+ */
+export function unpublishedShifts(from: string, to: string): ShiftWithPerson[] {
+  return listShifts(from, to).filter(shiftNeedsPublishing)
+}
+
+/**
+ * Publish a week.
+ *
+ * Returns WHAT WAS PUBLISHED rather than just how many, because the caller has
+ * to tell each person about their own shifts and cannot ask again afterwards —
+ * once the stamp is written the rows no longer look unpublished, so a second
+ * read would come back empty and nobody would be told anything.
+ *
+ * The read and the stamp are one transaction for the same reason: two leads
+ * pressing Publish at once must not both decide they are the ones announcing
+ * Thursday.
+ *
+ * Only ever moves shifts FORWARD into published. There is deliberately no
+ * unpublish: taking a shift back off somebody's phone after they have been told
+ * about it does not untell them, and a screen that implies otherwise is worse
+ * than one that makes you delete the shift and say so.
+ */
+export function publishShifts(from: string, to: string): ShiftWithPerson[] {
+  const db = getDb()
+  const stamp = nowIso()
+  const run = db.transaction((): ShiftWithPerson[] => {
+    const due = unpublishedShifts(from, to)
+    if (due.length === 0) return []
+    const mark = db.prepare(`UPDATE shifts SET published_at = ? WHERE id = ?`)
+    for (const shift of due) mark.run(stamp, shift.id)
+    return due.map((s) => ({ ...s, publishedAt: stamp }))
+  })
+  return run()
 }
 
 export function deleteShift(id: string): boolean {
@@ -194,6 +268,11 @@ export function deleteShift(id: string): boolean {
  * row already there was put there deliberately, most likely because that week
  * is the one that differs, and a copy that silently reverted it would be worse
  * than one that skipped it.
+ *
+ * A COPIED WEEK ARRIVES AS A DRAFT. `published_at` is not in the column list
+ * below, so every row lands NULL — which is the point: copying last week is the
+ * FIRST step in building this one, not the last, and a copy that published
+ * itself would tell the floor about a week nobody has looked at yet.
  */
 export function copyWeek(fromMonday: string, toMonday: string, actorId: string | null): number {
   const db = getDb()

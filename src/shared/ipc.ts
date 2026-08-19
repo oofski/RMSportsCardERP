@@ -344,6 +344,12 @@ export const IPC = {
   scheduleCreate: 'schedule:create',
   scheduleDelete: 'schedule:delete',
   scheduleCopyWeek: 'schedule:copy-week',
+  // A rota is a DRAFT until it is published. `schedulePending` is what the week
+  // still owes the floor — a pure read, so the button can carry a count without
+  // anybody pressing it — and `schedulePublish` makes those shifts visible to
+  // the people on them and buzzes each of their phones about their own week.
+  schedulePending: 'schedule:pending',
+  schedulePublish: 'schedule:publish',
   // Availability — what somebody says about a day BEFORE anybody is put on it.
   // The write half is scoped to the session and gated on nothing else: saying
   // when you can and cannot work is not a privilege. Reading the TEAM's answers

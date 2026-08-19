@@ -23,6 +23,9 @@
  * different kinds of fact and this file does not try to make them the same one.
  */
 
+import type { Role } from './permissions'
+import { roleLabel } from './permissions'
+
 /** One scheduled shift for one person. */
 export interface Shift {
   id: string
@@ -34,6 +37,24 @@ export interface Shift {
   endTime: string | null
   /** "Pack bench", "streaming", whatever the lead wants to say. */
   note: string | null
+  /**
+   * When this shift was last PUBLISHED to the person working it. Null = never.
+   *
+   * A rota is built over an afternoon — somebody is added, moved, thought better
+   * of — and until this existed every one of those keystrokes was on the floor's
+   * phones the moment it was typed. So a half-built Thursday read as the answer,
+   * and the only way to avoid it was to build the week somewhere else and copy
+   * it in, which is how a rota ends up on a whiteboard.
+   *
+   * A DRAFT IS INVISIBLE TO THE PERSON IT IS ABOUT. `myShifts` filters on this;
+   * the lead's own range read does not, because the lead has to see what they
+   * are building.
+   *
+   * Compared against `updatedAt` rather than treated as a flag: a shift moved
+   * from 4pm to 6pm after it was published is published AND out of date, and the
+   * person working it needs telling again. See `shiftNeedsPublishing`.
+   */
+  publishedAt: string | null
   createdBy: string | null
   createdAt: string
   updatedAt: string
@@ -421,6 +442,155 @@ export function shiftMinutes(shift: {
   const to = minutesOfDay(shift.endTime)
   if (from === null || to === null) return null
   return to > from ? to - from : to + 24 * 60 - from
+}
+
+/**
+ * Does this shift still owe somebody a message?
+ *
+ * TWO CASES, and missing the second is the one that matters. A shift never
+ * published is obviously unsent. A shift published on Monday and MOVED on
+ * Wednesday is equally unsent — the person working it is holding an answer that
+ * is no longer true, which is worse than holding none, because they will not
+ * think to check.
+ *
+ * Timestamps rather than a boolean for exactly that reason: a flag cleared on
+ * every edit would also be cleared by a lead retyping the same note, and a flag
+ * that is never cleared would never catch the move. The comparison is on strings
+ * because both are ISO instants, where lexical order is chronological order.
+ */
+// ---------------------------------------------------------------------------
+// Who sits under which heading on the rotation grid
+//
+// The grid is one row per person, and a list of everybody in one block is a list
+// somebody has to read all of to find the four packers they are rostering. So it
+// is grouped by the job people do, which on this floor is exactly the ROLE they
+// already hold — there is no second "position" field to keep in step, and
+// inventing one would mean two places to change when somebody moves to the
+// packing bench.
+// ---------------------------------------------------------------------------
+
+/**
+ * The order the headings are drawn in.
+ *
+ * THE FLOOR FIRST, deliberately. A rotation is overwhelmingly about who is
+ * packing and who is on camera; the office roles are on it because they
+ * occasionally work a night, not because anybody opens this screen to roster
+ * them. Putting Owner at the top because it outranks everything would sort the
+ * screen by authority, which is not what anybody is looking for.
+ *
+ * Anything not listed sorts last rather than being dropped — a role added later
+ * and forgotten here still appears, under its own heading.
+ */
+export const ROTATION_ROLE_ORDER: Role[] = ['shipping', 'breaker', 'staff', 'operations', 'owner']
+
+export interface RotationGroup<T> {
+  role: Role
+  label: string
+  people: T[]
+}
+
+/**
+ * Split people into their headings, in the order above.
+ *
+ * EMPTY GROUPS ARE DROPPED. A heading with nothing under it is a row of pixels
+ * saying nothing, and on a floor where most roles hold one or two people that
+ * would be most of the screen.
+ */
+export function groupByRole<T extends { role: Role; firstName: string; lastName: string }>(
+  people: readonly T[]
+): Array<RotationGroup<T>> {
+  const rank = (role: Role): number => {
+    const i = ROTATION_ROLE_ORDER.indexOf(role)
+    return i === -1 ? ROTATION_ROLE_ORDER.length : i
+  }
+  const byRole = new Map<Role, T[]>()
+  for (const person of people) {
+    const list = byRole.get(person.role)
+    if (list) list.push(person)
+    else byRole.set(person.role, [person])
+  }
+  return [...byRole.entries()]
+    .sort((a, b) => rank(a[0]) - rank(b[0]) || a[0].localeCompare(b[0]))
+    .map(([role, list]) => ({
+      role,
+      label: roleLabel(role),
+      people: [...list].sort(
+        (a, b) =>
+          a.firstName.localeCompare(b.firstName) || a.lastName.localeCompare(b.lastName)
+      )
+    }))
+}
+
+/**
+ * How many minutes a set of shifts comes to.
+ *
+ * A shift with no times contributes NOTHING rather than a guess. "In on
+ * Thursday, time to be confirmed" is a real state on this floor, and inventing
+ * eight hours for it would put a number in a total column that nobody agreed to
+ * — which is the kind of figure that ends up in a conversation about pay.
+ */
+export function totalShiftMinutes(
+  shifts: readonly { startTime: string | null; endTime: string | null }[]
+): number {
+  return shifts.reduce((sum, s) => sum + (shiftMinutes(s) ?? 0), 0)
+}
+
+/** Minutes as the hours label a rota column shows: "32h", "6h 30m", "—". */
+export function hoursLabel(minutes: number): string {
+  if (!(minutes > 0)) return '—'
+  const h = Math.floor(minutes / 60)
+  const m = minutes % 60
+  if (m === 0) return `${h}h`
+  return h === 0 ? `${m}m` : `${h}h ${m}m`
+}
+
+/**
+ * One person's week, as the line that lands on their lock screen.
+ *
+ * ## Everything about this is shaped by where it is read
+ *
+ * A push payload is a few kilobytes after encryption and the relay trims the
+ * body at 300 characters, so this cannot be the whole rota and must not be
+ * truncated mid-word into something that looks like a different time. It is
+ * built shortest-useful-first — day, then time — and stops early with a count of
+ * what did not fit, so the last thing somebody reads is "+2 more" rather than
+ * half of Thursday.
+ *
+ * It is also read on a phone that may be face-up on a packing bench, which is
+ * why it says days and times and never a note: "Pack bench with Ada" is fine on
+ * a rota and is not fine displayed to a room.
+ */
+export function describeOwnWeek(
+  shifts: readonly { day: string; startTime: string | null; endTime: string | null }[],
+  limit = 240
+): string {
+  const ordered = [...shifts].sort((a, b) => a.day.localeCompare(b.day))
+  if (ordered.length === 0) return 'Nothing this week.'
+
+  const parts: string[] = []
+  let used = 0
+  for (const [i, shift] of ordered.entries()) {
+    const label = `${dayLabel(shift.day)} ${shiftTimeLabel(shift)}`
+    // The tail has to fit too, or trimming to make room would itself overflow.
+    const tail = i < ordered.length - 1 ? ` +${ordered.length - i} more` : ''
+    if (used + label.length + tail.length > limit && parts.length > 0) {
+      parts.push(`+${ordered.length - i} more`)
+      break
+    }
+    parts.push(label)
+    used += label.length + 3
+  }
+  const total = totalShiftMinutes(ordered)
+  const count = `${ordered.length} shift${ordered.length === 1 ? '' : 's'}`
+  return `${parts.join(' · ')} — ${count}${total > 0 ? `, ${hoursLabel(total)}` : ''}`
+}
+
+export function shiftNeedsPublishing(shift: {
+  publishedAt: string | null
+  updatedAt: string
+}): boolean {
+  if (!shift.publishedAt) return true
+  return shift.updatedAt > shift.publishedAt
 }
 
 /** "4:00pm – 9:30pm", "From 4:00pm", or "Time to be confirmed". */

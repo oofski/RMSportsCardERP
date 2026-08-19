@@ -1334,6 +1334,26 @@ export function createBridge(ipcRenderer: BridgeTransport) {
         ipcRenderer.invoke(IPC.scheduleCopyWeek, { from, to }),
 
       /**
+       * What this week still owes the floor — never published, or published and
+       * changed since. A pure read, so the Publish button can carry a count.
+       */
+      pendingShifts: (from: string, to: string): Promise<ShiftWithPerson[]> =>
+        ipcRenderer.invoke(IPC.schedulePending, { from, to }),
+
+      /**
+       * Publish the week: put it on the phones of the people on it, and tell
+       * them. `problem` is a sentence about the NOTIFYING, beside a publish that
+       * succeeded — the rota is out either way, and a dead relay must not be
+       * reported as a failure to publish.
+       */
+      publishShifts: (
+        from: string,
+        to: string
+      ): Promise<
+        Result<{ published: number; people: number; notified: number; problem: string | null }>
+      > => ipcRenderer.invoke(IPC.schedulePublish, { from, to }),
+
+      /**
        * Availability — what you say about a day before anybody is put on it.
        *
        * `myAvailability` and `setAvailability` name no employee, deliberately:

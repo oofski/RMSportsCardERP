@@ -174,6 +174,36 @@ schedule.createShift({ employeeId: 'emp_robin', day: plus(1), startTime: '16:00'
 // "coming up".
 schedule.createShift({ employeeId: 'emp_pat', day: plus(-4), startTime: '16:00' }, 'emp_lead')
 
+// A ROTA IS A DRAFT UNTIL IT IS PUBLISHED, and `myShifts` is the packer's own
+// read — so nothing above is on anybody's phone yet. Asserted here rather than
+// only in tests/rotation.test.ts because THIS is the suite that would catch the
+// filter being quietly dropped from the read a packer depends on.
+ok(
+  schedule.myShifts('emp_pat').length === 0,
+  'nothing a lead has just typed is on the packer’s own screen yet'
+)
+schedule.publishShifts(plus(-14), plus(14))
+
+/**
+ * Roster somebody AND publish it.
+ *
+ * A rota is a DRAFT until somebody publishes it (see Shift.publishedAt), and
+ * nearly every test below is about what the FLOOR can see — a packer's own
+ * shifts, their board, the four o'clock they are in for. Creating without
+ * publishing would be testing the lead's screen while asserting on the packer's.
+ *
+ * The two places that deliberately do NOT use this are just above: the draft is
+ * the point there.
+ */
+const roster = (input: any, actor = 'emp_lead'): any => {
+  const shift = schedule.createShift(input, actor)
+  // Just that day. Publishing a range would also send whatever else a previous
+  // section left sitting in draft, which is how one test starts depending on
+  // another having run.
+  schedule.publishShifts(input.day, input.day)
+  return shift
+}
+
 const patAll = schedule.myShifts('emp_pat')
 ok(patAll.length === 3, "Pat's whole rota is three shifts", String(patAll.length))
 ok(
@@ -192,7 +222,7 @@ ok(
 // TODAY COUNTS AS AHEAD. Somebody opening the app at nine in the morning wants
 // the four o'clock they are in for, and a cutoff at "after today" hides exactly
 // the shift they most need.
-schedule.createShift({ employeeId: 'emp_robin', day: today, startTime: '16:00' }, 'emp_lead')
+roster({ employeeId: 'emp_robin', day: today, startTime: '16:00' }, 'emp_lead')
 ok(
   schedule.upcomingShifts('emp_robin').some((s: any) => s.day === today),
   "today's own shift is still coming up"
@@ -203,7 +233,7 @@ ok(schedule.myShifts('emp_nobody').length === 0, "a stranger's rota is empty")
 // ADDING AGAIN REPLACES. The floor works one shift a night and the realistic way
 // a second row appears is somebody clicking Add twice, which would put the same
 // evening on the calendar twice with nothing to say which is right.
-schedule.createShift(
+roster(
   { employeeId: 'emp_pat', day: plus(1), startTime: '18:00', note: 'Breaking' },
   'emp_lead'
 )
@@ -219,7 +249,7 @@ ok(moved?.endTime === null, 'and clears what was not restated rather than keepin
 // and a shift that appears on nobody's screen.
 let refused = false
 try {
-  schedule.createShift({ employeeId: 'emp_ghost', day: plus(2) }, 'emp_lead')
+  roster({ employeeId: 'emp_ghost', day: plus(2) }, 'emp_lead')
 } catch {
   refused = true
 }
@@ -261,13 +291,13 @@ console.log('\n=== 4. copying a week ===')
 db.prepare(`DELETE FROM shifts`).run()
 const MON = '2026-08-03'
 const NEXT_MON = '2026-08-10'
-schedule.createShift({ employeeId: 'emp_pat', day: '2026-08-03', startTime: '16:00' }, 'emp_lead')
-schedule.createShift({ employeeId: 'emp_pat', day: '2026-08-06', startTime: '16:00' }, 'emp_lead')
-schedule.createShift({ employeeId: 'emp_robin', day: '2026-08-06', startTime: '17:00' }, 'emp_lead')
+roster({ employeeId: 'emp_pat', day: '2026-08-03', startTime: '16:00' }, 'emp_lead')
+roster({ employeeId: 'emp_pat', day: '2026-08-06', startTime: '16:00' }, 'emp_lead')
+roster({ employeeId: 'emp_robin', day: '2026-08-06', startTime: '17:00' }, 'emp_lead')
 // Already on the target week, deliberately different. The copy must LEAVE IT
 // ALONE: a row already there was put there on purpose, most likely because that
 // week is the one that differs.
-schedule.createShift({ employeeId: 'emp_pat', day: '2026-08-10', startTime: '12:00' }, 'emp_lead')
+roster({ employeeId: 'emp_pat', day: '2026-08-10', startTime: '12:00' }, 'emp_lead')
 
 const made = schedule.copyWeek(MON, NEXT_MON, 'emp_lead')
 ok(made === 2, 'two of the three shifts copy; the clash is skipped', String(made))
@@ -407,8 +437,8 @@ ok(
 
 // And the board carries the person's OWN shifts, nobody else's.
 db.prepare(`DELETE FROM shifts`).run()
-schedule.createShift({ employeeId: meId, day: plus(2), startTime: '16:00' }, 'emp_lead')
-schedule.createShift({ employeeId: 'emp_robin', day: plus(2), startTime: '16:00' }, 'emp_lead')
+roster({ employeeId: meId, day: plus(2), startTime: '16:00' }, 'emp_lead')
+roster({ employeeId: 'emp_robin', day: plus(2), startTime: '16:00' }, 'emp_lead')
 const mine = staffBoard.getStaffBoard({ fulfillment: true, viewerId: meId })
 ok(mine.shifts.length === 1, 'one shift coming up', String(mine.shifts.length))
 ok(mine.shifts[0].employeeId === meId, "and it is mine, not Robin's")
@@ -537,7 +567,7 @@ console.log('\n=== 8. one shift per person per night, across machines ===')
 // The shift id is derived too, so two leads rostering the same person for the
 // same night converge on one row instead of two that both look authoritative.
 db.prepare(`DELETE FROM shifts`).run()
-const made1 = schedule.createShift(
+const made1 = roster(
   { employeeId: 'emp_pat', day: plus(4), startTime: '16:00' },
   'emp_lead'
 )
@@ -548,7 +578,7 @@ db.prepare(
   `INSERT INTO shifts (id, employee_id, shift_date, start_time, end_time, note, created_by, created_at, updated_at)
    VALUES ('legacy-uuid-1', 'emp_robin', ?, '16:00', NULL, NULL, 'emp_lead', ?, ?)`
 ).run(plus(4), stamp, stamp)
-const fixed = schedule.createShift(
+const fixed = roster(
   { employeeId: 'emp_robin', day: plus(4), startTime: '18:00' },
   'emp_lead'
 )
@@ -811,12 +841,12 @@ ok(pat?.hasPattern === true, 'and somebody who did is not')
 ok(pat?.pattern.length === 2, 'carrying their days', String(pat?.pattern.length))
 
 // Rostered hours per person, so a lead can see who is being loaded up.
-schedule.createShift(
+roster(
   { employeeId: 'emp_pat', day: mon2, startTime: '16:00', endTime: '21:00' },
   'emp_lead'
 )
 // A CLASH: Pat said they cannot work Tuesday, and here they are on Tuesday.
-schedule.createShift({ employeeId: 'emp_pat', day: tue2, startTime: '16:00' }, 'emp_lead')
+roster({ employeeId: 'emp_pat', day: tue2, startTime: '16:00' }, 'emp_lead')
 
 const ov1 = schedule.teamScheduleOverview(from, to)
 const pat1 = ov1.people.find((p: any) => p.employeeId === 'emp_pat')
@@ -863,7 +893,7 @@ ok(/2 people are free/.test(gap2.text), 'saying how many', gap2.text)
 
 // A DISABLED person drops off the roster — but their shift does not vanish from
 // the day, or a night would read as covered when nobody is coming.
-schedule.createShift({ employeeId: 'emp_sam', day: mon2, startTime: '16:00' }, 'emp_lead')
+roster({ employeeId: 'emp_sam', day: mon2, startTime: '16:00' }, 'emp_lead')
 db.prepare(`UPDATE employees SET status = 'disabled' WHERE id = 'emp_sam'`).run()
 const ov3 = schedule.teamScheduleOverview(from, to)
 ok(

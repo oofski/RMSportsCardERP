@@ -3270,6 +3270,42 @@ function migrate(database: Database.Database): void {
   addColumnIfMissing(database, 'invoices', 'qbo_payment_count', 'INTEGER')
   setMeta(database, 'schema_version', '71')
 
+  // v72: a rota is a DRAFT until somebody publishes it.
+  //
+  // A week is built over an afternoon — somebody is added, moved, thought better
+  // of — and every one of those keystrokes used to be on the floor's phones the
+  // moment it was typed. So a half-built Thursday read as the answer, and the
+  // only way round it was to build the week somewhere else and copy it in, which
+  // is how a rota ends up on a whiteboard instead of in the app.
+  //
+  // NULL means never published, and a draft is invisible to the person it is
+  // about: the packer's own read filters on this column, while the lead's range
+  // read does not, because the lead has to see what they are building.
+  //
+  // A TIMESTAMP RATHER THAN A FLAG, because there are two ways to owe somebody a
+  // message and a boolean only catches one. A shift never published is unsent. A
+  // shift published on Monday and MOVED to a different time on Wednesday is
+  // equally unsent — the person is holding an answer that is no longer true,
+  // which is worse than holding none, because they will not think to check.
+  // Comparing published_at against updated_at catches both.
+  addColumnIfMissing(database, 'shifts', 'published_at', 'TEXT')
+
+  // EVERY SHIFT THAT ALREADY EXISTED IS PUBLISHED. Without this the column
+  // arrives NULL on rows the floor has been reading for months, and the first
+  // launch after the update empties every packer's schedule — a silent, total
+  // data loss as far as anybody looking at a phone is concerned. Stamped with
+  // created_at rather than now(), so the record says when the shift became known
+  // rather than when this migration happened to run.
+  //
+  // runOnce, so a lead who deliberately drafts a week and restarts the app does
+  // not have it published out from under them on the way back up.
+  runOnce(database, 'shifts_published_backfill_v1', () => {
+    database
+      .prepare(`UPDATE shifts SET published_at = created_at WHERE published_at IS NULL`)
+      .run()
+  })
+  setMeta(database, 'schema_version', '72')
+
   // v41: re-derive every product's average cost from its remaining cost layers.
   //
   // The average used to be stored rounded to the cent, back when every total in

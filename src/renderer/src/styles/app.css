@@ -20670,101 +20670,419 @@ button.sor-team:focus-visible {
 }
 
 /* ---------------------------------------------------------------------------
-   THE ROTA, FROM THE LEAD'S SIDE
+   THE ROTATION GRID
 
-   A week across, one column per day. Seven columns of names is the shape the
-   decision is actually made in — "who is on Thursday" — and it stays legible at
-   four or five names because each cell is a column rather than a grid square.
+   ONE ROW PER PERSON, one column per day. The previous shape was seven columns
+   of names — a day at a time — which answered "who is on Thursday" and could not
+   answer "how is Ada's week looking" without reading all seven and holding the
+   answer in your head. A person per row answers both: a week is a line read left
+   to right, a day is still a column read top to bottom.
+
+   It is a CSS grid rather than a table because the first column has to stick
+   while the days scroll sideways on a narrow screen, and a table cannot do that
+   without the header and the body drifting a pixel apart at some zoom level.
+
+   The column widths live in one custom property so the header row, every person
+   row, each subtotal and the grand total are laid out by the same declaration —
+   the failure mode of repeating them is a header that lines up at one width and
+   not at another.
    --------------------------------------------------------------------------- */
 
-.rota-week {
-  display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
-  gap: 8px;
-  margin-top: 12px;
+.rot-filters {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 12px 0 10px;
 }
-/* Two rows of days rather than seven unreadable slivers once the window is
-   narrow. Four then three, which keeps the weekend together. */
-@media (max-width: 1020px) {
-  .rota-week {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
+.rot-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-3);
 }
-@media (max-width: 620px) {
-  .rota-week {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
+.rot-search input {
+  border: none;
+  outline: none;
+  background: transparent;
+  font-size: 12.5px;
+  color: var(--text);
+  width: 130px;
+}
+.rot-search button {
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  display: inline-flex;
 }
 
-.rota-day {
+.rot-chips {
   display: flex;
-  flex-direction: column;
-  min-height: 132px;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+/* A chip per job actually on the roster, and OFF is the styled state — the
+   default is everybody visible, so what a chip communicates when it changes is
+   "you are hiding these", which should look like something is missing. */
+.rot-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: 999px;
   background: var(--surface);
-  overflow: hidden;
-}
-.rota-day[data-today='true'] {
-  border-color: var(--accent);
-}
-/* A day already worked is history. It stays readable — a lead checking what
-   happened needs it — but it stops competing with the days still to fill. */
-.rota-day[data-past='true'] {
-  opacity: 0.62;
-}
-.rota-day-head {
-  display: flex;
-  align-items: baseline;
-  gap: 5px;
-  padding: 7px 9px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface-2);
-}
-.rota-day-head b {
-  font-size: 11.5px;
-  font-weight: 700;
   color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
 }
-.rota-day-head span {
-  font-size: 11px;
+.rot-chip span {
+  font-weight: 500;
   color: var(--text-3);
   font-variant-numeric: tabular-nums;
 }
+.rot-chip.is-off {
+  background: transparent;
+  color: var(--text-3);
+  border-style: dashed;
+  text-decoration: line-through;
+}
 
-.rota-list {
-  flex: 1;
-  list-style: none;
-  margin: 0;
-  padding: 5px 6px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.rota-list li {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  padding: 5px 20px 5px 7px;
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--accent) 11%, var(--surface-2));
-}
-.rota-who {
-  font-size: 11.5px;
-  font-weight: 650;
-  color: var(--text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.rota-when {
-  font-size: 10.5px;
+.rot-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
   color: var(--text-2);
+  cursor: pointer;
+}
+
+.rot-scroll {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.rot-grid {
+  --rot-name: 190px;
+  --rot-total: 66px;
+  min-width: 760px;
+}
+.rot-row {
+  display: grid;
+  grid-template-columns: var(--rot-name) repeat(7, minmax(0, 1fr)) var(--rot-total);
+  align-items: stretch;
+  border-bottom: 1px solid var(--border);
+}
+.rot-row:last-child {
+  border-bottom: none;
+}
+
+/* The first column sticks. On a phone the days scroll under it, and a grid whose
+   row labels scroll away is one where you count columns to work out whose week
+   you are looking at. */
+.rot-name {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  font-size: 12.5px;
+  color: var(--text);
+  min-width: 0;
+}
+.rot-person {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.rot-head {
+  background: var(--surface-2);
+  position: sticky;
+  top: 0;
+  z-index: 3;
+}
+.rot-head .rot-name {
+  background: var(--surface-2);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.rot-day-head {
+  flex-direction: column;
+  gap: 0;
+  padding: 6px 4px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+.rot-day-head b {
+  font-size: 12px;
+  color: var(--text-2);
+}
+.rot-day-head[data-today='true'] {
+  color: var(--brand-600);
+  box-shadow: inset 0 -2px 0 var(--brand-500);
+}
+.rot-day-head[data-today='true'] b {
+  color: var(--brand-600);
+}
+
+/* The heading band, in the same green family as the rest of the app's section
+   bands so a group reads as a group rather than as another row. */
+.rot-band {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--brand-soft);
+  color: var(--brand-700);
+  font-size: 12px;
+  font-weight: 700;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  left: 0;
+}
+.rot-band span {
+  font-weight: 500;
+  color: var(--text-3);
+}
+
+.rot-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 4px;
+  border-left: 1px solid var(--border);
+  min-height: 44px;
+  min-width: 0;
+}
+.rot-cell[data-past='true'] {
+  background: var(--surface-2);
+}
+
+/* An empty cell is a BUTTON, always. The row says who and the column says when,
+   so putting somebody on a day is one click on the square where they meet —
+   there is no name to pick out of a list of everybody. */
+.rot-open {
+  border-top: none;
+  border-right: none;
+  border-bottom: none;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  font-size: 11px;
+}
+.rot-open:disabled {
+  cursor: default;
+}
+.rot-open .rot-said {
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 999px;
+}
+/* What somebody SAID about the day, which is the fact a lead needs before they
+   click. Free is quiet; away is loud, because adding somebody who marked
+   themselves off must never happen without being noticed. */
+.rot-open[data-said='available'] .rot-said {
+  background: var(--success-bg);
+  color: var(--success-strong);
+}
+.rot-open[data-said='unavailable'] .rot-said {
+  background: var(--danger-bg);
+  color: var(--danger-strong);
+}
+.rot-open svg {
+  opacity: 0;
+}
+.rot-open:hover svg,
+.rot-open:focus-visible svg {
+  opacity: 1;
+}
+.rot-open:hover {
+  background: var(--brand-soft);
+}
+
+.rot-has {
+  position: relative;
+}
+.rot-shift {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  width: 100%;
+  padding: 5px 4px;
+  border: 1px solid var(--success);
+  border-radius: var(--radius-sm);
+  background: var(--success-bg);
+  color: var(--success-strong);
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  min-width: 0;
+}
+.rot-shift:disabled {
+  cursor: default;
+}
+.rot-time {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.rot-note {
+  font-size: 10px;
+  font-weight: 500;
+  opacity: 0.85;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+/* NOT PUBLISHED: a dashed edge, the same idea as the count on the Publish
+   button at the level of one square. It is possible to look at the grid and see
+   exactly which shifts the floor has not been told about. */
+.rot-has[data-unsent='true'] .rot-shift {
+  border-style: dashed;
+  background: var(--surface);
+  color: var(--text-2);
+  border-color: var(--border-strong);
+}
+/* ROSTERED ON A DAY THEY SAID THEY CANNOT WORK. The single most useful thing
+   this grid can say, so it is the colour of the cell rather than something to go
+   and check. It beats the unpublished styling above deliberately: a clash is a
+   problem now, and being unpublished is only a problem later. */
+.rot-has[data-clash='true'] .rot-shift {
+  border-style: solid;
+  border-color: var(--danger);
+  background: var(--danger-bg);
+  color: var(--danger-strong);
+}
+.rot-x {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  opacity: 0;
+}
+.rot-has:hover .rot-x,
+.rot-x:focus-visible {
+  opacity: 1;
+}
+.rot-x:hover {
+  color: var(--danger-strong);
+  background: var(--surface);
+}
+
+.rot-total {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 4px 10px;
+  border-left: 1px solid var(--border);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+.rot-head .rot-total {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* Cover per day — the figure a lead is checking when they read down a column.
+   A zero is styled, because "nobody on the bench on Thursday" is the answer this
+   row exists to give and it should not look like every other cell. */
+.rot-sub,
+.rot-grand {
+  background: var(--surface-2);
+  font-size: 12px;
+}
+.rot-sub .rot-name,
+.rot-grand .rot-name {
+  background: var(--surface-2);
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+.rot-grand {
+  font-weight: 700;
+}
+.rot-grand .rot-name {
+  color: var(--text-2);
+}
+.rot-count {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+.rot-count[data-none='true'] {
+  color: var(--text-3);
+  font-weight: 400;
+}
+
+.rot-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 34px 12px;
+  color: var(--text-3);
+  font-size: 13px;
+}
+.rot-empty p {
+  margin: 0;
+}
+
+.rot-foot {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--warning-bg);
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.rot-foot svg {
+  flex: none;
+  margin-top: 2px;
+}
+.rot-free-note {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+/* The close button on the inline editor, kept from the day-column layout that
+   this grid replaced — it is the same gesture in the same panel. */
 .rota-x {
   position: absolute;
   top: 4px;
@@ -20779,45 +21097,16 @@ button.sor-team:focus-visible {
   background: transparent;
   color: var(--text-3);
   cursor: pointer;
-  opacity: 0;
-}
-.rota-list li:hover .rota-x,
-.rota-x:focus-visible {
-  opacity: 1;
 }
 .rota-x:hover {
   color: var(--danger-strong);
   background: var(--surface);
 }
 
-.rota-none {
-  padding: 4px 7px;
-  font-size: 11px;
-  color: var(--text-3);
-}
-
-.rota-add {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  margin: 0 6px 6px;
-  padding: 5px;
-  border: 1px dashed var(--border);
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-3);
-  font-size: 11px;
-  font-weight: 600;
-  cursor: pointer;
-}
-.rota-add:hover {
-  color: var(--text);
-  border-color: var(--accent);
-}
-
-/* The add form, inline under the week. Setting a rota is half a dozen of these
-   in a row, and a dialog reopened for each one turns two minutes into a chore. */
+/* The cell editor, inline under the grid. Setting a week is a dozen of these in
+   a row, and a dialog reopened for each one turns two minutes into a chore. It
+   has no "who" field: the cell that was clicked already said who and already
+   said which day, so all that is left to decide is the time. */
 .rota-add-panel {
   margin-top: 12px;
   border: 1px solid var(--accent);

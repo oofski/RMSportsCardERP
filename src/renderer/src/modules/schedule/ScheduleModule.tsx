@@ -6,7 +6,7 @@ import { api } from '../../lib/api'
 import { LIVE, useLiveRefresh } from '../../lib/live'
 import { CenterLoader } from '../../components/ui'
 import { MyScheduleTab } from './MyScheduleTab'
-import { RotaTab } from './RotaTab'
+import { RotationTab } from './RotationTab'
 import { TeamScheduleTab } from './TeamScheduleTab'
 
 /**
@@ -28,7 +28,9 @@ import { TeamScheduleTab } from './TeamScheduleTab'
  * is covered, and everybody's usual week in one grid. It answers "who can I put
  * on Thursday" before the rota tab is opened to do it.
  *
- * ROTA is where the week is actually built.
+ * ROTATION is where the week is actually built: one row per person, one column
+ * per day, grouped by the job people do — and nothing on it reaches a phone
+ * until somebody presses Publish.
  *
  * ## The week is owned HERE, not by either tab
  *
@@ -115,10 +117,13 @@ export function ScheduleModule(): JSX.Element {
         <button className={`seg ${tab === 'team' ? 'on' : ''}`} onClick={() => setTab('team')}>
           Team
         </button>
-        {/* Reading the rota is admin.hours.view; CHANGING it needs
-            admin.employees.manage, which the tab checks again inside. */}
+        {/* Reading it is admin.hours.view; CHANGING it needs
+            admin.employees.manage, which the tab checks again inside. The tab id
+            stays 'rota' — it is remembered in component state and named by
+            openDay below, and renaming what a thing is CALLED is not a reason to
+            rename what it is. */}
         <button className={`seg ${tab === 'rota' ? 'on' : ''}`} onClick={() => setTab('rota')}>
-          Rota
+          Rotation
         </button>
       </div>
 
@@ -127,7 +132,7 @@ export function ScheduleModule(): JSX.Element {
       ) : tab === 'team' ? (
         <TeamScheduleTab weekStart={weekStart} onOpenDay={openDay} />
       ) : (
-        <RotaTab
+        <RotationTab
           employees={employees}
           weekStart={weekStart}
           setWeekStart={setWeekStart}

@@ -27,10 +27,14 @@ import {
   myAvailability,
   myPattern,
   myShifts,
+  publishShifts,
   setAvailability,
   setPattern,
-  teamScheduleOverview
+  teamScheduleOverview,
+  unpublishedShifts
 } from './db/schedule'
+import { notifyMessage } from './services/webPush'
+import { dayLabel, describeOwnWeek } from '@shared/schedule'
 
 /**
  * The floor's board, the rota, and availability.
@@ -149,6 +153,95 @@ export function registerScheduleIpc(): void {
         return {
           ok: true,
           data: { created: copyWeek(str(payload?.from), str(payload?.to), actor.id) }
+        }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  /**
+   * What a week still owes the floor. A pure READ, so the button can carry a
+   * count without anybody pressing it.
+   */
+  ipcMain.handle(
+    IPC.schedulePending,
+    (_e, payload: { from?: unknown; to?: unknown }): ShiftWithPerson[] => {
+      if (!can('admin.hours.view')) return []
+      return unpublishedShifts(str(payload?.from), str(payload?.to))
+    }
+  )
+
+  /**
+   * Publish a week: make it visible to the people on it, and tell them.
+   *
+   * ## The stamp goes down FIRST, and the phones come second
+   *
+   * Same ordering as a message being sent, and for the same reason. Publishing
+   * is the fact — it is what puts the week on everybody's own screen — and a
+   * notification is a doorbell. A relay that is down, a VAPID key that has not
+   * been pasted, a phone that unsubscribed last week: none of those should mean
+   * the rota fails to publish, because the rota is on every device that syncs
+   * regardless and the floor can open the app and read it.
+   *
+   * So `notifyMessage` never throws, whatever it finds, and its trouble comes
+   * back as a SENTENCE beside a successful publish rather than as an error that
+   * would undo one.
+   *
+   * ## One message per person, about their own week
+   *
+   * Not a broadcast. A packer does not need to know that four other people were
+   * rostered, and a notification listing the whole floor is one nobody reads to
+   * the end — which is exactly where their own Thursday would be. The body is
+   * their days and their times and nothing else.
+   */
+  ipcMain.handle(
+    IPC.schedulePublish,
+    async (
+      _e,
+      payload: { from?: unknown; to?: unknown }
+    ): Promise<
+      Result<{ published: number; people: number; notified: number; problem: string | null }>
+    > => {
+      try {
+        requireRoster()
+        const from = str(payload?.from)
+        const to = str(payload?.to)
+        const published = publishShifts(from, to)
+        if (published.length === 0) {
+          return { ok: true, data: { published: 0, people: 0, notified: 0, problem: null } }
+        }
+
+        const byPerson = new Map<string, ShiftWithPerson[]>()
+        for (const shift of published) {
+          const list = byPerson.get(shift.employeeId)
+          if (list) list.push(shift)
+          else byPerson.set(shift.employeeId, [shift])
+        }
+
+        // Sent one at a time rather than as one call with everybody's ids,
+        // because the whole point is that each body is different. The relay
+        // route takes a list because a message goes to a thread; a rota goes to
+        // a person.
+        let notified = 0
+        let problem: string | null = null
+        for (const [employeeId, shifts] of byPerson) {
+          const result = await notifyMessage({
+            employeeIds: [employeeId],
+            title: `Your shifts · ${dayLabel(from)} – ${dayLabel(to)}`,
+            body: describeOwnWeek(shifts),
+            // No thread to open — this is not a conversation. The service
+            // worker treats a blank id as "just open the app", which lands on
+            // the board with the schedule one tap away.
+            threadId: ''
+          })
+          notified += result.notified
+          problem = problem ?? result.problem
+        }
+
+        return {
+          ok: true,
+          data: { published: published.length, people: byPerson.size, notified, problem }
         }
       } catch (err) {
         return fail(err)
