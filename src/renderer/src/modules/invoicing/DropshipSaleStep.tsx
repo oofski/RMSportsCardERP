@@ -2,7 +2,7 @@ import { useState } from 'react'
 import type { InvoiceCustomer, InvoiceDetail } from '@shared/invoices'
 import type { PurchaseOrderDetail } from '@shared/types'
 import { dropshipSaleFromPurchase } from '@shared/orders'
-import { destinationHoldsStock, destinationSummary } from '@shared/purchaseOrders'
+import { destinationHoldsStock } from '@shared/purchaseOrders'
 import { api } from '../../lib/api'
 import { Button, Modal } from '../../components/ui'
 import { Icon } from '../../components/Icon'
@@ -64,17 +64,58 @@ export function DropshipSaleStep({
    * and `destinationSummary` already words that for a screen — but on a mixed
    * order it can genuinely be several, and picking one would be guessing.
    */
-  const dropDestinations = po.lines
-    .flatMap((l) =>
-      l.allocations.length > 0
-        ? l.allocations.map((a) => a.destination)
-        : [l.destination ?? po.location]
-    )
-    // destinationHoldsStock is the ONE place that decides what is a shelf. A
-    // second test spelled out here is how a screen comes to disagree with the
-    // stock code about which orders are dropships.
-    .filter((d): d is string => !!d && !destinationHoldsStock(d))
-  const buyer = destinationSummary([...new Set(dropDestinations)]) || po.location
+  /**
+   * ONLY THE UNITS THAT ACTUALLY LEFT THE BUILDING, at the quantity that left.
+   *
+   * ## The bug this shape exists to prevent
+   *
+   * A MIXED order — say ten units onto the RM shelf and five straight to a shop
+   * — was previously prefilled from `po.lines` at the LINE's full quantity, with
+   * every line stamped as a dropship. Two things went wrong at once and both
+   * cost money: the buyer was invoiced for fifteen units when they are receiving
+   * five, and the ten that really did come here were marked as never having
+   * touched a shelf, so the sale drew no stock and the shelf stayed up for units
+   * that had been sold.
+   *
+   * So the prefill is built from ALLOCATIONS — the actual slices of each line
+   * and where each slice went — and only the slices whose destination is not one
+   * of ours. An unsplit line has no allocations and is treated as one slice of
+   * its whole quantity, which is what it is.
+   *
+   * `destinationHoldsStock` is the ONE place that decides what counts as a
+   * shelf. Spelling that test out a second time here is how a screen comes to
+   * disagree with the stock code about which units are a dropship.
+   */
+  const dropSlices = po.lines.flatMap((line) => {
+    const slices =
+      line.allocations.length > 0
+        ? line.allocations.map((a) => ({ destination: a.destination, quantity: a.quantity }))
+        : [{ destination: line.destination ?? po.location, quantity: line.quantity }]
+    return slices
+      .filter((s) => !!s.destination && !destinationHoldsStock(s.destination))
+      .map((s) => ({
+        destination: s.destination as string,
+        quantity: s.quantity,
+        item: line.productName ?? 'Item',
+        productId: line.productId,
+        sku: line.sku ?? null
+      }))
+  })
+
+  const buyers = [...new Set(dropSlices.map((s) => s.destination))]
+  /**
+   * ONE BUYER, OR NONE. `destinationSummary` words a list for a screen and
+   * happily returns the literal string "2 destinations" — which, passed through
+   * as `customerName`, becomes a CUSTOMER OF THAT NAME in this app and then an
+   * offer to create one in the owner's real QuickBooks books.
+   *
+   * A purchase split across two different shops is two sales to two different
+   * people and cannot be one invoice, so the flow declines rather than guessing
+   * which of them to bill.
+   */
+  const buyer = buyers.length === 1 ? buyers[0] : null
+  const splitAcrossBuyers = buyers.length > 1
+  const dropUnits = dropSlices.reduce((sum, s) => sum + s.quantity, 0)
 
   const begin = async (): Promise<void> => {
     // Fetched at the moment the form opens rather than held: the number is a
@@ -95,13 +136,13 @@ export function DropshipSaleStep({
         invoice={null}
         prefill={dropshipSaleFromPurchase({
           supplier: po.supplier,
-          destination: buyer,
+          destination: buyer as string,
           invoiceDate: new Date().toISOString().slice(0, 10),
-          lines: po.lines.map((l) => ({
-            item: l.productName ?? 'Item',
-            productId: l.productId,
-            sku: l.sku ?? null,
-            quantity: l.quantity
+          lines: dropSlices.map((s) => ({
+            item: s.item,
+            productId: s.productId,
+            sku: s.sku,
+            quantity: s.quantity
           }))
         })}
         customers={customers}
@@ -139,22 +180,49 @@ export function DropshipSaleStep({
           <Button variant="ghost" onClick={onClose}>
             Not now
           </Button>
-          <Button variant="primary" icon="ReceiptText" onClick={() => void begin()}>
-            Write the sales order
-          </Button>
+          {!!buyer && !splitAcrossBuyers && (
+            <Button variant="primary" icon="ReceiptText" onClick={() => void begin()}>
+              Write the sales order
+            </Button>
+          )}
         </>
       }
     >
-      <p className="fin-confirm-lead">
-        <b>{po.poNumber}</b> buys {po.orderedUnits} unit{po.orderedUnits === 1 ? '' : 's'} from{' '}
-        <b>{po.supplier ?? 'a supplier'}</b> for <b>{formatMoney(po.total)}</b>, shipping straight
-        to <b>{buyer}</b>. None of it touches a shelf here.
-      </p>
-      <p className="fin-confirm-lead">
-        The sales order bills <b>{buyer}</b> for the same goods at <b>your</b> price. The lines
-        come across already marked as shipped by {po.supplier ?? 'the supplier'}, so no stock
-        moves — <b>the only thing to type is what you are selling it for.</b>
-      </p>
+      {/* TWO WAYS THIS CANNOT PROCEED, and neither is an error worth a red
+          banner — both are ordinary shapes of order that simply are not one
+          sale. Saying which, and offering the door out, beats a form that
+          would invoice the wrong person for the wrong number of boxes. */}
+      {splitAcrossBuyers ? (
+        <p className="fin-confirm-lead">
+          <b>{po.poNumber}</b> ships to <b>{buyers.length} different places</b>
+          {' — '}
+          {buyers.join(', ')}. That is {buyers.length} separate sales to {buyers.length} separate
+          people, so it cannot be billed as one order. Raise each one from the Sales Orders board.
+        </p>
+      ) : !buyer ? (
+        <p className="fin-confirm-lead">
+          Every unit on <b>{po.poNumber}</b> is coming to one of your own shelves, so there is
+          nothing here to bill on. Sell it from stock in the ordinary way when it arrives.
+        </p>
+      ) : (
+        <>
+          <p className="fin-confirm-lead">
+            <b>{po.poNumber}</b> buys {po.orderedUnits} unit{po.orderedUnits === 1 ? '' : 's'} from{' '}
+            <b>{po.supplier ?? 'a supplier'}</b> for <b>{formatMoney(po.total)}</b>.{' '}
+            <b>{dropUnits}</b> of {po.orderedUnits === dropUnits ? 'them ship' : 'those ship'}{' '}
+            straight to <b>{buyer}</b> and never touch a shelf here.
+          </p>
+          <p className="fin-confirm-lead">
+            The sales order bills <b>{buyer}</b> for <b>those {dropUnits}</b> at <b>your</b> price
+            — {po.orderedUnits === dropUnits
+              ? 'the whole order'
+              : `not the ${po.orderedUnits - dropUnits} coming to your own shelf, which you sell separately`}
+            . The lines come across already marked as shipped by{' '}
+            {po.supplier ?? 'the supplier'}, so no stock moves —{' '}
+            <b>the only thing to type is what you are selling it for.</b>
+          </p>
+        </>
+      )}
       <p className="ds-note">
         <Icon name="Info" size={14} />
         <span>

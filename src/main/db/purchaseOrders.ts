@@ -28,7 +28,7 @@ import { LOCATION_IDS } from '@shared/inventory'
 import { getDb, getMeta, setMeta } from './database'
 import { addStock, adjustStock, reverseStockReceipt, stockQty } from './inventory'
 import { recordPoCogs, voidPoCogs } from './finance'
-import { deleteOrderExtras, recordOrderEvent } from './orderExtras'
+import { adoptLegacyFreight, deleteOrderExtras, recordOrderEvent } from './orderExtras'
 import { newId, nowIso } from '../util'
 
 interface PoRow {
@@ -654,6 +654,21 @@ export function createPurchaseOrder(
       actorId,
       db
     })
+
+    // Freight typed on the form becomes the order's first PARCEL. Without this
+    // the number lives only in the mirror columns, and the first parcel anybody
+    // adds later overwrites it — see adoptLegacyFreight.
+    adoptLegacyFreight(
+      'po',
+      id,
+      {
+        carrier: asCarrier(input.carrier) ?? detectCarrier(input.trackingNumber ?? ''),
+        service: input.service ?? null,
+        trackingNumber: input.trackingNumber ?? null
+      },
+      actorId,
+      db
+    )
 
     const insertLine = db.prepare(
       `INSERT INTO purchase_order_lines

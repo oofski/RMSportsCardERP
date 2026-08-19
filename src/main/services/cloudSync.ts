@@ -5,6 +5,7 @@ import type { SyncConfig, SyncConfigView, SyncStatus, SyncPhase } from '@shared/
 import { getDb } from '../db/database'
 import { queueEverything } from '../db/syncTriggers'
 import { rebuildShipDocument } from '../db/shipping'
+import { rebuildOrderDocuments } from '../db/orderExtras'
 import {
   applyRows,
   clearForJoin,
@@ -428,6 +429,20 @@ export async function syncOnce(): Promise<RoundResult> {
     if (rebuildShipDocument() > 0) {
       changedKinds.add('ship_documents')
       console.log('Sync: the packing slip arrived from another machine.')
+    }
+  }
+  if (changedKinds.has('order_document_parts')) {
+    // The shipping labels, put back together the same way and for the same
+    // reason. Without this the slices arrive, the file never does, and every
+    // machine except the one that uploaded shows a label it can never open —
+    // which is the exact failure the packing slip had before it was sliced.
+    //
+    // Worse here than there: an order's label is what gets EMAILED to whoever
+    // is shipping the goods, and a send from a machine holding no bytes would
+    // go out saying a label is attached when none is.
+    if (rebuildOrderDocuments() > 0) {
+      changedKinds.add('order_documents')
+      console.log('Sync: a shipping label arrived from another machine.')
     }
   }
 

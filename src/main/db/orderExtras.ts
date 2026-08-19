@@ -286,32 +286,37 @@ function mirrorPrimaryShipment(db: Database.Database, side: OrderSide, orderId: 
   const table = side === 'po' ? 'purchase_orders' : 'invoices'
   const first = db
     .prepare(
-      `SELECT carrier, service, tracking_number, tracking_status, tracking_status_detail,
-              tracking_status_at, tracking_checked_at, tracking_error, tracking_attempted_at
-         FROM order_shipments
+      `SELECT carrier, service, tracking_number FROM order_shipments
         WHERE order_kind = ? AND order_id = ?
         ORDER BY position ASC, created_at ASC LIMIT 1`
     )
     .get(side, orderId) as Record<string, string | null> | undefined
 
+  /**
+   * ONLY THE THREE FIELDS SOMEBODY TYPES. The six tracking_* columns beside them
+   * are deliberately NOT mirrored, and that is a correctness rule rather than an
+   * optimisation.
+   *
+   * Those columns are written by the carrier-tracking sweep, which reads a real
+   * answer off a real carrier — "Delivered, Memphis TN, Tuesday". A parcel row
+   * carries its own copies and they are NULL until that sweep has run against
+   * that parcel. Mirroring them across would copy six nulls over a true reading
+   * every time anybody touched an unrelated field, so typing a postage figure
+   * would wipe a delivery confirmation — and if the carrier has since aged the
+   * number out of its system, it never comes back.
+   *
+   * The status the ORDER shows therefore stays whatever the sweep last wrote,
+   * which is the only thing that ever had the right to write it.
+   */
   db.prepare(
     `UPDATE ${table}
         SET carrier = @carrier, service = @service, tracking_number = @tracking,
-            tracking_status = @status, tracking_status_detail = @statusDetail,
-            tracking_status_at = @statusAt, tracking_checked_at = @checkedAt,
-            tracking_error = @error, tracking_attempted_at = @attemptedAt,
             updated_at = @at
       WHERE id = @id`
   ).run({
     carrier: first?.carrier ?? null,
     service: first?.service ?? null,
     tracking: first?.tracking_number ?? null,
-    status: first?.tracking_status ?? null,
-    statusDetail: first?.tracking_status_detail ?? null,
-    statusAt: first?.tracking_status_at ?? null,
-    checkedAt: first?.tracking_checked_at ?? null,
-    error: first?.tracking_error ?? null,
-    attemptedAt: first?.tracking_attempted_at ?? null,
     at: nowIso(),
     id: orderId
   })
@@ -565,6 +570,72 @@ export function recordShipmentTrackingFailure(id: string, error: string): void {
     | { order_kind: string; order_id: string }
     | undefined
   if (row) mirrorPrimaryShipment(db, row.order_kind === 'po' ? 'po' : 'so', row.order_id)
+}
+
+/**
+ * Turn freight typed on an ORDER FORM into the parcel it describes.
+ *
+ * ## Why this exists, and what breaks without it
+ *
+ * Both order forms carry a carrier / service / tracking box, and they predate
+ * parcels by a long way — they write `carrier`, `service` and `tracking_number`
+ * straight onto the order. Those three columns are now a MIRROR of the first
+ * parcel, maintained by exactly one writer.
+ *
+ * That left a hole at creation. An order raised with a tracking number wrote the
+ * columns and no parcel; the Parcels panel then showed nothing; and the moment
+ * anybody added a parcel the mirror overwrote those columns from it, silently
+ * destroying the number somebody had typed. The same hole swallowed a number
+ * typed into the old editor on a receipt.
+ *
+ * So freight entered on a form becomes a parcel here, at the point the order is
+ * saved, and from then on there is one store and one writer.
+ *
+ * IDEMPOTENT, and that is what makes it safe to call from a save that runs
+ * repeatedly: it does nothing at all when the order already has any parcel, so
+ * editing an order that has since been split into three boxes cannot resurrect
+ * a fourth from the header.
+ */
+export function adoptLegacyFreight(
+  side: OrderSide,
+  orderId: string,
+  freight: { carrier?: string | null; service?: string | null; trackingNumber?: string | null },
+  actorId: string | null,
+  db?: Database.Database
+): void {
+  const database = db ?? getDb()
+  const tracking = clean(freight.trackingNumber)
+  const carrier = asCarrier(freight.carrier ?? null)
+  const service = clean(freight.service)
+  if (!tracking && !carrier && !service) return
+
+  const existing = database
+    .prepare(
+      `SELECT COUNT(*) AS n FROM order_shipments WHERE order_kind = ? AND order_id = ?`
+    )
+    .get(side, orderId) as { n: number }
+  if (existing.n > 0) return
+
+  const stamp = nowIso()
+  database
+    .prepare(
+      `INSERT INTO order_shipments
+         (id, order_kind, order_id, position, carrier, service, tracking_number,
+          created_by, created_at, updated_at)
+       VALUES (@id, @side, @orderId, 0, @carrier, @service, @tracking, @actor, @at, @at)`
+    )
+    .run({
+      // Derived from the order, so two machines saving the same order mint the
+      // SAME row rather than two parcels where there is one.
+      id: `shp_${side}_${orderId}_0`,
+      side,
+      orderId,
+      carrier: carrier ?? (tracking ? detectCarrier(tracking) : null),
+      service,
+      tracking,
+      actor: clean(actorId),
+      at: stamp
+    })
 }
 
 /** Every parcel anywhere that carries a number worth asking a carrier about. */

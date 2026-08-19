@@ -398,6 +398,19 @@ export function registerOrderExtrasIpc(): void {
 
         const docId = str(payload?.documentId)
         const file = docId ? getOrderDocumentBytes(docId) : null
+        // ASKED FOR A LABEL AND THIS MACHINE HAS NOT GOT IT YET. Refused rather
+        // than sent without one: the body would read "the label is attached" to
+        // a supplier who is waiting for it, and they would wait. The slices are
+        // on their way — see rebuildOrderDocuments — so this is a "try again in
+        // a moment", not a failure of the order.
+        if (docId && !file) {
+          return {
+            ok: false,
+            error:
+              'That label has not finished syncing to this machine yet, so it cannot be attached. ' +
+              'Try again in a moment, or send it from the machine it was uploaded on.'
+          }
+        }
         const withLabel = file
           ? composeLabelEmail({
               side: which,

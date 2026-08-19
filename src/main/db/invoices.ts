@@ -33,7 +33,7 @@ import { asShipStatus } from '@shared/tracking'
 import { getDb } from './database'
 import { applyInvoiceStock, invoiceStockLocation, releaseInvoiceStock } from './invoiceStock'
 import { destinationHoldsStock } from '@shared/purchaseOrders'
-import { deleteOrderExtras, recordOrderEvent } from './orderExtras'
+import { adoptLegacyFreight, deleteOrderExtras, recordOrderEvent } from './orderExtras'
 
 /**
  * What to STORE in a line's destination column.
@@ -811,6 +811,21 @@ export function saveInvoice(
         db
       })
     }
+
+    // Same rule on the sell side: the carrier box on the form is the order's
+    // first parcel, not a second store. Idempotent, so re-saving a draft that
+    // has since been split into three boxes adds nothing.
+    adoptLegacyFreight(
+      'so',
+      id,
+      {
+        carrier: input.carrier ?? null,
+        service: input.service ?? null,
+        trackingNumber: input.trackingNumber ?? null
+      },
+      actorId,
+      db
+    )
 
     /**
      * THE SHELF. Everything this order was holding goes back, and then it takes
