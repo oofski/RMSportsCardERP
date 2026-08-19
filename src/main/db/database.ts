@@ -3306,6 +3306,278 @@ function migrate(database: Database.Database): void {
   })
   setMeta(database, 'schema_version', '72')
 
+  // -------------------------------------------------------------------------
+  // v73: what happened to an order, what is shipping it, and the paperwork.
+  //
+  // Four new tables and a handful of columns, added together because they are
+  // one subject seen from four angles: an order is a thing that MOVES THROUGH
+  // STAGES, is SHIPPED in one or more parcels, carries DOCUMENTS, and — on the
+  // sell side — can be paid before any of that starts.
+  //
+  // All four are shared between purchase orders and sales orders rather than
+  // duplicated per side. The buy side and the sell side are mirror images and
+  // every one of these questions is asked identically of both; two parallel sets
+  // of tables would be two sets of queries, two sets of migrations, and the
+  // first divergence would be a feature that quietly only works on one side.
+  // The pair (order_kind, order_id) is the reference, where order_kind is 'po'
+  // or 'so'. It is NOT a foreign key, deliberately: SQLite cannot express a
+  // reference whose target table depends on a sibling column, and the
+  // alternative — two nullable FK columns with a check constraint — buys
+  // nothing a query does not already have to say.
+  // -------------------------------------------------------------------------
+
+  /**
+   * WHO MOVED THIS, AND WHEN.
+   *
+   * Both boards could already say where an order IS; neither could say how it
+   * got there. Every stage column on a purchase order holds one timestamp per
+   * stage, so an order dragged to Paid and back to Ordered loses the first
+   * answer entirely, and none of them ever recorded a person. The question
+   * being asked on the floor is "who marked this received on Tuesday", and the
+   * app's honest answer was that nobody knows.
+   *
+   * The ACTOR NAME IS SNAPSHOTTED beside the id, for the same reason an
+   * invoice snapshots its customer name: a log is a record of what happened,
+   * and somebody leaving next year must not silently rewrite who did what. The
+   * id is kept too, so the row can still be joined when the person is still
+   * here.
+   *
+   * KIND is wider than stage changes on purpose. A stage move is the common
+   * entry, but "paid up front", "label uploaded", "emailed to the supplier" and
+   * "linked to sales order 2301" are the same kind of fact — something a person
+   * did to this order at a time — and splitting them across four tables would
+   * mean four queries to draw one list in date order.
+   */
+  database.exec(
+    `CREATE TABLE IF NOT EXISTS order_events (
+       id          TEXT PRIMARY KEY,
+       order_kind  TEXT NOT NULL,
+       order_id    TEXT NOT NULL,
+       kind        TEXT NOT NULL,
+       from_stage  TEXT,
+       to_stage    TEXT,
+       detail      TEXT,
+       actor_id    TEXT,
+       actor_name  TEXT,
+       created_at  TEXT NOT NULL
+     );
+     CREATE INDEX IF NOT EXISTS idx_order_events_order
+       ON order_events (order_kind, order_id, created_at);
+
+     -- One parcel. An order can have several, each with its own carrier.
+     --
+     -- Until now an order had exactly ONE carrier, ONE service and ONE tracking
+     -- number, as columns on the order itself. That is wrong about how this
+     -- business actually ships: a case order splits across two boxes on
+     -- different services more often than not, and the second number had
+     -- nowhere to go except being typed after the first one in the same box.
+     --
+     -- The legacy columns are backfilled into this table below and then left
+     -- alone. They are not dropped: they still sync, older copies of the app
+     -- still read them, and the read model derives them from the FIRST shipment
+     -- so nothing downstream had to change on the day this landed.
+     --
+     -- label_cost is what the postage cost to buy. Null means nobody has said,
+     -- which is not the same as free.
+     CREATE TABLE IF NOT EXISTS order_shipments (
+       id                     TEXT PRIMARY KEY,
+       order_kind             TEXT NOT NULL,
+       order_id               TEXT NOT NULL,
+       position               INTEGER NOT NULL DEFAULT 0,
+       carrier                TEXT,
+       service                TEXT,
+       tracking_number        TEXT,
+       label_cost             REAL,
+       tracking_status        TEXT,
+       tracking_status_detail TEXT,
+       tracking_status_at     TEXT,
+       tracking_checked_at    TEXT,
+       tracking_error         TEXT,
+       tracking_attempted_at  TEXT,
+       created_by             TEXT,
+       created_at             TEXT NOT NULL,
+       updated_at             TEXT NOT NULL
+     );
+     CREATE INDEX IF NOT EXISTS idx_order_shipments_order
+       ON order_shipments (order_kind, order_id, position);
+
+     -- Which line items are in which parcel.
+     --
+     -- Rows here are OPTIONAL and their absence means "not said". A shipment
+     -- with no lines against it is the ordinary case for a single-parcel order,
+     -- and forcing every line to be assigned would make the common case a form
+     -- to fill in. Quantity is carried because one line can split across two
+     -- boxes.
+     CREATE TABLE IF NOT EXISTS order_shipment_lines (
+       id          TEXT PRIMARY KEY,
+       shipment_id TEXT NOT NULL,
+       order_kind  TEXT NOT NULL,
+       order_id    TEXT NOT NULL,
+       line_id     TEXT NOT NULL,
+       quantity    REAL NOT NULL DEFAULT 0,
+       created_at  TEXT NOT NULL,
+       UNIQUE (shipment_id, line_id)
+     );
+     CREATE INDEX IF NOT EXISTS idx_order_shipment_lines_ship
+       ON order_shipment_lines (shipment_id);
+
+     -- A file attached to an order: a shipping label, mostly.
+     --
+     -- The bytes live here verbatim and this table is deliberately NOT synced —
+     -- a multi-megabyte blob does not belong in a row-at-a-time relay. It
+     -- travels as order_document_parts instead, exactly as the packing slip
+     -- does: the same file cut into slices small enough to be ordinary synced
+     -- rows, reassembled once every slice has arrived. See ship_documents and
+     -- rebuildShipDocument for the pattern this copies, and syncTables.ts for
+     -- why the whole-file row stays home.
+     CREATE TABLE IF NOT EXISTS order_documents (
+       id           TEXT PRIMARY KEY,
+       order_kind   TEXT NOT NULL,
+       order_id     TEXT NOT NULL,
+       shipment_id  TEXT,
+       kind         TEXT NOT NULL DEFAULT 'label',
+       name         TEXT NOT NULL,
+       mime_type    TEXT NOT NULL,
+       byte_size    INTEGER NOT NULL DEFAULT 0,
+       bytes        BLOB,
+       uploaded_by  TEXT,
+       uploaded_at  TEXT NOT NULL
+     );
+     CREATE INDEX IF NOT EXISTS idx_order_documents_order
+       ON order_documents (order_kind, order_id, uploaded_at);
+
+     -- The same file, in slices that travel. Each repeats the document's
+     -- metadata so a machine holding every slice can rebuild it with nothing
+     -- else having arrived — no ordering rule between two tables to get wrong.
+     CREATE TABLE IF NOT EXISTS order_document_parts (
+       id          TEXT PRIMARY KEY,
+       document_id TEXT NOT NULL,
+       order_kind  TEXT NOT NULL,
+       order_id    TEXT NOT NULL,
+       shipment_id TEXT,
+       kind        TEXT NOT NULL DEFAULT 'label',
+       name        TEXT NOT NULL,
+       mime_type   TEXT NOT NULL,
+       byte_size   INTEGER NOT NULL DEFAULT 0,
+       uploaded_by TEXT,
+       uploaded_at TEXT NOT NULL,
+       seq         INTEGER NOT NULL,
+       total       INTEGER NOT NULL,
+       data        TEXT NOT NULL,
+       created_at  TEXT NOT NULL,
+       UNIQUE (document_id, seq)
+     );
+     CREATE INDEX IF NOT EXISTS idx_order_doc_parts
+       ON order_document_parts (document_id, seq);`
+  )
+
+  /**
+   * PAID BEFORE IT SHIPS — the sell side's version of a fact the buy side has
+   * had all along.
+   *
+   * `setPurchaseOrderPaid` records payment on a purchase order WITHOUT moving
+   * its stage, precisely so a received-but-unpaid order does not get dragged
+   * backwards to say the money arrived. The sell side had no equivalent: the
+   * only way to record that a buyer had paid was to move the card to Paid,
+   * which is the LAST column, so an order paid up front looked finished before
+   * anybody had picked it.
+   *
+   * So payment and readiness are separate facts here too. `ready_to_ship_at`
+   * is what the picking side reads; `paid_up_front` distinguishes "they paid
+   * before we shipped" from "they paid the invoice we sent", which is the
+   * difference between a deposit and a settlement and is worth keeping.
+   */
+  addColumnIfMissing(database, 'invoices', 'paid_up_front', 'INTEGER NOT NULL DEFAULT 0')
+  addColumnIfMissing(database, 'invoices', 'payment_method', 'TEXT')
+  addColumnIfMissing(database, 'invoices', 'payment_reference', 'TEXT')
+  addColumnIfMissing(database, 'invoices', 'ready_to_ship_at', 'TEXT')
+  addColumnIfMissing(database, 'invoices', 'ready_to_ship_by', 'TEXT')
+
+  /**
+   * THE TWO HALVES OF A DROPSHIP, POINTING AT EACH OTHER.
+   *
+   * Buying from one party and selling to another is two documents — money out
+   * and money in — and until now nothing recorded that a particular pair were
+   * the same deal. The link is by ID on both sides rather than by number,
+   * because sync REWRITES po_number on a cross-machine collision (see
+   * RELABEL_ON_CONFLICT in sync.ts) and invoice_number is neither unique nor
+   * relabelled, so a link keyed on either would silently repoint.
+   *
+   * Both nullable and both independent: deleting one half must not take the
+   * other with it, because they are separate commitments to separate people.
+   */
+  addColumnIfMissing(database, 'purchase_orders', 'linked_invoice_id', 'TEXT')
+  addColumnIfMissing(database, 'invoices', 'source_po_id', 'TEXT')
+  database.exec(
+    `CREATE INDEX IF NOT EXISTS idx_po_linked_invoice
+       ON purchase_orders (linked_invoice_id);
+     CREATE INDEX IF NOT EXISTS idx_invoices_source_po
+       ON invoices (source_po_id);`
+  )
+
+  /**
+   * Every order that already carried a tracking number becomes one shipment.
+   *
+   * Without this the new table starts empty while the old columns still hold
+   * real numbers, so an order somebody is tracking today would show no parcels
+   * at all — the reading is not wrong, it is absent, which is worse. The
+   * shipment keeps the tracking STATE too, so a package half way across the
+   * country does not lose its last known position.
+   *
+   * The id is DERIVED from the order rather than random, so two laptops running
+   * this migration mint the same row and the relay compares it against a copy
+   * of itself instead of producing two parcels where there is one.
+   *
+   * runOnce, so an order whose single shipment is later deleted on purpose does
+   * not have it resurrected by the next launch.
+   */
+  runOnce(database, 'order_shipments_backfill_v1', () => {
+    const stamp = new Date().toISOString()
+    const insert = database.prepare(
+      `INSERT OR IGNORE INTO order_shipments
+         (id, order_kind, order_id, position, carrier, service, tracking_number,
+          tracking_status, tracking_status_detail, tracking_status_at,
+          tracking_checked_at, tracking_error, tracking_attempted_at,
+          created_by, created_at, updated_at)
+       VALUES (@id, @kind, @orderId, 0, @carrier, @service, @tracking,
+               @status, @statusDetail, @statusAt, @checkedAt, @error, @attemptedAt,
+               NULL, @stamp, @stamp)`
+    )
+    for (const [table, kind] of [
+      ['purchase_orders', 'po'],
+      ['invoices', 'so']
+    ] as const) {
+      const rows = database
+        .prepare(
+          `SELECT id, carrier, service, tracking_number, tracking_status,
+                  tracking_status_detail, tracking_status_at, tracking_checked_at,
+                  tracking_error, tracking_attempted_at
+             FROM ${table}
+            WHERE (tracking_number IS NOT NULL AND tracking_number != '')
+               OR (carrier IS NOT NULL AND carrier != '')`
+        )
+        .all() as Array<Record<string, string | null>>
+      for (const r of rows) {
+        insert.run({
+          id: `shp_${kind}_${r.id}_0`,
+          kind,
+          orderId: r.id,
+          carrier: r.carrier,
+          service: r.service,
+          tracking: r.tracking_number,
+          status: r.tracking_status,
+          statusDetail: r.tracking_status_detail,
+          statusAt: r.tracking_status_at,
+          checkedAt: r.tracking_checked_at,
+          error: r.tracking_error,
+          attemptedAt: r.tracking_attempted_at,
+          stamp
+        })
+      }
+    }
+  })
+  setMeta(database, 'schema_version', '73')
+
   // v41: re-derive every product's average cost from its remaining cost layers.
   //
   // The average used to be stored rounded to the cent, back when every total in

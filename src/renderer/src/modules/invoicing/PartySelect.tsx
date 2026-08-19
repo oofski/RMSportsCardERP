@@ -3,51 +3,82 @@ import type { SupplierSuggestion } from '@shared/purchaseOrders'
 import { MAX_PINNED_PARTIES, canonicalDestination } from '@shared/purchaseOrders'
 import { LOCATION_IDS } from '@shared/inventory'
 import { api } from '../../lib/api'
-import { Input, Select } from '../../components/ui'
+import { Combobox } from '../../components/Combobox'
 import { useOrderParties } from './DestinationPicker'
 import { Icon } from '../../components/Icon'
 
 /**
- * Supplier and destination, as a dropdown you do not type into.
+ * Supplier and destination: click the box, start typing, pick out of the list.
  *
- * ## Why a native <select> and not the typeaheads these replaced
+ * ## What was tried before this, and why it changed
  *
- * Two reasons, and the second one is the bigger of them.
+ * This control has been three things. It started as a typeahead, was rebuilt as
+ * a native <select> that could not be typed into at all, and is now a combobox —
+ * a box you can type into whose menu is a portal. The middle version was not a
+ * mistake, and the reasoning that produced it is still true; what changed is
+ * that both of the problems it was avoiding now have answers that do not cost
+ * the typing. The owner asked for the typing back in those words: click the
+ * empty box and start typing and the results appear.
  *
- * The first is what was asked for: picking the distributor you buy from every
- * week should not be a spelling exercise. A typeahead is a text box that HAPPENS
- * to offer help, so its resting state is an empty caret and its failure state is
- * a name typed two ways — "Bramble Wholesale" on Monday and "bramble wholesale"
- * on Thursday, which the vendor list then has to fold back together.
+ * The two problems, and where each one went:
  *
- * The second is that a typeahead's menu is a `position: absolute` panel, and
- * this form is a table inside a modal that scrolls. A floating panel opened from
- * a row near the bottom of that table has to be positioned against a scrolling
- * ancestor, gets clipped by the panel it is drawn inside, and moves out from
- * under the pointer when the body scrolls. A native <select> has none of those
- * problems because its menu is not in the page at all — the OS draws it, above
- * everything, correctly positioned, scrollable, and searchable by typing the
- * first few letters. Every "the dropdown appeared in the wrong place" bug this
- * screen could have is deleted rather than fixed.
+ * **Spelling drift.** A plain typeahead is a text box that HAPPENS to offer
+ * help, so its resting state is an empty caret and its failure state is a name
+ * typed two ways — "Bramble Wholesale" on Monday and "bramble wholesale" on
+ * Thursday, which the vendor list then has to fold back together. That is now
+ * handled instead of avoided: the list is still the same curated, grouped,
+ * ordered list, picking from it writes the list's own spelling, and a name typed
+ * by hand that case-insensitively matches an entry is FOLDED to that entry's
+ * spelling when the box is left. See `commitTyped` in components/Combobox.tsx —
+ * it is the same fold the `Other…` box did on blur, applied to every path in
+ * rather than to the one unusual one. Only a name that matches nothing at all is
+ * stored as typed, which is what a genuinely new distributor is.
  *
- * ## The escape hatch is not optional
+ * **The menu could not be drawn in the right place.** This was the bigger of the
+ * two and the real reason for the <select>. A typeahead's menu is a
+ * `position: absolute` panel and this form is a TABLE INSIDE A MODAL BODY THAT
+ * SCROLLS, so a menu opened from a row near the bottom is clipped by the panel it
+ * is drawn inside, is positioned against a container that is itself moving, and
+ * slides out from under the pointer the moment the body scrolls. A native
+ * <select> deleted all three by not being in the page at all. The combobox
+ * deletes them a different way: its menu is rendered through a React portal into
+ * `document.body` at `position: fixed`, placed from the input's
+ * `getBoundingClientRect()`, and there is no overflow ancestor to clip a fixed
+ * element parented to the body and no scrolling container to measure it against.
+ * Drift is handled by refusing to chase it — a capturing scroll listener catches
+ * the modal-body scrolls that never bubble to window and CLOSES the menu, with
+ * focus left in the box so one keystroke brings it back. The menu also flips
+ * above the control when the room below runs out, and is allowed to be wider than
+ * the 170px cell it belongs to, which the <select> never could be.
+ *
+ * ## The escape hatch is still not optional
  *
  * A list of parties can only ever hold the parties somebody has already dealt
  * with. The FIRST order from a new distributor, and the one-off drop to a shop
  * nobody has filed, are both real and both frequent — and a form that cannot
- * express them is a form somebody has to work around. So the last option is
- * `Other…`, and choosing it reveals a text box. Nothing is typed on the ordinary
- * path, and the unusual path is still one click away.
+ * express them is a form somebody has to work around. There is no `Other…`
+ * option any more because there is nothing to reveal: the box is already a text
+ * box, and a name that matches nothing is committed as typed. The menu says so
+ * when the filter finds nothing, rather than leaving somebody to guess.
  *
- * ## Inheritance is a first option, never a pre-selected value
+ * One thing that went away with the <select> and is worth naming: the "stray
+ * value" option. A <select> can only display strings it holds as options, so a
+ * supplier typed through `Other…` — or one whose directory row was deleted after
+ * the order was drafted — had to be synthesised as an extra option or the control
+ * would silently fall back to displaying its FIRST entry, a form claiming the
+ * order was going somewhere it was not. An <input> displays whatever string it
+ * is given, so that whole class of bug is gone rather than guarded.
+ *
+ * ## Inheritance is a first row, never a pre-selected value
  *
  * A line whose supplier or destination is NULL follows the order header, and
  * that null is what gets stored. Pre-selecting the header's concrete name would
  * look identical on screen and be a completely different document: the line
  * would stop tracking the header, so changing the order's destination afterwards
  * would move every line except the ones somebody had merely LOOKED at. So the
- * inherited state gets its own option, reading `Same as order (RM)`, whose value
- * is the empty string and whose meaning is null.
+ * inherited state gets its own row at the top of the menu, reading
+ * `Same as order (RM)`, whose value is null — and it is the placeholder on the
+ * empty box too, so an inherited cell reads the same closed as it does open.
  */
 
 /* -------------------------------------------------------------------------- */
@@ -84,7 +115,8 @@ export function useSupplierSuggestions(): SupplierSuggestion[] {
         .catch(() => {
           // A failed first read must not poison the cache for the session —
           // clearing the promise lets the next control that mounts try again.
-          // The form still works meanwhile: Other… types any name.
+          // The form still works meanwhile: the box takes any name typed into
+          // it, list or no list.
           supplierInflight = null
           publishSuppliers([])
         })
@@ -101,49 +133,41 @@ export function useSupplierSuggestions(): SupplierSuggestion[] {
 /* The control                                                                 */
 /* -------------------------------------------------------------------------- */
 
-/** One `<optgroup>`. Groups with no names are dropped rather than left empty. */
+/** One heading in the menu. Groups with no names are dropped rather than left
+ *  empty — a heading with nothing under it reads as a list that failed to load. */
 interface PartyGroup {
   label: string
   names: string[]
 }
-
-/**
- * The two option values that are not somebody's name.
- *
- * A control character rather than a readable word, because every name in either
- * directory is human-typed and a supplier genuinely called "Other" is possible.
- * U+001F cannot be typed into the escape hatch and cannot come back from
- * either list, so a sentinel can never be mistaken for a choice. Written as
- * an escape sequence rather than pasted in: an invisible byte in a string
- * literal is the kind of thing an editor silently eats and nobody sees go.
- */
-const BLANK = ''
-const OTHER = '\u001Fother'
 
 function PartySelectBase({
   value,
   onChange,
   groups,
   blankLabel,
-  otherLabel,
-  otherPlaceholder,
+  customHint,
+  requiredPlaceholder,
   ariaLabel,
   className = '',
   drop = false,
   canonical = false
 }: {
-  /** null or empty means "the blank option" — inherited, or not named at all. */
+  /** null or empty means "nothing chosen" — inherited, or not named at all. */
   value: string | null
   onChange: (next: string | null) => void
   groups: PartyGroup[]
   /**
-   * The label on the empty option. Absent means the field is REQUIRED: the
-   * option is still rendered so a momentarily-empty value has something to show,
-   * but it is disabled so it cannot be chosen back.
+   * The label on the row that clears the field, and the placeholder on the empty
+   * box. Absent means the field is REQUIRED: there is no row back to empty, and
+   * `requiredPlaceholder` prompts for a name instead.
    */
   blankLabel?: string
-  otherLabel: string
-  otherPlaceholder: string
+  /** The dim footer line naming the escape hatch, in place of the `Other…`
+   *  option that used to be the last entry in the list. */
+  customHint: string
+  /** The placeholder when there is no blank row to name — a required field has
+   *  to ask for something rather than sit there empty and silent. */
+  requiredPlaceholder: string
   ariaLabel: string
   className?: string
   /** Show the Drop chip beside the control — the caller decides, because on an
@@ -153,91 +177,30 @@ function PartySelectBase({
    *  only: "rm" typed into a supplier box is just a supplier called rm. */
   canonical?: boolean
 }): JSX.Element {
-  /**
-   * Is the escape hatch open?
-   *
-   * Deliberately not derived from "the value is not in the list". A brand-new
-   * supplier is not in the list the moment it is typed either, so a derived flag
-   * would close the box on the first keystroke and re-open it on the second.
-   */
-  const [custom, setCustom] = useState(false)
-
-  const current = (value ?? '').trim()
-
-  const names = useMemo(() => groups.flatMap((g) => g.names), [groups])
-
-  /**
-   * The option whose name IS this value, matched case-insensitively.
-   *
-   * The fold is the whole point of doing this by search rather than by equality.
-   * A supplier typed in caps on one order comes back from the directory in the
-   * spelling it was last written in, and `<select>` matches its options by exact
-   * string: "bramble wholesale" against an option reading "Bramble Wholesale"
-   * matches nothing, so the control silently falls back to displaying its FIRST
-   * entry — a form that says the order is going somewhere it is not.
-   */
-  const match = useMemo(
-    () => names.find((n) => n.toLowerCase() === current.toLowerCase()) ?? null,
-    [names, current]
-  )
-
-  /**
-   * A name that is set and is in no group at all.
-   *
-   * Rendered as an option of its own, for the same reason: without one the
-   * <select> has nothing to show and drops to its first entry. Happens on a name
-   * typed through Other… — which is every brand-new supplier, before the first
-   * order to them exists — and on a party whose directory row went away after
-   * the order was drafted.
-   */
-  const stray = current && !match ? current : null
-
-  const blankText = blankLabel ?? 'Choose…'
-  const selected = custom ? OTHER : match ?? stray ?? current
-
-  const choose = (raw: string): void => {
-    if (raw === OTHER) {
-      setCustom(true)
-      // Cleared rather than carried over: the box is being opened BECAUSE the
-      // list did not have the answer, so starting it with the last pick would
-      // mean deleting somebody else's name before typing your own.
-      onChange(null)
-      return
-    }
-    setCustom(false)
-    onChange(raw === BLANK ? null : raw)
-  }
-
   return (
     <div className={`po-party${className ? ` ${className}` : ''}`}>
       <div className="po-party-row">
-        <Select
+        {/* `po-party-select` stays the class on the CONTROL even though the
+            control is no longer a <select>. Every rule that sizes one of these —
+            the 32px lines-table row, the 30px split row, the phone layer's tap
+            floor, the dashed muted look of an inherited cell — is written
+            against that name in app.css and mobile.css, and renaming it here
+            would silently drop all of them at once. */}
+        <Combobox
           className="po-party-select"
-          value={selected}
-          aria-label={ariaLabel}
-          // A 170px column cannot print "Cardboard Kingdom Collectibles", and a
-          // native select clips rather than ellipsises. The tooltip is the only
-          // way to read the whole name without changing it.
-          title={custom ? undefined : current || blankText}
-          onChange={(e) => choose(e.target.value)}
-        >
-          <option value={BLANK} disabled={blankLabel === undefined}>
-            {blankText}
-          </option>
-          {stray && <option value={stray}>{stray}</option>}
-          {groups
-            .filter((g) => g.names.length > 0)
-            .map((g) => (
-              <optgroup key={g.label} label={g.label}>
-                {g.names.map((n) => (
-                  <option key={n} value={n}>
-                    {n}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
-          <option value={OTHER}>{otherLabel}</option>
-        </Select>
+          value={value}
+          onChange={onChange}
+          groups={groups.filter((g) => g.names.length > 0)}
+          clearLabel={blankLabel}
+          placeholder={blankLabel ?? requiredPlaceholder}
+          ariaLabel={ariaLabel}
+          allowCustom
+          customHint={customHint}
+          // Suppliers get no canonicaliser: `canonicalDestination` folds "rm" to
+          // the RM shelf, and a supplier genuinely called rm is a supplier, not a
+          // shelf. The case-insensitive fold against the list happens either way.
+          canonicalize={canonical ? canonicalDestination : undefined}
+        />
         {drop && (
           <span
             className="po-drop-chip"
@@ -247,28 +210,6 @@ function PartySelectBase({
           </span>
         )}
       </div>
-
-      {custom && (
-        <Input
-          className="po-party-other"
-          value={value ?? ''}
-          placeholder={otherPlaceholder}
-          aria-label={`${ariaLabel} — new name`}
-          autoFocus
-          onChange={(e) => onChange(e.target.value.trim() ? e.target.value : null)}
-          onBlur={() => {
-            const folded = canonical ? canonicalDestination(current) : current
-            if (folded !== (value ?? '')) onChange(folded || null)
-            // Typed a name the list already holds — or emptied the box — so the
-            // dropdown can tell the truth again. Without this the control would
-            // sit in "Other…" while holding a value that was never other, and
-            // "rm" folded to "RM" would read as a shop nobody has heard of.
-            if (!folded || names.some((n) => n.toLowerCase() === folded.toLowerCase())) {
-              setCustom(false)
-            }
-          }}
-        />
-      )}
     </div>
   )
 }
@@ -318,8 +259,8 @@ export function SupplierSelect({
       onChange={onChange}
       groups={groups}
       blankLabel={blankLabel}
-      otherLabel="Other… (type a new supplier)"
-      otherPlaceholder="Name the supplier"
+      customHint="Not listed? Type the name — whatever you type is the supplier."
+      requiredPlaceholder="Search or name the supplier"
       ariaLabel={ariaLabel}
       className={className}
     />
@@ -332,7 +273,9 @@ export function SupplierSelect({
 
 /**
  * Shelves first, then pins, then everybody else — the order the party list
- * already comes back in, split into `<optgroup>`s on the two flags it carries.
+ * already comes back in, split into headed groups on the two flags it carries.
+ * The order is preserved and only labelled, never re-sorted: a filter narrows
+ * the groups but never rearranges what is left inside them.
  *
  * RM and AM lead and are labelled as what they are, because they are the only
  * two entries in the list that mean "this arrives here". Everything below the
@@ -358,12 +301,13 @@ export function DestinationSelect({
    * Show the pin toggle beside the box.
    *
    * Only the ORDER's destination sets this, and it is the one control anywhere
-   * in the app that writes a pin. Moving from a typeahead to a select took the
-   * per-row star with it, which left the Pinned group readable and permanently
-   * unfillable: a list that can only ever shrink, and a main-process call with
-   * no caller left anywhere in the renderer.
-   * One toggle on the header keeps the feature whole without putting a button
-   * inside every line's select, which a native select cannot hold anyway.
+   * in the app that writes a pin. The original typeahead carried a star on every
+   * menu row; when that went, the Pinned group was left readable and permanently
+   * unfillable — a list that could only ever shrink, and a main-process call with
+   * no caller left anywhere in the renderer. One toggle on the header keeps the
+   * feature whole. It stays on the header rather than going back into the menu
+   * because pinning is a statement about a SHOP, not about a line, and a star on
+   * every row of every line's menu offers the same switch a dozen times over.
    */
   pinnable?: boolean
 }): JSX.Element {
@@ -405,8 +349,8 @@ export function DestinationSelect({
       onChange={onChange}
       groups={groups}
       blankLabel={blankLabel}
-      otherLabel="Other… (ship somewhere new)"
-      otherPlaceholder="Shop, person or address"
+      customHint="Not listed? Type a shop, a person or an address — it ships there."
+      requiredPlaceholder="Search, or type a shop or address"
       ariaLabel={ariaLabel}
       className={className}
       drop={drop}

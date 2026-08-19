@@ -20,6 +20,9 @@ import { useToast } from '../../components/Toast'
 import { FreightFields } from '../../components/FreightFields'
 import { ReceiveBar, ReceivePill } from '../../components/ReceiveProgress'
 import { Icon } from '../../components/Icon'
+import { OrderHistory } from '../orders/OrderHistory'
+import { OrderLabels } from '../orders/OrderLabels'
+import { OrderShipments } from '../orders/OrderShipments'
 import { formatDate, formatMoney } from '../../lib/format'
 import { CategoryLogo } from '../inventory/CategoryLogo'
 import { SupplierSelect } from './PartySelect'
@@ -442,9 +445,48 @@ export function PurchaseOrderReceipt({
           <span>Grand total</span>
           <span className="mono">{formatMoney(detail.total)}</span>
         </div>
+
+        {/* PARCELS, PAPERWORK AND HISTORY, in that order and all at the bottom.
+            Every one of them is read after the thing the document is actually
+            for — what was bought, from whom, for how much — so none of them may
+            push that below the fold. The history is collapsed on top of that,
+            because it is opened when something looks wrong, which is rarely. */}
+        <OrderShipments
+          side="po"
+          orderId={detail.id}
+          canEdit={linesEditable}
+          lines={detail.lines.map((l) => ({
+            id: l.id,
+            label: l.productName ?? 'Item',
+            quantity: l.quantity
+          }))}
+        />
+        <OrderLabels
+          side="po"
+          orderId={detail.id}
+          // The supplier is who ships a purchase, so they are who a label goes
+          // to. There is no email on a PO supplier — it is a name on a document,
+          // not a record — so this is a starting point, not an address.
+          defaultTo={null}
+          canEdit={linesEditable}
+        />
+        <OrderHistory side="po" orderId={detail.id} stageLabel={poStageLabel} />
       </div>
     </Modal>
   )
+}
+
+/**
+ * How this board names a stage, for the history log.
+ *
+ * The two boards do not share a vocabulary — 'received' is a purchase order's
+ * word and 'sent' is a sales order's — so each supplies its own translation
+ * rather than the log guessing from which side it is on. An id with no entry
+ * prints itself, which is the right answer for a stage that existed when the
+ * event was written and has since been renamed.
+ */
+function poStageLabel(id: string): string {
+  return PO_STAGE_META[id as PurchaseOrderStatus]?.label ?? id
 }
 
 /** "Ships to RM" / "Drop-ships to Fenwick Cards" / "2 destinations". */

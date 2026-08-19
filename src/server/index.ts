@@ -22,6 +22,7 @@ import { registerPushIpc } from '../main/pushIpc'
 import { registerOwnerIpc } from '../main/ownerIpc'
 import { registerScheduleIpc } from '../main/scheduleIpc'
 import { registerInvoicesIpc } from '../main/invoicesIpc'
+import { registerOrderExtrasIpc } from '../main/orderExtrasIpc'
 import { registerMessagesIpc } from '../main/messagesIpc'
 import { registerPerformanceIpc } from '../main/performanceIpc'
 import { initCloudSync, stopCloudSync } from '../main/services/cloudSync'
@@ -914,6 +915,7 @@ export function startServer(options: ServerOptions = {}): Server {
   registerOwnerIpc()
   registerScheduleIpc()
   registerInvoicesIpc()
+  registerOrderExtrasIpc()
   registerMessagesIpc()
   registerPerformanceIpc()
 

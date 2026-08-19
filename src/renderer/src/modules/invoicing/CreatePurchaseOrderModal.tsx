@@ -1,5 +1,5 @@
 import { Fragment, useMemo, useState } from 'react'
-import type { InventoryProduct } from '@shared/types'
+import type { InventoryProduct, PurchaseOrderDetail } from '@shared/types'
 import type { Freight } from '@shared/freight'
 import { LOCATION_IDS } from '@shared/inventory'
 import { destinationHoldsStock } from '@shared/purchaseOrders'
@@ -61,10 +61,20 @@ import { splitProblem, splitTotal, type DraftAllocation, type DraftLine } from '
  */
 export function CreatePurchaseOrderModal({
   onClose,
-  onSaved
+  onSaved,
+  onCreated
 }: {
   onClose: () => void
   onSaved: () => void | Promise<void>
+  /**
+   * The order that was just raised, handed back so a caller can carry on with
+   * it. The dropship flow uses it to open the sell side straight afterwards,
+   * pre-filled from what was just bought.
+   *
+   * Called BEFORE onClose, and its result is awaited, so the caller can put a
+   * second screen up without the first one having disappeared underneath it.
+   */
+  onCreated?: (po: PurchaseOrderDetail) => void | Promise<void>
 }): JSX.Element {
   const toast = useToast()
   const [supplier, setSupplier] = useState('')
@@ -348,6 +358,7 @@ export function CreatePurchaseOrderModal({
       }
       toast.success(`Created ${res.data.poNumber}.`)
       await onSaved()
+      if (onCreated) await onCreated(res.data)
       onClose()
     } finally {
       setBusy(false)

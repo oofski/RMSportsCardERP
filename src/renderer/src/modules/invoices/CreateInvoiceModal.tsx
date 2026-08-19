@@ -8,9 +8,17 @@ import type {
   InvoiceLine,
   InvoiceStatus,
   InvoiceTerms,
+  NewInvoice,
   NewInvoiceLine
 } from '@shared/invoices'
-import { DEFAULT_INVOICE_TERMS, INVOICE_TERMS, dueDateFor, lineAmount, money } from '@shared/invoices'
+import {
+  DEFAULT_INVOICE_TERMS,
+  INVOICE_STAGES,
+  INVOICE_TERMS,
+  dueDateFor,
+  lineAmount,
+  money
+} from '@shared/invoices'
 import { api } from '../../lib/api'
 import { useToast } from '../../components/Toast'
 import { Button, Field, Input, Modal, Select } from '../../components/ui'
@@ -18,6 +26,9 @@ import { Icon } from '../../components/Icon'
 import { formatDate, formatMoney } from '../../lib/format'
 import { FreightFields } from '../../components/FreightFields'
 import { PaymentBar } from '../../components/PaymentProgress'
+import { OrderHistory } from '../orders/OrderHistory'
+import { OrderLabels } from '../orders/OrderLabels'
+import { OrderShipments } from '../orders/OrderShipments'
 import { destinationHoldsStock } from '@shared/purchaseOrders'
 import { DestinationSelect, SupplierSelect } from '../invoicing/PartySelect'
 import { CategoryLogo } from '../inventory/CategoryLogo'
@@ -119,6 +130,8 @@ function withAmount(line: DraftLine): DraftLine {
 
 export function CreateInvoiceModal({
   invoice,
+  prefill,
+  onSavedInvoice,
   customers,
   nextNumber,
   thumbnails,
@@ -129,6 +142,21 @@ export function CreateInvoiceModal({
 }: {
   /** Null for a new one; an existing invoice to open otherwise. */
   invoice: InvoiceDetail | null
+  /**
+   * A new order that arrives PART-FILLED, for the second screen of a dropship.
+   *
+   * Ignored entirely when `invoice` is set — an existing document has its own
+   * values and a prefill on top of them would be a form quietly disagreeing with
+   * what is stored. Every field remains editable; this only saves typing what
+   * the purchase order already said.
+   */
+  prefill?: NewInvoice | null
+  /**
+   * What was saved, handed back so a caller can do something with it — the
+   * dropship flow uses it to link the two halves. `onSaved` is still called for
+   * the ordinary "reload the board" job, because most callers want only that.
+   */
+  onSavedInvoice?: (invoice: InvoiceDetail) => void | Promise<void>
   customers: InvoiceCustomer[]
   /** Suggested number for a new invoice, already fetched by the board. */
   nextNumber: string
@@ -148,7 +176,9 @@ export function CreateInvoiceModal({
 
   const [invoiceNumber, setInvoiceNumber] = useState(invoice?.invoiceNumber || nextNumber)
   const [customerId, setCustomerId] = useState(invoice?.customerId ?? '')
-  const [customerName, setCustomerName] = useState(invoice?.customerName ?? '')
+  const [customerName, setCustomerName] = useState(
+    invoice?.customerName ?? prefill?.customerName ?? ''
+  )
   const [email, setEmail] = useState(invoice?.email ?? '')
   const [terms, setTerms] = useState<InvoiceTerms>(invoice?.terms ?? DEFAULT_INVOICE_TERMS)
   const [invoiceDate, setInvoiceDate] = useState(invoice?.invoiceDate ?? today())
@@ -165,8 +195,29 @@ export function CreateInvoiceModal({
   const [paymentTiming, setPaymentTiming] = useState<PaymentTiming | null>(
     invoice?.paymentTiming ?? null
   )
-  const [lines, setLines] = useState<DraftLine[]>(() =>
-    (invoice?.lines ?? []).map((l) => ({
+  const [lines, setLines] = useState<DraftLine[]>(() => {
+    // A PREFILLED ORDER SEEDS ITS OWN LINES, and every one of them carries the
+    // destination the purchase order implied. That destination is what makes
+    // each line a dropship and stops it drawing stock off a shelf this business
+    // never put the units on — see dropshipSaleFromPurchase, which is the one
+    // place that rule is applied.
+    if (!invoice && prefill) {
+      return prefill.lines.map((l, i) => ({
+        key: `pre_${i}`,
+        productId: l.productId ?? '',
+        item: l.item,
+        sku: l.sku ?? '',
+        category: '',
+        description: l.description ?? '',
+        quantity: String(l.quantity),
+        rate: l.rate ? String(l.rate) : '',
+        amount: l.rate ? String(lineAmount(l.quantity, l.rate)) : '',
+        amountEdited: false,
+        destination: l.destination ?? '',
+        supplier: l.supplier ?? ''
+      }))
+    }
+    return (invoice?.lines ?? []).map((l) => ({
       key: l.id,
       productId: l.productId ?? '',
       item: l.item,
@@ -183,7 +234,7 @@ export function CreateInvoiceModal({
       destination: l.destination ?? '',
       supplier: l.supplier ?? ''
     }))
-  )
+  })
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -381,6 +432,10 @@ export function CreateInvoiceModal({
       toast.success(`Sent to QuickBooks as invoice ${res.data.docNumber}.`)
     }
     for (const note of res.data.notes ?? []) toast.error(note)
+    // Handed to the caller BEFORE the modal closes, so a flow that has more to
+    // do with this order — linking a dropship pair, say — acts on the document
+    // that was actually written rather than on the draft that was submitted.
+    if (onSavedInvoice) await onSavedInvoice(res.data.invoice)
     return res.data.invoice
   }
 
@@ -897,8 +952,40 @@ function InvoiceReceipt({
         <span>Grand total</span>
         <span className="mono">{formatMoney(invoice.total)}</span>
       </div>
+
+      {/* The same three panels the buy side carries, in the same order and at
+          the same place. A purchase order and a sales order are mirror images
+          and somebody who has read one receipt should not have to learn the
+          other. */}
+      <OrderShipments
+        side="so"
+        orderId={invoice.id}
+        canEdit={invoice.status !== 'void'}
+        lines={invoice.lines.map((l) => ({ id: l.id, label: l.item, quantity: l.quantity }))}
+      />
+      <OrderLabels
+        side="so"
+        orderId={invoice.id}
+        // The buyer is who the goods go to, so their address is the one already
+        // on the document. On a dropship the label usually goes to the SUPPLIER
+        // instead, which is why this is a default rather than a fixed value.
+        defaultTo={invoice.email}
+        canEdit={invoice.status !== 'void'}
+      />
+      <OrderHistory side="so" orderId={invoice.id} stageLabel={invoiceStageLabel} />
     </div>
   )
+}
+
+/**
+ * How this board names a stage, for the history log.
+ *
+ * Its own translation rather than one shared with purchase orders: 'sent' means
+ * something here and nothing there, and an id with no entry prints itself so a
+ * stage renamed after an event was written still reads.
+ */
+function invoiceStageLabel(id: string): string {
+  return INVOICE_STAGES.find((s) => s.id === id)?.label ?? (id === 'void' ? 'Void' : id)
 }
 
 function TimeRow({

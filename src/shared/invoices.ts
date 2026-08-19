@@ -298,6 +298,72 @@ export function canMoveInvoice(from: InvoiceStatus, to: InvoiceStatus): boolean 
 }
 
 /**
+ * How a buyer paid, as a list somebody picks from.
+ *
+ * OFFERED, NOT ENFORCED. The column is free text and the last option types
+ * anything, because this list can only ever hold the ways people have paid so
+ * far and the next one is always possible. What the list buys is that the four
+ * that happen constantly are one tap rather than four spellings of "zelle" that
+ * no report can group.
+ *
+ * NOTHING IS EVER REMOVED. The words themselves are stored on orders already
+ * written, so dropping an entry does not tidy a menu — it orphans every record
+ * holding that value.
+ */
+export const PAYMENT_METHODS = ['Cash', 'Zelle', 'Card', 'Bank transfer', 'PayPal', 'Other'] as const
+
+/** What a payment recorded up front says about itself. */
+export interface InvoicePaymentInput {
+  /** How much arrived. Defaults to the order's total when nobody says. */
+  amount?: number | null
+  method?: string | null
+  reference?: string | null
+  /** Release it to the packing floor at the same time. */
+  readyToShip?: boolean
+  /** Move the card to Paid as well. Off for a deposit against a bigger order. */
+  markPaid?: boolean
+}
+
+export const PAYMENT_REFERENCE_MAX = 120
+
+export function validateInvoicePayment(
+  input: InvoicePaymentInput,
+  orderTotal: number
+): string | null {
+  if (input.amount !== undefined && input.amount !== null) {
+    if (!Number.isFinite(input.amount) || input.amount <= 0) {
+      return 'A payment has to be more than nothing.'
+    }
+    // A cent of tolerance, because a total is money() rounded and an operator
+    // typing the figure off the order should not be told it disagrees with
+    // itself. Anything genuinely larger is worth stopping on: overpayment is a
+    // real event and it should be a deliberate one, not a typo.
+    if (input.amount > money(orderTotal) + 0.01) {
+      return 'That is more than the order comes to. Check the amount.'
+    }
+  }
+  if ((input.reference ?? '').length > PAYMENT_REFERENCE_MAX) {
+    return 'That reference is too long.'
+  }
+  return null
+}
+
+/**
+ * Is this order waiting to be picked?
+ *
+ * The question the packing floor asks, and the reason readiness is its own
+ * timestamp rather than a stage: an order can be paid and not ready (nothing has
+ * been said about picking it), ready and not paid (a trusted buyer on terms),
+ * and it stops being either the moment it is voided.
+ */
+export function awaitingShipment(invoice: {
+  status: InvoiceStatus
+  readyToShipAt: string | null
+}): boolean {
+  return invoice.status !== 'void' && !!invoice.readyToShipAt
+}
+
+/**
  * How the last attempt to put this invoice into QuickBooks went.
  *
  * Separate from `status` because they answer different questions. `status` is
@@ -419,6 +485,41 @@ export interface Invoice {
   /** When somebody recorded the money as arrived. Null until they do. */
   paidAt: string | null
   paidBy: string | null
+  /**
+   * Did the money arrive BEFORE we shipped?
+   *
+   * A different fact from `paidAt`, not a refinement of it. "They paid the
+   * invoice we sent" and "they paid before we picked a single box" are the same
+   * amount of money and completely different situations: the second one is what
+   * releases an order to the packing floor, and on this floor it is the common
+   * case for a case break sold off a stream.
+   */
+  paidUpFront: boolean
+  /** Cash, Zelle, card, wire — whatever the operator says. Never validated. */
+  paymentMethod: string | null
+  /** A confirmation number, a last four, a note. Theirs, kept verbatim. */
+  paymentReference: string | null
+  /**
+   * When this order was released to be picked and packed. Null until it is.
+   *
+   * Separate from the stage, deliberately, and the buy side is the precedent:
+   * `setPurchaseOrderPaid` records payment WITHOUT moving a purchase order's
+   * stage, precisely so a received-but-unpaid order is not dragged backwards to
+   * say the money arrived. The sell side had no equivalent — the only way to
+   * record that a buyer had paid was to move the card to Paid, which is the LAST
+   * column, so an order paid up front looked finished before anybody had picked
+   * it.
+   */
+  readyToShipAt: string | null
+  readyToShipBy: string | null
+  /**
+   * The purchase order this sale came from, on a dropship. Null otherwise.
+   *
+   * By ID and never by number: sync REWRITES po_number on a cross-machine
+   * collision, so a link keyed on the number would silently repoint at whatever
+   * order inherited it.
+   */
+  sourcePoId: string | null
   /** How it ships, and when it settles. See @shared/freight. */
   carrier: Carrier | null
   service: string | null

@@ -5,6 +5,7 @@ import {
   asPushState,
   dueDateFor,
   hasAddress,
+  canMoveInvoice,
   invoiceTotal,
   latestPaymentDate,
   lineAmount,
@@ -13,6 +14,7 @@ import {
   paymentsApplied,
   validateCustomer,
   validateInvoice,
+  validateInvoicePayment,
   type Invoice,
   type InvoiceAddress,
   type InvoiceCustomer,
@@ -20,6 +22,7 @@ import {
   type InvoiceLine,
   type InvoiceStatus,
   type InvoiceTerms,
+  type InvoicePaymentInput,
   type NewInvoice,
   type QboInvoiceObservation
 } from '@shared/invoices'
@@ -30,6 +33,7 @@ import { asShipStatus } from '@shared/tracking'
 import { getDb } from './database'
 import { applyInvoiceStock, invoiceStockLocation, releaseInvoiceStock } from './invoiceStock'
 import { destinationHoldsStock } from '@shared/purchaseOrders'
+import { deleteOrderExtras, recordOrderEvent } from './orderExtras'
 
 /**
  * What to STORE in a line's destination column.
@@ -430,6 +434,12 @@ interface InvoiceRow extends AddressRow {
   total: number
   paid_at: string | null
   paid_by: string | null
+  paid_up_front: number | null
+  payment_method: string | null
+  payment_reference: string | null
+  ready_to_ship_at: string | null
+  ready_to_ship_by: string | null
+  source_po_id: string | null
   carrier: string | null
   service: string | null
   tracking_number: string | null
@@ -513,6 +523,12 @@ function toInvoice(r: InvoiceRow): Invoice {
     total: r.total,
     paidAt: r.paid_at,
     paidBy: r.paid_by,
+    paidUpFront: r.paid_up_front === 1,
+    paymentMethod: r.payment_method ?? null,
+    paymentReference: r.payment_reference ?? null,
+    readyToShipAt: r.ready_to_ship_at ?? null,
+    readyToShipBy: r.ready_to_ship_by ?? null,
+    sourcePoId: r.source_po_id ?? null,
     carrier: asCarrier(r.carrier),
     service: r.service,
     trackingNumber: r.tracking_number,
@@ -570,6 +586,8 @@ const INVOICE_COLS = `id, invoice_number, customer_id, customer_name, email, ter
                       qbo_status_error,
                       ${ADDRESS_COLS},
                       total, paid_at, paid_by,
+                      paid_up_front, payment_method, payment_reference,
+                      ready_to_ship_at, ready_to_ship_by, source_po_id,
                       carrier, service, tracking_number, payment_timing,
                       tracking_status, tracking_status_detail, tracking_status_at,
                       tracking_checked_at, tracking_error, tracking_attempted_at,
@@ -781,6 +799,18 @@ export function saveInvoice(
       createdAt: existing?.created_at ?? stamp,
       updatedAt: stamp
     })
+
+    // The first line of the log, and only for a genuinely new order. A save that
+    // edits a draft is not a creation, and stamping one on every keystroke would
+    // fill the history with the same sentence.
+    if (!existing) {
+      recordOrderEvent('so', id, 'created', {
+        toStage: 'draft',
+        detail: `Raised for ${input.customerName.trim()}`,
+        actorId,
+        db
+      })
+    }
 
     /**
      * THE SHELF. Everything this order was holding goes back, and then it takes
@@ -1144,6 +1174,252 @@ export function recordQboObservation(id: string, o: QboInvoiceObservation): void
 }
 
 /**
+ * Bind a sales order to the purchase order it was raised against.
+ *
+ * ## Two documents, two events, one deal
+ *
+ * A dropship is a purchase and a sale that happen to be about the same boxes,
+ * and the owner's requirement was explicit: two individual records, synced,
+ * each specific to its own half of the process. So this writes the pointer on
+ * BOTH rows and an event on BOTH logs — the purchase order's log says what it
+ * was sold as, the sales order's log says what it was bought as, and each reads
+ * correctly to somebody who only ever opens one of them.
+ *
+ * ## By id, in one transaction
+ *
+ * Never by number: sync rewrites `po_number` on a cross-machine collision and
+ * `invoice_number` is neither unique nor relabelled, so a link keyed on either
+ * would silently repoint at whatever order inherited it. And both writes commit
+ * together, because a half-written link is a purchase order claiming a sale that
+ * does not point back — which is worse than no link, since it reads as one.
+ *
+ * Refuses to steal a link that already exists. Re-running the flow against an
+ * order already paired would otherwise orphan the first sale silently.
+ */
+export function linkDropshipPair(
+  poId: string,
+  invoiceId: string,
+  actorId: string | null
+): { ok: boolean; error?: string } {
+  const db = getDb()
+  const run = db.transaction((): { ok: boolean; error?: string } => {
+    const po = db
+      .prepare(`SELECT po_number, supplier, linked_invoice_id FROM purchase_orders WHERE id = ?`)
+      .get(poId) as
+      | { po_number: string; supplier: string | null; linked_invoice_id: string | null }
+      | undefined
+    if (!po) return { ok: false, error: 'That purchase order is gone.' }
+    const invoice = db
+      .prepare(`SELECT invoice_number, customer_name, source_po_id, total FROM invoices WHERE id = ?`)
+      .get(invoiceId) as
+      | {
+          invoice_number: string | null
+          customer_name: string
+          source_po_id: string | null
+          total: number
+        }
+      | undefined
+    if (!invoice) return { ok: false, error: 'That sales order is gone.' }
+
+    if (po.linked_invoice_id && po.linked_invoice_id !== invoiceId) {
+      return { ok: false, error: `${po.po_number} is already linked to another sales order.` }
+    }
+    if (invoice.source_po_id && invoice.source_po_id !== poId) {
+      return { ok: false, error: 'That sales order already came from another purchase order.' }
+    }
+
+    const stamp = nowIso()
+    db.prepare(`UPDATE purchase_orders SET linked_invoice_id = ?, updated_at = ? WHERE id = ?`).run(
+      invoiceId,
+      stamp,
+      poId
+    )
+    db.prepare(`UPDATE invoices SET source_po_id = ?, updated_at = ? WHERE id = ?`).run(
+      poId,
+      stamp,
+      invoiceId
+    )
+
+    const soLabel = invoice.invoice_number ? `sales order ${invoice.invoice_number}` : 'a sales order'
+    recordOrderEvent('po', poId, 'link', {
+      detail: `Dropship — sold on to ${invoice.customer_name} as ${soLabel}`,
+      actorId,
+      db
+    })
+    recordOrderEvent('so', invoiceId, 'link', {
+      detail: `Dropship — bought from ${po.supplier ?? 'a supplier'} on ${po.po_number}`,
+      actorId,
+      db
+    })
+    return { ok: true }
+  })
+  return run()
+}
+
+/** The other half of a dropship pair, or null when there is not one. */
+export function linkedDropshipInvoice(poId: string): InvoiceDetail | null {
+  const row = getDb()
+    .prepare(`SELECT linked_invoice_id AS id FROM purchase_orders WHERE id = ?`)
+    .get(poId) as { id: string | null } | undefined
+  return row?.id ? getInvoice(row.id) : null
+}
+
+/**
+ * Record that a buyer paid, and — usually — release the order to be picked.
+ *
+ * ## Payment and readiness are two facts, not one
+ *
+ * The buy side has worked this way all along: `setPurchaseOrderPaid` records
+ * money WITHOUT moving a purchase order's stage, precisely so a
+ * received-but-unpaid order is not dragged backwards to say the money arrived.
+ * The sell side had no equivalent — the only way to record that a buyer had paid
+ * was to drag the card to Paid, which is the LAST column, so an order paid up
+ * front looked finished before anybody had picked a single box.
+ *
+ * So this writes up to three separate things and the caller chooses which:
+ * the payment itself, the stage move, and the release to the packing floor. A
+ * deposit against a bigger order is payment with no stage move; a trusted buyer
+ * on terms is a release with no payment at all.
+ *
+ * ## It refuses on a voided order and nothing else
+ *
+ * Deliberately not gated on the stage. A draft settled in cash before it was
+ * ever posted is the ordinary case on this floor — that is what `draft → paid`
+ * exists for in INVOICE_TRANSITIONS — and a rule that made somebody post an
+ * invoice they had already been paid for would simply be worked around.
+ */
+export function recordInvoicePayment(
+  id: string,
+  input: InvoicePaymentInput,
+  actorId: string | null
+): { invoice: InvoiceDetail | null; error?: string } {
+  const db = getDb()
+  const run = db.transaction((): { invoice: InvoiceDetail | null; error?: string } => {
+    const row = db
+      .prepare(`SELECT status, total, invoice_number FROM invoices WHERE id = ?`)
+      .get(id) as { status: string; total: number; invoice_number: string | null } | undefined
+    if (!row) return { invoice: null, error: 'That order is gone.' }
+    if (asStatus(row.status) === 'void') {
+      return { invoice: getInvoice(id), error: 'That order was voided, so it cannot take a payment.' }
+    }
+
+    const problem = validateInvoicePayment(input, row.total)
+    if (problem) return { invoice: getInvoice(id), error: problem }
+
+    const stamp = nowIso()
+    const amount = money(
+      input.amount === undefined || input.amount === null ? row.total : input.amount
+    )
+    const markPaid = input.markPaid !== false
+    const ready = input.readyToShip !== false
+
+    db.prepare(
+      `UPDATE invoices
+          SET paid_up_front = 1,
+              payment_method = COALESCE(?, payment_method),
+              payment_reference = COALESCE(?, payment_reference),
+              paid_at = COALESCE(paid_at, ?),
+              paid_by = COALESCE(paid_by, ?),
+              ready_to_ship_at = CASE WHEN ? THEN COALESCE(ready_to_ship_at, ?) ELSE ready_to_ship_at END,
+              ready_to_ship_by = CASE WHEN ? THEN COALESCE(ready_to_ship_by, ?) ELSE ready_to_ship_by END,
+              updated_at = ?
+        WHERE id = ?`
+    ).run(
+      (input.method ?? '').trim() || null,
+      (input.reference ?? '').trim() || null,
+      stamp,
+      actorId,
+      ready ? 1 : 0,
+      stamp,
+      ready ? 1 : 0,
+      actorId,
+      stamp,
+      id
+    )
+
+    const how = (input.method ?? '').trim()
+    recordOrderEvent('so', id, 'paid', {
+      detail:
+        `Paid up front — ${amount.toFixed(2)}` +
+        (how ? ` by ${how}` : '') +
+        ((input.reference ?? '').trim() ? ` (${(input.reference as string).trim()})` : ''),
+      actorId,
+      db
+    })
+
+    // THE STAGE MOVE IS LAST and goes through the ordinary machinery, so it is
+    // checked against INVOICE_TRANSITIONS and logged like every other move.
+    // Writing 'paid' straight into the column here would skip both and put the
+    // one status nothing can move off behind a check nobody performed.
+    if (markPaid && canMoveInvoice(asStatus(row.status), 'paid')) {
+      setInvoiceStatus(id, 'paid', actorId)
+    }
+    if (ready) {
+      recordOrderEvent('so', id, 'ready', {
+        detail: 'Released to be picked and packed',
+        actorId,
+        db
+      })
+    }
+    return { invoice: getInvoice(id) }
+  })
+  return run()
+}
+
+/**
+ * Release an order to the packing floor, or take it back off.
+ *
+ * Separate from payment because the two genuinely come apart: a trusted buyer on
+ * Net 30 is ready to ship and has paid nothing, and an order paid by deposit is
+ * paid and not ready. Refused on a void, which has no boxes left to pick.
+ */
+export function setInvoiceReadyToShip(
+  id: string,
+  ready: boolean,
+  actorId: string | null
+): { invoice: InvoiceDetail | null; error?: string } {
+  const db = getDb()
+  const row = db.prepare(`SELECT status FROM invoices WHERE id = ?`).get(id) as
+    | { status: string }
+    | undefined
+  if (!row) return { invoice: null, error: 'That order is gone.' }
+  if (asStatus(row.status) === 'void') {
+    return { invoice: getInvoice(id), error: 'That order was voided.' }
+  }
+  const stamp = nowIso()
+  db.prepare(
+    `UPDATE invoices
+        SET ready_to_ship_at = ?, ready_to_ship_by = ?, updated_at = ?
+      WHERE id = ?`
+  ).run(ready ? stamp : null, ready ? actorId : null, stamp, id)
+  recordOrderEvent('so', id, 'ready', {
+    detail: ready ? 'Released to be picked and packed' : 'Taken back off the packing list',
+    actorId,
+    db
+  })
+  return { invoice: getInvoice(id) }
+}
+
+/**
+ * Everything waiting to be picked, oldest first.
+ *
+ * Oldest first because it is a QUEUE: the order that has been waiting longest is
+ * the one to do next, and a newest-first packing list quietly leaves somebody's
+ * order at the bottom for a fortnight.
+ */
+export function listAwaitingShipment(limit = 200): Invoice[] {
+  return (
+    getDb()
+      .prepare(
+        `SELECT ${INVOICE_COLS} FROM invoices
+          WHERE ready_to_ship_at IS NOT NULL AND status != 'void'
+          ORDER BY ready_to_ship_at ASC LIMIT ?`
+      )
+      .all(Math.max(1, Math.min(1000, limit))) as InvoiceRow[]
+  ).map(toInvoice)
+}
+
+/**
  * Local orders that could be bound to a QuickBooks invoice by their number.
  *
  * Nothing here is a match — these are the rows worth ASKING about. An order that
@@ -1326,18 +1602,37 @@ export function setInvoiceStatus(
      * gone in all of them.
      */
     if (status === 'void') releaseInvoiceStock(db, id)
-    return (
+    // Read BEFORE the write, so the log can say what it moved from. Reading
+    // after would report the new stage twice and lose the only fact the entry
+    // is worth writing for.
+    const before = db.prepare(`SELECT status FROM invoices WHERE id = ?`).get(id) as
+      | { status: string }
+      | undefined
+    const moved =
       db
         .prepare(
           `UPDATE invoices
               SET status  = ?,
                   paid_at = CASE WHEN ? = 'paid' THEN COALESCE(paid_at, ?) ELSE NULL END,
                   paid_by = CASE WHEN ? = 'paid' THEN COALESCE(paid_by, ?) ELSE NULL END,
+                  ready_to_ship_at = CASE WHEN ? = 'void' THEN NULL ELSE ready_to_ship_at END,
+                  ready_to_ship_by = CASE WHEN ? = 'void' THEN NULL ELSE ready_to_ship_by END,
                   updated_at = ?
             WHERE id = ?`
         )
-        .run(status, status, stamp, status, actorId, stamp, id).changes > 0
-    )
+        .run(status, status, stamp, status, actorId, status, status, stamp, id).changes > 0
+    // VOIDING UN-READIES IT. An order whose stock has just been handed back is
+    // not waiting to be picked, and leaving it on the packing floor's list is
+    // how somebody goes looking for boxes that are back on the shelf.
+    if (moved) {
+      recordOrderEvent('so', id, 'stage', {
+        fromStage: before?.status ?? null,
+        toStage: status,
+        actorId,
+        db
+      })
+    }
+    return moved
   })
   return run()
 }
@@ -1376,6 +1671,10 @@ export function deleteInvoice(id: string): void {
     // longer exists.
     releaseInvoiceStock(db, id)
     db.prepare(`DELETE FROM invoice_lines WHERE invoice_id = ?`).run(id)
+    // The parcels and the paperwork go with the order; the EVENTS stay. A
+    // deleted sales order is itself a thing that happened, and the log is the
+    // only place left that would say so.
+    deleteOrderExtras('so', id, db)
     db.prepare(`DELETE FROM invoices WHERE id = ?`).run(id)
   })
   run()
@@ -1465,6 +1764,25 @@ export function outstandingSalesLinesForProduct(productId: string): ScanSoCandid
         WHERE l.product_id = ?
           AND i.status != 'void'
           AND l.qty_fulfilled < l.quantity
+          -- A DROPSHIPPED LINE IS NOT PICKABLE, and leaving it out of this queue
+          -- is the whole of the fix.
+          --
+          -- The units went from the supplier straight to the buyer; this
+          -- business never held them, so there is nothing on any shelf to scan
+          -- out. But the line's qty_fulfilled stays 0 for ever precisely BECAUSE
+          -- nothing left here, which made it look permanently outstanding — so
+          -- it was offered to the scanner, and scanning it called fulfilSalesLine
+          -- and adjustStock, taking real boxes off a real shelf for units that
+          -- were never on it.
+          --
+          -- Rare while dropship sales orders were hand-typed; routine the moment
+          -- they are raised by the dropship flow. The test is the line's own
+          -- destination falling back to the header, which is the same rule
+          -- destinationHoldsStock applies everywhere else — spelled in SQL here
+          -- because this runs in the database, and case-folded because a
+          -- hand-typed 'rm' is the RM shelf.
+          AND UPPER(COALESCE(NULLIF(TRIM(l.destination), ''), i.location, 'RM'))
+              IN ('RM', 'AM')
         ORDER BY i.invoice_date ASC, i.invoice_number ASC, l.position ASC`
     )
     .all(productId) as Array<{

@@ -9,6 +9,7 @@ import { FreightLine, TrackingLine } from '../../components/FreightFields'
 import { PaymentBar } from '../../components/PaymentProgress'
 import { CheckTrackingButton } from '../../components/CheckTrackingButton'
 import { MatchByNumberModal } from './MatchByNumberModal'
+import { PayUpFrontModal } from '../orders/PayUpFrontModal'
 import { useToast } from '../../components/Toast'
 import { formatDate, formatMoney } from '../../lib/format'
 import { CreateInvoiceModal } from './CreateInvoiceModal'
@@ -61,6 +62,7 @@ export function InvoicesBoard({
   const [creatingNew, setCreatingNew] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [matching, setMatching] = useState(false)
+  const [paying, setPaying] = useState<InvoiceDetail | null>(null)
   const [nextNumber, setNextNumber] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
   /**
@@ -173,6 +175,21 @@ export function InvoicesBoard({
       active = false
     }
   }, [])
+
+  /**
+   * Open the paid-up-front dialog, which needs the whole order rather than the
+   * card's summary: the amount defaults to the total and the warning about a
+   * part payment is arithmetic against it.
+   */
+  const openForPayment = async (id: string): Promise<void> => {
+    const detail = await api.invoices.get(id)
+    if (!detail) {
+      toast.error('That order is gone.')
+      await load()
+      return
+    }
+    setPaying(detail)
+  }
 
   const open = async (id: string): Promise<void> => {
     const detail = await api.invoices.get(id)
@@ -425,6 +442,7 @@ export function InvoicesBoard({
                       }}
                       onDelete={() => setDeleting(inv)}
                       onPdf={() => void api.invoices.openPdf(inv.id)}
+                      onPayUpFront={() => void openForPayment(inv.id)}
                     />
                   ))}
                 </div>
@@ -447,6 +465,14 @@ export function InvoicesBoard({
           onSaved={load}
           onDelete={(inv) => setDeleting(inv)}
           onOpenQuickBooks={onOpenQuickBooks}
+        />
+      )}
+
+      {paying && (
+        <PayUpFrontModal
+          invoice={paying}
+          onClose={() => setPaying(null)}
+          onSaved={load}
         />
       )}
 
@@ -508,7 +534,8 @@ function InvoiceCard({
   onMove,
   onRetryPush,
   onDelete,
-  onPdf
+  onPdf,
+  onPayUpFront
 }: {
   invoice: Invoice
   busy: boolean
@@ -520,6 +547,8 @@ function InvoiceCard({
   onRetryPush: () => Promise<void>
   onDelete: () => void
   onPdf: () => void
+  /** Open the paid-up-front dialog for this order. */
+  onPayUpFront: () => void
 }): JSX.Element {
   const overdue =
     invoice.status !== 'paid' &&
@@ -639,6 +668,24 @@ function InvoiceCard({
             Open in QuickBooks is one click away with Send, print and payment
             all on that screen. Emailing a buyer now happens in QuickBooks,
             which is also where a record of having sent it lives. */}
+
+        {/* PAID UP FRONT is a different act from moving the card, and it is the
+            one that happens on this floor: a case sold off a stream is paid by
+            Zelle before anybody picks a box. It records the money, says how it
+            arrived, and RELEASES THE ORDER TO BE PICKED — which "Mark paid"
+            never did, because Paid is the last column and an order that lands
+            there looks finished. */}
+        {!settled && (
+          <button
+            type="button"
+            className="btn po-move inv-move-upfront"
+            disabled={busy}
+            title="Record money that arrived before it shipped, and put it on the packing list"
+            onClick={onPayUpFront}
+          >
+            Paid up front…
+          </button>
+        )}
 
         {!settled && (
           <button

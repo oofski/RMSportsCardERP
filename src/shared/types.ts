@@ -176,6 +176,20 @@ export interface UploadedFile {
   filename: string
   text?: string
   base64?: string
+  /**
+   * What the browser said the file is, when it said anything.
+   *
+   * Optional because every upload that predates it managed without: those are
+   * spreadsheets and PDFs whose handler already knows what it is being handed.
+   * It matters for a file that is STORED and handed back later — a shipping
+   * label is opened by an OS that decides what to launch from the content type,
+   * and a PDF served as an image is a file nothing will open.
+   *
+   * Never trusted on its own. It comes from the browser, so the receiving end
+   * checks it against a list of what it is willing to keep — see
+   * validateOrderDocument — rather than storing whatever a page claimed.
+   */
+  mimeType?: string
 }
 
 export interface RememberedCredentials {
@@ -930,6 +944,21 @@ export interface PurchaseOrder {
    * on a raw header value, and never assume it is a shelf.
    */
   location: string
+  /**
+   * The sales order raised against this purchase, on a dropship. Null otherwise.
+   *
+   * Buying from one party and selling to another is TWO documents — money out
+   * and money in — and this is the only thing recording that a particular pair
+   * are the same deal. By ID and never by number: sync REWRITES po_number on a
+   * cross-machine collision (see RELABEL_ON_CONFLICT), so a link keyed on the
+   * number would silently repoint at whatever order inherited it.
+   *
+   * Both halves stay independent. Deleting or cancelling one must not take the
+   * other with it — they are separate commitments to separate people, and a
+   * supplier is still owed for goods they shipped even if the buyer fell
+   * through.
+   */
+  linkedInvoiceId: string | null
   /** Σ(line qty × unit price), stored snapshot. */
   total: number
   /** Number of line items. */

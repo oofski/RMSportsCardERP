@@ -197,6 +197,43 @@ export const IPC = {
   invoiceOpenPdf: 'invoices:pdf:open',
   invoiceSavePdf: 'invoices:pdf:save',
 
+  // ---- What a purchase order and a sales order BOTH have -------------------
+  //
+  // A history, parcels, and paperwork. Shared channels taking a `side` of 'po'
+  // or 'so' rather than two parallel sets, because every one of these questions
+  // is asked identically of both documents — and the first time two parallel
+  // sets drifted would be a feature that quietly only worked on the buy side.
+  //
+  // There is deliberately NO channel that writes a log entry. An event is a
+  // record of something the app did, written by the code that did it inside the
+  // same transaction; a channel that let a screen post arbitrary history would
+  // make the log authorable rather than true, which is the only property that
+  // makes it worth reading.
+  orderEvents: 'order:events',
+  orderShipments: 'order:shipments',
+  orderShipmentSave: 'order:shipment:save',
+  orderShipmentDelete: 'order:shipment:delete',
+  orderDocuments: 'order:documents',
+  orderDocumentUpload: 'order:document:upload',
+  orderDocumentOpen: 'order:document:open',
+  orderDocumentDelete: 'order:document:delete',
+  // Send the label to whoever is shipping the goods. Answers with whether it
+  // actually SENT, because without a mail account configured the honest
+  // fallback is a mailto: — which cannot carry an attachment, and an email
+  // somebody believes has a label on it is worse than no email at all.
+  orderEmailLabel: 'order:email-label',
+  // Bind the two halves of a dropship. The sale is already saved by the time
+  // this is called: the second screen writes an ordinary sales order through the
+  // ordinary path, and this only records that the two are the same deal.
+  orderLinkDropship: 'order:link-dropship',
+  // Money that arrived BEFORE anything shipped, and the packing queue it
+  // releases an order into. Payment and readiness are separate facts — see
+  // recordInvoicePayment, and setPurchaseOrderPaid on the buy side, which is
+  // the precedent.
+  invoicePayUpFront: 'invoices:pay-up-front',
+  invoiceSetReady: 'invoices:set-ready',
+  invoicesAwaitingShipment: 'invoices:awaiting-shipment',
+
   // Purchase orders
   poList: 'po:list',
   poGet: 'po:get',

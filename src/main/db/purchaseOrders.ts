@@ -28,6 +28,7 @@ import { LOCATION_IDS } from '@shared/inventory'
 import { getDb, getMeta, setMeta } from './database'
 import { addStock, adjustStock, reverseStockReceipt, stockQty } from './inventory'
 import { recordPoCogs, voidPoCogs } from './finance'
+import { deleteOrderExtras, recordOrderEvent } from './orderExtras'
 import { newId, nowIso } from '../util'
 
 interface PoRow {
@@ -37,6 +38,7 @@ interface PoRow {
   notes: string | null
   status: string
   location: string
+  linked_invoice_id: string | null
   total: number
   created_by: string | null
   created_at: string
@@ -236,6 +238,7 @@ function toSummary(row: PoHeaderRow): PurchaseOrder {
     notes: row.notes ?? null,
     status: row.status as PurchaseOrderStatus,
     location: row.location,
+    linkedInvoiceId: row.linked_invoice_id ?? null,
     total: row.total,
     lineCount: row.line_count,
     receivedLineCount: row.received_line_count,
@@ -369,7 +372,8 @@ const RECEIVED_LINE_COUNT_SQL = `
     WHERE r.receivable > 0 AND r.received >= r.receivable)`
 
 const PO_SELECT = `
-  SELECT po.id, po.po_number, po.supplier, po.notes, po.status, po.location, po.total,
+  SELECT po.id, po.po_number, po.supplier, po.notes, po.status, po.location,
+         po.linked_invoice_id, po.total,
          po.created_by, po.created_at, po.updated_at,
          po.ordered_at, po.paid_at, po.received_at, po.cancelled_at, po.scanned_at,
          po.carrier, po.service, po.tracking_number, po.payment_timing,
@@ -639,6 +643,16 @@ export function createPurchaseOrder(
       service: input.service?.trim() || null,
       tracking_number: input.trackingNumber?.trim() || null,
       payment_timing: asPaymentTiming(input.paymentTiming)
+    })
+
+    // The first line of the log. Without it a purchase order's history opens on
+    // whatever was done to it SECOND, and the moment it came into existence —
+    // which is the one every other entry is measured against — is missing.
+    recordOrderEvent('po', id, 'created', {
+      toStage: 'ordered',
+      detail: `Raised as ${poNumber}`,
+      actorId,
+      db
     })
 
     const insertLine = db.prepare(
@@ -1243,7 +1257,14 @@ export function removePurchaseOrderLine(poId: string, lineId: string): PoStatusR
   }
 }
 
-export function setPurchaseOrderPaid(id: string, paid: boolean): PoStatusResult {
+export function setPurchaseOrderPaid(
+  id: string,
+  paid: boolean,
+  // WHO ticked it. The handler already had this and threw it away; the log is
+  // the reason it is worth carrying, and "somebody marked this paid on Tuesday"
+  // with no name is the answer the log exists to stop giving.
+  actorId: string | null = null
+): PoStatusResult {
   const db = getDb()
   const run = db.transaction((): PoStatusResult => {
     const row = db
@@ -1272,6 +1293,11 @@ export function setPurchaseOrderPaid(id: string, paid: boolean): PoStatusResult 
       ts,
       id
     )
+    recordOrderEvent('po', id, 'paid', {
+      detail: paid ? 'Marked paid' : 'Payment un-marked',
+      actorId,
+      db
+    })
     return { po: getPurchaseOrder(id) }
   })
   try {
@@ -1306,6 +1332,12 @@ export function setPurchaseOrderStatus(
       db.prepare(
         'UPDATE purchase_orders SET status = ?, paid_at = NULL, received_at = NULL, cancelled_at = NULL, updated_at = ? WHERE id = ?'
       ).run(status, ts, id)
+      recordOrderEvent('po', id, 'stage', {
+        fromStage: row.status,
+        toStage: status,
+        actorId,
+        db
+      })
       // UN-CANCELLING PUTS THE MONEY BACK.
       //
       // Cancelling is the single void point for a PO's COGS row: the purchase
@@ -1351,6 +1383,15 @@ export function setPurchaseOrderStatus(
       db.prepare(
         `UPDATE purchase_orders SET status = ?, ${tsCol} = ?, updated_at = ? WHERE id = ?`
       ).run(status, ts, ts, id)
+      // INSIDE the transaction, so the move and the record of it commit
+      // together. A log that can lag the board is a log nobody can use to work
+      // out what went wrong, which is the only reason anybody opens one.
+      recordOrderEvent('po', id, 'stage', {
+        fromStage: row.status,
+        toStage: status,
+        actorId,
+        db
+      })
       // Cancelling a PO voids its COGS ledger entry — the single void point.
       if (status === 'cancelled') {
         // Cancelling a RECEIVED PO has to give the stock back, or inventory
@@ -1732,6 +1773,19 @@ export function completePoIfFullyReceived(db: Database.Database, poId: string): 
         SET status = 'received', received_at = COALESCE(received_at, @ts), scanned_at = @ts, updated_at = @ts
       WHERE id = @id`
   ).run({ ts, id: poId })
+  // THE ORDER CLOSED ITSELF, and the log has to say so. This is one of the two
+  // places a purchase order's stage changes without going through
+  // setPurchaseOrderStatus, so a log hooked only into that function would show
+  // an order sitting in Ordered while the board says Received — the exact
+  // disagreement somebody opens a log to resolve.
+  //
+  // No actor: nobody clicked. The last box being scanned in is what did it, and
+  // naming the scanner would credit them with a decision they did not make.
+  recordOrderEvent('po', poId, 'stage', {
+    toStage: 'received',
+    detail: 'Closed automatically — every receivable unit was checked in',
+    db
+  })
   return { ...unchanged, completed: true }
 }
 
@@ -2399,6 +2453,10 @@ export function forceDeletePurchaseOrder(
     // Same two statements the ordinary delete runs. Lines cascade; the scan
     // history keeps its rows with po_id set to NULL.
     voidPoCogs(db, id)
+    // The parcels and the paperwork go with the order. The EVENTS deliberately
+    // do not — a deleted purchase order is itself a thing that happened, and the
+    // log is the only place that would still say so.
+    deleteOrderExtras('po', id, db)
     db.prepare('DELETE FROM purchase_orders WHERE id = ?').run(id)
   })
 
@@ -2517,6 +2575,10 @@ export function deletePurchaseOrder(
     // Drop the COGS row explicitly rather than relying on the cascade, so the
     // ledger is corrected the same way cancelling would correct it.
     voidPoCogs(db, id)
+    // The parcels and the paperwork go with the order. The EVENTS deliberately
+    // do not — a deleted purchase order is itself a thing that happened, and the
+    // log is the only place that would still say so.
+    deleteOrderExtras('po', id, db)
     db.prepare('DELETE FROM purchase_orders WHERE id = ?').run(id)
   })
   try {

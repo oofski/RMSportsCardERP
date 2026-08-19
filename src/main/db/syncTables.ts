@@ -165,6 +165,30 @@ export const SYNCED_TABLES: SyncedTable[] = [
   { table: 'stream_schedule', key: ['id'], tier: 0 },
   { table: 'purchase_orders', key: ['id'], tier: 0 },
   { table: 'inventory_resets', key: ['id'], tier: 0 },
+  // WHAT HAPPENED TO AN ORDER — who moved it, when, and from what to what.
+  //
+  // Tier 0 although every row names a purchase order or a sales order, for the
+  // same reason ship_work_log is: it is designed to OUTLIVE its subject. The
+  // actor's NAME is denormalised onto the row precisely so the log still reads
+  // after the person has left, and a row that waited for a parent somebody
+  // deleted last month would never land at all.
+  //
+  // Last-write-wins is trivially safe here: an event is an immutable record of
+  // a moment under a UUID nobody else mints, so the relay only ever compares a
+  // row against an older copy of itself. Nothing edits one and nothing counts.
+  { table: 'order_events', key: ['id'], tier: 0 },
+  // The parcels an order ships in. Tier 1: an order has to land first, because
+  // a shipment with no order to hang off is a tracking number for nothing.
+  { table: 'order_shipments', key: ['id'], tier: 1 },
+  // A shipping label, in slices that travel — the same arrangement as
+  // ship_document_parts and for exactly the same reason. Tier 0 because a slice
+  // points at nothing: it carries its own document's metadata so it never waits
+  // on a parent, and a set of slices is complete or it is not.
+  //
+  // `order_documents` — the whole-file row — is deliberately absent. It holds
+  // the bytes verbatim and is rebuilt from these on every machine but the one
+  // that uploaded. See rebuildOrderDocuments().
+  { table: 'order_document_parts', key: ['id'], tier: 0 },
   // Buyers. Operator-authored whole facts under UUIDs nobody else mints, and
   // they have to travel: an invoice raised on the office laptop for a buyer
   // added at the bench would otherwise have nobody to address it to.
@@ -289,6 +313,11 @@ export const SYNCED_TABLES: SyncedTable[] = [
   // Invoice lines. Tier 2 so they land after the invoice they belong to on the
   // row-at-a-time recovery path.
   { table: 'invoice_lines', key: ['id'], tier: 2 },
+  // Which line items are in which parcel. Tier 3, one below everything it
+  // names: it points at a SHIPMENT (tier 1) and at a LINE, and the line it
+  // names is an invoice line at tier 2 — so it has to be the last of the four
+  // to land or it is an assignment attached to nothing on the recovery path.
+  { table: 'order_shipment_lines', key: ['id'], tier: 3 },
   { table: 'stream_item_lots', key: ['id'], tier: 2 },
   // Which cost layers one ledger movement took, and whether an operator chose
   // them. Tier 2: it names a transaction, and a composition arriving before the

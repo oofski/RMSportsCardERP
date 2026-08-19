@@ -312,9 +312,9 @@ export function registerPurchaseOrdersIpc(): void {
     IPC.poSetPaid,
     (_e, payload: { id: string; paid: boolean }): Result<PurchaseOrderDetail> => {
       try {
-        requireInvoicing()
+        const actor = requireInvoicing()
         if (!payload?.id) return { ok: false, error: 'No purchase order specified.' }
-        const res = setPurchaseOrderPaid(payload.id, payload.paid !== false)
+        const res = setPurchaseOrderPaid(payload.id, payload.paid !== false, actor?.id ?? null)
         return res.error
           ? { ok: false, error: res.error }
           : { ok: true, data: res.po as PurchaseOrderDetail }

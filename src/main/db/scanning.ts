@@ -33,6 +33,7 @@ import {
   receivePoLine
 } from './purchaseOrders'
 import { newId, nowIso } from '../util'
+import { recordOrderEvent } from './orderExtras'
 
 /**
  * UPC scanning. Deliberately TWO steps:
@@ -782,6 +783,18 @@ export function undoScan(scanId: string, actorId: string | null): { record?: Sca
         received_at: row.po_prev_received_at,
         ts: nowIso(),
         id: row.po_id
+      })
+      // THE SECOND PATH THAT MOVES A PURCHASE ORDER'S STAGE WITHOUT GOING
+      // THROUGH setPurchaseOrderStatus. Undoing a scan reopens the order it
+      // closed, and a log that missed this would show an order received with no
+      // record of it ever being reopened — which reads as the undo not having
+      // worked.
+      recordOrderEvent('po', row.po_id, 'stage', {
+        fromStage: 'received',
+        toStage: row.po_prev_status ?? 'ordered',
+        detail: 'Reopened — the scan that closed it was undone',
+        actorId,
+        db
       })
     } else if (row.po_id && row.po_line_id) {
       // A DIFFERENT scan completed this PO (possible when a line was received in

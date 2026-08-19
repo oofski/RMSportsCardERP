@@ -4,8 +4,7 @@ import type {
   PurchaseOrderStatus,
   Supply,
   SupplyOrder,
-  SupplyOrderStatus
-} from '@shared/types'
+  SupplyOrderStatus, PurchaseOrderDetail } from '@shared/types'
 import { useSession } from '../../lib/session'
 import { api } from '../../lib/api'
 import { LIVE, useLiveRefresh } from '../../lib/live'
@@ -15,6 +14,7 @@ import { Icon } from '../../components/Icon'
 import { formatMoney } from '../../lib/format'
 import { PurchaseOrderBoard } from './PurchaseOrderBoard'
 import { CreatePurchaseOrderModal } from './CreatePurchaseOrderModal'
+import { DropshipSaleStep } from './DropshipSaleStep'
 import { PurchaseOrderReceipt } from './PurchaseOrderReceipt'
 import { CheckTrackingButton } from '../../components/CheckTrackingButton'
 import { SupplyOrderModal } from './SupplyOrderModal'
@@ -51,6 +51,7 @@ export function InvoicingModule(): JSX.Element {
   const [thumbnails, setThumbnails] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(true)
   const [showCreate, setShowCreate] = useState(false)
+  const [dropship, setDropship] = useState<PurchaseOrderDetail | null>(null)
   const [receiptId, setReceiptId] = useState<string | null>(null)
   /**
    * A PO the ordinary delete refused, held so the operator can decide what to do
@@ -303,7 +304,27 @@ export function InvoicingModule(): JSX.Element {
       </div>
 
       {showCreate && (
-        <CreatePurchaseOrderModal onClose={() => setShowCreate(false)} onSaved={reload} />
+        <CreatePurchaseOrderModal
+          onClose={() => setShowCreate(false)}
+          onSaved={reload}
+          // A DROPSHIP IS TWO DEALS AND THIS IS THE HINGE BETWEEN THEM. The
+          // purchase is done; the sale that pays for it has not been written,
+          // and this is the one moment when everything it needs is on screen.
+          onCreated={(created) => {
+            // 'stock' is an ordinary purchase onto our own shelf; 'drop' and
+            // 'mixed' both have units going somewhere that is not ours, and
+            // both are worth offering to bill.
+            if (created.orderKind === 'stock') return
+            setDropship(created)
+          }}
+        />
+      )}
+      {dropship && (
+        <DropshipSaleStep
+          po={dropship}
+          onClose={() => setDropship(null)}
+          onDone={reload}
+        />
       )}
       {receiptId && (
         <PurchaseOrderReceipt

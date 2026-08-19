@@ -24880,3 +24880,616 @@ button.sor-team:focus-visible {
   height: 32px;
   font-size: 12.5px;
 }
+
+/* ---------------------------------------------------------------------------
+   THE COMBOBOX — components/Combobox.tsx
+   ---------------------------------------------------------------------------
+   A box you click, type into and pick out of, whose menu is a PORTAL into
+   document.body at `position: fixed`. Everything below assumes that split: the
+   `.combo-input` rules style a control that lives inside a form, and the
+   `.combo-menu` rules style an element that is a child of <body> and therefore
+   has no inherited context at all — no cascade from the modal it looks like it
+   belongs to, and no ancestor whose `overflow` could clip it. That is the whole
+   reason it is drawn there. See the doc comment in the component for the three
+   ways an absolutely positioned menu loses inside a table inside a scrolling
+   modal body.
+   --------------------------------------------------------------------------- */
+
+/* The closed control is a <select> that happens to accept typing, so it is
+   styled as one down to the chevron: a run of these next to each other must not
+   split into "the ones you can type in" and "the ones you cannot". Sized against
+   .select rather than .input for the same reason — the callers' own rules
+   (.po-lines-routed .po-party-select and friends) are two classes deep and still
+   out-specify all of this, so a table row keeps its 32px. */
+.combo-input {
+  height: 44px;
+  font-size: 14.5px;
+  padding-right: 34px;
+  cursor: text;
+  text-overflow: ellipsis;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-3) 50%),
+    linear-gradient(135deg, var(--text-3) 50%, transparent 50%);
+  /* Vertically CENTRED rather than a fixed offset, because the same class is
+     worn by a 44px header field, a 32px table cell and a 30px split row. A
+     hard-coded y put the chevron on the floor of the short ones. */
+  background-position: calc(100% - 17px) center, calc(100% - 12px) center;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+.combo-input:disabled {
+  background-color: var(--surface-3);
+  color: var(--text-3);
+  cursor: not-allowed;
+}
+
+/* z-index 200 puts it over the modal overlay (60) and the sticky table headers
+   (80) it is opened from, and under the image lightbox (1000), which is the one
+   thing in this app that is genuinely meant to cover everything. */
+.combo-menu {
+  position: fixed;
+  z-index: 200;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-lg);
+  padding: 5px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  animation: pop 0.12s ease;
+  /* The menu is placed from the input's rect, so it is already exactly where it
+     belongs; a transform-origin only decides which corner the pop grows from. */
+  transform-origin: top center;
+}
+/* Flipped above the control because there was no room below. Anchored by its
+   BOTTOM edge in the component, so it grows upward without anything having to
+   measure its height first. */
+.combo-menu.is-above {
+  transform-origin: bottom center;
+}
+
+/* A heading, not a choice. Deliberately not hoverable and not focusable: an
+   <optgroup> label could never be picked and neither can this. */
+.combo-group {
+  padding: 9px 11px 4px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.combo-option {
+  padding: 8px 11px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13.5px;
+  color: var(--text);
+  /* One line, clipped. A name long enough to wrap would make one row twice the
+     height of its neighbours, which moves every row under it as the filter
+     narrows — the list appears to jump while somebody is reading it. The full
+     name is on the row's tooltip. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* ONE highlight, driven by the keyboard, and the mouse moves it rather than
+   painting a second one. Two independently highlighted rows — one under the
+   pointer, one under the arrow keys — is a menu where Enter picks the row you
+   are not looking at. */
+.combo-option.is-active {
+  background: var(--surface-3);
+}
+/* What is chosen right now, so the list opens saying where you already are. */
+.combo-option.is-current {
+  font-weight: 600;
+  color: var(--brand-700);
+}
+/* The row that clears the field — "Same as order (RM)", and its kind. It is an
+   answer, not an absence, but it is not a name either, so it reads as neither. */
+.combo-option.combo-clear {
+  color: var(--text-2);
+  font-style: italic;
+}
+
+/* WHY this row is in the list. With a filter of two or three letters the reason
+   a name matched is often in the middle of it, and without the tint the list
+   reads as unfiltered. `mark` is otherwise painted browser-yellow. */
+.combo-hit {
+  background: var(--brand-soft-2);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 1px;
+  font-weight: 700;
+}
+
+/* Nothing matched. This is where the escape hatch has to be stated, because it
+   is the exact moment somebody is wondering whether the form will let them
+   proceed at all. */
+.combo-empty {
+  padding: 14px 12px;
+  text-align: center;
+  color: var(--text-2);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+/* The same promise, kept quiet, for when the list DID find something — it must
+   be readable without being a row somebody tries to click. */
+.combo-hint {
+  margin-top: 4px;
+  padding: 8px 11px;
+  border-top: 1px solid var(--border);
+  color: var(--text-3);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+/* The compact rows — a lines-table cell and a split row — override the control's
+   padding wholesale to fit four fields across, and the shorthand takes the 34px
+   that was reserving room for the chevron with it. A <select> could live with
+   that because the text it showed was a chosen name; this box also shows a
+   PLACEHOLDER, and "Same as order (Bramble Wholesale)" is long enough to run
+   straight under the arrow and read as a glyph stuck in the middle of a word.
+   Scoped to `.combo-input` so no remaining <select> anywhere is touched, and
+   matched depth for depth so it out-orders the rule it is correcting. */
+.po-lines-routed .combo-input,
+.po-ld-splitfield .combo-input {
+  padding-right: 19px;
+  background-position: calc(100% - 12px) center, calc(100% - 7px) center;
+}
+
+/* ---------------------------------------------------------------------------
+   WHAT A PURCHASE ORDER AND A SALES ORDER BOTH HAVE
+
+   A history, parcels and paperwork, drawn identically on both receipts. One set
+   of rules rather than a `po-` copy and an `inv-` copy: the two documents are
+   mirror images, somebody who has read one receipt should not have to learn the
+   other, and two copies of a layout drift the first time either is touched.
+
+   All three sit BELOW the grand total, because every one of them is read after
+   the thing the document is actually for — what was bought, from whom, for how
+   much — and none of them may push that below the fold.
+   --------------------------------------------------------------------------- */
+
+/* ---------- The log ---------- */
+
+/* A `<details>` rather than a state flag: the browser already does disclosure
+   correctly, including the keyboard and screen readers, and a hand-rolled
+   accordion is a thing to get wrong for no gain. */
+.ord-log {
+  margin-top: 14px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+.ord-log > summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-2);
+  list-style: none;
+}
+.ord-log > summary::-webkit-details-marker {
+  display: none;
+}
+.ord-log > summary b {
+  font-weight: 600;
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.ord-log > summary:hover {
+  color: var(--text);
+}
+.ord-log-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.ord-log-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+  color: var(--text);
+}
+.ord-log-list li:nth-child(odd) {
+  background: var(--surface-2);
+}
+/* The two entries worth spotting without reading: a cancellation, and money.
+   Everything else is deliberately the same weight — a log where every line
+   shouts is one nobody scans. */
+.ord-log-list li[data-kind='paid'] .ord-log-what {
+  color: var(--success-strong);
+  font-weight: 600;
+}
+.ord-log-list li[data-kind='link'] .ord-log-what {
+  color: var(--brand-600);
+}
+.ord-log-what {
+  flex: 1;
+  min-width: 0;
+}
+.ord-log-who {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex: none;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+.ord-log-when {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Parcels ---------- */
+
+.ord-ship,
+.ord-lbl {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.ord-ship-head,
+.ord-lbl-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  color: var(--text-2);
+  margin-bottom: 8px;
+}
+.ord-ship-head b,
+.ord-lbl-head b {
+  color: var(--text);
+}
+.ord-ship-sum {
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+/* The count of parcels with no cost filled in. Amber rather than grey because a
+   postage total that silently omits three labels is one somebody quotes in a
+   margin conversation. */
+.ord-ship-sum em {
+  font-style: normal;
+  color: var(--warning);
+}
+.ord-ship-empty,
+.ord-lbl-empty {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-3);
+  line-height: 1.45;
+}
+
+.ord-ship-row {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  padding: 7px 8px;
+  margin-bottom: 6px;
+}
+.ord-ship-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.ord-ship-n {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--surface-3);
+  color: var(--text-3);
+  font-size: 10.5px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+/* The tracking box takes the slack and gives it back first. Everything else on
+   the row has a natural size it should keep — a carrier name, a service, a
+   figure — and it is the long opaque string that can afford to be narrow.
+
+   min-width:0 on the row's children is what actually stops the wrap: a flex item
+   defaults to min-content, so a 22-character tracking number refuses to shrink
+   below its own width and pushes the remove button onto a line of its own. */
+.ord-ship-main > * {
+  min-width: 0;
+}
+.ord-ship-main .ord-ship-track {
+  flex: 1 1 150px;
+  min-width: 110px;
+}
+.ord-ship-main .ord-ship-carrier {
+  flex: 0 1 130px;
+}
+.ord-ship-main .ord-ship-service {
+  flex: 0 1 160px;
+}
+.ord-ship-main .ord-ship-cost {
+  flex: 0 1 90px;
+  text-align: right;
+}
+.ord-ship-link,
+.ord-ship-x {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+}
+.ord-ship-link:hover {
+  color: var(--brand-600);
+  background: var(--brand-soft);
+}
+.ord-ship-x:hover {
+  color: var(--danger-strong);
+  background: var(--danger-bg);
+}
+.ord-ship-status {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 5px;
+  padding-left: 24px;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+.ord-ship-lines {
+  margin-top: 5px;
+  padding-left: 24px;
+}
+.ord-ship-lines-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: none;
+  background: transparent;
+  padding: 0;
+  font-size: 11.5px;
+  color: var(--text-3);
+  cursor: pointer;
+}
+.ord-ship-lines-toggle:hover {
+  color: var(--text-2);
+}
+.ord-ship-line-list {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.ord-ship-line-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.ord-ship-line-list label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.ord-ship-add {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+.ord-ship-add .input {
+  flex: 1 1 220px;
+  min-width: 160px;
+}
+/* The second door, and quieter than the first: a parcel with no number is real
+   — a hand delivery, a label bought before the number is known — but it is not
+   the ordinary gesture. */
+.ord-ship-blank {
+  border: none;
+  background: transparent;
+  padding: 0;
+  font-size: 11.5px;
+  color: var(--text-3);
+  text-decoration: underline;
+  cursor: pointer;
+}
+.ord-ship-blank:hover {
+  color: var(--text-2);
+}
+
+/* ---------- Labels ---------- */
+
+.ord-lbl-add {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 9px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.ord-lbl-add:hover {
+  border-color: var(--brand-500);
+  color: var(--brand-600);
+}
+.ord-lbl-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.ord-lbl-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font-size: 12.5px;
+}
+/* A label whose slices have not all arrived is dimmed rather than hidden. "No
+   label" and "the label is still arriving" are the same blank pane and
+   completely different situations. */
+.ord-lbl-list li[data-present='false'] {
+  border-style: dashed;
+  color: var(--text-3);
+}
+.ord-lbl-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ord-lbl-meta {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.ord-lbl-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.ord-lbl-btn:hover {
+  color: var(--brand-600);
+  border-color: var(--brand-500);
+}
+.ord-lbl-waiting {
+  flex: none;
+  font-size: 11px;
+  font-style: italic;
+  color: var(--text-3);
+}
+.ord-lbl-x {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+}
+.ord-lbl-x:hover {
+  color: var(--danger-strong);
+  background: var(--danger-bg);
+}
+
+/* The fallback, when the app cannot send on its own. The whole message is shown
+   because it is about to go to a supplier this business depends on, and the one
+   thing worse than not sending it is sending the wrong one. */
+.ord-lbl-fallback {
+  margin-top: 14px;
+  padding: 12px;
+  border-radius: var(--radius);
+  background: var(--warning-bg);
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.ord-lbl-fallback p {
+  margin: 0 0 8px;
+}
+.ord-lbl-fallback p:last-child {
+  margin-bottom: 0;
+}
+.ord-lbl-preview {
+  margin: 0;
+  padding: 10px;
+  max-height: 200px;
+  overflow: auto;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 11.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ---------- Paid up front ---------- */
+
+/* Said BEFORE it happens. Paid is terminal on this board, and a part payment
+   that quietly marked the whole order settled would take the rest of the money
+   off every outstanding figure the owner reads. */
+.ord-pay-warn,
+.ds-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--warning-bg);
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.ds-note {
+  background: var(--info-bg);
+}
+.ord-pay-warn svg,
+.ds-note svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+/* Recording money and moving a card are different acts, so they do not look the
+   same. This is the one that also releases the order to be picked. */
+.po-move.inv-move-upfront {
+  color: var(--success-strong);
+  border-color: var(--success);
+}
+.po-card-foot .po-move.inv-move-upfront:hover {
+  background: var(--success-bg);
+}

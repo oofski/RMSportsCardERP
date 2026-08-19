@@ -50,6 +50,7 @@ import type {
   InvoiceCustomer,
   InvoiceDetail,
   InvoiceMatchScan,
+  InvoicePaymentInput,
   InvoicePushResult,
   InvoiceStatus,
   InvoiceTerms,
@@ -57,6 +58,13 @@ import type {
   QboInvoicePreflight,
   WholesaleSaleRow
 } from '@shared/invoices'
+import type {
+  NewOrderShipment,
+  OrderDocument,
+  OrderEvent,
+  OrderShipment,
+  OrderSide
+} from '@shared/orders'
 import type { ContactImportResult } from '@shared/contacts'
 import type { ClockPushState, PushSubscriptionInput } from '@shared/webPush'
 import type { OrderParty, SupplierSuggestion, VendorSummary } from '@shared/purchaseOrders'
@@ -1436,6 +1444,90 @@ export function createBridge(ipcRenderer: BridgeTransport) {
         ipcRenderer.invoke(IPC.messageThreadLeave, threadId)
     },
 
+    /**
+     * What a purchase order and a sales order BOTH have.
+     *
+     * One section taking a `side` of 'po' or 'so' rather than the same four
+     * calls duplicated under each board. Every question here — how did it get
+     * here, what is it shipping in, what paperwork is on it — is asked
+     * identically of both documents, and two parallel sets would drift the first
+     * time either was edited.
+     */
+    orders: {
+      /** What happened to this order, newest first. A read; nothing writes here. */
+      events: (side: OrderSide, orderId: string): Promise<OrderEvent[]> =>
+        ipcRenderer.invoke(IPC.orderEvents, { side, orderId }),
+
+      /** The parcels it ships in, each with its own carrier and service. */
+      shipments: (side: OrderSide, orderId: string): Promise<OrderShipment[]> =>
+        ipcRenderer.invoke(IPC.orderShipments, { side, orderId }),
+
+      /**
+       * Add a parcel or change one.
+       *
+       * Omit the carrier and it is GUESSED from the tracking number, which is
+       * the ordinary gesture: paste the number and the carrier and its services
+       * fill themselves in. An explicit carrier always wins, so a wrong guess
+       * can be corrected and stays corrected.
+       */
+      saveShipment: (
+        side: OrderSide,
+        orderId: string,
+        shipment: NewOrderShipment & { id?: string }
+      ): Promise<Result<OrderShipment>> =>
+        ipcRenderer.invoke(IPC.orderShipmentSave, { side, orderId, shipment }),
+
+      deleteShipment: (id: string): Promise<Result<{ id: string }>> =>
+        ipcRenderer.invoke(IPC.orderShipmentDelete, id),
+
+      /** Labels attached to this order. `present` says whether the bytes are here. */
+      documents: (side: OrderSide, orderId: string): Promise<OrderDocument[]> =>
+        ipcRenderer.invoke(IPC.orderDocuments, { side, orderId }),
+
+      uploadDocument: (
+        side: OrderSide,
+        orderId: string,
+        file: UploadedFile,
+        shipmentId?: string | null
+      ): Promise<Result<OrderDocument>> =>
+        ipcRenderer.invoke(IPC.orderDocumentUpload, { side, orderId, file, shipmentId }),
+
+      openDocument: (id: string): Promise<Result<{ path: string }>> =>
+        ipcRenderer.invoke(IPC.orderDocumentOpen, id),
+
+      deleteDocument: (id: string): Promise<Result<{ id: string }>> =>
+        ipcRenderer.invoke(IPC.orderDocumentDelete, id),
+
+      /**
+       * Email the label to whoever is shipping the goods.
+       *
+       * `sent` is the fact that matters. With a mail account configured this
+       * really sends, with the label attached. Without one it comes back
+       * `sent: false` and a `mailtoUrl` the screen can open instead — which
+       * cannot carry the attachment, and the screen has to say so rather than
+       * letting somebody send an email they believe has a label on it.
+       */
+      emailLabel: (input: {
+        side: OrderSide
+        orderId: string
+        to: string
+        note?: string | null
+        documentId?: string | null
+      }): Promise<
+        Result<{
+          sent: boolean
+          mailtoUrl: string
+          subject: string
+          body: string
+          problem: string | null
+        }>
+      > => ipcRenderer.invoke(IPC.orderEmailLabel, input),
+
+      /** Record that a purchase order and a sales order are the same deal. */
+      linkDropship: (poId: string, invoiceId: string): Promise<Result<{ linked: true }>> =>
+        ipcRenderer.invoke(IPC.orderLinkDropship, { poId, invoiceId })
+    },
+
     invoices: {
       list: (): Promise<Invoice[]> => ipcRenderer.invoke(IPC.invoicesList),
       get: (id: string): Promise<InvoiceDetail | null> => ipcRenderer.invoke(IPC.invoiceGet, id),
@@ -1605,6 +1697,29 @@ export function createBridge(ipcRenderer: BridgeTransport) {
 
       /** The ones that tried and did not make it. A LOCAL read — no connection. */
       qboPending: (): Promise<Invoice[]> => ipcRenderer.invoke(IPC.invoiceQboPending),
+
+      /**
+       * Money that arrived BEFORE anything shipped, and — usually — the release
+       * of the order to the packing floor.
+       *
+       * Payment and readiness are separate facts, the same way they are on the
+       * buy side: `setPurchaseOrderPaid` records money without moving a purchase
+       * order's stage, precisely so a received-but-unpaid order is not dragged
+       * backwards to say the money arrived. `payment.markPaid` and
+       * `payment.readyToShip` are what let a caller ask for one without the
+       * other — a deposit against a bigger order is payment and not readiness; a
+       * trusted buyer on terms is readiness and no payment at all.
+       */
+      payUpFront: (id: string, payment: InvoicePaymentInput): Promise<Result<InvoiceDetail>> =>
+        ipcRenderer.invoke(IPC.invoicePayUpFront, { id, payment }),
+
+      /** Put an order on the packing list, or take it back off. */
+      setReady: (id: string, ready: boolean): Promise<Result<InvoiceDetail>> =>
+        ipcRenderer.invoke(IPC.invoiceSetReady, { id, ready }),
+
+      /** Everything waiting to be picked, oldest first — it is a queue. */
+      awaitingShipment: (): Promise<InvoiceDetail[]> =>
+        ipcRenderer.invoke(IPC.invoicesAwaitingShipment),
 
       /**
        * Ask QuickBooks where these have got to, and move the cards it can
