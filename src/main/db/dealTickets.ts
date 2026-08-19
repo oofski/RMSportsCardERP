@@ -66,7 +66,7 @@ import { getDb, getMeta, setMeta } from './database'
  * because a database that predates the seed (or one whose meta row was lost)
  * must still never issue 336 or below.
  */
-function ceilingSeq(db: Database.Database): number {
+export function ceilingSeq(db: Database.Database): number {
   const fromCounter = Number(getMeta(db, 'deal_ticket_seq') ?? '') || 0
   const row = db
     .prepare(
@@ -344,4 +344,21 @@ export function peekNextDealTicket(): string {
   // The same ceiling the issuer uses, WITHOUT the write-back — this is the one
   // place that reads the counter and does not spend it.
   return formatDealTicket(ceilingSeq(getDb()) + 1)
+}
+
+/**
+ * The highest number a ticket actually carries. 0 when none have been issued.
+ *
+ * Distinct from `ceilingSeq`, which also honours the counter and the business
+ * floor. The numbering screen needs both: the ceiling is what a new start has to
+ * clear, and this is what it tells the operator has already gone out.
+ */
+export function dealTicketIssued(db: Database.Database): number {
+  const row = db
+    .prepare(
+      `SELECT MAX(CAST(SUBSTR(number, 4) AS INTEGER)) AS n
+         FROM deal_tickets WHERE number GLOB 'DT-[0-9]*'`
+    )
+    .get() as { n: number | null } | undefined
+  return Number(row?.n ?? 0) || 0
 }

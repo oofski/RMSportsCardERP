@@ -145,6 +145,12 @@ export const IPC = {
   invoiceGet: 'invoices:get',
   invoiceStats: 'invoices:stats',
   invoiceNextNumber: 'invoices:next-number',
+
+  // WHERE EACH DOCUMENT SERIES STARTS — deal tickets, invoice numbers and
+  // purchase orders, on one screen in Admin. The read is a peek and mints
+  // nothing; the write only ever moves a series forward. See @shared/numbering.
+  numberingRead: 'numbering:read',
+  numberingSetStart: 'numbering:set-start',
   invoiceSave: 'invoices:save',
   invoiceDelete: 'invoices:delete',
   invoiceSetStatus: 'invoices:set-status',

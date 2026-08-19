@@ -12,6 +12,7 @@ import { OnboardingTab } from './OnboardingTab'
 import { RolesTab } from './RolesTab'
 import { ActivityTab } from './ActivityTab'
 import { DeveloperTab } from './DeveloperTab'
+import { NumberingTab } from './NumberingTab'
 
 type SectionId =
   | 'employees'
@@ -20,6 +21,7 @@ type SectionId =
   | 'onboarding'
   | 'roles'
   | 'activity'
+  | 'numbering'
   | 'developer'
 
 interface SectionDef {
@@ -230,6 +232,22 @@ export function AdminModule(): JSX.Element {
       count: null,
       hint: 'Every sale, restock and adjustment'
     },
+    // WHERE THE DOCUMENT SERIES START. Admin rather than a corner of Finance or
+    // Sales Orders, because it is one setting spanning three modules and it is
+    // the kind of thing set once when the app takes over from whatever came
+    // before — not a thing anybody touches in an ordinary week.
+    //
+    // No figure on the tile. There are THREE numbers behind it and no honest way
+    // to pick one, and a tile showing the deal-ticket number above a door
+    // labelled Numbering would read as though that were the only series.
+    {
+      id: 'numbering',
+      label: 'Numbering',
+      icon: 'Hash',
+      visible: can('admin.access'),
+      count: null,
+      hint: 'Where deal tickets, invoices and POs start'
+    },
     // THE BACK OF THE HOUSE, in one tile.
     //
     // Cloud sync and the inventory reset are not administration in the sense the
@@ -283,6 +301,7 @@ export function AdminModule(): JSX.Element {
         {open.id === 'onboarding' && <OnboardingTab />}
         {open.id === 'roles' && <RolesTab employees={employees} onChanged={loadEmployees} />}
         {open.id === 'activity' && <ActivityTab />}
+        {open.id === 'numbering' && <NumberingTab />}
         {open.id === 'developer' && <DeveloperTab />}
       </div>
     )

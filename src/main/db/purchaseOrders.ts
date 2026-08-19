@@ -2529,6 +2529,37 @@ export function forceDeletePurchaseOrder(
  * The counter is still the floor, so a run of deleted orders does not hand the
  * same number out twice.
  */
+/**
+ * The highest PO number considered spent, without spending another.
+ *
+ * The same two sources `nextPoNumber` reads — the counter, which is the floor,
+ * and MAX over the table, which catches numbers that arrived from another
+ * machine through sync. Split out so the numbering screen can SHOW what the next
+ * one will be without minting it: reading a value must never consume it, or
+ * opening Admin would burn a purchase order number every time.
+ */
+export function poCeiling(db: Database.Database): number {
+  const fromCounter = Number(getMeta(db, 'po_seq') ?? '0') || 0
+  const row = db
+    .prepare(
+      `SELECT MAX(CAST(SUBSTR(po_number, 4) AS INTEGER)) AS n
+         FROM purchase_orders WHERE po_number GLOB 'PO-[0-9]*'`
+    )
+    .get() as { n: number | null } | undefined
+  return Math.max(fromCounter, Number(row?.n ?? 0) || 0)
+}
+
+/** The highest PO number a document actually carries. 0 when there are none. */
+export function poIssued(db: Database.Database): number {
+  const row = db
+    .prepare(
+      `SELECT MAX(CAST(SUBSTR(po_number, 4) AS INTEGER)) AS n
+         FROM purchase_orders WHERE po_number GLOB 'PO-[0-9]*'`
+    )
+    .get() as { n: number | null } | undefined
+  return Number(row?.n ?? 0) || 0
+}
+
 export function nextPoNumber(db: Database.Database): string {
   const fromCounter = Number(getMeta(db, 'po_seq') ?? '0') || 0
   // GLOB rather than LIKE: LIKE is case-insensitive here and '[0-9]' is not a

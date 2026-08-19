@@ -28,6 +28,8 @@ import {
   nextStageFromQbo
 } from '@shared/invoices'
 import { currentUser } from './services/auth'
+import type { NumberSeries, SeriesState } from '@shared/numbering'
+import { readNumbering, setSeriesStart } from './db/numbering'
 import {
   adoptQboInvoice,
   claimedQboIds,
@@ -344,6 +346,36 @@ export function registerInvoicesIpc(): void {
   )
 
   ipcMain.handle(IPC.invoiceNextNumber, (): string => (can() ? suggestInvoiceNumber() : ''))
+
+  /**
+   * Where the three document series start.
+   *
+   * Gated on ADMIN, not on invoicing. Anybody raising a sales order needs a
+   * number; deciding what the whole business's numbering is belongs to whoever
+   * runs it, and getting it wrong bills a customer under a number they have
+   * already been billed under.
+   *
+   * The read returns an empty list rather than throwing when the caller has no
+   * business seeing it, matching every other gated read on this path — a screen
+   * that cannot be opened does not need an error to render.
+   */
+  ipcMain.handle(IPC.numberingRead, (): SeriesState[] =>
+    currentUser()?.permissions.includes('admin.access') ? readNumbering() : []
+  )
+
+  ipcMain.handle(
+    IPC.numberingSetStart,
+    (_e, input: { series: NumberSeries; start: number }): Result<SeriesState[]> => {
+      if (!currentUser()?.permissions.includes('admin.access')) {
+        return { ok: false, error: 'Changing where numbering starts is an admin job.' }
+      }
+      try {
+        return setSeriesStart(input?.series, Number(input?.start))
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      }
+    }
+  )
 
   ipcMain.handle(
     IPC.invoiceSave,

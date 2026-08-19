@@ -10,6 +10,7 @@ import {
   latestPaymentDate,
   lineAmount,
   money,
+  INVOICE_NUMBER_START,
   nextInvoiceNumber,
   paymentsApplied,
   validateCustomer,
@@ -30,7 +31,7 @@ import type { ScanSoCandidate } from '@shared/types'
 import type Database from 'better-sqlite3'
 import { asCarrier, asPaymentTiming, detectCarrier } from '@shared/freight'
 import { asShipStatus } from '@shared/tracking'
-import { getDb } from './database'
+import { getDb, getMeta } from './database'
 import { applyInvoiceStock, invoiceStockLocation, releaseInvoiceStock } from './invoiceStock'
 import { destinationHoldsStock } from '@shared/purchaseOrders'
 import { adoptLegacyFreight, deleteOrderExtras, recordOrderEvent } from './orderExtras'
@@ -651,12 +652,47 @@ function customerAddress(customerId: string | null): InvoiceAddress | null {
   return row ? toAddress(row) : null
 }
 
+/**
+ * The highest number an invoice actually carries. 0 when none are numeric.
+ *
+ * Numeric only, and for the same reason `nextInvoiceNumber` filters: a
+ * hand-typed "INV-0042" has no counter in it that this app is entitled to guess
+ * at, so it is not allowed to move the series.
+ */
+export function invoiceIssued(): number {
+  const row = getDb()
+    .prepare(
+      `SELECT MAX(CAST(invoice_number AS INTEGER)) AS n
+         FROM invoices WHERE invoice_number GLOB '[0-9]*'`
+    )
+    .get() as { n: number | null } | undefined
+  return Number(row?.n ?? 0) || 0
+}
+
+/**
+ * Where the invoice series starts, as configured.
+ *
+ * `INVOICE_NUMBER_START` is the value the app shipped with — the point the
+ * owner's QuickBooks history had reached when this was first wired up. It is now
+ * only the DEFAULT: the numbering screen writes a replacement into `meta`, and
+ * that is what a business changing its scheme actually needs. Reading it here
+ * rather than at the call site means every path that suggests a number honours
+ * it, including any added later.
+ */
+export function invoiceStart(): number {
+  const raw = Number(getMeta(getDb(), 'invoice_number_start') ?? '')
+  return Number.isInteger(raw) && raw > 0 ? raw : INVOICE_NUMBER_START
+}
+
 /** The next number in the series, so the editor opens with one filled in. */
 export function suggestInvoiceNumber(): string {
   const rows = getDb()
     .prepare(`SELECT invoice_number FROM invoices WHERE invoice_number IS NOT NULL`)
     .all() as Array<{ invoice_number: string }>
-  return nextInvoiceNumber(rows.map((r) => r.invoice_number))
+  return nextInvoiceNumber(
+    rows.map((r) => r.invoice_number),
+    invoiceStart()
+  )
 }
 
 /**

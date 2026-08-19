@@ -25633,3 +25633,112 @@ button.sor-team:focus-visible {
   text-decoration: underline;
   cursor: pointer;
 }
+
+/* ---- Admin → Numbering --------------------------------------------------- */
+
+.num-list {
+  display: grid;
+  gap: 12px;
+  margin-top: 6px;
+}
+
+.num-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+  padding: 16px 18px;
+}
+
+.num-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+}
+.num-card-head h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 650;
+}
+.num-hint {
+  margin: 3px 0 0;
+  font-size: 12.5px;
+  color: var(--text-3);
+  max-width: 52ch;
+}
+
+/* The next number is what the whole card is about, so it carries the weight —
+   the input beside it is the control, not the answer. Tabular because these get
+   compared against a paper book character by character. */
+.num-next {
+  text-align: right;
+  flex: 0 0 auto;
+}
+.num-next-n {
+  display: block;
+  font-size: 20px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+.num-next-l {
+  display: block;
+  font-size: 10.5px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  margin-top: 1px;
+}
+
+.num-card-body {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  margin-top: 14px;
+}
+.num-field {
+  display: grid;
+  gap: 4px;
+  /* min-width:0 so a long value cannot push the Save button onto its own line —
+     the same wrap that bit the shipment row. */
+  min-width: 0;
+  flex: 0 1 190px;
+}
+.num-field > span {
+  font-size: 11.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.num-field input {
+  font-variant-numeric: tabular-nums;
+}
+
+.num-problem,
+.num-issued {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 10px 0 0;
+  font-size: 12.5px;
+}
+.num-problem {
+  color: var(--danger);
+}
+.num-issued {
+  color: var(--text-3);
+}
+
+.num-foot {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin-top: 16px;
+  font-size: 12.5px;
+  color: var(--text-3);
+  max-width: 74ch;
+}
+.num-foot svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}

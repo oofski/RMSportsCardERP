@@ -231,6 +231,7 @@ import type {
   SalesOrderHistoryRow
 } from '@shared/orderHistory'
 import type { DealTicketRow } from '@shared/dealTickets'
+import type { NumberSeries, SeriesState } from '@shared/numbering'
 import type { PnlDetail, PnlDrillRequest } from '@shared/pnlDrill'
 import type { BreakPnlSplit } from '@shared/breakPnl'
 
@@ -1581,6 +1582,14 @@ export function createBridge(ipcRenderer: BridgeTransport) {
         thisMonth: number
       }> => ipcRenderer.invoke(IPC.invoiceStats),
       nextNumber: (): Promise<string> => ipcRenderer.invoke(IPC.invoiceNextNumber),
+      /** Where all three document series start. Empty when not an admin. */
+      numbering: (): Promise<SeriesState[]> => ipcRenderer.invoke(IPC.numberingRead),
+      /** Move one series forward. `start` is the NEXT number to issue. */
+      setNumberingStart: (
+        series: NumberSeries,
+        start: number
+      ): Promise<Result<SeriesState[]>> =>
+        ipcRenderer.invoke(IPC.numberingSetStart, { series, start }),
       save: (input: NewInvoice & { id?: string | null }): Promise<Result<InvoiceDetail>> =>
         ipcRenderer.invoke(IPC.invoiceSave, input),
       /**
