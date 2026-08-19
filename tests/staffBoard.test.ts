@@ -419,11 +419,28 @@ ok(hours1.daysWorked === 1, 'one day in')
 
 // AN OPEN SHIFT COUNTS WHAT IT HAS RUN. Somebody who clocked in an hour ago
 // reading as having done nothing this fortnight is the bug this catches.
-const openStart = new Date(Date.now() - 90 * 60_000)
+//
+// THE START IS CLAMPED TO LOCAL MIDNIGHT, and a fixed "90 minutes ago" is what
+// it is clamped away from. A payroll period begins on a calendar DAY, so run
+// this suite in the small hours of a payroll date — 19 August 2026 is one, the
+// anchor plus fourteen — and a naive ninety minutes back lands on the previous
+// evening, in the previous fortnight, where `periodHours` is CORRECT to ignore
+// it. The failure was a property of the wall clock rather than of the code, and
+// it would have come back every fourteen days.
+const midnight = new Date()
+midnight.setHours(0, 0, 0, 0)
+const openStart = new Date(Math.max(Date.now() - 90 * 60_000, midnight.getTime()))
+// Derived from the same clamp rather than hard-coded, so the expectation cannot
+// drift from what was actually written.
+const openMinutes = Math.round((Date.now() - openStart.getTime()) / 60_000)
 clock('te3', meId, openStart, null)
 const hours2 = staffBoard.getStaffBoard({ fulfillment: true, viewerId: meId }).hours
 ok(hours2.onTheClock === true, 'an open entry means on the clock')
-ok(hours2.minutes >= 268 && hours2.minutes <= 272, 'and the running time counts', String(hours2.minutes))
+ok(
+  hours2.minutes >= 180 + openMinutes - 2 && hours2.minutes <= 180 + openMinutes + 2,
+  'and the running time counts',
+  `${hours2.minutes} vs ${180 + openMinutes}`
+)
 
 // A shift OUTSIDE the period does not leak in. One a fortnight back is in the
 // previous period by construction.
