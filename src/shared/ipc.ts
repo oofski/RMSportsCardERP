@@ -597,6 +597,10 @@ export const IPC = {
   // there is deliberately no channel here that can mint one.
   finDealTickets: 'finance:deal-tickets:list',
   finDealTicketYears: 'finance:deal-tickets:years',
+  // Several documents under one ticket, and back out again. Writes, unlike the
+  // two reads above — combining is the one thing about a register a person does.
+  finDealTicketsMerge: 'finance:deal-tickets:merge',
+  finDealTicketsUnmerge: 'finance:deal-tickets:unmerge',
 
   // Messages, and the contact list they are addressed from.
   //

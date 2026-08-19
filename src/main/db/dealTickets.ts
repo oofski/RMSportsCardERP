@@ -7,7 +7,9 @@ import {
   formatDealTicket,
   parseDealTicketSeq
 } from '@shared/dealTickets'
+import type { Result } from '@shared/types'
 import { getDb, getMeta, setMeta } from './database'
+import { recordOrderEvent } from './orderExtras'
 
 /**
  * Issuing and reading deal tickets.
@@ -150,6 +152,8 @@ export function issueDealTicket(
       party: clean(input.party),
       amount: Math.round((Number(input.amount) || 0) * 100) / 100,
       pairedTicketId: null,
+      // A freshly struck ticket speaks for itself; combining is a later act.
+      mergedInto: null,
       issuedAt,
       issuedBy: clean(input.actorId)
     }
@@ -201,6 +205,7 @@ function rowToTicket(r: Record<string, unknown>): DealTicket {
     party: (r.party as string | null) ?? null,
     amount: Number(r.amount) || 0,
     pairedTicketId: (r.paired_ticket_id as string | null) ?? null,
+    mergedInto: (r.merged_into as string | null) ?? null,
     issuedAt: String(r.issued_at),
     issuedBy: (r.issued_by as string | null) ?? null
   }
@@ -361,4 +366,156 @@ export function dealTicketIssued(db: Database.Database): number {
     )
     .get() as { n: number | null } | undefined
   return Number(row?.n ?? 0) || 0
+}
+
+/**
+ * Put several documents under one deal ticket.
+ *
+ * `targetId` is the ticket the others join. Nothing is renumbered and nothing is
+ * deleted: the absorbed rows keep their number, their document and their issue
+ * date, and simply point at the target. That is what lets the register still
+ * account for every number it ever handed out, and what makes this reversible.
+ *
+ * ## The structure stays one level deep
+ *
+ * A target that is itself absorbed is resolved to its root before anything is
+ * written, so combining into a member of a group joins the GROUP. And when a
+ * ticket that already speaks for others is absorbed, its members come with it —
+ * otherwise they would be left pointing at a row that no longer speaks for
+ * anything, which is a chain by another name.
+ *
+ * ## Refused rather than half-applied
+ *
+ * Validated against rows read fresh inside the transaction, not against whatever
+ * the screen sent. A board can be seconds stale, and in those seconds somebody
+ * at another bench can have combined one of these already.
+ */
+export function mergeDealTickets(
+  targetId: string,
+  ticketIds: readonly string[],
+  actorId: string | null
+): Result<DealTicketRow[]> {
+  const db = getDb()
+  const run = db.transaction((): Result<DealTicketRow[]> => {
+    const read = (id: string): DealTicket | undefined => {
+      const r = db.prepare(`SELECT * FROM deal_tickets WHERE id = ?`).get(id) as
+        | Record<string, unknown>
+        | undefined
+      return r ? rowToTicket(r) : undefined
+    }
+    let target = read(targetId)
+    if (!target) return { ok: false, error: 'That deal ticket is gone.' }
+    // Joining a member joins its GROUP. Resolved before validating, so the
+    // operator is never told off for picking a row that is a perfectly sensible
+    // thing to point at.
+    if (target.mergedInto) {
+      const root = read(target.mergedInto)
+      if (root && !root.mergedInto) target = root
+    }
+    const resolvedTarget = target
+    const chosen = ticketIds
+      .map(read)
+      .filter((t): t is DealTicket => !!t && t.id !== resolvedTarget.id)
+    if (chosen.length === 0) return { ok: false, error: 'Choose at least two tickets to combine.' }
+
+    const stamp = new Date().toISOString()
+    const update = db.prepare(
+      `UPDATE deal_tickets SET merged_into = ?, updated_at = ? WHERE id = ?`
+    )
+    for (const t of chosen) {
+      if (t.mergedInto && t.mergedInto !== resolvedTarget.id) {
+        return {
+          ok: false,
+          error: `${t.number} is already part of another deal ticket. Separate it first.`
+        }
+      }
+      // Anything this ticket already speaks for moves WITH it, or those rows are
+      // left pointing at a row that no longer speaks for anything.
+      db.prepare(
+        `UPDATE deal_tickets SET merged_into = ?, updated_at = ? WHERE merged_into = ?`
+      ).run(resolvedTarget.id, stamp, t.id)
+      update.run(resolvedTarget.id, stamp, t.id)
+      // ON THE DOCUMENT'S OWN HISTORY. Somebody opening that order a year later
+      // needs to find out why its ticket number is not the one on the register.
+      recordOrderEvent(t.documentKind, t.documentId, 'note', {
+        detail: `Deal ticket ${t.number} combined into ${resolvedTarget.number}`,
+        actorId,
+        db
+      })
+    }
+    recordOrderEvent(resolvedTarget.documentKind, resolvedTarget.documentId, 'note', {
+      detail:
+        `${chosen.length} more document${chosen.length === 1 ? '' : 's'} joined this deal ticket ` +
+        `(${chosen.map((t) => t.number).join(', ')})`,
+      actorId,
+      db
+    })
+    return { ok: true, data: [] }
+  })
+  try {
+    const res = run()
+    // Re-read OUTSIDE the transaction so the caller gets the register exactly as
+    // the next screen refresh would, joins and all.
+    return res.ok ? { ok: true, data: listDealTickets(null) } : res
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+/**
+ * Take documents back out of a combined deal ticket.
+ *
+ * Each one returns to the number it was struck with, which is still sitting on
+ * its own row — the whole reason combining points rather than renumbers.
+ *
+ * Unmerging the ticket that SPEAKS for a group is refused. It would leave its
+ * members pointing at a row that no longer holds the group, and "separate
+ * everything" is a different intention from "take this one out" — one the
+ * operator can express by selecting the members.
+ */
+export function unmergeDealTickets(
+  ticketIds: readonly string[],
+  actorId: string | null
+): Result<DealTicketRow[]> {
+  const db = getDb()
+  const run = db.transaction((): Result<DealTicketRow[]> => {
+    const stamp = new Date().toISOString()
+    for (const id of ticketIds) {
+      const r = db.prepare(`SELECT * FROM deal_tickets WHERE id = ?`).get(id) as
+        | Record<string, unknown>
+        | undefined
+      if (!r) continue
+      const t = rowToTicket(r)
+      if (!t.mergedInto) {
+        const speaksFor = db
+          .prepare(`SELECT COUNT(*) AS n FROM deal_tickets WHERE merged_into = ?`)
+          .get(t.id) as { n: number }
+        if (speaksFor.n > 0) {
+          return {
+            ok: false,
+            error:
+              `${t.number} is the deal ticket the others joined. Select those instead to take ` +
+              'them out of it.'
+          }
+        }
+        continue
+      }
+      db.prepare(`UPDATE deal_tickets SET merged_into = NULL, updated_at = ? WHERE id = ?`).run(
+        stamp,
+        t.id
+      )
+      recordOrderEvent(t.documentKind, t.documentId, 'note', {
+        detail: `Taken out of a combined deal ticket — back to ${t.number}`,
+        actorId,
+        db
+      })
+    }
+    return { ok: true, data: [] }
+  })
+  try {
+    const res = run()
+    return res.ok ? { ok: true, data: listDealTickets(null) } : res
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+  }
 }

@@ -90,6 +90,10 @@ export interface FinanceApi {
   dealTickets(year: number | null): Promise<DealTicketRow[]>
   /** Which years the register covers, and what the next number will be. */
   dealTicketYears(): Promise<{ years: number[]; next: string }>
+  /** Put several documents under one ticket. Returns the whole register. */
+  mergeDealTickets(targetId: string, ticketIds: string[]): Promise<Result<DealTicketRow[]>>
+  /** Take documents back out, each to the number it was struck with. */
+  unmergeDealTickets(ticketIds: string[]): Promise<Result<DealTicketRow[]>>
   expenses(): Promise<GeneralExpense[]>
   saveExpense(input: GeneralExpenseInput): Promise<Result<GeneralExpenseResult>>
   deleteExpense(id: string): Promise<Result<GeneralExpenseResult>>

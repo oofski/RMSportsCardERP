@@ -1133,6 +1133,12 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       /** Which years the register covers, and what it will call the next one. */
       dealTicketYears: (): Promise<{ years: number[]; next: string }> =>
         ipcRenderer.invoke(IPC.finDealTicketYears),
+      /** Put several documents under one ticket. Returns the whole register. */
+      mergeDealTickets: (targetId: string, ticketIds: string[]): Promise<Result<DealTicketRow[]>> =>
+        ipcRenderer.invoke(IPC.finDealTicketsMerge, { targetId, ticketIds }),
+      /** Take documents back out, each to the number it was struck with. */
+      unmergeDealTickets: (ticketIds: string[]): Promise<Result<DealTicketRow[]>> =>
+        ipcRenderer.invoke(IPC.finDealTicketsUnmerge, { ticketIds }),
       /** Removes the upload and the rows NOTHING ELSE covers — a correction.
        *  Rows another import also contains are re-pointed to it and survive. */
       deleteImport: (id: string): Promise<Result<StreamingFinanceView>> =>

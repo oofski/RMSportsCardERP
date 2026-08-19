@@ -63,7 +63,13 @@ import type {
 } from '@shared/orderHistory'
 import type { WholesaleSaleRow } from '@shared/invoices'
 import type { DealTicketRow } from '@shared/dealTickets'
-import { dealTicketYears, listDealTickets, peekNextDealTicket } from './db/dealTickets'
+import {
+  dealTicketYears,
+  listDealTickets,
+  mergeDealTickets,
+  peekNextDealTicket,
+  unmergeDealTickets
+} from './db/dealTickets'
 import { getDb } from './db/database'
 import { deleteRatePeriod, listRatePeriods, saveRatePeriod } from './db/whatnotRates'
 import { currentUser } from './services/auth'
@@ -366,6 +372,34 @@ export function registerFinanceIpc(): void {
     const valid = Number.isInteger(y) && y >= 1970 && y <= 9999
     return listDealTickets(valid ? y : null)
   })
+
+  /**
+   * Combine, and separate. Gated on the same permission the register is read
+   * under — somebody who may see the money may say which movements were one
+   * deal, and nothing here changes a number or a document.
+   */
+  ipcMain.handle(
+    IPC.finDealTicketsMerge,
+    (_e, input: { targetId: string; ticketIds: string[] }): Result<DealTicketRow[]> => {
+      if (!can('module.finance')) return { ok: false, error: 'Not your register to change.' }
+      return mergeDealTickets(
+        String(input?.targetId ?? ''),
+        Array.isArray(input?.ticketIds) ? input.ticketIds.map(String) : [],
+        currentUser()?.id ?? null
+      )
+    }
+  )
+
+  ipcMain.handle(
+    IPC.finDealTicketsUnmerge,
+    (_e, input: { ticketIds: string[] }): Result<DealTicketRow[]> => {
+      if (!can('module.finance')) return { ok: false, error: 'Not your register to change.' }
+      return unmergeDealTickets(
+        Array.isArray(input?.ticketIds) ? input.ticketIds.map(String) : [],
+        currentUser()?.id ?? null
+      )
+    }
+  )
 
   ipcMain.handle(IPC.finDealTicketYears, (): { years: number[]; next: string } => {
     if (!can('module.finance')) return { years: [], next: '' }

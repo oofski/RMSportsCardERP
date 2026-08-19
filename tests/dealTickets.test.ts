@@ -454,5 +454,103 @@ ok(
 ok(tickets.listDealTickets(1999).length === 0, 'a year with nothing in it is empty')
 ok(tickets.listDealTickets(null).length >= 4, 'and null means the whole register')
 
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 13. several documents under ONE deal ticket ===')
+// ---------------------------------------------------------------------------
+/**
+ * The owner's words: "every po or so or drop shop is a deal ticket but then you
+ * can just select multiple of those to go into a deal ticket".
+ *
+ * A ticket is struck per document, which is right — every movement gets a number
+ * the moment it happens. But a DEAL is often several movements, and combining
+ * says so.
+ *
+ * NOTHING IS RENUMBERED AND NOTHING IS DELETED. The absorbed rows keep their
+ * number, their document and their issue date and simply point at the ticket
+ * that now speaks for them. That is what lets the register still account for
+ * every number it ever handed out, and what makes this reversible.
+ */
+const { groupDealTickets, isCombined, validateMerge } = require('../src/shared/dealTickets')
+
+const mA = makePo('Combine Supply A')
+const mB = makePo('Combine Supply B')
+const mC = makeSo('Combine Buyer')
+const tA = ticketFor('po', mA)?.number as string
+const tB = ticketFor('po', mB)?.number as string
+const tC = ticketFor('so', mC)?.number as string
+ok(!!tA && !!tB && !!tC, 'three documents, three tickets', `${tA} ${tB} ${tC}`)
+
+const idOf = (n: string): string =>
+  (db.prepare(`SELECT id FROM deal_tickets WHERE number = ?`).get(n) as { id: string }).id
+
+const merged = tickets.mergeDealTickets(idOf(tA), [idOf(tA), idOf(tB), idOf(tC)], ACTOR)
+ok(merged.ok === true, 'three tickets combine', merged.error ?? '')
+
+const after = tickets.listDealTickets(null)
+const rowFor = (n: string): any => after.find((r: any) => r.number === n)
+ok(rowFor(tA).mergedInto === null, `${tA} still speaks for itself`)
+ok(rowFor(tB).mergedInto === idOf(tA), `${tB} now answers to it`)
+ok(rowFor(tC).mergedInto === idOf(tA), `${tC} does too`)
+ok(!!rowFor(tB), 'AND THE ABSORBED ROWS ARE STILL THERE — no number was deleted')
+ok(rowFor(tB).number === tB, 'each keeping the number it was struck with')
+
+// The register folds into one group of three.
+const groups = groupDealTickets(after)
+const g = groups.find((x: any) => x.root.number === tA)
+ok(!!g, 'the three appear as one group')
+ok(g.rows.length === 3, 'holding three documents', String(g.rows.length))
+ok(isCombined(g) === true, 'and reading as combined')
+ok(
+  groups.filter((x: any) => x.rows.length === 1).length === after.length - 3,
+  'while every other ticket is still its own group'
+)
+
+// The move is on each document's own history.
+const evB = require('../src/main/db/orderExtras').listOrderEvents('po', mB)
+ok(
+  evB.some((e: any) => new RegExp(`${tB} combined into ${tA}`).test(e.detail ?? '')),
+  'each absorbed document records where its ticket went',
+  evB.map((e: any) => e.detail).join(' | ')
+)
+
+// NO CHAINS. Combining into a member joins the GROUP, not the member.
+const mD = makePo('Combine Supply D')
+const tD = ticketFor('po', mD)?.number as string
+const intoMember = tickets.mergeDealTickets(idOf(tB), [idOf(tB), idOf(tD)], ACTOR)
+ok(intoMember.ok === true, 'combining into a member is allowed', intoMember.error ?? '')
+ok(
+  tickets.listDealTickets(null).find((r: any) => r.number === tD).mergedInto === idOf(tA),
+  'AND IT JOINS THE ROOT, not the member — the structure stays one level deep',
+  String(tickets.listDealTickets(null).find((r: any) => r.number === tD).mergedInto)
+)
+
+// Separating gives a document its own number back.
+const un = tickets.unmergeDealTickets([idOf(tC)], ACTOR)
+ok(un.ok === true, 'a document can be taken back out', un.error ?? '')
+ok(
+  tickets.listDealTickets(null).find((r: any) => r.number === tC).mergedInto === null,
+  `${tC} answers to itself again`
+)
+
+// Separating the one that SPEAKS for the group is refused — it would leave the
+// others pointing at a row that no longer holds them.
+const unRoot = tickets.unmergeDealTickets([idOf(tA)], ACTOR)
+ok(unRoot.ok === false, 'the ticket the others joined cannot be separated on its own')
+ok(
+  /others joined/i.test(unRoot.error ?? ''),
+  'and says to select the members instead',
+  unRoot.error ?? ''
+)
+
+// What the screen refuses before anything is sent.
+const rows2 = tickets.listDealTickets(null)
+const rA = rows2.find((r: any) => r.number === tA)
+const rB = rows2.find((r: any) => r.number === tB)
+ok(validateMerge(rA, [rA]) !== null, 'one ticket is not a combination')
+ok(validateMerge(rA, [rA, rB]) === null, 'two is')
+ok(validateMerge(rB, [rB, rA]) !== null, 'an absorbed ticket cannot be the one others join')
+ok(validateMerge(undefined, [rA, rB]) !== null, 'and something has to be the target')
+
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail > 0) process.exit(1)

@@ -3817,6 +3817,38 @@ function migrate(database: Database.Database): void {
   )
   setMeta(database, 'schema_version', '77')
 
+  /**
+   * v78: several documents can answer to ONE deal ticket.
+   *
+   * A ticket is struck automatically per document, which is right — every
+   * movement gets a number the moment it happens, with nobody deciding anything.
+   * But a DEAL is often several movements: cases bought from one supplier and
+   * sold on to three shops is four documents and one piece of business, and
+   * until now there was no way to say so.
+   *
+   * ## Folded in, never renumbered
+   *
+   * `merged_into` points at the ticket that now speaks for the group. The
+   * absorbed row stays exactly as it was — same number, same document, same
+   * issue date — because the whole register rests on a number that was issued
+   * staying issued. Retiring a number by DELETING it would leave a gap nothing
+   * could account for; retiring it by pointing it somewhere leaves a trail that
+   * reads correctly a year later and can be undone.
+   *
+   * ## No chains
+   *
+   * A ticket that is itself absorbed can never be a target — the code resolves
+   * to the root before writing, so the structure stays exactly one level deep.
+   * A tree would make "what number does this document answer to" a walk of
+   * unknown length, and every screen would have to get that walk right.
+   */
+  addColumnIfMissing(database, 'deal_tickets', 'merged_into', 'TEXT')
+  database.exec(
+    `CREATE INDEX IF NOT EXISTS idx_deal_tickets_merged
+       ON deal_tickets (merged_into);`
+  )
+  setMeta(database, 'schema_version', '78')
+
   // v41: re-derive every product's average cost from its remaining cost layers.
   //
   // The average used to be stored rounded to the cent, back when every total in

@@ -150,6 +150,22 @@ export interface DealTicket {
   amount: number
   /** The ticket this one is paired with — the other half of a dropship. */
   pairedTicketId: string | null
+  /**
+   * The ticket that now speaks for this one, or null when it speaks for itself.
+   *
+   * A deal is often several movements — cases bought from one supplier and sold
+   * on to three shops is four documents and one piece of business. Combining
+   * them points the absorbed tickets HERE rather than renumbering or deleting
+   * anything: the row keeps its number, its document and its issue date, so the
+   * register still accounts for every number it ever handed out, and the
+   * grouping can be undone.
+   *
+   * EXACTLY ONE LEVEL. A ticket that is itself absorbed can never be a target;
+   * the write path resolves to the root first. A tree would turn "what does this
+   * document answer to" into a walk of unknown length that every screen would
+   * have to get right.
+   */
+  mergedInto: string | null
   /** When the deal was struck, ISO. */
   issuedAt: string
   issuedBy: string | null
@@ -260,4 +276,93 @@ export function summariseDealTickets(rows: readonly DealTicketRow[]): DealTicket
     first: lo === null ? null : formatDealTicket(lo),
     last: hi === null ? null : formatDealTicket(hi)
   }
+}
+
+// ---------------------------------------------------------------------------
+// Combining several documents under one ticket
+// ---------------------------------------------------------------------------
+
+/**
+ * Can these tickets be combined under `targetId`?
+ *
+ * Returns the reason they cannot, or null. Every branch names something the
+ * operator can see on the screen they are looking at, because a refusal on a
+ * bulk action is worthless if it does not say which row caused it.
+ */
+export function validateMerge(
+  target: DealTicket | undefined,
+  chosen: readonly DealTicket[]
+): string | null {
+  if (!target) return 'Pick the ticket the others should join.'
+  if (target.mergedInto) {
+    return `${target.number} is already part of another deal ticket, so it cannot be the one others join.`
+  }
+  const others = chosen.filter((t) => t.id !== target.id)
+  if (others.length === 0) return 'Choose at least two tickets to combine.'
+  for (const t of others) {
+    if (t.mergedInto && t.mergedInto !== target.id) {
+      return `${t.number} is already part of another deal ticket. Separate it first.`
+    }
+  }
+  return null
+}
+
+/** One deal ticket and every document answering to it. */
+export interface DealTicketGroup {
+  /** The ticket that speaks for the group. */
+  root: DealTicketRow
+  /**
+   * Every row in the group, root first, then the absorbed ones by number.
+   *
+   * The root is included rather than kept separate so a group of one and a group
+   * of four render through the same code — the single-document case is the
+   * overwhelming majority, and a screen that treats it as a special shape grows
+   * two layouts that drift.
+   */
+  rows: DealTicketRow[]
+  /** Money on the way in across the whole group. */
+  inbound: number
+  /** Money on the way out across the whole group. */
+  outbound: number
+}
+
+/**
+ * Fold a flat register into groups.
+ *
+ * An absorbed row whose root is NOT in the list — filtered out by a year, or by
+ * a search — becomes its own group rather than vanishing. Dropping it would make
+ * a search for its number return nothing while the number plainly exists, which
+ * is the worst answer a register can give.
+ */
+export function groupDealTickets(rows: readonly DealTicketRow[]): DealTicketGroup[] {
+  const byId = new Map(rows.map((r) => [r.id, r]))
+  const groups = new Map<string, DealTicketGroup>()
+  const rootIdOf = (r: DealTicketRow): string =>
+    r.mergedInto && byId.has(r.mergedInto) ? r.mergedInto : r.id
+
+  for (const r of rows) {
+    const rootId = rootIdOf(r)
+    const root = byId.get(rootId) ?? r
+    let g = groups.get(rootId)
+    if (!g) {
+      g = { root, rows: [], inbound: 0, outbound: 0 }
+      groups.set(rootId, g)
+    }
+    g.rows.push(r)
+    const amount = r.liveAmount ?? r.amount
+    if (dealTicketSide(r.kind) === 'in') g.inbound += amount
+    else g.outbound += amount
+  }
+
+  for (const g of groups.values()) {
+    g.rows.sort((a, b) => (a.id === g.root.id ? -1 : b.id === g.root.id ? 1 : b.seq - a.seq))
+    g.inbound = Math.round(g.inbound * 100) / 100
+    g.outbound = Math.round(g.outbound * 100) / 100
+  }
+  return [...groups.values()].sort((a, b) => b.root.seq - a.root.seq)
+}
+
+/** True when this group holds more than the one document it started as. */
+export function isCombined(group: DealTicketGroup): boolean {
+  return group.rows.length > 1
 }
