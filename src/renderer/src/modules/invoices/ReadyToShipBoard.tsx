@@ -159,8 +159,8 @@ export function ReadyToShipBoard(): JSX.Element {
               {held} order{held === 1 ? '' : 's'}
             </b>{' '}
             {held === 1 ? 'is' : 'are'} not shown — the buyer pays up front and has not paid yet.
-            Record the payment on the Sales Orders board, or open one there and use{' '}
-            <b>Send anyway</b> if it is going out regardless.
+            Record the payment under <b>Sales Orders</b>, and {held === 1 ? 'it' : 'they'} will
+            appear here.
           </span>
         </p>
       )}

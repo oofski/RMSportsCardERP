@@ -61,6 +61,41 @@ export function isPurchaseOrderStatus(value: unknown): value is PurchaseOrderSta
 }
 
 /**
+ * Which COLUMN an order is drawn in, which is not always its status.
+ *
+ * ## Paid and received is paid
+ *
+ * Payment is recorded as its own fact — `paid_at`, stamped by
+ * setPurchaseOrderPaid without moving the stage — precisely so that stock
+ * arriving before the invoice is settled does not force somebody to click Paid
+ * for a payment that has not happened. The consequence was an order that had
+ * been received AND paid sitting under Received for ever, because its status
+ * still said so, while the column to its right was the one that meant finished.
+ *
+ * With Received now drawn before Paid, the two columns read as the two steps in
+ * the order they happen, and PAID IS THE END OF THE LINE. So an order carrying a
+ * payment date belongs there whatever stage it stopped at.
+ *
+ * ## Derived, never stored
+ *
+ * Both facts survive: the order still knows it was received, and still knows
+ * when it was paid. Writing 'paid' into `status` when a payment landed would
+ * throw the received state away — and with it the receipt dates, the completion
+ * test and the only record that the boxes actually turned up.
+ *
+ * Cancelled outranks everything: a cancelled order that was once paid is not
+ * finished business, it is cancelled, and its stock has been handed back.
+ */
+export function poColumnOf(po: {
+  status: PurchaseOrderStatus
+  paidAt?: string | null
+}): PurchaseOrderStatus {
+  if (po.status === 'cancelled') return 'cancelled'
+  if (po.paidAt) return 'paid'
+  return po.status
+}
+
+/**
  * How long a fully-received order stays on the board after the boxes land.
  *
  * TWO DAYS, and the two days are the point rather than the number. A received

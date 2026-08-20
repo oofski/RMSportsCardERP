@@ -5,7 +5,7 @@ import type {
   SupplyOrder,
   SupplyOrderStatus
 } from '@shared/types'
-import { PO_STAGES, PO_TRANSITIONS, canTransition, displayOrderNumber } from '@shared/purchaseOrders'
+import { PO_STAGES, PO_TRANSITIONS, canTransition, displayOrderNumber, poColumnOf } from '@shared/purchaseOrders'
 import { receiveProgress } from '@shared/receiving'
 import { Icon } from '../../components/Icon'
 import { ReceiveBar } from '../../components/ReceiveProgress'
@@ -82,19 +82,25 @@ export function PurchaseOrderBoard({
 }): JSX.Element {
   const [dragId, setDragId] = useState<string | null>(null)
   const [overStage, setOverStage] = useState<PurchaseOrderStatus | null>(null)
-  const fromStatus = dragId ? pos.find((p) => p.id === dragId)?.status ?? null : null
+  const dragged = dragId ? pos.find((p) => p.id === dragId) ?? null : null
+  // The real STATUS decides which moves are legal; the COLUMN decides where the
+  // card is drawn. They come apart on an order that is received and paid — see
+  // poColumnOf — and using the status for both would dim the very column that
+  // card is sitting in the moment somebody picks it up.
+  const fromStatus = dragged?.status ?? null
+  const fromColumn = dragged ? poColumnOf(dragged) : null
 
   return (
     <div className="po-board">
       {PO_STAGES.map((stage) => {
-        const inStage = pos.filter((p) => p.status === stage.id)
+        const inStage = pos.filter((p) => poColumnOf(p) === stage.id)
         const suppliesInStage = supplyOrders.filter((o) => SUPPLY_COLUMN[o.status] === stage.id)
         const columnCount = inStage.length + suppliesInStage.length
         const meta = PO_STAGE_META[stage.id]
         const canDrop = !!(dragId && fromStatus && canTransition(fromStatus, stage.id))
         // While dragging, dim the columns this card can't move to (never the
         // column it came from) so valid vs invalid targets are both explicit.
-        const noAllow = !!dragId && fromStatus !== stage.id && !canDrop
+        const noAllow = !!dragId && fromColumn !== stage.id && !canDrop
         return (
           <div
             className={`po-col po-col-${stage.id}${overStage === stage.id ? ' po-col-dragover' : ''}${

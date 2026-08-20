@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { InvoicesBoard } from './InvoicesBoard'
 import { QuickBooksTab } from './QuickBooksTab'
+import { ReadyToShipBoard } from './ReadyToShipBoard'
 
 /**
  * Invoices — the sell side, and its own module.
@@ -11,11 +12,19 @@ import { QuickBooksTab } from './QuickBooksTab'
  * owe" and "what are we owed" in the same breath, so the sell side was always
  * one extra click away and read as a footnote to the buy side.
  *
- * ## Two sub-tabs, and each is a different question
+ * ## Three sub-tabs, and each is a different question
  *
  * SALES ORDERS is the board — where every invoice is, and which have been paid.
  * Laid out like the purchase-order board on purpose: same columns, same cards,
  * same drag. Somebody who has used one has used the other.
+ *
+ * READY TO SHIP is the same orders asked a DIFFERENT question: not where the
+ * document is, but where the goods are. The two genuinely come apart — an order
+ * can be paid with nothing in hand, or boxed and labelled while the buyer has
+ * paid nothing because they are on delivery terms — which is why it is a second
+ * board rather than more columns on the first. It sits here, beside the orders
+ * it is about, rather than in Shipping: the person who raised the sale is the
+ * one who knows whether the case turned up.
  *
  * QUICKBOOKS is the connection. It lives HERE rather than in Admin because
  * this is the only place in the app that uses it, and a setting whose only
@@ -40,7 +49,7 @@ import { QuickBooksTab } from './QuickBooksTab'
  * module, not a second customer screen in here.
  */
 export function InvoicesModule(): JSX.Element {
-  const [tab, setTab] = useState<'invoices' | 'quickbooks'>('invoices')
+  const [tab, setTab] = useState<'invoices' | 'ship' | 'quickbooks'>('invoices')
 
   return (
     <div className="content-narrow inv-shell">
@@ -52,6 +61,9 @@ export function InvoicesModule(): JSX.Element {
           >
             Sales Orders
           </button>
+          <button className={`seg ${tab === 'ship' ? 'on' : ''}`} onClick={() => setTab('ship')}>
+            Ready to Ship
+          </button>
           <button
             className={`seg ${tab === 'quickbooks' ? 'on' : ''}`}
             onClick={() => setTab('quickbooks')}
@@ -60,11 +72,9 @@ export function InvoicesModule(): JSX.Element {
           </button>
         </div>
 
-        {tab === 'invoices' ? (
-          <InvoicesBoard onOpenQuickBooks={() => setTab('quickbooks')} />
-        ) : (
-          <QuickBooksTab />
-        )}
+        {tab === 'invoices' && <InvoicesBoard onOpenQuickBooks={() => setTab('quickbooks')} />}
+        {tab === 'ship' && <ReadyToShipBoard />}
+        {tab === 'quickbooks' && <QuickBooksTab />}
       </div>
     </div>
   )
