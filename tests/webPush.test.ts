@@ -1209,6 +1209,54 @@ void (async () => {
     JSON.stringify(openWindows[0].postedMessages[0])
   )
 
+  // -------------------------------------------------------------------------
+  console.log('\n=== N. an unreachable relay is not an out-of-date relay ===')
+  // -------------------------------------------------------------------------
+  /* eslint-disable @typescript-eslint/no-var-requires */
+  const { clockScopeBlockMessage } = require('../src/shared/webPush')
+
+  // THE DEFECT THIS PINS. The gate that stops an unentitled device from being
+  // enrolled used to read a BOOLEAN, and every not-true — unreachable, wrong
+  // key, malformed reply — produced the sentence "the relay is running an older
+  // version". The owner pasted cloud/worker.js on the strength of it, twice, and
+  // nothing changed, because for two of those three causes pasting could not
+  // change anything. A cause the code has not established must not be stated as
+  // if it had been.
+  const outOfDate = clockScopeBlockMessage('no', null)
+  ok(/older version/i.test(outOfDate), 'a relay that ANSWERED without the capability is named as out of date')
+  ok(/paste/i.test(outOfDate), 'and says what to do about it')
+
+  const unreachable = clockScopeBlockMessage('unknown', 'Relay error 500.')
+  ok(
+    !/older version|out of date/i.test(unreachable),
+    'A RELAY THAT COULD NOT BE REACHED IS NOT CALLED OUT OF DATE',
+    unreachable
+  )
+  ok(
+    /could not reach/i.test(unreachable),
+    'it says what actually happened — the check did not complete',
+    unreachable
+  )
+  ok(
+    /Relay error 500/.test(unreachable),
+    'and carries the relay\u2019s own words, so the next step is diagnosable',
+    unreachable
+  )
+  ok(
+    /Cloud sync/i.test(unreachable),
+    'pointing at the address and key, which is where an unreachable relay is fixed'
+  )
+  // A blank detail must not leave a dangling "The relay said:".
+  ok(
+    !/relay said/i.test(clockScopeBlockMessage('unknown', null)),
+    'with nothing appended when the relay said nothing'
+  )
+  // Both refusals must still refuse — the point is the WORDING, not the gate.
+  ok(
+    clockScopeBlockMessage('no', null).length > 0 && unreachable.length > 0,
+    'both answers still block, and both still explain themselves'
+  )
+
   console.log(`\n${pass} passed, ${fail} failed\n`)
   process.exit(fail === 0 ? 0 : 1)
 })()

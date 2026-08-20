@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { ClockPushState } from '@shared/webPush'
+import { clockScopeBlockMessage } from '@shared/webPush'
 import { api } from '../../lib/api'
 import { Button, CenterLoader } from '../../components/ui'
 import { Icon } from '../../components/Icon'
@@ -191,6 +192,30 @@ export function NotificationsPanel({ canClock }: { canClock: boolean }): JSX.Ele
             ? 'One step needed on this iPhone or iPad'
             : 'This device cannot receive notifications',
         detail: capability.message
+      }
+    }
+    /**
+     * SAID BEFORE THE SWITCH IS PRESSED, not after.
+     *
+     * Somebody without the clock permission cannot be enrolled on a relay that
+     * cannot filter the punch feed — see pushIpc. That refusal used to arrive
+     * only on the attempt, as a toast that then vanished, so the screen sat
+     * there reading "Off for this device · turn it on" and turning it on did
+     * nothing anybody could still read a minute later. This is the same fact,
+     * on screen, before it wastes a press.
+     *
+     * Only shown to somebody the gate can actually stop: with the clock
+     * permission there is nothing to filter, so the relay's version is not
+     * their problem.
+     */
+    if (!canClock && !on && state.clockScope !== 'yes') {
+      return {
+        tone: 'error',
+        title:
+          state.clockScope === 'no'
+            ? 'The relay needs updating before this can be switched on'
+            : 'The relay could not be checked',
+        detail: clockScopeBlockMessage(state.clockScope, state.clockScopeDetail)
       }
     }
     if (on) {

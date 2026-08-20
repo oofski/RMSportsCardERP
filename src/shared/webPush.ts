@@ -82,6 +82,25 @@ export function explainRelayProblem(message: string): string {
   )
 }
 
+/**
+ * What the relay said when asked whether it can keep the clock feed off a
+ * device that is not entitled to it.
+ *
+ *   yes      it advertised clock-scope. Anybody can be enrolled.
+ *   no       it answered, and did not. It is an older paste of cloud/worker.js.
+ *   unknown  it could not be asked at all — unreachable, refused, or its reply
+ *            made no sense.
+ *
+ * THE THIRD VALUE IS THE POINT. This was a boolean, and everything that was not
+ * a clear yes came back as "the relay is running an older version" — so an
+ * unreachable relay, a wrong key and a stale paste all produced the same
+ * sentence telling somebody to go and paste the Worker again. They did, twice,
+ * and nothing changed, because for two of those three causes pasting was never
+ * going to change anything. A diagnosis the code has not actually established
+ * is worse than no diagnosis: it sends somebody to fix the wrong thing.
+ */
+export type ClockScopeAnswer = 'yes' | 'no' | 'unknown'
+
 export interface ClockPushState {
   /** Is there a relay at all? A standalone build has none and can do none of this. */
   relayConfigured: boolean
@@ -93,4 +112,44 @@ export interface ClockPushState {
   publicKey: string | null
   /** This user's own devices. Never anybody else's. */
   devices: PushDevice[]
+  /**
+   * Whether the relay can scope the clock feed — read BEFORE anybody presses
+   * the switch.
+   *
+   * The gate that uses this used to fire only on the attempt, as a toast that
+   * then disappeared. Somebody with no clock permission saw a switch, pressed
+   * it, got a wall of text about Cloudflare and had nothing left on screen to
+   * show anyone. Stating it up front is the difference between a screen that
+   * explains itself and one that has to be provoked into it.
+   */
+  clockScope: ClockScopeAnswer
+  /** What the relay actually said, when it said something unexpected. */
+  clockScopeDetail: string | null
+}
+
+/**
+ * What to tell somebody who cannot be enrolled because of the relay.
+ *
+ * `entitled` is whether they have the clock permission. Somebody who HAS it is
+ * never blocked by this gate — they are entitled to the feed, so a relay that
+ * cannot filter it is not a problem for them — which means every reader of this
+ * message is somebody the relay would over-notify.
+ */
+export function clockScopeBlockMessage(answer: ClockScopeAnswer, detail: string | null): string {
+  if (answer === 'no') {
+    return (
+      'The cloud relay is running an older version of its code that cannot keep clock-in alerts ' +
+      'off this device, so notifications cannot be switched on here yet. Whoever set up the ' +
+      'relay needs to re-paste cloud/worker.js in the Cloudflare dashboard (Worker → Edit code ' +
+      '→ select all → paste → Deploy). The app is ready and waiting for it.'
+    )
+  }
+  // NOT "it is out of date" — we do not know that, and saying it sent somebody
+  // to paste a file that was already correct.
+  return (
+    'The app could not reach the cloud relay to check what it supports, so it will not enrol ' +
+    'this device yet — on a relay that cannot filter the clock feed, switching notifications on ' +
+    'would subscribe this phone to every clock-in in the building. Check the relay address and ' +
+    'key under Admin → Developer → Cloud sync.' + (detail ? ` The relay said: ${detail}` : '')
+  )
 }

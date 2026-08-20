@@ -1,4 +1,9 @@
-import type { ClockPushState, PushDevice, PushSubscriptionInput } from '@shared/webPush'
+import type {
+  ClockPushState,
+  ClockScopeAnswer,
+  PushDevice,
+  PushSubscriptionInput
+} from '@shared/webPush'
 import { explainRelayProblem } from '@shared/webPush'
 import { call, getSyncConfig } from './cloudSync'
 
@@ -27,6 +32,8 @@ interface RelayKeyReply {
   publicKey?: string | null
   subject?: string | null
   problem?: string | null
+  /** What this deployment can enforce. See ClockScopeAnswer. */
+  capabilities?: unknown
 }
 
 function relayConfigured(): boolean {
@@ -49,7 +56,15 @@ const NO_RELAY =
  */
 export async function clockPushState(employeeId: string): Promise<ClockPushState> {
   if (!relayConfigured()) {
-    return { relayConfigured: false, ready: false, problem: NO_RELAY, publicKey: null, devices: [] }
+    return {
+      relayConfigured: false,
+      ready: false,
+      problem: NO_RELAY,
+      publicKey: null,
+      devices: [],
+      clockScope: 'unknown',
+      clockScopeDetail: null
+    }
   }
   try {
     const key = (await call('/v1/push-notify/key', { method: 'GET' })) as RelayKeyReply
@@ -58,6 +73,15 @@ export async function clockPushState(employeeId: string): Promise<ClockPushState
       { method: 'GET' }
     )) as { devices?: PushDevice[] }
     return {
+      // Read off the SAME reply the key came from, rather than asking again.
+      // Two calls could disagree, and a screen that says one thing while the
+      // gate a click later decides another is worse than either answer.
+      clockScope: Array.isArray(key.capabilities)
+        ? key.capabilities.includes('clock-scope')
+          ? 'yes'
+          : 'no'
+        : 'no',
+      clockScopeDetail: null,
       relayConfigured: true,
       ready: key.configured === true,
       problem: key.configured === true ? null : (key.problem ?? 'The relay cannot sign notifications.'),
@@ -75,7 +99,12 @@ export async function clockPushState(employeeId: string): Promise<ClockPushState
       ready: false,
       problem: explainRelayProblem(err instanceof Error ? err.message : String(err)),
       publicKey: null,
-      devices: []
+      devices: [],
+      // Never reached it, so nothing is known about what it runs. Saying 'no'
+      // here would put "your relay is out of date" on screen every time the
+      // network hiccups.
+      clockScope: 'unknown',
+      clockScopeDetail: explainRelayProblem(err instanceof Error ? err.message : String(err))
     }
   }
 }
@@ -104,15 +133,32 @@ export async function clockPushState(employeeId: string): Promise<ClockPushState
  * to tell, and a relay that does not answer at all is treated as unable, which
  * is the safe reading.
  */
-export async function relayEnforcesClockScope(): Promise<boolean> {
-  if (!relayConfigured()) return false
+export async function relayClockScope(): Promise<{
+  answer: ClockScopeAnswer
+  detail: string | null
+}> {
+  if (!relayConfigured()) return { answer: 'unknown', detail: NO_RELAY }
   try {
     const key = (await call('/v1/push-notify/key', { method: 'GET' })) as {
       capabilities?: unknown
     }
-    return Array.isArray(key.capabilities) && key.capabilities.includes('clock-scope')
-  } catch {
-    return false
+    if (Array.isArray(key.capabilities)) {
+      return {
+        answer: key.capabilities.includes('clock-scope') ? 'yes' : 'no',
+        detail: null
+      }
+    }
+    // It answered, and the field is absent. That IS an older paste — every
+    // version that has the field sends it unconditionally.
+    return { answer: 'no', detail: null }
+  } catch (err) {
+    // NOT 'no'. We never reached it, so we know nothing about what it runs, and
+    // reporting a stale deploy here is how somebody ends up pasting the Worker
+    // twice against a relay that was never the problem.
+    return {
+      answer: 'unknown',
+      detail: explainRelayProblem(err instanceof Error ? err.message : String(err))
+    }
   }
 }
 

@@ -3,10 +3,11 @@ import { IPC } from '@shared/ipc'
 import type { Result } from '@shared/types'
 import type { Permission } from '@shared/permissions'
 import type { ClockPushState, PushSubscriptionInput } from '@shared/webPush'
+import { clockScopeBlockMessage } from '@shared/webPush'
 import { currentUser } from './services/auth'
 import {
   clockPushState,
-  relayEnforcesClockScope,
+  relayClockScope,
   subscribeToClockPush,
   testClockPush,
   unsubscribeFromClockPush
@@ -63,7 +64,9 @@ export function registerPushIpc(): void {
         ready: false,
         problem: 'You are not signed in.',
         publicKey: null,
-        devices: []
+        devices: [],
+        clockScope: 'unknown',
+        clockScopeDetail: null
       }
     }
     // Scoped to the caller by the id, which comes from the session. The relay's
@@ -93,13 +96,10 @@ export function registerPushIpc(): void {
         // honour the flag. The cost is somebody waiting for a paste. The
         // alternative cost is the floor holding a live record of when everybody
         // works, with nothing on any screen to show it happened.
-        if (!clock && !(await relayEnforcesClockScope())) {
-          return {
-            ok: false,
-            error:
-              'The cloud relay is running an older version that cannot keep clock-in alerts off ' +
-              'this device, so notifications cannot be switched on yet. Whoever set up the relay ' +
-              'needs to update it — the app is ready.'
+        if (!clock) {
+          const scope = await relayClockScope()
+          if (scope.answer !== 'yes') {
+            return { ok: false, error: clockScopeBlockMessage(scope.answer, scope.detail) }
           }
         }
         const result = await subscribeToClockPush(actor.id, input, clock)
