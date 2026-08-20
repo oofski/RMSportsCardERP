@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { Invoice, InvoiceCustomer, InvoiceDetail, InvoiceStatus } from '@shared/invoices'
 import { INVOICE_STAGES, canMoveInvoice, isDropshipSale, salesOrderKindOf } from '@shared/invoices'
+import {
+  FULFILLMENT_STAGE_TONE,
+  fulfillmentNextStepDetail,
+  fulfillmentStageOf
+} from '@shared/fulfillment'
 import { api } from '../../lib/api'
 import { LIVE, useLiveRefresh } from '../../lib/live'
 import { Button, CenterLoader, Modal } from '../../components/ui'
@@ -603,9 +608,26 @@ function InvoiceCard({
   const kind = salesOrderKindOf(invoice)
   const kindClass = kind === 'drop' ? ' po-card-drop' : kind === 'mixed' ? ' po-card-mixed' : ''
 
+  /**
+   * WHERE THE GOODS ARE, on the board about where the DOCUMENT is.
+   *
+   * A STRIPE rather than a tint, and that is the whole reason it can be here at
+   * all: the card's background already says whether this is a dropship, and a
+   * sale can be a dropship AND be waiting on measurements. Two facts, two
+   * devices — the warm background stays dropship's, the left edge is the
+   * fulfilment colour, and neither has to give way to the other.
+   *
+   * Blue for items, amber for dims, the same pair the Ready to Ship board uses,
+   * because a colour that means one thing on one board and another elsewhere is
+   * worse than no colour.
+   */
+  const fxStage = fulfillmentStageOf(invoice)
+  const fxTone = fxStage && fxStage !== 'ready' ? FULFILLMENT_STAGE_TONE[fxStage] : null
+  const fxWhy = fulfillmentNextStepDetail(invoice)
+
   return (
     <div
-      className={`po-card${kindClass}`}
+      className={`po-card${kindClass}${fxTone ? ` fx-lane fx-lane-${fxTone}` : ''}`}
       data-status={invoice.status}
       draggable
       onDragStart={onDragStart}
@@ -632,6 +654,13 @@ function InvoiceCard({
             }
           >
             {kind === 'drop' ? 'Drop' : 'Part drop'}
+          </span>
+        )}
+        {/* NAMED, not just striped — the same rule the Drop chip above follows,
+            and for the same reason: a colour nobody can read is decoration. */}
+        {fxTone && (
+          <span className={`fx-chip fx-chip-${fxTone}`} title={fxWhy ?? undefined}>
+            {fxStage === 'awaiting_items' ? 'Awaiting items' : 'Awaiting dims'}
           </span>
         )}
         {/* An unpaid invoice past its due date is the one thing on this board

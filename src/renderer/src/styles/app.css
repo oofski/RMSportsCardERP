@@ -26016,6 +26016,25 @@ button.sor-team:focus-visible {
   border-left-color: var(--success);
 }
 
+/* WHERE THE GOODS ARE, on the two boards about something else.
+   
+   A left stripe rather than a tint, because the card's BACKGROUND is already
+   spoken for: on both order boards it says whether the order is a dropship, and
+   an order can be a dropship and be waiting on measurements at the same time.
+   Two facts need two devices, or one of them has to be dropped.
+   
+   Same blue and amber as the Ready to Ship board. A colour that means one thing
+   on one board and something else on the next is worse than no colour. */
+.fx-lane {
+  border-left-width: 3px;
+}
+.fx-lane-items {
+  border-left-color: var(--info);
+}
+.fx-lane-dims {
+  border-left-color: var(--warning);
+}
+
 /* A CARD THAT LIFTS ON HOVER IS A CARD THAT OPENS. This one does not — every
    action on it is a button — so it stays put rather than promising a click that
    goes nowhere. */

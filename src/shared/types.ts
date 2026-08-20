@@ -981,6 +981,15 @@ export interface PurchaseOrder {
    * through.
    */
   linkedInvoiceId: string | null
+  /**
+   * Is the sale this order supplies still waiting on the goods?
+   *
+   * Null when there is no linked sale, which is most purchase orders — and that
+   * is deliberately distinct from `false`, which means there IS one and it has
+   * what it needs. A board that folded the two together would light up every
+   * ordinary purchase.
+   */
+  saleAwaitsItems?: boolean | null
   /** Σ(line qty × unit price), stored snapshot. */
   total: number
   /** Number of line items. */

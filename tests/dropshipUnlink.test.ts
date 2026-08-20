@@ -250,5 +250,42 @@ ok(
   String(database.getMeta(db, 'schema_version'))
 )
 
+// ---------------------------------------------------------------------------
+console.log('\n=== 6. a purchase order can see that its sale has nothing yet ===')
+// ---------------------------------------------------------------------------
+/**
+ * `saleAwaitsItems` is a subquery, and a subquery is exactly the kind of thing
+ * that reads plausibly and returns the wrong row. What it drives is the blue
+ * stripe on the purchase board: when the sale on the other end has nothing in
+ * hand, THIS is the order somebody has to chase.
+ */
+const chasePo = makePo('Chase Card Co')
+const chaseSo = makeSo('Chase Card Co')
+inv.linkDropshipPair(chasePo.id, chaseSo.id, null)
+ok(
+  poRepo.getPurchaseOrder(chasePo.id).saleAwaitsItems === true,
+  'a linked sale with nothing in hand lights its purchase order up',
+  String(poRepo.getPurchaseOrder(chasePo.id).saleAwaitsItems)
+)
+inv.setInvoiceItemsInHand(chaseSo.id, true, null)
+ok(
+  poRepo.getPurchaseOrder(chasePo.id).saleAwaitsItems === false,
+  'AND GOES OUT THE MOMENT THE GOODS ARE CONFIRMED'
+)
+// Null, not false: "no sale behind this order" and "its sale has what it needs"
+// are different facts, and folding them together would light up every ordinary
+// purchase order on the board.
+ok(
+  poRepo.getPurchaseOrder(makePo('Nobody Linked').id).saleAwaitsItems === null,
+  'A PURCHASE ORDER WITH NO SALE BEHIND IT READS NULL, not false — otherwise every ordinary order would be lit'
+)
+// And a voided sale is nobody's problem.
+inv.setInvoiceItemsInHand(chaseSo.id, false, null)
+inv.setInvoiceStatus(chaseSo.id, 'void', null)
+ok(
+  poRepo.getPurchaseOrder(chasePo.id).saleAwaitsItems === false,
+  'a VOIDED sale stops asking for anything'
+)
+
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail > 0) process.exit(1)

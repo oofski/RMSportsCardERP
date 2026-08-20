@@ -283,7 +283,14 @@ function PoCard({
 
   return (
     <div
-      className={`po-card${kindClass}${dragging ? ' po-card-dragging' : ''}`}
+      className={`po-card${kindClass}${
+        /* THE ORDER SOMEBODY HAS TO CHASE. When the sale on the other end of a
+           dropship says it has nothing in hand, this is the document with the
+           supplier's name and the tracking number on it — and until now the
+           Ready to Ship board knew and this one did not. Blue, the same blue
+           awaiting-items wears everywhere else. */
+        po.saleAwaitsItems ? ' fx-lane fx-lane-items' : ''
+      }${dragging ? ' po-card-dragging' : ''}`}
       draggable
       onDragStart={(e) => {
         e.dataTransfer.setData('text/plain', po.id)

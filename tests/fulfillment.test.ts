@@ -411,5 +411,42 @@ ok(
   'AND SHIPPING NO LONGER DOES — two mounts would be two boards drifting apart'
 )
 
+// ---------------------------------------------------------------------------
+console.log('\n=== 10. the same state, said on the two order boards ===')
+// ---------------------------------------------------------------------------
+/**
+ * The owner asked for awaiting items and awaiting dims to show up on the Sales
+ * Orders and Purchase Orders boards too, highlighted the way a dropship is.
+ *
+ * A STRIPE, not a tint, and the distinction is the whole reason it works: the
+ * card BACKGROUND already says whether the order is a dropship, and an order can
+ * be a dropship and be waiting on measurements at once. Tinting for both would
+ * make one of them invisible — which is what this pins.
+ */
+const soBoard = read('src/renderer/src/modules/invoices/InvoicesBoard.tsx')
+const poBoard = read('src/renderer/src/modules/invoicing/PurchaseOrderBoard.tsx')
+const css = read('src/renderer/src/styles/app.css')
+
+ok(/fulfillmentStageOf/.test(soBoard), 'the Sales Orders card reads the fulfilment stage')
+ok(/fx-lane-\$\{fxTone\}/.test(soBoard), 'and wears it as a stripe')
+ok(
+  /po-card-drop/.test(soBoard) && /fx-lane/.test(soBoard),
+  'ALONGSIDE THE DROPSHIP TINT, not instead of it — an order can be both'
+)
+ok(/fx-chip fx-chip-\$\{fxTone\}/.test(soBoard), 'and names it, so the colour is readable')
+ok(
+  /saleAwaitsItems \? ' fx-lane fx-lane-items'/.test(poBoard),
+  'THE PURCHASE CARD LIGHTS UP WHEN THE SALE IT SUPPLIES HAS NOTHING — that is the order somebody has to chase'
+)
+// One definition of each colour, shared by all three boards.
+ok(
+  /\.fx-lane-items \{[^}]*--info/.test(css) && /\.fx-lane-dims \{[^}]*--warning/.test(css),
+  'blue for items and amber for dims, defined once'
+)
+ok(
+  /\.fx-lane \{[^}]*border-left-width/.test(css),
+  'and applied as a border rather than a background, so the dropship tint survives underneath'
+)
+
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail > 0) process.exit(1)

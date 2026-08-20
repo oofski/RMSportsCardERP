@@ -249,6 +249,9 @@ function toSummary(row: PoHeaderRow): PurchaseOrder {
     receivableUnits,
     dropshipUnits,
     destinationCount: row.destination_count,
+    // Null on a purchase order with no sale behind it, which is most of them —
+    // and "no linked sale" is a different fact from "its sale has the goods".
+    saleAwaitsItems: row.sale_awaits_items == null ? null : row.sale_awaits_items === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     orderedAt: row.ordered_at,
@@ -388,7 +391,21 @@ const PO_SELECT = `
            WHERE l.po_id = po.id) AS ordered_units,
          ${RECEIVABLE_UNITS_SQL} AS receivable_units,
          (SELECT COUNT(DISTINCT d.destination) FROM po_unit_destinations d
-           WHERE d.po_id = po.id) AS destination_count
+           WHERE d.po_id = po.id) AS destination_count,
+         -- IS THE SALE THIS ORDER SUPPLIES STILL WAITING ON THE GOODS?
+         --
+         -- A dropship purchase exists to put boxes in a buyer's hands, and when
+         -- the sale on the other end says it has nothing yet, THIS is the order
+         -- somebody has to chase. Without it the Ready to Ship board knows and
+         -- the purchase board — where the supplier's name and the tracking
+         -- number are — does not.
+         --
+         -- One boolean rather than the linked sale's whole fulfilment state:
+         -- the other gates are answered by facts that live on the SALE (its
+         -- shelf, its measurements) and mean nothing against a purchase order.
+         -- Only "the goods are not here yet" is a fact about this document too.
+         (SELECT CASE WHEN i.items_in_hand_at IS NULL AND i.status != 'void' THEN 1 ELSE 0 END
+            FROM invoices i WHERE i.id = po.linked_invoice_id) AS sale_awaits_items
   FROM purchase_orders po
 `
 
@@ -426,6 +443,7 @@ type PoHeaderRow = PoRow & {
   ordered_units: number
   receivable_units: number
   destination_count: number
+  sale_awaits_items: number | null
 }
 
 /** This order's unit rows, grouped by line, in allocation order. */
