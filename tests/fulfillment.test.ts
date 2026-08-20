@@ -52,7 +52,9 @@ const {
   fulfillmentBlockedReason,
   fulfillmentColumnOf,
   fulfillmentNextStep,
+  fulfillmentNextStepDetail,
   fulfillmentStageOf,
+  fulfillmentTickShort,
   hasDims,
   itemsInHand,
   paymentClearsFulfillment,
@@ -217,6 +219,39 @@ ok(
   'and an unmeasured one is told to weigh it'
 )
 ok(fulfillmentNextStep(order()) === null, 'a ready order has no next step')
+
+/**
+ * SHORT ON THE CARD, LONG ON HOVER.
+ *
+ * The first draft printed full sentences on a card in a column and they wrapped
+ * to three lines, pushing the buttons off the bottom. Nothing was cut — the
+ * advice moved to the tooltip — and this is what stops it creeping back.
+ */
+const shortOrder = order({ stockUnits: 10, drawnUnits: 3 })
+ok(
+  (fulfillmentNextStep(shortOrder) ?? '').length < 30,
+  'the card line is short enough to fit on one',
+  fulfillmentNextStep(shortOrder) ?? ''
+)
+ok(
+  (fulfillmentNextStepDetail(shortOrder) ?? '').length >
+    (fulfillmentNextStep(shortOrder) ?? '').length,
+  'AND THE ADVICE IS NOT LOST — the tooltip carries the long form'
+)
+ok(
+  /not enough on hand/.test(fulfillmentNextStepDetail(shortOrder) ?? ''),
+  'which says WHY the shelf came up short, not just that it did'
+)
+ok(
+  /all four/i.test(fulfillmentNextStepDetail(order({ ...NO_DIMS })) ?? ''),
+  'and why three measurements are not enough'
+)
+ok(fulfillmentNextStepDetail(order()) === null, 'a ready order has nothing to explain')
+ok(
+  fulfillmentTickShort('awaiting_items') === 'In hand' &&
+    fulfillmentTickShort('awaiting_dims') === 'Measure',
+  'the button wears two words while the tooltip keeps the sentence'
+)
 
 // ---------------------------------------------------------------------------
 console.log('\n=== 5. sending it anyway ===')

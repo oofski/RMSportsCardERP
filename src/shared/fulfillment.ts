@@ -128,6 +128,19 @@ export function fulfillmentTickLabel(stage: FulfillmentStage): string {
 }
 
 /**
+ * The same thing in two words, for the button face.
+ *
+ * A card lives in a column a third of a board wide, and the full sentence above
+ * wrapped the button onto three lines. The long form stays as the tooltip, so
+ * nothing is lost — it is just not shouted on every card.
+ */
+export function fulfillmentTickShort(stage: FulfillmentStage): string {
+  if (stage === 'awaiting_items') return 'In hand'
+  if (stage === 'awaiting_dims') return 'Measure'
+  return 'Ready'
+}
+
+/**
  * What a carrier needs before it will sell a label.
  *
  * All four or none, as far as this board is concerned. A weight with no
@@ -284,11 +297,16 @@ export function fulfillmentBlockedReason(facts: FulfillmentFacts): string | null
 }
 
 /**
- * What still has to happen before this order can move one column, in words.
+ * What still has to happen before this order can move on, in FEW words.
  *
- * Null on a ready order. Written here rather than in the board so the card and
- * any future list say the same thing — the two drifting is how a screen comes
- * to promise a step that is not the one blocking it.
+ * Null on a ready order. Deliberately short: this is printed on a card in a
+ * column, and the first draft's full sentences wrapped to three lines and
+ * pushed the buttons off the bottom. `fulfillmentBlockedDetail` carries the
+ * long form for the tooltip, so the advice is a hover away rather than gone.
+ *
+ * Written here rather than in the board so the card and any future list say the
+ * same thing — the two drifting is how a screen comes to promise a step that is
+ * not the one blocking it.
  */
 export function fulfillmentNextStep(facts: FulfillmentFacts): string | null {
   const stage = fulfillmentStageOf(facts)
@@ -296,9 +314,23 @@ export function fulfillmentNextStep(facts: FulfillmentFacts): string | null {
   if (stage === 'awaiting_items') {
     const short = shelfShortfall(facts)
     if (short > 0) {
-      return `${short} unit${short === 1 ? '' : 's'} short on the shelf — receive the stock, or fill the order from somewhere else.`
+      return `${short} short on the shelf`
     }
-    return 'Confirm with the supplier that the goods are in hand.'
+    return 'Waiting on the supplier'
   }
-  return 'Weigh the box and measure it, then a label can be bought.'
+  return 'Needs weighing and measuring'
+}
+
+/** The same answer at length, for a tooltip that has room for it. */
+export function fulfillmentNextStepDetail(facts: FulfillmentFacts): string | null {
+  const stage = fulfillmentStageOf(facts)
+  if (stage === null || stage === 'ready') return null
+  if (stage === 'awaiting_items') {
+    const short = shelfShortfall(facts)
+    if (short > 0) {
+      return `${short} unit${short === 1 ? '' : 's'} of this order could not come off the shelf — there was not enough on hand when it saved. Receive the stock, or fill it from somewhere else.`
+    }
+    return 'Nothing here knows whether the supplier has these in hand, so it waits until somebody says. Tick it once they have confirmed.'
+  }
+  return 'A carrier prices a case on weight AND dimensions, so all four are needed before a label can be bought.'
 }

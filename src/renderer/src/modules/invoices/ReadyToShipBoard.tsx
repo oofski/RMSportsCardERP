@@ -6,8 +6,10 @@ import {
   describeDims,
   fulfillmentColumnOf,
   fulfillmentNextStep,
+  fulfillmentNextStepDetail,
   fulfillmentStageOf,
   fulfillmentTickLabel,
+  fulfillmentTickShort,
   hasDims,
   shelfShortfall,
   type FulfillmentColumn,
@@ -112,7 +114,7 @@ export function ReadyToShipBoard(): JSX.Element {
 
   return (
     <>
-      <div className="po-board">
+      <div className="po-board fx-board">
         {FULFILLMENT_COLUMNS.map((column) => {
           const cards = inColumn(column.id)
           return (
@@ -196,6 +198,7 @@ function FulfillmentCard({
 }): JSX.Element {
   const tone = FULFILLMENT_STAGE_TONE[stage]
   const next = fulfillmentNextStep(invoice)
+  const why = fulfillmentNextStepDetail(invoice)
   const dims = describeDims(invoice)
   const short = shelfShortfall(invoice)
 
@@ -206,18 +209,23 @@ function FulfillmentCard({
         {/* THE CHIP IS THE WHOLE POINT of one column holding two states, so it
             carries its own explanation on hover rather than relying on somebody
             learning what blue means. */}
-        <span className={`fx-chip fx-chip-${tone}`} title={next ?? 'Ready to send'}>
-          {stage === 'awaiting_items'
-            ? 'Awaiting items'
-            : stage === 'awaiting_dims'
-              ? 'Awaiting dims'
-              : 'Ready'}
-        </span>
-        {invoice.forceReadyAt && (
-          <span className="fx-chip fx-chip-forced" title="Moved here by hand, ahead of the gates">
-            By hand
+        <span className="fx-chips">
+          <span
+            className={`fx-chip fx-chip-${tone}`}
+            title={why ?? 'Cleared — buy the label and send it'}
+          >
+            {stage === 'awaiting_items'
+              ? 'Awaiting items'
+              : stage === 'awaiting_dims'
+                ? 'Awaiting dims'
+                : 'Ready'}
           </span>
-        )}
+          {invoice.forceReadyAt && (
+            <span className="fx-chip fx-chip-forced" title="Moved here by hand, ahead of the gates">
+              By hand
+            </span>
+          )}
+        </span>
       </div>
 
       <div className="po-card-supplier">{invoice.customerName}</div>
@@ -230,7 +238,7 @@ function FulfillmentCard({
       </div>
 
       {next && (
-        <div className={`fx-next fx-next-${tone}`}>
+        <div className={`fx-next fx-next-${tone}`} title={why ?? undefined}>
           <Icon name={stage === 'awaiting_items' ? 'Truck' : 'Ruler'} size={13} />
           <span>{next}</span>
         </div>
@@ -246,10 +254,15 @@ function FulfillmentCard({
         </div>
       )}
 
+      {/* The shortfall used to print twice — "2 short on the shelf" and then
+          "0 of 2 off the shelf" underneath, which is the same fact said again
+          in weaker words. The sentence above keeps it; this line only appears
+          when part of the order DID come off the shelf, which the sentence
+          does not say. */}
       {dims && <div className="fx-dims mono">{dims}</div>}
-      {short > 0 && invoice.stockUnits > 0 && (
+      {short > 0 && invoice.drawnUnits > 0 && (
         <div className="fx-dims">
-          {invoice.drawnUnits} of {invoice.stockUnits} off the shelf
+          {invoice.drawnUnits} of {invoice.stockUnits} already off the shelf
         </div>
       )}
 
@@ -264,8 +277,18 @@ function FulfillmentCard({
             <>
               {/* Bullet five: an up-front buyer whose package is going out
                   regardless. Offered on any card still in Ordered, because the
-                  reason to override is not always the payment gate. */}
-              <Button variant="ghost" size="sm" icon="ArrowRight" onClick={onSendAnyway}>
+                  reason to override is not always the payment gate.
+
+                  No icon, and the short label on the tick beside it: the two
+                  together have a column a third of a board wide to live in, and
+                  the full sentences wrapped them onto three lines each. Both
+                  carry their long form as a tooltip. */}
+              <Button
+                variant="ghost"
+                size="sm"
+                title="Move it to Ready to ship now, ahead of the usual gates"
+                onClick={onSendAnyway}
+              >
                 Send anyway
               </Button>
               <Button
@@ -276,7 +299,7 @@ function FulfillmentCard({
                 title={fulfillmentTickLabel(stage)}
                 onClick={onTick}
               >
-                {fulfillmentTickLabel(stage)}
+                {fulfillmentTickShort(stage)}
               </Button>
             </>
           )}

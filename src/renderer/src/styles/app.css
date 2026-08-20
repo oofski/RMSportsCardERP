@@ -25979,9 +25979,32 @@ button.sor-team:focus-visible {
    part-dropship, so a card's state is readable down a column without stopping
    on any one of them.
    --------------------------------------------------------------------------- */
+/* ITS OWN GRID. `.po-board` is repeat(4, …) because the purchase board has four
+   stages; this one has two, and inheriting that laid both columns out at a
+   quarter of the width with half the board empty — which is what cramped the
+   cards onto five lines each. */
+.fx-board {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+@media (max-width: 900px) {
+  .fx-board {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .fx-card {
   cursor: default;
   border-left-width: 3px;
+}
+/* The date and the buttons, on one line while they fit and wrapping when they
+   do not. `.po-card-foot` stacks them, which is right for the purchase card's
+   full-width move buttons and leaves a lot of air under two small ones. */
+.fx-card .po-card-foot {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 .fx-card-items {
   border-left-color: var(--info);
@@ -25993,6 +26016,28 @@ button.sor-team:focus-visible {
   border-left-color: var(--success);
 }
 
+/* A CARD THAT LIFTS ON HOVER IS A CARD THAT OPENS. This one does not — every
+   action on it is a button — so it stays put rather than promising a click that
+   goes nowhere. */
+.fx-card:hover {
+  transform: none;
+  box-shadow: var(--shadow-sm);
+  border-color: var(--border);
+}
+.fx-card:hover {
+  border-left-color: inherit;
+}
+
+/* The chips travel together on the right. Giving each one `margin-left: auto`
+   spread the free space BETWEEN them, so "Ready" and "By hand" drifted to
+   opposite ends of the row. */
+.fx-chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  min-width: 0;
+}
 .fx-chip {
   flex: 0 0 auto;
   padding: 2px 8px;
