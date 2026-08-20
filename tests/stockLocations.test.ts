@@ -52,6 +52,7 @@ const {
   activeLocations,
   allLocations,
   isLocation,
+  isRoadshowLocation,
   locationIds,
   setKnownLocations
 } = require('../src/shared/inventory')
@@ -212,6 +213,65 @@ ok(
   active.some((l: any) => l.id === 'RM') && active.some((l: any) => l.id === 'AM'),
   'and the two originals still on the list underneath'
 )
+
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 7. Roadshow shops surface without being managed ===')
+// ---------------------------------------------------------------------------
+/**
+ * The owner's words: "just pin roadshows at the top or something like that".
+ *
+ * No list of pins to keep. The names already carry the fact — every one of these
+ * shops is called "Roadshow <somewhere>" — so a shop added next season is up
+ * there the moment it is created, with nobody remembering to do anything.
+ *
+ * THE HOME SHELVES STAY ABOVE THEM. Easy access for a seasonal shop should not
+ * cost a press on the two places most of the day's work goes to.
+ */
+ok(isRoadshowLocation('Roadshow Fort Worth'), 'a Roadshow shop is recognised by name')
+ok(isRoadshowLocation('roadshow tulsa'), 'case does not matter')
+ok(isRoadshowLocation('Spring ROADSHOW Pop-up'), 'and it can sit anywhere in the name')
+ok(!isRoadshowLocation('Fenwick Cards'), 'an ordinary shop is not one')
+ok(!isRoadshowLocation('RM'), 'and neither is a home shelf')
+
+// Build a mixed world and read the order off it.
+places.setStockLocationPinned('Roadshow Fort Worth', false)
+places.saveStockLocation({ label: 'Roadshow Tulsa' }, ACTOR)
+places.saveStockLocation({ label: 'Warehouse B' }, ACTOR)
+places.saveStockLocation({ label: 'Alamo Card Co' }, ACTOR)
+
+const order = activeLocations().map((l: any) => l.id)
+ok(order[0] === 'RM', 'RM leads', order.join(' | '))
+ok(order[1] === 'AM', 'then AM', order.join(' | '))
+ok(
+  isRoadshowLocation(order[2]) && isRoadshowLocation(order[3]),
+  'THEN THE ROADSHOW SHOPS, grouped together',
+  order.join(' | ')
+)
+ok(
+  order.indexOf('Roadshow Fort Worth') < order.indexOf('Warehouse B'),
+  'a Roadshow shop beats an ordinary place'
+)
+ok(
+  order.indexOf('Roadshow Tulsa') < order.indexOf('Alamo Card Co'),
+  'even one added later, with nobody pinning it'
+)
+ok(
+  order.indexOf('Alamo Card Co') < order.indexOf('Warehouse B'),
+  'and the rest fall in alphabetically',
+  order.join(' | ')
+)
+
+// An explicit pin still beats everything — the automatic grouping is a default,
+// not a rule somebody is stuck with.
+places.setStockLocationPinned('Warehouse B', true)
+ok(
+  activeLocations()[0].id === 'Warehouse B',
+  'AN EXPLICIT PIN STILL WINS — the grouping is a default, not a cage',
+  activeLocations()[0].id
+)
+places.setStockLocationPinned('Warehouse B', false)
+ok(activeLocations()[0].id === 'RM', 'and unpinning puts it back')
 
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail > 0) process.exit(1)

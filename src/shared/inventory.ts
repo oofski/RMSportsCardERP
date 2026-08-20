@@ -118,14 +118,52 @@ function refreshExports(): void {
   LOCATION_IDS = active.map((l) => l.id)
 }
 
+/**
+ * A Roadshow shop, recognised by its name.
+ *
+ * The owner asked for these to sit near the top without having to manage a list
+ * of pins, and the names carry the fact already — every one of them is called
+ * "Roadshow <somewhere>". Matching on the name means a shop added next season is
+ * up there the moment it is created, with nobody remembering to pin it.
+ *
+ * Deliberately NOT stored. A flag would be a second truth that drifts the first
+ * time a shop is renamed, and the honest reading of "is this a Roadshow shop" is
+ * whatever it is called right now.
+ */
+export function isRoadshowLocation(value: string): boolean {
+  return /roadshow/i.test(String(value ?? ''))
+}
+
+/**
+ * Where a place sits in a picker. Lower comes first.
+ *
+ *   0  explicitly pinned — an operator override, and it beats everything
+ *   1  RM and AM, the two home shelves somebody touches every day
+ *   2  Roadshow shops, grouped and near the top without being managed
+ *   3  everywhere else, alphabetically
+ *
+ * The home shelves stay above the Roadshow group ON PURPOSE. "Easy access" for a
+ * seasonal shop should not cost a press on the two places most of the day's work
+ * goes to, and an explicit pin is still there for anybody who disagrees.
+ */
+function pickerRank(l: StockLocation): number {
+  if (l.pinned) return 0
+  if (BUILTIN_LOCATION_IDS.some((b) => b.toLowerCase() === l.id.toLowerCase())) return 1
+  if (isRoadshowLocation(l.id)) return 2
+  return 3
+}
+
 export function activeLocations(): StockLocation[] {
   return knownLocations
     .filter((l) => !l.retired)
     .sort((a, b) => {
-      if (a.pinned !== b.pinned) return a.pinned ? -1 : 1
+      const ra = pickerRank(a)
+      const rb = pickerRank(b)
+      if (ra !== rb) return ra - rb
+      // Within the built-ins, the order they were declared in — RM then AM.
       const ai = BUILTIN_LOCATION_IDS.indexOf(a.id)
       const bi = BUILTIN_LOCATION_IDS.indexOf(b.id)
-      if (ai !== bi) return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi)
+      if (ai !== -1 && bi !== -1 && ai !== bi) return ai - bi
       return a.label.localeCompare(b.label)
     })
 }
