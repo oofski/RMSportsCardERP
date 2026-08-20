@@ -260,6 +260,12 @@ export const IPC = {
   invoicePayUpFront: 'invoices:pay-up-front',
   invoiceSetReady: 'invoices:set-ready',
   invoicesAwaitingShipment: 'invoices:awaiting-shipment',
+  // The fulfilment board — one read for all three columns, because the column
+  // an order belongs in is derived. See @shared/fulfillment.
+  invoicesFulfillment: 'invoices:fulfillment',
+  invoiceSetDims: 'invoices:set-dims',
+  invoiceSetItemsInHand: 'invoices:set-items-in-hand',
+  invoiceSetForceReady: 'invoices:set-force-ready',
 
   // Purchase orders
   poList: 'po:list',

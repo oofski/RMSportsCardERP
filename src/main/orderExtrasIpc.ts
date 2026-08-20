@@ -30,6 +30,10 @@ import {
 import {
   getInvoice,
   listAwaitingShipment,
+  listFulfillment,
+  setInvoiceDims,
+  setInvoiceForceReady,
+  setInvoiceItemsInHand,
   linkDropshipPair,
   recordInvoicePayment,
   setInvoiceReadyToShip
@@ -608,6 +612,86 @@ export function registerOrderExtrasIpc(): void {
       return []
     }
   })
+
+  // ---- The fulfilment board ------------------------------------------------
+
+  // Lines are dropped, as they are above: the board draws a card per ORDER and
+  // three columns of line items is a payload nobody reads.
+  ipcMain.handle(IPC.invoicesFulfillment, (): InvoiceDetail[] => {
+    try {
+      requireInvoicing()
+      return listFulfillment().map((i) => ({ ...i, lines: [] }))
+    } catch {
+      return []
+    }
+  })
+
+  ipcMain.handle(
+    IPC.invoiceSetDims,
+    (
+      _e,
+      payload: {
+        id?: unknown
+        weightLb?: unknown
+        lengthIn?: unknown
+        widthIn?: unknown
+        heightIn?: unknown
+      }
+    ): Result<InvoiceDetail> => {
+      try {
+        const actor = requireInvoicing()
+        const num = (v: unknown): number | null => {
+          const n = Number(v)
+          return Number.isFinite(n) && n > 0 ? n : null
+        }
+        const res = setInvoiceDims(
+          str(payload?.id),
+          {
+            weightLb: num(payload?.weightLb),
+            lengthIn: num(payload?.lengthIn),
+            widthIn: num(payload?.widthIn),
+            heightIn: num(payload?.heightIn)
+          },
+          actor.id
+        )
+        if (res.error) return { ok: false, error: res.error }
+        if (!res.invoice) return { ok: false, error: 'That order is gone.' }
+        return { ok: true, data: res.invoice }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  ipcMain.handle(
+    IPC.invoiceSetItemsInHand,
+    (_e, payload: { id?: unknown; inHand?: unknown }): Result<InvoiceDetail> => {
+      try {
+        const actor = requireInvoicing()
+        const res = setInvoiceItemsInHand(str(payload?.id), payload?.inHand !== false, actor.id)
+        if (res.error) return { ok: false, error: res.error }
+        if (!res.invoice) return { ok: false, error: 'That order is gone.' }
+        return { ok: true, data: res.invoice }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  ipcMain.handle(
+    IPC.invoiceSetForceReady,
+    (_e, payload: { id?: unknown; forced?: unknown }): Result<InvoiceDetail> => {
+      try {
+        const actor = requireInvoicing()
+        const res = setInvoiceForceReady(str(payload?.id), payload?.forced !== false, actor.id)
+        if (res.error) return { ok: false, error: res.error }
+        if (!res.invoice) return { ok: false, error: 'That order is gone.' }
+        return { ok: true, data: res.invoice }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
 
   // ---- The two halves of a dropship ---------------------------------------
 

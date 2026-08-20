@@ -3951,6 +3951,41 @@ function migrate(database: Database.Database): void {
   })
   setMeta(database, 'schema_version', '80')
 
+  /**
+   * v81: getting a sold order out of the building.
+   *
+   * The fulfilment board reads three gates — are the goods here, has the box
+   * been measured, has somebody overridden both — and none of them had anywhere
+   * to be recorded. See @shared/fulfillment for what each one means and why the
+   * order they are asked in is the order they are asked in.
+   *
+   * ## Why these are columns on invoices rather than a table of their own
+   *
+   * Every one of them is a single fact about ONE order, written once and read on
+   * every board draw. A side table would be a join on the hot path to store what
+   * amounts to six values, and `ready_to_ship_at` — the closest existing thing —
+   * is already a column here for the same reason.
+   *
+   * ## force_ready_at is NOT ready_to_ship_at
+   *
+   * They read alike and mean different things, so they are separate columns.
+   * `ready_to_ship_at` is stamped by the pay-up-front flow — its checkbox is
+   * ticked by default — and means "the money is in, let the floor have it".
+   * `force_ready_at` is somebody deliberately overriding the gates on an order
+   * that has NOT cleared them. Folding the second into the first would send
+   * every up-front-paid order straight past the measuring step, which is exactly
+   * the step the board exists to make visible.
+   */
+  addColumnIfMissing(database, 'invoices', 'ship_weight_lb', 'REAL')
+  addColumnIfMissing(database, 'invoices', 'ship_length_in', 'REAL')
+  addColumnIfMissing(database, 'invoices', 'ship_width_in', 'REAL')
+  addColumnIfMissing(database, 'invoices', 'ship_height_in', 'REAL')
+  addColumnIfMissing(database, 'invoices', 'items_in_hand_at', 'TEXT')
+  addColumnIfMissing(database, 'invoices', 'items_in_hand_by', 'TEXT')
+  addColumnIfMissing(database, 'invoices', 'force_ready_at', 'TEXT')
+  addColumnIfMissing(database, 'invoices', 'force_ready_by', 'TEXT')
+  setMeta(database, 'schema_version', '81')
+
   // v41: re-derive every product's average cost from its remaining cost layers.
   //
   // The average used to be stored rounded to the cent, back when every total in

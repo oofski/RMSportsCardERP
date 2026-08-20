@@ -14,7 +14,7 @@ import type {
 import {
   DEFAULT_INVOICE_TERMS,
   INVOICE_STAGES,
-  INVOICE_TERMS,
+  termsOptionsFor,
   dueDateFor,
   lineAmount,
   money,
@@ -660,7 +660,7 @@ export function CreateInvoiceModal({
             </Field>
             <Field label="Terms" hint="Sets the due date">
               <Select value={terms} onChange={(e) => setTermsAndDue(e.target.value as InvoiceTerms)}>
-                {INVOICE_TERMS.map((t) => (
+                {termsOptionsFor(invoice?.terms).map((t) => (
                   <option key={t} value={t}>
                     {t}
                   </option>

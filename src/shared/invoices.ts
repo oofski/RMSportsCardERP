@@ -109,6 +109,41 @@ export const INVOICE_TERMS: InvoiceTerms[] = [
 ]
 
 /**
+ * What a picker actually offers.
+ *
+ * The owner's call: nothing longer than Net 2. This business is paid before a
+ * case ships or within a couple of days of it landing, and a menu offering
+ * thirty and sixty days makes those a choice somebody can make by accident on
+ * an order worth five figures.
+ *
+ * SEPARATE FROM `INVOICE_TERMS` RATHER THAN A DELETION, for the reason written
+ * above it: the words themselves are stored on invoices and on customers, so
+ * removing an entry does not tidy a menu — it orphans every record holding that
+ * value, and a `<select>` renders a value it has no option for as BLANK, which
+ * reads as the terms having been wiped. `INVOICE_TERMS` stays complete so
+ * `TERM_DAYS` and every stored value still resolve; this is the shorter list a
+ * NEW choice is made from.
+ */
+export const INVOICE_TERMS_OFFERED: InvoiceTerms[] = ['Due on receipt', 'Net 2']
+
+/**
+ * The options to draw, given what this record is already on.
+ *
+ * An invoice written last year on Net 30 keeps saying Net 30 — it is a fact
+ * about a deal that was struck, and a screen that silently redrew it as "Due on
+ * receipt" would be rewriting history rather than tightening a policy. So the
+ * retired term is offered too, but ONLY on the record that already holds it,
+ * and it disappears from that record's menu the moment somebody moves off it.
+ */
+export function termsOptionsFor(current: string | null | undefined): InvoiceTerms[] {
+  const held = String(current ?? '').trim() as InvoiceTerms
+  if (held && INVOICE_TERMS.includes(held) && !INVOICE_TERMS_OFFERED.includes(held)) {
+    return [...INVOICE_TERMS_OFFERED, held]
+  }
+  return INVOICE_TERMS_OFFERED
+}
+
+/**
  * What a sale is on when nobody says otherwise.
  *
  * ONE constant, imported by the invoice form, the new-customer form and the
@@ -514,6 +549,19 @@ export interface Invoice {
    */
   readyToShipAt: string | null
   readyToShipBy: string | null
+  /**
+   * The fulfilment gates. See @shared/fulfillment for what each one decides and
+   * why they are asked in the order they are asked in.
+   */
+  drawnUnits: number
+  weightLb: number | null
+  lengthIn: number | null
+  widthIn: number | null
+  heightIn: number | null
+  itemsInHandAt: string | null
+  itemsInHandBy: string | null
+  forceReadyAt: string | null
+  forceReadyBy: string | null
   /**
    * May the buyer pay this invoice by CARD in QuickBooks?
    *

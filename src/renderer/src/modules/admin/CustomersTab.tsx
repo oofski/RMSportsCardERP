@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { InvoiceCustomer, InvoiceTerms } from '@shared/invoices'
-import { DEFAULT_INVOICE_TERMS, INVOICE_TERMS } from '@shared/invoices'
+import { DEFAULT_INVOICE_TERMS, termsOptionsFor } from '@shared/invoices'
 import type { ContactImportResult } from '@shared/contacts'
 import { summarizeImport } from '@shared/contacts'
 import { api } from '../../lib/api'
@@ -357,7 +357,7 @@ function CustomerForm({
           <label className="inv-field">
             Terms
             <select value={terms} onChange={(e) => setTerms(e.target.value as InvoiceTerms)}>
-              {INVOICE_TERMS.map((t) => (
+              {termsOptionsFor(customer?.terms).map((t) => (
                 <option key={t} value={t}>
                   {t}
                 </option>

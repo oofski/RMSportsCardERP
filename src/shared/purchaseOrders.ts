@@ -3,11 +3,23 @@ import type { PurchaseOrderStatus } from './types'
 
 export const PO_STATUSES: PurchaseOrderStatus[] = ['ordered', 'paid', 'received', 'cancelled']
 
-/** Pipeline columns in display order. */
+/**
+ * Pipeline columns in display order.
+ *
+ * RECEIVED SITS BEFORE PAID, which is the order the work actually happens in on
+ * this floor: stock turns up and gets checked in, and the invoice is settled
+ * after. PO_TRANSITIONS has allowed ordered → received directly for exactly that
+ * reason, so a board that drew Paid first was showing a step most orders take
+ * second — and the column with eight cards in it sat to the right of an empty
+ * one.
+ *
+ * DISPLAY ONLY. Nothing derives a legal move from this order; see
+ * PO_TRANSITIONS, which is unchanged.
+ */
 export const PO_STAGES: { id: PurchaseOrderStatus; label: string }[] = [
   { id: 'ordered', label: 'Ordered' },
-  { id: 'paid', label: 'Paid' },
   { id: 'received', label: 'Received' },
+  { id: 'paid', label: 'Paid' },
   { id: 'cancelled', label: 'Cancelled' }
 ]
 

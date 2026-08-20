@@ -126,6 +126,7 @@ import {
   FileX,
   User,
   Scale,
+  Ruler,
   // --- History calendar ---
   ChevronLeft,
   CalendarRange,
@@ -280,6 +281,7 @@ const MAP: Record<string, LucideIcon> = {
   FileX,
   User,
   Scale,
+  Ruler,
   // --- History calendar ---
   ChevronLeft,
   CalendarRange,

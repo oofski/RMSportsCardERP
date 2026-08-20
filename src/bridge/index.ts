@@ -1792,6 +1792,35 @@ export function createBridge(ipcRenderer: BridgeTransport) {
         ipcRenderer.invoke(IPC.invoicesAwaitingShipment),
 
       /**
+       * The fulfilment board, in ONE read.
+       *
+       * Which column an order belongs in is derived rather than stored — see
+       * fulfillmentStageOf — so the board asks for everything live and sorts it
+       * on the client. Three reads, one per column, would be three chances for
+       * the SQL to disagree with the rule the cards are labelled by.
+       */
+      fulfillment: (): Promise<InvoiceDetail[]> => ipcRenderer.invoke(IPC.invoicesFulfillment),
+
+      /** Weigh and measure the box. All four together, or all four cleared. */
+      setDims: (
+        id: string,
+        dims: {
+          weightLb: number | null
+          lengthIn: number | null
+          widthIn: number | null
+          heightIn: number | null
+        }
+      ): Promise<Result<InvoiceDetail>> => ipcRenderer.invoke(IPC.invoiceSetDims, { id, ...dims }),
+
+      /** Confirm the goods are in hand — the only signal a dropship has. */
+      setItemsInHand: (id: string, inHand: boolean): Promise<Result<InvoiceDetail>> =>
+        ipcRenderer.invoke(IPC.invoiceSetItemsInHand, { id, inHand }),
+
+      /** Send it anyway, ahead of the gates. Recorded as its own decision. */
+      setForceReady: (id: string, forced: boolean): Promise<Result<InvoiceDetail>> =>
+        ipcRenderer.invoke(IPC.invoiceSetForceReady, { id, forced }),
+
+      /**
        * Ask QuickBooks where these have got to, and move the cards it can
        * justify moving.
        *

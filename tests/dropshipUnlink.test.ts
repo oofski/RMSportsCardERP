@@ -235,9 +235,18 @@ ok(
   }).v === soLiveId,
   'in both directions'
 )
+// The MARKER, not the version number. Asserting schema_version === '80' pinned
+// the schema as it stood the day this was written, so the next migration broke
+// a test about dropship links — which is noise, and the kind of noise that
+// teaches people to edit assertions without reading them.
 ok(
-  database.getMeta(db, 'schema_version') === '80',
-  'and the schema says 80',
+  database.getMeta(db, 'dropship_orphan_links_v80') === '1',
+  'and the repair records that it ran, so it never runs twice',
+  String(database.getMeta(db, 'dropship_orphan_links_v80'))
+)
+ok(
+  Number(database.getMeta(db, 'schema_version')) >= 80,
+  'on a schema at or past the version that introduced it',
   String(database.getMeta(db, 'schema_version'))
 )
 

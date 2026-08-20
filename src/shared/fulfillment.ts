@@ -1,0 +1,304 @@
+/**
+ * Getting a sold order out of the building.
+ *
+ * ## Why this is a second axis and not four more columns on the Sales Orders board
+ *
+ * A sales order's `status` says where the DOCUMENT is — draft, posted to
+ * QuickBooks, sent, paid. That is a different question from where the GOODS are,
+ * and the two move independently: an order can be paid and have nothing in hand,
+ * or be sitting on the bench boxed and labelled while the buyer has not paid a
+ * penny because they are on delivery terms. `awaitingShipment` in @shared/invoices
+ * has said as much since readiness was first modelled — it is a timestamp rather
+ * than a stage precisely because it does not fit the same row.
+ *
+ * So this is its own board. A card cannot be in two columns of one row, and
+ * forcing fulfilment into the document pipeline would make somebody choose which
+ * of two true things to display.
+ *
+ * ## The pipeline
+ *
+ *   Awaiting items → Awaiting dims → Ready to ship
+ *
+ * and an order only ENTERS it once payment says it may. The three gates are
+ * asked in that order because each is meaningless before the one above it:
+ * there is nothing to measure until the case is in the building, and no label to
+ * buy until it has been measured.
+ */
+
+import type { PaymentTiming } from './freight'
+import type { InvoiceStatus } from './invoices'
+
+export type FulfillmentStage = 'awaiting_items' | 'awaiting_dims' | 'ready'
+
+/** The board's columns, left to right — the order the work moves in. */
+export const FULFILLMENT_STAGES: Array<{
+  id: FulfillmentStage
+  label: string
+  hint: string
+  icon: string
+  tone: string
+}> = [
+  {
+    id: 'awaiting_items',
+    label: 'Awaiting items',
+    hint: 'Sold, but the goods are not in hand yet',
+    icon: 'Truck',
+    tone: 'ordered'
+  },
+  {
+    id: 'awaiting_dims',
+    label: 'Awaiting dims',
+    hint: 'In hand — needs weighing and measuring before a label can be bought',
+    icon: 'Ruler',
+    tone: 'paid'
+  },
+  {
+    id: 'ready',
+    label: 'Ready to ship',
+    hint: 'Measured and cleared — buy the label and send it',
+    icon: 'PackageCheck',
+    tone: 'received'
+  }
+]
+
+/**
+ * The board's COLUMNS, which are not the same as its stages.
+ *
+ * Awaiting items and awaiting dims are both "sold, not out of the door yet", and
+ * the owner asked for them to share one column and be told apart by colour
+ * rather than by position — blue for items, amber for dims — with the card
+ * saying on hover which it is waiting on. Two states in one column is right for
+ * the same reason they are two states at all: the WORK is different (chase the
+ * supplier vs weigh the box) while the SITUATION is identical, and a card
+ * crossing a column boundary for a change of situation that has not happened
+ * reads as progress that was not made.
+ */
+export type FulfillmentColumn = 'ordered' | 'ready'
+
+export const FULFILLMENT_COLUMNS: Array<{
+  id: FulfillmentColumn
+  label: string
+  hint: string
+  icon: string
+}> = [
+  {
+    id: 'ordered',
+    label: 'Ordered',
+    hint: 'Sold and cleared to go — waiting on the goods, or on the measurements',
+    icon: 'ShoppingCart'
+  },
+  {
+    id: 'ready',
+    label: 'Ready to ship',
+    hint: 'Buy the label and send it',
+    icon: 'PackageCheck'
+  }
+]
+
+export function fulfillmentColumnOf(stage: FulfillmentStage): FulfillmentColumn {
+  return stage === 'ready' ? 'ready' : 'ordered'
+}
+
+/**
+ * The colourway a stage's chip wears. Blue for items, amber for dims.
+ *
+ * Named as a slug rather than a colour so the stylesheet owns the actual value
+ * — `.fx-chip-items` and `.fx-chip-dims` — and a theme change does not have to
+ * find its way back into this file.
+ */
+export const FULFILLMENT_STAGE_TONE: Record<FulfillmentStage, string> = {
+  awaiting_items: 'items',
+  awaiting_dims: 'dims',
+  ready: 'ready'
+}
+
+/**
+ * What the check mark on a card does next.
+ *
+ * ONE CONTROL, whose meaning follows the chip beside it: on a card waiting for
+ * goods it confirms they have arrived, and on one waiting for measurements it
+ * opens the box for them. Two buttons — one of which is always inert — would be
+ * asking the operator to work out which of them applies, which is the question
+ * the colour already answers.
+ */
+export function fulfillmentTickLabel(stage: FulfillmentStage): string {
+  if (stage === 'awaiting_items') return 'Goods are in hand'
+  if (stage === 'awaiting_dims') return 'Weigh and measure it'
+  return 'Ready'
+}
+
+/**
+ * What a carrier needs before it will sell a label.
+ *
+ * All four or none, as far as this board is concerned. A weight with no
+ * dimensions cannot be priced for anything that is charged by dimensional
+ * weight, which is every service this business uses for a case, so "we have the
+ * weight" is not a partial answer that lets the box move.
+ */
+export interface ShipDims {
+  weightLb: number | null
+  lengthIn: number | null
+  widthIn: number | null
+  heightIn: number | null
+}
+
+export function hasDims(dims: ShipDims): boolean {
+  const ok = (n: number | null): boolean => typeof n === 'number' && Number.isFinite(n) && n > 0
+  return ok(dims.weightLb) && ok(dims.lengthIn) && ok(dims.widthIn) && ok(dims.heightIn)
+}
+
+/** "12 × 9 × 4 in · 6.5 lb", or null when nothing has been measured. */
+export function describeDims(dims: ShipDims): string | null {
+  if (!hasDims(dims)) return null
+  const n = (v: number | null): string => String(Math.round((v as number) * 100) / 100)
+  return `${n(dims.lengthIn)} × ${n(dims.widthIn)} × ${n(dims.heightIn)} in · ${n(dims.weightLb)} lb`
+}
+
+/**
+ * Everything the pipeline reads off one order.
+ *
+ * A structural type rather than the full InvoiceDetail so the rules below can be
+ * tested against a plain object, and so a caller cannot accidentally make the
+ * answer depend on something that is not in this list.
+ */
+export interface FulfillmentFacts extends ShipDims {
+  status: InvoiceStatus
+  paymentTiming: PaymentTiming | null
+  /** Units on lines fulfilled from one of our own shelves. */
+  stockUnits: number
+  /** Units shipping direct from a supplier. */
+  dropshipUnits: number
+  /**
+   * Units actually taken off the shelf when this order saved.
+   *
+   * `applyInvoiceStock` gives what the shelf CAN give — `Math.min(asked, have)`
+   * — so a sale for ten boxes against three on hand draws three and leaves seven
+   * owed. That difference is the only honest signal this app has that a stock
+   * order is not yet fillable, and it is why this is read rather than assumed.
+   */
+  drawnUnits: number
+  /** Somebody confirmed the goods are in hand. The only signal a dropship has. */
+  itemsInHandAt: string | null
+  /** Somebody said send it regardless of the gates below. See forcedReady. */
+  forceReadyAt: string | null
+}
+
+/**
+ * May this order enter the pipeline at all?
+ *
+ * The owner's rule, in their words: ready to ship "when a sales order is either
+ * payment up front and paid, or payment on delivery and paid or unpaid."
+ *
+ * So an order on DELIVERY terms is admitted the moment it exists — the buyer
+ * pays when it lands, and holding the box back until they have would be waiting
+ * for something that cannot happen first. An order on UP-FRONT terms waits for
+ * the money.
+ *
+ * An order with NO timing said behaves as up-front. That is the safer reading:
+ * the alternative sends goods against a term nobody chose.
+ */
+export function paymentClearsFulfillment(facts: {
+  status: InvoiceStatus
+  paymentTiming: PaymentTiming | null
+}): boolean {
+  if (facts.paymentTiming === 'delivery') return true
+  return facts.status === 'paid'
+}
+
+/**
+ * Are the goods in the building?
+ *
+ * Two different questions wearing one name, because the answer comes from two
+ * different places:
+ *
+ *   · OUR OWN SHELF answers itself. The stock was drawn when the order saved,
+ *     and a shortfall means the shelf could not cover it — see drawnUnits.
+ *
+ *   · A DROPSHIP CANNOT ANSWER. Nothing in this app knows whether a supplier has
+ *     a case in hand, and inventing an answer would send a box to the bench that
+ *     nobody can pack. So it waits for somebody to say, which is what
+ *     `itemsInHandAt` is.
+ *
+ * An order with neither — no lines yet — has nothing to wait for.
+ */
+export function itemsInHand(facts: FulfillmentFacts): boolean {
+  const short = Math.max(0, (Number(facts.stockUnits) || 0) - (Number(facts.drawnUnits) || 0))
+  if (short > 0) return false
+  if ((Number(facts.dropshipUnits) || 0) > 0) return !!facts.itemsInHandAt
+  return true
+}
+
+/** How many units our own shelf still owes this order. */
+export function shelfShortfall(facts: Pick<FulfillmentFacts, 'stockUnits' | 'drawnUnits'>): number {
+  return Math.max(0, (Number(facts.stockUnits) || 0) - (Number(facts.drawnUnits) || 0))
+}
+
+/**
+ * Somebody said send it anyway.
+ *
+ * The owner's case, and it is a real one: "needed specifically for when a
+ * customer has up front payment terms but we are sending the package anyway."
+ * A relationship that has run for two years does not stop for a gate.
+ *
+ * It clears EVERY gate, including the dims one, because the request was to move
+ * the order to Ready to ship — not to move it one column. The board still says
+ * on the card when a forced order has no measurements, because the label cannot
+ * be bought without them and finding that out at the counter is worse than
+ * being told here.
+ */
+export function forcedReady(facts: Pick<FulfillmentFacts, 'forceReadyAt'>): boolean {
+  return !!facts.forceReadyAt
+}
+
+/**
+ * Which column this order sits in, or null when it is not on the board.
+ *
+ * Null is a real answer and it is the common one: a voided order, and an
+ * up-front order nobody has paid for yet, are both simply not the packing
+ * floor's problem. See fulfillmentBlockedReason for what to tell somebody
+ * looking for one that is missing.
+ */
+export function fulfillmentStageOf(facts: FulfillmentFacts): FulfillmentStage | null {
+  if (facts.status === 'void') return null
+  if (forcedReady(facts)) return 'ready'
+  if (!paymentClearsFulfillment(facts)) return null
+  if (!itemsInHand(facts)) return 'awaiting_items'
+  if (!hasDims(facts)) return 'awaiting_dims'
+  return 'ready'
+}
+
+/**
+ * Why an order is not on the board, in words.
+ *
+ * Null when it IS on it. Exists because "my order is not in the list" is the
+ * question this feature will generate, and the answer is always one of three
+ * things — none of which is visible from the board that does not contain it.
+ */
+export function fulfillmentBlockedReason(facts: FulfillmentFacts): string | null {
+  if (facts.status === 'void') return 'This order was voided.'
+  if (fulfillmentStageOf(facts) !== null) return null
+  return (
+    'The buyer pays up front and has not paid yet. Record the payment, or move it to Ready to ' +
+    'ship by hand if you are sending it anyway.'
+  )
+}
+
+/**
+ * What still has to happen before this order can move one column, in words.
+ *
+ * Null on a ready order. Written here rather than in the board so the card and
+ * any future list say the same thing — the two drifting is how a screen comes
+ * to promise a step that is not the one blocking it.
+ */
+export function fulfillmentNextStep(facts: FulfillmentFacts): string | null {
+  const stage = fulfillmentStageOf(facts)
+  if (stage === null || stage === 'ready') return null
+  if (stage === 'awaiting_items') {
+    const short = shelfShortfall(facts)
+    if (short > 0) {
+      return `${short} unit${short === 1 ? '' : 's'} short on the shelf — receive the stock, or fill the order from somewhere else.`
+    }
+    return 'Confirm with the supplier that the goods are in hand.'
+  }
+  return 'Weigh the box and measure it, then a label can be bought.'
+}

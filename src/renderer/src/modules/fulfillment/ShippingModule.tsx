@@ -11,6 +11,7 @@ import { TodayTab } from './TodayTab'
 import { HistoryTab } from './HistoryTab'
 import { FinishNightBar } from './FinishNightBar'
 import { FloorView } from './FloorView'
+import { ReadyToShipBoard } from './ReadyToShipBoard'
 import { WithSlipMode } from './WithSlipMode'
 
 /**
@@ -37,7 +38,7 @@ import { WithSlipMode } from './WithSlipMode'
  * places rather than deleted: the collision strip below still says a lead has to
  * look, and Today's empty state says who imports the show.
  */
-export type ShipTabId = 'today' | 'find' | 'floor' | 'reports'
+export type ShipTabId = 'today' | 'find' | 'ship' | 'floor' | 'reports'
 
 /**
  * The prop contract every tab in this workspace takes. FRONTEND-2's Checker /
@@ -158,7 +159,12 @@ export function ShippingModule(): JSX.Element {
     // The bench. Deliberately its own tab rather than a mode of Orders: a
     // picker and a packer are doing different jobs on different screens, and
     // the whole point is that neither is looking at the other's list.
-    { id: 'floor', label: 'Fulfillment', icon: 'Boxes', badge: 0 }
+    { id: 'floor', label: 'Fulfillment', icon: 'Boxes', badge: 0 },
+    // GETTING SOLD ORDERS OUT OF THE DOOR, which is a different job from the
+    // break bench above it: this list is one card per sales order and is driven
+    // by payment, stock and measurements rather than by what happened on
+    // stream. See ReadyToShipBoard.
+    { id: 'ship', label: 'Ready to ship', icon: 'PackageCheck', badge: 0 }
   ]
   // REPORTS, and only for whoever runs the show. It is the calendar, the
   // snapshots and the CSV exports — the record of what happened rather than a
@@ -248,6 +254,7 @@ export function ShippingModule(): JSX.Element {
           </WithSlipMode>
         )}
         {tab === 'floor' && <FloorView {...tabProps} />}
+        {tab === 'ship' && <ReadyToShipBoard />}
         {tab === 'reports' && <HistoryTab {...tabProps} />}
       </div>
     </div>

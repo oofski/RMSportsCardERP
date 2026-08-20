@@ -25965,3 +25965,108 @@ button.sor-team:focus-visible {
   font-weight: 500;
   color: var(--text-3);
 }
+
+/* ---------------------------------------------------------------------------
+   READY TO SHIP — the fulfilment board
+
+   Two columns holding three states. Awaiting items and awaiting dims share the
+   Ordered column and are told apart by COLOUR — blue for items, amber for dims
+   — which is the owner's call and the reason the chip carries its own
+   explanation on hover: a colour that has to be learned from a legend is a
+   colour nobody reads. See @shared/fulfillment.
+
+   The stripe down the left edge is the same device the PO board uses for a
+   part-dropship, so a card's state is readable down a column without stopping
+   on any one of them.
+   --------------------------------------------------------------------------- */
+.fx-card {
+  cursor: default;
+  border-left-width: 3px;
+}
+.fx-card-items {
+  border-left-color: var(--info);
+}
+.fx-card-dims {
+  border-left-color: var(--warning);
+}
+.fx-card-ready {
+  border-left-color: var(--success);
+}
+
+.fx-chip {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  cursor: help;
+}
+.fx-chip-items {
+  background: var(--info-bg);
+  color: var(--info);
+}
+.fx-chip-dims {
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+.fx-chip-ready {
+  background: var(--success-bg);
+  color: var(--success);
+}
+/* An override somebody made by hand. Deliberately plain — it is a fact about
+   the order, not a warning about it. */
+.fx-chip-forced {
+  background: var(--surface-3);
+  color: var(--text-2);
+}
+
+/* What has to happen next, in the same colour as the chip that says why. */
+.fx-next {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 9px;
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.fx-next svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+.fx-next-items {
+  color: var(--info);
+}
+.fx-next-dims,
+.fx-next-ready {
+  color: var(--warning);
+}
+
+.fx-dims {
+  margin-top: 7px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.fx-date {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+/* The orders this board does NOT contain, said before somebody goes looking. */
+.fx-held {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 16px 0 0;
+  padding: 11px 14px;
+  border-radius: 9px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.fx-held svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}

@@ -35,6 +35,7 @@ import { getDb, getMeta } from './database'
 import { applyInvoiceStock, invoiceStockLocation, releaseInvoiceStock } from './invoiceStock'
 import { destinationHoldsStock } from '@shared/purchaseOrders'
 import { adoptLegacyFreight, deleteOrderExtras, recordOrderEvent } from './orderExtras'
+import { describeDims, hasDims } from '@shared/fulfillment'
 import { issueDealTicket, markDropshipPair } from './dealTickets'
 
 /**
@@ -64,6 +65,12 @@ function lineDestination(value: string | null | undefined, headerLocation: strin
 
 function nowIso(): string {
   return new Date().toISOString()
+}
+
+/** A stored measurement, or null. Zero and NaN both read as "nobody said". */
+function numOrNull(v: unknown): number | null {
+  const n = Number(v)
+  return Number.isFinite(n) && n > 0 ? n : null
 }
 
 function clean(v: string | null | undefined): string | null {
@@ -445,6 +452,15 @@ interface InvoiceRow extends AddressRow {
   allow_credit_card: number | null
   stock_units: number | null
   drop_units: number | null
+  drawn_units: number | null
+  ship_weight_lb: number | null
+  ship_length_in: number | null
+  ship_width_in: number | null
+  ship_height_in: number | null
+  items_in_hand_at: string | null
+  items_in_hand_by: string | null
+  force_ready_at: string | null
+  force_ready_by: string | null
   carrier: string | null
   service: string | null
   tracking_number: string | null
@@ -540,6 +556,18 @@ function toInvoice(r: InvoiceRow): Invoice {
     sourcePoId: r.source_po_id ?? null,
     stockUnits: Number(r.stock_units) || 0,
     dropshipUnits: Number(r.drop_units) || 0,
+    drawnUnits: Number(r.drawn_units) || 0,
+    // Nulls kept as nulls rather than coerced to 0: "not measured" and "measured
+    // as nothing" are different facts, and hasDims reads a zero as absent
+    // anyway — but a 0 written into the form would look like somebody's answer.
+    weightLb: numOrNull(r.ship_weight_lb),
+    lengthIn: numOrNull(r.ship_length_in),
+    widthIn: numOrNull(r.ship_width_in),
+    heightIn: numOrNull(r.ship_height_in),
+    itemsInHandAt: r.items_in_hand_at ?? null,
+    itemsInHandBy: r.items_in_hand_by ?? null,
+    forceReadyAt: r.force_ready_at ?? null,
+    forceReadyBy: r.force_ready_by ?? null,
     carrier: asCarrier(r.carrier),
     service: r.service,
     trackingNumber: r.tracking_number,
@@ -630,7 +658,18 @@ const INVOICE_COLS = `id, invoice_number, customer_id, customer_name, email, ter
                                                                     invoices.location, 'RM'))
                                                      IN ('RM', 'AM')
                                                 THEN 0 ELSE l.quantity END), 0)
-                         FROM invoice_lines l WHERE l.invoice_id = invoices.id) AS drop_units`
+                         FROM invoice_lines l WHERE l.invoice_id = invoices.id) AS drop_units,
+                      -- THE FULFILMENT GATES. See @shared/fulfillment.
+                      ship_weight_lb, ship_length_in, ship_width_in, ship_height_in,
+                      items_in_hand_at, items_in_hand_by, force_ready_at, force_ready_by,
+                      -- WHAT THE SHELF ACTUALLY GAVE, which is not always what was
+                      -- asked for: applyInvoiceStock takes MIN(asked, on hand), so a
+                      -- sale for ten boxes against three draws three and leaves seven
+                      -- owed. Compared against stock_units above, this is the only
+                      -- honest signal that a stock order is not yet fillable -- and
+                      -- without it Awaiting items could only ever speak for dropships.
+                      (SELECT COALESCE(SUM(m.quantity), 0)
+                         FROM invoice_stock_moves m WHERE m.invoice_id = invoices.id) AS drawn_units`
 
 const LINE_COLS = `id, invoice_id, position, item, product_id, sku, description, quantity, rate,
                    amount, tax_rate, class_name, qty_fulfilled, fulfilled_at,
@@ -1651,6 +1690,163 @@ export function setInvoiceReadyToShip(
     db
   })
   return { invoice: getInvoice(id) }
+}
+
+/** Refuse to touch an order that is gone or voided, in one place. */
+function liveInvoiceOr(
+  db: Database.Database,
+  id: string
+): { ok: true } | { ok: false; result: { invoice: InvoiceDetail | null; error: string } } {
+  const row = db.prepare(`SELECT status FROM invoices WHERE id = ?`).get(id) as
+    | { status: string }
+    | undefined
+  if (!row) return { ok: false, result: { invoice: null, error: 'That order is gone.' } }
+  if (asStatus(row.status) === 'void') {
+    return { ok: false, result: { invoice: getInvoice(id), error: 'That order was voided.' } }
+  }
+  return { ok: true }
+}
+
+/**
+ * Weigh and measure the box.
+ *
+ * All four together or all four cleared. A carrier prices a case on dimensional
+ * weight, so three of the four buys nothing — and `hasDims` reads a partial set
+ * as unmeasured anyway, which would leave the order sitting in Awaiting dims
+ * with numbers on its card, looking like the board was broken.
+ */
+export function setInvoiceDims(
+  id: string,
+  dims: { weightLb: number | null; lengthIn: number | null; widthIn: number | null; heightIn: number | null },
+  actorId: string | null
+): { invoice: InvoiceDetail | null; error?: string } {
+  const db = getDb()
+  const guard = liveInvoiceOr(db, id)
+  if (!guard.ok) return guard.result
+
+  const at = (v: number | null): number | null => {
+    const n = Number(v)
+    return Number.isFinite(n) && n > 0 ? n : null
+  }
+  const weightLb = at(dims.weightLb)
+  const lengthIn = at(dims.lengthIn)
+  const widthIn = at(dims.widthIn)
+  const heightIn = at(dims.heightIn)
+  for (const v of [weightLb, lengthIn, widthIn, heightIn]) {
+    if (v !== null && v > 10000) return { invoice: getInvoice(id), error: 'That is not a parcel.' }
+  }
+
+  const stamp = nowIso()
+  db.prepare(
+    `UPDATE invoices
+        SET ship_weight_lb = ?, ship_length_in = ?, ship_width_in = ?, ship_height_in = ?,
+            updated_at = ?
+      WHERE id = ?`
+  ).run(weightLb, lengthIn, widthIn, heightIn, stamp, id)
+
+  const measured = hasDims({ weightLb, lengthIn, widthIn, heightIn })
+  recordOrderEvent('so', id, 'ready', {
+    detail: measured
+      ? `Measured — ${describeDims({ weightLb, lengthIn, widthIn, heightIn })}`
+      : 'Measurements cleared',
+    actorId,
+    db
+  })
+  return { invoice: getInvoice(id) }
+}
+
+/**
+ * Somebody confirmed the goods are in hand.
+ *
+ * ONLY MEANINGFUL ON A DROPSHIP, and that is not enforced here on purpose: a
+ * stock order answers this question from its own shelf (see itemsInHand), so
+ * setting the flag on one changes nothing and refusing it would be a button
+ * that errors for no reason the operator can see. The gate reads what it needs.
+ */
+export function setInvoiceItemsInHand(
+  id: string,
+  inHand: boolean,
+  actorId: string | null
+): { invoice: InvoiceDetail | null; error?: string } {
+  const db = getDb()
+  const guard = liveInvoiceOr(db, id)
+  if (!guard.ok) return guard.result
+  const stamp = nowIso()
+  db.prepare(
+    `UPDATE invoices
+        SET items_in_hand_at = ?, items_in_hand_by = ?, updated_at = ?
+      WHERE id = ?`
+  ).run(inHand ? stamp : null, inHand ? actorId : null, stamp, id)
+  recordOrderEvent('so', id, 'ready', {
+    detail: inHand
+      ? 'Goods confirmed in hand'
+      : 'Goods no longer confirmed in hand — back to Awaiting items',
+    actorId,
+    db
+  })
+  return { invoice: getInvoice(id) }
+}
+
+/**
+ * Send it anyway.
+ *
+ * The owner's case: a buyer on up-front terms whose package is going out
+ * regardless. It clears every gate — see forcedReady — so it is recorded as its
+ * own fact with its own author, rather than by faking the thing it is
+ * overriding. Somebody reading this order in six months can see that a person
+ * decided, and which person.
+ */
+export function setInvoiceForceReady(
+  id: string,
+  forced: boolean,
+  actorId: string | null
+): { invoice: InvoiceDetail | null; error?: string } {
+  const db = getDb()
+  const guard = liveInvoiceOr(db, id)
+  if (!guard.ok) return guard.result
+  const stamp = nowIso()
+  db.prepare(
+    `UPDATE invoices
+        SET force_ready_at = ?, force_ready_by = ?, updated_at = ?
+      WHERE id = ?`
+  ).run(forced ? stamp : null, forced ? actorId : null, stamp, id)
+  recordOrderEvent('so', id, 'ready', {
+    detail: forced
+      ? 'Moved to Ready to ship by hand, ahead of the usual gates'
+      : 'Manual release withdrawn — back to the usual gates',
+    actorId,
+    db
+  })
+  return { invoice: getInvoice(id) }
+}
+
+/**
+ * Everything the fulfilment board draws, oldest first.
+ *
+ * ONE READ FOR ALL THREE COLUMNS, because the column an order belongs in is
+ * derived — `fulfillmentStageOf` in @shared/fulfillment — and three queries each
+ * spelling one of those gates in SQL is three chances to disagree with the rule
+ * the cards are labelled by.
+ *
+ * Drafts are IN. An order can be in hand, measured and on delivery terms while
+ * it is still a draft in this app, and the boxes do not care that nobody has
+ * posted it to QuickBooks yet. Voids are excluded here rather than filtered
+ * later, since nothing about them is ever packable.
+ *
+ * Oldest first, for the reason listAwaitingShipment is: it is a QUEUE, and a
+ * newest-first packing list leaves somebody's order at the bottom for a
+ * fortnight.
+ */
+export function listFulfillment(limit = 400): Invoice[] {
+  return (
+    getDb()
+      .prepare(
+        `SELECT ${INVOICE_COLS} FROM invoices
+          WHERE status != 'void'
+          ORDER BY invoice_date ASC, created_at ASC LIMIT ?`
+      )
+      .all(Math.max(1, Math.min(2000, limit))) as InvoiceRow[]
+  ).map(toInvoice)
 }
 
 /**

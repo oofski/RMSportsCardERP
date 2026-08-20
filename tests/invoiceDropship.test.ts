@@ -793,5 +793,185 @@ try {
 }
 ok(indexHeld, 'THE UNIQUE INDEX REFUSES A DUPLICATE even by raw SQL')
 
+// ---------------------------------------------------------------------------
+console.log('\n=== N. the fulfilment gates, against a real database ===')
+// ---------------------------------------------------------------------------
+/**
+ * The stage machine is tested on its own in tests/fulfillment.ts. What is
+ * proved HERE is the half that only a database can prove: that the numbers the
+ * rules read are the numbers the database actually holds.
+ *
+ * `drawnUnits` is the one that matters. applyInvoiceStock takes MIN(asked, on
+ * hand), so a short order draws what it can and quietly owes the rest — and the
+ * only way to know is to compare what was asked against what invoice_stock_moves
+ * recorded. Get that subquery wrong and Awaiting items silently never fires for
+ * a stock order, which is the failure this whole board exists to prevent.
+ */
+const { fulfillmentStageOf } = require('../src/shared/fulfillment')
+
+const onShelf = qtyAt('RM')
+// Deliberately more than the shelf holds.
+const short = inv.saveInvoice(
+  {
+    customerName: 'Invented Buyer',
+    invoiceDate: '2026-04-10',
+    location: 'RM',
+    paymentTiming: 'delivery',
+    lines: [
+      { item: 'Dropship Hobby Box', productId: 'p_d', quantity: onShelf + 5, rate: 100 }
+    ]
+  },
+  null
+)
+const shortRead = inv.getInvoice(short.id)
+ok(
+  shortRead.stockUnits === onShelf + 5,
+  'the order asks for more than the shelf holds',
+  String(shortRead.stockUnits)
+)
+ok(
+  shortRead.drawnUnits === onShelf,
+  'AND DRAWN UNITS REPORTS WHAT THE SHELF ACTUALLY GAVE — not what was asked for',
+  `${shortRead.drawnUnits} of ${shortRead.stockUnits}`
+)
+ok(
+  fulfillmentStageOf(shortRead) === 'awaiting_items',
+  'so the order sits in Awaiting items',
+  String(fulfillmentStageOf(shortRead))
+)
+
+// Measure it — it must NOT jump the items gate.
+const measured = inv.setInvoiceDims(
+  short.id,
+  { weightLb: 6.5, lengthIn: 12, widthIn: 9, heightIn: 4 },
+  null
+)
+ok(measured.invoice?.weightLb === 6.5, 'the measurements round-trip', String(measured.invoice?.weightLb))
+ok(
+  fulfillmentStageOf(inv.getInvoice(short.id)) === 'awaiting_items',
+  'MEASURING A BOX THAT HAS NOT ARRIVED DOES NOT MOVE IT — the gates are asked in order'
+)
+
+// A covered order, on delivery terms, unmeasured.
+const covered = inv.saveInvoice(
+  {
+    customerName: 'Invented Buyer',
+    invoiceDate: '2026-04-11',
+    location: 'RM',
+    paymentTiming: 'delivery',
+    lines: [{ item: 'Dropship Hobby Box', productId: 'p_d', quantity: 1, rate: 100 }]
+  },
+  null
+)
+invStock.addStock('p_d', 'RM', 50, 50, null)
+const covered2 = inv.saveInvoice(
+  {
+    customerName: 'Invented Buyer',
+    invoiceDate: '2026-04-12',
+    location: 'RM',
+    paymentTiming: 'delivery',
+    lines: [{ item: 'Dropship Hobby Box', productId: 'p_d', quantity: 2, rate: 100 }]
+  },
+  null
+)
+ok(
+  fulfillmentStageOf(inv.getInvoice(covered2.id)) === 'awaiting_dims',
+  'a covered order on delivery terms is awaiting dims',
+  String(fulfillmentStageOf(inv.getInvoice(covered2.id)))
+)
+inv.setInvoiceDims(covered2.id, { weightLb: 2, lengthIn: 8, widthIn: 6, heightIn: 4 }, null)
+ok(
+  fulfillmentStageOf(inv.getInvoice(covered2.id)) === 'ready',
+  'AND MEASURING IT MOVES IT TO READY TO SHIP'
+)
+// Clearing them puts it back, which is how a repacked parcel is re-measured.
+inv.setInvoiceDims(covered2.id, { weightLb: null, lengthIn: null, widthIn: null, heightIn: null }, null)
+ok(
+  fulfillmentStageOf(inv.getInvoice(covered2.id)) === 'awaiting_dims',
+  'and clearing them puts it back, for a parcel that was repacked'
+)
+
+// The dropship half: it cannot answer for itself.
+const dropWait = inv.saveInvoice(
+  {
+    customerName: 'Invented Buyer',
+    invoiceDate: '2026-04-13',
+    location: 'RM',
+    paymentTiming: 'delivery',
+    lines: [
+      {
+        item: 'Dropship Hobby Box',
+        productId: 'p_d',
+        quantity: 3,
+        rate: 100,
+        destination: 'Fenwick Distribution',
+        supplier: 'Steel City'
+      }
+    ]
+  },
+  null
+)
+ok(
+  fulfillmentStageOf(inv.getInvoice(dropWait.id)) === 'awaiting_items',
+  'a dropship waits to be told the goods exist'
+)
+inv.setInvoiceItemsInHand(dropWait.id, true, null)
+ok(
+  !!inv.getInvoice(dropWait.id).itemsInHandAt,
+  'confirming it is stored with a timestamp'
+)
+ok(
+  fulfillmentStageOf(inv.getInvoice(dropWait.id)) === 'awaiting_dims',
+  'AND MOVES IT ON — to dims, not to ready, because nobody has measured it'
+)
+
+// Sending it anyway, which is the only way an unpaid up-front order gets there.
+const upfront = inv.saveInvoice(
+  {
+    customerName: 'Invented Buyer',
+    invoiceDate: '2026-04-14',
+    location: 'RM',
+    paymentTiming: 'front',
+    lines: [{ item: 'Dropship Hobby Box', productId: 'p_d', quantity: 1, rate: 100 }]
+  },
+  null
+)
+ok(
+  fulfillmentStageOf(inv.getInvoice(upfront.id)) === null,
+  'an unpaid up-front order is not on the board at all'
+)
+inv.setInvoiceForceReady(upfront.id, true, null)
+const forcedRead = inv.getInvoice(upfront.id)
+ok(!!forcedRead.forceReadyAt, 'the override is stored as its own fact')
+ok(
+  fulfillmentStageOf(forcedRead) === 'ready',
+  'AND PUTS IT STRAIGHT INTO READY TO SHIP — the case the owner asked for by name'
+)
+ok(
+  forcedRead.status !== 'paid',
+  'WITHOUT FAKING A PAYMENT — the money has not arrived and the order must not claim it has'
+)
+const forcedEvents = db
+  .prepare(`SELECT detail FROM order_events WHERE order_kind = 'so' AND order_id = ?`)
+  .all(upfront.id) as Array<{ detail: string }>
+ok(
+  forcedEvents.some((e) => /by hand/i.test(e.detail ?? '')),
+  'and the order says a person decided it, six months from now',
+  forcedEvents.map((e) => e.detail).join(' | ')
+)
+inv.setInvoiceForceReady(upfront.id, false, null)
+ok(
+  fulfillmentStageOf(inv.getInvoice(upfront.id)) === null,
+  'withdrawing it puts the order back behind the gates'
+)
+
+// A void is never packable, whoever said otherwise.
+inv.setInvoiceForceReady(covered.id, true, null)
+inv.setInvoiceStatus(covered.id, 'void', null)
+ok(
+  fulfillmentStageOf(inv.getInvoice(covered.id)) === null,
+  'AND A VOID IS OFF THE BOARD EVEN WHEN IT WAS FORCED ONTO IT'
+)
+
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail > 0) process.exit(1)
