@@ -800,8 +800,10 @@ export function saveInvoice(
   const db = getDb()
   const stamp = nowIso()
   const id = clean(input.id) ?? randomUUID()
-  const existing = db.prepare(`SELECT created_at, status FROM invoices WHERE id = ?`).get(id) as
-    | { created_at: string; status: string }
+  const existing = db
+    .prepare(`SELECT created_at, status, allow_credit_card FROM invoices WHERE id = ?`)
+    .get(id) as
+    | { created_at: string; status: string; allow_credit_card: number | null }
     | undefined
 
   // An invoice already in QuickBooks is not editable from here. Changing our
@@ -972,10 +974,31 @@ export function saveInvoice(
       service: clean(input.service),
       trackingNumber: clean(input.trackingNumber),
       paymentTiming: asPaymentTiming(input.paymentTiming),
-      // OMITTED MEANS ALLOWED. Every caller that predates the box — the dropship
-      // prefill, the tests, anything sending a bare NewInvoice — keeps the
-      // behaviour it had, and only an explicit false withdraws the card button.
-      allowCreditCard: input.allowCreditCard === false ? 0 : 1,
+      /**
+       * OFF UNLESS SOMEBODY SAYS OTHERWISE.
+       *
+       * This read "omitted means allowed" while the box was new and the point
+       * was that nothing changed for callers written before it. The owner has
+       * since asked for the opposite default, and a default that lives only in
+       * the create form is not a default — the next caller to omit the field
+       * would quietly start offering a card again.
+       *
+       * An EDIT is the exception, and it matters: this is an upsert, so every
+       * save rewrites the column. A payload that omits the field on an existing
+       * order must leave that order's own answer alone, or editing an address
+       * on an invoice raised last month would silently withdraw a card button
+       * the buyer has already been shown.
+       */
+      allowCreditCard:
+        input.allowCreditCard === undefined
+          ? existing
+            ? existing.allow_credit_card === 0
+              ? 0
+              : 1
+            : 0
+          : input.allowCreditCard
+            ? 1
+            : 0,
       ...addressParams(billAddr),
       total: invoiceTotal(lines),
       // Null on an edit. The ON CONFLICT branch does not touch created_by, so

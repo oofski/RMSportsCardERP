@@ -25885,19 +25885,22 @@ button.sor-team:focus-visible {
 
 /* A posted invoice that deliberately withheld the card button. Said quietly and
    only when it is true — see CreateInvoiceModal. */
-.inv-nocard {
+/* Was .inv-nocard, in warning colours, when withholding the card was the rare
+   thing. Offering it is the rare thing now, and this states a fact about an
+   invoice rather than flagging a problem with it — so it is neutral. */
+.inv-card-ok {
   display: flex;
   align-items: flex-start;
   gap: 7px;
   margin: 12px 0 0;
   padding: 9px 12px;
   border-radius: 7px;
-  background: var(--warning-bg);
-  color: var(--warning);
+  background: var(--surface-2);
+  color: var(--text-2);
   font-size: 12.5px;
   line-height: 1.5;
 }
-.inv-nocard svg {
+.inv-card-ok svg {
   flex: 0 0 auto;
   margin-top: 2px;
 }

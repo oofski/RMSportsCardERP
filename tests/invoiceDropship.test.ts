@@ -488,12 +488,68 @@ const cardRefs = new Map<string, any>([['dropship hobby box', { id: '77', name: 
 const payloadFor = (id: string): any =>
   toQboInvoice(inv.getInvoice(id), { id: '1', name: 'Invented Buyer' }, cardRefs, {})
 
-// Omitted means allowed, so nothing that predates the box changes behaviour.
-ok(inv.getInvoice(normal.id).allowCreditCard === true, 'an order raised without the box allows card')
+/**
+ * OFF UNLESS SOMEBODY SAYS OTHERWISE.
+ *
+ * This default started as TRUE, so that nothing changed for callers written
+ * before the box existed. The owner then asked for the opposite — "lets make
+ * the credit card box off by default" — because the fee is a percentage, so
+ * offering a card is the decision worth taking deliberately.
+ *
+ * Pinned in saveInvoice and not only in the form. A default that lives in one
+ * screen is not a default: the next caller to omit the field would quietly
+ * start offering cards again, and nothing would say so.
+ */
 ok(
-  payloadFor(normal.id).AllowOnlineCreditCardPayment === true,
-  'and says so explicitly to QuickBooks rather than staying silent',
+  inv.getInvoice(normal.id).allowCreditCard === false,
+  'AN ORDER RAISED WITHOUT THE BOX DOES NOT OFFER A CARD'
+)
+ok(
+  payloadFor(normal.id).AllowOnlineCreditCardPayment === false,
+  'and says so explicitly to QuickBooks rather than staying silent and letting the company default decide',
   String(payloadFor(normal.id).AllowOnlineCreditCardPayment)
+)
+
+// Ticking it is what turns it on, and it still travels all the way to Intuit.
+const withCard = inv.saveInvoice(
+  {
+    customerName: 'Invented Buyer',
+    invoiceDate: '2026-04-03',
+    location: 'RM',
+    allowCreditCard: true,
+    lines: [{ item: 'Dropship Hobby Box', productId: 'p_d', quantity: 1, rate: 400 }]
+  },
+  null
+)
+ok(inv.getInvoice(withCard.id).allowCreditCard === true, 'ticking it is stored')
+ok(
+  payloadFor(withCard.id).AllowOnlineCreditCardPayment === true,
+  'and QuickBooks is told to offer one',
+  String(payloadFor(withCard.id).AllowOnlineCreditCardPayment)
+)
+
+/**
+ * AN EDIT THAT SAYS NOTHING CHANGES NOTHING.
+ *
+ * saveInvoice is an upsert and rewrites this column on every save. If the new
+ * default applied to edits as well as to new orders, changing an address on an
+ * order raised last month would withdraw a card button its buyer has already
+ * been shown — and the only sign would be the buyer failing to pay.
+ */
+inv.saveInvoice(
+  {
+    id: withCard.id,
+    customerName: 'Invented Buyer',
+    invoiceDate: '2026-04-03',
+    location: 'RM',
+    lines: [{ item: 'Dropship Hobby Box', productId: 'p_d', quantity: 3, rate: 400 }]
+  },
+  null
+)
+ok(
+  inv.getInvoice(withCard.id).allowCreditCard === true,
+  'EDITING AN ORDER WITHOUT MENTIONING THE BOX LEAVES ITS OWN ANSWER ALONE',
+  String(inv.getInvoice(withCard.id).allowCreditCard)
 )
 
 const noCard = inv.saveInvoice(
@@ -539,6 +595,22 @@ inv.saveInvoice(
 )
 ok(inv.getInvoice(noCard.id).allowCreditCard === true, 'and can be turned back on')
 
+// ...and an edit that says nothing does not take it away again either.
+inv.saveInvoice(
+  {
+    id: noCard.id,
+    customerName: 'Invented Buyer',
+    invoiceDate: '2026-04-04',
+    location: 'RM',
+    lines: [{ item: 'Dropship Hobby Box', productId: 'p_d', quantity: 2, rate: 400 }]
+  },
+  null
+)
+ok(
+  inv.getInvoice(noCard.id).allowCreditCard === true,
+  'and a later silent edit does not undo that'
+)
+
 // A DROPSHIP IS BILLED THE SAME WAY. The goods coming from a supplier says
 // nothing about how the buyer may pay, and quietly changing it would be a
 // decision nobody made.
@@ -574,7 +646,7 @@ ok(
   'while still reading as a dropship for the board'
 )
 
-// The form offers it, and the receipt says so when it was withheld.
+// The form offers it, and the receipt says so on the exceptional case.
 const modalSrc = require('node:fs').readFileSync(
   join(process.cwd(), 'src/renderer/src/modules/invoices/CreateInvoiceModal.tsx'),
   'utf8'
@@ -582,8 +654,28 @@ const modalSrc = require('node:fs').readFileSync(
 ok(/Allow payment by credit card/i.test(modalSrc), 'the sales order form offers the choice')
 ok(modalSrc.includes('allowCreditCard'), 'and sends it with the order')
 ok(
-  modalSrc.includes('invoice.allowCreditCard === false'),
-  'a posted invoice says when card was withheld — it is read-only, so this is the only place to find out'
+  /useState\(invoice\?\.allowCreditCard \?\? false\)/.test(modalSrc),
+  'A NEW ORDER OPENS WITH THE BOX UNTICKED'
+)
+ok(
+  !/useState\(invoice\?\.allowCreditCard \?\? true\)/.test(modalSrc),
+  'and nothing is left defaulting it back on'
+)
+/**
+ * The receipt prints the RARE answer, and the two answers have swapped places.
+ * A posted invoice is read-only, so it is the only place to find out how a
+ * buyer was asked to pay — but a warning reading "no card button" on almost
+ * every receipt would be crying wolf about the normal case. It flags the
+ * offer instead, which is also what explains a card fee on any invoice raised
+ * back when cards were the default.
+ */
+ok(
+  modalSrc.includes('invoice.allowCreditCard === true'),
+  'a posted invoice says when card WAS offered'
+)
+ok(
+  !/inv-nocard/.test(modalSrc),
+  'and no longer warns about the case that is now ordinary'
 )
 
 

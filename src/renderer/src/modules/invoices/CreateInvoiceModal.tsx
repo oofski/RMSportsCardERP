@@ -200,7 +200,16 @@ export function CreateInvoiceModal({
   // existing one. Never derived from the prefill: a dropship is billed the same
   // way as anything else, and quietly changing how a buyer may pay because the
   // goods came from a supplier would be a decision nobody made.
-  const [allowCreditCard, setAllowCreditCard] = useState(invoice?.allowCreditCard ?? true)
+  /**
+   * OFF ON A NEW ORDER. The owner's call: the card fee is a percentage, so
+   * offering it is the decision worth making deliberately, not the one that
+   * happens by not looking.
+   *
+   * An order being EDITED keeps its own answer — `getInvoice` always returns a
+   * boolean, so the fallback below only ever fires for a new order, and nothing
+   * raised before this change reopens with the box quietly unticked.
+   */
+  const [allowCreditCard, setAllowCreditCard] = useState(invoice?.allowCreditCard ?? false)
   const [lines, setLines] = useState<DraftLine[]>(() => {
     // A PREFILLED ORDER SEEDS ITS OWN LINES, and every one of them carries the
     // destination the purchase order implied. That destination is what makes
@@ -710,10 +719,14 @@ export function CreateInvoiceModal({
             checked={allowCreditCard}
             onChange={setAllowCreditCard}
             label="Allow payment by credit card"
+            /* The unticked wording is the one most people will read now that it
+               is the default, so it says what IS happening rather than what has
+               been turned off — an order that was never going to offer a card
+               has not had anything withdrawn from it. */
             hint={
               allowCreditCard
-                ? 'QuickBooks shows this buyer a Pay-by-card button. Untick it and the card fee goes with it.'
-                : 'QuickBooks will NOT offer this buyer a card. Bank transfer and anything arranged off-invoice still work.'
+                ? 'QuickBooks shows this buyer a Pay-by-card button, and the card fee comes with it.'
+                : 'Bank transfer and anything arranged off-invoice. Tick it to let this buyer pay by card.'
             }
           />
 
@@ -986,17 +999,21 @@ function InvoiceReceipt({
         />
       </div>
 
-      {/* SHOWN ONLY WHEN CARD WAS WITHHELD. A posted invoice is read-only, so
-          this is the one place somebody can find out why a buyer is telling them
-          there is no Pay-by-card button — and printing "cards allowed" on the
-          overwhelming majority of invoices would be a line of noise on every
-          receipt to serve the rare one. */}
-      {invoice.allowCreditCard === false && (
-        <p className="inv-nocard">
-          <Icon name="AlertTriangle" size={13} />
+      {/* SHOWN ONLY WHEN CARD WAS OFFERED, which is the exception now that the
+          box starts unticked. The rule is unchanged — print the rare answer,
+          not the common one — but the two answers have swapped places, and a
+          warning triangle reading "no card button" on almost every receipt
+          would be crying wolf about the normal case.
+
+          It stays useful on the back catalogue for the opposite reason: every
+          invoice raised before this default flipped DID offer a card, and this
+          line is what explains a card fee against one of them. */}
+      {invoice.allowCreditCard === true && (
+        <p className="inv-card-ok">
+          <Icon name="CreditCard" size={13} />
           <span>
-            Paying by <b>card was not offered</b> on this invoice. QuickBooks shows the buyer
-            the other methods only.
+            This buyer was <b>offered payment by card</b>, so QuickBooks showed a Pay-by-card
+            button and its fee applies.
           </span>
         </p>
       )}

@@ -536,8 +536,17 @@ export interface Invoice {
    * Payments connection offers none of them, so the flag changes nothing there —
    * it is not broken, there was simply no button either way.
    *
-   * Defaults to TRUE so nothing changes for invoices raised before the box
-   * existed, and so the common case stays one fewer decision.
+   * ## It starts OFF
+   *
+   * It defaulted to true while the box was new, so that nothing changed for
+   * invoices raised before it existed. The owner has since asked for the
+   * opposite: the fee is a percentage, so OFFERING a card is the decision worth
+   * making deliberately, and it should not be the one that happens by not
+   * looking at the box.
+   *
+   * Invoices raised under the old default keep their stored answer — the change
+   * is to what a NEW order starts as, never a rewrite of what an existing one
+   * already told a buyer.
    */
   allowCreditCard: boolean
   /**
@@ -635,10 +644,15 @@ export interface NewInvoiceLine {
 
 export interface NewInvoice {
   /**
-   * May the buyer pay by card? Omit to allow it — see Invoice.allowCreditCard.
+   * May the buyer pay by card? See Invoice.allowCreditCard.
    *
-   * Omitted rather than required so every existing caller keeps working and
-   * behaves the way it did before the box existed.
+   * Omitting it means NO on a new order — the default lives in saveInvoice, not
+   * only in the form, so a caller that never sets the field cannot quietly
+   * start offering cards again.
+   *
+   * Omitting it on an EDIT leaves the order's own answer alone. The save is an
+   * upsert and rewrites the column every time, so anything else would let a
+   * change of address withdraw a card button the buyer has already been shown.
    */
   allowCreditCard?: boolean
   invoiceNumber?: string | null
