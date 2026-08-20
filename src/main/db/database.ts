@@ -3986,6 +3986,27 @@ function migrate(database: Database.Database): void {
   addColumnIfMissing(database, 'invoices', 'force_ready_by', 'TEXT')
   setMeta(database, 'schema_version', '81')
 
+  /**
+   * v82: what shipping cost, on both sides of a deal.
+   *
+   * ## They are not the same number and they are not treated the same
+   *
+   * On a PURCHASE it is freight the supplier charged, and it is part of what
+   * this business owes them — so it joins the order total and the COGS row that
+   * follows it. See restateOrderTotal.
+   *
+   * On a SALE it is what postage cost US. It is a cost we carry, not a charge to
+   * the buyer, so it stays OUT of the invoice total and never reaches
+   * QuickBooks: adding it to one and not the other is how our copy and Intuit's
+   * come to disagree about a document somebody has already been sent.
+   *
+   * Nullable, so every order raised before today reads as nothing rather than as
+   * free shipping — and NULL costs nothing in a total either way.
+   */
+  addColumnIfMissing(database, 'purchase_orders', 'shipping_cost', 'REAL')
+  addColumnIfMissing(database, 'invoices', 'shipping_cost', 'REAL')
+  setMeta(database, 'schema_version', '82')
+
   // v41: re-derive every product's average cost from its remaining cost layers.
   //
   // The average used to be stored rounded to the cent, back when every total in

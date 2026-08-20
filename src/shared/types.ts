@@ -991,6 +991,14 @@ export interface PurchaseOrder {
    */
   saleAwaitsItems?: boolean | null
   /**
+   * Freight the supplier charged to get these here.
+   *
+   * IN THE TOTAL, and therefore in COGS — it is money owed on this order. Not
+   * spread across the per-unit FIFO layers; see restateOrderTotal for why the
+   * valuation and the P&L are allowed to differ by exactly this.
+   */
+  shippingCost?: number | null
+  /**
    * The deal ticket this document answers to — the GROUP's number when it has
    * been folded in with others, not its own retired one. Null on anything
    * raised before the register existed.
@@ -1137,6 +1145,8 @@ export interface NewPurchaseOrder {
   service?: string | null
   trackingNumber?: string | null
   paymentTiming?: PaymentTiming | null
+  /** Freight the supplier charges. Joins the total — see PurchaseOrder.shippingCost. */
+  shippingCost?: number | null
   lines: NewPurchaseOrderLine[]
 }
 

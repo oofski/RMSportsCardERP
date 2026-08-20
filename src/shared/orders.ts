@@ -227,6 +227,45 @@ export function totalLabelCost(shipments: readonly OrderShipment[]): number {
   return cents / 100
 }
 
+/**
+ * WHAT SHIPPING THIS ORDER COST, in one number.
+ *
+ * There are two places that answer can come from and letting both speak is how
+ * a screen ends up showing a figure that disagrees with the one beside it:
+ *
+ *   · EVERY PARCEL carries a `labelCost`, which is the precise answer whenever
+ *     the labels were bought through the app and their costs filled in.
+ *   · THE ORDER carries a typed figure, for the cases the parcels cannot cover
+ *     — a courier invoiced monthly, postage bought at a counter, or a cost
+ *     somebody knows and has no parcel rows for.
+ *
+ * The TYPED figure wins where there is one, because somebody stating a number
+ * is a stronger claim than a sum this app assembled — and because the moment
+ * they disagree, the person who typed it is the one who looked. Where nothing
+ * is typed the parcels answer, so an order that never needed the field still
+ * reports a real cost.
+ *
+ * `shippingCostSource` says WHICH, so a screen can label it rather than
+ * printing a number of unstated origin.
+ */
+export function orderShippingCost(order: {
+  shippingCost?: number | null
+  shipments?: readonly OrderShipment[]
+}): number {
+  const typed = Number(order.shippingCost)
+  if (Number.isFinite(typed) && typed > 0) return typed
+  return totalLabelCost(order.shipments ?? [])
+}
+
+export function shippingCostSource(order: {
+  shippingCost?: number | null
+  shipments?: readonly OrderShipment[]
+}): 'typed' | 'labels' | 'none' {
+  const typed = Number(order.shippingCost)
+  if (Number.isFinite(typed) && typed > 0) return 'typed'
+  return totalLabelCost(order.shipments ?? []) > 0 ? 'labels' : 'none'
+}
+
 /** How many parcels carry a cost, so a screen can say what the total is missing. */
 export function shipmentsMissingCost(shipments: readonly OrderShipment[]): number {
   return shipments.filter((s) => s.labelCost === null || s.labelCost === undefined).length

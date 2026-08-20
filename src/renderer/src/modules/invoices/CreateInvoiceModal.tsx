@@ -193,6 +193,16 @@ export function CreateInvoiceModal({
   const [trackingNumber, setTrackingNumber] = useState<string | null>(
     invoice?.trackingNumber ?? null
   )
+  /**
+   * What POSTING it cost us — a cost we carry, not a charge to the buyer.
+   *
+   * Deliberately not in the invoice total and never sent to QuickBooks: adding
+   * it to our copy and not Intuit's is how the two come to disagree about a
+   * document somebody has already been sent.
+   */
+  const [shippingCost, setShippingCost] = useState(
+    invoice?.shippingCost != null ? String(invoice.shippingCost) : ''
+  )
   const [paymentTiming, setPaymentTiming] = useState<PaymentTiming | null>(
     invoice?.paymentTiming ?? null
   )
@@ -404,6 +414,7 @@ export function CreateInvoiceModal({
     trackingNumber: trackingNumber?.trim() || null,
     paymentTiming,
     allowCreditCard,
+    shippingCost: shippingCost.trim() === '' ? null : parseFloat(shippingCost),
     // productId and sku travel with every line. They are what makes the SKU
     // under a product name survive a reload — and what lets the posting code
     // match a QuickBooks Item on its SKU before falling back to a name somebody
@@ -729,6 +740,23 @@ export function CreateInvoiceModal({
                 : 'Bank transfer and anything arranged off-invoice. Tick it to let this buyer pay by card.'
             }
           />
+
+          {/* WHAT POSTING IT COST US — a cost, not a charge.
+              It is not in the total above and never goes to QuickBooks: adding
+              it to our copy and not Intuit's is how the two come to disagree
+              about a document somebody has already been sent. Leave it empty and
+              the parcels answer instead; see orderShippingCost. */}
+          <Field
+            label="Shipping cost"
+            hint="What postage cost US — not billed to the buyer, and not sent to QuickBooks"
+          >
+            <Input
+              value={shippingCost}
+              inputMode="decimal"
+              placeholder="0.00"
+              onChange={(e) => setShippingCost(e.target.value)}
+            />
+          </Field>
 
           {/* ---- What they are buying ------------------------------------ */}
           <POCatalogTypeahead onSelect={addLine} />

@@ -826,5 +826,139 @@ ok(
   'the buy-side screen still promises this can be started from the other end'
 )
 
+// ---------------------------------------------------------------------------
+console.log('\n=== N+1. what shipping cost, on both sides ===')
+// ---------------------------------------------------------------------------
+/**
+ * The owner asked for "a spot for shipping cost in purchase order and sales
+ * order", and the two are NOT the same number:
+ *
+ *   · On a PURCHASE it is freight the supplier charged. It is money owed on the
+ *     order, so it joins the total and the COGS row that follows it.
+ *
+ *   · On a SALE it is what postage cost US. A cost we carry, not a charge — so
+ *     it stays out of the invoice total and never reaches QuickBooks. Putting it
+ *     in one and not the other is how our copy and Intuit's come to disagree
+ *     about a document already sent.
+ *
+ * And on the sell side there were already TWO places a shipping figure could
+ * come from — the typed one and the parcels' own label costs — so the third
+ * thing pinned here is that they resolve to ONE answer.
+ */
+const { orderShippingCost, shippingCostSource } = require('../src/shared/orders')
+const { toQboInvoice: toQbo } = require('../src/shared/invoices')
+
+const freightPo = po.createPurchaseOrder(
+  {
+    supplier: 'Freight Test Supply',
+    location: 'RM',
+    shippingCost: 45.5,
+    lines: [{ productId: WIDGET, quantity: 2, unitPrice: 100 }]
+  },
+  OWEN
+)
+const freightRead = po.getPurchaseOrder(freightPo.id)
+ok(freightRead.shippingCost === 45.5, 'freight round-trips on a purchase order', String(freightRead.shippingCost))
+ok(
+  freightRead.total === 245.5,
+  'AND IT IS IN THE TOTAL — 2 x 100 of goods plus 45.50 of freight is what the supplier is owed',
+  String(freightRead.total)
+)
+const cogsRow = db
+  .prepare('SELECT amount FROM finance_cogs WHERE po_id = ?')
+  .get(freightPo.id) as { amount: number } | undefined
+ok(
+  cogsRow?.amount === 245.5,
+  'and the COGS row follows the total rather than the lines',
+  String(cogsRow?.amount)
+)
+// Editing it has to restate the total, or the order and its ledger row diverge.
+po.updatePurchaseOrderHeader(freightPo.id, { shippingCost: 10 })
+ok(
+  po.getPurchaseOrder(freightPo.id).total === 210,
+  'CHANGING FREIGHT RESTATES THE TOTAL',
+  String(po.getPurchaseOrder(freightPo.id).total)
+)
+ok(
+  (db.prepare('SELECT amount FROM finance_cogs WHERE po_id = ?').get(freightPo.id) as any)?.amount === 210,
+  'and the ledger row with it'
+)
+// Absent means absent, not free — and it costs the total nothing either way.
+const noFreight = po.createPurchaseOrder(
+  { supplier: 'No Freight Co', location: 'RM', lines: [{ productId: WIDGET, quantity: 1, unitPrice: 50 }] },
+  OWEN
+)
+ok(po.getPurchaseOrder(noFreight.id).shippingCost === null, 'an order nobody typed freight on reads null')
+ok(po.getPurchaseOrder(noFreight.id).total === 50, 'and its total is just the lines')
+
+// --- the sell side ---------------------------------------------------------
+const postageSo = inv.saveInvoice(
+  {
+    invoiceNumber: '5030',
+    customerName: 'Postage Test Buyer',
+    invoiceDate: '2026-08-22',
+    location: 'RM',
+    shippingCost: 12.75,
+    lines: [{ item: 'Widget Box', productId: WIDGET, quantity: 1, rate: 200 }]
+  },
+  OWEN
+)
+const postageRead = inv.getInvoice(postageSo.id)
+ok(postageRead.shippingCost === 12.75, 'postage round-trips on a sales order', String(postageRead.shippingCost))
+ok(
+  postageRead.total === 200,
+  'AND IS NOT IN THE INVOICE TOTAL — it is what posting cost us, not a charge to the buyer',
+  String(postageRead.total)
+)
+const qboPayload = toQbo(
+  postageRead,
+  { id: '1', name: 'Postage Test Buyer' },
+  new Map([['widget box', { id: '9', name: 'Widget Box' }]]),
+  {}
+)
+ok(
+  JSON.stringify(qboPayload).indexOf('12.75') === -1,
+  'AND IT NEVER REACHES QUICKBOOKS, so our copy and Intuit\u2019s still agree'
+)
+// An edit that says nothing leaves it alone — the save is an upsert.
+inv.saveInvoice(
+  {
+    id: postageSo.id,
+    invoiceNumber: '5030',
+    customerName: 'Postage Test Buyer',
+    invoiceDate: '2026-08-22',
+    location: 'RM',
+    lines: [{ item: 'Widget Box', productId: WIDGET, quantity: 2, rate: 200 }]
+  },
+  OWEN
+)
+ok(
+  inv.getInvoice(postageSo.id).shippingCost === 12.75,
+  'AN EDIT THAT DOES NOT MENTION IT LEAVES IT ALONE — this is an upsert and would otherwise erase it'
+)
+
+// --- one answer, two sources ----------------------------------------------
+ok(orderShippingCost({ shippingCost: 12.75, shipments: [] }) === 12.75, 'a typed figure is the answer')
+ok(
+  orderShippingCost({ shippingCost: null, shipments: [{ labelCost: 4 } as any, { labelCost: 6 } as any] }) === 10,
+  'and with nothing typed the parcels answer'
+)
+ok(
+  orderShippingCost({
+    shippingCost: 12.75,
+    shipments: [{ labelCost: 4 } as any]
+  }) === 12.75,
+  'THE TYPED FIGURE WINS WHERE BOTH EXIST — somebody stating a number looked; a sum did not'
+)
+ok(shippingCostSource({ shippingCost: 12.75, shipments: [] }) === 'typed', 'and the screen can say which it read')
+ok(
+  shippingCostSource({ shippingCost: null, shipments: [{ labelCost: 4 } as any] }) === 'labels',
+  'or that it came from the parcels'
+)
+ok(
+  shippingCostSource({ shippingCost: null, shipments: [] }) === 'none',
+  'or that nobody has said at all'
+)
+
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail > 0) process.exit(1)

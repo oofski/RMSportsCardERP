@@ -608,6 +608,17 @@ export interface Invoice {
   forceReadyAt: string | null
   forceReadyBy: string | null
   /**
+   * What POSTING this order cost us.
+   *
+   * A cost we carry, not a charge to the buyer — so it is deliberately NOT in
+   * `total` and never reaches QuickBooks. Putting it in one and not the other is
+   * how our copy and Intuit's come to disagree about a document already sent.
+   *
+   * Null when nobody has said. See `orderShippingCost` for how this and the
+   * per-parcel label costs resolve to ONE number rather than two.
+   */
+  shippingCost: number | null
+  /**
    * The deal ticket this document answers to — the GROUP's number when it has
    * been folded in with others, not its own retired one. Null on anything
    * raised before the register existed.
@@ -756,6 +767,8 @@ export interface NewInvoice {
    * change of address withdraw a card button the buyer has already been shown.
    */
   allowCreditCard?: boolean
+  /** What postage cost us. Omit to leave it alone. See Invoice.shippingCost. */
+  shippingCost?: number | null
   invoiceNumber?: string | null
   customerId?: string | null
   customerName: string

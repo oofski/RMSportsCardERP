@@ -68,6 +68,19 @@ function nowIso(): string {
   return new Date().toISOString()
 }
 
+/**
+ * A postage figure on the way in. Null when nobody said, never negative.
+ *
+ * Zero survives as zero: "this one went free" is an answer, and it is not the
+ * same as an empty box.
+ */
+function shippingIn(v: unknown): number | null {
+  if (v === null || v === undefined || v === '') return null
+  const n = Number(v)
+  if (!Number.isFinite(n) || n < 0) return null
+  return Math.round(n * 100) / 100
+}
+
 /** A stored measurement, or null. Zero and NaN both read as "nobody said". */
 function numOrNull(v: unknown): number | null {
   const n = Number(v)
@@ -462,6 +475,7 @@ interface InvoiceRow extends AddressRow {
   items_in_hand_by: string | null
   force_ready_at: string | null
   force_ready_by: string | null
+  shipping_cost: number | null
   carrier: string | null
   service: string | null
   tracking_number: string | null
@@ -569,6 +583,9 @@ function toInvoice(r: InvoiceRow): Invoice {
     itemsInHandBy: r.items_in_hand_by ?? null,
     forceReadyAt: r.force_ready_at ?? null,
     forceReadyBy: r.force_ready_by ?? null,
+    // What POSTING it cost us. Never a charge to the buyer, so it is not in
+    // `total` and never reaches QuickBooks — see the v82 note.
+    shippingCost: r.shipping_cost == null ? null : Number(r.shipping_cost),
     carrier: asCarrier(r.carrier),
     service: r.service,
     trackingNumber: r.tracking_number,
@@ -663,6 +680,7 @@ const INVOICE_COLS = `id, invoice_number, customer_id, customer_name, email, ter
                       -- THE FULFILMENT GATES. See @shared/fulfillment.
                       ship_weight_lb, ship_length_in, ship_width_in, ship_height_in,
                       items_in_hand_at, items_in_hand_by, force_ready_at, force_ready_by,
+                      shipping_cost,
                       -- WHAT THE SHELF ACTUALLY GAVE, which is not always what was
                       -- asked for: applyInvoiceStock takes MIN(asked, on hand), so a
                       -- sale for ten boxes against three draws three and leaves seven
@@ -847,9 +865,14 @@ export function saveInvoice(
   const stamp = nowIso()
   const id = clean(input.id) ?? randomUUID()
   const existing = db
-    .prepare(`SELECT created_at, status, allow_credit_card FROM invoices WHERE id = ?`)
+    .prepare(`SELECT created_at, status, allow_credit_card, shipping_cost FROM invoices WHERE id = ?`)
     .get(id) as
-    | { created_at: string; status: string; allow_credit_card: number | null }
+    | {
+        created_at: string
+        status: string
+        allow_credit_card: number | null
+        shipping_cost: number | null
+      }
     | undefined
 
   // An invoice already in QuickBooks is not editable from here. Changing our
@@ -965,12 +988,13 @@ export function saveInvoice(
          (id, invoice_number, customer_id, customer_name, email, terms, invoice_date, due_date,
           location, memo, message, send_later, class_name, status, qbo_id, qbo_doc_number,
           qbo_synced_at, total, carrier, service, tracking_number, payment_timing, allow_credit_card,
+          shipping_cost,
           bill_line1, bill_line2, bill_city, bill_region, bill_postal_code, bill_country,
           created_by, created_at, updated_at)
        VALUES (@id, @invoiceNumber, @customerId, @customerName, @email, @terms, @invoiceDate,
                @dueDate, @location, @memo, @message, @sendLater, @className, 'draft',
                NULL, NULL, NULL, @total, @carrier, @service, @trackingNumber, @paymentTiming,
-               @allowCreditCard,
+               @allowCreditCard, @shippingCost,
                @billLine1, @billLine2, @billCity, @billRegion, @billPostalCode, @billCountry,
                @createdBy, @createdAt, @updatedAt)
        ON CONFLICT(id) DO UPDATE SET
@@ -998,6 +1022,7 @@ export function saveInvoice(
          tracking_number= excluded.tracking_number,
          payment_timing = excluded.payment_timing,
          allow_credit_card = excluded.allow_credit_card,
+         shipping_cost  = excluded.shipping_cost,
          updated_at     = excluded.updated_at`
     ).run({
       id,
@@ -1045,6 +1070,17 @@ export function saveInvoice(
           : input.allowCreditCard
             ? 1
             : 0,
+      /**
+       * WHAT POSTING IT COST US, never a charge to the buyer.
+       *
+       * Absent leaves whatever is stored alone on an edit and writes nothing on
+       * a create, for the same reason allowCreditCard does: this is an upsert,
+       * and a payload that simply does not mention a field must not erase it.
+       */
+      shippingCost:
+        input.shippingCost === undefined
+          ? (existing?.shipping_cost ?? null)
+          : shippingIn(input.shippingCost),
       ...addressParams(billAddr),
       total: invoiceTotal(lines),
       // Null on an edit. The ON CONFLICT branch does not touch created_by, so

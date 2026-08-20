@@ -99,6 +99,8 @@ export function CreatePurchaseOrderModal({
     trackingNumber: null,
     paymentTiming: null
   })
+  /** Freight the supplier charges. Joins the total and the COGS row with it. */
+  const [shippingCost, setShippingCost] = useState('')
   const [lines, setLines] = useState<DraftLine[]>(() =>
     (prefill?.lines ?? []).map((l) => ({
       productId: l.productId,
@@ -267,14 +269,19 @@ export function CreatePurchaseOrderModal({
     if (allocations.length > 0) setOpenOverride((o) => ({ ...o, [l.productId]: true }))
   }
 
+  /**
+   * What this order comes to — FREIGHT INCLUDED, because that is what will be
+   * owed and what the saved total will say. A running total that quietly left
+   * it out would disagree with the order the moment it saved.
+   */
   const grandTotal = useMemo(
     () =>
       lines.reduce((sum, l) => {
         const qty = parseInt(l.quantity, 10) || 0
         const price = parseFloat(l.unitPrice) || 0
         return sum + qty * price
-      }, 0),
-    [lines]
+      }, 0) + (parseFloat(shippingCost) || 0),
+    [lines, shippingCost]
   )
 
   /**
@@ -365,6 +372,7 @@ export function CreatePurchaseOrderModal({
         location,
         notes: notes.trim() || null,
         ...freight,
+        shippingCost: shippingCost.trim() === '' ? null : parseFloat(shippingCost),
         lines: lines.map((l) => ({
           productId: l.productId,
           quantity: parseInt(l.quantity, 10),
@@ -460,6 +468,18 @@ export function CreatePurchaseOrderModal({
         hint="Who is bringing it"
         onChange={(patch) => setFreight((f) => ({ ...f, ...patch }))}
       />
+
+      {/* WHAT THE SUPPLIER CHARGES TO GET IT HERE. Beside the carrier, because
+          that is the same question asked about money — and it is part of what
+          this order costs, so it joins the total above the Create button. */}
+      <Field label="Shipping" hint="What the supplier charges for freight — added to the order total">
+        <Input
+          value={shippingCost}
+          inputMode="decimal"
+          placeholder="0.00"
+          onChange={(e) => setShippingCost(e.target.value)}
+        />
+      </Field>
 
       <PasteOfferPanel onApply={addReviewedLines} />
 

@@ -252,6 +252,8 @@ function toSummary(row: PoHeaderRow): PurchaseOrder {
     // Null on a purchase order with no sale behind it, which is most of them —
     // and "no linked sale" is a different fact from "its sale has the goods".
     saleAwaitsItems: row.sale_awaits_items == null ? null : row.sale_awaits_items === 1,
+    // Nullable so "nobody said" stays distinct from "free" — see the v82 note.
+    shippingCost: row.shipping_cost == null ? null : Number(row.shipping_cost),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     orderedAt: row.ordered_at,
@@ -377,7 +379,7 @@ const RECEIVED_LINE_COUNT_SQL = `
 
 const PO_SELECT = `
   SELECT po.id, po.po_number, po.supplier, po.notes, po.status, po.location,
-         po.linked_invoice_id, po.total,
+         po.linked_invoice_id, po.total, po.shipping_cost,
          po.created_by, po.created_at, po.updated_at,
          po.ordered_at, po.paid_at, po.received_at, po.cancelled_at, po.scanned_at,
          po.carrier, po.service, po.tracking_number, po.payment_timing,
@@ -444,6 +446,7 @@ type PoHeaderRow = PoRow & {
   receivable_units: number
   destination_count: number
   sale_awaits_items: number | null
+  shipping_cost: number | null
 }
 
 /** This order's unit rows, grouped by line, in allocation order. */
@@ -614,8 +617,15 @@ export function createPurchaseOrder(
     // Sum the SAME per-line rounded values the receipt/detail shows (toLine
     // rounds each line to cents), so the stored header total always equals
     // Σ(lineTotal) even when a unit price carries sub-cent precision.
+    // FREIGHT IS PART OF IT, on the same terms restateOrderTotal states: what
+    // the supplier charges to get the boxes here is money owed on this order.
+    // Added at creation as well as on every later restatement, or an order
+    // raised WITH freight would report a total that only became right the first
+    // time somebody edited it.
+    const freight = freightIn(input.shippingCost) ?? 0
     const total = cents(
-      input.lines.reduce((sum, l) => sum + cents(Math.round(l.quantity) * Math.max(0, l.unitPrice)), 0)
+      input.lines.reduce((sum, l) => sum + cents(Math.round(l.quantity) * Math.max(0, l.unitPrice)), 0) +
+        cents(freight)
     )
     /**
      * A header supplier the operator did not type, when every line agrees on one.
@@ -644,16 +654,17 @@ export function createPurchaseOrder(
     db.prepare(
       `INSERT INTO purchase_orders
          (id, po_number, supplier, notes, status, location, total, created_by, created_at, updated_at, ordered_at,
-          carrier, service, tracking_number, payment_timing)
+          carrier, service, tracking_number, payment_timing, shipping_cost)
        VALUES
          (@id, @po_number, @supplier, @notes, 'ordered', @location, @total, @created_by, @ts, @ts, @ts,
-          @carrier, @service, @tracking_number, @payment_timing)`
+          @carrier, @service, @tracking_number, @payment_timing, @shipping_cost)`
     ).run({
       id,
       po_number: poNumber,
       supplier: headerSupplier,
       notes: input.notes?.trim() || null,
       location,
+      shipping_cost: freightIn(input.shippingCost),
       total,
       created_by: actorId,
       ts,
@@ -1023,12 +1034,45 @@ export function addPurchaseOrderLines(
  * purchase was committed. Re-booking it today would move the cost into this
  * month and silently restate two months at once.
  */
+/**
+ * What this order comes to, and therefore what it costs.
+ *
+ * FREIGHT IS PART OF IT. What a supplier charges to get the boxes here is money
+ * owed on this order, so it belongs in the total and in the COGS row that
+ * follows the total one line down.
+ *
+ * It is NOT spread across the per-unit FIFO layers, and that is a decision
+ * rather than an omission. Apportioning freight over units would change the
+ * cost basis of stock that may already be sold, on every edit to a shipping
+ * figure — so inventory valuation stays ex-freight and the P&L carries the real
+ * spend. The two answer different questions and are allowed to differ by the
+ * freight.
+ */
+/**
+ * A freight figure on the way in. Null when nobody said, never negative.
+ *
+ * Zero is kept as zero rather than folded to null: "the supplier shipped it
+ * free" is a real answer somebody may want on the document, and it is not the
+ * same as leaving the box empty.
+ */
+function freightIn(v: unknown): number | null {
+  if (v === null || v === undefined || v === '') return null
+  const n = Number(v)
+  if (!Number.isFinite(n) || n < 0) return null
+  return Math.round(n * 100) / 100
+}
+
 function restateOrderTotal(db: Database.Database, poId: string, ts: string): void {
   const all = db
     .prepare('SELECT quantity, unit_price FROM purchase_order_lines WHERE po_id = ?')
     .all(poId) as Array<{ quantity: number; unit_price: number }>
+  const freightRow = db
+    .prepare('SELECT shipping_cost FROM purchase_orders WHERE id = ?')
+    .get(poId) as { shipping_cost: number | null } | undefined
+  const freight = Math.max(0, Number(freightRow?.shipping_cost) || 0)
   const total = cents(
-    all.reduce((sum, l) => sum + cents(Math.round(l.quantity) * Math.max(0, l.unit_price)), 0)
+    all.reduce((sum, l) => sum + cents(Math.round(l.quantity) * Math.max(0, l.unit_price)), 0) +
+      cents(freight)
   )
   db.prepare('UPDATE purchase_orders SET total = ?, updated_at = ? WHERE id = ?').run(total, ts, poId)
   db.prepare('UPDATE finance_cogs SET amount = ? WHERE po_id = ?').run(total, poId)
@@ -1060,7 +1104,7 @@ function restateOrderTotal(db: Database.Database, poId: string, ts: string): voi
  */
 export function updatePurchaseOrderHeader(
   id: string,
-  patch: { supplier?: string | null; notes?: string | null }
+  patch: { supplier?: string | null; notes?: string | null; shippingCost?: number | null }
 ): PoStatusResult {
   const db = getDb()
   const run = db.transaction((): PoStatusResult => {
@@ -1095,11 +1139,20 @@ export function updatePurchaseOrderHeader(
       sets.push('notes = @notes')
       params.notes = String(patch.notes ?? '').trim().slice(0, 2000) || null
     }
+    // FREIGHT MOVES THE TOTAL, so it cannot be written like the other two and
+    // left there — restateOrderTotal has to run after it, or the order says one
+    // thing and its COGS row says another.
+    const freightChanged = patch.shippingCost !== undefined
+    if (freightChanged) {
+      sets.push('shipping_cost = @shipping_cost')
+      params.shipping_cost = freightIn(patch.shippingCost)
+    }
     if (!sets.length) return { po: getPurchaseOrder(id) }
 
     db.prepare(`UPDATE purchase_orders SET ${sets.join(', ')}, updated_at = @ts WHERE id = @id`).run(
       params
     )
+    if (freightChanged) restateOrderTotal(db, id, ts)
     return { po: getPurchaseOrder(id) }
   })
   try {
