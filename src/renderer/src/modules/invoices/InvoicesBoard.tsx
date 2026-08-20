@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { Invoice, InvoiceCustomer, InvoiceDetail, InvoiceStatus } from '@shared/invoices'
-import { INVOICE_STAGES, canMoveInvoice, salesOrderKindOf } from '@shared/invoices'
+import { INVOICE_STAGES, canMoveInvoice, isDropshipSale, salesOrderKindOf } from '@shared/invoices'
 import { api } from '../../lib/api'
 import { LIVE, useLiveRefresh } from '../../lib/live'
 import { Button, CenterLoader, Modal } from '../../components/ui'
@@ -13,6 +13,7 @@ import { PayUpFrontModal } from '../orders/PayUpFrontModal'
 import { useToast } from '../../components/Toast'
 import { formatDate, formatMoney } from '../../lib/format'
 import { CreateInvoiceModal } from './CreateInvoiceModal'
+import { DropshipPurchaseStep } from './DropshipPurchaseStep'
 import { formatDay } from './helpers'
 
 /**
@@ -59,6 +60,8 @@ export function InvoicesBoard({
   })
   const [loading, setLoading] = useState(true)
   const [editing, setEditing] = useState<InvoiceDetail | null>(null)
+  /** The sale whose purchase has not been raised yet. See DropshipPurchaseStep. */
+  const [needsPurchase, setNeedsPurchase] = useState<InvoiceDetail | null>(null)
   const [creatingNew, setCreatingNew] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [matching, setMatching] = useState(false)
@@ -463,8 +466,29 @@ export function InvoicesBoard({
             setCreatingNew(false)
           }}
           onSaved={load}
+          // A DROPSHIP IS TWO DEALS AND THIS IS THE HINGE BETWEEN THEM — the
+          // mirror of what the Purchase Orders board does after a purchase that
+          // ships somewhere that is not ours. The sale is written; the purchase
+          // that supplies it has not been.
+          onSavedInvoice={(saved) => {
+            // Nothing to buy on a sale that comes off our own shelf.
+            if (!isDropshipSale(saved)) return
+            // ALREADY HALF OF A PAIR. A sale raised through the purchase-side
+            // flow arrives here carrying its own purchase order, and asking
+            // again would be asking somebody to buy the same goods twice.
+            if (saved.sourcePoId) return
+            setNeedsPurchase(saved)
+          }}
           onDelete={(inv) => setDeleting(inv)}
           onOpenQuickBooks={onOpenQuickBooks}
+        />
+      )}
+
+      {needsPurchase && (
+        <DropshipPurchaseStep
+          invoice={needsPurchase}
+          onClose={() => setNeedsPurchase(null)}
+          onDone={load}
         />
       )}
 

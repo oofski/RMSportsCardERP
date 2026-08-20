@@ -3,6 +3,7 @@ import type { InventoryProduct, PurchaseOrderDetail } from '@shared/types'
 import type { Freight } from '@shared/freight'
 import { LOCATION_IDS } from '@shared/inventory'
 import { destinationHoldsStock } from '@shared/purchaseOrders'
+import type { DropshipPurchasePrefill } from '@shared/orders'
 import { api } from '../../lib/api'
 import { useToast } from '../../components/Toast'
 import { Button, Field, Input, Modal } from '../../components/ui'
@@ -62,10 +63,19 @@ import { splitProblem, splitTotal, type DraftAllocation, type DraftLine } from '
 export function CreatePurchaseOrderModal({
   onClose,
   onSaved,
-  onCreated
+  onCreated,
+  prefill
 }: {
   onClose: () => void
   onSaved: () => void | Promise<void>
+  /**
+   * Open with the order already written, bar the prices.
+   *
+   * Used by the dropship flow coming the OTHER way — from a sales order that
+   * needs the purchase behind it. Read once, as the initial state: a prefill
+   * that kept overwriting the form would fight whoever is typing in it.
+   */
+  prefill?: DropshipPurchasePrefill | null
   /**
    * The order that was just raised, handed back so a caller can carry on with
    * it. The dropship flow uses it to open the sell side straight afterwards,
@@ -77,8 +87,11 @@ export function CreatePurchaseOrderModal({
   onCreated?: (po: PurchaseOrderDetail) => void | Promise<void>
 }): JSX.Element {
   const toast = useToast()
-  const [supplier, setSupplier] = useState('')
-  const [location, setLocation] = useState<string>(LOCATION_IDS[0])
+  const [supplier, setSupplier] = useState(prefill?.supplier ?? '')
+  // The buyer, on a prefilled dropship — which is the whole point of the
+  // prefill, because a destination that is not one of our shelves is what stops
+  // these units being received into stock. See dropshipPurchaseFromSale.
+  const [location, setLocation] = useState<string>(prefill?.destination || LOCATION_IDS[0])
   const [notes, setNotes] = useState('')
   const [freight, setFreight] = useState<Freight>({
     carrier: null,
@@ -86,7 +99,25 @@ export function CreatePurchaseOrderModal({
     trackingNumber: null,
     paymentTiming: null
   })
-  const [lines, setLines] = useState<DraftLine[]>([])
+  const [lines, setLines] = useState<DraftLine[]>(() =>
+    (prefill?.lines ?? []).map((l) => ({
+      productId: l.productId,
+      productName: l.productName,
+      sku: l.sku,
+      category: '',
+      quantity: String(l.quantity),
+      // Blank, not the catalog's average cost: this asks what the SUPPLIER
+      // charges for this deal, and a number already in the box is a number
+      // somebody accepts without reading.
+      unitPrice: '',
+      // Null so every line follows the header. Copying the destination onto
+      // each one would make them all overrides, and changing the order's
+      // destination afterwards would then move nothing.
+      supplier: null,
+      destination: null,
+      allocations: []
+    }))
+  )
   /**
    * The rows somebody has pressed open or pressed shut, by product id.
    *

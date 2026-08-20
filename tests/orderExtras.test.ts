@@ -652,5 +652,179 @@ mailer.clearEmailSettings()
 ok(mailer.emailConfigured() === false, 'and it can be removed again')
 ok(mailer.getEmailSettings() === null, 'leaving nothing behind')
 
+// ---------------------------------------------------------------------------
+console.log('\n=== N. and the same dropship begun from the SELL side ===')
+// ---------------------------------------------------------------------------
+/**
+ * The owner's words: "creating a dropship through a SO should prompt for a PO
+ * the way it does on PO tab."
+ *
+ * The buy-side interstitial has always PROMISED this — "you can raise it from
+ * the Sales Orders board whenever you like, and link it there" — and could not
+ * deliver it: linkDropship had exactly one caller, on the purchase side. So a
+ * dropship begun as a sale left the buyer billed and the supplier never ordered
+ * from, with nothing on either board saying the pair was half-written.
+ *
+ * What is pinned here is the prefill, because it is the part that can be
+ * silently wrong. The two directions are NOT symmetrical and the asymmetry is
+ * the thing worth a test.
+ */
+const {
+  dropshipPurchaseFromSale,
+  dropshipSuppliersOf
+} = require('../src/shared/orders')
+
+const sellSide = dropshipPurchaseFromSale({
+  supplier: 'Fenwick Distribution',
+  customerName: 'Steel City Cards',
+  lines: [{ productId: WIDGET, item: 'Invented Widget Box', sku: 'WID-1', quantity: 6 }]
+})
+ok(sellSide.supplier === 'Fenwick Distribution', 'the purchase is placed with whoever ships it')
+ok(
+  sellSide.destination === 'Steel City Cards',
+  'AND ADDRESSED TO THE BUYER — a destination that is not one of our shelves is what stops these units being received into stock',
+  sellSide.destination
+)
+ok(destinationHoldsStock(sellSide.destination) === false, 'which that is not')
+ok(
+  sellSide.lines.every((l: any) => l.quantity === 6 && l.productId === WIDGET),
+  'the lines come across at what was sold'
+)
+
+/**
+ * THE ASYMMETRY. Its mirror writes the routing onto every LINE and explains at
+ * length why the header will not do — on the SELL side a header location that
+ * is not a real shelf is collapsed back to RM, so only the lines can carry it.
+ * On the BUY side the header IS honoured, and the form is inheritance-first: a
+ * line that does not disagree with its order stores null. Copying the
+ * destination onto every line here would make them all overrides, so changing
+ * the order's destination afterwards would move nothing.
+ */
+ok(
+  !('destination' in sellSide.lines[0]),
+  'THE LINES CARRY NO DESTINATION OF THEIR OWN — they inherit the header, which the buy side honours'
+)
+ok(
+  !sellSide.lines.some((l: any) => 'unitPrice' in l && l.unitPrice),
+  'PRICES ARE NOT CARRIED OVER — what we pay the supplier is not what the buyer pays us'
+)
+
+// Who is supplying it, as far as the lines agree.
+const oneSupplier = dropshipSuppliersOf([
+  { supplier: 'Fenwick Distribution', dropship: true },
+  { supplier: 'Fenwick Distribution', dropship: true },
+  { supplier: null, dropship: false }
+])
+ok(
+  oneSupplier.length === 1 && oneSupplier[0] === 'Fenwick Distribution',
+  'lines that agree are one supplier, and a stock line is not asked',
+  oneSupplier.join(' | ')
+)
+const twoSuppliers = dropshipSuppliersOf([
+  { supplier: 'Fenwick Distribution', dropship: true },
+  { supplier: 'Ridgeway Supply', dropship: true }
+])
+ok(
+  twoSuppliers.length === 2,
+  'TWO SUPPLIERS IS TWO PURCHASE ORDERS — one order for all of it would put goods on a supplier who never agreed to ship them'
+)
+const unnamed = dropshipSuppliersOf([
+  { supplier: 'Fenwick Distribution', dropship: true },
+  { supplier: null, dropship: true }
+])
+ok(
+  unnamed.length === 2,
+  'AND A LINE WITH NO SUPPLIER IS AN UNKNOWN, not agreement with the rest — it is exactly the line somebody has not finished'
+)
+ok(
+  dropshipSuppliersOf([{ supplier: null, dropship: false }]).length === 0,
+  'a sale with no dropship lines has nothing to buy'
+)
+
+// End to end: a sale raised first, then the purchase behind it, then linked.
+const sellFirst = inv.saveInvoice(
+  {
+    invoiceNumber: '5020',
+    customerName: 'Steel City Cards',
+    invoiceDate: '2026-08-22',
+    location: 'RM',
+    lines: [
+      {
+        item: 'Invented Widget Box',
+        productId: WIDGET,
+        quantity: 4,
+        rate: 150,
+        destination: 'Fenwick Distribution',
+        supplier: 'Fenwick Distribution'
+      }
+    ]
+  },
+  OWEN
+)
+const soLines = inv.getInvoice(sellFirst.id).lines
+ok(soLines[0].dropship === true, 'the sale is a dropship')
+ok(inv.getInvoice(sellFirst.id).sourcePoId === null, 'and has no purchase behind it yet — which is what the prompt is for')
+
+const behind = dropshipPurchaseFromSale({
+  supplier: dropshipSuppliersOf(soLines)[0],
+  customerName: 'Steel City Cards',
+  lines: soLines.map((l: any) => ({
+    productId: l.productId,
+    item: l.item,
+    sku: l.sku,
+    quantity: l.quantity
+  }))
+})
+const raised = po.createPurchaseOrder(
+  {
+    supplier: behind.supplier,
+    location: behind.destination,
+    lines: behind.lines.map((l: any) => ({ productId: l.productId, quantity: l.quantity, unitPrice: 95 }))
+  },
+  OWEN
+)
+ok(
+  po.getPurchaseOrder(raised.id).orderKind === 'drop',
+  'THE PURCHASE IT BUILDS IS A DROPSHIP — nothing on it will ever be received onto a shelf',
+  po.getPurchaseOrder(raised.id).orderKind
+)
+const pairedBack = inv.linkDropshipPair(raised.id, sellFirst.id, OWEN)
+ok(pairedBack.ok === true, 'and the two halves link from this direction too', String(pairedBack.error))
+ok(
+  inv.getInvoice(sellFirst.id).sourcePoId === raised.id,
+  'the sale now points at its purchase, so it is never prompted for one again'
+)
+
+/**
+ * WHEN THE PROMPT APPEARS, which is the half of this that lives in a component.
+ *
+ * Two gates, and getting either wrong is worse than not having the feature:
+ * skipping the dropship test asks somebody to buy stock they already own, and
+ * skipping the sourcePoId test asks them to buy the same goods twice — a sale
+ * raised through the PURCHASE-side flow arrives already carrying its order.
+ */
+const boardSrc = require('node:fs').readFileSync(
+  join(process.cwd(), 'src/renderer/src/modules/invoices/InvoicesBoard.tsx'),
+  'utf8'
+)
+ok(/<DropshipPurchaseStep/.test(boardSrc), 'the Sales Orders board offers the purchase step')
+ok(
+  /if \(!isDropshipSale\(saved\)\) return/.test(boardSrc),
+  'AND ONLY ON A DROPSHIP — an ordinary sale off our own shelf has nothing to buy'
+)
+ok(
+  /if \(saved\.sourcePoId\) return/.test(boardSrc),
+  'AND ONLY WHEN NOTHING IS BEHIND IT YET — a sale raised from the purchase side already has its order, and asking again would buy the same goods twice'
+)
+// The buy side's promise, which this is what finally keeps.
+const saleStepSrc = require('node:fs').readFileSync(
+  join(process.cwd(), 'src/renderer/src/modules/invoicing/DropshipSaleStep.tsx'),
+  'utf8'
+)
+ok(
+  /the Sales Orders board whenever you like/.test(saleStepSrc),
+  'the buy-side screen still promises this can be started from the other end'
+)
+
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail > 0) process.exit(1)

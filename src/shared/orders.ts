@@ -365,6 +365,110 @@ export function dropshipSaleFromPurchase(input: {
 }
 
 // ---------------------------------------------------------------------------
+// Turning a dropship sale into the purchase that supplies it
+// ---------------------------------------------------------------------------
+
+/** What the purchase order form needs to open pre-filled from a sale. */
+export interface DropshipPurchasePrefill {
+  /** Who we are buying from. */
+  supplier: string
+  /** Where the goods go — on a dropship, the buyer. */
+  destination: string
+  /**
+   * PRODUCT-BACKED LINES ONLY. A purchase order line is a catalog product — it
+   * has to be, because receiving one puts units on a shelf against a cost
+   * layer, and there is nothing to put them against otherwise. A sales order
+   * may carry freehand lines, so the caller filters and SAYS what it left out;
+   * a prefill that silently dropped them would raise a purchase for less than
+   * was sold.
+   */
+  lines: Array<{
+    productId: string
+    productName: string
+    sku: string
+    quantity: number
+  }>
+}
+
+/**
+ * The purchase order that supplies a dropship sale, pre-filled.
+ *
+ * The mirror of `dropshipSaleFromPurchase`, for the half of the flow that was
+ * missing: a dropship raised from the Sales Orders board had no way to reach the
+ * purchase side, even though the buy-side interstitial promises exactly that
+ * ("you can raise it from the Sales Orders board whenever you like, and link it
+ * there").
+ *
+ * ## The destination goes on the HEADER here, and that is not an oversight
+ *
+ * Its mirror writes the routing onto every LINE and explains at length why the
+ * header will not do. That reasoning is real and it does not apply in this
+ * direction: on the SELL side a header location that is not a real shelf is
+ * collapsed back to RM by the stock code, so only the lines can carry it. On the
+ * BUY side the header destination is honoured as typed — `po_unit_destinations`
+ * resolves a line's destination as COALESCE(line, header) — so the header is the
+ * right place, and it is also what the form's inheritance-first convention
+ * expects: a line that does not disagree with its order stores null.
+ *
+ * Writing it onto every line as well would look symmetrical and would be wrong:
+ * every line would read as an override, so changing the destination on the order
+ * afterwards would move nothing.
+ *
+ * ## Prices are NOT carried over
+ *
+ * `unitPrice` is left blank, for the mirror of the reason the sale side leaves
+ * the rate at zero. The sale says what the buyer pays us; this asks what we pay
+ * the supplier, and defaulting one to the other would put a zero-margin deal one
+ * careless Enter away.
+ */
+export function dropshipPurchaseFromSale(input: {
+  /** Who the sale said would ship each line. */
+  supplier: string
+  /** Who bought it — the sales order's customer. */
+  customerName: string
+  lines: Array<{
+    productId: string
+    item: string
+    sku?: string | null
+    quantity: number
+  }>
+}): DropshipPurchasePrefill {
+  return {
+    supplier: input.supplier.trim(),
+    destination: input.customerName.trim(),
+    lines: input.lines.map((l) => ({
+      productId: l.productId,
+      productName: l.item,
+      sku: l.sku ?? '',
+      quantity: l.quantity
+    }))
+  }
+}
+
+/**
+ * Who is supplying a dropship sale, as far as its lines agree.
+ *
+ * Null when they do not — a sale whose lines come from two suppliers is two
+ * purchase orders, and guessing which one to raise would put the wrong goods on
+ * the wrong supplier's order. The mirror of the buy side refusing to bill one
+ * invoice for two buyers.
+ *
+ * A dropship line with NO supplier named counts as an unknown rather than as
+ * agreement: it is exactly the line somebody has not finished filling in, and
+ * treating it as "whatever the others said" would raise an order against a
+ * supplier who was never chosen for it.
+ */
+export function dropshipSuppliersOf(
+  lines: ReadonlyArray<{ supplier: string | null; dropship: boolean }>
+): string[] {
+  return [
+    ...new Set(
+      lines.filter((l) => l.dropship).map((l) => (l.supplier ?? '').trim() || '(not named)')
+    )
+  ]
+}
+
+// ---------------------------------------------------------------------------
 // Sending a label to whoever is shipping the goods
 // ---------------------------------------------------------------------------
 
