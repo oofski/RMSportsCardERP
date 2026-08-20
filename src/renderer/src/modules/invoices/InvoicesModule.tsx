@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { InvoicesBoard } from './InvoicesBoard'
 import { QuickBooksTab } from './QuickBooksTab'
-import { ReadyToShipBoard } from './ReadyToShipBoard'
 
 /**
  * Invoices — the sell side, and its own module.
@@ -12,19 +11,18 @@ import { ReadyToShipBoard } from './ReadyToShipBoard'
  * owe" and "what are we owed" in the same breath, so the sell side was always
  * one extra click away and read as a footnote to the buy side.
  *
- * ## Three sub-tabs, and each is a different question
+ * ## Two sub-tabs, and each is a different question
  *
  * SALES ORDERS is the board — where every invoice is, and which have been paid.
  * Laid out like the purchase-order board on purpose: same columns, same cards,
  * same drag. Somebody who has used one has used the other.
  *
- * READY TO SHIP is the same orders asked a DIFFERENT question: not where the
- * document is, but where the goods are. The two genuinely come apart — an order
- * can be paid with nothing in hand, or boxed and labelled while the buyer has
- * paid nothing because they are on delivery terms — which is why it is a second
- * board rather than more columns on the first. It sits here, beside the orders
- * it is about, rather than in Shipping: the person who raised the sale is the
- * one who knows whether the case turned up.
+ * WHERE THE GOODS ARE is asked on that same board rather than on one of its
+ * own. It briefly had a second board — the fulfilment state is genuinely a
+ * different axis from the document state — and a second board turned out to be
+ * a second place to look for the same orders. It says it in COLOUR instead: a
+ * stripe down the card's edge and a chip naming what is missing, so one list
+ * answers both questions and the work is done where the order already is.
  *
  * QUICKBOOKS is the connection. It lives HERE rather than in Admin because
  * this is the only place in the app that uses it, and a setting whose only
@@ -49,7 +47,7 @@ import { ReadyToShipBoard } from './ReadyToShipBoard'
  * module, not a second customer screen in here.
  */
 export function InvoicesModule(): JSX.Element {
-  const [tab, setTab] = useState<'invoices' | 'ship' | 'quickbooks'>('invoices')
+  const [tab, setTab] = useState<'invoices' | 'quickbooks'>('invoices')
 
   return (
     <div className="content-narrow inv-shell">
@@ -61,9 +59,6 @@ export function InvoicesModule(): JSX.Element {
           >
             Sales Orders
           </button>
-          <button className={`seg ${tab === 'ship' ? 'on' : ''}`} onClick={() => setTab('ship')}>
-            Ready to Ship
-          </button>
           <button
             className={`seg ${tab === 'quickbooks' ? 'on' : ''}`}
             onClick={() => setTab('quickbooks')}
@@ -73,7 +68,6 @@ export function InvoicesModule(): JSX.Element {
         </div>
 
         {tab === 'invoices' && <InvoicesBoard onOpenQuickBooks={() => setTab('quickbooks')} />}
-        {tab === 'ship' && <ReadyToShipBoard />}
         {tab === 'quickbooks' && <QuickBooksTab />}
       </div>
     </div>

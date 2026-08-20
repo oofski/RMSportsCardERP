@@ -4,8 +4,10 @@ import { INVOICE_STAGES, canMoveInvoice, isDropshipSale, salesOrderKindOf } from
 import {
   FULFILLMENT_STAGE_TONE,
   fulfillmentNextStepDetail,
-  fulfillmentStageOf
+  fulfillmentStageOf,
+  fulfillmentTickShort
 } from '@shared/fulfillment'
+import { DimsModal } from './DimsModal'
 import { api } from '../../lib/api'
 import { LIVE, useLiveRefresh } from '../../lib/live'
 import { Button, CenterLoader, Modal } from '../../components/ui'
@@ -422,6 +424,36 @@ export function InvoicesBoard({
                         setOverStage(null)
                       }}
                       onMove={(to) => void move(inv, to)}
+                      onItemsInHand={async () => {
+                        if (busy) return
+                        setBusy(inv.id)
+                        try {
+                          const res = await api.invoices.setItemsInHand(inv.id, true)
+                          if (!res.ok) {
+                            toast.error(res.error ?? 'Could not mark the goods in hand.')
+                            return
+                          }
+                          await load()
+                        } finally {
+                          setBusy(null)
+                        }
+                      }}
+                      onSendAnyway={async () => {
+                        if (busy) return
+                        setBusy(inv.id)
+                        try {
+                          const res = await api.invoices.setForceReady(inv.id, true)
+                          if (!res.ok) {
+                            toast.error(res.error ?? 'Could not move it.')
+                            return
+                          }
+                          toast.success('Moved to ready to ship.')
+                          await load()
+                        } finally {
+                          setBusy(null)
+                        }
+                      }}
+                      onFulfillmentChanged={load}
                       onRetryPush={async () => {
                         // BUSY, LIKE EVERY OTHER ACTION ON THIS CARD. This one
                         // was the exception, and it is the one action that
@@ -564,7 +596,10 @@ function InvoiceCard({
   onRetryPush,
   onDelete,
   onPdf,
-  onPayUpFront
+  onPayUpFront,
+  onItemsInHand,
+  onSendAnyway,
+  onFulfillmentChanged
 }: {
   invoice: Invoice
   busy: boolean
@@ -578,7 +613,14 @@ function InvoiceCard({
   onPdf: () => void
   /** Open the paid-up-front dialog for this order. */
   onPayUpFront: () => void
+  /** Confirm the goods arrived — the only signal a dropship has. */
+  onItemsInHand: () => Promise<void>
+  /** Move it straight to ready, ahead of the gates. */
+  onSendAnyway: () => Promise<void>
+  /** Reload after the dims editor writes. */
+  onFulfillmentChanged: () => Promise<void>
 }): JSX.Element {
+  const [measuring, setMeasuring] = useState(false)
   const overdue =
     invoice.status !== 'paid' &&
     invoice.status !== 'void' &&
@@ -718,7 +760,52 @@ function InvoiceCard({
         hasTracking={!!invoice.trackingNumber}
       />
 
+      {measuring && (
+        <div onClick={(e) => e.stopPropagation()}>
+          <DimsModal
+            invoice={invoice as InvoiceDetail}
+            onClose={() => setMeasuring(false)}
+            onSaved={async () => {
+              setMeasuring(false)
+              await onFulfillmentChanged()
+            }}
+          />
+        </div>
+      )}
       <div className="po-card-foot" onClick={(e) => e.stopPropagation()}>
+        {/* WHERE THE GOODS ARE, ACTED ON WHERE THE ORDER ALREADY IS.
+            
+            These two lived on a board of their own for a version. A second
+            board meant a second place to look for the same orders, so the state
+            became a colour on this card — and the buttons had to follow it, or
+            the colour would say what was missing with no way to answer it.
+            
+            Drawn only while the order is WAITING. A card that is ready, or one
+            payment has not cleared, has nothing here to press. */}
+        {fxTone && (
+          <>
+            <button
+              type="button"
+              className={`btn po-move inv-move-${fxTone}`}
+              disabled={busy}
+              title={fxWhy ?? undefined}
+              onClick={() => (fxStage === 'awaiting_items' ? void onItemsInHand() : setMeasuring(true))}
+            >
+              <Icon name={fxStage === 'awaiting_items' ? 'Check' : 'Ruler'} size={14} />
+              {fulfillmentTickShort(fxStage as 'awaiting_items' | 'awaiting_dims')}
+            </button>
+            <button
+              type="button"
+              className="btn po-move"
+              disabled={busy}
+              title="Move it straight to ready, ahead of the usual gates"
+              onClick={() => void onSendAnyway()}
+            >
+              <Icon name="ArrowRight" size={14} />
+              Send anyway
+            </button>
+          </>
+        )}
         {/* SAVED HERE, NOT IN QUICKBOOKS. The push runs on save and can fail —
             no network, an expired grant, an item QuickBooks will not accept —
             and the invoice is deliberately kept when it does, because throwing

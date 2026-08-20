@@ -389,26 +389,35 @@ ok(
 )
 
 // ---------------------------------------------------------------------------
-console.log('\n=== 9. where the Ready to Ship board lives ===')
+console.log('\n=== 9. one board, not two ===')
 // ---------------------------------------------------------------------------
 /**
- * The owner moved it: "the ready to ship board should be sales orders is where
- * it should be not in the shipping module". Pinned because a board mounted in
- * two places, or in none, is a screen that silently disappears — and nothing
- * else in the suite would notice.
+ * The fulfilment state had a board of its own for two versions. It was a second
+ * place to look for the same orders, so the owner asked for it to fold back
+ * into the main one — "can u not have the new tab just have it on the main tab
+ * ... and that just like have the color represent something".
+ *
+ * The STATE did not go anywhere; only the board did. So what this pins is that
+ * the fold happened completely: no orphan tab, and the actions that board owned
+ * still reachable, or the colour would name something with no way to answer it.
  */
 const read = (rel: string): string =>
   require('node:fs').readFileSync(require('node:path').join(process.cwd(), rel), 'utf8')
 const invoicesModule = read('src/renderer/src/modules/invoices/InvoicesModule.tsx')
 const shippingModule = read('src/renderer/src/modules/fulfillment/ShippingModule.tsx')
-ok(/<ReadyToShipBoard/.test(invoicesModule), 'Sales Orders mounts the board')
 ok(
-  /Ready to Ship/.test(invoicesModule),
-  'and offers it as a tab somebody can reach'
+  !/ReadyToShipBoard/.test(invoicesModule) && !/ReadyToShipBoard/.test(shippingModule),
+  'NO SEPARATE BOARD IS MOUNTED ANYWHERE — it folded into the orders list rather than moving again'
 )
 ok(
-  !/ReadyToShipBoard/.test(shippingModule),
-  'AND SHIPPING NO LONGER DOES — two mounts would be two boards drifting apart'
+  !require('node:fs').existsSync(
+    require('node:path').join(process.cwd(), 'src/renderer/src/modules/invoices/ReadyToShipBoard.tsx')
+  ),
+  'and the component is gone rather than left orphaned for somebody to re-mount'
+)
+ok(
+  !/Ready to Ship/.test(invoicesModule),
+  'so Sales Orders is back to two tabs'
 )
 
 // ---------------------------------------------------------------------------
@@ -426,6 +435,25 @@ console.log('\n=== 10. the same state, said on the two order boards ===')
 const soBoard = read('src/renderer/src/modules/invoices/InvoicesBoard.tsx')
 const poBoard = read('src/renderer/src/modules/invoicing/PurchaseOrderBoard.tsx')
 const css = read('src/renderer/src/styles/app.css')
+
+// THE COLOUR HAS TO BE ANSWERABLE. Naming what is missing on a card with no way
+// to act on it just moves the dead end onto the main board.
+ok(/<DimsModal/.test(soBoard), 'the card can open the measuring box')
+ok(/setItemsInHand/.test(soBoard), 'and confirm the goods arrived')
+ok(/setForceReady/.test(soBoard), 'and send it anyway')
+// TWO guards, not one: the chip in the header and the buttons in the footer are
+// separately gated, and asserting the bare string matched the chip's guard while
+// the footer's had been removed — a green test over a card offering "In hand" on
+// every order on the board.
+ok(
+  (soBoard.match(/\{fxTone && \(/g) ?? []).length >= 2,
+  'AND ONLY WHILE IT IS WAITING — the chip AND the buttons are each gated, so a ready card has nothing there to press',
+  String((soBoard.match(/\{fxTone && \(/g) ?? []).length)
+)
+ok(
+  /inv-move-\$\{fxTone\}/.test(soBoard),
+  'and the button wears the same colour as the chip that says why it is there'
+)
 
 ok(/fulfillmentStageOf/.test(soBoard), 'the Sales Orders card reads the fulfilment stage')
 ok(/fx-lane-\$\{fxTone\}/.test(soBoard), 'and wears it as a stripe')

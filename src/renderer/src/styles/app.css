@@ -4354,6 +4354,22 @@ tr.hoverable-row:hover {
   background: var(--success-bg);
   border-color: var(--success);
 }
+/* The card's own fulfilment action, wearing the colour of the chip that says
+   why it is there — blue to confirm goods arrived, amber to go and measure. */
+.po-move.inv-move-items {
+  color: var(--info);
+}
+.po-card-foot .po-move.inv-move-items:hover {
+  background: var(--info-bg);
+  border-color: var(--info);
+}
+.po-move.inv-move-dims {
+  color: var(--warning);
+}
+.po-card-foot .po-move.inv-move-dims:hover {
+  background: var(--warning-bg);
+  border-color: var(--warning);
+}
 .po-move.inv-move-send {
   color: var(--brand-700);
 }
