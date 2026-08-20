@@ -228,6 +228,79 @@ table.data tbody td {
   border-bottom: 1px solid var(--border);
   vertical-align: middle;
 }
+/* ---------------------------------------------------------------------------
+   SORTABLE COLUMN HEADERS
+
+   The header's padding moves onto the button so the CLICK TARGET IS THE WHOLE
+   HEADING, not the 13px glyph beside it. A heading is already the thing people
+   aim at; making them hit the arrow instead would be a worse table with an
+   arrow drawn on it.
+
+   The arrow is always present, faint until its column is the one in use. An
+   affordance that only appears on hover is one nobody finds, and on a
+   touchscreen there is no hover to find it with.
+   --------------------------------------------------------------------------- */
+table.data thead th.sort-th {
+  padding: 0;
+}
+.sort-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  padding: 12px 16px;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  /* Inherited, so the sortable headers and any plain ones left in a table stay
+     the same size, weight, colour and letter-spacing. */
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: inherit;
+  transition: color 0.12s ease;
+}
+.sort-btn:hover {
+  color: var(--text);
+}
+/* The heading and the arrow centre as a PAIR, which leaves the heading itself
+   sitting half an arrow left of the numbers below it. Pulling the arrow out of
+   the flex line's measured width — rather than padding the other side to
+   compensate — centres the WORD on the column while costing the column no
+   width at all. That matters: this table can carry a column per location, and
+   34px of padding on each of them comes straight out of the product names. The
+   arrow overhangs into the header's own right padding, where there is nothing
+   to collide with. */
+.sort-center .sort-btn {
+  justify-content: center;
+}
+.sort-center .sort-arrow {
+  margin-right: -18px;
+}
+.sort-right .sort-btn {
+  justify-content: flex-end;
+}
+.sort-arrow {
+  flex: 0 0 auto;
+  opacity: 0.3;
+  transition: opacity 0.12s ease;
+}
+.sort-btn:hover .sort-arrow {
+  opacity: 0.7;
+}
+table.data thead th.sort-th.sorted {
+  background: var(--surface-3);
+  color: var(--text);
+}
+.sorted .sort-arrow {
+  opacity: 1;
+  color: var(--accent);
+}
+/* The phone's stand-in for the header row — see the note where it is rendered.
+   Nothing to show while the headings themselves are on screen. */
+.sort-bar {
+  display: none;
+}
 table.data tbody tr:last-child td {
   border-bottom: none;
 }

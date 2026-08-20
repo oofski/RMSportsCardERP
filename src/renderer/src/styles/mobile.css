@@ -474,6 +474,31 @@
   table.as-cards td:empty {
     display: none;
   }
+  /* The stacked layout hides the header row, and with it the sortable column
+     headings — so a table that can be re-ranked offers this instead: the same
+     column list as a picker, plus the direction. Without it sorting would be a
+     feature that silently does not exist on a phone.
+
+     Wraps rather than scrolls: the location names are as long as somebody
+     chose to make them, and a select squeezed to 60px is unreadable. */
+  .sort-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 10px;
+  }
+  .sort-bar-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-3);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .sort-bar .input {
+    flex: 1 1 140px;
+    min-width: 0;
+  }
   /* A grouping row inside the body — the day a run of punches belongs to, with
      that day's total on the right. It is a rule between cards rather than a
      card, and both of its cells are short, so it stays on one line. */

@@ -16,6 +16,15 @@ import type {
   PurchaseOrderStatus
 } from '@shared/types'
 import { CATEGORY_ORDER, LOCATIONS, categoryColor } from '@shared/inventory'
+import {
+  defaultInventorySort,
+  firstSortDir,
+  locationSortKey,
+  nextSortState,
+  sortInventoryRows,
+  type InventorySortRow,
+  type SortState
+} from '@shared/inventorySort'
 import { countIdentifierGaps } from '@shared/identifiers'
 import { destinationSummary } from '@shared/purchaseOrders'
 import { receivableProgressOf } from '@shared/receiving'
@@ -27,7 +36,7 @@ import { useToast } from '../../components/Toast'
 import { api } from '../../lib/api'
 import { formatDate, formatMoney, formatUnitMoney } from '../../lib/format'
 import { formatUnitCount } from '../../lib/productUnits'
-import { UnitBadge, productMetrics } from './helpers'
+import { UnitBadge, productMetrics, type ProductMetrics } from './helpers'
 import { EditField } from './ProductsTab'
 import { CategoryLogo } from './CategoryLogo'
 import { GAP_META, MissingIdentifiers } from './MissingIdentifiers'
@@ -1394,6 +1403,84 @@ function IncomingOrdersHoverCard({
 }
 
 /** Shared detail view: a product table with the money metrics + a totals row. */
+/**
+ * What one row can be ranked by.
+ *
+ * Written to MIRROR THE CELLS BELOW line for line: wherever the table prints a
+ * dash this returns null, so the ranking and the screen can never tell
+ * different stories. If a cell's condition changes, this changes with it.
+ */
+function sortRowOf({ p, m }: { p: InventoryProduct; m: ProductMetrics }): InventorySortRow {
+  return {
+    name: p.name,
+    unit: p.unitType,
+    quantity: p.quantity,
+    byLocation: p.quantityByLocation,
+    highBid: m.hasBid ? m.marketUnit : null,
+    invValue: p.quantity > 0 ? m.invValue : null,
+    avgCost: m.hasCost ? m.avgCost : null,
+    totalCost: m.hasCost && p.quantity > 0 ? m.totalCost : null,
+    spread: m.hasCost && !m.outsideSpread && p.quantity > 0 ? m.spread : null
+  }
+}
+
+/**
+ * A column header you can rank the table by.
+ *
+ * The arrow is always drawn, faint until the column is the one in use, because
+ * an arrow that only appears on hover is a feature nobody finds. The whole
+ * header is the button, so the target is the width of the column rather than a
+ * 13px glyph.
+ */
+function SortTh({
+  label,
+  sortKey,
+  sort,
+  onSort,
+  align = 'left'
+}: {
+  label: string
+  sortKey: string
+  sort: SortState
+  onSort: (key: string) => void
+  align?: 'left' | 'center' | 'right'
+}): JSX.Element {
+  const active = sort.key === sortKey
+  const dir = active ? sort.dir : null
+  const arrow = (
+    <Icon
+      name={dir === 'asc' ? 'ChevronUp' : dir === 'desc' ? 'ChevronDown' : 'ChevronsUpDown'}
+      size={13}
+      className="sort-arrow"
+    />
+  )
+  return (
+    <th
+      className={`sort-th sort-${align}${active ? ' sorted' : ''}`}
+      aria-sort={dir === 'asc' ? 'ascending' : dir === 'desc' ? 'descending' : 'none'}
+    >
+      <button
+        type="button"
+        className="sort-btn"
+        onClick={() => onSort(sortKey)}
+        title={
+          active
+            ? `Sorted by ${label}, ${dir === 'asc' ? 'lowest' : 'highest'} first — click to reverse`
+            : `Sort by ${label}`
+        }
+      >
+        {/* THE ARROW LEADS ON A MONEY COLUMN. Trailing it would push the
+            heading left by its own width and the heading would stop lining up
+            with the right-aligned figures under it — the same complaint the PO
+            card headers drew, one column over. */}
+        {align === 'right' && arrow}
+        <span className="sort-label">{label}</span>
+        {align !== 'right' && arrow}
+      </button>
+    </th>
+  )
+}
+
 function InventoryDetail({
   detail,
   refreshKey = 0,
@@ -1410,6 +1497,14 @@ function InventoryDetail({
   const [rows, setRows] = useState<InventoryProduct[] | null>(null)
   const [hover, setHover] = useState<{ data: ProductCardData; style: CSSProperties } | null>(null)
   const closeTimer = useRef<number | undefined>(undefined)
+  const [sort, setSort] = useState<SortState>(() => defaultInventorySort(detail.kind))
+
+  // A new drill-down arrives sorted by the figure ITS tile counts — see
+  // defaultInventorySort. Carrying the previous view's column across would
+  // answer a question the operator asked about a different table.
+  useEffect(() => {
+    setSort(defaultInventorySort(detail.kind))
+  }, [detail])
 
   useEffect(() => {
     let active = true
@@ -1458,31 +1553,66 @@ function InventoryDetail({
     if (closeTimer.current) window.clearTimeout(closeTimer.current)
   }
 
-  const shown = useMemo(() => {
+  /**
+   * WHAT the tile speaks for. Filtering only — the ORDER is the operator's now,
+   * and the two must not be confused: re-ranking by Total cost on the Spread
+   * drill-down must not drag an uncosted box into a total that excludes it.
+   */
+  const filtered = useMemo(() => {
     if (!rows) return []
     const withM = rows.map((p) => ({ p, m: productMetrics(p) }))
     switch (detail.kind) {
       // Inventory value counts every unit on hand, cost basis or not — which is
       // exactly what the tile above it counts.
       case 'value':
-        return withM.filter((x) => x.p.quantity > 0).sort((a, b) => b.m.invValue - a.m.invValue)
+        return withM.filter((x) => x.p.quantity > 0)
       case 'cost':
-        return withM.filter((x) => x.p.quantity > 0 && x.m.hasCost).sort((a, b) => b.m.totalCost - a.m.totalCost)
+        return withM.filter((x) => x.p.quantity > 0 && x.m.hasCost)
       // An uncosted box contributes nothing to the tile, so it is not listed
       // under it either — it is accounted for in the line above the table.
       case 'spread':
-        return withM
-          .filter((x) => x.p.quantity > 0 && x.m.hasCost && !x.m.outsideSpread)
-          .sort((a, b) => b.m.spread - a.m.spread)
+        return withM.filter((x) => x.p.quantity > 0 && x.m.hasCost && !x.m.outsideSpread)
       case 'cases':
-        return withM.filter((x) => x.p.unitType === 'case' && x.p.quantity > 0).sort((a, b) => b.p.quantity - a.p.quantity)
+        return withM.filter((x) => x.p.unitType === 'case' && x.p.quantity > 0)
       case 'skus':
-        return withM.sort((a, b) => a.p.name.localeCompare(b.p.name))
       case 'category':
       default:
-        return withM.sort((a, b) => b.p.quantity - a.p.quantity || a.p.name.localeCompare(b.p.name))
+        return withM
     }
   }, [rows, detail])
+
+  const shown = useMemo(() => sortInventoryRows(filtered, sort, sortRowOf), [filtered, sort])
+
+  const onSort = useCallback((key: string) => {
+    setSort((cur) => nextSortState(cur, key))
+  }, [])
+
+  /**
+   * ONE list, drawn twice.
+   *
+   * The desktop draws it as clickable column headers; the phone, where the
+   * table stacks into cards and the whole header row is hidden, draws it as a
+   * picker above the cards. Deriving both from this means a column can never
+   * become sortable on one and not the other.
+   */
+  const columns: { key: string; label: string; align: 'left' | 'center' | 'right' }[] = useMemo(
+    () => [
+      { key: 'product', label: 'Product', align: 'left' },
+      { key: 'structure', label: 'Structure', align: 'left' },
+      ...LOCATIONS.map((l) => ({
+        key: locationSortKey(l.id),
+        label: l.label,
+        align: 'center' as const
+      })),
+      { key: 'total', label: 'Total', align: 'center' },
+      { key: 'highBid', label: 'High bid', align: 'right' },
+      { key: 'invValue', label: 'Inv. value', align: 'right' },
+      { key: 'avgCost', label: 'Avg cost', align: 'right' },
+      { key: 'totalCost', label: 'Total cost', align: 'right' },
+      { key: 'spread', label: 'Spread', align: 'right' }
+    ],
+    []
+  )
 
   if (rows === null) return <CenterLoader />
 
@@ -1536,7 +1666,38 @@ function InventoryDetail({
       {shown.length === 0 ? (
         <EmptyState icon="Boxes" title="Nothing to show here yet" />
       ) : (
-        <div className="table-wrap">
+        <>
+          {/* The phone's version of the column headers. The stacked card layout
+              hides the whole header row (mobile.css section 3), so without this
+              the table could only be re-ranked on a desktop. Hidden above the
+              breakpoint, where the headers themselves do the job. */}
+          <div className="sort-bar">
+            <label className="sort-bar-label" htmlFor="inv-sort">
+              Sort by
+            </label>
+            <select
+              id="inv-sort"
+              className="input"
+              value={sort.key}
+              onChange={(e) => setSort({ key: e.target.value, dir: firstSortDir(e.target.value) })}
+            >
+              {columns.map((c) => (
+                <option key={c.key} value={c.key}>
+                  {c.label}
+                </option>
+              ))}
+            </select>
+            <Button
+              variant="ghost"
+              size="sm"
+              icon={sort.dir === 'asc' ? 'ChevronUp' : 'ChevronDown'}
+              onClick={() => setSort((s) => ({ ...s, dir: s.dir === 'asc' ? 'desc' : 'asc' }))}
+            >
+              {sort.dir === 'asc' ? 'Lowest first' : 'Highest first'}
+            </Button>
+          </div>
+
+          <div className="table-wrap">
           {/* The widest table in the app — product, structure, one column per
               location, then six money columns. On a phone it stacks into one
               card per product with each figure printed against its own header;
@@ -1545,19 +1706,16 @@ function InventoryDetail({
           <table className="data as-cards">
             <thead>
               <tr>
-                <th>Product</th>
-                <th>Structure</th>
-                {LOCATIONS.map((l) => (
-                  <th key={l.id} style={{ textAlign: 'center' }}>
-                    {l.label}
-                  </th>
+                {columns.map((c) => (
+                  <SortTh
+                    key={c.key}
+                    label={c.label}
+                    sortKey={c.key}
+                    align={c.align}
+                    sort={sort}
+                    onSort={onSort}
+                  />
                 ))}
-                <th style={{ textAlign: 'center' }}>Total</th>
-                <th style={{ textAlign: 'right' }}>High bid</th>
-                <th style={{ textAlign: 'right' }}>Inv. value</th>
-                <th style={{ textAlign: 'right' }}>Avg cost</th>
-                <th style={{ textAlign: 'right' }}>Total cost</th>
-                <th style={{ textAlign: 'right' }}>Spread</th>
               </tr>
             </thead>
             <tbody>
@@ -1633,7 +1791,8 @@ function InventoryDetail({
               </tr>
             </tfoot>
           </table>
-        </div>
+          </div>
+        </>
       )}
 
       {hover && (

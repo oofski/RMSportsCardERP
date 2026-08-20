@@ -311,6 +311,19 @@ ok(/\.shell\.nav-hidden \.sidebar\s*\{[^}]*display:\s*flex/.test(mobileCss),
 ok(/\.nav-toggle\s*\{[^}]*display:\s*none/.test(mobileCss),
   'with the toggle itself hidden, since there is nothing for it to do')
 
+console.log('\n=== N+1. a re-rankable table can still be re-ranked on a phone ===')
+// The stacked card layout hides the whole header row, and the sortable column
+// headings go with it. `.sort-bar` is the replacement. It is hidden on the
+// desktop and shown here — and if either half went missing the feature would be
+// invisible on one of the two, which is exactly the kind of thing nobody
+// notices until somebody asks why sorting does not work on their phone.
+ok(/\.sort-bar\s*\{[^}]*display:\s*none/.test(appCss),
+  'the desktop hides the picker, because it has the headings themselves')
+ok(/\.sort-bar\s*\{[^}]*display:\s*flex/.test(mobileCss),
+  'AND THE PHONE SHOWS IT, since the header row it replaces is display:none here')
+ok(/table\.as-cards\s*>\s*thead\s*\{[^}]*display:\s*none/.test(mobileCss),
+  'which is still true — the header row really is hidden at this width')
+
 console.log(`\n${pass} passed, ${fail} failed\n`)
   process.exit(fail === 0 ? 0 : 1)
 })()
