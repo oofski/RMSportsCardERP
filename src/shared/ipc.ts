@@ -63,6 +63,12 @@ export const IPC = {
   credClear: 'credentials:clear',
 
   // Inventory
+  // WHERE STOCK CAN SIT. RM and AM were the whole world until v79; a Roadshow
+  // shop that keeps product between events is our inventory somewhere else.
+  invLocationsList: 'inventory:locations:list',
+  invLocationSave: 'inventory:locations:save',
+  invLocationRetire: 'inventory:locations:retire',
+  invLocationPin: 'inventory:locations:pin',
   invProductsList: 'inventory:products:list',
   invCatalogSearch: 'inventory:catalog:search',
   invProductCreate: 'inventory:products:create',

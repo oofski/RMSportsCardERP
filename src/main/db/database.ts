@@ -14,6 +14,7 @@ import { dedupeProducts } from './dedupe'
 import { backfillLots, resyncProductAvgCosts } from './lots'
 import { backfillWorkLog } from './workLogStore'
 import { installSyncTriggers } from './syncTriggers'
+import { hydrateLocations } from './stockLocations'
 import { fingerprintOf } from './financeStreaming'
 
 let db: Database.Database | null = null
@@ -3849,6 +3850,76 @@ function migrate(database: Database.Database): void {
   )
   setMeta(database, 'schema_version', '78')
 
+  /**
+   * v79: stock can sit somewhere other than RM and AM.
+   *
+   * The app was built around two shelves, and everywhere else was a DROPSHIP by
+   * definition — units this business never held. That is wrong about a Roadshow
+   * shop, which keeps product between events: those boxes are ours, they are
+   * just not here. Under the old model selling one drew stock from nowhere,
+   * because the shop was not a place stock could be.
+   *
+   * ## RM and AM are the floor, not rows
+   *
+   * They are seeded here, but @shared/inventory holds them as BUILTIN_LOCATION_IDS
+   * and re-adds them whatever this table says. A blank destination has always
+   * resolved to RM, in migrations and defaults going back to v1; a database whose
+   * table was empty or unreadable must still behave exactly as this app always
+   * has rather than deciding RM is not a place.
+   *
+   * ## Retired, never deleted
+   *
+   * A place that stops being used keeps holding stock as far as the shelf test is
+   * concerned. Every sales order ever fulfilled from it was costed on the
+   * understanding that its units came off a shelf, and removing it from the set
+   * would silently reclassify all of them as dropships — changing the stock math
+   * of closed months underneath somebody.
+   */
+  database.exec(
+    `CREATE TABLE IF NOT EXISTS stock_locations (
+       id          TEXT PRIMARY KEY,
+       label       TEXT NOT NULL,
+       pinned      INTEGER NOT NULL DEFAULT 0,
+       retired     INTEGER NOT NULL DEFAULT 0,
+       position    INTEGER NOT NULL DEFAULT 0,
+       created_by  TEXT,
+       created_at  TEXT NOT NULL,
+       updated_at  TEXT NOT NULL
+     );
+     CREATE INDEX IF NOT EXISTS idx_stock_locations_active
+       ON stock_locations (retired, pinned, position);`
+  )
+  runOnce(database, 'stock_locations_seed_v1', () => {
+    const stamp = new Date().toISOString()
+    const insert = database.prepare(
+      `INSERT OR IGNORE INTO stock_locations
+         (id, label, pinned, retired, position, created_by, created_at, updated_at)
+       VALUES (?, ?, 0, 0, ?, NULL, ?, ?)`
+    )
+    insert.run('RM', 'RM', 0, stamp, stamp)
+    insert.run('AM', 'AM', 1, stamp, stamp)
+    /**
+     * Anywhere stock ALREADY SITS becomes a location.
+     *
+     * Not hypothetical: dropship routing has been writing arbitrary destination
+     * names since v67, and `addStock` never validated its location argument — so
+     * a mis-routed receipt could have opened a real inventory_stock row under a
+     * shop's name. Those rows have quantity and FIFO layers against them, and
+     * leaving them outside the registry would keep them invisible to every
+     * screen while still counting in valuation.
+     */
+    const found = database
+      .prepare(
+        `SELECT DISTINCT location AS id FROM inventory_stock
+          WHERE location IS NOT NULL AND TRIM(location) != ''`
+      )
+      .all() as Array<{ id: string }>
+    for (const row of found) {
+      insert.run(row.id, row.id, 100, stamp, stamp)
+    }
+  })
+  setMeta(database, 'schema_version', '79')
+
   // v41: re-derive every product's average cost from its remaining cost layers.
   //
   // The average used to be stored rounded to the cent, back when every total in
@@ -3879,6 +3950,19 @@ function migrate(database: Database.Database): void {
   // Re-applied on every launch rather than once: a new app version can add a
   // synced table, and these triggers are generated from the manifest.
   installSyncTriggers(database)
+
+  /**
+   * THE SHELF REGISTRY, filled before anything can ask.
+   *
+   * `destinationHoldsStock` decides whether a line draws inventory down, and it
+   * answers from the shared registry rather than from the database. Left
+   * unhydrated it holds only RM and AM — which is exactly the behaviour v79
+   * exists to end, and it would end silently: a sale from a Roadshow shop would
+   * read as a dropship and draw no stock at all.
+   *
+   * Last in the migration run, after the table exists and the seed has landed.
+   */
+  hydrateLocations(database)
 }
 
 /**

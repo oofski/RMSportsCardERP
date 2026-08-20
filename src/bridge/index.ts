@@ -232,6 +232,7 @@ import type {
 } from '@shared/orderHistory'
 import type { DealTicketRow } from '@shared/dealTickets'
 import type { NumberSeries, SeriesState } from '@shared/numbering'
+import type { StockLocation } from '@shared/inventory'
 import type { PnlDetail, PnlDrillRequest } from '@shared/pnlDrill'
 import type { BreakPnlSplit } from '@shared/breakPnl'
 
@@ -347,6 +348,20 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       clear: (): Promise<Result> => ipcRenderer.invoke(IPC.credClear)
     },
     inventory: {
+      /** Everywhere stock can sit, retired included. */
+      locations: (): Promise<StockLocation[]> => ipcRenderer.invoke(IPC.invLocationsList),
+      /** Add a place, or rename one — a rename moves its stock with it. */
+      saveLocation: (input: {
+        id?: string | null
+        label: string
+        pinned?: boolean
+      }): Promise<Result<StockLocation[]>> => ipcRenderer.invoke(IPC.invLocationSave, input),
+      /** Stop offering a place. It keeps holding the stock it already holds. */
+      retireLocation: (id: string, retired: boolean): Promise<Result<StockLocation[]>> =>
+        ipcRenderer.invoke(IPC.invLocationRetire, { id, retired }),
+      /** Keep a place near the top of every picker. */
+      pinLocation: (id: string, pinned: boolean): Promise<Result<StockLocation[]>> =>
+        ipcRenderer.invoke(IPC.invLocationPin, { id, pinned }),
       list: (): Promise<InventoryProduct[]> => ipcRenderer.invoke(IPC.invProductsList),
       search: (query: string): Promise<InventoryProduct[]> =>
         ipcRenderer.invoke(IPC.invCatalogSearch, query),

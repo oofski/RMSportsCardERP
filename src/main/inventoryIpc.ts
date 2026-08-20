@@ -8,6 +8,13 @@ import {
 import { ipcMain } from './ipcRegistry'
 import { writeFileSync } from 'node:fs'
 import { IPC } from '@shared/ipc'
+import type { StockLocation } from '@shared/inventory'
+import {
+  listStockLocations,
+  saveStockLocation,
+  setStockLocationPinned,
+  setStockLocationRetired
+} from './db/stockLocations'
 import type {
   ResetApplyResult,
   ResetField,
@@ -171,6 +178,42 @@ function validateReorderUrl(url: string | null | undefined): string | null {
 
 export function registerInventoryIpc(): void {
   // ---- Reads (module.inventory) -------------------------------------------
+  /**
+   * The places stock can sit.
+   *
+   * The LIST is readable by anyone who can see inventory — every picker in the
+   * app needs it, and it is a list of shop names. Changing the set is gated on
+   * `inventory.manage`, because adding a shelf changes what counts as a dropship
+   * and therefore what draws stock.
+   */
+  ipcMain.handle(IPC.invLocationsList, (): StockLocation[] =>
+    can('module.inventory') ? listStockLocations() : []
+  )
+
+  ipcMain.handle(
+    IPC.invLocationSave,
+    (_e, input: { id?: string | null; label: string; pinned?: boolean }): Result<StockLocation[]> => {
+      if (!can('inventory.manage')) return { ok: false, error: 'Not yours to change.' }
+      return saveStockLocation(input ?? { label: '' }, currentUser()?.id ?? null)
+    }
+  )
+
+  ipcMain.handle(
+    IPC.invLocationRetire,
+    (_e, input: { id: string; retired: boolean }): Result<StockLocation[]> => {
+      if (!can('inventory.manage')) return { ok: false, error: 'Not yours to change.' }
+      return setStockLocationRetired(String(input?.id ?? ''), !!input?.retired)
+    }
+  )
+
+  ipcMain.handle(
+    IPC.invLocationPin,
+    (_e, input: { id: string; pinned: boolean }): Result<StockLocation[]> => {
+      if (!can('inventory.manage')) return { ok: false, error: 'Not yours to change.' }
+      return setStockLocationPinned(String(input?.id ?? ''), !!input?.pinned)
+    }
+  )
+
   ipcMain.handle(IPC.invProductsList, (): InventoryProduct[] =>
     can('module.inventory') ? listProducts() : []
   )

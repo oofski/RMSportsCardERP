@@ -165,6 +165,15 @@ export const SYNCED_TABLES: SyncedTable[] = [
   { table: 'stream_schedule', key: ['id'], tier: 0 },
   { table: 'purchase_orders', key: ['id'], tier: 0 },
   { table: 'inventory_resets', key: ['id'], tier: 0 },
+  // WHERE STOCK CAN SIT. Tier 0 and it must travel: the shelf test reads this
+  // set, so a Roadshow shop added at the office and absent on the bench laptop
+  // would make the same sales order draw stock on one machine and read as a
+  // dropship on the other.
+  //
+  // The id is the NAME, so two people adding the same shop write the same row
+  // and last-write-wins compares it against a copy of itself — the same
+  // reasoning order_party_pins gives.
+  { table: 'stock_locations', key: ['id'], tier: 0 },
   // WHAT HAPPENED TO AN ORDER — who moved it, when, and from what to what.
   //
   // Tier 0 although every row names a purchase order or a sales order, for the
