@@ -1798,6 +1798,10 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       payUpFront: (id: string, payment: InvoicePaymentInput): Promise<Result<InvoiceDetail>> =>
         ipcRenderer.invoke(IPC.invoicePayUpFront, { id, payment }),
 
+      /** Say whether the money arrived. Does NOT move the order — see setInvoicePaid. */
+      setPaid: (id: string, paid: boolean): Promise<Result<InvoiceDetail>> =>
+        ipcRenderer.invoke(IPC.invoiceSetPaid, { id, paid }),
+
       /** Put an order on the packing list, or take it back off. */
       setReady: (id: string, ready: boolean): Promise<Result<InvoiceDetail>> =>
         ipcRenderer.invoke(IPC.invoiceSetReady, { id, ready }),

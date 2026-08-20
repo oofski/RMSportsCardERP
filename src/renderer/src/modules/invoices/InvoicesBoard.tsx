@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { Invoice, InvoiceCustomer, InvoiceDetail, InvoiceStatus } from '@shared/invoices'
-import { INVOICE_STAGES, canMoveInvoice, isDropshipSale, salesOrderKindOf } from '@shared/invoices'
+import {
+  INVOICE_STAGES,
+  canMoveInvoice,
+  isDropshipSale,
+  isInvoicePaid,
+  salesOrderKindOf
+} from '@shared/invoices'
 import {
   FULFILLMENT_STAGE_TONE,
   fulfillmentNextStepDetail,
@@ -8,6 +14,7 @@ import {
   fulfillmentTickShort
 } from '@shared/fulfillment'
 import { DimsModal } from './DimsModal'
+import { QuickConfirm } from './QuickConfirm'
 import { api } from '../../lib/api'
 import { LIVE, useLiveRefresh } from '../../lib/live'
 import { Button, CenterLoader, Modal } from '../../components/ui'
@@ -453,6 +460,20 @@ export function InvoicesBoard({
                           setBusy(null)
                         }
                       }}
+                      onSetPaid={async (next) => {
+                        if (busy) return
+                        setBusy(inv.id)
+                        try {
+                          const res = await api.invoices.setPaid(inv.id, next)
+                          if (!res.ok) {
+                            toast.error(res.error ?? 'Could not record that.')
+                            return
+                          }
+                          await load()
+                        } finally {
+                          setBusy(null)
+                        }
+                      }}
                       onFulfillmentChanged={load}
                       onRetryPush={async () => {
                         // BUSY, LIKE EVERY OTHER ACTION ON THIS CARD. This one
@@ -599,6 +620,7 @@ function InvoiceCard({
   onPayUpFront,
   onItemsInHand,
   onSendAnyway,
+  onSetPaid,
   onFulfillmentChanged
 }: {
   invoice: Invoice
@@ -617,14 +639,23 @@ function InvoiceCard({
   onItemsInHand: () => Promise<void>
   /** Move it straight to ready, ahead of the gates. */
   onSendAnyway: () => Promise<void>
+  /** Record, or withdraw, that the money arrived. Never moves the order. */
+  onSetPaid: (paid: boolean) => Promise<void>
   /** Reload after the dims editor writes. */
   onFulfillmentChanged: () => Promise<void>
 }): JSX.Element {
   const [measuring, setMeasuring] = useState(false)
+  const [asking, setAsking] = useState<'items' | 'send' | 'paid' | 'unpaid' | null>(null)
+  // What to call this order in a sentence. The number if it has one; a draft
+  // may not, and "Invoice null moves on" is worse than the vaguer phrase.
+  const label = invoice.invoiceNumber ? `Sales order ${invoice.invoiceNumber}` : 'This order'
+
+  // THE FACT, NOT THE COLUMN. An order sitting in Payment that nobody has been
+  // paid for is exactly the one that can be overdue, and reading the stage here
+  // made every one of them look settled the moment its card was dragged.
+  const paid = isInvoicePaid(invoice)
   const overdue =
-    invoice.status !== 'paid' &&
-    invoice.status !== 'void' &&
-    invoice.dueDate < new Date().toISOString().slice(0, 10)
+    !paid && invoice.status !== 'void' && invoice.dueDate < new Date().toISOString().slice(0, 10)
 
   // ALWAYS DELETABLE. This was gated on the invoice not yet being in
   // QuickBooks, which was right when saving and posting were separate steps and
@@ -633,7 +664,7 @@ function InvoiceCard({
   // disappeared. Delete now removes the remote copy first and only then the
   // local one — see the IPC handler for why that order is not interchangeable.
   const deletable = true
-  const settled = invoice.status === 'paid' || invoice.status === 'void'
+  const settled = paid || invoice.status === 'void'
   /**
    * THE SAME YELLOW THE BUY SIDE USES, and deliberately the same class names.
    *
@@ -733,7 +764,7 @@ function InvoiceCard({
             days: the money landed on the 12th and the sync that noticed ran on
             the 18th, and it is the 12th somebody repeats to a buyer. */}
         <span className="po-card-meta">
-          {invoice.status === 'paid'
+          {paid
             ? invoice.qboPaidAt
               ? `paid ${formatDay(invoice.qboPaidAt)}`
               : invoice.paidAt
@@ -760,6 +791,57 @@ function InvoiceCard({
         hasTracking={!!invoice.trackingNumber}
       />
 
+      {asking && (
+        <div onClick={(e) => e.stopPropagation()}>
+          <QuickConfirm
+            title={
+              asking === 'items'
+                ? 'Goods are in hand?'
+                : asking === 'send'
+                  ? 'Send it anyway?'
+                  : asking === 'paid'
+                    ? 'Mark it paid?'
+                    : 'Withdraw the payment?'
+            }
+            detail={
+              asking === 'items'
+                ? `${label} moves on to be weighed and measured.`
+                : asking === 'send'
+                  ? `${label} moves straight to ready to ship, ahead of the usual gates.`
+                  : asking === 'paid'
+                    ? `${label} is recorded as settled, dated today.`
+                    : `${label} goes back to unpaid. Nothing is refunded — this only changes what the board says.`
+            }
+            confirmLabel={
+              asking === 'items'
+                ? 'Yes, they are here'
+                : asking === 'send'
+                  ? 'Move it'
+                  : asking === 'paid'
+                    ? 'Mark paid'
+                    : 'Mark not paid'
+            }
+            confirmIcon={
+              asking === 'items'
+                ? 'Check'
+                : asking === 'send'
+                  ? 'ArrowRight'
+                  : asking === 'paid'
+                    ? 'DollarSign'
+                    : 'RotateCcw'
+            }
+            tone={asking === 'unpaid' ? 'danger' : 'primary'}
+            onConfirm={
+              asking === 'items'
+                ? onItemsInHand
+                : asking === 'send'
+                  ? onSendAnyway
+                  : () => onSetPaid(asking === 'paid')
+            }
+            onClose={() => setAsking(null)}
+          />
+        </div>
+      )}
       {measuring && (
         <div onClick={(e) => e.stopPropagation()}>
           <DimsModal
@@ -782,6 +864,25 @@ function InvoiceCard({
             
             Drawn only while the order is WAITING. A card that is ready, or one
             payment has not cleared, has nothing here to press. */}
+        {/* MARK IT PAID, IN THE COLUMN NAMED FOR IT.
+            
+            Only on Payment cards: the column is the settling-up step, and a tick
+            anywhere earlier would be recording money against an order nobody has
+            finished. QuickBooks wins where it speaks — an order Intuit says is
+            paid shows as paid and is not un-tickable here, because the books are
+            the record for money and this board is not. */}
+        {invoice.status === 'paid' && !invoice.qboPaidAt && (
+          <button
+            type="button"
+            className={`btn po-move ${paid ? 'inv-move-paid' : ''}`}
+            disabled={busy}
+            title={paid ? 'Withdraw the payment on this order' : 'Record that the money arrived'}
+            onClick={() => setAsking(paid ? 'unpaid' : 'paid')}
+          >
+            <Icon name={paid ? 'RotateCcw' : 'DollarSign'} size={14} />
+            {paid ? 'Mark not paid' : 'Mark paid'}
+          </button>
+        )}
         {fxTone && (
           <>
             <button
@@ -789,7 +890,7 @@ function InvoiceCard({
               className={`btn po-move inv-move-${fxTone}`}
               disabled={busy}
               title={fxWhy ?? undefined}
-              onClick={() => (fxStage === 'awaiting_items' ? void onItemsInHand() : setMeasuring(true))}
+              onClick={() => (fxStage === 'awaiting_items' ? setAsking('items') : setMeasuring(true))}
             >
               <Icon name={fxStage === 'awaiting_items' ? 'Check' : 'Ruler'} size={14} />
               {fulfillmentTickShort(fxStage as 'awaiting_items' | 'awaiting_dims')}
@@ -799,7 +900,7 @@ function InvoiceCard({
               className="btn po-move"
               disabled={busy}
               title="Move it straight to ready, ahead of the usual gates"
-              onClick={() => void onSendAnyway()}
+              onClick={() => setAsking('send')}
             >
               <Icon name="ArrowRight" size={14} />
               Send anyway

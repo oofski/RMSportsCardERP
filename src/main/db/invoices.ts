@@ -1666,6 +1666,47 @@ export function recordInvoicePayment(
 }
 
 /**
+ * Say whether the money has arrived.
+ *
+ * The other half of splitting the stage from the fact. Marking an order paid
+ * does NOT move it — it may already be sitting in Payment, and dragging it
+ * somewhere on a tick would be the app deciding what the board should look like
+ * on somebody's behalf.
+ *
+ * Refused on a void, which is owed nothing and owes nothing.
+ *
+ * QUICKBOOKS IS NOT OVERWRITTEN. `qbo_paid_at` is Intuit's own record of an
+ * applied payment and this never touches it — `isInvoicePaid` prefers it, so an
+ * order the books say is paid stays paid whatever is ticked here. Un-marking one
+ * of those is not a thing this app can do, and pretending otherwise would put a
+ * screen at odds with the ledger.
+ */
+export function setInvoicePaid(
+  id: string,
+  paid: boolean,
+  actorId: string | null
+): { invoice: InvoiceDetail | null; error?: string } {
+  const db = getDb()
+  const row = db.prepare(`SELECT status FROM invoices WHERE id = ?`).get(id) as
+    | { status: string }
+    | undefined
+  if (!row) return { invoice: null, error: 'That order is gone.' }
+  if (asStatus(row.status) === 'void') {
+    return { invoice: getInvoice(id), error: 'That order was voided.' }
+  }
+  const stamp = nowIso()
+  db.prepare(
+    `UPDATE invoices SET paid_at = ?, paid_by = ?, updated_at = ? WHERE id = ?`
+  ).run(paid ? stamp : null, paid ? actorId : null, stamp, id)
+  recordOrderEvent('so', id, 'paid', {
+    detail: paid ? 'Marked paid' : 'Marked not paid — the payment was withdrawn',
+    actorId,
+    db
+  })
+  return { invoice: getInvoice(id) }
+}
+
+/**
  * Release an order to the packing floor, or take it back off.
  *
  * Separate from payment because the two genuinely come apart: a trusted buyer on
@@ -2067,16 +2108,30 @@ export function setInvoiceStatus(
     const moved =
       db
         .prepare(
+          /**
+           * REACHING THE PAYMENT STAGE IS NOT BEING PAID.
+           *
+           * This used to stamp paid_at the moment an order landed in what was
+           * then called Paid, which made the stage and the money one fact. The
+           * column is Payment now — the settling-up step — and whether the
+           * money arrived is marked inside it (setInvoicePaid) or read from
+           * QuickBooks. See isInvoicePaid.
+           *
+           * The clearing arm STAYS, and only for a void: an order that has been
+           * cancelled has not been paid, whatever it said a moment ago. Moving
+           * BACKWARDS off Payment no longer wipes a real payment date either,
+           * which the old rule did — silently, on a drag.
+           */
           `UPDATE invoices
               SET status  = ?,
-                  paid_at = CASE WHEN ? = 'paid' THEN COALESCE(paid_at, ?) ELSE NULL END,
-                  paid_by = CASE WHEN ? = 'paid' THEN COALESCE(paid_by, ?) ELSE NULL END,
+                  paid_at = CASE WHEN ? = 'void' THEN NULL ELSE paid_at END,
+                  paid_by = CASE WHEN ? = 'void' THEN NULL ELSE paid_by END,
                   ready_to_ship_at = CASE WHEN ? = 'void' THEN NULL ELSE ready_to_ship_at END,
                   ready_to_ship_by = CASE WHEN ? = 'void' THEN NULL ELSE ready_to_ship_by END,
                   updated_at = ?
             WHERE id = ?`
         )
-        .run(status, status, stamp, status, actorId, status, status, stamp, id).changes > 0
+        .run(status, status, status, status, status, stamp, id).changes > 0
     // VOIDING UN-READIES IT. An order whose stock has just been handed back is
     // not waiting to be picked, and leaving it on the packing floor's list is
     // how somebody goes looking for boxes that are back on the shelf.

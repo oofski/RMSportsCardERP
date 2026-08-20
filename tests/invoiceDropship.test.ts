@@ -973,5 +973,88 @@ ok(
   'AND A VOID IS OFF THE BOARD EVEN WHEN IT WAS FORCED ONTO IT'
 )
 
+// ---------------------------------------------------------------------------
+console.log('\n=== N+1. reaching Payment is not being paid ===')
+// ---------------------------------------------------------------------------
+/**
+ * The last bucket used to be called Paid and moving a card into it stamped
+ * paid_at — one gesture doing two jobs, so the app had no way to say "this is at
+ * the settling-up step and nobody has paid". The column is Payment now and the
+ * money is its own fact, marked inside it or read from QuickBooks.
+ *
+ * The other half matters just as much: moving BACKWARDS used to wipe paid_at,
+ * silently, on a drag. A real payment date is not something a card position
+ * should be able to erase.
+ */
+const { isInvoicePaid } = require('../src/shared/invoices')
+
+const payIt = inv.saveInvoice(
+  {
+    customerName: 'Invented Buyer',
+    invoiceDate: '2026-04-20',
+    location: 'RM',
+    lines: [{ item: 'Dropship Hobby Box', productId: 'p_d', quantity: 1, rate: 500 }]
+  },
+  null
+)
+inv.setInvoiceStatus(payIt.id, 'paid', null)
+const atPayment = inv.getInvoice(payIt.id)
+ok(atPayment.status === 'paid', 'the order reaches the Payment stage')
+ok(
+  atPayment.paidAt === null,
+  'AND IS NOT PAID BY ARRIVING THERE — the column is a step, not a receipt',
+  String(atPayment.paidAt)
+)
+ok(!isInvoicePaid(atPayment), 'so it reads as unpaid')
+
+const marked = inv.setInvoicePaid(payIt.id, true, null)
+ok(!!marked.invoice?.paidAt, 'marking it paid stamps the date')
+ok(isInvoicePaid(inv.getInvoice(payIt.id)), 'and it reads as paid')
+ok(
+  inv.getInvoice(payIt.id).status === 'paid',
+  'WITHOUT MOVING IT — a tick is not the app deciding where the card should sit'
+)
+
+// Backwards off Payment must not erase a real payment date.
+inv.setInvoiceStatus(payIt.id, 'sent', null)
+ok(
+  isInvoicePaid(inv.getInvoice(payIt.id)),
+  'MOVING IT BACK DOES NOT WIPE THE PAYMENT — a drag must not erase a date somebody recorded'
+)
+
+// Un-marking is available and says what it is.
+inv.setInvoicePaid(payIt.id, false, null)
+ok(!isInvoicePaid(inv.getInvoice(payIt.id)), 'and it can be withdrawn')
+const paidEvents = db
+  .prepare(`SELECT detail FROM order_events WHERE order_kind = 'so' AND order_id = ?`)
+  .all(payIt.id) as Array<{ detail: string }>
+ok(
+  paidEvents.some((e) => /Marked paid/i.test(e.detail ?? '')) &&
+    paidEvents.some((e) => /not paid/i.test(e.detail ?? '')),
+  'both are on the record',
+  paidEvents.map((e) => e.detail).join(' | ')
+)
+
+// A void owes nothing and is owed nothing.
+const voided = inv.saveInvoice(
+  {
+    customerName: 'Invented Buyer',
+    invoiceDate: '2026-04-21',
+    location: 'RM',
+    lines: [{ item: 'Dropship Hobby Box', productId: 'p_d', quantity: 1, rate: 100 }]
+  },
+  null
+)
+inv.setInvoicePaid(voided.id, true, null)
+inv.setInvoiceStatus(voided.id, 'void', null)
+ok(
+  !isInvoicePaid(inv.getInvoice(voided.id)),
+  'VOIDING CLEARS THE PAYMENT — an order that was cancelled has not been paid'
+)
+ok(
+  inv.setInvoicePaid(voided.id, true, null).error !== undefined,
+  'and a void refuses to be marked paid'
+)
+
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail > 0) process.exit(1)

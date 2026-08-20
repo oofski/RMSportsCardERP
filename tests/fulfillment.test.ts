@@ -87,6 +87,8 @@ const order = (over: Record<string, unknown> = {}): any => ({
   drawnUnits: 4,
   itemsInHandAt: null,
   forceReadyAt: null,
+  paidAt: null,
+  qboPaidAt: null,
   ...DIMS,
   ...over
 })
@@ -96,33 +98,71 @@ console.log('\n=== 1. the payment gate ===')
 // ---------------------------------------------------------------------------
 
 ok(
-  paymentClearsFulfillment({ status: 'draft', paymentTiming: 'delivery' }),
+  paymentClearsFulfillment({ status: 'draft', paymentTiming: 'delivery', paidAt: null }),
   'DELIVERY TERMS ARE ADMITTED UNPAID — the buyer pays when it lands, so waiting for the money first waits for something that cannot happen'
 )
 ok(
-  paymentClearsFulfillment({ status: 'paid', paymentTiming: 'delivery' }),
+  paymentClearsFulfillment({
+    status: 'paid',
+    paymentTiming: 'delivery',
+    paidAt: '2026-08-20T00:00:00.000Z'
+  }),
   'and still admitted once they have paid'
 )
 ok(
-  !paymentClearsFulfillment({ status: 'sent', paymentTiming: 'front' }),
+  !paymentClearsFulfillment({ status: 'sent', paymentTiming: 'front', paidAt: null }),
   'UP-FRONT TERMS WAIT for the money'
 )
 ok(
-  paymentClearsFulfillment({ status: 'paid', paymentTiming: 'front' }),
+  paymentClearsFulfillment({
+    status: 'sent',
+    paymentTiming: 'front',
+    paidAt: '2026-08-20T00:00:00.000Z'
+  }),
   'and are admitted the moment it arrives'
 )
+/**
+ * THE FACT, NOT THE COLUMN.
+ *
+ * The last bucket is called Payment now — the settling-up step — and reaching
+ * it is not being paid. A gate that read the stage would open the packing floor
+ * for any order somebody dragged into that column, which is precisely the drag
+ * that means "chase this one for the money".
+ */
 ok(
-  !paymentClearsFulfillment({ status: 'sent', paymentTiming: null }),
+  !paymentClearsFulfillment({ status: 'paid', paymentTiming: 'front', paidAt: null }),
+  'AN ORDER SITTING IN PAYMENT UNPAID DOES NOT CLEAR THE GATE — the column is a step, not a receipt'
+)
+ok(
+  paymentClearsFulfillment({
+    status: 'paid',
+    paymentTiming: 'front',
+    paidAt: null,
+    qboPaidAt: '2026-08-20T00:00:00.000Z'
+  }),
+  'while QUICKBOOKS SAYING SO DOES — the books are the record for money, not this board'
+)
+ok(
+  !paymentClearsFulfillment({
+    status: 'paid',
+    paymentTiming: 'front',
+    paidAt: '2026-08-20T00:00:00.000Z',
+    qboVoided: true
+  }),
+  'and a voided QuickBooks copy un-pays it'
+)
+ok(
+  !paymentClearsFulfillment({ status: 'sent', paymentTiming: null, paidAt: null }),
   'AN ORDER WITH NO TERMS SAID BEHAVES AS UP-FRONT — the other reading ships goods against a term nobody chose'
 )
 ok(fulfillmentStageOf(order({ status: 'void' })) === null, 'a void is never on the board')
 ok(
-  fulfillmentStageOf(order({ paymentTiming: 'front', status: 'sent' })) === null,
+  fulfillmentStageOf(order({ paymentTiming: 'front', status: 'sent', paidAt: null })) === null,
   'and neither is an unpaid up-front order'
 )
 ok(
   /has not paid yet/.test(
-    fulfillmentBlockedReason(order({ paymentTiming: 'front', status: 'sent' })) ?? ''
+    fulfillmentBlockedReason(order({ paymentTiming: 'front', status: 'sent', paidAt: null })) ?? ''
   ),
   'which the board can say in words, because "where is my order" has no answer on a list that omits it'
 )
@@ -474,6 +514,42 @@ ok(
 ok(
   /\.fx-lane \{[^}]*border-left-width/.test(css),
   'and applied as a border rather than a background, so the dropship tint survives underneath'
+)
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 11. the sales order buckets ===')
+// ---------------------------------------------------------------------------
+/**
+ * The owner's words: "we can add a bucket which is draft in QuickBooks and then
+ * it should be ready to ship and then payment and then in the payment section
+ * we can mark if a sales order has been paid or not yet".
+ *
+ * The stage VALUES are untouched — nothing stored moves and nothing re-syncs —
+ * and what the last two MEAN has narrowed. `paid` is the payment step; whether
+ * money arrived is its own fact.
+ */
+const { INVOICE_STAGES, isInvoicePaid } = require('../src/shared/invoices')
+ok(
+  INVOICE_STAGES.map((s: any) => s.label).join(' | ') ===
+    'Draft | In QuickBooks | Ready to ship | Payment',
+  'the board reads Draft, In QuickBooks, Ready to ship, Payment',
+  INVOICE_STAGES.map((s: any) => s.label).join(' | ')
+)
+ok(
+  INVOICE_STAGES.map((s: any) => s.id).join(' | ') === 'draft | created | sent | paid',
+  'ON THE SAME STORED VALUES — a relabel, not a migration, so nothing already written moves',
+  INVOICE_STAGES.map((s: any) => s.id).join(' | ')
+)
+
+ok(!isInvoicePaid({ paidAt: null }), 'an order nobody has marked is not paid')
+ok(isInvoicePaid({ paidAt: '2026-08-20T00:00:00.000Z' }), 'a tick on the board makes it paid')
+ok(
+  isInvoicePaid({ paidAt: null, qboPaidAt: '2026-08-20T00:00:00.000Z' }),
+  'AND SO DOES QUICKBOOKS ON ITS OWN — an order settled over there needs no tick here'
+)
+ok(
+  !isInvoicePaid({ paidAt: '2026-08-20T00:00:00.000Z', qboVoided: true }),
+  'a voided QuickBooks copy un-pays it, whatever the board said'
 )
 
 console.log(`\n${pass} passed, ${fail} failed`)

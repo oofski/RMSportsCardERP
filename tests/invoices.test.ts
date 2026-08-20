@@ -545,20 +545,43 @@ const cash = repo.saveInvoice(
   { customerName: 'Ana Ruiz', invoiceDate: '2026-03-01', lines: [{ item: 'Design', quantity: 1, rate: 250 }] },
   'emp_owner'
 )
+/**
+ * THE STAGE AND THE MONEY CAME APART.
+ *
+ * This block used to assert that moving an order into what was then called Paid
+ * stamped paid_at, and that moving it back wiped it — one gesture doing two
+ * jobs. The owner asked for the last bucket to be PAYMENT, the settling-up step,
+ * with paid-or-not marked inside it, so reaching it no longer claims the money
+ * arrived and leaving it no longer erases a date somebody recorded.
+ */
 ok(cash.paidAt === null, 'a new invoice is not paid')
 repo.setInvoiceStatus(cash.id, 'paid', 'emp_owner')
+const atPayment = repo.getInvoice(cash.id)
+ok(atPayment.status === 'paid', 'it reaches the Payment stage')
+ok(
+  atPayment.paidAt === null,
+  'AND ARRIVING THERE DOES NOT CLAIM THE MONEY — the column is a step, not a receipt',
+  String(atPayment.paidAt)
+)
+
+repo.setInvoicePaid(cash.id, true, 'emp_owner')
 const paid = repo.getInvoice(cash.id)
-ok(paid.status === 'paid', 'ticking it records paid')
-ok(typeof paid.paidAt === 'string' && paid.paidAt.length > 0, 'and stamps when', String(paid.paidAt))
+ok(typeof paid.paidAt === 'string' && paid.paidAt.length > 0, 'marking it stamps when', String(paid.paidAt))
 ok(paid.paidBy === 'emp_owner', 'and who')
 
-// THE DATE MUST NOT OUTLIVE THE CLAIM. A stale "paid 3 March" on an invoice no
-// longer marked paid is the kind of thing somebody reads out to a buyer.
+// A DRAG MUST NOT ERASE A DATE SOMEBODY RECORDED. The old rule wiped paid_at on
+// any move off that column, silently — including a correction that had nothing
+// to do with the money.
 repo.setInvoiceStatus(cash.id, 'sent', 'emp_owner')
+const movedBack = repo.getInvoice(cash.id)
+ok(movedBack.status === 'sent', 'moving it back works')
+ok(movedBack.paidAt === paid.paidAt, 'AND THE PAYMENT SURVIVES THE MOVE', String(movedBack.paidAt))
+
+// Withdrawing it is a decision, taken on purpose.
+repo.setInvoicePaid(cash.id, false, 'emp_owner')
 const unpaid = repo.getInvoice(cash.id)
-ok(unpaid.status === 'sent', 'moving it off paid works')
-ok(unpaid.paidAt === null, 'and clears the paid date', String(unpaid.paidAt))
-ok(unpaid.paidBy === null, 'and who ticked it')
+ok(unpaid.paidAt === null, 'and it clears when somebody says so', String(unpaid.paidAt))
+ok(unpaid.paidBy === null, 'along with who ticked it')
 
 // Ticking twice keeps the FIRST date — the money arrived when it arrived.
 repo.setInvoiceStatus(cash.id, 'paid', 'emp_owner')

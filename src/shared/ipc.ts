@@ -263,6 +263,8 @@ export const IPC = {
   // the precedent.
   invoicePayUpFront: 'invoices:pay-up-front',
   invoiceSetReady: 'invoices:set-ready',
+  // Whether the money arrived — separate from the stage. See isInvoicePaid.
+  invoiceSetPaid: 'invoices:set-paid',
   invoicesAwaitingShipment: 'invoices:awaiting-shipment',
   // The fulfilment board — one read for all three columns, because the column
   // an order belongs in is derived. See @shared/fulfillment.

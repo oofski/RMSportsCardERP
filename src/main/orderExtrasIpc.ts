@@ -34,6 +34,7 @@ import {
   setInvoiceDims,
   setInvoiceForceReady,
   setInvoiceItemsInHand,
+  setInvoicePaid,
   linkDropshipPair,
   recordInvoicePayment,
   setInvoiceReadyToShip
@@ -595,6 +596,21 @@ export function registerOrderExtrasIpc(): void {
       try {
         const actor = requireInvoicing()
         const res = setInvoiceReadyToShip(str(payload?.id), payload?.ready !== false, actor.id)
+        if (res.error) return { ok: false, error: res.error }
+        if (!res.invoice) return { ok: false, error: 'That order is gone.' }
+        return { ok: true, data: res.invoice }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  ipcMain.handle(
+    IPC.invoiceSetPaid,
+    (_e, payload: { id?: unknown; paid?: unknown }): Result<InvoiceDetail> => {
+      try {
+        const actor = requireInvoicing()
+        const res = setInvoicePaid(str(payload?.id), payload?.paid !== false, actor.id)
         if (res.error) return { ok: false, error: res.error }
         if (!res.invoice) return { ok: false, error: 'That order is gone.' }
         return { ok: true, data: res.invoice }

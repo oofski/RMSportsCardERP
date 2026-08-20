@@ -302,12 +302,57 @@ export interface InvoiceLine {
 export type InvoiceStatus = 'draft' | 'created' | 'sent' | 'paid' | 'void'
 
 /** The board's columns, left to right — the order the work moves in. */
+/**
+ * The board's columns, left to right — the order the work moves in.
+ *
+ * ## The last two changed what they mean
+ *
+ * They were "Sent" and "Paid", and the second of those was doing two jobs: it
+ * was a STAGE on the pipeline and it was the only place the app recorded that
+ * money had arrived. The owner asked for the pipeline to read
+ * Draft → In QuickBooks → Ready to ship → Payment, with paid-or-not marked
+ * inside the last column — which is the same split the BUY side has had since
+ * `setPurchaseOrderPaid` was written: where an order is, and whether it has been
+ * settled, are two facts.
+ *
+ * So the stage values are unchanged — nothing stored moves, nothing re-syncs —
+ * and what they mean has narrowed. `paid` is now the PAYMENT stage, and whether
+ * the money is in is `isInvoicePaid`, read from `paidAt` and from what
+ * QuickBooks says. An order raised before this still reads as paid, because
+ * reaching that stage always stamped `paid_at`.
+ */
 export const INVOICE_STAGES: Array<{ id: InvoiceStatus; label: string; hint: string }> = [
   { id: 'draft', label: 'Draft', hint: 'Being built — not sent to anybody yet' },
   { id: 'created', label: 'In QuickBooks', hint: 'Posted, waiting to be sent' },
-  { id: 'sent', label: 'Sent', hint: 'With the buyer, waiting to be paid' },
-  { id: 'paid', label: 'Paid', hint: 'Money in' }
+  { id: 'sent', label: 'Ready to ship', hint: 'With the buyer, or on the bench being packed' },
+  { id: 'paid', label: 'Payment', hint: 'Settling up — mark it paid when the money lands' }
 ]
+
+/**
+ * Has the money actually arrived?
+ *
+ * SEPARATE FROM THE STAGE, and that separation is the point. Reaching the
+ * Payment column means an order is at the settling-up step; it does not mean
+ * anybody has been paid, and a board that conflated the two could only ever
+ * show one of them.
+ *
+ * QUICKBOOKS WINS WHERE IT SPEAKS. `qboPaidAt` is Intuit's own record that a
+ * payment was applied, and it is the answer whenever there is one — the books
+ * are the system of record for money, and a tick on this board is somebody's
+ * word. `paidAt` is that word, and it is what the rest of the time reads.
+ *
+ * Deliberately NOT derived from the balance: a partly-paid invoice has a
+ * balance and is not paid, and `invoicePaymentState` already models that
+ * properly for the progress bar. This is the yes-or-no the column needs.
+ */
+export function isInvoicePaid(invoice: {
+  paidAt: string | null
+  qboPaidAt?: string | null
+  qboVoided?: boolean | null
+}): boolean {
+  if (invoice.qboVoided) return false
+  return !!invoice.qboPaidAt || !!invoice.paidAt
+}
 
 /**
  * Which moves are legal.

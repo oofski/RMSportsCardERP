@@ -27,6 +27,7 @@
 
 import type { PaymentTiming } from './freight'
 import type { InvoiceStatus } from './invoices'
+import { isInvoicePaid } from './invoices'
 
 export type FulfillmentStage = 'awaiting_items' | 'awaiting_dims' | 'ready'
 
@@ -177,6 +178,11 @@ export function describeDims(dims: ShipDims): string | null {
 export interface FulfillmentFacts extends ShipDims {
   status: InvoiceStatus
   paymentTiming: PaymentTiming | null
+  /** When somebody said the money arrived. See isInvoicePaid. */
+  paidAt?: string | null
+  /** When Intuit says a payment was applied. Wins over the tick above. */
+  qboPaidAt?: string | null
+  qboVoided?: boolean | null
   /** Units on lines fulfilled from one of our own shelves. */
   stockUnits: number
   /** Units shipping direct from a supplier. */
@@ -213,9 +219,20 @@ export interface FulfillmentFacts extends ShipDims {
 export function paymentClearsFulfillment(facts: {
   status: InvoiceStatus
   paymentTiming: PaymentTiming | null
+  paidAt?: string | null
+  qboPaidAt?: string | null
+  qboVoided?: boolean | null
 }): boolean {
   if (facts.paymentTiming === 'delivery') return true
-  return facts.status === 'paid'
+  // THE FACT, NOT THE STAGE. Reaching the Payment column means an order is at
+  // the settling-up step, which is not the same as the money being in — so this
+  // reads what isInvoicePaid reads, and an order dragged into Payment unpaid
+  // does not open the packing gate on the strength of where its card sits.
+  return isInvoicePaid({
+    paidAt: facts.paidAt ?? null,
+    qboPaidAt: facts.qboPaidAt ?? null,
+    qboVoided: facts.qboVoided ?? null
+  })
 }
 
 /**

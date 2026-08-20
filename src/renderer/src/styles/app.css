@@ -26243,3 +26243,21 @@ button.sor-team:focus-visible {
 .num-reset .btn {
   flex: 0 0 auto;
 }
+
+/* One line in the middle of the screen, for an action that happens in one
+   press. See QuickConfirm — the point is seeing yourself do it, not friction,
+   so it is deliberately the smallest dialog in the app. */
+.qc-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--text);
+}
+.qc-line svg {
+  flex: 0 0 auto;
+  margin-top: 3px;
+  color: var(--accent);
+}
