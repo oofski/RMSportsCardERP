@@ -552,5 +552,42 @@ ok(validateMerge(rA, [rA, rB]) === null, 'two is')
 ok(validateMerge(rB, [rB, rA]) !== null, 'an absorbed ticket cannot be the one others join')
 ok(validateMerge(undefined, [rA, rB]) !== null, 'and something has to be the target')
 
+// ---------------------------------------------------------------------------
+console.log('\n=== 14. a dropship begun from the SELL side ===')
+// ---------------------------------------------------------------------------
+/**
+ * AND THE SAME WHEN THE SALE COMES FIRST.
+ *
+ * Above, the purchase was raised and the sale written against it — the flow
+ * that has existed since dropships did. The sell side can now start it too
+ * (DropshipPurchaseStep), which reverses the order the two documents are
+ * created in and therefore the order their tickets are struck in. It is the
+ * same linkDropshipPair either way, and this is what says so: both keep the
+ * number they were struck with, and neither direction mints a third.
+ */
+const soFirst = makeSo('Sell First Cards')
+const poSecond = makePo('Sell First Supply')
+const sellFirstNum = ticketFor('so', soFirst)?.number
+const buySecondNum = ticketFor('po', poSecond)?.number
+const countBefore = ticketCount()
+ok(
+  !!sellFirstNum && !!buySecondNum && sellFirstNum < buySecondNum,
+  'the sale was struck BEFORE the purchase this time',
+  `${sellFirstNum} then ${buySecondNum}`
+)
+const linkedBack = invRepo.linkDropshipPair(poSecond, soFirst, ACTOR)
+ok(linkedBack.ok === true, 'they link from this direction too', linkedBack.error ?? '')
+ok(
+  ticketFor('so', soFirst)?.number === sellFirstNum &&
+    ticketFor('po', poSecond)?.number === buySecondNum,
+  'BOTH KEEP THE NUMBER THEY WERE STRUCK WITH — the register is a sequence, not a story about who was first'
+)
+ok(
+  ticketFor('so', soFirst)?.kind === 'dropship_sale' &&
+    ticketFor('po', poSecond)?.kind === 'dropship_purchase',
+  'and both are re-kinded as a dropship'
+)
+ok(ticketCount() === countBefore, 'with nothing new minted', String(ticketCount()))
+
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail > 0) process.exit(1)
