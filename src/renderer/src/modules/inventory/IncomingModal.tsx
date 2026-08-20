@@ -6,6 +6,7 @@ import { formatUnitCount } from '../../lib/productUnits'
 import { useToast } from '../../components/Toast'
 import { Button, Field, Input, Modal } from '../../components/ui'
 import { structureLabel } from './helpers'
+import { CatalogEmpty } from './CatalogEmpty'
 
 /**
  * Log an expected shipment of stock. Pick a catalog product, choose where it's
@@ -193,7 +194,9 @@ function CatalogTypeahead({ onSelect }: { onSelect: (p: InventoryProduct) => voi
           {loading && results.length === 0 ? (
             <div className="ta-empty">Searching…</div>
           ) : results.length === 0 ? (
-            <div className="ta-empty">No match in the catalog.</div>
+            // Not in the catalog yet — add it here rather than closing this to
+            // go and do it in the Catalog tab. See CatalogEmpty.
+            <CatalogEmpty query={query} onCreated={onSelect} />
           ) : (
             results.map((p) => (
               <button type="button" key={p.id} className="ta-item" onClick={() => onSelect(p)}>

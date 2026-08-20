@@ -6,8 +6,18 @@
  * were in the catalog."
  *
  * Most of this is a component, and this repository has no DOM to render one in.
- * What IS worth pinning are the two facts that live in two files at once, where
- * changing one and not the other produces something that looks fine and is not:
+ * What IS worth pinning are the facts that live in more than one file at once,
+ * where changing one and not the others produces something that looks fine and
+ * is not:
+ *
+ *   0. ALL THREE CATALOG SEARCHES OFFER IT, AND ALL THREE OFFER THE SAME ONE.
+ *      There are three — sales and purchase orders, logging an incoming
+ *      shipment, and adding an item to a stream — and they are separate
+ *      components because each reads differently and describes a result
+ *      differently. Pasting the escape hatch into all three would be a third
+ *      thing to keep in step, and AddItemForm's own header already warns what
+ *      that costs. So the dead end is one component, and this checks nobody has
+ *      quietly grown a second copy of it.
  *
  *   1. THE BUTTON AND THE HANDLER MUST AGREE ON THE PERMISSION. The catalog
  *      SEARCH runs on `module.invoicing`, deliberately, so somebody who raises
@@ -46,8 +56,20 @@ const ok = (c: boolean, n: string, e = ''): void => {
   }
 }
 
-const typeahead = read('src/renderer/src/modules/invoicing/POCatalogTypeahead.tsx')
+const empty = read('src/renderer/src/modules/inventory/CatalogEmpty.tsx')
 const inventoryIpc = read('src/main/inventoryIpc.ts')
+
+/**
+ * Every catalog search in the app. They are separate components because each
+ * reads differently and describes a result differently — but the DEAD END has
+ * to be the same one, or the button drifts out of step with the permission it
+ * is gated on in whichever copy nobody remembered to update.
+ */
+const SEARCHES: Array<[string, string]> = [
+  ['sales and purchase orders', 'src/renderer/src/modules/invoicing/POCatalogTypeahead.tsx'],
+  ['logging an incoming shipment', 'src/renderer/src/modules/inventory/IncomingModal.tsx'],
+  ['adding an item to a stream', 'src/renderer/src/modules/streaming/AddItemForm.tsx']
+]
 const productForm = read('src/renderer/src/modules/inventory/ProductFormModal.tsx')
 const ui = read('src/renderer/src/components/ui.tsx')
 
@@ -56,21 +78,29 @@ console.log('\n=== 1. the way out of the dead end exists ===')
 // ---------------------------------------------------------------------------
 
 ok(
-  /No match in the catalog/.test(typeahead),
+  /No match in the catalog/.test(empty),
   'the empty state is still the one the operator sees'
 )
 ok(
-  /ProductFormModal/.test(typeahead),
+  /ProductFormModal/.test(empty),
   'AND IT OPENS THE CATALOG’S OWN FORM — "like we would if we were in the catalog", not a second one to keep in step'
 )
 ok(
-  /presetName=\{creating\}/.test(typeahead),
+  /presetName=\{creating\}/.test(empty),
   'prefilled with what was already typed, so nobody types the name twice'
 )
-ok(
-  /onSelect\(p\)/.test(typeahead),
-  'and the new product goes straight onto the line'
-)
+ok(/onCreated\(p\)/.test(empty), 'and hands the new product back to whoever asked')
+
+// EVERY search offers it, and every one of them offers the SAME one.
+for (const [where, file] of SEARCHES) {
+  const src = read(file)
+  ok(/<CatalogEmpty/.test(src), `${where} offers the quick add`)
+  ok(
+    !/className="ta-empty">No match in the catalog/.test(src),
+    `${where} has no second copy of the dead end left behind`,
+    file
+  )
+}
 
 // ---------------------------------------------------------------------------
 console.log('\n=== 2. the button and the handler agree on who may press it ===')
@@ -83,12 +113,18 @@ const managePermission = /function requireManage[\s\S]{0,300}?'(inventory\.manag
 ok(!!managePermission, 'and requireManage is the inventory.manage gate', String(managePermission?.[1]))
 
 ok(
-  /can\('inventory\.manage'\)/.test(typeahead),
-  'THE BUTTON IS GATED ON THE SAME PERMISSION, not on the one the search runs under'
+  /can\('inventory\.manage'\)/.test(empty),
+  'THE BUTTON IS GATED ON THE SAME PERMISSION, not on the one a search runs under'
 )
 ok(
-  /canCreate && \(/.test(typeahead),
-  'and the gate actually wraps the button rather than being computed and ignored'
+  /if \(!can\('inventory\.manage'\)\) \{[\s\S]{0,140}?No match in the catalog[\s\S]{0,40}?\}/.test(empty),
+  'and somebody without it still gets the plain sentence, not a button that refuses'
+)
+// Gated in ONE place. Three copies of this check is three chances for one of
+// them to be the loose one.
+ok(
+  SEARCHES.every(([, f]) => !/inventory\.manage/.test(read(f))),
+  'no search re-implements the permission check for itself'
 )
 // The search's own gate is the looser one, and it must stay looser or the
 // feature this typeahead exists for — invoicing without the catalog — breaks.

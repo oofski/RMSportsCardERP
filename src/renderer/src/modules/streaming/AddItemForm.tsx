@@ -22,6 +22,7 @@ import { Icon } from '../../components/Icon'
 import { useToast } from '../../components/Toast'
 import { Button, Field, Input } from '../../components/ui'
 import { structureLabel } from '../inventory/helpers'
+import { CatalogEmpty } from '../inventory/CatalogEmpty'
 import { useLotPicker } from '../inventory/LotPicker'
 import { resultError, streaming } from './api'
 
@@ -1144,7 +1145,10 @@ function ProductTypeahead({ onSelect }: { onSelect: (p: InventoryProduct) => voi
           {loading && results.length === 0 ? (
             <div className="ta-empty">Searching…</div>
           ) : results.length === 0 ? (
-            <div className="ta-empty">No match in the catalog.</div>
+            // A box being broken on stream that nobody has catalogued yet. Added
+            // from here, because the alternative is leaving a live show to do
+            // it. See CatalogEmpty.
+            <CatalogEmpty query={query} onCreated={onSelect} />
           ) : (
             results.map((p) => {
               const u = productUnits(p)
