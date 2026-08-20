@@ -2635,6 +2635,35 @@ export function deletePurchaseOrder(
   }
 
   const run = db.transaction((): void => {
+    /**
+     * THE SALE ON THE OTHER END LETS GO FIRST.
+     *
+     * `invoices.source_po_id` has no foreign key behind it, so deleting this row
+     * used to leave the sale pointing at nothing: `salesOrderKindOf` reads that
+     * column, so the order kept a "Part drop" badge with no purchase order to
+     * open, and `linkDropshipPair` refuses any sale that already carries a
+     * pointer — so it could not even be paired with the replacement order. See
+     * the v80 migration, which repairs the pairs already broken this way.
+     *
+     * The event is recorded on the SALE, because the sale is the document that
+     * survives, and its own history is now the only place that says why the
+     * badge went away.
+     */
+    const linked = db
+      .prepare(`SELECT id FROM invoices WHERE source_po_id = ?`)
+      .all(id) as Array<{ id: string }>
+    for (const inv of linked) {
+      db.prepare(`UPDATE invoices SET source_po_id = NULL, updated_at = ? WHERE id = ?`).run(
+        nowIso(),
+        inv.id
+      )
+      recordOrderEvent('so', inv.id, 'link', {
+        detail: `Dropship link cleared — purchase order ${row.po_number} was deleted`,
+        actorId,
+        db
+      })
+    }
+
     // Drop the COGS row explicitly rather than relying on the cascade, so the
     // ledger is corrected the same way cancelling would correct it.
     voidPoCogs(db, id)

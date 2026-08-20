@@ -3920,6 +3920,37 @@ function migrate(database: Database.Database): void {
   })
   setMeta(database, 'schema_version', '79')
 
+  /**
+   * v80: a dropship link must not outlive the document at its other end.
+   *
+   * `deletePurchaseOrder` removed the order and left `invoices.source_po_id`
+   * pointing at it; `deleteInvoice` did the mirror image. Neither pointer has a
+   * foreign key behind it, so the row simply survived its target.
+   *
+   * It is not cosmetic. `salesOrderKindOf` reads sourcePoId to decide the badge,
+   * so the sale reads "Part drop" for ever with no order to open; and
+   * linkDropshipPair refuses to link anything that already carries a pointer, so
+   * the sale could never be paired with the PO that replaced the deleted one.
+   * The way out was editing the database by hand.
+   *
+   * Both delete paths clear their counterpart now. This is the repair for
+   * databases that already ran the old ones — keyed on the target row being
+   * ABSENT, so a live pair is never touched.
+   */
+  runOnce(database, 'dropship_orphan_links_v80', () => {
+    database.exec(
+      `UPDATE invoices
+          SET source_po_id = NULL
+        WHERE source_po_id IS NOT NULL
+          AND source_po_id NOT IN (SELECT id FROM purchase_orders);
+       UPDATE purchase_orders
+          SET linked_invoice_id = NULL
+        WHERE linked_invoice_id IS NOT NULL
+          AND linked_invoice_id NOT IN (SELECT id FROM invoices);`
+    )
+  })
+  setMeta(database, 'schema_version', '80')
+
   // v41: re-derive every product's average cost from its remaining cost layers.
   //
   // The average used to be stored rounded to the cent, back when every total in

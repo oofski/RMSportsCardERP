@@ -1894,6 +1894,29 @@ export function deleteInvoice(id: string): void {
   // reports what happened, so a surviving copy over there is stated rather than
   // discovered later.
   const run = db.transaction(() => {
+    /**
+     * THE PURCHASE ORDER ON THE OTHER END LETS GO FIRST.
+     *
+     * The mirror of what deletePurchaseOrder does, and broken the same way:
+     * `purchase_orders.linked_invoice_id` has no foreign key behind it, so this
+     * row's departure left the order claiming a sale that no longer exists —
+     * and `linkDropshipPair` refuses an order that already carries a pointer, so
+     * it could never be sold on to anybody else. See the v80 migration.
+     */
+    const linkedPos = db
+      .prepare(`SELECT id, po_number FROM purchase_orders WHERE linked_invoice_id = ?`)
+      .all(id) as Array<{ id: string; po_number: string }>
+    for (const po of linkedPos) {
+      db.prepare(
+        `UPDATE purchase_orders SET linked_invoice_id = NULL, updated_at = ? WHERE id = ?`
+      ).run(nowIso(), po.id)
+      recordOrderEvent('po', po.id, 'link', {
+        detail: 'Dropship link cleared — the sales order it was sold on to was deleted',
+        actorId: null,
+        db
+      })
+    }
+
     // The shelf first, and BEFORE the row goes: invoice_stock_moves cascades on
     // the invoice, so deleting the header first would take the receipt with it
     // and there would be nothing left to say which layers to restore. The boxes
