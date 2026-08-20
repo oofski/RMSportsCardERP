@@ -563,6 +563,14 @@ export interface Invoice {
   forceReadyAt: string | null
   forceReadyBy: string | null
   /**
+   * The deal ticket this document answers to — the GROUP's number when it has
+   * been folded in with others, not its own retired one. Null on anything
+   * raised before the register existed.
+   */
+  dealTicket?: string | null
+  /** Was this folded under another document's ticket? */
+  dealTicketMerged?: boolean
+  /**
    * May the buyer pay this invoice by CARD in QuickBooks?
    *
    * ## What it actually does

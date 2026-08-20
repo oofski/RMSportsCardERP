@@ -224,6 +224,47 @@ export function readTicketFor(
 }
 
 /**
+ * Which deal ticket this document answers to, and whether it is sharing.
+ *
+ * ## Read HERE rather than in the order's own SELECT, and that is the point
+ *
+ * It was a subquery on the list query for about ten minutes, which read
+ * beautifully and broke the one promise the register makes: that a broken
+ * register can never stop an order. `issueDealTicket` swallows everything for
+ * exactly that reason — but a SELECT that joins the table cannot swallow
+ * anything, so with `deal_tickets` missing, RAISING a purchase order started
+ * failing on the read-back. The suite caught it, which is why that test exists.
+ *
+ * So it is a separate, guarded read on the DETAIL path only. A register that is
+ * missing, mid-migration or unreadable costs a reference number on one screen,
+ * which is what it should cost.
+ *
+ * The number is the GROUP's when this document was folded into one. Its own is
+ * retired the moment it is merged, and printing that would send somebody
+ * looking for a ticket the register no longer lists on a line of its own.
+ */
+export function dealTicketRefFor(
+  db: Database.Database,
+  documentKind: 'po' | 'so',
+  documentId: string
+): { dealTicket: string | null; dealTicketMerged: boolean } {
+  try {
+    const row = db
+      .prepare(
+        `SELECT COALESCE(root.number, t.number) AS number,
+                CASE WHEN t.merged_into IS NULL THEN 0 ELSE 1 END AS merged
+           FROM deal_tickets t
+           LEFT JOIN deal_tickets root ON root.id = t.merged_into
+          WHERE t.document_kind = ? AND t.document_id = ?`
+      )
+      .get(documentKind, documentId) as { number: string | null; merged: number } | undefined
+    return { dealTicket: row?.number ?? null, dealTicketMerged: row?.merged === 1 }
+  } catch {
+    return { dealTicket: null, dealTicketMerged: false }
+  }
+}
+
+/**
  * Declare two documents to be the two halves of one dropship.
  *
  * The tickets are RE-LABELLED, never re-issued. Both numbers were struck when

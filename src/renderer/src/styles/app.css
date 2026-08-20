@@ -26150,3 +26150,42 @@ button.sor-team:focus-visible {
   flex: 0 0 auto;
   margin-top: 2px;
 }
+
+/* ---------------------------------------------------------------------------
+   THE DEAL TICKET, ON THE ORDER IT BELONGS TO
+
+   Quiet on purpose. It is a reference number somebody looks up when they need
+   it, not a status — and the receipts it sits on already carry a stage badge, a
+   payment badge and a dropship chip competing for the same glance.
+
+   The trailing "+" on the chip is the whole of the grouping story at a glance:
+   this document does not have this number to itself.
+   --------------------------------------------------------------------------- */
+.dt-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--text-2);
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: help;
+}
+.dt-line {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+.dt-line .mono {
+  font-weight: 700;
+  color: var(--text);
+}

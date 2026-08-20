@@ -36,6 +36,7 @@ import { applyInvoiceStock, invoiceStockLocation, releaseInvoiceStock } from './
 import { destinationHoldsStock } from '@shared/purchaseOrders'
 import { adoptLegacyFreight, deleteOrderExtras, recordOrderEvent } from './orderExtras'
 import { describeDims, hasDims } from '@shared/fulfillment'
+import { dealTicketRefFor } from './dealTickets'
 import { issueDealTicket, markDropshipPair } from './dealTickets'
 
 /**
@@ -697,7 +698,13 @@ export function getInvoice(id: string): InvoiceDetail | null {
     .prepare(`SELECT ${LINE_COLS} FROM invoice_lines WHERE invoice_id = ? ORDER BY position ASC`)
     .all(id) as LineRow[]
   const head = toInvoice(row)
-  return { ...head, lines: lines.map((l) => toLine(l, invoiceStockLocation(head.location))) }
+  // DETAIL PATH ONLY, and guarded — see dealTicketRefFor. The list query must
+  // not depend on the register, or a broken one stops orders being raised.
+  return {
+    ...head,
+    ...dealTicketRefFor(db, 'so', id),
+    lines: lines.map((l) => toLine(l, invoiceStockLocation(head.location)))
+  }
 }
 
 /** Several invoices with their lines, for the CSV export. */

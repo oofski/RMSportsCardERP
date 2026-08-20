@@ -420,6 +420,36 @@ try {
 }
 db.exec(`ALTER TABLE deal_tickets_hidden RENAME TO deal_tickets`)
 ok(!brokeTheBuy, 'a broken register did NOT stop a purchase order being raised')
+
+/**
+ * AND READING ONE STILL WORKS WITHOUT IT.
+ *
+ * This is the half that was missing, and it went missing for real: the ticket
+ * number was briefly a subquery on the order's own SELECT, which reads well and
+ * cannot swallow anything — so with the table renamed away, RAISING an order
+ * began failing on its read-back. `issueDealTicket` giving up quietly buys
+ * nothing if the query beside it throws.
+ *
+ * It is a separate guarded read on the detail path now (dealTicketRefFor), and
+ * this is what says so: a missing register costs a reference number on one
+ * screen, and nothing else.
+ */
+db.exec(`ALTER TABLE deal_tickets RENAME TO deal_tickets_hidden`)
+let readBroke = false
+let readBack: unknown = null
+try {
+  readBack = poRepo.getPurchaseOrder(po1)
+} catch {
+  readBroke = true
+}
+db.exec(`ALTER TABLE deal_tickets_hidden RENAME TO deal_tickets`)
+ok(!readBroke, 'A BROKEN REGISTER DOES NOT STOP AN ORDER BEING READ EITHER')
+ok(!!readBack, 'the order comes back whole')
+ok(
+  (readBack as { dealTicket: string | null } | null)?.dealTicket === null,
+  'with no ticket number, which is what a missing register should cost — one field on one screen',
+  String((readBack as { dealTicket: string | null } | null)?.dealTicket)
+)
 ok(
   !!poDespite &&
     db.prepare(`SELECT COUNT(*) AS n FROM purchase_orders WHERE id = ?`).get(poDespite).n === 1,
@@ -588,6 +618,71 @@ ok(
   'and both are re-kinded as a dropship'
 )
 ok(ticketCount() === countBefore, 'with nothing new minted', String(ticketCount()))
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 15. the order knows which deal it answers to ===')
+// ---------------------------------------------------------------------------
+/**
+ * The register could always group documents; the DOCUMENTS could not say so.
+ * Standing on a purchase order there was nothing to tell you it had been folded
+ * in with anything, and the only screen that knew was Finance.
+ *
+ * What matters is WHICH number an absorbed document reports. It must be the
+ * group's, not its own — its own is retired the moment it is merged, and
+ * printing it would send somebody looking for a ticket the register no longer
+ * lists on its own line.
+ */
+const poA = makePo('Ticket Visible Co')
+const soA = makeSo('Ticket Visible Buyer')
+const poTicket = ticketFor('po', poA)?.number
+const soTicket = ticketFor('so', soA)?.number
+
+ok(
+  poRepo.getPurchaseOrder(poA).dealTicket === poTicket,
+  'a purchase order reports its own ticket',
+  `${poRepo.getPurchaseOrder(poA).dealTicket} vs ${poTicket}`
+)
+ok(
+  invRepo.getInvoice(soA).dealTicket === soTicket,
+  'and so does a sales order',
+  `${invRepo.getInvoice(soA).dealTicket} vs ${soTicket}`
+)
+ok(
+  poRepo.getPurchaseOrder(poA).dealTicketMerged === false &&
+    invRepo.getInvoice(soA).dealTicketMerged === false,
+  'neither is part of a group yet'
+)
+
+// Fold the sale under the purchase's ticket — a PO and an SO in one deal, which
+// is the whole point of the feature.
+const joined = tickets.mergeDealTickets(
+  ticketFor('po', poA)!.id,
+  [ticketFor('po', poA)!.id, ticketFor('so', soA)!.id],
+  ACTOR
+)
+ok(joined.ok === true, 'a purchase order and a sales order combine', String(joined.error))
+ok(
+  invRepo.getInvoice(soA).dealTicket === poTicket,
+  'AND THE ABSORBED SALE NOW REPORTS THE GROUP’S NUMBER — not its own, which the register has retired',
+  String(invRepo.getInvoice(soA).dealTicket)
+)
+ok(
+  invRepo.getInvoice(soA).dealTicketMerged === true,
+  'and says it is sharing, so the screen can mark it'
+)
+ok(
+  poRepo.getPurchaseOrder(poA).dealTicket === poTicket &&
+    poRepo.getPurchaseOrder(poA).dealTicketMerged === false,
+  'while the one that KEPT the number is not marked as absorbed'
+)
+
+// Separating puts it back, or the chip would lie for ever after an undo.
+tickets.unmergeDealTickets([ticketFor('so', soA)!.id], ACTOR)
+ok(
+  invRepo.getInvoice(soA).dealTicket === soTicket &&
+    invRepo.getInvoice(soA).dealTicketMerged === false,
+  'and separating hands its own number back'
+)
 
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail > 0) process.exit(1)

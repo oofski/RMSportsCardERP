@@ -990,6 +990,14 @@ export interface PurchaseOrder {
    * ordinary purchase.
    */
   saleAwaitsItems?: boolean | null
+  /**
+   * The deal ticket this document answers to — the GROUP's number when it has
+   * been folded in with others, not its own retired one. Null on anything
+   * raised before the register existed.
+   */
+  dealTicket?: string | null
+  /** Was this folded under another document's ticket? */
+  dealTicketMerged?: boolean
   /** Σ(line qty × unit price), stored snapshot. */
   total: number
   /** Number of line items. */

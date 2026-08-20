@@ -978,6 +978,24 @@ function InvoiceReceipt({
 
   return (
     <div className="po-receipt">
+      {/* WHICH DEAL THIS BELONGS TO — the mirror of the same line on the
+          purchase receipt. The register can fold several documents under one
+          number, and until now that was only visible from Finance. The number
+          shown is the GROUP's when it has one, because that is the number
+          somebody writes on paperwork; printing its own retired one would send
+          them looking for a ticket the register no longer lists. */}
+      {invoice.dealTicket && (
+        <div className="dt-line">
+          <Icon name="Hash" size={13} />
+          <span className="mono">{invoice.dealTicket}</span>
+          <span>
+            {invoice.dealTicketMerged
+              ? 'Deal ticket — shared with other documents'
+              : 'Deal ticket'}
+          </span>
+        </div>
+      )}
+
       <div className="po-receipt-timeline">
         <TimeRow icon="ReceiptText" label="Invoiced" value={formatDay(invoice.invoiceDate)} />
         <TimeRow icon="CalendarClock" label="Due" value={formatDay(invoice.dueDate)} />

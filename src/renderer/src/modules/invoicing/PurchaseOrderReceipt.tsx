@@ -309,6 +309,25 @@ export function PurchaseOrderReceipt({
             <div className="po-rh-date">
               {formatDate(detail.createdAt)} · {shipsTo(detail.orderKind, destinations)}
             </div>
+            {/* WHICH DEAL THIS BELONGS TO. The register can fold several
+                documents under one number, and until now that was only visible
+                from Finance — standing on the order there was nothing to say it
+                had been grouped with anything. The number shown is the GROUP's
+                when it has one, because that is the number somebody writes on
+                paperwork. */}
+            {detail.dealTicket && (
+              <span
+                className="dt-chip mono"
+                title={
+                  detail.dealTicketMerged
+                    ? `Part of deal ticket ${detail.dealTicket}, together with other documents`
+                    : `Deal ticket ${detail.dealTicket}`
+                }
+              >
+                {detail.dealTicket}
+                {detail.dealTicketMerged ? ' +' : ''}
+              </span>
+            )}
           </div>
           <div className="po-rh-right">
             <span className={`badge po-badge po-badge-${meta.tone}`}>

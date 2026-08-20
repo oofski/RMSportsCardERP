@@ -29,7 +29,7 @@ import { getDb, getMeta, setMeta } from './database'
 import { addStock, adjustStock, reverseStockReceipt, stockQty } from './inventory'
 import { recordPoCogs, voidPoCogs } from './finance'
 import { adoptLegacyFreight, deleteOrderExtras, recordOrderEvent } from './orderExtras'
-import { issueDealTicket } from './dealTickets'
+import { dealTicketRefFor, issueDealTicket } from './dealTickets'
 import { newId, nowIso } from '../util'
 
 interface PoRow {
@@ -488,7 +488,9 @@ export function getPurchaseOrder(id: string): PurchaseOrderDetail | null {
   const lines = (db.prepare(LINE_SELECT).all(id) as PoLineRow[]).map((l) =>
     toLine(l, units.get(l.id) ?? [])
   )
-  return { ...toSummary(header), lines }
+  // Attached on the DETAIL path only, and behind a guard — see dealTicketRefFor
+  // for why it is not part of PO_SELECT.
+  return { ...toSummary(header), ...dealTicketRefFor(db, 'po', id), lines }
 }
 
 /**
