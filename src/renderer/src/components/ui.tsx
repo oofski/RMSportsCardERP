@@ -1,5 +1,5 @@
 import type { ButtonHTMLAttributes, ReactNode, SelectHTMLAttributes, InputHTMLAttributes, TextareaHTMLAttributes } from 'react'
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { Icon } from './Icon'
 import { roleLabel, type Role } from '@shared/permissions'
 import type { EmployeeStatus } from '@shared/types'
@@ -150,6 +150,22 @@ export function EmptyState({
 }
 
 // ---------- Modal ----------
+
+/**
+ * Which dialogs are open, innermost last.
+ *
+ * ESCAPE MUST CLOSE ONE THING. Every Modal listens on `window`, so with two of
+ * them open — the quick-add product form inside the New invoice modal is the
+ * first place this happens — one press ran both handlers: the little form shut
+ * AND the half-filled order it was opened from went with it. Nothing on screen
+ * suggested that would happen, and everything typed was gone.
+ *
+ * A module-level stack rather than a stopPropagation on the dialog: the
+ * listeners are on `window`, so DOM nesting cannot separate them, and the only
+ * question that matters is which dialog is on top.
+ */
+const openModals: symbol[] = []
+
 export function Modal({
   title,
   subtitle,
@@ -175,9 +191,20 @@ export function Modal({
    */
   className?: string
 }): JSX.Element {
+  const token = useRef<symbol>(Symbol('modal'))
+  useEffect(() => {
+    const me = token.current
+    openModals.push(me)
+    return () => {
+      const at = openModals.lastIndexOf(me)
+      if (at !== -1) openModals.splice(at, 1)
+    }
+  }, [])
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') onClose()
+      // Only the topmost dialog answers. See openModals.
+      if (e.key === 'Escape' && openModals[openModals.length - 1] === token.current) onClose()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)

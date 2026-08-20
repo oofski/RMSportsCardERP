@@ -18,6 +18,7 @@ function numOrNull(v: string): number | null {
 export function ProductFormModal({
   product,
   presetUpc,
+  presetName,
   onClose,
   onSaved
 }: {
@@ -25,15 +26,26 @@ export function ProductFormModal({
   /** Prefills the UPC when creating — used by the scan station's "not
    * recognised" escape hatch so the code you just scanned is already in. */
   presetUpc?: string | null
+  /** Prefills the name, for a search that found nothing and offered to create it. */
+  presetName?: string | null
   onClose: () => void
-  onSaved: () => void | Promise<void>
+  /**
+   * Handed the product that was just saved.
+   *
+   * The Catalog ignores it and simply reloads, which is why this took no
+   * argument for most of its life. A caller that opened this form to fill a gap
+   * — a sales order line whose product does not exist yet — needs the row
+   * itself, and refetching to go looking for it by name would be guessing at
+   * the answer the save already returned.
+   */
+  onSaved: (product: InventoryProduct) => void | Promise<void>
 }): JSX.Element {
   const toast = useToast()
   const isEdit = !!product
   const [form, setForm] = useState({
     sku: product?.sku ?? '',
     upc: product?.upc ?? presetUpc ?? '',
-    name: product?.name ?? '',
+    name: product?.name ?? presetName ?? '',
     category: product?.category ?? '',
     brand: product?.brand ?? '',
     setName: product?.setName ?? '',
@@ -92,12 +104,12 @@ export function ProductFormModal({
             openingQuantity: numOrNull(form.openingQuantity) ?? 0,
             openingLocation: form.openingLocation
           })
-      if (!res.ok) {
+      if (!res.ok || !res.data) {
         setError(res.error ?? 'Could not save the product.')
         return
       }
       toast.success(isEdit ? 'Product updated.' : `${form.name} added to the catalog.`)
-      await onSaved()
+      await onSaved(res.data)
     } finally {
       setBusy(false)
     }

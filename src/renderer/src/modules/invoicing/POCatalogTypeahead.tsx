@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import type { InventoryProduct } from '@shared/types'
 import { api } from '../../lib/api'
-import { Field, Input } from '../../components/ui'
+import { useSession } from '../../lib/session'
+import { Button, Field, Input } from '../../components/ui'
 import { structureLabel } from '../inventory/helpers'
+import { ProductFormModal } from '../inventory/ProductFormModal'
 
 /**
  * Debounced typeahead over the inventory catalog, cloned from the Inventory
@@ -32,10 +34,23 @@ export function POCatalogTypeahead({
   /** Pre-fill, so a row can open its search already asking for its own words. */
   initialQuery?: string
 }): JSX.Element {
+  const { can } = useSession()
   const [query, setQuery] = useState(initialQuery)
   const [results, setResults] = useState<InventoryProduct[]>([])
   const [loading, setLoading] = useState(false)
+  const [creating, setCreating] = useState<string | null>(null)
   const timer = useRef<number | null>(null)
+
+  /**
+   * OFFERED ONLY TO SOMEBODY WHO CAN ACTUALLY DO IT.
+   *
+   * Creating a product is gated on `inventory.manage` in the IPC handler, while
+   * this search deliberately runs on `module.invoicing` alone so a person who
+   * raises orders can find products without holding the catalog. Those are two
+   * different sets of people, and drawing the button for the difference between
+   * them would be a button that fills in a whole form and then refuses.
+   */
+  const canCreate = can('inventory.manage')
 
   useEffect(() => {
     if (query.trim().length < 2) {
@@ -68,7 +83,29 @@ export function POCatalogTypeahead({
           {loading && results.length === 0 ? (
             <div className="ta-empty">Searching…</div>
           ) : results.length === 0 ? (
-            <div className="ta-empty">No match in the catalog.</div>
+            /**
+             * The dead end, with a way out of it.
+             *
+             * A product that is not in the catalog used to end the line here:
+             * leave the order, open Inventory, add it, come back, and retype
+             * what you had already typed. The words are already in the box, so
+             * the form opens with the name filled in and the new product lands
+             * on the line the moment it saves — which is what somebody was
+             * going to do anyway, minus the round trip.
+             */
+            <div className="ta-empty ta-empty-action">
+              <span>No match in the catalog.</span>
+              {canCreate && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  icon="PackagePlus"
+                  onClick={() => setCreating(query.trim())}
+                >
+                  Add “{query.trim()}”
+                </Button>
+              )}
+            </div>
           ) : (
             results.map((p) => (
               <button
@@ -89,6 +126,22 @@ export function POCatalogTypeahead({
             ))
           )}
         </div>
+      )}
+      {creating !== null && (
+        <ProductFormModal
+          product={null}
+          presetName={creating}
+          onClose={() => setCreating(null)}
+          onSaved={(p) => {
+            // Straight onto the line. Going back to the search results would
+            // mean re-running the query that just failed and trusting it to
+            // find the row we are already holding.
+            setCreating(null)
+            onSelect(p)
+            setQuery('')
+            setResults([])
+          }}
+        />
       )}
     </div>
   )

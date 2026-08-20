@@ -3221,6 +3221,23 @@ table.data tfoot .data-total td {
   color: var(--text-3);
   font-size: 13px;
 }
+/* "No match" plus the way out of it. Stacked rather than side by side because
+   the button carries the words that were typed, and a long product name beside
+   a sentence would wrap into a shape that reads as two unrelated things. */
+.ta-empty-action {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+/* The typed name can be a whole product title. It wraps inside the button
+   rather than stretching the menu, which would push the search box around
+   while somebody is still typing in it. */
+.ta-empty-action .btn {
+  max-width: 100%;
+  white-space: normal;
+  text-align: left;
+}
 
 /* Selected product summary + location pills */
 .selected-product {
