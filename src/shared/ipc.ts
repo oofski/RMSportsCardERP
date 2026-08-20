@@ -157,6 +157,10 @@ export const IPC = {
   // nothing; the write only ever moves a series forward. See @shared/numbering.
   numberingRead: 'numbering:read',
   numberingSetStart: 'numbering:set-start',
+  // THE HARD RESET. Every order and every deal ticket, gone — see
+  // @shared/orderReset for what it deliberately leaves alone.
+  orderResetPreview: 'orders:reset-preview',
+  orderResetApply: 'orders:reset-apply',
   invoiceSave: 'invoices:save',
   invoiceDelete: 'invoices:delete',
   invoiceSetStatus: 'invoices:set-status',

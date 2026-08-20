@@ -28,6 +28,8 @@ import {
   nextStageFromQbo
 } from '@shared/invoices'
 import { currentUser } from './services/auth'
+import type { OrderResetInput, OrderResetPreview, OrderResetResult } from '@shared/orderReset'
+import { applyOrderReset, previewOrderReset } from './db/orderReset'
 import type { NumberSeries, SeriesState } from '@shared/numbering'
 import { readNumbering, setSeriesStart } from './db/numbering'
 import {
@@ -374,6 +376,31 @@ export function registerInvoicesIpc(): void {
       } catch (err) {
         return { ok: false, error: err instanceof Error ? err.message : String(err) }
       }
+    }
+  )
+
+  /**
+   * WHAT A RESET WOULD TAKE. Read-only, and gated the same way the numbering
+   * screen it lives on is: a preview names every order this business has, which
+   * is not a list somebody without admin should be able to count.
+   */
+  ipcMain.handle(IPC.orderResetPreview, (): OrderResetPreview | null =>
+    currentUser()?.permissions.includes('admin.access') ? previewOrderReset() : null
+  )
+
+  /**
+   * DO IT. Admin only, and the renderer's typed phrase is NOT the control — it
+   * is a courtesy on the way to this line. A permission check that lives in a
+   * dialog is a permission check anybody can skip by calling the channel.
+   */
+  ipcMain.handle(
+    IPC.orderResetApply,
+    (_e, input: OrderResetInput): Result<OrderResetResult> => {
+      const actor = currentUser()
+      if (!actor?.permissions.includes('admin.access')) {
+        return { ok: false, error: 'Deleting every order is an admin job.' }
+      }
+      return applyOrderReset(input ?? {}, actor.id)
     }
   )
 

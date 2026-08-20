@@ -26189,3 +26189,57 @@ button.sor-team:focus-visible {
   font-weight: 700;
   color: var(--text);
 }
+
+/* ---------------------------------------------------------------------------
+   START THE PAPERWORK OVER — the hard reset, on the Numbering screen
+
+   Deliberately NOT styled as a danger zone in red. The colour that matters here
+   is on the line saying what SURVIVES: the fear this button provokes is that it
+   empties the warehouse, and answering that before it is asked is worth more
+   than another red border on a button that already says Delete.
+   --------------------------------------------------------------------------- */
+.num-reset {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  margin: 22px 0 0;
+  padding: 16px 18px;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+.num-reset-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.num-reset-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--warning);
+  margin-bottom: 6px;
+}
+.num-reset p {
+  margin: 0 0 8px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-2);
+}
+.num-reset-safe {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 9px 12px;
+  border-radius: 8px;
+  background: var(--success-bg);
+  color: var(--success-strong, var(--success));
+}
+.num-reset-safe svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+.num-reset .btn {
+  flex: 0 0 auto;
+}

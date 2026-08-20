@@ -1,4 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
+import type { OrderResetPreview } from '@shared/orderReset'
+import {
+  ORDER_RESET_PHRASE,
+  describeOrderReset,
+  orderResetArmed,
+  orderResetIsEmpty,
+  orderResetTotal
+} from '@shared/orderReset'
 import type { SeriesState } from '@shared/numbering'
 import {
   formatSeriesNumber,
@@ -7,7 +15,7 @@ import {
   validateSeriesStart
 } from '@shared/numbering'
 import { api } from '../../lib/api'
-import { Button, CenterLoader, EmptyState, Input } from '../../components/ui'
+import { Button, CenterLoader, Checkbox, EmptyState, Field, Input, Modal } from '../../components/ui'
 import { Icon } from '../../components/Icon'
 import { useToast } from '../../components/Toast'
 
@@ -84,6 +92,8 @@ export function NumberingTab(): JSX.Element {
           />
         ))}
       </div>
+
+      <HardResetCard />
 
       <p className="num-foot">
         <Icon name="Info" size={14} />
@@ -236,5 +246,170 @@ function SeriesCard({
         </p>
       )}
     </div>
+  )
+}
+
+/**
+ * Start the paperwork over.
+ *
+ * ## Why it is here rather than anywhere else
+ *
+ * The screen that says where a series starts counting is the screen somebody is
+ * on when they decide the count should start again. Filing it under Developer
+ * would put the most destructive button in the app behind a door labelled for
+ * something else.
+ *
+ * ## The preview IS the control
+ *
+ * Same principle the inventory reset works on: a dialog with a button gets
+ * dismissed by somebody already reaching for the mouse. This one counts what
+ * would go, says in one line what survives — the shelf, and QuickBooks' own
+ * copies — and needs a phrase typed before the button does anything.
+ *
+ * The typed phrase is a courtesy, not the lock. The permission check that
+ * matters is in the IPC handler, because a control that lives in a dialog is a
+ * control anybody can skip by calling the channel.
+ */
+function HardResetCard(): JSX.Element {
+  const toast = useToast()
+  const [preview, setPreview] = useState<OrderResetPreview | null>(null)
+  const [open, setOpen] = useState(false)
+  const [typed, setTyped] = useState('')
+  const [restartNumbering, setRestartNumbering] = useState(false)
+  const [busy, setBusy] = useState(false)
+
+  const load = useCallback(async (): Promise<void> => {
+    setPreview(await api.invoices.orderResetPreview())
+  }, [])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  const begin = async (): Promise<void> => {
+    // Re-read at the moment of asking rather than trusting what was fetched when
+    // the tab opened. Somebody else may have raised twenty orders since.
+    await load()
+    setTyped('')
+    setRestartNumbering(false)
+    setOpen(true)
+  }
+
+  const apply = async (): Promise<void> => {
+    if (busy || !orderResetArmed(typed)) return
+    setBusy(true)
+    try {
+      const res = await api.invoices.orderResetApply({ restartNumbering })
+      if (!res.ok || !res.data) {
+        toast.error(res.error ?? 'Nothing was deleted.')
+        return
+      }
+      toast.success(`Deleted ${describeOrderReset(res.data)}.`)
+      setOpen(false)
+      await load()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (!preview) return <></>
+  const empty = orderResetIsEmpty(preview)
+
+  return (
+    <>
+      <div className="num-reset">
+        <div className="num-reset-main">
+          <div className="num-reset-title">
+            <Icon name="AlertTriangle" size={15} />
+            Start the paperwork over
+          </div>
+          <p>
+            Deletes <b>every purchase order, sales order and deal ticket</b>, with their history,
+            parcels and uploaded labels. {empty ? 'There are none.' : `Right now that is ${describeOrderReset(preview)}.`}
+          </p>
+          <p className="num-reset-safe">
+            <Icon name="ShieldCheck" size={13} />
+            <span>
+              Your <b>stock is not touched</b> — {preview.stockUnitsKept} unit
+              {preview.stockUnitsKept === 1 ? '' : 's'} on hand, their cost layers and the
+              inventory ledger all stay exactly as they are. So do products, buyers, suppliers
+              and staff.
+            </span>
+          </p>
+        </div>
+        <Button variant="secondary" icon="Trash2" disabled={empty} onClick={() => void begin()}>
+          Start over
+        </Button>
+      </div>
+
+      {open && (
+        <Modal
+          title="Delete every order?"
+          subtitle="This cannot be undone from inside the app"
+          onClose={() => setOpen(false)}
+          footer={
+            <>
+              <Button variant="ghost" onClick={() => setOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                variant="danger"
+                icon="Trash2"
+                loading={busy}
+                disabled={!orderResetArmed(typed)}
+                onClick={() => void apply()}
+              >
+                Delete {orderResetTotal(preview)} records
+              </Button>
+            </>
+          }
+        >
+          <p className="fin-confirm-lead">
+            <b>{describeOrderReset(preview)}</b> will be deleted, along with {preview.events} log
+            entr{preview.events === 1 ? 'y' : 'ies'}, {preview.shipments} parcel
+            {preview.shipments === 1 ? '' : 's'} and {preview.documents} uploaded label
+            {preview.documents === 1 ? '' : 's'}.
+          </p>
+
+          {/* THE TWO THINGS THAT DO NOT COME BACK, and neither is obvious from a
+              button that says Delete. Both are permanent disagreements with
+              something outside this database. */}
+          <p className="auth-alert">
+            <b>It travels.</b> Every machine that syncs with this one will lose the same records.
+            This is not local housekeeping.
+          </p>
+          {preview.inQuickBooks > 0 && (
+            <p className="auth-alert">
+              <b>QuickBooks keeps its copies.</b> {preview.inQuickBooks} of these sales orders
+              have been posted to Intuit and will still be there afterwards. Our side and theirs
+              will no longer agree, and nothing here can change that.
+            </p>
+          )}
+
+          <Checkbox
+            checked={restartNumbering}
+            onChange={setRestartNumbering}
+            label="Also restart the numbering"
+            hint={
+              restartNumbering
+                ? 'Deal tickets begin again at DT-000337 and the order series fall back to the starts set above.'
+                : 'Off: the next order carries on from where the count is now, so a number that has been on somebody’s paperwork does not come round twice.'
+            }
+          />
+
+          <Field
+            label={`Type ${ORDER_RESET_PHRASE} to confirm`}
+            hint="Deliberately awkward — there is no way back from this one."
+          >
+            <Input
+              value={typed}
+              onChange={(e) => setTyped(e.target.value)}
+              placeholder={ORDER_RESET_PHRASE}
+              autoFocus
+            />
+          </Field>
+        </Modal>
+      )}
+    </>
   )
 }

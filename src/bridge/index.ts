@@ -20,6 +20,7 @@
  */
 import { IPC, type AppInfo } from '@shared/ipc'
 import type { Permission } from '@shared/permissions'
+import type { OrderResetInput, OrderResetPreview, OrderResetResult } from '@shared/orderReset'
 import type { FreightPatch } from '@shared/freight'
 import type { BreakBenchDetail, BreakStepState } from '@shared/breakSteps'
 import type { ShippingPerformanceView } from '@shared/performance'
@@ -1611,6 +1612,20 @@ export function createBridge(ipcRenderer: BridgeTransport) {
         start: number
       ): Promise<Result<SeriesState[]>> =>
         ipcRenderer.invoke(IPC.numberingSetStart, { series, start }),
+
+      /**
+       * What a hard reset would delete. Null when the caller may not ask.
+       *
+       * A separate read from the apply on purpose: the confirmation shows this,
+       * and a screen that guessed at the numbers would be asking somebody to
+       * approve a figure the delete does not use.
+       */
+      orderResetPreview: (): Promise<OrderResetPreview | null> =>
+        ipcRenderer.invoke(IPC.orderResetPreview),
+
+      /** Every order and every deal ticket, gone. See @shared/orderReset. */
+      orderResetApply: (input: OrderResetInput): Promise<Result<OrderResetResult>> =>
+        ipcRenderer.invoke(IPC.orderResetApply, input),
       save: (input: NewInvoice & { id?: string | null }): Promise<Result<InvoiceDetail>> =>
         ipcRenderer.invoke(IPC.invoiceSave, input),
       /**
