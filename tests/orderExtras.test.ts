@@ -510,11 +510,58 @@ const otherSale = inv.saveInvoice(
     lines: [{ item: 'Widget Box', productId: WIDGET, quantity: 1, rate: 10 }] },
   OWEN
 )
+/**
+ * A PURCHASE ORDER TAKES A SECOND SALE, and this assertion used to say the
+ * opposite.
+ *
+ * The old rule refused, on the grounds that re-running the flow would orphan the
+ * first sale silently. That reasoning was right about re-running and wrong about
+ * the shape of the deal: one case bought from one distributor and shipped out to
+ * five people is one purchase and five sales, and refusing the second left the
+ * operator retyping four of them by hand against a purchase they then had to
+ * find and link one at a time.
+ *
+ * Nothing is orphaned, and the two assertions below are what say so:
+ * `linked_invoice_id` keeps pointing at the FIRST sale rather than being
+ * overwritten by the last, and `source_po_id` — the many side — holds every one
+ * of them.
+ */
 ok(
-  inv.linkDropshipPair(dropPo.id, otherSale.id, OWEN).ok === false,
-  'A PAIRED PURCHASE ORDER REFUSES A SECOND SALE — re-running the flow would otherwise orphan the first silently'
+  inv.linkDropshipPair(dropPo.id, otherSale.id, OWEN).ok === true,
+  'A PURCHASE ORDER TAKES A SECOND SALE — one case shipped out to several buyers is one purchase and several invoices'
 )
-ok(inv.linkDropshipPair(dropPo.id, dropSale.id, OWEN).ok === true, 'while re-linking the same pair is harmless')
+ok(
+  po.getPurchaseOrder(dropPo.id).linkedInvoiceId === dropSale.id,
+  'AND THE FIRST SALE IS NOT OVERWRITTEN — linked_invoice_id keeps the first, or callers still reading it would follow a different sale on every refresh',
+  String(po.getPurchaseOrder(dropPo.id).linkedInvoiceId)
+)
+ok(
+  inv.getInvoice(otherSale.id).sourcePoId === dropPo.id,
+  'while the second points back through source_po_id, which is the side that holds them all'
+)
+ok(inv.linkDropshipPair(dropPo.id, dropSale.id, OWEN).ok === true, 'and re-linking the same pair is harmless')
+
+/**
+ * WHAT IS STILL REFUSED: repointing a sale that came from a DIFFERENT purchase.
+ *
+ * That is not a second buyer, it is the same boxes claimed by two purchases —
+ * and it would leave the first one silently orphaned, which is the failure the
+ * old rule was reaching for. Kept, and tested, because relaxing the other half
+ * is exactly when this half stops being obvious.
+ */
+const rivalPo = po.createPurchaseOrder(
+  { supplier: 'Rival Distribution', location: 'Steel City Cards',
+    lines: [{ productId: WIDGET, quantity: 1, unitPrice: 5 }] },
+  OWEN
+)
+ok(
+  inv.linkDropshipPair(rivalPo.id, otherSale.id, OWEN).ok === false,
+  'A SALE CANNOT BE REPOINTED AT ANOTHER PURCHASE — that is the same boxes claimed twice, and it would orphan the first'
+)
+ok(
+  inv.getInvoice(otherSale.id).sourcePoId === dropPo.id,
+  'and the refusal leaves it where it was'
+)
 
 // ---------------------------------------------------------------------------
 console.log('\n=== 10. A DROPSHIPPED LINE IS NOT PICKABLE ===')

@@ -3,6 +3,7 @@ import type { InventoryProduct, PurchaseOrderDetail } from '@shared/types'
 import type { Freight } from '@shared/freight'
 import { LOCATION_IDS } from '@shared/inventory'
 import { destinationHoldsStock } from '@shared/purchaseOrders'
+import { isMultiShipment } from '@shared/multiShipment'
 import type { DropshipPurchasePrefill } from '@shared/orders'
 import { api } from '../../lib/api'
 import { useToast } from '../../components/Toast'
@@ -443,7 +444,14 @@ export function CreatePurchaseOrderModal({
             onChange={(name) => setSupplier(name ?? '')}
           />
         </Field>
-        <Field label="Destination" hint="RM or AM to stock it; anyone else drop-ships">
+        <Field
+          label="Destination"
+          hint={
+            isMultiShipment(location)
+              ? 'You name the buyers when you raise the sales orders'
+              : 'RM or AM to stock it; anyone else drop-ships'
+          }
+        >
           <DestinationSelect
             value={location}
             ariaLabel="Destination"
@@ -451,6 +459,9 @@ export function CreatePurchaseOrderModal({
             // The ONE place a pin can be set, now that the typeahead's per-row
             // star is gone. Without it the Pinned group could only ever shrink.
             pinnable
+            // And the one place "several buyers" can be chosen — see the `multi`
+            // prop, which is off on every line and split row deliberately.
+            multi
             onChange={(dest) => setLocation(dest ?? '')}
           />
         </Field>

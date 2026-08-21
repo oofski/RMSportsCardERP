@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { SupplierSuggestion } from '@shared/purchaseOrders'
 import { MAX_PINNED_PARTIES, canonicalDestination } from '@shared/purchaseOrders'
+import { MULTI_SHIPMENT } from '@shared/multiShipment'
 import { LOCATION_IDS } from '@shared/inventory'
 import { api } from '../../lib/api'
 import { Combobox } from '../../components/Combobox'
@@ -289,7 +290,8 @@ export function DestinationSelect({
   ariaLabel,
   className,
   drop,
-  pinnable
+  pinnable,
+  multi
 }: {
   value: string | null
   onChange: (next: string | null) => void
@@ -297,6 +299,18 @@ export function DestinationSelect({
   ariaLabel: string
   className?: string
   drop?: boolean
+  /**
+   * Offer "several buyers, named later" as a destination.
+   *
+   * THE ORDER'S OWN BOX ONLY, never a line's or a split row's. On the header it
+   * means "every line that does not say otherwise is going out to buyers I will
+   * name on the way to the sales orders", which is a statement about the whole
+   * purchase. On a split row — a row that exists precisely to name ONE
+   * destination for a slice of a line — it would mean "this slice goes to
+   * several buyers", which is just an unsplit line said twice, and it would let
+   * an order be half-assigned in two different vocabularies at once.
+   */
+  multi?: boolean
   /**
    * Show the pin toggle beside the box.
    *
@@ -321,6 +335,10 @@ export function DestinationSelect({
       // destination box on a new order would offer nothing at all, which reads
       // as the form being broken rather than as a list being unavailable.
       { label: 'Stock locations', names: shelves.length > 0 ? shelves : [...LOCATION_IDS] },
+      // Directly under the shelves, because it is the other answer to "where is
+      // this going" that is not a party's name — and because a reader scanning
+      // for it will not find it filed under E for "Everyone else".
+      ...(multi ? [{ label: 'Ships out to buyers', names: [MULTI_SHIPMENT] }] : []),
       {
         label: 'Pinned',
         names: parties
@@ -333,7 +351,7 @@ export function DestinationSelect({
         names: parties.filter((p) => !p.holdsStock && !p.pinned).map((p) => p.name)
       }
     ]
-  }, [parties])
+  }, [parties, multi])
 
   const chosen = (value ?? '').trim()
   const row = parties.find((p) => p.name.toLowerCase() === chosen.toLowerCase())
@@ -378,5 +396,76 @@ export function DestinationSelect({
         </button>
       )}
     </div>
+  )
+}
+
+/* -------------------------------------------------------------------------- */
+/* Buyers                                                                      */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Who is receiving these units — a compact box for a table row.
+ *
+ * ## Why not CustomerTypeahead
+ *
+ * That control draws its own `Field` with a label and a hint, which is right for
+ * the one buyer at the top of a sales order and wrong for a column of them: the
+ * buyer-assignment screen has a row per slice, and a labelled field per row
+ * would be the same word printed a dozen times down the page. This is the same
+ * combobox every supplier and destination cell on both order forms already uses,
+ * so a row of it looks like a row of them.
+ *
+ * ## It reads the party list, not the customer list
+ *
+ * `useOrderParties` is already fetched once for the whole form and already
+ * carries who this business sells to — see OrderParty.kind, where `customer` and
+ * `both` are the two that buy. Reaching for `api.invoices.customers()` instead
+ * would be a second round trip returning a subset of the same people, and two
+ * lists that can disagree about how somebody's name is spelled.
+ *
+ * SHELVES ARE EXCLUDED. RM and AM are places, not people; offering them here
+ * would let somebody raise a sales order billing a shelf.
+ */
+export function BuyerSelect({
+  value,
+  onChange,
+  ariaLabel,
+  className
+}: {
+  value: string | null
+  onChange: (next: string | null) => void
+  ariaLabel: string
+  className?: string
+}): JSX.Element {
+  const { parties } = useOrderParties()
+
+  const groups = useMemo<PartyGroup[]>(() => {
+    const off = parties.filter((p) => !p.holdsStock)
+    return [
+      { label: 'Pinned', names: off.filter((p) => p.pinned).map((p) => p.name) },
+      {
+        label: 'Sold to before',
+        names: off.filter((p) => !p.pinned && (p.kind === 'customer' || p.kind === 'both')).map((p) => p.name)
+      },
+      {
+        label: 'Everyone else',
+        names: off.filter((p) => !p.pinned && p.kind !== 'customer' && p.kind !== 'both').map((p) => p.name)
+      }
+    ]
+  }, [parties])
+
+  return (
+    <PartySelectBase
+      value={value}
+      onChange={onChange}
+      groups={groups}
+      // NO BLANK ROW. A row on this screen exists to name one buyer, and there
+      // is no header to inherit from — shipmentProblem refuses an empty one, so
+      // offering a way back to empty would be offering a refusal.
+      customHint="Not listed? Type their name — whatever you type is the buyer."
+      requiredPlaceholder="Search, or type a buyer"
+      ariaLabel={ariaLabel}
+      className={className}
+    />
   )
 }

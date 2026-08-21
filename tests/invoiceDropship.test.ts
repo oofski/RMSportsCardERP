@@ -275,9 +275,31 @@ ok(
   invSrc.includes('modal-xl'),
   'AND THE SALES ORDER FORM IS NOW THE SAME WIDTH — at 620px the money columns were three characters wide'
 )
-for (const col of ['po-col-qty', 'po-col-price', 'po-col-total', 'po-col-supplier', 'po-col-dest', 'po-col-remove']) {
+/**
+ * THE SAME COLUMNS EXCEPT ONE, and the exception is the point.
+ *
+ * `po-col-supplier` is gone from the sales order. On a PURCHASE order the
+ * supplier and the destination are different parties answering different
+ * questions — who we buy from, and where the goods go. On a SALES order the
+ * goods always go to the buyer, so "Fulfilled from" naming anything but a shelf
+ * is ALREADY saying which party ships it, and a Supplier column beside it asked
+ * the same question twice and got the same answer twice.
+ *
+ * The stored FIELD survives — see the multi-shipment suite, which pins that the
+ * form still derives it, because `dropshipSuppliersOf` reads it to work out who
+ * to raise a purchase order against.
+ */
+for (const col of ['po-col-qty', 'po-col-price', 'po-col-total', 'po-col-dest', 'po-col-remove']) {
   ok(invSrc.includes(col), `the sales order table declares ${col}, exactly as the PO does`)
 }
+ok(
+  !invSrc.includes('po-col-supplier'),
+  'BUT NOT po-col-supplier — on a sales order that column asked the same question as Fulfilled from'
+)
+ok(
+  poSrc.includes('po-col-supplier'),
+  'while the purchase order keeps it, where the two are genuinely different parties'
+)
 ok(
   invSrc.includes('po-lines-routed'),
   'and uses the routed layout, so the columns line up between the two'

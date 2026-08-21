@@ -1,4 +1,5 @@
 import { isLocation, LOCATION_IDS } from './inventory'
+import { MULTI_SHIPMENT, isMultiShipment } from './multiShipment'
 import type { PurchaseOrderStatus } from './types'
 
 export const PO_STATUSES: PurchaseOrderStatus[] = ['ordered', 'paid', 'received', 'cancelled']
@@ -389,10 +390,18 @@ export function isDestination(value: unknown): value is string {
  * shop called rm: the units stop being receivable, no box appears in Incoming,
  * and the PO can never complete. The failure is silent and looks like the
  * feature is broken rather than like a typo, so it is fixed at the door.
+ *
+ * MULTI_SHIPMENT folds the same way and for a worse version of the same reason.
+ * Typed as "multi-shipment" and left alone it is a dropship to a shop of that
+ * name: the order looks right, `isMultiShipment` says no, the buyer-assignment
+ * screen never appears, and the sales orders are never raised — so the deal is
+ * simply lost rather than visibly broken. See isMultiShipment, which folds it
+ * again on the reading side, because neither can be the only door.
  */
 export function canonicalDestination(value: string): string {
   const trimmed = String(value ?? '').trim()
   if (!trimmed) return ''
+  if (isMultiShipment(trimmed)) return MULTI_SHIPMENT
   const hit = LOCATION_IDS.find((id) => id.toLowerCase() === trimmed.toLowerCase())
   return hit ?? trimmed
 }

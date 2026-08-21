@@ -3,12 +3,14 @@ import type { InvoiceCustomer, InvoiceDetail } from '@shared/invoices'
 import type { PurchaseOrderDetail } from '@shared/types'
 import { dropshipSaleFromPurchase } from '@shared/orders'
 import { destinationHoldsStock } from '@shared/purchaseOrders'
+import { isMultiShipment } from '@shared/multiShipment'
 import { api } from '../../lib/api'
 import { Button, Modal } from '../../components/ui'
 import { Icon } from '../../components/Icon'
 import { useToast } from '../../components/Toast'
 import { formatMoney } from '../../lib/format'
 import { CreateInvoiceModal } from '../invoices/CreateInvoiceModal'
+import { MultiShipmentSplit } from './MultiShipmentSplit'
 
 /**
  * The second half of a dropship: the sale that pays for the purchase.
@@ -86,14 +88,19 @@ export function DropshipSaleStep({
    * shelf. Spelling that test out a second time here is how a screen comes to
    * disagree with the stock code about which units are a dropship.
    */
-  const dropSlices = po.lines.flatMap((line) => {
+  const dropSlices = po.lines.flatMap((line, li) => {
     const slices =
       line.allocations.length > 0
-        ? line.allocations.map((a) => ({ destination: a.destination, quantity: a.quantity }))
-        : [{ destination: line.destination ?? po.location, quantity: line.quantity }]
+        ? line.allocations.map((a, ai) => ({
+            key: `a-${li}-${ai}`,
+            destination: a.destination,
+            quantity: a.quantity
+          }))
+        : [{ key: `l-${li}`, destination: line.destination ?? po.location, quantity: line.quantity }]
     return slices
       .filter((s) => !!s.destination && !destinationHoldsStock(s.destination))
       .map((s) => ({
+        key: s.key,
         destination: s.destination as string,
         quantity: s.quantity,
         item: line.productName ?? 'Item',
@@ -102,19 +109,30 @@ export function DropshipSaleStep({
       }))
   })
 
-  const buyers = [...new Set(dropSlices.map((s) => s.destination))]
   /**
-   * ONE BUYER, OR NONE. `destinationSummary` words a list for a screen and
-   * happily returns the literal string "2 destinations" — which, passed through
-   * as `customerName`, becomes a CUSTOMER OF THAT NAME in this app and then an
-   * offer to create one in the owner's real QuickBooks books.
+   * THE SENTINEL IS NOT A BUYER. A slice reading MULTI_SHIPMENT is a slice whose
+   * buyer has not been named yet — see @shared/multiShipment — so it is excluded
+   * from the buyer list rather than counted as somebody called that. Left in, it
+   * would reach `customerName` and become a CUSTOMER OF THAT NAME in this app,
+   * and then an offer to create one in the owner's real QuickBooks books.
    *
-   * A purchase split across two different shops is two sales to two different
-   * people and cannot be one invoice, so the flow declines rather than guessing
-   * which of them to bill.
+   * That is the same failure `destinationSummary` would cause by returning the
+   * literal string "2 destinations", which is why this list is built from the
+   * slices rather than from that.
    */
-  const buyer = buyers.length === 1 ? buyers[0] : null
-  const splitAcrossBuyers = buyers.length > 1
+  const buyers = [...new Set(dropSlices.map((s) => s.destination).filter((d) => !isMultiShipment(d)))]
+  const unassigned = dropSlices.some((s) => isMultiShipment(s.destination))
+  /**
+   * ONE BUYER AND EVERY UNIT SPOKEN FOR — the ordinary dropship, billed as one
+   * sales order by the flow that has always handled it.
+   *
+   * Anything else goes to MultiShipmentSplit: several buyers named on the order,
+   * or buyers still to name, or both at once on a purchase that was partly
+   * assigned when it was raised. All three are one act of dividing units between
+   * people, and one screen does it.
+   */
+  const buyer = buyers.length === 1 && !unassigned ? buyers[0] : null
+  const needsSplit = dropSlices.length > 0 && !buyer
   const dropUnits = dropSlices.reduce((sum, s) => sum + s.quantity, 0)
 
   const begin = async (): Promise<void> => {
@@ -128,6 +146,30 @@ export function DropshipSaleStep({
     setCustomers(people)
     setNextNumber(suggested)
     setSelling(true)
+  }
+
+  // One purchase going out to several people. Handed the slices already
+  // flattened, so that module never has to know how a purchase order stores its
+  // routing — and a slice that already names a buyer arrives pre-filled rather
+  // than being asked about again.
+  if (needsSplit) {
+    return (
+      <MultiShipmentSplit
+        poId={po.id}
+        poNumber={po.poNumber}
+        supplier={po.supplier}
+        sources={dropSlices.map((s) => ({
+          key: s.key,
+          productId: s.productId,
+          item: s.item,
+          sku: s.sku,
+          quantity: s.quantity,
+          buyer: isMultiShipment(s.destination) ? null : s.destination
+        }))}
+        onClose={onClose}
+        onDone={onDone}
+      />
+    )
   }
 
   if (selling) {
@@ -180,7 +222,7 @@ export function DropshipSaleStep({
           <Button variant="ghost" onClick={onClose}>
             Not now
           </Button>
-          {!!buyer && !splitAcrossBuyers && (
+          {!!buyer && (
             <Button variant="primary" icon="ReceiptText" onClick={() => void begin()}>
               Write the sales order
             </Button>
@@ -188,18 +230,14 @@ export function DropshipSaleStep({
         </>
       }
     >
-      {/* TWO WAYS THIS CANNOT PROCEED, and neither is an error worth a red
-          banner — both are ordinary shapes of order that simply are not one
-          sale. Saying which, and offering the door out, beats a form that
-          would invoice the wrong person for the wrong number of boxes. */}
-      {splitAcrossBuyers ? (
-        <p className="fin-confirm-lead">
-          <b>{po.poNumber}</b> ships to <b>{buyers.length} different places</b>
-          {' — '}
-          {buyers.join(', ')}. That is {buyers.length} separate sales to {buyers.length} separate
-          people, so it cannot be billed as one order. Raise each one from the Sales Orders board.
-        </p>
-      ) : !buyer ? (
+      {/* ONE WAY THIS CANNOT PROCEED, and it is not an error worth a red banner
+          — it is an ordinary purchase that simply has nothing to bill on.
+
+          There used to be a second: a purchase going to several places was
+          refused outright and the operator was sent to retype it N times. That
+          case never reaches this body now — `needsSplit` catches it above and
+          MultiShipmentSplit does the dividing. */}
+      {!buyer ? (
         <p className="fin-confirm-lead">
           Every unit on <b>{po.poNumber}</b> is coming to one of your own shelves, so there is
           nothing here to bill on. Sell it from stock in the ordinary way when it arrives.

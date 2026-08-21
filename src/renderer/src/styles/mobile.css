@@ -1037,6 +1037,30 @@
     display: none;
   }
 
+  /* ---- The SALES order's table is one column shorter ----------------------
+     Both forms carry .po-lines-routed, and the rule above counts POSITIONS. A
+     purchase order line names a supplier AND a destination — different parties
+     answering different questions — so columns 5 and 6 are its two routing
+     cells and 7 is the bin. A sales order line names only where it is fulfilled
+     FROM, because the goods always go to the buyer, so 5 is its one routing
+     cell and 6 IS THE BIN. Counted the same way, a phone would hide the only
+     control that removes a line.
+
+     So column 6 comes back for this table, and only for this table. Anything
+     that adds or removes a column on either form has to revisit both rules —
+     which is the cost of hiding by position, and the reason the two tables are
+     told apart by a class rather than by their shape.
+
+     Note what is still true and is NOT a regression: a phone cannot route a
+     SALES order line at all, because column 5 is hidden here and this form has
+     no unfolding panel to recover it the way CreatePurchaseOrderModal does (see
+     .po-line-route). That was true before the Supplier column came off and is
+     its own piece of work. */
+  .po-lines-so th:nth-child(6),
+  .po-lines-so td:nth-child(6) {
+    display: table-cell;
+  }
+
   /* The desktop's <colgroup> has to come off with them. Under
      `table-layout: fixed` a column's width comes from its <col> and NOT from
      what is in it, so two columns whose cells are all hidden would still hold

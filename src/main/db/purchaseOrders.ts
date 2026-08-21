@@ -406,8 +406,29 @@ const PO_SELECT = `
          -- the other gates are answered by facts that live on the SALE (its
          -- shelf, its measurements) and mean nothing against a purchase order.
          -- Only "the goods are not here yet" is a fact about this document too.
-         (SELECT CASE WHEN i.items_in_hand_at IS NULL AND i.status != 'void' THEN 1 ELSE 0 END
-            FROM invoices i WHERE i.id = po.linked_invoice_id) AS sale_awaits_items
+         --
+         -- ANY OF THEM, not the first of them. A multi-shipment purchase supplies
+         -- one sale per buyer, so it is read off invoices.source_po_id — the many
+         -- side — rather than off po.linked_invoice_id, which holds only whichever
+         -- sale was saved first. Keyed on the single column, a purchase with five
+         -- buyers would go quiet the moment that ONE buyer's order was marked in
+         -- hand, while four people were still waiting on boxes nobody was chasing.
+         --
+         -- AND NULL STILL MEANS "NO SALE BEHIND THIS ORDER", which is a third
+         -- state and not a slow way of saying false. Folding it into 0 would be
+         -- invisible here and wrong on the board: every ordinary purchase order
+         -- would start answering a question about a sale it does not have.
+         (SELECT CASE
+                   WHEN NOT EXISTS (SELECT 1 FROM invoices i WHERE i.source_po_id = po.id)
+                     THEN NULL
+                   WHEN EXISTS (
+                     SELECT 1 FROM invoices i
+                      WHERE i.source_po_id = po.id
+                        AND i.items_in_hand_at IS NULL
+                        AND i.status != 'void'
+                   ) THEN 1
+                   ELSE 0
+                 END) AS sale_awaits_items
   FROM purchase_orders po
 `
 

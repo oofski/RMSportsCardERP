@@ -257,6 +257,14 @@ export const IPC = {
   // this is called: the second screen writes an ordinary sales order through the
   // ordinary path, and this only records that the two are the same deal.
   orderLinkDropship: 'order:link-dropship',
+  // One purchase, several buyers: write every buyer's sales order and link them
+  // all to the purchase in ONE transaction. Deliberately not the linking call
+  // above run five times — a partial batch leaves buyers uninvoiced for boxes
+  // that have already shipped, with nothing left on screen to say which ones.
+  orderSplitDropship: 'order:split-dropship',
+  // Every sales order raised against one purchase order. The purchase row's own
+  // linked_invoice_id holds only the FIRST; this is the many side.
+  orderDropshipSales: 'order:dropship-sales',
   // Money that arrived BEFORE anything shipped, and the packing queue it
   // releases an order into. Payment and readiness are separate facts — see
   // recordInvoicePayment, and setPurchaseOrderPaid on the buy side, which is

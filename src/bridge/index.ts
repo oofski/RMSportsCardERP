@@ -1560,6 +1560,32 @@ export function createBridge(ipcRenderer: BridgeTransport) {
         ipcRenderer.invoke(IPC.orderLinkDropship, { poId, invoiceId }),
 
       /**
+       * One purchase, several buyers: write and link every buyer's sales order
+       * in one transaction.
+       *
+       * ALL OR NOTHING. A half-written split leaves buyers uninvoiced for boxes
+       * already shipping, and the assignment that knew which ones is gone the
+       * moment the screen closes — so a failure comes back with nothing created
+       * and the screen still holding the answer.
+       *
+       * The orders arrive as DRAFTS at rate 0. Prices are per buyer and nobody
+       * has typed them yet; posting five unpriced invoices to QuickBooks from
+       * one button would be five documents to void over there.
+       */
+      splitDropship: (
+        poId: string,
+        orders: NewInvoice[]
+      ): Promise<
+        Result<{
+          created: Array<{ id: string; invoiceNumber: string | null; customerName: string }>
+        }>
+      > => ipcRenderer.invoke(IPC.orderSplitDropship, { poId, orders }),
+
+      /** Every sales order raised against one purchase order, oldest first. */
+      dropshipSales: (poId: string): Promise<InvoiceDetail[]> =>
+        ipcRenderer.invoke(IPC.orderDropshipSales, poId),
+
+      /**
        * The address already on file for a party, so the To box fills itself in.
        *
        * A SUGGESTION. A purchase order's supplier is a string with no record

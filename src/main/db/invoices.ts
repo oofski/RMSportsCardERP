@@ -1522,8 +1522,22 @@ export function recordQboObservation(id: string, o: QboInvoiceObservation): void
  * together, because a half-written link is a purchase order claiming a sale that
  * does not point back — which is worse than no link, since it reads as one.
  *
- * Refuses to steal a link that already exists. Re-running the flow against an
- * order already paired would otherwise orphan the first sale silently.
+ * ## A purchase order may hold MORE THAN ONE sale
+ *
+ * One case bought from one distributor and shipped out to five people is one
+ * purchase order and five sales orders — see @shared/multiShipment. So the many
+ * side is `invoices.source_po_id`, which has always been able to hold it, and
+ * `purchase_orders.linked_invoice_id` keeps the FIRST sale only, as a
+ * convenience pointer for the callers that predate multi-shipment.
+ *
+ * It is therefore NOT the place to ask "which sales came from this order" —
+ * `dropshipSalesFor` is. Reading the single column would answer with one of five
+ * and give no sign that the other four exist, which is the failure mode this
+ * note is here to stop somebody walking back into.
+ *
+ * What is still refused is REPOINTING a sale that already came from a different
+ * purchase order. That is not a second buyer, it is the same boxes claimed by
+ * two purchases, and it would leave the first one silently orphaned.
  */
 export function linkDropshipPair(
   poId: string,
@@ -1550,19 +1564,22 @@ export function linkDropshipPair(
       | undefined
     if (!invoice) return { ok: false, error: 'That sales order is gone.' }
 
-    if (po.linked_invoice_id && po.linked_invoice_id !== invoiceId) {
-      return { ok: false, error: `${po.po_number} is already linked to another sales order.` }
-    }
     if (invoice.source_po_id && invoice.source_po_id !== poId) {
       return { ok: false, error: 'That sales order already came from another purchase order.' }
     }
 
     const stamp = nowIso()
-    db.prepare(`UPDATE purchase_orders SET linked_invoice_id = ?, updated_at = ? WHERE id = ?`).run(
-      invoiceId,
-      stamp,
-      poId
-    )
+    // FIRST SALE ONLY, and only while the column is empty. A multi-shipment
+    // purchase raises several sales in one go; overwriting this each time would
+    // leave it pointing at whichever happened to be saved last, so the callers
+    // still reading it would follow a different sale on every refresh.
+    if (!po.linked_invoice_id) {
+      db.prepare(
+        `UPDATE purchase_orders SET linked_invoice_id = ?, updated_at = ? WHERE id = ?`
+      ).run(invoiceId, stamp, poId)
+    } else {
+      db.prepare(`UPDATE purchase_orders SET updated_at = ? WHERE id = ?`).run(stamp, poId)
+    }
     db.prepare(`UPDATE invoices SET source_po_id = ?, updated_at = ? WHERE id = ?`).run(
       poId,
       stamp,
@@ -1591,12 +1608,98 @@ export function linkDropshipPair(
   return run()
 }
 
-/** The other half of a dropship pair, or null when there is not one. */
+/**
+ * The other half of a dropship pair, or null when there is not one.
+ *
+ * SINGULAR, and it answers a narrower question than it used to: since a
+ * multi-shipment purchase can raise several sales, this returns the FIRST of
+ * them. Callers that want the set want `dropshipSalesFor`.
+ */
 export function linkedDropshipInvoice(poId: string): InvoiceDetail | null {
   const row = getDb()
     .prepare(`SELECT linked_invoice_id AS id FROM purchase_orders WHERE id = ?`)
     .get(poId) as { id: string | null } | undefined
   return row?.id ? getInvoice(row.id) : null
+}
+
+/**
+ * Every sales order raised against one purchase order, oldest first.
+ *
+ * Read from `invoices.source_po_id` — the MANY side — rather than from
+ * `purchase_orders.linked_invoice_id`, which holds only the first. A
+ * multi-shipment purchase has as many sales as it has buyers, and a read that
+ * followed the single column would report one of five with nothing to say the
+ * other four existed.
+ *
+ * Ordered by `created_at` so the list reads in the order the buyers were named,
+ * which is the order somebody assigned them in and therefore the order they
+ * expect to see them back in.
+ */
+export function dropshipSalesFor(poId: string): InvoiceDetail[] {
+  const rows = getDb()
+    .prepare(`SELECT id FROM invoices WHERE source_po_id = ? ORDER BY created_at ASC, id ASC`)
+    .all(poId) as Array<{ id: string }>
+  return rows.map((r) => getInvoice(r.id)).filter((i): i is InvoiceDetail => i !== null)
+}
+
+/**
+ * Raise every buyer's sales order for one multi-shipment purchase, at once.
+ *
+ * ## All of them or none of them
+ *
+ * One transaction around the whole batch, because a partial batch is the worst
+ * outcome available here. Five buyers assigned and three orders written leaves
+ * two people uninvoiced for boxes that have already shipped, and NOTHING on
+ * screen says which two — the assignment that knew is spent the moment the modal
+ * closes. Rolling the lot back leaves the purchase order exactly as it was, with
+ * the assignment still on screen to try again.
+ *
+ * ## Drafts, deliberately
+ *
+ * Each order is written the way `saveInvoice` writes any new one: status
+ * `draft`, nothing posted. Pushing five invoices into the owner's real
+ * QuickBooks books from one button — with prices nobody has typed yet, because
+ * the rate is 0 until somebody sets it — would be five documents to void over
+ * there to undo one mistake here. They go to the board, get priced, and go to
+ * QuickBooks one at a time like every other sales order.
+ *
+ * ## Numbers look after themselves
+ *
+ * `saveInvoice` already moves a number up when it is taken, and says so on the
+ * order's own history. Five saves in one transaction is exactly the collision
+ * that guard exists for, so the batch offers a starting number and lets it work
+ * rather than reserving a block — which would be a second numbering scheme that
+ * could disagree with the first.
+ */
+export function splitDropshipSales(
+  poId: string,
+  orders: Array<NewInvoice>,
+  actorId: string | null
+): { ok: boolean; created?: InvoiceDetail[]; error?: string } {
+  if (orders.length === 0) return { ok: false, error: 'Assign at least one buyer first.' }
+  const db = getDb()
+  const po = db.prepare(`SELECT id FROM purchase_orders WHERE id = ?`).get(poId)
+  if (!po) return { ok: false, error: 'That purchase order is gone.' }
+
+  const run = db.transaction((): { ok: boolean; created?: InvoiceDetail[]; error?: string } => {
+    const created: InvoiceDetail[] = []
+    for (const order of orders) {
+      const saved = saveInvoice(order, actorId)
+      const link = linkDropshipPair(poId, saved.id, actorId)
+      // Thrown rather than returned, because a `return` inside a better-sqlite3
+      // transaction COMMITS what came before it. The throw is what rolls the
+      // whole batch back, and it is caught immediately below.
+      if (!link.ok) throw new Error(link.error ?? 'That sales order could not be linked.')
+      created.push(saved)
+    }
+    return { ok: true, created }
+  })
+
+  try {
+    return run()
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : 'Could not raise the sales orders.' }
+  }
 }
 
 /**

@@ -13,7 +13,7 @@ import type {
   OrderSide
 } from '@shared/orders'
 import { composeLabelEmail, isOrderSide, labelMailtoUrl } from '@shared/orders'
-import type { InvoiceDetail, InvoicePaymentInput } from '@shared/invoices'
+import type { InvoiceDetail, InvoicePaymentInput, NewInvoice } from '@shared/invoices'
 import { COMPANY_NAME } from '@shared/config'
 import { currentUser } from './services/auth'
 import {
@@ -36,6 +36,8 @@ import {
   setInvoiceItemsInHand,
   setInvoicePaid,
   linkDropshipPair,
+  dropshipSalesFor,
+  splitDropshipSales,
   recordInvoicePayment,
   setInvoiceReadyToShip
 } from './db/invoices'
@@ -734,4 +736,52 @@ export function registerOrderExtrasIpc(): void {
       }
     }
   )
+
+  /**
+   * One purchase, several buyers — write every buyer's sales order at once.
+   *
+   * The exception to the rule stated above, and the reason is the batch rather
+   * than the linking: five separate create-then-link round trips can fail
+   * halfway, and a half-done split leaves buyers uninvoiced for boxes already in
+   * the post with nothing on screen to say which ones. The assignment that knew
+   * is gone the moment the modal closes.
+   *
+   * It is still not a second way to write a sales order. `splitDropshipSales`
+   * calls the SAME `saveInvoice` every other path calls, N times inside one
+   * transaction, so the orders it produces are ordinary drafts in every respect.
+   */
+  ipcMain.handle(
+    IPC.orderSplitDropship,
+    (
+      _e,
+      payload: { poId?: unknown; orders?: unknown }
+    ): Result<{ created: Array<{ id: string; invoiceNumber: string | null; customerName: string }> }> => {
+      try {
+        const actor = requireInvoicing()
+        const orders = Array.isArray(payload?.orders) ? (payload.orders as NewInvoice[]) : []
+        const res = splitDropshipSales(str(payload?.poId), orders, actor.id)
+        if (!res.ok || !res.created) {
+          return { ok: false, error: res.error ?? 'Could not raise the sales orders.' }
+        }
+        return {
+          ok: true,
+          data: {
+            created: res.created.map((i) => ({
+              id: i.id,
+              invoiceNumber: i.invoiceNumber,
+              customerName: i.customerName
+            }))
+          }
+        }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  /** Every sales order raised against one purchase order. A read; nothing writes. */
+  ipcMain.handle(IPC.orderDropshipSales, (_e, poId: unknown): InvoiceDetail[] => {
+    requireInvoicing()
+    return dropshipSalesFor(str(poId))
+  })
 }

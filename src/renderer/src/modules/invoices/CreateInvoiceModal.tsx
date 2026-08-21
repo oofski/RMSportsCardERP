@@ -31,7 +31,7 @@ import { OrderHistory } from '../orders/OrderHistory'
 import { OrderLabels } from '../orders/OrderLabels'
 import { OrderShipments } from '../orders/OrderShipments'
 import { destinationHoldsStock } from '@shared/purchaseOrders'
-import { DestinationSelect, SupplierSelect } from '../invoicing/PartySelect'
+import { DestinationSelect } from '../invoicing/PartySelect'
 import { CategoryLogo } from '../inventory/CategoryLogo'
 import { POCatalogTypeahead } from '../invoicing/POCatalogTypeahead'
 import { CustomerTypeahead } from './CustomerTypeahead'
@@ -419,8 +419,27 @@ export function CreateInvoiceModal({
     // under a product name survive a reload — and what lets the posting code
     // match a QuickBooks Item on its SKU before falling back to a name somebody
     // may have edited over there.
-    lines: lines.map(
-      (l): NewInvoiceLine => ({
+    lines: lines.map((l): NewInvoiceLine => {
+      /**
+       * THE SUPPLIER IS DERIVED FROM WHERE THE LINE IS FULFILLED FROM.
+       *
+       * There is no Supplier column on this form any more — on a sales order it
+       * asked the same question as Fulfilled from and got the same answer, and
+       * `dropshipSaleFromPurchase` has always written both fields to the same
+       * party for exactly that reason.
+       *
+       * The COLUMN still exists and is still written, because `dropshipSuppliersOf`
+       * reads it to work out who to raise a purchase order against when a
+       * dropship sale is billed before it is bought. Dropping the field as well
+       * as the column would have broken that flow silently — it would have found
+       * no supplier on any line and refused to prefill anything.
+       *
+       * NULL on a line off our own shelf. Those goods came from stock; naming a
+       * supplier on them would offer to buy what we already own.
+       */
+      const from = (l.destination || location || 'RM').trim()
+      const shipsItself = destinationHoldsStock(from)
+      return {
         item: l.item,
         productId: l.productId || null,
         sku: l.sku || null,
@@ -431,9 +450,12 @@ export function CreateInvoiceModal({
         taxRate: null,
         className: null,
         destination: l.destination || null,
-        supplier: l.supplier || null
-      })
-    )
+        // A supplier the operator already typed on a saved line is kept — it may
+        // name a party the destination does not, on a line entered before this
+        // column went away.
+        supplier: shipsItself ? null : l.supplier || from
+      }
+    })
   })
 
   /** Validate here so the message names the line, not just "something is wrong". */
@@ -767,7 +789,16 @@ export function CreateInvoiceModal({
             </div>
           ) : (
             <div className="po-lines">
-              <table className="data po-lines-table po-lines-routed">
+              {/* `po-lines-so` is not styling — it is what tells the phone layer
+                  WHICH of the two routed tables this is. Both carry
+                  po-lines-routed and they no longer have the same number of
+                  columns: a purchase order line names a supplier AND a
+                  destination, a sales order line names only where it is
+                  fulfilled from. mobile.css hides routing columns BY POSITION,
+                  so without this the sales form would lose its Remove button on
+                  a phone — column 6 there is the bin, and column 6 on a purchase
+                  order is the destination. */}
+              <table className="data po-lines-table po-lines-routed po-lines-so">
                 {/* THE SAME COLGROUP AS A PURCHASE ORDER. Fixed widths declared
                     once, product takes the slack — without it the money columns
                     were sized by whatever text happened to be in them, so typing
@@ -778,7 +809,6 @@ export function CreateInvoiceModal({
                   <col className="po-col-qty" />
                   <col className="po-col-price" />
                   <col className="po-col-total" />
-                  <col className="po-col-supplier" />
                   <col className="po-col-dest" />
                   <col className="po-col-remove" />
                 </colgroup>
@@ -788,11 +818,20 @@ export function CreateInvoiceModal({
                     <th className="num">Qty</th>
                     <th className="num">Rate</th>
                     <th className="num">Amount</th>
-                    <th>Supplier</th>
                     {/* "Fulfilled from", not "Destination". On a purchase order
                         the column is where the goods GO; on a sales order they
                         always go to the buyer, so the open question is where they
-                        COME FROM — our shelf, or a supplier who ships direct. */}
+                        COME FROM — our shelf, or a supplier who ships direct.
+
+                        AND IT IS THE ONLY ROUTING COLUMN HERE, where a purchase
+                        order has two. On a PO the supplier and the destination
+                        are different parties answering different questions — who
+                        we buy from, and where it goes. On a SALES order they
+                        collapse: the goods always go to the buyer, so a line
+                        naming anything but a shelf here is already saying which
+                        party ships it, and a Supplier column beside it asked the
+                        same question twice. It was answered twice too — see
+                        `build`, which fills the stored supplier from this. */}
                     <th>Fulfilled from</th>
                     <th aria-label="Remove" />
                   </tr>
@@ -862,21 +901,12 @@ export function CreateInvoiceModal({
                           }
                         />
                       </td>
-                      {/* Both routing cells are inheritance-first, the same as a
-                          purchase order's: the opening option IS "same as the
-                          order", it is what a new line is set to, and choosing it
-                          stores NULL rather than a copy of the header. Muted
-                          while inherited, solid once overridden — readable down
-                          the column without opening a row. */}
-                      <td>
-                        <SupplierSelect
-                          className={`po-route-party${l.supplier ? '' : ' is-inherited'}`}
-                          ariaLabel={`Supplier for ${l.item}`}
-                          value={l.supplier || null}
-                          blankLabel={drop ? 'Who ships it?' : 'Off our own shelf'}
-                          onChange={(name) => patch(l.key, { supplier: name ?? '' })}
-                        />
-                      </td>
+                      {/* Inheritance-first, the same as a purchase order's: the
+                          opening option IS "same as the order", it is what a new
+                          line is set to, and choosing it stores NULL rather than
+                          a copy of the header. Muted while inherited, solid once
+                          overridden — readable down the column without opening a
+                          row. */}
                       <td>
                         <DestinationSelect
                           className={`po-route-party${l.destination ? '' : ' is-inherited'}`}
