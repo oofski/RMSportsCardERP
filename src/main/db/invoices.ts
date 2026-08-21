@@ -1678,8 +1678,40 @@ export function splitDropshipSales(
 ): { ok: boolean; created?: InvoiceDetail[]; error?: string } {
   if (orders.length === 0) return { ok: false, error: 'Assign at least one buyer first.' }
   const db = getDb()
-  const po = db.prepare(`SELECT id FROM purchase_orders WHERE id = ?`).get(poId)
+  const po = db.prepare(`SELECT po_number FROM purchase_orders WHERE id = ?`).get(poId) as
+    | { po_number: string }
+    | undefined
   if (!po) return { ok: false, error: 'That purchase order is gone.' }
+
+  /**
+   * ONCE PER PURCHASE ORDER, and this guard is on the SERVER because the ways
+   * back in are not all in one screen.
+   *
+   * An assignment covers every unit the order bought — `shipmentProblem` refuses
+   * anything less — so a second batch is not "more buyers", it is the same boxes
+   * billed twice: every buyer gets a duplicate invoice, and the totals on this
+   * deal double. The routes to a second press are ordinary ones: a double click,
+   * a failed refresh after a good save, reopening the interstitial on a purchase
+   * that was already split.
+   *
+   * Refused rather than made idempotent, because there is no key to be
+   * idempotent ON. The assignment is never stored; two presses can legitimately
+   * carry different buyers and quantities, so "the same batch again" is not
+   * something this function can recognise. What it CAN see is that the purchase
+   * has already been sold on, and that is the question worth asking.
+   */
+  const already = db
+    .prepare(`SELECT COUNT(*) AS n FROM invoices WHERE source_po_id = ?`)
+    .get(poId) as { n: number }
+  if (already.n > 0) {
+    return {
+      ok: false,
+      error:
+        `${po.po_number} has already been split — ${already.n} sales order` +
+        `${already.n === 1 ? '' : 's'} were raised from it. Open them from the Sales Orders board, ` +
+        `or delete one there before splitting again.`
+    }
+  }
 
   const run = db.transaction((): { ok: boolean; created?: InvoiceDetail[]; error?: string } => {
     const created: InvoiceDetail[] = []

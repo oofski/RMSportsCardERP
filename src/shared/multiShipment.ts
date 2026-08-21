@@ -308,23 +308,44 @@ export function salesOrdersFromShipment(input: {
   rows: ReadonlyArray<ShipmentRow>
   sources: ReadonlyArray<ShipmentSource>
 }): NewInvoice[] {
-  const from = (input.supplier ?? '').trim()
+  const named = (input.supplier ?? '').trim()
   const base = Number(input.firstNumber)
   const numbered = Number.isFinite(base) && base > 0
 
   return buyerShares(input.rows, input.sources).map((share, i) => {
+    /**
+     * NEVER EMPTY, AND THAT IS THE WHOLE SAFETY PROPERTY OF THIS FUNCTION.
+     *
+     * `purchase_orders.supplier` is nullable and the create form does not
+     * require it — "No supplier named" is an offered option. This used to write
+     * `destination: from || null` straight from it, and null on a sales-order
+     * line means INHERIT THE HEADER; the header of these orders is unset, and
+     * `invoiceStockLocation` falls back to RM. So every line of a supplier-less
+     * multi-shipment split came out as an ordinary from-stock line: saveInvoice
+     * ran `applyInvoiceStock`, drew down real FIFO layers, and billed the buyer
+     * for boxes that were dropshipped from a distributor and never touched a
+     * shelf here. The shelf went down, the cost basis moved, and nothing said so.
+     *
+     * The buyer's own name is the fallback, which is exactly what
+     * `dropshipSaleFromPurchase` has always done on the single-buyer path
+     * (`(supplier ?? '').trim() || destination.trim()`). Reading "fulfilled from
+     * the person who bought it" is a bit odd on the page — and it is the RIGHT
+     * kind of odd, because the only property that matters here is that the name
+     * is not a shelf: `destinationHoldsStock` says no, the stock move is
+     * suppressed, and the line stays a dropship. An honest oddity beats a silent
+     * stock write, and it keeps the two paths on one rule instead of two.
+     */
+    const from = named || share.buyer.trim()
     const lines: NewInvoiceLine[] = share.lines.map((l) => ({
       item: l.item,
       productId: l.productId,
       sku: l.sku,
       quantity: l.quantity,
       rate: 0,
-      // BOTH, and both are the supplier — see dropshipSaleFromPurchase. The
-      // buyer is the CUSTOMER on this order, never its destination: on a sales
-      // order `destination` means fulfilled-from, and writing the buyer's name
-      // there would be saying they shipped it to themselves.
-      destination: from || null,
-      supplier: from || null
+      // BOTH, and both name the party that shipped it — see
+      // dropshipSaleFromPurchase, which writes the same two fields the same way.
+      destination: from,
+      supplier: from
     }))
     return {
       customerName: share.buyer,

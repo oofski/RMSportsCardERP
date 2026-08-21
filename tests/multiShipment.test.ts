@@ -450,6 +450,103 @@ ok(
 )
 
 // ---------------------------------------------------------------------------
+console.log('\n=== 6b. A PURCHASE ORDER WITH NO SUPPLIER MUST NOT DRAW STOCK ===')
+// ---------------------------------------------------------------------------
+/**
+ * THE BUG THIS SECTION EXISTS FOR, and it reached the branch before an
+ * adversarial review caught it.
+ *
+ * `purchase_orders.supplier` is nullable and the create form does not require
+ * it — "No supplier named" is an offered option. salesOrdersFromShipment wrote
+ * `destination: from || null` straight off it, and NULL on a sales-order line
+ * means INHERIT THE HEADER. These orders set no header, `invoiceStockLocation`
+ * falls back to RM, and `destinationHoldsStock('RM')` is true — so every line of
+ * a supplier-less split came out as an ordinary from-stock line. saveInvoice ran
+ * applyInvoiceStock, drew down real FIFO layers, and billed the buyer for boxes
+ * that were dropshipped from a distributor and never touched a shelf.
+ *
+ * The shelf went down, the cost basis moved, and nothing on any screen said so.
+ * The single-buyer sibling never had the hole: dropshipSaleFromPurchase falls
+ * back to the other party's name.
+ */
+inventory.addStock('p_ms1', 'RM', 20, 40, 'real boxes on a real shelf', null, null)
+const shelfAtStart = inventory.stockQty('p_ms1', 'RM')
+
+const orphanDrafts = salesOrdersFromShipment({
+  supplier: null,
+  invoiceDate: '2026-08-21',
+  firstNumber: '7300',
+  rows: [row('s1', 'Gale Imports', 4), row('s1', 'Hana Cards', 6), row('s2', 'Gale Imports', 3)],
+  sources: SOURCES
+})
+const orphanLines = orphanDrafts.flatMap((d: any) => d.lines)
+ok(
+  orphanLines.every((l: any) => !!l.destination),
+  'A LINE NEVER COMES OUT WITH NO DESTINATION — null means inherit the header, and the header collapses to RM'
+)
+ok(
+  orphanLines.every((l: any) => !destinationHoldsStock(l.destination)),
+  'AND NEVER ONE THAT HOLDS STOCK — that is the single test standing between a dropship and a real FIFO draw'
+)
+ok(
+  orphanLines.every((l: any) => l.destination === l.supplier),
+  'both fields still name the same party'
+)
+
+const noSupplierPo = poRepo.createPurchaseOrder(
+  {
+    supplier: null,
+    location: MULTI_SHIPMENT,
+    lines: [
+      { productId: 'p_ms1', quantity: 10, unitPrice: 40 },
+      { productId: 'p_ms2', quantity: 3, unitPrice: 90 }
+    ]
+  },
+  null
+)
+ok(noSupplierPo.supplier === null, 'a purchase order really can carry no supplier', String(noSupplierPo.supplier))
+const noSupplierWrite = inv.splitDropshipSales(noSupplierPo.id, orphanDrafts, null)
+ok(noSupplierWrite.ok === true, 'the split still writes', String(noSupplierWrite.error))
+ok(
+  inventory.stockQty('p_ms1', 'RM') === shelfAtStart,
+  'AND THE SHELF DOES NOT MOVE — 20 boxes on the RM shelf are still 20',
+  `${shelfAtStart} -> ${inventory.stockQty('p_ms1', 'RM')}`
+)
+ok(
+  inv.dropshipSalesFor(noSupplierPo.id).every((s: any) => s.lines.every((l: any) => l.dropship === true)),
+  'every line reads as a dropship, not as stock going out of the door'
+)
+ok(
+  (db.prepare(`SELECT COUNT(*) AS n FROM invoice_stock_moves WHERE invoice_id IN
+     (SELECT id FROM invoices WHERE source_po_id = ?)`).get(noSupplierPo.id) as any).n === 0,
+  'AND NOT ONE STOCK MOVE WAS WRITTEN AGAINST THEM'
+)
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 6c. a purchase order is split ONCE ===')
+// ---------------------------------------------------------------------------
+/**
+ * An assignment covers every unit the order bought, so a second batch is not
+ * more buyers — it is the same boxes billed twice, and every buyer gets a
+ * duplicate invoice. The routes to a second press are ordinary: a double click,
+ * a refresh that failed after a good save, reopening the interstitial.
+ *
+ * Guarded on the SERVER because those routes are not all in one screen.
+ */
+const twice = inv.splitDropshipSales(noSupplierPo.id, orphanDrafts, null)
+ok(twice.ok === false, 'A SECOND SPLIT OF THE SAME PURCHASE IS REFUSED — it would bill every buyer twice')
+ok(
+  (twice.error ?? '').includes(noSupplierPo.poNumber),
+  'and the refusal names the order, so it can be found',
+  String(twice.error)
+)
+ok(
+  inv.dropshipSalesFor(noSupplierPo.id).length === 2,
+  'still exactly two sales orders, not four',
+  String(inv.dropshipSalesFor(noSupplierPo.id).length)
+)
+
+// ---------------------------------------------------------------------------
 console.log('\n=== 7. the guards that outlive this suite ===')
 // ---------------------------------------------------------------------------
 /**
@@ -507,6 +604,26 @@ ok(
 // The destination picker offers the sentinel on the ORDER and nowhere else: a
 // split row exists to name ONE destination for a slice, so "several buyers"
 // there is an unsplit line said twice.
+const splitScreen = readFileSync('src/renderer/src/modules/invoicing/MultiShipmentSplit.tsx', 'utf8')
+/**
+ * THE MODAL HAS TO CLOSE, and the refresh after it must not be able to report
+ * the save as failed. It used to await the board's reload INSIDE the same try as
+ * the write, so a refetch that rejected re-enabled the button on a batch that
+ * had already committed — one more press, and every buyer had two invoices.
+ */
+ok(
+  /onClose\(\)\n\s+try \{\n\s+await onDone\(\)/.test(splitScreen),
+  'THE SPLIT SCREEN CLOSES ON SUCCESS AND REFRESHES OUTSIDE THE SAVE — a failed refetch must not read as a failed save'
+)
+ok(
+  /if \(left <= 0 && rs\[at\]\.quantity <= 1\) return rs/.test(splitScreen),
+  'AND A ROW OF ONE UNIT CANNOT BE SPLIT — the old arithmetic left it at one and added another, over-assigning the slice'
+)
+ok(
+  /disabled=\{!canSplit\(row\)\}/.test(splitScreen),
+  'with the button saying so rather than doing nothing when pressed'
+)
+
 const partySelect = readFileSync('src/renderer/src/modules/invoicing/PartySelect.tsx', 'utf8')
 ok(
   /multi \? \[\{ label: 'Ships out to buyers', names: \[MULTI_SHIPMENT\] \}\] : \[\]/.test(partySelect),

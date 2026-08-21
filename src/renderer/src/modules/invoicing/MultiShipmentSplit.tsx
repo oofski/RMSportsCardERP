@@ -89,6 +89,20 @@ export function MultiShipmentSplit({
     const left = unassignedUnits(rows, source)
     setRows((rs) => {
       const at = rs.findIndex((r) => r.key === row.key)
+      if (at === -1) return rs
+      /**
+       * A ROW HOLDING ONE UNIT CANNOT BE SPLIT, and refusing is the only honest
+       * answer.
+       *
+       * With nothing left over, the new row has to come out of this one. That
+       * works down to a row of two; at one there is nothing to give, and the
+       * previous `Math.max(1, quantity - 1)` quietly left the row AT one and
+       * added another beside it — so the slice summed to one more than the order
+       * bought, and `shipmentProblem` blocked the save with a message about
+       * over-assignment that the operator had not caused. Splitting one box
+       * between two people is not a thing; the button says so instead.
+       */
+      if (left <= 0 && rs[at].quantity <= 1) return rs
       const added: ShipmentRow = {
         key: newShipmentRowKey(),
         sourceKey: row.sourceKey,
@@ -99,10 +113,17 @@ export function MultiShipmentSplit({
         quantity: left > 0 ? left : 1
       }
       const next = [...rs]
-      if (left <= 0) next[at] = { ...next[at], quantity: Math.max(1, next[at].quantity - 1) }
+      if (left <= 0) next[at] = { ...next[at], quantity: next[at].quantity - 1 }
       next.splice(at + 1, 0, added)
       return next
     })
+  }
+
+  /** Is there anything to give a new row? See splitRow. */
+  const canSplit = (row: ShipmentRow): boolean => {
+    const source = sources.find((s) => s.key === row.sourceKey)
+    if (!source) return false
+    return unassignedUnits(rows, source) > 0 || row.quantity > 1
   }
 
   const removeRow = (row: ShipmentRow): void => {
@@ -144,7 +165,27 @@ export function MultiShipmentSplit({
         `${made.length} sales order${made.length === 1 ? '' : 's'} raised from ${poNumber} — ` +
           `open each one to set the price.`
       )
-      await onDone()
+      /**
+       * THE WRITE IS DONE AND NOTHING AFTER IT MAY LOOK LIKE A FAILURE.
+       *
+       * `onDone` is the board's `reload` — a refetch, not part of the save. It
+       * used to be awaited inside the try above, so a refetch that rejected
+       * (a dropped connection, a signed-out session) was caught by the same
+       * handler as the write, reported as "Could not raise the sales orders",
+       * and re-enabled the button — on a batch that had ALREADY committed. The
+       * next press wrote every buyer a second invoice.
+       *
+       * So it is awaited outside, its failure is swallowed to a stale board
+       * rather than a wrong sentence, and the modal closes either way. The
+       * server refuses a second batch too — see splitDropshipSales — because
+       * this is not the only way back to that button.
+       */
+      onClose()
+      try {
+        await onDone()
+      } catch {
+        // A stale board is a refresh away. Saying the save failed is not.
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not raise the sales orders.')
       setSaving(false)
@@ -242,7 +283,12 @@ export function MultiShipmentSplit({
                   <button
                     type="button"
                     className="btn btn-ghost btn-sm ms-split"
-                    title={`Send some of these ${source.item} to somebody else too`}
+                    disabled={!canSplit(row)}
+                    title={
+                      canSplit(row)
+                        ? `Send some of these ${source.item} to somebody else too`
+                        : 'Nothing left to give — one box cannot go to two people'
+                    }
                     aria-label={`Split ${source.item} between more buyers`}
                     onClick={() => splitRow(row)}
                   >
