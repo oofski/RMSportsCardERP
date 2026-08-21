@@ -61,7 +61,12 @@ const {
   shelfShortfall
 } = require('../src/shared/fulfillment')
 const { INVOICE_TERMS, INVOICE_TERMS_OFFERED, termsOptionsFor } = require('../src/shared/invoices')
-const { PO_STAGES, PO_TRANSITIONS, poColumnOf } = require('../src/shared/purchaseOrders')
+const {
+  PO_STAGES,
+  PO_TRANSITIONS,
+  poColumnOf,
+  poColumnStatus
+} = require('../src/shared/purchaseOrders')
 
 let pass = 0
 let fail = 0
@@ -378,9 +383,22 @@ console.log('\n=== 8. Received sits before Paid on the purchase board ===')
 
 const order2 = PO_STAGES.map((s: any) => s.id).join(' | ')
 ok(
-  order2 === 'ordered | received | paid | cancelled',
+  order2 === 'ordered | received | paid | completed',
   'RECEIVED COMES BEFORE PAID — stock turns up and gets checked in, and the invoice is settled after',
   order2
+)
+/**
+ * AND THE LAST COLUMN IS COMPLETED, NOT CANCELLED.
+ *
+ * Cancelled was a lane for the rarest thing on the board, sitting in the place a
+ * reader's eye goes for "what finished?" — while an order that was received AND
+ * paid for had nowhere to land and sat in Paid, a live column, until the sweep
+ * took it. So the board could not tell "settled up, done" from "paid, boxes
+ * still coming".
+ */
+ok(
+  !PO_STAGES.some((s: any) => s.id === 'cancelled'),
+  'THERE IS NO CANCELLED COLUMN — a cancelled order is finished business and files under Completed with everything else'
 )
 ok(
   PO_TRANSITIONS.ordered.includes('received'),
@@ -392,40 +410,61 @@ ok(
 )
 
 /**
- * PAID AND RECEIVED IS PAID.
+ * PAID AND RECEIVED IS COMPLETED.
  *
  * Payment is its own fact — setPurchaseOrderPaid stamps paid_at without moving
  * the stage — precisely so that stock arriving before the invoice is settled
- * does not make somebody click Paid for a payment that has not happened. The
- * consequence was an order that had been received AND paid sitting under
- * Received for ever, while the column to its right was the one that meant
- * finished.
+ * does not make somebody click Paid for a payment that has not happened. Once
+ * BOTH are true there is nothing left to do about the order, and it moves one
+ * column right to say so.
  */
+const IS = '2026-08-20T00:00:00.000Z'
 ok(poColumnOf({ status: 'ordered', paidAt: null }) === 'ordered', 'an ordered order draws in Ordered')
 ok(
-  poColumnOf({ status: 'received', paidAt: null }) === 'received',
-  'a received one that is unpaid stays in Received'
+  poColumnOf({ status: 'received', paidAt: null, receivedAt: IS }) === 'received',
+  'a received one that is unpaid stays in Received — the money is still owed'
 )
 ok(
-  poColumnOf({ status: 'received', paidAt: '2026-08-20T00:00:00.000Z' }) === 'paid',
-  'AND ONE THAT IS RECEIVED AND PAID DRAWS IN PAID — which is the end of the line now that Paid is the rightmost live column'
+  poColumnOf({ status: 'ordered', paidAt: IS, receivedAt: null }) === 'paid',
+  'one paid for before it arrived draws in Paid — the boxes are still coming'
 )
 ok(
-  poColumnOf({ status: 'ordered', paidAt: '2026-08-20T00:00:00.000Z' }) === 'paid',
-  'as does one paid before it arrived'
+  poColumnOf({ status: 'received', paidAt: IS, receivedAt: IS }) === 'completed',
+  'AND ONE THAT IS PAID FOR AND RECEIVED DRAWS IN COMPLETED — nothing left to do about it'
 )
 ok(
-  poColumnOf({ status: 'cancelled', paidAt: '2026-08-20T00:00:00.000Z' }) === 'cancelled',
-  'CANCELLED OUTRANKS EVERYTHING — a cancelled order that was once paid is cancelled, and its stock has been handed back'
+  poColumnOf({ status: 'cancelled', paidAt: IS, receivedAt: IS }) === 'completed',
+  'a cancelled order is finished business too, and files in the same column'
 )
 // Derived, never stored: both facts have to survive, or cancelling can no
 // longer reverse the receipt and the completion test loses its input.
-const bothFacts: any = { status: 'received', paidAt: '2026-08-20T00:00:00.000Z' }
-ok(poColumnOf(bothFacts) === 'paid', 'a received-and-paid order draws in Paid')
+const bothFacts: any = { status: 'received', paidAt: IS, receivedAt: IS }
+ok(poColumnOf(bothFacts) === 'completed', 'a received-and-paid order draws in Completed')
 ok(
   bothFacts.status === 'received',
   'AND STILL KNOWS IT WAS RECEIVED — the column is derived and the status is left alone, or cancelling could no longer reverse the receipt',
   bothFacts.status
+)
+
+/**
+ * COMPLETED TAKES NO DROPS.
+ *
+ * It is derived from two dates the order already carries, so dragging a card
+ * into it would have to invent them both — or store a flag that then disagrees
+ * with them, which is the exact failure this codebase derives everything to
+ * avoid. poColumnStatus is what tells the board so.
+ */
+ok(poColumnStatus('completed') === null, 'Completed is not a drop target — it is derived, not set')
+ok(
+  PO_STAGES.filter((s: any) => poColumnStatus(s.id) !== null).map((s: any) => s.id).join(' | ') ===
+    'ordered | received | paid',
+  'the other three are, and each one is its own status'
+)
+// Which is what stops a card being dragged there: the board asks canTransition
+// with the drop target, and there is no target to ask about.
+ok(
+  !PO_STAGES.some((s: any) => s.id === 'completed' && poColumnStatus(s.id)),
+  'so no drag can reach it'
 )
 
 // ---------------------------------------------------------------------------

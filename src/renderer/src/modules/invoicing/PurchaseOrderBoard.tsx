@@ -5,7 +5,15 @@ import type {
   SupplyOrder,
   SupplyOrderStatus
 } from '@shared/types'
-import { PO_STAGES, PO_TRANSITIONS, canTransition, displayOrderNumber, poColumnOf } from '@shared/purchaseOrders'
+import type { PoColumn } from '@shared/purchaseOrders'
+import {
+  PO_STAGES,
+  PO_TRANSITIONS,
+  canTransition,
+  displayOrderNumber,
+  poColumnOf,
+  poColumnStatus
+} from '@shared/purchaseOrders'
 import { receiveProgress } from '@shared/receiving'
 import { Icon } from '../../components/Icon'
 import { ReceiveBar } from '../../components/ReceiveProgress'
@@ -22,12 +30,24 @@ import { PO_MOVE_LABEL, PO_STAGE_META } from './helpers'
  * than renaming anything: a supply order in transit belongs in the same "in
  * flight" column as a paid PO. The card keeps its OWN status word, so nothing
  * claims a supply order was "Paid" when what is known is that it shipped.
+ *
+ * BOTH TERMINAL STATES LAND IN COMPLETED. Cancelled has to, because the column
+ * it used to sit in is gone and a row that reaches no column has no way back to
+ * deleteSupplyOrder. Delivered joins it because a supply order carries no
+ * payment at all: delivered IS its finish, and leaving it in Received — a column
+ * that now reads "the boxes are here and we still owe for them" — would put a
+ * paid-for box of sleeves under a heading about money still outstanding.
+ *
+ * They leave on their own clock, not the PO one: listSupplyOrders keeps a
+ * terminal supply order for 14 days, where a completed PO goes at 1. Nothing
+ * reconciles the two numbers because nothing needs to — the card says Supply on
+ * it, and neither sweep can strand the other's rows.
  */
-const SUPPLY_COLUMN: Record<SupplyOrderStatus, PurchaseOrderStatus> = {
+const SUPPLY_COLUMN: Record<SupplyOrderStatus, PoColumn> = {
   ordered: 'ordered',
   in_transit: 'paid',
-  delivered: 'received',
-  cancelled: 'cancelled'
+  delivered: 'completed',
+  cancelled: 'completed'
 }
 
 /** The forward move offered on a supply card, and what to call it. */
@@ -46,11 +66,16 @@ const SUPPLY_STATUS_LABEL: Record<SupplyOrderStatus, string> = {
 }
 
 /**
- * The buy-side pipeline. One column per PO_STAGES entry (Ordered / Paid /
- * Received / Cancelled); each PO sits in the column matching its status. Moves
- * are both button-driven (from PO_TRANSITIONS, so terminal stages show none) and
- * drag-and-drop: a card can be dragged into any column its status can legally
- * transition to (canTransition). Clicking a card body opens its receipt.
+ * The buy-side pipeline. One column per PO_STAGES entry (Ordered / Received /
+ * Paid / Completed); each PO sits in the column `poColumnOf` derives for it,
+ * which is not always its status. Moves are both button-driven (from
+ * PO_TRANSITIONS, so terminal stages show none) and drag-and-drop: a card can be
+ * dragged into any column its status can legally transition to (canTransition).
+ * Clicking a card body expands it.
+ *
+ * COMPLETED TAKES NO DROPS — see poColumnStatus. An order arrives there by being
+ * paid AND received, or by being cancelled, and it leaves for history a day
+ * later. Dragging into it would have to invent the dates it is derived from.
  */
 export function PurchaseOrderBoard({
   pos,
@@ -81,7 +106,7 @@ export function PurchaseOrderBoard({
   onDeleteSupply: (order: SupplyOrder) => void
 }): JSX.Element {
   const [dragId, setDragId] = useState<string | null>(null)
-  const [overStage, setOverStage] = useState<PurchaseOrderStatus | null>(null)
+  const [overStage, setOverStage] = useState<PoColumn | null>(null)
   const dragged = dragId ? pos.find((p) => p.id === dragId) ?? null : null
   // The real STATUS decides which moves are legal; the COLUMN decides where the
   // card is drawn. They come apart on an order that is received and paid — see
@@ -97,7 +122,10 @@ export function PurchaseOrderBoard({
         const suppliesInStage = supplyOrders.filter((o) => SUPPLY_COLUMN[o.status] === stage.id)
         const columnCount = inStage.length + suppliesInStage.length
         const meta = PO_STAGE_META[stage.id]
-        const canDrop = !!(dragId && fromStatus && canTransition(fromStatus, stage.id))
+        // Null on Completed, which is derived rather than set — so it is never a
+        // drop target, and the guard is the same one the drop handler uses.
+        const dropTo = poColumnStatus(stage.id)
+        const canDrop = !!(dragId && fromStatus && dropTo && canTransition(fromStatus, dropTo))
         // While dragging, dim the columns this card can't move to (never the
         // column it came from) so valid vs invalid targets are both explicit.
         const noAllow = !!dragId && fromColumn !== stage.id && !canDrop
@@ -122,7 +150,7 @@ export function PurchaseOrderBoard({
             onDrop={(e) => {
               e.preventDefault()
               const id = dragId
-              if (id && fromStatus && canTransition(fromStatus, stage.id)) onMove(id, stage.id)
+              if (id && fromStatus && dropTo && canTransition(fromStatus, dropTo)) onMove(id, dropTo)
               setDragId(null)
               setOverStage(null)
             }}
@@ -353,6 +381,26 @@ function PoCard({
             title={`${po.receivedUnits} unit${po.receivedUnits === 1 ? '' : 's'} received and not paid for — ${formatMoney(po.total)} outstanding`}
           >
             Unpaid
+          </span>
+        )}
+        {/* WHICH KIND OF FINISHED. Completed holds two things that arrived there
+            for opposite reasons — settled up, and called off — and the column
+            heading can only name one of them. Without this chip a cancelled
+            order sitting beside a paid one reads as another job well done.
+
+            It says Reopen on the button below, so this is also the only thing
+            explaining why that button is there. */}
+        {po.status === 'cancelled' && (
+          <span
+            className="po-card-cancelled"
+            title={
+              po.cancelledAt
+                ? `Cancelled ${formatDate(po.cancelledAt)} — reopen it below if that was a mistake. It files itself away after a day.`
+                : 'Cancelled — reopen it below if that was a mistake.'
+            }
+          >
+            <Icon name="Ban" size={11} />
+            Cancelled
           </span>
         )}
         <Icon

@@ -20,10 +20,11 @@ function asInvoiceStatus(v: unknown): InvoiceStatus {
  *
  * ## What this is for
  *
- * A board is a place where work is done. A purchase order that has been received
- * and settled has no work left on it, and leaving it there makes the orders that
- * DO need attention harder to see — so `listPurchaseOrders` sweeps it off after
- * two days. This is where it goes, and this is what makes that sweep safe: the
+ * A board is a place where work is done. A purchase order that has been paid for
+ * AND received has no work left on it, and leaving it there makes the orders that
+ * DO need attention harder to see — so it spends a day in the board's Completed
+ * column and `listPurchaseOrders` then sweeps it off. This is where it goes, and
+ * this is what makes that sweep safe: the
  * order has not been deleted, hidden or summarised. Every line, every date and
  * every number is still here, one search away, for as long as the database
  * exists.
@@ -158,7 +159,20 @@ export function listPurchaseOrderHistory(
       unitsOrdered: own.reduce((n, l) => n + l.quantity, 0),
       unitsReceived: own.reduce((n, l) => n + (l.settledQty ?? 0), 0),
       total: CENTS(r.total),
-      settled: isSettledPurchaseOrder({ status, receivedAt: r.received_at }, now),
+      // ALL FOUR FACTS, because the predicate needs all four. Passing only the
+      // status and the receipt date used to be enough; it is not any more, and
+      // the failure is silent — an order the board has already swept would show
+      // here without the "filed" marker, so the one screen that can tell you
+      // where an order went would say it is still on a board it has left.
+      settled: isSettledPurchaseOrder(
+        {
+          status,
+          receivedAt: r.received_at,
+          paidAt: r.paid_at,
+          cancelledAt: r.cancelled_at
+        },
+        now
+      ),
       lines: own
     }
   })

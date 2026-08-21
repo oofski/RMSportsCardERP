@@ -28,8 +28,8 @@ import { financeReady } from './api'
  * half that does exist bought nobody anything.
  *
  * History is the year's ledger of orders, both sides. It exists because a
- * purchase order that has been received and settled has no work left on it, so
- * it leaves the board two days later — and something has to be the place it goes.
+ * purchase order that has been paid for and received has no work left on it, so
+ * it leaves the board a day later — and something has to be the place it goes.
  * Nothing is deleted: every line, date and price is still on the row.
  *
  * Wholesale is built now, and what unblocked it was not this screen: a sales

@@ -13,15 +13,49 @@ export const PO_STATUSES: PurchaseOrderStatus[] = ['ordered', 'paid', 'received'
  * second — and the column with eight cards in it sat to the right of an empty
  * one.
  *
+ * ## The last column is COMPLETED, not Cancelled
+ *
+ * A Cancelled column was a lane for the rarest thing on the board — most weeks
+ * it held nothing — sitting in the place a reader's eye goes for the answer to
+ * "what finished?". Meanwhile an order that was received AND paid had nowhere to
+ * land: it sat in Paid, which is a live column, until the sweep took it, so the
+ * board could not tell "settled up, done" from "paid, still waiting on boxes".
+ *
+ * Completed answers both. An order reaches it by being paid AND received, or by
+ * being cancelled, and it sits there for PO_SETTLE_DAYS before going to history.
+ *
+ * NOTHING IS DRAGGED INTO IT. It is derived from the two dates the order already
+ * carries — see poColumnOf — so it cannot disagree with them. `poColumnStatus`
+ * is what tells the board a column has no drop target.
+ *
  * DISPLAY ONLY. Nothing derives a legal move from this order; see
  * PO_TRANSITIONS, which is unchanged.
  */
-export const PO_STAGES: { id: PurchaseOrderStatus; label: string }[] = [
+export type PoColumn = 'ordered' | 'received' | 'paid' | 'completed'
+
+export const PO_STAGES: { id: PoColumn; label: string }[] = [
   { id: 'ordered', label: 'Ordered' },
   { id: 'received', label: 'Received' },
   { id: 'paid', label: 'Paid' },
-  { id: 'cancelled', label: 'Cancelled' }
+  { id: 'completed', label: 'Completed' }
 ]
+
+/**
+ * The status a card dropped on this column should be moved to, or NULL when the
+ * column takes no drops at all.
+ *
+ * Completed returns null because it is derived, not set: an order is complete
+ * when it has been paid for and received, and dragging a card there would have
+ * to either invent both dates or store a flag that then disagrees with them. The
+ * board dims the column instead, which says the same thing without lying about
+ * it.
+ *
+ * Every other column is its own status, and that identity is the reason this is
+ * a function rather than a lookup table nobody would remember to extend.
+ */
+export function poColumnStatus(column: PoColumn): PurchaseOrderStatus | null {
+  return column === 'completed' ? null : column
+}
 
 /**
  * Allowed moves between stages. Cancel is reachable from EVERY live stage,
@@ -73,8 +107,17 @@ export function isPurchaseOrderStatus(value: unknown): value is PurchaseOrderSta
  * still said so, while the column to its right was the one that meant finished.
  *
  * With Received now drawn before Paid, the two columns read as the two steps in
- * the order they happen, and PAID IS THE END OF THE LINE. So an order carrying a
- * payment date belongs there whatever stage it stopped at.
+ * the order they happen, and an order carrying a payment date belongs in Paid
+ * whatever stage it stopped at.
+ *
+ * ## Paid AND received is COMPLETED
+ *
+ * Once both are true there is nothing left to do about the order: the goods are
+ * here and the supplier is settled with. Leaving it in Paid made that column
+ * mean two different things at once — "paid, boxes still coming" and "finished"
+ * — and the finished ones outnumber the live ones, so the live ones were the
+ * hard ones to find. They now move one column right and leave for good a day
+ * later; see poCompletedAt and isSettledPurchaseOrder.
  *
  * ## Derived, never stored
  *
@@ -83,33 +126,65 @@ export function isPurchaseOrderStatus(value: unknown): value is PurchaseOrderSta
  * throw the received state away — and with it the receipt dates, the completion
  * test and the only record that the boxes actually turned up.
  *
- * Cancelled outranks everything: a cancelled order that was once paid is not
- * finished business, it is cancelled, and its stock has been handed back.
+ * Cancelled outranks everything, and lands in Completed too — finished in the
+ * other direction. It keeps its own chip on the card so the column does not
+ * claim a cancelled order was paid for.
  */
 export function poColumnOf(po: {
   status: PurchaseOrderStatus
   paidAt?: string | null
-}): PurchaseOrderStatus {
-  if (po.status === 'cancelled') return 'cancelled'
+  receivedAt?: string | null
+}): PoColumn {
+  // Cancelled orders sit in Completed for their last day rather than vanishing.
+  // See poCompletedAt: a cancel is reversible, and an order that disappeared the
+  // instant somebody mis-clicked would take the way back with it.
+  if (po.status === 'cancelled') return 'completed'
+  if (po.paidAt && po.receivedAt) return 'completed'
   if (po.paidAt) return 'paid'
   return po.status
 }
 
 /**
- * How long a fully-received order stays on the board after the boxes land.
+ * When this order stopped being live work, or null while it still is.
  *
- * TWO DAYS, and the two days are the point rather than the number. A received
- * order is not finished with the moment it is checked in: a short shipment turns
- * up the next morning, a scan gets corrected, somebody notices the price on the
- * invoice does not match the line. Sweeping it off the board the instant the
- * last box is counted would put the one order most likely to need a correction
- * behind a search.
+ * Three ways to finish, and the moment matters because the board keeps a
+ * finished order for a day before it goes to history:
+ *
+ *   · PAID AND RECEIVED — the goods are here and the supplier is settled with.
+ *     The later of the two dates is when that became true; taking the earlier
+ *     would start the clock before the order was actually done.
+ *   · CANCELLED — finished in the other direction.
+ *
+ * An order that is only one of paid or received is still live and has no date.
+ */
+export function poCompletedAt(po: {
+  status: PurchaseOrderStatus
+  paidAt?: string | null
+  receivedAt?: string | null
+  cancelledAt?: string | null
+}): string | null {
+  if (po.status === 'cancelled') return po.cancelledAt ?? null
+  if (po.paidAt && po.receivedAt) {
+    return Date.parse(po.paidAt) >= Date.parse(po.receivedAt) ? po.paidAt : po.receivedAt
+  }
+  return null
+}
+
+/**
+ * How long a finished order sits in Completed before it goes to history.
+ *
+ * ONE DAY, and the day is the point rather than the number. An order is not
+ * finished with the moment the last box is counted and the invoice is settled: a
+ * short shipment turns up the next morning, a scan gets corrected, somebody
+ * notices the price on the invoice does not match the line, somebody cancels the
+ * wrong PO. Sweeping it off the instant it completes would put the one order
+ * most likely to need a correction behind a search.
  *
  * After that it is history. The board is a place where work is done, and an
  * order with nothing left to do on it is clutter that makes the orders that DO
  * need attention harder to see — which is the whole reason this exists.
  */
-export const PO_SETTLE_DAYS = 2
+export const PO_SETTLE_DAYS = 1
 
 /**
  * Is this order finished with — off the board, into the year's ledger?
@@ -118,24 +193,34 @@ export const PO_SETTLE_DAYS = 2
  * something to set it: a background job, a check on every read, or a button
  * somebody has to remember. All three can be wrong, and the first two can be
  * wrong on one machine and right on another — sync would then carry the wrong
- * answer across. Computed from `received_at` it is simply a fact about the
- * clock, identical everywhere, correct on a laptop that has been shut for a
- * month, and needs no migration to change if the two days ever become five.
+ * answer across. Computed from the order's own dates it is simply a fact about
+ * the clock, identical everywhere, correct on a laptop that has been shut for a
+ * month, and needs no migration to change if the day ever becomes five.
  *
- * Keyed on `receivedAt` rather than on `status`, because an order can be both
- * received AND paid and the status column only holds one of those. The
- * timestamp is what records that the boxes arrived.
+ * Keyed on `poCompletedAt` rather than on `status`, because an order can be both
+ * received AND paid and the status column only holds one of those — and because
+ * neither timestamp on its own means finished. The clock starts when BOTH are
+ * true, which is what the Completed column draws.
  *
- * A cancelled order is NOT settled by this. Cancelling reverses every received
- * unit and is reversible in turn; it belongs on the board where somebody can see
- * what they did.
+ * A CANCELLED ORDER SETTLES TOO, from its cancellation date. It used to be
+ * exempt because there was a Cancelled column for it to sit in; there is not any
+ * more, and an order nobody can finish with is one that stays on the board for
+ * ever. The day it spends in Completed is the window to undo a mis-click — see
+ * PO_TRANSITIONS.cancelled, which reopens it — and after that it is in history
+ * with its dates intact, same as any other finished order.
  */
 export function isSettledPurchaseOrder(
-  po: { status: PurchaseOrderStatus; receivedAt: string | null },
+  po: {
+    status: PurchaseOrderStatus
+    receivedAt: string | null
+    paidAt?: string | null
+    cancelledAt?: string | null
+  },
   now: number = Date.now()
 ): boolean {
-  if (po.status === 'cancelled' || !po.receivedAt) return false
-  const at = Date.parse(po.receivedAt)
+  const done = poCompletedAt(po)
+  if (!done) return false
+  const at = Date.parse(done)
   if (!Number.isFinite(at)) return false
   return now - at >= PO_SETTLE_DAYS * 24 * 60 * 60 * 1000
 }

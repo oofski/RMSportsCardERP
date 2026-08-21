@@ -4094,6 +4094,19 @@ tr.hoverable-row:hover {
 .po-col-cancelled .po-col-title svg {
   color: var(--danger);
 }
+/* Completed is the end of the line, so it reads as one — but MUTED, not
+   celebratory. Received and Paid are the columns somebody is working towards;
+   this one is where finished work waits a day to be sure, and a third bright
+   green heading would compete with the two that mean something is happening. */
+.po-col-completed {
+  background: var(--surface);
+}
+.po-col-completed .po-col-title {
+  color: var(--text-3);
+}
+.po-col-completed .po-col-title svg {
+  color: var(--success-strong);
+}
 .po-col-count {
   min-width: 26px;
   height: 26px;
@@ -24726,6 +24739,24 @@ button.sor-team:focus-visible {
   border-radius: 999px;
   background: var(--warning-bg);
   color: var(--warning);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  flex-shrink: 0;
+}
+
+/* Called off, not settled up. The Completed column holds both, and its heading
+   can only name one — so a cancelled order says so on its own card, or it reads
+   as another job finished. Danger-coloured because it is the one card in that
+   column somebody might still need to act on. */
+.po-card-cancelled {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--danger-bg);
+  color: var(--danger);
   font-size: 10.5px;
   font-weight: 700;
   letter-spacing: 0.02em;

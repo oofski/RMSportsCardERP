@@ -43,7 +43,8 @@ const inv = require('../src/main/db/inventory')
 const history = require('../src/main/db/orderHistory')
 const {
   PO_SETTLE_DAYS,
-  isSettledPurchaseOrder
+  isSettledPurchaseOrder,
+  poColumnOf
 } = require('../src/shared/purchaseOrders')
 const db = getDb()
 
@@ -100,26 +101,86 @@ const receivedAgo = (id: string, ms: number): void => {
   )
 }
 
+/**
+ * Stamp an order as FINISHED N milliseconds ago — the boxes here and the
+ * supplier settled with, which since the Completed column is what starts the
+ * clock. Receipt alone no longer does; see `owed` below.
+ */
+const completedAgo = (id: string, ms: number): void => {
+  db.prepare(
+    `UPDATE purchase_orders SET status = 'received', received_at = ?, paid_at = ? WHERE id = ?`
+  ).run(agoIso(ms), agoIso(ms), id)
+}
+
+const HOUR = 60 * 60 * 1000
+
 // ---------------------------------------------------------------------------
 console.log('=== 1. the rule itself ===')
 // ---------------------------------------------------------------------------
-ok(PO_SETTLE_DAYS === 2, 'a received order stays on the board for two days', String(PO_SETTLE_DAYS))
-const rule = (over: any): boolean =>
-  isSettledPurchaseOrder({ status: 'received', receivedAt: agoIso(3 * DAY), ...over })
-ok(rule({}) === true, 'three days after receipt it is settled')
-ok(rule({ receivedAt: agoIso(1 * DAY) }) === false, 'one day after, it is not')
-ok(rule({ receivedAt: agoIso(2 * DAY + 1000) }) === true, 'the boundary is two days exactly')
-ok(rule({ receivedAt: null }) === false, 'an order that never arrived is never settled')
 ok(
-  rule({ status: 'cancelled' }) === false,
-  'AND A CANCELLED ORDER IS NEVER SWEPT — cancelling is reversible, and it belongs where somebody can see it'
+  PO_SETTLE_DAYS === 1,
+  'a completed order sits in the Completed column for a day',
+  String(PO_SETTLE_DAYS)
+)
+const rule = (over: any): boolean =>
+  isSettledPurchaseOrder({
+    status: 'received',
+    receivedAt: agoIso(3 * DAY),
+    paidAt: agoIso(3 * DAY),
+    ...over
+  })
+ok(rule({}) === true, 'three days after it completed it is settled')
+ok(rule({ receivedAt: agoIso(2 * HOUR), paidAt: agoIso(2 * HOUR) }) === false, 'two hours after, it is not')
+ok(
+  rule({ receivedAt: agoIso(1 * DAY + 1000), paidAt: agoIso(1 * DAY + 1000) }) === true,
+  'the boundary is one day exactly'
+)
+
+/**
+ * THE RULE THE OWNER ASKED FOR, stated as its two halves.
+ *
+ * Neither date on its own finishes an order. Received and unpaid is money still
+ * owed on stock already on the shelf — the one combination on this board worth
+ * interrupting for — and sweeping it off would file the invoice nobody has paid.
+ */
+ok(
+  rule({ paidAt: null }) === false,
+  'RECEIVED AND NOT PAID FOR IS NOT FINISHED — the money is still owed and the card stays'
+)
+ok(
+  rule({ receivedAt: null }) === false,
+  'AND PAID FOR WITH NOTHING DELIVERED IS NOT FINISHED EITHER — the boxes are still coming'
+)
+// The clock starts at the LATER of the two. Taking the earlier would settle an
+// order the day it was paid for on stock that only turned up this morning.
+ok(
+  rule({ receivedAt: agoIso(9 * DAY), paidAt: agoIso(2 * HOUR) }) === false,
+  'the clock starts at the LATER date — received last week, paid this morning, still on the board'
+)
+ok(
+  rule({ receivedAt: agoIso(2 * HOUR), paidAt: agoIso(9 * DAY) }) === false,
+  'and the same the other way round'
 )
 ok(rule({ receivedAt: 'not a date' }) === false, 'an unparseable date settles nothing')
-// Keyed on the timestamp rather than the status, because an order can be both
-// received AND paid and `status` only holds one of the two.
+
+// A CANCELLED ORDER SETTLES TOO, on its own date. It used to be exempt because
+// there was a Cancelled column for it to sit in; there is not any more, so an
+// exempt one would stay on the board for ever.
+const cancelled = (over: any): boolean =>
+  isSettledPurchaseOrder({
+    status: 'cancelled',
+    receivedAt: null,
+    cancelledAt: agoIso(3 * DAY),
+    ...over
+  })
+ok(cancelled({}) === true, 'a cancelled order files itself away a day later')
 ok(
-  isSettledPurchaseOrder({ status: 'paid', receivedAt: agoIso(5 * DAY) }) === true,
-  'a received order marked paid still settles'
+  cancelled({ cancelledAt: agoIso(2 * HOUR) }) === false,
+  'BUT NOT THE MINUTE IT IS CANCELLED — the day in Completed is the window to undo a mis-click'
+)
+ok(
+  cancelled({ cancelledAt: null, receivedAt: agoIso(9 * DAY), paidAt: agoIso(9 * DAY) }) === false,
+  'and one with no cancellation date recorded stays put rather than settling on its receipt'
 )
 
 // ---------------------------------------------------------------------------
@@ -128,15 +189,30 @@ console.log('\n=== 2. the board sweeps, and NOTHING is deleted ===')
 const fresh = raise([{ productId: P1, quantity: 4, unitPrice: 100 }])
 const stale = raise([{ productId: P1, quantity: 6, unitPrice: 90 }, { productId: P2, quantity: 2, unitPrice: 300 }])
 const live = raise([{ productId: P2, quantity: 3, unitPrice: 280 }])
+const owed = raise([{ productId: P1, quantity: 5, unitPrice: 120 }])
 
-receivedAgo(fresh.id, 6 * 60 * 60 * 1000) // this morning
-receivedAgo(stale.id, 4 * DAY) // last week
+completedAgo(fresh.id, 6 * HOUR) // finished this morning
+completedAgo(stale.id, 4 * DAY) // finished last week
+receivedAgo(owed.id, 4 * DAY) // arrived last week, still not paid for
 
 const board = poRepo.listPurchaseOrders()
 const onBoard = (id: string): boolean => board.some((p: any) => p.id === id)
 ok(onBoard(live.id), 'an order still in transit is on the board')
-ok(onBoard(fresh.id), 'and one received this morning is TOO — the correction window')
-ok(!onBoard(stale.id), 'ONE RECEIVED FOUR DAYS AGO IS GONE FROM THE BOARD')
+ok(onBoard(fresh.id), 'and one that completed this morning is TOO — the correction window')
+ok(!onBoard(stale.id), 'ONE THAT COMPLETED FOUR DAYS AGO IS GONE FROM THE BOARD')
+ok(
+  onBoard(owed.id),
+  'AND ONE RECEIVED FOUR DAYS AGO AND STILL UNPAID IS STILL THERE — receipt alone does not finish an order'
+)
+// Which column each of the survivors is drawn in, so the sweep and the board
+// cannot disagree about what "finished" looks like.
+const columnOf = (id: string): string | null => {
+  const hit = board.find((p: any) => p.id === id)
+  return hit ? poColumnOf(hit) : null
+}
+ok(columnOf(fresh.id) === 'completed', 'the fresh one sits in Completed', String(columnOf(fresh.id)))
+ok(columnOf(owed.id) === 'received', 'the unpaid one sits in Received', String(columnOf(owed.id)))
+ok(columnOf(live.id) === 'ordered', 'and the in-transit one in Ordered', String(columnOf(live.id)))
 
 // THE ASSERTION THAT MAKES THE SWEEP SAFE.
 ok(poRepo.getPurchaseOrder(stale.id) !== null, 'but the order itself still exists')
@@ -156,6 +232,18 @@ ok(!!find(stale.id), 'the settled one is here — this is where it went')
 ok(!!find(live.id), 'AND SO IS THE LIVE ONE — a ledger of the year is a ledger of the year')
 ok(find(stale.id)?.settled === true, 'the settled one says so on the row')
 ok(find(live.id)?.settled === false, 'and the live one does not')
+/**
+ * THE TWO SCREENS HAVE TO AGREE, and this is where they used to stop.
+ *
+ * History built its `settled` flag from the status and the receipt date alone.
+ * Once completion needed the payment date too, an order the board had already
+ * swept came back here reading as live — so the one screen that can tell you
+ * where an order went would have said it was still on a board it had left.
+ */
+ok(
+  find(owed.id)?.settled === false,
+  'the received-and-unpaid one is NOT filed here either — it is still on the board and the two screens say the same thing'
+)
 
 // Sorted by number descending, so the newest order is the first row — which is
 // what "based off number" means when you are looking for the last one you did.

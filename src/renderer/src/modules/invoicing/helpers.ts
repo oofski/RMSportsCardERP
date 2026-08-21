@@ -1,19 +1,27 @@
 import type { PurchaseOrderDetail, PurchaseOrderLine, PurchaseOrderStatus } from '@shared/types'
+import type { PoColumn } from '@shared/purchaseOrders'
 import { canonicalDestination, destinationHoldsStock } from '@shared/purchaseOrders'
 
 /**
- * Per-stage display metadata — a label, an Icon name (all four already live in
- * the Icon MAP) and a tone slug that drives the `.po-badge-<tone>` colourway.
+ * Per-stage display metadata — a label, an Icon name (all of them already live
+ * in the Icon MAP) and a tone slug that drives the `.po-badge-<tone>` colourway.
  * Shared by the board columns, the card move buttons and the receipt badge so a
  * stage always looks the same wherever it shows up.
+ *
+ * KEYED ON BOTH a status and a column, because the two are no longer the same
+ * set. `cancelled` is a status an order can hold and never a column of its own
+ * any more; `completed` is a column derived from two dates and never a status.
+ * Both are looked up here — the receipt badges the STATUS, the board heads the
+ * COLUMN — so dropping either key would leave one of them rendering nothing.
  */
 export const PO_STAGE_META: Record<
-  PurchaseOrderStatus,
+  PurchaseOrderStatus | PoColumn,
   { label: string; icon: string; tone: string }
 > = {
   ordered: { label: 'Ordered', icon: 'ShoppingCart', tone: 'ordered' },
   paid: { label: 'Paid', icon: 'DollarSign', tone: 'paid' },
   received: { label: 'Received', icon: 'PackageCheck', tone: 'received' },
+  completed: { label: 'Completed', icon: 'CheckCircle2', tone: 'completed' },
   cancelled: { label: 'Cancelled', icon: 'Ban', tone: 'cancelled' }
 }
 

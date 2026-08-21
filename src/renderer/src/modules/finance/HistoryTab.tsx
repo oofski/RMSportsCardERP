@@ -15,11 +15,12 @@ import { DealTicketsTab } from './DealTicketsTab'
  *
  * ## Why this exists
  *
- * A board is a place where work is done. A purchase order that has been received
- * and settled has no work left on it, so it leaves the board two days after the
- * boxes land — long enough for the short shipment that turns up the next
- * morning, short enough that finished orders stop crowding the ones that still
- * need something. This is where it goes.
+ * A board is a place where work is done. A purchase order that has been paid for
+ * AND received has no work left on it, so it spends a day in the board's
+ * Completed column and then leaves — long enough for the short shipment that
+ * turns up the next morning or the cancel somebody wants back, short enough that
+ * finished orders stop crowding the ones that still need something. This is
+ * where it goes.
  *
  * Nothing is deleted. Every line, date, price and tracking number is still on
  * the row, and the FIFO cost layers those receipts opened still point at it.

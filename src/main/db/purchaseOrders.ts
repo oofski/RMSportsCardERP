@@ -466,8 +466,8 @@ function unitsByLine(db: Database.Database, poId: string): Map<string, UnitRow[]
 /**
  * The board: every order there is still something to do about.
  *
- * SETTLED ORDERS ARE LEFT OUT — fully received, and received more than
- * PO_SETTLE_DAYS ago. They have not gone anywhere: `listPurchaseOrderHistory`
+ * SETTLED ORDERS ARE LEFT OUT — completed (paid AND received, or cancelled) more
+ * than PO_SETTLE_DAYS ago. They have not gone anywhere: `listPurchaseOrderHistory`
  * is the year's ledger and shows every order regardless of stage, so an order
  * swept off here is one search away and still carries its lines, its dates and
  * the cost basis every FIFO layer points at.
