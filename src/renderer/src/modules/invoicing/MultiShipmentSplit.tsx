@@ -293,6 +293,12 @@ export function MultiShipmentSplit({
                     onClick={() => splitRow(row)}
                   >
                     <Icon name="Split" size={15} />
+                    {/* HIDDEN AT EVERY DESKTOP WIDTH — see .ms-btn-label. On a
+                        wide row the two icon buttons sit at the end of a line
+                        and their position is what says what they do; the phone
+                        layer stacks that row, and a lone centred glyph on a line
+                        of its own reads as decoration rather than a control. */}
+                    <span className="ms-btn-label">Split</span>
                   </button>
 
                   <button
@@ -307,6 +313,7 @@ export function MultiShipmentSplit({
                     onClick={() => removeRow(row)}
                   >
                     <Icon name="Trash2" size={15} />
+                    <span className="ms-btn-label">{own.length <= 1 ? 'Clear' : 'Remove'}</span>
                   </button>
                 </div>
               ))}

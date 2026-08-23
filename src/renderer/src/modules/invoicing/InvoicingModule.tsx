@@ -144,6 +144,33 @@ export function InvoicingModule(): JSX.Element {
     [reload, toast]
   )
 
+  /**
+   * THE WAY BACK TO THE BUYER-ASSIGNMENT SCREEN.
+   *
+   * `setDropship` was called from exactly one place: the moment a dropship
+   * purchase order was created. That is the right moment to OFFER it and the
+   * wrong one to be the only moment it exists — press "Not now", close the tab,
+   * get interrupted, or raise the order yesterday, and the screen could never be
+   * opened again. The purchase sat on the board with its buyers unnamed and no
+   * control anywhere that would name them, so the sales orders could not be
+   * raised through the feature at all.
+   *
+   * The DETAIL is fetched here rather than passing the board's summary row:
+   * DropshipSaleStep flattens the order's LINES and their allocations to work
+   * out which slices are going out and to whom, and a summary carries neither.
+   */
+  const billBuyers = useCallback(
+    async (id: string) => {
+      const detail = await api.purchaseOrders.get(id)
+      if (!detail) {
+        toast.error('That purchase order is gone.')
+        return
+      }
+      setDropship(detail)
+    },
+    [toast]
+  )
+
   const moveSupply = useCallback(
     async (order: SupplyOrder, to: SupplyOrderStatus) => {
       const res = await api.supplies.setOrderStatus(order.id, to)
@@ -303,6 +330,7 @@ export function InvoicingModule(): JSX.Element {
             canManageSupplies={canManageSupplies}
             onDeletePo={canManage ? removePo : undefined}
             onMarkPaid={markPaid}
+            onBillBuyers={billBuyers}
             thumbnails={thumbnails}
             onMove={move}
             onOpen={(id) => setReceiptId(id)}

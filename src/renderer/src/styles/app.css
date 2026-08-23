@@ -24243,6 +24243,15 @@ button.sor-team:focus-visible {
 /* What each person's invoice comes to, added up. The rows above are per PRODUCT,
    so somebody taking two off one line and three off another appears twice in
    them — this is the one place that says what they are actually getting. */
+/* The two icon buttons on a split row carry a text label that NEVER shows on a
+   desktop. There, they sit at the end of a wide row and their position says what
+   they do; the phone layer stacks that row, and a lone centred glyph on a line of
+   its own reads as decoration. mobile.css turns these on — the same trick
+   .po-line-route uses to recover the routing cells a phone hides. */
+.ms-btn-label {
+  display: none;
+}
+
 .ms-preview {
   display: flex;
   flex-direction: column;
@@ -24573,6 +24582,19 @@ button.sor-team:focus-visible {
   border-color: color-mix(in srgb, var(--success) 45%, var(--border));
   color: var(--success);
 }
+/* The other half of a dropship. Primary-tinted at rest, unlike the two
+   correction buttons beside it: this is the NEXT STEP on an order that is not
+   finished, not an undo, and on a multi-shipment purchase it is the only route
+   to the screen that names the buyers. */
+.po-move.po-move-bill {
+  color: var(--brand-600);
+  border-color: color-mix(in srgb, var(--brand-500) 34%, var(--border));
+}
+.po-card-foot .po-move.po-move-bill:hover {
+  background: color-mix(in srgb, var(--brand-500) 10%, transparent);
+  border-color: color-mix(in srgb, var(--brand-500) 55%, var(--border));
+}
+
 /* Taking a payment back. Dashed at rest like its opposite number — both are
    corrections rather than the order's next step — but it warms to WARNING on
    hover, not success: pressing this un-says something the card currently

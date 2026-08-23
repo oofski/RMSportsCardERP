@@ -287,6 +287,74 @@ function topLevel(css: string): { blocks: { prelude: string; body: string }[]; b
   ok(mobileAt > appAt, 'and does it AFTER app.css, or every override loses the cascade')
 
   // ---------------------------------------------------------------------------
+  console.log('\n=== 6. the screens the dropship change added ===')
+  // ---------------------------------------------------------------------------
+  /**
+   * ALL THREE OF THESE WERE FOUND BY DRIVING THE APP AT 390px, not by reading
+   * CSS — which is why they are pinned here rather than trusted.
+   */
+
+  /**
+   * THE SALES ORDER TABLE HAS ONE MORE COLUMN THAN THE PURCHASE ORDER'S.
+   *
+   * A PO line hides BOTH routing columns on a phone and keeps four plus the bin.
+   * A sales order line has only one routing column to hide, so it carries five —
+   * and at the shared widths that came to 484px inside a 390px screen. The
+   * modal body does not scroll sideways, so the overflow was CLIPPED: the bin
+   * sat at x=443 with no way to reach it, and a line could not be removed from a
+   * sales order on a phone at all.
+   *
+   * The padding rule is the load-bearing half and the easiest to lose: app.css
+   * sets `table.data tbody td { padding: 13px 16px }` at (0,1,2), so a plain
+   * `.po-lines-so td` at (0,1,1) is outranked however late it appears. Written
+   * without the element qualifiers this rule silently does nothing and the table
+   * goes back over the edge.
+   */
+  ok(
+    /table\.po-lines-so thead th,\s*table\.po-lines-so tbody td \{[^}]*padding-left/.test(stripped),
+    'THE SALES ORDER CELLS ARE ELEMENT-QUALIFIED — a plain class selector loses to table.data tbody td and the bin goes off the screen'
+  )
+  ok(
+    /\.po-lines-so \.po-qty-input \{[^}]*width:\s*48px/.test(stripped),
+    'its quantity field is narrower than a purchase order line'
+  )
+  ok(
+    /\.po-lines-so \.po-price-input \{[^}]*width:\s*66px/.test(stripped),
+    'and so are its money fields, which is what makes five columns fit'
+  )
+
+  /**
+   * THE BUYER-ASSIGNMENT ROW GETS A SHAPE, not the generic flattening.
+   *
+   * `.po-ld-splitrow` collapses to one column on a phone. Applied to `.ms-row`
+   * that stacked five blocks about 800px tall FOR ONE BUYER, and left the two
+   * icon buttons as lone centred glyphs on lines of their own — which read as
+   * decoration rather than controls. Assigning a case between five people was
+   * most of a metre of scrolling.
+   */
+  ok(
+    /\.ms-row \{[^}]*grid-template-areas:/.test(stripped),
+    'the assignment row is laid out explicitly on a phone, not flattened to one column'
+  )
+  ok(
+    /\.ms-row > \.ms-split,\s*\.ms-row > \.po-ld-splitdrop \{[^}]*min-height:\s*var\(--rm-tap\)/.test(stripped),
+    'and both of its actions clear the tap floor'
+  )
+  /**
+   * The two icon buttons carry a text label that app.css hides at every desktop
+   * width. Turn one of those two off without the other and the phone gets
+   * unlabelled glyphs again, or the desktop grows words it never had.
+   */
+  ok(
+    /\.ms-btn-label \{[^}]*display:\s*inline/.test(stripped),
+    'the phone shows the labels on those buttons'
+  )
+  ok(
+    /\.ms-btn-label \{\s*display:\s*none;\s*\}/.test(appCss),
+    'AND THE DESKTOP HIDES THEM — the pair is what keeps one bundle serving both'
+  )
+
+  // ---------------------------------------------------------------------------
 console.log('\n=== N. hiding the nav is a DESKTOP gesture only ===')
 // ---------------------------------------------------------------------------
 // `.nav-hidden` is remembered in localStorage, so the flag travels with the

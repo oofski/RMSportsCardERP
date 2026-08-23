@@ -85,6 +85,7 @@ export function PurchaseOrderBoard({
   onOpen,
   onDeletePo,
   onMarkPaid,
+  onBillBuyers,
   onMoveSupply,
   onDeleteSupply
 }: {
@@ -103,6 +104,13 @@ export function PurchaseOrderBoard({
   /** Record a payment, or take one back, without moving the card. See `payable`
    *  in PoCard — the false case is how a mis-ticked payment is undone. */
   onMarkPaid?: (id: string, poNumber: string, paid: boolean) => void
+  /**
+   * Open the buyer-assignment screen for a dropship that has not been billed.
+   *
+   * The way back to a screen that used to exist for one moment only — see
+   * `billBuyers` in InvoicingModule.
+   */
+  onBillBuyers?: (id: string) => void
   onMoveSupply: (order: SupplyOrder, to: SupplyOrderStatus) => void
   onDeleteSupply: (order: SupplyOrder) => void
 }): JSX.Element {
@@ -176,6 +184,7 @@ export function PurchaseOrderBoard({
                       onOpen={onOpen}
                       onDelete={onDeletePo}
                       onMarkPaid={onMarkPaid}
+                      onBillBuyers={onBillBuyers}
                       dragging={dragId === po.id}
                       onDragStart={setDragId}
                       onDragEnd={() => {
@@ -209,6 +218,7 @@ function PoCard({
   onOpen,
   onDelete,
   onMarkPaid,
+  onBillBuyers,
   dragging,
   onDragStart,
   onDragEnd
@@ -218,6 +228,7 @@ function PoCard({
   onOpen: (id: string) => void
   onDelete?: (id: string, poNumber: string) => void
   onMarkPaid?: (id: string, poNumber: string, paid: boolean) => void
+  onBillBuyers?: (id: string) => void
   dragging: boolean
   onDragStart: (id: string) => void
   onDragEnd: () => void
@@ -277,6 +288,23 @@ function PoCard({
    * along — nothing reached it.
    */
   const payable = onMarkPaid !== undefined && po.status !== 'cancelled'
+  /**
+   * Has this dropship been sold on yet?
+   *
+   * `linkedInvoiceId` holds the FIRST sale raised against the order — see
+   * linkDropshipPair, which keeps it rather than overwriting it per buyer — so
+   * its absence is the honest test for "nothing has been billed". Reading it as
+   * "the sale" would be wrong on a multi-shipment order; reading it as "any
+   * sale" is exactly what it is.
+   *
+   * Offered on drop and MIXED orders alike: a mixed order has units going out to
+   * somebody as well as onto our own shelf, and those units still need billing.
+   */
+  const billable =
+    onBillBuyers !== undefined &&
+    po.dropshipUnits > 0 &&
+    !po.linkedInvoiceId &&
+    po.status !== 'cancelled'
   // Only worth a rail once something has actually landed. A whole column of
   // empty bars on orders still with the supplier is noise that makes the ONE
   // half-arrived shipment harder to pick out, which is the opposite of the job.
@@ -475,6 +503,26 @@ function PoCard({
           >
             Open
           </button>
+          {/* THE OTHER HALF OF THE DEAL, and it used to be reachable for about
+              five seconds. This offered itself once — the instant the purchase
+              order was created — and never again: "Not now", a closed tab or an
+              order raised yesterday all left the buyers unnamed with no control
+              anywhere that would name them.
+
+              Only while nothing has been billed. Once a sale points back at this
+              purchase the assignment is spent, and splitDropshipSales refuses a
+              second batch anyway — a button whose only outcome is that refusal
+              teaches the operator the feature is broken. */}
+          {billable && (
+            <button
+              type="button"
+              className="btn po-move po-move-bill"
+              title={`Say who is getting these units and raise ${po.dropshipUnits > 0 ? 'their sales orders' : 'the sales order'}`}
+              onClick={() => onBillBuyers?.(po.id)}
+            >
+              Bill the buyers
+            </button>
+          )}
           {payable && (
             <button
               type="button"

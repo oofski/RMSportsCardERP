@@ -1107,6 +1107,48 @@
     width: 74px;
   }
 
+  /* ---- The SALES order table has one more column to fit ------------------
+     A purchase order line hides BOTH its routing columns on a phone and keeps
+     four: product, qty, price, total, and the bin. A sales order line hides only
+     "Fulfilled from" — it has no second routing column — so it carries FIVE, and
+     at the widths above that came to 484px inside a 390px screen.
+
+     That is worse than it sounds. `.modal-body` does not scroll sideways, so the
+     overflow is CLIPPED rather than reachable: the bin sat at x=443 with no way
+     to scroll to it, and a line could not be removed from a sales order on a
+     phone at all. Measured, not guessed — see the walkthrough that found it.
+
+     So this table gets tighter cells than the purchase order's. The numbers are
+     the ones that fit: 4px of cell padding, 48px for a quantity (three digits),
+     66px for money (a five-figure total with a decimal), and the bin at the tap
+     floor. Everything left over goes to the product name, which wraps.
+     ------------------------------------------------------------------------ */
+  /* ELEMENT-QUALIFIED, and it has to be. `table.data tbody td` in app.css is
+     (0,1,2) and sets `padding: 13px 16px`; a plain `.po-lines-so td` is (0,1,1)
+     and loses to it however late it appears. Matching depth for depth is the
+     difference between 4px and 16px per side — 48px across the row, which is
+     most of what was pushing the bin off the screen. */
+  table.po-lines-so thead th,
+  table.po-lines-so tbody td {
+    padding-left: 4px;
+    padding-right: 4px;
+  }
+  .po-lines-so .po-qty-input {
+    width: 48px;
+  }
+  .po-lines-so .po-price-input {
+    width: 66px;
+  }
+  .po-lines-so td:last-child,
+  .po-lines-so th:last-child {
+    width: var(--rm-tap);
+  }
+  /* The name is the flexible column now, so it wraps instead of forcing width. */
+  .po-lines-so .po-line-name {
+    white-space: normal;
+    word-break: break-word;
+  }
+
   /* The panel's copy of the two hidden columns. Stacked, full width, and the
      only routing controls that exist at this width. */
   .po-line-route {
@@ -1153,6 +1195,78 @@
   .po-ld-splitdrop {
     width: 100%;
   }
+  /* ------------------------------------------------------------------------
+     Who is getting what (MultiShipmentSplit)
+
+     The desktop draws one buyer per LINE: a number, a stepper, a buyer box and
+     two icon buttons, side by side. Flattened by the single-column rule above,
+     that became five stacked blocks about 800px tall FOR ONE BUYER — and the
+     two icon buttons ended up as lone centred glyphs on lines of their own,
+     which read as decoration rather than controls. Assigning a case between
+     five people was most of a metre of scrolling.
+
+     So it gets a shape of its own rather than the generic flattening: the buyer
+     on one line because it is the answer being given, the stepper under it, and
+     the two actions side by side at the foot where they read as a pair. Three
+     compact lines instead of five tall ones, and both buttons wear the text
+     label app.css keeps hidden at every desktop width.
+     ------------------------------------------------------------------------ */
+  .ms-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-areas:
+      'buyer buyer'
+      'step  step'
+      'split trash';
+    gap: 8px;
+    padding: 12px;
+  }
+  /* The per-buyer number earns a line on a desktop and not on a phone: the
+     buyer's own name is what tells two rows apart, and the product heading above
+     already groups them. */
+  .ms-row > .po-ld-splitn {
+    display: none;
+  }
+  .ms-row > .ms-buyer {
+    grid-area: buyer;
+  }
+  .ms-row > .po-ld-step {
+    grid-area: step;
+  }
+  .ms-row > .ms-split {
+    grid-area: split;
+  }
+  .ms-row > .po-ld-splitdrop {
+    grid-area: trash;
+  }
+  .ms-row > .ms-split,
+  .ms-row > .po-ld-splitdrop {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    width: 100%;
+    min-height: var(--rm-tap);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+  }
+  .ms-btn-label {
+    display: inline;
+    font-size: 13px;
+    font-weight: 600;
+  }
+  /* The product heading wraps rather than truncating: on a phone the name is the
+     only thing saying which boxes these rows are dividing, and an ellipsis two
+     words in makes two headings look identical. */
+  .ms-source-name {
+    white-space: normal;
+    overflow: visible;
+  }
+  .ms-source-head {
+    flex-wrap: wrap;
+    gap: 4px 8px;
+  }
+
   .po-ld-splits-head {
     flex-wrap: wrap;
   }
