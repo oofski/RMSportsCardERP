@@ -51,7 +51,7 @@ mkdirSync(DIR, { recursive: true })
 /* eslint-disable @typescript-eslint/no-var-requires */
 const { getDb } = require('../src/main/db/database')
 const po = require('../src/main/db/purchaseOrders')
-const { PO_TRANSITIONS, canTransition } = require('../src/shared/purchaseOrders')
+const { PO_TRANSITIONS, canTransition, poColumnOf } = require('../src/shared/purchaseOrders')
 const db = getDb()
 const ACTOR = null
 
@@ -90,11 +90,31 @@ console.log('\n=== 1. REASON 2: stock can arrive before the money ===')
 // ---------------------------------------------------------------------------
 ok(canTransition('ordered', 'received'), 'an ordered PO may go straight to Received')
 ok(canTransition('ordered', 'paid'), 'and the ordinary route through Paid still exists')
-ok(!canTransition('received', 'paid'), 'a received PO still may NOT move to the Paid column')
+/**
+ * RECEIVED IS NO LONGER A ONE-WAY DOOR, and this assertion used to say it was.
+ *
+ * The old rule left `cancelled` as the only move out, so an order checked in by
+ * mistake could be escaped exactly one way: cancel it. That does three wrong
+ * things at once — reverses the stock (right), voids the purchase's COGS row
+ * (wrong, the money is still committed to a supplier who is still shipping) and
+ * records a cancellation that never happened (wrong, the buy was fine and the
+ * receipt was the mistake). Reopening afterwards then wiped `paid_at`, so fixing
+ * a mis-click could delete a payment that really happened.
+ *
+ * What has NOT changed is what the Paid COLUMN means, which is the thing the old
+ * assertion was really defending: payment is still recorded by
+ * setPurchaseOrderPaid without moving anything — see section 2 — and the card
+ * still does not go backwards up the board when the money lands. This is the
+ * separate act of saying the boxes never arrived.
+ */
 ok(
-  (PO_TRANSITIONS.received ?? []).join(',') === 'cancelled',
-  'cancel remains its only move — payment is not one',
+  (PO_TRANSITIONS.received ?? []).join(',') === 'ordered,paid,cancelled',
+  'A RECEIVED PO CAN GO BACK — cancelling is no longer the only way out of a mis-click',
   JSON.stringify(PO_TRANSITIONS.received)
+)
+ok(
+  canTransition('received', 'ordered'),
+  'undoing the receipt is a move it can make'
 )
 
 const before = stockAt('RM')
@@ -185,15 +205,62 @@ ok(n2.status === 'received', 'and Received still follows')
 ok(stockAt('RM') - nBefore === 4, 'booking its stock', String(stockAt('RM') - nBefore))
 ok(!!n2.paidAt, 'and the payment date survives the move')
 
-// Undo back to Ordered still clears the stage stamps, which is what that move
-// MEANS — "this was not paid after all". It is only reachable from Paid, so it
-// can never wipe a payment recorded by hand against a received order.
+// Undo back to Ordered still clears the stage stamps when it comes FROM PAID,
+// which is what that move means there — "this was not paid after all".
 const undone = make()
 po.setPurchaseOrderStatus(undone.id, 'paid', ACTOR)
 po.setPurchaseOrderStatus(undone.id, 'ordered', ACTOR)
 const u = po.getPurchaseOrder(undone.id)
 ok(u.paidAt === null, 'undoing Paid back to Ordered still clears the date')
-ok(!canTransition('received', 'ordered'), 'and Received has no route back to Ordered to wipe one')
+
+/**
+ * BUT UNDOING A RECEIPT MUST NOT WIPE A PAYMENT, and that used to be guaranteed
+ * only by the move being impossible.
+ *
+ * Received can now go back — a mis-click on Received should not have to be
+ * escaped by cancelling the order. The safety that came for free from refusing
+ * the move has to be written down instead: the boxes turning up by mistake says
+ * NOTHING about whether the invoice was settled, so `paid_at` survives. If it
+ * did not, fixing one mistake would silently create another, and the only record
+ * that the supplier had been paid would be gone.
+ *
+ * And then nothing has to choose a column: `poColumnOf` reads the surviving
+ * payment date and draws the card in Paid. The right stage, derived.
+ */
+const misReceived = make()
+po.setPurchaseOrderPaid(misReceived.id, true, ACTOR)
+const mrBefore = stockAt('RM')
+po.setPurchaseOrderStatus(misReceived.id, 'received', ACTOR)
+ok(stockAt('RM') - mrBefore === 4, 'a mis-received order books its stock like any other')
+
+const undoRes = po.setPurchaseOrderStatus(misReceived.id, 'ordered', ACTOR)
+ok(!undoRes.error, 'and can be sent back without cancelling it', String(undoRes.error))
+const mr = po.getPurchaseOrder(misReceived.id)
+ok(
+  !!mr.paidAt,
+  'UNDOING THE RECEIPT KEEPS THE PAYMENT — the boxes arriving by mistake says nothing about the money'
+)
+ok(mr.receivedAt === null, 'while the receipt date goes')
+ok(mr.status === 'ordered', 'the stage is ordered', mr.status)
+ok(
+  poColumnOf(mr) === 'paid',
+  'AND THE CARD LANDS IN PAID, derived from the date that survived rather than chosen',
+  poColumnOf(mr)
+)
+ok(
+  stockAt('RM') === mrBefore,
+  'THE STOCK IS HANDED BACK — an order with nothing checked in must not leave units on the shelf',
+  `${mrBefore} -> ${stockAt('RM')}`
+)
+ok(
+  cogsFor(misReceived.id) === 100,
+  'AND THE COST STAYS ON THE BOOKS — the money is still committed to a supplier who is still shipping; only cancelling voids it',
+  String(cogsFor(misReceived.id))
+)
+ok(
+  (db.prepare(`SELECT qty_received AS q FROM purchase_order_lines WHERE po_id = ?`).get(misReceived.id) as any).q === 0,
+  'and the line is receivable again from scratch'
+)
 
 // ---------------------------------------------------------------------------
 console.log('\n=== 7. reverting a cancelled order ===')
@@ -460,6 +527,109 @@ ok(po.getPurchaseOrder(r1.id).paidAt === null, 'a received order can sit unpaid 
 const late = po.setPurchaseOrderPaid(r1.id, true)
 ok(!late.error, 'and be paid later, from the Received column', String(late.error))
 ok(po.getPurchaseOrder(r1.id).status === 'received', 'without moving off it')
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 11. undoing a receipt REFUSES when the stock has gone ===')
+// ---------------------------------------------------------------------------
+/**
+ * THE ONE CASE WHERE THE UNDO MUST NOT WORK.
+ *
+ * Handing stock back means unwinding the exact FIFO lot each receipt opened. If
+ * part of that lot has already been sold there is nothing clean to unwind — the
+ * boxes are gone — and pretending they never arrived would leave the shelf short
+ * and the cost layers inconsistent. `reverseLotReceipt` throws, and because the
+ * whole move runs in one transaction the order is left EXACTLY as it was rather
+ * than half-undone.
+ *
+ * This is the same refusal cancelling has always made. It is worth its own test
+ * here because undoing a receipt is a new door onto it, and a door that half-
+ * worked would be worse than the one-way street it replaced.
+ */
+const soldPo = make()
+const soldBefore = stockAt('RM')
+po.setPurchaseOrderStatus(soldPo.id, 'received', ACTOR)
+ok(stockAt('RM') - soldBefore === 4, 'four boxes land on the shelf')
+
+// Sell two of them out of the lot this receipt opened.
+const soldLot = db
+  .prepare(`SELECT lot_id FROM po_line_receipts WHERE po_line_id IN
+              (SELECT id FROM purchase_order_lines WHERE po_id = ?)`)
+  .get(soldPo.id) as { lot_id: string }
+db.prepare('UPDATE inventory_lots SET qty_remaining = qty_remaining - 2 WHERE id = ?').run(soldLot.lot_id)
+
+const undoRefused = po.setPurchaseOrderStatus(soldPo.id, 'ordered', ACTOR)
+ok(!!undoRefused.error, 'THE UNDO IS REFUSED once part of the stock has been sold', String(undoRefused.error))
+ok(
+  (undoRefused.error ?? '').toLowerCase().includes('already been sold'),
+  'and says why, rather than failing silently',
+  String(undoRefused.error)
+)
+const stillThere = po.getPurchaseOrder(soldPo.id)
+ok(stillThere.status === 'received', 'THE ORDER IS UNCHANGED — not half-undone', stillThere.status)
+ok(!!stillThere.receivedAt, 'it still carries its receipt date')
+ok(
+  (db.prepare(`SELECT qty_received AS q FROM purchase_order_lines WHERE po_id = ?`).get(soldPo.id) as any).q === 4,
+  'and its line still reads as received — the transaction rolled back whole'
+)
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 12. received -> paid does not land in Completed ===')
+// ---------------------------------------------------------------------------
+/**
+ * The stamps are what `poColumnOf` reads, and an order carrying BOTH a payment
+ * date and a receipt date is drawn in COMPLETED — finished, a day from history.
+ * Moving a received order to Paid stamps `paid_at`; leaving the stale
+ * `received_at` behind would file an order whose stock was just handed back
+ * under "nothing left to do".
+ */
+const toPaid = make()
+const tpBefore = stockAt('RM')
+po.setPurchaseOrderStatus(toPaid.id, 'received', ACTOR)
+const tpMoved = po.setPurchaseOrderStatus(toPaid.id, 'paid', ACTOR)
+ok(!tpMoved.error, 'a received order can be moved to Paid', String(tpMoved.error))
+const tp = po.getPurchaseOrder(toPaid.id)
+ok(tp.receivedAt === null, 'AND THE RECEIPT DATE IS CLEARED WITH IT', String(tp.receivedAt))
+ok(!!tp.paidAt, 'while the payment date is stamped')
+ok(
+  poColumnOf(tp) === 'paid',
+  'SO THE CARD DRAWS IN PAID, not Completed — it is not finished, its boxes never arrived',
+  poColumnOf(tp)
+)
+ok(stockAt('RM') === tpBefore, 'and the stock went back', `${tpBefore} -> ${stockAt('RM')}`)
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 13. the card offers the undo (guards that outlive this suite) ===')
+// ---------------------------------------------------------------------------
+/**
+ * READ OFF THE SOURCE. `setPurchaseOrderPaid` has taken a boolean and logged
+ * "Payment un-marked" since it was written — and NOTHING REACHED IT, because the
+ * card hid the button the moment `paidAt` was set. A backend that can undo and a
+ * screen with no way to ask is the same as no undo at all, and no test of the
+ * repository could see it.
+ */
+const { readFileSync } = require('node:fs')
+const boardSrc = readFileSync('src/renderer/src/modules/invoicing/PurchaseOrderBoard.tsx', 'utf8')
+const moduleSrc = readFileSync('src/renderer/src/modules/invoicing/InvoicingModule.tsx', 'utf8')
+ok(
+  /const payable = onMarkPaid !== undefined && po\.status !== 'cancelled'/.test(boardSrc),
+  'THE PAY BUTTON IS NO LONGER HIDDEN ONCE PAID — that is what made a mis-tick unfixable'
+)
+ok(
+  /po\.paidAt \? 'Un-mark paid' : 'Mark paid'/.test(boardSrc),
+  'and it says which way it goes'
+)
+ok(
+  /onMarkPaid\?\.\(po\.id, po\.poNumber, !po\.paidAt\)/.test(boardSrc),
+  'passing the opposite of what the card currently claims'
+)
+ok(
+  /api\.purchaseOrders\.setPaid\(id, paid\)/.test(moduleSrc),
+  'AND THE HANDLER PASSES IT THROUGH — it used to hardcode true, so the false case was unreachable'
+)
+ok(
+  /po\.status === 'received' && to === 'ordered' \? 'Undo receipt'/.test(boardSrc),
+  'undoing a receipt is called that, not "Reopen" — from Received it is a different act with different consequences'
+)
 
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

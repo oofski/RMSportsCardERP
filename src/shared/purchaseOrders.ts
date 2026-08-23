@@ -76,7 +76,21 @@ export function poColumnStatus(column: PoColumn): PurchaseOrderStatus | null {
 export const PO_TRANSITIONS: Record<PurchaseOrderStatus, PurchaseOrderStatus[]> = {
   ordered: ['paid', 'received', 'cancelled'],
   paid: ['ordered', 'received', 'cancelled'],
-  received: ['cancelled'],
+  // RECEIVED IS NO LONGER A ONE-WAY DOOR.
+  //
+  // It used to offer only `cancelled`, so an order checked in by mistake could
+  // be escaped in exactly one way: cancel it. That is three wrong things at
+  // once — it reverses the stock (right), voids the purchase's COGS row
+  // (wrong: the order is still a purchase this business committed to), and
+  // records a cancellation that never happened (wrong: the buy was fine, the
+  // receipt was the mistake). Reopening afterwards then cleared `paid_at` too,
+  // so fixing a mis-click could silently delete a payment that really happened.
+  //
+  // Going back to ordered or paid hands the stock back through the SAME
+  // reversal the cancel uses — see reverseReceivedLines, which unwinds each
+  // receipt against the exact FIFO lot it opened and REFUSES when any of that
+  // stock has already been sold — and leaves the purchase, and its cost, alone.
+  received: ['ordered', 'paid', 'cancelled'],
   // Cancelled is no longer the end of the road. A PO cancelled by mistake had
   // no way back, and the only remedy was to retype the whole order under a new
   // number — which loses the original number, the dates and the paperwork

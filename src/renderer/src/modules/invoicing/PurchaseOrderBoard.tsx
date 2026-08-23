@@ -100,8 +100,9 @@ export function PurchaseOrderBoard({
   /** Undefined without the manage permission — the button is then not rendered
    *  at all rather than rendered and refused. */
   onDeletePo?: (id: string, poNumber: string) => void
-  /** Record a payment without moving the card. See `payable` in PoCard. */
-  onMarkPaid?: (id: string, poNumber: string) => void
+  /** Record a payment, or take one back, without moving the card. See `payable`
+   *  in PoCard — the false case is how a mis-ticked payment is undone. */
+  onMarkPaid?: (id: string, poNumber: string, paid: boolean) => void
   onMoveSupply: (order: SupplyOrder, to: SupplyOrderStatus) => void
   onDeleteSupply: (order: SupplyOrder) => void
 }): JSX.Element {
@@ -216,7 +217,7 @@ function PoCard({
   onMove: (id: string, to: PurchaseOrderStatus) => void
   onOpen: (id: string) => void
   onDelete?: (id: string, poNumber: string) => void
-  onMarkPaid?: (id: string, poNumber: string) => void
+  onMarkPaid?: (id: string, poNumber: string, paid: boolean) => void
   dragging: boolean
   onDragStart: (id: string) => void
   onDragEnd: () => void
@@ -265,10 +266,17 @@ function PoCard({
    * made the paid date on those orders mean nothing at all.
    *
    * So it is not a stage button. It stamps a date and the card stays exactly
-   * where it is. Hidden once paid — the chip in the header says so from then on
-   * — and hidden on a cancelled order, whose money is already back out of COGS.
+   * where it is. Hidden on a cancelled order, whose money is already back out of
+   * COGS.
+   *
+   * IT UN-MARKS TOO, and hiding it once paid was the mistake. A payment ticked
+   * on the wrong card had no way back from this board at all: the only thing
+   * that cleared `paid_at` was cancelling the order and reopening it, which
+   * reverses stock and voids the purchase's cost to undo a mis-click about
+   * money. The backend has taken a boolean and logged "Payment un-marked" all
+   * along — nothing reached it.
    */
-  const payable = onMarkPaid !== undefined && !po.paidAt && po.status !== 'cancelled'
+  const payable = onMarkPaid !== undefined && po.status !== 'cancelled'
   // Only worth a rail once something has actually landed. A whole column of
   // empty bars on orders still with the supplier is noise that makes the ONE
   // half-arrived shipment harder to pick out, which is the opposite of the job.
@@ -470,11 +478,15 @@ function PoCard({
           {payable && (
             <button
               type="button"
-              className="btn po-move po-move-paid"
-              title={`Record that ${po.poNumber} has been paid. It stays where it is — this is the payment, not a stage.`}
-              onClick={() => onMarkPaid?.(po.id, po.poNumber)}
+              className={`btn po-move ${po.paidAt ? 'po-move-unpaid' : 'po-move-paid'}`}
+              title={
+                po.paidAt
+                  ? `${po.poNumber} was marked paid ${formatDate(po.paidAt)}. This takes that back — the order stays exactly where it is and no stock moves.`
+                  : `Record that ${po.poNumber} has been paid. It stays where it is — this is the payment, not a stage.`
+              }
+              onClick={() => onMarkPaid?.(po.id, po.poNumber, !po.paidAt)}
             >
-              Mark paid
+              {po.paidAt ? 'Un-mark paid' : 'Mark paid'}
             </button>
           )}
           {moves.map((to) => (
@@ -482,9 +494,19 @@ function PoCard({
               key={to}
               type="button"
               className={`btn po-move po-move-${to}`}
+              title={
+                po.status === 'received' && to !== 'cancelled'
+                  ? `These boxes were not actually checked in — hands the stock back and puts ${po.poNumber} where it was. Refused if any of it has already been sold.`
+                  : undefined
+              }
               onClick={() => onMove(po.id, to)}
             >
-              {PO_MOVE_LABEL[to]}
+              {/* "Undo receipt", not "Reopen". From CANCELLED, moving to ordered
+                  is reopening a dead order; from RECEIVED it is saying the boxes
+                  never arrived, which is a different act with different
+                  consequences — stock goes back, the purchase stays a purchase.
+                  One label for both would describe neither. */}
+              {po.status === 'received' && to === 'ordered' ? 'Undo receipt' : PO_MOVE_LABEL[to]}
             </button>
           ))}
           {deletable && (

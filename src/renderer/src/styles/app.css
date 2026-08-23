@@ -24573,6 +24573,20 @@ button.sor-team:focus-visible {
   border-color: color-mix(in srgb, var(--success) 45%, var(--border));
   color: var(--success);
 }
+/* Taking a payment back. Dashed at rest like its opposite number — both are
+   corrections rather than the order's next step — but it warms to WARNING on
+   hover, not success: pressing this un-says something the card currently
+   claims, and the two buttons occupy the same spot on the row. */
+.po-move.po-move-unpaid {
+  color: var(--text-3);
+  border-style: dashed;
+}
+.po-card-foot .po-move.po-move-unpaid:hover {
+  border-style: solid;
+  background: var(--warning-bg);
+  border-color: color-mix(in srgb, var(--warning) 45%, var(--border));
+  color: var(--warning);
+}
 
 /* ---------------------------------------------------------------------------
    Collapsed purchase-order cards

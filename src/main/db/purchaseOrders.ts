@@ -1451,12 +1451,55 @@ export function setPurchaseOrderStatus(
 
     const ts = nowIso()
     const tsCol = STATUS_TS_COLUMN[status]
+
+    /**
+     * UNDOING A RECEIPT — the stock has to come back first.
+     *
+     * Leaving Received for anywhere except Cancelled means the boxes were never
+     * checked in, so the units and the FIFO layers they opened have to be handed
+     * back or inventory keeps stock no document accounts for. The SAME reversal
+     * the cancel uses, deliberately: each receipt unwinds against the exact lot
+     * it opened rather than the FIFO-oldest, which would cannibalise a different
+     * and possibly cheaper layer and quietly move the average cost of stock that
+     * has nothing to do with this order.
+     *
+     * `reverseReceivedLines` THROWS when part of that stock has already been
+     * sold, which rolls this whole transaction back and leaves the order exactly
+     * as it was — the right answer, because those boxes are gone and pretending
+     * they never arrived would leave the shelf negative.
+     *
+     * WHAT IS NOT DONE HERE IS THE POINT: the COGS row is left alone. Cancelling
+     * voids it because the purchase stopped being a purchase; undoing a receipt
+     * does not, because the money is still committed to a supplier who is still
+     * going to ship. Voiding it would take a real cost out of the books to fix a
+     * mis-click on a different question.
+     */
+    if (row.status === 'received' && status !== 'cancelled') {
+      reverseReceivedLines(db, id, row.po_number, actorId)
+    }
+
     // ordered_at is set once at creation; on an undo back to 'ordered' keep the
     // original stamp but clear the downstream stage stamps so the timestamps
     // reflect the PO's current stage (no stale paid_at on a reopened PO).
     if (status === 'ordered') {
+      /**
+       * A PAYMENT SURVIVES AN UNDONE RECEIPT.
+       *
+       * Clearing all three stamps is right when UN-CANCELLING — a cancel took
+       * the whole order out, so everything downstream of it is stale. It is
+       * wrong when undoing a receipt: the boxes turning up by mistake says
+       * nothing about whether the invoice was settled, and wiping `paid_at`
+       * would silently delete a real payment as the price of fixing a mis-click.
+       *
+       * Kept, and then nothing has to decide which column the card lands in:
+       * `poColumnOf` reads the payment date and draws it in Paid, or in Ordered
+       * when there is none. The right stage, derived rather than chosen.
+       */
+      const undoingReceipt = row.status === 'received'
       db.prepare(
-        'UPDATE purchase_orders SET status = ?, paid_at = NULL, received_at = NULL, cancelled_at = NULL, updated_at = ? WHERE id = ?'
+        undoingReceipt
+          ? 'UPDATE purchase_orders SET status = ?, received_at = NULL, cancelled_at = NULL, updated_at = ? WHERE id = ?'
+          : 'UPDATE purchase_orders SET status = ?, paid_at = NULL, received_at = NULL, cancelled_at = NULL, updated_at = ? WHERE id = ?'
       ).run(status, ts, id)
       recordOrderEvent('po', id, 'stage', {
         fromStage: row.status,
@@ -1506,6 +1549,22 @@ export function setPurchaseOrderStatus(
         }
       }
     } else {
+      /**
+       * RECEIVED → PAID needs no receipt date cleared HERE, and it matters that
+       * this says so rather than doing it again.
+       *
+       * The stamps are what `poColumnOf` reads, and an order carrying BOTH a
+       * payment date and a receipt date is drawn in COMPLETED — finished, a day
+       * from history. Setting `paid_at` while leaving a stale `received_at`
+       * behind would file an order whose stock was just handed back under
+       * "nothing left to do".
+       *
+       * `reverseReceivedLines` has already nulled it, above — along with
+       * `scanned_at`, which retires the order's box from the Incoming panel and
+       * which a clear written here would have missed. One place does this, and
+       * the second copy that used to sit on this line was dead code that looked
+       * load-bearing: removing the real one left the tests green.
+       */
       db.prepare(
         `UPDATE purchase_orders SET status = ?, ${tsCol} = ?, updated_at = ? WHERE id = ?`
       ).run(status, ts, ts, id)

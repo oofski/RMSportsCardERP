@@ -121,14 +121,24 @@ export function InvoicingModule(): JSX.Element {
    * does not go anywhere, because an order that arrived before it was paid for
    * has not gone backwards up the board.
    */
+  /**
+   * BOTH WAYS, because the button that only went one way was a trap.
+   *
+   * `setPurchaseOrderPaid` has always taken a boolean and has always logged
+   * "Payment un-marked" for the false case — it was reachable from nothing. A
+   * payment ticked on the wrong card had no way back at all, and the only thing
+   * that cleared `paid_at` was cancelling the order and reopening it, which
+   * reverses stock and voids the purchase's cost to fix a mis-click on a
+   * different question entirely.
+   */
   const markPaid = useCallback(
-    async (id: string, poNumber: string) => {
-      const res = await api.purchaseOrders.setPaid(id, true)
+    async (id: string, poNumber: string, paid: boolean) => {
+      const res = await api.purchaseOrders.setPaid(id, paid)
       if (!res.ok) {
-        toast.error(res.error ?? 'Could not record the payment.')
+        toast.error(res.error ?? (paid ? 'Could not record the payment.' : 'Could not undo that.'))
         return
       }
-      toast.success(`${poNumber} is marked paid.`)
+      toast.success(paid ? `${poNumber} is marked paid.` : `${poNumber} is no longer marked paid.`)
       await reload()
     },
     [reload, toast]
