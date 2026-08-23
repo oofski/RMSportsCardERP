@@ -2743,6 +2743,22 @@ table.data tfoot .data-total td {
   font-weight: 700;
   color: var(--text);
 }
+/* A CASE THAT HAS BEEN BROKEN INTO. The count beside it already reads
+   "3 + 11 boxes", which says it; this is what makes it findable when somebody is
+   scanning a long catalog for what is part-used rather than reading one row's
+   numbers. Warning-toned, not danger — an open case is normal, it is just the
+   holding a number of cases cannot describe. */
+/* The same marker on the break form's shelf picker, where it answers the
+   question being asked at that moment: which shelf has the open case on it. */
+.lp-open {
+  color: var(--warning);
+  font-weight: 650;
+}
+.crs-open {
+  display: inline-flex;
+  align-items: center;
+  color: var(--warning);
+}
 .cr-exp {
   color: var(--text-3);
   flex-shrink: 0;
@@ -2895,6 +2911,19 @@ table.data tfoot .data-total td {
 }
 /* Only this flag makes a fractional on-hand legal, so it is named beside the
    numbers it explains. 7.52:1 light, 7.35:1 dark. */
+/* What is actually left in the open case, on the expanded product. The row
+   above says a case is open; this says how much of it there is. */
+.cd-opencase {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 9px;
+  border-radius: 999px;
+  background: var(--warning-bg);
+  color: var(--warning);
+  font-size: 11.5px;
+  font-weight: 650;
+}
 .cd-giveaway-flag {
   display: inline-flex;
   align-items: center;

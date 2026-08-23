@@ -127,6 +127,36 @@ export function breakToStock(units: ProductUnits, cases: number, boxes: number):
   if (units.unitType === 'case') {
     // Stock counts cases, so loose boxes are a fraction of one.
     if (boxes > 0) {
+      /**
+       * A CASE THAT SAYS HOW MANY BOXES IT HOLDS CAN BE OPENED, and that used to
+       * be refused.
+       *
+       * Breaking one box out of a case is the single most ordinary thing this
+       * business does on air, and the rule here turned it into an error:
+       * "…is a part-case, and this product is not stocked for fractional
+       * quantities. Enter whole cases, or mark it as a giveaway item." Neither
+       * way out was true. Entering a whole case says twelve boxes were opened
+       * when one was, and the giveaway flag is a statement about a product being
+       * promotional material — ticking it to get past this would put a real case
+       * of Tier One in the same category as loose packs handed out on stream.
+       *
+       * `boxesPerCase` IS the divisibility statement. A product that declares a
+       * case holds twelve boxes has said that a box is a twelfth of a case; the
+       * refusal below still stands when the divisor is unknown, because then the
+       * fraction genuinely cannot be computed.
+       *
+       * The dust argument that produced the old gate is real and is handled
+       * elsewhere rather than avoided here — see QTY_SNAP and
+       * `quantizationSlack`, both written for exactly this: breaking a case one
+       * box at a time, where each stored balance is re-rounded to four places and
+       * the error accumulates in one direction. Without them the last box of a
+       * 6-box case could not be recorded and a 12-box case kept a permanent
+       * 0.0001 on the shelf. With them, a part-case is an ordinary balance.
+       *
+       * PACKS ARE STILL GATED. See giveawayToStock, which keeps the flag: a pack
+       * is a fraction of a fraction, it is only ever handed out rather than sold,
+       * and nothing about this change says a box divides cleanly into packs.
+       */
       if (!units.boxesPerCase) {
         return {
           ok: false,
@@ -135,12 +165,6 @@ export function breakToStock(units: ProductUnits, cases: number, boxes: number):
       }
       const q = cases + boxes / units.boxesPerCase
       const fractional = Math.abs(q - Math.round(q)) > QTY_EPS
-      if (fractional && !units.giveawayItem) {
-        return {
-          ok: false,
-          error: `${boxes} loose box(es) is a part-case, and this product is not stocked for fractional quantities. Enter whole cases, or mark it as a giveaway item in Inventory.`
-        }
-      }
       return { ok: true, value: { quantity: q, fractional } }
     }
     return { ok: true, value: { quantity: cases, fractional: false } }
@@ -244,11 +268,75 @@ export function boxesPerCaseFromName(name: string): number | null {
   return Number.isFinite(n) && n > 0 && n <= 100 ? n : null
 }
 
-/** Human summary of a quantity in the product's own unit. */
+/**
+ * A shelf balance read back as whole cases and loose boxes.
+ *
+ * ## The number on its own is unreadable
+ *
+ * Stock is one decimal count of the product's own unit, which is right for the
+ * arithmetic and useless to a person: break a box out of a 12-box case and the
+ * shelf holds 3.9167, which answers no question anybody asks. What the operator
+ * wants to know is what is physically in the room — three sealed cases and an
+ * open one with eleven boxes in it.
+ *
+ * ## Rounding to the nearest BOX, deliberately
+ *
+ * Every stored balance is re-rounded to four places, so 3.9167 × 12 is 47.0004
+ * and 3.9166 × 12 is 46.9992 — both are 47 boxes, and rounding is what says so.
+ * Flooring instead would report 46 for one of them and lose a box that exists.
+ *
+ * ## Null when the split would be a lie
+ *
+ * Returns null for a box-stocked product (there is nothing to divide), when
+ * `boxesPerCase` is unknown (the divisor is the whole basis of the split), and
+ * when the balance is not a whole number of boxes — a giveaway item holding
+ * two-thirds of a box has no honest reading as "0 boxes" or "1 box", so the
+ * caller falls back to the decimal rather than inventing one.
+ */
+export interface CaseBreakdown {
+  /** Sealed cases — untouched, whole. */
+  fullCases: number
+  /** Boxes sitting in the one case that has been opened. Zero when none is. */
+  looseBoxes: number
+  /** True when a case has been cracked and still has boxes in it. */
+  open: boolean
+  /** Everything, counted in boxes. What a break actually consumes. */
+  totalBoxes: number
+}
+
+export function caseBreakdown(units: ProductUnits, quantity: number): CaseBreakdown | null {
+  if (units.unitType !== 'case') return null
+  if (!units.boxesPerCase || units.boxesPerCase <= 0) return null
+  if (!Number.isFinite(quantity) || quantity < 0) return null
+
+  const totalBoxes = Math.round(quantity * units.boxesPerCase)
+  // A balance that is not a whole number of boxes is a fraction this reading
+  // cannot express — see the note above.
+  if (Math.abs(quantity * units.boxesPerCase - totalBoxes) > 0.01) return null
+
+  const fullCases = Math.floor(totalBoxes / units.boxesPerCase)
+  const looseBoxes = totalBoxes - fullCases * units.boxesPerCase
+  return { fullCases, looseBoxes, open: looseBoxes > 0, totalBoxes }
+}
+
+/**
+ * Human summary of a quantity in the product's own unit.
+ *
+ * A part-case reads as "3 cases + 11 boxes" rather than "3.9167 cases" — see
+ * caseBreakdown, which is what makes the difference between a number and an
+ * answer. Anything it cannot split honestly falls back to the decimal.
+ */
 export function describeQuantity(units: ProductUnits, quantity: number): string {
   const unit = units.unitType === 'case' ? 'case' : 'box'
   const whole = Math.floor(quantity)
   const frac = round4(quantity - whole)
   if (frac === 0) return `${whole} ${unit}${whole === 1 ? '' : 's'}`
+
+  const split = caseBreakdown(units, quantity)
+  if (split && split.open) {
+    const cases = `${split.fullCases} case${split.fullCases === 1 ? '' : 's'}`
+    const boxes = `${split.looseBoxes} box${split.looseBoxes === 1 ? '' : 'es'}`
+    return split.fullCases > 0 ? `${cases} + ${boxes}` : boxes
+  }
   return `${round4(quantity)} ${unit}s`
 }

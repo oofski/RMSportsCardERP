@@ -17,7 +17,13 @@ import {
 } from '@shared/units'
 import { api } from '../../lib/api'
 import { formatMoney } from '../../lib/format'
-import { formatUnitCount, productUnits, stockUnitWord } from '../../lib/productUnits'
+import {
+  formatStockOnHand,
+  formatUnitCount,
+  hasOpenCase,
+  productUnits,
+  stockUnitWord
+} from '../../lib/productUnits'
 import { Icon } from '../../components/Icon'
 import { useToast } from '../../components/Toast'
 import { Button, Field, Input } from '../../components/ui'
@@ -511,8 +517,18 @@ export function AddItemForm({
                       a factor of twelve between a case product and a box one. */}
                   {!reconcile && (
                     <div className="lp-sub">
-                      {formatUnitCount(product.quantityByLocation[l.id] ?? 0)}{' '}
+                      {/* "4 + 11 boxes", not "3.9167". A case that has been
+                          broken into is the one holding the number alone cannot
+                          describe, and it is exactly what somebody picking a
+                          shelf to break from wants to know. */}
+                      {formatStockOnHand(units, product.quantityByLocation[l.id] ?? 0)}{' '}
                       {units ? `${stockUnitWord(units.unitType, 2)} on hand` : 'on hand'}
+                      {hasOpenCase(units, product.quantityByLocation[l.id] ?? 0) && (
+                        <span className="lp-open" title="One case is already open">
+                          {' '}
+                          · open
+                        </span>
+                      )}
                     </div>
                   )}
                 </button>
@@ -998,7 +1014,7 @@ function DeductionPreview({
         {short && (
           <span className="stm-consume-short">
             <Icon name="AlertTriangle" size={13} />
-            {location} holds only {formatUnitCount(onHand)}{' '}
+            {location} holds only {formatStockOnHand(units, onHand)}{' '}
             {units ? stockUnitWord(units.unitType, onHand) : 'on hand'}.
           </span>
         )}

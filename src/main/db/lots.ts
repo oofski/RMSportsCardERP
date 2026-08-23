@@ -163,14 +163,43 @@ function hasGiveawayFlag(db: Database): boolean {
  * caller of createLot / consumeFifo / restoreFifo had to change and none of them
  * can accidentally opt a product in. A product that no longer exists is false —
  * whole units — which is the safe answer.
+ *
+ * ## THIS HAS TO AGREE WITH breakToStock, and for a while it did not
+ *
+ * `consumeFifo` rounds its ask through `roundQty(qty, allowsFractionalQty(...))`
+ * before it walks the layers. So when the break form was opened up to part-cases
+ * and this was left reading only the giveaway flag, the two disagreed by exactly
+ * one box: `bumpStock` took 1.0833 cases off the shelf and this rounded the ask
+ * to 1, so the loose box left inventory WITHOUT its cost leaving with it. The
+ * shelf and the cost layers drifted 1/12 apart on every part-case break, the
+ * margin on that box was pure profit, and nothing on any screen said so. Found
+ * by a test that broke one box out of a clean five-case product and compared the
+ * two — see streamReconcile.
+ *
+ * ## Why a case with a divisor qualifies
+ *
+ * `boxes_per_case` IS the divisibility statement: a product declaring a 12-box
+ * case has said a box is a twelfth of it, and that fraction is exact rather than
+ * arbitrary. The dust that produced the giveaway-only rule is handled rather
+ * than avoided — see QTY_SNAP and `quantizationSlack`, both written for breaking
+ * a case one box at a time.
+ *
+ * A case with NO divisor stays whole-unit: there is no fraction to be exact
+ * about, and `breakToStock` refuses it on the same grounds.
  */
 export function allowsFractionalQty(db: Database, productId: string | null | undefined): boolean {
   if (!productId) return false
-  if (!hasGiveawayFlag(db)) return false
-  const row = db.prepare('SELECT giveaway_item FROM inventory_products WHERE id = ?').get(productId) as
-    | { giveaway_item: number }
+  const row = db
+    .prepare(
+      `SELECT unit_type, boxes_per_case${hasGiveawayFlag(db) ? ', giveaway_item' : ''}
+         FROM inventory_products WHERE id = ?`
+    )
+    .get(productId) as
+    | { unit_type: string; boxes_per_case: number | null; giveaway_item?: number }
     | undefined
-  return !!row && Number(row.giveaway_item) === 1
+  if (!row) return false
+  if (Number(row.giveaway_item ?? 0) === 1) return true
+  return row.unit_type === 'case' && Number(row.boxes_per_case) > 0
 }
 
 /** Insert one cost lot (qty_received === qty_remaining === qty). Returns the new

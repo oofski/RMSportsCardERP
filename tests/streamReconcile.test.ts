@@ -1051,5 +1051,180 @@ console.log('\n--- 14b. a LIVE line: the record moves, the stock does not ---')
   ok(lotStockGap(ZERO_P) === 0, 'and it ends exactly consistent after all of it')
 }
 
+// ---------------------------------------------------------------------------
+console.log('\n=== BREAKING A BOX OUT OF A CASE ===')
+// ---------------------------------------------------------------------------
+/**
+ * THE MOST ORDINARY THING THIS BUSINESS DOES, and it used to be an error.
+ *
+ * The owner opened one whole case and one box out of the next, and the break
+ * form refused: "1 loose box(es) is a part-case, and this product is not stocked
+ * for fractional quantities. Enter whole cases, or mark it as a giveaway item."
+ * Neither way out was true — a whole case says twelve boxes were opened when one
+ * was, and the giveaway flag is a statement about promotional material.
+ *
+ * `boxesPerCase` is the divisibility statement. A product declaring a 12-box
+ * case has said a box is a twelfth of it. What is pinned here is that the break
+ * goes through, takes exactly the right stock, and reads back as cases and boxes
+ * rather than as a decimal nobody can act on.
+ */
+const { breakToStock, caseBreakdown, describeQuantity } = require('../src/shared/units')
+const CASE_UNITS = { unitType: 'case', boxesPerCase: 12, packsPerBox: null, giveawayItem: false }
+
+// ---- the conversion --------------------------------------------------------
+const oneAndOne = breakToStock(CASE_UNITS, 1, 1)
+ok(oneAndOne.ok === true, 'ONE CASE PLUS ONE BOX IS ACCEPTED — it was refused outright before', String(!oneAndOne.ok && oneAndOne.error))
+ok(
+  oneAndOne.ok && Math.abs(oneAndOne.value.quantity - (1 + 1 / 12)) < 1e-9,
+  'and converts to 1 + 1/12 cases, at full precision',
+  oneAndOne.ok ? String(oneAndOne.value.quantity) : ''
+)
+ok(oneAndOne.ok && oneAndOne.value.fractional === true, 'flagged fractional, which is what the stock path keys its slack off')
+
+// A whole number of cases is unchanged, and so is the one refusal worth keeping.
+const whole = breakToStock(CASE_UNITS, 2, 0)
+ok(whole.ok === true && whole.value.quantity === 2 && whole.value.fractional === false, 'two whole cases still convert plainly')
+const noDivisor = breakToStock(
+  { unitType: 'case', boxesPerCase: null, packsPerBox: null, giveawayItem: false },
+  0,
+  1
+)
+ok(
+  noDivisor.ok === false,
+  'A CASE WITH NO BOXES-PER-CASE STILL REFUSES — without the divisor the fraction cannot be computed at all'
+)
+ok(
+  (!noDivisor.ok ? noDivisor.error : '').includes('boxes-per-case'),
+  'and says which field to set rather than blaming the operator',
+  !noDivisor.ok ? noDivisor.error : ''
+)
+
+// ---- reading the shelf back ------------------------------------------------
+/**
+ * A stored balance is re-rounded to four places, so 47 boxes of a 12-box case is
+ * 3.9167 and not 3.916666… The breakdown rounds to the nearest BOX, which is what
+ * makes both readings land on 47. Flooring would report 46 and lose a real box.
+ */
+const split = caseBreakdown(CASE_UNITS, 3.9167)
+ok(!!split, 'a part-case balance can be read back')
+ok(split.fullCases === 3, 'three cases are still sealed', String(split?.fullCases))
+ok(split.looseBoxes === 11, 'AND ELEVEN BOXES ARE LEFT IN THE OPEN ONE', String(split?.looseBoxes))
+ok(split.open === true, 'which is what marks the case as cracked')
+ok(split.totalBoxes === 47, 'forty-seven boxes in the room', String(split?.totalBoxes))
+
+/**
+ * THE LAST BOX OF AN OPEN CASE, and the reason this rounds rather than floors.
+ *
+ * One box of a 12-box case is 1/12 = 0.08333…, stored at four places as 0.0833.
+ * Multiplied back out that is 0.9996 — just UNDER a whole box. Flooring reports
+ * zero and the box vanishes from the shelf reading while it is still physically
+ * on it and still carrying its cost; rounding lands on the one box that is
+ * really there. The same shortfall exists on every divisor where 1/N rounds
+ * down, which is most of them.
+ */
+ok(
+  caseBreakdown(CASE_UNITS, 0.0833)?.looseBoxes === 1,
+  'A SINGLE REMAINING BOX IS STILL ONE BOX — its stored balance is a hair under, and flooring would lose it',
+  String(caseBreakdown(CASE_UNITS, 0.0833)?.looseBoxes)
+)
+ok(caseBreakdown(CASE_UNITS, 0.0833)?.fullCases === 0, 'with no sealed cases behind it')
+ok(
+  caseBreakdown({ unitType: 'case', boxesPerCase: 3, packsPerBox: null, giveawayItem: false }, 0.3333)
+    ?.looseBoxes === 1,
+  'and the same on a 3-box case, where the shortfall is larger'
+)
+
+ok(caseBreakdown(CASE_UNITS, 4)?.open === false, 'four sealed cases are not open')
+ok(caseBreakdown(CASE_UNITS, 0)?.totalBoxes === 0, 'and an empty shelf reads as no boxes')
+ok(
+  caseBreakdown({ unitType: 'box', boxesPerCase: 8, packsPerBox: null, giveawayItem: false }, 3) === null,
+  'a BOX-stocked product has nothing to split — the reading would be an invention'
+)
+ok(
+  caseBreakdown({ unitType: 'case', boxesPerCase: null, packsPerBox: null, giveawayItem: false }, 3.5) === null,
+  'and neither has one with no divisor'
+)
+/**
+ * A giveaway item holding two thirds of a box has no honest reading as a number
+ * of boxes, so it gets none and the caller falls back to the decimal. Returning
+ * "0 boxes" would say the shelf is empty when it is not.
+ */
+ok(
+  caseBreakdown({ unitType: 'case', boxesPerCase: 12, packsPerBox: 4, giveawayItem: true }, 3.9722) === null,
+  'a balance that is not a whole number of boxes refuses to be split'
+)
+
+ok(
+  describeQuantity(CASE_UNITS, 3.9167) === '3 cases + 11 boxes',
+  'THE SHELF READS AS CASES AND BOXES, not as 3.9167',
+  describeQuantity(CASE_UNITS, 3.9167)
+)
+ok(describeQuantity(CASE_UNITS, 4) === '4 cases', 'a whole shelf still reads whole')
+ok(
+  describeQuantity(CASE_UNITS, 1 / 12) === '11 boxes' || describeQuantity(CASE_UNITS, 11 / 12) === '11 boxes',
+  'and one open case with no sealed ones behind it drops the "0 cases"',
+  describeQuantity(CASE_UNITS, 11 / 12)
+)
+
+// ---- and it actually moves the stock ---------------------------------------
+/**
+ * The end of the owner's sentence: five cases on the shelf, open one whole case
+ * and one box out of the next, and thirty-five boxes plus eleven are left.
+ */
+/**
+ * A FRESH product, deliberately. CASE_P has been through the reconciliation
+ * sections above, which leave stock and cost layers legitimately apart — a
+ * reconciliation describes a night and not a shelf, so it moves one and not the
+ * other. Measuring lot consistency against that would be measuring their history
+ * rather than this break.
+ */
+const PART_P = make({
+  name: 'SR Part Case Hobby 12-Box Case',
+  unitType: 'case',
+  boxesPerCase: 12,
+  cost: 1200,
+  open: 5
+})
+const shelfBefore = stockQty(PART_P, 'RM')
+const gapBefore = lotStockGap(PART_P)
+ok(shelfBefore === 5, 'five sealed cases to start', String(shelfBefore))
+ok(gapBefore === 0, 'with stock and cost layers in step', String(gapBefore))
+const broke = addItem(
+  { sessionId: TODAY, kind: 'break', productId: PART_P, cases: 1, boxes: 1, location: 'RM' },
+  null
+)
+ok(broke.ok === true, 'the break records', String(!broke.ok && broke.error))
+const shelfAfter = stockQty(PART_P, 'RM')
+ok(
+  Math.abs(shelfBefore - shelfAfter - (1 + 1 / 12)) < 1e-3,
+  'THIRTEEN BOXES CAME OFF THE SHELF — one case and one box, not two cases',
+  `${shelfBefore} -> ${shelfAfter}`
+)
+const left = caseBreakdown(CASE_UNITS, shelfAfter)
+ok(
+  left?.fullCases === 3 && left?.looseBoxes === 11,
+  'AND THE SHELF READS 3 SEALED CASES AND 11 BOXES IN THE OPEN ONE',
+  JSON.stringify(left)
+)
+ok(left?.totalBoxes === 47, 'forty-seven boxes left in the room', String(left?.totalBoxes))
+ok(
+  lotStockGap(PART_P) === 0,
+  'STOCK AND THE COST LAYERS STILL AGREE EXACTLY — a part-case break must not leave dust behind',
+  String(lotStockGap(PART_P))
+)
+
+// Putting it back is the same rule in reverse — a part-case must not strand.
+const partLine = db
+  .prepare(`SELECT id FROM stream_items WHERE product_id = ? ORDER BY rowid DESC LIMIT 1`)
+  .get(PART_P) as { id: string } | undefined
+ok(!!partLine, 'the break left a line to remove')
+ok(removeItem(partLine?.id as string, null).ok, 'the part-case line removes')
+ok(
+  Math.abs(stockQty(PART_P, 'RM') - shelfBefore) < 1e-3,
+  'and every one of the thirteen boxes goes back',
+  `${stockQty(PART_P, 'RM')} vs ${shelfBefore}`
+)
+ok(lotStockGap(PART_P) === 0, 'with the layers exactly consistent again', String(lotStockGap(PART_P)))
+
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail > 0) process.exit(1)

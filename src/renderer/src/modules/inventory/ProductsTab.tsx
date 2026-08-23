@@ -2,7 +2,12 @@ import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import type { InventoryProduct, ProductImage, UpdateInventoryProduct } from '@shared/types'
 import { CATEGORY_ORDER, LOCATIONS, categoryColor } from '@shared/inventory'
 import { api } from '../../lib/api'
-import { formatUnitCount } from '../../lib/productUnits'
+import {
+  formatStockOnHand,
+  hasOpenCase,
+  productUnits,
+  stockBreakdown
+} from '../../lib/productUnits'
 import { useToast } from '../../components/Toast'
 import { Button, EmptyState, Field, Input, Modal, Select } from '../../components/ui'
 import { Icon } from '../../components/Icon'
@@ -315,11 +320,22 @@ export function ProductsTab({
                     <span className="cr-stock">
                       {LOCATIONS.map((l) => (
                         <span key={l.id} className="crs-loc">
-                          <em>{l.label}</em> {formatUnitCount(p.quantityByLocation[l.id] ?? 0)}
+                          <em>{l.label}</em>{' '}
+                          {formatStockOnHand(productUnits(p), p.quantityByLocation[l.id] ?? 0)}
                         </span>
                       ))}
                       <span className={`crs-total ${low ? 'stock-low' : ''}`}>
-                        {formatUnitCount(p.quantity)}
+                        {formatStockOnHand(productUnits(p), p.quantity)}
+                        {/* A CRACKED CASE, said on the row rather than left to be
+                            inferred from a decimal. "3 + 11 boxes" already reads
+                            as one case being open; this is what makes it findable
+                            when somebody is scanning the list for what is part-used
+                            rather than reading one product's numbers. */}
+                        {hasOpenCase(productUnits(p), p.quantity) && (
+                          <span className="crs-open" title="A case is open — see the boxes left in it">
+                            <Icon name="PackageOpen" size={12} strokeWidth={2.5} />
+                          </span>
+                        )}
                         {low && <Icon name="AlertTriangle" size={12} strokeWidth={2.5} />}
                       </span>
                     </span>
@@ -564,12 +580,28 @@ function ProductDetail({
         </span>
         {LOCATIONS.map((l) => (
           <span key={l.id}>
-            <em>{l.label}</em> {formatUnitCount(product.quantityByLocation[l.id] ?? 0)}
+            <em>{l.label}</em>{' '}
+            {formatStockOnHand(productUnits(product), product.quantityByLocation[l.id] ?? 0)}
           </span>
         ))}
         <span>
-          <em>Total</em> {formatUnitCount(product.quantity)}
+          <em>Total</em> {formatStockOnHand(productUnits(product), product.quantity)}
         </span>
+        {/* What is actually in the open case, spelled out. The row above reads
+            "3 + 11 boxes"; this says which of those numbers is the broken one and
+            how much of it is left, which is the question somebody opens a product
+            to answer. */}
+        {(() => {
+          const split = stockBreakdown(productUnits(product), product.quantity)
+          if (!split || !split.open) return null
+          return (
+            <span className="cd-opencase" title="One case has been broken into">
+              <Icon name="PackageOpen" size={11} />
+              {split.fullCases} sealed · 1 open with {split.looseBoxes} box
+              {split.looseBoxes === 1 ? '' : 'es'} left
+            </span>
+          )
+        })()}
         {/* Only this flag makes a fractional on-hand legal, so it is named where
             the fraction is read. Without it "2.25" here looks like a bug. */}
         {product.giveawayItem && (

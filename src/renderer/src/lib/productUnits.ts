@@ -1,6 +1,7 @@
 import type { InventoryProduct, UnitType } from '@shared/types'
 import type { StreamItem } from '@shared/streaming'
-import type { ProductUnits, StockUnit } from '@shared/units'
+import type { CaseBreakdown, ProductUnits, StockUnit } from '@shared/units'
+import { caseBreakdown } from '@shared/units'
 
 /**
  * The renderer's bridge from a catalog product to the unit contract.
@@ -60,6 +61,60 @@ export function productUnits(
 export function formatUnitCount(quantity: number): string {
   if (!Number.isFinite(quantity)) return '0'
   return String(Math.round(quantity * 10000) / 10000)
+}
+
+/**
+ * The same count, but read as cases and boxes when the product has been broken
+ * into.
+ *
+ * `formatUnitCount` on its own prints 3.9167, which is the truth and not an
+ * answer: what the operator is asking is how many sealed cases are on the shelf
+ * and how many boxes are left in the open one. Every screen that shows a
+ * balance for a KNOWN product should use this; the plain formatter stays for the
+ * places that have a number and no product to interpret it with.
+ *
+ * Falls through to the plain number whenever the split would be invented — see
+ * caseBreakdown, which refuses a box-stocked product, a missing divisor, and a
+ * balance that is not a whole number of boxes.
+ */
+export function formatStockOnHand(
+  units: ProductUnits | null,
+  quantity: number
+): string {
+  if (!Number.isFinite(quantity)) return '0'
+  if (!units) return formatUnitCount(quantity)
+  const split = caseBreakdown(units, quantity)
+  if (!split || !split.open) return formatUnitCount(quantity)
+  const boxes = `${split.looseBoxes} box${split.looseBoxes === 1 ? '' : 'es'}`
+  return split.fullCases > 0 ? `${split.fullCases} + ${boxes}` : boxes
+}
+
+/**
+ * Is one of this product's cases open on the shelf?
+ *
+ * Drives the marker beside a count. A cracked case is worth calling out because
+ * it is the one holding that cannot be read off the number of cases — and
+ * because it is the thing somebody is looking for when they ask what is left to
+ * break tonight.
+ */
+export function hasOpenCase(units: ProductUnits | null, quantity: number): boolean {
+  return stockBreakdown(units, quantity)?.open === true
+}
+
+/**
+ * `caseBreakdown` for a product the renderer may not have units for.
+ *
+ * `productUnits` returns null for a single, a pack or an "other" — rows with no
+ * case/box structure at all — so every caller here would otherwise repeat the
+ * same null check, or invent a placeholder ProductUnits to get past the type,
+ * which is how a divisor that means nothing reaches the contract.
+ */
+export function stockBreakdown(
+  units: ProductUnits | null,
+  quantity: number
+): CaseBreakdown | null {
+  if (!units) return null
+  return caseBreakdown(units, quantity)
 }
 
 /** "case" / "cases" — the noun for a product's own stock unit. */
