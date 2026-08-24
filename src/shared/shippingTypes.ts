@@ -68,6 +68,20 @@ export interface ShipBreak {
    */
   breakLabel: string
   breakNumber: number
+  /**
+   * The league THIS break was run in.
+   *
+   * A night that starts with two NBA breaks and finishes with two MLB ones is
+   * one upload and two leagues, and the league is not decoration: it picks the
+   * team list a name is matched against and it is where the slate size comes
+   * from. Bound once per upload, whichever league lost had every team name fail
+   * to match and every break audited against the wrong slate.
+   *
+   * NULL means "whatever the import as a whole was" — every break that predates
+   * this reads that way, and the dataset still carries its own `sport`, so the
+   * answer exists; it just is not the break's own.
+   */
+  sport: ShipSport | null
   eventName: string
   eventDate: string
   status: ShipBreakStatus
@@ -88,6 +102,8 @@ export interface ShipBreakDraft {
    */
   breakLabel: string
   breakNumber: number
+  /** The league detected for this break. See ShipBreak.sport. */
+  sport: ShipSport | null
   eventName?: string | null
   eventDate?: string | null
   status?: ShipBreakStatus

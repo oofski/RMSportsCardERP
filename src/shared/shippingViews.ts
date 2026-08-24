@@ -22,6 +22,7 @@ import type {
   ShipManualStatus,
   ShipSnapshotSummary,
   ShipSpecialRequest,
+  ShipSport,
   ShipSportOption,
   ShipStatusCode,
   ShipTeamSlot,
@@ -229,6 +230,12 @@ export interface ShipBreakSummary {
   breakNumber: number
   eventName: string
   eventDate: string
+  /**
+   * The league THIS break was read against, or null for "whatever the import as
+   * a whole was" — which is every break imported before per-break detection.
+   * The screen offers it as a correction: see ShipBreak.sport.
+   */
+  sport: ShipSport | null
   status: ShipBreakStatus
   totalTeams: number
   checkedTeams: number

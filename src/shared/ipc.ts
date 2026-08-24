@@ -476,6 +476,8 @@ export const IPC = {
   // Every card in ONE package at once — what "Next order" means.
   shipOrderCheckAll: 'shipping:orders:check-all',
   shipBreakSetStatus: 'shipping:breaks:set-status',
+  /** Correct a break's league by hand: re-matches its names and re-audits it. */
+  shipBreakSetSport: 'shipping:breaks:set-sport',
   shipSlotChecked: 'shipping:teamslot:checked',
   /** Step 4's per-card tick: gathered into the buyer's package. NOT bagging. */
   shipSlotPicked: 'shipping:teamslot:picked',

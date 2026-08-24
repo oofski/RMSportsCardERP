@@ -1051,5 +1051,138 @@ for (const [line, want] of TRACK_CASES) {
   ok(got === want, `parses ${want} and not the weight after it`, got)
 }
 
+// ---------------------------------------------------------------------------
+// A NIGHT THAT RUNS TWO LEAGUES
+// ---------------------------------------------------------------------------
+/**
+ * The owner's case, in the owner's words: breaks 1 and 2 are NBA, breaks 3 and 4
+ * are MLB, one show, one PDF.
+ *
+ * `parsePages` used to bind the league ONCE for the whole upload — the comment
+ * in the source said so plainly — and build a single team matcher from it. So
+ * whichever league lost the vote had every one of its team names fail to match
+ * and reach the pick list exactly as printed. That is not cosmetic: the SLATE
+ * SIZE is read off the league too, so the fidelity audit measured an NBA break
+ * against a 30-team MLB slate and reported missing teams that were never in it.
+ *
+ * Detection is per break now. Nothing here names a league — `auto` is the whole
+ * point, because the operator should not have to split the PDF by sport.
+ */
+{
+  const twoLeagueShow = [
+    'Whatnot Packing Slip 1/1',
+    'To: hoopsfan From: rm_cardz',
+    'Hoops Buyer',
+    '9 Court St. Boston, MA. 02108. US',
+    'QTY Name & Description Attributes Subtotal',
+    '1 Boston Celtics Order 3000000001 $60.00',
+    '1x 2026 PRIZM BASKETBALL HOBBY BOX- Break #1',
+    '1 Denver Nuggets Order 3000000002 $55.00',
+    '1x 2026 PRIZM BASKETBALL HOBBY BOX- Break #2',
+    '1 Chicago Cubs Order 3000000003 $45.00',
+    '1x 2026 TOPPS BASEBALL HOBBY BOX- Break #3',
+    '1 Baltimore Orioles Order 3000000004 $40.00',
+    '1x 2026 TOPPS BASEBALL HOBBY BOX- Break #4',
+    '4 Items $200.00',
+    'USPS Ground Advantage #9300120762602315706888 9.0 oz'
+  ].join('\n')
+
+  const mixed = parsePages([twoLeagueShow], { sport: 'auto' })
+  const sportOf = (label: string): string | null =>
+    mixed.breaks.find((b) => b.breakLabel === label)?.sport ?? null
+
+  ok(sportOf('1') === 'nba', 'BREAK #1 IS NBA', String(sportOf('1')))
+  ok(sportOf('2') === 'nba', 'and break #2 is NBA', String(sportOf('2')))
+  ok(sportOf('3') === 'mlb', 'WHILE BREAK #3 IS MLB — the same upload, a different league', String(sportOf('3')))
+  ok(sportOf('4') === 'mlb', 'and so is break #4', String(sportOf('4')))
+
+  /**
+   * The point of getting the league right: the names MATCH. Read against the
+   * wrong list they survive as printed, which looks fine on a pick list and is
+   * how a card ends up filed under a team the app does not believe exists.
+   */
+  const named = (label: string): string[] =>
+    mixed.teamSlots.filter((s) => s.breakLabel === label).map((s) => s.teamName)
+  ok(named('1').includes('Boston Celtics'), 'the Celtics are matched in break #1', named('1').join(','))
+  ok(named('3').includes('Chicago Cubs'), 'AND THE CUBS ARE MATCHED IN BREAK #3', named('3').join(','))
+  ok(
+    !mixed.warnings.some((w) => /Could not match/.test(w.message)),
+    'with NOTHING left unmatched — every card found its league',
+    mixed.warnings.filter((w) => /Could not match/.test(w.message)).map((w) => w.message).join(' | ')
+  )
+
+  /**
+   * Each break is audited against ITS OWN slate. Measured against one league for
+   * the whole upload, an NBA break inside an MLB show is short thirty teams it
+   * never had — a warning about data that was never wrong.
+   */
+  const missingIn = (label: string): string[] =>
+    mixed.breakAudit.find((a) => a.breakLabel === label)?.missingTeams ?? []
+  /**
+   * The slate SIZE cannot tell these two apart — the NBA and MLB both field
+   * thirty teams — so the assertion is about WHICH teams are missing. Audited
+   * against the wrong league a break is short thirty teams it never had, and
+   * every one of them is named in a warning the operator cannot act on.
+   */
+  ok(
+    missingIn('1').includes('Chicago Bulls') && !missingIn('1').includes('Chicago Cubs'),
+    'BREAK #1 IS SHORT NBA TEAMS, NOT BASEBALL ONES — the slate comes from its own league',
+    missingIn('1').slice(0, 4).join(', ')
+  )
+  ok(
+    missingIn('3').includes('Boston Red Sox') && !missingIn('3').includes('Chicago Bulls'),
+    'and break #3 is short MLB teams — the Red Sox, never the Bulls',
+    missingIn('3').slice(0, 4).join(', ')
+  )
+  /**
+   * The Cubs are the card that was BOUGHT in break #3, so they must not appear
+   * in its missing list at all. That is the other half of the audit: the slate
+   * is the right league AND the sold slot was struck off it.
+   */
+  ok(
+    !missingIn('3').includes('Chicago Cubs'),
+    'and the team that sold is struck off its own break',
+    missingIn('3').slice(0, 4).join(', ')
+  )
+
+  /**
+   * AN OPERATOR-CHOSEN LEAGUE STILL WINS OUTRIGHT. Picking MLB by hand is a
+   * statement about the whole upload; second-guessing it per break would make
+   * the control a suggestion rather than an instruction.
+   */
+  const forced = parsePages([twoLeagueShow], { sport: 'mlb' })
+  ok(
+    forced.breaks.every((b) => b.sport === null),
+    'choosing a league by hand leaves every break on the upload’s league',
+    forced.breaks.map((b) => `${b.breakLabel}=${b.sport}`).join(',')
+  )
+  ok(forced.sport === 'mlb', 'which is the one that was chosen', String(forced.sport))
+}
+
+// A single-league show is unchanged: every break detects the same thing, so
+// nothing about the old behaviour moves.
+{
+  const oneLeague = [
+    'Whatnot Packing Slip 1/1',
+    'To: onlyfootball From: rm_cardz',
+    'Single Buyer',
+    '4 Field Rd. Dallas, TX. 75201. US',
+    'QTY Name & Description Attributes Subtotal',
+    '1 Dallas Cowboys Order 4000000001 $30.00',
+    '1x 2026 PRIZM FOOTBALL HOBBY BOX- Break #1',
+    '1 Green Bay Packers Order 4000000002 $30.00',
+    '1x 2026 PRIZM FOOTBALL HOBBY BOX- Break #2',
+    '2 Items $60.00',
+    'USPS Ground Advantage #9300120762602315706999 5.0 oz'
+  ].join('\n')
+  const out = parsePages([oneLeague], { sport: 'auto' })
+  ok(out.sport === 'nfl', 'a one-league show still detects one league', String(out.sport))
+  ok(
+    out.breaks.every((b) => b.sport === 'nfl'),
+    'and every break agrees with it',
+    out.breaks.map((b) => `${b.breakLabel}=${b.sport}`).join(',')
+  )
+}
+
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

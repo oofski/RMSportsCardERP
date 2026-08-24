@@ -39,6 +39,7 @@ import {
   type ShipImportRecord,
   type ShipSnapshot,
   type ShipSnapshotSummary,
+  type ShipSport,
   type ShipSportOption,
   type ShipStatusCode,
   type ShipWarning
@@ -125,6 +126,7 @@ import {
   setBreakStep,
   setTeamBagged,
   setBreakChecked,
+  setBreakLeague,
   setBreakStage,
   setBreakTopSleeved,
   setOrderHold,
@@ -1077,6 +1079,29 @@ export function registerShippingIpc(): void {
           return { ok: false, error: 'Unknown break status.' }
         }
         return { ok: true, data: setBreakStage(id, payload.status) }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  ipcMain.handle(
+    IPC.shipBreakSetSport,
+    (_e, payload: { id: string; sport: ShipSport | null }): Result<ShipBreakDetail> => {
+      try {
+        requireManage()
+        const id = requireId(payload?.id, 'break')
+        /**
+         * `null` is a real answer here — it puts the break back on whatever
+         * league the import as a whole was read as. Anything else has to be a
+         * league the app actually has a slate for, or the re-match would run
+         * against nothing and quietly wipe every name in the break.
+         */
+        const sport = payload?.sport ?? null
+        if (sport !== null && !SHIP_SPORTS.includes(sport)) {
+          return { ok: false, error: 'Unknown league.' }
+        }
+        return { ok: true, data: setBreakLeague(id, sport) }
       } catch (err) {
         return fail(err)
       }

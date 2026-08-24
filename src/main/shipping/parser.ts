@@ -867,10 +867,25 @@ interface OrderPosition {
   id: string
 }
 
+/**
+ * How a break's league is looked up while a slip is being read.
+ *
+ * A RESOLVER rather than a matcher, because ONE CUSTOMER'S SLIP CAN SPAN
+ * LEAGUES: somebody who bought the Knicks in break #1 and the Cubs in break #3
+ * has both on one page, and a single matcher would read one of them against the
+ * wrong team list. The break label is known before any team candidate is
+ * offered — see `breakLabel` in the order loop — so the right list is always
+ * available at the moment it is needed.
+ *
+ * Null for a break-less line (a promo rider that belongs to no break) and during
+ * the harvest pass, where the point is to read names with no league at all.
+ */
+export type TeamMatcherFor = (breakLabel: string | null) => TeamMatcher | null
+
 export function parsePackingSlip(
   handle: string,
   pages: PageRef[],
-  matcher: TeamMatcher | null,
+  matcherFor: TeamMatcherFor,
   /** The seller banner's second line, so it can be cut out of an address. */
   bannerTail = ''
 ): PackingSlip {
@@ -1074,7 +1089,7 @@ export function parsePackingSlip(
       for (const line of tail) {
         const text = cleanTeamText(stripQty(cleanTeamText(stripBreakMarkers(stripPrices(line)))))
         if (!isTeamCandidateText(text)) continue
-        if (matcher?.matchTeam(text).team || isAnyLeagueTeam(text)) {
+        if (matcherFor(breakLabel)?.matchTeam(text).team || isAnyLeagueTeam(text)) {
           candidates.push(text)
           break
         }
@@ -1086,7 +1101,8 @@ export function parsePackingSlip(
     let matched = false
     for (const candidate of candidates) {
       if (RE_ITEMS_NOISE.test(candidate)) continue // rule 4: never let "1 Item" be a team
-      const hit = matcher ? matcher.matchTeam(candidate) : null
+      const slipMatcher = matcherFor(breakLabel)
+      const hit = slipMatcher ? slipMatcher.matchTeam(candidate) : null
       if (hit?.team) {
         team = hit.team
         teamRaw = candidate
@@ -1153,7 +1169,15 @@ interface CustomerEmit {
 function emitCustomerRecords(
   handle: string,
   packing: PackingSlip | null,
-  matcher: TeamMatcher
+  /**
+   * ONE CUSTOMER'S SLIP CAN SPAN LEAGUES — see TeamMatcherFor. Somebody who
+   * bought the Celtics in break #1 and the Cubs in break #3 has both on one
+   * page, so the list a name is checked against is chosen per BREAK and not
+   * per slip. Held as a single matcher, one of those two names was always
+   * checked against the wrong league: it survived as printed and the warning
+   * blamed the operator's data for a league this code had picked.
+   */
+  matcherFor: TeamMatcherFor
 ): CustomerEmit {
   const slots: ShipTeamSlotDraft[] = []
   const orders: ShipOrder[] = []
@@ -1234,12 +1258,13 @@ function emitCustomerRecords(
     // Every packing line in this break is one card.
     for (const pack of packsForBreak) {
       consumedPacks.add(pack)
-        const hit = pack.team ? matcher.matchTeam(pack.team) : null
+        const breakMatcher = matcherFor(label)
+        const hit = pack.team && breakMatcher ? breakMatcher.matchTeam(pack.team) : null
         const teamName = hit?.team || cleanTeamText(pack.team) || 'Unknown team'
         if (!hit?.team && pack.team) {
           warnings.push({
             page: pack.page,
-            message: `Could not match “${pack.team}” (@${handle}, break #${label}) to a ${matcher.sport.toUpperCase()} team — kept as printed.`,
+            message: `Could not match “${pack.team}” (@${handle}, break #${label}) to a ${(breakMatcher?.sport ?? 'unknown').toUpperCase()} team — kept as printed.`,
             rawText: pack.team
           })
         }
@@ -1272,7 +1297,7 @@ function emitCustomerRecords(
   // --- the sweep: nothing on the packing slip is allowed to vanish ---------
   for (const pack of packOrders) {
     if (consumedPacks.has(pack)) continue
-    const canonical = pack.team ? matcher.canonical(pack.team) : null
+    const canonical = pack.team ? matcherFor(pack.breakLabel)?.canonical(pack.team) ?? null : null
 
     if (pack.isGiveaway) {
       // Rule 8 dedup: a giveaway whose team is ALREADY a slot for this customer
@@ -1346,45 +1371,74 @@ function emitCustomerRecords(
 function buildBreakAudit(
   teamSlots: ShipTeamSlotDraft[],
   breakSpecs: { label: string; number: number }[],
-  matcher: TeamMatcher
+  matcherFor: TeamMatcherFor
 ): ShipBreakAudit[] {
+  return breakSpecs.map(({ label, number }) =>
+    /**
+     * EACH BREAK IS MEASURED AGAINST ITS OWN SLATE.
+     *
+     * The slate is where "how many teams should be here" and "which ones are
+     * missing" both come from. Measured against one league for the whole upload,
+     * an NBA break inside an MLB show was audited against baseball: thirty teams
+     * it never had reported missing, and its own thirty reported as strangers.
+     */
+    auditOneBreak(
+      label,
+      number,
+      teamSlots.filter((s) => s.breakLabel === label),
+      matcherFor(label)
+    )
+  )
+}
+
+/**
+ * The audit for a SINGLE break, given the slots that landed in it.
+ *
+ * Split out because the import is no longer the only thing that produces one.
+ * An operator who corrects a break's league re-reads that break's names against
+ * the right list, and the audit that goes with them has to be recomputed from
+ * the same rules — a second implementation over there would be a second answer
+ * to "is this break complete", and the two would drift.
+ */
+export function auditOneBreak(
+  breakLabel: string,
+  breakNumber: number,
+  slots: { teamName: string; customerId: string }[],
+  teamMatcher: TeamMatcher | null
+): ShipBreakAudit {
+  const matcher = teamMatcher ?? createNullTeamMatcher()
   const slate = new Set(matcher.teams)
-  const audits: ShipBreakAudit[] = []
-  for (const { label: breakLabel, number: breakNumber } of breakSpecs) {
-    const slots = teamSlots.filter((s) => s.breakLabel === breakLabel)
-    const byTeam = new Map<string, Set<string>>()
-    for (const slot of slots) {
-      let handles = byTeam.get(slot.teamName)
-      if (!handles) {
-        handles = new Set<string>()
-        byTeam.set(slot.teamName, handles)
-      }
-      handles.add(slot.customerId)
+  const byTeam = new Map<string, Set<string>>()
+  for (const slot of slots) {
+    let handles = byTeam.get(slot.teamName)
+    if (!handles) {
+      handles = new Set<string>()
+      byTeam.set(slot.teamName, handles)
     }
-    const captured = new Set<string>()
-    for (const teamName of byTeam.keys()) if (slate.has(teamName)) captured.add(teamName)
-    const missingTeams = matcher.teams.filter((t) => !captured.has(t))
-    const collisions: ShipBreakCollision[] = []
-    for (const [teamName, handles] of byTeam) {
-      // One team claimed by two customers in the same break is a real data
-      // error (usually a page too corrupted to read). Surface it rather than
-      // silently guessing which customer owns the card.
-      if (handles.size > 1) collisions.push({ teamName, handles: [...handles].sort() })
-    }
-    collisions.sort((a, b) => a.teamName.localeCompare(b.teamName))
-    audits.push({
-      breakLabel,
-      breakNumber,
-      teamCount: slots.length,
-      distinctTeamCount: byTeam.size,
-      maxTeams: matcher.maxTeams,
-      missingCount: missingTeams.length,
-      missingTeams,
-      hasAll: missingTeams.length === 0,
-      collisions
-    })
+    handles.add(slot.customerId)
   }
-  return audits
+  const captured = new Set<string>()
+  for (const teamName of byTeam.keys()) if (slate.has(teamName)) captured.add(teamName)
+  const missingTeams = matcher.teams.filter((t) => !captured.has(t))
+  const collisions: ShipBreakCollision[] = []
+  for (const [teamName, handles] of byTeam) {
+    // One team claimed by two customers in the same break is a real data
+    // error (usually a page too corrupted to read). Surface it rather than
+    // silently guessing which customer owns the card.
+    if (handles.size > 1) collisions.push({ teamName, handles: [...handles].sort() })
+  }
+  collisions.sort((a, b) => a.teamName.localeCompare(b.teamName))
+  return {
+    breakLabel,
+    breakNumber,
+    teamCount: slots.length,
+    distinctTeamCount: byTeam.size,
+    maxTeams: matcher.maxTeams,
+    missingCount: missingTeams.length,
+    missingTeams,
+    hasAll: missingTeams.length === 0,
+    collisions
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1397,12 +1451,42 @@ function buildBreakAudit(
  * pass, which makes every candidate fall through to its raw text.
  */
 export function collectTeamCandidates(groups: CustomerGroup[]): string[] {
+  const byBreak = collectTeamCandidatesByBreak(groups)
   const out: string[] = []
-  const nullMatcher = createNullTeamMatcher()
+  for (const names of byBreak.values()) out.push(...names)
+  return out
+}
+
+/**
+ * The same harvest, kept apart by the break each name was won in.
+ *
+ * ## Why the league is decided per break and not per upload
+ *
+ * A night runs two NBA breaks and then two MLB ones. Scored together, one league
+ * wins the whole upload and every team name in the other one fails to match:
+ * those cards reach the pick list exactly as printed, and the fidelity audit
+ * measures them against the winner's slate, so it reports missing teams that
+ * were never in that break. Scored per break, each one answers for itself.
+ *
+ * Read with a NULL matcher, deliberately — this is the pass that decides which
+ * team list to use, so it cannot be holding one already. `isAnyLeagueTeam` is
+ * what rescues a torn name here; it is league-blind for exactly this reason.
+ *
+ * A break-less line keys on the empty string. It belongs to no break, so it has
+ * no league of its own and takes the upload's.
+ */
+export function collectTeamCandidatesByBreak(groups: CustomerGroup[]): Map<string, string[]> {
+  const out = new Map<string, string[]>()
+  const nullMatcherFor: TeamMatcherFor = () => null
   for (const group of groups) {
-    if (group.packingPages.length) {
-      const packing = parsePackingSlip(group.handle, group.packingPages, nullMatcher)
-      for (const order of packing.orders) if (order.team) out.push(order.team)
+    if (!group.packingPages.length) continue
+    const packing = parsePackingSlip(group.handle, group.packingPages, nullMatcherFor)
+    for (const order of packing.orders) {
+      if (!order.team) continue
+      const key = order.breakLabel ?? ''
+      const list = out.get(key)
+      if (list) list.push(order.team)
+      else out.set(key, [order.team])
     }
   }
   return out
@@ -1489,7 +1573,9 @@ export function parsePages(pages: string[], options: ParsePagesOptions = {}): Sh
   // Product titles seen across the slips, used to name the import.
   const seenPackTitles: string[] = []
 
-  // Bind the league ONCE for the whole upload.
+  // The upload's league. Still bound once, and it is now the FALLBACK rather
+  // than the answer: it covers break-less lines and any break whose own names
+  // resolved to nothing. See sportForBreak below.
   const requested: ShipSportOption = options.sport ?? 'auto'
   let sport: ShipSport
   // Detection with NO evidence is not detection, it is the tie-break: every
@@ -1515,6 +1601,44 @@ export function parsePages(pages: string[], options: ParsePagesOptions = {}): Sh
   }
   const matcher = createTeamMatcher(sport)
 
+  /**
+   * THE LEAGUE, PER BREAK.
+   *
+   * Detected from the names won in that break alone, so a night of two NBA
+   * breaks followed by two MLB ones comes out with each break matched against
+   * its own team list. A break whose names resolve to nothing in any league
+   * keeps the upload's league rather than being assigned one at random — the
+   * tie-break in `detectSport` is "first in the list", which is how a baseball
+   * show once came out labelled NFL.
+   *
+   * An OPERATOR-CHOSEN league still wins outright. Picking MLB by hand is a
+   * statement about the whole upload, and second-guessing it per break would
+   * make the control a suggestion.
+   */
+  const sportForBreak = new Map<string, ShipSport>()
+  if (requested === 'auto') {
+    for (const [label, names] of collectTeamCandidatesByBreak(groups)) {
+      if (!label || names.length === 0) continue
+      const detection = detectSportDetailed(names)
+      // Every league scored zero: no evidence, so no answer of its own.
+      if (Object.values(detection.scores).every((n) => n === 0)) continue
+      sportForBreak.set(label, detection.sport)
+    }
+  }
+
+  /** One matcher per league, built once and shared by every break using it. */
+  const matcherCache = new Map<ShipSport, TeamMatcher>([[sport, matcher]])
+  const matcherForSport = (s: ShipSport): TeamMatcher => {
+    const hit = matcherCache.get(s)
+    if (hit) return hit
+    const made = createTeamMatcher(s)
+    matcherCache.set(s, made)
+    return made
+  }
+  const sportOf = (breakLabel: string | null): ShipSport =>
+    (breakLabel && sportForBreak.get(breakLabel)) || sport
+  const matcherFor: TeamMatcherFor = (breakLabel) => matcherForSport(sportOf(breakLabel))
+
   const customers: ShipCustomer[] = []
   const shipments: ShipShipmentDraft[] = []
   const teamSlots: ShipTeamSlotDraft[] = []
@@ -1533,12 +1657,12 @@ export function parsePages(pages: string[], options: ParsePagesOptions = {}): Sh
     })
 
     const packing = group.packingPages.length
-      ? parsePackingSlip(group.handle, group.packingPages, matcher, bannerTail)
+      ? parsePackingSlip(group.handle, group.packingPages, matcherFor, bannerTail)
       : null
     if (packing) warnings.push(...packing.warnings)
     if (packing?.packTitle) seenPackTitles.push(packing.packTitle)
 
-    const emitted = emitCustomerRecords(group.handle, packing, matcher)
+    const emitted = emitCustomerRecords(group.handle, packing, matcherFor)
     teamSlots.push(...emitted.slots)
     orders.push(...emitted.orders)
     warnings.push(...emitted.warnings)
@@ -1585,12 +1709,15 @@ export function parsePages(pages: string[], options: ParsePagesOptions = {}): Sh
     id,
     breakLabel: label,
     breakNumber,
+    // Its OWN league when its names said one, otherwise null — which reads as
+    // "the upload's", and is what every break imported before this did.
+    sport: sportForBreak.get(label) ?? null,
     eventName,
     eventDate,
     status: 'pending'
   }))
 
-  const breakAudit = buildBreakAudit(teamSlots, breakSpecs.map(([, v]) => v), matcher)
+  const breakAudit = buildBreakAudit(teamSlots, breakSpecs.map(([, v]) => v), matcherFor)
   const batchUrls = buildBatchUrls(
     shipments.map((s) => s.trackingNumber ?? '').filter((t): t is string => Boolean(t))
   )

@@ -291,5 +291,162 @@ const bravo = domain
   .find((o: { customerId: string }) => o.customerId === 'bravo')
 ok(bravo.pick.checked === 0, 'the next package is untouched', String(bravo.pick.checked))
 
+// ---------------------------------------------------------------------------
+// A BREAK'S LEAGUE, CORRECTED BY HAND
+// ---------------------------------------------------------------------------
+/**
+ * A show that starts on baseball and finishes on basketball is one upload with
+ * two leagues in it, and the league is read off the names the slip printed. A
+ * break that sold three cards is a three-name vote, so it can land wrong — and
+ * the raw slip text is not kept, so once it is wrong it is wrong forever.
+ *
+ * This is the way back: set the league, and the break re-reads its own names
+ * against the right list and re-checks its own slate.
+ */
+console.log('\n=== a break whose league was read wrong ===')
+
+const HOOPS = [
+  slip('charlie', '9300120762602315706801', [
+    '1 Boston Red Sox Order 6000000001 $20.00',
+    BOX + '1',
+    // BARE MASCOTS, which is how they come off a real slip. The point of
+    // re-reading is that the stored text CHANGES: "Nuggets" is what the slip
+    // printed and "Denver Nuggets" is the team, and only the right league's
+    // list can get from one to the other. A fixture that prints the canonical
+    // name already makes the re-match a no-op and proves nothing.
+    '1 Nuggets Order 6000000002 $55.00',
+    '1x 2026 PRIZM BASKETBALL HOBBY BOX- Break #7',
+    '1 Warriors Order 6000000003 $50.00',
+    '1x 2026 PRIZM BASKETBALL HOBBY BOX- Break #7',
+    // Nobody's league. It has to survive the correction as printed — a card the
+    // app cannot name is still a card somebody has to pull.
+    '1 Springfield Isotopes Order 6000000004 $10.00',
+    '1x 2026 PRIZM BASKETBALL HOBBY BOX- Break #7'
+  ])
+]
+
+/**
+ * Imported with the league CHOSEN, which is how a break ends up on the wrong
+ * one: the operator's pick covers the whole upload, so the basketball break is
+ * read against a baseball slate.
+ */
+ship.importDataset(parsePages(HOOPS, { ...opts, sport: 'mlb' }), { filename: 'hoops.pdf' })
+
+const hoopsBreak = ship
+  .listShipBreaks()
+  .find((b: { breakLabel: string }) => b.breakLabel === '7')
+const namesIn = (id: string): string[] =>
+  ship
+    .listShipTeamSlotsByBreak(id)
+    .map((s: { teamName: string }) => s.teamName)
+    .sort()
+
+ok(
+  namesIn(hoopsBreak.id).includes('Nuggets'),
+  'the basketball card is on the board, read against baseball and kept as printed',
+  namesIn(hoopsBreak.id).join(', ')
+)
+const beforeAudit = ship.getShipBreakAudit('7')
+ok(
+  beforeAudit.missingTeams.includes('Boston Red Sox'),
+  'AND ITS SLATE IS THE WRONG ONE — thirty baseball teams it never had',
+  String(beforeAudit.maxTeams)
+)
+
+const corrected = domain.setBreakLeague(hoopsBreak.id, 'nba')
+ok(corrected.sport === 'nba', 'THE BREAK IS MOVED TO ITS OWN LEAGUE', String(corrected.sport))
+ok(
+  ship.getShipBreak(hoopsBreak.id).sport === 'nba',
+  'and the store agrees, not just the row that came back',
+  String(ship.getShipBreak(hoopsBreak.id).sport)
+)
+
+/**
+ * The names are RE-READ. This is the part that cannot be skipped: a name that
+ * failed against the wrong league is sitting there exactly as printed, and a
+ * card filed under a team the app does not believe exists is a card that does
+ * not show up where anyone looks for it.
+ */
+const reread = namesIn(hoopsBreak.id)
+ok(
+  reread.includes('Denver Nuggets') && reread.includes('Golden State Warriors'),
+  'AND ITS TEAM NAMES ARE RE-READ — “Nuggets” off the slip becomes the team',
+  reread.join(', ')
+)
+ok(
+  reread.includes('Springfield Isotopes'),
+  'while a name NEITHER league knows survives as printed rather than being blanked',
+  reread.join(', ')
+)
+
+/**
+ * The audit is the other half. The slate size and the missing list are both
+ * read off the league, so leaving them behind would give the operator the right
+ * league and a warning about thirty teams that were never in the break.
+ */
+const afterAudit = ship.getShipBreakAudit('7')
+ok(
+  afterAudit.missingTeams.includes('Chicago Bulls'),
+  'THE SLATE IS RE-CHECKED — it is short basketball teams now',
+  afterAudit.missingTeams.slice(0, 3).join(', ')
+)
+ok(
+  !afterAudit.missingTeams.includes('Boston Red Sox'),
+  'and no longer short baseball ones',
+  afterAudit.missingTeams.slice(0, 3).join(', ')
+)
+ok(
+  !afterAudit.missingTeams.includes('Denver Nuggets'),
+  'and the teams that sold are struck off it',
+  afterAudit.missingTeams.slice(0, 3).join(', ')
+)
+
+/**
+ * The break next door is untouched. The correction is per break by definition —
+ * that is the whole point of it — and a fix that quietly moved the whole show
+ * would be worse than the bug.
+ */
+const baseballBreak = ship
+  .listShipBreaks()
+  .find((b: { breakLabel: string }) => b.breakLabel === '1')
+ok(
+  baseballBreak.sport === null && namesIn(baseballBreak.id).includes('Boston Red Sox'),
+  'THE BREAK NEXT DOOR IS UNTOUCHED — one break at a time',
+  String(baseballBreak.sport)
+)
+
+/** Putting it back is not a delete: the names it earned stay. */
+const reverted = domain.setBreakLeague(hoopsBreak.id, null)
+ok(reverted.sport === null, 'and it can be put back on the upload’s own league', String(reverted.sport))
+ok(
+  namesIn(hoopsBreak.id).includes('Denver Nuggets'),
+  'without losing the names it earned on the way',
+  namesIn(hoopsBreak.id).join(', ')
+)
+
+/**
+ * AND THE DETECTED LEAGUE SURVIVES THE STORE.
+ *
+ * It did not. `BREAK_SELECT` wrote `sport` on import and never selected it
+ * back, so every break read out with no league however many had been detected —
+ * per-break detection worked perfectly and was invisible to every screen above
+ * it. A store that cannot read back what it writes fails silently and looks
+ * exactly like a feature that was never built.
+ */
+ship.importDataset(parsePages(HOOPS, { ...opts, sport: 'auto' }), { filename: 'auto.pdf' })
+const detected = ship
+  .listShipBreaks()
+  .find((b: { breakLabel: string }) => b.breakLabel === '7')
+ok(detected.sport === 'nba', 'AN AUTO-DETECTED LEAGUE READS BACK OUT OF THE STORE', String(detected.sport))
+const baseball = ship
+  .listShipBreaks()
+  .find((b: { breakLabel: string }) => b.breakLabel === '1')
+ok(baseball.sport === 'mlb', 'and the baseball break beside it reads back as baseball', String(baseball.sport))
+ok(
+  domain.listBreaks().find((b: { breakLabel: string }) => b.breakLabel === '7').sport === 'nba',
+  'all the way up to the summary the screen renders',
+  String(domain.listBreaks().find((b: { breakLabel: string }) => b.breakLabel === '7').sport)
+)
+
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

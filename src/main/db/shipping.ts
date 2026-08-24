@@ -43,10 +43,14 @@ import type {
   ShipStatusCode,
   ShipDocument,
   ShipTeamSlot,
+  ShipSport,
   ShipWarning,
   ShippingDataset
 } from '@shared/shippingTypes'
+import { SHIP_SPORTS } from '@shared/shippingTypes'
 import { bagRowId } from '@shared/breakSteps'
+import { auditOneBreak } from '../shipping/parser'
+import { createTeamMatcher } from '../shipping/teams'
 import { getDb } from './database'
 import { newId, nowIso } from '../util'
 
@@ -64,6 +68,7 @@ interface BreakRow {
   id: string
   break_label: string | null
   break_number: number | null
+  sport: string | null
   event_name: string | null
   event_date: string | null
   status: string
@@ -217,6 +222,21 @@ function parseJson<T>(raw: string | null | undefined, fallback: T): T {
 /** Round money to whole cents so summed prices never carry float drift. */
 const cents = (n: number): number => Math.round(num(n) * 100) / 100
 
+/**
+ * A stored league string, or null.
+ *
+ * Coerced on READ rather than trusted, for the same reason every other status
+ * column in this file is: the value can arrive from an older build, from sync,
+ * or from a hand-edited row, and an unrecognised league would otherwise be
+ * handed to `createTeamMatcher`, which has no answer for it. Null is the safe
+ * one — it reads as "the upload's league", which is what every break before v83
+ * already means.
+ */
+function asShipSport(v: unknown): ShipSport | null {
+  const s = typeof v === 'string' ? v.trim().toLowerCase() : ''
+  return (SHIP_SPORTS as readonly string[]).includes(s) ? (s as ShipSport) : null
+}
+
 // ---------------------------------------------------------------------------
 // Mappers
 // ---------------------------------------------------------------------------
@@ -227,6 +247,9 @@ function toBreak(r: BreakRow): ShipBreak {
     // A row written before v31 has no label; its number IS its label.
     breakLabel: str(r.break_label) || String(num(r.break_number)),
     breakNumber: num(r.break_number),
+    // NULL on every break imported before v83, which reads as "the upload's
+    // league" rather than as a fifth one. See ShipBreak.sport.
+    sport: asShipSport(r.sport),
     eventName: str(r.event_name),
     eventDate: str(r.event_date),
     status: (r.status || 'pending') as ShipBreakStatus,
@@ -437,7 +460,11 @@ export function setShipEvent(name: string, date: string): ShipEvent {
 // Reads — breaks
 // ---------------------------------------------------------------------------
 
-const BREAK_SELECT = `SELECT id, break_label, break_number, event_name, event_date, status,
+// `sport` is selected because the import WRITES it and setBreakSport writes it
+// again. Left out, toBreak mapped `undefined` and every break read back with no
+// league however many had been detected — the same trap SLOT_SELECT carries a
+// note about, and it made per-break detection invisible to every screen.
+const BREAK_SELECT = `SELECT id, break_label, break_number, sport, event_name, event_date, status,
                              sleeved_at, sleeved_by, sorted_at, sorted_by
                       FROM ship_breaks`
 
@@ -1041,6 +1068,87 @@ export function setBreakStatus(id: string, status: ShipBreakStatus): ShipBreak |
 }
 
 /**
+ * Correct a break's league by hand, and re-read its team names against it.
+ *
+ * Detection is a vote on the names the slip printed, so a break that sold four
+ * cards can be called wrong — and once it is wrong it stays wrong, because the
+ * raw slip text is not kept. This is the way back.
+ *
+ * The write is three things at once, and they have to move together or the
+ * break is left describing itself in two leagues:
+ *   1. the stored league,
+ *   2. every team name in the break, re-matched against the new slate,
+ *   3. the fidelity audit, which reads "how many teams should be here" off the
+ *      league and would otherwise still be measuring against the old one.
+ *
+ * A name is only REPLACED when the new league recognises it. Anything it does
+ * not recognise is left exactly as printed rather than blanked — a card the app
+ * cannot name is still a card somebody has to pull, and the printed text is the
+ * only thing left to find it by.
+ *
+ * `null` puts the break back on the import's own league, which is what every
+ * break imported before per-break detection carries.
+ */
+export function setBreakSport(id: string, sport: ShipSport | null): ShipBreak | null {
+  const db = getDb()
+  const current = getShipBreak(id)
+  if (!current) return null
+
+  const matcher = sport ? createTeamMatcher(sport) : null
+  const label = current.breakLabel || String(current.breakNumber ?? '')
+  const slots = db
+    .prepare(`SELECT id, team_name, customer_id FROM ship_team_slots WHERE break_id = ?`)
+    .all(id) as { id: string; team_name: string | null; customer_id: string | null }[]
+
+  const renamed = slots.map((s) => {
+    const printed = (s.team_name ?? '').trim()
+    return {
+      id: s.id,
+      customerId: s.customer_id ?? '',
+      teamName: (matcher ? matcher.canonical(printed) : null) ?? printed
+    }
+  })
+
+  const audit = auditOneBreak(
+    label,
+    Number(current.breakNumber ?? 0),
+    renamed.map((r) => ({ teamName: r.teamName, customerId: r.customerId })),
+    matcher
+  )
+
+  const write = db.transaction(() => {
+    db.prepare(`UPDATE ship_breaks SET sport = ? WHERE id = ?`).run(sport, id)
+    const rename = db.prepare(`UPDATE ship_team_slots SET team_name = ? WHERE id = ?`)
+    for (const r of renamed) rename.run(r.teamName, r.id)
+    /**
+     * The audit is keyed by PRINTED LABEL, and a break imported before the audit
+     * table gained a row for it has none — so this is an upsert, not an update.
+     * Guarding on `changes === 0` and giving up would leave the operator's
+     * correction half-applied: right league, stale slate.
+     */
+    db.prepare(`DELETE FROM ship_break_audit WHERE break_label = ?`).run(label)
+    db.prepare(
+      `INSERT INTO ship_break_audit
+         (break_label, break_number, team_count, distinct_team_count, max_teams, missing_count,
+          missing_teams, has_all, collisions)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      audit.breakLabel,
+      audit.breakNumber,
+      audit.teamCount,
+      audit.distinctTeamCount,
+      audit.maxTeams,
+      audit.missingCount,
+      JSON.stringify(audit.missingTeams),
+      audit.hasAll ? 1 : 0,
+      JSON.stringify(audit.collisions)
+    )
+  })
+  write()
+  return getShipBreak(id)
+}
+
+/**
  * Section 5's status recompute: `packed` / `shipped` are explicit human states
  * and are STICKY (un-packing is a deliberate action), so a check-off edit only
  * ever moves a break between `pending` and `picking`.
@@ -1391,14 +1499,15 @@ export function importDataset(
       .run(eventName, eventDate, createdAt)
 
     const insBreak = database.prepare(
-      `INSERT INTO ship_breaks (id, break_label, break_number, event_name, event_date, status)
-       VALUES (?, ?, ?, ?, ?, ?)`
+      `INSERT INTO ship_breaks (id, break_label, break_number, sport, event_name, event_date, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
     )
     for (const b of dataset.breaks) {
       insBreak.run(
         b.id,
         b.breakLabel || String(b.breakNumber),
         b.breakNumber,
+        asShipSport(b.sport),
         str(b.eventName) || eventName,
         str(b.eventDate) || eventDate,
         b.status ?? 'pending'

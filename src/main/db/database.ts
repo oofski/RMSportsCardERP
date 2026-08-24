@@ -4007,6 +4007,34 @@ function migrate(database: Database.Database): void {
   addColumnIfMissing(database, 'invoices', 'shipping_cost', 'REAL')
   setMeta(database, 'schema_version', '82')
 
+  /**
+   * v83: the league a break was run in, ON THE BREAK.
+   *
+   * ## One show is not one sport
+   *
+   * A night starts with two NBA breaks and finishes with two MLB ones — the same
+   * upload, the same slips, four breaks, two leagues. The parser bound the league
+   * ONCE for the whole import and built a single team matcher from it, so
+   * whichever league lost the vote had every one of its team names fail to match
+   * and land on the pick list exactly as printed. That is not a cosmetic
+   * failure: the slate size is read off the league too, so the fidelity audit
+   * measured a 30-team NBA break against a 30-team MLB slate and reported
+   * missing teams that were never in it.
+   *
+   * Stored rather than derived, because it is the ANSWER to a detection that
+   * cannot be re-run later: the raw slip text is not kept, so a break whose
+   * league was read wrong could otherwise never be corrected. It is also what
+   * an operator overrides — see setShipBreakSport, which re-matches that break's
+   * team names against the right list.
+   *
+   * NULL on every break imported before today, which reads as "whatever the
+   * import as a whole was" rather than as a fifth league. The dataset still
+   * carries its own `sport`, so an old break has an answer; it just is not its
+   * own.
+   */
+  addColumnIfMissing(database, 'ship_breaks', 'sport', 'TEXT')
+  setMeta(database, 'schema_version', '83')
+
   // v41: re-derive every product's average cost from its remaining cost layers.
   //
   // The average used to be stored rounded to the cent, back when every total in

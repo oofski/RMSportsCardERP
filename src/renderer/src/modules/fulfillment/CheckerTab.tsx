@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { ShipBreakStatus } from '@shared/shippingTypes'
-import { SHIP_BREAK_STATUSES } from '@shared/shippingTypes'
+import type { ShipBreakStatus, ShipSport } from '@shared/shippingTypes'
+import { SHIP_BREAK_STATUSES, SHIP_SPORTS, SHIP_SPORT_LABELS } from '@shared/shippingTypes'
 import type {
   ShipBreakAssignee,
   ShipBreakDetail,
@@ -399,6 +399,9 @@ export function CheckerTab({
           }
           onStatus={(status) =>
             runBreakAction('change the status', () => api.shipping.setBreakStatus(detail.id, status))
+          }
+          onSport={(sport) =>
+            runBreakAction('change the league', () => api.shipping.setBreakSport(detail.id, sport))
           }
           onClear={() => setConfirmClear(detail)}
           onBenchChanged={async () => {
@@ -814,6 +817,7 @@ function BreakDetailView({
   onPack,
   onSleeve,
   onStatus,
+  onSport,
   onClear,
   onBenchChanged,
   onGoToShipping
@@ -833,6 +837,8 @@ function BreakDetailView({
   onPack: () => void
   onSleeve: (on: boolean) => void
   onStatus: (status: ShipBreakStatus) => void
+  /** Correct this break's league; null puts it back on the import's own. */
+  onSport: (sport: ShipSport | null) => void
   onClear: () => void
   /** Re-read this break after a bench tick — step 3 writes the same flag the
    *  pick list below is showing, so both have to move together. */
@@ -1090,6 +1096,28 @@ function BreakDetailView({
           {allSleeved ? 'Remove top sleeves' : 'Top-sleeve all'}
         </Button>
         <span className="spacer" />
+        {/* THE LEAGUE THIS BREAK WAS READ AGAINST.
+            A show that starts on baseball and finishes on basketball is one
+            upload with two leagues in it, and the league is detected from the
+            team names the slip printed — so a break that sold four cards is a
+            four-name vote and can land wrong. Changing it here re-reads this
+            break's names against the right list and re-checks its slate; the
+            raw slip text is not kept, so without this the break would be stuck
+            with the wrong answer forever. */}
+        <Select
+          className="chk-sport-select"
+          value={detail.sport ?? ''}
+          disabled={!canManage || busy}
+          title="Which league this break was read as. Change it to re-read the team names."
+          onChange={(e) => onSport((e.target.value || null) as ShipSport | null)}
+        >
+          <option value="">League: from the upload</option>
+          {SHIP_SPORTS.map((s) => (
+            <option key={s} value={s}>
+              {SHIP_SPORT_LABELS[s]}
+            </option>
+          ))}
+        </Select>
         <Select
           className="chk-status-select"
           data-bstatus={detail.status}

@@ -30,6 +30,7 @@ import {
   type ShipImportRecord,
   type ShipShipment,
   type ShipSnapshot,
+  type ShipSport,
   type ShipStatusCode,
   type ShipTeamSlot,
   type ShipWarning
@@ -97,6 +98,7 @@ import {
   resetShipQueueOrder,
   setBreakSlotsChecked,
   setBreakSlotsTopSleeved,
+  setBreakSport,
   setBreakStatus,
   setCustomerSlotsPicked,
   setShipWarningStatus,
@@ -837,6 +839,7 @@ function summarizeBreak(
     breakNumber: br.breakNumber,
     eventName: br.eventName,
     eventDate: br.eventDate,
+    sport: br.sport,
     status: br.status,
     totalTeams: slots.length,
     checkedTeams,
@@ -1209,6 +1212,20 @@ export function setBreakTopSleeved(breakId: string, on: boolean): ShipBreakDetai
 export function setBreakStage(breakId: string, status: ShipBreakStatus): ShipBreakDetail {
   requireBreak(breakId)
   setBreakStatus(breakId, status)
+  return getBreak(breakId) as ShipBreakDetail
+}
+
+/**
+ * The operator's correction to a break's league.
+ *
+ * Detection reads the league off the names the slip printed, so a break that
+ * sold four cards is a four-name vote and can land on the wrong league. The
+ * store does the real work — re-matching the names and re-auditing the slate —
+ * and this is the boundary that turns it back into the detail the screen holds.
+ */
+export function setBreakLeague(breakId: string, sport: ShipSport | null): ShipBreakDetail {
+  requireBreak(breakId)
+  setBreakSport(breakId, sport)
   return getBreak(breakId) as ShipBreakDetail
 }
 

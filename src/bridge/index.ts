@@ -167,6 +167,7 @@ import type {
   ShipImportRecord,
   ShipSnapshot,
   ShipSnapshotSummary,
+  ShipSport,
   ShipStatusCode,
   ShipWarning
 } from '@shared/shippingTypes'
@@ -893,6 +894,13 @@ export function createBridge(ipcRenderer: BridgeTransport) {
         ipcRenderer.invoke(IPC.shipBreakSleeveAll, { id, topSleeved }),
       setBreakStatus: (id: string, status: ShipBreakStatus): Promise<Result<ShipBreakDetail>> =>
         ipcRenderer.invoke(IPC.shipBreakSetStatus, { id, status }),
+      /**
+       * Correct one break's league. `null` puts it back on the import's own
+       * league — the state every break carries that predates per-break
+       * detection — so it is a real value here, not a missing argument.
+       */
+      setBreakSport: (id: string, sport: ShipSport | null): Promise<Result<ShipBreakDetail>> =>
+        ipcRenderer.invoke(IPC.shipBreakSetSport, { id, sport }),
 
       // ---- Break assignments (who is sorting which break) --------------------
       /** Every assignment, or just one break's when `breakId` is given. */
