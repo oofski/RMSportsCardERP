@@ -840,6 +840,7 @@ function summarizeBreak(
     eventName: br.eventName,
     eventDate: br.eventDate,
     sport: br.sport,
+    showId: br.showId,
     status: br.status,
     totalTeams: slots.length,
     checkedTeams,
@@ -859,8 +860,8 @@ export function listBreaks(): ShipBreakSummary[] {
     if (list) list.push(s)
     else slotsByBreak.set(s.breakId, [s])
   }
-  const auditByLabel = new Map<string, ShipBreakAudit>()
-  for (const a of listShipBreakAudit()) auditByLabel.set(a.breakLabel, a)
+  const auditByBreak = new Map<string, ShipBreakAudit>()
+  for (const a of listShipBreakAudit()) auditByBreak.set(a.breakId, a)
   const assignees = assigneesByBreak()
 
   // Only real breaks appear: a break-less giveaway's `giveaway_<handle>` id has
@@ -869,7 +870,7 @@ export function listBreaks(): ShipBreakSummary[] {
     summarizeBreak(
       br,
       slotsByBreak.get(br.id) ?? [],
-      auditByLabel.get(br.breakLabel) ?? null,
+      auditByBreak.get(br.id) ?? null,
       assignees.get(br.id) ?? []
     )
   )
@@ -882,7 +883,7 @@ export function getBreakSummary(id: string): ShipBreakSummary | null {
   return summarizeBreak(
     br,
     listShipTeamSlotsByBreak(id),
-    getShipBreakAudit(br.breakLabel),
+    getShipBreakAudit(br.id),
     listBreakAssignees(id)
   )
 }
@@ -891,7 +892,7 @@ export function getBreak(id: string): ShipBreakDetail | null {
   const br = getShipBreak(id)
   if (!br) return null
   const slots = listShipTeamSlotsByBreak(id)
-  const summary = summarizeBreak(br, slots, getShipBreakAudit(br.breakLabel), listBreakAssignees(id))
+  const summary = summarizeBreak(br, slots, getShipBreakAudit(br.id), listBreakAssignees(id))
 
   const customers = new Map<string, ShipCustomer>()
   const shipments = new Map<string, ShipShipment>()
@@ -1145,12 +1146,12 @@ export function setSlotPicked(slotId: string, picked: boolean, userId: string | 
  * for a break we could not measure would be worse.
  */
 export function getSupplyPlan(): ShipSupplyPlan {
-  const auditByLabel = new Map<string, ShipBreakAudit>()
-  for (const a of listShipBreakAudit()) auditByLabel.set(a.breakLabel, a)
+  const auditByBreak = new Map<string, ShipBreakAudit>()
+  for (const a of listShipBreakAudit()) auditByBreak.set(a.breakId, a)
 
   const breaks = listBreaks().map((b) => ({
     label: b.breakLabel,
-    slateSize: auditByLabel.get(b.breakLabel)?.maxTeams || b.totalTeams
+    slateSize: auditByBreak.get(b.id)?.maxTeams || b.totalTeams
   }))
 
   const orders = listOrders().map((o) => ({

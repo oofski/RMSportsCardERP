@@ -28,6 +28,7 @@ import type {
   ShipTeamSlot,
   ShipWarning
 } from './shippingTypes'
+import type { ShipShow } from './shows'
 import type { ShipStationRole } from './shipStations'
 import type { UploadedFile } from './types'
 
@@ -236,6 +237,13 @@ export interface ShipBreakSummary {
    * The screen offers it as a correction: see ShipBreak.sport.
    */
   sport: ShipSport | null
+  /**
+   * WHICH SHOW this break ran in. The bench groups by it — several slips can be
+   * on the floor at once now, and a flat grid of break cards across two nights
+   * is a pile, not a list. NULL on a break imported before the workspace could
+   * hold more than one show; the screen falls back to its event name and date.
+   */
+  showId: string | null
   status: ShipBreakStatus
   totalTeams: number
   checkedTeams: number
@@ -513,6 +521,24 @@ export interface ShipParseRequest {
   /** The PDF itself, base64, when the caller is a browser. */
   upload?: UploadedFile
   /**
+   * SEVERAL PDFs, base64, in one go.
+   *
+   * A Saturday can be two streams, and a bench can be working Thursday's slips
+   * and Saturday's together. Each file is parsed as its OWN show — its own
+   * league detection, its own breaks — and the results are merged into one
+   * workspace before anything is written, so two nights that both ran a
+   * "Break #4" stay two breaks. See @shared/shows.
+   *
+   * Takes precedence over `upload` when both are present. One file here behaves
+   * exactly like `upload` did.
+   */
+  uploads?: UploadedFile[]
+  /**
+   * Several pre-chosen paths, desktop only — the multi-file counterpart of
+   * `filePath`, with the same reason for existing and the same restriction.
+   */
+  filePaths?: string[]
+  /**
    * Keep the pick/pack progress from the dataset this import replaces.
    *
    * OFF unless the operator asks. Carry-forward used to be inferred from the
@@ -530,7 +556,16 @@ export type ShipParseJobStatus = 'running' | 'done' | 'error'
 export interface ShipParseJob {
   id: string
   status: ShipParseJobStatus
+  /**
+   * The file being read RIGHT NOW. With several slips in one upload this moves
+   * from one to the next, so the progress line always names the one it is
+   * counting pages through.
+   */
   filename: string
+  /** Every file in this upload, in the order they are read. */
+  filenames?: string[]
+  /** 1-based position of `filename` within `filenames`. */
+  fileIndex?: number
   phase: 'extract' | 'parse' | 'done' | 'error'
   page: number
   totalPages: number
@@ -542,6 +577,8 @@ export interface ShipParseJob {
   counts: ShipImportCounts | null
   carriedForward: boolean
   event: ShipEvent | null
+  /** The shows this upload put on the bench. Populated once `status === 'done'`. */
+  shows?: ShipShow[]
   /**
    * Set only when the dataset imported fine but the PDF could not be filed
    * alongside it. The import still succeeded — this is "you will not have the
@@ -553,7 +590,10 @@ export interface ShipParseJob {
 /** `startParse` either began a job or the operator cancelled the file dialog. */
 export interface ShipParseStart {
   jobId: string
+  /** The first file's name — what the caller shows while the job spins up. */
   filename: string
+  /** Every file the job will read. */
+  filenames: string[]
 }
 
 // ---------------------------------------------------------------------------

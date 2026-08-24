@@ -472,6 +472,7 @@ function migrate(database: Database.Database): void {
     CREATE TABLE IF NOT EXISTS ship_breaks (
       id           TEXT PRIMARY KEY,
       break_number INTEGER,
+      show_id      TEXT,
       event_name   TEXT,
       event_date   TEXT,
       status       TEXT NOT NULL DEFAULT 'pending'
@@ -555,11 +556,13 @@ function migrate(database: Database.Database): void {
     -- collisions (one team claimed by two customers in the same break — a real
     -- data error worth surfacing instead of silently guessing).
     -- missing_teams / collisions are JSON arrays.
-    -- Keyed by the printed LABEL, not the number: a show that ran both #11 and
-    -- #11A has two independent slates to measure, and a number PK would let the
-    -- second overwrite the first.
+    -- Keyed by the BREAK ID, which carries both the printed label and the show.
+    -- The label alone is not unique: a show that ran both #11 and #11A has two
+    -- independent slates to measure, and every show has a break 4, so with two
+    -- shows on the bench a label PK lets one night overwrite the other's.
     CREATE TABLE IF NOT EXISTS ship_break_audit (
-      break_label        TEXT PRIMARY KEY,
+      break_id           TEXT PRIMARY KEY,
+      break_label        TEXT,
       break_number       INTEGER,
       team_count         INTEGER,
       distinct_team_count INTEGER,
@@ -4034,6 +4037,60 @@ function migrate(database: Database.Database): void {
    */
   addColumnIfMissing(database, 'ship_breaks', 'sport', 'TEXT')
   setMeta(database, 'schema_version', '83')
+
+  // v84: the bench holds SEVERAL SHOWS AT ONCE.
+  //
+  // The workspace was built around one upload at a time, which was true of the
+  // business for exactly as long as it ran one stream a night. It is not any
+  // more: a Saturday can be two streams, and a bench can be working Thursday's
+  // slips and Saturday's together. Uploading the second slip threw the first
+  // one away.
+  //
+  // Two changes make that possible, and both are about identity.
+  //
+  // ONE: a break remembers which show it came from. The id already carries it
+  // (see SHOW_SEP in @shared/shows), but the id is not a thing to group by on a
+  // screen, and a break has to keep its own night after the workspace has moved
+  // on.
+  addColumnIfMissing(database, 'ship_breaks', 'show_id', 'TEXT')
+
+  // TWO: the fidelity audit moves off the printed label and onto the break id.
+  //
+  // The label recurs — EVERY show has a break 4 — so the moment two shows are
+  // loaded together the second one's audit row lands on the first one's primary
+  // key and one of the two slates is silently lost. A rebuild rather than a new
+  // column because it is the PRIMARY KEY that is wrong, and SQLite cannot move
+  // one in place. The existing rows are carried over with their id derived the
+  // way the parser derives it, so the dataset on the floor keeps its counts
+  // instead of going blank until the next import.
+  const auditV84 = database.prepare(`PRAGMA table_info(ship_break_audit)`).all() as Array<{
+    name: string
+  }>
+  if (!auditV84.some((c) => c.name === 'break_id')) {
+    database.exec(`
+      ALTER TABLE ship_break_audit RENAME TO ship_break_audit_v83;
+      CREATE TABLE ship_break_audit (
+        break_id           TEXT PRIMARY KEY,
+        break_label        TEXT,
+        break_number       INTEGER,
+        team_count         INTEGER,
+        distinct_team_count INTEGER,
+        max_teams          INTEGER,
+        missing_count      INTEGER,
+        missing_teams      TEXT,
+        has_all            INTEGER,
+        collisions         TEXT
+      );
+      INSERT INTO ship_break_audit
+        (break_id, break_label, break_number, team_count, distinct_team_count, max_teams,
+         missing_count, missing_teams, has_all, collisions)
+      SELECT 'break_' || break_label, break_label, break_number, team_count,
+             distinct_team_count, max_teams, missing_count, missing_teams, has_all, collisions
+        FROM ship_break_audit_v83;
+      DROP TABLE ship_break_audit_v83;
+    `)
+  }
+  setMeta(database, 'schema_version', '84')
 
   // v41: re-derive every product's average cost from its remaining cost layers.
   //

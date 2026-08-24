@@ -82,6 +82,16 @@ export interface ShipBreak {
    * answer exists; it just is not the break's own.
    */
   sport: ShipSport | null
+  /**
+   * WHICH SHOW this break ran in — the upload it came out of.
+   *
+   * The id already carries it (see SHOW_SEP in @shared/shows), but an id is not
+   * a thing to group by on a screen, and a break has to keep its own night
+   * after the workspace has moved on. NULL on every break imported before the
+   * bench could hold more than one show, which reads as "the only one there
+   * was".
+   */
+  showId: string | null
   eventName: string
   eventDate: string
   status: ShipBreakStatus
@@ -104,6 +114,8 @@ export interface ShipBreakDraft {
   breakNumber: number
   /** The league detected for this break. See ShipBreak.sport. */
   sport: ShipSport | null
+  /** The show it ran in. Set when several slips are merged; see ShipBreak. */
+  showId?: string | null
   eventName?: string | null
   eventDate?: string | null
   status?: ShipBreakStatus
@@ -375,12 +387,18 @@ export interface ShipBreakCollision {
 
 export interface ShipBreakAudit {
   /**
-   * The audit is keyed by the printed LABEL, not the number.
+   * WHICH BREAK — the id, not the label.
    *
-   * Auditing by number folds #11 and #11A into one 60-card pile measured
-   * against a 30-team slate: every team appears twice, so the screen reports
-   * thirty collisions that never happened and a break nobody can trust.
+   * It was the label, and the label recurs: every show has a break 4, so the
+   * moment two shows are on the bench together the second one's audit lands on
+   * the first one's primary key. The id already carries the show.
+   *
+   * Auditing by NUMBER would be worse still — it folds #11 and #11A into one
+   * 60-card pile measured against a 30-team slate, so every team appears twice
+   * and the screen reports thirty collisions that never happened.
    */
+  breakId: string
+  /** The label as printed, for display. Not unique across shows. */
   breakLabel: string
   breakNumber: number
   teamCount: number

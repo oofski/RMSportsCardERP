@@ -170,6 +170,7 @@ import {
   type ShipStationOrder
 } from '@shared/shipStations'
 import { setTeamSlotSleeve } from './db/shippingDomain'
+import { mergeShows, type ParsedShow } from '@shared/shows'
 
 // ---------------------------------------------------------------------------
 // Guards
@@ -268,54 +269,85 @@ interface ParseJobOptions {
   carryForward: boolean
 }
 
+/** One PDF waiting to be read, with the name it will be recognised by. */
+interface ParseFile {
+  filename: string
+  buffer: Buffer
+}
+
 /**
  * Runs off the IPC call stack. Progress is throttled so a 200-page extract does
  * not flood the renderer with several hundred messages per second.
+ *
+ * SEVERAL SLIPS AT ONCE. Each file is parsed as its own show — its own league
+ * detection, its own breaks, its own event — and only then are they merged and
+ * written, in ONE transaction. Importing them one at a time would be wrong two
+ * different ways: each import replaces the workspace, so the second slip would
+ * delete the first; and the merge is where two nights that both ran a
+ * "Break #4" are told apart, so nothing can be written until every slip is read.
  */
 async function runParseJob(
   job: ShipParseJob,
-  buffer: Buffer,
+  files: ParseFile[],
   opts: ParseJobOptions
 ): Promise<void> {
   let lastEmit = 0
   try {
-    const dataset = await parsePdf(buffer, {
-      sport: opts.sport,
-      eventName: opts.eventName,
-      eventDate: opts.eventDate,
-      onProgress: (p) => {
-        job.phase = p.phase === 'error' ? 'parse' : p.phase
-        job.page = p.page
-        job.totalPages = p.totalPages
-        job.message = p.message
-        const now = Date.now()
-        if (now - lastEmit >= 120) {
-          lastEmit = now
-          emitJob(job)
+    const parsed: ParsedShow[] = []
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i]
+      job.filename = file.filename
+      job.fileIndex = i + 1
+      emitJob(job)
+      const dataset = await parsePdf(file.buffer, {
+        sport: opts.sport,
+        eventName: opts.eventName,
+        eventDate: opts.eventDate,
+        onProgress: (p) => {
+          job.phase = p.phase === 'error' ? 'parse' : p.phase
+          job.page = p.page
+          job.totalPages = p.totalPages
+          job.message =
+            files.length > 1 ? `${file.filename} (${i + 1}/${files.length}) — ${p.message}` : p.message
+          const now = Date.now()
+          if (now - lastEmit >= 120) {
+            lastEmit = now
+            emitJob(job)
+          }
         }
-      }
-    })
+      })
+      /**
+       * The show id is the file's POSITION in this upload, not its name. Two
+       * streams are routinely exported under the same filename, and a name
+       * collision here would merge two different nights into one break list.
+       */
+      parsed.push({ id: `s${i + 1}`, filename: file.filename, dataset })
+    }
+
+    const merged = mergeShows(parsed)
 
     // The import is synchronous (better-sqlite3) and fully transactional: a
     // throw anywhere inside leaves the previous dataset untouched.
-    const result = importDataset(dataset, {
-      filename: job.filename,
-      name: opts.name ?? job.filename,
+    const result = importDataset(merged.dataset, {
+      filename: files.map((f) => f.filename).join(', '),
+      name: opts.name ?? files[0]?.filename ?? 'Import',
       carryForward: opts.carryForward
     })
 
-    // Keep the file itself, now that the dataset it produced has landed.
+    // Keep the files themselves, now that the dataset they produced has landed.
     //
     // After the import, not before: a parse that throws must leave the previous
     // show — dataset AND slip — exactly as it was, so nobody is left holding a
     // pick list and a document that describe different nights.
     try {
-      putShipDocument({
-        importId: result.record?.id ?? null,
-        name: job.filename,
-        pageCount: job.totalPages,
-        bytes: buffer
-      })
+      for (const file of files) {
+        putShipDocument({
+          importId: result.record?.id ?? null,
+          name: file.filename,
+          pageCount: job.totalPages,
+          bytes: file.buffer
+        })
+      }
     } catch (err) {
       // The slip is a convenience; the dataset is the job. Never fail an import
       // that already succeeded because the paper could not be filed.
@@ -328,10 +360,12 @@ async function runParseJob(
     job.counts = result.counts
     job.carriedForward = result.carriedForward
     job.event = result.event
+    job.shows = merged.shows
     job.finishedAt = nowIso()
+    const showPart = merged.shows.length > 1 ? ` across ${merged.shows.length} shows` : ''
     job.message = result.carriedForward
-      ? `Imported ${result.counts.customers} packages and carried your progress forward.`
-      : `Imported ${result.counts.customers} packages, ${result.counts.teamSlots} cards.`
+      ? `Imported ${result.counts.customers} packages${showPart} and carried your progress forward.`
+      : `Imported ${result.counts.customers} packages, ${result.counts.teamSlots} cards${showPart}.`
   } catch (err) {
     job.status = 'error'
     job.phase = 'error'
@@ -501,43 +535,67 @@ export function registerShippingIpc(): void {
         requireManage()
 
         // Three ways the bytes arrive, in order of how much the caller knows:
-        // a browser uploads them, a desktop caller names a path, and a desktop
-        // caller who named nothing gets the native picker. The parse itself has
-        // always taken a Buffer, so nothing below this block changes.
-        let buffer: Buffer | null = null
-        let filename = ''
+        // a browser uploads them, a desktop caller names paths, and a desktop
+        // caller who named nothing gets the native picker. Each way can now
+        // carry SEVERAL slips — a Saturday that ran two streams, or Thursday's
+        // night and Saturday's worked together — and each one becomes its own
+        // show. See runParseJob.
+        const files: ParseFile[] = []
 
-        const uploaded = uploadedBytes(request?.upload)
-        if (uploaded) {
-          filename = uploadedName(request?.upload, 'packing-slips.pdf')
-          if (!/\.pdf$/i.test(filename)) return { ok: false, error: 'Choose a PDF file.' }
-          buffer = uploaded
+        const uploads = [
+          ...(Array.isArray(request?.uploads) ? request.uploads : []),
+          ...(request?.upload ? [request.upload] : [])
+        ]
+        const uploadedFiles = uploads
+          .map((u) => ({ filename: uploadedName(u, 'packing-slips.pdf'), buffer: uploadedBytes(u) }))
+          .filter((f): f is ParseFile => f.buffer !== null)
+
+        if (uploadedFiles.length > 0) {
+          for (const f of uploadedFiles) {
+            if (!/\.pdf$/i.test(f.filename)) return { ok: false, error: 'Choose PDF files.' }
+            files.push(f)
+          }
         } else {
-          let filePath = str(request?.filePath).trim()
-          if (!filePath) {
+          let paths = [
+            ...(Array.isArray(request?.filePaths) ? request.filePaths : []),
+            ...(str(request?.filePath).trim() ? [str(request?.filePath).trim()] : [])
+          ].filter(Boolean)
+          if (paths.length === 0) {
             const win = BrowserWindow.fromWebContents(e.sender) ?? BrowserWindow.getFocusedWindow()
             const opts: OpenDialogOptions = {
-              title: 'Choose the Whatnot packing-slip PDF',
-              properties: ['openFile'],
+              title: 'Choose the Whatnot packing-slip PDFs',
+              // One night or several — the picker allows both, so the operator
+              // never has to run the upload twice for one evening's work.
+              properties: ['openFile', 'multiSelections'],
               filters: PDF_FILTERS
             }
             const picked = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts)
-            if (picked.canceled || !picked.filePaths[0]) {
+            if (picked.canceled || picked.filePaths.length === 0) {
               return { ok: false, error: 'No file selected.' }
             }
-            filePath = picked.filePaths[0]
+            paths = picked.filePaths
           }
-          if (!/\.pdf$/i.test(filePath)) return { ok: false, error: 'Choose a PDF file.' }
-          buffer = await readFile(filePath)
-          filename = basename(filePath)
+          for (const filePath of paths) {
+            if (!/\.pdf$/i.test(filePath)) return { ok: false, error: 'Choose PDF files.' }
+            files.push({ filename: basename(filePath), buffer: await readFile(filePath) })
+          }
         }
 
-        if (!buffer.length) return { ok: false, error: 'That PDF is empty.' }
+        if (files.length === 0) return { ok: false, error: 'No file selected.' }
+        /**
+         * An empty file is refused rather than skipped. Dropping it silently
+         * would import the OTHER slips and report success, and the operator
+         * would go looking for a night that never landed.
+         */
+        const empty = files.find((f) => f.buffer.length === 0)
+        if (empty) return { ok: false, error: `${empty.filename} is empty.` }
 
         const job: ShipParseJob = {
           id: randomUUID(),
           status: 'running',
-          filename,
+          filename: files[0].filename,
+          filenames: files.map((f) => f.filename),
+          fileIndex: 1,
           phase: 'extract',
           page: 0,
           totalPages: 0,
@@ -554,7 +612,7 @@ export function registerShippingIpc(): void {
 
         // Deliberately NOT awaited: the handler returns the jobId at once so a
         // 10-30s parse never blocks the IPC loop.
-        void runParseJob(job, buffer, {
+        void runParseJob(job, files, {
           sport: validSport(request?.sport),
           eventName: str(request?.eventName).trim() || null,
           eventDate: str(request?.eventDate).trim() || null,
@@ -562,7 +620,10 @@ export function registerShippingIpc(): void {
           name: str(request?.name).trim() || null
         })
 
-        return { ok: true, data: { jobId: job.id, filename } }
+        return {
+          ok: true,
+          data: { jobId: job.id, filename: files[0].filename, filenames: files.map((f) => f.filename) }
+        }
       } catch (err) {
         return fail(err)
       }

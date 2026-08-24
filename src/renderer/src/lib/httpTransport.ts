@@ -289,38 +289,70 @@ function toBase64(bytes: Uint8Array): string {
 async function pickFile(options: {
   accept: string
   as: 'text' | 'bytes'
+  multiple?: boolean
 }): Promise<UploadedFile | null> {
-  return new Promise<UploadedFile | null>((resolve) => {
+  const picked = await pickFiles(options)
+  return picked.length > 0 ? picked[0] : null
+}
+
+/**
+ * The browser's file picker, reading EVERY file chosen.
+ *
+ * `pickFile` above is the one-file front door every caller but one still uses;
+ * this is the whole answer underneath it. They are one function because two
+ * would drift: the base64 encoding, the cancel handling and the hidden-input
+ * lifecycle all have to be identical, and the reason the multi-file case exists
+ * at all — several packing slips in one upload — is not a reason to have a
+ * second copy of them.
+ *
+ * Reads the files IN PARALLEL and then puts them back in the order they were
+ * chosen: FileReader is async per file, and resolving in completion order would
+ * make the show numbering depend on how fast each PDF happened to load.
+ */
+async function pickFiles(options: {
+  accept: string
+  as: 'text' | 'bytes'
+  multiple?: boolean
+}): Promise<UploadedFile[]> {
+  return new Promise<UploadedFile[]>((resolve) => {
     const input = document.createElement('input')
     input.type = 'file'
     input.accept = options.accept
+    if (options.multiple) input.multiple = true
     input.style.position = 'fixed'
     input.style.left = '-9999px'
     document.body.appendChild(input)
 
-    const done = (value: UploadedFile | null): void => {
+    const done = (value: UploadedFile[]): void => {
       input.remove()
       resolve(value)
     }
 
-    input.addEventListener('cancel', () => done(null))
-    input.addEventListener('change', () => {
-      const file = input.files?.[0]
-      if (!file) return done(null)
-      const reader = new FileReader()
-      reader.onerror = () => done(null)
-      reader.onload = () => {
-        if (options.as === 'text') {
-          done({ filename: file.name, text: String(reader.result ?? '') })
-        } else {
-          done({
-            filename: file.name,
-            base64: toBase64(new Uint8Array(reader.result as ArrayBuffer))
-          })
+    const readOne = (file: File): Promise<UploadedFile | null> =>
+      new Promise((res) => {
+        const reader = new FileReader()
+        reader.onerror = () => res(null)
+        reader.onload = () => {
+          if (options.as === 'text') {
+            res({ filename: file.name, text: String(reader.result ?? '') })
+          } else {
+            res({
+              filename: file.name,
+              base64: toBase64(new Uint8Array(reader.result as ArrayBuffer))
+            })
+          }
         }
-      }
-      if (options.as === 'text') reader.readAsText(file)
-      else reader.readAsArrayBuffer(file)
+        if (options.as === 'text') reader.readAsText(file)
+        else reader.readAsArrayBuffer(file)
+      })
+
+    input.addEventListener('cancel', () => done([]))
+    input.addEventListener('change', () => {
+      const files = [...(input.files ?? [])]
+      if (files.length === 0) return done([])
+      void Promise.all(files.map(readOne)).then((read) =>
+        done(read.filter((f): f is UploadedFile => f !== null))
+      )
     })
 
     input.click()
@@ -330,6 +362,7 @@ async function pickFile(options: {
 export const httpTransport: BridgeTransport = {
   invoke: (channel: string, ...args: unknown[]) => call(channel, args),
   pickFile,
+  pickFiles,
   on: (channel: string, listener: Listener) => {
     const set = listeners.get(channel) ?? new Set<Listener>()
     set.add(listener)

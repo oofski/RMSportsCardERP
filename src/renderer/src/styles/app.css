@@ -8229,6 +8229,34 @@ tr.hoverable-row:hover {
   grid-template-columns: repeat(auto-fill, minmax(228px, 1fr));
   gap: 12px;
 }
+
+/* One night's worth of breaks, under its own heading.
+   Only rendered when there is more than one show on the bench — a single show
+   keeps the bare grid it has always had, because a heading over the only group
+   there is labels a distinction that does not exist. */
+.chk-show + .chk-show {
+  margin-top: 18px;
+}
+.chk-show-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 9px;
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+}
+.chk-show-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+.chk-show-count {
+  margin-left: auto;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
 .chk-card {
   display: flex;
   flex-direction: column;

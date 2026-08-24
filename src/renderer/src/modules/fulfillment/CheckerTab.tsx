@@ -342,6 +342,54 @@ export function CheckerTab({
     })
   }, [breaks, query, statusFilter])
 
+  /**
+   * THE BENCH, GROUPED BY SHOW.
+   *
+   * A Saturday can be two streams, and a bench can be working Thursday's slips
+   * and Saturday's together — so one flat grid of break cards stops being a
+   * list of tonight's work and becomes a pile. Grouping is derived here rather
+   * than stored, because the answer is just "which breaks are on screen right
+   * now", and it changes with the search box.
+   *
+   * ONE group and no name means one show, which is how it has always been: the
+   * heading is dropped entirely rather than printed as a label for a
+   * distinction that does not exist yet.
+   */
+  const grouped = useMemo(() => {
+    const groups = new Map<string, { key: string; label: string; date: string; breaks: ShipBreakSummary[] }>()
+    for (const b of visible) {
+      const key = b.showId ?? `${b.eventName}|${b.eventDate}`
+      let group = groups.get(key)
+      if (!group) {
+        group = { key, label: b.eventName.trim(), date: b.eventDate, breaks: [] }
+        groups.set(key, group)
+      }
+      group.breaks.push(b)
+    }
+    const list = [...groups.values()]
+    /**
+     * NEWEST NIGHT FIRST, and an undated show last. The bench works the most
+     * recent show and reaches back for the older one, so putting Thursday above
+     * Saturday would make everyone scroll past finished work every time.
+     */
+    list.sort((a, b) => {
+      if (a.date && b.date && a.date !== b.date) return b.date.localeCompare(a.date)
+      if (!a.date !== !b.date) return a.date ? -1 : 1
+      return a.label.localeCompare(b.label)
+    })
+    // Two shows on ONE date are two streams, and the heading has to say which.
+    const perDate = new Map<string, number>()
+    for (const g of list) perDate.set(g.date, (perDate.get(g.date) ?? 0) + 1)
+    const seen = new Map<string, number>()
+    return list.map((g) => {
+      const n = (seen.get(g.date) ?? 0) + 1
+      seen.set(g.date, n)
+      const streams = perDate.get(g.date) ?? 1
+      const name = g.label || g.date || 'Show'
+      return { ...g, heading: streams > 1 ? `${name} · stream ${n}` : name }
+    })
+  }, [visible])
+
   if (loading) return <CenterLoader />
   // A failed load is a dead end otherwise — show what happened and offer a retry.
   if (loadError) {
@@ -585,9 +633,9 @@ export function CheckerTab({
             }
           />
         )
-      ) : (
+      ) : grouped.length === 1 ? (
         <div className="chk-grid">
-          {visible.map((b) => (
+          {grouped[0].breaks.map((b) => (
             <BreakCard
               key={b.id}
               summary={b}
@@ -596,6 +644,28 @@ export function CheckerTab({
             />
           ))}
         </div>
+      ) : (
+        grouped.map((group) => (
+          <div className="chk-show" key={group.key}>
+            <div className="chk-show-head">
+              <Icon name="CalendarDays" size={14} />
+              <span className="chk-show-name">{group.heading}</span>
+              <span className="chk-show-count">
+                {group.breaks.length} break{group.breaks.length === 1 ? '' : 's'}
+              </span>
+            </div>
+            <div className="chk-grid">
+              {group.breaks.map((b) => (
+                <BreakCard
+                  key={b.id}
+                  summary={b}
+                  opening={openingId === b.id}
+                  onOpen={() => open(b.id)}
+                />
+              ))}
+            </div>
+          </div>
+        ))
       )}
 
       {/* Break-less giveaways: real, checkable cards that belong to NO break.

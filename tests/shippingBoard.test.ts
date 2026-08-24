@@ -346,7 +346,7 @@ ok(
   'the basketball card is on the board, read against baseball and kept as printed',
   namesIn(hoopsBreak.id).join(', ')
 )
-const beforeAudit = ship.getShipBreakAudit('7')
+const beforeAudit = ship.getShipBreakAudit(hoopsBreak.id)
 ok(
   beforeAudit.missingTeams.includes('Boston Red Sox'),
   'AND ITS SLATE IS THE WRONG ONE — thirty baseball teams it never had',
@@ -384,7 +384,7 @@ ok(
  * read off the league, so leaving them behind would give the operator the right
  * league and a warning about thirty teams that were never in the break.
  */
-const afterAudit = ship.getShipBreakAudit('7')
+const afterAudit = ship.getShipBreakAudit(hoopsBreak.id)
 ok(
   afterAudit.missingTeams.includes('Chicago Bulls'),
   'THE SLATE IS RE-CHECKED — it is short basketball teams now',

@@ -1383,6 +1383,7 @@ function buildBreakAudit(
      * it never had reported missing, and its own thirty reported as strangers.
      */
     auditOneBreak(
+      `break_${label}`,
       label,
       number,
       teamSlots.filter((s) => s.breakLabel === label),
@@ -1401,6 +1402,7 @@ function buildBreakAudit(
  * to "is this break complete", and the two would drift.
  */
 export function auditOneBreak(
+  breakId: string,
   breakLabel: string,
   breakNumber: number,
   slots: { teamName: string; customerId: string }[],
@@ -1429,6 +1431,7 @@ export function auditOneBreak(
   }
   collisions.sort((a, b) => a.teamName.localeCompare(b.teamName))
   return {
+    breakId,
     breakLabel,
     breakNumber,
     teamCount: slots.length,

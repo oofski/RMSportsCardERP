@@ -271,6 +271,17 @@ export interface BridgeTransport {
     /** Text for sheets, bytes for PDFs and images. */
     as: 'text' | 'bytes'
   }): Promise<UploadedFile | null>
+  /**
+   * The same picker, reading every file chosen. Only the packing-slip upload
+   * needs it — a night can be several slips — and it is optional for the same
+   * reason `pickFile` is: Electron has neither, and its absence is how each
+   * method decides which transport it is on.
+   */
+  pickFiles?(options: {
+    accept: string
+    as: 'text' | 'bytes'
+    multiple?: boolean
+  }): Promise<UploadedFile[]>
 }
 
 export function createBridge(ipcRenderer: BridgeTransport) {
@@ -824,12 +835,14 @@ export function createBridge(ipcRenderer: BridgeTransport) {
         */
       startParse: async (request?: ShipParseRequest): Promise<Result<ShipParseStart>> => {
         const req = request ?? {}
-        if (!ipcRenderer.pickFile || req.filePath || req.upload) {
+        if (!ipcRenderer.pickFiles || req.filePath || req.upload || req.uploads) {
           return ipcRenderer.invoke(IPC.shipParseStart, req)
         }
-        const upload = await ipcRenderer.pickFile({ accept: '.pdf', as: 'bytes' })
-        if (!upload) return { ok: false, error: 'No file selected.' }
-        return ipcRenderer.invoke(IPC.shipParseStart, { ...req, upload })
+        // SEVERAL SLIPS. A night can be two streams, and a bench can be working
+        // two nights; each file becomes its own show. See @shared/shows.
+        const uploads = await ipcRenderer.pickFiles({ accept: '.pdf', as: 'bytes', multiple: true })
+        if (uploads.length === 0) return { ok: false, error: 'No file selected.' }
+        return ipcRenderer.invoke(IPC.shipParseStart, { ...req, uploads })
       },
       parseJob: (jobId: string): Promise<ShipParseJob | null> =>
         ipcRenderer.invoke(IPC.shipParseJob, jobId),

@@ -69,6 +69,7 @@ interface BreakRow {
   break_label: string | null
   break_number: number | null
   sport: string | null
+  show_id: string | null
   event_name: string | null
   event_date: string | null
   status: string
@@ -152,6 +153,7 @@ interface BatchUrlRow {
 }
 
 interface BreakAuditRow {
+  break_id: string | null
   break_label: string | null
   break_number: number
   team_count: number | null
@@ -250,6 +252,7 @@ function toBreak(r: BreakRow): ShipBreak {
     // NULL on every break imported before v83, which reads as "the upload's
     // league" rather than as a fifth one. See ShipBreak.sport.
     sport: asShipSport(r.sport),
+    showId: str(r.show_id) || null,
     eventName: str(r.event_name),
     eventDate: str(r.event_date),
     status: (r.status || 'pending') as ShipBreakStatus,
@@ -346,8 +349,10 @@ function toBatchUrl(r: BatchUrlRow): ShipBatchUrl {
 }
 
 function toBreakAudit(r: BreakAuditRow): ShipBreakAudit {
+  const label = str(r.break_label) || String(r.break_number)
   return {
-    breakLabel: str(r.break_label) || String(r.break_number),
+    breakId: str(r.break_id) || `break_${label}`,
+    breakLabel: label,
     breakNumber: r.break_number,
     teamCount: num(r.team_count),
     distinctTeamCount: num(r.distinct_team_count),
@@ -464,7 +469,8 @@ export function setShipEvent(name: string, date: string): ShipEvent {
 // again. Left out, toBreak mapped `undefined` and every break read back with no
 // league however many had been detected — the same trap SLOT_SELECT carries a
 // note about, and it made per-break detection invisible to every screen.
-const BREAK_SELECT = `SELECT id, break_label, break_number, sport, event_name, event_date, status,
+const BREAK_SELECT = `SELECT id, break_label, break_number, sport, show_id,
+                             event_name, event_date, status,
                              sleeved_at, sleeved_by, sorted_at, sorted_by
                       FROM ship_breaks`
 
@@ -620,8 +626,8 @@ export function listShipBatchUrls(): ShipBatchUrl[] {
 }
 
 const AUDIT_SELECT = `
-  SELECT break_label, break_number, team_count, distinct_team_count, max_teams, missing_count,
-         missing_teams, has_all, collisions
+  SELECT break_id, break_label, break_number, team_count, distinct_team_count, max_teams,
+         missing_count, missing_teams, has_all, collisions
   FROM ship_break_audit
 `
 
@@ -632,9 +638,12 @@ export function listShipBreakAudit(): ShipBreakAudit[] {
   return rows.map(toBreakAudit)
 }
 
-/** By the PRINTED LABEL — "11" and "11A" have separate slates. */
-export function getShipBreakAudit(breakLabel: string): ShipBreakAudit | null {
-  const row = getDb().prepare(`${AUDIT_SELECT} WHERE break_label = ?`).get(breakLabel) as
+/**
+ * By the BREAK ID. "11" and "11A" have separate slates and so do Thursday's #4
+ * and Saturday's — the id is the only key that tells all four apart.
+ */
+export function getShipBreakAudit(breakId: string): ShipBreakAudit | null {
+  const row = getDb().prepare(`${AUDIT_SELECT} WHERE break_id = ?`).get(breakId) as
     | BreakAuditRow
     | undefined
   return row ? toBreakAudit(row) : null
@@ -1110,6 +1119,7 @@ export function setBreakSport(id: string, sport: ShipSport | null): ShipBreak | 
   })
 
   const audit = auditOneBreak(
+    id,
     label,
     Number(current.breakNumber ?? 0),
     renamed.map((r) => ({ teamName: r.teamName, customerId: r.customerId })),
@@ -1121,18 +1131,19 @@ export function setBreakSport(id: string, sport: ShipSport | null): ShipBreak | 
     const rename = db.prepare(`UPDATE ship_team_slots SET team_name = ? WHERE id = ?`)
     for (const r of renamed) rename.run(r.teamName, r.id)
     /**
-     * The audit is keyed by PRINTED LABEL, and a break imported before the audit
-     * table gained a row for it has none — so this is an upsert, not an update.
-     * Guarding on `changes === 0` and giving up would leave the operator's
-     * correction half-applied: right league, stale slate.
+     * A break imported before the audit table gained a row for it has none — so
+     * this is an upsert, not an update. Guarding on `changes === 0` and giving
+     * up would leave the operator's correction half-applied: right league,
+     * stale slate.
      */
-    db.prepare(`DELETE FROM ship_break_audit WHERE break_label = ?`).run(label)
+    db.prepare(`DELETE FROM ship_break_audit WHERE break_id = ?`).run(id)
     db.prepare(
       `INSERT INTO ship_break_audit
-         (break_label, break_number, team_count, distinct_team_count, max_teams, missing_count,
-          missing_teams, has_all, collisions)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         (break_id, break_label, break_number, team_count, distinct_team_count, max_teams,
+          missing_count, missing_teams, has_all, collisions)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
+      audit.breakId,
       audit.breakLabel,
       audit.breakNumber,
       audit.teamCount,
@@ -1499,8 +1510,9 @@ export function importDataset(
       .run(eventName, eventDate, createdAt)
 
     const insBreak = database.prepare(
-      `INSERT INTO ship_breaks (id, break_label, break_number, sport, event_name, event_date, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO ship_breaks
+         (id, break_label, break_number, sport, show_id, event_name, event_date, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     )
     for (const b of dataset.breaks) {
       insBreak.run(
@@ -1508,6 +1520,7 @@ export function importDataset(
         b.breakLabel || String(b.breakNumber),
         b.breakNumber,
         asShipSport(b.sport),
+        str(b.showId) || null,
         str(b.eventName) || eventName,
         str(b.eventDate) || eventDate,
         b.status ?? 'pending'
@@ -1614,12 +1627,13 @@ export function importDataset(
 
     const insAudit = database.prepare(
       `INSERT INTO ship_break_audit
-         (break_label, break_number, team_count, distinct_team_count, max_teams, missing_count,
-          missing_teams, has_all, collisions)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         (break_id, break_label, break_number, team_count, distinct_team_count, max_teams,
+          missing_count, missing_teams, has_all, collisions)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     for (const a of dataset.breakAudit) {
       insAudit.run(
+        a.breakId || `break_${a.breakLabel || String(a.breakNumber)}`,
         a.breakLabel || String(a.breakNumber),
         a.breakNumber,
         num(a.teamCount),

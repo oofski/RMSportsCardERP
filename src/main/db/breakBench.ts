@@ -71,8 +71,8 @@ import { recordBagTick, recordBenchStep, recordBreakDone } from './workLog'
  * slate the data cannot support would leave a break permanently short of a
  * total it can never reach, and permanently un-shippable.
  */
-function slateSize(breakLabel: string, soldCount: number): number {
-  const audit = getShipBreakAudit(breakLabel)
+function slateSize(breakId: string, soldCount: number): number {
+  const audit = getShipBreakAudit(breakId)
   if (audit && audit.maxTeams > 0) return Math.max(audit.maxTeams, soldCount)
   return soldCount
 }
@@ -85,7 +85,7 @@ function stateFrom(br: ShipBreak, slots: ShipTeamSlot[], unsoldBagged: number): 
     sleeve: br.sleeve,
     sort: br.sort,
     baggedTeams: checked + unsoldBagged,
-    totalTeams: slateSize(br.breakLabel, slots.length)
+    totalTeams: slateSize(br.id, slots.length)
   }
 }
 
@@ -142,12 +142,14 @@ export function listBreakStepStates(): BreakStepState[] {
   }
   const bags = countBreakTeamBags()
   const slate = new Map<string, number>()
-  for (const a of listShipBreakAudit()) slate.set(a.breakLabel, a.maxTeams)
+  // BY BREAK ID, not the printed label: every show has a break 4, so with two
+  // shows on the bench a label key hands one night's slate size to the other's.
+  for (const a of listShipBreakAudit()) slate.set(a.breakId, a.maxTeams)
 
   return listShipBreaks().map((br) => {
     const slots = slotsByBreak.get(br.id) ?? []
     const checked = slots.filter((s) => s.checkedOff).length
-    const max = slate.get(br.breakLabel) ?? 0
+    const max = slate.get(br.id) ?? 0
     return {
       breakId: br.id,
       breakLabel: br.breakLabel,
@@ -195,7 +197,7 @@ export function getBreakBench(breakId: string): BreakBenchDetail | null {
   })
 
   // The teams nobody bought. Still in the box, still bagged, still counted.
-  const audit = getShipBreakAudit(br.breakLabel)
+  const audit = getShipBreakAudit(br.id)
   for (const teamName of audit?.missingTeams ?? []) {
     rows.push({
       teamName,

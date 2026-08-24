@@ -179,8 +179,11 @@ export function UploadTab({ summary, canManage, onChanged, onGoTo }: ShipTabProp
       if (next.status === 'running') return
       localStorage.removeItem(JOB_KEY)
       if (next.status === 'done') {
+        const showCount = next.shows?.length ?? 1
         toastRef.current.success(
-          `Imported ${next.counts?.shipments ?? 0} packages from ${next.filename}.`
+          showCount > 1
+            ? `Imported ${next.counts?.shipments ?? 0} packages across ${showCount} shows.`
+            : `Imported ${next.counts?.shipments ?? 0} packages from ${next.filename}.`
         )
         void onChangedRef.current()
       } else {
@@ -211,6 +214,8 @@ export function UploadTab({ summary, canManage, onChanged, onGoTo }: ShipTabProp
         id: res.data.jobId,
         status: 'running',
         filename: res.data.filename,
+        filenames: res.data.filenames,
+        fileIndex: 1,
         phase: 'extract',
         page: 0,
         totalPages: 0,
@@ -406,7 +411,19 @@ export function UploadTab({ summary, canManage, onChanged, onGoTo }: ShipTabProp
               />
             </span>
             <div className="ship-job-main">
-              <div className="ship-job-title">{job.filename}</div>
+              {/* With several slips in one upload the title names the whole
+                  batch and the line below names the one being read right now —
+                  otherwise the heading changes under the operator every twenty
+                  seconds and looks like the job restarted. */}
+              <div className="ship-job-title">
+                {(job.filenames?.length ?? 1) > 1
+                  ? `${job.filenames?.length} slips${
+                      job.status === 'running' && job.fileIndex
+                        ? ` · reading ${job.fileIndex} of ${job.filenames?.length}`
+                        : ''
+                    }`
+                  : job.filename}
+              </div>
               <div className="ship-job-sub">
                 {job.status === 'error'
                   ? job.error ?? 'The PDF could not be parsed.'

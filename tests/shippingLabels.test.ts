@@ -62,12 +62,19 @@ const cols = (t: string): string[] =>
 ok(cols('ship_breaks').includes('break_label'), 'ship_breaks.break_label exists')
 ok(cols('ship_team_slots').includes('break_label'), 'ship_team_slots.break_label exists')
 ok(cols('ship_break_audit').includes('break_label'), 'ship_break_audit.break_label exists')
+/**
+ * v84 moved the audit's PRIMARY KEY off the label and onto the break id. The
+ * label recurs — every show has a break 4 — so the moment two shows are on the
+ * bench together a label PK lets one night's slate overwrite the other's. The
+ * label is still a column, because it is what the screen prints.
+ */
 const pk = (db.prepare(`PRAGMA table_info(ship_break_audit)`).all() as { name: string; pk: number }[])
   .filter((c) => c.pk > 0).map((c) => c.name)
-ok(pk.length === 1 && pk[0] === 'break_label', 'and it is the primary key', JSON.stringify(pk))
+ok(pk.length === 1 && pk[0] === 'break_id', 'AND THE BREAK ID IS THE PRIMARY KEY, not the label', JSON.stringify(pk))
 const carried = db.prepare(`SELECT * FROM ship_break_audit`).all() as Record<string, unknown>[]
 ok(carried.length === 1 && carried[0].break_label === '7' && carried[0].break_number === 7,
    'the pre-existing audit row survived, labelled by its number', JSON.stringify(carried))
+ok(carried[0]?.break_id === 'break_7', 'and was given the id its break already had', String(carried[0]?.break_id))
 ok(carried[0]?.missing_teams === '["Chicago Cubs"]', 'with its slate intact')
 
 console.log('\n=== 2. #11 and #11A land as two breaks ===')
