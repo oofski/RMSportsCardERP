@@ -252,6 +252,23 @@ export function QboReadiness({
         </div>
       )}
 
+      {/* THE REASON THE BUTTON BELOW CANNOT WORK, SAID BEFORE THE PRESS.
+          A new Product/Service has to post its revenue to an account, and this
+          app will not pick one. Until that account is chosen, every "Add to
+          QuickBooks" here fails with a sentence about a settings screen — so
+          the sentence goes here instead, once, next to the thing it blocks. */}
+      {report && !report.canAddItems && report.missingItems.length > 0 && (
+        <div className="qbo-ready-row qbo-ready-blocked">
+          <div>
+            <b>Pick the “Break sales income” account first</b>
+            <span>
+              A new product has to post its revenue somewhere, and this app will not choose that
+              for you. Set it in Invoices → QuickBooks → Account mapping, then Re-check.
+            </span>
+          </div>
+        </div>
+      )}
+
       {report?.missingItems.map((miss) => (
         <div className="qbo-ready-row" key={`${miss.sku ?? ''}|${miss.name}`}>
           <div>
@@ -266,9 +283,14 @@ export function QboReadiness({
             variant="secondary"
             icon="Plus"
             loading={creating === miss.name}
-            disabled={creating !== null}
-            // Says what it will do to real books, on the control that does it.
-            title={`Create a non-inventory Product/Service called “${miss.name}” in QuickBooks`}
+            disabled={creating !== null || !report.canAddItems}
+            // Says what it will do to real books, on the control that does it —
+            // or why it cannot, when the income account has not been chosen.
+            title={
+              report.canAddItems
+                ? `Create a non-inventory Product/Service called “${miss.name}” in QuickBooks`
+                : 'Choose the “Break sales income” account first — Invoices → QuickBooks → Account mapping'
+            }
             onClick={() => void createItem(miss)}
           >
             Add to QuickBooks

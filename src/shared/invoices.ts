@@ -1181,6 +1181,21 @@ export interface QboInvoicePreflight {
   customerFound: boolean
   missingItems: QboMissingTarget[]
   /**
+   * Can a missing product actually be CREATED from here?
+   *
+   * A new Product/Service has to post its revenue to an account, and this app
+   * refuses to pick one — see toQboItemPayload. So when the "Break sales
+   * income" slot is unset, every "Add to QuickBooks" button in the panel is a
+   * button that cannot work, and pressing it produces a sentence about a
+   * settings screen the operator was given no reason to have visited.
+   *
+   * Reported here so the panel can say that BEFORE the press, next to the
+   * thing it blocks, rather than as the outcome of trying. The check is one
+   * mapping slot, not the whole sales flow: creating an item needs the income
+   * account and nothing else.
+   */
+  canAddItems: boolean
+  /**
    * SKU disagreements. NOT blockers — the invoice posts — but worth reading
    * before rather than after, because the fix is on the QuickBooks item and
    * doing it first means the document is right the first time.

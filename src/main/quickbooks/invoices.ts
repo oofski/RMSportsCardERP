@@ -282,11 +282,15 @@ export async function preflightQboInvoice(invoice: {
   lines: readonly { item: string; sku?: string | null }[]
 }): Promise<QboInvoicePreflight> {
   const targets = await resolveQboInvoiceTargets(invoice)
+  const realmId = activeRealmId()
   return {
     ready: !!targets.customer && targets.missingItems.length === 0,
     customerName: invoice.customerName,
     customerFound: !!targets.customer,
     missingItems: targets.missingItems,
+    // The one slot createQboItem needs. Read here so the panel can say it
+    // before offering a button that cannot work — see QboInvoicePreflight.
+    canAddItems: !!(realmId && (getAccountMap(realmId).salesIncome ?? '').trim()),
     notes: targets.skuNotes,
     skuFixes: targets.skuFixes
   }

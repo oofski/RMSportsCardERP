@@ -588,5 +588,58 @@ ok(
 )
 
 // ---------------------------------------------------------------------------
+// A BUTTON THAT CANNOT WORK IS NOT OFFERED
+// ---------------------------------------------------------------------------
+/**
+ * The refusal above is correct, and it was still a wall.
+ *
+ * The panel listed the missing product with an "Add to QuickBooks" button beside
+ * it. Pressing it always failed — a new Product/Service has to post its revenue
+ * to an account, and this app will not pick one — so the operator got a sentence
+ * about a settings screen they had been given no reason to visit, from a button
+ * that looked like the fix. Nothing in the app had said the account was unset,
+ * and re-pressing did the same thing again, which is exactly what "why does this
+ * keep happening" feels like.
+ *
+ * The mapping is knowable before the press. So the pre-flight reports it and the
+ * panel says it, next to the thing it blocks.
+ */
+console.log('\n=== the missing income account is said BEFORE the press ===')
+
+const { readFileSync } = require('node:fs')
+const panel = readFileSync('src/renderer/src/modules/invoices/QboReadiness.tsx', 'utf8')
+
+ok(
+  /canAddItems/.test(panel),
+  'THE PANEL READS WHETHER A PRODUCT CAN BE CREATED AT ALL',
+  'QboReadiness.tsx never mentions canAddItems'
+)
+ok(
+  /disabled=\{creating !== null \|\| !report\.canAddItems\}/.test(panel),
+  'and the Add button is DISABLED when it cannot',
+  'the Add button does not disable on canAddItems'
+)
+ok(
+  /Pick the .Break sales income. account first/.test(panel),
+  'with the reason shown on the panel, naming the account to choose'
+)
+ok(
+  /Account mapping/.test(panel),
+  'and where to choose it — the same place the post-press refusal names'
+)
+
+/**
+ * The contract, not just the screen: a renderer that reads a field the main
+ * process never sends gets `undefined`, which is falsy, and would disable the
+ * button forever on a perfectly mapped company.
+ */
+const preflight = readFileSync('src/main/quickbooks/invoices.ts', 'utf8')
+ok(
+  /canAddItems: !!\(realmId && \(getAccountMap\(realmId\)\.salesIncome/.test(preflight),
+  'AND THE PRE-FLIGHT ACTUALLY SENDS IT, read off the mapped income account',
+  'preflightQboInvoice does not populate canAddItems from the account map'
+)
+
+// ---------------------------------------------------------------------------
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail > 0) process.exit(1)

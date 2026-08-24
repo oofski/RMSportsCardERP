@@ -12782,6 +12782,12 @@ button.sor-team:focus-visible {
 .qbo-ready-row > .btn {
   flex-shrink: 0;
 }
+/* The one row that is not a thing to fix but the reason the rows below it
+   cannot be fixed yet. Reads as an instruction rather than another item. */
+.qbo-ready-row.qbo-ready-blocked {
+  border-color: var(--warn-border, var(--border-strong));
+  background: var(--warn-bg, var(--surface-2));
+}
 .qbo-ready-note,
 .qbo-ready-foot {
   font-size: 11.5px;
