@@ -161,13 +161,13 @@ export function qboNotConnectedReason(input: QboHolderInput): string {
   if (input.relayConfigured) {
     return (
       'QuickBooks is not connected. The connection lives in the cloud relay and is set up once, ' +
-      'by the owner, under Invoices → QuickBooks — not on this computer.'
+      'by the owner, under Sales Orders → QuickBooks — not on this computer.'
     )
   }
   return (
     'QuickBooks is not connected, and this copy of the app is not wired to the cloud relay ' +
     'either. Set the relay up under Admin → Developer → Cloud sync, or connect QuickBooks on ' +
-    'this machine under Invoices → QuickBooks.'
+    'this machine under Sales Orders → QuickBooks.'
   )
 }
 

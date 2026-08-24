@@ -593,6 +593,35 @@ export function shiftNeedsPublishing(shift: {
   return shift.updatedAt > shift.publishedAt
 }
 
+/**
+ * The `updated_at` to write for an edit, given what the row was published at.
+ *
+ * `shiftNeedsPublishing` compares two ISO instants, and ISO instants are only
+ * accurate to the MILLISECOND. So an edit landing in the same millisecond as the
+ * publish that preceded it is not "after" it — the comparison says the row is
+ * published and current, and the person working that shift is never told it
+ * moved. There is no error and nothing to see: the message simply does not go.
+ *
+ * A person cannot click twice in a millisecond, but nothing here is driven only
+ * by clicks: publishing stamps a whole week from ONE timestamp taken before the
+ * writes, and copying a week creates shifts in a tight loop. On a fast machine
+ * those share a millisecond routinely — which is exactly how often the test that
+ * found this failed.
+ *
+ * So an edit to a PUBLISHED shift is forced strictly past the publish. One
+ * millisecond, only when the clock did not already provide one, and only on that
+ * path: a draft has no publish to be newer than, and an unedited row is never
+ * written at all.
+ */
+export function shiftEditStamp(now: string, publishedAt: string | null): string {
+  if (!publishedAt || now > publishedAt) return now
+  const next = Date.parse(publishedAt)
+  // An unparseable stamp is not something to do arithmetic on. Leaving `now`
+  // alone keeps the old behaviour rather than inventing a timestamp from NaN.
+  if (!Number.isFinite(next)) return now
+  return new Date(next + 1).toISOString()
+}
+
 /** "4:00pm – 9:30pm", "From 4:00pm", or "Time to be confirmed". */
 export function shiftTimeLabel(shift: {
   startTime: string | null

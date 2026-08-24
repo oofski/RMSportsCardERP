@@ -1787,8 +1787,19 @@ export function createBridge(ipcRenderer: BridgeTransport) {
         sku?: string | null
         rate?: number | null
         description?: string | null
-      }): Promise<Result<{ id: string; name: string; sku: string | null }>> =>
-        ipcRenderer.invoke(IPC.invoiceQboCreateItem, input),
+      }): Promise<
+        Result<{
+          id: string
+          name: string
+          sku: string | null
+          /**
+           * Named only when THIS press settled which Income account the item's
+           * sales post to — see createQboItem. Null every press after, because
+           * the mapping then has one.
+           */
+          incomeAccountChosen?: string | null
+        }>
+      > => ipcRenderer.invoke(IPC.invoiceQboCreateItem, input),
 
       /**
        * Give an existing QuickBooks item the SKU we hold for it.

@@ -595,50 +595,125 @@ ok(
  *
  * The panel listed the missing product with an "Add to QuickBooks" button beside
  * it. Pressing it always failed — a new Product/Service has to post its revenue
- * to an account, and this app will not pick one — so the operator got a sentence
+ * to an account, and the app would not pick one — so the operator got a sentence
  * about a settings screen they had been given no reason to visit, from a button
- * that looked like the fix. Nothing in the app had said the account was unset,
- * and re-pressing did the same thing again, which is exactly what "why does this
- * keep happening" feels like.
+ * that looked like the fix. Re-pressing did the same thing again, which is what
+ * "why does this keep happening" feels like.
  *
- * The mapping is knowable before the press. So the pre-flight reports it and the
- * panel says it, next to the thing it blocks.
+ * ## What changed, and what did not
+ *
+ * The RULE did not change: revenue never posts to an account nobody chose. What
+ * changed is that the account is now RESOLVED on the press and WRITTEN INTO THE
+ * MAPPING before it is used — so it becomes the operator's own visible, editable
+ * setting rather than a hidden default. That is the whole difference between
+ * choosing for somebody and choosing behind them, and it is what these
+ * assertions are about.
+ *
+ * The picker is `suggestMap`, the same one the mapping screen offers, so the
+ * account this lands on is the account that screen would have proposed. It
+ * declines to guess between several plausible Income accounts, and the refusal
+ * still stands for that case.
  */
-console.log('\n=== the missing income account is said BEFORE the press ===')
+console.log('\n=== adding a product works without a detour through settings ===')
 
 const { readFileSync } = require('node:fs')
 const panel = readFileSync('src/renderer/src/modules/invoices/QboReadiness.tsx', 'utf8')
+const preflight = readFileSync('src/main/quickbooks/invoices.ts', 'utf8')
 
 ok(
-  /canAddItems/.test(panel),
-  'THE PANEL READS WHETHER A PRODUCT CAN BE CREATED AT ALL',
-  'QboReadiness.tsx never mentions canAddItems'
+  /disabled=\{creating !== null\}/.test(panel),
+  'THE ADD BUTTON IS NOT DISABLED BY AN UNSET INCOME ACCOUNT',
+  'the Add button is still gated on the mapping'
 )
 ok(
-  /disabled=\{creating !== null \|\| !report\.canAddItems\}/.test(panel),
-  'and the Add button is DISABLED when it cannot',
-  'the Add button does not disable on canAddItems'
-)
-ok(
-  /Pick the .Break sales income. account first/.test(panel),
-  'with the reason shown on the panel, naming the account to choose'
-)
-ok(
-  /Account mapping/.test(panel),
-  'and where to choose it — the same place the post-press refusal names'
+  /suggestMap\(accounts\)\.salesIncome/.test(preflight),
+  'because the account is worked out on the press, by the mapping screen’s own picker',
+  'createQboItem does not resolve the income account'
 )
 
 /**
- * The contract, not just the screen: a renderer that reads a field the main
- * process never sends gets `undefined`, which is falsy, and would disable the
- * button forever on a perfectly mapped company.
+ * PERSISTED, AND BEFORE THE WRITE. Using a resolved account without recording it
+ * would be a hidden default that reappears on every press and can never be
+ * found; recording it after the write would lose it whenever QuickBooks refused
+ * the item, leaving the operator to repeat the same mystery.
  */
-const preflight = readFileSync('src/main/quickbooks/invoices.ts', 'utf8')
 ok(
-  /canAddItems: !!\(realmId && \(getAccountMap\(realmId\)\.salesIncome/.test(preflight),
-  'AND THE PRE-FLIGHT ACTUALLY SENDS IT, read off the mapped income account',
-  'preflightQboInvoice does not populate canAddItems from the account map'
+  /setAccountMap\(realmId, \{ \.\.\.getAccountMap\(realmId\), salesIncome: suggestion \}\)/.test(
+    preflight
+  ),
+  'AND SAVED INTO THE OPERATOR’S OWN MAPPING, where it can be seen and changed',
+  'the resolved account is never written to the map'
 )
+const persistAt = preflight.indexOf('setAccountMap(realmId,')
+const postAt = preflight.indexOf("qboRequest<{ Item?: RawItem }>")
+ok(
+  persistAt > 0 && postAt > persistAt,
+  'saved BEFORE the item is posted, so a refusal still leaves the setting filled in',
+  `persist@${persistAt} post@${postAt}`
+)
+
+/** The decision is reported, not made silently. */
+ok(
+  /incomeAccountChosen/.test(preflight) && /incomeAccountChosen/.test(panel),
+  'the account it settled on travels back to the screen',
+  'incomeAccountChosen is not plumbed through'
+)
+ok(
+  /Its sales post to \$\{account\}/.test(panel),
+  'AND IS NAMED IN THE TOAST — revenue landing somewhere is never decided in silence',
+  'the toast does not name the account'
+)
+
+/**
+ * The refusal survives for the case that is genuinely a choice: a company with
+ * no Income account the picker can settle on without one.
+ */
+const stillRefuses = threw(() => toQboItemPayload({ name: MEGA, incomeAccountId: '' }))
+ok(stillRefuses !== null, 'and a blank account is STILL refused rather than invented')
+
+// ---------------------------------------------------------------------------
+// AND IT NAMES A MENU THAT EXISTS
+// ---------------------------------------------------------------------------
+/**
+ * Every message above sends somebody to a screen. They were all written when
+ * that screen was called "Invoices", and it was later renamed to "Sales Orders"
+ * — the sidebar, the module registry, everything except the sentences pointing
+ * at it. So the app answered "where do I fix this?" with the name of a menu
+ * that is not in the app, which is worse than saying nothing: it reads as the
+ * instruction being for a different version.
+ *
+ * The display name lives in ONE place. This asserts the sentences agree with
+ * it, so the next rename cannot quietly orphan them again.
+ */
+console.log('\n=== the instructions name a menu that is actually there ===')
+
+const { MODULES } = require('../src/shared/modules')
+const invoicesModule = MODULES.find((m: { id: string }) => m.id === 'invoices')
+const screenName: string = invoicesModule?.name ?? ''
+
+ok(!!screenName, 'the sales-order module has a display name', String(screenName))
+
+const pointers = [
+  ['src/shared/invoices.ts', readFileSync('src/shared/invoices.ts', 'utf8')],
+  ['src/shared/quickbooksRelay.ts', readFileSync('src/shared/quickbooksRelay.ts', 'utf8')]
+] as const
+
+for (const [file, text] of pointers) {
+  const arrows = [...String(text).matchAll(/([A-Za-z ]+) \u2192 QuickBooks/g)].map((m) => m[1].trim())
+  ok(
+    arrows.length > 0,
+    `${file} points somebody at the QuickBooks screen`,
+    'no "… → QuickBooks" pointer found'
+  )
+  // `endsWith`, because the sentence around it varies — "under Sales Orders →
+  // QuickBooks" and "Sales Orders → QuickBooks → Account mapping" are both fine.
+  // What must not vary is the name of the screen itself.
+  ok(
+    arrows.every((a) => a.endsWith(screenName)),
+    `AND CALLS IT “${screenName}” — the name that is actually in the sidebar`,
+    `${file} says: ${[...new Set(arrows)].join(', ')}`
+  )
+}
 
 // ---------------------------------------------------------------------------
 console.log(`\n${pass} passed, ${fail} failed`)

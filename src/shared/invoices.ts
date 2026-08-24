@@ -1439,7 +1439,7 @@ export function toQboItemPayload(input: {
   const income = (input.incomeAccountId ?? '').trim()
   if (!income) {
     throw new Error(
-      'Pick the “Break sales income” account first — Invoices → QuickBooks → Account mapping. ' +
+      'Pick the “Break sales income” account first — Sales Orders → QuickBooks → Account mapping. ' +
         'A new product has to post its revenue somewhere, and this app will not choose that for ' +
         'you.'
     )

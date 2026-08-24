@@ -38,6 +38,7 @@ const {
   groupByRole,
   hoursLabel,
   ROTATION_ROLE_ORDER,
+  shiftEditStamp,
   shiftNeedsPublishing,
   totalShiftMinutes
 } = require('../src/shared/schedule')
@@ -171,6 +172,56 @@ ok(
     updatedAt: '2026-08-21T09:00:00.000Z'
   }) === true,
   'PUBLISHED AND THEN MOVED IS UNSENT — they are holding an answer that is no longer true and no reason to check'
+)
+
+/**
+ * THE MILLISECOND THE COMPARISON CANNOT SEE.
+ *
+ * `shiftNeedsPublishing` compares two ISO instants, and ISO instants stop at the
+ * millisecond. An edit landing in the SAME millisecond as the publish before it
+ * is not "after" it — so the row reads as published and current, and the person
+ * working that shift is never told it moved. Nothing errors; the message simply
+ * does not go.
+ *
+ * That is not theoretical. Publishing stamps a whole week from one timestamp
+ * taken before the writes, and copying a week creates shifts in a tight loop —
+ * on a fast machine those share a millisecond routinely, which is how the suite
+ * below found it: it failed about one run in three.
+ *
+ * The comparison is left alone (making it `>=` would flag every freshly
+ * published shift as unsent). The WRITE is what guarantees the invariant.
+ */
+const SAME_MS = '2026-08-20T10:00:00.000Z'
+ok(
+  shiftNeedsPublishing({ publishedAt: SAME_MS, updatedAt: SAME_MS }) === false,
+  'an edit that shares a millisecond with the publish is INVISIBLE to the comparison',
+  'this is the hazard, asserted so the fix below has something to be a fix for'
+)
+ok(
+  shiftEditStamp(SAME_MS, SAME_MS) > SAME_MS,
+  'SO AN EDIT TO A PUBLISHED SHIFT IS FORCED STRICTLY PAST IT',
+  shiftEditStamp(SAME_MS, SAME_MS)
+)
+ok(
+  shiftNeedsPublishing({ publishedAt: SAME_MS, updatedAt: shiftEditStamp(SAME_MS, SAME_MS) }) === true,
+  'and the message is owed after all',
+  shiftEditStamp(SAME_MS, SAME_MS)
+)
+ok(
+  shiftEditStamp('2026-08-21T09:00:00.000Z', SAME_MS) === '2026-08-21T09:00:00.000Z',
+  'while a clock that already moved on is left exactly as it is',
+  shiftEditStamp('2026-08-21T09:00:00.000Z', SAME_MS)
+)
+ok(
+  shiftEditStamp(SAME_MS, null) === SAME_MS,
+  'and a DRAFT is untouched — there is no publish for it to be newer than',
+  shiftEditStamp(SAME_MS, null)
+)
+/** An unparseable stamp is not something to do arithmetic on. */
+ok(
+  shiftEditStamp(SAME_MS, 'not a date') === SAME_MS,
+  'a stamp that is not a date is left alone rather than becoming one from NaN',
+  shiftEditStamp(SAME_MS, 'not a date')
 )
 
 // ---------------------------------------------------------------------------

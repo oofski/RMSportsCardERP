@@ -13,6 +13,7 @@ import {
   type Availability,
   type AvailabilityPattern,
   type AvailabilityWithPerson,
+  shiftEditStamp,
   type EffectiveAvailability,
   type EffectiveAvailabilityWithPerson,
   type NewAvailability,
@@ -169,7 +170,10 @@ export function createShift(input: NewShift, actorId: string | null): Shift {
     | { id: string; created_at: string; published_at: string | null }
     | undefined
 
-  const stamp = nowIso()
+  // Strictly past the publish when this is an edit to a published shift — see
+  // shiftEditStamp. Without it an edit sharing a millisecond with the publish
+  // reads as already announced and nobody is told the shift moved.
+  const stamp = shiftEditStamp(nowIso(), existing?.published_at ?? null)
   const shift: Shift = {
     // An existing row keeps its id; a new one gets an id DERIVED from the person
     // and the day. Two leads rostering the same person for the same night on two

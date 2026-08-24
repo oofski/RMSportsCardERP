@@ -942,7 +942,15 @@ export function CreateInvoiceModal({
           {/* Directly under the lines, because that is what it is about. The
               refusal it predicts used to arrive after Save as a toast, by which
               point the invoice existed here and not there. */}
-          <QboReadiness customerName={customerName} lines={lines} email={email} />
+          <QboReadiness
+            customerName={customerName}
+            lines={lines}
+            email={email}
+            onOpenQuickBooks={() => {
+              onClose()
+              onOpenQuickBooks()
+            }}
+          />
 
           {/* ---- What it says -------------------------------------------- */}
           <div className="field-row">

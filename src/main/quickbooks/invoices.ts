@@ -15,7 +15,8 @@ import {
 import { activeRealmId, qboRequest, qboUpload } from './client'
 import { buildInvoiceHtml } from '../invoicePdf'
 import { renderDocumentForExport } from '../poPdf'
-import { getAccountMap } from './mapping'
+import { getAccountMap, setAccountMap, suggestMap } from './mapping'
+import { fetchAccounts } from './accounts'
 import { getQboConfig } from './store'
 import {
   RM_CLASS_NAME,
@@ -89,6 +90,15 @@ export interface QboCustomerRef {
 export interface QboItemRef {
   id: string
   name: string
+  /**
+   * The Income account this press SETTLED, when it was the press that settled
+   * it — see createQboItem. Null when the mapping already had one, which is
+   * every press after the first.
+   *
+   * Reported so the screen can name it: revenue landing in an account is not a
+   * thing to decide silently, even when the decision is the obvious one.
+   */
+  incomeAccountChosen?: string | null
   /** The list price, so the editor can offer it rather than make somebody type it. */
   rate: number | null
   description: string | null
@@ -453,12 +463,48 @@ export async function createQboItem(input: {
   description?: string | null
 }): Promise<QboItemRef> {
   const realmId = activeRealmId()
-  // Throws by name on a blank one. The mapping screen is where that is chosen,
-  // and the message says so — nothing here picks an Income account.
-  const body = toQboItemPayload({
-    ...input,
-    incomeAccountId: (realmId ? getAccountMap(realmId).salesIncome : '') ?? ''
-  })
+  const mapped = (realmId ? getAccountMap(realmId).salesIncome : '') ?? ''
+
+  /**
+   * WORKING OUT THE INCOME ACCOUNT RATHER THAN SENDING SOMEBODY TO A SETTING.
+   *
+   * The rule this integration runs on is that revenue never posts to an account
+   * nobody chose. That rule is right, and it used to be enforced by refusing —
+   * which put a settings screen between an operator and a button labelled "Add
+   * to QuickBooks", for a decision that has one obvious answer in almost every
+   * company: the Income account QuickBooks itself created and called something
+   * with "Sales" in it.
+   *
+   * So the account is RESOLVED, and the resolution is what keeps the rule
+   * intact: it is written into the operator's own mapping before it is used.
+   * That is the difference between choosing for somebody and choosing behind
+   * them. From this press on it is a visible, editable setting on the mapping
+   * screen, and the caller is told which account it landed on so it can say so.
+   *
+   * suggestMap is the SAME picker the mapping screen offers as a suggestion —
+   * one implementation, so the account this lands on is the account that screen
+   * would have proposed. It deliberately declines to guess when there are
+   * several plausible Income accounts and none of them looks like sales; that
+   * really is a choice, and the refusal below still stands for it.
+   */
+  let income = mapped.trim()
+  let chosenFor: string | null = null
+  if (!income && realmId) {
+    const accounts = await fetchAccounts()
+    const suggestion = (suggestMap(accounts).salesIncome ?? '').trim()
+    if (suggestion) {
+      income = suggestion
+      chosenFor =
+        accounts.find((a) => a.id === suggestion)?.fullyQualifiedName ?? `account ${suggestion}`
+      // Persisted BEFORE the write, so a create that fails still leaves the
+      // operator with the setting filled in rather than a mystery to repeat.
+      setAccountMap(realmId, { ...getAccountMap(realmId), salesIncome: suggestion })
+    }
+  }
+
+  // Still throws by name on a blank one — the case where the company has no
+  // Income account that can be resolved without a real decision.
+  const body = toQboItemPayload({ ...input, incomeAccountId: income })
 
   const res = await qboRequest<{ Item?: RawItem }>({ method: 'POST', path: 'item', body })
 
@@ -471,7 +517,10 @@ export async function createQboItem(input: {
     name: String(created.FullyQualifiedName || created.Name || input.name.trim()),
     rate: typeof created.UnitPrice === 'number' ? created.UnitPrice : null,
     description: created.Description ?? null,
-    sku: (created.Sku ?? '').trim() || null
+    sku: (created.Sku ?? '').trim() || null,
+    // Only set when this press is what decided it. The screen says so once,
+    // rather than repeating an account name on every item after.
+    incomeAccountChosen: chosenFor
   }
 }
 

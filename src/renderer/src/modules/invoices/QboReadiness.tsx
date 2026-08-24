@@ -41,7 +41,15 @@ export function QboReadiness({
   customerName,
   lines,
   /** The bill-to, so a customer created from here starts with their email. */
-  email
+  email,
+  /**
+   * Take them to the QuickBooks tab. Given rather than described, because the
+   * setting that blocks this panel is two screens away and a sentence naming
+   * where it lives is a sentence somebody has to go and find. The modal is
+   * closed first — the invoice is a draft in a form, and leaving it open behind
+   * a settings screen is how a half-typed order gets lost.
+   */
+  onOpenQuickBooks
 }: {
   customerName: string
   /**
@@ -51,6 +59,7 @@ export function QboReadiness({
    */
   lines: Array<{ item: string; sku: string; rate?: string; description?: string }>
   email?: string | null
+  onOpenQuickBooks?: () => void
 }): JSX.Element | null {
   const toast = useToast()
   const [report, setReport] = useState<QboInvoicePreflight | null>(null)
@@ -149,7 +158,18 @@ export function QboReadiness({
         toast.error(res.error ?? 'QuickBooks would not create that item.')
         return
       }
-      toast.success(`Added “${miss.name}” to QuickBooks.`)
+      /**
+       * When this press is what settled the income account, SAY WHICH ONE.
+       * Revenue landing in an account is not a thing to decide silently, even
+       * when the decision is the obvious one — and the sentence is the only
+       * reason anybody would think to go and change it.
+       */
+      const account = res.data?.incomeAccountChosen
+      toast.success(
+        account
+          ? `Added “${miss.name}”. Its sales post to ${account} — change that under Account mapping.`
+          : `Added “${miss.name}” to QuickBooks.`
+      )
       await run()
     } finally {
       setCreating(null)
@@ -252,20 +272,28 @@ export function QboReadiness({
         </div>
       )}
 
-      {/* THE REASON THE BUTTON BELOW CANNOT WORK, SAID BEFORE THE PRESS.
-          A new Product/Service has to post its revenue to an account, and this
-          app will not pick one. Until that account is chosen, every "Add to
-          QuickBooks" here fails with a sentence about a settings screen — so
-          the sentence goes here instead, once, next to the thing it blocks. */}
+      {/* WHERE THE MONEY WILL LAND, SAID BEFORE THE PRESS RATHER THAN INSTEAD
+          OF IT.
+          This used to be a refusal: a new Product/Service has to post its
+          revenue to an account, the app would not pick one, and the button
+          below failed until somebody found a settings screen they had been
+          given no reason to visit. The account is worked out on the press now
+          and written into the mapping where it can be changed — so this is a
+          heads-up about a decision being made, not a wall in front of one. */}
       {report && !report.canAddItems && report.missingItems.length > 0 && (
         <div className="qbo-ready-row qbo-ready-blocked">
           <div>
-            <b>Pick the “Break sales income” account first</b>
+            <b>Sales income account not set yet</b>
             <span>
-              A new product has to post its revenue somewhere, and this app will not choose that
-              for you. Set it in Invoices → QuickBooks → Account mapping, then Re-check.
+              Adding a product below will post its sales to the Income account QuickBooks uses for
+              sales, and save that choice. Change it any time under Account mapping.
             </span>
           </div>
+          {onOpenQuickBooks && (
+            <Button variant="secondary" icon="Settings" onClick={onOpenQuickBooks}>
+              Choose it myself
+            </Button>
+          )}
         </div>
       )}
 
@@ -283,14 +311,9 @@ export function QboReadiness({
             variant="secondary"
             icon="Plus"
             loading={creating === miss.name}
-            disabled={creating !== null || !report.canAddItems}
-            // Says what it will do to real books, on the control that does it —
-            // or why it cannot, when the income account has not been chosen.
-            title={
-              report.canAddItems
-                ? `Create a non-inventory Product/Service called “${miss.name}” in QuickBooks`
-                : 'Choose the “Break sales income” account first — Invoices → QuickBooks → Account mapping'
-            }
+            disabled={creating !== null}
+            // Says what it will do to real books, on the control that does it.
+            title={`Create a non-inventory Product/Service called “${miss.name}” in QuickBooks`}
             onClick={() => void createItem(miss)}
           >
             Add to QuickBooks
