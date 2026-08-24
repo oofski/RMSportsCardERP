@@ -1358,4 +1358,60 @@
   .po-origins-side > svg {
     margin-left: auto;
   }
+
+  /* 17. The rotation's day view
+
+     Three columns side by side is the right shape on a desk and impossible at
+     390px — each would be about 120px wide, which is narrower than "Cara
+     Whitlow". They stack, in the order somebody works through them: what you
+     have, what you can do about it, then why nobody is left.
+
+     The day strip stays seven across. It is the control for CHOOSING the day
+     and a stacked list of seven days would push the day itself off the screen —
+     and the pills only carry a weekday, a date and a count, which fits. */
+  .dayb-cols {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .dayb-nav {
+    gap: 3px;
+  }
+  .dayb-pill {
+    min-height: var(--rm-tap);
+    padding: 5px 2px;
+  }
+  .dayb-pill b {
+    font-size: 10px;
+  }
+  /* The Week/Day switch is how somebody gets to any of this. */
+  .rot-view-toggle button {
+    min-height: var(--rm-tap);
+  }
+  /* Two buttons and a name on one row at 390px leaves the name a word wide. */
+  .dayb-btn {
+    min-height: 34px;
+  }
+
+  /* The rotation's toolbar wrapped to FOUR rows on a phone — week arrows, then
+     "This week", then Week/Day, then Copy last week, then Publish — so roughly
+     200px of buttons stood between opening the tab and seeing a single name.
+     The day view is the half of this screen somebody would actually use on a
+     phone, and it was below all of it.
+
+     Two rows instead: the controls keep their tap height and lose the padding
+     they were only spending on air. */
+  .rot-shell .section-head .row > .btn,
+  .rot-shell .section-head .sb-month-nav {
+    flex: 0 1 auto;
+  }
+  .rot-shell .section-head .row {
+    gap: 6px;
+  }
+  .rot-shell .section-head .btn {
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+  .rot-view-toggle button {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
 }

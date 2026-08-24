@@ -38,6 +38,9 @@ const {
   groupByRole,
   hoursLabel,
   ROTATION_ROLE_ORDER,
+  dayCoverLabel,
+  dayRoster,
+  ownWeekTitle,
   shiftEditStamp,
   shiftNeedsPublishing,
   totalShiftMinutes
@@ -390,5 +393,154 @@ ok(long.length < 140, 'a long week is trimmed rather than sent whole', String(lo
 ok(long.includes('more'), 'AND SAYS WHAT DID NOT FIT, so the last thing read is not half of Thursday', long)
 ok(long.includes('7 shifts'), 'while still saying how many there really are', long)
 
+// ---------------------------------------------------------------------------
+// ONE DAY, AND WHO IS ON IT
+// ---------------------------------------------------------------------------
+/**
+ * The rotation is a person per row and a day per column, which answers "how is
+ * Ada's week looking" and is the wrong shape for "who is in on Thursday, and who
+ * could be". Answering that on the grid means reading one column top to bottom
+ * and then working out separately which of the people NOT in it actually said
+ * they could work — and that second half existed nowhere: availability was a
+ * tint behind a cell, and the list of people free and not yet rostered was on no
+ * screen at all.
+ *
+ * The cases below are the ones that decide whether the split is honest.
+ */
+console.log('\n=== 9. one day, and who is on it ===')
+
+const CREW = [
+  { id: 'e_ada', firstName: 'Ada', lastName: 'Fenn', role: 'shipping' },
+  { id: 'e_ben', firstName: 'Ben', lastName: 'Orsini', role: 'shipping' },
+  { id: 'e_cara', firstName: 'Cara', lastName: 'Whitlow', role: 'shipping' },
+  { id: 'e_dov', firstName: 'Dov', lastName: 'Ashby', role: 'breaker' }
+]
+const THU = '2026-08-27'
+
+const roster = dayRoster(
+  THU,
+  CREW,
+  [
+    // Ada is on, and said she cannot work — a real shift AND a real problem.
+    { employeeId: 'e_ada', day: THU, startTime: '16:00', endTime: '22:00', publishedAt: null, updatedAt: '' },
+    // Dov is on, times not settled yet.
+    { employeeId: 'e_dov', day: THU, startTime: null, endTime: null, publishedAt: null, updatedAt: '' },
+    // A shift on ANOTHER day, which must not leak into this one.
+    { employeeId: 'e_ben', day: '2026-08-28', startTime: '10:00', endTime: '18:00', publishedAt: null, updatedAt: '' }
+  ],
+  [
+    { employeeId: 'e_ada', day: THU, status: 'unavailable', startTime: null, endTime: null, note: null, source: 'day' },
+    { employeeId: 'e_ben', day: THU, status: 'available', startTime: '10:00', endTime: null, note: null, source: 'pattern' },
+    { employeeId: 'e_cara', day: '2026-08-28', status: 'unavailable', startTime: null, endTime: null, note: null, source: 'day' }
+  ]
+)
+
+const named = (list: Array<{ person: { firstName: string } }>): string =>
+  list.map((e) => e.person.firstName).sort().join(', ')
+
+ok(named(roster.on) === 'Ada, Dov', 'ON is who is rostered, and only for this day', named(roster.on))
+ok(named(roster.free) === 'Ben, Cara', 'FREE is who could be', named(roster.free))
+ok(named(roster.away) === '', 'and AWAY holds nobody who is already on', named(roster.away))
+
+/**
+ * THE ONE THAT MATTERS MOST. Ada is rostered on a day she said she cannot work.
+ * She belongs in ON — the shift is real — and it has to be marked, because
+ * filing her under "away" on the strength of what she said would hide a shift
+ * from the person building the rota, and somebody would be left expecting cover
+ * that is not coming.
+ */
+const adaEntry = roster.on.find((e: { person: { firstName: string } }) => e.person.firstName === 'Ada')
+ok(!!adaEntry, 'a rostered person who said no is still ON')
+ok(adaEntry.clash === true, 'AND IS MARKED AS A CLASH — the shift is real and so is the problem')
+const dovEntry = roster.on.find((e: { person: { firstName: string } }) => e.person.firstName === 'Dov')
+ok(dovEntry.clash === false, 'while somebody who said nothing is on without a clash')
+ok(roster.clashes === 1, 'and the day counts exactly one', String(roster.clashes))
+
+/**
+ * SAYING NOTHING IS NOT SAYING YES. Both are free, and a lead about to phone
+ * somebody needs to know which of the two they are holding.
+ */
+const benEntry = roster.free.find((e: { person: { firstName: string } }) => e.person.firstName === 'Ben')
+const caraEntry = roster.free.find((e: { person: { firstName: string } }) => e.person.firstName === 'Cara')
+ok(benEntry.saidYes === true, 'somebody who answered "can work" is recorded as having said so')
+ok(
+  caraEntry.saidYes === false && caraEntry.answer === null,
+  'while somebody who has said NOTHING is free, and not credited with an answer',
+  JSON.stringify(caraEntry.answer)
+)
+ok(
+  caraEntry.answer === null,
+  'AND AN ANSWER ABOUT A DIFFERENT DAY IS NOT READ AS ONE ABOUT THIS ONE'
+)
+
+/** Somebody who said no and is not rostered is away, and is still shown. */
+const withAway = dayRoster(
+  THU,
+  CREW,
+  [],
+  [{ employeeId: 'e_cara', day: THU, status: 'unavailable', startTime: null, endTime: null, note: null, source: 'day' }]
+)
+ok(named(withAway.away) === 'Cara', 'SAID NO AND NOT ROSTERED IS AWAY', named(withAway.away))
+ok(!named(withAway.free).includes('Cara'), 'and is not offered as free at the same time')
+ok(withAway.on.length === 0 && withAway.clashes === 0, 'a day with nobody on has no clashes')
+
+/** The hours only count a shift whose two ends are both known. */
+ok(roster.minutes === 360, "Ada's six hours count; Dov's unset times add nothing", String(roster.minutes))
+ok(dayCoverLabel(roster) === '2 on · 6h', 'and the day reads as one line', dayCoverLabel(roster))
+ok(
+  dayCoverLabel({ on: [], minutes: 0 }) === 'Nobody on',
+  'while an empty day SAYS SO rather than printing a zero somebody reads as entered',
+  dayCoverLabel({ on: [], minutes: 0 })
+)
+ok(
+  dayCoverLabel({ on: [{}], minutes: 0 }) === '1 on',
+  'and a shift with no times says who without inventing hours',
+  dayCoverLabel({ on: [{}], minutes: 0 })
+)
+
+/**
+ * THE LINE ABOVE THE DAYS, on the lock screen.
+ *
+ * A push shows its title in full and truncates its body, so the title is the
+ * only part guaranteed to be read — and it led with "Your shifts", which is the
+ * one thing somebody already knows from the fact that their phone buzzed. The
+ * date is what they want off a glance.
+ */
+console.log('\n=== 10. the title on the lock screen ===')
+
+ok(
+  ownWeekTitle([{ day: '2026-08-27' }]) === 'Thu 27 Aug · Scheduled',
+  'ONE SHIFT IS TITLED BY ITS DAY, then what happened',
+  ownWeekTitle([{ day: '2026-08-27' }])
+)
+ok(
+  ownWeekTitle([{ day: '2026-08-27' }, { day: '2026-08-29' }]) === 'Thu 27 Aug – Sat 29 Aug · Scheduled',
+  'and several are titled first to last',
+  ownWeekTitle([{ day: '2026-08-27' }, { day: '2026-08-29' }])
+)
+/**
+ * THE SPAN IS THIS PERSON'S OWN. A lead publishing Monday to Sunday sends one
+ * message per person, and most are not on all seven days — titling Ada's
+ * message with the whole week tells her about days she is not working and
+ * buries the one she is.
+ */
+ok(
+  ownWeekTitle([{ day: '2026-08-29' }, { day: '2026-08-27' }]) === 'Thu 27 Aug – Sat 29 Aug · Scheduled',
+  'whatever order they arrive in',
+  ownWeekTitle([{ day: '2026-08-29' }, { day: '2026-08-27' }])
+)
+ok(
+  ownWeekTitle([{ day: '2026-08-27' }, { day: '2026-08-27' }]) === 'Thu 27 Aug · Scheduled',
+  'and two shifts on ONE day is still one day, not a range from it to itself',
+  ownWeekTitle([{ day: '2026-08-27' }, { day: '2026-08-27' }])
+)
+ok(ownWeekTitle([]) === 'Scheduled', 'nothing to name leaves just the word', ownWeekTitle([]))
+ok(
+  ownWeekTitle([{ day: '2026-08-27' }], 'Changed') === 'Thu 27 Aug · Changed',
+  'and what happened is the caller’s to say',
+  ownWeekTitle([{ day: '2026-08-27' }], 'Changed')
+)
+
+// ---------------------------------------------------------------------------
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail > 0) process.exit(1)

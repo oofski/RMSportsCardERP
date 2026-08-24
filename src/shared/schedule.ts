@@ -522,6 +522,127 @@ export function groupByRole<T extends { role: Role; firstName: string; lastName:
 }
 
 /**
+ * ONE DAY, AND WHO IS ON IT.
+ *
+ * ## The question the week grid cannot answer
+ *
+ * The rotation is a person per row and a day per column, which is the right
+ * shape for "how is Ada's week looking". It is the wrong shape for the other
+ * question a lead asks — "who is in on Thursday, and who could be" — because
+ * answering that means reading one column top to bottom, holding eight names in
+ * your head, and then working out separately which of the people NOT in that
+ * column actually said they could work.
+ *
+ * That second half is the part nobody could do at all. Availability was on the
+ * screen as a tint behind a cell; the list of people who are free and not yet
+ * rostered existed nowhere.
+ *
+ * ## Three buckets, and the order matters
+ *
+ * ON is who is rostered. FREE is who could be. AWAY is who said no.
+ *
+ * A person rostered on a day they said they cannot work is in ON — they are
+ * genuinely on the rota — and CARRIES A CLASH. Filing them under "away" because
+ * of what they said would hide a real shift, and hiding a shift from the person
+ * building the rota is how somebody is left expecting cover that is not coming.
+ *
+ * ## Saying nothing is not saying yes
+ *
+ * Most people say nothing about most days. They are in FREE, because there is no
+ * reason they cannot work — but the row says which it is, because "Ada told me
+ * she is free" and "Ada has not answered" are different amounts of information
+ * and a lead about to phone somebody needs to know which one they have.
+ */
+export interface DayRosterEntry<P> {
+  person: P
+  /** The shift they are on, when they are on one. */
+  shift: Shift | null
+  /** What they said about this day. Null when they have said nothing at all. */
+  answer: EffectiveAvailability | null
+  /**
+   * Rostered on a day they said they CANNOT work. Only ever true in `on` — see
+   * the note above about why such a person is not filed under away.
+   */
+  clash: boolean
+  /** They answered "can work" rather than simply never having been asked. */
+  saidYes: boolean
+}
+
+export interface DayRoster<P> {
+  day: string
+  on: Array<DayRosterEntry<P>>
+  free: Array<DayRosterEntry<P>>
+  away: Array<DayRosterEntry<P>>
+  /** Rostered minutes across the day, where both ends of a shift are known. */
+  minutes: number
+  /** How many of the rostered are on a day they said no to. */
+  clashes: number
+}
+
+/**
+ * Sort one day's people into on / free / away.
+ *
+ * Pure, and given everything it needs: the roster to consider, this day's
+ * shifts, and this day's effective availability. The caller has all three
+ * already — the rotation loads them for the whole week — so this invents no
+ * read and cannot disagree with the grid drawn beside it.
+ */
+export function dayRoster<P extends { id: string }>(
+  day: string,
+  people: readonly P[],
+  shifts: readonly (Shift & { employeeId: string })[],
+  answers: readonly (EffectiveAvailability & { employeeId: string })[]
+): DayRoster<P> {
+  const shiftFor = new Map<string, Shift>()
+  for (const s of shifts) if (s.day === day) shiftFor.set(s.employeeId, s)
+  const answerFor = new Map<string, EffectiveAvailability>()
+  for (const a of answers) if (a.day === day) answerFor.set(a.employeeId, a)
+
+  const on: Array<DayRosterEntry<P>> = []
+  const free: Array<DayRosterEntry<P>> = []
+  const away: Array<DayRosterEntry<P>> = []
+
+  for (const person of people) {
+    const shift = shiftFor.get(person.id) ?? null
+    const answer = answerFor.get(person.id) ?? null
+    const saidNo = answer?.status === 'unavailable'
+    const entry: DayRosterEntry<P> = {
+      person,
+      shift,
+      answer,
+      clash: !!shift && saidNo,
+      saidYes: answer?.status === 'available'
+    }
+    if (shift) on.push(entry)
+    else if (saidNo) away.push(entry)
+    else free.push(entry)
+  }
+
+  return {
+    day,
+    on,
+    free,
+    away,
+    minutes: totalShiftMinutes(on.map((e) => e.shift).filter((s): s is Shift => !!s)),
+    clashes: on.filter((e) => e.clash).length
+  }
+}
+
+/**
+ * What a day's cover comes to, in one line.
+ *
+ * The count first because that is the number somebody scans a week for, and the
+ * hours after it because two people for two hours is not the same shift as two
+ * people for eight. A day with nobody on says so in words rather than printing
+ * a zero, which reads as a value somebody entered.
+ */
+export function dayCoverLabel(roster: { on: unknown[]; minutes: number }): string {
+  if (roster.on.length === 0) return 'Nobody on'
+  const who = `${roster.on.length} on`
+  return roster.minutes > 0 ? `${who} · ${hoursLabel(roster.minutes)}` : who
+}
+
+/**
  * How many minutes a set of shifts comes to.
  *
  * A shift with no times contributes NOTHING rather than a guess. "In on
@@ -583,6 +704,37 @@ export function describeOwnWeek(
   const total = totalShiftMinutes(ordered)
   const count = `${ordered.length} shift${ordered.length === 1 ? '' : 's'}`
   return `${parts.join(' · ')} — ${count}${total > 0 ? `, ${hoursLabel(total)}` : ''}`
+}
+
+/**
+ * THE LINE ON THE LOCK SCREEN, above the days themselves.
+ *
+ * A push notification shows its title in full and truncates its body, so the
+ * title is the only part guaranteed to be read — and it used to lead with "Your
+ * shifts", which is the one thing the reader already knows from the fact that
+ * their phone buzzed. What they actually want off a glance is WHEN.
+ *
+ * So the date comes first and what happened comes second: "Thu 27 Aug ·
+ * Scheduled".
+ *
+ * ## The range is the person's own, not the week that was published
+ *
+ * A lead publishing Monday to Sunday sends one notification per person, and
+ * most people are not on all seven days. Titling Ada's message "Mon 24 Aug –
+ * Sun 30 Aug" tells her about a week she is in for one evening of, and the day
+ * she is actually working is somewhere in a truncated body. So the span is
+ * derived from HER shifts: one day when she works one, first-to-last when she
+ * works several.
+ */
+export function ownWeekTitle(
+  shifts: readonly { day: string }[],
+  what = 'Scheduled'
+): string {
+  const days = [...new Set(shifts.map((s) => s.day))].sort()
+  if (days.length === 0) return what
+  const first = dayLabel(days[0])
+  const last = dayLabel(days[days.length - 1])
+  return days.length === 1 || first === last ? `${first} · ${what}` : `${first} – ${last} · ${what}`
 }
 
 export function shiftNeedsPublishing(shift: {

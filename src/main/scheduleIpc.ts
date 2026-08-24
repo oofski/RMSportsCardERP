@@ -34,7 +34,7 @@ import {
   unpublishedShifts
 } from './db/schedule'
 import { notifyMessage } from './services/webPush'
-import { dayLabel, describeOwnWeek } from '@shared/schedule'
+import { describeOwnWeek, ownWeekTitle } from '@shared/schedule'
 
 /**
  * The floor's board, the rota, and availability.
@@ -228,7 +228,10 @@ export function registerScheduleIpc(): void {
         for (const [employeeId, shifts] of byPerson) {
           const result = await notifyMessage({
             employeeIds: [employeeId],
-            title: `Your shifts · ${dayLabel(from)} – ${dayLabel(to)}`,
+            // The DATE first, then what happened — see ownWeekTitle. The span
+            // is this person's own days, not the week the lead published: most
+            // people are not on all seven of them.
+            title: ownWeekTitle(shifts),
             body: describeOwnWeek(shifts),
             // No thread to open — this is not a conversation. The service
             // worker treats a blank id as "just open the app", which lands on

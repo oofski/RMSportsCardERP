@@ -4,9 +4,12 @@ import type { Role } from '@shared/permissions'
 import type { EffectiveAvailabilityWithPerson, ShiftWithPerson } from '@shared/schedule'
 import { addDays, dayKey } from '@shared/homeTasks'
 import {
+  dayCoverLabel,
   dayLabel,
+  dayRoster,
   formatClock,
   groupByRole,
+  type DayRosterEntry,
   hoursLabel,
   shiftNeedsPublishing,
   shiftTimeLabel,
@@ -110,6 +113,21 @@ export function RotationTab({
   const [hiddenRoles, setHiddenRoles] = useState<Set<Role>>(new Set())
   const [onlyRostered, setOnlyRostered] = useState(false)
 
+  /**
+   * WEEK OR ONE DAY.
+   *
+   * The grid answers "how is Ada's week looking". The other question a lead
+   * asks — "who is in on Thursday, and who could be" — needs the day, because
+   * on the grid the second half of it (who is free and NOT yet rostered) is not
+   * drawn at all: availability is a tint behind a cell, and the cells that
+   * matter for that question are the empty ones.
+   *
+   * The two share every filter and every read. Switching view re-sorts what is
+   * already on screen; it does not fetch anything or forget where you were.
+   */
+  const [view, setView] = useState<'week' | 'day'>('week')
+  const [dayShown, setDayShown] = useState<string>(() => today)
+
   const weekEnd = useMemo(() => addDays(weekStart, 6), [weekStart])
   const days = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)), [weekStart])
 
@@ -140,12 +158,30 @@ export function RotationTab({
     }
   }, [load])
 
-  // A day clicked on the Team tab scrolls this week into view. It cannot open a
-  // cell — a cell is a person AND a day, and Team only named the day.
+  /**
+   * A day clicked on the Team tab OPENS THAT DAY.
+   *
+   * It used to just scroll the week into view and stop, because a cell is a
+   * person AND a day and Team had only named the day — so the click that a lead
+   * makes on a thin-looking Thursday dead-ended on a grid of empty squares. The
+   * day view needs only the day, which is exactly what was handed over.
+   */
   useEffect(() => {
     if (!focusDay) return
+    setDayShown(focusDay)
+    setView('day')
     onFocusHandled()
   }, [focusDay, onFocusHandled])
+
+  // A day is only meaningful inside the week on screen. Stepping the week takes
+  // the focused day with it rather than leaving it behind on a week nobody is
+  // looking at.
+  useEffect(() => {
+    if (dayShown < weekStart || dayShown > addDays(weekStart, 6)) {
+      const sameWeekAsToday = today >= weekStart && today <= addDays(weekStart, 6)
+      setDayShown(sameWeekAsToday ? today : weekStart)
+    }
+  }, [weekStart, dayShown, today])
 
   /** shift, keyed "employeeId|day" — the cell lookup. */
   const cells = useMemo(() => {
@@ -261,7 +297,7 @@ export function RotationTab({
   const weekMinutes = shown.reduce((sum, p) => sum + minutesFor(p.id, days), 0)
 
   return (
-    <>
+    <div className="rot-shell">
       <div className="section-head">
         <div>
           <h2>Rotation</h2>
@@ -281,6 +317,25 @@ export function RotationTab({
           <Button variant="secondary" size="sm" onClick={() => setWeekStart(mondayOf(today))}>
             This week
           </Button>
+          {/* WEEK OR ONE DAY. Both are the same seven days and the same filters
+              — this re-sorts what is already on screen rather than going
+              anywhere. See the note on `view`. */}
+          <div className="rot-view-toggle">
+            <button
+              className={view === 'week' ? 'on' : ''}
+              onClick={() => setView('week')}
+              title="Everybody's week, a person per row"
+            >
+              Week
+            </button>
+            <button
+              className={view === 'day' ? 'on' : ''}
+              onClick={() => setView('day')}
+              title="One day: who is on, who is free, who said no"
+            >
+              Day
+            </button>
+          </div>
           {canEdit && (
             <Button
               variant="secondary"
@@ -364,7 +419,23 @@ export function RotationTab({
         </label>
       </div>
 
-      <div className="rot-scroll">
+      {view === 'day' && (
+        <DayBoard
+          day={dayShown}
+          days={days}
+          today={today}
+          groups={groups}
+          cells={cells}
+          said={said}
+          canEdit={canEdit}
+          busy={busy}
+          onDay={setDayShown}
+          onOpen={(employeeId) => setEditing({ employeeId, day: dayShown })}
+          onRemove={remove}
+        />
+      )}
+
+      <div className="rot-scroll" hidden={view === 'day'}>
         <div className="rot-grid">
           <div className="rot-row rot-head">
             <div className="rot-name">{shown.length} people</div>
@@ -490,8 +561,265 @@ export function RotationTab({
           }}
         />
       )}
-    </>
+    </div>
   )
+}
+
+/**
+ * ONE DAY: who is on it, who could be, and who said no.
+ *
+ * ## Why this is not just a column of the grid
+ *
+ * The grid answers "how is Ada's week looking" and cannot answer "who could I
+ * put on Thursday", because the answer to that lives in the EMPTY squares — and
+ * an empty square is the one thing a grid is worst at drawing. Availability was
+ * a tint behind a cell; the list of people who are free and not yet rostered was
+ * on no screen at all, so filling a thin day meant reading a column, then going
+ * to a different tab to find out who had said they could work.
+ *
+ * ## Three lists, in the order somebody works through them
+ *
+ * ON is what you have. FREE is what you can do about it. AWAY is the answer to
+ * "why is nobody left" — shown rather than hidden, because a lead who cannot see
+ * that four people said no will keep looking for a fifth.
+ *
+ * Somebody rostered on a day they said no to stays in ON and is marked. Filing
+ * them under away would hide a real shift from the person building the rota.
+ *
+ * ## Adding somebody is one press
+ *
+ * The name is already on screen and the day is already chosen, so there is
+ * nothing left to pick. The press opens the same time editor the grid uses —
+ * one editor, so a shift set here and a shift set there cannot differ.
+ */
+function DayBoard({
+  day,
+  days,
+  today,
+  groups,
+  cells,
+  said,
+  canEdit,
+  busy,
+  onDay,
+  onOpen,
+  onRemove
+}: {
+  day: string
+  days: string[]
+  today: string
+  groups: Array<{ role: Role; label: string; people: Employee[] }>
+  cells: Map<string, ShiftWithPerson>
+  said: Map<string, EffectiveAvailabilityWithPerson>
+  canEdit: boolean
+  busy: boolean
+  onDay: (day: string) => void
+  onOpen: (employeeId: string) => void
+  onRemove: (id: string) => Promise<void>
+}): JSX.Element {
+  // The SAME people the grid is showing — same search, same role chips, same
+  // "only people on this week". Two lists of who counts is two answers to one
+  // question, and the day is the one somebody acts on.
+  const people = useMemo(() => groups.flatMap((g) => g.people), [groups])
+
+  const roster = useMemo(
+    () =>
+      dayRoster(
+        day,
+        people,
+        [...cells.values()],
+        [...said.values()]
+      ),
+    [day, people, cells, said]
+  )
+
+  /** A bucket's entries under their job headings, so the shape matches the grid. */
+  const byRole = (entries: typeof roster.on): Array<{ label: string; entries: typeof roster.on }> => {
+    const order = groups.map((g) => g.role)
+    const out: Array<{ label: string; entries: typeof roster.on }> = []
+    for (const g of groups) {
+      const mine = entries.filter((e) => e.person.role === g.role)
+      if (mine.length > 0) out.push({ label: g.label, entries: mine })
+    }
+    // A role the chips have hidden cannot appear, so anything left over is a
+    // person whose role is not in the current grouping at all — shown rather
+    // than dropped, because a missing name on a rota is the worst outcome here.
+    const rest = entries.filter((e) => !order.includes(e.person.role))
+    if (rest.length > 0) out.push({ label: 'Other', entries: rest })
+    return out
+  }
+
+  return (
+    <div className="dayb">
+      <div className="dayb-nav">
+        {days.map((d) => {
+          const count = [...cells.values()].filter((s) => s.day === d).length
+          return (
+            <button
+              key={d}
+              className={`dayb-pill${d === day ? ' on' : ''}`}
+              data-today={d === today ? 'true' : 'false'}
+              onClick={() => onDay(d)}
+            >
+              <b>{WEEKDAYS[days.indexOf(d)]}</b>
+              <span>{d.slice(8)}</span>
+              {/* The count is what makes this a way of FINDING the thin day
+                  rather than a row of buttons you have to press to learn
+                  anything. */}
+              <em>{count > 0 ? count : '—'}</em>
+            </button>
+          )
+        })}
+      </div>
+
+      <div className="dayb-head">
+        <h3>{dayLabel(day)}</h3>
+        <span>{dayCoverLabel(roster)}</span>
+        {roster.clashes > 0 && (
+          <span className="dayb-clash-count">
+            <Icon name="AlertTriangle" size={12} />
+            {roster.clashes} rostered against a no
+          </span>
+        )}
+      </div>
+
+      <div className="dayb-cols">
+        <DayColumn
+          title="On"
+          count={roster.on.length}
+          tone="on"
+          empty="Nobody on this day yet."
+          sections={byRole(roster.on)}
+          canEdit={canEdit}
+          busy={busy}
+          onOpen={onOpen}
+          onRemove={onRemove}
+        />
+        <DayColumn
+          title="Free"
+          count={roster.free.length}
+          tone="free"
+          empty="Everybody is either on or away."
+          sections={byRole(roster.free)}
+          canEdit={canEdit}
+          busy={busy}
+          onOpen={onOpen}
+          onRemove={onRemove}
+        />
+        <DayColumn
+          title="Said no"
+          count={roster.away.length}
+          tone="away"
+          empty="Nobody has said they cannot work."
+          sections={byRole(roster.away)}
+          canEdit={canEdit}
+          busy={busy}
+          onOpen={onOpen}
+          onRemove={onRemove}
+        />
+      </div>
+    </div>
+  )
+}
+
+/** One of the three lists, with its people under their job headings. */
+function DayColumn({
+  title,
+  count,
+  tone,
+  empty,
+  sections,
+  canEdit,
+  busy,
+  onOpen,
+  onRemove
+}: {
+  title: string
+  count: number
+  tone: 'on' | 'free' | 'away'
+  empty: string
+  sections: Array<{ label: string; entries: Array<DayRosterEntry<Employee>> }>
+  canEdit: boolean
+  busy: boolean
+  onOpen: (employeeId: string) => void
+  onRemove: (id: string) => Promise<void>
+}): JSX.Element {
+  return (
+    <div className="dayb-col" data-tone={tone}>
+      <div className="dayb-col-head">
+        {title}
+        <span>{count}</span>
+      </div>
+      {count === 0 ? (
+        <p className="dayb-empty">{empty}</p>
+      ) : (
+        sections.map((sec) => (
+          <div className="dayb-sec" key={sec.label}>
+            <div className="dayb-sec-head">{sec.label}</div>
+            {sec.entries.map((e) => (
+              <div className={`dayb-row${e.clash ? ' is-clash' : ''}`} key={e.person.id}>
+                <Avatar text={initials(e.person)} src={e.person.avatarUrl} small />
+                <div className="dayb-who">
+                  <b>
+                    {e.person.firstName} {e.person.lastName}
+                  </b>
+                  <span>{entryLine(e)}</span>
+                </div>
+                {canEdit && (
+                  <div className="dayb-acts">
+                    {/* One press. The name is on screen and the day is chosen,
+                        so there is nothing left to pick — this opens the same
+                        time editor the grid uses. */}
+                    <button
+                      className="dayb-btn"
+                      disabled={busy}
+                      onClick={() => onOpen(e.person.id)}
+                      title={e.shift ? 'Change this shift' : `Put them on this day`}
+                    >
+                      <Icon name={e.shift ? 'Pencil' : 'Plus'} size={13} />
+                      {e.shift ? 'Change' : 'Add'}
+                    </button>
+                    {e.shift && (
+                      <button
+                        className="dayb-btn is-remove"
+                        disabled={busy}
+                        onClick={() => void onRemove(e.shift?.id ?? '')}
+                        title="Take them off this day"
+                      >
+                        <Icon name="X" size={13} />
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        ))
+      )}
+    </div>
+  )
+}
+
+/**
+ * The line under a name.
+ *
+ * A shift shows its time, because that is what somebody is checking. Without
+ * one it shows WHAT THEY SAID — and "said nothing" is spelled out rather than
+ * left blank, because a blank row reads as an answer that has not loaded.
+ */
+function entryLine(e: DayRosterEntry<Employee>): string {
+  if (e.shift) {
+    const time = shiftTimeLabel(e.shift)
+    return e.clash ? `${time} · said they cannot work` : time
+  }
+  if (e.answer?.status === 'unavailable') {
+    return e.answer.note?.trim() || 'Said they cannot work'
+  }
+  if (e.saidYes) {
+    const from = formatClock(e.answer?.startTime)
+    return from ? `Can work from ${from}` : 'Said they can work'
+  }
+  return 'Has not said'
 }
 
 /**

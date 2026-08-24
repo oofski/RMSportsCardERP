@@ -21176,6 +21176,237 @@ button.sor-team:focus-visible {
   gap: 6px;
   flex-wrap: wrap;
 }
+
+/* ==========================================================================
+   The rotation, one day at a time
+   --------------------------------------------------------------------------
+   Three lists: what you have, what you can do about it, and why nobody is left.
+   Same people and same filters as the week grid beside it.
+   ========================================================================== */
+.rot-view-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.rot-view-toggle button {
+  padding: 6px 14px;
+  border: 0;
+  background: var(--surface);
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.rot-view-toggle button + button {
+  border-left: 1px solid var(--border);
+}
+.rot-view-toggle button.on {
+  background: var(--brand-500);
+  color: #fff;
+}
+
+/* The day strip. The COUNT on each pill is what makes this a way of finding the
+   thin day rather than seven buttons you have to press to learn anything. */
+.dayb-nav {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 14px;
+}
+.dayb-pill {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  padding: 7px 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text-2);
+  font: inherit;
+  cursor: pointer;
+}
+.dayb-pill b {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.dayb-pill span {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.dayb-pill em {
+  font-style: normal;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.dayb-pill[data-today='true'] {
+  border-color: var(--brand-500);
+}
+.dayb-pill.on {
+  border-color: var(--brand-500);
+  background: var(--brand-50, var(--surface-2));
+  color: var(--brand-600);
+}
+.dayb-pill.on em {
+  color: var(--brand-600);
+}
+
+.dayb-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.dayb-head h3 {
+  margin: 0;
+  font-size: 15px;
+}
+.dayb-head > span {
+  font-size: 12.5px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+.dayb-clash-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--warn-bg, #fdf5e3);
+  color: var(--warn, #8a6d1f);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.dayb-cols {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+.dayb-col {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 10px;
+}
+.dayb-col-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-2);
+}
+.dayb-col-head span {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+/* The three lists are told apart by a stripe rather than by tinting the whole
+   card: a wash of colour behind eight names makes the names harder to read,
+   which is the one thing this screen is for. */
+.dayb-col[data-tone='on'] {
+  border-top: 2px solid var(--success);
+}
+.dayb-col[data-tone='free'] {
+  border-top: 2px solid var(--brand-500);
+}
+.dayb-col[data-tone='away'] {
+  border-top: 2px solid var(--border-strong);
+}
+.dayb-empty {
+  margin: 4px 0 2px;
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+.dayb-sec + .dayb-sec {
+  margin-top: 8px;
+}
+.dayb-sec-head {
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-2);
+  margin: 4px 0 4px;
+}
+.dayb-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 4px;
+  border-radius: var(--radius);
+}
+.dayb-row + .dayb-row {
+  border-top: 1px solid var(--border);
+}
+.dayb-row.is-clash {
+  background: var(--warn-bg, #fdf5e3);
+}
+.dayb-who {
+  min-width: 0;
+  flex: 1;
+}
+.dayb-who b {
+  display: block;
+  font-size: 12.5px;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.dayb-who span {
+  display: block;
+  margin-top: 1px;
+  font-size: 11px;
+  color: var(--text-2);
+}
+.dayb-row.is-clash .dayb-who span {
+  color: var(--warn, #8a6d1f);
+  font-weight: 600;
+}
+.dayb-acts {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.dayb-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text-2);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.dayb-btn:hover:not(:disabled) {
+  border-color: var(--brand-500);
+  color: var(--brand-600);
+}
+.dayb-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.dayb-btn.is-remove:hover:not(:disabled) {
+  border-color: var(--danger);
+  color: var(--danger);
+}
 /* A chip per job actually on the roster, and OFF is the styled state — the
    default is everybody visible, so what a chip communicates when it changes is
    "you are hiding these", which should look like something is missing. */
