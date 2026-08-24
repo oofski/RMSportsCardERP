@@ -38,7 +38,14 @@ import { SupplyOrderModal } from './SupplyOrderModal'
  * supply order still needs 'inventory.manage', exactly as it did in its old
  * home — the move must not widen who can spend.
  */
-export function InvoicingModule(): JSX.Element {
+export function InvoicingModule({
+  focusPoId,
+  onFocusConsumed
+}: {
+  /** A purchase order to open on mount — see AppShell's focusPoId. */
+  focusPoId?: string | null
+  onFocusConsumed?: () => void
+} = {}): JSX.Element {
   const { can } = useSession()
   const canManage = can('module.invoicing')
   const canManageSupplies = can('inventory.manage')
@@ -53,6 +60,20 @@ export function InvoicingModule(): JSX.Element {
   const [showCreate, setShowCreate] = useState(false)
   const [dropship, setDropship] = useState<PurchaseOrderDetail | null>(null)
   const [receiptId, setReceiptId] = useState<string | null>(null)
+
+  /**
+   * Somebody arrived here from an Inventory card asking where a case came from,
+   * naming the order that bought it. Open it.
+   *
+   * The parent is told the moment it is consumed, so pressing the same PO again
+   * re-opens it. Left set, the second press would be an unchanged value and
+   * nothing would happen — which reads as the link being broken.
+   */
+  useEffect(() => {
+    if (!focusPoId) return
+    setReceiptId(focusPoId)
+    onFocusConsumed?.()
+  }, [focusPoId, onFocusConsumed])
   /**
    * A PO the ordinary delete refused, held so the operator can decide what to do
    * about it instead of just being told no.

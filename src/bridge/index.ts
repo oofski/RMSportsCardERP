@@ -158,6 +158,7 @@ import type {
   UpdateStatus,
   UploadedFile
 } from '@shared/types'
+import type { StockProvenance } from '@shared/provenance'
 import type {
   ShipBatchUrl,
   ShipBreakAudit,
@@ -427,6 +428,13 @@ export function createBridge(ipcRenderer: BridgeTransport) {
         ipcRenderer.invoke(IPC.invCostBasisFix, { productId, unitCost }),
       productLots: (productId: string): Promise<ProductLot[]> =>
         ipcRenderer.invoke(IPC.invProductLots, productId),
+      /**
+       * WHERE THESE CASES CAME FROM, and which purchase orders are still
+       * bringing more. One read for both halves: the panel opens on a click and
+       * two round trips over the web transport is a visible pause.
+       */
+      productProvenance: (productId: string): Promise<StockProvenance | null> =>
+        ipcRenderer.invoke(IPC.invProductProvenance, productId),
       // What the cost-lot picker draws itself from. A pure READ: the operator's
       // answer is carried on the write that follows (adjustStock / recordSale /
       // streaming.addItem), so closing the dialog leaves nothing behind to undo.

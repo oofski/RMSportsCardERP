@@ -1334,4 +1334,28 @@
     overflow-y: visible;
     padding-right: 0;
   }
+
+  /* 16. Where these cases came from
+
+     Two things break on a phone. The toggle is the control that opens the
+     whole panel and it is a line of 11px text, which is not a thumb target.
+     And each row puts a name, a quantity, a cost and a shelf beside a date and
+     a chip — at 390px that is a two-word column against a squeezed date, so the
+     side stacks under the main text instead of beside it. */
+  .po-origins-toggle {
+    min-height: var(--rm-tap);
+  }
+  .po-origins-row {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 5px;
+  }
+  .po-origins-side {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+  /* The arrow goes last on its own row and would sit alone at the left. */
+  .po-origins-side > svg {
+    margin-left: auto;
+  }
 }

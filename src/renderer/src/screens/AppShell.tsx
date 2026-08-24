@@ -62,6 +62,17 @@ export function AppShell(): JSX.Element {
    * the moment that decision is made. Defaults to the first tab.
    */
   const [teamTab, setTeamTab] = useState<string>(TEAM_TABS[0].id)
+  /**
+   * A purchase order to open as soon as Purchase Orders mounts.
+   *
+   * Held HERE for exactly the reason `teamTab` above is: the decision is made
+   * somewhere else — the Inventory card asking "where did these cases come
+   * from" — and Purchase Orders is not mounted at the moment it is made.
+   *
+   * Cleared by the module once it has consumed it, so pressing the same PO
+   * again re-opens it rather than being swallowed as an unchanged value.
+   */
+  const [focusPoId, setFocusPoId] = useState<string | null>(null)
   const navRef = useRef<HTMLElement | null>(null)
   const [workspace, setWorkspace] = useState<WorkspaceId>(() => {
     const saved = localStorage.getItem('rmops.workspace')
@@ -465,7 +476,12 @@ export function AppShell(): JSX.Element {
             ) : activeModule?.id === 'schedule' ? (
               <ScheduleModule />
             ) : activeModule?.id === 'inventory' ? (
-              <InventoryModule />
+              <InventoryModule
+                onOpenPo={(poId) => {
+                  setFocusPoId(poId)
+                  navigate('invoicing')
+                }}
+              />
             ) : activeModule?.id === 'performance' ? (
               <PerformanceModule />
             ) : activeModule?.id === 'finance' ? (
@@ -473,7 +489,7 @@ export function AppShell(): JSX.Element {
             ) : activeModule?.id === 'streaming' ? (
               <StreamingModule />
             ) : activeModule?.id === 'invoicing' ? (
-              <InvoicingModule />
+              <InvoicingModule focusPoId={focusPoId} onFocusConsumed={() => setFocusPoId(null)} />
             ) : activeModule?.id === 'invoices' ? (
               <InvoicesModule />
             ) : activeModule?.id === 'team' ? (

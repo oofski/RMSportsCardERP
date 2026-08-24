@@ -97,6 +97,8 @@ export const IPC = {
   // not just to the product row, which is why it is not `invProductUpdate`.
   invCostBasisFix: 'inventory:cost-basis:fix',
   invProductLots: 'inventory:product:lots',
+  /** Where a product's stock came from, and which POs are still bringing more. */
+  invProductProvenance: 'inventory:product:provenance',
   // The cost-lot picker's one read: the open layers for a (product, location)
   // plus the average to judge them against. A READ — the choice it informs is
   // carried on the write that follows (addStock/adjustStock/recordSale/stream

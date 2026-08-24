@@ -15,6 +15,7 @@ import { CategoryLogo } from './CategoryLogo'
 import { productMatches, structureLabel } from './helpers'
 import { ImageLightbox } from './ImageLightbox'
 import { ProductCasesLoader } from './ProductCases'
+import { ProductOrigins } from './ProductOrigins'
 import { ProductFormModal } from './ProductFormModal'
 import { RecordSaleModal } from './RecordSaleModal'
 import { StockModal } from './StockModal'
@@ -27,7 +28,8 @@ export function ProductsTab({
   thumbnails,
   canManage,
   onChanged,
-  onImagesChanged
+  onImagesChanged,
+  onOpenPo
 }: {
   products: InventoryProduct[]
   query: string
@@ -35,6 +37,8 @@ export function ProductsTab({
   onCategory: (c: string) => void
   thumbnails: Record<string, string>
   canManage: boolean
+  /** Open the purchase order a case came off — see ProductOrigins. */
+  onOpenPo?: (poId: string) => void
   onChanged: () => Promise<void>
   onImagesChanged: () => void
 }): JSX.Element {
@@ -352,6 +356,7 @@ export function ProductsTab({
                     onStock={() => setStockFor(p)}
                     onSell={() => setSaleFor(p)}
                     onDelete={() => setDeleteFor(p)}
+                    onOpenPo={onOpenPo}
                   />
                 )}
               </div>
@@ -388,7 +393,8 @@ function ProductDetail({
   onEdit,
   onStock,
   onSell,
-  onDelete
+  onDelete,
+  onOpenPo
 }: {
   product: InventoryProduct
   canManage: boolean
@@ -398,6 +404,8 @@ function ProductDetail({
   onStock: () => void
   onSell: () => void
   onDelete: () => void
+  /** Open the purchase order a case came off. Absent when nothing can navigate. */
+  onOpenPo?: (poId: string) => void
 }): JSX.Element {
   const toast = useToast()
   const [images, setImages] = useState<ProductImage[] | null>(null)
@@ -620,6 +628,11 @@ function ProductDetail({
           <ProductCasesLoader productId={product.id} unitType={product.unitType} />
         </div>
       )}
+
+      {/* Which order bought these, and what is still coming. Shown even at zero
+          on hand: "nothing here and PO-0009 is bringing four" is the answer
+          somebody is looking for exactly when the shelf is empty. */}
+      <ProductOrigins productId={product.id} onOpenPo={onOpenPo} />
 
       {canManage && (
         <div className="cd-actions">

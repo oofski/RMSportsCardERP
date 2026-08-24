@@ -34,7 +34,12 @@ const EMPTY_STATS: InventoryStats = {
   layerGaps: []
 }
 
-export function InventoryModule(): JSX.Element {
+export function InventoryModule({
+  onOpenPo
+}: {
+  /** Leave for the purchase order a case came off — see ProductOrigins. */
+  onOpenPo?: (poId: string) => void
+} = {}): JSX.Element {
   const { can } = useSession()
   const canManage = can('inventory.manage')
   const canPrice = can('inventory.pricing') || canManage
@@ -157,6 +162,7 @@ export function InventoryModule(): JSX.Element {
             canManage={canManage}
             onChanged={reload}
             onImagesChanged={refreshThumbs}
+            onOpenPo={onOpenPo}
           />
         )}
         {tab === 'pricing' && canPrice && <DailyPricingTab onChanged={reload} />}

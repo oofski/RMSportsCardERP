@@ -20,6 +20,8 @@ import type {
   ResetField,
   ResetRunSummary
 } from '@shared/inventoryReset'
+import type { StockProvenance } from '@shared/provenance'
+import { productProvenance } from './db/provenance'
 import type {
   AddStockInput,
   AdjustStockInput,
@@ -256,6 +258,18 @@ export function registerInventoryIpc(): void {
   )
   ipcMain.handle(IPC.invProductLots, (_e, productId: string): ProductLot[] =>
     can('module.inventory') ? listLots(String(productId ?? '')) : []
+  )
+
+  /**
+   * Where these cases came from, and what is still on order.
+   *
+   * Gated on module.inventory alone. It names SUPPLIERS AND PRICES — what the
+   * business pays, and who it buys from — which is not floor information the way
+   * a pick list is, and the cost-lot picker's wider gate would hand it to a
+   * streaming-only operator who has no reason to see it.
+   */
+  ipcMain.handle(IPC.invProductProvenance, (_e, productId: string): StockProvenance | null =>
+    can('module.inventory') ? productProvenance(String(productId ?? '')) : null
   )
   // The cost-lot picker's read. Gated like the catalog search rather than like
   // the rest of Inventory: a streaming-only operator is exactly who this dialog
