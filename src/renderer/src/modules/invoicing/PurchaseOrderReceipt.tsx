@@ -14,6 +14,7 @@ import {
   orderGlows
 } from '@shared/purchaseOrders'
 import { receiveProgress, receivableProgressOf } from '@shared/receiving'
+import { purchaseQtyFloor, stepDownBlockedReason, stepQty } from '@shared/lineQty'
 import { api } from '../../lib/api'
 import { Button, CenterLoader, Modal } from '../../components/ui'
 import { useToast } from '../../components/Toast'
@@ -692,10 +693,23 @@ function ReceiptLine({
             className="po-rl-qty"
             value={line.quantity}
             step={1}
-            min={Math.max(1, line.qtyReceived)}
+            min={purchaseQtyFloor(line)}
             format={(v) => String(Math.round(v))}
             label={`Quantity of ${line.productName}`}
             onCommit={(v) => onEdit(line.id, { quantity: Math.round(v) })}
+            /* One more, or one fewer. The box stays for "make it 40"; this is
+               the change somebody actually makes standing at a shelf, and the
+               one that is fiddly to type on a phone. */
+            onStep={(delta) =>
+              onEdit(line.id, {
+                quantity: stepQty(line.quantity, delta, purchaseQtyFloor(line))
+              })
+            }
+            downBlocked={stepDownBlockedReason(
+              line.quantity,
+              purchaseQtyFloor(line),
+              line.qtyReceived
+            )}
           />
         ) : (
           <span className="po-rl-qty">{line.quantity}</span>
@@ -822,7 +836,9 @@ function NumberCell({
   format,
   label,
   className,
-  onCommit
+  onCommit,
+  onStep,
+  downBlocked
 }: {
   value: number
   min: number
@@ -831,6 +847,14 @@ function NumberCell({
   label: string
   className: string
   onCommit: (v: number) => Promise<void>
+  /**
+   * Nudge by one. Given only where stepping means something — a unit price has
+   * no natural step, and a pair of arrows beside one would invite somebody to
+   * walk a price up a cent at a time.
+   */
+  onStep?: (delta: number) => Promise<void>
+  /** Why the minus is greyed out, when it is. Null when it is not. */
+  downBlocked?: string | null
 }): JSX.Element {
   const [draft, setDraft] = useState(format(value))
   const [busy, setBusy] = useState(false)
@@ -857,8 +881,30 @@ function NumberCell({
     }
   }
 
+  const nudge = async (delta: number): Promise<void> => {
+    if (!onStep || busy) return
+    setBusy(true)
+    try {
+      await onStep(delta)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
-    <span className={`${className} po-rl-edit`}>
+    <span className={`${className} po-rl-edit${onStep ? ' has-step' : ''}`}>
+      {onStep && (
+        <button
+          type="button"
+          className="po-rl-step"
+          disabled={busy || !!downBlocked}
+          title={downBlocked ?? 'One fewer'}
+          aria-label="One fewer"
+          onClick={() => void nudge(-1)}
+        >
+          <Icon name="Minus" size={12} />
+        </button>
+      )}
       <input
         className="po-rl-input mono"
         type="number"
@@ -882,6 +928,18 @@ function NumberCell({
           }
         }}
       />
+      {onStep && (
+        <button
+          type="button"
+          className="po-rl-step"
+          disabled={busy}
+          title="One more"
+          aria-label="One more"
+          onClick={() => void nudge(1)}
+        >
+          <Icon name="Plus" size={12} />
+        </button>
+      )}
     </span>
   )
 }

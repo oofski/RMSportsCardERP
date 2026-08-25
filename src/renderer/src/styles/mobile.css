@@ -1078,6 +1078,15 @@
   .po-col-remove {
     width: auto;
   }
+  /* The sales order widens its own QTY column on the desktop to hold the − and
+     +, and that rule is TWO classes deep, so it out-specifies the one directly
+     above and would pin a fixed 126px here. Matched depth for depth. The phone
+     sizes the column from what is in it, which is the whole point of switching
+     this table to auto layout — and the stepper is a different size here
+     anyway. If the desktop rule is renamed, this has to move with it. */
+  .po-lines-so .po-col-qty {
+    width: auto;
+  }
 
   /* The desktop puts every control in a lines row at one 32px height so the row
      has a single baseline. That rule is two classes deep, so it OUT-SPECIFIES
@@ -1385,6 +1394,21 @@
   /* The Week/Day switch is how somebody gets to any of this. */
   .rot-view-toggle button {
     min-height: var(--rm-tap);
+  }
+
+  /* − / + on an order line. These exist BECAUSE typing into a 48px number box
+     on a phone is the fiddly part, so a 24px target would be replacing one
+     miss with another. The box shrinks to pay for them; it is still wide
+     enough for a three-figure quantity, and anything longer is typed on a
+     desk. */
+  .po-rl-step {
+    width: 34px;
+    height: 34px;
+  }
+  .po-rl-edit.has-step .po-rl-input,
+  .inv-qty-step .po-qty-input {
+    max-width: 40px;
+    width: 40px;
   }
   /* Two buttons and a name on one row at 390px leaves the name a word wide. */
   .dayb-btn {

@@ -5282,7 +5282,10 @@ tr.hoverable-row:hover {
 }
 .po-receipt-line {
   display: grid;
-  grid-template-columns: 46px 1fr 52px 84px 104px 116px;
+  /* QTY is 100px, not 52px, because it is a CONTROL now and not just a
+     number: − box + does not fit in the width a two-digit figure needed, and
+     the box came out as a sliver with nothing visible in it. */
+  grid-template-columns: 46px 1fr 100px 84px 104px 116px;
   align-items: center;
   gap: 12px;
   padding: 11px 4px;
@@ -24322,6 +24325,18 @@ button.sor-team:focus-visible {
 .po-col-qty {
   width: 80px;
 }
+/* THE SALES ORDER'S QTY COLUMN CARRIES THE − AND +, so it cannot be the 80px
+   the other one is. The stepper needs 98px — 24 + 44 + 24 and two 3px gaps —
+   and 80px minus the cell's own 12px of padding each side leaves 56. Under
+   `table-layout: fixed` the overflow does not push the table along, it spills
+   under the Rate box, which is later in the document and therefore paints on
+   top: the plus was on screen, looked pressable, and swallowed the click into
+   the price field instead. Scoped to the sales order because the purchase
+   order's create form has no steppers and would only lose 46px of product
+   name for nothing. */
+.po-lines-so .po-col-qty {
+  width: 126px;
+}
 .po-col-price {
   width: 100px;
 }
@@ -24865,7 +24880,7 @@ button.sor-team:focus-visible {
    the same rule the PDF follows. A single-destination order keeps the six
    columns it has always printed. */
 .po-receipt-lines-routed .po-receipt-line {
-  grid-template-columns: 46px minmax(0, 1fr) 44px 82px 128px 92px 104px;
+  grid-template-columns: 46px minmax(0, 1fr) 100px 82px 128px 92px 104px;
 }
 .po-receipt-lines-routed .po-receipt-line-head .po-rl-dest {
   text-align: left;
@@ -25450,6 +25465,66 @@ button.sor-team:focus-visible {
 .po-rl-edit {
   display: flex;
   justify-content: flex-end;
+}
+
+/* − / + beside a quantity.
+   The box already accepted a typed number; these are for the change somebody
+   actually makes — one more, one fewer — which was a click, a select and a
+   retype, and is genuinely fiddly on a phone. */
+.po-rl-edit.has-step {
+  align-items: center;
+  gap: 3px;
+}
+.po-rl-edit.has-step .po-rl-input {
+  /* 24 + 44 + 24 + two 3px gaps = 98, inside the 100px column above.
+     FLEX-BASIS, not width: the base rule is `width: 100%`, which inside a flex
+     row becomes a basis the two buttons then shrink to almost nothing — the box
+     came out a sliver with the number clipped out of sight. */
+  flex: 0 0 44px;
+  width: 44px;
+  max-width: 44px;
+  padding-left: 2px;
+  padding-right: 2px;
+  text-align: center;
+}
+.inv-qty-step .po-qty-input {
+  text-align: center;
+  flex: 0 0 44px;
+  width: 44px;
+  max-width: 44px;
+  padding-left: 2px;
+  padding-right: 2px;
+}
+.inv-qty-step {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 3px;
+}
+.po-rl-step {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-2);
+  cursor: pointer;
+}
+.po-rl-step:hover:not(:disabled) {
+  border-color: var(--brand-500);
+  color: var(--brand-600);
+}
+/* Greyed out AT the floor rather than refusing after the press: a minus that
+   stops at three, on a line where three have been checked in, explains the rule
+   by being shaped like it. */
+.po-rl-step:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 .po-rl-input {
   width: 100%;

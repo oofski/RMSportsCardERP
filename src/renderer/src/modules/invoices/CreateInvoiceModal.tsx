@@ -24,6 +24,7 @@ import { api } from '../../lib/api'
 import { useToast } from '../../components/Toast'
 import { Button, Checkbox, Field, Input, Modal, Select } from '../../components/ui'
 import { Icon } from '../../components/Icon'
+import { SALES_QTY_FLOOR, canStep, stepDownBlockedReason, stepQty } from '@shared/lineQty'
 import { formatDate, formatMoney } from '../../lib/format'
 import { FreightFields } from '../../components/FreightFields'
 import { PaymentBar } from '../../components/PaymentProgress'
@@ -867,12 +868,58 @@ export function CreateInvoiceModal({
                         />
                       </td>
                       <td className="num">
-                        <Input
-                          value={l.quantity}
-                          inputMode="decimal"
-                          className="po-qty-input"
-                          onChange={(e) => patch(l.key, { quantity: e.target.value })}
-                        />
+                        {/* The box stays for "make it 40"; the arrows are for
+                            the change somebody actually makes, and the one that
+                            is fiddly to type on a phone. Down stops at one —
+                            below one is not a smaller sale, it is no sale, and
+                            the bin at the end of the row is what does that. */}
+                        <span className="inv-qty-step">
+                          <button
+                            type="button"
+                            className="po-rl-step"
+                            aria-label="One fewer"
+                            title={
+                              stepDownBlockedReason(
+                                parseFloat(l.quantity) || 0,
+                                SALES_QTY_FLOOR,
+                                0
+                              ) ?? 'One fewer'
+                            }
+                            disabled={
+                              !canStep(parseFloat(l.quantity) || 0, -1, SALES_QTY_FLOOR)
+                            }
+                            onClick={() =>
+                              patch(l.key, {
+                                quantity: String(
+                                  stepQty(parseFloat(l.quantity) || 0, -1, SALES_QTY_FLOOR)
+                                )
+                              })
+                            }
+                          >
+                            <Icon name="Minus" size={12} />
+                          </button>
+                          <Input
+                            value={l.quantity}
+                            inputMode="decimal"
+                            className="po-qty-input"
+                            onChange={(e) => patch(l.key, { quantity: e.target.value })}
+                          />
+                          <button
+                            type="button"
+                            className="po-rl-step"
+                            aria-label="One more"
+                            title="One more"
+                            onClick={() =>
+                              patch(l.key, {
+                                quantity: String(
+                                  stepQty(parseFloat(l.quantity) || 0, 1, SALES_QTY_FLOOR)
+                                )
+                              })
+                            }
+                          >
+                            <Icon name="Plus" size={12} />
+                          </button>
+                        </span>
                       </td>
                       <td className="num">
                         <Input

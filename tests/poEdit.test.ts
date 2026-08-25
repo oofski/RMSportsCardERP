@@ -347,5 +347,105 @@ ok(
   'and a plain stock PO no longer falls back to the narrow modal'
 )
 
+// ---------------------------------------------------------------------------
+// NUDGING A QUANTITY, AND WHERE IT STOPS
+// ---------------------------------------------------------------------------
+/**
+ * Both order screens already let a quantity be changed — the number is a box you
+ * click into, select and retype. That is the right control for "make it 40" and
+ * the wrong one for "make it one more", which is the change somebody actually
+ * makes standing at a shelf.
+ *
+ * The arithmetic of a step is trivial. What is not is WHERE IT STOPS, and the
+ * two documents stop in different places for different reasons:
+ *
+ *   A PURCHASE line stops at what has already been RECEIVED. Three cases are
+ *   checked in and costed against real FIFO layers; taking the order down to two
+ *   would leave stock on the shelf whose paperwork says it was never bought.
+ *
+ *   A SALES line stops at ONE. Below one is not a smaller sale, it is no sale,
+ *   and a minus that silently deletes a row is a control somebody presses once
+ *   and then never trusts.
+ *
+ * The repository refuses a bad quantity either way — that is asserted above.
+ * These assertions are about the SCREEN knowing the floor before the press, so
+ * the button is greyed out instead of firing a refusal.
+ */
+console.log('\n=== nudging a quantity, and where it stops ===')
+
+const {
+  SALES_QTY_FLOOR,
+  canStep,
+  purchaseQtyFloor,
+  stepDownBlockedReason,
+  stepQty
+} = require('../src/shared/lineQty')
+
+ok(purchaseQtyFloor({ qtyReceived: 0 }) === 1, 'nothing received yet: a purchase line floors at one')
+ok(
+  purchaseQtyFloor({ qtyReceived: 3 }) === 3,
+  'THREE RECEIVED: THE LINE CANNOT GO BELOW THREE',
+  String(purchaseQtyFloor({ qtyReceived: 3 }))
+)
+ok(purchaseQtyFloor({}) === 1, 'and a line that says nothing about receipts still floors at one')
+
+ok(stepQty(4, 1, 1) === 5, 'plus one is one more', String(stepQty(4, 1, 1)))
+ok(stepQty(4, -1, 1) === 3, 'minus one is one fewer', String(stepQty(4, -1, 1)))
+ok(
+  stepQty(3, -1, 3) === 3,
+  'AND A STEP AT THE FLOOR IS A NO-OP, never a number below it',
+  String(stepQty(3, -1, 3))
+)
+ok(canStep(4, -1, 3) === true, 'so the minus is live above the floor')
+ok(canStep(3, -1, 3) === false, 'and dead at it — which is what greys the button out')
+ok(canStep(3, 1, 3) === true, 'while the plus has no ceiling')
+
+/**
+ * The two floors are reached for different reasons, and the tooltip says which.
+ * "Use the bin" on a line with three checked in would be wrong AND destructive
+ * advice.
+ */
+ok(
+  (stepDownBlockedReason(3, 3, 3) ?? '').includes('already received'),
+  'A LINE HELD UP BY RECEIPTS SAYS SO',
+  String(stepDownBlockedReason(3, 3, 3))
+)
+ok(
+  (stepDownBlockedReason(1, SALES_QTY_FLOOR, 0) ?? '').includes('bin'),
+  'while a line at one is pointed at the bin instead',
+  String(stepDownBlockedReason(1, SALES_QTY_FLOOR, 0))
+)
+ok(
+  stepDownBlockedReason(4, 3, 3) === null,
+  'and a line that CAN step down explains nothing, because there is nothing to explain',
+  String(stepDownBlockedReason(4, 3, 3))
+)
+
+/**
+ * The floor is the repository's rule, read the same way. If these two ever
+ * disagree the screen offers a button that is refused — which is exactly the
+ * wall this change is undoing.
+ */
+const held = po.createPurchaseOrder(
+  { supplier: 'Steel City', location: 'RM', lines: [{ productId: 'p_a', quantity: 4, unitPrice: 100 }] },
+  'emp_owner'
+)
+po.receivePurchaseOrderLines(held.id, [{ lineId: held.lines[0].id, quantity: 3 }], 'emp_owner')
+const heldLine = po.getPurchaseOrder(held.id).lines[0]
+ok(heldLine.qtyReceived === 3, 'three of four have landed', String(heldLine.qtyReceived))
+ok(
+  purchaseQtyFloor(heldLine) === 3,
+  'the screen floors that line at three',
+  String(purchaseQtyFloor(heldLine))
+)
+ok(
+  !!po.updatePurchaseOrderLine(held.id, heldLine.id, { quantity: 2 }).error,
+  'AND THE REPOSITORY REFUSES TWO — the two agree, so no button is offered that would be refused'
+)
+ok(
+  !po.updatePurchaseOrderLine(held.id, heldLine.id, { quantity: 3 }).error,
+  'while three is accepted, which is what the minus lands on'
+)
+
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail > 0) process.exit(1)
