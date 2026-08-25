@@ -1078,5 +1078,223 @@ ok(
   'and a void refuses to be marked paid'
 )
 
+// ---------------------------------------------------------------------------
+console.log('\n=== who ships it, and who it is for ===')
+// ---------------------------------------------------------------------------
+/**
+ * THE TWO NAMES NEITHER BOARD COULD SAY.
+ *
+ * A dropship sales order has always known it WAS a dropship — salesOrderKindOf
+ * reads sourcePoId and the unit split — and had no way to name the supplier who
+ * has the boxes. A dropship purchase order has always known where its units go
+ * — a shelf name, or "Multi-shipment" — and never who is on the other end.
+ *
+ * So chasing a late case, or sending a label, meant opening the sale, reading
+ * the purchase order's number, and going to find it on the other board.
+ */
+const poRepo = require('../src/main/db/purchaseOrders')
+
+const supplyPo = poRepo.createPurchaseOrder(
+  {
+    supplier: 'Steel City Collectibles',
+    location: 'Fenwick Card Shop',
+    lines: [{ productId: 'p_d', quantity: 4, unitPrice: 90 }]
+  },
+  null
+)
+
+// A sale off our own shelf, bound to that purchase. NOTHING on its lines names
+// a supplier, which is exactly what dropshipSaleFromPurchase leaves behind —
+// so the source purchase order is the only thing that can answer.
+const inherited = inv.saveInvoice(
+  {
+    customerName: 'Fenwick Card Shop',
+    invoiceDate: '2026-06-01',
+    location: 'RM',
+    lines: [{ item: 'Dropship Hobby Box', productId: 'p_d', quantity: 4, rate: 140 }]
+  },
+  null
+)
+inv.linkDropshipPair(supplyPo.id, inherited.id, null)
+const inheritedBack = inv.getInvoice(inherited.id)
+ok(
+  inheritedBack.dropSupplier === 'Steel City Collectibles',
+  'A SALE WITH NO SUPPLIER ON ITS LINES FALLS BACK TO THE PURCHASE ORDER’S — which is every sale the dropship flow raises',
+  String(inheritedBack.dropSupplier)
+)
+ok(
+  inheritedBack.sourcePoNumber === supplyPo.poNumber,
+  'and it names the order, so somebody can find it on the other board',
+  String(inheritedBack.sourcePoNumber)
+)
+
+// A line that names its own supplier WINS over the order's — that is the point
+// of the column, and the case where the two disagree is a real one.
+const ownSupplier = inv.saveInvoice(
+  {
+    customerName: 'Invented Buyer',
+    invoiceDate: '2026-06-02',
+    location: 'RM',
+    lines: [
+      {
+        item: 'Dropship Hobby Box',
+        productId: 'p_d',
+        quantity: 2,
+        rate: 140,
+        destination: 'Fenwick Card Shop',
+        supplier: 'Harborline Distribution'
+      }
+    ]
+  },
+  null
+)
+ok(
+  inv.getInvoice(ownSupplier.id).dropSupplier === 'Harborline Distribution',
+  'a line that names its own supplier is read off the line',
+  String(inv.getInvoice(ownSupplier.id).dropSupplier)
+)
+
+/**
+ * AND IT WINS WHEN THE TWO DISAGREE, which is the case the order of the
+ * fallback chain exists for. This sale is bound to supplyPo — whose supplier is
+ * Steel City Collectibles — while its own line says Harborline shipped it. The
+ * line is the more specific fact and the more recent one: somebody typed it on
+ * THIS order, about THESE units.
+ *
+ * Without this pairing the chain is untestable: a sale with a line supplier and
+ * no purchase order behind it passes whichever way round the two are read.
+ */
+const otherPo = poRepo.createPurchaseOrder(
+  {
+    supplier: 'Steel City Collectibles',
+    location: 'Fenwick Card Shop',
+    lines: [{ productId: 'p_d', quantity: 2, unitPrice: 90 }]
+  },
+  null
+)
+inv.linkDropshipPair(otherPo.id, ownSupplier.id, null)
+const disagreeing = inv.getInvoice(ownSupplier.id)
+ok(
+  disagreeing.sourcePoNumber === otherPo.poNumber,
+  'the sale is bound to a purchase order naming somebody else',
+  String(disagreeing.sourcePoNumber)
+)
+ok(
+  disagreeing.dropSupplier === 'Harborline Distribution',
+  'AND THE LINE STILL WINS — it is the more specific answer, typed about these units',
+  String(disagreeing.dropSupplier)
+)
+
+/**
+ * TWO SUPPLIERS ON ONE SALE NAMES NEITHER.
+ *
+ * A mixed order can have two halves from two places, and printing one of them
+ * would send a label to the wrong building — the same rule the provenance read
+ * keeps about destinations. The COUNT is what tells this null apart from
+ * "nobody said".
+ */
+const twoWays = inv.saveInvoice(
+  {
+    customerName: 'Invented Buyer',
+    invoiceDate: '2026-06-03',
+    location: 'RM',
+    lines: [
+      { item: 'Dropship Hobby Box', productId: 'p_d', quantity: 1, rate: 140,
+        destination: 'Fenwick Card Shop', supplier: 'Harborline Distribution' },
+      { item: 'Dropship Hobby Box', productId: 'p_d', quantity: 1, rate: 140,
+        destination: 'Fenwick Card Shop', supplier: 'Steel City Collectibles' }
+    ]
+  },
+  null
+)
+const splitBack = inv.getInvoice(twoWays.id)
+ok(splitBack.dropSupplierCount === 2, 'two suppliers are counted', String(splitBack.dropSupplierCount))
+ok(
+  splitBack.dropSupplier === null,
+  'AND NEITHER IS NAMED — naming one of two sends a label to the wrong building',
+  String(splitBack.dropSupplier)
+)
+
+// An ordinary sale answers null to both, which is what makes the card draw
+// nothing rather than a line saying "from nobody".
+const plain = inv.saveInvoice(
+  {
+    customerName: 'Invented Buyer',
+    invoiceDate: '2026-06-04',
+    location: 'RM',
+    lines: [{ item: 'Dropship Hobby Box', productId: 'p_d', quantity: 1, rate: 140 }]
+  },
+  null
+)
+ok(inv.getInvoice(plain.id).dropSupplier === null, 'a sale off our own shelf names no supplier')
+ok(inv.getInvoice(plain.id).sourcePoNumber === null, 'and no source order')
+
+// ---- and the same question from the buy side ------------------------------
+const supplyRow = poRepo.listPurchaseOrders().find((p: any) => p.id === supplyPo.id)
+ok(supplyRow.saleBuyerCount === 1, 'the purchase knows it has one buyer behind it', String(supplyRow.saleBuyerCount))
+ok(
+  supplyRow.saleBuyer === 'Fenwick Card Shop',
+  'AND NAMES THEM — the arrow says where the boxes go, this says whose they are',
+  String(listed.saleBuyer)
+)
+
+// A second buyer against the same purchase: counted, not named.
+const secondBuyer = inv.saveInvoice(
+  {
+    customerName: 'Coastline Cards',
+    invoiceDate: '2026-06-05',
+    location: 'RM',
+    lines: [{ item: 'Dropship Hobby Box', productId: 'p_d', quantity: 1, rate: 140 }]
+  },
+  null
+)
+inv.linkDropshipPair(supplyPo.id, secondBuyer.id, null)
+const twoBuyers = poRepo.listPurchaseOrders().find((p: any) => p.id === supplyPo.id)
+ok(twoBuyers.saleBuyerCount === 2, 'two buyers are counted', String(twoBuyers.saleBuyerCount))
+
+// VOIDS DROP OUT. A cancelled sale is not somebody waiting on boxes, and
+// leaving it in would have the card naming a buyer who fell through.
+inv.setInvoiceStatus(secondBuyer.id, 'void', null)
+const afterVoid = poRepo.listPurchaseOrders().find((p: any) => p.id === supplyPo.id)
+ok(afterVoid.saleBuyerCount === 1, 'VOIDING A SALE TAKES ITS BUYER OFF THE PURCHASE', String(afterVoid.saleBuyerCount))
+ok(afterVoid.saleBuyer === 'Fenwick Card Shop', 'leaving the one who is still waiting')
+
+// An ordinary purchase has no sale behind it at all — a third state, and the
+// reason the count travels with the name.
+const plainPo = poRepo.createPurchaseOrder(
+  { supplier: 'Invented Distribution Co', location: 'RM',
+    lines: [{ productId: 'p_d', quantity: 2, unitPrice: 90 }] },
+  null
+)
+const plainBack = poRepo.listPurchaseOrders().find((p: any) => p.id === plainPo.id)
+ok(plainBack.saleBuyerCount === 0, 'an ordinary purchase has no buyer behind it')
+ok(plainBack.saleBuyer === null, 'and names none')
+
+// ---- has it shipped? ------------------------------------------------------
+// THE HEADER IS ONLY HALF THE ANSWER. A split shipment lives in
+// order_shipments and can leave the header column empty, so a board reading
+// only the header reports a fully shipped order as not shipped.
+const extras = require('../src/main/db/orderExtras')
+ok(inv.getInvoice(plain.id).trackedParcels === 0, 'a sale with no parcels counts none')
+extras.saveShipment('so', plain.id, { trackingNumber: '1Z999AA10123456784' }, null)
+ok(
+  inv.getInvoice(plain.id).trackedParcels === 1,
+  'ADDING A PARCEL WITH A NUMBER COUNTS IT, even with nothing on the header',
+  String(inv.getInvoice(plain.id).trackedParcels)
+)
+
+/**
+ * A PARCEL IS NOT A TRACKING NUMBER. A row can be opened to record what a label
+ * cost before the number exists — validateShipment accepts a cost alone — and
+ * counting those would report an order as shipped on the strength of somebody
+ * typing $8.50 into a box.
+ */
+extras.saveShipment('so', plain.id, { labelCost: 8.5 }, null)
+ok(
+  inv.getInvoice(plain.id).trackedParcels === 1,
+  'BUT A PARCEL WITH NO NUMBER IS NOT COUNTED — a cost is not a shipment',
+  String(inv.getInvoice(plain.id).trackedParcels)
+)
+
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail > 0) process.exit(1)

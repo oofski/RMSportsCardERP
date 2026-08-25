@@ -30,6 +30,7 @@ import { FreightFields } from '../../components/FreightFields'
 import { PaymentBar } from '../../components/PaymentProgress'
 import { OrderHistory } from '../orders/OrderHistory'
 import { OrderLabels } from '../orders/OrderLabels'
+import { labelRecipientFor } from '@shared/orders'
 import { OrderShipments } from '../orders/OrderShipments'
 import { destinationHoldsStock } from '@shared/purchaseOrders'
 import { DestinationSelect } from '../invoicing/PartySelect'
@@ -1088,6 +1089,9 @@ function InvoiceReceipt({
   thumbnails: Record<string, string>
 }): JSX.Element {
   const shipsWith = [carrierLabel(invoice.carrier), invoice.service].filter(Boolean).join(' · ')
+  // The buyer on a stock sale, the supplier on a dropship — see labelRecipientFor
+  // for why the buyer is not the fallback when a dropship's supplier is unknown.
+  const labelRecipient = labelRecipientFor(invoice)
 
   return (
     <div className="po-receipt">
@@ -1196,14 +1200,25 @@ function InvoiceReceipt({
         canEdit={invoice.status !== 'void'}
         lines={invoice.lines.map((l) => ({ id: l.id, label: l.item, quantity: l.quantity }))}
       />
+      {/* WHO THE LABEL GOES TO, and on a dropship it is NOT the buyer.
+
+          This used to hand down the buyer's address on every sale, with a
+          comment saying "on a dropship the label usually goes to the SUPPLIER
+          instead" — which described the problem rather than fixing it. The
+          supplier has the boxes; a label emailed to the buyer reaches somebody
+          who cannot put it on anything.
+
+          The buyer's own address is not offered as a fallback on a dropship,
+          deliberately. Falling back to it would put the wrong party in the To
+          box whenever the supplier is not in the directory, which is the exact
+          case where nobody is expecting an address to appear. An empty box asks
+          a question; a plausible wrong one does not. */}
       <OrderLabels
         side="so"
         orderId={invoice.id}
-        // The buyer is who the goods go to, so their address is the one already
-        // on the document. On a dropship the label usually goes to the SUPPLIER
-        // instead, which is why this is a default rather than a fixed value.
-        defaultTo={invoice.email}
-        lookupName={invoice.customerName}
+        defaultTo={labelRecipient.email}
+        lookupName={labelRecipient.name}
+        recipientNote={labelRecipient.note}
         canEdit={invoice.status !== 'void'}
       />
       <OrderHistory side="so" orderId={invoice.id} stageLabel={invoiceStageLabel} />

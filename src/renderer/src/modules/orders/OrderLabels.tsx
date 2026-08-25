@@ -33,12 +33,24 @@ export function OrderLabels({
   orderId,
   defaultTo,
   lookupName,
+  recipientNote,
   canEdit
 }: {
   side: OrderSide
   orderId: string
   /** Who this would go to — the supplier on a purchase, the buyer on a sale. */
   defaultTo: string | null
+  /**
+   * Why the To box says what it says, in one line.
+   *
+   * A DROPSHIP SALE POINTS AT THE SUPPLIER, NOT THE BUYER, because the boxes
+   * leave the supplier's building — so on those orders this control pre-fills a
+   * completely different party from the one the sales order is addressed to.
+   * That is right and it is surprising, and an address that quietly changed
+   * meaning between two cards is exactly the mistake that only gets noticed
+   * after Send. So the screen says which party it picked.
+   */
+  recipientNote?: string | null
   /**
    * The party's NAME, when the address is not already known.
    *
@@ -224,6 +236,7 @@ export function OrderLabels({
           document={emailing}
           defaultTo={defaultTo}
           lookupName={lookupName ?? null}
+          recipientNote={recipientNote ?? null}
           onClose={() => setEmailing(null)}
         />
       )}
@@ -245,6 +258,7 @@ function EmailLabelModal({
   document: doc,
   defaultTo,
   lookupName,
+  recipientNote,
   onClose
 }: {
   side: OrderSide
@@ -252,6 +266,7 @@ function EmailLabelModal({
   document: OrderDocument
   defaultTo: string | null
   lookupName: string | null
+  recipientNote: string | null
   onClose: () => void
 }): JSX.Element {
   const toast = useToast()
@@ -360,6 +375,19 @@ function EmailLabelModal({
         </>
       }
     >
+      {/* WHICH PARTY THIS IS ADDRESSED TO, said out loud.
+
+          On a dropship sale the label goes to the SUPPLIER — they have the
+          boxes — not to the buyer the sales order is made out to. That is the
+          right answer and a surprising one, and an address that quietly means a
+          different person on some cards than on others is the mistake nobody
+          catches until after Send. */}
+      {recipientNote && (
+        <div className="lbl-to-note">
+          <Icon name="Info" size={13} />
+          <span>{recipientNote}</span>
+        </div>
+      )}
       <Field label="To">
         <Input
           value={to}

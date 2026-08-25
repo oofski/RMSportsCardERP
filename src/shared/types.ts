@@ -991,6 +991,21 @@ export interface PurchaseOrder {
    */
   saleAwaitsItems?: boolean | null
   /**
+   * The buyer this order's boxes are FOR, on a dropship. Null otherwise.
+   *
+   * The card has always said where the units GO — a shelf name, or
+   * "Multi-shipment" — and never who is on the other end of it. On a dropship
+   * that is the whole point of the document: it exists to put cases in a named
+   * buyer's hands, and the only way to find out whose was to open the order.
+   *
+   * NULL WHEN THERE ARE SEVERAL, not the first of them. A multi-shipment
+   * purchase supplies one sale per buyer, and naming one of five reads as the
+   * answer. `saleBuyerCount` is what tells that null apart from "no sale yet".
+   */
+  saleBuyer?: string | null
+  /** How many distinct buyers have a live sale against this order. */
+  saleBuyerCount?: number
+  /**
    * Freight the supplier charged to get these here.
    *
    * IN THE TOTAL, and therefore in COGS — it is money owed on this order. Not

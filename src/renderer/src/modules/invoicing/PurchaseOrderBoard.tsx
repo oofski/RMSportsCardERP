@@ -344,6 +344,23 @@ function PoCard({
     po.orderKind === 'drop' ? ' po-card-drop' : po.orderKind === 'mixed' ? ' po-card-mixed' : ''
   const multi = po.destinationCount > 1
   const destination = multi ? `${po.destinationCount} destinations` : po.location
+  /**
+   * The buyer these boxes are for. Null on an ordinary purchase.
+   *
+   * Three states, and the third is why the count travels with the name: no sale
+   * behind this order at all (null, and nothing is drawn), one sale (named), and
+   * several (counted). Naming the first of five would read as the answer.
+   */
+  const buyerCount = po.saleBuyerCount ?? 0
+  const buyerLine =
+    buyerCount === 0
+      ? null
+      : buyerCount === 1 && po.saleBuyer
+        ? { text: po.saleBuyer, title: `These boxes are going to ${po.saleBuyer}` }
+        : {
+            text: `${buyerCount} buyers`,
+            title: `This order was split across ${buyerCount} buyers — open it for the list`
+          }
 
   return (
     <div
@@ -450,6 +467,31 @@ function PoCard({
       <div className="po-card-supplier" title={po.supplier || 'No supplier'}>
         {po.supplier || 'No supplier'}
       </div>
+      {/* WHO THE BOXES ARE FOR, on a dropship.
+
+          The arrow in the header says where they GO — a shelf name, or
+          "Multi-shipment" — and on a dropship that is a routing word, not a
+          person. The whole point of the document is to put cases in a named
+          buyer's hands, and until now the only way to find out whose was to open
+          the order and read the sales orders raised from it.
+
+          ITS OWN ROW, under the supplier, and that is not a style choice. It
+          first went in the header beside the destination, where three items had
+          to share the width of a board column — and both names ellipsed to two
+          characters each: "→ Fe… for F…". A name truncated past recognition is
+          worse than no name, because it looks like the feature works.
+
+          The row is the mirror of the sell side's "from <supplier>" line, which
+          answers the same question from the other end.
+
+          Several buyers are COUNTED rather than named: a multi-shipment purchase
+          supplies one sale each, and printing one of five reads as the answer. */}
+      {buyerLine && (
+        <div className="po-card-for" title={buyerLine.title}>
+          <Icon name="User" size={12} />
+          <span>for {buyerLine.text}</span>
+        </div>
+      )}
       <div className="po-card-figs">
         <span className="po-card-total mono">{formatMoney(po.total)}</span>
         <span className="po-card-meta">

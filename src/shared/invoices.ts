@@ -670,6 +670,32 @@ export interface Invoice {
    * order inherited it.
    */
   sourcePoId: string | null
+  /** That order's number, so a card can NAME it without a second read. */
+  sourcePoNumber: string | null
+  /**
+   * WHO SHIPS THIS ORDER, on a dropship. Null on a sale off our own shelf.
+   *
+   * The one fact a dropship card could never say. It knew it WAS a dropship —
+   * `salesOrderKindOf` reads sourcePoId and the unit split — and had no way to
+   * name the supplier, which is who has to be chased for the goods and who the
+   * shipping label has to go to.
+   *
+   * Resolved in the read, in this order: the lines' own supplier when they all
+   * agree, then the source purchase order's. NULL WHEN TWO SUPPLIERS DISAGREE,
+   * deliberately — a mixed sale can have two halves from two places, and naming
+   * one of them would send somebody to the wrong building. `dropSupplierCount`
+   * is what tells that null apart from "nobody said".
+   */
+  dropSupplier: string | null
+  /** How many distinct suppliers the lines name. > 1 is why dropSupplier is null. */
+  dropSupplierCount: number
+  /**
+   * Parcels on this order carrying a tracking number.
+   *
+   * The other half of "has it shipped": a split shipment lives in
+   * `order_shipments` and may leave the header column empty. See shipChip.
+   */
+  trackedParcels: number
   /** Units on this order coming off our own shelf (RM or AM). */
   stockUnits: number
   /** Units a supplier ships straight to the buyer. Never touch a shelf here. */

@@ -14,6 +14,12 @@ import {
   fulfillmentTickShort,
   readyToShipBlockedReason
 } from '@shared/fulfillment'
+import {
+  ORDER_FILTERS,
+  orderStatusChips,
+  passesOrderFilters,
+  type OrderFilterId
+} from '@shared/orderStatus'
 import { DimsModal } from './DimsModal'
 import { QuickConfirm } from './QuickConfirm'
 import { api } from '../../lib/api'
@@ -94,6 +100,15 @@ export function InvoicesBoard({
   const [deleting, setDeleting] = useState<Invoice | null>(null)
   const [dragId, setDragId] = useState<string | null>(null)
   const [overStage, setOverStage] = useState<InvoiceStatus | null>(null)
+  /**
+   * Which of the six filters are ticked.
+   *
+   * NOT REMEMBERED between visits, and that is deliberate. A filter is a
+   * question somebody is asking right now — "which of these have not shipped?" —
+   * not a preference, and a board that opens two days later still hiding half
+   * its orders is a board somebody reports as having lost their invoices.
+   */
+  const [filters, setFilters] = useState<Set<OrderFilterId>>(() => new Set())
 
   const load = useCallback(async () => {
     const [list, people, s, next] = await Promise.all([
@@ -309,6 +324,29 @@ export function InvoicesBoard({
 
   if (loading) return <CenterLoader />
 
+  const toggleFilter = (id: OrderFilterId): void =>
+    setFilters((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+
+  /**
+   * The orders that survive the ticked filters.
+   *
+   * `readyToPack` is handed in rather than re-derived inside the predicate:
+   * `fulfillmentStageOf` owns that answer, it reads eleven facts off the order,
+   * and a second spelling of it in the filter module would be a second set of
+   * gates to keep in step with the cards' own chips.
+   */
+  const shown = invoices.filter((i) =>
+    passesOrderFilters(
+      { ...i, readyToPack: fulfillmentStageOf(i) === 'ready' },
+      filters
+    )
+  )
+
   const dragging = dragId ? invoices.find((i) => i.id === dragId) ?? null : null
   const fromStatus = dragging?.status ?? null
   // WHY READY TO SHIP WOULD TURN THIS CARD DOWN, worked out once for the drag
@@ -392,9 +430,49 @@ export function InvoicesBoard({
           </Button>
         </div>
       ) : (
+        <>
+        {/* NARROWING THE BOARD DOWN TO THE QUESTION SOMEBODY CAME WITH.
+
+            The chips on each card make the three facts readable one at a time.
+            This is what makes them readable ACROSS a board: "unpaid and not
+            shipped" is the pile where nothing has happened, and "paid and ready
+            to pack" is the list of labels to go and buy — which is the view the
+            owner asked for by name and the one that had no home.
+
+            Combined with AND, and nothing ticked shows everything. See
+            passesOrderFilters, which owns both rules so this row and the cards
+            cannot disagree about what "shipped" means. */}
+        <div className="inv-filters">
+          <span className="inv-filters-lead">Show only</span>
+          {ORDER_FILTERS.map((f) => (
+            <button
+              key={f.id}
+              type="button"
+              className={`inv-filter${filters.has(f.id) ? ' on' : ''}`}
+              title={f.hint}
+              aria-pressed={filters.has(f.id)}
+              onClick={() => toggleFilter(f.id)}
+            >
+              {f.label}
+            </button>
+          ))}
+          {/* Only once something is ticked. A permanent "showing 12 of 12" is a
+              number nobody reads, and the count matters exactly when a filter is
+              hiding things — including when it is hiding all of them. */}
+          {filters.size > 0 && (
+            <>
+              <span className="inv-filters-count">
+                {shown.length} of {invoices.length}
+              </span>
+              <button type="button" className="link-btn" onClick={() => setFilters(new Set())}>
+                Clear
+              </button>
+            </>
+          )}
+        </div>
         <div className="po-board">
           {INVOICE_STAGES.map((stage) => {
-            const inStage = invoices.filter((i) => i.status === stage.id)
+            const inStage = shown.filter((i) => i.status === stage.id)
             const moneyBlocks = stage.id === 'sent' && !!dragBlocked
             const canDrop = !!(
               dragId &&
@@ -529,6 +607,7 @@ export function InvoicesBoard({
             )
           })}
         </div>
+        </>
       )}
 
       {(editing || creatingNew) && (
@@ -717,8 +796,46 @@ function InvoiceCard({
   const fxWhy = fulfillmentNextStepDetail(invoice)
   // Null on everything the packing floor can have — a void included, which has
   // its own greyed card and does not need a second reason printed on it.
+  //
+  // It no longer draws a chip of its own. "Unpaid" and "Pay up front" already
+  // say it between them, and a third red chip repeating the same fact is how a
+  // card stops being scannable. What it still does is put a padlock on the money
+  // chip and the full sentence on its tooltip — see the strip below.
   const heldForPayment =
     invoice.status === 'void' ? null : readyToShipBlockedReason(invoice)
+
+  const chips = orderStatusChips(invoice)
+  if (heldForPayment) chips[0] = { ...chips[0], title: heldForPayment }
+
+  /**
+   * "from Steel City Collectibles", when a supplier ships this one.
+   *
+   * Two suppliers on one sale is a real shape — a mixed order with two halves
+   * from two places — and it is COUNTED rather than named, because naming one of
+   * them would send somebody to the wrong building. A dropship whose supplier
+   * nobody has typed says so plainly rather than going quiet, since "we do not
+   * know who is shipping this" is the most useful thing this line can say.
+   */
+  const sourceLine =
+    kind === 'stock'
+      ? null
+      : invoice.dropSupplierCount > 1
+        ? {
+            text: `from ${invoice.dropSupplierCount} suppliers`,
+            title: 'The lines on this order name more than one supplier. Open it for the split.'
+          }
+        : invoice.dropSupplier
+          ? {
+              text: `from ${invoice.dropSupplier}`,
+              title: invoice.sourcePoNumber
+                ? `Ships from ${invoice.dropSupplier}, bought on ${invoice.sourcePoNumber}`
+                : `Ships from ${invoice.dropSupplier}`
+            }
+          : {
+              text: 'supplier not named',
+              title:
+                'Nothing on this order says who ships it. Open it and name the supplier on the line.'
+            }
 
   return (
     <div
@@ -758,22 +875,6 @@ function InvoiceCard({
             {fxStage === 'awaiting_items' ? 'Awaiting items' : 'Awaiting dims'}
           </span>
         )}
-        {/* HELD FOR THE MONEY, said on the card.
-
-            The lane above only draws for an order that is ON the packing
-            pipeline, and this is the one that never got onto it: up-front terms,
-            nothing received. Before this the card looked ordinary and simply
-            refused to be dragged into Ready to ship, which reads as a broken
-            drag rather than as a rule.
-
-            Not drawn on a forced order — that is exactly the order somebody
-            already decided to send, and marking it held would contradict the
-            decision. `readyToShipBlockedReason` handles that; this only asks. */}
-        {heldForPayment && (
-          <span className="fx-chip fx-chip-hold" title={heldForPayment}>
-            Awaiting payment
-          </span>
-        )}
         {/* An unpaid invoice past its due date is the one thing on this board
             somebody would act on today, so it is the only badge. */}
         {overdue && (
@@ -785,6 +886,48 @@ function InvoiceCard({
       {/* The full name on hover, since the line now truncates. */}
       <div className="po-card-supplier" title={invoice.customerName}>
         {invoice.customerName}
+      </div>
+
+      {/* WHO SHIPS IT, on a dropship — the one fact these cards could never say.
+
+          The Drop chip above has always announced that a supplier ships this
+          order and never WHICH supplier, so chasing the goods or sending the
+          label meant opening the sale, reading the source purchase order's
+          number, and going to find it on the other board.
+
+          TEXT, not a link. There is no cross-module navigation in this app —
+          ProductOrigins' PO rows take an optional opener that nothing passes,
+          for the same reason — and the purchase order's NUMBER is on the
+          tooltip, which is what somebody needs to find it on the other board.
+          A button that opened a purchase-order receipt from here would drag the
+          whole PO stage machinery onto the sell side to save one click. */}
+      {sourceLine && (
+        <div className="inv-source" title={sourceLine.title}>
+          <Icon name="Truck" size={12} />
+          <span>{sourceLine.text}</span>
+          {invoice.sourcePoNumber && (
+            <span className="inv-source-po mono">{invoice.sourcePoNumber}</span>
+          )}
+        </div>
+      )}
+
+      {/* THE THREE THINGS SOMEBODY SCANS THIS BOARD FOR, in a fixed order and a
+          fixed place, so a column reads down.
+
+          Every one of these was already knowable and none of them was READABLE,
+          because each was shown by something being there: paid was a date where
+          unpaid was a different date in the same grey, shipped was a carrier
+          line that is simply not drawn without one, and the terms were not on
+          the card at all. Absence is not something anybody scans for — see the
+          note at the top of @shared/orderStatus, and the Owing chip the purchase
+          board grew for exactly this reason. */}
+      <div className="inv-chips">
+        {chips.map((c) => (
+          <span key={c.slot} className={`inv-chip inv-chip-${c.tone}`} title={c.title}>
+            {c.slot === 'money' && heldForPayment && <Icon name="Lock" size={10} />}
+            {c.label}
+          </span>
+        ))}
       </div>
       <div className="po-card-figs">
         <span className="po-card-total mono">{formatMoney(invoice.total)}</span>

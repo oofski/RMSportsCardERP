@@ -252,6 +252,17 @@ function toSummary(row: PoHeaderRow): PurchaseOrder {
     // Null on a purchase order with no sale behind it, which is most of them —
     // and "no linked sale" is a different fact from "its sale has the goods".
     saleAwaitsItems: row.sale_awaits_items == null ? null : row.sale_awaits_items === 1,
+    /**
+     * WHO THIS PURCHASE IS FOR, when it is a dropship.
+     *
+     * One buyer is named; several are counted and left unnamed, because naming
+     * one of five reads as the answer. Null on an ordinary purchase, which has
+     * no sale behind it at all — a third state, kept distinct from "several"
+     * by the count travelling beside it.
+     */
+    saleBuyer:
+      Number(row.sale_buyer_count) === 1 ? (row.sale_buyer ?? '').trim() || null : null,
+    saleBuyerCount: Number(row.sale_buyer_count) || 0,
     // Nullable so "nobody said" stays distinct from "free" — see the v82 note.
     shippingCost: row.shipping_cost == null ? null : Number(row.shipping_cost),
     createdAt: row.created_at,
@@ -428,7 +439,30 @@ const PO_SELECT = `
                         AND i.status != 'void'
                    ) THEN 1
                    ELSE 0
-                 END) AS sale_awaits_items
+                 END) AS sale_awaits_items,
+         -- WHO THIS ORDER IS FOR, on a dropship.
+         --
+         -- The card says where the boxes GO -- a shelf name, or "Multi-shipment"
+         -- -- and never who is on the other end of it. On a dropship that is the
+         -- whole point of the document: it exists to put cases in a named
+         -- buyer's hands, and the only way to find out whose was to open the
+         -- order and read the sales orders raised from it.
+         --
+         -- Read off invoices.source_po_id, the MANY side, for the same reason
+         -- sale_awaits_items is: po.linked_invoice_id holds only whichever sale
+         -- was saved first, so a five-buyer split would name one of five.
+         --
+         -- VOIDS ARE EXCLUDED. A cancelled sale is not somebody waiting on
+         -- boxes, and leaving it in would have the card naming a buyer who
+         -- fell through.
+         --
+         -- MIN over a DISTINCT count, and the count travels with it: one buyer
+         -- is named, several are counted. Naming one of five is worse than
+         -- saying five, because it reads as the answer.
+         (SELECT COUNT(DISTINCT i.customer_name) FROM invoices i
+           WHERE i.source_po_id = po.id AND i.status != 'void') AS sale_buyer_count,
+         (SELECT MIN(i.customer_name) FROM invoices i
+           WHERE i.source_po_id = po.id AND i.status != 'void') AS sale_buyer
   FROM purchase_orders po
 `
 
@@ -467,6 +501,8 @@ type PoHeaderRow = PoRow & {
   receivable_units: number
   destination_count: number
   sale_awaits_items: number | null
+  sale_buyer_count: number | null
+  sale_buyer: string | null
   shipping_cost: number | null
 }
 

@@ -1438,4 +1438,47 @@
     padding-left: 16px;
     padding-right: 16px;
   }
+
+  /* THE FILTER ROW, on a screen a third the width it was designed for.
+
+     Six chips plus a lead-in wrap to three rows at 390px, which puts the board
+     below the fold before a single order is on screen. It SCROLLS SIDEWAYS
+     instead — one row, swipe for the rest — which is the pattern the app
+     already uses for the order-line tables. The chips keep the tap height;
+     what they give up is the horizontal padding they were spending on air. */
+  .inv-filters {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    padding-bottom: 2px;
+  }
+  .inv-filters::-webkit-scrollbar {
+    display: none;
+  }
+  .inv-filters-lead {
+    display: none;
+  }
+  .inv-filter {
+    flex: 0 0 auto;
+    min-height: var(--rm-tap);
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+  /* The count and Clear ride at the end of the same scroller. Without these
+     they are laid out as shrinkable flex items and "1 of 4" came out stacked
+     on three lines, one word per line, dragging the whole row taller than the
+     chips beside it. */
+  .inv-filters-count,
+  .inv-filters .link-btn {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
+  /* The three status chips WRAP rather than scroll — they are the thing being
+     read, not a control being reached for, and a fact you have to swipe to see
+     is a fact nobody sees. Two rows of three on a narrow card is fine. */
+  .inv-chips {
+    flex-wrap: wrap;
+  }
 }

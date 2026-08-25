@@ -26783,12 +26783,148 @@ button.sor-team:focus-visible {
   background: var(--success-bg);
   color: var(--success);
 }
-/* HELD FOR THE MONEY — an up-front order nobody has paid for. Red rather than
-   the amber the dims chip wears: those two are steps somebody is working
-   through, and this one is a wall until a buyer acts. */
-.fx-chip-hold {
+/* ---------------------------------------------------------------------------
+   THE THREE FACTS SOMEBODY SCANS A SALES-ORDER BOARD FOR
+
+   Money, shipping, terms — always all three, always in that order, always in
+   the same place on the card, so a column reads DOWN. The whole point is that
+   none of these states is expressed by a chip being absent: see the note at the
+   top of @shared/orderStatus for the three that used to be.
+   --------------------------------------------------------------------------- */
+.inv-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  margin-top: 8px;
+}
+.inv-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  cursor: help;
+}
+.inv-chip-good {
+  background: var(--success-bg);
+  color: var(--success);
+}
+.inv-chip-bad {
   background: var(--danger-bg);
   color: var(--danger);
+}
+.inv-chip-warn {
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+.inv-chip-info {
+  background: var(--info-bg);
+  color: var(--info);
+}
+/* NOT SHIPPED and TERMS NOT SET are the two that wear this, and neither is a
+   problem — they are the ordinary state of a young order. Grey rather than
+   amber, so the card's warm colours stay reserved for something to act on. */
+.inv-chip-idle {
+  background: var(--surface-3);
+  color: var(--text-3);
+}
+
+/* WHO SHIPS IT, on a dropship. Under the buyer's name, because it is the
+   answer to the question the buyer's name raises on a card marked Drop: these
+   boxes are going to that person, and they are coming from somebody else. */
+.inv-source {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 5px;
+  min-width: 0;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+.inv-source > span:first-of-type {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.inv-source-po {
+  flex: 0 0 auto;
+  font-size: 10.5px;
+  color: var(--text-3);
+  opacity: 0.85;
+}
+
+/* The buyer a dropship purchase is FOR — its own row under the supplier, the
+   mirror of the sell side's "from <supplier>" line. It started in the card
+   header beside the → destination and both names ellipsed to two characters
+   ("→ Fe… for F…"), because three items cannot share the width of a board
+   column. A name truncated past recognition is worse than no name. */
+.po-card-for {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 5px;
+  min-width: 0;
+  font-size: 11.5px;
+  color: var(--text-3);
+  cursor: help;
+}
+.po-card-for span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------------------------------------------------------------------------
+   NARROWING THE BOARD
+
+   The chips answer one card at a time; this answers the board. "Paid and ready
+   to pack" is the list of labels to buy, and it had no home before this.
+   --------------------------------------------------------------------------- */
+.inv-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 12px;
+}
+.inv-filters-lead {
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  margin-right: 2px;
+}
+.inv-filter {
+  padding: 4px 11px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.inv-filter:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.inv-filter.on {
+  border-color: var(--brand-500);
+  background: var(--brand-soft);
+  color: var(--brand-700);
+}
+/* Drawn only while something is ticked — see the note at the call site. */
+.inv-filters-count {
+  margin-left: 4px;
+  font-size: 11.5px;
+  color: var(--text-3);
 }
 /* An override somebody made by hand. Deliberately plain — it is a fact about
    the order, not a warning about it. */
@@ -26955,4 +27091,26 @@ button.sor-team:focus-visible {
   flex: 0 0 auto;
   margin-top: 3px;
   color: var(--accent);
+}
+
+/* WHICH PARTY THE LABEL IS ADDRESSED TO. On a dropship the To box holds the
+   SUPPLIER rather than the buyer the sales order is made out to — right, and
+   surprising enough that it is said rather than left to be noticed. */
+.lbl-to-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+.lbl-to-note svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--info);
 }

@@ -512,6 +512,83 @@ export function dropshipSuppliersOf(
 // ---------------------------------------------------------------------------
 
 /**
+ * WHO A SALES ORDER'S SHIPPING LABEL IS ACTUALLY FOR.
+ *
+ * On an ordinary sale it is the buyer: the boxes are here, we pack them, the
+ * label goes on the box, and the buyer's address is already on the document.
+ *
+ * ON A DROPSHIP IT IS THE SUPPLIER, and that is the whole reason this function
+ * exists. The boxes never touch this building — a supplier has them and a
+ * supplier puts the label on them — so a label emailed to the buyer reaches
+ * somebody who cannot put it on anything. The screen used to hand down the
+ * buyer's address on every sale, with a comment beside it saying "on a dropship
+ * the label usually goes to the SUPPLIER instead", which described the problem
+ * rather than fixing it.
+ *
+ * ## Why the buyer is not offered as a fallback on a dropship
+ *
+ * Because the case where the supplier's address is unknown is exactly the case
+ * where nobody is expecting an address to appear at all. Falling back would put
+ * a plausible, wrong party in the To box of a message about to be sent, and a
+ * plausible wrong answer is worse than none: an empty box asks a question and a
+ * filled one does not. So the address comes back null and the NOTE says why.
+ *
+ * ## Two suppliers is a real shape and is refused rather than guessed
+ *
+ * A mixed sale can have two halves from two places. Naming one of them would
+ * send a label to the wrong building — the same rule the provenance read keeps
+ * about destinations, and the same rule the card's "from" line keeps.
+ */
+export interface LabelRecipient {
+  /** Pre-filled address, or null to leave the box empty and ask. */
+  email: string | null
+  /** The party's name, for the contact-directory lookup. Null when unknown. */
+  name: string | null
+  /** Why this party, in one line. Null on the ordinary case, which needs no note. */
+  note: string | null
+}
+
+export function labelRecipientFor(invoice: {
+  email: string | null
+  customerName: string
+  dropSupplier: string | null
+  dropSupplierCount: number
+  dropshipUnits: number
+  sourcePoId: string | null
+}): LabelRecipient {
+  const isDrop = (Number(invoice.dropshipUnits) || 0) > 0 || !!invoice.sourcePoId
+  if (!isDrop) {
+    return { email: invoice.email ?? null, name: invoice.customerName || null, note: null }
+  }
+  if ((invoice.dropSupplierCount ?? 0) > 1) {
+    return {
+      email: null,
+      name: null,
+      note:
+        `This order ships from ${invoice.dropSupplierCount} suppliers, so there is no one ` +
+        'address to fill in. Type the one this label is for.'
+    }
+  }
+  const supplier = (invoice.dropSupplier ?? '').trim()
+  if (!supplier) {
+    return {
+      email: null,
+      name: null,
+      note:
+        'This is a dropship and nothing on it says who ships it. Name the supplier on the ' +
+        'line, or type their address here.'
+    }
+  }
+  return {
+    email: null,
+    name: supplier,
+    note:
+      `This is a dropship — ${supplier} has the boxes, so the label goes to them and not to ` +
+      `${invoice.customerName || 'the buyer'}.`
+  }
+}
+
+/**
  * The message that goes out with a label.
  *
  * Composed in shared code so it can be tested without a mail server, and so the

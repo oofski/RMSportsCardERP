@@ -467,6 +467,11 @@ interface InvoiceRow extends AddressRow {
   stock_units: number | null
   drop_units: number | null
   drawn_units: number | null
+  tracked_parcels: number | null
+  drop_supplier_count: number | null
+  drop_supplier: string | null
+  source_po_supplier: string | null
+  source_po_number: string | null
   ship_weight_lb: number | null
   ship_length_in: number | null
   ship_width_in: number | null
@@ -569,6 +574,25 @@ function toInvoice(r: InvoiceRow): Invoice {
     // QuickBooks company default was — which is the same thing 'allowed' sends.
     allowCreditCard: r.allow_credit_card !== 0,
     sourcePoId: r.source_po_id ?? null,
+    sourcePoNumber: (r.source_po_number ?? '').trim() || null,
+    /**
+     * WHO SHIPS IT, worked out here so no screen has to know the order.
+     *
+     * The lines first, and only when they AGREE: a mixed sale can have two
+     * suppliers shipping two halves, and naming one of them would send somebody
+     * to the wrong building. Then the source purchase order's supplier, which
+     * is what a sale raised by dropshipSaleFromPurchase inherits and never
+     * writes onto its own lines. Null when neither answers, which is the
+     * ordinary state of a sale off our own shelf.
+     */
+    dropSupplier:
+      Number(r.drop_supplier_count) === 1
+        ? (r.drop_supplier ?? '').trim() || null
+        : Number(r.drop_supplier_count) > 1
+          ? null
+          : (r.source_po_supplier ?? '').trim() || null,
+    dropSupplierCount: Number(r.drop_supplier_count) || 0,
+    trackedParcels: Number(r.tracked_parcels) || 0,
     stockUnits: Number(r.stock_units) || 0,
     dropshipUnits: Number(r.drop_units) || 0,
     drawnUnits: Number(r.drawn_units) || 0,
@@ -688,7 +712,45 @@ const INVOICE_COLS = `id, invoice_number, customer_id, customer_name, email, ter
                       -- honest signal that a stock order is not yet fillable -- and
                       -- without it Awaiting items could only ever speak for dropships.
                       (SELECT COALESCE(SUM(m.quantity), 0)
-                         FROM invoice_stock_moves m WHERE m.invoice_id = invoices.id) AS drawn_units`
+                         FROM invoice_stock_moves m WHERE m.invoice_id = invoices.id) AS drawn_units,
+                      -- HAS ANY OF THIS SHIPPED?
+                      --
+                      -- The header tracking column is only half the answer. A
+                      -- four-box order split across two labels has two rows in
+                      -- order_shipments and may carry nothing on the header at
+                      -- all, so a board reading only the header reports a fully
+                      -- shipped order as not shipped. Counted rather than
+                      -- fetched: the card needs a yes-or-no, and the parcels
+                      -- themselves are read when somebody opens the order.
+                      (SELECT COUNT(*) FROM order_shipments s
+                        WHERE s.order_kind = 'so' AND s.order_id = invoices.id
+                          AND TRIM(COALESCE(s.tracking_number, '')) != '') AS tracked_parcels,
+                      -- WHO IS SHIPPING THIS, on a dropship.
+                      --
+                      -- The sale knows source_po_id and nothing about who the
+                      -- supplier IS, so a dropship card could say it was a
+                      -- dropship and never say from whom -- which is the one
+                      -- fact somebody needs to chase it, or to send the label.
+                      --
+                      -- THE LINE WINS OVER THE ORDER. A line carries its own
+                      -- supplier for the mixed case, where two suppliers ship
+                      -- two halves of one sale; a blank line supplier means the
+                      -- source purchase order's, which is what
+                      -- dropshipSaleFromPurchase leaves behind. Only reported
+                      -- when the whole thing agrees -- MIN over DISTINCT with a
+                      -- COUNT beside it -- because naming one of two suppliers
+                      -- would point somebody at the wrong building, the same
+                      -- rule the provenance read keeps about destinations.
+                      (SELECT COUNT(DISTINCT TRIM(l.supplier)) FROM invoice_lines l
+                        WHERE l.invoice_id = invoices.id
+                          AND TRIM(COALESCE(l.supplier, '')) != '') AS drop_supplier_count,
+                      (SELECT MIN(TRIM(l.supplier)) FROM invoice_lines l
+                        WHERE l.invoice_id = invoices.id
+                          AND TRIM(COALESCE(l.supplier, '')) != '') AS drop_supplier,
+                      (SELECT po.supplier FROM purchase_orders po
+                        WHERE po.id = invoices.source_po_id) AS source_po_supplier,
+                      (SELECT po.po_number FROM purchase_orders po
+                        WHERE po.id = invoices.source_po_id) AS source_po_number`
 
 const LINE_COLS = `id, invoice_id, position, item, product_id, sku, description, quantity, rate,
                    amount, tax_rate, class_name, qty_fulfilled, fulfilled_at,
