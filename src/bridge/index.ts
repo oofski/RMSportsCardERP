@@ -67,6 +67,7 @@ import type {
   OrderSide
 } from '@shared/orders'
 import type { EmailSettings, RedactedEmailSettings } from '@shared/emailSettings'
+import type { InvoiceDelivery } from '@shared/invoiceDelivery'
 import type { ContactImportResult } from '@shared/contacts'
 import type { ClockPushState, PushSubscriptionInput } from '@shared/webPush'
 import type { OrderParty, SupplierSuggestion, VendorSummary } from '@shared/purchaseOrders'
@@ -1963,6 +1964,14 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       > => ipcRenderer.invoke(IPC.invoiceCreateInQbo, { id, open }),
       sendFromQbo: (id: string): Promise<Result<{ id: string }>> =>
         ipcRenderer.invoke(IPC.invoiceSendFromQbo, id),
+      /**
+       * The standing payment instructions, and whether QuickBooks emails each
+       * invoice as it is posted. Machine-local — see the store.
+       */
+      getDelivery: (): Promise<Result<InvoiceDelivery>> =>
+        ipcRenderer.invoke(IPC.invoiceDeliveryGet),
+      setDelivery: (input: InvoiceDelivery): Promise<Result<InvoiceDelivery>> =>
+        ipcRenderer.invoke(IPC.invoiceDeliverySet, input),
       openInQbo: (id: string): Promise<Result<{ url: string }>> =>
         ipcRenderer.invoke(IPC.invoiceOpenInQbo, id),
 

@@ -15,6 +15,7 @@
  */
 import { safeStorage } from 'electron'
 import type { QboConfig, QboEnvironment, QboTokens } from '@shared/quickbooks'
+import { DEFAULT_INVOICE_DELIVERY, type InvoiceDelivery } from '@shared/invoiceDelivery'
 import type { QboRelayProbe } from '@shared/quickbooksRelay'
 import { getDb, getMeta, setMeta } from '../db/database'
 
@@ -147,4 +148,63 @@ export function setQboRelayMemo(memo: QboRelayMemo): void {
 
 export function clearQboRelayMemo(): void {
   setMeta(getDb(), RELAY_KEY, '')
+}
+
+// ---------------------------------------------------------------------------
+// How the invoice reaches the buyer
+// ---------------------------------------------------------------------------
+
+/**
+ * The payment instructions and the auto-send switch.
+ *
+ * ## In `meta`, and therefore going nowhere
+ *
+ * `meta` is one of the four tables deliberately left out of sync — see
+ * syncTables — so the bank details typed in here stay in this database. They do
+ * not travel through the relay, they are not on another laptop, and THEY ARE
+ * NOT IN THIS REPOSITORY, which is public. That last one is the reason the
+ * instructions are a setting at all rather than a constant somebody would have
+ * had to commit.
+ *
+ * ## Plain JSON, not sealed
+ *
+ * Unlike the client secret and the tokens above, which go through safeStorage.
+ * These details are PRINTED ON EVERY INVOICE THE BUSINESS SENDS — a wire is
+ * paid by publishing the account number to whoever owes you money — so they are
+ * not a credential and encrypting them at rest would be theatre. What matters
+ * is that they are not committed and not synced, and both of those are true of
+ * where they sit rather than of how they are stored.
+ *
+ * The web app has its own database, so this is answered once per install. That
+ * is the same as the SMTP account and for the same reason.
+ */
+const DELIVERY_KEY = 'qbo_invoice_delivery'
+
+export function getInvoiceDelivery(): InvoiceDelivery {
+  const raw = getMeta(getDb(), DELIVERY_KEY)
+  if (!raw) return { ...DEFAULT_INVOICE_DELIVERY }
+  try {
+    const parsed = JSON.parse(raw) as Partial<InvoiceDelivery>
+    return {
+      paymentInstructions:
+        typeof parsed?.paymentInstructions === 'string' ? parsed.paymentInstructions : '',
+      // === true, so anything that is not the word yes reads as no. A record
+      // written by an older build has no such key, and an invoice must never
+      // email itself because a field was missing.
+      autoSend: parsed?.autoSend === true
+    }
+  } catch {
+    return { ...DEFAULT_INVOICE_DELIVERY }
+  }
+}
+
+export function setInvoiceDelivery(input: InvoiceDelivery): void {
+  setMeta(
+    getDb(),
+    DELIVERY_KEY,
+    JSON.stringify({
+      paymentInstructions: String(input?.paymentInstructions ?? '').trim(),
+      autoSend: input?.autoSend === true
+    } satisfies InvoiceDelivery)
+  )
 }

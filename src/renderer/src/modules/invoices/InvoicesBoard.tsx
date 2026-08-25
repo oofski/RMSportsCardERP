@@ -11,7 +11,8 @@ import {
   FULFILLMENT_STAGE_TONE,
   fulfillmentNextStepDetail,
   fulfillmentStageOf,
-  fulfillmentTickShort
+  fulfillmentTickShort,
+  readyToShipBlockedReason
 } from '@shared/fulfillment'
 import { DimsModal } from './DimsModal'
 import { QuickConfirm } from './QuickConfirm'
@@ -308,7 +309,14 @@ export function InvoicesBoard({
 
   if (loading) return <CenterLoader />
 
-  const fromStatus = dragId ? invoices.find((i) => i.id === dragId)?.status ?? null : null
+  const dragging = dragId ? invoices.find((i) => i.id === dragId) ?? null : null
+  const fromStatus = dragging?.status ?? null
+  // WHY READY TO SHIP WOULD TURN THIS CARD DOWN, worked out once for the drag
+  // rather than per column. `canMoveInvoice` only knows the SHAPE of the
+  // pipeline; this is the money rule, and the server keeps it whatever this
+  // says — see invoiceStageRefusal. Dimming the column is so the answer arrives
+  // before the drop rather than as a toast after it.
+  const dragBlocked = dragging ? readyToShipBlockedReason(dragging) : null
 
   return (
     <>
@@ -387,7 +395,13 @@ export function InvoicesBoard({
         <div className="po-board">
           {INVOICE_STAGES.map((stage) => {
             const inStage = invoices.filter((i) => i.status === stage.id)
-            const canDrop = !!(dragId && fromStatus && canMoveInvoice(fromStatus, stage.id))
+            const moneyBlocks = stage.id === 'sent' && !!dragBlocked
+            const canDrop = !!(
+              dragId &&
+              fromStatus &&
+              canMoveInvoice(fromStatus, stage.id) &&
+              !moneyBlocks
+            )
             // While dragging, dim the columns this card cannot reach — never the
             // one it came from — so valid and invalid targets are both explicit.
             const noAllow = !!dragId && fromStatus !== stage.id && !canDrop
@@ -412,7 +426,11 @@ export function InvoicesBoard({
                 }}
               >
                 <div className="po-col-head">
-                  <span className="po-col-title" title={stage.hint}>
+                  {/* The dimmed column says WHY while the card is still in the
+                      air. A column that simply refuses the drop reads as a
+                      broken drag, and the answer — they have not paid — is one
+                      somebody can act on immediately. */}
+                  <span className="po-col-title" title={moneyBlocks ? dragBlocked : stage.hint}>
                     {stage.label}
                   </span>
                   <span className="po-col-count">{inStage.length}</span>
@@ -697,6 +715,10 @@ function InvoiceCard({
   const fxStage = fulfillmentStageOf(invoice)
   const fxTone = fxStage && fxStage !== 'ready' ? FULFILLMENT_STAGE_TONE[fxStage] : null
   const fxWhy = fulfillmentNextStepDetail(invoice)
+  // Null on everything the packing floor can have — a void included, which has
+  // its own greyed card and does not need a second reason printed on it.
+  const heldForPayment =
+    invoice.status === 'void' ? null : readyToShipBlockedReason(invoice)
 
   return (
     <div
@@ -734,6 +756,22 @@ function InvoiceCard({
         {fxTone && (
           <span className={`fx-chip fx-chip-${fxTone}`} title={fxWhy ?? undefined}>
             {fxStage === 'awaiting_items' ? 'Awaiting items' : 'Awaiting dims'}
+          </span>
+        )}
+        {/* HELD FOR THE MONEY, said on the card.
+
+            The lane above only draws for an order that is ON the packing
+            pipeline, and this is the one that never got onto it: up-front terms,
+            nothing received. Before this the card looked ordinary and simply
+            refused to be dragged into Ready to ship, which reads as a broken
+            drag rather than as a rule.
+
+            Not drawn on a forced order — that is exactly the order somebody
+            already decided to send, and marking it held would contradict the
+            decision. `readyToShipBlockedReason` handles that; this only asks. */}
+        {heldForPayment && (
+          <span className="fx-chip fx-chip-hold" title={heldForPayment}>
+            Awaiting payment
           </span>
         )}
         {/* An unpaid invoice past its due date is the one thing on this board
@@ -963,14 +1001,26 @@ function InvoiceCard({
           </button>
         )}
 
-        {!settled && (
+        {/* MOVING THE CARD, AND SAYING SO.
+
+            This button said "Mark paid" and moved the card to the last column
+            without recording a penny — so the card landed in Payment still
+            reading UNPAID, beside a second button also called "Mark paid" that
+            was the one that actually stamped the date. Two controls with one
+            name, doing different things, on the same card.
+
+            The column is called Payment, so this is called what it does. The
+            money is recorded by the two buttons that record money: the tick in
+            that column, and Paid up front… beside this one. */}
+        {!settled && invoice.status !== 'paid' && canMoveInvoice(invoice.status, 'paid') && (
           <button
             type="button"
             className="btn po-move inv-move-paid"
             disabled={busy}
+            title="Move it to the Payment column. This does not record any money."
             onClick={() => onMove('paid')}
           >
-            Mark paid
+            To payment
           </button>
         )}
 

@@ -186,6 +186,11 @@ export const IPC = {
   invoiceQboSetItemSku: 'invoices:qbo:set-item-sku',
   invoiceSendFromQbo: 'invoices:qbo:send',
   invoiceOpenInQbo: 'invoices:qbo:open',
+  // How the invoice reaches the buyer: the standing payment instructions that go
+  // on every one of them, and whether QuickBooks emails it the moment it is
+  // posted. Kept in `meta`, which does not sync — see the note in the store.
+  invoiceDeliveryGet: 'invoices:delivery:get',
+  invoiceDeliverySet: 'invoices:delivery:set',
   // Save it here, then put it in QuickBooks — one gesture, two steps, in that
   // order. The local write is committed BEFORE the network call, so a refused
   // push costs the push and never the invoice. `invoiceQboPending` is what the

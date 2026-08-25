@@ -236,6 +236,81 @@ export function paymentClearsFulfillment(facts: {
 }
 
 /**
+ * MAY THIS ORDER BE CALLED READY TO SHIP AT ALL? Null when it may.
+ *
+ * The same rule as `paymentClearsFulfillment` and a different job. That one
+ * answers a question the packing board asks about itself; this one is a REFUSAL,
+ * with the sentence to say, for the two places somebody can put an order on the
+ * packing list by hand — dragging its card into Ready to ship on the Sales
+ * Orders board, and the release that `setInvoiceReadyToShip` writes.
+ *
+ * ## Why the gate was missing from exactly those two
+ *
+ * The fulfilment board DERIVES its columns, so an unpaid up-front order simply
+ * never appeared on it: nothing had to refuse, because nothing was ever asked.
+ * The Sales Orders board is the opposite — its columns are a stored status
+ * somebody drags a card between, and `INVOICE_TRANSITIONS` only knows the SHAPE
+ * of the pipeline, not whether the money arrived. So draft → Ready to ship was
+ * legal on a buyer who pays up front and has not paid.
+ *
+ * Worse than the drag: `nextStageFromQbo` moves a card to that same stage the
+ * moment QuickBooks reports it emailed the invoice. Emailing an invoice is not
+ * being paid for it, so an unpaid up-front order walked itself onto the packing
+ * list a quarter of an hour after it was posted, with nobody touching it.
+ *
+ * ## What it does NOT refuse
+ *
+ * A FORCED order, which is the whole point of `forceReadyAt` — see forcedReady.
+ * A buyer of two years standing whose package is going out today is a real case
+ * and it has an answer already; this must not become a second gate that answer
+ * cannot open.
+ *
+ * An order on DELIVERY terms, which is admitted unpaid by design: the buyer pays
+ * when it lands, so holding the box back is waiting for something that cannot
+ * happen first.
+ *
+ * AND — the one place this is deliberately NARROWER than
+ * `paymentClearsFulfillment` — an order with NO TERMS SAID.
+ *
+ * That function reads a blank as up-front, which is the right reading for it:
+ * the fulfilment board DERIVES its columns, so a blank order simply does not
+ * appear there and nobody is stopped from doing anything. This is a REFUSAL on
+ * a card somebody is dragging, and neither box on the invoice form is ticked by
+ * default. Reading a blank as up-front here would put a wall in front of every
+ * order nobody had classified — which is not what was asked for, and is a much
+ * bigger change than the one that was. The owner's words were "if something is
+ * paid up front that it doesn't get moved to ready to ship unless it has been
+ * paid", and Front is a box somebody ticks.
+ *
+ * So: ticked Front and unpaid is refused, and nothing else is.
+ */
+export function readyToShipBlockedReason(facts: {
+  status: InvoiceStatus
+  paymentTiming: PaymentTiming | null
+  paidAt?: string | null
+  qboPaidAt?: string | null
+  qboVoided?: boolean | null
+  forceReadyAt?: string | null
+}): string | null {
+  if (facts.status === 'void') return 'That order was voided, so it cannot be shipped.'
+  if (facts.forceReadyAt) return null
+  if (facts.paymentTiming !== 'front') return null
+  if (
+    isInvoicePaid({
+      paidAt: facts.paidAt ?? null,
+      qboPaidAt: facts.qboPaidAt ?? null,
+      qboVoided: facts.qboVoided ?? null
+    })
+  ) {
+    return null
+  }
+  return (
+    'This buyer pays up front and the money has not arrived, so it cannot go on the packing ' +
+    'list yet. Record the payment, or use Send anyway if you are shipping it regardless.'
+  )
+}
+
+/**
  * Are the goods in the building?
  *
  * Two different questions wearing one name, because the answer comes from two

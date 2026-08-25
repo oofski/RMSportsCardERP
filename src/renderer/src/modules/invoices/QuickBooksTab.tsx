@@ -17,6 +17,7 @@ import { Icon } from '../../components/Icon'
 import { useToast } from '../../components/Toast'
 import { formatDateTime } from '../../lib/format'
 import { QboAccountMapping } from './QboAccountMapping'
+import { InvoiceDeliverySettings } from './InvoiceDeliverySettings'
 
 const INTUIT_APPS_URL = 'https://developer.intuit.com/app/developer/myapps'
 
@@ -294,6 +295,7 @@ export function QuickBooksTab(): JSX.Element {
         {promotePanel}
 
         <QboAccountMapping connected />
+        <InvoiceDeliverySettings connected />
       </div>
     )
   }

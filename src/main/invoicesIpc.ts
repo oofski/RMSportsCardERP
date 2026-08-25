@@ -54,6 +54,7 @@ import {
   removeCustomer,
   saveCustomer,
   saveInvoice,
+  invoiceStageRefusal,
   setInvoiceStatus,
   suggestInvoiceNumber,
   type CustomerInput
@@ -76,6 +77,12 @@ import {
   type QboItemRef
 } from './quickbooks/invoices'
 import { fetchQboInvoiceStatuses, findQboInvoicesByDocNumber } from './quickbooks/invoiceStatus'
+import { getInvoiceDelivery, setInvoiceDelivery } from './quickbooks/store'
+import {
+  autoSendPlan,
+  validateInvoiceDelivery,
+  type InvoiceDelivery
+} from '@shared/invoiceDelivery'
 
 /**
  * Invoices — the sell side.
@@ -230,6 +237,43 @@ async function pushToQbo(invoice: InvoiceDetail, open: boolean): Promise<Invoice
     const posted = getInvoice(invoice.id) ?? invoice
     const attachNote = await attachInvoiceDocument(posted, res.qboId)
     const notes = attachNote ? [...res.notes, attachNote] : res.notes
+
+    /**
+     * EMAIL IT, IF THAT IS WHAT THE OWNER ASKED FOR.
+     *
+     * `sendQboInvoice` has existed since the integration was written and nothing
+     * has ever called it — the button was taken off the card because "Send"
+     * beside an invoice already in QuickBooks read as "send it TO QuickBooks",
+     * and the habit since has been to open each one in the browser and press
+     * Send there. This is that press, for anybody who wants it, and it is OFF
+     * until they say so: an invoice cannot be un-emailed, and the mistyped price
+     * is found by the person reading it.
+     *
+     * NEVER ALLOWED TO THROW, for the same reason the attachment above is not.
+     * The invoice is on Intuit's books by this line; reporting a mail failure as
+     * a failed post would invite a retry that either bounces as a duplicate or
+     * writes the invoice twice. It is a NOTE — the money is right, something
+     * optional did not happen.
+     *
+     * IT DOES NOT MOVE THE CARD. Emailing an invoice is not being paid for it,
+     * and the stage it would move to is called Ready to ship — see
+     * invoiceStageRefusal, which turns that down on an unpaid up-front order
+     * whichever direction it is asked from. What the send IS recorded as is
+     * QuickBooks' own EmailStatus, which the next status check reads back.
+     */
+    const plan = autoSendPlan(getInvoiceDelivery(), posted)
+    if (plan.note) notes.push(plan.note)
+    if (plan.send) {
+      try {
+        await sendQboInvoice(res.qboId, posted.email)
+      } catch (err) {
+        notes.push(
+          `The invoice is in QuickBooks, but the email was not sent: ${
+            err instanceof Error ? err.message : String(err)
+          }`
+        )
+      }
+    }
 
     // Opening the browser is a convenience, not the operation. A blocked pop-up
     // or a machine with no default browser must not turn a successfully created
@@ -466,6 +510,12 @@ export function registerInvoicesIpc(): void {
         const raw = str(payload?.status)
         const status: InvoiceStatus =
           raw === 'created' || raw === 'sent' || raw === 'paid' || raw === 'void' ? raw : 'draft'
+        // ASKED BEFORE THE WRITE, only so the refusal has WORDS. The rule itself
+        // lives in setInvoiceStatus, which the QuickBooks pull also goes through
+        // — a check here and nowhere else would gate the drag and leave the
+        // timer walking unpaid orders onto the packing list behind it.
+        const refusal = invoiceStageRefusal(id, status)
+        if (refusal) return { ok: false, error: refusal }
         if (!setInvoiceStatus(id, status, actor.id)) {
           return { ok: false, error: 'That invoice is gone.' }
         }
@@ -842,6 +892,13 @@ export function registerInvoicesIpc(): void {
           checked++
           recordQboObservation(invoice.id, observed)
           const next = nextStageFromQbo(invoice.status, observed)
+          // A REFUSED MOVE IS NOT A FAILED CHECK. setInvoiceStatus turns down
+          // Ready to ship for an unpaid up-front order, and this is the path
+          // that used to make that happen on its own: QuickBooks reports it
+          // EMAILED the invoice, which is not being paid for it, and the card
+          // walked onto the packing list a quarter of an hour later with nobody
+          // touching it. The observation is already written either way, so the
+          // card still shows what Intuit said — it just does not move.
           if (next && setInvoiceStatus(invoice.id, next)) {
             moved.push({ id: invoice.id, from: invoice.status, to: next })
           }
@@ -1063,6 +1120,43 @@ export function registerInvoicesIpc(): void {
       return fail(err)
     }
   })
+
+  // ---- How the invoice reaches the buyer ----------------------------------
+  //
+  // A READ anybody with invoicing can do, and a WRITE too: this is the same
+  // permission that already posts invoices and spends money, and an operator who
+  // can raise an invoice can already type anything they like into its message.
+  ipcMain.handle(IPC.invoiceDeliveryGet, (): Result<InvoiceDelivery> => {
+    try {
+      requireInvoicing()
+      return { ok: true, data: getInvoiceDelivery() }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle(
+    IPC.invoiceDeliverySet,
+    (_e, payload: Partial<InvoiceDelivery>): Result<InvoiceDelivery> => {
+      try {
+        requireInvoicing()
+        const next: InvoiceDelivery = {
+          paymentInstructions: String(payload?.paymentInstructions ?? ''),
+          autoSend: payload?.autoSend === true
+        }
+        // REFUSED HERE RATHER THAN BY QUICKBOOKS. Over the memo limit Intuit
+        // rejects the whole invoice, so an operator who pasted four paragraphs
+        // would find out by having every invoice from then on fail to post,
+        // with an error naming a field they have forgotten they filled in.
+        const problem = validateInvoiceDelivery(next)
+        if (problem) return { ok: false, error: problem }
+        setInvoiceDelivery(next)
+        return { ok: true, data: getInvoiceDelivery() }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
 
   /** Reopen an already-created invoice in QuickBooks. */
   ipcMain.handle(IPC.invoiceOpenInQbo, async (_e, id: unknown): Promise<Result<{ url: string }>> => {

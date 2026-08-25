@@ -58,6 +58,7 @@ const {
   hasDims,
   itemsInHand,
   paymentClearsFulfillment,
+  readyToShipBlockedReason,
   shelfShortfall
 } = require('../src/shared/fulfillment')
 const { INVOICE_TERMS, INVOICE_TERMS_OFFERED, termsOptionsFor } = require('../src/shared/invoices')
@@ -589,6 +590,86 @@ ok(
 ok(
   !isInvoicePaid({ paidAt: '2026-08-20T00:00:00.000Z', qboVoided: true }),
   'a voided QuickBooks copy un-pays it, whatever the board said'
+)
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 12. Ready to ship refuses an unpaid up-front order ===')
+// ---------------------------------------------------------------------------
+/**
+ * The owner's rule already governed the fulfilment board, which DERIVES its
+ * columns — so an unpaid up-front order never appeared on it and nothing ever
+ * had to refuse. The Sales Orders board is the opposite: its columns are a
+ * stored status somebody drags a card between, and one of them is also called
+ * Ready to ship. INVOICE_TRANSITIONS knows the SHAPE of that pipeline and
+ * nothing about money, so draft → Ready to ship was legal on a buyer who pays up
+ * front and has not paid.
+ *
+ * And the drag was not even the path that did it. `nextStageFromQbo` moves a
+ * card to that stage the moment QuickBooks reports the invoice EMAILED, which is
+ * not being paid for it — so an unpaid up-front order walked itself onto the
+ * packing list a quarter of an hour after posting with nobody touching it.
+ */
+const upFrontUnpaid = { status: 'created', paymentTiming: 'front', paidAt: null }
+const why = readyToShipBlockedReason(upFrontUnpaid)
+ok(typeof why === 'string' && why.length > 0, 'AN UNPAID UP-FRONT ORDER IS REFUSED', String(why))
+ok(
+  typeof why === 'string' && /pay(s)? up front/i.test(why) && /Send anyway/i.test(why),
+  'and the refusal names both the reason and the way past it',
+  String(why)
+)
+
+ok(
+  readyToShipBlockedReason({ status: 'created', paymentTiming: 'delivery', paidAt: null }) === null,
+  'DELIVERY TERMS ARE LET THROUGH UNPAID — the same rule the packing board keeps'
+)
+ok(
+  readyToShipBlockedReason({
+    status: 'created',
+    paymentTiming: 'front',
+    paidAt: '2026-08-20T00:00:00.000Z'
+  }) === null,
+  'and an up-front order that HAS been paid is let through'
+)
+ok(
+  readyToShipBlockedReason({
+    status: 'created',
+    paymentTiming: 'front',
+    paidAt: null,
+    qboPaidAt: '2026-08-20'
+  }) === null,
+  'QUICKBOOKS ANSWERS FOR IT TOO — an invoice settled over there needs no tick here'
+)
+ok(
+  readyToShipBlockedReason({
+    status: 'created',
+    paymentTiming: 'front',
+    paidAt: null,
+    forceReadyAt: '2026-08-20T00:00:00.000Z'
+  }) === null,
+  'SEND ANYWAY STILL OPENS IT — this must not become a second gate the override cannot pass'
+)
+ok(
+  readyToShipBlockedReason({ status: 'void', paymentTiming: 'delivery', paidAt: null }) !== null,
+  'and a voided order has nothing to ship'
+)
+/**
+ * AN ORDER WITH NO TERMS SAID IS NOT HELD, and this is the one place this rule
+ * is deliberately narrower than `paymentClearsFulfillment`.
+ *
+ * That function reads a blank as up-front, which is right for a board that
+ * DERIVES its columns: a blank order simply does not appear on it and nobody is
+ * stopped from doing anything. This is a REFUSAL on a card somebody is dragging,
+ * and NEITHER payment box is ticked by default on the invoice form — so reading
+ * a blank as up-front would put a wall in front of every order nobody had
+ * classified. Front is a box somebody ticks.
+ */
+ok(
+  readyToShipBlockedReason({ status: 'draft', paymentTiming: null, paidAt: null }) === null,
+  'AN ORDER WITH NO TERMS SAID IS NOT HELD — neither box is ticked by default, and this refusal is not a place to guess'
+)
+ok(
+  paymentClearsFulfillment({ status: 'draft', paymentTiming: null, paidAt: null }) === false,
+  'while the DERIVED board still reads a blank as up-front, which is right for a board nobody is dragging cards on'
 )
 
 console.log(`\n${pass} passed, ${fail} failed`)

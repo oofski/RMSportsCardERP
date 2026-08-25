@@ -35,7 +35,7 @@ import { getDb, getMeta } from './database'
 import { applyInvoiceStock, invoiceStockLocation, releaseInvoiceStock } from './invoiceStock'
 import { destinationHoldsStock } from '@shared/purchaseOrders'
 import { adoptLegacyFreight, deleteOrderExtras, recordOrderEvent } from './orderExtras'
-import { describeDims, hasDims } from '@shared/fulfillment'
+import { describeDims, hasDims, readyToShipBlockedReason } from '@shared/fulfillment'
 import { dealTicketRefFor } from './dealTickets'
 import { issueDealTicket, markDropshipPair } from './dealTickets'
 
@@ -1883,6 +1883,14 @@ export function setInvoicePaid(
  * Separate from payment because the two genuinely come apart: a trusted buyer on
  * Net 30 is ready to ship and has paid nothing, and an order paid by deposit is
  * paid and not ready. Refused on a void, which has no boxes left to pick.
+ *
+ * AND REFUSED ON AN UNPAID UP-FRONT ORDER, which is the other half of the same
+ * rule the stage move now keeps — see invoiceStageRefusal. This is the second
+ * door onto the packing list, and gating one of two doors is not a gate.
+ *
+ * Only on the way IN. TAKING an order back off the list is always allowed: it
+ * is the correction for having put it there, and a rule that refused it would
+ * trap an order somebody had just released by mistake.
  */
 export function setInvoiceReadyToShip(
   id: string,
@@ -1896,6 +1904,10 @@ export function setInvoiceReadyToShip(
   if (!row) return { invoice: null, error: 'That order is gone.' }
   if (asStatus(row.status) === 'void') {
     return { invoice: getInvoice(id), error: 'That order was voided.' }
+  }
+  if (ready) {
+    const refusal = invoiceStageRefusal(id, 'sent')
+    if (refusal) return { invoice: getInvoice(id), error: refusal }
   }
   const stamp = nowIso()
   db.prepare(
@@ -2237,12 +2249,67 @@ export function recordQboStatusFailure(id: string, error: string): void {
 }
 
 /**
+ * WHY THE PACKING LIST IS REFUSING THIS ORDER, or null when it is not.
+ *
+ * Reads the six facts `readyToShipBlockedReason` judges on and hands them to it.
+ * Deliberately NOT a second copy of the rule — the rule is one function in
+ * @shared/fulfillment, and this is a query.
+ *
+ * A row that is GONE comes back null, not a sentence. "That order is gone" is
+ * the caller's answer to a different question, and answering it here would have
+ * every caller printing whichever of the two sentences it happened to reach
+ * first.
+ */
+export function invoiceStageRefusal(id: string, to: InvoiceStatus): string | null {
+  // Only the move onto the packing list is gated. Posting to QuickBooks, taking
+  // a payment and voiding are all legal on an unpaid order — the second one is
+  // how it stops being unpaid.
+  if (to !== 'sent') return null
+  const row = getDb()
+    .prepare(
+      `SELECT status, payment_timing, paid_at, qbo_paid_at, qbo_voided, force_ready_at
+         FROM invoices WHERE id = ?`
+    )
+    .get(id) as
+    | {
+        status: string
+        payment_timing: string | null
+        paid_at: string | null
+        qbo_paid_at: string | null
+        qbo_voided: number | null
+        force_ready_at: string | null
+      }
+    | undefined
+  if (!row) return null
+  return readyToShipBlockedReason({
+    status: asStatus(row.status),
+    paymentTiming: asPaymentTiming(row.payment_timing),
+    paidAt: row.paid_at,
+    qboPaidAt: row.qbo_paid_at,
+    qboVoided: row.qbo_voided === 1,
+    forceReadyAt: row.force_ready_at
+  })
+}
+
+/**
  * Move an invoice along the board.
  *
  * Marking it paid STAMPS THE DATE, and moving it off paid clears it — so the
  * date can never outlive the claim it belongs to. A stale "paid 3 March" on an
  * invoice that is no longer marked paid is the kind of thing somebody reads off
  * a screen and repeats to a buyer.
+ *
+ * ## Refusing Ready to ship is done HERE, not at the caller
+ *
+ * Three different things move a card to that stage — a drag, the QuickBooks
+ * pull, and the send-from-QuickBooks button — and only one of them is a person
+ * who could be shown a message. A gate in the screen would have been no gate at
+ * all: the pull was the path that actually did it, silently, on a timer, the
+ * moment Intuit reported the invoice emailed. See invoiceStageRefusal.
+ *
+ * It returns FALSE rather than throwing, because the pull moves a list and one
+ * refused order must not abandon the rest of it. Callers with somebody to talk
+ * to ask invoiceStageRefusal first, which is where the sentence comes from.
  */
 export function setInvoiceStatus(
   id: string,
@@ -2252,6 +2319,10 @@ export function setInvoiceStatus(
   const db = getDb()
   const stamp = nowIso()
   const run = db.transaction((): boolean => {
+    // THE GATE, BEFORE ANYTHING IS WRITTEN. Inside the transaction so the facts
+    // it judges on are the ones this move is about to overwrite, and ahead of
+    // the void branch so a refusal never gets as far as handing stock back.
+    if (invoiceStageRefusal(id, status)) return false
     /**
      * VOIDING PUTS THE BOXES BACK.
      *
@@ -2401,16 +2472,43 @@ export function invoiceStats(): {
     .all() as Array<{ status: string; n: number; value: number | null }>
 
   const count = (s: string): number => byStatus.find((r) => r.status === s)?.n ?? 0
-  // OUTSTANDING is what has been billed and not yet ticked as paid — voided
-  // invoices are money nobody is waiting on, and paid ones have arrived. Both
-  // figures rest on somebody having ticked the box, which is why the screen
-  // labels this a record rather than a bank balance.
-  const outstanding = byStatus
-    .filter((r) => r.status !== 'void' && r.status !== 'paid')
-    .reduce((sum, r) => sum + (r.value ?? 0), 0)
-  const paidTotal = byStatus
-    .filter((r) => r.status === 'paid')
-    .reduce((sum, r) => sum + (r.value ?? 0), 0)
+
+  /**
+   * THE MONEY IS COUNTED OFF THE MONEY, NOT OFF THE COLUMN.
+   *
+   * Both figures used to come from the query above — paid was `status='paid'`
+   * and outstanding was everything else — and that was right for exactly as long
+   * as the last column meant "we have been paid". It is called PAYMENT now: the
+   * settling-up step, which an order reaches before the money lands. See
+   * INVOICE_STAGES and isInvoicePaid, where the split is written down.
+   *
+   * So the old arithmetic reported two lies at once, in opposite directions:
+   *
+   *   · An order dragged into Payment that nobody had paid counted as PAID, and
+   *     its whole total went into a figure the owner reads as money received.
+   *   · An order QuickBooks says is settled, still sitting in Ready to ship
+   *     because the boxes have not gone out, counted as AWAITING PAYMENT —
+   *     money the screen says is owed and that is already in the account.
+   *
+   * This is the SQL form of isInvoicePaid, and it has to stay that way: an
+   * invoice Intuit reports paid is paid whatever this floor ticked, an invoice
+   * Intuit reports VOIDED is not paid whatever it says here, and a tick on this
+   * board is the answer the rest of the time. A void is in neither figure —
+   * nobody is waiting on it and nobody sent anything.
+   */
+  // COALESCE on the flag even though the column is NOT NULL DEFAULT 0. The two
+  // figures are complements — one is NOT the other — so a single NULL would
+  // drop that invoice out of BOTH and quietly lose its total off a screen whose
+  // whole job is totals. Cheap insurance against a column that changes shape.
+  const PAID_SQL = `status != 'void' AND COALESCE(qbo_voided, 0) != 1 AND (paid_at IS NOT NULL OR qbo_paid_at IS NOT NULL)`
+  const sumWhere = (where: string): number =>
+    (
+      getDb()
+        .prepare(`SELECT COALESCE(SUM(total), 0) AS value FROM invoices WHERE ${where}`)
+        .get() as { value: number }
+    ).value
+  const paidTotal = sumWhere(PAID_SQL)
+  const outstanding = sumWhere(`status != 'void' AND NOT (${PAID_SQL})`)
 
   const month = new Date().toISOString().slice(0, 7)
   const thisMonth = (

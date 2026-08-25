@@ -12814,6 +12814,18 @@ button.sor-team:focus-visible {
   gap: 8px;
   flex-shrink: 0;
 }
+/* A wire is four lines — bank, routing, account, name on the account — so this
+   is a textarea wearing the `.input` skin rather than a one-line box that would
+   show the first of them. `height: auto` because `.input` pins a control
+   height, which on a textarea collapses all five rows into one. */
+.qbo-pay-note {
+  height: auto;
+  min-height: 104px;
+  padding: 9px 11px;
+  line-height: 1.5;
+  font-family: inherit;
+  resize: vertical;
+}
 /* Readiness per flow. Three across on desktop, stacking on narrow — each is a
    sentence, so they must not be squeezed into unreadable columns. */
 .qbo-flows {
@@ -26770,6 +26782,13 @@ button.sor-team:focus-visible {
 .fx-chip-ready {
   background: var(--success-bg);
   color: var(--success);
+}
+/* HELD FOR THE MONEY — an up-front order nobody has paid for. Red rather than
+   the amber the dims chip wears: those two are steps somebody is working
+   through, and this one is a wall until a buyer acts. */
+.fx-chip-hold {
+  background: var(--danger-bg);
+  color: var(--danger);
 }
 /* An override somebody made by hand. Deliberately plain — it is a fact about
    the order, not a warning about it. */

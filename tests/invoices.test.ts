@@ -583,16 +583,62 @@ const unpaid = repo.getInvoice(cash.id)
 ok(unpaid.paidAt === null, 'and it clears when somebody says so', String(unpaid.paidAt))
 ok(unpaid.paidBy === null, 'along with who ticked it')
 
-// Ticking twice keeps the FIRST date — the money arrived when it arrived.
+/**
+ * THE MONEY TILES COUNT MONEY, NOT COLUMNS.
+ *
+ * This order is now sitting in the PAYMENT column with its payment explicitly
+ * WITHDRAWN — which is the exact shape the old arithmetic got backwards. It
+ * summed `status = 'paid'` into the Paid tile, so $250 nobody had sent read as
+ * money received, and the same order was missing from Awaiting payment where it
+ * belonged. Both figures wrong, in opposite directions, off one order.
+ */
 repo.setInvoiceStatus(cash.id, 'paid', 'emp_owner')
-const firstStamp = repo.getInvoice(cash.id).paidAt
-repo.setInvoiceStatus(cash.id, 'paid', 'emp_other')
-ok(repo.getInvoice(cash.id).paidAt === firstStamp, 'ticking paid twice keeps the first date')
+const inPaymentUnpaid = repo.getInvoice(cash.id)
+ok(inPaymentUnpaid.status === 'paid', 'the card is in the Payment column')
+ok(inPaymentUnpaid.paidAt === null, 'with nothing recorded against it', String(inPaymentUnpaid.paidAt))
 
-// Paid money is no longer outstanding; it moves to the paid total.
-const s2 = repo.invoiceStats()
-ok(s2.paid >= 1, 'the paid count includes it', String(s2.paid))
-ok(s2.paidTotal >= 250, 'and the paid total', String(s2.paidTotal))
+const withdrawn = repo.invoiceStats()
+const paidWithout = withdrawn.paidTotal
+const owedWithout = withdrawn.outstanding
+
+/**
+ * Now the money actually arrives. The same order, in the same column, with
+ * nothing else on the board touched — so the two figures below can only have
+ * moved because of this payment, and they must move by its total EXACTLY.
+ *
+ * A delta of 250 in each direction is what proves the old rule is gone: under
+ * it this order was ALREADY in the paid total before the tick, so recording the
+ * payment would have moved nothing at all.
+ */
+repo.setInvoicePaid(cash.id, true, 'emp_owner')
+const settled = repo.invoiceStats()
+ok(
+  Math.abs(settled.paidTotal - (paidWithout + 250)) < 0.005,
+  'recording the payment moves exactly $250 into the paid total',
+  `${paidWithout} -> ${settled.paidTotal}`
+)
+ok(
+  Math.abs(settled.outstanding - (owedWithout - 250)) < 0.005,
+  'and takes exactly $250 out of what is owed',
+  `${owedWithout} -> ${settled.outstanding}`
+)
+ok(settled.paid >= 1, 'the Payment column still counts its cards', String(settled.paid))
+
+// THE OTHER DIRECTION: paid, and NOT in the Payment column. An order QuickBooks
+// has settled while the boxes are still on the bench used to be reported as
+// money owed — a figure the owner reads as "chase these people".
+repo.setInvoiceStatus(cash.id, 'sent', 'emp_owner')
+const onTheBench = repo.invoiceStats()
+ok(
+  Math.abs(onTheBench.paidTotal - settled.paidTotal) < 0.005,
+  'MOVING A PAID ORDER OFF THE PAYMENT COLUMN DOES NOT UN-PAY IT',
+  `${settled.paidTotal} -> ${onTheBench.paidTotal}`
+)
+ok(
+  Math.abs(onTheBench.outstanding - settled.outstanding) < 0.005,
+  'and it is still not owed',
+  `${settled.outstanding} -> ${onTheBench.outstanding}`
+)
 
 // ---------------------------------------------------------------------------
 console.log('\n=== 12. the document a buyer reads ===')

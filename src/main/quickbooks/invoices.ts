@@ -17,7 +17,7 @@ import { buildInvoiceHtml } from '../invoicePdf'
 import { renderDocumentForExport } from '../poPdf'
 import { getAccountMap, setAccountMap, suggestMap } from './mapping'
 import { fetchAccounts } from './accounts'
-import { getQboConfig } from './store'
+import { getInvoiceDelivery, getQboConfig } from './store'
 import {
   RM_CLASS_NAME,
   resolveClassPlacement,
@@ -392,7 +392,11 @@ export async function createQboInvoice(invoice: InvoiceDetail): Promise<QboInvoi
     // invoice carries nothing of its own — which is what their form does when
     // you pick a customer, and the reason the posted document matches the screen.
     billAddr: customer.billAddr,
-    billEmail: customer.email
+    billEmail: customer.email,
+    // HOW TO PAY IT, read at the moment of posting rather than copied onto the
+    // order when it was written. Empty until somebody fills it in, and empty
+    // leaves CustomerMemo exactly as it was before this existed.
+    paymentInstructions: getInvoiceDelivery().paymentInstructions
   })
 
   const res = await qboRequest<RawInvoiceResponse>({

@@ -311,6 +311,80 @@ ok(
 )
 
 // ---------------------------------------------------------------------------
+console.log('\n=== 4b. an unpaid up-front order cannot reach the packing list ===')
+// ---------------------------------------------------------------------------
+/**
+ * THE GATE IS IN THE STORE, and it has to be, because only one of the three
+ * things that move a card to Ready to ship is a person who could be shown a
+ * message. The other two are the QuickBooks status pull — which moves a card
+ * there the moment Intuit reports the invoice EMAILED — and the send-from-
+ * QuickBooks button. A check in the screen would have gated the drag and left
+ * the timer walking unpaid orders onto the packing list behind it.
+ *
+ * Two doors, both gated: the stage move, and the release
+ * `setInvoiceReadyToShip` writes.
+ */
+const upFront = inv.saveInvoice(
+  { invoiceNumber: '5010', customerName: 'Marisol Vega', invoiceDate: '2026-08-21', location: 'RM',
+    paymentTiming: 'front',
+    lines: [{ item: 'Gadget Case', productId: GADGET, quantity: 1, rate: 900 }] },
+  OWEN
+)
+ok(upFront.paymentTiming === 'front', 'the buyer pays up front')
+
+const held = inv.invoiceStageRefusal(upFront.id, 'sent')
+ok(typeof held === 'string' && held.length > 0, 'and Ready to ship says why it will not have it', String(held))
+ok(
+  inv.setInvoiceStatus(upFront.id, 'sent', OWEN) === false,
+  'THE STAGE MOVE IS REFUSED — this is the path the QuickBooks pull takes'
+)
+ok(inv.getInvoice(upFront.id).status === 'draft', 'and the card has not moved', inv.getInvoice(upFront.id).status)
+
+const released = inv.setInvoiceReadyToShip(upFront.id, true, ADA)
+ok(released.error === held, 'THE RELEASE IS REFUSED IN THE SAME WORDS — one rule, not two', String(released.error))
+ok(inv.getInvoice(upFront.id).readyToShipAt === null, 'and nothing was written')
+
+// EVERY OTHER MOVE IS STILL LEGAL. Posting it to QuickBooks is how it gets an
+// invoice to be paid against, and voiding is how a fallen-through sale ends.
+ok(inv.invoiceStageRefusal(upFront.id, 'created') === null, 'it can still be posted to QuickBooks')
+ok(inv.invoiceStageRefusal(upFront.id, 'paid') === null, 'and still reach the Payment column')
+ok(inv.setInvoiceStatus(upFront.id, 'created', OWEN) === true, 'and the post goes through')
+
+// The money arrives. Nothing else about the order changed.
+inv.setInvoicePaid(upFront.id, true, ADA)
+ok(inv.invoiceStageRefusal(upFront.id, 'sent') === null, 'PAID, AND THE GATE OPENS')
+ok(inv.setInvoiceStatus(upFront.id, 'sent', OWEN) === true, 'the card moves')
+ok(inv.setInvoiceReadyToShip(upFront.id, true, ADA).error === undefined, 'and so does the release')
+
+// TAKING IT BACK OFF IS ALWAYS ALLOWED, even once it is held again. It is the
+// correction for having put it there, and a rule that refused it would trap an
+// order somebody had just released by mistake.
+inv.setInvoicePaid(upFront.id, false, ADA)
+ok(!!inv.invoiceStageRefusal(upFront.id, 'sent'), 'withdrawing the payment holds it again')
+ok(
+  inv.setInvoiceReadyToShip(upFront.id, false, ADA).error === undefined,
+  'BUT IT CAN STILL BE TAKEN OFF THE LIST — the gate is only on the way in'
+)
+ok(inv.getInvoice(upFront.id).readyToShipAt === null, 'and it came off')
+
+// SEND ANYWAY IS THE WAY PAST IT, and stays that way — the owner's case is a
+// buyer of two years standing whose package is going out today.
+inv.setInvoiceForceReady(upFront.id, true, OWEN)
+ok(inv.invoiceStageRefusal(upFront.id, 'sent') === null, 'SEND ANYWAY OPENS THE GATE')
+ok(inv.setInvoiceReadyToShip(upFront.id, true, ADA).error === undefined, 'and the release goes through')
+
+// DELIVERY TERMS ARE ADMITTED UNPAID. The buyer pays when it lands, so holding
+// the box back waits for something that cannot happen first.
+const onDelivery = inv.saveInvoice(
+  { invoiceNumber: '5011', customerName: 'Priya Raman', invoiceDate: '2026-08-21', location: 'RM',
+    paymentTiming: 'delivery',
+    lines: [{ item: 'Gadget Case', productId: GADGET, quantity: 1, rate: 900 }] },
+  OWEN
+)
+ok(inv.invoiceStageRefusal(onDelivery.id, 'sent') === null, 'a delivery-terms order is let through unpaid')
+ok(inv.setInvoiceStatus(onDelivery.id, 'sent', OWEN) === true, 'and its card moves')
+
+// ---------------------------------------------------------------------------
 console.log('\n=== 5. PARCELS — several, each with its own carrier ===')
 // ---------------------------------------------------------------------------
 ok(validateShipment({}) !== null, 'a parcel with nothing on it is refused')

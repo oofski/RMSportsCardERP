@@ -716,5 +716,99 @@ for (const [file, text] of pointers) {
 }
 
 // ---------------------------------------------------------------------------
+console.log('\n=== how to pay it, on the invoice the buyer reads ===')
+// ---------------------------------------------------------------------------
+/**
+ * Every invoice this business sends has to say where the money goes, and until
+ * now that was typed into the message box by hand, per invoice, or left off and
+ * asked for by text afterwards.
+ *
+ * The value itself is NOT IN THIS REPOSITORY, which is public — it is typed into
+ * the running app and kept in `meta`, which does not sync. What is pinned here
+ * is the composition, and each rule below is a bug that would otherwise reach a
+ * buyer.
+ */
+const {
+  CUSTOMER_MEMO_MAX,
+  PAYMENT_INSTRUCTIONS_MAX,
+  autoSendPlan,
+  composeCustomerMemo,
+  validateInvoiceDelivery
+} = require('../src/shared/invoiceDelivery')
+
+const WIRE = 'Wire to Example Bank · routing 000000000 · account 000000000'
+
+ok(composeCustomerMemo(null, null) === '', 'nothing in, nothing out')
+ok(
+  composeCustomerMemo('Thanks for your business!', null) === 'Thanks for your business!',
+  'a message with no instructions is left exactly as it was'
+)
+ok(composeCustomerMemo(null, WIRE) === WIRE, 'instructions with no message stand alone')
+ok(
+  composeCustomerMemo('Thanks!', WIRE) === `Thanks!\n\n${WIRE}`,
+  'and together they are the message THEN how to pay, one blank line apart',
+  composeCustomerMemo('Thanks!', WIRE)
+)
+
+/**
+ * THE EMPTY CASE IS THE ONE THAT MATTERS TO THE PAYLOAD. An empty string is a
+ * value: QuickBooks stores it, and it overwrites whatever default memo the
+ * customer record would otherwise have supplied. `toQboInvoice` must omit the
+ * field entirely, and this is the assertion that it still does.
+ */
+const noMemo = toQboInvoice(detailFor([{ item: 'Grading submission fee', sku: null }]), { id: '99' }, byName, { itemsBySku: bySku }) as any
+ok(!('CustomerMemo' in noMemo), 'AN INVOICE WITH NEITHER SENDS NO CustomerMemo AT ALL')
+
+const withPay = toQboInvoice(
+  detailFor([{ item: 'Grading submission fee', sku: null }]),
+  { id: '99' },
+  byName,
+  { itemsBySku: bySku, paymentInstructions: WIRE }
+) as any
+ok(withPay.CustomerMemo?.value === WIRE, 'and one with instructions carries them to the buyer', JSON.stringify(withPay.CustomerMemo))
+
+// ALREADY PASTED IT IN BY HAND. Somebody who has been putting the wire details
+// in the message box for months keeps doing it for a while after this exists,
+// and their invoice would carry the account number twice.
+ok(
+  composeCustomerMemo(`Thanks!\n${WIRE}`, WIRE) === `Thanks!\n${WIRE}`,
+  'instructions already in the message are not added a second time'
+)
+ok(
+  composeCustomerMemo(`Thanks!\n   ${WIRE.toUpperCase()}   `, WIRE).indexOf(WIRE) === -1,
+  'compared on collapsed whitespace and case, because a paste picks up characters nobody can see'
+)
+
+// CLAMPED, and the instructions are what survives: over Intuit's limit the whole
+// invoice is refused, and an invoice that cannot be paid is worse than one whose
+// covering note stops early.
+const long = composeCustomerMemo('x'.repeat(2000), WIRE)
+ok(long.length <= CUSTOMER_MEMO_MAX, 'a huge message is clamped to what QuickBooks accepts', String(long.length))
+ok(long.endsWith(WIRE), 'AND THE PAYMENT DETAILS ARE THE HALF THAT SURVIVES')
+
+ok(validateInvoiceDelivery({ paymentInstructions: WIRE }) === null, 'ordinary instructions are fine')
+ok(
+  validateInvoiceDelivery({ paymentInstructions: 'x'.repeat(PAYMENT_INSTRUCTIONS_MAX + 1) }) !== null,
+  'and pasting four paragraphs of terms is refused HERE, while somebody is looking at the box'
+)
+
+// AUTO-SEND IS OFF UNTIL SOMEBODY SAYS. An invoice cannot be unsent.
+ok(
+  autoSendPlan({ paymentInstructions: '', autoSend: false }, { email: 'buyer@example.test' }).send === false,
+  'switched off, nothing is emailed'
+)
+ok(
+  autoSendPlan({ paymentInstructions: '', autoSend: false }, { email: null }).note === null,
+  'and somebody who never asked for it is not told about it on every invoice'
+)
+const noEmail = autoSendPlan({ paymentInstructions: '', autoSend: true }, { email: '  ' })
+ok(noEmail.send === false, 'a buyer with no email address is skipped')
+ok(typeof noEmail.note === 'string' && noEmail.note.length > 0, 'AND SAID SO — silence here reads as sent', String(noEmail.note))
+ok(
+  autoSendPlan({ paymentInstructions: '', autoSend: true }, { email: 'buyer@example.test' }).send === true,
+  'switched on, with an address, it goes'
+)
+
+// ---------------------------------------------------------------------------
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail > 0) process.exit(1)

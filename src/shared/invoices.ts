@@ -37,6 +37,7 @@
  */
 
 /** Payment terms, as QuickBooks names them. */
+import { composeCustomerMemo } from './invoiceDelivery'
 import { destinationHoldsStock } from './purchaseOrders'
 import { LOCATION_IDS } from './inventory'
 import type { Carrier, PaymentTiming } from './freight'
@@ -1119,6 +1120,18 @@ export interface QboInvoiceRefs {
   billEmail?: string | null
   /** Items keyed by lowercased SKU. Consulted BEFORE the name map. */
   itemsBySku?: Map<string, QboItemMatch>
+  /**
+   * How to pay it — the operator's standing wire/ACH note, appended to this
+   * invoice's own message. See composeCustomerMemo in @shared/invoiceDelivery
+   * for the joining rules, and why the value itself lives in `meta` and not in
+   * this repository.
+   *
+   * A REF rather than a field on the invoice because it is not a fact about the
+   * invoice: it is the same sentence on all of them, read from settings at the
+   * moment of posting. Storing a copy per invoice would freeze last year's
+   * account number onto anything raised before the bank changed.
+   */
+  paymentInstructions?: string | null
 }
 
 function trimLower(v: string | null | undefined): string {
@@ -1544,6 +1557,7 @@ export function toQboInvoice(
       ? refs.billAddr
       : null
   const email = (invoice.email ?? '').trim() || (refs.billEmail ?? '').trim()
+  const memo = composeCustomerMemo(invoice.message, refs.paymentInstructions)
 
   return {
     // Only sent when we have one. QuickBooks replaces it silently unless the
@@ -1572,7 +1586,13 @@ export function toQboInvoice(
     // memo. Intuit's names for them are the wrong way round from how they read,
     // and putting an internal note in front of a customer is the sort of mistake
     // that only gets noticed after it is sent.
-    ...(invoice.message ? { CustomerMemo: { value: invoice.message } } : {}),
+    //
+    // The message and the standing PAYMENT INSTRUCTIONS share it — an invoice
+    // the buyer cannot see how to pay is an invoice that gets paid by text
+    // message a week later. Omitted entirely when both are empty rather than
+    // sent blank: an empty string is a value, and it OVERWRITES whatever default
+    // memo the QuickBooks customer would otherwise have supplied.
+    ...(memo ? { CustomerMemo: { value: memo } } : {}),
     ...(invoice.memo ? { PrivateNote: invoice.memo } : {}),
     Line: invoice.lines.map((l) => {
       const ref = resolveLineItemRef(l, itemRefs, refs.itemsBySku)
