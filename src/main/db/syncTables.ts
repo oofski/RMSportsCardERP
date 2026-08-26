@@ -352,6 +352,14 @@ export const SYNCED_TABLES: SyncedTable[] = [
   // Invoice lines. Tier 2 so they land after the invoice they belong to on the
   // row-at-a-time recovery path.
   { table: 'invoice_lines', key: ['id'], tier: 2 },
+  // Where each slice of a sales-order line comes FROM. Tier 3, one below the
+  // line it splits, for the same reason order_shipment_lines is: a routing that
+  // landed before its line would be attached to nothing on the recovery path.
+  //
+  // invoice_unit_sources is deliberately NOT here and must never be: it is a
+  // VIEW, created by the migration on every machine, so it is schema rather than
+  // data — the same rule po_unit_destinations keeps above.
+  { table: 'invoice_line_allocations', key: ['id'], tier: 3 },
   // Which line items are in which parcel. Tier 3, one below everything it
   // names: it points at a SHIPMENT (tier 1) and at a LINE, and the line it
   // names is an invoice line at tier 2 — so it has to be the last of the four

@@ -4317,6 +4317,116 @@ function migrate(database: Database.Database): void {
   retireUnofferedCustomerTerms(database)
   setMeta(database, 'schema_version', '88')
 
+  /**
+   * v89: ONE SALES-ORDER LINE, SPLIT BY QUANTITY ACROSS SEVERAL SOURCES.
+   *
+   * The owner's words: "for each item in any sales order we can go in and for
+   * each individual case adjust where it is coming from, and then basically it
+   * corresponds back to inventory or the right dropship PO."
+   *
+   * Ten cases on one line: eight off the RM shelf, two shipped direct by a
+   * supplier. Until now a line could name exactly ONE answer, so making two of
+   * ten a dropship meant the line was all dropship or none, and the only way to
+   * say it was to split the invoice itself — which is not available on an order
+   * already in QuickBooks, and would change a document a buyer is holding.
+   *
+   * ## The deliberate mirror of purchase_order_allocations
+   *
+   * Same shape, same invariants, same back-compat mechanism, pointed the other
+   * way: a purchase splits a line across destinations its units are going TO, a
+   * sale splits a line across the places its units come FROM. Read the v67 note
+   * above this one alongside this; everything it says about I1, I5 and the zero
+   * rows case is true here word for word. @shared/invoiceAllocations is the
+   * shared half.
+   *
+   * ## THE MIGRATION WRITES NO ALLOCATION ROW FOR ANY EXISTING SALE. EVER.
+   *
+   * That is the whole back-compat contract, and `effectiveSlices` is the single
+   * function that keeps it: a line with zero allocation rows IS one implicit
+   * slice of its whole quantity at the line's own destination and source order.
+   * Every sales order in every copy of this database has zero rows here and goes
+   * on behaving byte for byte as it did.
+   *
+   * ## What a split does NOT touch
+   *
+   * The line's quantity, rate and amount. Splitting says where units come from,
+   * not what was sold — eight at $900 plus two at $900 is ten at $900 — which is
+   * exactly why it is safe on a posted order. See setInvoiceLineRouting.
+   *
+   * `destination` is stored RESOLVED and NOT NULL, unlike a line's, which is
+   * nullable so it can inherit the header. An allocation exists only because
+   * somebody went in and answered "where does this case come from" per case, and
+   * that answer is a statement about specific units rather than a default worth
+   * following. Inheritance at this level would also give the same case two
+   * possible answers depending on which way it was read.
+   *
+   * NOT a foreign key on source_po_id, for the reason the v33 and v87 notes give:
+   * a purchase order deleted after a sale went out must not take the sale's
+   * routing with it.
+   */
+  database.exec(
+    `CREATE TABLE IF NOT EXISTS invoice_line_allocations (
+       id              TEXT PRIMARY KEY,
+       invoice_id      TEXT NOT NULL,
+       invoice_line_id TEXT NOT NULL,
+       quantity        INTEGER NOT NULL,
+       destination     TEXT NOT NULL,
+       supplier        TEXT,
+       source_po_id    TEXT,
+       position        INTEGER NOT NULL DEFAULT 0,
+       created_at      TEXT NOT NULL,
+       updated_at      TEXT NOT NULL,
+       FOREIGN KEY (invoice_id)      REFERENCES invoices (id)      ON DELETE CASCADE,
+       FOREIGN KEY (invoice_line_id) REFERENCES invoice_lines (id) ON DELETE CASCADE
+     );
+     CREATE INDEX IF NOT EXISTS idx_inv_alloc_invoice ON invoice_line_allocations (invoice_id);
+     CREATE INDEX IF NOT EXISTS idx_inv_alloc_line    ON invoice_line_allocations (invoice_line_id);
+
+     -- THE one definition of where each SOLD unit comes from. Every query that
+     -- counts shelf units against dropship units reads this, so there is no
+     -- second place to get it wrong -- which is the failure the buy side wrote
+     -- po_unit_destinations to prevent, and this is that view's mirror.
+     --
+     -- First arm: lines that were split, one row per allocation.
+     -- Second arm: lines that were not, one row carrying the whole quantity.
+     -- A sale written before today produces exactly the rows it produced before,
+     -- with the header inheritance the old subqueries spelled out inline.
+     --
+     -- The stock-bound test in SQL is destination IN (RM, AM), which duplicates
+     -- LOCATION_IDS; tests assert the two agree.
+     --
+     -- NO BACKTICKS in these comments: this whole block is a template literal
+     -- and one would end it hundreds of lines from the error it caused.
+     CREATE VIEW IF NOT EXISTS invoice_unit_sources AS
+       SELECT l.invoice_id, l.id AS invoice_line_id, l.position, l.product_id,
+              a.id AS allocation_id, a.position AS slice_position,
+              a.quantity, a.supplier, a.destination, a.source_po_id
+         FROM invoice_lines l
+         JOIN invoice_line_allocations a ON a.invoice_line_id = l.id
+       UNION ALL
+       SELECT l.invoice_id, l.id, l.position, l.product_id,
+              NULL, 0,
+              l.quantity, l.supplier,
+              COALESCE(NULLIF(TRIM(l.destination), ''), i.location, 'RM'),
+              l.source_po_id
+         FROM invoice_lines l
+         JOIN invoices i ON i.id = l.invoice_id
+        WHERE NOT EXISTS
+          (SELECT 1 FROM invoice_line_allocations a WHERE a.invoice_line_id = l.id);`
+  )
+  // WHICH SLICE a stock move was taken for.
+  //
+  // Required rather than tidy. applyInvoiceStock used to key its result on the
+  // LINE's position, which was a unique answer while a line had one source. A
+  // line split into "six out of PO-0042" and "four ordinary FIFO" produces two
+  // moves at one position, and a map keyed on position would silently keep one
+  // of them -- so half the line's units would look unfulfilled, and a release
+  // would still hand both back because release reads rows, not the map.
+  //
+  // NULL on every move an unsplit line writes, which is nearly all of them.
+  addColumnIfMissing(database, 'invoice_stock_moves', 'allocation_id', 'TEXT')
+  setMeta(database, 'schema_version', '89')
+
   // v41: re-derive every product's average cost from its remaining cost layers.
   //
   // The average used to be stored rounded to the cent, back when every total in

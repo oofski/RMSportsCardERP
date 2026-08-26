@@ -1,19 +1,29 @@
 import { useState } from 'react'
-import type { InvoiceDetail } from '@shared/invoices'
+import type { InvoiceDetail, InvoiceLine } from '@shared/invoices'
+import {
+  allocationProblem,
+  allocationTotal,
+  dropUnitsOf,
+  stockUnitsOf,
+  type InvoiceLineAllocation
+} from '@shared/invoiceAllocations'
 import { destinationHoldsStock } from '@shared/purchaseOrders'
 import { api } from '../../lib/api'
 import { Button, Modal } from '../../components/ui'
 import { Icon } from '../../components/Icon'
 import { useToast } from '../../components/Toast'
 import { DestinationSelect } from '../invoicing/PartySelect'
+import { newDraftKey } from '../invoicing/helpers'
 import { SourceOrderPicker } from './SourceOrderPicker'
 
 /**
- * WHERE THE LINES OF A POSTED SALE ARE FULFILLED FROM.
+ * WHERE THE LINES OF A POSTED SALE ARE FULFILLED FROM — case by case.
  *
  * The owner's words: "on a sales order that is posted into QuickBooks I want the
  * ability to change the destination and supplier if needed, for our own purposes
- * and inventory — not the QuickBooks."
+ * and inventory — not the QuickBooks." And then: "for each individual case
+ * adjust where it is coming from, and it corresponds back to inventory or the
+ * right dropship PO."
  *
  * ## Why this is a separate screen and not the invoice form
  *
@@ -29,6 +39,13 @@ import { SourceOrderPicker } from './SourceOrderPicker'
  * should. So it gets its own control, editable for the life of the order, and it
  * writes three columns and re-derives the stock — see setInvoiceLineRouting.
  *
+ * ## Splitting a line does not split the invoice
+ *
+ * Eight at $900 plus two at $900 is ten at $900. The quantity, the rate and the
+ * amount are never written by this screen, which is exactly what makes it safe
+ * on an order somebody has already been billed for: the line stays the line, and
+ * the split hangs off it. See @shared/invoiceAllocations.
+ *
  * ## The consequences are on the screen, not in a comment
  *
  * Two of them are real and neither is obvious, so both are said out loud before
@@ -36,6 +53,17 @@ import { SourceOrderPicker } from './SourceOrderPicker'
  * order waits for somebody to confirm the goods are in hand before it can be
  * called ready to ship.
  */
+
+/** One row of the split editor. Ids are minted on the way in, not here. */
+type DraftSlice = {
+  key: string
+  quantity: number
+  /** Always a real destination — a split has no header to inherit from. */
+  destination: string
+  /** '' means ordinary FIFO stock, exactly as the single-line picker means it. */
+  sourcePoId: string
+}
+
 export function RouteLinesModal({
   invoice,
   onClose,
@@ -59,12 +87,67 @@ export function RouteLinesModal({
    * exactly that — leave it alone.
    */
   const [sources, setSources] = useState<Record<string, string>>({})
+  /**
+   * Line id -> the line broken up by quantity. Only what has been touched.
+   *
+   * THREE STATES, and they are three different instructions, matching the three
+   * the main process accepts:
+   *
+   *   key absent   leave whatever splits the line already has
+   *   []           collapse it back to one line with one answer
+   *   [a, b, …]    these splits, replacing whatever was there
+   *
+   * An empty array is NOT the same as an absent key. "Not split" is a state this
+   * editor can return to, and it is stored as zero rows rather than as one
+   * allocation covering the whole quantity — which is what keeps an ordinary
+   * sale stored the way sales have always been stored.
+   */
+  const [splits, setSplits] = useState<Record<string, DraftSlice[]>>({})
 
   const headerLocation = (invoice.location || 'RM').trim()
   const routeOf = (lineId: string, current: string | null): string | null =>
     lineId in edits ? edits[lineId] : current
+  /** The destination a line's units come from once inheritance is resolved. */
+  const effectiveDest = (l: InvoiceLine): string =>
+    (routeOf(l.id, l.destination) ?? '').trim() || headerLocation
 
-  const routeChanged = (l: (typeof invoice.lines)[number]): boolean => {
+  /** The line's stored splits, as this editor's rows. Empty when it is unsplit. */
+  const storedSlices = (l: InvoiceLine): DraftSlice[] =>
+    l.allocations.map((a) => ({
+      key: a.id,
+      quantity: a.quantity,
+      destination: a.destination,
+      sourcePoId: a.sourcePoId ?? ''
+    }))
+  /** What the line's splits will BE, touched or not. */
+  const draftOf = (l: InvoiceLine): DraftSlice[] =>
+    l.id in splits ? splits[l.id] : storedSlices(l)
+  const isSplit = (l: InvoiceLine): boolean => draftOf(l).length > 0
+  /** The draft in the shape the shared slice rule reads. */
+  const draftAllocations = (l: InvoiceLine): InvoiceLineAllocation[] =>
+    draftOf(l).map((s) => {
+      const where = s.destination.trim() || effectiveDest(l)
+      const holdsStock = destinationHoldsStock(where)
+      return {
+        id: s.key,
+        quantity: s.quantity,
+        destination: where,
+        supplier: holdsStock ? null : where,
+        holdsStock,
+        sourcePoId: holdsStock ? s.sourcePoId || null : null,
+        sourcePoNumber: null
+      }
+    })
+
+  const setSlices = (lineId: string, rows: DraftSlice[]): void =>
+    setSplits((prev) => ({ ...prev, [lineId]: rows }))
+  const patchSlice = (l: InvoiceLine, key: string, patch: Partial<DraftSlice>): void =>
+    setSlices(
+      l.id,
+      draftOf(l).map((s) => (s.key === key ? { ...s, ...patch } : s))
+    )
+
+  const routeChanged = (l: InvoiceLine): boolean => {
     if (!(l.id in edits)) return false
     const now = (edits[l.id] ?? '').trim()
     const was = (l.destination ?? '').trim()
@@ -74,30 +157,76 @@ export function RouteLinesModal({
     // for nothing.
     return (now || headerLocation).toLowerCase() !== (was || headerLocation).toLowerCase()
   }
-  const sourceChanged = (l: (typeof invoice.lines)[number]): boolean =>
+  const sourceChanged = (l: InvoiceLine): boolean =>
     l.id in sources && (sources[l.id] || '') !== (l.sourcePoId || '')
+  /** Serialised so "same rows, re-keyed" does not read as a change. */
+  const sliceKey = (rows: DraftSlice[]): string =>
+    rows.map((s) => `${s.quantity}|${s.destination.trim().toLowerCase()}|${s.sourcePoId}`).join('/')
+  const splitChanged = (l: InvoiceLine): boolean =>
+    l.id in splits && sliceKey(splits[l.id]) !== sliceKey(storedSlices(l))
 
-  const changed = invoice.lines.filter((l) => routeChanged(l) || sourceChanged(l))
+  const changed = invoice.lines.filter(
+    (l) => routeChanged(l) || sourceChanged(l) || splitChanged(l)
+  )
+
+  /**
+   * WHY SAVE IS REFUSED, said as arithmetic rather than as an error code.
+   *
+   * Σ splits must equal the line's quantity. A line of ten split into six and
+   * three is not a line of nine — it is a line of ten with a case coming from
+   * nowhere, drawing no shelf and appearing on no purchase order. The main
+   * process refuses it too; this is so nobody has to press Save to find out.
+   */
+  const problems = changed
+    .map((l) => {
+      const rows = draftOf(l)
+      if (rows.length === 0) return null
+      const problem = allocationProblem(rows, l.quantity)
+      return problem ? `${l.item}: ${problem}` : null
+    })
+    .filter((p): p is string => p !== null)
 
   // What the shelf will do, said before it happens rather than discovered after.
+  // Counted in UNITS through the shared slice rule, because a split line is
+  // partly on the shelf and partly not — a whole-line count would put all ten
+  // cases on one side of that and name a number nobody is going to see.
   let backToShelf = 0
   let offTheShelf = 0
   for (const l of changed) {
-    if (!l.productId || !routeChanged(l)) continue
-    const wasStock = destinationHoldsStock((l.destination ?? '').trim() || headerLocation)
-    const nowStock = destinationHoldsStock((edits[l.id] ?? '').trim() || headerLocation)
-    if (wasStock && !nowStock) backToShelf += l.quantity
-    if (!wasStock && nowStock) offTheShelf += l.quantity
+    if (!l.productId) continue
+    const was = stockUnitsOf(
+      {
+        quantity: l.quantity,
+        destination: l.destination,
+        supplier: l.supplier,
+        sourcePoId: l.sourcePoId,
+        allocations: l.allocations
+      },
+      headerLocation
+    )
+    const now = stockUnitsOf(
+      {
+        quantity: l.quantity,
+        destination: effectiveDest(l),
+        allocations: draftAllocations(l)
+      },
+      headerLocation
+    )
+    if (now > was) offTheShelf += now - was
+    if (was > now) backToShelf += was - now
   }
 
-  const willHaveDropship = invoice.lines.some((l) => {
-    const dest = (routeOf(l.id, l.destination) ?? '').trim() || headerLocation
-    return !destinationHoldsStock(dest)
-  })
+  const willHaveDropship = invoice.lines.some(
+    (l) =>
+      dropUnitsOf(
+        { quantity: l.quantity, destination: effectiveDest(l), allocations: draftAllocations(l) },
+        headerLocation
+      ) > 0
+  )
   const hasDropshipNow = invoice.lines.some((l) => l.dropship)
 
   const save = async (): Promise<void> => {
-    if (changed.length === 0) return
+    if (changed.length === 0 || problems.length > 0) return
     setBusy(true)
     try {
       const res = await api.invoices.setLineRouting(
@@ -112,7 +241,18 @@ export function RouteLinesModal({
           supplier: null,
           // Absent unless somebody touched it, so a route-only change leaves a
           // roadshow pointer exactly where it was.
-          ...(l.id in sources ? { sourcePoId: sources[l.id] || null } : {})
+          ...(l.id in sources ? { sourcePoId: sources[l.id] || null } : {}),
+          // Same rule again: absent means leave the splits alone, [] means
+          // collapse the line back to one answer.
+          ...(l.id in splits
+            ? {
+                allocations: splits[l.id].map((s) => ({
+                  quantity: s.quantity,
+                  destination: s.destination.trim() || null,
+                  sourcePoId: s.sourcePoId || null
+                }))
+              }
+            : {})
         }))
       )
       if (!res.ok) {
@@ -144,13 +284,15 @@ export function RouteLinesModal({
           <Button
             variant="primary"
             icon="Check"
-            disabled={changed.length === 0 || busy}
+            disabled={changed.length === 0 || problems.length > 0 || busy}
             loading={busy}
             onClick={() => void save()}
           >
             {changed.length === 0
               ? 'Nothing changed'
-              : `Save ${changed.length} line${changed.length === 1 ? '' : 's'}`}
+              : problems.length > 0
+                ? 'The splits do not add up'
+                : `Save ${changed.length} line${changed.length === 1 ? '' : 's'}`}
           </Button>
         </>
       }
@@ -162,10 +304,11 @@ export function RouteLinesModal({
         invoice the buyer is holding.
       </p>
       <p className="fin-confirm-lead">
-        A line that DOES come off a shelf may also say <b>whose cases</b> it takes — a roadshow
-        week, or any purchase order still holding that product. That decides where its{' '}
-        <b>cost</b> comes from, and it shows up on that purchase order&rsquo;s history as well as
-        this sale&rsquo;s.
+        A line of several cases can be <b>split</b>, so each case says where it comes from on its
+        own — eight off the shelf and two shipped direct is one line with two answers. And a line
+        that DOES come off a shelf may say <b>whose cases</b> it takes: a roadshow week, or any
+        purchase order still holding that product. That decides where its <b>cost</b> comes from,
+        and it shows up on that purchase order&rsquo;s history as well as this sale&rsquo;s.
       </p>
 
       <table className="data po-lines-table">
@@ -180,6 +323,14 @@ export function RouteLinesModal({
           {invoice.lines.map((l) => {
             const dest = routeOf(l.id, l.destination)
             const drop = !destinationHoldsStock((dest ?? '').trim() || headerLocation)
+            const rows = draftOf(l)
+            const split = isSplit(l)
+            const assigned = allocationTotal(rows)
+            const remainder = Math.max(0, l.quantity - assigned)
+            const problem = split ? allocationProblem(rows, l.quantity) : null
+            const firstDropKey =
+              rows.find((s) => !destinationHoldsStock(s.destination.trim() || effectiveDest(l)))
+                ?.key ?? null
             return (
               <tr key={l.id}>
                 <td>
@@ -192,36 +343,213 @@ export function RouteLinesModal({
                       a grading fee, a one-off typed by hand — so re-routing it
                       claims something about goods that do not exist. Shown as
                       what it is rather than offered as a choice. */}
-                  {l.productId ? (
-                    <DestinationSelect
-                      className={`po-route-party${dest ? '' : ' is-inherited'}`}
-                      ariaLabel={`Fulfilled from, for ${l.item}`}
-                      value={dest || null}
-                      blankLabel={`Same as order (${headerLocation})`}
-                      drop={drop}
-                      onChange={(d) => setEdits((prev) => ({ ...prev, [l.id]: d ?? '' }))}
-                    />
-                  ) : (
+                  {!l.productId ? (
                     <span className="muted">not a stocked item</span>
-                  )}
-                  {/* WHOSE CASES, once it is established that it takes any.
-                      
-                      The second question, and only ever asked of a line that
-                      comes off a shelf: a dropship line went supplier-to-buyer
-                      and never sat on one, so there is no order's stock to sell
-                      out of. The same picker the invoice form shows on a draft,
-                      answering the same question — it renders nothing at all
-                      unless some purchase order actually holds this product on
-                      this shelf, which is almost never. */}
-                  {l.productId && !drop && (
-                    <SourceOrderPicker
-                      productId={l.productId}
-                      productName={l.item}
-                      location={(dest ?? '').trim() || headerLocation}
-                      quantity={l.quantity}
-                      value={l.id in sources ? sources[l.id] : (l.sourcePoId ?? '')}
-                      onChange={(poId) => setSources((prev) => ({ ...prev, [l.id]: poId }))}
-                    />
+                  ) : split ? (
+                    <>
+                      <div className="po-ld-splits-head">
+                        <span className="po-ld-splits-title">
+                          <Icon name="Split" size={15} />
+                          Where these {l.quantity} come from
+                        </span>
+                        <button
+                          type="button"
+                          className="btn btn-sm po-ld-add"
+                          disabled={remainder < 1}
+                          title={
+                            remainder < 1
+                              ? 'Every case is already accounted for — take some off a split to make room.'
+                              : `Adds a split of ${remainder}`
+                          }
+                          onClick={() =>
+                            setSlices(l.id, [
+                              ...rows,
+                              {
+                                key: newDraftKey(),
+                                quantity: Math.max(1, remainder),
+                                destination: effectiveDest(l),
+                                sourcePoId: ''
+                              }
+                            ])
+                          }
+                        >
+                          <Icon name="Plus" size={14} /> Add split
+                        </button>
+                      </div>
+                      <div className="po-ld-rows">
+                        {rows.map((s, i) => {
+                          const where = s.destination.trim() || effectiveDest(l)
+                          const sliceDrop = !destinationHoldsStock(where)
+                          return (
+                            <div key={s.key}>
+                              <div
+                                className={`po-ld-splitrow so-slice-row${sliceDrop ? ' is-drop' : ''}`}
+                              >
+                                <span className="po-ld-splitn">{i + 1}</span>
+                                <span className="po-ld-step">
+                                  <button
+                                    type="button"
+                                    className="po-deliv-btn"
+                                    aria-label={`One fewer case in split ${i + 1} of ${l.item}`}
+                                    disabled={s.quantity <= 1}
+                                    onClick={() => patchSlice(l, s.key, { quantity: s.quantity - 1 })}
+                                  >
+                                    <Icon name="Minus" size={14} />
+                                  </button>
+                                  <input
+                                    className="po-deliv-num mono"
+                                    inputMode="numeric"
+                                    aria-label={`Cases in split ${i + 1} of ${l.item}`}
+                                    value={String(s.quantity)}
+                                    onChange={(e) =>
+                                      patchSlice(l, s.key, {
+                                        quantity: Math.max(
+                                          0,
+                                          parseInt(e.target.value.replace(/\D+/g, ''), 10) || 0
+                                        )
+                                      })
+                                    }
+                                  />
+                                  <button
+                                    type="button"
+                                    className="po-deliv-btn"
+                                    aria-label={`One more case in split ${i + 1} of ${l.item}`}
+                                    onClick={() => patchSlice(l, s.key, { quantity: s.quantity + 1 })}
+                                  >
+                                    <Icon name="Plus" size={14} />
+                                  </button>
+                                </span>
+                                <DestinationSelect
+                                  className="po-ld-splitfield"
+                                  ariaLabel={`Where split ${i + 1} of ${l.item} comes from`}
+                                  value={s.destination || null}
+                                  drop={sliceDrop}
+                                  onChange={(d) =>
+                                    patchSlice(l, s.key, {
+                                      destination: d ?? '',
+                                      // A split that stops coming off a shelf
+                                      // cannot go on naming whose cases it
+                                      // takes — it consumes no cost layers at
+                                      // all. Cleared here so the stored row and
+                                      // the screen never disagree.
+                                      ...(destinationHoldsStock(d ?? '')
+                                        ? {}
+                                        : { sourcePoId: '' })
+                                    })
+                                  }
+                                />
+                                <button
+                                  type="button"
+                                  className="btn btn-ghost btn-sm po-ld-splitdrop"
+                                  aria-label={`Remove split ${i + 1} of ${l.item}`}
+                                  title="Remove this split"
+                                  onClick={() =>
+                                    setSlices(
+                                      l.id,
+                                      rows.filter((r) => r.key !== s.key)
+                                    )
+                                  }
+                                >
+                                  <Icon name="Trash2" size={15} />
+                                </button>
+                              </div>
+                              {!sliceDrop && (
+                                <SourceOrderPicker
+                                  productId={l.productId as string}
+                                  productName={l.item}
+                                  location={where}
+                                  quantity={s.quantity}
+                                  value={s.sourcePoId}
+                                  onChange={(poId) => patchSlice(l, s.key, { sourcePoId: poId })}
+                                />
+                              )}
+                              {/* Said once, under the first dropship split: it
+                                  is the one consequence of this row that is
+                                  invisible anywhere else. */}
+                              {s.key === firstDropKey && (
+                                <p className="po-ld-dropnote">
+                                  <Icon name="Truck" size={14} />
+                                  These cases go straight from the supplier to the buyer — they
+                                  never touch a shelf here, so they come back off it.
+                                </p>
+                              )}
+                            </div>
+                          )
+                        })}
+                      </div>
+                      <div className={`po-ld-guard${problem ? ' is-bad' : ''}`} role="status">
+                        <Icon name={problem ? 'AlertTriangle' : 'Check'} size={14} />
+                        <span>
+                          <b className="mono">{assigned}</b> of <b className="mono">{l.quantity}</b>{' '}
+                          accounted for{problem ? ` — ${problem}` : ' — the splits add up.'}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm so-split-toggle"
+                        onClick={() => setSlices(l.id, [])}
+                      >
+                        <Icon name="ChevronsDownUp" size={14} /> Stop splitting — all {l.quantity}{' '}
+                        from one place
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <DestinationSelect
+                        className={`po-route-party${dest ? '' : ' is-inherited'}`}
+                        ariaLabel={`Fulfilled from, for ${l.item}`}
+                        value={dest || null}
+                        blankLabel={`Same as order (${headerLocation})`}
+                        drop={drop}
+                        onChange={(d) => setEdits((prev) => ({ ...prev, [l.id]: d ?? '' }))}
+                      />
+                      {/* WHOSE CASES, once it is established that it takes any.
+
+                          The second question, and only ever asked of a line that
+                          comes off a shelf: a dropship line went supplier-to-buyer
+                          and never sat on one, so there is no order's stock to sell
+                          out of. The same picker the invoice form shows on a draft,
+                          answering the same question — it renders nothing at all
+                          unless some purchase order actually holds this product on
+                          this shelf, which is almost never. */}
+                      {!drop && (
+                        <SourceOrderPicker
+                          productId={l.productId}
+                          productName={l.item}
+                          location={(dest ?? '').trim() || headerLocation}
+                          quantity={l.quantity}
+                          value={l.id in sources ? sources[l.id] : (l.sourcePoId ?? '')}
+                          onChange={(poId) => setSources((prev) => ({ ...prev, [l.id]: poId }))}
+                        />
+                      )}
+                      {/* ONLY OFFERED ON A LINE OF MORE THAN ONE. Splitting a
+                          single case has no meaning it could express, and the
+                          guard rail would refuse every arrangement of it. */}
+                      {l.quantity > 1 && (
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm so-split-toggle"
+                          onClick={() =>
+                            setSlices(l.id, [
+                              {
+                                key: newDraftKey(),
+                                quantity: l.quantity - 1,
+                                destination: effectiveDest(l),
+                                sourcePoId: l.id in sources ? sources[l.id] : (l.sourcePoId ?? '')
+                              },
+                              {
+                                key: newDraftKey(),
+                                quantity: 1,
+                                destination: effectiveDest(l),
+                                sourcePoId: ''
+                              }
+                            ])
+                          }
+                        >
+                          <Icon name="Split" size={14} /> Split these {l.quantity} up
+                        </button>
+                      )}
+                    </>
                   )}
                 </td>
               </tr>
@@ -264,9 +592,10 @@ export function RouteLinesModal({
         <Icon name="Info" size={14} />
         <span>
           Nothing here reaches QuickBooks. This app cannot amend an invoice Intuit already has, and
-          does not try — the buyer&rsquo;s document stays exactly as it was sent. What changes is
-          your inventory, your cost of goods on this sale, and what the board says about where the
-          goods are coming from.
+          does not try — the buyer&rsquo;s document stays exactly as it was sent. Splitting a line
+          does not split what was billed either: eight at one price plus two at the same price is
+          still ten at that price. What changes is your inventory, your cost of goods on this sale,
+          and what the board says about where the goods are coming from.
         </span>
       </p>
     </Modal>

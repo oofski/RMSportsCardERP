@@ -55,11 +55,37 @@ import {
  * not a feature it keeps.
  */
 
-/** One product line's worth of an order, as the stock side needs it. */
+/**
+ * One SLICE of a product line, as the stock side needs it.
+ *
+ * A slice, not a line, since a line may be split by quantity: "eight off RM out
+ * of PO-0042, two shipped direct by Kestrel" is one line and one entry here, the
+ * dropship half having been filtered out before it got this far. An unsplit line
+ * is one slice carrying its whole quantity, which is every line written before
+ * splits existed. See stockDrawingLines, which is the only thing that builds
+ * these, and @shared/invoiceAllocations for the rule it applies.
+ */
 export interface InvoiceStockLine {
   position: number
+  /**
+   * Which slice this is, when the line was split. Null on an unsplit line.
+   *
+   * Carried so the move row can name it. Two slices of one line share a
+   * position, so position alone stopped being a unique answer the moment splits
+   * landed — and a map keyed on it would silently keep one of the two.
+   */
+  allocationId?: string | null
   productId: string
   quantity: number
+  /**
+   * WHICH SHELF, when the slice names one of its own.
+   *
+   * Absent means the order's location, which is what every caller passed before
+   * a line could carry a destination at all. A split saying "six off RM, four
+   * off AM" needs the difference: handing the header's shelf to both would take
+   * ten off one of them and leave the other untouched.
+   */
+  location?: string | null
   /**
    * The purchase order these particular units came out of, when the operator
    * said so. Null on every ordinary line, which walks FIFO exactly as it always
@@ -87,9 +113,11 @@ function poNumberOf(db: Database.Database, poId: string): string {
   }
 }
 
-/** What one line took, for the receipt and for the Wholesale report. */
+/** What one slice took, for the receipt and for the Wholesale report. */
 export interface InvoiceStockMove {
   position: number
+  /** The slice it was taken for, or null on an unsplit line. */
+  allocationId: string | null
   productId: string
   location: string
   quantity: number
@@ -180,10 +208,15 @@ export function releaseInvoiceStock(db: Database.Database, invoiceId: string): n
 /**
  * Take the order's stock off the shelf and write the receipt.
  *
- * One ledger transaction per LINE rather than per product, because the Wholesale
- * report is a line-by-line margin and an order may list the same box twice at
- * two prices. Rolling those into one transaction would give both lines a cost
- * that is neither of theirs.
+ * One ledger transaction per SLICE rather than per product, because the
+ * Wholesale report is a line-by-line margin and an order may list the same box
+ * twice at two prices. Rolling those into one transaction would give both lines
+ * a cost that is neither of theirs.
+ *
+ * A slice is a whole unsplit line on nearly every order. A line split by
+ * quantity contributes one entry per stock slice, so "six out of PO-0042 and
+ * four ordinary FIFO" writes two transactions and two moves at different costs —
+ * which is the honest answer, and the reason the move row names the allocation.
  *
  * ## A short shelf CLAMPS; it does not refuse
  *
@@ -201,8 +234,9 @@ export function releaseInvoiceStock(db: Database.Database, invoiceId: string): n
  * somebody scans it, or on the next save of the order once it is on the shelf.
  * Nothing is ever invented and nothing goes negative.
  *
- * The clamp is re-read PER LINE, so two lines of the same product against one
- * short shelf split what there is in line order rather than both claiming it.
+ * The clamp is re-read PER SLICE, so two lines of the same product against one
+ * short shelf split what there is in line order rather than both claiming it —
+ * and so do two stock slices of the SAME line.
  *
  * MUST be called inside the caller's db.transaction().
  */
@@ -218,19 +252,26 @@ export function applyInvoiceStock(
   const stamp = nowIso()
   const insertMove = db.prepare(
     `INSERT INTO invoice_stock_moves
-       (id, invoice_id, line_position, product_id, location, quantity, cost_total, txn_id, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       (id, invoice_id, line_position, allocation_id, product_id, location, quantity,
+        cost_total, txn_id, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   )
   const out: InvoiceStockMove[] = []
   const touched = new Set<string>()
 
   for (const line of lines) {
+    // THE SLICE'S OWN SHELF WHEN IT NAMES ONE. Only a split line ever does; an
+    // unsplit line leaves it absent and gets the order's location, which is the
+    // only thing this function had before.
+    const shelf = isLocation((line.location ?? '').trim())
+      ? (line.location as string).trim()
+      : location
     const fractional = allowsFractionalQty(db, line.productId)
     const asked = roundQty(line.quantity, fractional)
     if (!(asked > 0)) continue
     // What the shelf can actually give, read fresh so two lines of the same
     // product cannot both claim the last box.
-    const have = roundQty(Math.max(0, stockQty(line.productId, location)), fractional)
+    const have = roundQty(Math.max(0, stockQty(line.productId, shelf)), fractional)
     const fromPo = (line.sourcePoId ?? '').trim()
     /**
      * A LINE THAT NAMES AN ORDER IS NOT TRIMMED TO THE SHELF.
@@ -251,10 +292,10 @@ export function applyInvoiceStock(
     // The shelf first, then the layers — the same order recordSale uses, so a
     // layer shortfall throws with the stock already decremented inside a
     // transaction that is about to roll back.
-    bumpStock(line.productId, location, -qty)
+    bumpStock(line.productId, shelf, -qty)
     const slices = fromPo
-      ? consumeFromPo(db, line.productId, location, qty, fromPo, poNumberOf(db, fromPo))
-      : consumeFifo(db, line.productId, location, qty)
+      ? consumeFromPo(db, line.productId, shelf, qty, fromPo, poNumberOf(db, fromPo))
+      : consumeFifo(db, line.productId, shelf, qty)
     const cost = slicesCost(slices)
 
     // A real ledger row, of the same type and shape a counter sale writes. It is
@@ -268,7 +309,7 @@ export function applyInvoiceStock(
       customerName,
       invoiceNumber ? `Sales order ${invoiceNumber}` : 'Sales order',
       actorId,
-      location,
+      shelf,
       cost
     )
     recordTxnLots(db, txnId, slices, false)
@@ -276,8 +317,9 @@ export function applyInvoiceStock(
       newId(),
       invoiceId,
       line.position,
+      line.allocationId ?? null,
       line.productId,
-      location,
+      shelf,
       qty,
       cost,
       txnId,
@@ -285,8 +327,9 @@ export function applyInvoiceStock(
     )
     out.push({
       position: line.position,
+      allocationId: line.allocationId ?? null,
       productId: line.productId,
-      location,
+      location: shelf,
       quantity: qty,
       costTotal: cost
     })
@@ -317,6 +360,13 @@ export function applyInvoiceStock(
  *
  * VOID ORDERS. Voiding releases the stock, so a void order has no moves left to
  * join to — the exclusion below is belt and braces rather than the mechanism.
+ *
+ * A SPLIT LINE APPEARS ONCE PER STOCK SLICE, joined to the same line and so
+ * reported at the same rate. That is deliberate: the two halves came off the
+ * shelf at different costs — one out of a named purchase order, one walking
+ * ordinary FIFO — so they are two margins, and rolling them into one row would
+ * report an average nobody made. Revenue still sums to the line's, because each
+ * row is its own quantity × the shared rate.
  *
  * LEGACY ROWS COST NOTHING. A move written by the v68 backfill records units
  * that left through a scan before this table existed, and their layers are not

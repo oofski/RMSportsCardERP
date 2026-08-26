@@ -60,6 +60,7 @@ import type {
   QboInvoicePreflight,
   WholesaleSaleRow
 } from '@shared/invoices'
+import type { InvoiceAllocationInput } from '@shared/invoiceAllocations'
 import type {
   LinkablePurchaseOrder,
   NewOrderShipment,
@@ -1999,6 +2000,12 @@ export function createBridge(ipcRenderer: BridgeTransport) {
           supplier: string | null
           /** Omit to leave it; null to clear it. See setInvoiceLineRouting. */
           sourcePoId?: string | null
+          /**
+           * The line SPLIT BY QUANTITY, so each case can come from its own
+           * place. Omit to leave the splits alone; an empty array collapses the
+           * line back to one answer. See @shared/invoiceAllocations.
+           */
+          allocations?: InvoiceAllocationInput[]
         }>
       ): Promise<Result<InvoiceDetail>> =>
         ipcRenderer.invoke(IPC.invoiceSetLineRouting, { id, changes }),

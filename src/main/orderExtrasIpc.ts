@@ -710,6 +710,19 @@ export function registerOrderExtrasIpc(): void {
           // rather than being flattened to null by str().
           ...('sourcePoId' in (c ?? {})
             ? { sourcePoId: str(c?.sourcePoId).trim() || null }
+            : {}),
+          // AND SO DO UNDEFINED AND EMPTY here. Absent leaves whatever splits
+          // the line has; [] collapses it back to one answer and deletes the
+          // rows. Flattening one into the other would either wipe a split
+          // somebody made or make "not split" unreachable.
+          ...(Array.isArray(c?.allocations)
+            ? {
+                allocations: (c.allocations as Array<Record<string, unknown>>).map((a) => ({
+                  quantity: Math.trunc(Number(a?.quantity) || 0),
+                  destination: str(a?.destination).trim() || null,
+                  sourcePoId: str(a?.sourcePoId).trim() || null
+                }))
+              }
             : {})
         }))
         if (changes.some((c) => !c.lineId)) {

@@ -1627,21 +1627,45 @@ console.log('\n=== WHOSE CASES A POSTED LINE TAKES, and both histories saying so
   /**
    * `undefined` and `null` are different answers. A caller changing only the
    * destination must not silently drop a pointer somebody set last week.
+   *
+   * PINNED THROUGH A REFUSAL, which is a stronger statement than a success
+   * would be. This roadshow's cases came in on RM, so moving the line to AM
+   * while it still claims them is a contradiction — "these two come off the AM
+   * shelf, out of an order whose stock is on RM" — and it is refused by name.
+   * Had `undefined` been flattened to null the pointer would be gone, the line
+   * would claim nothing, and moving it to AM would sail straight through. The
+   * refusal IS the evidence the pointer survived the crossing.
+   *
+   * It used to be asserted the other way round, as "a route-only change is
+   * allowed", and it passed for the wrong reason: applyInvoiceStock drew every
+   * line from the ORDER's shelf and ignored the line's own, so a line saying AM
+   * quietly took two cases off RM. A split line can name two shelves at once,
+   * so that shortcut had to go — see stockDrawingLines.
    */
   inv.setInvoiceLineRouting(
     sale.id,
     [{ lineId: line.id, destination: 'RM', supplier: null, sourcePoId: roadshow.id }],
     null
   )
-  ok(
-    !inv.setInvoiceLineRouting(sale.id, [{ lineId: line.id, destination: 'AM', supplier: null }], null)
-      .error,
-    'a route-only change is allowed'
+  const wrongShelf = inv.setInvoiceLineRouting(
+    sale.id,
+    [{ lineId: line.id, destination: 'AM', supplier: null }],
+    null
   )
+  ok(
+    !!wrongShelf.error,
+    'A LINE CANNOT TAKE AN ORDER’S CASES OFF A SHELF THEY ARE NOT ON',
+    String(wrongShelf.error)
+  )
+  ok(/AM shelf/i.test(wrongShelf.error ?? ''), 'and the refusal names the shelf', String(wrongShelf.error))
   ok(
     inv.getInvoice(sale.id).lines[0].sourcePoId === roadshow.id,
     'AND LEAVES THE PURCHASE ORDER POINTER EXACTLY WHERE IT WAS',
     String(inv.getInvoice(sale.id).lines[0].sourcePoId)
+  )
+  ok(
+    (inv.getInvoice(sale.id).lines[0].destination ?? 'RM') === 'RM',
+    'and the refused destination was never written — one transaction, all or nothing'
   )
   /**
    * AND WRITES NOTHING ON THE PURCHASE ORDER, because nothing about that order
@@ -1680,7 +1704,11 @@ console.log('\n=== WHOSE CASES A POSTED LINE TAKES, and both histories saying so
     null
   )
   ok(!!short.error, 'AN ORDER THAT CANNOT COVER THE LINE IS REFUSED')
-  ok(/1 of .* not 2/i.test(short.error ?? ''), 'naming both numbers', String(short.error))
+  ok(
+    /has 1 of/i.test(short.error ?? '') && /2 more/i.test(short.error ?? ''),
+    'naming both numbers — what the order has left, and what this is asking it for',
+    String(short.error)
+  )
   ok(
     inv.getInvoice(sale.id).lines[0].sourcePoId === roadshow.id,
     'and the line is left on the order it had'
@@ -1698,6 +1726,483 @@ console.log('\n=== WHOSE CASES A POSTED LINE TAKES, and both histories saying so
     dropped.sourcePoId === null,
     'AND NAMES NO PURCHASE ORDER — it consumes no cost layers, so it cannot say whose',
     String(dropped.sourcePoId)
+  )
+}
+
+console.log('\n=== ONE LINE, SPLIT BY CASE, EACH CASE FROM ITS OWN PLACE ===')
+// ---------------------------------------------------------------------------
+/**
+ * The owner's words: "for each item in any sales order we can go in and for each
+ * individual case adjust where it is coming from, and then basically it
+ * corresponds back to inventory or the right dropship PO."
+ *
+ * Ten cases on one line: eight off the shelf, two shipped direct by a supplier.
+ * The line stays a line of ten at one price — nothing here writes a quantity, a
+ * rate or an amount, which is the whole reason it is safe on a posted order.
+ *
+ * What is being pinned:
+ *   · the split moves only the units it names, not the line
+ *   · the document is untouched — quantity, rate, amount, total
+ *   · the board counts UNITS on each side, not lines
+ *   · a split that does not add up is refused, and the refusal changes nothing
+ *   · "not split" is reachable again, and stores ZERO rows getting there
+ *   · two slices of one line can name two different purchase orders
+ */
+{
+  const poRepo = require('../src/main/db/purchaseOrders')
+  const extrasRepo = require('../src/main/db/orderExtras')
+  const qtyAt = (loc: string): number => invStock.stockQty('p_d', loc)
+
+  // Two purchase orders of the same box on the same shelf, so a split line can
+  // take some cases from each — which is the case a whole-line pointer could
+  // never express.
+  const first = poRepo.createPurchaseOrder(
+    {
+      supplier: 'Roadshow Austin',
+      location: 'RM',
+      ongoing: true,
+      lines: [{ productId: 'p_d', item: 'Dropship Hobby Box', quantity: 6, unitPrice: 300 }]
+    },
+    null
+  )
+  poRepo.setPurchaseOrderStatus(first.id, 'received', null)
+  const second = poRepo.createPurchaseOrder(
+    {
+      supplier: 'Nimbus Distribution',
+      location: 'RM',
+      lines: [{ productId: 'p_d', item: 'Dropship Hobby Box', quantity: 6, unitPrice: 500 }]
+    },
+    null
+  )
+  poRepo.setPurchaseOrderStatus(second.id, 'received', null)
+
+  const shelfBefore = qtyAt('RM')
+  const sale = inv.saveInvoice(
+    {
+      customerName: 'Split Line Buyer',
+      invoiceNumber: 'SO-9100',
+      invoiceDate: '2026-08-22',
+      location: 'RM',
+      lines: [{ item: 'Dropship Hobby Box', productId: 'p_d', quantity: 10, rate: 900 }]
+    },
+    null
+  )
+  db.prepare(`UPDATE invoices SET status = 'sent', qbo_id = 'qbo-9100' WHERE id = ?`).run(sale.id)
+  const lineId = inv.getInvoice(sale.id).lines[0].id
+
+  ok(
+    inv.getInvoice(sale.id).lines[0].allocations.length === 0,
+    'A LINE STARTS WITH NO SPLITS AT ALL — zero rows, which is what every sale ever written has',
+    String(inv.getInvoice(sale.id).lines[0].allocations.length)
+  )
+
+  // --- eight off the shelf, two shipped direct ---------------------------
+  const split = inv.setInvoiceLineRouting(
+    sale.id,
+    [
+      {
+        lineId,
+        destination: 'RM',
+        supplier: null,
+        allocations: [
+          { quantity: 8, destination: 'RM', sourcePoId: null },
+          { quantity: 2, destination: 'Kestrel Cards', sourcePoId: null }
+        ]
+      }
+    ],
+    null
+  )
+  ok(!split.error, 'A LINE OF TEN CAN BE SPLIT EIGHT AND TWO', String(split.error))
+
+  const afterSplit = inv.getInvoice(sale.id)
+  const splitLine = afterSplit.lines[0]
+  ok(splitLine.allocations.length === 2, 'the line carries two splits', String(splitLine.allocations.length))
+  ok(splitLine.quantity === 10, 'AND IS STILL A LINE OF TEN', String(splitLine.quantity))
+  ok(splitLine.rate === 900 && splitLine.amount === 9000, 'at the price it was sold at')
+  ok(afterSplit.total === sale.total, 'with the order total untouched', `${afterSplit.total} vs ${sale.total}`)
+
+  /**
+   * THE SHELF MOVED BY EIGHT, NOT BY TEN AND NOT BY NOTHING.
+   *
+   * This is the assertion the whole feature rests on. Before splits a line was
+   * all one thing, so two dropship cases on a line of ten meant the shelf gave
+   * up either all ten or none of them — one of which invents stock and the
+   * other of which sells stock this business never held.
+   */
+  ok(
+    qtyAt('RM') === shelfBefore - 8,
+    'THE SHELF GAVE EIGHT — the two dropship cases never touched it',
+    `${shelfBefore} -> ${qtyAt('RM')}`
+  )
+  ok(
+    afterSplit.stockUnits === 8 && afterSplit.dropshipUnits === 2,
+    'AND THE BOARD COUNTS UNITS ON EACH SIDE, not the whole line on one',
+    `${afterSplit.stockUnits} stock / ${afterSplit.dropshipUnits} drop`
+  )
+  ok(
+    splitLine.qtyFulfilled === 8,
+    'and the line is eight fulfilled of ten — summed across the splits, not read off one',
+    String(splitLine.qtyFulfilled)
+  )
+
+  // --- the splits can name two different purchase orders -----------------
+  const twoOrders = inv.setInvoiceLineRouting(
+    sale.id,
+    [
+      {
+        lineId,
+        destination: 'RM',
+        supplier: null,
+        allocations: [
+          { quantity: 6, destination: 'RM', sourcePoId: first.id },
+          { quantity: 4, destination: 'RM', sourcePoId: second.id }
+        ]
+      }
+    ],
+    null
+  )
+  ok(!twoOrders.error, 'SIX CASES FROM ONE ORDER AND FOUR FROM ANOTHER', String(twoOrders.error))
+  const mixed = inv.getInvoice(sale.id).lines[0]
+  ok(
+    mixed.allocations.map((a: any) => a.sourcePoId).join() === `${first.id},${second.id}`,
+    'each split names its own order',
+    mixed.allocations.map((a: any) => a.sourcePoNumber).join(' / ')
+  )
+  ok(qtyAt('RM') === shelfBefore - 10, 'and all ten now come off the shelf', String(qtyAt('RM')))
+  /**
+   * TWO STOCK SLICES OF ONE LINE, WHICH IS WHERE A MAP KEYED ON THE LINE BREAKS.
+   *
+   * `qty_fulfilled` is a per-LINE number and both slices write a move at the
+   * same line position, so it has to be the SUM. Indexed instead of summed it
+   * keeps whichever move came last, the line reads four fulfilled of ten, and
+   * the scan queue offers six units that are already in a box on a van. See
+   * movedByPosition.
+   */
+  ok(
+    mixed.qtyFulfilled === 10,
+    'AND THE LINE IS TEN FULFILLED — both slices counted, not the last one only',
+    String(mixed.qtyFulfilled)
+  )
+  const poDetail = (poId: string): string =>
+    extrasRepo
+      .listOrderEvents('po', poId)
+      .map((e: any) => e.detail ?? '')
+      .join(' | ')
+  ok(
+    /6 × Dropship Hobby Box/.test(poDetail(first.id)),
+    'AND EACH PURCHASE ORDER’S HISTORY NAMES THE NUMBER OF CASES IT SUPPLIED',
+    poDetail(first.id)
+  )
+  ok(/4 × Dropship Hobby Box/.test(poDetail(second.id)), 'both of them', poDetail(second.id))
+  /**
+   * AND SAVING THE SAME SPLITS AGAIN IS NOT REFUSED.
+   *
+   * The coverage check has to compare against the INCREASE, not the total. These
+   * six cases have already left the shelf and are not in the order's on-hand any
+   * more, so a check that read the whole claim would compare six against the
+   * nought that is left and refuse a change that takes nothing — which is every
+   * second press of Save on a line somebody is adjusting.
+   */
+  ok(
+    !inv.setInvoiceLineRouting(
+      sale.id,
+      [
+        {
+          lineId,
+          destination: 'RM',
+          supplier: null,
+          allocations: [
+            { quantity: 6, destination: 'RM', sourcePoId: first.id },
+            { quantity: 4, destination: 'RM', sourcePoId: second.id }
+          ]
+        }
+      ],
+      null
+    ).error,
+    'SAVING THE SAME SPLITS TWICE IS NOT REFUSED — the check is against the increase, not the total'
+  )
+  /**
+   * AND NO DEAL TICKET FOLDS. `soleSourceOrder` sees two purchase orders and
+   * declines — a deal ticket is a claim about ONE deal, and folding this sale
+   * into the roadshow would put a week's figure on a shop that supplied four of
+   * its ten cases.
+   */
+  const ticket = db
+    .prepare(`SELECT merged_into FROM deal_tickets WHERE document_kind = 'so' AND document_id = ?`)
+    .get(sale.id) as any
+  ok(
+    !ticket?.merged_into,
+    'AND THE SALE JOINS NEITHER ORDER’S DEAL TICKET — two suppliers is not one deal',
+    String(ticket?.merged_into)
+  )
+
+  // --- two shelves on one line -------------------------------------------
+  /**
+   * FIVE OFF RM AND FIVE OFF AM, which is the case that made the stock engine's
+   * old shortcut untenable.
+   *
+   * `applyInvoiceStock` used to take a single shelf for the whole order and hand
+   * it to every line, so a line whose destination said AM quietly drew ten cases
+   * off RM: the count on the screen said one thing and the boxes on the racks
+   * said another, and nothing anywhere reported a problem. A split line can name
+   * two shelves at once, so the shelf is now read PER SLICE — see
+   * stockDrawingLines and InvoiceStockLine.location.
+   */
+  const am = poRepo.createPurchaseOrder(
+    {
+      supplier: 'Second Room Supply',
+      location: 'AM',
+      lines: [{ productId: 'p_d', item: 'Dropship Hobby Box', quantity: 5, unitPrice: 450 }]
+    },
+    null
+  )
+  poRepo.setPurchaseOrderStatus(am.id, 'received', null)
+  const rmBeforeShelves = qtyAt('RM')
+  const amBeforeShelves = qtyAt('AM')
+  const twoShelves = inv.setInvoiceLineRouting(
+    sale.id,
+    [
+      {
+        lineId,
+        destination: 'RM',
+        supplier: null,
+        allocations: [
+          { quantity: 5, destination: 'RM', sourcePoId: null },
+          { quantity: 5, destination: 'AM', sourcePoId: null }
+        ]
+      }
+    ],
+    null
+  )
+  ok(!twoShelves.error, 'FIVE FROM ONE ROOM AND FIVE FROM THE OTHER', String(twoShelves.error))
+  ok(
+    qtyAt('AM') === amBeforeShelves - 5,
+    'AND THE AM SHELF GAVE FIVE — a slice draws the shelf IT names, not the order’s',
+    `${amBeforeShelves} -> ${qtyAt('AM')}`
+  )
+  ok(
+    qtyAt('RM') === rmBeforeShelves + 5,
+    'while RM is five better off than it was holding all ten',
+    `${rmBeforeShelves} -> ${qtyAt('RM')}`
+  )
+
+  // --- a split that does not add up is refused ---------------------------
+  const shelfNow = qtyAt('RM')
+  const short = inv.setInvoiceLineRouting(
+    sale.id,
+    [
+      {
+        lineId,
+        destination: 'RM',
+        supplier: null,
+        allocations: [
+          { quantity: 6, destination: 'RM', sourcePoId: null },
+          { quantity: 3, destination: 'Kestrel Cards', sourcePoId: null }
+        ]
+      }
+    ],
+    null
+  )
+  ok(!!short.error, 'NINE SPLITS ON A LINE OF TEN IS REFUSED', String(short.error))
+  ok(/not accounted for/i.test(short.error ?? ''), 'naming the case that comes from nowhere', String(short.error))
+  ok(
+    inv.getInvoice(sale.id).lines[0].allocations.length === 2 && qtyAt('RM') === shelfNow,
+    'and the refusal changed nothing — one transaction, all or nothing'
+  )
+  const over = inv.setInvoiceLineRouting(
+    sale.id,
+    [
+      {
+        lineId,
+        destination: 'RM',
+        supplier: null,
+        allocations: [
+          { quantity: 8, destination: 'RM', sourcePoId: null },
+          { quantity: 8, destination: 'Kestrel Cards', sourcePoId: null }
+        ]
+      }
+    ],
+    null
+  )
+  ok(!!over.error, 'AND SO IS SIXTEEN ON A LINE OF TEN', String(over.error))
+  /**
+   * A ZERO-UNIT SPLIT IS REFUSED even though the arithmetic works out.
+   *
+   * Ten and nothing sums to ten, so I1 alone would let it through — and it would
+   * store a row that claims nothing, appears on the screen as a split somebody
+   * has to look at, and means less than deleting it would. I5 says a split is at
+   * least one unit.
+   */
+  const empty = inv.setInvoiceLineRouting(
+    sale.id,
+    [
+      {
+        lineId,
+        destination: 'RM',
+        supplier: null,
+        allocations: [
+          { quantity: 10, destination: 'RM', sourcePoId: null },
+          { quantity: 0, destination: 'Kestrel Cards', sourcePoId: null }
+        ]
+      }
+    ],
+    null
+  )
+  ok(!!empty.error, 'A SPLIT OF NOTHING IS REFUSED, even though ten and nought is ten', String(empty.error))
+  ok(/at least one unit/i.test(empty.error ?? ''), 'saying so plainly', String(empty.error))
+  /**
+   * AND ONE SPLIT OF THE WHOLE LINE IS NOT A SPLIT. Storing it would be a second
+   * way to say what the line already says, and the two could then disagree — the
+   * line's column pointing one way and its only allocation the other, with
+   * nothing to arbitrate.
+   */
+  const solo = inv.setInvoiceLineRouting(
+    sale.id,
+    [
+      {
+        lineId,
+        destination: 'RM',
+        supplier: null,
+        allocations: [{ quantity: 10, destination: 'RM', sourcePoId: null }]
+      }
+    ],
+    null
+  )
+  ok(!!solo.error, 'ONE SPLIT COVERING THE WHOLE LINE IS REFUSED', String(solo.error))
+
+  // --- a split with no destination of its own takes the LINE's -------------
+  /**
+   * ONE STEP OF INHERITANCE, and it is the LINE's destination, not the order's.
+   *
+   * A slice that says nothing is a slice going wherever the line goes, which on
+   * a line routed to a supplier is that supplier — falling all the way through
+   * to the order's shelf instead would put cases back on a shelf the operator
+   * had just said they never touch.
+   */
+  const inherited = inv.setInvoiceLineRouting(
+    sale.id,
+    [
+      {
+        lineId,
+        destination: 'Kestrel Cards',
+        supplier: null,
+        allocations: [
+          { quantity: 4, destination: null, sourcePoId: null },
+          { quantity: 6, destination: 'RM', sourcePoId: null }
+        ]
+      }
+    ],
+    null
+  )
+  ok(!inherited.error, 'a split can leave its destination blank', String(inherited.error))
+  const inheritLine = inv.getInvoice(sale.id).lines[0]
+  ok(
+    inheritLine.allocations[0].destination === 'Kestrel Cards',
+    'A BLANK SPLIT TAKES THE LINE’S DESTINATION, not the order’s shelf',
+    String(inheritLine.allocations[0].destination)
+  )
+  ok(
+    inv.getInvoice(sale.id).stockUnits === 6 && inv.getInvoice(sale.id).dropshipUnits === 4,
+    'and the board counts six on the shelf and four shipping direct',
+    `${inv.getInvoice(sale.id).stockUnits} / ${inv.getInvoice(sale.id).dropshipUnits}`
+  )
+
+  // --- "not split" is reachable again, and stores nothing -----------------
+  const collapsed = inv.setInvoiceLineRouting(
+    sale.id,
+    [{ lineId, destination: 'RM', supplier: null, sourcePoId: null, allocations: [] }],
+    null
+  )
+  ok(!collapsed.error, 'A SPLIT LINE CAN BE PUT BACK TOGETHER', String(collapsed.error))
+  ok(
+    inv.getInvoice(sale.id).lines[0].allocations.length === 0,
+    'AND STORES ZERO ROWS GETTING THERE, not one covering the whole quantity — ' +
+      'the two behave alike and only one leaves an ordinary sale stored as sales have always been',
+    String(inv.getInvoice(sale.id).lines[0].allocations.length)
+  )
+  ok(
+    db
+      .prepare(`SELECT COUNT(*) AS n FROM invoice_line_allocations WHERE invoice_line_id = ?`)
+      .get(lineId).n === 0,
+    'and the table agrees'
+  )
+  ok(qtyAt('RM') === shelfBefore - 10, 'with the whole line back on ordinary stock', String(qtyAt('RM')))
+
+  // --- absence still means LEAVE THE SPLITS ALONE ------------------------
+  inv.setInvoiceLineRouting(
+    sale.id,
+    [
+      {
+        lineId,
+        destination: 'RM',
+        supplier: null,
+        // The DROPSHIP slice deliberately first, because the line's own columns
+        // describe the first slice and the assertion below is about them.
+        allocations: [
+          { quantity: 3, destination: 'Kestrel Cards', sourcePoId: null },
+          { quantity: 7, destination: 'RM', sourcePoId: null }
+        ]
+      }
+    ],
+    null
+  )
+  const splitHead = inv.getInvoice(sale.id).lines[0]
+  /**
+   * A SPLIT LINE'S OWN COLUMNS DESCRIBE ITS FIRST SLICE.
+   *
+   * They govern nothing any more — the slices do — but they are what every
+   * reader written before splits existed looks at, and left stale they would
+   * have a line saying RM while three of its cases ship direct from a supplier.
+   */
+  ok(
+    splitHead.destination === 'Kestrel Cards' && splitHead.dropship === true,
+    'A SPLIT LINE’S OWN COLUMNS DESCRIBE ITS FIRST SLICE, so no reader sees a stale answer',
+    `${splitHead.destination} / dropship=${splitHead.dropship}`
+  )
+  const keptIds = splitHead.allocations.map((a: any) => a.id).join()
+  inv.setInvoiceLineRouting(sale.id, [{ lineId, destination: 'RM', supplier: null }], null)
+  const stillThere = inv.getInvoice(sale.id).lines[0]
+  ok(
+    stillThere.allocations.map((a: any) => a.id).join() === keptIds,
+    'A CHANGE THAT DOES NOT MENTION THE SPLITS LEAVES THEM EXACTLY WHERE THEY WERE — ' +
+      'ids included, so nothing churns through sync for nothing',
+    stillThere.allocations.length + ' rows'
+  )
+  ok(
+    stillThere.destination === 'Kestrel Cards',
+    'AND THE LINE GOES ON DESCRIBING THEM — a destination sent alongside splits it does not ' +
+      'mention is not an answer to anything, and writing it would contradict the slices',
+    String(stillThere.destination)
+  )
+  ok(qtyAt('RM') === shelfBefore - 7, 'and the shelf still stands at seven taken', String(qtyAt('RM')))
+
+  // --- a dropship slice cannot claim cost layers --------------------------
+  /**
+   * WRITTEN STRAIGHT INTO THE COLUMN, because no screen and no write path in
+   * this app can produce this state — `setInvoiceLineRouting` clears the pointer
+   * on any slice that does not hold stock. A row like this arrives from SYNC,
+   * off a copy of the app that is older or newer than this one, and the read has
+   * to be the thing that refuses it: a slice that goes supplier-to-buyer
+   * consumes no cost layers at all, so it cannot say whose it consumed, and
+   * carrying the claim forward would put a dropship on a purchase order's
+   * history as if that order had supplied it.
+   */
+  db.prepare(
+    `UPDATE invoice_line_allocations SET source_po_id = ?
+      WHERE invoice_line_id = ? AND destination = 'Kestrel Cards'`
+  ).run(first.id, lineId)
+  ok(
+    inv.getInvoice(sale.id).lines[0].allocations[0].sourcePoId === null,
+    'A DROPSHIP SPLIT NAMES NO PURCHASE ORDER, whatever is sitting in the column',
+    String(inv.getInvoice(sale.id).lines[0].allocations[0].sourcePoId)
+  )
+
+  // --- voiding hands back exactly what the splits took --------------------
+  inv.setInvoiceStatus(sale.id, 'void', null)
+  ok(
+    qtyAt('RM') === shelfBefore,
+    'VOIDING A SPLIT ORDER HANDS BACK THE SEVEN IT TOOK AND NOT THE TEN IT SOLD',
+    `${qtyAt('RM')} vs ${shelfBefore}`
   )
 }
 

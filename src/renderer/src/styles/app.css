@@ -27486,3 +27486,26 @@ button.sor-team:focus-visible {
   font-size: 11px;
   line-height: 1.45;
 }
+
+/* ---------- Splitting a posted sale's line by case (RouteLinesModal) ----------
+   The purchase order's split row, one column different: a buy split names a
+   SUPPLIER and a DESTINATION, and a sell split names only where the cases come
+   from — so the two 1fr party columns become one, and the question of WHOSE
+   cases sits under the row rather than in it, because SourceOrderPicker renders
+   nothing at all on most lines and a column that is empty on most rows is a
+   column that should not exist. Everything else is inherited from .po-ld-* on
+   purpose: it is the same control doing the same job, and two copies drift. */
+.so-slice-row {
+  grid-template-columns: 22px 128px minmax(140px, 1fr) 34px;
+}
+/* Under the controls, not beside them: it is the answer to "is this line one
+   thing or several", asked once, and it must not compete with the destination
+   picker directly above it. */
+.so-split-toggle {
+  margin-top: 8px;
+  padding-left: 0;
+  color: var(--text-2);
+}
+.so-split-toggle:hover {
+  color: var(--brand-600);
+}

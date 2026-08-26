@@ -34,7 +34,20 @@ import type Database from 'better-sqlite3'
 import { asCarrier, asPaymentTiming, detectCarrier } from '@shared/freight'
 import { asShipStatus } from '@shared/tracking'
 import { getDb, getMeta } from './database'
-import { applyInvoiceStock, invoiceStockLocation, releaseInvoiceStock } from './invoiceStock'
+import {
+  applyInvoiceStock,
+  invoiceStockLocation,
+  releaseInvoiceStock,
+  type InvoiceStockLine,
+  type InvoiceStockMove
+} from './invoiceStock'
+import {
+  allocationProblem,
+  effectiveSlices,
+  stockUnitsOf,
+  type InvoiceAllocationInput,
+  type InvoiceLineAllocation
+} from '@shared/invoiceAllocations'
 import { destinationHoldsStock } from '@shared/purchaseOrders'
 import type { LinkablePurchaseOrder } from '@shared/orders'
 import { adoptLegacyFreight, deleteOrderExtras, recordOrderEvent } from './orderExtras'
@@ -640,9 +653,14 @@ function toInvoice(r: InvoiceRow): Invoice {
  * `destination` column means. Resolved here so no screen has to know the rule —
  * the same reason a purchase order line's destination is resolved on read.
  */
-function toLine(r: LineRow, headerLocation: string): InvoiceLine {
+function toLine(
+  r: LineRow,
+  headerLocation: string,
+  allocations: InvoiceLineAllocation[] = []
+): InvoiceLine {
   const destination = (r.destination ?? '').trim() || headerLocation
   return {
+    allocations,
     id: r.id,
     invoiceId: r.invoice_id,
     position: r.position,
@@ -697,21 +715,25 @@ const INVOICE_COLS = `id, invoice_number, customer_id, customer_name, email, ter
                       -- these comments: this whole block is a template literal,
                       -- and one would end it hundreds of lines from the error.
                       --
-                      -- The destination test is the same one listAwaitingShipment
-                      -- uses: a blank line destination inherits the order's, and a
-                      -- blank order location means RM. Spelling it differently
-                      -- here is how a board comes to disagree with the stock
-                      -- engine about which lines are a dropship.
-                      (SELECT COALESCE(SUM(CASE WHEN UPPER(COALESCE(NULLIF(TRIM(l.destination), ''),
-                                                                    invoices.location, 'RM'))
-                                                     IN ('RM', 'AM')
-                                                THEN l.quantity ELSE 0 END), 0)
-                         FROM invoice_lines l WHERE l.invoice_id = invoices.id) AS stock_units,
-                      (SELECT COALESCE(SUM(CASE WHEN UPPER(COALESCE(NULLIF(TRIM(l.destination), ''),
-                                                                    invoices.location, 'RM'))
-                                                     IN ('RM', 'AM')
-                                                THEN 0 ELSE l.quantity END), 0)
-                         FROM invoice_lines l WHERE l.invoice_id = invoices.id) AS drop_units,
+                      -- READ OFF invoice_unit_sources, THE VIEW, and not off the
+                      -- lines. A line split by quantity is eight units off the
+                      -- shelf and two shipped direct, and counting the LINE puts
+                      -- all ten on one side of that -- so a part-dropship order
+                      -- would report as wholly one thing and the board's
+                      -- Awaiting items gate would be answering about units that
+                      -- were never coming. The view's second arm reproduces the
+                      -- inheritance these subqueries used to spell out inline (a
+                      -- blank line destination takes the order's, a blank order
+                      -- location means RM), so an unsplit sale counts exactly
+                      -- what it counted before.
+                      (SELECT COALESCE(SUM(CASE WHEN UPPER(u.destination) IN ('RM', 'AM')
+                                                THEN u.quantity ELSE 0 END), 0)
+                         FROM invoice_unit_sources u WHERE u.invoice_id = invoices.id)
+                        AS stock_units,
+                      (SELECT COALESCE(SUM(CASE WHEN UPPER(u.destination) IN ('RM', 'AM')
+                                                THEN 0 ELSE u.quantity END), 0)
+                         FROM invoice_unit_sources u WHERE u.invoice_id = invoices.id)
+                        AS drop_units,
                       -- THE FULFILMENT GATES. See @shared/fulfillment.
                       ship_weight_lb, ship_length_in, ship_width_in, ship_height_in,
                       items_in_hand_at, items_in_hand_by, force_ready_at, force_ready_by,
@@ -770,12 +792,17 @@ const INVOICE_COLS = `id, invoice_number, customer_id, customer_name, email, ter
                       -- COUNT beside it -- because naming one of two suppliers
                       -- would point somebody at the wrong building, the same
                       -- rule the provenance read keeps about destinations.
-                      (SELECT COUNT(DISTINCT TRIM(l.supplier)) FROM invoice_lines l
-                        WHERE l.invoice_id = invoices.id
-                          AND TRIM(COALESCE(l.supplier, '')) != '') AS drop_supplier_count,
-                      (SELECT MIN(TRIM(l.supplier)) FROM invoice_lines l
-                        WHERE l.invoice_id = invoices.id
-                          AND TRIM(COALESCE(l.supplier, '')) != '') AS drop_supplier,
+                      --
+                      -- Off the view as well, so a line split into "eight off
+                      -- the shelf, two shipped by Kestrel" can name Kestrel. The
+                      -- unsplit arm carries l.supplier verbatim, so an ordinary
+                      -- sale answers exactly what it answered before.
+                      (SELECT COUNT(DISTINCT TRIM(u.supplier)) FROM invoice_unit_sources u
+                        WHERE u.invoice_id = invoices.id
+                          AND TRIM(COALESCE(u.supplier, '')) != '') AS drop_supplier_count,
+                      (SELECT MIN(TRIM(u.supplier)) FROM invoice_unit_sources u
+                        WHERE u.invoice_id = invoices.id
+                          AND TRIM(COALESCE(u.supplier, '')) != '') AS drop_supplier,
                       (SELECT po.supplier FROM purchase_orders po
                         WHERE po.id = invoices.source_po_id) AS source_po_supplier,
                       (SELECT po.po_number FROM purchase_orders po
@@ -857,13 +884,66 @@ export function getInvoice(id: string): InvoiceDetail | null {
     .prepare(`SELECT ${LINE_COLS} FROM invoice_lines WHERE invoice_id = ? ORDER BY position ASC`)
     .all(id) as LineRow[]
   const head = toInvoice(row)
+  const splits = readLineAllocations(db, id)
   // DETAIL PATH ONLY, and guarded — see dealTicketRefFor. The list query must
   // not depend on the register, or a broken one stops orders being raised.
   return {
     ...head,
     ...dealTicketRefFor(db, 'so', id),
-    lines: lines.map((l) => toLine(l, invoiceStockLocation(head.location)))
+    lines: lines.map((l) =>
+      toLine(l, invoiceStockLocation(head.location), splits.get(l.id) ?? [])
+    )
   }
+}
+
+/**
+ * Every split on this order, by line id — ONE query, not one per line.
+ *
+ * An order of forty lines would otherwise cost forty round trips to read back a
+ * table that is empty on almost every order in the database. Lines with no
+ * splits are simply absent from the map, and `toLine` defaults them to `[]`,
+ * which is the zero-rows case `effectiveSlices` reads as one implicit slice.
+ */
+function readLineAllocations(
+  db: Database.Database,
+  invoiceId: string
+): Map<string, InvoiceLineAllocation[]> {
+  const rows = db
+    .prepare(
+      `SELECT a.id, a.invoice_line_id, a.quantity, a.destination, a.supplier, a.source_po_id,
+              (SELECT po.po_number FROM purchase_orders po WHERE po.id = a.source_po_id)
+                AS source_po_number
+         FROM invoice_line_allocations a
+        WHERE a.invoice_id = ?
+        ORDER BY a.position ASC, a.created_at ASC`
+    )
+    .all(invoiceId) as Array<{
+    id: string
+    invoice_line_id: string
+    quantity: number
+    destination: string
+    supplier: string | null
+    source_po_id: string | null
+    source_po_number: string | null
+  }>
+  const out = new Map<string, InvoiceLineAllocation[]>()
+  for (const r of rows) {
+    const holdsStock = destinationHoldsStock(r.destination)
+    const list = out.get(r.invoice_line_id) ?? []
+    list.push({
+      id: r.id,
+      quantity: r.quantity,
+      destination: r.destination,
+      // Derived on read from the destination, exactly as a line's is, so a
+      // slice cannot end up saying it holds stock at a customer's address.
+      supplier: holdsStock ? null : (r.supplier ?? '').trim() || r.destination,
+      holdsStock,
+      sourcePoId: holdsStock ? (r.source_po_id ?? null) : null,
+      sourcePoNumber: holdsStock ? ((r.source_po_number ?? '').trim() || null) : null
+    })
+    out.set(r.invoice_line_id, list)
+  }
+  return out
 }
 
 /** Several invoices with their lines, for the CSV export. */
@@ -1321,7 +1401,7 @@ export function saveInvoice(
       stockLocation,
       actorId
     )
-    const movedQty = new Map(moved.map((m) => [m.position, m.quantity]))
+    const movedQty = movedByPosition(moved)
 
     /**
      * WHAT HAS ALREADY LEFT THE BUILDING, carried across the rewrite.
@@ -2436,6 +2516,22 @@ function foldRoadshowTicket(
   })
 }
 
+/**
+ * WHICH UNITS OF THIS ORDER COME OFF A SHELF — one entry per SLICE, not per line.
+ *
+ * Shared by `saveInvoice` and `setInvoiceLineRouting` so there is one answer to
+ * "what moves stock" rather than two that can drift.
+ *
+ * An unsplit line yields at most one entry and is byte-for-byte what this
+ * returned before splits existed. A line split by quantity yields one entry per
+ * slice that holds stock, each with its own quantity, its own shelf and its own
+ * source purchase order — so "eight off RM out of PO-0042, two shipped direct by
+ * Kestrel" draws eight and leaves two alone, which is the whole point of the
+ * feature.
+ *
+ * `effectiveSlices` is asked rather than `allocations.length` being tested here,
+ * because that rule has to live in exactly one place. See @shared/invoiceAllocations.
+ */
 function stockDrawingLines(
   lines: ReadonlyArray<{
     position: number
@@ -2443,29 +2539,60 @@ function stockDrawingLines(
     product_id?: string | null
     quantity: number
     destination?: string | null
+    supplier?: string | null
     sourcePoId?: string | null
     source_po_id?: string | null
+    allocations?: readonly InvoiceLineAllocation[]
   }>,
   stockLocation: string
-): Array<{ position: number; productId: string; quantity: number; sourcePoId: string | null }> {
-  const out: Array<{
-    position: number
-    productId: string
-    quantity: number
-    sourcePoId: string | null
-  }> = []
+): InvoiceStockLine[] {
+  const out: InvoiceStockLine[] = []
   for (const l of lines) {
     const productId = l.productId ?? l.product_id ?? null
     if (!productId || !(l.quantity > 0)) continue
-    const dest = lineDestination(l.destination, stockLocation) ?? stockLocation
-    if (!destinationHoldsStock(dest)) continue
-    out.push({
-      position: l.position,
-      productId,
-      quantity: l.quantity,
-      sourcePoId: l.sourcePoId ?? l.source_po_id ?? null
-    })
+    for (const slice of effectiveSlices(
+      {
+        quantity: l.quantity,
+        // Stored inheritance resolved the same way it always was: a blank line
+        // destination means the order's shelf.
+        destination: lineDestination(l.destination, stockLocation) ?? stockLocation,
+        supplier: l.supplier ?? null,
+        sourcePoId: l.sourcePoId ?? l.source_po_id ?? null,
+        allocations: l.allocations
+      },
+      stockLocation
+    )) {
+      if (!slice.holdsStock || !(slice.quantity > 0)) continue
+      out.push({
+        position: l.position,
+        allocationId: slice.id,
+        productId,
+        quantity: slice.quantity,
+        // THE SLICE'S OWN SHELF, not the order's. A split that says "six off RM
+        // and four off AM" has to draw two different shelves, and handing the
+        // header's location to both would take ten off one of them.
+        location: slice.destination,
+        sourcePoId: slice.sourcePoId
+      })
+    }
   }
+  return out
+}
+
+/**
+ * How many units the shelf actually gave EACH LINE — the moves SUMMED.
+ *
+ * Summed rather than indexed, because a split line writes one move per stock
+ * slice and both carry the same line position. `new Map(moves.map(...))` kept
+ * whichever came last, so a line of ten split six-and-four reported four
+ * fulfilled and six still owed, and the scan queue offered six units that had
+ * already gone. `qty_fulfilled` is a per-LINE number, so this is the shape it
+ * needs. The dropship half of a line contributes nothing here, correctly: the
+ * shelf never gave those units.
+ */
+function movedByPosition(moves: readonly InvoiceStockMove[]): Map<number, number> {
+  const out = new Map<number, number>()
+  for (const m of moves) out.set(m.position, (out.get(m.position) ?? 0) + m.quantity)
   return out
 }
 
@@ -2582,6 +2709,24 @@ export function setInvoiceDims(
  * arithmetically, and a line flipped to dropship simply is not in the re-take
  * and its units stay on the shelf.
  *
+ * ## SPLITTING A LINE BY QUANTITY
+ *
+ * The owner again: "for each individual case adjust where it is coming from, and
+ * then it corresponds back to inventory or the right dropship PO." Ten cases on
+ * one line, eight off the shelf and two shipped direct, is one line with two
+ * answers — so a change may carry `allocations`, and each one is a slice of the
+ * line's quantity with its own destination and its own source purchase order.
+ *
+ * The quantity, the rate and the amount are still never written. Eight at $900
+ * plus two at $900 is ten at $900: the document is untouched and the buyer's
+ * copy stays true, which is the same reasoning that makes the rest of this
+ * function safe on a posted order.
+ *
+ * `allocationProblem` is the gate — Σ slices must equal the line's quantity, and
+ * every slice must be at least one whole unit. A line of ten split six-and-three
+ * is not a line of nine, it is a line of ten with a case coming from nowhere, so
+ * the whole change is refused rather than stored.
+ *
  * ## What it deliberately does to `qty_fulfilled`
  *
  * On a stock line that number means "the shelf gave these units". Flip the line
@@ -2589,6 +2734,9 @@ export function setInvoiceDims(
  * goes to zero rather than being carried forward as picking that never happened.
  * A line that was ALWAYS a dropship is left alone: its number came from somebody
  * scanning, which this has no business erasing.
+ *
+ * On a SPLIT line it is the sum of what every stock slice drew, which is why
+ * `movedByPosition` sums rather than indexes.
  *
  * ## What it does NOT do
  *
@@ -2616,6 +2764,26 @@ export function setInvoiceLineRouting(
      * there: a line that consumes no cost layers cannot name which ones.
      */
     sourcePoId?: string | null
+    /**
+     * THE LINE SPLIT BY QUANTITY, when somebody split it.
+     *
+     * Three states, and they are three different instructions:
+     *
+     *   undefined  leave whatever splits the line already has
+     *   []         collapse it back to one line with one answer, deleting rows
+     *   [a, b, …]  replace the splits with exactly these
+     *
+     * An empty array is not the same as undefined and must not be flattened into
+     * it: "not split" is a state this feature can return to, and it is stored as
+     * ZERO ROWS rather than as one allocation covering the whole quantity —
+     * which is what keeps an ordinary sale byte-for-byte the way sales have
+     * always been stored. See @shared/invoiceAllocations.
+     *
+     * `destination` and `supplier` above still apply to the line, and a split
+     * line's own columns go on describing its FIRST slice so nothing that reads
+     * a line without knowing about splits reads a blank.
+     */
+    allocations?: ReadonlyArray<InvoiceAllocationInput>
   }>,
   actorId: string | null
 ): { invoice: InvoiceDetail | null; error?: string } {
@@ -2655,11 +2823,24 @@ export function setInvoiceLineRouting(
         .all(id) as Row[]
 
     const before = readLines()
+    const splitsBefore = readLineAllocations(db, id)
+    /** What a line looks like to the shared slice rule — splits included. */
+    const asSliceable = (
+      l: Row,
+      splits: Map<string, InvoiceLineAllocation[]>
+    ): Parameters<typeof effectiveSlices>[0] => ({
+      quantity: l.quantity,
+      destination: lineDestination(l.destination, stockLocation) ?? stockLocation,
+      supplier: l.supplier,
+      sourcePoId: l.source_po_id,
+      allocations: splits.get(l.id)
+    })
+    // DID THIS LINE DRAW A SHELF AT ALL, splits accounted for. Read off the
+    // slices rather than off the line's own destination: a split line's column
+    // describes only its first slice, so a line that was eight-on-the-shelf and
+    // two-dropship would answer for the eight and lose the rest.
     const wasStock = new Map(
-      before.map((l) => [
-        l.id,
-        destinationHoldsStock(lineDestination(l.destination, stockLocation) ?? stockLocation)
-      ])
+      before.map((l) => [l.id, stockUnitsOf(asSliceable(l, splitsBefore), stockLocation) > 0])
     )
 
     const setLine = db.prepare(
@@ -2667,6 +2848,48 @@ export function setInvoiceLineRouting(
           SET destination = ?, supplier = ?, source_po_id = ?, updated_at = ?
         WHERE id = ? AND invoice_id = ?`
     )
+    const clearSplits = db.prepare(
+      `DELETE FROM invoice_line_allocations WHERE invoice_id = ? AND invoice_line_id = ?`
+    )
+    const insertSplit = db.prepare(
+      `INSERT INTO invoice_line_allocations
+         (id, invoice_id, invoice_line_id, quantity, destination, supplier, source_po_id,
+          position, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    const holdsStmt = db.prepare(
+      `SELECT po.po_number,
+              (SELECT COALESCE(SUM(l2.qty_remaining), 0)
+                 FROM inventory_lots l2
+                 JOIN po_line_receipts r ON r.lot_id = l2.id
+                WHERE r.po_id = po.id AND l2.product_id = ? AND l2.location = ?
+                  AND l2.qty_remaining > 0) AS on_hand
+         FROM purchase_orders po WHERE po.id = ?`
+    )
+    /**
+     * What this line claims FROM each purchase order, on each shelf.
+     *
+     * The pair is kept in the VALUE and only ever grouped by the key, never
+     * parsed back out of it. An earlier cut joined the two into a string and
+     * split them again on the way out, and it went in carrying a literal NUL as
+     * the separator: invisible in every editor, every diff and every review, and
+     * working perfectly right up until something reformatted the file. Nothing
+     * here encodes, so there is nothing to decode wrongly.
+     */
+    const claimsOf = (
+      slices: ReturnType<typeof effectiveSlices>
+    ): Map<string, { poId: string; shelf: string; quantity: number }> => {
+      const out = new Map<string, { poId: string; shelf: string; quantity: number }>()
+      for (const s of slices) {
+        if (!s.holdsStock || !s.sourcePoId) continue
+        const key = `${s.sourcePoId} at ${s.destination}`
+        const seen = out.get(key)
+        if (seen) seen.quantity += s.quantity
+        else out.set(key, { poId: s.sourcePoId, shelf: s.destination, quantity: s.quantity })
+      }
+      return out
+    }
+
     const touched: string[] = []
     for (const change of changes) {
       const line = before.find((l) => l.id === change.lineId)
@@ -2686,41 +2909,134 @@ export function setInvoiceLineRouting(
       // chooser itself hides on a dropship line.
       const asked = change.sourcePoId === undefined ? line.source_po_id : change.sourcePoId
       const sourcePo = drawsStock ? (asked ?? '').trim() || null : null
-      if (sourcePo && sourcePo !== line.source_po_id) {
-        // NAMED, SO IT MUST BE REAL AND IT MUST HOLD THEM. `consumeFromPo` throws
-        // rather than topping up from elsewhere when an order is short — the
-        // right behaviour, and a thrown transaction is a worse message than a
-        // sentence naming both numbers. Checked here so the refusal can.
-        const holds = db
-          .prepare(
-            `SELECT po.po_number,
-                    (SELECT COALESCE(SUM(l2.qty_remaining), 0)
-                       FROM inventory_lots l2
-                       JOIN po_line_receipts r ON r.lot_id = l2.id
-                      WHERE r.po_id = po.id AND l2.product_id = ? AND l2.location = ?
-                        AND l2.qty_remaining > 0) AS on_hand
-               FROM purchase_orders po WHERE po.id = ?`
-          )
-          .get(line.product_id, dest ?? stockLocation, sourcePo) as
+
+      /**
+       * THE SPLITS THIS LINE WILL HAVE, in the three states the caller can ask
+       * for. Undefined leaves the rows alone entirely — including their ids, so
+       * a caller changing only a destination does not churn every allocation
+       * through sync for nothing.
+       */
+      const rewriteSplits = change.allocations !== undefined
+      const keepSplits = !rewriteSplits && (splitsBefore.get(line.id)?.length ?? 0) > 0
+      let slices: ReturnType<typeof effectiveSlices>
+      if (keepSplits) {
+        // The splits govern and they are not being touched, so the change's own
+        // destination is not the answer to anything here — it only goes on to
+        // describe the first slice. See the setLine call below.
+        slices = effectiveSlices(asSliceable(line, splitsBefore), stockLocation)
+      } else if (!rewriteSplits || (change.allocations ?? []).length === 0) {
+        // ONE ANSWER FOR THE WHOLE LINE, taken from THIS change and not from the
+        // row as it stands. Reading the old row here would compare the line's
+        // claim against itself, find nothing new, skip the coverage check below
+        // and let consumeFromPo throw a transaction away instead.
+        slices = effectiveSlices(
+          { quantity: line.quantity, destination: dest, supplier, sourcePoId: sourcePo },
+          stockLocation
+        )
+      } else {
+        const proposed = change.allocations ?? []
+        const problem = allocationProblem(proposed, line.quantity)
+        if (problem) return { invoice: null, error: `${line.item}: ${problem}` }
+        slices = proposed.map((a, i) => {
+          // A slice with no destination of its own takes the LINE's, which is
+          // the same one-step inheritance a line takes from the header. It is
+          // resolved here and stored resolved — see the v89 note.
+          const where = (a.destination ?? '').trim() || dest || stockLocation
+          const holds = destinationHoldsStock(where)
+          return {
+            id: `new-${i}`,
+            quantity: Math.round(a.quantity),
+            destination: where,
+            supplier: holds ? null : where,
+            holdsStock: holds,
+            sourcePoId: holds ? (a.sourcePoId ?? '').trim() || null : null
+          }
+        })
+      }
+
+      /**
+       * NAMED, SO IT MUST BE REAL AND IT MUST HOLD THEM.
+       *
+       * `consumeFromPo` throws rather than topping up from elsewhere when an
+       * order is short — the right behaviour, and a thrown transaction is a
+       * worse message than a sentence naming both numbers. Checked here so the
+       * refusal can name them.
+       *
+       * Against the INCREASE, not the total. This order's own units have already
+       * left the shelf and are not in `on_hand`, so re-saving an unchanged claim
+       * of six would compare six against the nought that is left and refuse a
+       * change that took nothing.
+       */
+      const already = claimsOf(effectiveSlices(asSliceable(line, splitsBefore), stockLocation))
+      for (const [key, want] of claimsOf(slices)) {
+        const extra = want.quantity - (already.get(key)?.quantity ?? 0)
+        if (extra <= 0) continue
+        const { poId, shelf } = want
+        const holds = holdsStmt.get(line.product_id, shelf, poId) as
           | { po_number: string; on_hand: number }
           | undefined
         if (!holds) return { invoice: null, error: 'That purchase order is gone.' }
-        if ((Number(holds.on_hand) || 0) < line.quantity) {
+        const onHand = Number(holds.on_hand) || 0
+        if (onHand < extra) {
           return {
             invoice: null,
             error:
-              `${holds.po_number} has ${Number(holds.on_hand) || 0} of ${line.item} left on the ` +
-              `${dest ?? stockLocation} shelf, not ${line.quantity}. Lower the quantity, or leave ` +
-              'the line on ordinary stock — a line cannot be part one order and part another.'
+              `${holds.po_number} has ${onHand} of ${line.item} left on the ${shelf} shelf, ` +
+              `and this asks it for ${extra} more. Lower the quantity taken from that order, ` +
+              'or leave those units on ordinary stock.'
           }
         }
       }
-      setLine.run(dest, supplier, sourcePo, stamp, line.id, id)
+
+      if (rewriteSplits) {
+        clearSplits.run(id, line.id)
+        // ZERO ROWS FOR AN UNSPLIT LINE, never one row covering the whole
+        // quantity. The two would behave identically and only one of them keeps
+        // an ordinary sale stored the way sales have always been stored, which
+        // is the entire back-compat mechanism — see @shared/invoiceAllocations.
+        if ((change.allocations ?? []).length > 0) {
+          slices.forEach((s, i) =>
+            insertSplit.run(
+              randomUUID(),
+              id,
+              line.id,
+              s.quantity,
+              s.destination,
+              s.supplier,
+              s.sourcePoId,
+              i,
+              stamp,
+              stamp
+            )
+          )
+        }
+      }
+
+      // A SPLIT LINE'S OWN COLUMNS DESCRIBE ITS FIRST SLICE.
+      //
+      // They no longer govern anything — the slices do — but they are still what
+      // every reader that predates splits looks at, and leaving them stale would
+      // have a line saying RM while all ten of its cases ship direct. First
+      // rather than "mixed": these columns have to hold a real destination, and
+      // a made-up word in them would reach the QuickBooks export and the board.
+      const head = keepSplits || (rewriteSplits && slices.length > 1) ? slices[0] : null
+      setLine.run(
+        head ? lineDestination(head.destination, stockLocation) : dest,
+        head ? head.supplier : supplier,
+        head ? head.sourcePoId : sourcePo,
+        stamp,
+        line.id,
+        id
+      )
       touched.push(line.id)
     }
 
     const after = readLines()
-    const stockLines = stockDrawingLines(after, stockLocation)
+    const splitsAfter = readLineAllocations(db, id)
+    const stockLines = stockDrawingLines(
+      after.map((l) => ({ ...l, allocations: splitsAfter.get(l.id) })),
+      stockLocation
+    )
     releaseInvoiceStock(db, id)
     const moved = applyInvoiceStock(
       db,
@@ -2731,7 +3047,7 @@ export function setInvoiceLineRouting(
       stockLocation,
       actorId
     )
-    const movedQty = new Map(moved.map((m) => [m.position, m.quantity]))
+    const movedQty = movedByPosition(moved)
 
     const drawing = new Set(stockLines.map((l) => l.position))
     const setFulfilled = db.prepare(
@@ -2765,6 +3081,12 @@ export function setInvoiceLineRouting(
      *
      * One entry per purchase order, not per line: three lines moved onto one
      * order is one thing that happened to that order.
+     *
+     * Read off the SLICES, so a split line that takes six cases out of PO-0042
+     * and leaves four on ordinary stock shows up on PO-0042's history — reading
+     * the line's own column would see only its first slice and quietly lose the
+     * rest. The quantity is named because it is the thing that changed: "6 × Foo"
+     * on a line of ten says something a bare item name does not.
      */
     const poBefore = new Map<string, string[]>()
     const poAfter = new Map<string, string[]>()
@@ -2772,8 +3094,27 @@ export function setInvoiceLineRouting(
       if (!po) return
       m.set(po, [...(m.get(po) ?? []), item])
     }
-    for (const l of before) if (touched.includes(l.id)) push(poBefore, l.source_po_id, l.item)
-    for (const l of after) if (touched.includes(l.id)) push(poAfter, l.source_po_id, l.item)
+    const pushSlices = (
+      m: Map<string, string[]>,
+      rows: Row[],
+      splits: Map<string, InvoiceLineAllocation[]>
+    ): void => {
+      for (const l of rows) {
+        if (!touched.includes(l.id)) continue
+        // Summed per order first, so one line split into two slices of the same
+        // purchase order reads as one claim of six rather than two of three.
+        const byPo = new Map<string, number>()
+        for (const s of effectiveSlices(asSliceable(l, splits), stockLocation)) {
+          if (!s.holdsStock || !s.sourcePoId) continue
+          byPo.set(s.sourcePoId, (byPo.get(s.sourcePoId) ?? 0) + s.quantity)
+        }
+        for (const [poId, qty] of byPo) {
+          push(m, poId, qty === l.quantity ? l.item : `${qty} × ${l.item}`)
+        }
+      }
+    }
+    pushSlices(poBefore, before, splitsBefore)
+    pushSlices(poAfter, after, splitsAfter)
     const soLabel = (header.invoice_number ?? '').trim()
       ? `sales order ${(header.invoice_number ?? '').trim()}`
       : 'a sales order'
@@ -2796,7 +3137,22 @@ export function setInvoiceLineRouting(
 
     // The same fold a draft save performs. Naming an order on a posted sale
     // means exactly what naming it on a draft did — see foldRoadshowTicket.
-    foldRoadshowTicket(db, id, after.map((l) => ({ sourcePoId: l.source_po_id })), header.customer_name, actorId)
+    //
+    // ONE ENTRY PER SLICE, not per line, so `soleSourceOrder` sees two purchase
+    // orders when a split line takes cases from two of them and declines to fold
+    // — which is exactly what it should do: a deal ticket is a claim about one
+    // deal, and picking one of the two would put a week's figure on the wrong shop.
+    foldRoadshowTicket(
+      db,
+      id,
+      after.flatMap((l) =>
+        effectiveSlices(asSliceable(l, splitsAfter), stockLocation).map((s) => ({
+          sourcePoId: s.sourcePoId
+        }))
+      ),
+      header.customer_name,
+      actorId
+    )
 
     const names = after.filter((l) => touched.includes(l.id)).map((l) => l.item)
     // 'note', not a new kind. The event log's kinds are the things that happen

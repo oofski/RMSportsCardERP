@@ -40,6 +40,7 @@
 import { composeCustomerMemo } from './invoiceDelivery'
 import { destinationHoldsStock } from './purchaseOrders'
 import { LOCATION_IDS } from './inventory'
+import type { InvoiceLineAllocation } from './invoiceAllocations'
 import type { Carrier, PaymentTiming } from './freight'
 import type { ShipStatusCode } from './shippingTypes'
 
@@ -308,6 +309,20 @@ export interface InvoiceLine {
    * still draws a shelf down.
    */
   dropship: boolean
+  /**
+   * THE LINE SPLIT BY QUANTITY, when somebody split it.
+   *
+   * Empty on every line ever written, which is what makes it back-compatible:
+   * no rows means one implicit slice of the whole quantity at this line's own
+   * destination and source order, so `destination`, `supplier`, `sourcePoId` and
+   * `dropship` above still answer for the line exactly as they always did.
+   *
+   * Never read `allocations.length` and branch. Ask `effectiveSlices` in
+   * @shared/invoiceAllocations, which is the one place that rule lives — the
+   * zero-row case handled correctly in some readers and forgotten in others is
+   * how a back-compat mechanism becomes a bug.
+   */
+  allocations: InvoiceLineAllocation[]
   /** Passed through to the export verbatim; this app does no tax arithmetic. */
   taxRate: string | null
   className: string | null

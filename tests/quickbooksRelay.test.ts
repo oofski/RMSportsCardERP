@@ -622,6 +622,56 @@ async function main(): Promise<void> {
   }
   ok(broken.length === 0, 'and every character class in it compiles', broken.slice(0, 3).join(' | '))
 
+  /**
+   * AND NEITHER DOES ANY OTHER SOURCE FILE.
+   *
+   * This check was worker-only for a long time, on the reasoning that the paste
+   * into Cloudflare was the thing that broke. That reasoning was too narrow, and
+   * it was proved so: a literal NUL went into `src/main/db/invoices.ts` as the
+   * separator in a Map key, joined and split with the same invisible byte, so it
+   * worked — typecheck, build and every test passed — and it would have gone on
+   * working until something normalised the file and silently changed what the
+   * two halves of a key were.
+   *
+   * A control character costs nothing to forbid and cannot be seen by any human
+   * process. Every character that needs to be one is written as an escape.
+   */
+  const walk = (dir: string, out: string[] = []): string[] => {
+    const fs = require('node:fs')
+    const path = require('node:path')
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) {
+        if (['node_modules', '.git', 'out', 'dist', 'release', 'build'].includes(entry.name)) continue
+        walk(full, out)
+      } else if (/\.(ts|tsx|js|jsx|css)$/.test(entry.name)) {
+        out.push(full)
+      }
+    }
+    return out
+  }
+  const offenders: string[] = []
+  for (const file of [
+    ...walk(require('node:path').join(process.cwd(), 'src')),
+    ...walk(require('node:path').join(process.cwd(), 'tests')),
+    ...walk(require('node:path').join(process.cwd(), 'cloud'))
+  ]) {
+    const bytes: Buffer = require('node:fs').readFileSync(file)
+    for (let i = 0; i < bytes.length; i++) {
+      const b = bytes[i]
+      // Tab, newline and carriage return are the only ones a source file may hold.
+      if ((b < 32 && b !== 9 && b !== 10 && b !== 13) || b === 127) {
+        offenders.push(`${file.replace(process.cwd() + '/', '')} byte ${i}: 0x${b.toString(16)}`)
+        break
+      }
+    }
+  }
+  ok(
+    offenders.length === 0,
+    'NO SOURCE FILE ANYWHERE CONTAINS A LITERAL CONTROL CHARACTER — no editor, diff or review can see one',
+    offenders.slice(0, 5).join(', ')
+  )
+
   // -------------------------------------------------------------------------
   console.log('\n=== attachments: what the relay will and will not carry ===')
   // -------------------------------------------------------------------------
