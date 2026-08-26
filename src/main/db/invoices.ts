@@ -36,6 +36,7 @@ import { asShipStatus } from '@shared/tracking'
 import { getDb, getMeta } from './database'
 import { applyInvoiceStock, invoiceStockLocation, releaseInvoiceStock } from './invoiceStock'
 import { destinationHoldsStock } from '@shared/purchaseOrders'
+import type { LinkablePurchaseOrder } from '@shared/orders'
 import { adoptLegacyFreight, deleteOrderExtras, recordOrderEvent } from './orderExtras'
 import { describeDims, hasDims, readyToShipBlockedReason } from '@shared/fulfillment'
 import { dealTicketRefFor } from './dealTickets'
@@ -1890,6 +1891,80 @@ export function recordQboObservation(id: string, o: QboInvoiceObservation): bool
  * purchase order. That is not a second buyer, it is the same boxes claimed by
  * two purchases, and it would leave the first one silently orphaned.
  */
+/**
+ * The purchase orders a saved sale could be attached to.
+ *
+ * ## Why this read did not exist until now
+ *
+ * Both dropship flows could only ever RAISE the missing document. Sell first and
+ * the app offers to write the purchase; buy first and it offers to write the
+ * sale. Neither could say "I already made that one — attach it", so
+ * `linkDropshipPair` had exactly two callers and both fired in the moment after
+ * a brand-new document was created.
+ *
+ * The gap showed in the app's own words: DropshipPurchaseStep's footnote tells
+ * the operator to choose "Not now" if the goods were bought already, and the
+ * buy-side interstitial promises the sale can be raised "from the Sales Orders
+ * board whenever you like, and link it there". It could not be. The owner's case
+ * was exactly that — one invoice already sent to a buyer, two of its cases
+ * dropshipped, and the purchase order for them raised by hand beforehand.
+ *
+ * ## Everything not cancelled, ranked rather than filtered
+ *
+ * A purchase order that supplies a sale is not required to look like it. The
+ * supplier the sale's lines name is the usual answer and leads the list — see
+ * `linkableOrder` in @shared/orders — but a sale whose lines name nobody is
+ * precisely the one that sent somebody here, and hiding everything on a supplier
+ * mismatch would hand it an empty picker.
+ *
+ * Orders already supplying OTHER sales stay on the list: a multi-shipment
+ * purchase legitimately supplies several. `otherSales` is carried so the picker
+ * can say so rather than the operator finding out afterwards.
+ */
+export function linkablePurchaseOrders(invoiceId: string, limit = 60): LinkablePurchaseOrder[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT po.id, po.po_number, po.supplier, po.location, po.status, po.total,
+              COALESCE(po.ordered_at, po.created_at) AS ordered_at,
+              (SELECT COALESCE(SUM(l.quantity), 0)
+                 FROM purchase_order_lines l WHERE l.po_id = po.id) AS units,
+              (SELECT COUNT(*) FROM invoices i
+                WHERE i.source_po_id = po.id AND i.status != 'void' AND i.id != ?) AS other_sales,
+              (SELECT COUNT(*) FROM invoices i
+                WHERE i.source_po_id = po.id AND i.id = ?) AS linked_here
+         FROM purchase_orders po
+        WHERE po.status != 'cancelled'
+        ORDER BY COALESCE(po.ordered_at, po.created_at) DESC, po.po_number DESC
+        LIMIT ?`
+    )
+    .all(invoiceId, invoiceId, Math.max(1, Math.min(500, limit))) as Array<{
+    id: string
+    po_number: string
+    supplier: string | null
+    location: string | null
+    status: string
+    total: number
+    ordered_at: string | null
+    units: number
+    other_sales: number
+    linked_here: number
+  }>
+  return rows.map((r) => ({
+    poId: r.id,
+    poNumber: r.po_number,
+    supplier: (r.supplier ?? '').trim() || null,
+    destination: (r.location ?? '').trim() || null,
+    status: r.status,
+    // A DAY, not an instant. Two orders to one supplier are told apart by when
+    // they were raised, and nobody reads a timestamp to do it.
+    orderedOn: r.ordered_at ? r.ordered_at.slice(0, 10) : null,
+    total: money(Number(r.total) || 0),
+    unitsOrdered: Number(r.units) || 0,
+    linkedHere: Number(r.linked_here) > 0,
+    otherSales: Number(r.other_sales) || 0
+  }))
+}
+
 export function linkDropshipPair(
   poId: string,
   invoiceId: string,

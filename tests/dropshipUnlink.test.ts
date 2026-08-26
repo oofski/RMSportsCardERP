@@ -45,6 +45,7 @@ const database = require('../src/main/db/database')
 const poRepo = require('../src/main/db/purchaseOrders')
 const inv = require('../src/main/db/invoices')
 const { salesOrderKindOf } = require('../src/shared/invoices')
+const { linkPurchaseRefusal, linkableOrder } = require('../src/shared/orders')
 
 let db = database.getDb()
 
@@ -286,6 +287,245 @@ ok(
   poRepo.getPurchaseOrder(chasePo.id).saleAwaitsItems === false,
   'a VOIDED sale stops asking for anything'
 )
+
+// ---------------------------------------------------------------------------
+console.log('\n=== ATTACHING A PURCHASE ORDER TO A SALE THAT IS ALREADY WRITTEN ===')
+// ---------------------------------------------------------------------------
+/**
+ * The owner's case, in his words: "made an invoice for a ton of stuff going to
+ * one buyer, two of the cases are being drop shipped, I made a PO for the two
+ * drop ship sources, didn't make any new SOs - can I make any changes on the SOs
+ * page to show the two dropships without changing the invoice or invoicing
+ * again?"
+ *
+ * He could not. `linkDropshipPair` does exactly this and has no status guard,
+ * but its only two callers both fired in the moment after a brand-new document
+ * was created - sell first and the app offers to write the purchase, buy first
+ * and it offers to write the sale. Neither could be told the other half already
+ * existed, and the modal's own footnote told people to choose "Not now" if the
+ * goods were "bought already", which left the pair unrecorded.
+ *
+ * `linkablePurchaseOrders` is the read the picker needed. What it must get right
+ * is WHAT IT DOES NOT DO: no line, no total, nothing in QuickBooks.
+ */
+{
+  const buyer = 'Ryan Rubin'
+  const sale = inv.saveInvoice(
+    {
+      id: null,
+      customerName: buyer,
+      invoiceNumber: 'SO-7700',
+      invoiceDate: '2026-08-20',
+      location: 'RM',
+      lines: [{ item: 'Tribute Baseball Case', quantity: 10, rate: 900, amount: 9000 }]
+    },
+    null
+  )
+  // Already sent: this is the state the owner is actually in, and the state in
+  // which nothing about the document may be touched.
+  db.prepare(`UPDATE invoices SET status = 'sent', qbo_id = 'qbo-7700' WHERE id = ?`).run(sale.id)
+
+  const supplierPo = poRepo.createPurchaseOrder(
+    { supplier: 'Kestrel Cards', location: buyer, lines: [] },
+    null
+  )
+  const shelfPo = poRepo.createPurchaseOrder(
+    { supplier: 'Longwood Wax', location: 'RM', lines: [] },
+    null
+  )
+  const deadPo = poRepo.createPurchaseOrder(
+    { supplier: 'Gone Distributors', location: 'RM', lines: [] },
+    null
+  )
+  poRepo.setPurchaseOrderStatus(deadPo.id, 'cancelled', null)
+
+  const offered = inv.linkablePurchaseOrders(sale.id)
+  const has = (id: string): boolean => offered.some((o: any) => o.poId === id)
+  ok(has(supplierPo.id) && has(shelfPo.id), 'every live purchase order is offered')
+  ok(
+    !has(deadPo.id),
+    'A CANCELLED ONE IS NOT - nothing on it is being bought',
+    offered.map((o: any) => o.poNumber).join(',')
+  )
+  /**
+   * NEWEST FIRST out of the read itself, not just out of the shared ranker. A
+   * purchase raised for a sale is raised near it in time, and a picker that
+   * opens on the oldest order in the company is one nobody scrolls to the end
+   * of.
+   */
+  db.prepare(`UPDATE purchase_orders SET ordered_at = '2026-01-05T00:00:00.000Z' WHERE id = ?`).run(
+    shelfPo.id
+  )
+  db.prepare(`UPDATE purchase_orders SET ordered_at = '2026-08-22T00:00:00.000Z' WHERE id = ?`).run(
+    supplierPo.id
+  )
+  const byDate = inv.linkablePurchaseOrders(sale.id).filter((o: any) =>
+    [supplierPo.id, shelfPo.id].includes(o.poId)
+  )
+  ok(
+    byDate[0].poId === supplierPo.id && byDate[1].poId === shelfPo.id,
+    'THE READ COMES BACK NEWEST FIRST',
+    byDate.map((o: any) => `${o.poNumber}@${o.orderedOn}`).join(' , ')
+  )
+  ok(byDate[0].orderedOn === '2026-08-22', 'as a DAY, not a timestamp', String(byDate[0].orderedOn))
+
+  const row = offered.find((o: any) => o.poId === supplierPo.id)
+  ok(row.supplier === 'Kestrel Cards', 'the supplier comes across', String(row?.supplier))
+  ok(row.destination === buyer, 'and where its goods were headed', String(row?.destination))
+  ok(row.linkedHere === false, 'and it is not attached to this sale yet')
+  ok(row.otherSales === 0, 'nor to any other')
+
+  // THE ATTACH ITSELF. What matters is the four things it leaves alone.
+  const before = inv.getInvoice(sale.id)
+  const res = inv.linkDropshipPair(supplierPo.id, sale.id, null)
+  ok(res.ok === true, 'a sale that has already been SENT can still be attached', String(res.error))
+
+  const after = inv.getInvoice(sale.id)
+  ok(after.sourcePoId === supplierPo.id, 'the sale now names the purchase order')
+  ok(after.total === before.total, 'THE TOTAL IS UNTOUCHED', `${before.total} -> ${after.total}`)
+  ok(after.lines.length === before.lines.length, 'and so is every line')
+  ok(
+    after.lines[0].quantity === before.lines[0].quantity &&
+      after.lines[0].rate === before.lines[0].rate,
+    'down to the quantity and the rate'
+  )
+  ok(after.qboId === before.qboId, 'and the QuickBooks copy is not even addressed')
+  ok(after.status === 'sent', 'the sale stays exactly where it was on the board', after.status)
+
+  /**
+   * WHICH IS THE WHOLE POINT: the card now reads as a dropship even though every
+   * line still comes off a shelf. salesOrderKindOf says so deliberately - the
+   * link is a statement about the DEAL, not about the routing of the lines.
+   */
+  ok(salesOrderKindOf(after) === 'mixed', 'and the card reads Part drop', salesOrderKindOf(after))
+
+  // It shows as attached on the next read, so the picker can say so.
+  const again = inv.linkablePurchaseOrders(sale.id).find((o: any) => o.poId === supplierPo.id)
+  ok(again.linkedHere === true, 'the picker reports it as already attached')
+
+  // ONE PURCHASE MAY SUPPLY SEVERAL SALES - that is multi-shipment - so a second
+  // sale attaching to the same order is allowed and is COUNTED, not refused.
+  const second = inv.saveInvoice(
+    {
+      id: null,
+      customerName: 'Ada Okonkwo',
+      invoiceNumber: 'SO-7701',
+      invoiceDate: '2026-08-20',
+      location: 'RM',
+      lines: [{ item: 'Tribute Baseball Case', quantity: 2, rate: 900, amount: 1800 }]
+    },
+    null
+  )
+  ok(
+    inv.linkDropshipPair(supplierPo.id, second.id, null).ok === true,
+    'a SECOND sale can be attached to the same purchase order'
+  )
+  const forSecond = inv
+    .linkablePurchaseOrders(second.id)
+    .find((o: any) => o.poId === supplierPo.id)
+  ok(forSecond.otherSales === 1, 'and each is told how many others it already supplies', String(forSecond?.otherSales))
+
+  // REPOINTING IS REFUSED. Moving a deal off the order it was recorded against
+  // would rewrite both of their histories with nothing saying it happened.
+  const moved = inv.linkDropshipPair(shelfPo.id, sale.id, null)
+  ok(moved.ok === false, 'A SALE CANNOT BE MOVED TO A DIFFERENT PURCHASE ORDER')
+  ok(/already came from another/i.test(moved.error ?? ''), 'and the refusal says why', String(moved.error))
+  ok(
+    inv.getInvoice(sale.id).sourcePoId === supplierPo.id,
+    'with the original link left standing'
+  )
+
+  // Attaching the SAME one again is a no-op rather than an error - somebody
+  // pressing twice must not be told they broke something.
+  ok(
+    inv.linkDropshipPair(supplierPo.id, sale.id, null).ok === true,
+    'attaching the same order again is harmless'
+  )
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n=== WHICH ORDER THE PICKER PUTS FIRST, and what it refuses ===')
+// ---------------------------------------------------------------------------
+/**
+ * Pure rules, tested without a database. The ranking is the difference between
+ * a picker somebody can use and a list of forty order numbers.
+ */
+{
+  const po = (over: any): any => ({
+    poId: 'p1',
+    poNumber: 'PO-0001',
+    supplier: null,
+    destination: null,
+    status: 'ordered',
+    orderedOn: '2026-08-01',
+    total: 0,
+    unitsOrdered: 0,
+    linkedHere: false,
+    otherSales: 0,
+    ...over
+  })
+
+  const kestrel = po({ poId: 'a', poNumber: 'PO-0010', supplier: 'Kestrel Cards', orderedOn: '2026-08-01' })
+  const longwood = po({ poId: 'b', poNumber: 'PO-0020', supplier: 'Longwood Wax', orderedOn: '2026-08-20' })
+  const older = po({ poId: 'c', poNumber: 'PO-0005', supplier: 'Kestrel Cards', orderedOn: '2026-07-01' })
+
+  const ranked = linkableOrder([longwood, older, kestrel], ['Kestrel Cards'])
+  ok(
+    ranked[0].poId === 'a' && ranked[1].poId === 'c',
+    'THE SUPPLIER THE LINES NAME COMES FIRST, newest of those first',
+    ranked.map((o: any) => o.poNumber).join(',')
+  )
+  ok(
+    ranked[2].poId === 'b',
+    'and everything else follows rather than being hidden',
+    ranked.map((o: any) => o.poNumber).join(',')
+  )
+
+  /**
+   * NOTHING IS HIDDEN ON A MISMATCH. A sale whose lines name no supplier is
+   * exactly the one that sends somebody here, and filtering would hand it an
+   * empty picker.
+   */
+  const blind = linkableOrder([longwood, older, kestrel], [])
+  ok(blind.length === 3, 'a sale naming no supplier is still offered everything', String(blind.length))
+  ok(
+    blind[0].poId === 'b',
+    'in newest-first order, which is the only thing left to go on',
+    blind.map((o: any) => o.poNumber).join(',')
+  )
+  // "(not named)" is what dropshipSuppliersOf yields for a line with no
+  // supplier. It must not be matched against as if it were a business.
+  /**
+   * "(not named)" is what dropshipSuppliersOf yields for a line carrying no
+   * supplier. Matched as if it were a business it would drag a purchase order
+   * whose supplier field happens to be blank-ish to the top of every picker —
+   * so the fixture includes one called exactly that, and it must NOT lead.
+   */
+  const placeholder = po({ poId: 'd', poNumber: 'PO-0001', supplier: '(not named)', orderedOn: '2026-01-01' })
+  const withBlank = linkableOrder([longwood, placeholder, kestrel], ['(not named)'])
+  ok(
+    withBlank[0].poId === 'b',
+    'THE PLACEHOLDER SUPPLIER RANKS NOTHING — the newest still leads',
+    withBlank.map((o: any) => o.poNumber).join(',')
+  )
+  ok(
+    withBlank[withBlank.length - 1].poId === 'd',
+    'and the one literally called "(not named)" sorts last on its date, not first on its name',
+    withBlank.map((o: any) => o.poNumber).join(',')
+  )
+
+  // --- the refusals -------------------------------------------------------
+  ok(linkPurchaseRefusal(kestrel, { sourcePoId: null }) === null, 'an unattached sale may attach')
+  ok(
+    linkPurchaseRefusal(kestrel, { sourcePoId: 'a' }) === null,
+    'and re-attaching the SAME order is not a refusal'
+  )
+  const moved = linkPurchaseRefusal(kestrel, { sourcePoId: 'zzz', sourcePoNumber: 'PO-0099' })
+  ok(!!moved && /PO-0099/.test(moved), 'A SALE ALREADY ON ANOTHER ORDER IS REFUSED, by name', String(moved))
+  const dead = linkPurchaseRefusal(po({ status: 'cancelled', poNumber: 'PO-0077' }), { sourcePoId: null })
+  ok(!!dead && /cancelled/i.test(dead), 'and a cancelled order is refused', String(dead))
+  ok(linkPurchaseRefusal(null, { sourcePoId: null }) === null, 'nothing chosen is not a refusal')
+}
 
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail > 0) process.exit(1)

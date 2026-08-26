@@ -61,6 +61,7 @@ import type {
   WholesaleSaleRow
 } from '@shared/invoices'
 import type {
+  LinkablePurchaseOrder,
   NewOrderShipment,
   OrderDocument,
   OrderEvent,
@@ -1657,6 +1658,15 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       > => ipcRenderer.invoke(IPC.orderEmailLabel, input),
 
       /** Record that a purchase order and a sales order are the same deal. */
+      /**
+       * The purchase orders a saved sale could be attached to.
+       *
+       * Deliberately not the PO board's list: that one sweeps finished orders
+       * off after a day, and a purchase raised last week for goods only now
+       * being invoiced is exactly the one somebody comes here looking for.
+       */
+      linkablePos: (invoiceId: string): Promise<Result<LinkablePurchaseOrder[]>> =>
+        ipcRenderer.invoke(IPC.orderLinkablePos, invoiceId),
       linkDropship: (poId: string, invoiceId: string): Promise<Result<{ linked: true }>> =>
         ipcRenderer.invoke(IPC.orderLinkDropship, { poId, invoiceId }),
 

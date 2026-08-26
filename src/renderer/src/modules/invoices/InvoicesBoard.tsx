@@ -30,6 +30,7 @@ import { FreightLine, TrackingLine } from '../../components/FreightFields'
 import { PaymentBar } from '../../components/PaymentProgress'
 import { CheckTrackingButton } from '../../components/CheckTrackingButton'
 import { MatchByNumberModal } from './MatchByNumberModal'
+import { AttachPurchaseOrderModal } from './AttachPurchaseOrderModal'
 import { PayUpFrontModal } from '../orders/PayUpFrontModal'
 import { useToast } from '../../components/Toast'
 import { formatDate, formatMoney } from '../../lib/format'
@@ -86,6 +87,14 @@ export function InvoicesBoard({
   const [creatingNew, setCreatingNew] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [matching, setMatching] = useState(false)
+  /**
+   * The sale somebody is attaching a purchase order to.
+   *
+   * A summary, not a detail: attaching touches only the link, so nothing here
+   * needs the lines — which is also what lets it work on an order that has left
+   * draft and can no longer be opened as a form.
+   */
+  const [attaching, setAttaching] = useState<Invoice | null>(null)
   const [paying, setPaying] = useState<InvoiceDetail | null>(null)
   const [nextNumber, setNextNumber] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
@@ -623,6 +632,7 @@ export function InvoicesBoard({
                       }}
                       onDelete={() => setDeleting(inv)}
                       onPdf={() => void api.invoices.openPdf(inv.id)}
+                      onAttachPo={() => setAttaching(inv)}
                       onPayUpFront={() => void openForPayment(inv.id)}
                     />
                   ))}
@@ -667,6 +677,14 @@ export function InvoicesBoard({
         <DropshipPurchaseStep
           invoice={needsPurchase}
           onClose={() => setNeedsPurchase(null)}
+          onDone={load}
+        />
+      )}
+
+      {attaching && (
+        <AttachPurchaseOrderModal
+          invoice={attaching}
+          onClose={() => setAttaching(null)}
           onDone={load}
         />
       )}
@@ -738,6 +756,7 @@ function InvoiceCard({
   onRetryPush,
   onDelete,
   onPdf,
+  onAttachPo,
   onPayUpFront,
   onItemsInHand,
   onSendAnyway,
@@ -754,6 +773,8 @@ function InvoiceCard({
   onRetryPush: () => Promise<void>
   onDelete: () => void
   onPdf: () => void
+  /** Attach the purchase order that supplied this sale. See AttachPurchaseOrderModal. */
+  onAttachPo: () => void
   /** Open the paid-up-front dialog for this order. */
   onPayUpFront: () => void
   /** Confirm the goods arrived — the only signal a dropship has. */
@@ -1204,6 +1225,30 @@ function InvoiceCard({
             onClick={onPdf}
           >
             Open as PDF
+          </button>
+        )}
+
+        {/* THE PURCHASE THAT SUPPLIED THIS SALE, attachable at any time.
+            
+            Not gated on status, and that is the point. A sale only ever got its
+            purchase order in the seconds after one of them was created — sell
+            first and the app offered to write the purchase, buy first and it
+            offered to write the sale — so an invoice already sent to a buyer,
+            with the purchase raised separately by hand, had no way to say the
+            two were one deal. Attaching writes the link and nothing else: no
+            line, no total, nothing in QuickBooks.
+            
+            Hidden once it has one, because a second purchase order is a
+            different claim and `linkDropshipPair` refuses it anyway. */}
+        {!invoice.sourcePoId && (
+          <button
+            type="button"
+            className="btn po-move"
+            title="Record which purchase order supplied this sale"
+            onClick={onAttachPo}
+          >
+            <Icon name="Link" size={14} />
+            Attach purchase order
           </button>
         )}
 

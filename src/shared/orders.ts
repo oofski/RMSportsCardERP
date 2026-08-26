@@ -539,6 +539,109 @@ export function dropshipSuppliersOf(
  * send a label to the wrong building — the same rule the provenance read keeps
  * about destinations, and the same rule the card's "from" line keeps.
  */
+// ---------------------------------------------------------------------------
+// ATTACHING A SALE TO A PURCHASE ORDER THAT ALREADY EXISTS
+//
+// The other direction of the same pairing, and the one that was missing. Both
+// dropship flows could only ever RAISE the missing document: sell first and the
+// app offers to write the purchase, buy first and it offers to write the sale.
+// Neither could say "I already made that one — attach it."
+//
+// The gap was visible in the app's own words. DropshipPurchaseStep's footnote
+// tells the operator to choose "Not now" if the goods were "bought already",
+// and the buy-side interstitial promises they can raise the sale "from the
+// Sales Orders board whenever you like, and link it there". The link existed —
+// `linkDropshipPair` — with no way in that did not also create a second
+// document. The owner's case was exactly this: one big invoice already sent to
+// a buyer, two of its cases dropshipped, and the purchase order for them raised
+// by hand beforehand.
+// ---------------------------------------------------------------------------
+
+/** A purchase order a sale could be attached to, as the picker needs it. */
+export interface LinkablePurchaseOrder {
+  poId: string
+  poNumber: string
+  supplier: string | null
+  /** Where its goods were headed. A dropship names the buyer, not a shelf. */
+  destination: string | null
+  status: string
+  /** The calendar day it was raised, for telling two orders to one supplier apart. */
+  orderedOn: string | null
+  total: number
+  unitsOrdered: number
+  /** True when THIS sale is already the one it points at. */
+  linkedHere: boolean
+  /** How many other sales it already supplies. A purchase may supply several. */
+  otherSales: number
+}
+
+/**
+ * Why this sale cannot be attached to that purchase order — null when it can.
+ *
+ * Deliberately short. Two documents being one deal is a claim a person makes,
+ * not something to be second-guessed: a supplier that does not match the line,
+ * a date weeks apart, a total that is nothing like the sale's are all ordinary
+ * shapes of real trade. Only the things that would produce a WRONG record are
+ * refused.
+ */
+export function linkPurchaseRefusal(
+  po: LinkablePurchaseOrder | null | undefined,
+  sale: { sourcePoId?: string | null; sourcePoNumber?: string | null }
+): string | null {
+  if (!po) return null
+  // Already pointed somewhere else. Overwriting would silently move a deal off
+  // the order it was recorded against, on both of their histories.
+  const held = (sale.sourcePoId ?? '').trim()
+  if (held && held !== po.poId) {
+    return (
+      `This sale is already attached to ${sale.sourcePoNumber || 'another purchase order'}. ` +
+      'Detach it there first — a sale belongs to one purchase.'
+    )
+  }
+  if (po.status === 'cancelled') {
+    return `${po.poNumber} was cancelled, so nothing on it is being bought.`
+  }
+  return null
+}
+
+/**
+ * The purchase orders worth offering for one sale, best first.
+ *
+ * THE SUPPLIER THE LINES NAME COMES FIRST, because on a dropship the sale
+ * already says who is shipping it and that is almost always the order somebody
+ * is looking for. After that the newest, because a purchase raised for a sale is
+ * raised near it in time.
+ *
+ * Nothing is HIDDEN on a supplier mismatch, only sorted down. A sale whose lines
+ * name no supplier at all — which is the shape that sent somebody here in the
+ * first place — would otherwise be offered an empty list.
+ */
+export function linkableOrder(
+  orders: readonly LinkablePurchaseOrder[],
+  suppliers: readonly string[]
+): LinkablePurchaseOrder[] {
+  const wanted = new Set(
+    suppliers.map((s) => s.trim().toLowerCase()).filter((s) => s && s !== '(not named)')
+  )
+  const rank = (po: LinkablePurchaseOrder): number =>
+    wanted.size > 0 && wanted.has((po.supplier ?? '').trim().toLowerCase()) ? 0 : 1
+  return [...orders].sort(
+    (a, b) =>
+      rank(a) - rank(b) ||
+      (b.orderedOn ?? '').localeCompare(a.orderedOn ?? '') ||
+      b.poNumber.localeCompare(a.poNumber)
+  )
+}
+
+/** How it reads in the picker: "PO-0042 · Panini · 24 Aug · 2 units". */
+export function linkableOrderLabel(po: LinkablePurchaseOrder): string {
+  const bits = [po.poNumber]
+  if (po.supplier) bits.push(po.supplier)
+  if (po.orderedOn) bits.push(po.orderedOn)
+  bits.push(`${po.unitsOrdered} unit${po.unitsOrdered === 1 ? '' : 's'}`)
+  return bits.join(' · ')
+}
+
 export interface LabelRecipient {
   /** Pre-filled address, or null to leave the box empty and ask. */
   email: string | null

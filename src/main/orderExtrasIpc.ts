@@ -13,6 +13,7 @@ import type {
   OrderSide
 } from '@shared/orders'
 import { composeLabelEmail, isOrderSide, labelMailtoUrl } from '@shared/orders'
+import type { LinkablePurchaseOrder } from '@shared/orders'
 import type { InvoiceDetail, InvoicePaymentInput, NewInvoice } from '@shared/invoices'
 import { COMPANY_NAME } from '@shared/config'
 import { currentUser } from './services/auth'
@@ -36,6 +37,7 @@ import {
   setInvoiceItemsInHand,
   setInvoicePaid,
   linkDropshipPair,
+  linkablePurchaseOrders,
   dropshipSalesFor,
   splitDropshipSales,
   recordInvoicePayment,
@@ -723,6 +725,27 @@ export function registerOrderExtrasIpc(): void {
    * A combined "create and link" call would be a second way to write a sales
    * order, and the two would drift.
    */
+  /**
+   * The purchase orders a saved sale could be attached to. See
+   * linkablePurchaseOrders — a pure read that decides nothing.
+   *
+   * Its own channel rather than a filter on the PO list, because the question is
+   * about a PAIR: which orders make sense beside THIS sale, and which one it is
+   * already attached to. The board's list answers neither and sweeps finished
+   * orders off, which is exactly the order somebody is looking for here.
+   */
+  ipcMain.handle(
+    IPC.orderLinkablePos,
+    (_e, invoiceId: unknown): Result<LinkablePurchaseOrder[]> => {
+      try {
+        requireInvoicing()
+        return { ok: true, data: linkablePurchaseOrders(str(invoiceId)) }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
   ipcMain.handle(
     IPC.orderLinkDropship,
     (_e, payload: { poId?: unknown; invoiceId?: unknown }): Result<{ linked: true }> => {

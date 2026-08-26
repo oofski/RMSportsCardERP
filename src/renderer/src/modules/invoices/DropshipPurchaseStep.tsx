@@ -8,6 +8,7 @@ import { Icon } from '../../components/Icon'
 import { useToast } from '../../components/Toast'
 import { formatMoney } from '../../lib/format'
 import { CreatePurchaseOrderModal } from '../invoicing/CreatePurchaseOrderModal'
+import { AttachPurchaseOrderModal } from './AttachPurchaseOrderModal'
 
 /**
  * The other half of a dropship, coming the other way: the purchase that
@@ -52,6 +53,7 @@ export function DropshipPurchaseStep({
 }): JSX.Element {
   const toast = useToast()
   const [buying, setBuying] = useState(false)
+  const [attaching, setAttaching] = useState(false)
 
   const dropLines = invoice.lines.filter((l) => l.dropship)
   const suppliers = dropshipSuppliersOf(dropLines)
@@ -64,6 +66,12 @@ export function DropshipPurchaseStep({
   const buyable = dropLines.filter((l) => !!l.productId)
   const freehand = dropLines.filter((l) => !l.productId)
   const dropUnits = buyable.reduce((sum, l) => sum + l.quantity, 0)
+
+  if (attaching) {
+    return (
+      <AttachPurchaseOrderModal invoice={invoice} onClose={onClose} onDone={onDone} />
+    )
+  }
 
   if (buying && supplier) {
     return (
@@ -109,6 +117,16 @@ export function DropshipPurchaseStep({
         <>
           <Button variant="ghost" onClick={onClose}>
             Not now
+          </Button>
+          {/* "BOUGHT ALREADY" WAS AN EXIT, NOT AN ANSWER.
+              
+              The note at the foot of this modal has always told people to choose
+              Not now if the goods were bought already — which left the two
+              documents unlinked and nothing on either board saying so. That was
+              the whole gap: the app could raise the missing half or shrug, and
+              could not be told the half already existed. */}
+          <Button variant="secondary" icon="Link" onClick={() => setAttaching(true)}>
+            I already made it
           </Button>
           {!!supplier && buyable.length > 0 && (
             <Button variant="primary" icon="ClipboardList" onClick={() => setBuying(true)}>
@@ -175,8 +193,9 @@ export function DropshipPurchaseStep({
         <span>
           The two orders stay <b>separate documents</b> — you still owe {supplier ?? 'the supplier'}{' '}
           for what they ship even if the buyer falls through. Linking them only records that they
-          are one deal, on both of their histories. Choose <b>Not now</b> if this was bought
-          already, or is going on a standing order.
+          are one deal, on both of their histories. If this was bought already, choose{' '}
+          <b>I already made it</b> and pick that order — it changes nothing on either
+          document. <b>Not now</b> leaves them unlinked.
         </span>
       </p>
     </Modal>

@@ -271,6 +271,7 @@ export const IPC = {
   // this is called: the second screen writes an ordinary sales order through the
   // ordinary path, and this only records that the two are the same deal.
   orderLinkDropship: 'order:link-dropship',
+  orderLinkablePos: 'order:linkable-pos',
   // One purchase, several buyers: write every buyer's sales order and link them
   // all to the purchase in ONE transaction. Deliberately not the linking call
   // above run five times — a partial batch leaves buyers uninvoiced for boxes
