@@ -6,6 +6,7 @@ import { Button, Modal } from '../../components/ui'
 import { Icon } from '../../components/Icon'
 import { useToast } from '../../components/Toast'
 import { DestinationSelect } from '../invoicing/PartySelect'
+import { SourceOrderPicker } from './SourceOrderPicker'
 
 /**
  * WHERE THE LINES OF A POSTED SALE ARE FULFILLED FROM.
@@ -48,12 +49,22 @@ export function RouteLinesModal({
   const [busy, setBusy] = useState(false)
   /** Line id -> the destination it should have. Only what has been touched. */
   const [edits, setEdits] = useState<Record<string, string | null>>({})
+  /**
+   * Line id -> which purchase order's cases it takes. Only what has been touched.
+   *
+   * SEPARATE FROM `edits` because the two questions are separate: one is whether
+   * a line comes off a shelf at all, the other is whose cases it takes when it
+   * does. Somebody moving a line onto the other shelf must not silently drop a
+   * roadshow pointer they set last week, and a key that is absent here means
+   * exactly that — leave it alone.
+   */
+  const [sources, setSources] = useState<Record<string, string>>({})
 
   const headerLocation = (invoice.location || 'RM').trim()
   const routeOf = (lineId: string, current: string | null): string | null =>
     lineId in edits ? edits[lineId] : current
 
-  const changed = invoice.lines.filter((l) => {
+  const routeChanged = (l: (typeof invoice.lines)[number]): boolean => {
     if (!(l.id in edits)) return false
     const now = (edits[l.id] ?? '').trim()
     const was = (l.destination ?? '').trim()
@@ -62,13 +73,17 @@ export function RouteLinesModal({
     // line already inheriting RM would read as a change and rewrite the stock
     // for nothing.
     return (now || headerLocation).toLowerCase() !== (was || headerLocation).toLowerCase()
-  })
+  }
+  const sourceChanged = (l: (typeof invoice.lines)[number]): boolean =>
+    l.id in sources && (sources[l.id] || '') !== (l.sourcePoId || '')
+
+  const changed = invoice.lines.filter((l) => routeChanged(l) || sourceChanged(l))
 
   // What the shelf will do, said before it happens rather than discovered after.
   let backToShelf = 0
   let offTheShelf = 0
   for (const l of changed) {
-    if (!l.productId) continue
+    if (!l.productId || !routeChanged(l)) continue
     const wasStock = destinationHoldsStock((l.destination ?? '').trim() || headerLocation)
     const nowStock = destinationHoldsStock((edits[l.id] ?? '').trim() || headerLocation)
     if (wasStock && !nowStock) backToShelf += l.quantity
@@ -89,10 +104,15 @@ export function RouteLinesModal({
         invoice.id,
         changed.map((l) => ({
           lineId: l.id,
-          destination: edits[l.id],
+          // A line whose route was not touched keeps the one it has — this
+          // screen may be here only to change whose cases it takes.
+          destination: l.id in edits ? edits[l.id] : (l.destination ?? null),
           // The destination IS the party shipping a dropship line, exactly as
           // the sales form derives it — there is no second question to ask.
-          supplier: null
+          supplier: null,
+          // Absent unless somebody touched it, so a route-only change leaves a
+          // roadshow pointer exactly where it was.
+          ...(l.id in sources ? { sourcePoId: sources[l.id] || null } : {})
         }))
       )
       if (!res.ok) {
@@ -141,6 +161,12 @@ export function RouteLinesModal({
         here. Changing this moves your <b>stock</b>. It does not change a price, the total, or the
         invoice the buyer is holding.
       </p>
+      <p className="fin-confirm-lead">
+        A line that DOES come off a shelf may also say <b>whose cases</b> it takes — a roadshow
+        week, or any purchase order still holding that product. That decides where its{' '}
+        <b>cost</b> comes from, and it shows up on that purchase order&rsquo;s history as well as
+        this sale&rsquo;s.
+      </p>
 
       <table className="data po-lines-table">
         <thead>
@@ -177,6 +203,25 @@ export function RouteLinesModal({
                     />
                   ) : (
                     <span className="muted">not a stocked item</span>
+                  )}
+                  {/* WHOSE CASES, once it is established that it takes any.
+                      
+                      The second question, and only ever asked of a line that
+                      comes off a shelf: a dropship line went supplier-to-buyer
+                      and never sat on one, so there is no order's stock to sell
+                      out of. The same picker the invoice form shows on a draft,
+                      answering the same question — it renders nothing at all
+                      unless some purchase order actually holds this product on
+                      this shelf, which is almost never. */}
+                  {l.productId && !drop && (
+                    <SourceOrderPicker
+                      productId={l.productId}
+                      productName={l.item}
+                      location={(dest ?? '').trim() || headerLocation}
+                      quantity={l.quantity}
+                      value={l.id in sources ? sources[l.id] : (l.sourcePoId ?? '')}
+                      onChange={(poId) => setSources((prev) => ({ ...prev, [l.id]: poId }))}
+                    />
                   )}
                 </td>
               </tr>

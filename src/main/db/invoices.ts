@@ -1420,59 +1420,7 @@ export function saveInvoice(
      * false when it has already happened, which is what keeps the log from
      * gaining a line every time somebody fixes a typo.
      */
-    const fromOrder = soleSourceOrder(lines)
-    if (fromOrder) {
-      const src = db
-        .prepare(
-          `SELECT po_number, supplier, tab_opened_at, tab_closed_at
-             FROM purchase_orders WHERE id = ?`
-        )
-        .get(fromOrder) as
-        | {
-            po_number: string
-            supplier: string | null
-            tab_opened_at: string | null
-            tab_closed_at: string | null
-          }
-        | undefined
-      /**
-       * ONLY A RUNNING ROADSHOW ORDER, and this is the narrower half of the
-       * pair.
-       *
-       * A line may now name ANY purchase order holding stock — five cases from a
-       * roadshow beside five from a distributor is the case the chooser exists
-       * for. Naming one decides where the COST comes from, and that is right
-       * whoever the order is with.
-       *
-       * It does not decide the two documents are one DEAL. A case bought from a
-       * distributor in March and sold to somebody unrelated in August is two
-       * pieces of trade that happen to share a box, and folding their tickets
-       * together would put a purchase and a sale under one number on the strength
-       * of a shelf. A roadshow week is the opposite — bought and sold against
-       * itself all week, one shop, one payment — which is the whole reason the
-       * fold exists.
-       */
-      if (src && isOpenTab({ tabOpenedAt: src.tab_opened_at, tabClosedAt: src.tab_closed_at })) {
-        const folded = foldTicketIntoDocument(
-          db,
-          { kind: 'po', id: fromOrder },
-          { kind: 'so', id },
-          actorId
-        )
-        if (folded) {
-          recordOrderEvent('so', id, 'link', {
-            detail: `Sold out of ${src.po_number}${src.supplier ? ` (${src.supplier})` : ''}`,
-            actorId,
-            db
-          })
-          recordOrderEvent('po', fromOrder, 'link', {
-            detail: `Sold on to ${clean(input.customerName) ?? 'a buyer'} out of this order's stock`,
-            actorId,
-            db
-          })
-        }
-      }
-    }
+    foldRoadshowTicket(db, id, lines, clean(input.customerName), actorId)
 
     for (const l of lines) {
       const key = l.productId ? `p:${l.productId}` : `i:${l.item.trim().toLowerCase()}`
@@ -2417,6 +2365,77 @@ export function setInvoiceReadyToShip(
  * it in the second would be a second answer to the same question, and the first
  * time they disagreed a line would be billed as a dropship and picked as stock.
  */
+/**
+ * A SALE OUT OF ONE ROADSHOW ORDER'S STOCK JOINS THAT ORDER'S DEAL TICKET.
+ *
+ * "The deal ticket is just linked to the ongoing PO until the PO is paid out" —
+ * a week of buying from one shop and everything sold out of it is one deal, and
+ * the register should say so under one number.
+ *
+ * ## Only a RUNNING roadshow order
+ *
+ * A line may name ANY purchase order holding stock — five cases from a roadshow
+ * beside five from a distributor is the case the chooser exists for. Naming one
+ * decides where the COST comes from, and that is right whoever the order is
+ * with. It does not decide the two documents are one DEAL: a case bought from a
+ * distributor in March and sold to somebody unrelated in August is two pieces of
+ * trade that happen to share a box. A roadshow week is the opposite — bought and
+ * sold against itself all week, one shop, one payment.
+ *
+ * ## And only when every line AGREES
+ *
+ * `soleSourceOrder` yields null when two lines name two orders. A deal ticket is
+ * a claim about one deal, and folding a sale into one of the two orders that
+ * supplied it would put a week's figure on the wrong shop.
+ *
+ * Shared by `saveInvoice` and `setInvoiceLineRouting`, because naming an order
+ * on a posted sale means exactly what naming it on a draft did. Idempotent: the
+ * fold returns false once it has happened, which is what keeps the log from
+ * gaining a line every time somebody fixes a typo.
+ */
+function foldRoadshowTicket(
+  db: Database.Database,
+  invoiceId: string,
+  lines: ReadonlyArray<{ sourcePoId?: string | null }>,
+  customerName: string | null,
+  actorId: string | null
+): void {
+  const fromOrder = soleSourceOrder(lines)
+  if (!fromOrder) return
+  const src = db
+    .prepare(
+      `SELECT po_number, supplier, tab_opened_at, tab_closed_at
+         FROM purchase_orders WHERE id = ?`
+    )
+    .get(fromOrder) as
+    | {
+        po_number: string
+        supplier: string | null
+        tab_opened_at: string | null
+        tab_closed_at: string | null
+      }
+    | undefined
+  if (!src) return
+  if (!isOpenTab({ tabOpenedAt: src.tab_opened_at, tabClosedAt: src.tab_closed_at })) return
+  const folded = foldTicketIntoDocument(
+    db,
+    { kind: 'po', id: fromOrder },
+    { kind: 'so', id: invoiceId },
+    actorId
+  )
+  if (!folded) return
+  recordOrderEvent('so', invoiceId, 'link', {
+    detail: `Sold out of ${src.po_number}${src.supplier ? ` (${src.supplier})` : ''}`,
+    actorId,
+    db
+  })
+  recordOrderEvent('po', fromOrder, 'link', {
+    detail: `Sold on to ${customerName ?? 'a buyer'} out of this order's stock`,
+    actorId,
+    db
+  })
+}
+
 function stockDrawingLines(
   lines: ReadonlyArray<{
     position: number
@@ -2584,7 +2603,20 @@ export function setInvoiceDims(
  */
 export function setInvoiceLineRouting(
   id: string,
-  changes: ReadonlyArray<{ lineId: string; destination: string | null; supplier: string | null }>,
+  changes: ReadonlyArray<{
+    lineId: string
+    destination: string | null
+    supplier: string | null
+    /**
+     * WHICH PURCHASE ORDER'S CASES this line takes, when it takes any.
+     *
+     * `undefined` leaves whatever the line already names — a caller changing
+     * only the destination must not silently drop a roadshow pointer somebody
+     * set. `null` clears it. Meaningless on a dropship line, and forced to null
+     * there: a line that consumes no cost layers cannot name which ones.
+     */
+    sourcePoId?: string | null
+  }>,
   actorId: string | null
 ): { invoice: InvoiceDetail | null; error?: string } {
   const db = getDb()
@@ -2652,7 +2684,37 @@ export function setInvoiceLineRouting(
       // which purchase order's cost layers to consume, which is meaningless on a
       // line that consumes none. Left behind it would be a stale claim that the
       // chooser itself hides on a dropship line.
-      const sourcePo = drawsStock ? line.source_po_id : null
+      const asked = change.sourcePoId === undefined ? line.source_po_id : change.sourcePoId
+      const sourcePo = drawsStock ? (asked ?? '').trim() || null : null
+      if (sourcePo && sourcePo !== line.source_po_id) {
+        // NAMED, SO IT MUST BE REAL AND IT MUST HOLD THEM. `consumeFromPo` throws
+        // rather than topping up from elsewhere when an order is short — the
+        // right behaviour, and a thrown transaction is a worse message than a
+        // sentence naming both numbers. Checked here so the refusal can.
+        const holds = db
+          .prepare(
+            `SELECT po.po_number,
+                    (SELECT COALESCE(SUM(l2.qty_remaining), 0)
+                       FROM inventory_lots l2
+                       JOIN po_line_receipts r ON r.lot_id = l2.id
+                      WHERE r.po_id = po.id AND l2.product_id = ? AND l2.location = ?
+                        AND l2.qty_remaining > 0) AS on_hand
+               FROM purchase_orders po WHERE po.id = ?`
+          )
+          .get(line.product_id, dest ?? stockLocation, sourcePo) as
+          | { po_number: string; on_hand: number }
+          | undefined
+        if (!holds) return { invoice: null, error: 'That purchase order is gone.' }
+        if ((Number(holds.on_hand) || 0) < line.quantity) {
+          return {
+            invoice: null,
+            error:
+              `${holds.po_number} has ${Number(holds.on_hand) || 0} of ${line.item} left on the ` +
+              `${dest ?? stockLocation} shelf, not ${line.quantity}. Lower the quantity, or leave ` +
+              'the line on ordinary stock — a line cannot be part one order and part another.'
+          }
+        }
+      }
       setLine.run(dest, supplier, sourcePo, stamp, line.id, id)
       touched.push(line.id)
     }
@@ -2691,6 +2753,50 @@ export function setInvoiceLineRouting(
     }
 
     db.prepare(`UPDATE invoices SET updated_at = ? WHERE id = ?`).run(stamp, id)
+
+    /**
+     * THE PURCHASE ORDER'S OWN HISTORY, which is the half nobody sees coming.
+     *
+     * The owner's requirement was "our own inventory and PO and SO history that
+     * it is reflective of that". A line that starts or stops taking a purchase
+     * order's cases changes what that ORDER supplied, and reading only the
+     * sale's log would leave the purchase silently different from what its
+     * history says about it.
+     *
+     * One entry per purchase order, not per line: three lines moved onto one
+     * order is one thing that happened to that order.
+     */
+    const poBefore = new Map<string, string[]>()
+    const poAfter = new Map<string, string[]>()
+    const push = (m: Map<string, string[]>, po: string | null, item: string): void => {
+      if (!po) return
+      m.set(po, [...(m.get(po) ?? []), item])
+    }
+    for (const l of before) if (touched.includes(l.id)) push(poBefore, l.source_po_id, l.item)
+    for (const l of after) if (touched.includes(l.id)) push(poAfter, l.source_po_id, l.item)
+    const soLabel = (header.invoice_number ?? '').trim()
+      ? `sales order ${(header.invoice_number ?? '').trim()}`
+      : 'a sales order'
+    for (const [poId, items] of poAfter) {
+      if ((poBefore.get(poId) ?? []).join('|') === items.join('|')) continue
+      recordOrderEvent('po', poId, 'link', {
+        detail: `${items.join(', ')} on ${soLabel} now come out of this order's stock`,
+        actorId,
+        db
+      })
+    }
+    for (const [poId, items] of poBefore) {
+      if (poAfter.has(poId)) continue
+      recordOrderEvent('po', poId, 'link', {
+        detail: `${items.join(', ')} on ${soLabel} no longer come out of this order's stock`,
+        actorId,
+        db
+      })
+    }
+
+    // The same fold a draft save performs. Naming an order on a posted sale
+    // means exactly what naming it on a draft did — see foldRoadshowTicket.
+    foldRoadshowTicket(db, id, after.map((l) => ({ sourcePoId: l.source_po_id })), header.customer_name, actorId)
 
     const names = after.filter((l) => touched.includes(l.id)).map((l) => l.item)
     // 'note', not a new kind. The event log's kinds are the things that happen

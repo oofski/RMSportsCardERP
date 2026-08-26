@@ -704,7 +704,13 @@ export function registerOrderExtrasIpc(): void {
         const changes = raw.map((c: Record<string, unknown>) => ({
           lineId: str(c?.lineId),
           destination: str(c?.destination).trim() || null,
-          supplier: str(c?.supplier).trim() || null
+          supplier: str(c?.supplier).trim() || null,
+          // UNDEFINED AND NULL MEAN DIFFERENT THINGS here — leave it alone
+          // versus clear it — so the key's absence has to survive the crossing
+          // rather than being flattened to null by str().
+          ...('sourcePoId' in (c ?? {})
+            ? { sourcePoId: str(c?.sourcePoId).trim() || null }
+            : {})
         }))
         if (changes.some((c) => !c.lineId)) {
           return { ok: false, error: 'A line was named without saying which one.' }

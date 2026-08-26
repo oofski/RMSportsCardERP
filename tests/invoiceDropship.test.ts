@@ -1517,5 +1517,189 @@ console.log('\n=== RE-ROUTING A LINE ON AN ORDER THAT IS ALREADY IN QUICKBOOKS =
   ok(qtyAt('RM') === shelfBefore, 'with every unit back on the shelf and none taken twice', String(qtyAt('RM')))
 }
 
+// ---------------------------------------------------------------------------
+console.log('\n=== WHOSE CASES A POSTED LINE TAKES, and both histories saying so ===')
+// ---------------------------------------------------------------------------
+/**
+ * The owner's requirement, in his words: "if we change where a case is coming
+ * from for our own inventory and PO and SO history that it is reflective of
+ * that."
+ *
+ * Two questions, deliberately separate. WHERE a line comes from — a shelf or a
+ * supplier — was the first half. WHOSE cases it takes when it comes off a shelf
+ * is this one: it decides where the COST comes from, and it was previously
+ * settable only while the order was still a draft.
+ *
+ * The half that is easy to forget is the purchase order's own log. A line moving
+ * onto an order changes what that ORDER supplied, and a sale's history alone
+ * would leave the purchase silently different from what its history says.
+ */
+{
+  const poRepo = require('../src/main/db/purchaseOrders')
+  const extrasRepo = require('../src/main/db/orderExtras')
+
+  // A purchase order that actually BRINGS IN stock, so its cases are on a shelf
+  // and can be sold out of.
+  const roadshow = poRepo.createPurchaseOrder(
+    {
+      supplier: 'Roadshow Dallas',
+      location: 'RM',
+      ongoing: true,
+      lines: [{ productId: 'p_d', item: 'Dropship Hobby Box', quantity: 6, unitPrice: 400 }]
+    },
+    null
+  )
+  poRepo.setPurchaseOrderStatus(roadshow.id, 'received', null)
+
+  const sale = inv.saveInvoice(
+    {
+      customerName: 'Cost Basis Buyer',
+      invoiceNumber: 'SO-8900',
+      invoiceDate: '2026-08-21',
+      location: 'RM',
+      lines: [{ item: 'Dropship Hobby Box', productId: 'p_d', quantity: 2, rate: 900 }]
+    },
+    null
+  )
+  db.prepare(`UPDATE invoices SET status = 'sent', qbo_id = 'qbo-8900' WHERE id = ?`).run(sale.id)
+  const line = inv.getInvoice(sale.id).lines[0]
+  ok(line.sourcePoId === null, 'the line names no purchase order to begin with')
+
+  const poEvents = (poId: string): string[] =>
+    extrasRepo.listOrderEvents('po', poId).map((e: any) => e.detail ?? '')
+
+  // --- naming one --------------------------------------------------------
+  const named = inv.setInvoiceLineRouting(
+    sale.id,
+    [{ lineId: line.id, destination: 'RM', supplier: null, sourcePoId: roadshow.id }],
+    null
+  )
+  ok(!named.error, 'A POSTED LINE CAN NOW SAY WHOSE CASES IT TAKES', String(named.error))
+  ok(
+    inv.getInvoice(sale.id).lines[0].sourcePoId === roadshow.id,
+    'the line names the purchase order'
+  )
+  ok(
+    poEvents(roadshow.id).some((d: string) => /now come out of this order/i.test(d)),
+    'AND THE PURCHASE ORDER\u2019S OWN HISTORY SAYS SO',
+    poEvents(roadshow.id).join(' | ')
+  )
+  ok(
+    extrasRepo
+      .listOrderEvents('so', sale.id)
+      .some((e: any) => /Re-routed/i.test(e.detail ?? '')),
+    'and the sale\u2019s history does too'
+  )
+  ok(inv.getInvoice(sale.id).total === sale.total, 'with the total still untouched')
+
+  /**
+   * AND THE DEAL TICKET FOLDS, because naming a RUNNING roadshow order on a
+   * posted sale means exactly what naming it on a draft did: a week of buying
+   * from one shop and everything sold out of it is one deal under one number.
+   * Same rule, same function — see foldRoadshowTicket.
+   */
+  const folded = db
+    .prepare(`SELECT merged_into FROM deal_tickets WHERE document_kind = 'so' AND document_id = ?`)
+    .get(sale.id) as any
+  ok(
+    !!folded?.merged_into,
+    'THE SALE JOINS THE ROADSHOW\u2019S DEAL TICKET, the same as it would on a draft',
+    String(folded?.merged_into)
+  )
+
+  // --- taking it off again ------------------------------------------------
+  ok(
+    !inv.setInvoiceLineRouting(
+      sale.id,
+      [{ lineId: line.id, destination: 'RM', supplier: null, sourcePoId: null }],
+      null
+    ).error,
+    'and it can be taken off again'
+  )
+  ok(inv.getInvoice(sale.id).lines[0].sourcePoId === null, 'the line names nobody')
+  ok(
+    poEvents(roadshow.id).some((d: string) => /no longer come out of this order/i.test(d)),
+    'AND THE PURCHASE ORDER IS TOLD IT LOST THEM — a log that only ever gains claims is a wrong log',
+    poEvents(roadshow.id).join(' | ')
+  )
+
+  // --- absence means LEAVE IT ALONE ---------------------------------------
+  /**
+   * `undefined` and `null` are different answers. A caller changing only the
+   * destination must not silently drop a pointer somebody set last week.
+   */
+  inv.setInvoiceLineRouting(
+    sale.id,
+    [{ lineId: line.id, destination: 'RM', supplier: null, sourcePoId: roadshow.id }],
+    null
+  )
+  ok(
+    !inv.setInvoiceLineRouting(sale.id, [{ lineId: line.id, destination: 'AM', supplier: null }], null)
+      .error,
+    'a route-only change is allowed'
+  )
+  ok(
+    inv.getInvoice(sale.id).lines[0].sourcePoId === roadshow.id,
+    'AND LEAVES THE PURCHASE ORDER POINTER EXACTLY WHERE IT WAS',
+    String(inv.getInvoice(sale.id).lines[0].sourcePoId)
+  )
+  /**
+   * AND WRITES NOTHING ON THE PURCHASE ORDER, because nothing about that order
+   * changed. A log that gains a line every time somebody adjusts a shelf is a
+   * log nobody reads, and "these lines now come out of this order" said three
+   * times in a row is three claims where one thing happened.
+   */
+  const quietBefore = poEvents(roadshow.id).length
+  inv.setInvoiceLineRouting(sale.id, [{ lineId: line.id, destination: 'RM', supplier: null }], null)
+  ok(
+    poEvents(roadshow.id).length === quietBefore,
+    'A CHANGE THAT MOVES NO LINE ONTO OR OFF AN ORDER LEAVES ITS LOG ALONE',
+    `${quietBefore} -> ${poEvents(roadshow.id).length}`
+  )
+  // Put it back on the shelf the cases are actually on.
+  inv.setInvoiceLineRouting(sale.id, [{ lineId: line.id, destination: 'RM', supplier: null }], null)
+
+  // --- an order that cannot cover it is REFUSED, by name ------------------
+  /**
+   * `consumeFromPo` throws rather than topping up from elsewhere when an order
+   * is short — the right behaviour, and a thrown transaction is a worse message
+   * than a sentence naming both numbers.
+   */
+  const thin = poRepo.createPurchaseOrder(
+    {
+      supplier: 'One Case Only',
+      location: 'RM',
+      lines: [{ productId: 'p_d', item: 'Dropship Hobby Box', quantity: 1, unitPrice: 400 }]
+    },
+    null
+  )
+  poRepo.setPurchaseOrderStatus(thin.id, 'received', null)
+  const short = inv.setInvoiceLineRouting(
+    sale.id,
+    [{ lineId: line.id, destination: 'RM', supplier: null, sourcePoId: thin.id }],
+    null
+  )
+  ok(!!short.error, 'AN ORDER THAT CANNOT COVER THE LINE IS REFUSED')
+  ok(/1 of .* not 2/i.test(short.error ?? ''), 'naming both numbers', String(short.error))
+  ok(
+    inv.getInvoice(sale.id).lines[0].sourcePoId === roadshow.id,
+    'and the line is left on the order it had'
+  )
+
+  // --- a dropship line cannot name one -----------------------------------
+  inv.setInvoiceLineRouting(
+    sale.id,
+    [{ lineId: line.id, destination: 'Kestrel Cards', supplier: null, sourcePoId: roadshow.id }],
+    null
+  )
+  const dropped = inv.getInvoice(sale.id).lines[0]
+  ok(dropped.dropship === true, 'the line is a dropship now')
+  ok(
+    dropped.sourcePoId === null,
+    'AND NAMES NO PURCHASE ORDER — it consumes no cost layers, so it cannot say whose',
+    String(dropped.sourcePoId)
+  )
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail > 0) process.exit(1)

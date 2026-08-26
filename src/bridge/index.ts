@@ -1993,7 +1993,13 @@ export function createBridge(ipcRenderer: BridgeTransport) {
        */
       setLineRouting: (
         id: string,
-        changes: Array<{ lineId: string; destination: string | null; supplier: string | null }>
+        changes: Array<{
+          lineId: string
+          destination: string | null
+          supplier: string | null
+          /** Omit to leave it; null to clear it. See setInvoiceLineRouting. */
+          sourcePoId?: string | null
+        }>
       ): Promise<Result<InvoiceDetail>> =>
         ipcRenderer.invoke(IPC.invoiceSetLineRouting, { id, changes }),
 
