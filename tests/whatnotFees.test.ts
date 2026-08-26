@@ -75,6 +75,7 @@ const {
   validateRatePeriod,
   whatnotOrder
 } = require('../src/shared/financeStreaming')
+const { buildPnlOmissions } = require('../src/shared/pnlOmissions')
 const { streamDateOf } = require('../src/shared/streaming')
 
 const db = getDb()
@@ -2073,6 +2074,219 @@ ok(
 checksumOk(dayUncosted, 'the fully costed night')
 checksumOk(vU.totals, 'all-time once every hole is filled')
 ok(vU.reconciled, 'and the whole view still reconciles', String(vU.reconcileNote))
+
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 11. what the profit does NOT include, said on the statement ===')
+// ---------------------------------------------------------------------------
+/**
+ * The owner's question: "why is our profit higher than what we are seeing."
+ *
+ * It reads high because several real costs are not terms in `netProfit`, and
+ * until now nothing on the screen said so. This section pins the disclosure —
+ * see @shared/pnlOmissions — and, more importantly, pins the ONE case the
+ * statement was structurally blind to.
+ *
+ * ## The blindness
+ *
+ * Break cost of goods has exactly one source in the whole app: rows somebody
+ * types into the live session. Nothing in the import path ever creates one. So a
+ * night whose cases were never entered comes out with `breakCost` at zero and
+ * reads, everywhere, as a night that sold at 100% margin.
+ *
+ * The existing `uncosted` flag CANNOT catch that, and the reason is structural
+ * rather than an oversight: it is computed inside a SELECT over `stream_items`,
+ * so it only ever sees rows that EXIST. It catches a case somebody entered and
+ * left priced at nothing — section 10 above — and is blind to a case nobody
+ * entered at all, which is both commoner and more expensive.
+ *
+ * ## What must NOT change
+ *
+ * The disclosure is not a cost. `netProfit`, every section subtotal and the
+ * checksum are identical with it and without it — asserted below, because a
+ * disclosure that moved the figure it describes would be a silent restatement of
+ * every night in the database.
+ */
+{
+  const OMIT_NIGHT = back(100, 19)
+  const dayO = streamDateOf(OMIT_NIGHT.toISOString())
+  const sO = createSession(
+    { title: 'Nobody logged the cases', startedAt: OMIT_NIGHT.toISOString(), endedAt: back(100, 23).toISOString() },
+    null
+  )
+  ok(sO.ok, 'a show is logged', sO.ok ? '' : sO.error)
+
+  // Break spots AND a whole product sold sealed, so the two different holes are
+  // exercised together and the disclosure has to tell them apart.
+  const SEALED_MSG = 'Earnings for selling a 2026 Topps Chrome Baseball Hobby Box'
+  const OMIT_ROWS: Line[] = [
+    { when: back(100, 20), amount: 300, message: spotMsg(7, 'Detroit Tigers'), type: 'SALES' },
+    { when: back(100, 20, 1), amount: 200, message: spotMsg(7, 'Chicago Cubs'), type: 'SALES' },
+    { when: back(100, 21), amount: 480, message: SEALED_MSG, type: 'SALES' }
+  ]
+  const csvO = join(DIR, 'omissions.csv')
+  writeFileSync(csvO, csvOf(OMIT_ROWS), 'utf8')
+  ok(importLedger(csvO, null).ok, 'the night imported')
+
+  let vO = viewOf()
+  let dO = pick(vO, dayO)
+  ok(!!dO, 'the night is on the statement')
+
+  // --- the blind spot, and that the OLD flag cannot see it -----------------
+  ok(
+    dO.breakCost === 0 && dO.cogs === 0,
+    'NOBODY ENTERED THE CASES, so cost of goods is zero',
+    `${dO.breakCost} / ${dO.cogs}`
+  )
+  ok(
+    !cogsShape(dO).incomplete,
+    'AND THE EXISTING UNCOSTED FLAG IS SILENT — it reads the stock rows, and there are none. ' +
+      'This is the hole the disclosure exists for, not a bug in that flag.'
+  )
+
+  // --- the new counter sees it --------------------------------------------
+  ok(dO.uncostedSaleDays === 1, 'the night is counted as one that sold and recorded nothing', String(dO.uncostedSaleDays))
+  const breakGross = Math.round((dO.grossSales - dO.productGrossSales) * 100) / 100
+  ok(
+    Math.round(dO.uncostedSaleRevenue * 100) === Math.round(breakGross * 100),
+    'AND CARRIES THE BREAK-SPOT GROSS, not the whole top line — a sealed box could never have had ' +
+      'a cost on any night, so counting it here would blame the operator for a gap in the model',
+    `${dO.uncostedSaleRevenue} vs ${breakGross}`
+  )
+
+  const om = buildPnlOmissions(dO)
+  const keys = om.items.map((i: any) => i.key)
+  ok(keys.includes('uncostedNights'), 'the statement discloses the night', JSON.stringify(keys))
+  ok(keys.includes('sealedProductCost'), 'and the sealed box sold with no cost behind it')
+  ok(keys.includes('labour'), 'and that no wage reaches this statement at all')
+  ok(
+    om.items.find((i: any) => i.key === 'uncostedNights').amount === null &&
+      om.items.find((i: any) => i.key === 'sealedProductCost').amount === null,
+    'BOTH ARE UNPRICED, and say so rather than showing a confident zero — the app knows the ' +
+      'revenue involved and does not know the cost, and those are different answers'
+  )
+  ok(om.unpriceable >= 3, 'counted as unpriced', String(om.unpriceable))
+
+  // --- IT CHANGES NO FIGURE -----------------------------------------------
+  const netBefore = dO.netProfit
+  const checkBefore = pnlChecksum(buildPnl(dO))
+  ok(
+    Math.round(checkBefore * 100) === Math.round(netBefore * 100),
+    'THE DISCLOSURE IS IN NO SECTION — the checksum still equals net profit exactly',
+    `${checkBefore} vs ${netBefore}`
+  )
+  checksumOk(dO, 'the night with nothing costed')
+
+  // --- and it goes away when the cases ARE entered -------------------------
+  const echoId = mkProduct('WF Echo Hobby 12-Box Case', 'case', 12)
+  ok(
+    addItem(
+      { sessionId: sO.data.id, kind: 'break', productId: echoId, cases: 1, casePrice: 900, location: 'RM' },
+      null
+    ).ok,
+    'the case is entered at $900'
+  )
+  vO = viewOf()
+  dO = pick(vO, dayO)
+  ok(dO.uncostedSaleDays === 0, 'THE NIGHT STOPS BEING COUNTED once the stock is on it', String(dO.uncostedSaleDays))
+  ok(dO.uncostedSaleRevenue === 0, 'and its revenue with it', String(dO.uncostedSaleRevenue))
+  const om2 = buildPnlOmissions(dO)
+  ok(
+    !om2.items.map((i: any) => i.key).includes('uncostedNights'),
+    'so the statement stops saying it'
+  )
+  ok(
+    om2.items.map((i: any) => i.key).includes('sealedProductCost'),
+    'while the sealed box is STILL disclosed — that one is a gap in the model, not a gap in the ' +
+      'operator, and entering a break cannot close it'
+  )
+  checksumOk(dO, 'the night after the case is entered')
+
+  // --- a night that sells nothing is not accused ---------------------------
+  const QUIET = back(101, 19)
+  const dayQ = streamDateOf(QUIET.toISOString())
+  const sQ = createSession(
+    { title: 'Quiet night', startedAt: QUIET.toISOString(), endedAt: back(101, 23).toISOString() },
+    null
+  )
+  ok(sQ.ok, 'a show with a tip and no sales is logged', sQ.ok ? '' : sQ.error)
+  const csvQ = join(DIR, 'omissions-quiet.csv')
+  writeFileSync(csvQ, csvOf([{ when: back(101, 20), amount: 15, message: 'Tip from viewer', type: 'TIP' }]), 'utf8')
+  ok(importLedger(csvQ, null).ok, 'it imported')
+  const dQ = pick(viewOf(), dayQ)
+  ok(
+    !!dQ && dQ.uncostedSaleDays === 0,
+    'A NIGHT THAT SOLD NO SPOTS IS NOT COUNTED — no sale means no missing cost, and a disclosure ' +
+      'that fires on every quiet night is one nobody reads',
+    String(dQ && dQ.uncostedSaleDays)
+  )
+
+  // --- a night whose only stock row is a GIVEAWAY is not accused -----------
+  /**
+   * TWO TESTS, NOT ONE, AND THIS IS WHY.
+   *
+   * A giveaway's cost lands in `giveawayCost`, never in `breakCost` — so a night
+   * that sold spots and recorded only a giveaway has `breakCost` at zero while
+   * its stock rows plainly exist. Judging on the cost alone would accuse that
+   * night of recording nothing, which is false and, worse, unfixable: there is
+   * nothing for the operator to go and enter.
+   *
+   * So the breakdown is consulted as well. Somebody was here; the disclosure is
+   * for nights where nobody was.
+   */
+  const GIFT = back(102, 19)
+  const dayG = streamDateOf(GIFT.toISOString())
+  const sG = createSession(
+    { title: 'Giveaway night', startedAt: GIFT.toISOString(), endedAt: back(102, 23).toISOString() },
+    null
+  )
+  ok(sG.ok, 'a show with a giveaway and no break is logged', sG.ok ? '' : sG.error)
+  const csvG = join(DIR, 'omissions-gift.csv')
+  writeFileSync(
+    csvG,
+    csvOf([{ when: back(102, 20), amount: 120, message: spotMsg(9, 'Detroit Tigers'), type: 'SALES' }]),
+    'utf8'
+  )
+  ok(importLedger(csvG, null).ok, 'it imported')
+  const foxId = mkProduct('WF Fox Hobby 6-Box Case', 'case', 6)
+  ok(
+    addItem(
+      { sessionId: sG.data.id, kind: 'giveaway', productId: foxId, cases: 1, casePrice: 250, location: 'RM' },
+      null
+    ).ok,
+    'a case is given away and recorded'
+  )
+  const dG = pick(viewOf(), dayG)
+  ok(
+    !!dG && Math.round(dG.breakCost * 100) === 0,
+    'break cost is zero on that night — a giveaway is not a break',
+    String(dG && dG.breakCost)
+  )
+  ok(
+    dG.uncostedSaleDays === 0,
+    'AND THE NIGHT IS STILL NOT ACCUSED — somebody DID record the stock, so judging on break ' +
+      'cost alone would raise a warning with nothing behind it for anyone to act on',
+    String(dG.uncostedSaleDays)
+  )
+
+  // --- the counters SUM through a rollup ------------------------------------
+  /**
+   * The reason these are counts and not flags. One bad night inside a month is
+   * invisible in the month's own total, and the month is where somebody looks.
+   */
+  const totals = viewOf().totals
+  ok(
+    totals.uncostedSaleDays >= 1,
+    'ALL-TIME CARRIES THE COUNT, so a month can say "4 of 21 nights" rather than losing it in a sum',
+    String(totals.uncostedSaleDays)
+  )
+  ok(
+    buildPnlOmissions({ ...totals, dayCount: 21 })
+      .items.find((i: any) => i.key === 'uncostedNights')
+      .detail.includes('of 21'),
+    'and names the denominator when the period knows it'
+  )
+}
 
 console.log(`\n${pass} passed, ${fail} failed${skipped ? `, ${skipped} skipped` : ''}\n`)
 process.exit(fail === 0 ? 0 : 1)

@@ -1762,6 +1762,32 @@ export interface StreamDayFinance {
    */
   productGrossSales: number
   productSaleCount: number
+  /**
+   * DID THIS NIGHT SELL BREAK SPOTS AND RECORD NO STOCK AT ALL? 1 or 0.
+   *
+   * A COUNT rather than a flag, and that is the whole design: a boolean would
+   * not survive being summed into a week, and the rollup is where this matters
+   * most — one uncosted night inside a month is invisible in the month's total.
+   * Summed, a month says "4 of 21 nights", which is the sentence somebody can
+   * act on.
+   *
+   * It exists because the statement's other completeness flag cannot see this
+   * case. `uncosted` is computed over the stock rows themselves, so it catches a
+   * line somebody entered and left blank and is structurally blind to a night
+   * with no stock rows at all — which is the commoner mistake and the more
+   * expensive one, because the night then reads as 100% margin. See
+   * @shared/pnlOmissions, which is the only reader.
+   */
+  uncostedSaleDays: number
+  /**
+   * Break-spot gross taken on those nights — revenue standing against no cost.
+   *
+   * Break spots only. Whole-product sales are excluded because they can never
+   * carry a cost on any night (there is no stream item kind for stock sold
+   * sealed), so counting them here would blame the operator for a gap in the
+   * model. `productGrossSales` discloses those separately.
+   */
+  uncostedSaleRevenue: number
   /** Those sales per product, so a range can name what actually sold rather than
    *  print one figure covering a case and forty loose boxes. */
   marketplaceBreakdown: MarketplaceItem[]
@@ -2989,6 +3015,15 @@ export const PNL_MONEY_FIELDS = [
   // Revenue subtotal rather than added to it — the sales line above it is the
   // gross LESS this — so `pnlChecksum` is untouched by its presence.
   'productGrossSales',
+  // THE TWO DISCLOSURE COUNTERS. Summed like everything else so a week and a
+  // month state the same gap their days do — and unlike the packaging and
+  // postage fields above, these are READ, by @shared/pnlOmissions. They are in
+  // no statement section, so `pnlChecksum` is untouched and the bottom line is
+  // exactly what it would be if they did not exist: this pair says what is
+  // MISSING from that line, and a disclosure that changed the figure it
+  // describes would be a cost, not a disclosure.
+  'uncostedSaleDays',
+  'uncostedSaleRevenue',
   'tips',
   'bonuses',
   'unclassified',
@@ -3084,6 +3119,8 @@ export function emptyDayFinance(streamDate: string): StreamDayFinance {
     feeSaleCount: 0,
     productSales: 0,
     productGrossSales: 0,
+    uncostedSaleDays: 0,
+    uncostedSaleRevenue: 0,
     productSaleCount: 0,
     marketplaceBreakdown: [],
     tips: 0,

@@ -27509,3 +27509,67 @@ button.sor-team:focus-visible {
 .so-split-toggle:hover {
   color: var(--brand-600);
 }
+
+/* ---------- What the profit leaves out (Pnl.tsx) ----------
+   Under the statement and OUTSIDE its table, because every figure in that table
+   is in net profit and these are the opposite: money missing from it. Sharing
+   the table's amount column is exactly how somebody adds a disclosure into a
+   total by mistake, so this block has its own grid and its own right edge. */
+.fin-omit {
+  margin: 18px 0 4px;
+  padding: 14px 16px;
+  border: 1px solid color-mix(in srgb, var(--warning) 34%, var(--border));
+  border-radius: var(--radius-sm);
+  background: var(--warning-bg);
+}
+.fin-omit-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+}
+.fin-omit-head svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--warning);
+}
+.fin-omit-list {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+/* Label and amount on the first row, the sentence spanning underneath — so the
+   three-word reason never squeezes the number, and the numbers still line up
+   down a single edge for comparison. */
+.fin-omit-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 12px;
+  padding-top: 10px;
+  border-top: 1px solid color-mix(in srgb, var(--warning) 20%, transparent);
+}
+.fin-omit-row:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+.fin-omit-label {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+.fin-omit-amt {
+  font-size: 13px;
+  text-align: right;
+  white-space: nowrap;
+}
+.fin-omit-detail {
+  grid-column: 1 / -1;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-2);
+}

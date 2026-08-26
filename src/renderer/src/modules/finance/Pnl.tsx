@@ -7,6 +7,7 @@ import type {
   UncostedStreamItem
 } from '@shared/financeStreaming'
 import { buildPnl, pnlChecksum } from '@shared/financeStreaming'
+import { buildPnlOmissions } from '@shared/pnlOmissions'
 import { pnlDrillSource } from '@shared/pnlDrill'
 import { parseMoneyInput } from '@shared/streaming'
 import { LIVE, useLiveRefresh } from '../../lib/live'
@@ -249,6 +250,29 @@ export function PnlStatement({
   const revenue = sections.find((s) => s.key === 'revenue')?.subtotal ?? 0
   const withShare = revenue > 0
 
+  /**
+   * WHAT THIS PROFIT LEAVES OUT.
+   *
+   * Read off the same `money` the statement is built from, and deliberately NOT
+   * a section: every section is in `netProfit` and `pnlChecksum` asserts it, so
+   * money that is missing FROM the bottom line cannot live in one. See
+   * @shared/pnlOmissions.
+   *
+   * `PnlMoney` is the DAY shape; a period row and the all-time totals both
+   * extend it with `dayCount` at runtime, which is the only grain where "4 of 21
+   * nights" means anything. Read narrowly rather than widening the prop — a
+   * single day passes no count, and "a night with no stock recorded" is still
+   * true without a denominator.
+   */
+  const omissions = useMemo(
+    () =>
+      buildPnlOmissions({
+        ...money,
+        dayCount: (money as PnlMoney & { dayCount?: number }).dayCount ?? null
+      }),
+    [money]
+  )
+
   const toggleAll = (): void => {
     const next: Record<string, boolean> = {}
     for (const s of expandable) next[s.key] = !allOpen
@@ -318,6 +342,52 @@ export function PnlStatement({
               />
             ))}
           </table>
+
+          {/* UNDER THE BOTTOM LINE, AND OUTSIDE THE TABLE.
+              Outside on purpose: the table has one amount column and every
+              figure in it is in net profit. A row here is the opposite — money
+              that is NOT in that number — and putting it on the same right edge
+              is how somebody adds it up by mistake. */}
+          {omissions.items.length > 0 && (
+            <div className="fin-omit">
+              <div className="fin-omit-head">
+                <Icon name="AlertTriangle" size={15} />
+                <span>
+                  <b>What this profit does not include.</b>{' '}
+                  {omissions.pricedTotal > 0 ? (
+                    <>
+                      Net profit above is at least <Money value={omissions.pricedTotal} strong /> too
+                      high
+                      {omissions.unpriceable > 0 ? ', and probably more — ' : '. '}
+                    </>
+                  ) : (
+                    <>Net profit above is too high, by an amount this app cannot total — </>
+                  )}
+                  {omissions.unpriceable > 0 && (
+                    <>
+                      {omissions.unpriceable === 1 ? 'one cost below has' : `${omissions.unpriceable} costs below have`}{' '}
+                      no figure the app can put on {omissions.unpriceable === 1 ? 'it' : 'them'} yet.
+                    </>
+                  )}
+                </span>
+              </div>
+              <ul className="fin-omit-list">
+                {omissions.items.map((o) => (
+                  <li key={o.key} className="fin-omit-row">
+                    <span className="fin-omit-label">{o.label}</span>
+                    <span className="fin-omit-amt mono">
+                      {o.amount === null ? (
+                        <span className="muted">not priced</span>
+                      ) : (
+                        <Money value={o.amount} strong />
+                      )}
+                    </span>
+                    <span className="fin-omit-detail">{o.detail}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           <div className="fin-pnl-foot">
             {expandable.length > 0 && (

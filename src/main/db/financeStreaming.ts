@@ -2896,6 +2896,52 @@ function buildView(db: Database): StreamingFinanceView {
     // period, rather than trusted.
     day.cogs = toDollars(toCents(day.breakCost) + toCents(day.giveawayCost))
     day.grossProfit = toDollars(toCents(day.totalRevenue) + toCents(day.cogs))
+
+    /**
+     * DID THIS NIGHT SELL BREAK SPOTS AND RECORD NO STOCK AT ALL?
+     *
+     * Break cost of goods has exactly one source in the whole app: rows somebody
+     * types into the live session. Nothing in the import path ever creates one.
+     * So a night whose cases were never entered comes out of this loop with
+     * `breakCost` at zero and reads, on every screen, as a night that sold at
+     * 100% margin — which is the single quietest way this statement can be
+     * wrong, because there is no error, no blank and no warning anywhere.
+     *
+     * The existing `uncosted` flag cannot catch it. That one is computed inside
+     * a SELECT over `stream_items`, so it can only ever see rows that EXIST: it
+     * catches a case somebody entered and left priced at nothing, and is
+     * structurally blind to a case nobody entered. This is the other half.
+     *
+     * BREAK-SPOT GROSS, NOT THE WHOLE TOP LINE. `grossSales − productGrossSales`
+     * is the break-spot share to the cent, by construction — both come off the
+     * same rows in the same pass. Whole-product sales are left out on purpose:
+     * they can never carry a cost on ANY night, so counting them here would
+     * report a modelling gap as an operator's mistake. @shared/pnlOmissions
+     * discloses those separately, and says which is which.
+     *
+     * NOTE BOTH TESTS, AND THAT ONLY ONE OF THEM CAN FAIL HERE.
+     *
+     * The breakdown test is the live one: a day can record a GIVEAWAY and no
+     * break, which leaves `breakCost` at zero while its stock rows plainly
+     * exist. Judging on the cost alone would accuse that night of recording
+     * nothing — false, and unfixable, because there is nothing for anybody to go
+     * and enter. A test pins exactly that.
+     *
+     * The cost test is unreachable on THIS build and is kept deliberately.
+     * `cogsBreakdown` and `breakCost` are filled from the same query, so here
+     * they always move together and no test can tell the two conditions apart.
+     * `StreamDayFinance.cogsBreakdown` is OPTIONAL, though, precisely because a
+     * packaged main older than that field sends none — and on that shape the
+     * breakdown reads empty while the cost is populated, which is the false
+     * accusation this second test refuses. Do not simplify it away because a
+     * mutation survives; the mutation survives because the shape it defends
+     * cannot be produced by the code path it is written in.
+     */
+    const breakSpotGrossCents = toCents(day.grossSales) - toCents(day.productGrossSales)
+    const recordedNoStock =
+      (day.cogsBreakdown ?? []).length === 0 && toCents(day.breakCost) === 0
+    day.uncostedSaleDays = breakSpotGrossCents > 0 && recordedNoStock ? 1 : 0
+    day.uncostedSaleRevenue = day.uncostedSaleDays === 1 ? toDollars(breakSpotGrossCents) : 0
     // THERE IS NEITHER A POSTAGE NOR A PACKAGING TERM BELOW, AND THE TWO
     // ABSENCES ARE THE LAST TWO CHANGES TO THIS SUM. `netShipping` was here until
     // the owner took shipping off the P&L; the six packaging figures were here
