@@ -221,12 +221,23 @@ export function productProvenance(productId: string): StockProvenance {
 }
 
 /**
- * The OPEN ROADSHOW ORDERS still holding stock of this product, per shelf.
+ * EVERY PURCHASE ORDER still holding stock of this product, per shelf.
  *
  * The same join `stockSources` uses, asked from the other end: not "where did
  * this layer come from" but "which of these orders still has anything left".
- * See @shared/poStock for why only an open roadshow order is offered and what
- * happens when one cannot cover a line.
+ * See @shared/poStock for what happens when one cannot cover a line.
+ *
+ * ## It was roadshow-only for about a day, and that was too narrow
+ *
+ * The owner's case: "we buy 5 of product A from a roadshow shop and then we buy
+ * 5 from someone else — I want to select which PO these are coming from." The
+ * someone else is very often an ordinary distributor, and its order was not on
+ * the list, so the one scenario the chooser exists for was the one it could not
+ * answer. Five roadshow cases and five distributor cases sitting on the same
+ * shelf is exactly when it matters which five went out.
+ *
+ * A CANCELLED ORDER IS STILL EXCLUDED. Its cost is out of the ledger; selling
+ * "out of" it would attribute units to a purchase the books say never happened.
  *
  * ## SUMMED PER ORDER AND SHELF, not per layer
  *
@@ -270,12 +281,19 @@ export function supplyingOrders(
          JOIN purchase_orders  po ON po.id = r.po_id
         WHERE l.product_id = ?
           AND l.qty_remaining > 0
-          AND po.tab_opened_at IS NOT NULL
-          AND po.tab_closed_at IS NULL
           AND po.status != 'cancelled'
           AND (? = '' OR l.location = ?)
         GROUP BY po.id, l.location
-        ORDER BY on_hand DESC, po.po_number ASC`
+        -- RUNNING ROADSHOW ORDERS LEAD. They are the ones this control was built
+        -- for and the ones somebody is most often reaching for; after them, the
+        -- order that can actually cover the line comes first, which is the
+        -- question being asked at a chooser like this.
+        ORDER BY CASE
+                   WHEN po.tab_opened_at IS NOT NULL AND po.tab_closed_at IS NULL THEN 0
+                   ELSE 1
+                 END,
+                 on_hand DESC,
+                 po.po_number ASC`
     )
     .all(id, shelf, shelf) as Array<{
     po_id: string

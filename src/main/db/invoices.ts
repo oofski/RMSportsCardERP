@@ -1372,9 +1372,36 @@ export function saveInvoice(
     const fromOrder = soleSourceOrder(lines)
     if (fromOrder) {
       const src = db
-        .prepare(`SELECT po_number, supplier FROM purchase_orders WHERE id = ?`)
-        .get(fromOrder) as { po_number: string; supplier: string | null } | undefined
-      if (src) {
+        .prepare(
+          `SELECT po_number, supplier, tab_opened_at, tab_closed_at
+             FROM purchase_orders WHERE id = ?`
+        )
+        .get(fromOrder) as
+        | {
+            po_number: string
+            supplier: string | null
+            tab_opened_at: string | null
+            tab_closed_at: string | null
+          }
+        | undefined
+      /**
+       * ONLY A RUNNING ROADSHOW ORDER, and this is the narrower half of the
+       * pair.
+       *
+       * A line may now name ANY purchase order holding stock — five cases from a
+       * roadshow beside five from a distributor is the case the chooser exists
+       * for. Naming one decides where the COST comes from, and that is right
+       * whoever the order is with.
+       *
+       * It does not decide the two documents are one DEAL. A case bought from a
+       * distributor in March and sold to somebody unrelated in August is two
+       * pieces of trade that happen to share a box, and folding their tickets
+       * together would put a purchase and a sale under one number on the strength
+       * of a shelf. A roadshow week is the opposite — bought and sold against
+       * itself all week, one shop, one payment — which is the whole reason the
+       * fold exists.
+       */
+      if (src && isOpenTab({ tabOpenedAt: src.tab_opened_at, tabClosedAt: src.tab_closed_at })) {
         const folded = foldTicketIntoDocument(
           db,
           { kind: 'po', id: fromOrder },

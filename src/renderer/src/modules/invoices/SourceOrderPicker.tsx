@@ -11,13 +11,17 @@ import { Icon } from '../../components/Icon'
  * roadshow, and then I sell five cases to another person. I would be able to
  * just select the cases when I'm selecting the cases in the inventory UI."
  *
- * ## It is absent on almost every line, and that is the design
+ * ## Absent unless there is something to choose between
  *
- * The control renders NOTHING unless an open roadshow order actually has some
- * of this product on the shelf right now. Every sales order line in this app
- * would otherwise grow a chooser to serve a case that arises on one kind of
- * order — and a control that is empty on nine lines out of ten teaches people
- * to stop reading the row.
+ * The control renders NOTHING unless some purchase order actually has this
+ * product on the shelf right now. A line for a service, a one-off, or stock that
+ * came in through a count sheet has no orders to offer and shows no chooser.
+ *
+ * It was open-roadshow-only for about a day, which was too narrow: the owner's
+ * case is five cases from a roadshow beside five from a distributor, and the
+ * distributor's order was not on the list — so the one scenario this exists for
+ * was the one it could not answer. Running roadshow orders lead the list, which
+ * is where the eye goes first.
  *
  * ## Under the product name, not a seventh column
  *

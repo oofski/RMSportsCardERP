@@ -23,16 +23,29 @@
  * So a sales order line may NAME the order its units come out of, and the
  * consumption follows the name.
  *
- * ## What is offered, and what is deliberately not
+ * ## What is offered
  *
- * ONLY AN OPEN ROADSHOW ORDER. Every purchase order on the board has cost
- * layers on the shelf somewhere, and offering all of them would put a chooser on
- * every line of every sales order in the app to serve a case that arises on one
- * kind of order. A settled order is not offered either: its week is closed and
- * its bill is paid, and a sale attributed to it afterwards would move a figure
- * somebody has already reconciled.
+ * ANY purchase order that still has some of this product on the shelf. It was
+ * open-roadshow-only for about a day, which was too narrow: the owner's case is
+ * "we buy 5 of product A from a roadshow shop and then we buy 5 from someone
+ * else", and the someone else is usually an ordinary distributor whose order was
+ * not on the list — so the one scenario the chooser exists for was the one it
+ * could not answer.
  *
- * An ordinary line names nothing and walks FIFO, exactly as it always has.
+ * Running roadshow orders still lead the list, because they are what it was
+ * built for and what somebody most often reaches for.
+ *
+ * An ordinary line names nothing and walks FIFO, exactly as it always has. That
+ * is still the default and still what almost every line does.
+ *
+ * ## THE DEAL TICKET IS A NARROWER QUESTION, and it stayed narrow
+ *
+ * Naming an order decides where the COST comes from, and that is right for any
+ * purchase. It does not decide that the two documents are one deal — a case
+ * bought from a distributor in March and sold to somebody unrelated in August is
+ * two pieces of trade that happen to share a box. Only a running roadshow order
+ * folds the sale into its ticket, because only there is a week with one shop one
+ * deal. See saveInvoice.
  */
 
 export { isRoadshowLocation } from './inventory'
@@ -104,18 +117,34 @@ export function supplyRefusal(
   return null
 }
 
+/** Is this a roadshow order that is still running? See @shared/roadshowTab. */
+export function isRunningTab(o: {
+  tabOpenedAt?: string | null
+  tabClosedAt?: string | null
+}): boolean {
+  return !!o.tabOpenedAt && !o.tabClosedAt
+}
+
 /**
  * The orders worth offering for one line, best first.
  *
- * Ordered by units on hand DESCENDING rather than by date, because the question
- * at this control is "can this order cover what I am selling" and the one that
- * can is the one to show first. Anything holding nothing is dropped: a row
- * reading "0 left" is a row whose only outcome is a refusal.
+ * RUNNING ROADSHOW ORDERS LEAD, then units on hand descending — because the
+ * question at this control is "can this order cover what I am selling", and the
+ * one that can is the one to show first. Within a tie the order number, so the
+ * list does not reshuffle between two renders.
+ *
+ * Anything holding nothing is dropped: a row reading "0 left" is a row whose
+ * only outcome is a refusal.
  */
 export function offerableOrders(orders: readonly SupplyingOrder[]): SupplyingOrder[] {
   return orders
-    .filter((o) => (Number(o.unitsOnHand) || 0) > 0 && !!o.tabOpenedAt && !o.tabClosedAt)
-    .sort((a, b) => b.unitsOnHand - a.unitsOnHand || a.poNumber.localeCompare(b.poNumber))
+    .filter((o) => (Number(o.unitsOnHand) || 0) > 0)
+    .sort(
+      (a, b) =>
+        Number(isRunningTab(b)) - Number(isRunningTab(a)) ||
+        b.unitsOnHand - a.unitsOnHand ||
+        a.poNumber.localeCompare(b.poNumber)
+    )
 }
 
 /**

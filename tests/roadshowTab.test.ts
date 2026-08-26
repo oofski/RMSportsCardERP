@@ -631,13 +631,26 @@ const week = po.createPurchaseOrder(
 po.receivePurchaseOrderLines(week.id, [{ lineId: week.lines[0].id, quantity: 10 }], 'emp_owner')
 ok(inventory.stockQty('p_trib', 'RM') === 14, 'fourteen on the shelf — four old, ten from the roadshow')
 
+/**
+ * BOTH ORDERS ARE OFFERED, and this is the owner's actual case: "we buy 5 of
+ * product A from a roadshow shop and then we buy 5 from someone else — I want to
+ * select which PO these are coming from."
+ *
+ * The someone else is usually an ordinary distributor. Offering only roadshow
+ * orders left the one scenario the chooser exists for as the one it could not
+ * answer.
+ */
 const offered = prov.supplyingOrders('p_trib', 'RM')
-ok(offered.length === 1, 'ONE order is offered on a sales order line', JSON.stringify(offered))
-ok(offered[0].poId === week.id, 'and it is the roadshow one')
+ok(offered.length === 2, 'BOTH orders are offered on a sales order line', JSON.stringify(offered))
+ok(
+  offered[0].poId === week.id,
+  'THE RUNNING ROADSHOW ONE LEADS — it is what the control was built for and what somebody reaches for most',
+  JSON.stringify(offered.map((o: any) => o.poNumber))
+)
 ok(offered[0].unitsOnHand === 10, 'holding all ten', String(offered[0].unitsOnHand))
 ok(
-  !offered.some((o: any) => o.poId === march.id),
-  "THE DISTRIBUTOR'S ORDER IS NOT OFFERED — an ordinary purchase is not something to sell 'out of', and offering every order would put this chooser on every line in the app"
+  offered.some((o: any) => o.poId === march.id && o.unitsOnHand === 4),
+  "AND THE DISTRIBUTOR'S IS THERE TOO, with the four it still has — five roadshow cases beside five distributor cases on one shelf is exactly when it matters which five went out"
 )
 
 // WHAT THE CHOOSER WILL ACTUALLY DRAW, asked of the shared rule directly.
@@ -653,8 +666,17 @@ const OFFERS = [
 ]
 const kept = offerableOrders(OFFERS).map((o: any) => o.poId)
 ok(
-  JSON.stringify(kept) === JSON.stringify(['e', 'd']),
-  'AN EMPTY ONE, A SETTLED ONE AND AN ORDINARY ONE ARE ALL DROPPED — and the rest come most-on-hand first, because the question at this control is which order can cover the line',
+  JSON.stringify(kept) === JSON.stringify(['e', 'd', 'b', 'c']),
+  'THE EMPTY ONE IS DROPPED — a row reading "0 left" is a row whose only outcome is a refusal — AND THE RUNNING ROADSHOWS LEAD, then most-on-hand first',
+  JSON.stringify(kept)
+)
+ok(
+  !kept.includes('a'),
+  'said plainly: an order holding nothing is never offered'
+)
+ok(
+  kept.indexOf('d') < kept.indexOf('b') && kept.indexOf('d') < kept.indexOf('c'),
+  'A RUNNING ROADSHOW HOLDING 3 STILL BEATS A SETTLED ONE HOLDING 4 — the lead is by kind, not by count',
   JSON.stringify(kept)
 )
 
@@ -804,6 +826,138 @@ ok(
   inventory.stockQty('p_trib', 'RM') === 9,
   'AND NOTHING MOVED — the throw rolled the whole save back, shelf included',
   String(inventory.stockQty('p_trib', 'RM'))
+)
+
+/**
+ * SELLING OUT OF AN ORDINARY PURCHASE ORDER — the other half of the owner's
+ * case, and the half that decides whether the chooser is any use.
+ *
+ * The COST follows the name, exactly as it does for a roadshow: that is what
+ * naming an order is for, and it is right whoever the order is with.
+ *
+ * The DEAL TICKET does not. A case bought from a distributor in March and sold
+ * to somebody unrelated in August is two pieces of trade that happen to share a
+ * box; folding their tickets together would put a purchase and a sale under one
+ * number on the strength of a shelf. Only a roadshow week is one deal.
+ */
+product('p_mix', 'RS-MIX', 'Mixed Shelf Case')
+const rsFive = po.createPurchaseOrder(
+  {
+    supplier: 'Roadshow Dallas',
+    location: 'RM',
+    ongoing: true,
+    lines: [{ productId: 'p_mix', quantity: 5, unitPrice: 300 }]
+  },
+  'emp_owner'
+)
+const distFive = po.createPurchaseOrder(
+  {
+    supplier: 'Cardinal Distribution',
+    location: 'RM',
+    lines: [{ productId: 'p_mix', quantity: 5, unitPrice: 120 }]
+  },
+  'emp_owner'
+)
+po.receivePurchaseOrderLines(rsFive.id, [{ lineId: rsFive.lines[0].id, quantity: 5 }], 'emp_owner')
+po.receivePurchaseOrderLines(distFive.id, [{ lineId: distFive.lines[0].id, quantity: 5 }], 'emp_owner')
+ok(inventory.stockQty('p_mix', 'RM') === 10, 'ten on the shelf — five from each')
+
+const bothOffered = prov.supplyingOrders('p_mix', 'RM')
+ok(
+  bothOffered.length === 2 && bothOffered[0].poId === rsFive.id,
+  'both are offered, roadshow first',
+  JSON.stringify(bothOffered.map((o: any) => `${o.poNumber}:${o.unitsOnHand}`))
+)
+
+// Sell the DISTRIBUTOR's five, with the roadshow's sitting right beside them.
+const distSale = invoices.saveInvoice(
+  {
+    customerName: 'Thorne Collectibles',
+    invoiceDate: '2026-08-23',
+    location: 'RM',
+    lines: [
+      { item: 'Mixed Shelf Case', productId: 'p_mix', quantity: 5, rate: 400, sourcePoId: distFive.id }
+    ]
+  },
+  'emp_owner'
+)
+const distCost = db
+  .prepare(`SELECT SUM(cost_total) AS c FROM invoice_stock_moves WHERE invoice_id = ?`)
+  .get(distSale.id) as any
+ok(
+  Math.abs(Number(distCost.c) - 600) < 0.005,
+  "IT COST 5 × $120 — THE DISTRIBUTOR'S, not the roadshow's $300s and not a blend",
+  String(distCost?.c)
+)
+ok(
+  prov.supplyingOrders('p_mix', 'RM').length === 1,
+  'and the distributor order drops off the list, having nothing left'
+)
+ok(
+  prov.supplyingOrders('p_mix', 'RM')[0].poId === rsFive.id,
+  "leaving the roadshow's five, untouched"
+)
+
+/**
+ * A CANCELLED ORDER IS NEVER OFFERED, even while its layers are still there.
+ *
+ * Cancelling normally hands the stock back, which would empty the layers and
+ * make the guard look redundant. The state it exists for is the one where the
+ * two come apart — a row that arrived through sync, or a cancel that could not
+ * reverse — and then its cost is out of the ledger while its cases are on the
+ * shelf. Selling "out of" it would attribute units to a purchase the books say
+ * never happened.
+ *
+ * Set directly, because reaching it through the ordinary path is the thing that
+ * cannot happen.
+ */
+const stillHeld = prov.supplyingOrders('p_mix', 'RM').length
+db.prepare(`UPDATE purchase_orders SET status = 'cancelled' WHERE id = ?`).run(rsFive.id)
+ok(
+  prov.supplyingOrders('p_mix', 'RM').length === stillHeld - 1,
+  'A CANCELLED ORDER DROPS OFF THE LIST while its cases are still on the shelf',
+  JSON.stringify(prov.supplyingOrders('p_mix', 'RM').map((o: any) => o.poNumber))
+)
+ok(
+  inventory.stockQty('p_mix', 'RM') > 0,
+  'and the shelf still holds them — the guard is about the ORDER, not the stock',
+  String(inventory.stockQty('p_mix', 'RM'))
+)
+db.prepare(`UPDATE purchase_orders SET status = 'received' WHERE id = ?`).run(rsFive.id)
+ok(
+  prov.supplyingOrders('p_mix', 'RM').length === stillHeld,
+  'put back, it is offered again'
+)
+
+const distTicket = db
+  .prepare(`SELECT merged_into FROM deal_tickets WHERE document_kind = 'so' AND document_id = ?`)
+  .get(distSale.id) as any
+ok(
+  distTicket.merged_into === null,
+  'AND THE SALE KEEPS ITS OWN DEAL TICKET — naming an ordinary order says where the cost came from, not that the two documents are one deal',
+  String(distTicket?.merged_into)
+)
+
+// A SETTLED roadshow order is still selectable, and still does not fold. Its
+// week is closed; the cases it brought in are on the shelf either way.
+const settledSale = invoices.saveInvoice(
+  {
+    customerName: 'Thorne Collectibles',
+    invoiceDate: '2026-08-23',
+    location: 'RM',
+    lines: [
+      { item: 'Mixed Shelf Case', productId: 'p_mix', quantity: 1, rate: 400, sourcePoId: rsFive.id }
+    ]
+  },
+  'emp_owner'
+)
+const openFold = db
+  .prepare(`SELECT merged_into FROM deal_tickets WHERE document_kind = 'so' AND document_id = ?`)
+  .get(settledSale.id) as any
+ok(
+  openFold.merged_into !== null,
+  'A SALE OFF THE RUNNING ROADSHOW STILL JOINS ITS TICKET — the narrowing took nothing away from the case it was built for',
+  String(openFold?.merged_into)
 )
 
 /**
