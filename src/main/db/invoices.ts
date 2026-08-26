@@ -1308,24 +1308,9 @@ export function saveInvoice(
      * outstanding on the line and goes out when the stock does.
      */
     const stockLocation = invoiceStockLocation(input.location)
-    const stockLines = lines
-      .filter((l) => {
-        if (!l.productId || !(l.quantity > 0)) return false
-        // A DROPSHIPPED LINE MOVES NO STOCK, and this is the assertion the whole
-        // feature rests on. The units went from the supplier straight to the
-        // buyer; this business never held them, so drawing a shelf down for them
-        // would invent a sale out of inventory that was never there — and on a
-        // product carried in stock it would quietly consume somebody else's
-        // boxes.
-        const dest = lineDestination(l.destination, stockLocation) ?? stockLocation
-        return destinationHoldsStock(dest)
-      })
-      .map((l) => ({
-        position: l.position,
-        productId: l.productId as string,
-        quantity: l.quantity,
-        sourcePoId: l.sourcePoId
-      }))
+    // See stockDrawingLines — shared with setInvoiceLineRouting, which asks the
+    // identical question of a posted order's lines.
+    const stockLines = stockDrawingLines(lines, stockLocation)
     releaseInvoiceStock(db, id)
     const moved = applyInvoiceStock(
       db,
@@ -2418,6 +2403,53 @@ export function setInvoiceReadyToShip(
 }
 
 /** Refuse to touch an order that is gone or voided, in one place. */
+/**
+ * WHICH LINES OF A SALE DRAW A SHELF DOWN. The one answer, asked twice.
+ *
+ * A DROPSHIPPED LINE MOVES NO STOCK, and this is the assertion the whole feature
+ * rests on. The units went from the supplier straight to the buyer; this
+ * business never held them, so drawing a shelf down for them would invent a sale
+ * out of inventory that was never there — and on a product carried in stock it
+ * would quietly consume somebody else's boxes.
+ *
+ * Shared by `saveInvoice`, which writes a whole order, and by
+ * `setInvoiceLineRouting`, which re-routes two lines of a posted one. Restating
+ * it in the second would be a second answer to the same question, and the first
+ * time they disagreed a line would be billed as a dropship and picked as stock.
+ */
+function stockDrawingLines(
+  lines: ReadonlyArray<{
+    position: number
+    productId?: string | null
+    product_id?: string | null
+    quantity: number
+    destination?: string | null
+    sourcePoId?: string | null
+    source_po_id?: string | null
+  }>,
+  stockLocation: string
+): Array<{ position: number; productId: string; quantity: number; sourcePoId: string | null }> {
+  const out: Array<{
+    position: number
+    productId: string
+    quantity: number
+    sourcePoId: string | null
+  }> = []
+  for (const l of lines) {
+    const productId = l.productId ?? l.product_id ?? null
+    if (!productId || !(l.quantity > 0)) continue
+    const dest = lineDestination(l.destination, stockLocation) ?? stockLocation
+    if (!destinationHoldsStock(dest)) continue
+    out.push({
+      position: l.position,
+      productId,
+      quantity: l.quantity,
+      sourcePoId: l.sourcePoId ?? l.source_po_id ?? null
+    })
+  }
+  return out
+}
+
 function liveInvoiceOr(
   db: Database.Database,
   id: string
@@ -2488,6 +2520,196 @@ export function setInvoiceDims(
  * setting the flag on one changes nothing and refusing it would be a button
  * that errors for no reason the operator can see. The gate reads what it needs.
  */
+/**
+ * RE-ROUTE THE LINES OF A SALE THAT HAS ALREADY BEEN POSTED.
+ *
+ * The owner's words: "on a sales order that is posted into QuickBooks I want the
+ * ability to change the destination and supplier if needed, for our own purposes
+ * and inventory — not the QuickBooks."
+ *
+ * ## Why this cannot go through `saveInvoice`
+ *
+ * `saveInvoice` throws on anything that is not a draft, and it is right to:
+ * it rewrites EVERY column — number, buyer, dates, terms, every line's price and
+ * quantity, the total — and once a document is on somebody's books this app is
+ * not its system of record. Widening that guard would let a total drift away
+ * from the invoice a buyer is holding, with nothing on either screen to say
+ * which is true.
+ *
+ * So this is a separate, narrow write, and the narrowness IS the safety. It
+ * touches three columns on the lines named — `destination`, `supplier` and the
+ * roadshow `source_po_id` — and then re-derives the stock. It cannot change what
+ * anybody is billed, because it never writes a rate, a quantity or a total, and
+ * it never speaks to Intuit. The same shape as `setInvoiceItemsInHand` and
+ * `setInvoicePaid` beside it: one fact about OUR handling of an order, editable
+ * for the life of the order.
+ *
+ * ## Where the goods come from is not a fact about the invoice
+ *
+ * That is the whole justification. "Ten cases at $900" is what the buyer agreed
+ * and is fixed the moment it is sent. "Two of those ship direct from Kestrel and
+ * eight come off the RM shelf" is a fact about THIS business's inventory and
+ * logistics, discovered afterwards more often than not, and nothing on the
+ * buyer's document says it or should.
+ *
+ * ## The stock is re-derived, not adjusted
+ *
+ * Release everything this order ever took, then take again from the lines that
+ * still draw a shelf — the identical release-then-apply `saveInvoice` performs,
+ * calling the identical `stockDrawingLines` filter, so there is one answer to
+ * "which lines move stock" and not two that can drift. `restoreFifo` puts units
+ * back into the exact layers they came from, so the re-take walks the same FIFO
+ * order and lands on the same layers at the same costs: nothing to get wrong
+ * arithmetically, and a line flipped to dropship simply is not in the re-take
+ * and its units stay on the shelf.
+ *
+ * ## What it deliberately does to `qty_fulfilled`
+ *
+ * On a stock line that number means "the shelf gave these units". Flip the line
+ * to a dropship and the claim is void — the release just took it back — so it
+ * goes to zero rather than being carried forward as picking that never happened.
+ * A line that was ALWAYS a dropship is left alone: its number came from somebody
+ * scanning, which this has no business erasing.
+ *
+ * ## What it does NOT do
+ *
+ * It does not touch QuickBooks, and it cannot: `pushToQbo` refuses an invoice
+ * that already has an id and there is no update path in this app at all. It does
+ * not move the card, change the total, or link a purchase order — that is
+ * `linkDropshipPair`, deliberately separate, because being supplied by an order
+ * and being routed from a supplier are two different claims.
+ *
+ * Refused on a VOID order only. A void sale has already handed its stock back,
+ * and re-applying would take it a second time.
+ */
+export function setInvoiceLineRouting(
+  id: string,
+  changes: ReadonlyArray<{ lineId: string; destination: string | null; supplier: string | null }>,
+  actorId: string | null
+): { invoice: InvoiceDetail | null; error?: string } {
+  const db = getDb()
+  const guard = liveInvoiceOr(db, id)
+  if (!guard.ok) return guard.result
+  if (changes.length === 0) return { invoice: getInvoice(id) }
+
+  const run = db.transaction((): { invoice: InvoiceDetail | null; error?: string } => {
+    const header = db
+      .prepare(`SELECT invoice_number, customer_name, location FROM invoices WHERE id = ?`)
+      .get(id) as
+      | { invoice_number: string | null; customer_name: string; location: string | null }
+      | undefined
+    if (!header) return { invoice: null, error: 'That order is gone.' }
+    const stockLocation = invoiceStockLocation(header.location)
+    const stamp = nowIso()
+
+    type Row = {
+      id: string
+      position: number
+      item: string
+      product_id: string | null
+      quantity: number
+      destination: string | null
+      supplier: string | null
+      source_po_id: string | null
+      qty_fulfilled: number
+    }
+    const readLines = (): Row[] =>
+      db
+        .prepare(
+          `SELECT id, position, item, product_id, quantity, destination, supplier,
+                  source_po_id, qty_fulfilled
+             FROM invoice_lines WHERE invoice_id = ? ORDER BY position`
+        )
+        .all(id) as Row[]
+
+    const before = readLines()
+    const wasStock = new Map(
+      before.map((l) => [
+        l.id,
+        destinationHoldsStock(lineDestination(l.destination, stockLocation) ?? stockLocation)
+      ])
+    )
+
+    const setLine = db.prepare(
+      `UPDATE invoice_lines
+          SET destination = ?, supplier = ?, source_po_id = ?, updated_at = ?
+        WHERE id = ? AND invoice_id = ?`
+    )
+    const touched: string[] = []
+    for (const change of changes) {
+      const line = before.find((l) => l.id === change.lineId)
+      if (!line) return { invoice: null, error: 'That line is no longer on this order.' }
+      // NULL means "the order's location", the same inheritance a line stores
+      // when it is typed. Keeping the inheritance rather than a copy is what
+      // stops a line disagreeing with its header after the header moves.
+      const dest = lineDestination(change.destination, stockLocation)
+      const drawsStock = destinationHoldsStock(dest ?? stockLocation)
+      // A dropship line has no supplier to derive from anything else — the
+      // destination IS the party shipping it, exactly as the sales form derives
+      // it. A stock line has no supplier at all.
+      const supplier = drawsStock ? null : (change.supplier ?? '').trim() || dest || null
+      // THE ROADSHOW POINTER GOES WITH THE SHELF. `source_po_id` on a line says
+      // which purchase order's cost layers to consume, which is meaningless on a
+      // line that consumes none. Left behind it would be a stale claim that the
+      // chooser itself hides on a dropship line.
+      const sourcePo = drawsStock ? line.source_po_id : null
+      setLine.run(dest, supplier, sourcePo, stamp, line.id, id)
+      touched.push(line.id)
+    }
+
+    const after = readLines()
+    const stockLines = stockDrawingLines(after, stockLocation)
+    releaseInvoiceStock(db, id)
+    const moved = applyInvoiceStock(
+      db,
+      id,
+      (header.invoice_number ?? '').trim() || null,
+      header.customer_name?.trim() || null,
+      stockLines,
+      stockLocation,
+      actorId
+    )
+    const movedQty = new Map(moved.map((m) => [m.position, m.quantity]))
+
+    const drawing = new Set(stockLines.map((l) => l.position))
+    const setFulfilled = db.prepare(
+      `UPDATE invoice_lines SET qty_fulfilled = ?, fulfilled_at = ?, updated_at = ?
+        WHERE id = ? AND invoice_id = ?`
+    )
+    for (const line of after) {
+      if (drawing.has(line.position)) {
+        // Read off what the shelf ACTUALLY gave, never off the quantity asked
+        // for — the same rule saveInvoice keeps, so the record and the shelf say
+        // the same number when the consumption takes less than was wanted.
+        const qty = movedQty.get(line.position) ?? 0
+        setFulfilled.run(qty, qty > 0 ? stamp : null, stamp, line.id, id)
+      } else if (touched.includes(line.id) && wasStock.get(line.id)) {
+        // It drew a shelf until a moment ago and does not any more. The number
+        // described that draw, and the draw has been given back.
+        setFulfilled.run(0, null, stamp, line.id, id)
+      }
+    }
+
+    db.prepare(`UPDATE invoices SET updated_at = ? WHERE id = ?`).run(stamp, id)
+
+    const names = after.filter((l) => touched.includes(l.id)).map((l) => l.item)
+    // 'note', not a new kind. The event log's kinds are the things that happen
+    // TO an order — created, staged, paid, shipped, linked — and re-routing is a
+    // correction somebody made, which is what a note is. Minting a kind for it
+    // would make every reader of describeOrderEvent handle a case that means
+    // "something else happened".
+    recordOrderEvent('so', id, 'note', {
+      detail:
+        `Re-routed ${names.length} line${names.length === 1 ? '' : 's'} — ${names.join(', ')}. ` +
+        'Stock re-derived; nothing on the invoice or in QuickBooks changed.',
+      actorId,
+      db
+    })
+    return { invoice: getInvoice(id) }
+  })
+  return run()
+}
+
 export function setInvoiceItemsInHand(
   id: string,
   inHand: boolean,

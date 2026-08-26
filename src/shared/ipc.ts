@@ -294,6 +294,7 @@ export const IPC = {
   invoicesFulfillment: 'invoices:fulfillment',
   invoiceSetDims: 'invoices:set-dims',
   invoiceSetItemsInHand: 'invoices:set-items-in-hand',
+  invoiceSetLineRouting: 'invoices:set-line-routing',
   invoiceSetForceReady: 'invoices:set-force-ready',
 
   // Purchase orders

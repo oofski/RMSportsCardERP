@@ -1982,6 +1982,20 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       /** Confirm the goods are in hand — the only signal a dropship has. */
       setItemsInHand: (id: string, inHand: boolean): Promise<Result<InvoiceDetail>> =>
         ipcRenderer.invoke(IPC.invoiceSetItemsInHand, { id, inHand }),
+      /**
+       * Where a POSTED sale's lines are fulfilled from — our shelf, or a
+       * supplier shipping direct. See setInvoiceLineRouting.
+       *
+       * Not part of save, and that is the point: save rewrites every column and
+       * is refused once a document is on the books. This writes three columns on
+       * the lines named and re-derives the stock, so it changes nothing anybody
+       * was billed and never speaks to Intuit.
+       */
+      setLineRouting: (
+        id: string,
+        changes: Array<{ lineId: string; destination: string | null; supplier: string | null }>
+      ): Promise<Result<InvoiceDetail>> =>
+        ipcRenderer.invoke(IPC.invoiceSetLineRouting, { id, changes }),
 
       /** Send it anyway, ahead of the gates. Recorded as its own decision. */
       setForceReady: (id: string, forced: boolean): Promise<Result<InvoiceDetail>> =>

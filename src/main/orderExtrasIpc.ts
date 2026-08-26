@@ -35,6 +35,7 @@ import {
   setInvoiceDims,
   setInvoiceForceReady,
   setInvoiceItemsInHand,
+  setInvoiceLineRouting,
   setInvoicePaid,
   linkDropshipPair,
   linkablePurchaseOrders,
@@ -674,6 +675,41 @@ export function registerOrderExtrasIpc(): void {
           },
           actor.id
         )
+        if (res.error) return { ok: false, error: res.error }
+        if (!res.invoice) return { ok: false, error: 'That order is gone.' }
+        return { ok: true, data: res.invoice }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  /**
+   * WHERE A POSTED SALE'S LINES ARE FULFILLED FROM. See setInvoiceLineRouting.
+   *
+   * Beside items-in-hand rather than beside save, because it is the same KIND of
+   * thing: one fact about this business's handling of an order, editable for the
+   * life of the order, touching nothing a buyer was billed and nothing in
+   * QuickBooks.
+   */
+  ipcMain.handle(
+    IPC.invoiceSetLineRouting,
+    (
+      _e,
+      payload: { id?: unknown; changes?: unknown }
+    ): Result<InvoiceDetail> => {
+      try {
+        const actor = requireInvoicing()
+        const raw = Array.isArray(payload?.changes) ? payload.changes : []
+        const changes = raw.map((c: Record<string, unknown>) => ({
+          lineId: str(c?.lineId),
+          destination: str(c?.destination).trim() || null,
+          supplier: str(c?.supplier).trim() || null
+        }))
+        if (changes.some((c) => !c.lineId)) {
+          return { ok: false, error: 'A line was named without saying which one.' }
+        }
+        const res = setInvoiceLineRouting(str(payload?.id), changes, actor.id)
         if (res.error) return { ok: false, error: res.error }
         if (!res.invoice) return { ok: false, error: 'That order is gone.' }
         return { ok: true, data: res.invoice }

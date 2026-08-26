@@ -1296,5 +1296,226 @@ ok(
   String(inv.getInvoice(plain.id).trackedParcels)
 )
 
+// ---------------------------------------------------------------------------
+console.log('\n=== RE-ROUTING A LINE ON AN ORDER THAT IS ALREADY IN QUICKBOOKS ===')
+// ---------------------------------------------------------------------------
+/**
+ * The owner's words: "on a sales order that is posted into QuickBooks I want the
+ * ability to change the destination and supplier if needed, for our own purposes
+ * and inventory - not the QuickBooks."
+ *
+ * He could not. `saveInvoice` throws on anything that is not a draft, correctly:
+ * it rewrites every column including the total, and once a document is on
+ * somebody's books this app is not its system of record. But where the goods come
+ * FROM is not part of that document - "ten cases at $900" is what the buyer
+ * agreed, and "two of them ship direct from a supplier" is a fact about this
+ * business's inventory, usually discovered afterwards.
+ *
+ * So `setInvoiceLineRouting` is a separate, narrow write, and the narrowness is
+ * the safety. These assertions are mostly about what it must NOT do.
+ */
+{
+  invStock.addStock('p_d', 'RM', 20, 50, null)
+  const shelfBefore = qtyAt('RM')
+
+  const posted = inv.saveInvoice(
+    {
+      customerName: 'Ryan Rubin',
+      invoiceNumber: 'SO-8800',
+      invoiceDate: '2026-08-20',
+      location: 'RM',
+      lines: [
+        { item: 'Dropship Hobby Box', productId: 'p_d', quantity: 8, rate: 900 },
+        { item: 'Dropship Hobby Box', productId: 'p_d', quantity: 2, rate: 900 },
+        { item: 'Grading fee', productId: null, quantity: 1, rate: 25 }
+      ]
+    },
+    null
+  )
+  ok(qtyAt('RM') === shelfBefore - 10, 'ten units came off the shelf', String(qtyAt('RM')))
+
+  // Posted and sent - the state the owner is actually in, and the one in which
+  // saveInvoice refuses to touch anything.
+  db.prepare(`UPDATE invoices SET status = 'sent', qbo_id = 'qbo-8800' WHERE id = ?`).run(posted.id)
+  let threw = ''
+  try {
+    inv.saveInvoice({ ...posted, id: posted.id, lines: posted.lines }, null)
+  } catch (err) {
+    threw = err instanceof Error ? err.message : String(err)
+  }
+  ok(/no longer be edited/i.test(threw), 'saveInvoice still refuses the whole document', threw)
+
+  const before = inv.getInvoice(posted.id)
+  const twoCases = before.lines.find((l: any) => l.quantity === 2)
+
+  const res = inv.setInvoiceLineRouting(
+    posted.id,
+    [{ lineId: twoCases.id, destination: 'Kestrel Cards', supplier: null }],
+    null
+  )
+  ok(!res.error, 'BUT THE ROUTING CAN STILL BE CHANGED', String(res.error))
+
+  const after = inv.getInvoice(posted.id)
+  // --- what it must NOT have touched --------------------------------------
+  ok(after.total === before.total, 'THE TOTAL IS UNTOUCHED', `${before.total} -> ${after.total}`)
+  ok(after.lines.length === 3, 'every line is still there', String(after.lines.length))
+  ok(
+    after.lines.every((l: any, i: number) => l.quantity === before.lines[i].quantity && l.rate === before.lines[i].rate),
+    'with every quantity and every rate exactly as billed'
+  )
+  ok(after.qboId === 'qbo-8800', 'the QuickBooks id is not even addressed')
+  ok(after.status === 'sent', 'and the card has not moved', after.status)
+
+  // --- what it DID do -----------------------------------------------------
+  const routed = after.lines.find((l: any) => l.id === twoCases.id)
+  ok(routed.destination === 'Kestrel Cards', 'the line is fulfilled from the supplier now', String(routed?.destination))
+  ok(routed.dropship === true, 'so it reads as a dropship')
+  ok(
+    routed.supplier === 'Kestrel Cards',
+    'AND THE SUPPLIER IS DERIVED FROM IT - there is no second question to ask',
+    String(routed?.supplier)
+  )
+  ok(after.dropshipUnits === 2 && after.stockUnits === 9, 'two units are a dropship, the rest are stock', `${after.dropshipUnits}/${after.stockUnits}`)
+  ok(
+    qtyAt('RM') === shelfBefore - 8,
+    'AND THE TWO CASES ARE BACK ON THE SHELF - this business never held them',
+    String(qtyAt('RM'))
+  )
+  ok(routed.qtyFulfilled === 0, 'the picking claim on that line is withdrawn with the draw', String(routed?.qtyFulfilled))
+  ok(
+    after.lines.find((l: any) => l.quantity === 8).qtyFulfilled === 8,
+    'while the line that still draws the shelf keeps its eight'
+  )
+
+  // --- and back again -----------------------------------------------------
+  ok(
+    !inv.setInvoiceLineRouting(posted.id, [{ lineId: twoCases.id, destination: 'RM', supplier: null }], null)
+      .error,
+    'it goes back the other way too'
+  )
+  const back = inv.getInvoice(posted.id)
+  ok(qtyAt('RM') === shelfBefore - 10, 'the two come off the shelf again', String(qtyAt('RM')))
+  ok(back.dropshipUnits === 0, 'and nothing is a dropship any more', String(back.dropshipUnits))
+  ok(
+    back.lines.find((l: any) => l.id === twoCases.id).destination === 'RM',
+    'the line names the shelf'
+  )
+  ok(
+    back.lines.find((l: any) => l.id === twoCases.id).supplier === null,
+    'AND THE SUPPLIER IS CLEARED - a shelf line has none'
+  )
+  ok(back.total === before.total, 'the total STILL has not moved', String(back.total))
+
+  /**
+   * A NON-INHERITING SHELF still clears the supplier. Routing back to the
+   * ORDER's own shelf stores NULL and would hide a supplier that was never
+   * cleared; naming the other shelf is the case that catches it.
+   */
+  ok(
+    !inv.setInvoiceLineRouting(posted.id, [{ lineId: twoCases.id, destination: 'AM', supplier: null }], null)
+      .error,
+    'a line can be moved to the other shelf'
+  )
+  const onAm = inv.getInvoice(posted.id).lines.find((l: any) => l.id === twoCases.id)
+  ok(onAm.destination === 'AM', 'it names AM', String(onAm?.destination))
+  ok(onAm.dropship === false, 'which is still a shelf, not a dropship')
+  ok(
+    onAm.supplier === null,
+    'AND CARRIES NO SUPPLIER — a shelf line has none, whichever shelf it is',
+    String(onAm?.supplier)
+  )
+
+  /**
+   * THE STORED DESTINATION INHERITS rather than being a copy. Read back through
+   * toLine both look like "RM", so this asks the column directly: a copy would
+   * stop following the header the first time the order's location moved.
+   */
+  inv.setInvoiceLineRouting(posted.id, [{ lineId: twoCases.id, destination: 'RM', supplier: null }], null)
+  const raw = db
+    .prepare(`SELECT destination FROM invoice_lines WHERE id = ?`)
+    .get(twoCases.id) as { destination: string | null }
+  ok(
+    raw.destination === null,
+    'ROUTING TO THE ORDER\u2019S OWN SHELF STORES NULL, so the line keeps following the header',
+    String(raw.destination)
+  )
+
+  /**
+   * A LINE WITH NO CATALOG PRODUCT NEVER MOVES STOCK. The grading fee is on this
+   * order precisely so that the filter has something to refuse.
+   */
+  const fee = inv.getInvoice(posted.id).lines.find((l: any) => !l.productId)
+  const feeMoves = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM invoice_stock_moves WHERE invoice_id = ? AND line_position = ?`
+    )
+    .get(posted.id, fee.position) as { n: number }
+  ok(feeMoves.n === 0, 'a service line has no stock move behind it', String(feeMoves.n))
+  /**
+   * AND IT IS THE PRODUCT TEST THAT DOES IT, not the shelf running out.
+   *
+   * A line with no product falls out of stockDrawingLines on `!productId`. Drop
+   * that half and an ordinary service line still moves nothing — the shelf has
+   * none of a null product — so the guard looks redundant right up until a line
+   * carries a source purchase order, where the quantity is NOT clamped to the
+   * shelf and the consumption is asked for outright. Written straight into the
+   * column, because no screen can produce it and sync or an import can.
+   */
+  db.prepare(`UPDATE invoice_lines SET source_po_id = 'po-ghost' WHERE id = ?`).run(fee.id)
+  let feeThrew = ''
+  try {
+    inv.setInvoiceLineRouting(posted.id, [{ lineId: twoCases.id, destination: 'RM', supplier: null }], null)
+  } catch (err) {
+    feeThrew = err instanceof Error ? err.message : String(err)
+  }
+  ok(feeThrew === '', 'A SERVICE LINE NAMING A PURCHASE ORDER STILL MOVES NOTHING', feeThrew)
+  db.prepare(`UPDATE invoice_lines SET source_po_id = NULL WHERE id = ?`).run(fee.id)
+
+  /**
+   * THE ROADSHOW POINTER GOES WITH THE SHELF. `source_po_id` on a line says which
+   * purchase order's cost layers to consume, which is meaningless on a line that
+   * consumes none — and the chooser itself hides on a dropship line.
+   */
+  const eight = inv.getInvoice(posted.id).lines.find((l: any) => l.quantity === 8)
+  db.prepare(`UPDATE invoice_lines SET source_po_id = 'po-roadshow' WHERE id = ?`).run(eight.id)
+  inv.setInvoiceLineRouting(posted.id, [{ lineId: eight.id, destination: 'Kestrel Cards', supplier: null }], null)
+  const cleared = db
+    .prepare(`SELECT source_po_id FROM invoice_lines WHERE id = ?`)
+    .get(eight.id) as { source_po_id: string | null }
+  ok(
+    cleared.source_po_id === null,
+    'A LINE FLIPPED TO DROPSHIP DROPS ITS SOURCE PURCHASE ORDER — it consumes no layers',
+    String(cleared.source_po_id)
+  )
+  // And put it back, so the assertions below start from a shelf again.
+  inv.setInvoiceLineRouting(posted.id, [{ lineId: eight.id, destination: 'RM', supplier: null }], null)
+
+  // --- refusals -----------------------------------------------------------
+  ok(
+    !!inv.setInvoiceLineRouting(posted.id, [{ lineId: 'not-a-line', destination: 'RM', supplier: null }], null)
+      .error,
+    'a line that is not on this order is refused'
+  )
+  ok(
+    inv.getInvoice(posted.id).lines.length === 3,
+    'and the refusal changes nothing - the whole thing is one transaction'
+  )
+  ok(
+    !inv.setInvoiceLineRouting(posted.id, [], null).error,
+    'changing nothing is not an error'
+  )
+
+  // A VOID order has already handed its stock back. Re-applying would take it a
+  // second time, off a shelf that has no claim on it.
+  inv.setInvoiceStatus(posted.id, 'void', null)
+  const onVoid = inv.setInvoiceLineRouting(
+    posted.id,
+    [{ lineId: twoCases.id, destination: 'Kestrel Cards', supplier: null }],
+    null
+  )
+  ok(!!onVoid.error && /void/i.test(onVoid.error), 'A VOID ORDER IS REFUSED', String(onVoid.error))
+  ok(qtyAt('RM') === shelfBefore, 'with every unit back on the shelf and none taken twice', String(qtyAt('RM')))
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail > 0) process.exit(1)

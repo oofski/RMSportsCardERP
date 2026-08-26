@@ -31,6 +31,7 @@ import { PaymentBar } from '../../components/PaymentProgress'
 import { CheckTrackingButton } from '../../components/CheckTrackingButton'
 import { MatchByNumberModal } from './MatchByNumberModal'
 import { AttachPurchaseOrderModal } from './AttachPurchaseOrderModal'
+import { RouteLinesModal } from './RouteLinesModal'
 import { PayUpFrontModal } from '../orders/PayUpFrontModal'
 import { useToast } from '../../components/Toast'
 import { formatDate, formatMoney } from '../../lib/format'
@@ -95,6 +96,13 @@ export function InvoicesBoard({
    * draft and can no longer be opened as a form.
    */
   const [attaching, setAttaching] = useState<Invoice | null>(null)
+  /**
+   * The sale whose lines are being re-routed.
+   *
+   * A DETAIL, unlike `attaching` — this one edits the lines, so it needs them.
+   * Fetched on demand rather than held for every card.
+   */
+  const [routing, setRouting] = useState<InvoiceDetail | null>(null)
   const [paying, setPaying] = useState<InvoiceDetail | null>(null)
   const [nextNumber, setNextNumber] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
@@ -633,6 +641,11 @@ export function InvoicesBoard({
                       onDelete={() => setDeleting(inv)}
                       onPdf={() => void api.invoices.openPdf(inv.id)}
                       onAttachPo={() => setAttaching(inv)}
+                      onRoute={async () => {
+                        const full = await api.invoices.get(inv.id)
+                        if (full) setRouting(full)
+                        else toast.error('That order is gone.')
+                      }}
                       onPayUpFront={() => void openForPayment(inv.id)}
                     />
                   ))}
@@ -687,6 +700,10 @@ export function InvoicesBoard({
           onClose={() => setAttaching(null)}
           onDone={load}
         />
+      )}
+
+      {routing && (
+        <RouteLinesModal invoice={routing} onClose={() => setRouting(null)} onDone={load} />
       )}
 
       {paying && (
@@ -757,6 +774,7 @@ function InvoiceCard({
   onDelete,
   onPdf,
   onAttachPo,
+  onRoute,
   onPayUpFront,
   onItemsInHand,
   onSendAnyway,
@@ -775,6 +793,8 @@ function InvoiceCard({
   onPdf: () => void
   /** Attach the purchase order that supplied this sale. See AttachPurchaseOrderModal. */
   onAttachPo: () => void
+  /** Change where the lines are fulfilled from. See RouteLinesModal. */
+  onRoute: () => void
   /** Open the paid-up-front dialog for this order. */
   onPayUpFront: () => void
   /** Confirm the goods arrived — the only signal a dropship has. */
@@ -1249,6 +1269,27 @@ function InvoiceCard({
           >
             <Icon name="Link" size={14} />
             Attach purchase order
+          </button>
+        )}
+
+        {/* WHERE THE GOODS COME FROM, editable for the life of the order.
+            
+            Not part of the invoice form, and not gated the way the form is. The
+            form edits the DOCUMENT — prices, the total, what a buyer was billed
+            — and is refused the moment an invoice reaches QuickBooks, correctly.
+            Which shelf a line draws down, or whether a supplier ships it direct,
+            is a fact about THIS business's inventory that is discovered
+            afterwards more often than not, and nothing on the buyer's invoice
+            says it. See RouteLinesModal. */}
+        {invoice.status !== 'void' && (
+          <button
+            type="button"
+            className="btn po-move"
+            title="Change which lines come off a shelf and which ship direct from a supplier"
+            onClick={onRoute}
+          >
+            <Icon name="Route" size={14} />
+            Fulfilled from
           </button>
         )}
 
