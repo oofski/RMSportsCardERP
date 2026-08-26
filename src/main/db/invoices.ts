@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto'
 import {
   DEFAULT_INVOICE_TERMS,
   INVOICE_TERMS,
+  INVOICE_TERMS_OFFERED,
   asPushState,
   dueDateFor,
   hasAddress,
@@ -1630,6 +1631,54 @@ export function listInvoicesNeedingPush(limit = 100): Invoice[] {
  * limit carry it off the end. Those are the oldest and least likely to change,
  * which is the right thing to drop first.
  */
+/**
+ * Move every CUSTOMER AND VENDOR off a payment term the picker no longer offers.
+ *
+ * The owner's words: "remove Net 30 as a payment option for all customers in
+ * sales order and purchase orders."
+ *
+ * ## Why retiring it from the menu was not enough on its own
+ *
+ * `INVOICE_TERMS_OFFERED` stopped offering anything longer than Net 2 a while
+ * back, but that only governs a NEW choice. `termsOptionsFor` deliberately hands
+ * a retired term back on a record that already holds one — otherwise a `<select>`
+ * renders a value it has no option for as blank, which reads as the terms having
+ * been wiped. So the menu tightened and almost nothing changed, because almost
+ * every contact was already on Net 30: the vendor import wrote it as a SQL
+ * literal on every supplier it created, and both `terms` columns were declared
+ * `DEFAULT 'Net 30'` from before the default moved to Due on receipt.
+ *
+ * ## The relationship, not the document
+ *
+ * This is the term a NEW order starts from, which is the thing the owner is
+ * asking to change. It deliberately does not touch `invoices.terms`: an invoice
+ * written last year on Net 30 keeps saying Net 30, because its `due_date` was
+ * computed from those terms and sent to a buyer, and rewriting the words would
+ * either contradict the date beside them or move a date somebody has been told.
+ *
+ * ## Everything unoffered, not Net 30 by name
+ *
+ * Net 15 and Net 60 sit behind the same door. Naming only Net 30 would leave
+ * them to produce the identical complaint the first time somebody hit one, and
+ * "the terms nobody may choose any more" is one rule rather than a list to keep
+ * in step with `INVOICE_TERMS_OFFERED`.
+ *
+ * Idempotent, and a no-op where nobody is on a long term — which matters,
+ * because invoice_customers is a synced table and touching rows that did not
+ * change would push every one of them to every other machine.
+ */
+export function retireUnofferedCustomerTerms(db: Database.Database): number {
+  const marks = INVOICE_TERMS_OFFERED.map(() => '?').join(', ')
+  const info = db
+    .prepare(
+      `UPDATE invoice_customers
+          SET terms = ?, updated_at = ?
+        WHERE terms NOT IN (${marks})`
+    )
+    .run(DEFAULT_INVOICE_TERMS, nowIso(), ...INVOICE_TERMS_OFFERED)
+  return info.changes
+}
+
 export function listPostedInvoices(limit = 200): Invoice[] {
   return (
     getDb()

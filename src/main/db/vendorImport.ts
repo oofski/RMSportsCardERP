@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto'
-import { hasAddress, type InvoiceAddress } from '@shared/invoices'
+import { DEFAULT_INVOICE_TERMS, hasAddress, type InvoiceAddress } from '@shared/invoices'
 import { emptyImportResult, type ContactImportResult } from '@shared/contacts'
 import type { ParsedVendor, ParsedVendorSheet } from '@shared/vendors'
 import { getDb } from './database'
@@ -116,7 +116,7 @@ export function importVendors(sheet: ParsedVendorSheet, source: string): Contact
     `INSERT INTO invoice_customers
        (id, name, terms, active, is_customer, is_vendor, vendor_label, created_at, updated_at,
         bill_line1, bill_line2, bill_city, bill_region, bill_postal_code, bill_country)
-     VALUES (@id, @name, 'Net 30', 1, 0, 1, @label, @stamp, @stamp,
+     VALUES (@id, @name, @terms, 1, 0, 1, @label, @stamp, @stamp,
              @line1, @line2, @city, @region, @postalCode, @country)`
   )
   const update = db.prepare(
@@ -154,6 +154,15 @@ export function importVendors(sheet: ParsedVendorSheet, source: string): Contact
         id: randomUUID(),
         name: vendor.name,
         label: vendor.label,
+        // THE BUSINESS DEFAULT, from the one constant, not a literal.
+        //
+        // This wrote `'Net 30'` straight into the SQL, which put every supplier
+        // the sheet created — a hundred and fifty in one import — on a term the
+        // picker had already stopped offering. `termsOptionsFor` then handed
+        // Net 30 back on each of those records, so retiring it from the menu
+        // had almost no visible effect. See the v88 migration, which moved the
+        // ones already written.
+        terms: DEFAULT_INVOICE_TERMS,
         stamp,
         line1: addr?.line1 ?? null,
         line2: addr?.line2 ?? null,

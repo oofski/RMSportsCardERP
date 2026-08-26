@@ -16,6 +16,7 @@ import { backfillWorkLog } from './workLogStore'
 import { installSyncTriggers } from './syncTriggers'
 import { hydrateLocations } from './stockLocations'
 import { fingerprintOf } from './financeStreaming'
+import { retireUnofferedCustomerTerms } from './invoices'
 
 let db: Database.Database | null = null
 
@@ -2063,7 +2064,7 @@ function migrate(database: Database.Database): void {
        id         TEXT PRIMARY KEY,
        name       TEXT NOT NULL,
        email      TEXT,
-       terms      TEXT NOT NULL DEFAULT 'Net 30',
+       terms      TEXT NOT NULL DEFAULT 'Due on receipt',
        location   TEXT,
        class_name TEXT,
        message    TEXT,
@@ -2086,7 +2087,7 @@ function migrate(database: Database.Database): void {
        customer_id    TEXT,
        customer_name  TEXT NOT NULL,
        email          TEXT,
-       terms          TEXT NOT NULL DEFAULT 'Net 30',
+       terms          TEXT NOT NULL DEFAULT 'Due on receipt',
        invoice_date   TEXT NOT NULL,
        due_date       TEXT NOT NULL,
        location       TEXT,
@@ -4277,6 +4278,44 @@ function migrate(database: Database.Database): void {
        ON invoice_lines (source_po_id);`
   )
   setMeta(database, 'schema_version', '87')
+
+  /**
+   * v88: NOBODY IS ON NET 30 ANY MORE.
+   *
+   * The owner's call, and the second half of a decision already half-made. The
+   * PICKER stopped offering anything longer than Net 2 a while back — see
+   * INVOICE_TERMS_OFFERED in @shared/invoices — but that only governed a NEW
+   * choice. `termsOptionsFor` deliberately hands the retired term back on a
+   * record that already holds one, so a select never renders blank, and the
+   * consequence was that Net 30 went on appearing for almost everybody:
+   *
+   *   · The vendor import wrote `'Net 30'` as a literal on every supplier it
+   *     created — a hundred and fifty of them in one go (see db/vendorImport).
+   *   · Both `terms` columns were declared `DEFAULT 'Net 30'`, from before the
+   *     default became Due on receipt.
+   *
+   * So this moves the RELATIONSHIP records — customers and vendors, which share
+   * the invoice_customers table — off any term the picker no longer offers. That
+   * is what the owner means by "for all customers": the term a new order starts
+   * from. Anything not in the offered list goes, not just Net 30, because Net 15
+   * and Net 60 sit behind exactly the same door and leaving them would reproduce
+   * the same complaint the first time somebody hit one.
+   *
+   * ## What it deliberately does NOT touch: the invoices themselves
+   *
+   * An invoice written last year on Net 30 keeps saying Net 30. It is a record
+   * of a deal that was struck, and its `due_date` was computed FROM those terms
+   * and sent to a buyer — rewriting the words here would either contradict the
+   * date sitting beside them or change a date somebody has already been told.
+   * `INVOICE_TERMS` therefore stays complete so `TERM_DAYS` still resolves every
+   * stored value, and `termsOptionsFor` still grandfathers on that one document.
+   * The difference is that no RELATIONSHIP points at Net 30 any more, so no new
+   * order can start there.
+   *
+   * Idempotent, and a no-op on a database where nobody was on a long term.
+   */
+  retireUnofferedCustomerTerms(database)
+  setMeta(database, 'schema_version', '88')
 
   // v41: re-derive every product's average cost from its remaining cost layers.
   //

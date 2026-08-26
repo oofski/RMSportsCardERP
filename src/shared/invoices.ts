@@ -124,6 +124,22 @@ export const INVOICE_TERMS: InvoiceTerms[] = [
  * reads as the terms having been wiped. `INVOICE_TERMS` stays complete so
  * `TERM_DAYS` and every stored value still resolve; this is the shorter list a
  * NEW choice is made from.
+ *
+ * ## Retiring a term from the MENU was only ever half the job
+ *
+ * `termsOptionsFor` hands a retired term back on a record that already holds it,
+ * so this list alone changes nothing for anybody already on one — and almost
+ * everybody was. The vendor import wrote `'Net 30'` as a literal on every
+ * supplier it created, and both `terms` columns were declared
+ * `DEFAULT 'Net 30'`, so Net 30 went on appearing in the picker for most of the
+ * contact list long after it stopped being offered. The owner's report was
+ * simply "remove Net 30 as a payment option for all customers".
+ *
+ * The other half is the v88 migration in db/database.ts, which moves every
+ * CUSTOMER AND VENDOR record off any term this list does not contain. Between
+ * the two, a new order can no longer start on a retired term — while an invoice
+ * already written on one keeps saying so, because its due date was computed from
+ * it and sent to a buyer.
  */
 export const INVOICE_TERMS_OFFERED: InvoiceTerms[] = ['Due on receipt', 'Net 2']
 

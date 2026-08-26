@@ -36,7 +36,9 @@ const {
   INVOICE_CSV_HEADERS,
   DEFAULT_INVOICE_TERMS,
   INVOICE_TERMS,
+  INVOICE_TERMS_OFFERED,
   TERM_DAYS,
+  termsOptionsFor,
   dueDateFor,
   invoiceTotal,
   invoicesToCsv,
@@ -144,7 +146,75 @@ ok(
 for (const historical of ['Due on receipt', 'Net 15', 'Net 30', 'Net 60']) {
   ok(
     INVOICE_TERMS.includes(historical),
-    `“${historical}” is still offered, so invoices on it still show it`
+    `“${historical}” still resolves, so invoices on it still show it`
+  )
+}
+
+// ---- WHAT MAY BE CHOSEN, which is a shorter list ---------------------------
+/**
+ * The owner's words: "remove Net 30 as a payment option for all customers in
+ * sales order and purchase orders."
+ *
+ * Two lists, on purpose. `INVOICE_TERMS` is everything that RESOLVES, so
+ * `TERM_DAYS` can date a stored value and an old invoice still prints its terms.
+ * `INVOICE_TERMS_OFFERED` is everything that may be CHOSEN. Collapsing them is
+ * the mistake the block above exists to prevent.
+ */
+ok(
+  !INVOICE_TERMS_OFFERED.includes('Net 30'),
+  'NET 30 IS NOT ON OFFER — nor anything longer than Net 2',
+  INVOICE_TERMS_OFFERED.join(', ')
+)
+ok(
+  INVOICE_TERMS_OFFERED.every((t: string) => TERM_DAYS[t] <= 2),
+  'and every term that IS on offer falls due within two days',
+  INVOICE_TERMS_OFFERED.map((t: string) => `${t}=${TERM_DAYS[t]}`).join(', ')
+)
+ok(
+  INVOICE_TERMS_OFFERED.every((t: string) => INVOICE_TERMS.includes(t)),
+  'the offered list is a subset of the resolvable one, so nothing offered is undatable'
+)
+
+/**
+ * A record ALREADY on a retired term is still shown it — but only that record,
+ * and only while it holds it. Without this the select renders blank, which reads
+ * as the terms having been wiped rather than as a policy having tightened.
+ */
+ok(
+  termsOptionsFor('Net 30').includes('Net 30'),
+  'AN INVOICE ALREADY ON NET 30 IS STILL OFFERED IT, so its own document is not silently rewritten'
+)
+ok(
+  termsOptionsFor('Net 30').length === INVOICE_TERMS_OFFERED.length + 1,
+  'and it is added to the short list rather than reopening the long one',
+  termsOptionsFor('Net 30').join(', ')
+)
+ok(
+  !termsOptionsFor('Due on receipt').includes('Net 30') &&
+    !termsOptionsFor(null).includes('Net 30') &&
+    !termsOptionsFor('').includes('Net 30'),
+  'while everybody else — including a brand-new order — never sees it',
+  termsOptionsFor(null).join(', ')
+)
+
+/**
+ * The grandfathering is a narrow exception and has to STAY narrow: it fires only
+ * when the held term is real AND retired. Widen it and the menu breaks in two
+ * quiet ways — a record already on an offered term gets that term listed twice,
+ * and a record holding nothing at all (every new order) gets an EMPTY option,
+ * which is the blank entry the whole two-list arrangement exists to prevent.
+ */
+for (const held of [null, '', 'Due on receipt', 'Net 2', 'Net 30', 'Net 60', 'nonsense']) {
+  const opts = termsOptionsFor(held)
+  ok(
+    opts.every((t: string) => !!t && INVOICE_TERMS.includes(t)),
+    `no blank or unknown option is offered to a record on ${JSON.stringify(held)}`,
+    JSON.stringify(opts)
+  )
+  ok(
+    new Set(opts).size === opts.length,
+    `and nothing is listed twice for a record on ${JSON.stringify(held)}`,
+    JSON.stringify(opts)
   )
 }
 
@@ -1641,6 +1711,101 @@ console.log('\n=== 21. the Wholesale ledger: sold for, minus what it cost ===')
   ok(legacy.cost === 0, 'carrying no cost figure', String(legacy?.cost))
   ok(legacy.costKnown === false, 'AND FLAGGED AS UNKNOWN, so the screen can leave it out of the totals')
   db.prepare(`DELETE FROM invoice_stock_moves WHERE id = 'legacy-move-1'`).run()
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n=== NOBODY IS LEFT SITTING ON NET 30 ===')
+// ---------------------------------------------------------------------------
+/**
+ * The v88 migration, as a named function so it can be tested rather than only
+ * run once at startup inside a five-thousand-line schema file.
+ *
+ * Retiring Net 30 from the picker changed almost nothing on its own, because
+ * `termsOptionsFor` hands a retired term back on any record already holding one
+ * — and almost every record did. The vendor import wrote `'Net 30'` as a SQL
+ * literal on every supplier it created, and both `terms` columns were declared
+ * `DEFAULT 'Net 30'`. So the menu tightened and the owner went on seeing Net 30
+ * on customer after customer.
+ */
+{
+  const stamp = '2026-01-02T03:04:05.000Z'
+  const seed = (name: string, terms: string): string => {
+    const id = `term-fix-${name.replace(/\W+/g, '-')}`
+    db.prepare(
+      `INSERT INTO invoice_customers (id, name, terms, active, is_customer, created_at, updated_at)
+       VALUES (?, ?, ?, 1, 1, ?, ?)`
+    ).run(id, name, terms, stamp, stamp)
+    return id
+  }
+  const termsOf = (id: string): string =>
+    (db.prepare(`SELECT terms FROM invoice_customers WHERE id = ?`).get(id) as any).terms
+  const touchedAt = (id: string): string =>
+    (db.prepare(`SELECT updated_at FROM invoice_customers WHERE id = ?`).get(id) as any).updated_at
+
+  const onNet30 = seed('Longwood Wax Co', 'Net 30')
+  const onNet60 = seed('Sixty Day Cards', 'Net 60')
+  const onNet15 = seed('Fifteen Day Cards', 'Net 15')
+  const onNet2 = seed('Weekend Buyer', 'Net 2')
+  const onReceipt = seed('Cash Buyer', 'Due on receipt')
+
+  // An invoice ALREADY written on Net 30, with the due date it was sent under.
+  const oldSale = repo.saveInvoice(
+    {
+      invoiceNumber: '2101',
+      customerName: 'Longwood Wax Co',
+      customerId: onNet30,
+      invoiceDate: '2026-01-05',
+      terms: 'Net 30',
+      lines: [{ item: 'Case break', quantity: 1, rate: 400 }]
+    },
+    'emp_owner'
+  )
+  ok(oldSale.terms === 'Net 30', 'an invoice can still be written on Net 30 by an old record')
+  ok(oldSale.dueDate === '2026-02-04', 'thirty days out', oldSale.dueDate)
+
+  const stranded = (): number =>
+    (
+      db
+        .prepare(
+          `SELECT COUNT(*) AS n FROM invoice_customers
+            WHERE terms NOT IN (${INVOICE_TERMS_OFFERED.map(() => '?').join(', ')})`
+        )
+        .get(...INVOICE_TERMS_OFFERED) as any
+    ).n
+
+  ok(stranded() >= 3, 'before: several contacts sit on a term nobody may choose', String(stranded()))
+  const moved = repo.retireUnofferedCustomerTerms(db)
+  ok(moved >= 3, 'the run reports how many it moved', String(moved))
+  ok(
+    stranded() === 0,
+    'AND NOBODY ANYWHERE IS LEFT ON A TERM THE PICKER DOES NOT OFFER — Net 60 and Net 15 sit behind the same door as Net 30',
+    String(stranded())
+  )
+  ok(termsOf(onNet30) === 'Due on receipt', 'the Net 30 customer is on the default now', termsOf(onNet30))
+  ok(termsOf(onNet60) === 'Due on receipt', 'and so is the Net 60 one')
+  ok(termsOf(onNet15) === 'Due on receipt', 'and the Net 15 one')
+  ok(termsOf(onNet2) === 'Net 2', 'while Net 2 — which IS on offer — is left exactly alone', termsOf(onNet2))
+  ok(termsOf(onReceipt) === 'Due on receipt', 'as is Due on receipt')
+
+  /**
+   * THE INVOICE IS NOT REWRITTEN. Its due date was computed from those terms and
+   * sent to a buyer; changing the words would either contradict the date beside
+   * them or move a date somebody has already been told.
+   */
+  const after = repo.getInvoice(oldSale.id)
+  ok(
+    after.terms === 'Net 30' && after.dueDate === '2026-02-04',
+    'THE INVOICE ALREADY WRITTEN ON NET 30 STILL SAYS SO, due date and all',
+    `${after.terms} / ${after.dueDate}`
+  )
+
+  /**
+   * Idempotent AND quiet. invoice_customers is a synced table, so a second run
+   * that touched all five rows would push all five to every other machine for a
+   * change nobody made.
+   */
+  ok(repo.retireUnofferedCustomerTerms(db) === 0, 'a second run moves nothing')
+  ok(touchedAt(onNet2) === stamp, 'and never touched updated_at on a row it left alone', touchedAt(onNet2))
 }
 
 console.log(`\n${pass} passed, ${fail} failed\n`)
