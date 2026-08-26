@@ -1158,6 +1158,122 @@
     word-break: break-word;
   }
 
+  /* ---- AND THEN THE QUANTITY BECAME A CONTROL -----------------------------
+     Everything above was measured and correct, and then − / + arrived on the
+     sales line and took QTY from a 48px box to a 122px stepper. The row went
+     back to 440px inside a 390px modal — and `.modal-body` does not scroll
+     sideways, so the bin sat at x=407 with no way to reach it and Amount was
+     cut through the middle. A line could not be removed from a sales order on a
+     phone, again, for the second time and for a different reason.
+     Measured, not guessed.
+
+     Squeezing further is not available: the stepper is 114px of tap targets and
+     two money fields need five figures and a decimal, so four controls and a
+     name cannot share 352px however the numbers are cut. So the NAME TAKES ITS
+     OWN ROW and the four controls share the one beneath it — the same fold the
+     purchase-order receipt uses, and for the same reason.
+
+     Table semantics stay in the markup and only the LAYOUT changes: display
+     block/grid on a table keeps the row and cell elements exactly as they are,
+     so nothing about the form, its state or its keyboard order moves.
+
+     ## The heading row goes, and the headings do not
+
+     Keeping <thead> was the first attempt and it looked right in the numbers and
+     wrong on the screen: the name row sits between the headings and the fields
+     they name, and by the time RATE and AMOUNT reach the eye there is a product
+     name, a SKU, a description box and a Sell-from picker in between. A label
+     three rows above its field is not a label.
+
+     So each field carries its own, printed from `data-label` on the cell. Both
+     money boxes say "0.00" and are otherwise identical; without this the second
+     one is a field nobody can name.
+     ------------------------------------------------------------------------ */
+  table.po-lines-so,
+  table.po-lines-so tbody {
+    display: block;
+  }
+  table.po-lines-so thead {
+    display: none;
+  }
+  table.po-lines-so tbody tr {
+    display: grid;
+    /* 118 for the stepper (34 + 40 + 34 and its gaps), the tap floor for the
+       bin, and the two money cells share what is left: 86px each at 390 and
+       71px at 360, both of which hold "12,345.67". */
+    grid-template-columns: 118px minmax(52px, 1fr) minmax(52px, 1fr) var(--rm-tap);
+    grid-template-areas:
+      'name name name   name'
+      'from from from   from'
+      'qty  rate amount kill';
+    column-gap: 6px;
+    row-gap: 8px;
+    /* BOTTOM-ALIGNED, so the bin — which has no label above it — sits on the
+       same baseline as the three boxes rather than floating up beside their
+       captions. */
+    align-items: end;
+    padding-bottom: 6px;
+  }
+  table.po-lines-so tbody td:nth-child(1) {
+    grid-area: name;
+  }
+  table.po-lines-so tbody td:nth-child(2) {
+    grid-area: qty;
+  }
+  table.po-lines-so tbody td:nth-child(3) {
+    grid-area: rate;
+  }
+  table.po-lines-so tbody td:nth-child(4) {
+    grid-area: amount;
+  }
+  /* ---- AND "FULFILLED FROM" COMES BACK ------------------------------------
+     The block above notes, as a known and unfixed thing, that a phone cannot
+     route a sales order line at all: column 5 is hidden and this form has no
+     unfolding panel to recover it the way the purchase order has. That was the
+     honest call when five controls were fighting for 352px of one row.
+
+     It is not the call any more. The line stacks, so the routing control can
+     have a full-width row of its own — which is what it wanted in the first
+     place, being a name rather than a number. Dropshipping a line is now
+     something somebody can do standing up.
+
+     Matched depth for depth: the rule that hides it is `.po-lines-routed
+     td:nth-child(5)`, and un-hiding it for this table alone needs the same
+     specificity plus the class. */
+  table.po-lines-so tbody td:nth-child(5) {
+    display: block;
+    grid-area: from;
+  }
+  .po-lines-so td:nth-child(6) {
+    grid-area: kill;
+    display: flex;
+    justify-content: flex-end;
+  }
+  /* The field's own name, above it. */
+  table.po-lines-so tbody td[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 3px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-3);
+    text-align: left;
+  }
+  /* The money fields fill their own track rather than carrying the width the
+     five-column layout needed. A stated 66px inside an 86px cell is 20px of
+     dead space beside a field somebody is typing money into. */
+  .po-lines-so .po-price-input {
+    width: 100%;
+  }
+  /* The stepper was pushed right to sit under a right-aligned heading. There is
+     no heading over it now, and a control that starts where the column starts
+     is the one a thumb reaches for. */
+  .po-lines-so .inv-qty-step {
+    justify-content: flex-start;
+  }
+
   /* The panel's copy of the two hidden columns. Stacked, full width, and the
      only routing controls that exist at this width. */
   .po-line-route {

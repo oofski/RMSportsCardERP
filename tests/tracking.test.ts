@@ -190,6 +190,54 @@ ok(
   parseTrackingStatus('Get alerts about your package by email', 'usps') !== 'exception',
   'but an advert offering alerts is not one'
 )
+// ---------------------------------------------------------------------------
+// DHL Express
+// ---------------------------------------------------------------------------
+/**
+ * "WITH DELIVERY COURIER" IS THE ONE THAT MATTERS.
+ *
+ * It is DHL's phrase for out-for-delivery and nobody else's, so the generic
+ * list has no rule for it — without DHL's own list a package on a van reads as
+ * unreadable and the board goes on showing yesterday. That is the failure this
+ * section exists to catch, and it is why DHL has a phrase list at all rather
+ * than falling through to the fallback like every other new carrier could.
+ */
+ok(
+  parseTrackingStatus('With delivery courier', 'dhl') === 'out_for_delivery',
+  'DHL\'s own words for out for delivery',
+  String(parseTrackingStatus('With delivery courier', 'dhl'))
+)
+ok(
+  parseTrackingStatus('With delivery courier', null) !== 'out_for_delivery',
+  'AND THE GENERIC LIST REALLY DOES NOT KNOW IT — which is what makes the list above load-bearing rather than decorative'
+)
+ok(
+  parseTrackingStatus('Shipment picked up', 'dhl') === 'in_transit',
+  'a DHL pickup is in transit'
+)
+ok(
+  parseTrackingStatus('Shipment information received', 'dhl') === 'label_created',
+  'and DHL\'s way of saying the label exists and the parcel does not'
+)
+ok(parseTrackingStatus('Delivered', 'dhl') === 'delivered', 'delivered still reads as delivered')
+ok(
+  parseTrackingStatus('Shipment on hold', 'dhl') === 'exception',
+  'and a hold is a problem worth surfacing'
+)
+const DHL_PAGE = [
+  'DHL Express',
+  'JJD0099998877665544',
+  'With delivery courier',
+  'Processed at DHL facility',
+  'Shipment picked up',
+  'Shipment information received'
+].join('\n')
+ok(
+  parseTrackingStatus(DHL_PAGE, 'dhl') === 'out_for_delivery',
+  'THE TOP LINE WINS on a real page — the history below it is where the package HAS been',
+  String(parseTrackingStatus(DHL_PAGE, 'dhl'))
+)
+
 const USPS_PAGE = [
   'USPS Tracking',
   '9400111899223197428490',

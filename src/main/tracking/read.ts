@@ -65,7 +65,12 @@ const PROFILES: Record<string, CarrierProfile> = {
   // The heaviest of the three, and the one that was failing.
   fedex: { maxWaitMs: 22_000, pollMs: 1000 },
   ups: { maxWaitMs: 18_000, pollMs: 1000 },
-  usps: { maxWaitMs: 14_000, pollMs: 800 }
+  usps: { maxWaitMs: 14_000, pollMs: 800 },
+  // DHL's page is a single-page app that fills in after the shell paints, so it
+  // needs about as long as UPS. Without an entry it would take DEFAULT_PROFILE,
+  // which is the same number — this is here so the ceiling is a decision rather
+  // than a coincidence, and so it can move without moving everybody else's.
+  dhl: { maxWaitMs: 18_000, pollMs: 1000 }
 }
 
 const DEFAULT_PROFILE: CarrierProfile = { maxWaitMs: 18_000, pollMs: 1000 }

@@ -36,6 +36,7 @@ const { getDb } = require('../src/main/db/database')
 const poRepo = require('../src/main/db/purchaseOrders')
 const invRepo = require('../src/main/db/invoices')
 const {
+  CARRIERS,
   asCarrier,
   asPaymentTiming,
   carrierLabel,
@@ -115,7 +116,10 @@ ok(
 // And when it does NOT name itself, there is no link — see reason 1 above.
 ok(trackingUrl(null, '12345678901234567890') === null, 'an ambiguous number gets no link')
 ok(trackingUrl('ups', '') === null, 'a carrier with no number gets no link')
-ok(trackingUrl('dhl', '123456789012') === null, 'an unknown carrier is not guessed at')
+// 'royalmail' is the stand-in now: DHL used to play this part and this business
+// ships with it, so the assertion moved to a carrier that really is not on the
+// list rather than being deleted.
+ok(trackingUrl('royalmail', '123456789012') === null, 'an unknown carrier is not guessed at')
 // A number is put in a URL, so it has to be encoded.
 ok(
   (trackingUrl('ups', 'A&B=C') ?? '').includes('A%26B%3DC'),
@@ -145,7 +149,8 @@ ok(asPaymentTiming('delivery') === 'delivery', 'so does delivery')
 ok(asPaymentTiming('later') === null, 'and anything else reads as not-said')
 ok(asPaymentTiming(undefined) === null, 'including undefined')
 ok(asCarrier('ups') === 'ups', 'a real carrier survives')
-ok(asCarrier('dhl') === null, 'one we do not use does not')
+ok(asCarrier('dhl') === 'dhl', 'and so does DHL, which this business now ships with')
+ok(asCarrier('royalmail') === null, 'one we do not use does not')
 ok(carrierLabel('fedex') === 'FedEx', 'carriers print with their own capitals')
 ok(carrierLabel(null) === '', 'and nothing prints as nothing')
 ok(paymentLabel('delivery') === 'Upon delivery', 'payment prints in words')
@@ -409,7 +414,56 @@ for (const c of ['usps', 'fedex', 'ups']) {
 // it, so offering it first would let a UPS service land on a FedEx shipment.
 ok(servicesFor(null).length === 0, 'no carrier offers no services', JSON.stringify(servicesFor(null)))
 ok(servicesFor(undefined).length === 0, 'and neither does an absent one')
-ok(servicesFor('dhl').length === 0, 'nor a carrier this business does not use')
+ok(servicesFor('royalmail').length === 0, 'nor a carrier this business does not use')
+
+// ---------------------------------------------------------------------------
+// DHL — one carrier, one service
+// ---------------------------------------------------------------------------
+/**
+ * The owner asked for DHL "with its only type being express". A ONE-ENTRY
+ * service list is not a special case anywhere: the box narrows to it exactly as
+ * it narrows to eleven for FedEx, and everything below is the same machinery
+ * asked the same questions.
+ */
+ok(
+  JSON.stringify(servicesFor('dhl')) === JSON.stringify(['Express']),
+  'DHL SELLS EXPRESS AND NOTHING ELSE — a service nobody picks is a line somebody reads past on every order',
+  JSON.stringify(servicesFor('dhl'))
+)
+ok(carrierLabel('dhl') === 'DHL', 'and it prints with its own capitals', carrierLabel('dhl'))
+ok(
+  CARRIERS.some((c) => c.id === 'dhl'),
+  'it is on the list the two forms draw from, so both sides get it at once'
+)
+
+// A ten-digit air waybill is DHL's and collides with nothing: FedEx's shortest
+// is twelve.
+ok(detectCarrier('1234567890') === 'dhl', 'a ten-digit number reads as DHL', String(detectCarrier('1234567890')))
+ok(detectCarrier('JJD0099998877665544') === 'dhl', 'and so does a JJD number')
+ok(
+  detectCarrier('123456789012') === 'fedex',
+  'TWELVE DIGITS IS STILL FEDEX — the DHL rule must not have eaten the length above it',
+  String(detectCarrier('123456789012'))
+)
+ok(
+  detectCarrier('123456789012345') === 'fedex',
+  'and fifteen is still FedEx',
+  String(detectCarrier('123456789012345'))
+)
+ok(
+  detectCarrier('1Z999AA10123456784') === 'ups',
+  'and a UPS number is untouched by any of it'
+)
+const dhlUrl = trackingUrl('dhl', 'JJD0099998877665544')
+ok(!!dhlUrl && dhlUrl.includes('dhl.com'), 'Track opens DHL rather than nothing', String(dhlUrl))
+ok(
+  !!dhlUrl && dhlUrl.includes('JJD0099998877665544'),
+  'carrying the number it was given'
+)
+ok(
+  trackingUrl(null, '1234567890') === trackingUrl('dhl', '1234567890'),
+  'AND A BARE DHL NUMBER LINKS ITSELF — the carrier is a fact about the number, not a second thing to remember'
+)
 
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

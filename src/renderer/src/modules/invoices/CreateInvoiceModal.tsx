@@ -906,7 +906,12 @@ export function CreateInvoiceModal({
                           />
                         )}
                       </td>
-                      <td className="num">
+                      {/* `data-label` is what the phone prints above the field
+                          once the heading row is gone — see mobile.css. It is
+                          on the markup rather than generated from an nth-child
+                          in CSS so the words a person reads live where the rest
+                          of this form's words live. */}
+                      <td className="num" data-label="Qty">
                         {/* The box stays for "make it 40"; the arrows are for
                             the change somebody actually makes, and the one that
                             is fiddly to type on a phone. Down stops at one —
@@ -960,7 +965,7 @@ export function CreateInvoiceModal({
                           </button>
                         </span>
                       </td>
-                      <td className="num">
+                      <td className="num" data-label="Rate">
                         <Input
                           value={l.rate}
                           inputMode="decimal"
@@ -969,7 +974,7 @@ export function CreateInvoiceModal({
                           onChange={(e) => patch(l.key, { rate: e.target.value })}
                         />
                       </td>
-                      <td className="num">
+                      <td className="num" data-label="Amount">
                         <Input
                           value={l.amount}
                           inputMode="decimal"
@@ -993,7 +998,7 @@ export function CreateInvoiceModal({
                           a copy of the header. Muted while inherited, solid once
                           overridden — readable down the column without opening a
                           row. */}
-                      <td>
+                      <td data-label="Fulfilled from">
                         <DestinationSelect
                           className={`po-route-party${l.destination ? '' : ' is-inherited'}`}
                           ariaLabel={`Fulfilled from, for ${l.item}`}

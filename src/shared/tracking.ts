@@ -95,10 +95,41 @@ const CARRIER_PHRASES: Record<string, Array<[RegExp, ShipStatusCode]>> = {
     [/\bshipping label created,? usps awaiting item\b/, 'label_created'],
     [/\bpre-?shipment\b/, 'label_created'],
     [/\blabel created\b/, 'label_created']
+  ],
+  /**
+   * DHL EXPRESS, whose wording is its own.
+   *
+   * "With delivery courier" is the phrase that matters and it is nobody else's
+   * — GENERIC_PHRASES has no rule for it, so without this list a package out on
+   * a van would read as unreadable and the board would go on showing yesterday.
+   *
+   * "Shipment picked up" and "Clearance processing" are the other two DHL says
+   * that the generic list does not. Everything else it prints — delivered, in
+   * transit — the fallback already handles, and repeating those here would be a
+   * second copy to keep in step.
+   */
+  dhl: [
+    [/\breturn(?:ed|ing)? to shipper\b/, 'returned'],
+    [/\bdelivered\b/, 'delivered'],
+    [/\bwith delivery courier\b/, 'out_for_delivery'],
+    [/\bout for delivery\b/, 'out_for_delivery'],
+    [/\bdelivery attempted\b/, 'exception'],
+    [/\bcustoms status updated\b/, 'exception'],
+    [/\bshipment on hold\b/, 'exception'],
+    [/\bclearance (?:event|processing|delay)\b/, 'in_transit'],
+    [/\bprocessed at\b/, 'in_transit'],
+    [/\bdeparted facility\b/, 'in_transit'],
+    [/\barrived at (?:dhl|sort|delivery) facility\b/, 'in_transit'],
+    [/\bshipment picked up\b/, 'in_transit'],
+    [/\bin transit\b/, 'in_transit'],
+    // DHL's wording for "we have been told about it and do not have it".
+    [/\bshipment information received\b/, 'label_created'],
+    [/\belectronic shipment details? (?:sent|received)\b/, 'label_created'],
+    [/\blabel created\b/, 'label_created']
   ]
 }
 
-/** Wording common to all three, and the fallback when no carrier is known. */
+/** Wording common to every carrier, and the fallback when none is known. */
 const GENERIC_PHRASES: Array<[RegExp, ShipStatusCode]> = [
   [/\breturn(?:ed|ing)? to (?:sender|shipper)\b/, 'returned'],
   [/\bdelivered\b/, 'delivered'],

@@ -30,7 +30,7 @@
  * API integration would need.
  */
 
-export type Carrier = 'fedex' | 'ups' | 'usps' | 'local'
+export type Carrier = 'fedex' | 'ups' | 'usps' | 'dhl' | 'local'
 
 export interface CarrierDef {
   id: Carrier
@@ -40,7 +40,7 @@ export interface CarrierDef {
 }
 
 /**
- * The three carriers this business uses, and every service each one sells.
+ * The carriers this business uses, and every service each one sells.
  *
  * ## Names only, and the carrier's own name for it
  *
@@ -108,6 +108,25 @@ export const CARRIERS: CarrierDef[] = [
   },
   {
     /**
+     * DHL, and ONE SERVICE.
+     *
+     * DHL sells a shelf of them — eCommerce, Parcel, Global Mail, several
+     * Express tiers. This business uses Express and the owner said so in those
+     * words, so that is the whole list. A service nobody picks is a line in a
+     * speed ladder somebody reads past on every order, which is the same
+     * argument that keeps Express Critical and SurePost off the UPS list above.
+     *
+     * A one-entry list is not a special case for any of the machinery: the
+     * service box narrows to it exactly as it narrows to eleven for FedEx, and
+     * an order already on disk naming something else still shows it — see the
+     * fallback <option> in FreightFields.
+     */
+    id: 'dhl',
+    label: 'DHL',
+    services: ['Express']
+  },
+  {
+    /**
      * NOT A CARRIER, and it sits in this list anyway.
      *
      * Plenty of what leaves this building never goes near a carrier: a local
@@ -164,6 +183,11 @@ export function servicesFor(carrier: string | null | undefined): string[] {
  *   FedEx 12 digits, or 15 (Ground/SmartPost), or 20.
  *   USPS  20 or 22 digits, and 22 is theirs alone. A bare 20-digit number is
  *         ambiguous with FedEx SmartPost, so it is left for a human.
+ *   DHL   A 10-digit Express air waybill, or JJD/JD + digits. Ten digits
+ *         collides with nothing above — FedEx starts at 12 — so it is safe to
+ *         claim. The longer DHL eCommerce formats are deliberately absent: this
+ *         business ships Express, and a number guessed onto the wrong DHL
+ *         product opens the wrong tracking page.
  */
 export function detectCarrier(tracking: string): Carrier | null {
   const t = (tracking ?? '').replace(/[\s-]/g, '').toUpperCase()
@@ -172,6 +196,10 @@ export function detectCarrier(tracking: string): Carrier | null {
   // USPS numbers starting 94/93/92/95 are theirs regardless of length.
   if (/^(94|93|92|95)\d{18,20}$/.test(t)) return 'usps'
   if (/^\d{22}$/.test(t)) return 'usps'
+  // BEFORE the FedEx lengths, and it cannot collide with them: 12 and 15 are
+  // FedEx's shortest, and this is exactly 10.
+  if (/^\d{10}$/.test(t)) return 'dhl'
+  if (/^JJD\d{9,}$/.test(t) || /^JD\d{9,}$/.test(t)) return 'dhl'
   if (/^\d{12}$/.test(t) || /^\d{15}$/.test(t)) return 'fedex'
   // 20 digits is FedEx SmartPost AND a USPS format. Ambiguous, so say nothing.
   return null
@@ -200,6 +228,8 @@ export function trackingUrl(carrier: string | null | undefined, tracking: string
       return `https://www.ups.com/track?loc=en_US&requester=ST&tracknum=${n}`
     case 'usps':
       return `https://tools.usps.com/go/TrackConfirmAction?tLabels=${n}`
+    case 'dhl':
+      return `https://www.dhl.com/us-en/home/tracking/tracking-express.html?submit=1&tracking-id=${n}`
     default:
       return null
   }
