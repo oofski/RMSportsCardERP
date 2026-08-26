@@ -37,8 +37,9 @@ import type {
   ShipWarningInput,
   ShippingDataset
 } from '@shared/shippingTypes'
-import { SHIP_SPORT_LABELS } from '@shared/shippingTypes'
+import { SHIP_SPORTS, SHIP_SPORT_LABELS } from '@shared/shippingTypes'
 import {
+  SLATE_DETECTION_MIN_SCORE,
   createNullTeamMatcher,
   createTeamMatcher,
   detectSportDetailed,
@@ -1495,6 +1496,12 @@ export function collectTeamCandidatesByBreak(groups: CustomerGroup[]): Map<strin
   return out
 }
 
+/** "#5", "#5 and #6", "#5, #6 and #7" — a warning is a sentence a person reads. */
+function joinWithAnd(items: string[]): string {
+  if (items.length <= 1) return items[0] ?? ''
+  return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`
+}
+
 // ---------------------------------------------------------------------------
 // The pipeline
 // ---------------------------------------------------------------------------
@@ -1614,19 +1621,58 @@ export function parsePages(pages: string[], options: ParsePagesOptions = {}): Sh
    * tie-break in `detectSport` is "first in the list", which is how a baseball
    * show once came out labelled NFL.
    *
-   * An OPERATOR-CHOSEN league still wins outright. Picking MLB by hand is a
-   * statement about the whole upload, and second-guessing it per break would
-   * make the control a suggestion.
+   * ## Why this runs even when the operator picked a league
+   *
+   * It used to run under `auto` only, and the reason written here was that
+   * picking MLB by hand is a statement about the whole upload which the parser
+   * has no business second-guessing. That reasoning was sound and the behaviour
+   * it produced was still wrong, because of one thing it did not account for:
+   * THE PICKER IS STICKY. It is restored from localStorage on every visit (see
+   * readSport in UploadTab), so "MLB" is not re-stated per upload — it is left
+   * over from the last baseball night, and the operator does not see themselves
+   * making a claim at all.
+   *
+   * The owner's report, in the owner's words: "breaks 1-8 in one stream, breaks
+   * 1-4 are MLB and breaks 5-8 are NBA — it should not show 120 errors because
+   * in breaks 5-8 it cannot find the MLB teams." That is exactly this: four
+   * basketball breaks read against the baseball slate, every card kept as
+   * printed, and one warning per card.
+   *
+   * ## So the pick is the FALLBACK, and overruling it takes real evidence
+   *
+   * A break may take its own league from a hand-picked upload only on evidence
+   * that identifies a league on its own — SLATE_DETECTION_MIN_SCORE, which is
+   * one exact-or-alias team name (or ten mascots agreeing). Under `auto` there
+   * is no human claim to contradict, so any untied evidence is enough and the
+   * old bar stands.
+   *
+   * A TIE IS NOT EVIDENCE, either way. `detectSportDetailed` resolves ties by
+   * position in SHIP_SPORTS, so a break whose slips only say "Cardinals" scores
+   * NFL 10 / MLB 10 and comes back NFL for no reason but the order of a list.
+   * Falling through to the upload's league is an answer with more behind it.
    */
   const sportForBreak = new Map<string, ShipSport>()
-  if (requested === 'auto') {
-    for (const [label, names] of collectTeamCandidatesByBreak(groups)) {
-      if (!label || names.length === 0) continue
-      const detection = detectSportDetailed(names)
-      // Every league scored zero: no evidence, so no answer of its own.
-      if (Object.values(detection.scores).every((n) => n === 0)) continue
+  /** Breaks that were read against a league other than the one picked by hand. */
+  const overruled: { label: string; sport: ShipSport }[] = []
+  for (const [label, names] of collectTeamCandidatesByBreak(groups)) {
+    if (!label || names.length === 0) continue
+    const detection = detectSportDetailed(names)
+    const top = detection.scores[detection.sport]
+    // TWO LEAGUES LEVEL ON THE EVIDENCE: no answer of its own, take the fallback.
+    // This is also what catches a break with NO evidence at all — every league
+    // scores zero, so every league ties, and the "winner" is only the first
+    // entry in SHIP_SPORTS. A separate `top === 0` guard sat here for a while
+    // and could never once fire.
+    if (SHIP_SPORTS.some((s) => s !== detection.sport && detection.scores[s] >= top)) continue
+    if (requested === 'auto') {
       sportForBreak.set(label, detection.sport)
+      continue
     }
+    // The operator's pick already covers it.
+    if (detection.sport === sport) continue
+    if (top < SLATE_DETECTION_MIN_SCORE) continue
+    sportForBreak.set(label, detection.sport)
+    overruled.push({ label, sport: detection.sport })
   }
 
   /** One matcher per league, built once and shared by every break using it. */
@@ -1648,6 +1694,33 @@ export function parsePages(pages: string[], options: ParsePagesOptions = {}): Sh
   const orders: ShipOrder[] = []
   const warnings: ShipWarningInput[] = [...groupWarnings]
   if (blindDetection) warnings.push(blindDetection)
+
+  /**
+   * SAY THAT THE PICK WAS OVERRULED — once per league, not once per break.
+   *
+   * Reading a break against a list the operator did not choose is the kind of
+   * quiet helpfulness that becomes a mystery three weeks later, so it is stated
+   * plainly. One line per league rather than one per break: four flags carrying
+   * the same sentence about four consecutive breaks is the noise this whole
+   * change exists to remove.
+   */
+  for (const league of SHIP_SPORTS) {
+    const labels = overruled
+      .filter((o) => o.sport === league)
+      .map((o) => o.label)
+      .sort((a, b) => (parseInt(a, 10) || 0) - (parseInt(b, 10) || 0) || a.localeCompare(b))
+      .map((l) => `#${l}`)
+    if (!labels.length) continue
+    const one = labels.length === 1
+    warnings.push({
+      page: null,
+      message:
+        `${one ? 'Break' : 'Breaks'} ${joinWithAnd(labels)} name ${SHIP_SPORT_LABELS[league]} teams, ` +
+        `so ${one ? 'its' : 'their'} cards were matched against the ${SHIP_SPORT_LABELS[league]} list ` +
+        `rather than the ${SHIP_SPORT_LABELS[sport]} chosen for this upload. Every card is kept and pickable.`,
+      rawText: null
+    })
+  }
 
   let processedPages = 0
   groups.forEach((group, index) => {
@@ -1733,7 +1806,11 @@ export function parsePages(pages: string[], options: ParsePagesOptions = {}): Sh
   // exactly where the slip put it and stays pickable. The numbers only ever
   // produce a flag, because the machine cannot know which of two plausible
   // mistakes was actually made, and a person can.
-  const slate = matcher.maxTeams
+  // The slate is THIS BREAK'S league, not the upload's. `audit.maxTeams` comes
+  // from the matcher the break was actually read with, so an NBA break inside a
+  // night picked as NFL is measured against thirty and not thirty-two. Reading
+  // the size off the upload was the last place the old one-league-per-upload
+  // assumption survived, and it turned a right answer into a wrong arithmetic.
   for (const audit of breakAudit) {
     for (const collision of audit.collisions) {
       warnings.push({
@@ -1746,10 +1823,11 @@ export function parsePages(pages: string[], options: ParsePagesOptions = {}): Sh
     // More cards than the league has teams. Usually two breaks that got the
     // same label typed on them, occasionally a line that read as a team when it
     // was not one.
+    const slate = audit.maxTeams
     if (slate > 0 && audit.teamCount > slate) {
       warnings.push({
         page: null,
-        message: `Break #${audit.breakLabel} holds ${audit.teamCount} cards but ${matcher.sport.toUpperCase()} only has ${slate} teams — every card is kept and pickable. Check whether two breaks were labelled the same.`,
+        message: `Break #${audit.breakLabel} holds ${audit.teamCount} cards but ${SHIP_SPORT_LABELS[sportOf(audit.breakLabel)]} only has ${slate} teams — every card is kept and pickable. Check whether two breaks were labelled the same.`,
         rawText: null
       })
     }
@@ -1768,12 +1846,17 @@ export function parsePages(pages: string[], options: ParsePagesOptions = {}): Sh
   }
   for (const [number, siblings] of siblingsByNumber) {
     if (siblings.length < 2) continue
+    // Siblings read against DIFFERENT leagues are not one break written two
+    // ways — they are two breaks, and there is no single slate to add them up
+    // against. Say nothing rather than add basketball to baseball.
+    const slate = siblings[0].maxTeams
+    if (siblings.some((a) => a.maxTeams !== slate)) continue
     const labels = siblings.map((a) => `#${a.breakLabel}`).join(' and ')
     const together = siblings.reduce((n, a) => n + a.distinctTeamCount, 0)
     if (slate > 0 && together <= slate && siblings.every((a) => a.distinctTeamCount < slate)) {
       warnings.push({
         page: null,
-        message: `${labels} together hold ${together} of the ${slate} ${matcher.sport.toUpperCase()} teams and neither is a full slate on its own — they may be one break #${number} labelled two ways. Both are kept as separate breaks; nothing is blocked.`,
+        message: `${labels} together hold ${together} of the ${slate} ${SHIP_SPORT_LABELS[sportOf(siblings[0].breakLabel)]} teams and neither is a full slate on its own — they may be one break #${number} labelled two ways. Both are kept as separate breaks; nothing is blocked.`,
         rawText: null
       })
     }

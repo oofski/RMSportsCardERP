@@ -1146,17 +1146,317 @@ for (const [line, want] of TRACK_CASES) {
   )
 
   /**
-   * AN OPERATOR-CHOSEN LEAGUE STILL WINS OUTRIGHT. Picking MLB by hand is a
-   * statement about the whole upload; second-guessing it per break would make
-   * the control a suggestion rather than an instruction.
+   * A HAND-PICKED LEAGUE IS THE FALLBACK, NOT THE ANSWER.
+   *
+   * This used to assert the opposite — that picking MLB won outright, because
+   * second-guessing a control makes it a suggestion. The reasoning was sound and
+   * the behaviour was wrong, for a reason nothing in the parser could see: the
+   * picker is STICKY. `readSport` in UploadTab restores it from localStorage, so
+   * "MLB" is not re-stated per upload; it is left over from last week, and the
+   * operator does not experience themselves as having claimed anything.
+   *
+   * So the two NBA breaks come out NBA even here, and only the ones with no
+   * league of their own fall back to the pick.
    */
   const forced = parsePages([twoLeagueShow], { sport: 'mlb' })
+  const forcedSportOf = (label: string): string | null =>
+    forced.breaks.find((b) => b.breakLabel === label)?.sport ?? null
+  ok(forced.sport === 'mlb', 'the upload still carries the league that was chosen', String(forced.sport))
   ok(
-    forced.breaks.every((b) => b.sport === null),
-    'choosing a league by hand leaves every break on the upload’s league',
+    forcedSportOf('1') === 'nba' && forcedSportOf('2') === 'nba',
+    'AND THE NBA BREAKS ARE STILL NBA — the pick did not drag them to baseball',
     forced.breaks.map((b) => `${b.breakLabel}=${b.sport}`).join(',')
   )
-  ok(forced.sport === 'mlb', 'which is the one that was chosen', String(forced.sport))
+  ok(
+    forcedSportOf('3') === null && forcedSportOf('4') === null,
+    'while the breaks that agree with the pick stay on it, marked as nothing of their own',
+    forced.breaks.map((b) => `${b.breakLabel}=${b.sport}`).join(',')
+  )
+  ok(
+    !forced.warnings.some((w) => /Could not match/.test(w.message)),
+    'and nothing is left unmatched',
+    forced.warnings.filter((w) => /Could not match/.test(w.message)).map((w) => w.message).join(' | ')
+  )
+  /**
+   * The override is STATED. A parser quietly reading a break against a list the
+   * operator did not choose is a mystery three weeks later — and one line for
+   * the pair beats one line each.
+   */
+  const overrule = forced.warnings.filter((w) => /rather than the MLB/.test(w.message))
+  ok(
+    overrule.length === 1 && /Breaks #1 and #2 name NBA teams/.test(overrule[0].message),
+    'ONE warning names both overruled breaks and the league they were read as',
+    overrule.map((w) => w.message).join(' | ') || '(none)'
+  )
+}
+
+// ---------------------------------------------------------------------------
+// THE OWNER'S REPORT: EIGHT BREAKS, FOUR BASEBALL AND FOUR BASKETBALL
+// ---------------------------------------------------------------------------
+/**
+ * In the owner's words: "it is like breaks 1-8 in one stream but then like
+ * breaks 1-4 are MLB and breaks 5-8 are NBA — it should not show 120 errors
+ * because in breaks 5-8 it cannot find the MLB teams."
+ *
+ * Which is what it did. The picker had MLB left in it from a previous night, the
+ * per-break detection ran under `auto` only, so all eight breaks were read
+ * against the thirty baseball teams and every basketball card came back as a
+ * "Could not match" warning. Nothing was lost — the cards were kept as printed —
+ * but the flags list was unreadable, which amounts to the same thing.
+ */
+{
+  const nights: string[] = []
+  const mlbTeams = ['Chicago Cubs', 'Baltimore Orioles', 'Boston Red Sox', 'Houston Astros']
+  const nbaTeams = ['Boston Celtics', 'Denver Nuggets', 'Miami Heat', 'Phoenix Suns']
+  // Eight breaks, four cards each: #1-#4 baseball, #5-#8 basketball.
+  for (let breakNo = 1; breakNo <= 8; breakNo++) {
+    const baseball = breakNo <= 4
+    const teams = baseball ? mlbTeams : nbaTeams
+    const box = baseball ? '2026 TOPPS BASEBALL HOBBY BOX' : '2026 PRIZM BASKETBALL HOBBY BOX'
+    const lines = [
+      'Whatnot Packing Slip 1/1',
+      `To: buyer${breakNo} From: rm_cardz`,
+      `Buyer ${breakNo}`,
+      '7 Card Ln. Dallas, TX. 75201. US',
+      'QTY Name & Description Attributes Subtotal'
+    ]
+    teams.forEach((team, i) => {
+      lines.push(`1 ${team} Order 5${breakNo}0000${String(i + 1).padStart(3, '0')} $40.00`)
+      lines.push(`1x ${box}- Break #${breakNo}`)
+    })
+    lines.push('4 Items $160.00')
+    lines.push(`USPS Ground Advantage #93001207626023157070${String(breakNo).padStart(2, '0')} 8.0 oz`)
+    nights.push(lines.join('\n'))
+  }
+
+  const stuck = parsePages(nights, { sport: 'mlb' })
+  const unmatched = stuck.warnings.filter((w) => /Could not match/.test(w.message))
+  ok(
+    unmatched.length === 0,
+    'NOT ONE “could not match” WARNING — the basketball breaks were read as basketball',
+    `${unmatched.length}: ${unmatched.slice(0, 3).map((w) => w.message).join(' | ')}`
+  )
+
+  const leagueOf = (label: string): string | null =>
+    stuck.breaks.find((b) => b.breakLabel === label)?.sport ?? null
+  ok(
+    ['5', '6', '7', '8'].every((l) => leagueOf(l) === 'nba'),
+    'breaks #5-#8 each carry their own league',
+    ['5', '6', '7', '8'].map((l) => `${l}=${leagueOf(l)}`).join(',')
+  )
+  ok(
+    ['1', '2', '3', '4'].every((l) => leagueOf(l) === null),
+    'and #1-#4 stay on the upload’s MLB, claiming nothing of their own',
+    ['1', '2', '3', '4'].map((l) => `${l}=${leagueOf(l)}`).join(',')
+  )
+
+  /**
+   * The audit is the other half. Read against baseball, break #5 would be short
+   * thirty teams it never had AND still holding four names struck off nothing —
+   * which is the pile of rows the owner was actually looking at.
+   */
+  const missingIn = (label: string): string[] =>
+    stuck.breakAudit.find((a) => a.breakLabel === label)?.missingTeams ?? []
+  ok(
+    missingIn('5').includes('Chicago Bulls') && !missingIn('5').includes('Chicago Cubs'),
+    'break #5 is short NBA teams, and the Celtics it sold are struck off',
+    missingIn('5').slice(0, 4).join(', ')
+  )
+  ok(
+    !missingIn('5').includes('Boston Celtics') && !missingIn('1').includes('Chicago Cubs'),
+    'NOTHING THAT SOLD IS REPORTED MISSING, in either league',
+    `${missingIn('5').length} / ${missingIn('1').length} missing`
+  )
+
+  /** Four overruled breaks, ONE line about them. Not four, and not a hundred. */
+  const said = stuck.warnings.filter((w) => /rather than the MLB/.test(w.message))
+  ok(
+    said.length === 1 && /Breaks #5, #6, #7 and #8 name NBA teams/.test(said[0].message),
+    'and ONE warning explains the whole thing, naming all four breaks',
+    said.map((w) => w.message).join(' | ') || '(none)'
+  )
+}
+
+// ---------------------------------------------------------------------------
+// WHAT IS NOT ENOUGH TO OVERRULE A PERSON
+// ---------------------------------------------------------------------------
+/**
+ * The other half of the fix, and the harder half. Letting a break contradict the
+ * operator is only right when the break KNOWS something, and two things look
+ * like knowing and are not:
+ *
+ *   - a bare ambiguous mascot. "Cardinals" is football and baseball, "Giants" is
+ *     both, "Rangers" is hockey and baseball. `detectSportDetailed` scores them
+ *     level and then breaks the tie by position in SHIP_SPORTS, so the answer is
+ *     NFL because NFL is first in an array. That is not evidence.
+ *   - a single unambiguous mascot, worth 10. Below SLATE_DETECTION_MIN_SCORE,
+ *     which is one exact-or-alias name, and deliberately so: the operator said
+ *     baseball out loud and one clipped word should not outvote them.
+ */
+{
+  const mascots = [
+    'Whatnot Packing Slip 1/1',
+    'To: mascotbuyer From: rm_cardz',
+    'Mascot Buyer',
+    '3 Short St. Dallas, TX. 75201. US',
+    'QTY Name & Description Attributes Subtotal',
+    '1 Cardinals Order 6000000001 $20.00',
+    '1x 2026 HOBBY BOX- Break #1',
+    '1 Giants Order 6000000002 $20.00',
+    '1x 2026 HOBBY BOX- Break #1',
+    '1 Cowboys Order 6000000003 $20.00',
+    '1x 2026 HOBBY BOX- Break #2',
+    '3 Items $60.00',
+    'USPS Ground Advantage #9300120762602315707100 6.0 oz'
+  ].join('\n')
+
+  const picked = parsePages([mascots], { sport: 'mlb' })
+  ok(
+    picked.breaks.every((b) => b.sport === null),
+    'A TIE AND A LONE MASCOT BOTH LEAVE THE OPERATOR’S PICK ALONE',
+    picked.breaks.map((b) => `${b.breakLabel}=${b.sport}`).join(',')
+  )
+  ok(
+    !picked.warnings.some((w) => /rather than the MLB/.test(w.message)),
+    'and nothing claims to have overruled anybody',
+    picked.warnings.map((w) => w.message).join(' | ')
+  )
+
+  /**
+   * Under `auto` there is no human claim to contradict, so the bar is lower —
+   * but a TIE is still not an answer. Break #1 ties NFL and MLB on ten each; it
+   * takes the upload's league, which was scored over every name at once, rather
+   * than whichever league happens to sort first.
+   */
+  const guessed = parsePages([mascots], { sport: 'auto' })
+  ok(
+    guessed.breaks.find((b) => b.breakLabel === '1')?.sport == null,
+    'even under auto, a break that ties two leagues answers for nothing',
+    String(guessed.breaks.find((b) => b.breakLabel === '1')?.sport)
+  )
+  ok(
+    guessed.breaks.find((b) => b.breakLabel === '2')?.sport === 'nfl',
+    'while an unambiguous mascot is enough when nobody has said otherwise',
+    String(guessed.breaks.find((b) => b.breakLabel === '2')?.sport)
+  )
+}
+
+// ---------------------------------------------------------------------------
+// THE ARITHMETIC IS THE BREAK'S OWN LEAGUE TOO
+// ---------------------------------------------------------------------------
+/**
+ * Getting the league right per break is only half of it. Two warnings are pure
+ * arithmetic off the SLATE SIZE — "holds more cards than the league has teams"
+ * and "these two may be one break labelled twice" — and both read that size off
+ * the upload's matcher, which is the last place the old one-league-per-upload
+ * assumption survived. It turns a right answer into a wrong sum: a 31-card
+ * basketball break inside a night picked as hockey is measured against 32 and
+ * passes, when 31 cards in a 30-team league is exactly the double-label mistake
+ * the warning exists to catch.
+ *
+ * The two leagues here are chosen for their SIZES — NBA 30, NHL 32 — because
+ * that is the whole difference being tested.
+ */
+{
+  const nba = SHIP_TEAM_LISTS.nba
+  const lines = [
+    'Whatnot Packing Slip 1/1',
+    'To: hoopsheavy From: rm_cardz',
+    'Hoops Heavy',
+    '8 Court Rd. Dallas, TX. 75201. US',
+    'QTY Name & Description Attributes Subtotal'
+  ]
+  // All thirty NBA teams, plus one repeat — 31 cards in a 30-team league. The
+  // repeat is the SAME customer, so it is an over-full break and not a
+  // two-customers-claim-one-team collision.
+  ;[...nba, nba[0]].forEach((team, i) => {
+    lines.push(`1 ${team} Order 7000000${String(i + 1).padStart(3, '0')} $25.00`)
+    lines.push('1x 2026 PRIZM BASKETBALL HOBBY BOX- Break #1')
+  })
+  lines.push('31 Items $775.00')
+  lines.push('USPS Ground Advantage #9300120762602315707200 20.0 oz')
+
+  const hockeyNight = parsePages([lines.join('\n')], { sport: 'nhl' })
+  const overfull = hockeyNight.warnings.filter((w) => /holds 31 cards/.test(w.message))
+  ok(
+    overfull.length === 1,
+    'A 31-CARD BREAK IS OVER-FULL AT 30, not fine at 32 — the slate is the break’s league',
+    overfull.map((w) => w.message).join(' | ') || '(no warning at all)'
+  )
+  ok(
+    overfull.length === 1 && /NBA only has 30 teams/.test(overfull[0].message),
+    'and the warning names the NBA, which is what it was actually measured against',
+    overfull.map((w) => w.message).join(' | ') || '(none)'
+  )
+}
+
+/**
+ * The sibling warning — "#11 and #11A may be one break written two ways" — adds
+ * two part-slates together and compares the total to one slate size. Siblings in
+ * DIFFERENT leagues have no single slate to add up against, and they are not one
+ * break either: say nothing rather than add hockey to basketball.
+ */
+{
+  const siblings = [
+    'Whatnot Packing Slip 1/1',
+    'To: bothnights From: rm_cardz',
+    'Both Nights',
+    '5 Rink St. Dallas, TX. 75201. US',
+    'QTY Name & Description Attributes Subtotal',
+    '1 Boston Celtics Order 8000000001 $30.00',
+    '1x 2026 PRIZM BASKETBALL HOBBY BOX- Break #11',
+    '1 Denver Nuggets Order 8000000002 $30.00',
+    '1x 2026 PRIZM BASKETBALL HOBBY BOX- Break #11',
+    '1 Toronto Maple Leafs Order 8000000003 $30.00',
+    '1x 2026 UPPER DECK HOCKEY HOBBY BOX- Break #11A',
+    '1 Edmonton Oilers Order 8000000004 $30.00',
+    '1x 2026 UPPER DECK HOCKEY HOBBY BOX- Break #11A',
+    '4 Items $120.00',
+    'USPS Ground Advantage #9300120762602315707300 10.0 oz'
+  ].join('\n')
+
+  const out = parsePages([siblings], { sport: 'auto' })
+  ok(
+    out.breaks.find((b) => b.breakLabel === '11')?.sport === 'nba' &&
+      out.breaks.find((b) => b.breakLabel === '11A')?.sport === 'nhl',
+    '#11 is basketball and #11A is hockey',
+    out.breaks.map((b) => `${b.breakLabel}=${b.sport}`).join(',')
+  )
+  ok(
+    !out.warnings.some((w) => /may be one break/.test(w.message)),
+    'TWO SIBLINGS IN TWO LEAGUES ARE NOT ONE BREAK — nothing is added across them',
+    out.warnings.filter((w) => /may be one break/.test(w.message)).map((w) => w.message).join(' | ')
+  )
+}
+
+/**
+ * The overrule warning names breaks in BREAK ORDER, not in the order the slips
+ * happened to print them and not in string order. #2 and #10 sort the wrong way
+ * both ways round if either is left to chance.
+ */
+{
+  const outOfOrder = [
+    'Whatnot Packing Slip 1/1',
+    'To: lateorder From: rm_cardz',
+    'Late Order',
+    '6 Hoop Ave. Dallas, TX. 75201. US',
+    'QTY Name & Description Attributes Subtotal',
+    '1 Boston Celtics Order 9000000001 $30.00',
+    '1x 2026 PRIZM BASKETBALL HOBBY BOX- Break #10',
+    '1 Denver Nuggets Order 9000000002 $30.00',
+    '1x 2026 PRIZM BASKETBALL HOBBY BOX- Break #2',
+    '2 Items $60.00',
+    'USPS Ground Advantage #9300120762602315707400 6.0 oz'
+  ].join('\n')
+
+  const said = parsePages([outOfOrder], { sport: 'mlb' }).warnings.filter((w) =>
+    /rather than the MLB/.test(w.message)
+  )
+  ok(
+    said.length === 1 && /Breaks #2 and #10 name NBA teams/.test(said[0].message),
+    'BREAKS ARE NAMED #2 THEN #10 — printed order and string order both get this wrong',
+    said.map((w) => w.message).join(' | ') || '(none)'
+  )
 }
 
 // A single-league show is unchanged: every break detects the same thing, so
