@@ -1481,4 +1481,35 @@
   .inv-chips {
     flex-wrap: wrap;
   }
+
+  /* WHO IS ON THE SHOW, on a phone.
+
+     The chips are what somebody TAPS, so they take the tap floor. They wrap
+     rather than scroll: the list is short by design — that is what filtering to
+     Breakers and Owners buys — and a name you have to swipe to find is a name
+     that gets left off. */
+  .crew-opt,
+  .crew-chip {
+    min-height: var(--rm-tap);
+  }
+  .crew-x {
+    width: 26px;
+    height: 26px;
+  }
+
+  /* Came back / They sold it sit side by side under the consignment they act
+     on, rather than beside it: a 390px row cannot hold a shop's name, four
+     figures and two buttons, and squeezing them put the name at two
+     characters. */
+  .cons-row {
+    flex-wrap: wrap;
+  }
+  .cons-row .cons-acts {
+    width: 100%;
+    margin-top: 6px;
+  }
+  .cons-row .cons-acts .btn {
+    flex: 1 1 0;
+    min-height: var(--rm-tap);
+  }
 }

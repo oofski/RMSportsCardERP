@@ -27114,3 +27114,121 @@ button.sor-team:focus-visible {
   margin-top: 2px;
   color: var(--info);
 }
+
+/* ---------------------------------------------------------------------------
+   WHO IS ON THE SHOW
+
+   Toggles rather than a multi-select: adding a second name to a native one
+   needs a ctrl-click nobody discovers, and on a phone it is a scrolling column
+   of tiny rows. The set is small on purpose — that is what the Breaker filter
+   buys — so the whole thing fits on screen.
+   --------------------------------------------------------------------------- */
+.crew-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+.crew-pick-label {
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.crew-on {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.crew-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 6px 4px 10px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+/* The first of the crew IS host_id — the column the P&L and the performance
+   page read — so the screen says so rather than leaving it to be discovered. */
+.crew-chip.is-host {
+  background: var(--brand-soft);
+  color: var(--brand-700);
+}
+.crew-chip em {
+  font-style: normal;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.75;
+}
+.crew-x {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  opacity: 0.6;
+  cursor: pointer;
+}
+.crew-x:hover {
+  opacity: 1;
+  background: rgba(0, 0, 0, 0.08);
+}
+.crew-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.crew-opt {
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.crew-opt:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.crew-opt.on {
+  border-color: var(--brand-500);
+  background: var(--brand-soft);
+  color: var(--brand-700);
+}
+
+/* One consignment that is still out, and the two ways it can end. */
+.cons-row .cons-acts {
+  display: flex;
+  flex-shrink: 0;
+  gap: 6px;
+}
+.cons-chip {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+/* Came back is the reversible outcome and wears the calm colour; sold wrote
+   off a case that is genuinely gone and there is no undo for it. */
+.cons-returned {
+  background: var(--success-bg);
+  color: var(--success);
+}
+.cons-sold {
+  background: var(--surface-3);
+  color: var(--text-3);
+}

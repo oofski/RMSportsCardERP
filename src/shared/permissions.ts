@@ -420,3 +420,46 @@ export function assignableRoles(actorRole: Role): Role[] {
     return r.rank <= actorRank
   }).map((r) => r.id)
 }
+
+/**
+ * WHO MAY BE PUT ON A STREAM.
+ *
+ * The owner's rule: "only people that are in breaking or owners are options for
+ * streaming."
+ *
+ * The picker used to offer every employee who was not disabled, which on this
+ * floor is the whole business — the packers, the person doing the books, the
+ * warehouse. A show is run by the people in front of the camera, and a list of
+ * thirty names to find the two of them is a list nobody reads.
+ *
+ * READ OFF THE PERMISSION, not off the role name. `streaming.run` is the thing
+ * that actually decides whether somebody can put the business on air, it is
+ * what the Breaker role exists to grant (see BREAKER_PERMISSIONS), and an owner
+ * has it because an owner has everything. Testing the role instead would go
+ * wrong the first time somebody is granted `streaming.run` by hand as an
+ * override — which is precisely how a stand-in gets covered for a week — and
+ * they would be able to start a show they could not be named on.
+ */
+export function canRunStream(role: Role, overrides: Permission[] = []): boolean {
+  return effectivePermissions(role, overrides).includes('streaming.run')
+}
+
+/**
+ * Narrow a staff list to the people who can be named on a show.
+ *
+ * Structural rather than typed to Employee so the rule can be tested against
+ * plain objects, and so nothing in @shared has to import the employee record.
+ *
+ * A DISABLED ACCOUNT IS STILL OFFERED WHEN IT IS ALREADY ON THE SHOW. That is
+ * the `keep` argument: somebody who has left the business still ran the shows
+ * they ran, and dropping them out of the picker would silently rewrite the crew
+ * of an old session the first time anybody opened it to fix a typo.
+ */
+export function streamHostCandidates<
+  T extends { id: string; role: Role; permissions?: Permission[]; status?: string }
+>(people: readonly T[], keep: readonly string[] = []): T[] {
+  const kept = new Set(keep)
+  return people.filter(
+    (p) => kept.has(p.id) || (p.status !== 'disabled' && canRunStream(p.role, p.permissions ?? []))
+  )
+}

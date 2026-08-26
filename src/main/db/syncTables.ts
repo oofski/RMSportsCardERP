@@ -324,8 +324,21 @@ export const SYNCED_TABLES: SyncedTable[] = [
   { table: 'ledger_quarantine', key: ['id'], tier: 1 },
   { table: 'stream_items', key: ['id'], tier: 1 },
   { table: 'intake_submissions', key: ['id'], tier: 1 },
+  // Stock that is ours and is somewhere else. Tier 1 beside stream_items
+  // because it is the same shape and the same parent: a product. Its lot slices
+  // are tier 2 below.
+  { table: 'consignments', key: ['id'], tier: 1 },
+  // Who is on a show. Tier 1 rather than 2 despite naming a session, because it
+  // also names an EMPLOYEE — and the recovery path applies rows one at a time,
+  // so a crew row must be able to land whichever of the two arrived first. The
+  // UNIQUE on (session_id, employee_id) is what makes a re-apply idempotent.
+  { table: 'stream_session_hosts', key: ['id'], tier: 1 },
 
   // Tier 2 — children of a tier-1 row.
+  // Which cost layers a consignment took, so a case that comes back goes into
+  // the exact layers it left at the exact price. Without these a return would
+  // be re-costed at today's average and quietly rewrite a shelf's basis.
+  { table: 'consignment_lots', key: ['id'], tier: 2 },
   { table: 'po_line_receipts', key: ['id'], tier: 2 },
   // Where each slice of a purchase-order line is going. Tier 2 beside the
   // receipts, and for the same reason: it names a LINE, and an allocation

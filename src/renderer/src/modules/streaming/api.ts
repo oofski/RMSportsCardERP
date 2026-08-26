@@ -27,7 +27,13 @@ export interface StreamingApi {
   /** Inclusive YYYY-MM-DD range over `streamDate`, not over end times. */
   list(from: string, to: string): Promise<StreamSession[]>
   get(id: string): Promise<StreamSessionDetail | null>
-  start(input: { title: string; hostId: string | null; note: string | null }): Promise<
+  start(input: {
+    title: string
+    hostId: string | null
+    /** Everybody on the show. The first of them becomes the host. */
+    crew?: string[]
+    note: string | null
+  }): Promise<
     Result<StreamSession>
   >
   end(id: string): Promise<Result<StreamSession>>

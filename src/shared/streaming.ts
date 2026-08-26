@@ -35,6 +35,19 @@ export type StreamSource = 'live' | 'manual'
 /** A break consumes stock to open it; a giveaway consumes stock to give away. */
 export type StreamItemKind = 'break' | 'giveaway'
 
+/**
+ * One person on a show.
+ *
+ * The NAME is resolved for display and is null when the employee record has
+ * been deleted — the id is kept either way, so the slot still says somebody was
+ * there rather than silently shrinking the crew of a show that has already
+ * happened.
+ */
+export interface StreamCrewMember {
+  employeeId: string
+  name: string | null
+}
+
 export interface StreamSession {
   id: string
   title: string
@@ -54,6 +67,19 @@ export interface StreamSession {
   hostId: string | null
   /** Resolved for display; null when the employee record is gone. */
   hostName: string | null
+  /**
+   * EVERYBODY ON THE SHOW, in the order they were added.
+   *
+   * `hostId` above is the FIRST of these and is kept in step with it — the P&L,
+   * the performance page, the schedule and every read written before crews
+   * existed go on working unchanged, which is the same "keep the single column
+   * as the first of many" the purchase side uses for linkedInvoiceId.
+   *
+   * Empty on a show nobody was named on, which is an ordinary state: a stream
+   * started from the bar with the picker left alone has no crew and never had a
+   * host either.
+   */
+  crew: StreamCrewMember[]
   note: string | null
   /** Whole minutes, null while live. */
   durationMinutes: number | null
@@ -215,6 +241,15 @@ export interface NewStreamSession {
   startedAt: string
   endedAt: string | null
   hostId: string | null
+  /**
+   * Everybody on the show. The FIRST of them becomes `hostId`.
+   *
+   * Both are accepted so nothing that only knows about a single host has to
+   * change: a caller sending `hostId` alone still works, and one sending
+   * `crew` gets the host set for it. See writeCrew, which reconciles the two in
+   * one place so they cannot disagree.
+   */
+  crew?: string[]
   note: string | null
 }
 
@@ -224,7 +259,41 @@ export interface UpdateStreamSession {
   startedAt?: string
   endedAt?: string | null
   hostId?: string | null
+  /** Omitted leaves the crew alone; an empty array clears it. */
+  crew?: string[]
   note?: string | null
+}
+
+/**
+ * The crew, tidied: trimmed, de-duplicated, order preserved.
+ *
+ * DE-DUPLICATION MATTERS because the picker is a list of toggles and a double
+ * tap is one press too many — and the UNIQUE on (session_id, employee_id) would
+ * turn that into a failed insert rather than a no-op. Order is preserved
+ * because the first name is the host, and somebody who put themselves first
+ * meant it.
+ */
+export function normalizeCrew(ids: readonly (string | null | undefined)[]): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const raw of ids ?? []) {
+    const id = String(raw ?? '').trim()
+    if (!id || seen.has(id)) continue
+    seen.add(id)
+    out.push(id)
+  }
+  return out
+}
+
+/**
+ * The host a crew implies: the first of them, or null for an empty crew.
+ *
+ * One function so `stream_sessions.host_id` and `stream_session_hosts` can
+ * never disagree about who is leading. Two places deciding it is how a show
+ * comes to name one person in its header and a different one in its list.
+ */
+export function hostFromCrew(crew: readonly string[]): string | null {
+  return crew.length > 0 ? crew[0] : null
 }
 
 /**

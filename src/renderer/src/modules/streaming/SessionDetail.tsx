@@ -190,7 +190,20 @@ export function SessionDetail({
           label="Duration"
           value={session.status === 'live' ? 'Running' : formatDuration(session.durationMinutes)}
         />
-        <MetaItem icon="User" label="Host" value={session.hostName ?? 'Nobody recorded'} />
+        {/* EVERYBODY ON IT, not just the leader. One name where three people
+            ran the show is a record that quietly credits one of them. The host
+            still reads first — they are the first of the crew — and the label
+            follows the count so a one-person show says "Host" exactly as it
+            always did. */}
+        <MetaItem
+          icon="User"
+          label={session.crew.length > 1 ? 'On air' : 'Host'}
+          value={
+            session.crew.length > 0
+              ? session.crew.map((c) => c.name ?? 'Someone who has left').join(', ')
+              : (session.hostName ?? 'Nobody recorded')
+          }
+        />
       </div>
 
       {runaway && session.status === 'live' && (

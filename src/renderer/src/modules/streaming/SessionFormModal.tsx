@@ -3,6 +3,7 @@ import type { Employee } from '@shared/types'
 import type { StreamSession } from '@shared/streaming'
 import { durationMinutes, formatDuration } from '@shared/streaming'
 import { Icon } from '../../components/Icon'
+import { CrewPicker } from './CrewPicker'
 import { useToast } from '../../components/Toast'
 import { Button, Field, Input, Modal, Select } from '../../components/ui'
 import { resultError, streaming } from './api'
@@ -64,7 +65,21 @@ export function SessionFormModal({
   // under them — the derived value is a convenience, not a rule.
   const [endDayPinned, setEndDayPinned] = useState(false)
   const [title, setTitle] = useState(session?.title ?? '')
-  const [hostId, setHostId] = useState(session?.hostId ?? '')
+  /**
+   * Everybody on the show, in order. The first is the host.
+   *
+   * Seeded from the session's stored crew, falling back to its lone `hostId`
+   * for a show raised before crews existed — the migration backfills those, so
+   * this fallback is for a record read before the upgrade lands rather than a
+   * state that persists.
+   */
+  const [crew, setCrew] = useState<string[]>(
+    session?.crew?.length
+      ? session.crew.map((c) => c.employeeId)
+      : session?.hostId
+        ? [session.hostId]
+        : []
+  )
   const [note, setNote] = useState(session?.note ?? '')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -112,14 +127,16 @@ export function SessionFormModal({
             // A live session keeps its open end when the field is left blank;
             // typing one into a live session is how you close it after the fact.
             endedAt: endIso,
-            hostId: hostId || null,
+            hostId: crew[0] ?? null,
+            crew,
             note: note.trim() || null
           })
         : await streaming.create({
             title: finalTitle,
             startedAt: startIso,
             endedAt: endIso,
-            hostId: hostId || null,
+            hostId: crew[0] ?? null,
+            crew,
             note: note.trim() || null
           })
       if (!res.ok) {
@@ -220,17 +237,12 @@ export function SessionFormModal({
       </Field>
 
       <div className="stm-form-row">
+        {/* The whole crew, and only the people who run shows — see CrewPicker.
+            It returns null when nobody qualifies, which is the same shape the
+            old `hosts.length > 0` guard had: a read-only line naming whoever is
+            already on, for somebody without employee access. */}
         {hosts.length > 0 ? (
-          <Field label="Host" hint="Optional">
-            <Select value={hostId} onChange={(e) => setHostId(e.target.value)}>
-              <option value="">No host</option>
-              {hosts.map((h) => (
-                <option key={h.id} value={h.id}>
-                  {h.firstName} {h.lastName}
-                </option>
-              ))}
-            </Select>
-          </Field>
+          <CrewPicker people={hosts} value={crew} onChange={setCrew} />
         ) : (
           session?.hostName && (
             <Field label="Host" hint="You cannot change this without employee access">

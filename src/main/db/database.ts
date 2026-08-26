@@ -4092,6 +4092,110 @@ function migrate(database: Database.Database): void {
   }
   setMeta(database, 'schema_version', '84')
 
+  /**
+   * v85: STOCK WE STILL OWN AND NO LONGER HAVE, and a show run by more than one
+   * person. Two unrelated things, one version — see the note on each.
+   *
+   * ## consignments
+   *
+   * A case handed to a shop to sell for us had no state in this app. It was
+   * either on the shelf, where a sales order could bill it and a break could rip
+   * it — neither of which is possible for a box fifty miles away — or gone,
+   * which writes off a case we still own.
+   *
+   * The shape is deliberately stream_items / stream_item_lots, because it is the
+   * same operation against inventory: pull N units of a product out of a
+   * location at their real layered cost and remember which layers. That is what
+   * makes "cannot be sold, cannot be streamed" true rather than enforced —
+   * consumeFifo cannot find units that are not in a lot — and it is what gives
+   * the return path for free, since restoreFifo already puts a break's units
+   * back into the exact layers at the exact price.
+   *
+   * consignment_lots is what a return reads. Without it a case coming back would
+   * have to be re-costed at today's average, which is a different number from
+   * the one it left at and would quietly rewrite the cost basis of a shelf.
+   *
+   * No foreign key on product_id from consignment_lots to inventory_lots: a lot
+   * that has been fully consumed and swept is a lot this row still has to be
+   * able to name. product_id on the header is SET NULL on delete, matching
+   * stream_items, so the row survives a product being removed from the catalog
+   * — the denormalised name is why it still reads.
+   *
+   * ## stream_session_hosts
+   *
+   * `stream_sessions.host_id` holds ONE person and a show is run by a crew.
+   * The column stays and keeps holding the FIRST of them, so the P&L, the
+   * performance page, the schedule and every existing read carry on unchanged —
+   * the same "keep the single column as the first of many" the purchase side
+   * already uses for linked_invoice_id. This table is the rest.
+   *
+   * `position` is draw order, rebuilt on every write so it can never have gaps.
+   */
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS consignments (
+      id           TEXT PRIMARY KEY,
+      product_id   TEXT,
+      product_name TEXT NOT NULL,
+      sku          TEXT NOT NULL DEFAULT '',
+      category     TEXT NOT NULL DEFAULT '',
+      consignee    TEXT NOT NULL,
+      location     TEXT NOT NULL,
+      quantity     REAL NOT NULL,
+      unit_cost    REAL NOT NULL DEFAULT 0,
+      cost_total   REAL NOT NULL DEFAULT 0,
+      status       TEXT NOT NULL DEFAULT 'out',
+      sent_at      TEXT NOT NULL,
+      sent_by      TEXT,
+      settled_at   TEXT,
+      settled_by   TEXT,
+      note         TEXT,
+      created_at   TEXT NOT NULL,
+      updated_at   TEXT NOT NULL,
+      FOREIGN KEY (product_id) REFERENCES inventory_products (id) ON DELETE SET NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_consignments_product
+      ON consignments (product_id, status);
+    CREATE INDEX IF NOT EXISTS idx_consignments_status
+      ON consignments (status, sent_at);
+
+    CREATE TABLE IF NOT EXISTS consignment_lots (
+      id             TEXT PRIMARY KEY,
+      consignment_id TEXT NOT NULL,
+      lot_id         TEXT NOT NULL,
+      quantity       REAL NOT NULL,
+      unit_cost      REAL NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_consignment_lots_parent
+      ON consignment_lots (consignment_id);
+
+    CREATE TABLE IF NOT EXISTS stream_session_hosts (
+      id          TEXT PRIMARY KEY,
+      session_id  TEXT NOT NULL,
+      employee_id TEXT NOT NULL,
+      position    INTEGER NOT NULL DEFAULT 0,
+      created_at  TEXT NOT NULL,
+      UNIQUE (session_id, employee_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_stream_hosts_session
+      ON stream_session_hosts (session_id, position);
+  `)
+
+  /**
+   * EVERY SHOW ALREADY ON THE BOOKS KEEPS ITS HOST, as the first of its crew.
+   *
+   * Without this, opening an old session after the upgrade would show an empty
+   * crew beside a host name — the header reading one thing and the list another
+   * — and the first save would write that empty list back over a fact nobody
+   * meant to clear. Runs once; the UNIQUE makes it idempotent.
+   */
+  database.exec(`
+    INSERT OR IGNORE INTO stream_session_hosts (id, session_id, employee_id, position, created_at)
+    SELECT 'sh_' || s.id, s.id, s.host_id, 0, s.created_at
+      FROM stream_sessions s
+     WHERE s.host_id IS NOT NULL AND TRIM(s.host_id) != ''
+  `)
+  setMeta(database, 'schema_version', '85')
+
   // v41: re-derive every product's average cost from its remaining cost layers.
   //
   // The average used to be stored rounded to the cent, back when every total in

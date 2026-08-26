@@ -6,6 +6,7 @@ import type {
   SetStreamItemCost,
   StreamCalendarDay,
   StreamCalendarMonth,
+  StreamCrewMember,
   StreamItem,
   StreamItemKind,
   StreamSession,
@@ -16,7 +17,9 @@ import type {
 } from '@shared/streaming'
 import {
   durationMinutes,
+  hostFromCrew,
   isPastDatedSession,
+  normalizeCrew,
   parseMoneyInput,
   sessionsOverlap,
   streamDateOf
@@ -87,6 +90,9 @@ interface SessionRow {
   source: string
   host_id: string | null
   host_name: string | null
+  /** Newline-joined, ordered by position. See zipCrew. */
+  crew_ids: string | null
+  crew_names: string | null
   note: string | null
   created_at: string
   updated_at: string
@@ -124,10 +130,49 @@ interface ItemRow {
 const SESSION_SELECT = `
   SELECT s.id, s.title, s.started_at, s.ended_at, s.stream_date, s.status, s.source,
          s.host_id, (e.first_name || ' ' || e.last_name) AS host_name,
-         s.note, s.created_at, s.updated_at, s.created_by
+         s.note, s.created_at, s.updated_at, s.created_by,
+         -- THE WHOLE CREW, in one read.
+         --
+         -- A show is run by more than one person and host_id holds one of them.
+         -- It still does — it is the FIRST of the crew and every existing read
+         -- of it is unchanged — and this is the rest, gathered here rather than
+         -- fetched per session because the calendar draws a month of them.
+         --
+         -- Ids and names come back as two parallel newline-joined strings
+         -- ordered by the same position, so a crew member whose employee record
+         -- is gone still occupies its slot rather than shifting everybody else
+         -- up by one. See toSession, which zips them.
+         (SELECT GROUP_CONCAT(h.employee_id, char(10))
+            FROM (SELECT employee_id FROM stream_session_hosts
+                   WHERE session_id = s.id ORDER BY position ASC, rowid ASC) h) AS crew_ids,
+         (SELECT GROUP_CONCAT(COALESCE(TRIM(he.first_name || ' ' || he.last_name), ''), char(10))
+            FROM (SELECT employee_id FROM stream_session_hosts
+                   WHERE session_id = s.id ORDER BY position ASC, rowid ASC) h
+            LEFT JOIN employees he ON he.id = h.employee_id) AS crew_names
   FROM stream_sessions s
   LEFT JOIN employees e ON e.id = s.host_id
 `
+
+/**
+ * The two parallel GROUP_CONCATs above, back into a list.
+ *
+ * SPLIT ON NEWLINE, not on a comma: a person called "Vega, Marisol" is a name
+ * somebody can type into an employee record, and a comma separator would tear
+ * them into two crew members. A newline cannot appear in either column.
+ *
+ * A missing NAME keeps its slot with a null, so the ids and the names stay in
+ * step. Dropping the row would shift everybody after it up by one and put
+ * somebody else's name against this id.
+ */
+function zipCrew(ids: string | null, names: string | null): StreamCrewMember[] {
+  const idList = (ids ?? '').split('\n').filter((v) => v.trim())
+  if (idList.length === 0) return []
+  const nameList = (names ?? '').split('\n')
+  return idList.map((id, i) => ({
+    employeeId: id.trim(),
+    name: (nameList[i] ?? '').trim() || null
+  }))
+}
 
 function toSession(row: SessionRow): StreamSession {
   return {
@@ -142,6 +187,7 @@ function toSession(row: SessionRow): StreamSession {
     // NULL when the employee record is gone; the id is kept either way so the
     // line still says a host was set.
     hostName: row.host_name?.trim() || null,
+    crew: zipCrew(row.crew_ids, row.crew_names),
     note: row.note,
     durationMinutes: durationMinutes(row.started_at, row.ended_at),
     createdAt: row.created_at,
@@ -365,6 +411,61 @@ export function getSessionDetail(id: string): StreamSessionDetail | null {
 // ---------------------------------------------------------------------------
 
 /**
+ * Write the crew, and keep `host_id` as the first of them.
+ *
+ * ONE FUNCTION FOR BOTH, and that is the whole reason it exists: two places
+ * deciding who leads is how a show comes to name one person in its header and a
+ * different one in its list. Every caller here goes through this, so the column
+ * and the table cannot drift.
+ *
+ * ## Replace, not merge
+ *
+ * The list arrives complete from a picker that shows the whole crew, so a
+ * removal is expressed by a name being ABSENT. Merging would make it impossible
+ * to take anybody off a show.
+ *
+ * ## And it accepts either input
+ *
+ * A caller that only knows about a single host — the live bar's Start button,
+ * anything written before crews existed — passes `hostId` and gets a one-person
+ * crew. A caller that passes `crew` gets the host set from it. Passing neither
+ * leaves the session alone, which is what an edit of the title must do.
+ */
+function writeCrew(
+  db: Database,
+  sessionId: string,
+  crew: readonly string[],
+  stamp: string
+): void {
+  db.prepare(`DELETE FROM stream_session_hosts WHERE session_id = ?`).run(sessionId)
+  const put = db.prepare(
+    `INSERT INTO stream_session_hosts (id, session_id, employee_id, position, created_at)
+     VALUES (?, ?, ?, ?, ?)`
+  )
+  crew.forEach((employeeId, i) => put.run(newId(), sessionId, employeeId, i, stamp))
+  db.prepare(`UPDATE stream_sessions SET host_id = ?, updated_at = ? WHERE id = ?`).run(
+    hostFromCrew(crew),
+    stamp,
+    sessionId
+  )
+}
+
+/**
+ * What a caller meant, whichever of the two fields they sent.
+ *
+ * `crew` wins when present, because it is the richer statement. `hostId` alone
+ * is a one-person crew. Both absent is null, which callers read as "leave it".
+ */
+function crewFromInput(input: {
+  hostId?: string | null
+  crew?: readonly string[]
+}): string[] | null {
+  if (input?.crew !== undefined) return normalizeCrew(input.crew)
+  if (input?.hostId !== undefined) return normalizeCrew([input.hostId])
+  return null
+}
+
+/**
  * Clock a show on air. The start is NOW, so the only thing that can be entered
  * wrongly is the title — which is the whole point of this path existing beside
  * the manual one.
@@ -399,6 +500,7 @@ export function startSession(
     ts: startedAt,
     created_by: actorId
   })
+  writeCrew(db, id, crewFromInput(input) ?? [], startedAt)
   return { ok: true, data: getSession(id) as StreamSession }
 }
 
@@ -455,6 +557,7 @@ export function createSession(input: NewStreamSession, actorId: string | null): 
     ts,
     created_by: actorId
   })
+  writeCrew(db, id, crewFromInput(input) ?? [], ts)
   return { ok: true, data: getSession(id) as StreamSession }
 }
 
@@ -536,6 +639,22 @@ export function updateSession(input: UpdateStreamSession, actorId: string | null
       d: streamDate,
       id: existing.id
     })
+
+    /**
+     * The crew, LAST — after the UPDATE above, which also writes host_id.
+     *
+     * Order matters: writeCrew sets host_id from the first of the crew, and
+     * running it first would have the statement above overwrite that with the
+     * caller's (or the existing) hostId a moment later. Whoever writes last
+     * wins, and the crew is the richer statement.
+     *
+     * Only when the caller SAID something. crewFromInput returns null when
+     * neither field was sent, and an edit that changes only the title must not
+     * clear the crew — which replacing with an empty list is exactly what it
+     * would do.
+     */
+    const crew = crewFromInput(input)
+    if (crew) writeCrew(db, existing.id, crew, nowIso())
   })
   run()
   return { ok: true, data: getSession(existing.id) as StreamSession }

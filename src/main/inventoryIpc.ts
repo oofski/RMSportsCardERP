@@ -22,6 +22,13 @@ import type {
 } from '@shared/inventoryReset'
 import type { StockProvenance } from '@shared/provenance'
 import { productProvenance } from './db/provenance'
+import type { Consignment, NewConsignment } from '@shared/consignment'
+import {
+  consignmentsForProduct,
+  listOpenConsignments,
+  sendOnConsignment,
+  settleConsignment
+} from './db/consignment'
 import type {
   AddStockInput,
   AdjustStockInput,
@@ -550,6 +557,55 @@ export function registerInventoryIpc(): void {
       return fail(err)
     }
   })
+
+  // ---- Consignment ---------------------------------------------------------
+  //
+  // Gated on `inventory.manage`, the same permission that adjusts stock — which
+  // is exactly what sending a case out on consignment IS: units leave the shelf
+  // and the cost layers they came from are consumed. See @shared/consignment for
+  // why that is the design rather than a flag.
+  ipcMain.handle(
+    IPC.invConsignSend,
+    (_e, input: NewConsignment): Result<Consignment> => {
+      try {
+        const actor = requireManage()
+        const res = sendOnConsignment(input, actor.id)
+        if (res.error) return { ok: false, error: res.error }
+        if (!res.consignment) return { ok: false, error: 'Could not send that.' }
+        return { ok: true, data: res.consignment }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  ipcMain.handle(
+    IPC.invConsignSettle,
+    (_e, payload: { id?: unknown; outcome?: unknown }): Result<Consignment> => {
+      try {
+        const actor = requireManage()
+        // Anything that is not the word "sold" settles as RETURNED, which is the
+        // safe half: a return puts the units back and can be corrected by
+        // sending them again, while a wrongly-recorded sale leaves a case
+        // written off that is sitting in somebody's shop.
+        const outcome = String(payload?.outcome ?? '') === 'sold' ? 'sold' : 'returned'
+        const res = settleConsignment(String(payload?.id ?? ''), outcome, actor.id)
+        if (res.error) return { ok: false, error: res.error }
+        if (!res.consignment) return { ok: false, error: 'Could not settle that.' }
+        return { ok: true, data: res.consignment }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  // Reads, gated like every other inventory read rather than like a write.
+  ipcMain.handle(IPC.invConsignForProduct, (_e, productId: unknown): Consignment[] =>
+    can('module.inventory') ? consignmentsForProduct(String(productId ?? '')) : []
+  )
+  ipcMain.handle(IPC.invConsignOpen, (): Consignment[] =>
+    can('module.inventory') ? listOpenConsignments() : []
+  )
 
   ipcMain.handle(IPC.invStockAdjust, (_e, input: AdjustStockInput): Result<InventoryProduct> => {
     try {

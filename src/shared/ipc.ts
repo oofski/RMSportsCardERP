@@ -77,6 +77,13 @@ export const IPC = {
   invSaleRecord: 'inventory:sale:record',
   invStockAdd: 'inventory:stock:add',
   invStockAdjust: 'inventory:stock:adjust',
+  // Stock we own and no longer have. Sending CONSUMES the cost lots, which is
+  // what makes consigned units unsellable and unbreakable without a check being
+  // added to either path — see @shared/consignment.
+  invConsignSend: 'inventory:consign:send',
+  invConsignSettle: 'inventory:consign:settle',
+  invConsignForProduct: 'inventory:consign:for-product',
+  invConsignOpen: 'inventory:consign:open',
   invStats: 'inventory:stats',
   invCategories: 'inventory:categories',
   invByCategory: 'inventory:by-category',

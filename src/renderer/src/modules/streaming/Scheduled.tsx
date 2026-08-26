@@ -3,6 +3,7 @@ import type { Employee } from '@shared/types'
 import type { ScheduledStream } from '@shared/streamReminders'
 import { SCHEDULED_NOTE_MAX, SCHEDULED_TITLE_MAX } from '@shared/streamReminders'
 import { Icon } from '../../components/Icon'
+import { streamHostCandidates } from '@shared/permissions'
 import { useToast } from '../../components/Toast'
 import { Button, Field, Input, Modal, Select } from '../../components/ui'
 import { resultError, scheduleReady, streamPlans } from './api'
@@ -269,6 +270,7 @@ export function ScheduleStreamModal({
   const [time, setTime] = useState(() => plan?.startTime ?? '19:00')
   const [title, setTitle] = useState(plan?.title ?? '')
   const [hostId, setHostId] = useState(plan?.hostId ?? '')
+  const hostChoices = streamHostCandidates(hosts, plan?.hostId ? [plan.hostId] : [])
   const [note, setNote] = useState(plan?.note ?? '')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -369,11 +371,21 @@ export function ScheduleStreamModal({
       </Field>
 
       <div className="stm-form-row">
-        {hosts.length > 0 ? (
+        {/* ONLY THE PEOPLE WHO RUN SHOWS, the same rule the live bar and the
+            session form keep. A PLAN still names ONE person rather than a crew:
+            `stream_schedule` is a different table with a single host_id, it is
+            what the reminder is sent to, and who actually ends up on air is
+            decided by the session when the show starts. Widening a plan to a
+            crew would mean deciding who gets the reminder, which is a question
+            nobody has asked.
+
+            Whoever is already on the plan stays offered even if they have since
+            left, so opening an old plan cannot silently reassign it. */}
+        {hostChoices.length > 0 ? (
           <Field label="Host" hint="Reminded too, even without Admin access">
             <Select value={hostId} onChange={(e) => setHostId(e.target.value)}>
               <option value="">No host</option>
-              {hosts.map((h) => (
+              {hostChoices.map((h) => (
                 <option key={h.id} value={h.id}>
                   {h.firstName} {h.lastName}
                 </option>

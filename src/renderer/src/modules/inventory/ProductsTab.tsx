@@ -12,12 +12,14 @@ import { useToast } from '../../components/Toast'
 import { Button, EmptyState, Field, Input, Modal, Select } from '../../components/ui'
 import { Icon } from '../../components/Icon'
 import { CategoryLogo } from './CategoryLogo'
-import { productMatches, structureLabel } from './helpers'
+import { productMatches, structureLabel, unitLabel } from './helpers'
 import { ImageLightbox } from './ImageLightbox'
 import { ProductCasesLoader } from './ProductCases'
 import { ProductOrigins } from './ProductOrigins'
 import { ProductFormModal } from './ProductFormModal'
 import { RecordSaleModal } from './RecordSaleModal'
+import { ConsignModal } from './ConsignModal'
+import { ProductConsignments } from './ProductConsignments'
 import { StockModal } from './StockModal'
 
 export function ProductsTab({
@@ -129,6 +131,9 @@ export function ProductsTab({
     }
   }
 
+  /** The product whose consignment dialog is open. See ConsignModal. */
+  const [consignFor, setConsignFor] = useState<InventoryProduct | null>(null)
+
   const headerActions = canManage && (
     <div className="row" style={{ gap: 8 }}>
       <Button variant="secondary" icon="ShoppingCart" onClick={() => setSaleFor('any')}>
@@ -162,6 +167,16 @@ export function ProductsTab({
           onClose={() => setSaleFor(null)}
           onSaved={async () => {
             setSaleFor(null)
+            await onChanged()
+          }}
+        />
+      )}
+      {consignFor && (
+        <ConsignModal
+          product={consignFor}
+          onClose={() => setConsignFor(null)}
+          onSaved={async () => {
+            setConsignFor(null)
             await onChanged()
           }}
         />
@@ -355,6 +370,7 @@ export function ProductsTab({
                     onEdit={() => setFormFor(p)}
                     onStock={() => setStockFor(p)}
                     onSell={() => setSaleFor(p)}
+                    onConsign={() => setConsignFor(p)}
                     onDelete={() => setDeleteFor(p)}
                     onOpenPo={onOpenPo}
                   />
@@ -393,6 +409,7 @@ function ProductDetail({
   onEdit,
   onStock,
   onSell,
+  onConsign,
   onDelete,
   onOpenPo
 }: {
@@ -403,6 +420,8 @@ function ProductDetail({
   onEdit: () => void
   onStock: () => void
   onSell: () => void
+  /** Hand units to somebody to sell for us. See ConsignModal. */
+  onConsign: () => void
   onDelete: () => void
   /** Open the purchase order a case came off. Absent when nothing can navigate. */
   onOpenPo?: (poId: string) => void
@@ -634,6 +653,19 @@ function ProductDetail({
           somebody is looking for exactly when the shelf is empty. */}
       <ProductOrigins productId={product.id} onOpenPo={onOpenPo} />
 
+      {/* WHERE THE CASES THAT ARE NOT HERE ARE.
+
+          Consigning takes units off the shelf — that is what makes them
+          unsellable and unbreakable — so without this the count would simply
+          drop and nothing would say where three cases went. Draws nothing at
+          all on a product that has never been consigned. */}
+      <ProductConsignments
+        productId={product.id}
+        unitNoun={unitLabel(product.unitType).toLowerCase()}
+        canManage={canManage}
+        onChanged={onChanged}
+      />
+
       {canManage && (
         <div className="cd-actions">
           <Button size="sm" variant="secondary" icon="PackagePlus" onClick={onStock}>
@@ -641,6 +673,19 @@ function ProductDetail({
           </Button>
           <Button size="sm" variant="secondary" icon="ShoppingCart" disabled={product.quantity <= 0} onClick={onSell}>
             Sell
+          </Button>
+          {/* Beside Sell, because it is the other way stock leaves this
+              building — and the one that is not a sale. Disabled at zero on
+              hand for the same reason Sell is: there is nothing to send. */}
+          <Button
+            size="sm"
+            variant="secondary"
+            icon="Send"
+            disabled={product.quantity <= 0}
+            title="Hand these to somebody to sell for us — they come off the shelf and cannot be sold or broken while they are out"
+            onClick={onConsign}
+          >
+            Consign
           </Button>
           <Button size="sm" variant="ghost" icon="Pencil" onClick={onEdit}>
             Full edit

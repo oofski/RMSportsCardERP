@@ -68,6 +68,7 @@ import type {
 } from '@shared/orders'
 import type { EmailSettings, RedactedEmailSettings } from '@shared/emailSettings'
 import type { InvoiceDelivery } from '@shared/invoiceDelivery'
+import type { Consignment, NewConsignment } from '@shared/consignment'
 import type { ContactImportResult } from '@shared/contacts'
 import type { ClockPushState, PushSubscriptionInput } from '@shared/webPush'
 import type { OrderParty, SupplierSuggestion, VendorSummary } from '@shared/purchaseOrders'
@@ -399,6 +400,22 @@ export function createBridge(ipcRenderer: BridgeTransport) {
         ipcRenderer.invoke(IPC.invStockAdd, input),
       adjustStock: (input: AdjustStockInput): Promise<Result<InventoryProduct>> =>
         ipcRenderer.invoke(IPC.invStockAdjust, input),
+      /**
+       * Stock we own and no longer have. Sending CONSUMES the cost lots, which
+       * is what makes consigned units unsellable and unbreakable — see
+       * @shared/consignment.
+       */
+      sendOnConsignment: (input: NewConsignment): Promise<Result<Consignment>> =>
+        ipcRenderer.invoke(IPC.invConsignSend, input),
+      settleConsignment: (
+        id: string,
+        outcome: 'returned' | 'sold'
+      ): Promise<Result<Consignment>> =>
+        ipcRenderer.invoke(IPC.invConsignSettle, { id, outcome }),
+      consignmentsFor: (productId: string): Promise<Consignment[]> =>
+        ipcRenderer.invoke(IPC.invConsignForProduct, productId),
+      openConsignments: (): Promise<Consignment[]> =>
+        ipcRenderer.invoke(IPC.invConsignOpen),
       recordSale: (input: RecordSaleInput): Promise<Result<InventoryProduct>> =>
         ipcRenderer.invoke(IPC.invSaleRecord, input),
       thumbnails: (): Promise<Record<string, string>> => ipcRenderer.invoke(IPC.invThumbnails),
@@ -1040,6 +1057,8 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       start: (input: {
         title: string
         hostId: string | null
+        /** Everybody on the show. The first of them becomes the host. */
+        crew?: string[]
         note: string | null
       }): Promise<Result<StreamSession>> => ipcRenderer.invoke(IPC.streamStart, input),
       end: (id: string): Promise<Result<StreamSession>> => ipcRenderer.invoke(IPC.streamEnd, id),

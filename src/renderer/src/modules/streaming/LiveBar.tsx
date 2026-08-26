@@ -3,8 +3,9 @@ import type { Employee } from '@shared/types'
 import type { StreamSession } from '@shared/streaming'
 import { formatDuration, isSuspiciouslyLong } from '@shared/streaming'
 import { Icon } from '../../components/Icon'
+import { CrewPicker } from './CrewPicker'
 import { useToast } from '../../components/Toast'
-import { Button, Input, Select } from '../../components/ui'
+import { Button, Input } from '../../components/ui'
 import { resultError, streaming } from './api'
 import { formatElapsed, shortDayLabel, timeLabel, todayKey } from './time'
 
@@ -39,7 +40,14 @@ export function LiveBar({
 }): JSX.Element {
   const toast = useToast()
   const [title, setTitle] = useState('')
-  const [hostId, setHostId] = useState('')
+  /**
+   * Everybody going on air, in order. The first of them becomes the host.
+   *
+   * A LIST rather than one id, because a show is run by a crew — see
+   * CrewPicker. `hostId` is still what the server stores as the leader and it
+   * is derived from this, so nothing had to learn about both.
+   */
+  const [crew, setCrew] = useState<string[]>([])
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -61,7 +69,8 @@ export function LiveBar({
       // rather than blocking the start on a form error.
       const res = await streaming.start({
         title: title.trim() || `Stream — ${shortDayLabel(todayKey())}`,
-        hostId: hostId || null,
+        hostId: crew[0] ?? null,
+        crew,
         note: note.trim() || null
       })
       if (!res.ok || !res.data) {
@@ -70,6 +79,7 @@ export function LiveBar({
       }
       setTitle('')
       setNote('')
+      setCrew([])
       toast.success('Stream started.')
       await onStarted(res.data)
     } finally {
@@ -121,20 +131,11 @@ export function LiveBar({
                 if (e.key === 'Enter' && !busy) void start()
               }}
             />
-            {hosts.length > 0 && (
-              <Select
-                value={hostId}
-                onChange={(e) => setHostId(e.target.value)}
-                aria-label="Host"
-              >
-                <option value="">No host</option>
-                {hosts.map((h) => (
-                  <option key={h.id} value={h.id}>
-                    {h.firstName} {h.lastName}
-                  </option>
-                ))}
-              </Select>
-            )}
+            {/* The whole crew, not one host — and only the people who run
+                shows. See CrewPicker, which returns null when there are none,
+                so a business with nobody in the Breaker role sees exactly what
+                it saw before. */}
+            <CrewPicker people={hosts} value={crew} onChange={setCrew} label="On air" />
             <Input
               value={note}
               onChange={(e) => setNote(e.target.value)}

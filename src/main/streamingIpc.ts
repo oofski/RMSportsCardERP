@@ -159,13 +159,21 @@ export function registerStreamingIpc(): void {
   // ---- Writes (streaming.manage) ------------------------------------------
   ipcMain.handle(
     IPC.streamStart,
-    (_e, input: { title: string; hostId: string | null; note: string | null }): Result<StreamSession> => {
+    (
+      _e,
+      input: { title: string; hostId: string | null; crew?: unknown; note: string | null }
+    ): Result<StreamSession> => {
       try {
         const actor = requireRun()
         return startSession(
           {
             title: str(input?.title),
             hostId: str(input?.hostId).trim() || null,
+            // Only when the caller SENT one. Passing [] for an absent field
+            // would clear a host the old single-field path had just set —
+            // crewFromInput reads `crew` first, and an empty array is a
+            // statement rather than a silence.
+            ...(Array.isArray(input?.crew) ? { crew: input.crew.map((v) => str(v)) } : {}),
             note: str(input?.note).trim() || null
           },
           actor.id
@@ -194,6 +202,7 @@ export function registerStreamingIpc(): void {
           startedAt: str(input?.startedAt),
           endedAt: str(input?.endedAt).trim() || null,
           hostId: str(input?.hostId).trim() || null,
+          ...(Array.isArray(input?.crew) ? { crew: input.crew.map((v) => str(v)) } : {}),
           note: str(input?.note).trim() || null
         },
         actor.id
@@ -216,6 +225,9 @@ export function registerStreamingIpc(): void {
       if (input?.startedAt !== undefined) patch.startedAt = str(input.startedAt)
       if (input?.endedAt !== undefined) patch.endedAt = str(input.endedAt).trim() || null
       if (input?.hostId !== undefined) patch.hostId = str(input.hostId).trim() || null
+      // An ARRAY or nothing. `undefined` leaves the crew alone; `[]` clears it,
+      // which is how somebody takes the last name off a show.
+      if (Array.isArray(input?.crew)) patch.crew = input.crew.map((v) => str(v))
       if (input?.note !== undefined) patch.note = str(input.note).trim() || null
       return updateSession(patch, actor.id)
     } catch (err) {
