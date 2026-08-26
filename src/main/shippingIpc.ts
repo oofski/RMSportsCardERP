@@ -153,6 +153,7 @@ import {
   getStationBoard,
   heartbeatStation,
   operatorFor,
+  packBack,
   packDone,
   packNext,
   pickAdvance,
@@ -813,6 +814,25 @@ export function registerShippingIpc(): void {
     try {
       const actor = requirePack()
       return { ok: true, data: packDone(requireId(customerId, 'package'), actor.id) }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  /**
+   * STEP BACK ONE BOX, and open it again. See packBack.
+   *
+   * Behind `requirePack()` like the rest of the bench: the same authority that
+   * seals a box may un-seal it. It answers with a Result rather than a bare
+   * order, because this is the one bench control that can REFUSE — a parcel the
+   * carrier already has is not something to quietly mark unpacked.
+   */
+  ipcMain.handle(IPC.shipStationPackBack, (): Result<ShipStationOrder | null> => {
+    try {
+      const actor = requirePack()
+      const res = packBack(actor.id)
+      if (!res.ok) return { ok: false, error: res.error ?? 'Could not step back.' }
+      return { ok: true, data: res.order }
     } catch (err) {
       return fail(err)
     }

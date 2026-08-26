@@ -864,6 +864,15 @@ export function createBridge(ipcRenderer: BridgeTransport) {
         ipcRenderer.invoke(IPC.shipStationPackNext),
       stationPackDone: (customerId: string): Promise<Result<unknown>> =>
         ipcRenderer.invoke(IPC.shipStationPackDone, customerId),
+      /**
+       * Step back one box and open it again — see packBack in db/shipStations.
+       *
+       * Result-shaped rather than a bare order, because it is the one bench
+       * control that refuses: a parcel the carrier already has must not be
+       * quietly marked unpacked.
+       */
+      stationPackBack: (): Promise<Result<unknown>> =>
+        ipcRenderer.invoke(IPC.shipStationPackBack),
       stationSendBack: (customerId: string, reason: string): Promise<Result<boolean>> =>
         ipcRenderer.invoke(IPC.shipStationSendBack, { customerId, reason }),
       stationHeartbeat: (): Promise<number> => ipcRenderer.invoke(IPC.shipStationHeartbeat),

@@ -363,6 +363,15 @@ export interface ShipStationBoard {
    * what the bench still owes, whoever is holding it.
    */
   packingRemaining: number
+  /**
+   * How many boxes this bench could step BACK through, newest first.
+   *
+   * Drives the Back button's enabled state, and its count: a packer who has just
+   * sealed four boxes should be able to see that four are behind them rather
+   * than pressing a control to find out. Zero on a bench that has packed nothing
+   * tonight, and on a picker's screen, which has no such control.
+   */
+  packedBehind: number
   /** The order this station is holding, if any. */
   current: ShipStationOrder | null
   /** Everyone working right now, for the "who else is on" strip. */

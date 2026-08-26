@@ -299,6 +299,178 @@ ok(
 )
 
 // ---------------------------------------------------------------------------
+console.log('\n=== 8b. STEPPING BACK TO THE LAST BOX, and opening it again ===')
+// ---------------------------------------------------------------------------
+/**
+ * The owner's words: "when someone is packing an order they can go back and see
+ * the ones they completed - if they go back it has to be sequential, so skip
+ * back and then it marks it unpacked until they go forward and do it."
+ *
+ * The load-bearing half is the second one. Back is not a viewer with an undo
+ * beside it: the box is OPEN again the moment you step onto it, so there is no
+ * state where the screen shows a box behind you while the floor still counts it
+ * as done.
+ *
+ * Takes ONE order out of the shared picking run and no more. Every other box it
+ * needs comes from re-opening one it already packed, which is the feature.
+ */
+{
+  const packedAtOf = (cid: string): string | null =>
+    domain.listOrders().find((o: any) => o.customerId === cid)?.packedAt ?? null
+  const queued = (cid: string): any =>
+    stations.packQueue().find((o: any) => o.customerId === cid) ?? null
+
+  const cand = stations.pickableOrders()[0]
+  stations.claimOrder(cand.orderId, cand.customerId, 'pick', 'user2')
+  stations.pickAdvance(cand.customerId, 'user2')
+  const second = stations.packNext('user2')?.customerId as string
+  ok(!!second, 'a second box reaches the bench', String(second))
+  stations.packDone(second, 'user2')
+  ok(stations.packedBehind() === 2, 'TWO are behind this bench', String(stations.packedBehind()))
+
+  const back = stations.packBack('user2')
+  ok(back.ok === true, 'the packer can step back', String(back.error))
+  ok(
+    back.order?.customerId === second,
+    'ONTO THE BOX THEY SEALED MOST RECENTLY, not the first one of the night',
+    `${back.order?.customerId} (wanted ${second})`
+  )
+  ok(back.order?.mine === true, 'and it reads as theirs')
+  /**
+   * WHICH HAS TO BE A RE-CLAIM, not a label. Without re-opening this bench's own
+   * claim the box would sit in the queue for whoever asked next, and a packer
+   * pressing Back would be handed somebody else's work.
+   */
+  ok(
+    stations.packNext('user2')?.customerId === second,
+    'so asking for the next box hands back the SAME one - the claim was re-opened',
+    String(stations.packNext('user2')?.customerId)
+  )
+  ok(
+    packedAtOf(second) === null,
+    'STEPPING BACK OPENS IT - packed_at is cleared, so the floor owes it a mailer again',
+    String(packedAtOf(second))
+  )
+  ok(!!queued(second), 'it is back in the pack queue')
+  ok(
+    stations.packQueue()[0]?.customerId === second,
+    'AT THE HEAD, because readyAt comes from the PICK claim and never moved',
+    String(stations.packQueue()[0]?.customerId)
+  )
+  ok(packedAtOf(first.customerId) !== null, 'and ONE step means one box - the one before it is untouched')
+  ok(stations.packedBehind() === 1, 'one is behind the bench now', String(stations.packedBehind()))
+
+  // Press again: walk one further back. The box just stepped onto is in this
+  // packer's hands and unpacked, so this also covers what happens to it.
+  const again = stations.packBack('user2')
+  ok(again.ok === true, 'pressing again steps back again', String(again.error))
+  ok(
+    again.order?.customerId === first.customerId,
+    'ONE MORE BOX, in order',
+    `${again.order?.customerId} (wanted ${first.customerId})`
+  )
+  ok(packedAtOf(first.customerId) === null, 'opening that one too')
+  /**
+   * THE BOX THAT WAS IN HAND GOES BACK TO THE QUEUE, unheld. It was never packed,
+   * so nothing is undone - it is simply not this packer's any more. Left claimed
+   * it would be stranded: nobody else could take it, and the person who had it is
+   * now looking at a different box.
+   */
+  ok(!!queued(second), 'the box that was in hand is back in the queue')
+  ok(queued(second)?.mine === false, 'AND IS NOBODY\u2019S - the claim on it was released, not left standing')
+  ok(packedAtOf(second) === null, 'and it was never packed by the step back')
+
+  const none = stations.packBack('user2')
+  ok(none.ok === false, 'a press with nothing behind it refuses')
+  ok(/nothing behind you/i.test(none.error ?? ''), 'saying so plainly', String(none.error))
+
+  // Forward again re-seals it, which is the other half of the owner's sentence.
+  ok(!!stations.packDone(first.customerId, 'user2'), 'and going forward packs it again')
+  ok(packedAtOf(first.customerId) !== null, 'packed_at is back')
+  stations.packNext('user2')
+  stations.packDone(second, 'user2')
+  ok(stations.packedBehind() === 2, 'both are behind the bench again', String(stations.packedBehind()))
+
+  /**
+   * A BOX SOMEBODY ELSE ALREADY OPENED IS SKIPPED, not refused. The step is "the
+   * last one still standing behind me", and stopping dead on a box that is
+   * already open would strand the packer with a button that does nothing.
+   */
+  domain.setOrderStage(ship.getShipShipmentByCustomer(second).id, 'to_pick', 'user9')
+  ok(
+    stations.packedBehind() === 1,
+    'A BOX OPENED BY SOMEBODY ELSE STOPS COUNTING as behind this bench',
+    String(stations.packedBehind())
+  )
+  const skipped = stations.packBack('user2')
+  ok(skipped.ok === true, 'and Back still works', String(skipped.error))
+  ok(
+    skipped.order?.customerId === first.customerId,
+    'walking PAST the one already open to the one that is not',
+    String(skipped.order?.customerId)
+  )
+
+  /**
+   * A PRINTED LABEL IS STILL BENCH WORK. `label_created` derives to put_together
+   * and re-opening the box is exactly what this control is for, so it must NOT be
+   * caught by the carrier guard below.
+   */
+  stations.packNext('user2')
+  stations.packDone(first.customerId, 'user2')
+  ship.updateShipment(ship.getShipShipmentByCustomer(first.customerId).id, {
+    manualStatus: { code: 'label_created', setAt: new Date().toISOString(), setBy: 'user2' }
+  })
+  ok(
+    stations.packBack('user2').ok === true,
+    'A BOX WITH A LABEL PRINTED CAN STILL BE STEPPED BACK ONTO - a label is bench work'
+  )
+
+  /**
+   * IT REFUSES ONCE THE CARRIER HAS THE PARCEL. Un-packing resets the manual
+   * status to not_shipped - it has to, or a label_created row derives back to
+   * put_together and the box would still look packed. But overwriting "in
+   * transit" with "not shipped" because somebody pressed Back twice would be this
+   * screen lying about a parcel it cannot see.
+   */
+  stations.packNext('user2')
+  stations.packDone(first.customerId, 'user2')
+  domain.setOrderStage(ship.getShipShipmentByCustomer(first.customerId).id, 'sent', 'user2')
+  const gone2 = stations.packBack('user2')
+  ok(gone2.ok === false, 'A PARCEL THE CARRIER ALREADY HAS CANNOT BE STEPPED BACK ONTO')
+  ok(/erase what the carrier said/i.test(gone2.error ?? ''), 'and the refusal says why', String(gone2.error))
+  ok(
+    ship.getShipShipmentByCustomer(first.customerId).manualStatus.code === 'in_transit',
+    'with the carrier status left exactly as it was',
+    ship.getShipShipmentByCustomer(first.customerId).manualStatus.code
+  )
+  /**
+   * LEAVE THE FLOOR AS THIS SECTION FOUND IT.
+   *
+   * The fixture's picking run is shared with every section below and has exactly
+   * enough orders in it for them. This section borrowed one and re-opened it, so
+   * it hands that one back to PICKING — which is where a send-back would have put
+   * it — and re-packs the box section 8 left packed. Net effect on the run: zero.
+   */
+  domain.setOrderStage(ship.getShipShipmentByCustomer(first.customerId).id, 'to_pick', 'user2')
+  stations.packNext('user2')
+  stations.packDone(first.customerId, 'user2')
+  const borrowed = domain.listOrders().find((o: any) => o.customerId === second)
+  for (const c of stations.claimsForOrder(borrowed.id, second)) {
+    if (!c.releasedAt) stations.releaseClaim(c.id, 'returned by the step-back section')
+  }
+  ok(
+    stations.pickableOrders().some((o: any) => o.customerId === second),
+    'the borrowed order is handed back to the picking run',
+    String(stations.pickableOrders().length)
+  )
+  ok(
+    stations.packQueue().length === 0,
+    'and the pack queue is empty again, as section 9 expects to find it',
+    String(stations.packQueue().length)
+  )
+}
+
+// ---------------------------------------------------------------------------
 console.log('\n=== 9. send back ===')
 // ---------------------------------------------------------------------------
 // Bagging every break no longer hands anything to packing: collecting a

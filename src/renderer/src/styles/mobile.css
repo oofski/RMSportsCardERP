@@ -821,9 +821,19 @@
     display: flex;
     flex: 1 1 100%;
     margin-left: 0;
+    /* THREE BUTTONS NOW, not two — Back joined Send back and Packed·next when
+       the bench got a way to re-open the last box. Three across a 360px screen
+       leaves each about a hundred pixels, which is fine for a finger and NOT
+       fine for "Packed · next", so the row is allowed to wrap rather than
+       squeezing the primary action down to two characters and an ellipsis. */
+    flex-wrap: wrap;
+    gap: 6px;
   }
   .walk-nav .btn {
     flex: 1 1 auto;
+    /* Apple's and Google's floor. A bench control is pressed with a thumb, over
+       and over, by somebody holding a box in the other hand. */
+    min-height: var(--rm-tap);
   }
   .walk-prog {
     margin-left: 0;

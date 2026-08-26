@@ -422,6 +422,7 @@ export const IPC = {
   shipStationPickNext: 'shipping:station:pick-next',
   shipStationPackNext: 'shipping:station:pack-next',
   shipStationPackDone: 'shipping:station:pack-done',
+  shipStationPackBack: 'shipping:station:pack-back',
   shipStationSendBack: 'shipping:station:send-back',
   shipStationHeartbeat: 'shipping:station:heartbeat',
   // Per-card sleeve capture, split from the single old flag.

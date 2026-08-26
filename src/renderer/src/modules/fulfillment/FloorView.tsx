@@ -250,6 +250,8 @@ export function FloorView({ canFind, canPack, onGoTo, onChanged }: ShipTabProps)
           }}
           onSendBack={() => void doSendBack(current)}
           onAdvance={() => void advance(current)}
+          onStepBack={() => void stepBack()}
+          packedBehind={board?.packedBehind ?? 0}
           upNext={session.role === 'pack' ? board?.upNext ?? [] : []}
         />
       ) : (
@@ -303,6 +305,33 @@ export function FloorView({ canFind, canPack, onGoTo, onChanged }: ShipTabProps)
         : await api.shipping.stationPickNext()
     if (!res.ok) toast.error(res.error ?? 'Could not take the next one.')
     await load()
+  }
+
+  /**
+   * STEP BACK ONE BOX, and open it again.
+   *
+   * The owner's words: "they can go back and see the ones they completed — if
+   * they go back it has to be sequential, so skip back and then it marks it
+   * unpacked until they go forward and do it."
+   *
+   * So this is not a viewer with an undo beside it. Pressing Back puts the last
+   * box this bench sealed back in front of the packer AND opens it: the floor
+   * owes it a mailer again, and "Packed · next" re-seals it. There is no state
+   * where the screen shows a box as behind you while the counts still call it
+   * done. All of that is decided in packBack; this only reports the refusal.
+   */
+  async function stepBack(): Promise<void> {
+    setBusy(true)
+    try {
+      const res = await api.shipping.stationPackBack()
+      if (!res.ok) {
+        toast.error(res.error ?? 'Could not step back.')
+        return
+      }
+      await load()
+    } finally {
+      setBusy(false)
+    }
   }
 
   async function advance(order: ShipStationOrder): Promise<void> {
@@ -562,6 +591,8 @@ function OrderPane({
   onCancelSendBack,
   onSendBack,
   onAdvance,
+  onStepBack,
+  packedBehind,
   upNext
 }: {
   order: ShipStationOrder
@@ -578,6 +609,10 @@ function OrderPane({
   onCancelSendBack: () => void
   onSendBack: () => void
   onAdvance: () => void
+  /** Re-open the last box this bench sealed. See stepBack. */
+  onStepBack: () => void
+  /** How many boxes are behind this one, so Back can say so and be disabled. */
+  packedBehind: number
   /** The packing queue behind this box, oldest first. Empty for a picker. */
   upNext: Array<{ customerId: string; handle: string; realName: string | null; cards: number }>
 }): JSX.Element {
@@ -636,6 +671,28 @@ function OrderPane({
           </span>
         </span>
         <div className="walk-nav">
+          {/* BACK IS FIRST, because it walks the same axis the primary button
+              does and reads left-to-right with it: back one, forward one. Send
+              back is a different idea — it hands the box to somebody else — and
+              sits between them rather than being confused for either.
+
+              Disabled with nothing behind you rather than hidden: a control that
+              appears after the first box would be one nobody knew was there. */}
+          {role === 'pack' && (
+            <Button
+              size="sm"
+              icon="ChevronLeft"
+              disabled={busy || sendingBack || packedBehind === 0}
+              title={
+                packedBehind === 0
+                  ? 'Nothing behind you yet — this is the first box.'
+                  : `Re-open the last box you packed. ${packedBehind} behind you.`
+              }
+              onClick={onStepBack}
+            >
+              Back
+            </Button>
+          )}
           {role === 'pack' && (
             <Button size="sm" icon="Undo2" disabled={busy || sendingBack} onClick={onStartSendBack}>
               Send back

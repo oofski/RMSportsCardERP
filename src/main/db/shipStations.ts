@@ -14,6 +14,7 @@ import {
   type ShipWorkClaim
 } from '@shared/shipStations'
 import type { ShipOrderRow } from '@shared/shippingViews'
+import { SHIP_STATUS_LABELS, SHIP_STATUS_RANK } from '@shared/shippingTypes'
 import { getDb } from './database'
 import {
   allLiveClaims,
@@ -612,6 +613,130 @@ export function packDone(customerId: string, loginUserId: string | null): ShipOr
 }
 
 /**
+ * STEP BACK TO THE LAST BOX THIS BENCH PACKED, and un-pack it.
+ *
+ * The owner's words: "when someone is packing an order they can go back and see
+ * the ones they completed — if they go back it has to be sequential, so skip
+ * back and then it marks it unpacked until they go forward and do it."
+ *
+ * ## One step, and the step IS the un-packing
+ *
+ * Not a viewer with an undo beside it. Going back means the box is open again:
+ * `packed_at` is cleared, the bench owes it a mailer once more, and pressing
+ * "Packed · next" re-stamps it. That is what makes the control safe to press —
+ * there is no state where the screen shows a box as behind you while the floor
+ * still counts it as done.
+ *
+ * ## Sequential, out of the claim log rather than an index
+ *
+ * `packQueue` filters out anything with a `packed_at`, so the box just finished
+ * is not in it and a cursor could not walk backwards through it. The order comes
+ * instead from this station's own finished pack claims, newest first — which is
+ * the order this bench actually did the work in, not the order the queue offered
+ * it. Boxes somebody else has already re-opened are skipped rather than
+ * refused: the step is "the last one still standing behind me".
+ *
+ * Going forward again needs no new ordering. Clearing `packed_at` puts the order
+ * back into `packQueue` at the HEAD, because `readyAt` comes from the PICK
+ * claim and is untouched, so it is the oldest handover waiting.
+ *
+ * ## It refuses once the parcel has left the building
+ *
+ * `setOrderStage(_, 'to_pick')` resets the manual status to `not_shipped`, and
+ * it has to — a `label_created` row derives back to `put_together`, so anything
+ * else would leave the box looking packed and the button looking broken. On the
+ * bench that is fine: `not_shipped` and `label_created` are bench states and
+ * re-opening a box is exactly what this is for.
+ *
+ * But `in_transit`, `delivered`, `returned` and `exception` are facts about the
+ * world that came from a carrier, and quietly overwriting one with "not shipped"
+ * because somebody pressed Back twice would be this screen lying about a parcel
+ * it cannot see. Those are refused, by name, and the stage dropdown is still
+ * there for anybody who genuinely means it.
+ *
+ * ## What it costs, which is real and is the existing behaviour
+ *
+ * Un-packing deletes that box's pack and ship work measurements — see
+ * `clearWorkEvent` in setOrderStage, asserted by tests/workLog. That is
+ * deliberate: the app no longer claims the work happened, so it must not keep
+ * timing it. Stepping back and forward re-measures from the new claim.
+ */
+export function packBack(loginUserId: string | null): {
+  ok: boolean
+  error?: string
+  order: ShipStationOrder | null
+} {
+  const station = stationKey()
+  const db = getDb()
+  const behind = db
+    .prepare(
+      `SELECT id, order_id, customer_id FROM ship_work_claims
+        WHERE station_id = ? AND role = 'pack'
+          AND finished_at IS NOT NULL AND released_at IS NULL
+        ORDER BY finished_at DESC`
+    )
+    .all(station) as Array<{ id: string; order_id: string; customer_id: string }>
+
+  for (const claim of behind) {
+    const shipment = getShipShipmentByCustomer(claim.customer_id)
+    // Already re-opened, by this bench or another. Not an error — keep walking
+    // back to the last one that is genuinely still packed.
+    if (!shipment || !shipment.packedAt) continue
+
+    if (SHIP_STATUS_RANK[shipment.manualStatus.code] >= SHIP_STATUS_RANK.in_transit) {
+      return {
+        ok: false,
+        order: null,
+        error:
+          `That parcel is already marked ${SHIP_STATUS_LABELS[shipment.manualStatus.code]}. ` +
+          'Opening it again here would erase what the carrier said. Change the stage on the order ' +
+          'itself if you really mean to.'
+      }
+    }
+
+    // The box currently in this packer's hands goes back to the queue. It was
+    // never packed, so nothing is undone — it is simply not theirs any more.
+    const holding = myClaim('pack')
+    if (holding) releaseClaim(holding.id, 'stepped back to the previous box')
+
+    const operator = operatorFor(loginUserId)
+    setOrderStage(shipment.id, 'to_pick', operator)
+    // Re-open this bench's own claim on it, so it is `current` again rather than
+    // sitting in the queue for whoever asks next.
+    db.prepare(
+      `UPDATE ship_work_claims SET finished_at = NULL, heartbeat_at = ?
+        WHERE id = ? AND station_id = ?`
+    ).run(nowIso(), claim.id, station)
+
+    // `mine` is DERIVED by toStationOrder from the claim rows, not asserted
+    // here. Overriding it would make this function's answer agree with itself
+    // whether or not the re-claim above actually took, which is exactly the
+    // failure the re-claim exists to prevent.
+    const row = listOrders().find((o) => o.customerId === claim.customer_id)
+    return { ok: true, order: row ? toStationOrder(row, Date.now(), true) : null }
+  }
+
+  return { ok: false, order: null, error: 'There is nothing behind you — this is the first box.' }
+}
+
+/** How many boxes this bench could still step back through. Drives the button. */
+export function packedBehind(): number {
+  const rows = getDb()
+    .prepare(
+      `SELECT customer_id FROM ship_work_claims
+        WHERE station_id = ? AND role = 'pack'
+          AND finished_at IS NOT NULL AND released_at IS NULL`
+    )
+    .all(stationKey()) as Array<{ customer_id: string }>
+  let n = 0
+  for (const r of rows) {
+    const shipment = getShipShipmentByCustomer(r.customer_id)
+    if (shipment?.packedAt) n++
+  }
+  return n
+}
+
+/**
  * The packer found something wrong — wrong card, missing card, damaged.
  *
  * Goes back to the picking pool with the reason attached, so whoever takes it
@@ -708,6 +833,9 @@ export function getStationBoard(): ShipStationBoard {
     // asking "is the packing finished" reads this one, because that is a
     // question about the night rather than about a screen.
     packingRemaining: packingRemaining(),
+    // Only a packer can step back, so a picker's board reports none rather than
+    // a number nothing on their screen can act on.
+    packedBehind: session?.role === 'pack' ? packedBehind() : 0,
     current,
     others,
     // Asked of the ROOM, for exactly the reason stated three lines above.
