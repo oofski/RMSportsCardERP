@@ -46,6 +46,7 @@ const {
   isSettledPurchaseOrder,
   poColumnOf
 } = require('../src/shared/purchaseOrders')
+const { INVOICE_SETTLE_DAYS, isSettledInvoice } = require('../src/shared/invoices')
 const db = getDb()
 
 let pass = 0
@@ -318,6 +319,152 @@ const afterVoid = history
 ok(!!afterVoid, 'A VOID ORDER IS STILL IN THE LEDGER')
 ok(afterVoid.status === 'void', 'flagged as void', afterVoid?.status)
 ok(afterVoid.margin === null, 'and reports NO margin rather than its whole total as profit', String(afterVoid?.margin))
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 4b. THE SALES BOARD SWEEPS TOO, and nothing is deleted ===')
+// ---------------------------------------------------------------------------
+/**
+ * The owner asked why a sales order does not go to history a day after it is
+ * finished, the way a purchase order does. It never did: the sweep was born as a
+ * purchase-order feature and the sell-side board — a mirror of the PO board in
+ * columns, cards and CSS — was never given one. A paid sales order sat in the
+ * Payment column for ever, and 'paid' is terminal, so nobody could move it on.
+ *
+ * BOTH HALVES, chosen deliberately over "paid alone": money in AND boxes out.
+ * An order paid up front on Monday and still on the packing bench on Wednesday
+ * is not finished with, and sweeping it off would take work away from the floor
+ * rather than clutter.
+ */
+{
+  ok(INVOICE_SETTLE_DAYS === 1, 'a finished sale sits for a day', String(INVOICE_SETTLE_DAYS))
+
+  // --- the rule itself, before any database ---------------------------------
+  const settled = (over: any): boolean =>
+    isSettledInvoice({
+      status: 'paid',
+      paidAt: agoIso(4 * DAY),
+      lastTrackedAt: agoIso(4 * DAY),
+      ...over
+    })
+  ok(settled({}) === true, 'paid and shipped four days ago is settled')
+  ok(settled({ paidAt: null, qboPaidAt: null }) === false, 'NOT PAID IS NOT SETTLED, however long ago it shipped')
+  ok(settled({ lastTrackedAt: null }) === false, 'AND NOT SHIPPED IS NOT SETTLED, however long ago it was paid')
+  ok(settled({ paidAt: agoIso(2 * HOUR) }) === false, 'the clock runs from the LATER of the two — paid this morning is not settled')
+  ok(settled({ lastTrackedAt: agoIso(2 * HOUR) }) === false, 'and neither is shipped this morning')
+  ok(settled({ status: 'void' }) === false, 'a void sale never settles — it is already off the board')
+  ok(settled({ qboVoided: true }) === false, 'nor one QuickBooks voided, which un-pays it')
+  ok(
+    settled({ paidAt: null, qboPaidAt: agoIso(4 * DAY) }) === true,
+    'PAID IS THE FACT, NOT THE COLUMN — QuickBooks’ own date settles it just as well'
+  )
+  // The boundary is the day, exactly — the same assertion the buy side carries.
+  ok(
+    settled({ paidAt: agoIso(DAY + 1000), lastTrackedAt: agoIso(DAY + 1000) }) === true,
+    'a second past the day settles'
+  )
+  ok(
+    settled({ paidAt: agoIso(DAY - 60_000), lastTrackedAt: agoIso(DAY - 60_000) }) === false,
+    'AND A MINUTE SHORT OF IT DOES NOT — the window is a day, not about a day'
+  )
+  // A date nothing can parse must settle nothing. Silently reading it as epoch
+  // zero would sweep the order off the board the moment it was written.
+  ok(settled({ paidAt: 'not a date', qboPaidAt: null }) === false, 'an unparseable paid date settles nothing')
+  ok(settled({ lastTrackedAt: 'not a date' }) === false, 'nor an unparseable shipping one')
+
+  // --- and against the real board -------------------------------------------
+  inv.addStock(P1, 'RM', 40, 50, 'stock for the sweep', null, null)
+  const sale = (number: string): any =>
+    invoices.saveInvoice(
+      {
+        id: null,
+        customerName: 'Sweep Buyer',
+        invoiceNumber: number,
+        invoiceDate: `${thisYear}-06-20`,
+        terms: 'Due on receipt',
+        location: 'RM',
+        lines: [{ item: 'History Hobby Box', productId: P1, quantity: 2, rate: 120, amount: 240 }]
+      },
+      null
+    )
+  const payAgo = (id: string, ms: number): void => {
+    db.prepare(`UPDATE invoices SET status = 'paid', paid_at = ? WHERE id = ?`).run(agoIso(ms), id)
+  }
+  const shipAgo = (id: string, ms: number): void => {
+    db.prepare(
+      `INSERT INTO order_shipments (id, order_kind, order_id, position, carrier, tracking_number, created_at, updated_at)
+       VALUES (?, 'so', ?, 0, 'ups', '1Z999AA10123456784', ?, ?)`
+    ).run(`shp_so_${id}_0`, id, agoIso(ms), agoIso(ms))
+  }
+
+  const done = sale('SO-9100')
+  const justDone = sale('SO-9101')
+  const paidNotGone = sale('SO-9102')
+  const goneNotPaid = sale('SO-9103')
+
+  payAgo(done.id, 4 * DAY)
+  shipAgo(done.id, 4 * DAY)
+  payAgo(justDone.id, 6 * HOUR)
+  shipAgo(justDone.id, 6 * HOUR)
+  payAgo(paidNotGone.id, 4 * DAY) // money in, still on the bench
+  shipAgo(goneNotPaid.id, 4 * DAY) // out the door, nobody has paid
+
+  /**
+   * A SPLIT SHIPMENT IS OUT THE DOOR WHEN THE LAST BOX IS.
+   *
+   * Four boxes over two labels: the first went days ago, the second an hour ago.
+   * Reading the FIRST parcel would start the settle clock while boxes were still
+   * on the bench, and the order would vanish off the board with work left on it.
+   */
+  const split = sale('SO-9104')
+  payAgo(split.id, 4 * DAY)
+  shipAgo(split.id, 4 * DAY)
+  db.prepare(
+    `INSERT INTO order_shipments (id, order_kind, order_id, position, carrier, tracking_number, created_at, updated_at)
+     VALUES (?, 'so', ?, 1, 'ups', '1Z999AA10123456785', ?, ?)`
+  ).run(`shp_so_${split.id}_1`, split.id, agoIso(HOUR), agoIso(HOUR))
+
+  const board = invoices.listOpenInvoices()
+  const onBoard = (id: string): boolean => board.some((i: any) => i.id === id)
+  ok(
+    onBoard(split.id),
+    'A SPLIT SHIPMENT WHOSE SECOND LABEL PRINTED AN HOUR AGO IS STILL ON THE BOARD — the clock runs from the LAST parcel'
+  )
+  ok(!onBoard(done.id), 'A SALE PAID AND SHIPPED FOUR DAYS AGO IS GONE FROM THE BOARD')
+  ok(onBoard(justDone.id), 'one finished this morning is still there — the correction window')
+  ok(
+    onBoard(paidNotGone.id),
+    'AND ONE PAID FOUR DAYS AGO THAT HAS NOT SHIPPED IS STILL THERE — money alone does not finish a sale'
+  )
+  ok(
+    onBoard(goneNotPaid.id),
+    'nor does shipping alone, so the unpaid one stays too'
+  )
+
+  // THE ASSERTION THAT MAKES THE SWEEP SAFE — the twin of the purchase-order one.
+  ok(invoices.getInvoice(done.id) !== null, 'but the order itself still exists')
+  ok(invoices.getInvoice(done.id)?.lines.length === 1, 'with its line')
+  ok(
+    (db.prepare(`SELECT COUNT(*) AS n FROM invoices WHERE id = ?`).get(done.id) as any).n === 1,
+    'and one row on disk — swept, not deleted'
+  )
+
+  /**
+   * THE UNFILTERED READ IS STILL UNFILTERED. It is what the CSV export asks when
+   * somebody exports without selecting anything, and an export quietly missing
+   * finished orders would be a different document from the one its name promises.
+   */
+  ok(
+    invoices.listInvoices().some((i: any) => i.id === done.id),
+    'listInvoices — which the export uses — still returns every order'
+  )
+
+  // And the history row says where it went.
+  const swept = history.listSalesOrderHistory(db, thisYear).find((r: any) => r.id === done.id)
+  ok(!!swept, 'the swept order is in the ledger')
+  ok(swept.settled === true, 'FLAGGED AS FILED, which is what draws the chip beside its stage')
+  const stillUp = history.listSalesOrderHistory(db, thisYear).find((r: any) => r.id === justDone.id)
+  ok(stillUp.settled === false, 'while the one still on the board is not')
+}
 
 // ---------------------------------------------------------------------------
 console.log('\n=== 5. the year picker reads the data ===')

@@ -8,7 +8,7 @@ import type {
 } from '@shared/orderHistory'
 import type { PurchaseOrderStatus } from '@shared/types'
 import { isPurchaseOrderStatus } from '@shared/purchaseOrders'
-import { INVOICE_STAGES, type InvoiceStatus } from '@shared/invoices'
+import { INVOICE_STAGES, isSettledInvoice, type InvoiceStatus } from '@shared/invoices'
 
 /** Coerce a stored status string. Same rule invoices.ts applies on read. */
 function asInvoiceStatus(v: unknown): InvoiceStatus {
@@ -192,6 +192,13 @@ interface SoRow {
   due_date: string | null
   terms: string
   total: number
+  // The four facts isSettledInvoice needs, and no more. Fetched here rather
+  // than by calling the board's read, because a history of 2019 must not depend
+  // on an order still being on a board.
+  paid_at: string | null
+  qbo_paid_at: string | null
+  qbo_voided: number | null
+  last_tracked_at: string | null
 }
 
 interface SoLineRow {
@@ -225,10 +232,18 @@ export function listSalesOrderHistory(
   year: number
 ): SalesOrderHistoryRow[] {
   const prefix = `${year}%`
+  const now = Date.now()
   const rows = db
     .prepare(
       `SELECT id, invoice_number, qbo_doc_number, status, customer_name,
-              invoice_date, due_date, terms, total
+              invoice_date, due_date, terms, total,
+              paid_at, qbo_paid_at, qbo_voided,
+              -- The same MAX the board's read takes: a tracking number IS the
+              -- shipped event here, and the last parcel to get one is when the
+              -- order was fully out the door. See saleCompletedAt.
+              (SELECT MAX(s.created_at) FROM order_shipments s
+                WHERE s.order_kind = 'so' AND s.order_id = invoices.id
+                  AND TRIM(COALESCE(s.tracking_number, '')) != '') AS last_tracked_at
          FROM invoices
         WHERE invoice_date LIKE ?
         ORDER BY invoice_date DESC, invoice_number DESC`
@@ -299,6 +314,21 @@ export function listSalesOrderHistory(
       total,
       cost: money?.total ?? 0,
       margin: money && money.priced > 0 ? CENTS(total - money.total) : null,
+      // ALL FOUR FACTS, for the reason written on the purchase-order twin above:
+      // the predicate needs every one of them, and passing fewer fails SILENTLY
+      // — an order the board has already swept would show here without the
+      // "filed" marker, so the one screen that can say where an order went would
+      // claim it is still on a board it has left.
+      settled: isSettledInvoice(
+        {
+          status: asInvoiceStatus(r.status),
+          paidAt: r.paid_at,
+          qboPaidAt: r.qbo_paid_at,
+          qboVoided: !!r.qbo_voided,
+          lastTrackedAt: r.last_tracked_at
+        },
+        now
+      ),
       lines: own
     }
   })

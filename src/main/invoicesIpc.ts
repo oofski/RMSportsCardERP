@@ -46,6 +46,7 @@ import {
   listInvoices,
   listInvoicesForDocNumberMatch,
   listInvoicesNeedingPush,
+  listOpenInvoices,
   listPostedInvoices,
   markPosted,
   markPushFailed,
@@ -379,7 +380,9 @@ export function registerInvoicesIpc(): void {
   )
 
   // ---- Invoices -----------------------------------------------------------
-  ipcMain.handle(IPC.invoicesList, (): Invoice[] => (can() ? listInvoices() : []))
+  // THE BOARD'S LIST, which is not every invoice — see listOpenInvoices. A sale
+  // finished with for a day stops being drawn here and stays in Finance -> History.
+  ipcMain.handle(IPC.invoicesList, (): Invoice[] => (can() ? listOpenInvoices() : []))
 
   ipcMain.handle(IPC.invoiceGet, (_e, id: unknown): InvoiceDetail | null =>
     can() ? getInvoice(str(id)) : null

@@ -370,7 +370,7 @@ export const INVOICE_STAGES: Array<{ id: InvoiceStatus; label: string; hint: str
  * properly for the progress bar. This is the yes-or-no the column needs.
  */
 export function isInvoicePaid(invoice: {
-  paidAt: string | null
+  paidAt?: string | null
   qboPaidAt?: string | null
   qboVoided?: boolean | null
 }): boolean {
@@ -467,6 +467,120 @@ export function awaitingShipment(invoice: {
   readyToShipAt: string | null
 }): boolean {
   return invoice.status !== 'void' && !!invoice.readyToShipAt
+}
+
+// ---------------------------------------------------------------------------
+// Finished with — off the board, into the year's ledger
+//
+// THE DELIBERATE MIRROR OF isSettledPurchaseOrder in @shared/purchaseOrders.
+// Read that file's version alongside this one: same constant, same derivation,
+// same reasoning, and the differences between them are only the two facts that
+// differ between buying and selling.
+//
+// The owner asked why sales orders were not doing this. They never had it: the
+// sweep was born as a purchase-order feature and the sell-side board, which
+// mirrors the PO board in columns, cards and CSS, was never given one. A paid
+// sales order sat in Payment for ever.
+// ---------------------------------------------------------------------------
+
+/**
+ * When both halves of a SALE were finished, or null while either is outstanding.
+ *
+ * ## Both halves, because one is not the deal
+ *
+ * A purchase is done when it has been paid AND received. The sell-side mirror is
+ * money in AND boxes out, and the owner chose it over "paid alone" for the
+ * reason that makes the difference matter: an order paid up front on Monday and
+ * still on the packing bench on Wednesday is not finished with, and sweeping it
+ * off the board would take work away from the floor rather than clutter.
+ *
+ * ## "Shipped" has no timestamp here, on purpose
+ *
+ * Nothing in this app stamps shipped — see `shipChip` in @shared/orderStatus:
+ * A TRACKING NUMBER IS THE EVENT, and a second flag beside it would be a fact
+ * that could disagree with the one the carrier answers about. So the instant is
+ * the moment the number appeared, which the read supplies as `lastTrackedAt`:
+ * the newest of the order's parcel rows, MAX rather than MIN because a
+ * four-box order split over two labels is out the door when the LAST label
+ * exists.
+ *
+ * ## The clock starts at the LATER of the two
+ *
+ * Same as the buy side. Whichever happened second is when the order became
+ * finished; starting from the first would begin counting down while the other
+ * half was still outstanding.
+ *
+ * A VOID sale has no completion date and never gets one — it is already off the
+ * board, because `INVOICE_STAGES` has no column for it.
+ */
+export function saleCompletedAt(sale: {
+  status: InvoiceStatus
+  paidAt?: string | null
+  qboPaidAt?: string | null
+  qboVoided?: boolean | null
+  trackingNumber?: string | null
+  trackedParcels?: number | null
+  lastTrackedAt?: string | null
+}): string | null {
+  if (sale.status === 'void') return null
+  if (!isInvoicePaid(sale)) return null
+  // Paid is a FACT, not the column, so the money instant is whichever of the two
+  // recorded it — the same pair isInvoicePaid reads.
+  const money = (sale.qboPaidAt ?? '').trim() || (sale.paidAt ?? '').trim()
+  const gone = (sale.lastTrackedAt ?? '').trim()
+  if (!money || !gone) return null
+  const a = Date.parse(money)
+  const b = Date.parse(gone)
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return null
+  return a >= b ? money : gone
+}
+
+/**
+ * How long a finished sale sits in Payment before it goes to history.
+ *
+ * ONE DAY, and it is `PO_SETTLE_DAYS` on the other side for the same reason
+ * written there: an order is not finished with the moment the money lands and
+ * the label prints. A parcel comes back, a payment is applied to the wrong
+ * invoice, somebody notices the total is wrong. Sweeping it off the instant it
+ * completes puts the order most likely to need a correction behind a search.
+ *
+ * Its own constant rather than an import, because the two boards are allowed to
+ * disagree — a shared one would make changing the buy side silently change the
+ * sell side, which is not a decision this file gets to make for that one.
+ */
+export const INVOICE_SETTLE_DAYS = 1
+
+/**
+ * Is this sale finished with — off the board, into the year's ledger?
+ *
+ * DERIVED, NEVER STORED, exactly as on the buy side. A stored `archived` flag
+ * needs something to set it — a background job, a check on every read, or a
+ * button somebody has to remember — and all three can be wrong, the first two
+ * differently wrong on two machines, with sync then carrying the wrong answer
+ * across. Computed from the order's own dates it is a fact about the clock:
+ * identical everywhere, correct on a laptop that has been shut for a month, and
+ * needing no migration if the day ever becomes five.
+ *
+ * Nothing is deleted and nothing moves. Finance → History reads the same table
+ * unfiltered and shows the order exactly as it always did.
+ */
+export function isSettledInvoice(
+  sale: {
+    status: InvoiceStatus
+    paidAt?: string | null
+    qboPaidAt?: string | null
+    qboVoided?: boolean | null
+    trackingNumber?: string | null
+    trackedParcels?: number | null
+    lastTrackedAt?: string | null
+  },
+  now: number = Date.now()
+): boolean {
+  const done = saleCompletedAt(sale)
+  if (!done) return false
+  const at = Date.parse(done)
+  if (!Number.isFinite(at)) return false
+  return now - at >= INVOICE_SETTLE_DAYS * 24 * 60 * 60 * 1000
 }
 
 /**
@@ -719,6 +833,13 @@ export interface Invoice {
    * `order_shipments` and may leave the header column empty. See shipChip.
    */
   trackedParcels: number
+  /**
+   * When the newest of those parcels got its tracking number.
+   *
+   * The nearest thing to a shipped-at this app has, and deliberately not called
+   * one — see saleCompletedAt and shipChip. Null when nothing is tracked.
+   */
+  lastTrackedAt: string | null
   /** Units on this order coming off our own shelf (RM or AM). */
   stockUnits: number
   /** Units a supplier ships straight to the buyer. Never touch a shelf here. */

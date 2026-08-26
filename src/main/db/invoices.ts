@@ -4,6 +4,7 @@ import {
   INVOICE_TERMS,
   INVOICE_TERMS_OFFERED,
   asPushState,
+  isSettledInvoice,
   dueDateFor,
   hasAddress,
   canMoveInvoice,
@@ -471,6 +472,7 @@ interface InvoiceRow extends AddressRow {
   drop_units: number | null
   drawn_units: number | null
   tracked_parcels: number | null
+  last_tracked_at: string | null
   drop_supplier_count: number | null
   drop_supplier: string | null
   source_po_supplier: string | null
@@ -598,6 +600,7 @@ function toInvoice(r: InvoiceRow): Invoice {
           : (r.source_po_supplier ?? '').trim() || null,
     dropSupplierCount: Number(r.drop_supplier_count) || 0,
     trackedParcels: Number(r.tracked_parcels) || 0,
+    lastTrackedAt: r.last_tracked_at ?? null,
     stockUnits: Number(r.stock_units) || 0,
     dropshipUnits: Number(r.drop_units) || 0,
     drawnUnits: Number(r.drawn_units) || 0,
@@ -732,6 +735,24 @@ const INVOICE_COLS = `id, invoice_number, customer_id, customer_name, email, ter
                       (SELECT COUNT(*) FROM order_shipments s
                         WHERE s.order_kind = 'so' AND s.order_id = invoices.id
                           AND TRIM(COALESCE(s.tracking_number, '')) != '') AS tracked_parcels,
+                      -- WHEN IT WENT, as near as this app can honestly say.
+                      --
+                      -- Nothing stamps "shipped" here, deliberately -- see
+                      -- shipChip in @shared/orderStatus: a tracking number IS
+                      -- the event, and a second flag beside it would be a fact
+                      -- that could disagree with the one the carrier answers
+                      -- about. So the instant is the moment the NUMBER appeared,
+                      -- which is this row's created_at, and a header number
+                      -- adopted by adoptLegacyFreight gets a row too -- so every
+                      -- number the app knows about is covered.
+                      --
+                      -- MAX, not MIN: a four-box order split over two labels is
+                      -- out the door when the LAST label exists. Taking the
+                      -- first would start the settle clock while boxes were
+                      -- still on the bench.
+                      (SELECT MAX(s.created_at) FROM order_shipments s
+                        WHERE s.order_kind = 'so' AND s.order_id = invoices.id
+                          AND TRIM(COALESCE(s.tracking_number, '')) != '') AS last_tracked_at,
                       -- WHO IS SHIPPING THIS, on a dropship.
                       --
                       -- The sale knows source_po_id and nothing about who the
@@ -770,16 +791,59 @@ const LINE_COLS = `id, invoice_id, position, item, product_id, sku, description,
                    (SELECT po.po_number FROM purchase_orders po
                      WHERE po.id = invoice_lines.source_po_id) AS source_po_number`
 
-/** Newest first — an invoice list is read from the top. */
-export function listInvoices(limit = 200): Invoice[] {
+/**
+ * EVERY sales order, newest first — a list is read from the top.
+ *
+ * Deliberately unfiltered, and deliberately NOT what the board draws. This is
+ * the answer to "what invoices are there", which the CSV export asks when
+ * somebody exports without selecting any: an export that quietly left out
+ * finished orders would be a different document from the one its name promises.
+ * The board's question is narrower and has its own function below.
+ *
+ * The limit is a backstop against an unbounded read on a table that only grows,
+ * not a statement about which orders matter. It used to be 200, which was small
+ * enough to be a silent truncation on a real year's trading.
+ */
+export function listInvoices(limit = 2000): Invoice[] {
   return (
     getDb()
       .prepare(
         `SELECT ${INVOICE_COLS} FROM invoices
           ORDER BY invoice_date DESC, created_at DESC LIMIT ?`
       )
-      .all(Math.max(1, Math.min(1000, limit))) as InvoiceRow[]
+      .all(Math.max(1, Math.min(5000, limit))) as InvoiceRow[]
   ).map(toInvoice)
+}
+
+/**
+ * The sales orders the BOARD draws — everything not yet finished with.
+ *
+ * ## Finished orders leave, exactly as they do on the buy side
+ *
+ * The owner asked why sales orders were not doing this. They never had it: the
+ * sweep was born as a purchase-order feature — see `listPurchaseOrders`, which
+ * filters on `isSettledPurchaseOrder` — and the sell-side board, a mirror of the
+ * PO board in columns, cards, drag-and-drop and CSS, was never given one. A paid
+ * sales order sat in Payment for ever, and 'paid' is terminal in
+ * INVOICE_TRANSITIONS, so nobody could move it on either.
+ *
+ * A day after a sale is both PAID and SHIPPED it stops being drawn. The filter
+ * is the whole mechanism: nothing is deleted, no status changes, no flag is
+ * written, and Finance → History reads the same table unfiltered and shows the
+ * order exactly as it always did. See `isSettledInvoice`, and read it beside
+ * `isSettledPurchaseOrder` — same constant, same derivation, same reasoning.
+ *
+ * ## Filtered HERE rather than in the SQL above
+ *
+ * The rule is one function in @shared/invoices, shared with the renderer and
+ * with the history view's `settled` flag. Restating it as a WHERE clause would
+ * be a second copy that could disagree with the first — and it is the copy
+ * nothing would test. The buy side filters in exactly the same place for
+ * exactly this reason.
+ */
+export function listOpenInvoices(limit = 2000): Invoice[] {
+  const now = Date.now()
+  return listInvoices(limit).filter((invoice) => !isSettledInvoice(invoice, now))
 }
 
 export function getInvoice(id: string): InvoiceDetail | null {

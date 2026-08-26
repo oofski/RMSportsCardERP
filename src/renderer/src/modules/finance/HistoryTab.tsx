@@ -382,6 +382,14 @@ function SoRow({
         </td>
         <td>
           <span className={`hist-stage st-${row.status}`}>{row.status}</span>
+          {/* The same marker the purchase-order rows have carried all along.
+              It could not be drawn here before, because nothing on the sell side
+              ever left the board — see isSettledInvoice. */}
+          {row.settled && (
+            <span className="hist-filed" title="Off the board, filed here">
+              filed
+            </span>
+          )}
         </td>
       </tr>
       {open && (

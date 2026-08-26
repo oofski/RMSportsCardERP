@@ -83,6 +83,15 @@ export interface SalesOrderHistoryRow {
   cost: number
   /** total − cost. Null when nothing on the order had a recoverable cost. */
   margin: number | null
+  /**
+   * True once it has left the board — see isSettledInvoice.
+   *
+   * The sell-side twin of the same field on a purchase order, added when the
+   * sales board finally got the sweep the PO board has had all along. Without it
+   * this row could not draw the "filed" chip, and the one screen that can tell
+   * somebody where an order went would not say it had gone anywhere.
+   */
+  settled: boolean
   lines: OrderHistoryLine[]
 }
 
