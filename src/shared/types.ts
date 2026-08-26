@@ -1205,6 +1205,18 @@ export interface NewPurchaseOrder {
   paymentTiming?: PaymentTiming | null
   /** Freight the supplier charges. Joins the total — see PurchaseOrder.shippingCost. */
   shippingCost?: number | null
+  /**
+   * KEEP THIS ORDER OPEN. The roadshow tick on the create form.
+   *
+   * A roadshow shop is bought from over a whole week and paid once at the end,
+   * so the order must not close itself the moment its last case is checked in —
+   * see @shared/roadshowTab, which is the whole model in one file. Everything
+   * else about it is an ordinary purchase order, deliberately.
+   *
+   * Omitted or false on every other order, which behaves exactly as it always
+   * has.
+   */
+  ongoing?: boolean
   lines: NewPurchaseOrderLine[]
 }
 

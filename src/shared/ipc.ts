@@ -319,17 +319,23 @@ export const IPC = {
   poUpdateLine: 'po:update-line',
   poRemoveLine: 'po:remove-line',
   poSetFreight: 'po:set-freight',
-  // A ROADSHOW TAB: buy from a shop all week, settle up once.
+  // WHICH OPEN ROADSHOW ORDER STILL HAS THIS PRODUCT ON THE SHELF, so a sales
+  // order line can sell that order's cases rather than whatever is oldest.
+  // See @shared/poStock.
+  poSupplyingOrders: 'po:supplying-orders',
+  // The sales that took units out of one order's stock. A DIFFERENT question
+  // from soDropshipSales, which answers the dropship pairing.
+  poStockSales: 'po:stock-sales',
+  // AN ONGOING (ROADSHOW) ORDER: bought from all week, settled once.
   //
-  // Four channels rather than reusing the ordinary ones, because each does
-  // something an ordinary purchase order deliberately refuses. `poOpenTab` is
-  // find-or-create — there is only ever one open tab per shop, so "open" and
-  // "start" are the same press. `poSetLinePrice` takes a NULLABLE price, which
-  // `poUpdateLine` cannot: null is the operator saying "the shop still has not
-  // told us", which is a different fact from free. `poSettleTab` closes the tab
-  // and pays it in one act, and refuses while any price is missing.
-  // See @shared/roadshowTab for the whole model.
-  poOpenTab: 'po:open-tab',
+  // Three channels rather than reusing the ordinary ones, because each does
+  // something an ordinary purchase order deliberately refuses. `poOpenTabs`
+  // lists the ones still running, so the create form can warn before a second
+  // week's buying starts on a second document. `poSetLinePrice` takes a NULLABLE
+  // price, which `poUpdateLine` cannot: null is the operator saying "the shop
+  // still has not told us", which is a different fact from free. `poSettleTab`
+  // closes the order and pays it in one act, and refuses while any price is
+  // missing. See @shared/roadshowTab for the whole model.
   poOpenTabs: 'po:open-tabs',
   poSetLinePrice: 'po:set-line-price',
   poSettleTab: 'po:settle-tab',

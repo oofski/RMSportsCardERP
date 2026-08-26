@@ -1,5 +1,5 @@
-import { Fragment, useMemo, useState } from 'react'
-import type { InventoryProduct, PurchaseOrderDetail } from '@shared/types'
+import { Fragment, useEffect, useMemo, useState } from 'react'
+import type { InventoryProduct, PurchaseOrder, PurchaseOrderDetail } from '@shared/types'
 import type { Freight } from '@shared/freight'
 import { LOCATION_IDS } from '@shared/inventory'
 import { destinationHoldsStock } from '@shared/purchaseOrders'
@@ -7,7 +7,7 @@ import { isMultiShipment } from '@shared/multiShipment'
 import type { DropshipPurchasePrefill } from '@shared/orders'
 import { api } from '../../lib/api'
 import { useToast } from '../../components/Toast'
-import { Button, Field, Input, Modal } from '../../components/ui'
+import { Button, Checkbox, Field, Input, Modal } from '../../components/ui'
 import { Icon } from '../../components/Icon'
 import { formatMoney } from '../../lib/format'
 import { FreightFields } from '../../components/FreightFields'
@@ -102,6 +102,49 @@ export function CreatePurchaseOrderModal({
   })
   /** Freight the supplier charges. Joins the total and the COGS row with it. */
   const [shippingCost, setShippingCost] = useState('')
+  /**
+   * KEEP THIS ORDER OPEN — the roadshow tick.
+   *
+   * A roadshow shop is bought from over a whole week and paid once at the end,
+   * so this order must not close itself the moment its last case is checked in.
+   * A TICK ON THIS FORM rather than a screen of its own: the owner's words were
+   * "instead of having a roadshow tab, just have, like, a roadshow check mark
+   * that I create the purchase order for". It is the same purchase order in
+   * every other respect — same board, same lines, same receiving — which is
+   * exactly what a second kind of document would have cost.
+   */
+  const [ongoing, setOngoing] = useState(false)
+  /**
+   * Orders already running, so the tick can warn rather than refuse.
+   *
+   * Two open orders with one shop splits a week's trading across two amounts
+   * owed to somebody expecting one payment. The app is not in a position to know
+   * that is a mistake — a second one is a real if unusual thing — so it says so
+   * and leaves the decision where it belongs.
+   */
+  const [running, setRunning] = useState<PurchaseOrder[]>([])
+  useEffect(() => {
+    let alive = true
+    void api.purchaseOrders.openTabs().then((rows) => {
+      if (alive) setRunning(Array.isArray(rows) ? rows : [])
+    })
+    return () => {
+      alive = false
+    }
+  }, [])
+  /**
+   * The running orders for THE SUPPLIER BEING TYPED, folded for case.
+   *
+   * A purchase order's supplier is free text — see @shared/purchaseOrders for
+   * why it is not a foreign key — so "Roadshow Dallas" and "roadshow dallas"
+   * have to land on the same warning. An empty supplier box warns about nothing,
+   * because there is nothing yet to be a second of.
+   */
+  const alreadyRunning = useMemo(() => {
+    const who = supplier.trim().toLowerCase()
+    if (!who) return []
+    return running.filter((p) => (p.supplier ?? '').trim().toLowerCase() === who)
+  }, [running, supplier])
   const [lines, setLines] = useState<DraftLine[]>(() =>
     (prefill?.lines ?? []).map((l) => ({
       productId: l.productId,
@@ -374,6 +417,7 @@ export function CreatePurchaseOrderModal({
         notes: notes.trim() || null,
         ...freight,
         shippingCost: shippingCost.trim() === '' ? null : parseFloat(shippingCost),
+        ongoing,
         lines: lines.map((l) => ({
           productId: l.productId,
           quantity: parseInt(l.quantity, 10),
@@ -472,6 +516,48 @@ export function CreatePurchaseOrderModal({
             placeholder="e.g. Net-30, split shipment"
           />
         </Field>
+      </div>
+
+      {/* THE ROADSHOW TICK.
+          Above the freight because it changes what KIND of order this is, and
+          the two fields under it are details of an order whose kind is already
+          decided. The consequence is spelled out on the hint rather than left
+          in the word "ongoing": somebody ticking a box called Roadshow will not
+          otherwise expect the order to stop closing itself. */}
+      <div className="po-ongoing-tick">
+        <Checkbox
+          checked={ongoing}
+          onChange={setOngoing}
+          label="Roadshow — keep this order open"
+          hint={
+            'Buy from this shop all week on one order: it does not close itself when the cases ' +
+            'arrive, prices can be filled in later, and you settle up once at the end.'
+          }
+        />
+        {/* NAMED, not counted. "1 order already open" sends somebody looking;
+            "PO-0042 with Roadshow Dallas" tells them which one to go and look
+            at, which is the only useful version of this warning. */}
+        {ongoing && alreadyRunning.length > 0 && (
+          <div className="qbo-note">
+            <Icon name="Info" size={15} />
+            <div>
+              {alreadyRunning.length === 1 ? (
+                <>
+                  <b>{alreadyRunning[0].poNumber}</b> is already open with{' '}
+                  {alreadyRunning[0].supplier || 'this shop'}. Adding to that one keeps the week on
+                  a single bill — a second open order means two amounts owed to a shop expecting
+                  one payment.
+                </>
+              ) : (
+                <>
+                  <b>{alreadyRunning.length} orders</b> are already open with this shop (
+                  {alreadyRunning.map((o) => o.poNumber).join(', ')}). A week on several bills is a
+                  week nobody can settle in one go.
+                </>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       <FreightFields

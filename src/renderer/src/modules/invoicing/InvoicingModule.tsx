@@ -8,6 +8,7 @@ import type {
 import { useSession } from '../../lib/session'
 import { api } from '../../lib/api'
 import { LIVE, useLiveRefresh } from '../../lib/live'
+import { isTab } from '@shared/roadshowTab'
 import { useToast } from '../../components/Toast'
 import { Button, CenterLoader, Modal } from '../../components/ui'
 import { Icon } from '../../components/Icon'
@@ -18,7 +19,6 @@ import { DropshipSaleStep } from './DropshipSaleStep'
 import { PurchaseOrderReceipt } from './PurchaseOrderReceipt'
 import { CheckTrackingButton } from '../../components/CheckTrackingButton'
 import { SupplyOrderModal } from './SupplyOrderModal'
-import { RoadshowTabsModal } from './RoadshowTabsModal'
 
 /**
  * Invoicing & POs module — the buy side of the business as ONE board:
@@ -61,7 +61,6 @@ export function InvoicingModule({
   const [showCreate, setShowCreate] = useState(false)
   const [dropship, setDropship] = useState<PurchaseOrderDetail | null>(null)
   const [receiptId, setReceiptId] = useState<string | null>(null)
-  const [tabsOpen, setTabsOpen] = useState(false)
 
   /**
    * Somebody arrived here from an Inventory card asking where a case came from,
@@ -326,16 +325,6 @@ export function InvoicingModule({
                 New supply order
               </Button>
             )}
-            {/* A WEEK'S BUYING FROM A ROADSHOW SHOP, which is not a purchase
-                order anybody would think to raise: it stays open for days and
-                is paid once at the end. Its own button, next to New PO, because
-                the two are different acts and "raise a PO and then remember not
-                to close it" is not an instruction anybody follows. */}
-            {canManage && (
-              <Button icon="Store" onClick={() => setTabsOpen(true)}>
-                Roadshow tabs
-              </Button>
-            )}
             {canManage && <CheckTrackingButton onDone={reload} />}
             {canManage && (
               <Button variant="primary" icon="Plus" onClick={() => setShowCreate(true)}>
@@ -382,6 +371,21 @@ export function InvoicingModule({
           // purchase is done; the sale that pays for it has not been written,
           // and this is the one moment when everything it needs is on screen.
           onCreated={(created) => {
+            /**
+             * A ROADSHOW ORDER IS NEVER PROMPTED, whatever its routing.
+             *
+             * The owner's words: "it doesn't prompt me on a roadshow one to
+             * create a sales order". The prompt exists for a dropship, where the
+             * purchase and the sale are two halves of one deal raised in one
+             * sitting. A roadshow order is the opposite shape — it stays open
+             * for a week and the sales come off it as buyers turn up — so
+             * offering to bill it at creation is offering to bill a week that
+             * has not happened.
+             *
+             * Selling out of it happens on the sales order instead, by picking
+             * this order's cases on the line. See @shared/poStock.
+             */
+            if (isTab(created)) return
             // 'stock' is an ordinary purchase onto our own shelf; 'drop' and
             // 'mixed' both have units going somewhere that is not ours, and
             // both are worth offering to bill.
@@ -395,20 +399,6 @@ export function InvoicingModule({
           po={dropship}
           onClose={() => setDropship(null)}
           onDone={reload}
-        />
-      )}
-      {tabsOpen && (
-        <RoadshowTabsModal
-          onClose={() => setTabsOpen(false)}
-          // Straight onto the tab's own document. The receipt is where the week
-          // is actually worked — lines added, prices filled in, settled — and
-          // sending somebody back to hunt for the card on the board would be a
-          // step this button exists to remove.
-          onOpenTab={(poId) => {
-            setTabsOpen(false)
-            setReceiptId(poId)
-            void reload()
-          }}
         />
       )}
       {receiptId && (

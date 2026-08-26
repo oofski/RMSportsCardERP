@@ -1618,4 +1618,18 @@
     gap: 8px;
     margin-left: 26px;
   }
+
+  /* WHICH CASES, on a phone. The product column in the sales-order line table is
+     narrow enough that a flex select beside a label collapsed to nothing but its
+     own dropdown arrow — a control that is visibly there and impossible to read.
+     The label takes the first line and the select takes the width. */
+  .so-source-row {
+    flex-wrap: wrap;
+    row-gap: 3px;
+  }
+  .so-source-select {
+    flex: 1 1 100%;
+    min-width: 110px;
+    height: var(--rm-tap);
+  }
 }

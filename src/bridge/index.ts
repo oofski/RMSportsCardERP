@@ -22,6 +22,7 @@ import { IPC, type AppInfo } from '@shared/ipc'
 import type { Permission } from '@shared/permissions'
 import type { OrderResetInput, OrderResetPreview, OrderResetResult } from '@shared/orderReset'
 import type { FreightPatch } from '@shared/freight'
+import type { SupplyingOrder } from '@shared/poStock'
 import type { BreakBenchDetail, BreakStepState } from '@shared/breakSteps'
 import type { ShippingPerformanceView } from '@shared/performance'
 /** Mirrors SweepResult in main; named here so the bridge stays off the main side. */
@@ -651,16 +652,24 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       setFreight: (id: string, patch: FreightPatch): Promise<Result<PurchaseOrderDetail>> =>
         ipcRenderer.invoke(IPC.poSetFreight, { id, ...patch }),
       /**
-       * This roadshow's running tab, opening one if there is not already one.
+       * Which open roadshow orders still have this product on a given shelf.
        *
-       * FIND-OR-CREATE on purpose. There is only ever one open tab per shop — a
-       * second would split a week's trading across two amounts owed to a shop
-       * expecting one payment — so pressing the button on Monday and pressing it
-       * again on Thursday are the same gesture with the same answer.
+       * Drawn on a sales order line so the operator can sell THAT order's cases.
+       * Empty on almost every product, which is what keeps the chooser off
+       * almost every line — see @shared/poStock.
        */
-      openTab: (supplier: string, location: string): Promise<Result<PurchaseOrderDetail>> =>
-        ipcRenderer.invoke(IPC.poOpenTab, { supplier, location }),
-      /** Every tab still running, oldest first — what the roadshows are owed. */
+      supplyingOrders: (productId: string, location?: string | null): Promise<SupplyingOrder[]> =>
+        ipcRenderer.invoke(IPC.poSupplyingOrders, { productId, location: location ?? null }),
+      /** The sales that took units out of this order's stock, oldest first. */
+      stockSales: (poId: string): Promise<InvoiceDetail[]> =>
+        ipcRenderer.invoke(IPC.poStockSales, poId),
+      /**
+       * Every ongoing order still running, oldest first.
+       *
+       * Read by the create form so it can warn when the supplier being typed
+       * already has one open — a second week's buying landing on a second
+       * document is how a shop expecting one payment ends up owed two.
+       */
       openTabs: (): Promise<PurchaseOrder[]> => ipcRenderer.invoke(IPC.poOpenTabs),
       /**
        * Say what a line cost, or that nobody knows yet.

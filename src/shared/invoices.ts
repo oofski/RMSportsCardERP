@@ -277,6 +277,13 @@ export interface InvoiceLine {
   /** Who shipped a dropshipped line. Null when it came off our own shelf. */
   supplier: string | null
   /**
+   * The purchase order this line's units were taken out of. Null on an ordinary
+   * line, which walked FIFO and claims nothing about where its units came from.
+   */
+  sourcePoId: string | null
+  /** That order's number, for printing. Null when the line names no order. */
+  sourcePoNumber: string | null
+  /**
    * Did this line move stock?
    *
    * DERIVED from the destination rather than stored, for the same reason a PO's
@@ -779,6 +786,20 @@ export interface NewInvoiceLine {
   destination?: string | null
   /** Who shipped it, on a dropshipped line. Null means the order's supplier. */
   supplier?: string | null
+  /**
+   * WHICH PURCHASE ORDER these particular units come out of.
+   *
+   * Null on every ordinary line, and that is not a default so much as the whole
+   * shape of the thing: a sale takes stock oldest-layer-first, which is right
+   * almost always, and this is the exception for an order the business is
+   * buying against and selling out of at the same time. Naming one makes the
+   * consumption take THAT order's layers — see consumeFromPo — so the week with
+   * that shop is costed against its own cases rather than against whatever
+   * happened to be oldest on the shelf.
+   *
+   * Only an OPEN roadshow order is ever offered; see @shared/poStock.
+   */
+  sourcePoId?: string | null
 }
 
 export interface NewInvoice {

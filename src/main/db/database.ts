@@ -4242,6 +4242,42 @@ function migrate(database: Database.Database): void {
   )
   setMeta(database, 'schema_version', '86')
 
+  /**
+   * v87: a sales order line may say WHICH purchase order its units come out of.
+   *
+   * ## The problem it exists for
+   *
+   * A roadshow order stays open for a week, bought against and sold out of the
+   * whole time, and the question asked of it at the end is "what did we make on
+   * this week with this shop". A sale takes stock oldest-layer-first, so without
+   * this the five cases sold on Wednesday are costed against whatever happened
+   * to be oldest on the shelf — a distributor's case from March, at a completely
+   * different price — while the roadshow's own ten sit untouched. The order's
+   * margin then describes somebody else's stock.
+   *
+   * ## Why on the LINE and not on the order
+   *
+   * A sale of five roadshow cases plus a T-shirt off the ordinary shelf is one
+   * document with two different answers on it, and the consumption is per line.
+   * The ORDER-level link (`invoices.source_po_id`) is still what the board and
+   * the deal ticket read, and it is derived from these when they agree — see
+   * soleSourceOrder in @shared/poStock.
+   *
+   * NULL on every line ever written, which is every ordinary sale: no chooser
+   * appears unless an open roadshow order actually holds stock of that product,
+   * and a line that names nothing walks FIFO exactly as it always has.
+   *
+   * NOT a foreign key with a cascade. A purchase order deleted after a sale went
+   * out must not take the sale's line with it — see the v33 note on
+   * source_po_id, which is cleared rather than cascaded for the same reason.
+   */
+  addColumnIfMissing(database, 'invoice_lines', 'source_po_id', 'TEXT')
+  database.exec(
+    `CREATE INDEX IF NOT EXISTS idx_invoice_lines_src_po
+       ON invoice_lines (source_po_id);`
+  )
+  setMeta(database, 'schema_version', '87')
+
   // v41: re-derive every product's average cost from its remaining cost layers.
   //
   // The average used to be stored rounded to the cent, back when every total in

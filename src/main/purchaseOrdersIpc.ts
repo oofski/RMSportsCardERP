@@ -23,6 +23,10 @@ import {
   type VendorSummary
 } from '@shared/purchaseOrders'
 import type { FreightPatch } from '@shared/freight'
+import type { SupplyingOrder } from '@shared/poStock'
+import type { InvoiceDetail } from '@shared/invoices'
+import { supplyingOrders } from './db/provenance'
+import { salesFromPoStock } from './db/invoices'
 import { sweepTracking, type SweepResult } from './tracking/poller'
 import { canRead } from './tracking/read'
 import type { Permission } from '@shared/permissions'
@@ -49,7 +53,6 @@ import {
   removePurchaseOrderLine,
   setPurchaseOrderPaid,
   setPurchaseOrderStatus,
-  openRoadshowTab,
   listOpenRoadshowTabs,
   setPurchaseOrderLinePrice,
   settleRoadshowTab
@@ -413,6 +416,25 @@ export function registerPurchaseOrdersIpc(): void {
   )
 
   /**
+   * WHICH OPEN ROADSHOW ORDER STILL HOLDS THIS PRODUCT.
+   *
+   * A read, drawn on a sales order line. Bare arrays like every other read on
+   * this channel family — see the note on IPC.poOpenTabs for what a Result
+   * envelope does here.
+   */
+  ipcMain.handle(
+    IPC.poSupplyingOrders,
+    (_e, payload: { productId: string; location?: string | null }): SupplyingOrder[] =>
+      can('module.invoicing')
+        ? supplyingOrders(String(payload?.productId ?? ''), payload?.location ?? null)
+        : []
+  )
+
+  ipcMain.handle(IPC.poStockSales, (_e, poId: string): InvoiceDetail[] =>
+    can('module.invoicing') ? salesFromPoStock(String(poId ?? '')) : []
+  )
+
+  /**
    * THE ROADSHOW TAB: open it, price a line, settle the week.
    *
    * All three behind the same invoicing permission every other PO write uses.
@@ -420,37 +442,6 @@ export function registerPurchaseOrdersIpc(): void {
    * close itself, so somebody who may raise a PO may run a tab — a separate
    * grant would be a second thing to remember to give the person doing the
    * buying.
-   */
-  ipcMain.handle(
-    IPC.poOpenTab,
-    (_e, payload: { supplier: string; location?: string }): Result<PurchaseOrderDetail> => {
-      try {
-        const actor = requireInvoicing()
-        const res = openRoadshowTab(
-          String(payload?.supplier ?? ''),
-          String(payload?.location ?? '') || 'RM',
-          actor?.id ?? null
-        )
-        return res.error
-          ? { ok: false, error: res.error }
-          : { ok: true, data: res.po as PurchaseOrderDetail }
-      } catch (err) {
-        return fail(err)
-      }
-    }
-  )
-
-  /**
-   * A BARE ARRAY, not a Result — the same shape `poList` returns, and this was a
-   * real bug for about an hour.
-   *
-   * The bridge types every plain read on this channel family as the list itself,
-   * so a Result envelope arrived at the picker as an object and `for (const t of
-   * tabs)` threw before a single row was drawn. Typecheck could not see it: the
-   * two sides are joined by a channel name, not by a type.
-   *
-   * Refused as an empty list rather than an error, exactly as `poList` does.
-   * Somebody without the permission never sees the button that opens this.
    */
   ipcMain.handle(IPC.poOpenTabs, (): PurchaseOrder[] =>
     can('module.invoicing') ? listOpenRoadshowTabs() : []

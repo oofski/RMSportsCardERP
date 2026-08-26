@@ -39,6 +39,7 @@ import { describeDims, hasDims, readyToShipBlockedReason } from '@shared/fulfill
 import { dealTicketRefFor } from './dealTickets'
 import { foldTicketIntoDocument, issueDealTicket, markDropshipPair } from './dealTickets'
 import { isOpenTab } from '@shared/roadshowTab'
+import { soleSourceOrder } from '@shared/poStock'
 
 /**
  * What to STORE in a line's destination column.
@@ -515,6 +516,8 @@ interface LineRow {
   /** NULL means "the order's location" — see toLine. */
   destination: string | null
   supplier: string | null
+  source_po_id: string | null
+  source_po_number: string | null
 }
 
 function asStatus(v: string): InvoiceStatus {
@@ -652,6 +655,8 @@ function toLine(r: LineRow, headerLocation: string): InvoiceLine {
     fulfilledAt: r.fulfilled_at ?? null,
     destination,
     supplier: (r.supplier ?? '').trim() || null,
+    sourcePoId: r.source_po_id ?? null,
+    sourcePoNumber: (r.source_po_number ?? '').trim() || null,
     // DERIVED, never stored. A stored flag is a second source of truth that
     // drifts the first time a line is re-routed.
     dropship: !destinationHoldsStock(destination)
@@ -755,7 +760,14 @@ const INVOICE_COLS = `id, invoice_number, customer_id, customer_name, email, ter
 
 const LINE_COLS = `id, invoice_id, position, item, product_id, sku, description, quantity, rate,
                    amount, tax_rate, class_name, qty_fulfilled, fulfilled_at,
-                   destination, supplier`
+                   destination, supplier, source_po_id,
+                   -- The NUMBER beside the id, because a screen prints PO-0042 and
+                   -- nothing prints a uuid. A LEFT join by subquery rather than a
+                   -- real one: a purchase order deleted after the sale went out
+                   -- leaves the line saying nothing rather than dropping it, which
+                   -- is the same bargain source_po_id makes on the header.
+                   (SELECT po.po_number FROM purchase_orders po
+                     WHERE po.id = invoice_lines.source_po_id) AS source_po_number`
 
 /** Newest first — an invoice list is read from the top. */
 export function listInvoices(limit = 200): Invoice[] {
@@ -983,7 +995,12 @@ export function saveInvoice(
       // Carried through as typed; `lineDestination` decides what is actually
       // stored, because "same as the header" has to become NULL to inherit.
       destination: clean(l.destination),
-      supplier: clean(l.supplier)
+      supplier: clean(l.supplier),
+      // WHICH PURCHASE ORDER THESE UNITS CAME OUT OF, when the operator said.
+      // Null on every ordinary line — see @shared/poStock for why only an open
+      // roadshow order is ever offered, and consumeFromPo for what naming one
+      // does to the cost.
+      sourcePoId: clean(l.sourcePoId)
     }
   })
 
@@ -1237,7 +1254,12 @@ export function saveInvoice(
         const dest = lineDestination(l.destination, stockLocation) ?? stockLocation
         return destinationHoldsStock(dest)
       })
-      .map((l) => ({ position: l.position, productId: l.productId as string, quantity: l.quantity }))
+      .map((l) => ({
+        position: l.position,
+        productId: l.productId as string,
+        quantity: l.quantity,
+        sourcePoId: l.sourcePoId
+      }))
     releaseInvoiceStock(db, id)
     const moved = applyInvoiceStock(
       db,
@@ -1315,11 +1337,65 @@ export function saveInvoice(
       `INSERT INTO invoice_lines
          (id, invoice_id, position, item, product_id, sku, description, quantity, rate, amount,
           tax_rate, class_name, qty_fulfilled, fulfilled_at, created_at, updated_at,
-          destination, supplier)
+          destination, supplier, source_po_id)
        VALUES (@id, @invoiceId, @position, @item, @productId, @sku, @description, @quantity,
                @rate, @amount, @taxRate, @className, @qtyFulfilled, @fulfilledAt, @stamp, @stamp,
-               @destination, @supplier)`
+               @destination, @supplier, @sourcePoId)`
     )
+    /**
+     * A SALE OUT OF ONE PURCHASE ORDER'S STOCK JOINS THAT ORDER'S DEAL TICKET.
+     *
+     * "The deal ticket is just linked to the ongoing PO until the PO is paid
+     * out" — a week of buying from one shop and everything sold out of it is one
+     * deal, and the register should say so under one number.
+     *
+     * ## NOT by setting invoices.source_po_id
+     *
+     * That column means one specific thing: this sale is the sell-half of a
+     * DROPSHIP. `salesOrderKindOf` reads it, and a sale of our own roadshow
+     * cases would start reporting as "mixed" — part drop-shipped — on a document
+     * where every unit came off our shelf. The provenance already lives on the
+     * lines, which is the honest place for it: one sale can have five roadshow
+     * cases and a T-shirt off ordinary stock, and those are two different
+     * answers on one document.
+     *
+     * ## Which is why it needs the lines to AGREE
+     *
+     * `soleSourceOrder` yields null when two lines name two orders. A deal
+     * ticket is a claim about one deal, and folding a sale into one of the two
+     * orders that supplied it would put a week's figure on the wrong shop.
+     *
+     * Runs on EVERY save, including edits, and is idempotent: the fold returns
+     * false when it has already happened, which is what keeps the log from
+     * gaining a line every time somebody fixes a typo.
+     */
+    const fromOrder = soleSourceOrder(lines)
+    if (fromOrder) {
+      const src = db
+        .prepare(`SELECT po_number, supplier FROM purchase_orders WHERE id = ?`)
+        .get(fromOrder) as { po_number: string; supplier: string | null } | undefined
+      if (src) {
+        const folded = foldTicketIntoDocument(
+          db,
+          { kind: 'po', id: fromOrder },
+          { kind: 'so', id },
+          actorId
+        )
+        if (folded) {
+          recordOrderEvent('so', id, 'link', {
+            detail: `Sold out of ${src.po_number}${src.supplier ? ` (${src.supplier})` : ''}`,
+            actorId,
+            db
+          })
+          recordOrderEvent('po', fromOrder, 'link', {
+            detail: `Sold on to ${clean(input.customerName) ?? 'a buyer'} out of this order's stock`,
+            actorId,
+            db
+          })
+        }
+      }
+    }
+
     for (const l of lines) {
       const key = l.productId ? `p:${l.productId}` : `i:${l.item.trim().toLowerCase()}`
       const carried = priorFulfilled.get(key)
@@ -1739,6 +1815,37 @@ export function dropshipSalesFor(poId: string): InvoiceDetail[] {
   const rows = getDb()
     .prepare(`SELECT id FROM invoices WHERE source_po_id = ? ORDER BY created_at ASC, id ASC`)
     .all(poId) as Array<{ id: string }>
+  return rows.map((r) => getInvoice(r.id)).filter((i): i is InvoiceDetail => i !== null)
+}
+
+/**
+ * Every sales order that took units OUT OF this purchase order's stock.
+ *
+ * A DIFFERENT QUESTION from `dropshipSalesFor`, and therefore a different read.
+ * That one answers "which sales was this purchase raised to supply" — the
+ * dropship pairing, off `invoices.source_po_id`. This answers "which sales have
+ * sold the cases this order brought in", off the LINES, and the two are only
+ * the same document by coincidence.
+ *
+ * It is the question a roadshow order is opened to ask: the order stays running
+ * all week, cases go on it and come off it, and what somebody wants at the end
+ * is the list of who bought them.
+ *
+ * DISTINCT, because one sale can have three lines out of the same order and is
+ * still one sale on the list.
+ */
+export function salesFromPoStock(poId: string): InvoiceDetail[] {
+  const id = String(poId ?? '').trim()
+  if (!id) return []
+  const rows = getDb()
+    .prepare(
+      `SELECT DISTINCT i.id, i.created_at
+         FROM invoice_lines l
+         JOIN invoices i ON i.id = l.invoice_id
+        WHERE l.source_po_id = ?
+        ORDER BY i.created_at ASC, i.id ASC`
+    )
+    .all(id) as Array<{ id: string }>
   return rows.map((r) => getInvoice(r.id)).filter((i): i is InvoiceDetail => i !== null)
 }
 

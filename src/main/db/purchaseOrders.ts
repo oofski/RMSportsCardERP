@@ -739,13 +739,24 @@ export function createPurchaseOrder(
     db.prepare(
       `INSERT INTO purchase_orders
          (id, po_number, supplier, notes, status, location, total, created_by, created_at, updated_at, ordered_at,
-          carrier, service, tracking_number, payment_timing, shipping_cost)
+          carrier, service, tracking_number, payment_timing, shipping_cost, tab_opened_at)
        VALUES
          (@id, @po_number, @supplier, @notes, 'ordered', @location, @total, @created_by, @ts, @ts, @ts,
-          @carrier, @service, @tracking_number, @payment_timing, @shipping_cost)`
+          @carrier, @service, @tracking_number, @payment_timing, @shipping_cost, @tab_opened_at)`
     ).run({
       id,
       po_number: poNumber,
+      /**
+       * THE ROADSHOW TICK, stamped at creation.
+       *
+       * The one thing that makes this order stay open: `completePoIfFullyReceived`
+       * asks isOpenTab before it closes anything, so an order carrying this
+       * timestamp is bought against and checked in all week and never shuts
+       * itself. Everything else about it is an ordinary purchase order — same
+       * board, same lines, same receiving, same P&L — which is what a second
+       * document type would have cost. See @shared/roadshowTab.
+       */
+      tab_opened_at: input.ongoing ? ts : null,
       supplier: headerSupplier,
       notes: input.notes?.trim() || null,
       location,
@@ -1479,69 +1490,14 @@ export function removePurchaseOrderLine(poId: string, lineId: string): PoStatusR
 }
 
 /**
- * THIS ROADSHOW'S OPEN TAB, or a new one.
+ * Every ongoing (roadshow) order still running, oldest first.
  *
- * The button behind "add what we bought from Roadshow Dallas today". It is
- * deliberately find-or-create rather than two controls: there is only ever ONE
- * open tab per shop — a second would split a week's trading across two amounts
- * owed to a shop expecting one payment — so "open the tab" and "start the tab"
- * are the same gesture with the same outcome, and asking somebody to know which
- * one applies is asking them to remember whether they bought anything on Monday.
- *
- * ## The uniqueness is enforced here, not by a constraint
- *
- * A UNIQUE index cannot express "one row per supplier WHERE tab_closed_at IS
- * NULL" portably, and the read below is inside the same transaction as the
- * insert, so two benches pressing at once serialise on SQLite's write lock and
- * the second one finds the first one's tab.
- *
- * ## It is an ordinary purchase order in every other respect
- *
- * Same numbering, same board, same deal ticket, same receiving. What differs is
- * the two timestamps — see @shared/roadshowTab for why that is the whole model.
+ * Read by the create form, which warns when the supplier being typed already has
+ * one open. NOT a refusal — two open orders with one shop is a real if unusual
+ * thing, and the app is not in a position to know it is a mistake. What it can
+ * do is say so before a second week's buying starts landing on a new document
+ * while the first is still owed.
  */
-export function openRoadshowTab(
-  supplier: string,
-  location: string,
-  actorId: string | null
-): PoStatusResult {
-  const who = String(supplier ?? '').trim()
-  if (!who) return { po: null, error: 'Say which roadshow.' }
-  const db = getDb()
-  const existing = db
-    .prepare(
-      `SELECT id FROM purchase_orders
-        WHERE tab_opened_at IS NOT NULL AND tab_closed_at IS NULL
-          AND status != 'cancelled'
-          AND LOWER(TRIM(COALESCE(supplier, ''))) = LOWER(?)
-        ORDER BY tab_opened_at ASC LIMIT 1`
-    )
-    .get(who) as { id: string } | undefined
-  if (existing) return { po: getPurchaseOrder(existing.id) }
-
-  // EMPTY ON PURPOSE. A tab starts with nothing on it and grows all week;
-  // createPurchaseOrder is happy with no lines, and seeding a placeholder line
-  // would be a case nobody bought sitting in the week's cost of goods.
-  const made = createPurchaseOrder(
-    { supplier: who, location, lines: [] },
-    actorId
-  )
-  const ts = nowIso()
-  getDb()
-    .prepare(
-      `UPDATE purchase_orders SET tab_opened_at = ?, updated_at = ? WHERE id = ?`
-    )
-    .run(ts, ts, made.id)
-  recordOrderEvent('po', made.id, 'stage', {
-    toStage: 'ordered',
-    detail: `Opened as a running tab with ${who} — it stays open until it is settled`,
-    actorId,
-    db: getDb()
-  })
-  return { po: getPurchaseOrder(made.id) }
-}
-
-/** Every roadshow tab still running, oldest first — the ones somebody owes. */
 export function listOpenRoadshowTabs(): PurchaseOrder[] {
   return (
     getDb()
@@ -3005,6 +2961,21 @@ export function forceDeletePurchaseOrder(
       ).run(id)
     }
 
+    /**
+     * EVERY POINTER AT THIS ORDER LETS GO, exactly as the ordinary delete makes
+     * them. Missed here first time round, and the test caught it: a force delete
+     * is the path used on the orders that are hardest to get rid of, so it is
+     * the LAST place that should leave a dangling reference behind.
+     *
+     * The sale keeps its units. Which order they came out of is a label on the
+     * line, and deleting the purchase order removes the label, not the line.
+     */
+    db.prepare(`UPDATE invoice_lines SET source_po_id = NULL WHERE source_po_id = ?`).run(id)
+    db.prepare(`UPDATE invoices SET source_po_id = NULL, updated_at = ? WHERE source_po_id = ?`).run(
+      nowIso(),
+      id
+    )
+
     // Same two statements the ordinary delete runs. Lines cascade; the scan
     // history keeps its rows with po_id set to NULL.
     voidPoCogs(db, id)
@@ -3186,6 +3157,21 @@ export function deletePurchaseOrder(
         db
       })
     }
+
+    /**
+     * AND SO DO THE LINES THAT SAID THEY CAME OUT OF IT.
+     *
+     * `invoice_lines.source_po_id` names the order a line's units were taken
+     * from. Left pointing at a deleted row the line would keep claiming a
+     * provenance nothing can open — and the sale it is on may not be one of the
+     * rows above, because a sale can name this order on a line without ever
+     * having been LINKED to it as a dropship.
+     *
+     * The stock does not move. Those units left the shelf when the sale went
+     * out; which order they had come from is a label on the line, and deleting
+     * the purchase order removes the label, not the sale.
+     */
+    db.prepare(`UPDATE invoice_lines SET source_po_id = NULL WHERE source_po_id = ?`).run(id)
 
     // Drop the COGS row explicitly rather than relying on the cascade, so the
     // ledger is corrected the same way cancelling would correct it.

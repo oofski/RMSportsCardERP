@@ -325,18 +325,21 @@ export function markDropshipPair(
  * the register failing a real piece of trade — see the note at the top of this
  * file. So a missing ticket on either side is skipped, and a member already
  * folded into somebody ELSE is left exactly where it is rather than stolen.
+ *
+ * Returns whether it actually folded, so a caller that runs on every save can
+ * log the fact once rather than once per keystroke.
  */
 export function foldTicketIntoDocument(
   db: Database.Database,
   target: { kind: 'po' | 'so'; id: string },
   member: { kind: 'po' | 'so'; id: string },
   actorId: string | null
-): void {
+): boolean {
   try {
     const targetTicket = readTicketFor(db, target.kind, target.id)
     const memberTicket = readTicketFor(db, member.kind, member.id)
-    if (!targetTicket || !memberTicket) return
-    if (targetTicket.id === memberTicket.id) return
+    if (!targetTicket || !memberTicket) return false
+    if (targetTicket.id === memberTicket.id) return false
 
     // JOINING A MEMBER JOINS ITS GROUP — the one-level-deep rule mergeDealTickets
     // states. A tab whose own ticket had been combined into something bigger
@@ -352,10 +355,10 @@ export function foldTicketIntoDocument(
       // A parent that is ITSELF merged means the register is already in a state
       // this function does not understand. Leaving the sale on its own number is
       // the harmless outcome; guessing at a root is not.
-      else if (parent) return
+      else if (parent) return false
     }
-    if (memberTicket.mergedInto === root.id) return
-    if (memberTicket.mergedInto) return
+    if (memberTicket.mergedInto === root.id) return false
+    if (memberTicket.mergedInto) return false
 
     const stamp = new Date().toISOString()
     // Anything the member already speaks for comes with it, or those rows end up
@@ -383,10 +386,15 @@ export function foldTicketIntoDocument(
       actorId,
       db
     })
+    // TRUE ONLY WHEN IT ACTUALLY FOLDED, which is what lets a caller that runs
+    // on every save — saveInvoice does — write its own line to the log exactly
+    // once. Every early return above is a no-op and says so.
+    return true
   } catch {
     // Same bargain as issueDealTicket and markDropshipPair: a register that
     // failed to combine costs a reference number on one screen. A link that
     // refused costs the operator their work.
+    return false
   }
 }
 

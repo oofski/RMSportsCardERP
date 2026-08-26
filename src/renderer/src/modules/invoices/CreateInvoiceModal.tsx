@@ -36,6 +36,7 @@ import { destinationHoldsStock } from '@shared/purchaseOrders'
 import { DestinationSelect } from '../invoicing/PartySelect'
 import { CategoryLogo } from '../inventory/CategoryLogo'
 import { POCatalogTypeahead } from '../invoicing/POCatalogTypeahead'
+import { SourceOrderPicker } from './SourceOrderPicker'
 import { CustomerTypeahead } from './CustomerTypeahead'
 import { QboReadiness } from './QboReadiness'
 import { InvoiceStatusChip, formatDay } from './helpers'
@@ -108,6 +109,15 @@ interface DraftLine {
   destination: string
   /** Who shipped a dropshipped line. Empty means nobody has said. */
   supplier: string
+  /**
+   * WHICH PURCHASE ORDER'S CASES this line is selling. Empty is ordinary stock.
+   *
+   * Only ever set to an OPEN roadshow order that actually has some of this
+   * product on the shelf — see @shared/poStock. Naming one makes the sale take
+   * that order's cost layers rather than whatever is oldest, which is what lets
+   * the week with that shop be costed against its own cases.
+   */
+  sourcePoId: string
 }
 
 function today(): string {
@@ -241,7 +251,11 @@ export function CreateInvoiceModal({
         amount: l.rate ? String(lineAmount(l.quantity, l.rate)) : '',
         amountEdited: false,
         destination: l.destination ?? '',
-        supplier: l.supplier ?? ''
+        supplier: l.supplier ?? '',
+        // A prefill comes from a DROPSHIP purchase, which is the other kind of
+        // link entirely — those units never touched a shelf, so there is no
+        // order's cases to sell out of.
+        sourcePoId: ''
       }))
     }
     return (invoice?.lines ?? []).map((l) => ({
@@ -259,7 +273,10 @@ export function CreateInvoiceModal({
       // the order's location — so the picker shows what the line actually says
       // rather than a blank that means "ask the header".
       destination: l.destination ?? '',
-      supplier: l.supplier ?? ''
+      supplier: l.supplier ?? '',
+      // Read back so reopening an order shows which cases it sold, and re-saving
+      // it does not quietly turn them into ordinary stock.
+      sourcePoId: l.sourcePoId ?? ''
     }))
   })
   const [error, setError] = useState('')
@@ -373,7 +390,10 @@ export function CreateInvoiceModal({
           // Empty inherits the order's location, which is what nearly every line
           // wants. Somebody drop-shipping changes this one line.
           destination: '',
-          supplier: ''
+          supplier: '',
+          // ORDINARY STOCK until somebody says otherwise. A line that names no
+          // order walks FIFO exactly as every sale always has.
+          sourcePoId: ''
         })
       ]
     })
@@ -444,6 +464,7 @@ export function CreateInvoiceModal({
       return {
         item: l.item,
         productId: l.productId || null,
+        sourcePoId: l.sourcePoId || null,
         sku: l.sku || null,
         description: l.description || null,
         quantity: parseFloat(l.quantity) || 0,
@@ -867,6 +888,23 @@ export function CreateInvoiceModal({
                           className="inv-line-desc"
                           onChange={(e) => patch(l.key, { description: e.target.value })}
                         />
+                        {/* WHICH CASES. Renders nothing at all unless an open
+                            roadshow order actually holds some of this product
+                            on this shelf, which is almost never — so an
+                            ordinary line is exactly what it always was. A
+                            DROPSHIPPED line never gets it either: those units
+                            went supplier-to-buyer and never sat on a shelf, so
+                            there is no order's stock to sell out of. */}
+                        {l.productId && !drop && (
+                          <SourceOrderPicker
+                            productId={l.productId}
+                            productName={l.item}
+                            location={from}
+                            quantity={parseFloat(l.quantity) || 0}
+                            value={l.sourcePoId}
+                            onChange={(poId) => patch(l.key, { sourcePoId: poId })}
+                          />
+                        )}
                       </td>
                       <td className="num">
                         {/* The box stays for "make it 40"; the arrows are for

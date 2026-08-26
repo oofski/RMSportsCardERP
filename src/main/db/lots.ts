@@ -338,6 +338,93 @@ export function consumeFifo(db: Database, productId: string, location: string, q
 }
 
 /**
+ * Take units out of ONE PURCHASE ORDER'S layers, oldest of those first.
+ *
+ * ## Why this exists beside consumeFifo rather than inside it
+ *
+ * A roadshow order stays open for a week, bought against and sold out of the
+ * whole time, and the question asked of it at the end is what the week with
+ * that shop made. Walked FIFO, the cases sold on Wednesday are costed against
+ * whatever was oldest on the whole shelf — a distributor's case from March at a
+ * different price — while the roadshow's own ten sit untouched, and the order's
+ * margin becomes a number about somebody else's stock.
+ *
+ * So the walk is the same walk, over a narrower set: the layers that THIS order
+ * opened, still oldest-first among themselves. See @shared/poStock.
+ *
+ * ## It refuses rather than finishing the job from elsewhere
+ *
+ * Short by two, this throws. It does NOT take what the order has and let FIFO
+ * find the rest: the operator said these units were that order's, the document
+ * would say so, and the two that came from somewhere else would be costed
+ * against a different purchase silently. The screen refuses before it gets here
+ * — see supplyRefusal, which owns the words — and this is the gate behind it,
+ * because a screen is not a gate.
+ *
+ * ## The join is po_line_receipts, and nothing was migrated for it
+ *
+ * One row per receipt, carrying the exact lot it opened. Same join
+ * `stockSources` reads from the other end. A `po_id` column on `inventory_lots`
+ * would be a second copy of a fact already held, and the two would drift the
+ * first time a receipt was reversed.
+ */
+export function consumeFromPo(
+  db: Database,
+  productId: string,
+  location: string,
+  qty: number,
+  poId: string,
+  poNumber?: string
+): LotSlice[] {
+  let need = roundQty(qty, allowsFractionalQty(db, productId))
+  if (!(need > 0)) return []
+  const label = (poNumber ?? '').trim() || 'that purchase order'
+  const lots = db
+    .prepare(
+      `SELECT l.id, l.qty_remaining, l.unit_cost FROM inventory_lots l
+         JOIN po_line_receipts r ON r.lot_id = l.id
+        WHERE l.product_id = ? AND l.location = ? AND l.qty_remaining > 0
+          AND r.po_id = ?
+        ORDER BY l.received_at ASC, l.rowid ASC`
+    )
+    .all(productId, location, poId) as Array<{
+    id: string
+    qty_remaining: number
+    unit_cost: number
+  }>
+
+  const set = db.prepare('UPDATE inventory_lots SET qty_remaining = ? WHERE id = ?')
+  /**
+   * SNAP IS ASKED OF THIS ORDER'S LAYERS ONLY, and that is deliberate.
+   *
+   * maySnapShelf decides whether a hair of fractional dust left in a layer may
+   * be zeroed, and the rule is that it may only when the ask is clearing what it
+   * is asked of. Passing the whole shelf here would let a take that empties this
+   * order's four cases zero out dust belonging to layers this walk never
+   * touched — stock the inventory row is still counting.
+   */
+  const snap = maySnapShelf(lots, need)
+  const slices: LotSlice[] = []
+  for (const lot of lots) {
+    if (need <= QTY_EPS) break
+    const take = normQty(Math.min(need, lot.qty_remaining))
+    if (!(take > 0)) continue
+    const left = normQty(lot.qty_remaining - take)
+    set.run(snap && left <= QTY_SNAP ? 0 : left, lot.id)
+    slices.push({ lotId: lot.id, qty: take, unitCost: lot.unit_cost })
+    need = normQty(need - take)
+  }
+  if (need > quantizationSlack(qty)) {
+    const had = normQty(roundQty(qty, allowsFractionalQty(db, productId)) - need)
+    throw new Error(
+      `${label} has ${had} of that left at ${location}, not ${qty}. Lower the quantity, or sell ` +
+        'it from ordinary stock — a line cannot be part one order and part another.'
+    )
+  }
+  return slices
+}
+
+/**
  * The open cost layers for one (product, location), oldest first — what the
  * picker puts on screen.
  *

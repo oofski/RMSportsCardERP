@@ -48,6 +48,9 @@ const po = require('../src/main/db/purchaseOrders')
 const invoices = require('../src/main/db/invoices')
 const inventory = require('../src/main/db/inventory')
 const dealTickets = require('../src/main/db/dealTickets')
+const prov = require('../src/main/db/provenance')
+const { offerableOrders, soleSourceOrder, supplyRefusal } = require('../src/shared/poStock')
+const { salesOrderKindOf } = require('../src/shared/invoices')
 const {
   isOpenTab,
   isRoadshowLocation,
@@ -168,21 +171,31 @@ ok(
 // ---------------------------------------------------------------------------
 console.log('=== 2. THE TAB DOES NOT CLOSE ITSELF ===')
 // ---------------------------------------------------------------------------
-const opened = po.openRoadshowTab('Roadshow Dallas', 'RM', 'emp_owner')
-ok(!opened.error, 'a tab opens with Roadshow Dallas', String(opened.error))
-const tabId = opened.po.id
-ok(!!opened.po.tabOpenedAt && !opened.po.tabClosedAt, 'and it is running')
-ok(opened.po.lineCount === 0, 'EMPTY ON PURPOSE — a tab grows all week and starts with nothing on it')
-ok(opened.po.status === 'ordered', 'it is an ordinary purchase order in Ordered, not a fifth status')
-
-const again = po.openRoadshowTab('roadshow dallas', 'RM', 'emp_owner')
-ok(
-  again.po.id === tabId,
-  'PRESSING THE BUTTON AGAIN FINDS THE SAME TAB, case and all — a second would split a week across two amounts owed',
-  `${again.po.id} vs ${tabId}`
+// THE ROADSHOW TICK ON AN ORDINARY CREATE. There is no separate document and no
+// separate screen: `ongoing` is one flag on the form somebody already uses to
+// raise a purchase order.
+const opened = po.createPurchaseOrder(
+  { supplier: 'Roadshow Dallas', location: 'RM', ongoing: true, lines: [] },
+  'emp_owner'
 )
-const other = po.openRoadshowTab('Roadshow Tulsa', 'RM', 'emp_owner')
-ok(other.po.id !== tabId, 'a different shop gets its own tab')
+const tabId = opened.id
+ok(!!opened.tabOpenedAt && !opened.tabClosedAt, 'a ticked order is open and running')
+ok(opened.lineCount === 0, 'EMPTY ON PURPOSE — it grows all week and starts with nothing on it')
+ok(opened.status === 'ordered', 'and it is an ordinary purchase order in Ordered, not a fifth status')
+
+// UNTICKED IS UNCHANGED, which is the assertion that keeps every other purchase
+// order in the app out of this feature.
+const plainOne = po.createPurchaseOrder(
+  { supplier: 'Cardinal Distribution', location: 'RM', lines: [] },
+  'emp_owner'
+)
+ok(!plainOne.tabOpenedAt, 'AN UNTICKED ORDER IS NOT ONE — the flag costs nothing when it is off')
+
+const other = po.createPurchaseOrder(
+  { supplier: 'Roadshow Tulsa', location: 'RM', ongoing: true, lines: [] },
+  'emp_owner'
+)
+ok(other.id !== tabId, 'a different shop gets its own order')
 
 // Tuesday: one case, priced.
 const tue = po.addPurchaseOrderLines(tabId, [{ productId: 'p_tue', quantity: 1, unitPrice: 400 }])
@@ -239,7 +252,7 @@ ok(!!listed, 'the tab is on the open-tabs list')
 ok(listed.pendingPriceCount === 1, 'carrying the same count to the picker screen')
 ok(
   po.listOpenRoadshowTabs().length === 2,
-  'both shops with a tab running are listed, oldest first',
+  'both shops with an order running are listed, oldest first',
   String(po.listOpenRoadshowTabs().length)
 )
 
@@ -381,11 +394,14 @@ const bigger = po.createPurchaseOrder(
 const biggerTicket = db
   .prepare(`SELECT id FROM deal_tickets WHERE document_kind = 'po' AND document_id = ?`)
   .get(bigger.id) as any
-const grouped = po.openRoadshowTab('Roadshow Amarillo', 'RM', 'emp_owner')
-po.addPurchaseOrderLines(grouped.po.id, [{ productId: 'p_tue', quantity: 1, unitPrice: 110 }])
+const grouped = po.createPurchaseOrder(
+  { supplier: 'Roadshow Amarillo', location: 'RM', ongoing: true, lines: [] },
+  'emp_owner'
+)
+po.addPurchaseOrderLines(grouped.id, [{ productId: 'p_tue', quantity: 1, unitPrice: 110 }])
 const groupedTicket = db
   .prepare(`SELECT id FROM deal_tickets WHERE document_kind = 'po' AND document_id = ?`)
-  .get(grouped.po.id) as any
+  .get(grouped.id) as any
 ok(
   dealTickets.mergeDealTickets(biggerTicket.id, [groupedTicket.id], 'emp_owner').ok,
   "the tab's own ticket is combined into a bigger deal"
@@ -399,7 +415,7 @@ const offGrouped = invoices.saveInvoice(
   },
   'emp_owner'
 )
-invoices.linkDropshipPair(grouped.po.id, offGrouped.id, 'emp_owner')
+invoices.linkDropshipPair(grouped.id, offGrouped.id, 'emp_owner')
 const chained = db
   .prepare(`SELECT merged_into FROM deal_tickets WHERE document_kind = 'so' AND document_id = ?`)
   .get(offGrouped.id) as any
@@ -437,9 +453,12 @@ const claimedTicket = db
 const combined = dealTickets.mergeDealTickets(spokenTicket.id, [claimedTicket.id], 'emp_owner')
 ok(combined.ok, 'a sale is combined into another deal by hand first', String(combined.error))
 
-const wichita = po.openRoadshowTab('Roadshow Wichita', 'RM', 'emp_owner')
-po.addPurchaseOrderLines(wichita.po.id, [{ productId: 'p_tue', quantity: 1, unitPrice: 150 }])
-const stolen = invoices.linkDropshipPair(wichita.po.id, claimed.id, 'emp_owner')
+const wichita = po.createPurchaseOrder(
+  { supplier: 'Roadshow Wichita', location: 'RM', ongoing: true, lines: [] },
+  'emp_owner'
+)
+po.addPurchaseOrderLines(wichita.id, [{ productId: 'p_tue', quantity: 1, unitPrice: 150 }])
+const stolen = invoices.linkDropshipPair(wichita.id, claimed.id, 'emp_owner')
 ok(stolen.ok, 'and is then linked to a running tab', String(stolen.error))
 const stillTheirs = db
   .prepare(`SELECT merged_into FROM deal_tickets WHERE document_kind = 'so' AND document_id = ?`)
@@ -509,15 +528,17 @@ ok((late.error as string).includes('settled'), 'and it says so')
 const twice = po.settleRoadshowTab(tabId, 'emp_owner')
 ok(!!twice.error, 'and it cannot be settled twice')
 
-const fresh = po.openRoadshowTab('Roadshow Dallas', 'RM', 'emp_owner')
-ok(
-  fresh.po.id !== tabId,
-  'PRESSING THE BUTTON AGAIN NOW STARTS A NEW WEEK — find-or-create only ever finds an OPEN one',
-  `${fresh.po.id} vs ${tabId}`
+// A NEW WEEK IS A NEW ORDER, raised the same way the first one was.
+const fresh = po.createPurchaseOrder(
+  { supplier: 'Roadshow Dallas', location: 'RM', ongoing: true, lines: [] },
+  'emp_owner'
 )
-
-const noName = po.openRoadshowTab('  ', 'RM', 'emp_owner')
-ok(!!noName.error, 'and a tab with nobody on the other side of it is refused')
+ok(fresh.id !== tabId, 'the next week is its own order, ticked the same way')
+ok(!!fresh.tabOpenedAt && !fresh.tabClosedAt, 'and it is open')
+ok(
+  po.listOpenRoadshowTabs().some((t: any) => t.id === fresh.id),
+  'THE CREATE FORM CAN SEE IT — which is what lets it warn before a third one is started'
+)
 
 // ---------------------------------------------------------------------------
 console.log('=== 8. an ordinary purchase order is untouched by every bit of this ===')
@@ -566,6 +587,412 @@ ok(
 )
 const fcogs = db.prepare(`SELECT amount FROM finance_cogs WHERE po_id = ?`).get(freighted.id) as any
 ok(Number(fcogs.amount) === 475, 'and the ledger row agrees', String(fcogs?.amount))
+
+// ---------------------------------------------------------------------------
+console.log('=== 10. SELLING THE CASES THIS ORDER BROUGHT IN ===')
+// ---------------------------------------------------------------------------
+/**
+ * The owner's example, run: buy ten cases on a roadshow order, sell five of
+ * them, and check the money.
+ *
+ * THE ASSERTION THAT MATTERS is the cost. There is a cheaper, older case of the
+ * same product on the shelf from a distributor, and FIFO would take it — so a
+ * tribSale that merely POINTED at the roadshow order while costing against March's
+ * stock would look right on every screen and report a margin about somebody
+ * else's inventory. The figure below is what proves the units followed the name.
+ */
+product('p_trib', 'RS-TRIB', 'Tribute Baseball Case')
+
+// March, from a distributor: cheap, and OLDEST, so FIFO would reach for it.
+const march = po.createPurchaseOrder(
+  {
+    supplier: 'Cardinal Distribution',
+    location: 'RM',
+    lines: [{ productId: 'p_trib', quantity: 4, unitPrice: 100 }]
+  },
+  'emp_owner'
+)
+po.receivePurchaseOrderLines(
+  march.id,
+  [{ lineId: march.lines[0].id, quantity: 4 }],
+  'emp_owner'
+)
+
+// The roadshow week: ten cases at 300.
+const week = po.createPurchaseOrder(
+  {
+    supplier: 'Roadshow Dallas',
+    location: 'RM',
+    ongoing: true,
+    lines: [{ productId: 'p_trib', quantity: 10, unitPrice: 300 }]
+  },
+  'emp_owner'
+)
+po.receivePurchaseOrderLines(week.id, [{ lineId: week.lines[0].id, quantity: 10 }], 'emp_owner')
+ok(inventory.stockQty('p_trib', 'RM') === 14, 'fourteen on the shelf — four old, ten from the roadshow')
+
+const offered = prov.supplyingOrders('p_trib', 'RM')
+ok(offered.length === 1, 'ONE order is offered on a sales order line', JSON.stringify(offered))
+ok(offered[0].poId === week.id, 'and it is the roadshow one')
+ok(offered[0].unitsOnHand === 10, 'holding all ten', String(offered[0].unitsOnHand))
+ok(
+  !offered.some((o: any) => o.poId === march.id),
+  "THE DISTRIBUTOR'S ORDER IS NOT OFFERED — an ordinary purchase is not something to sell 'out of', and offering every order would put this chooser on every line in the app"
+)
+
+// WHAT THE CHOOSER WILL ACTUALLY DRAW, asked of the shared rule directly.
+// Every row it keeps is a row somebody can pick; a row whose only outcome is a
+// refusal is one more thing to read past on a line that mostly wants "any
+// stock".
+const OFFERS = [
+  { poId: 'a', poNumber: 'PO-A', supplier: null, location: 'RM', unitsOnHand: 0, tabOpenedAt: 'x', tabClosedAt: null },
+  { poId: 'b', poNumber: 'PO-B', supplier: null, location: 'RM', unitsOnHand: 4, tabOpenedAt: 'x', tabClosedAt: 'y' },
+  { poId: 'c', poNumber: 'PO-C', supplier: null, location: 'RM', unitsOnHand: 2, tabOpenedAt: null, tabClosedAt: null },
+  { poId: 'd', poNumber: 'PO-D', supplier: null, location: 'RM', unitsOnHand: 3, tabOpenedAt: 'x', tabClosedAt: null },
+  { poId: 'e', poNumber: 'PO-E', supplier: null, location: 'RM', unitsOnHand: 9, tabOpenedAt: 'x', tabClosedAt: null }
+]
+const kept = offerableOrders(OFFERS).map((o: any) => o.poId)
+ok(
+  JSON.stringify(kept) === JSON.stringify(['e', 'd']),
+  'AN EMPTY ONE, A SETTLED ONE AND AN ORDINARY ONE ARE ALL DROPPED — and the rest come most-on-hand first, because the question at this control is which order can cover the line',
+  JSON.stringify(kept)
+)
+
+// The shared refusal, before anything is written.
+ok(
+  supplyRefusal(offered[0], 5, 'Tribute') === null,
+  'five out of ten is fine'
+)
+ok(
+  supplyRefusal(offered[0], 11, 'Tribute') !== null,
+  'ELEVEN IS REFUSED rather than topped up from the older case — a line cannot be part one order and part another'
+)
+ok(
+  (supplyRefusal(offered[0], 11, 'Tribute') as string).includes('10'),
+  'and the refusal names what is actually there',
+  String(supplyRefusal(offered[0], 11, 'Tribute'))
+)
+ok(supplyRefusal(null, 11) === null, 'a line naming NO order is never refused by this — it walks FIFO')
+
+const tribSale = invoices.saveInvoice(
+  {
+    customerName: 'Ashgrove Cards',
+    invoiceDate: '2026-08-19',
+    location: 'RM',
+    lines: [
+      { item: 'Tribute Baseball Case', productId: 'p_trib', quantity: 5, rate: 900, sourcePoId: week.id }
+    ]
+  },
+  'emp_owner'
+)
+ok(!!tribSale.id, 'five cases are sold out of the roadshow order')
+ok(inventory.stockQty('p_trib', 'RM') === 9, 'the shelf is down to nine', String(inventory.stockQty('p_trib', 'RM')))
+
+const soldCost = db
+  .prepare(
+    `SELECT SUM(cost_total) AS c FROM invoice_stock_moves WHERE invoice_id = ?`
+  )
+  .get(tribSale.id) as any
+ok(
+  Math.abs(Number(soldCost.c) - 1500) < 0.005,
+  'AND IT COST 5 × $300, NOT 4 × $100 + 1 × $300 — the units followed the name instead of the FIFO walk',
+  String(soldCost?.c)
+)
+ok(
+  lots('p_trib').filter((l) => l.cost === 100).reduce((n, l) => n + l.qty, 0) === 4,
+  "THE DISTRIBUTOR'S FOUR ARE UNTOUCHED, which is the other half of the same fact",
+  JSON.stringify(lots('p_trib'))
+)
+ok(
+  prov.supplyingOrders('p_trib', 'RM')[0].unitsOnHand === 5,
+  'and the order now offers the five it has left',
+  JSON.stringify(prov.supplyingOrders('p_trib', 'RM'))
+)
+
+// The line remembers, and the tribSale is on the order.
+const tribSaleBack = invoices.getInvoice(tribSale.id)
+ok(tribSaleBack.lines[0].sourcePoId === week.id, 'the line says which order it sold')
+ok(tribSaleBack.lines[0].sourcePoNumber === week.poNumber, 'and prints its number rather than an id')
+ok(
+  invoices.salesFromPoStock(week.id).some((i: any) => i.id === tribSale.id),
+  'THE ORDER CAN LIST WHO BOUGHT ITS CASES — the question a week with a shop is opened to ask'
+)
+
+// The deal ticket, folded — without the tribSale becoming a dropship.
+const weekTicket = db
+  .prepare(`SELECT id, number FROM deal_tickets WHERE document_kind = 'po' AND document_id = ?`)
+  .get(week.id) as any
+const saleTicketRow = db
+  .prepare(`SELECT merged_into FROM deal_tickets WHERE document_kind = 'so' AND document_id = ?`)
+  .get(tribSale.id) as any
+ok(
+  saleTicketRow.merged_into === weekTicket.id,
+  "the tribSale joins the order's deal ticket — one week with one shop is one deal"
+)
+ok(
+  tribSaleBack.sourcePoId === null,
+  'AND THE SALE IS STILL NOT A DROPSHIP. invoices.source_po_id means one specific thing — this is the sell-half of a dropship — and setting it here would have an all-our-own-stock sale reporting as part drop-shipped'
+)
+ok(
+  salesOrderKindOf(tribSaleBack) === 'stock',
+  'which is exactly what the board reads it as',
+  salesOrderKindOf(tribSaleBack)
+)
+
+// A SECOND SAVE MUST NOT DOUBLE ANYTHING. Editing a sales order re-runs the
+// whole release-and-apply, and the fold runs with it.
+const edited = invoices.saveInvoice(
+  {
+    id: tribSale.id,
+    customerName: 'Ashgrove Cards',
+    invoiceDate: '2026-08-19',
+    location: 'RM',
+    lines: [
+      { item: 'Tribute Baseball Case', productId: 'p_trib', quantity: 5, rate: 950, sourcePoId: week.id }
+    ]
+  },
+  'emp_owner'
+)
+ok(!!edited.id, 'the sale is edited — the rate changes')
+ok(
+  inventory.stockQty('p_trib', 'RM') === 9,
+  'THE SHELF DOES NOT MOVE — release-and-apply put the same five back and took the same five again',
+  String(inventory.stockQty('p_trib', 'RM'))
+)
+ok(
+  Math.abs(
+    Number(
+      (db.prepare(`SELECT SUM(cost_total) AS c FROM invoice_stock_moves WHERE invoice_id = ?`)
+        .get(tribSale.id) as any).c
+    ) - 1500
+  ) < 0.005,
+  'and it still costs 1500 — the re-take found the same layers'
+)
+const joins = db
+  .prepare(
+    `SELECT COUNT(*) AS n FROM order_events
+      WHERE order_id = ? AND detail LIKE 'Sold out of%'`
+  )
+  .get(tribSale.id) as any
+ok(
+  Number(joins.n) === 1,
+  'AND THE LOG GAINED NOTHING — the fold reports whether it actually folded, which is what stops a line per keystroke',
+  String(joins?.n)
+)
+
+// A line asking for more than the order has is refused by the STORE, not only
+// by the screen. A screen is not a gate.
+let refused = ''
+try {
+  invoices.saveInvoice(
+    {
+      customerName: 'Overreach Cards',
+      invoiceDate: '2026-08-19',
+      location: 'RM',
+      lines: [
+        { item: 'Tribute Baseball Case', productId: 'p_trib', quantity: 9, rate: 900, sourcePoId: week.id }
+      ]
+    },
+    'emp_owner'
+  )
+} catch (err) {
+  refused = String((err as Error).message)
+}
+ok(!!refused, 'NINE OUT OF AN ORDER HOLDING FIVE IS REFUSED IN THE STORE', refused)
+ok(refused.includes(week.poNumber), 'and the refusal names the order', refused)
+ok(
+  inventory.stockQty('p_trib', 'RM') === 9,
+  'AND NOTHING MOVED — the throw rolled the whole save back, shelf included',
+  String(inventory.stockQty('p_trib', 'RM'))
+)
+
+/**
+ * TWO LINES NAMING TWO ORDERS FOLD INTO NEITHER.
+ *
+ * A deal ticket is a claim about ONE deal. A sale supplied half by Dallas and
+ * half by Tulsa belongs to neither week, and picking one would put a figure on
+ * the wrong shop's ticket — quietly, on the register somebody reconciles from.
+ *
+ * The COST still follows each line to its own order. Only the ticket abstains,
+ * because only the ticket has to name a single deal.
+ */
+product('p_two', 'RS-TWO', 'Two-Shop Case')
+const shopA = po.createPurchaseOrder(
+  {
+    supplier: 'Roadshow Dallas',
+    location: 'RM',
+    ongoing: true,
+    lines: [{ productId: 'p_two', quantity: 2, unitPrice: 100 }]
+  },
+  'emp_owner'
+)
+const shopB = po.createPurchaseOrder(
+  {
+    supplier: 'Roadshow Tulsa',
+    location: 'RM',
+    ongoing: true,
+    lines: [{ productId: 'p_two', quantity: 2, unitPrice: 400 }]
+  },
+  'emp_owner'
+)
+po.receivePurchaseOrderLines(shopA.id, [{ lineId: shopA.lines[0].id, quantity: 2 }], 'emp_owner')
+po.receivePurchaseOrderLines(shopB.id, [{ lineId: shopB.lines[0].id, quantity: 2 }], 'emp_owner')
+
+ok(
+  soleSourceOrder([{ sourcePoId: shopA.id }, { sourcePoId: shopA.id }]) === shopA.id,
+  'two lines naming the SAME order agree on it'
+)
+ok(
+  soleSourceOrder([{ sourcePoId: shopA.id }, { sourcePoId: shopB.id }]) === null,
+  'TWO LINES NAMING TWO ORDERS AGREE ON NOTHING — naming one of them would put a week on the wrong shop'
+)
+ok(
+  soleSourceOrder([{ sourcePoId: shopA.id }, { sourcePoId: null }]) === shopA.id,
+  'and a line naming NOTHING is not a disagreement — a roadshow sale plus a T-shirt is still that roadshow\'s sale'
+)
+
+const split = invoices.saveInvoice(
+  {
+    customerName: 'Nakamura Cards',
+    invoiceDate: '2026-08-22',
+    location: 'RM',
+    lines: [
+      { item: 'Two-Shop Case', productId: 'p_two', quantity: 1, rate: 700, sourcePoId: shopA.id },
+      { item: 'Two-Shop Case', productId: 'p_two', quantity: 1, rate: 700, sourcePoId: shopB.id }
+    ]
+  },
+  'emp_owner'
+)
+const splitTicket = db
+  .prepare(`SELECT merged_into FROM deal_tickets WHERE document_kind = 'so' AND document_id = ?`)
+  .get(split.id) as any
+ok(
+  splitTicket.merged_into === null,
+  'A SALE OFF TWO ORDERS KEEPS ITS OWN TICKET rather than joining one of them',
+  String(splitTicket?.merged_into)
+)
+// But the money still went to the right layers, per line.
+const splitCost = db
+  .prepare(`SELECT SUM(cost_total) AS c FROM invoice_stock_moves WHERE invoice_id = ?`)
+  .get(split.id) as any
+ok(
+  Math.abs(Number(splitCost.c) - 500) < 0.005,
+  'AND EACH LINE STILL COST ITS OWN ORDER — $100 from Dallas and $400 from Tulsa, not $200 of the cheaper one',
+  String(splitCost?.c)
+)
+
+/**
+ * A NAMED LINE IS NOT QUIETLY TRIMMED TO WHAT IS THERE.
+ *
+ * The ordinary path clamps: a sale of six against a shelf holding four books
+ * four, deliberately, because the operator asked for stock and the shelf is the
+ * answer. That leniency is WRONG on a line that names an order — "six of
+ * PO-0042's cases" is a claim about which units, and booking four of them would
+ * leave the document saying six while two were never sold and nothing said so.
+ *
+ * Needs a product whose ONLY stock is the order's, or the clamp and the refusal
+ * land on the same number and the difference cannot be seen. That is exactly why
+ * this case exists: the first version of this test could not tell them apart.
+ */
+product('p_only', 'RS-ONLY', 'Only-From-Roadshow Case')
+const onlyPo = po.createPurchaseOrder(
+  {
+    supplier: 'Roadshow Dallas',
+    location: 'RM',
+    ongoing: true,
+    lines: [{ productId: 'p_only', quantity: 3, unitPrice: 200 }]
+  },
+  'emp_owner'
+)
+po.receivePurchaseOrderLines(onlyPo.id, [{ lineId: onlyPo.lines[0].id, quantity: 3 }], 'emp_owner')
+ok(inventory.stockQty('p_only', 'RM') === 3, 'three on the shelf, all from the one order')
+
+let overAsk = ''
+try {
+  invoices.saveInvoice(
+    {
+      customerName: 'Bekele Sportscards',
+      invoiceDate: '2026-08-21',
+      location: 'RM',
+      lines: [
+        { item: 'Only-From-Roadshow Case', productId: 'p_only', quantity: 8, rate: 500, sourcePoId: onlyPo.id }
+      ]
+    },
+    'emp_owner'
+  )
+} catch (err) {
+  overAsk = String((err as Error).message)
+}
+ok(
+  !!overAsk,
+  'EIGHT AGAINST AN ORDER HOLDING THREE IS REFUSED — not booked as three on a line that says eight',
+  overAsk
+)
+ok(
+  inventory.stockQty('p_only', 'RM') === 3,
+  'and the three are still on the shelf',
+  String(inventory.stockQty('p_only', 'RM'))
+)
+// The same over-ask WITHOUT naming the order is the ordinary path, and it still
+// takes what is there — the leniency is not removed, it is scoped.
+const lenient = invoices.saveInvoice(
+  {
+    customerName: 'Bekele Sportscards',
+    invoiceDate: '2026-08-21',
+    location: 'RM',
+    lines: [{ item: 'Only-From-Roadshow Case', productId: 'p_only', quantity: 8, rate: 500 }]
+  },
+  'emp_owner'
+)
+ok(!!lenient.id, 'AN UNNAMED LINE OVER-ASKING IS STILL ACCEPTED — an order written the day before the pallet lands is a real thing')
+ok(
+  inventory.stockQty('p_only', 'RM') === 0,
+  'taking the three that were there',
+  String(inventory.stockQty('p_only', 'RM'))
+)
+
+/**
+ * DELETING THE ORDER TAKES THE LABEL OFF THE LINE, NOT THE SALE.
+ *
+ * On its own order, because deleting `week` is refused — it has stock checked in
+ * against it, which is a different and correct refusal. This is the unlink, and
+ * it is asserted rather than wrapped in an `if`: a conditional around a check is
+ * how a test goes green while proving nothing.
+ */
+product('p_del', 'RS-DEL', 'Deletable Case')
+const doomed = po.createPurchaseOrder(
+  {
+    supplier: 'Roadshow Amarillo',
+    location: 'RM',
+    ongoing: true,
+    lines: [{ productId: 'p_del', quantity: 2, unitPrice: 50 }]
+  },
+  'emp_owner'
+)
+po.receivePurchaseOrderLines(doomed.id, [{ lineId: doomed.lines[0].id, quantity: 2 }], 'emp_owner')
+const offDoomed = invoices.saveInvoice(
+  {
+    customerName: 'Lindqvist Cards',
+    invoiceDate: '2026-08-20',
+    location: 'RM',
+    lines: [{ item: 'Deletable Case', productId: 'p_del', quantity: 1, rate: 200, sourcePoId: doomed.id }]
+  },
+  'emp_owner'
+)
+ok(
+  invoices.getInvoice(offDoomed.id).lines[0].sourcePoId === doomed.id,
+  'a sale names the order it sold out of'
+)
+const forced = po.forceDeletePurchaseOrder(doomed.id, false, 'emp_owner')
+ok(!forced.error, 'the order is deleted, stock left where it is', String(forced.error))
+ok(!po.getPurchaseOrder(doomed.id), 'and it is gone')
+const orphan = invoices.getInvoice(offDoomed.id)
+ok(!!orphan, 'THE SALE SURVIVES — the units are still sold, whatever happened to the paperwork behind them')
+ok(
+  orphan.lines[0].sourcePoId === null,
+  'AND THE LINE STOPS CLAIMING A PROVENANCE NOTHING CAN OPEN — the label is what goes, not the line',
+  String(orphan.lines[0].sourcePoId)
+)
 
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail > 0) process.exit(1)

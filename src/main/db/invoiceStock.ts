@@ -6,6 +6,7 @@ import { bumpStock, insertTxn, stockQty } from './inventory'
 import {
   allowsFractionalQty,
   consumeFifo,
+  consumeFromPo,
   recordTxnLots,
   restoreFifo,
   roundQty,
@@ -59,6 +60,31 @@ export interface InvoiceStockLine {
   position: number
   productId: string
   quantity: number
+  /**
+   * The purchase order these particular units came out of, when the operator
+   * said so. Null on every ordinary line, which walks FIFO exactly as it always
+   * has — see consumeFromPo for why a roadshow order needs the difference.
+   */
+  sourcePoId?: string | null
+}
+
+/**
+ * The order's number, for a refusal somebody can act on.
+ *
+ * `consumeFromPo` throws with a sentence naming the order, and an id in that
+ * sentence is a sentence nobody can use. Read here rather than threaded through
+ * every caller because it is needed only when a line names an order, which is
+ * the rare case, and it costs one read on exactly those lines.
+ */
+function poNumberOf(db: Database.Database, poId: string): string {
+  try {
+    const row = db.prepare('SELECT po_number FROM purchase_orders WHERE id = ?').get(poId) as
+      | { po_number: string | null }
+      | undefined
+    return (row?.po_number ?? '').trim()
+  } catch {
+    return ''
+  }
 }
 
 /** What one line took, for the receipt and for the Wholesale report. */
@@ -205,14 +231,30 @@ export function applyInvoiceStock(
     // What the shelf can actually give, read fresh so two lines of the same
     // product cannot both claim the last box.
     const have = roundQty(Math.max(0, stockQty(line.productId, location)), fractional)
-    const qty = Math.min(asked, have)
+    const fromPo = (line.sourcePoId ?? '').trim()
+    /**
+     * A LINE THAT NAMES AN ORDER IS NOT TRIMMED TO THE SHELF.
+     *
+     * The clamp above exists so a sale of six against a shelf holding four
+     * books four rather than throwing — a deliberate leniency on the ordinary
+     * path, where the operator asked for stock and the shelf is the answer.
+     *
+     * It is the wrong leniency here. "Six of PO-0042's cases" is a claim about
+     * WHICH units, and quietly booking four of them would leave the document
+     * saying six while two were never sold and nothing said so. So a named line
+     * asks for exactly what it says and consumeFromPo refuses if that order
+     * cannot cover it.
+     */
+    const qty = fromPo ? asked : Math.min(asked, have)
     if (!(qty > 0)) continue
 
     // The shelf first, then the layers — the same order recordSale uses, so a
     // layer shortfall throws with the stock already decremented inside a
     // transaction that is about to roll back.
     bumpStock(line.productId, location, -qty)
-    const slices = consumeFifo(db, line.productId, location, qty)
+    const slices = fromPo
+      ? consumeFromPo(db, line.productId, location, qty, fromPo, poNumberOf(db, fromPo))
+      : consumeFifo(db, line.productId, location, qty)
     const cost = slicesCost(slices)
 
     // A real ledger row, of the same type and shape a counter sale writes. It is

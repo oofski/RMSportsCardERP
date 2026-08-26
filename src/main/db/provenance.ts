@@ -33,6 +33,7 @@
 
 import type { PurchaseOrderStatus } from '@shared/types'
 import type { IncomingSource, StockProvenance, StockSource } from '@shared/provenance'
+import type { SupplyingOrder } from '@shared/poStock'
 import { getDb } from './database'
 
 interface SourceRow {
@@ -217,4 +218,82 @@ export function productProvenance(productId: string): StockProvenance {
   const id = String(productId ?? '').trim()
   if (!id) return { productId: '', onHand: [], incoming: [] }
   return { productId: id, onHand: stockSources(id), incoming: incomingSources(id) }
+}
+
+/**
+ * The OPEN ROADSHOW ORDERS still holding stock of this product, per shelf.
+ *
+ * The same join `stockSources` uses, asked from the other end: not "where did
+ * this layer come from" but "which of these orders still has anything left".
+ * See @shared/poStock for why only an open roadshow order is offered and what
+ * happens when one cannot cover a line.
+ *
+ * ## SUMMED PER ORDER AND SHELF, not per layer
+ *
+ * One order can open several layers of the same product — a line received over
+ * two visits is two receipts and two lots — and the operator is choosing an
+ * ORDER, not a layer. Listing "PO-0042 · 4 left" twice because the case arrived
+ * in two vans would be asking somebody to answer a question the app should
+ * never have shown them.
+ *
+ * ## Empty layers are dropped in the WHERE, not by the caller
+ *
+ * `qty_remaining > 0`, so an order whose cases have all been sold does not come
+ * back at all. Offering it would offer a row whose only outcome is a refusal —
+ * and this list is drawn on a sales order line, where every extra row is one
+ * more thing to read past.
+ *
+ * ## A LOCATION FILTER THAT IS OPTIONAL ON PURPOSE
+ *
+ * A sale consumes from one shelf, so the screen asks for that shelf. Omitting
+ * it answers "anywhere", which is what the purchase order's own receipt wants
+ * when it lists what it still has out there.
+ */
+export function supplyingOrders(
+  productId: string,
+  location?: string | null
+): SupplyingOrder[] {
+  const id = String(productId ?? '').trim()
+  if (!id) return []
+  const shelf = String(location ?? '').trim()
+  const rows = getDb()
+    .prepare(
+      `SELECT po.id             AS po_id,
+              po.po_number      AS po_number,
+              po.supplier       AS supplier,
+              l.location        AS location,
+              po.tab_opened_at  AS tab_opened_at,
+              po.tab_closed_at  AS tab_closed_at,
+              SUM(l.qty_remaining) AS on_hand
+         FROM inventory_lots l
+         JOIN po_line_receipts r ON r.lot_id = l.id
+         JOIN purchase_orders  po ON po.id = r.po_id
+        WHERE l.product_id = ?
+          AND l.qty_remaining > 0
+          AND po.tab_opened_at IS NOT NULL
+          AND po.tab_closed_at IS NULL
+          AND po.status != 'cancelled'
+          AND (? = '' OR l.location = ?)
+        GROUP BY po.id, l.location
+        ORDER BY on_hand DESC, po.po_number ASC`
+    )
+    .all(id, shelf, shelf) as Array<{
+    po_id: string
+    po_number: string | null
+    supplier: string | null
+    location: string | null
+    tab_opened_at: string | null
+    tab_closed_at: string | null
+    on_hand: number | null
+  }>
+
+  return rows.map((r) => ({
+    poId: r.po_id,
+    poNumber: str(r.po_number).trim(),
+    supplier: str(r.supplier).trim() || null,
+    location: str(r.location),
+    unitsOnHand: num(r.on_hand),
+    tabOpenedAt: r.tab_opened_at ?? null,
+    tabClosedAt: r.tab_closed_at ?? null
+  }))
 }

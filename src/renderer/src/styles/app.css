@@ -27428,3 +27428,61 @@ button.sor-team:focus-visible {
   font-weight: 700;
   white-space: nowrap;
 }
+
+/* The roadshow tick on the create-PO form. It changes what KIND of order this
+   is, so it gets a little air above the freight fields rather than sitting in
+   the run of them like another detail. */
+.po-ongoing-tick {
+  margin: 14px 0 18px;
+}
+.po-ongoing-tick .qbo-note {
+  margin-top: 10px;
+}
+
+/* WHICH CASES a sales order line is selling — under the product name, beside
+   the description, where the thing being sold is named. Absent on almost every
+   line: it renders only when an open roadshow order actually holds some of that
+   product. See SourceOrderPicker. */
+.so-source {
+  margin-top: 5px;
+}
+.so-source-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.so-source-row > svg {
+  flex: none;
+  color: var(--accent);
+}
+.so-source-label {
+  flex: none;
+  font-size: 11px;
+  font-weight: 650;
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+/* Sized to the row it lives in rather than to its longest option: an order
+   label carries a number, a shop and a count, and letting that set the width
+   would push the money columns off the edge of a 620px modal. */
+.so-source-select {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 26px;
+  padding: 0 22px 0 7px;
+  font-size: 11.5px;
+}
+/* The refusal, in place. Said BEFORE the save rather than thrown by it — the
+   quantity and the order are both on screen here, and they are what has to
+   change. */
+.so-source-warn {
+  margin-top: 4px;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--warning-bg);
+  color: var(--warning);
+  font-size: 11px;
+  line-height: 1.45;
+}

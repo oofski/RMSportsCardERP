@@ -53,10 +53,20 @@ export { isRoadshowLocation } from './inventory'
  * the receiving desk and the P&L about a stage none of them needs to know about.
  */
 export interface TabFacts {
-  /** When the tab was opened. NULL on every ordinary purchase order. */
-  tabOpenedAt: string | null
-  /** When it was settled. NULL while it is still running. */
-  tabClosedAt: string | null
+  /**
+   * When the order was opened as an ongoing one. NULL on every ordinary
+   * purchase order.
+   *
+   * UNDEFINED IS ACCEPTED as well as null, and that is not laziness. The field
+   * is optional on `PurchaseOrder` — it has to be, because every caller that
+   * builds one of those by hand predates it — so requiring null here meant a
+   * `?? null` at every single call site, and the one somebody forgets is a
+   * typecheck error at best and a wrong answer at worst. Both absences mean the
+   * same thing: this is not an ongoing order.
+   */
+  tabOpenedAt?: string | null
+  /** When it was settled. NULL or absent while it is still running. */
+  tabClosedAt?: string | null
 }
 
 /** Is this order a tab at all — open or settled? */
