@@ -141,7 +141,7 @@ export function InvoicesBoard({
    * ## MOVING COLUMN IS NOT THE ONLY THING A CHECK CAN CHANGE
    *
    * This watched `moved` alone, and `moved` counts cards that changed STAGE. A
-   * card already sitting in Paid because somebody ticked it here does not change
+   * card already sitting in Paid on this floor does not change
    * stage when the money finally appears in QuickBooks — `nextStageFromQbo`
    * returns null the moment what Intuit says matches where the card already is —
    * so the board never re-read itself and the payment bar went on drawing the

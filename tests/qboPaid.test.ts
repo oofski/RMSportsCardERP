@@ -383,15 +383,19 @@ console.log('\n=== 6. WHAT TAKES AN INVOICE OFF THE SWEEP IS QUICKBOOKS, NOT THE
  * asserted that rule approvingly. Both halves of it look like they are about the
  * payment and neither is: `qbo_status_checked_at` is stamped by every check,
  * including ones that ran days earlier while the invoice was still open, and
- * `status = 'paid'` is the Mark paid button on this floor.
+ * `status = 'paid'` is a LOCAL fact — `setInvoiceStatus`, from the card reaching
+ * the Paid column on this floor or from the paid-up-front receipt. (Not the Mark
+ * paid button: `setInvoicePaid` writes `paid_at`/`paid_by` and never the stage.
+ * The two are separate on purpose, and it is the STAGE that armed this.)
  *
- * So the instant an operator ticked Mark paid, the invoice left the sweep
- * carrying whatever balance had been read while it was still unpaid. The money
- * then landed in QuickBooks and nothing here ever asked again. The owner's
- * invoices 2362 and 2367 showed "Paid" in QuickBooks and an EMPTY payment rail
- * here, reading "$0.00 of $5,200.00 — QuickBooks still shows $5,200.00 owing",
- * and pressing Check QuickBooks could not mend it because the row was not in the
- * sweep to begin with.
+ * So the instant a card reached Paid here, the invoice left the sweep carrying
+ * whatever balance had been read while it was still unpaid — and `'paid'` is
+ * terminal, so it could never come back. The money then landed in QuickBooks and
+ * nothing here ever asked again. The owner's invoices 2362 and 2367 showed
+ * "Paid" in QuickBooks and an EMPTY payment rail here, reading "$0.00 of
+ * $5,200.00 — QuickBooks still shows $5,200.00 owing", and pressing Check
+ * QuickBooks could not mend it because the row was not in the sweep to begin
+ * with.
  *
  * The rule is QuickBooks' own reading now: a zero balance, or a void.
  */
@@ -421,12 +425,12 @@ db.prepare(
 ).run(settledRow.id)
 ok(onSweep(settledRow.id), 'a checked-but-still-owing invoice is asked about again')
 
-// Somebody ticks Mark paid on the board. The money is real; QuickBooks has not
+// The card reaches Paid on the board. The money is real; QuickBooks has not
 // heard about it yet. THIS is the line that used to end the invoice's life.
 repo.setInvoiceStatus(settledRow.id, 'paid', 'emp_owner')
 ok(
   onSweep(settledRow.id),
-  'MARKING IT PAID HERE DOES NOT END THE QUESTION — Intuit still shows 500 owing, which is exactly the invoice worth asking about',
+  'REACHING PAID HERE DOES NOT END THE QUESTION — Intuit still shows 500 owing, which is exactly the invoice worth asking about',
   String(repo.getInvoice(settledRow.id).qboBalance)
 )
 

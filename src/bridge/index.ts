@@ -1979,7 +1979,7 @@ export function createBridge(ipcRenderer: BridgeTransport) {
        *
        * Omit the id to sweep every posted invoice QUICKBOOKS has not called
        * finished — a zero balance or a void. Deliberately not "not already
-       * settled" in this app's sense: an invoice ticked paid on the board while
+       * settled" in this app's sense: an invoice sitting in Paid on this board while
        * Intuit still shows money owing is the one most worth asking about, and
        * treating the tick as the answer is what once froze a card's payment bar
        * at the balance it had before anybody paid.

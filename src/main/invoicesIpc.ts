@@ -841,7 +841,7 @@ export function registerInvoicesIpc(): void {
    *
    * `updated` counts the ones where something a person can SEE actually moved —
    * a balance, a payment date, a void. It is deliberately not the same number as
-   * `moved`: a card already sitting in Paid because somebody ticked it here does
+   * `moved`: a card already sitting in Paid on this floor does
    * not change column when the money finally shows up in QuickBooks, but its
    * rail goes from empty to full, and a caller that only watched `moved` would
    * redraw nothing and announce that nothing had changed.

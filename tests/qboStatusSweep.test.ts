@@ -16,9 +16,12 @@
  *     about an invoice once `status = 'paid' AND qbo_status_checked_at IS NOT
  *     NULL`. Neither half is about the payment — `qbo_status_checked_at` is
  *     stamped by every check including ones from days earlier while the invoice
- *     was still open, and `status = 'paid'` is the Mark paid button on this
- *     floor. So the tick itself ended the invoice's life on the sweep, carrying
- *     whatever balance had been read before anybody paid.
+ *     was still open, and `status = 'paid'` is a LOCAL fact, written by
+ *     `setInvoiceStatus` when the card reaches the Paid column here (NOT by the
+ *     Mark paid button, which writes `paid_at` and leaves the stage alone). So
+ *     reaching Paid on this floor ended the invoice's life on the sweep, and
+ *     `'paid'` is terminal, so it could never come back — carrying whatever
+ *     balance had been read before anybody paid.
  *
  *   · THE BOARD DID NOT REDRAW. It re-read itself only when a card changed
  *     COLUMN, and a card already in Paid does not change column when the money
@@ -188,9 +191,11 @@ const run = async (): Promise<void> => {
   }
 
   // -------------------------------------------------------------------------
-  console.log('\n=== 3. somebody ticks Mark paid. THE MONEY IS REAL; INTUIT HAS NOT HEARD ===')
+  console.log('\n=== 3. the card reaches Paid here. THE MONEY IS REAL; INTUIT HAS NOT HEARD ===')
   // -------------------------------------------------------------------------
-  // This is the line that used to end the invoice's life on the sweep.
+  // `setInvoiceStatus` is the real gesture — the card moving into the Paid
+  // column — and this is the line that used to end the invoice's life on the
+  // sweep. The Mark paid button beside it writes only `paid_at`.
   {
     repo.setInvoiceStatus(howard.id, 'paid', 'emp_owner')
     const row = repo.getInvoice(howard.id)
@@ -202,7 +207,7 @@ const run = async (): Promise<void> => {
     const res = await sync()
     ok(
       res.data.checked === 2,
-      'THE TICK DOES NOT TAKE IT OFF THE SWEEP — it is the invoice most worth asking about',
+      'REACHING PAID HERE DOES NOT TAKE IT OFF THE SWEEP — it is the invoice most worth asking about',
       String(res.data.checked)
     )
     ok(res.data.updated === 0, 'and nothing has changed in QuickBooks yet, so nothing is claimed')

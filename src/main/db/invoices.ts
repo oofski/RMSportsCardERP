@@ -1597,15 +1597,26 @@ export function listInvoicesNeedingPush(limit = 100): Invoice[] {
  *
  * `qbo_status_checked_at` is stamped by EVERY check, including the ones that ran
  * days earlier while the invoice was still open — so it is already set long
- * before anybody pays. And `status = 'paid'` is set by the Mark paid button on
- * this floor, which is somebody's word, not Intuit's. Put together, the moment
- * an operator ticked Mark paid the invoice dropped out of the sweep forever,
- * carrying whatever balance had been read back when it was still unpaid. The
- * money then landed in QuickBooks and nothing here ever asked again: the card
- * sat in Paid above an empty rail reading "$0.00 of $5,200.00 — QuickBooks still
- * shows $5,200.00 owing", and pressing Check QuickBooks could not fix it,
- * because the sweep no longer included the row. Reported by the owner against
- * invoices 2362 and 2367, both of which QuickBooks showed as Paid.
+ * before anybody pays. And `status = 'paid'` is a LOCAL fact: it is written by
+ * `setInvoiceStatus`, from the card being moved into the Paid column on this
+ * floor or from the paid-up-front receipt, which is somebody's word and not
+ * Intuit's. (Not by `setInvoicePaid`, the Mark paid button — that writes
+ * `paid_at`/`paid_by` and never touches the stage. The two are deliberately
+ * separate and it is the STAGE that armed this.)
+ *
+ * Put together, the moment a card reached Paid here the invoice dropped out of
+ * the sweep forever — `'paid'` is terminal in INVOICE_TRANSITIONS, so it could
+ * never re-enter — carrying whatever balance had been read back when it was
+ * still unpaid. The money then landed in QuickBooks and nothing here ever asked
+ * again: the card sat in Paid above an empty rail reading "$0.00 of $5,200.00 —
+ * QuickBooks still shows $5,200.00 owing", and pressing Check QuickBooks could
+ * not fix it, because the sweep no longer included the row. Reported by the
+ * owner against invoices 2362 and 2367, both of which QuickBooks showed as Paid.
+ *
+ * `status = 'paid'` beside `qbo_balance == qbo_total_amt` is in fact a signature
+ * only a local stage move can leave: had QUICKBOOKS been what set the stage, it
+ * would have gone through `observedInvoiceStage`, which requires a zero balance,
+ * and the zero would have been written first.
  *
  * So the stopping rule is now QuickBooks' own reading and nothing else: a
  * BALANCE OF ZERO, or a VOID. Those are terminal in the books — a settled
