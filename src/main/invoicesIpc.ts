@@ -838,6 +838,13 @@ export function registerInvoicesIpc(): void {
    * `checked` counts invoices QuickBooks answered for. `missing` counts ones it
    * did not — an invoice deleted in QuickBooks comes back as silence, and that
    * is worth a number on a screen rather than being rounded into the errors.
+   *
+   * `updated` counts the ones where something a person can SEE actually moved —
+   * a balance, a payment date, a void. It is deliberately not the same number as
+   * `moved`: a card already sitting in Paid because somebody ticked it here does
+   * not change column when the money finally shows up in QuickBooks, but its
+   * rail goes from empty to full, and a caller that only watched `moved` would
+   * redraw nothing and announce that nothing had changed.
    */
   ipcMain.handle(
     IPC.invoiceSyncQboStatus,
@@ -848,6 +855,7 @@ export function registerInvoicesIpc(): void {
       Result<{
         checked: number
         missing: number
+        updated: number
         moved: Array<{ id: string; from: InvoiceStatus; to: InvoiceStatus }>
       }>
     > => {
@@ -858,7 +866,7 @@ export function registerInvoicesIpc(): void {
           ? [getInvoice(one)].filter((i): i is InvoiceDetail => !!i?.qboId)
           : listPostedInvoices()
         if (targets.length === 0) {
-          return { ok: true, data: { checked: 0, missing: 0, moved: [] } }
+          return { ok: true, data: { checked: 0, missing: 0, updated: 0, moved: [] } }
         }
 
         let observations: Map<string, QboInvoiceObservation>
@@ -879,6 +887,7 @@ export function registerInvoicesIpc(): void {
         const moved: Array<{ id: string; from: InvoiceStatus; to: InvoiceStatus }> = []
         let checked = 0
         let missing = 0
+        let updated = 0
         for (const invoice of targets) {
           const observed = invoice.qboId ? observations.get(invoice.qboId) : undefined
           if (!observed) {
@@ -890,7 +899,7 @@ export function registerInvoicesIpc(): void {
             continue
           }
           checked++
-          recordQboObservation(invoice.id, observed)
+          if (recordQboObservation(invoice.id, observed)) updated++
           const next = nextStageFromQbo(invoice.status, observed)
           // A REFUSED MOVE IS NOT A FAILED CHECK. setInvoiceStatus turns down
           // Ready to ship for an unpaid up-front order, and this is the path
@@ -903,7 +912,7 @@ export function registerInvoicesIpc(): void {
             moved.push({ id: invoice.id, from: invoice.status, to: next })
           }
         }
-        return { ok: true, data: { checked, missing, moved } }
+        return { ok: true, data: { checked, missing, updated, moved } }
       } catch (err) {
         return fail(err)
       }

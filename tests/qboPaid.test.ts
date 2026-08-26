@@ -372,11 +372,29 @@ ok(row.qboPaymentsApplied === 0, 'and the amount goes to zero, not to null')
 ok(row.qboPaymentCount === 0, 'and the count says zero rather than unknown')
 
 // ---------------------------------------------------------------------------
-console.log('\n=== 6. a paid invoice is asked about ONCE more, then left alone ===')
+console.log('\n=== 6. WHAT TAKES AN INVOICE OFF THE SWEEP IS QUICKBOOKS, NOT THE TICK ===')
 // ---------------------------------------------------------------------------
-// The pull used to stop at 'paid' because there was nothing further to learn.
-// There is now: every invoice that reached paid before this existed has a date
-// sitting in QuickBooks nothing here has ever read.
+/**
+ * THE OWNER'S BUG, and the assertion that used to guarantee it.
+ *
+ * There has to be a stopping rule — a cash sale QuickBooks never saw would
+ * otherwise be asked about forever — and it used to be
+ * `NOT (status = 'paid' AND qbo_status_checked_at IS NOT NULL)`. This section
+ * asserted that rule approvingly. Both halves of it look like they are about the
+ * payment and neither is: `qbo_status_checked_at` is stamped by every check,
+ * including ones that ran days earlier while the invoice was still open, and
+ * `status = 'paid'` is the Mark paid button on this floor.
+ *
+ * So the instant an operator ticked Mark paid, the invoice left the sweep
+ * carrying whatever balance had been read while it was still unpaid. The money
+ * then landed in QuickBooks and nothing here ever asked again. The owner's
+ * invoices 2362 and 2367 showed "Paid" in QuickBooks and an EMPTY payment rail
+ * here, reading "$0.00 of $5,200.00 — QuickBooks still shows $5,200.00 owing",
+ * and pressing Check QuickBooks could not mend it because the row was not in the
+ * sweep to begin with.
+ *
+ * The rule is QuickBooks' own reading now: a zero balance, or a void.
+ */
 const settledRow = repo.saveInvoice(
   {
     invoiceNumber: '3002',
@@ -386,24 +404,159 @@ const settledRow = repo.saveInvoice(
   },
   'emp_owner'
 )
+const onSweep = (id: string): boolean =>
+  repo.listPostedInvoices().some((i: any) => i.id === id)
+
 db.prepare(
-  `UPDATE invoices SET qbo_id = '9002', status = 'paid', qbo_status_checked_at = NULL WHERE id = ?`
+  `UPDATE invoices SET qbo_id = '9002', status = 'sent', qbo_status_checked_at = NULL WHERE id = ?`
 ).run(settledRow.id)
+ok(onSweep(settledRow.id), 'an invoice with no answer yet is asked about')
+
+// It has been checked once, while genuinely unpaid. This is the state every
+// invoice passes through, and it is where the old rule was armed and waiting.
+db.prepare(
+  `UPDATE invoices
+      SET qbo_status_checked_at = '2026-08-18T00:00:00.000Z', qbo_balance = 500, qbo_total_amt = 500
+    WHERE id = ?`
+).run(settledRow.id)
+ok(onSweep(settledRow.id), 'a checked-but-still-owing invoice is asked about again')
+
+// Somebody ticks Mark paid on the board. The money is real; QuickBooks has not
+// heard about it yet. THIS is the line that used to end the invoice's life.
+repo.setInvoiceStatus(settledRow.id, 'paid', 'emp_owner')
 ok(
-  repo.listPostedInvoices().some((i: any) => i.id === settledRow.id),
-  'a paid invoice with no answer yet IS asked about'
+  onSweep(settledRow.id),
+  'MARKING IT PAID HERE DOES NOT END THE QUESTION — Intuit still shows 500 owing, which is exactly the invoice worth asking about',
+  String(repo.getInvoice(settledRow.id).qboBalance)
 )
-db.prepare(`UPDATE invoices SET qbo_status_checked_at = '2026-08-18T00:00:00.000Z' WHERE id = ?`).run(
-  settledRow.id
+
+// QuickBooks finally reports the payment. NOW there is nothing left to learn.
+db.prepare(`UPDATE invoices SET qbo_balance = 0 WHERE id = ?`).run(settledRow.id)
+ok(
+  !onSweep(settledRow.id),
+  'and it drops off once QUICKBOOKS says the balance is zero',
+  String(repo.getInvoice(settledRow.id).qboBalance)
+)
+
+// A cash sale QuickBooks never sees keeps a real balance forever, so the date
+// ordering and the limit are what carry it off the end — not a rule that
+// pretends it was answered. Proven by putting the balance back.
+db.prepare(`UPDATE invoices SET qbo_balance = 500 WHERE id = ?`).run(settledRow.id)
+ok(
+  onSweep(settledRow.id),
+  'a balance that comes back puts the invoice back on the sweep',
+  String(repo.getInvoice(settledRow.id).qboBalance)
+)
+
+// A void is the other terminal answer: nothing about it will change either.
+db.prepare(`UPDATE invoices SET qbo_voided = 1 WHERE id = ?`).run(settledRow.id)
+ok(!onSweep(settledRow.id), 'a voided invoice drops off even with a balance on it')
+
+db.prepare(`UPDATE invoices SET qbo_voided = 0, status = 'void' WHERE id = ?`).run(settledRow.id)
+ok(!onSweep(settledRow.id), 'and a locally void invoice is never asked about')
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 6b. THE CHECK REPORTS WHETHER ANYTHING ACTUALLY MOVED ===')
+// ---------------------------------------------------------------------------
+/**
+ * The other half of the same bug, on the screen rather than in the sweep.
+ *
+ * The board re-read itself only when a card changed COLUMN. A card already in
+ * Paid because somebody ticked it does not change column when the money shows up
+ * — `nextStageFromQbo` returns null the moment Intuit agrees with where the card
+ * already is — so the rail went on drawing the old balance and the toast said
+ * "nothing has changed" over a row that had just been settled.
+ *
+ * `recordQboObservation` answers "did a figure a person can see move", which is
+ * what the board watches now.
+ */
+const watchRow = repo.saveInvoice(
+  {
+    invoiceNumber: '3003',
+    customerName: 'Ada Okonkwo',
+    invoiceDate: '2026-08-03',
+    lines: [{ item: 'Case break', quantity: 1, rate: 800 }]
+  },
+  'emp_owner'
+)
+db.prepare(`UPDATE invoices SET qbo_id = '9003', status = 'sent' WHERE id = ?`).run(watchRow.id)
+const seenOn9003 = (over: any = {}): any => ({
+  qboId: '9003',
+  docNumber: '3003',
+  emailStatus: 'EmailSent',
+  deliveredAt: null,
+  balance: 800,
+  totalAmt: 800,
+  linkedPayments: 0,
+  payments: [],
+  voided: false,
+  ...over
+})
+
+ok(
+  repo.recordQboObservation(watchRow.id, seenOn9003()) === true,
+  'the first answer about an invoice is a change'
 )
 ok(
-  !repo.listPostedInvoices().some((i: any) => i.id === settledRow.id),
-  'AND IS DROPPED ONCE IT HAS ONE — including when the answer was "no payment", or a cash sale would be asked about forever'
+  repo.recordQboObservation(watchRow.id, seenOn9003()) === false,
+  'THE SAME ANSWER TWICE IS NOT — or every quarter-hour sweep would redraw the board and claim news',
 )
-db.prepare(`UPDATE invoices SET status = 'void' WHERE id = ?`).run(settledRow.id)
 ok(
-  !repo.listPostedInvoices().some((i: any) => i.id === settledRow.id),
-  'a void invoice is never asked about'
+  repo.recordQboObservation(
+    watchRow.id,
+    seenOn9003({ balance: 0, linkedPayments: 1, payments: [{ id: '81', date: '2026-08-24', amount: 800 }] })
+  ) === true,
+  'A PAYMENT LANDING IS A CHANGE, even though the card does not move column'
+)
+ok(
+  repo.getInvoice(watchRow.id).qboBalance === 0 &&
+    repo.getInvoice(watchRow.id).qboPaidAt === '2026-08-24',
+  'and the balance and the date are what got written',
+  `${repo.getInvoice(watchRow.id).qboBalance} / ${repo.getInvoice(watchRow.id).qboPaidAt}`
+)
+// A throttled payment fetch leaves the date alone (section 5), so it must not
+// report itself as having changed one either.
+ok(
+  repo.recordQboObservation(
+    watchRow.id,
+    seenOn9003({ balance: 0, linkedPayments: 1, payments: [] })
+  ) === false,
+  'A LOOK THAT DID NOT HAPPEN REPORTS NO CHANGE — it did not write one'
+)
+
+/**
+ * The two figures move independently, so each has to count on its own.
+ *
+ * A PART PAYMENT moves the balance and nothing else — no new payment date if the
+ * Payment query was throttled, same email status, same total. A RE-DATED payment
+ * moves the date and nothing else — somebody in QuickBooks correcting the day a
+ * transfer was booked leaves the balance at zero. Either one alone must redraw
+ * the rail, and a change test that only watched the other would sit there
+ * reporting that nothing had happened.
+ */
+db.prepare(
+  `UPDATE invoices SET qbo_balance = 800, qbo_paid_at = NULL, qbo_payments_applied = NULL WHERE id = ?`
+).run(watchRow.id)
+ok(
+  repo.recordQboObservation(
+    watchRow.id,
+    seenOn9003({ balance: 300, linkedPayments: 1, payments: [] })
+  ) === true,
+  'A PART PAYMENT IS A CHANGE ON THE BALANCE ALONE — no date came with it',
+  String(repo.getInvoice(watchRow.id).qboBalance)
+)
+
+const settledOn = (day: string): any =>
+  seenOn9003({ balance: 0, linkedPayments: 1, payments: [{ id: '82', date: day, amount: 800 }] })
+repo.recordQboObservation(watchRow.id, settledOn('2026-08-24'))
+ok(
+  repo.recordQboObservation(watchRow.id, settledOn('2026-08-24')) === false,
+  'the same settled answer twice is still not a change'
+)
+ok(
+  repo.recordQboObservation(watchRow.id, settledOn('2026-08-25')) === true,
+  'A PAYMENT RE-DATED IN QUICKBOOKS IS A CHANGE ON THE DATE ALONE — the balance never moved off zero',
+  String(repo.getInvoice(watchRow.id).qboPaidAt)
 )
 
 // ---------------------------------------------------------------------------

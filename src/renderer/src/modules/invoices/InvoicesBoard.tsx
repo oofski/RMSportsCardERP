@@ -137,6 +137,20 @@ export function InvoicesBoard({
    * dismiss toasts without reading them, and the next one matters. Pressed by
    * hand it always answers, because silence after pressing a button reads as a
    * broken button.
+   *
+   * ## MOVING COLUMN IS NOT THE ONLY THING A CHECK CAN CHANGE
+   *
+   * This watched `moved` alone, and `moved` counts cards that changed STAGE. A
+   * card already sitting in Paid because somebody ticked it here does not change
+   * stage when the money finally appears in QuickBooks — `nextStageFromQbo`
+   * returns null the moment what Intuit says matches where the card already is —
+   * so the board never re-read itself and the payment bar went on drawing the
+   * balance from before the payment. Pressing Check QuickBooks then answered
+   * "nothing has changed" over a row whose balance had just gone to zero, which
+   * is how a working button convinces somebody it is broken.
+   *
+   * `updated` is the count that actually means "a figure moved", so it drives
+   * both the redraw and the sentence.
    */
   const syncStatus = useCallback(
     async (announce: boolean): Promise<void> => {
@@ -148,12 +162,22 @@ export function InvoicesBoard({
           return
         }
         const moved = res.data.moved.length
+        const updated = res.data.updated ?? 0
+        if (moved > 0 || updated > 0) await load()
         if (moved > 0) {
-          await load()
           toast.success(
             moved === 1
               ? `1 invoice moved to ${res.data.moved[0].to}.`
               : `${moved} invoices moved.`
+          )
+        } else if (updated > 0) {
+          // Nothing changed column, but something changed. Naming the figure
+          // rather than the count would be better still and needs the backend to
+          // say WHICH figure; this at least never claims nothing happened.
+          toast.success(
+            updated === 1
+              ? '1 invoice updated from QuickBooks.'
+              : `${updated} invoices updated from QuickBooks.`
           )
         } else if (announce) {
           toast.success(

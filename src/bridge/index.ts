@@ -1977,7 +1977,16 @@ export function createBridge(ipcRenderer: BridgeTransport) {
        * exposed by the Accounting API at all and are deliberately not faked —
        * see @shared/invoices for the full accounting.
        *
-       * Omit the id to sweep every posted invoice that is not already settled.
+       * Omit the id to sweep every posted invoice QUICKBOOKS has not called
+       * finished — a zero balance or a void. Deliberately not "not already
+       * settled" in this app's sense: an invoice ticked paid on the board while
+       * Intuit still shows money owing is the one most worth asking about, and
+       * treating the tick as the answer is what once froze a card's payment bar
+       * at the balance it had before anybody paid.
+       *
+       * `updated` counts answers that changed a figure a person can see, which
+       * is not the same as `moved` — a card already in Paid does not change
+       * column when the money finally lands, but its rail does fill in.
        */
       syncQboStatus: (
         id?: string
@@ -1985,6 +1994,7 @@ export function createBridge(ipcRenderer: BridgeTransport) {
         Result<{
           checked: number
           missing: number
+          updated: number
           moved: Array<{ id: string; from: InvoiceStatus; to: InvoiceStatus }>
         }>
       > => ipcRenderer.invoke(IPC.invoiceSyncQboStatus, { id: id ?? '' }),

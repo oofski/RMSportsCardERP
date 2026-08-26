@@ -1585,17 +1585,39 @@ export function listInvoicesNeedingPush(limit = 100): Invoice[] {
 /**
  * Everything this app has posted, so a status pull knows what to ask about.
  *
- * PAID IS NOT THE END OF THE QUESTION any more. It used to be — an invoice that
- * reached the last column had nothing left worth asking — but the pull now also
- * fetches WHEN the money landed, and an invoice that arrived in paid before this
- * existed has a date sitting in QuickBooks that nothing here has ever gone and
- * read. So a paid invoice stays on the list until it has an answer.
+ * ## WHAT TAKES AN INVOICE OFF THIS LIST IS QUICKBOOKS' OWN ANSWER
  *
- * It stops after that answer whichever way it came out, including "there is no
- * payment behind this" — an invoice settled in cash that QuickBooks never saw
- * would otherwise be asked about on every refresh for the rest of its life. One
- * extra read each, once, and the per-card refresh is always available for the
- * one somebody is actually looking at.
+ * There has to be a stopping rule — an invoice settled in cash that QuickBooks
+ * never saw would otherwise be asked about on every refresh for the rest of its
+ * life — and the whole bug lived in which fact was used as one.
+ *
+ * It used to be `NOT (status = 'paid' AND qbo_status_checked_at IS NOT NULL)`:
+ * stop once the card is paid and we have checked it at least once. Both halves
+ * look like they are about the payment. Neither is.
+ *
+ * `qbo_status_checked_at` is stamped by EVERY check, including the ones that ran
+ * days earlier while the invoice was still open — so it is already set long
+ * before anybody pays. And `status = 'paid'` is set by the Mark paid button on
+ * this floor, which is somebody's word, not Intuit's. Put together, the moment
+ * an operator ticked Mark paid the invoice dropped out of the sweep forever,
+ * carrying whatever balance had been read back when it was still unpaid. The
+ * money then landed in QuickBooks and nothing here ever asked again: the card
+ * sat in Paid above an empty rail reading "$0.00 of $5,200.00 — QuickBooks still
+ * shows $5,200.00 owing", and pressing Check QuickBooks could not fix it,
+ * because the sweep no longer included the row. Reported by the owner against
+ * invoices 2362 and 2367, both of which QuickBooks showed as Paid.
+ *
+ * So the stopping rule is now QuickBooks' own reading and nothing else: a
+ * BALANCE OF ZERO, or a VOID. Those are terminal in the books — a settled
+ * invoice's balance does not move again — which makes the rule true structurally
+ * rather than by anybody remembering to keep the two facts apart. An invoice
+ * ticked paid here that QuickBooks still shows owing stays on the list, which is
+ * exactly the invoice most worth asking about.
+ *
+ * The residue is real and bounded: a cash sale never entered in QuickBooks never
+ * reaches a zero balance, so it is asked about until `invoice_date DESC` and the
+ * limit carry it off the end. Those are the oldest and least likely to change,
+ * which is the right thing to drop first.
  */
 export function listPostedInvoices(limit = 200): Invoice[] {
   return (
@@ -1604,7 +1626,10 @@ export function listPostedInvoices(limit = 200): Invoice[] {
         `SELECT ${INVOICE_COLS} FROM invoices
           WHERE qbo_id IS NOT NULL AND qbo_id != ''
             AND status != 'void'
-            AND NOT (status = 'paid' AND qbo_status_checked_at IS NOT NULL)
+            AND NOT (
+              qbo_status_checked_at IS NOT NULL
+              AND (qbo_voided = 1 OR (qbo_balance IS NOT NULL AND qbo_balance <= 0))
+            )
           ORDER BY invoice_date DESC LIMIT ?`
       )
       .all(Math.max(1, Math.min(1000, limit))) as InvoiceRow[]
@@ -1632,10 +1657,35 @@ export function listPostedInvoices(limit = 200): Invoice[] {
  * answer and IS written — a payment deleted in QuickBooks should take its date
  * with it. Links but no payments means we did not look, and leaves all three
  * columns exactly as they were.
+ *
+ * ## It reports whether anything a person would SEE actually moved
+ *
+ * Every check stamps `qbo_status_checked_at`, so "did this write change
+ * anything" cannot be read off the row count — it is always 1. The caller needs
+ * the real answer for two reasons: the board only re-reads itself when something
+ * changed, and the toast after Check QuickBooks used to say "nothing has
+ * changed" on the strength of no card having moved COLUMN, which was a flat
+ * untruth on the press that finally picked up a payment.
+ *
+ * Compared before the write, over the four figures the card actually draws.
  */
-export function recordQboObservation(id: string, o: QboInvoiceObservation): void {
+export function recordQboObservation(id: string, o: QboInvoiceObservation): boolean {
   const stamp = nowIso()
   const looked = o.payments.length > 0 || o.linkedPayments === 0
+  const before = getDb()
+    .prepare(
+      `SELECT qbo_balance, qbo_total_amt, qbo_voided, qbo_paid_at, qbo_email_status
+         FROM invoices WHERE id = ?`
+    )
+    .get(id) as
+    | {
+        qbo_balance: number | null
+        qbo_total_amt: number | null
+        qbo_voided: number | null
+        qbo_paid_at: string | null
+        qbo_email_status: string | null
+      }
+    | undefined
   getDb()
     .prepare(
       `UPDATE invoices
@@ -1666,6 +1716,17 @@ export function recordQboObservation(id: string, o: QboInvoiceObservation): void
       stamp,
       id
     )
+  if (!before) return false
+  // The paid date is compared only when we actually looked for one — the write
+  // above leaves it alone otherwise, so a round trip that skipped the payment
+  // fetch must not report itself as having changed it.
+  return (
+    before.qbo_balance !== o.balance ||
+    before.qbo_total_amt !== o.totalAmt ||
+    !!before.qbo_voided !== o.voided ||
+    (before.qbo_email_status ?? null) !== (o.emailStatus ?? null) ||
+    (looked && (before.qbo_paid_at ?? null) !== latestPaymentDate(o.payments))
+  )
 }
 
 /**

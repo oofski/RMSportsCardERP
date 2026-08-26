@@ -1145,11 +1145,16 @@ ok(
   `${afterFailure.qboStatusCheckedAt} → ${afterFailure.qboStatusAttemptedAt}`
 )
 
-// A settled invoice is off the sweep — there is nothing left to learn about it.
+// TICKING IT PAID HERE DOES NOT TAKE IT OFF THE SWEEP. This asserted the
+// opposite for a while and that WAS the bug: `watched` has a balance of 500
+// sitting in QuickBooks, so it is precisely the invoice worth asking about
+// again, and dropping it froze its payment rail at the pre-payment figure for
+// good. What ends the question is QuickBooks' own answer — see qboPaid section 6.
 repo.setInvoiceStatus(watched.id, 'paid', 'emp_owner')
 ok(
-  !repo.listPostedInvoices().some((i: any) => i.id === watched.id),
-  'a paid invoice is not re-checked'
+  repo.listPostedInvoices().some((i: any) => i.id === watched.id),
+  'an invoice ticked paid here is STILL re-checked while QuickBooks shows a balance',
+  String(repo.getInvoice(watched.id).qboBalance)
 )
 
 // ---------------------------------------------------------------------------
