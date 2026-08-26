@@ -18,6 +18,7 @@ import { DropshipSaleStep } from './DropshipSaleStep'
 import { PurchaseOrderReceipt } from './PurchaseOrderReceipt'
 import { CheckTrackingButton } from '../../components/CheckTrackingButton'
 import { SupplyOrderModal } from './SupplyOrderModal'
+import { RoadshowTabsModal } from './RoadshowTabsModal'
 
 /**
  * Invoicing & POs module — the buy side of the business as ONE board:
@@ -60,6 +61,7 @@ export function InvoicingModule({
   const [showCreate, setShowCreate] = useState(false)
   const [dropship, setDropship] = useState<PurchaseOrderDetail | null>(null)
   const [receiptId, setReceiptId] = useState<string | null>(null)
+  const [tabsOpen, setTabsOpen] = useState(false)
 
   /**
    * Somebody arrived here from an Inventory card asking where a case came from,
@@ -324,6 +326,16 @@ export function InvoicingModule({
                 New supply order
               </Button>
             )}
+            {/* A WEEK'S BUYING FROM A ROADSHOW SHOP, which is not a purchase
+                order anybody would think to raise: it stays open for days and
+                is paid once at the end. Its own button, next to New PO, because
+                the two are different acts and "raise a PO and then remember not
+                to close it" is not an instruction anybody follows. */}
+            {canManage && (
+              <Button icon="Store" onClick={() => setTabsOpen(true)}>
+                Roadshow tabs
+              </Button>
+            )}
             {canManage && <CheckTrackingButton onDone={reload} />}
             {canManage && (
               <Button variant="primary" icon="Plus" onClick={() => setShowCreate(true)}>
@@ -383,6 +395,20 @@ export function InvoicingModule({
           po={dropship}
           onClose={() => setDropship(null)}
           onDone={reload}
+        />
+      )}
+      {tabsOpen && (
+        <RoadshowTabsModal
+          onClose={() => setTabsOpen(false)}
+          // Straight onto the tab's own document. The receipt is where the week
+          // is actually worked — lines added, prices filled in, settled — and
+          // sending somebody back to hunt for the card on the board would be a
+          // step this button exists to remove.
+          onOpenTab={(poId) => {
+            setTabsOpen(false)
+            setReceiptId(poId)
+            void reload()
+          }}
         />
       )}
       {receiptId && (

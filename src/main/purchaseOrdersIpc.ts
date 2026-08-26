@@ -48,7 +48,11 @@ import {
   updatePurchaseOrderLine,
   removePurchaseOrderLine,
   setPurchaseOrderPaid,
-  setPurchaseOrderStatus
+  setPurchaseOrderStatus,
+  openRoadshowTab,
+  listOpenRoadshowTabs,
+  setPurchaseOrderLinePrice,
+  settleRoadshowTab
 } from './db/purchaseOrders'
 import type { PoReceiptItem } from './db/purchaseOrders'
 import { listCogsEntries } from './db/finance'
@@ -399,6 +403,93 @@ export function registerPurchaseOrdersIpc(): void {
         if (!payload?.id) return { ok: false, error: 'No purchase order specified.' }
         if (!payload?.lineId) return { ok: false, error: 'No line specified.' }
         const res = removePurchaseOrderLine(payload.id, payload.lineId)
+        return res.error
+          ? { ok: false, error: res.error }
+          : { ok: true, data: res.po as PurchaseOrderDetail }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  /**
+   * THE ROADSHOW TAB: open it, price a line, settle the week.
+   *
+   * All three behind the same invoicing permission every other PO write uses.
+   * A tab is an ordinary purchase order in every respect except that it does not
+   * close itself, so somebody who may raise a PO may run a tab — a separate
+   * grant would be a second thing to remember to give the person doing the
+   * buying.
+   */
+  ipcMain.handle(
+    IPC.poOpenTab,
+    (_e, payload: { supplier: string; location?: string }): Result<PurchaseOrderDetail> => {
+      try {
+        const actor = requireInvoicing()
+        const res = openRoadshowTab(
+          String(payload?.supplier ?? ''),
+          String(payload?.location ?? '') || 'RM',
+          actor?.id ?? null
+        )
+        return res.error
+          ? { ok: false, error: res.error }
+          : { ok: true, data: res.po as PurchaseOrderDetail }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  /**
+   * A BARE ARRAY, not a Result — the same shape `poList` returns, and this was a
+   * real bug for about an hour.
+   *
+   * The bridge types every plain read on this channel family as the list itself,
+   * so a Result envelope arrived at the picker as an object and `for (const t of
+   * tabs)` threw before a single row was drawn. Typecheck could not see it: the
+   * two sides are joined by a channel name, not by a type.
+   *
+   * Refused as an empty list rather than an error, exactly as `poList` does.
+   * Somebody without the permission never sees the button that opens this.
+   */
+  ipcMain.handle(IPC.poOpenTabs, (): PurchaseOrder[] =>
+    can('module.invoicing') ? listOpenRoadshowTabs() : []
+  )
+
+  ipcMain.handle(
+    IPC.poSetLinePrice,
+    (
+      _e,
+      payload: { id: string; lineId: string; unitPrice: number | null }
+    ): Result<PurchaseOrderDetail> => {
+      try {
+        const actor = requireInvoicing()
+        if (!payload?.id) return { ok: false, error: 'No purchase order specified.' }
+        if (!payload?.lineId) return { ok: false, error: 'No line specified.' }
+        // NULL SURVIVES THE WIRE. `?? null` rather than a truthiness check,
+        // because 0 is a price a roadshow really gives and folding it to
+        // "unknown" here would be the exact confusion the column exists to stop.
+        const price =
+          payload.unitPrice === null || payload.unitPrice === undefined
+            ? null
+            : Number(payload.unitPrice)
+        const res = setPurchaseOrderLinePrice(payload.id, payload.lineId, price, actor?.id ?? null)
+        return res.error
+          ? { ok: false, error: res.error }
+          : { ok: true, data: res.po as PurchaseOrderDetail }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  ipcMain.handle(
+    IPC.poSettleTab,
+    (_e, payload: { id: string }): Result<PurchaseOrderDetail> => {
+      try {
+        const actor = requireInvoicing()
+        if (!payload?.id) return { ok: false, error: 'No purchase order specified.' }
+        const res = settleRoadshowTab(payload.id, actor?.id ?? null)
         return res.error
           ? { ok: false, error: res.error }
           : { ok: true, data: res.po as PurchaseOrderDetail }

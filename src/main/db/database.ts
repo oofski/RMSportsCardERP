@@ -4196,6 +4196,52 @@ function migrate(database: Database.Database): void {
   `)
   setMeta(database, 'schema_version', '85')
 
+  /**
+   * v86: A PURCHASE ORDER THAT STAYS OPEN ALL WEEK.
+   *
+   * A roadshow shop is traded with rather than ordered from: things are bought
+   * across the week, carried home and checked in as they go, some of them
+   * without a price yet, and the whole lot is settled once at the end.
+   *
+   * An ordinary purchase order cannot express that, and the reason is a feature
+   * rather than a gap: `completePoIfFullyReceived` closes an order the moment its
+   * last receivable unit lands, so the receiving desk is never left chasing
+   * boxes that are already here. Buy one case on Tuesday and check it in and the
+   * order shuts — Wednesday's box has nowhere to go, and a week becomes five
+   * orders and five amounts owed to a shop expecting one payment.
+   *
+   * ## Two timestamps, not a status
+   *
+   * A tab is a purchase order in `ordered` that happens to stay there. Modelling
+   * it as a fifth stage would have meant teaching PO_TRANSITIONS, the board, the
+   * receiving desk and the P&L about a stage none of them needs to know exists —
+   * and every one of them treats a tab correctly today by treating it as what it
+   * is. `tab_opened_at` non-null makes it a tab; `tab_closed_at` null makes it
+   * still running. See @shared/roadshowTab.
+   *
+   * ## And a price nobody knows yet
+   *
+   * `unit_price` is NOT NULL DEFAULT 0, and 0 is a REAL PRICE — a roadshow
+   * throws a box in often enough. So "we do not know" is stored beside the
+   * number rather than encoded into it, the same way `label_cost` is nullable so
+   * "nobody said" stays distinct from "free". A tab cannot be settled while any
+   * line still carries this, which is the guard that stops a week of trading
+   * being marked paid with three cases priced at nothing.
+   */
+  addColumnIfMissing(database, 'purchase_orders', 'tab_opened_at', 'TEXT')
+  addColumnIfMissing(database, 'purchase_orders', 'tab_closed_at', 'TEXT')
+  addColumnIfMissing(
+    database,
+    'purchase_order_lines',
+    'price_pending',
+    'INTEGER NOT NULL DEFAULT 0'
+  )
+  database.exec(
+    `CREATE INDEX IF NOT EXISTS idx_po_open_tab
+       ON purchase_orders (supplier, tab_closed_at);`
+  )
+  setMeta(database, 'schema_version', '86')
+
   // v41: re-derive every product's average cost from its remaining cost layers.
   //
   // The average used to be stored rounded to the cent, back when every total in

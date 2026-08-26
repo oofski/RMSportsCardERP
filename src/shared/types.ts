@@ -870,6 +870,19 @@ export interface PurchaseOrderLine {
   quantity: number
   /** Per-unit buy price being paid (future FIFO cost basis). */
   unitPrice: number
+  /**
+   * NOBODY HAS SAID WHAT THIS COST YET.
+   *
+   * A roadshow shop hands things over across the week and prices them at the
+   * end. Stored beside the number rather than encoded into it, because 0 is a
+   * REAL price — a throw-in — and null would mean touching a NOT NULL column
+   * every existing read depends on. Same reasoning as a nullable label cost:
+   * "nobody said" and "it was free" are different facts.
+   *
+   * A tab cannot be settled while any line still carries it. See
+   * @shared/roadshowTab.
+   */
+  pricePending: boolean
   /** quantity × unitPrice. */
   lineTotal: number
   /** Units already folded into stock (by UPC scan or a whole-PO receive). */
@@ -990,6 +1003,26 @@ export interface PurchaseOrder {
    * ordinary purchase.
    */
   saleAwaitsItems?: boolean | null
+  /**
+   * A ROADSHOW TAB: a purchase order that stays open all week.
+   *
+   * Two timestamps rather than a status, because a tab IS an ordinary purchase
+   * order in `ordered` that happens to stay there — see @shared/roadshowTab.
+   * Non-null `tabOpenedAt` makes it a tab; a null `tabClosedAt` makes it still
+   * running, which is the one test completePoIfFullyReceived asks before it
+   * closes anything.
+   */
+  tabOpenedAt?: string | null
+  tabClosedAt?: string | null
+  /**
+   * How many lines still have no price. 0 on every ordinary purchase order.
+   *
+   * Belongs BESIDE `total` wherever that is printed for a tab, because on a tab
+   * `total` is the priced lines only: a pending line contributes nothing. The
+   * figure is honest and, alone, misleading — "$1,240" for a week that also has
+   * three unpriced cases on it reads as the bill.
+   */
+  pendingPriceCount?: number
   /**
    * The buyer this order's boxes are FOR, on a dropship. Null otherwise.
    *
@@ -1113,6 +1146,16 @@ export interface NewPurchaseOrderLine {
   productId: string
   quantity: number
   unitPrice: number
+  /**
+   * "We bought it, nobody has said what it costs yet."
+   *
+   * Only ever true on a roadshow tab, where the shop prices the week up at the
+   * end. Stored beside `unitPrice` rather than encoded into it because 0 is a
+   * real price a roadshow gives on a throw-in — see @shared/roadshowTab.
+   * Omitted everywhere else, which is what keeps every existing caller's line
+   * priced exactly as it was.
+   */
+  pricePending?: boolean
   /** Omit or null to inherit the header's supplier. Store the inheritance. */
   supplier?: string | null
   /** Omit or null to inherit the header's destination. */

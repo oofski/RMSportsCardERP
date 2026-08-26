@@ -319,6 +319,20 @@ export const IPC = {
   poUpdateLine: 'po:update-line',
   poRemoveLine: 'po:remove-line',
   poSetFreight: 'po:set-freight',
+  // A ROADSHOW TAB: buy from a shop all week, settle up once.
+  //
+  // Four channels rather than reusing the ordinary ones, because each does
+  // something an ordinary purchase order deliberately refuses. `poOpenTab` is
+  // find-or-create — there is only ever one open tab per shop, so "open" and
+  // "start" are the same press. `poSetLinePrice` takes a NULLABLE price, which
+  // `poUpdateLine` cannot: null is the operator saying "the shop still has not
+  // told us", which is a different fact from free. `poSettleTab` closes the tab
+  // and pays it in one act, and refuses while any price is missing.
+  // See @shared/roadshowTab for the whole model.
+  poOpenTab: 'po:open-tab',
+  poOpenTabs: 'po:open-tabs',
+  poSetLinePrice: 'po:set-line-price',
+  poSettleTab: 'po:settle-tab',
   // Carrier status: the hourly sweep, forced by hand.
   trackingCheckNow: 'tracking:check-now',
   trackingCanRead: 'tracking:can-read',

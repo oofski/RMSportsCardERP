@@ -15,6 +15,7 @@ import {
   poColumnStatus
 } from '@shared/purchaseOrders'
 import { receiveProgress } from '@shared/receiving'
+import { isOpenTab } from '@shared/roadshowTab'
 import { Icon } from '../../components/Icon'
 import { ReceiveBar } from '../../components/ReceiveProgress'
 import { FreightLine, TrackingLine } from '../../components/FreightFields'
@@ -443,6 +444,20 @@ function PoCard({
 
             It says Reopen on the button below, so this is also the only thing
             explaining why that button is there. */}
+        {/* THIS ORDER IS MEANT TO BE SITTING HERE.
+            A roadshow tab stays in Ordered for a week on purpose, and without
+            this it reads as a purchase somebody raised and forgot to chase —
+            the single most likely thing to happen to this feature is that
+            somebody "tidies up" an open tab by cancelling it. */}
+        {isOpenTab({ tabOpenedAt: po.tabOpenedAt ?? null, tabClosedAt: po.tabClosedAt ?? null }) && (
+          <span
+            className="po-tab-chip"
+            title={`A running tab${po.supplier ? ` with ${po.supplier}` : ''} — it stays open until it is settled. Open it to add what was bought.`}
+          >
+            <Icon name="Store" size={11} />
+            Open tab
+          </span>
+        )}
         {po.status === 'cancelled' && (
           <span
             className="po-card-cancelled"
@@ -500,6 +515,12 @@ function PoCard({
               gap between them is where a partial delivery hides: nine items can
               be thirty-eight units. */}
           {po.orderedUnits > 0 && ` · ${po.orderedUnits} ${po.orderedUnits === 1 ? 'unit' : 'units'}`}
+          {/* NEVER LET THE TOTAL STAND ALONE ON A TAB. An unpriced line
+              contributes nothing to it, so the figure beside this is the priced
+              lines only — and on the board, where nobody is going to open the
+              order, a total that quietly excludes three cases is exactly how
+              somebody underpays a shop. */}
+          {(po.pendingPriceCount ?? 0) > 0 && ` · ${po.pendingPriceCount} not priced`}
         </span>
       </div>
       {/* The split, named on the card. The glow says part of this order never

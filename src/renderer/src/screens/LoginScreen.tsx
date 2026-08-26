@@ -5,7 +5,7 @@ import { useSession } from '../lib/session'
 import { api } from '../lib/api'
 
 export function LoginScreen(): JSX.Element {
-  const { setUser } = useSession()
+  const { setUser, refresh } = useSession()
   const [identifier, setIdentifier] = useState('')
   const [password, setPassword] = useState('')
   const [remember, setRemember] = useState(false)
@@ -37,6 +37,20 @@ export function LoginScreen(): JSX.Element {
       if (remember) await api.credentials.set({ identifier, password })
       else await api.credentials.clear()
       setUser(res.user)
+      /**
+       * AND RE-READ THE SESSION, which is what hydrates the shelf registry.
+       *
+       * `refresh` runs once on mount — before anybody is signed in, when the
+       * locations read 401s and is swallowed — so a session that signed in on
+       * this page-load kept the built-in RM/AM registry until somebody reloaded
+       * the window. Every screen that asks `destinationHoldsStock` was then
+       * drawing a Roadshow shop as a dropship, and the roadshow tab picker came
+       * up empty because it had no shops to list.
+       *
+       * Swallowed, and AFTER setUser: the sign-in itself has already succeeded,
+       * and a failed re-read must not bounce somebody back to this form.
+       */
+      await refresh().catch(() => undefined)
     } finally {
       setBusy(false)
     }

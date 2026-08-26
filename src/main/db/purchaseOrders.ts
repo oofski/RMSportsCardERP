@@ -30,6 +30,8 @@ import { addStock, adjustStock, reverseStockReceipt, stockQty } from './inventor
 import { recordPoCogs, voidPoCogs } from './finance'
 import { adoptLegacyFreight, deleteOrderExtras, recordOrderEvent } from './orderExtras'
 import { dealTicketRefFor, issueDealTicket } from './dealTickets'
+import { isOpenTab, settleTabRefusal } from '@shared/roadshowTab'
+import { syncProductAvgCost, unitMoney } from './lots'
 import { newId, nowIso } from '../util'
 
 interface PoRow {
@@ -70,6 +72,7 @@ interface PoLineRow {
   category: string
   quantity: number
   unit_price: number
+  price_pending: number | null
   position: number
   qty_received: number
   received_at: string | null
@@ -252,6 +255,13 @@ function toSummary(row: PoHeaderRow): PurchaseOrder {
     // Null on a purchase order with no sale behind it, which is most of them —
     // and "no linked sale" is a different fact from "its sale has the goods".
     saleAwaitsItems: row.sale_awaits_items == null ? null : row.sale_awaits_items === 1,
+    // A roadshow tab: a purchase order that stays open all week. Two timestamps
+    // rather than a status — see @shared/roadshowTab for why.
+    tabOpenedAt: row.tab_opened_at ?? null,
+    tabClosedAt: row.tab_closed_at ?? null,
+    // Always printed beside `total`, never on its own — the total is the priced
+    // lines only, and this is what stops that figure being read as the bill.
+    pendingPriceCount: Number(row.pending_price_count) || 0,
     /**
      * WHO THIS PURCHASE IS FOR, when it is a dropship.
      *
@@ -337,6 +347,9 @@ function toLine(row: PoLineRow, units: UnitRow[]): PurchaseOrderLine {
     category: row.category,
     quantity: row.quantity,
     unitPrice: row.unit_price,
+    // "We do not know yet" is stored beside the number rather than encoded into
+    // it: 0 is a real price a roadshow gives on a throw-in. See @shared/roadshowTab.
+    pricePending: row.price_pending === 1,
     lineTotal: cents(row.quantity * row.unit_price),
     qtyReceived: row.qty_received,
     qtyOutstanding: Math.max(0, row.quantity - row.qty_received),
@@ -393,10 +406,22 @@ const PO_SELECT = `
          po.linked_invoice_id, po.total, po.shipping_cost,
          po.created_by, po.created_at, po.updated_at,
          po.ordered_at, po.paid_at, po.received_at, po.cancelled_at, po.scanned_at,
+         po.tab_opened_at, po.tab_closed_at,
          po.carrier, po.service, po.tracking_number, po.payment_timing,
          po.tracking_status, po.tracking_status_detail, po.tracking_status_at, po.tracking_checked_at,
          po.tracking_error, po.tracking_attempted_at,
          (SELECT COUNT(*) FROM purchase_order_lines l WHERE l.po_id = po.id) AS line_count,
+         -- HOW MUCH OF THE TOTAL BESIDE IT IS STILL UNKNOWN.
+         --
+         -- The total on a tab is the PRICED lines only, because a pending line
+         -- carries a price of 0. That figure is honest and, on its own,
+         -- misleading: "$1,240" for a week that also has three unpriced cases on
+         -- it reads as the bill. This is what lets every screen print the two
+         -- together, which is the only form in which either is safe.
+         --
+         -- Zero on every ordinary purchase order, where the column defaults to 0.
+         (SELECT COUNT(*) FROM purchase_order_lines l
+           WHERE l.po_id = po.id AND l.price_pending = 1) AS pending_price_count,
          ${RECEIVED_LINE_COUNT_SQL} AS received_line_count,
          (SELECT COALESCE(SUM(l.qty_received), 0) FROM purchase_order_lines l
            WHERE l.po_id = po.id) AS received_units,
@@ -468,7 +493,7 @@ const PO_SELECT = `
 
 const LINE_SELECT = `
   SELECT l.id, l.po_id, l.product_id, p.name AS product_name, p.sku AS sku,
-         p.category AS category, l.quantity, l.unit_price, l.position,
+         p.category AS category, l.quantity, l.unit_price, l.price_pending, l.position,
          l.qty_received, l.received_at,
          po.supplier AS header_supplier, po.location AS header_destination
   FROM purchase_order_lines l
@@ -501,6 +526,9 @@ type PoHeaderRow = PoRow & {
   receivable_units: number
   destination_count: number
   sale_awaits_items: number | null
+  tab_opened_at: string | null
+  tab_closed_at: string | null
+  pending_price_count: number | null
   sale_buyer_count: number | null
   sale_buyer: string | null
   shipping_cost: number | null
@@ -1002,9 +1030,20 @@ export function addPurchaseOrderLines(
   const db = getDb()
   const run = db.transaction((): PoStatusResult => {
     const head = db
-      .prepare('SELECT id, po_number, status, supplier, location FROM purchase_orders WHERE id = ?')
+      .prepare(
+        `SELECT id, po_number, status, supplier, location, tab_opened_at, tab_closed_at
+           FROM purchase_orders WHERE id = ?`
+      )
       .get(poId) as
-      | { id: string; po_number: string; status: PurchaseOrderStatus; supplier: string | null; location: string }
+      | {
+          id: string
+          po_number: string
+          status: PurchaseOrderStatus
+          supplier: string | null
+          location: string
+          tab_opened_at: string | null
+          tab_closed_at: string | null
+        }
       | undefined
     if (!head) return { po: null, error: 'Purchase order not found.' }
     if (head.status === 'cancelled') {
@@ -1013,7 +1052,22 @@ export function addPurchaseOrderLines(
         error: `${head.po_number} was cancelled. Reopen it before adding anything.`
       }
     }
-    if (head.status === 'received') {
+    /**
+     * A TAB KEEPS TAKING THINGS. The refusal below was written for a delivery
+     * that has arrived: anything added to it could never be checked in, so the
+     * order has to be reopened first. A tab is the case that rule predates — it
+     * is checked in as it goes and stays open on purpose — so it is exempt while
+     * it is running, and refused once it has been settled, when adding to it
+     * would change a bill that has already been paid.
+     */
+    if (head.tab_opened_at) {
+      if (head.tab_closed_at) {
+        return {
+          po: getPurchaseOrder(poId),
+          error: `${head.po_number} has been settled. Open a new tab for anything bought since.`
+        }
+      }
+    } else if (head.status === 'received') {
       return {
         po: getPurchaseOrder(poId),
         error: `${head.po_number} is closed, so anything added now could never be checked in. Move it back to Ordered first.`
@@ -1040,16 +1094,26 @@ export function addPurchaseOrderLines(
     ).p
     const insertLine = db.prepare(
       `INSERT INTO purchase_order_lines
-         (id, po_id, product_id, quantity, unit_price, position, created_at, supplier, destination)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         (id, po_id, product_id, quantity, unit_price, price_pending, position, created_at,
+          supplier, destination)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     wanted.forEach((l, i) => {
+      // "Nobody has said what it costs" is only a thing an OPEN TAB can hold. On
+      // an ordinary purchase order it would be a line that quietly never reaches
+      // the total and nothing ever asks about, because only the tab screen shows
+      // the pending count and only settling refuses on it.
+      const pending = !!l.pricePending && isOpenTab({
+        tabOpenedAt: head.tab_opened_at,
+        tabClosedAt: head.tab_closed_at
+      })
       insertLine.run(
         newId(),
         poId,
         l.productId,
         Math.round(l.quantity),
-        Math.max(0, l.unitPrice),
+        pending ? 0 : Math.max(0, l.unitPrice),
+        pending ? 1 : 0,
         nextPos + 1 + i,
         ts,
         // NULL means "same as the header", exactly as it does on a line written
@@ -1060,17 +1124,12 @@ export function addPurchaseOrderLines(
       )
     })
 
-    const all = db
-      .prepare('SELECT quantity, unit_price FROM purchase_order_lines WHERE po_id = ?')
-      .all(poId) as Array<{ quantity: number; unit_price: number }>
-    const total = cents(
-      all.reduce((sum, l) => sum + cents(Math.round(l.quantity) * Math.max(0, l.unit_price)), 0)
-    )
-    db.prepare('UPDATE purchase_orders SET total = ?, updated_at = ? WHERE id = ?').run(total, ts, poId)
-    // The ledger follows the document. UPDATE rather than void-and-rewrite so
-    // the row keeps the date the purchase was committed — re-booking it today
-    // would move the cost into this month and restate two months at once.
-    db.prepare('UPDATE finance_cogs SET amount = ? WHERE po_id = ?').run(total, poId)
+    // The one restatement, shared with every other edit. This used to sum the
+    // lines here and FORGOT THE FREIGHT — so adding a line to an order that had
+    // a shipping charge on it silently wiped that charge out of both the total
+    // and the ledger row. A tab has a line added to it every day of the week,
+    // which is how that finally showed up.
+    restateOrderTotal(db, poId, ts)
     return { po: getPurchaseOrder(poId) }
   })
   try {
@@ -1417,6 +1476,262 @@ export function removePurchaseOrderLine(poId: string, lineId: string): PoStatusR
   } catch (err) {
     return { po: getPurchaseOrder(poId), error: (err as Error).message }
   }
+}
+
+/**
+ * THIS ROADSHOW'S OPEN TAB, or a new one.
+ *
+ * The button behind "add what we bought from Roadshow Dallas today". It is
+ * deliberately find-or-create rather than two controls: there is only ever ONE
+ * open tab per shop — a second would split a week's trading across two amounts
+ * owed to a shop expecting one payment — so "open the tab" and "start the tab"
+ * are the same gesture with the same outcome, and asking somebody to know which
+ * one applies is asking them to remember whether they bought anything on Monday.
+ *
+ * ## The uniqueness is enforced here, not by a constraint
+ *
+ * A UNIQUE index cannot express "one row per supplier WHERE tab_closed_at IS
+ * NULL" portably, and the read below is inside the same transaction as the
+ * insert, so two benches pressing at once serialise on SQLite's write lock and
+ * the second one finds the first one's tab.
+ *
+ * ## It is an ordinary purchase order in every other respect
+ *
+ * Same numbering, same board, same deal ticket, same receiving. What differs is
+ * the two timestamps — see @shared/roadshowTab for why that is the whole model.
+ */
+export function openRoadshowTab(
+  supplier: string,
+  location: string,
+  actorId: string | null
+): PoStatusResult {
+  const who = String(supplier ?? '').trim()
+  if (!who) return { po: null, error: 'Say which roadshow.' }
+  const db = getDb()
+  const existing = db
+    .prepare(
+      `SELECT id FROM purchase_orders
+        WHERE tab_opened_at IS NOT NULL AND tab_closed_at IS NULL
+          AND status != 'cancelled'
+          AND LOWER(TRIM(COALESCE(supplier, ''))) = LOWER(?)
+        ORDER BY tab_opened_at ASC LIMIT 1`
+    )
+    .get(who) as { id: string } | undefined
+  if (existing) return { po: getPurchaseOrder(existing.id) }
+
+  // EMPTY ON PURPOSE. A tab starts with nothing on it and grows all week;
+  // createPurchaseOrder is happy with no lines, and seeding a placeholder line
+  // would be a case nobody bought sitting in the week's cost of goods.
+  const made = createPurchaseOrder(
+    { supplier: who, location, lines: [] },
+    actorId
+  )
+  const ts = nowIso()
+  getDb()
+    .prepare(
+      `UPDATE purchase_orders SET tab_opened_at = ?, updated_at = ? WHERE id = ?`
+    )
+    .run(ts, ts, made.id)
+  recordOrderEvent('po', made.id, 'stage', {
+    toStage: 'ordered',
+    detail: `Opened as a running tab with ${who} — it stays open until it is settled`,
+    actorId,
+    db: getDb()
+  })
+  return { po: getPurchaseOrder(made.id) }
+}
+
+/** Every roadshow tab still running, oldest first — the ones somebody owes. */
+export function listOpenRoadshowTabs(): PurchaseOrder[] {
+  return (
+    getDb()
+      .prepare(
+        `${PO_SELECT}
+          WHERE po.tab_opened_at IS NOT NULL AND po.tab_closed_at IS NULL
+            AND po.status != 'cancelled'
+          ORDER BY po.tab_opened_at ASC`
+      )
+      .all() as PoHeaderRow[]
+  ).map(toSummary)
+}
+
+/**
+ * Say what a line cost, or that nobody knows yet.
+ *
+ * Separate from updatePurchaseOrderLine because it is a different act with a
+ * different guard: that one edits quantity and price together on an order being
+ * corrected, and this one is somebody working down a settled-up receipt filling
+ * in the prices a shop has finally given them.
+ *
+ * ## PRICING A LINE THAT IS ALREADY IN THE BUILDING RE-COSTS ITS STOCK
+ *
+ * This is the part the whole "we do not know yet" idea stands or falls on. A
+ * roadshow case is carried home and checked in on Tuesday; the shop says $400 on
+ * Friday. Without this, the cost layer that case opened would sit at whatever
+ * was known on Tuesday — nothing — so the shelf would be under-valued by $400
+ * and every break and every sale out of that case would book pure profit, with
+ * the purchase order's own total saying $400 all the while.
+ *
+ * So the layers this line opened are restated to the real figure, and the
+ * product's average cost with them.
+ *
+ * ## Which is refused the moment ANY of it has left the shelf
+ *
+ * A layer that has been drawn down has already priced a break or a sale at the
+ * old figure, and changing it now would restate a margin somebody has already
+ * been shown, in a month that may already be closed. `updatePurchaseOrderLine`
+ * refuses on RECEIVED for essentially this reason; this is the same rule drawn
+ * one step later, at the point where it actually starts to matter.
+ *
+ * ## What it does NOT restate
+ *
+ * The stock ledger's own row keeps the figure known at check-in. That row is a
+ * record of what happened on Tuesday, nothing values inventory from it, and
+ * rewriting history to match a fact that arrived later is the opposite of what a
+ * ledger is for. The order's history log carries the correction instead.
+ */
+export function setPurchaseOrderLinePrice(
+  poId: string,
+  lineId: string,
+  unitPrice: number | null,
+  actorId: string | null
+): PoStatusResult {
+  const db = getDb()
+  const run = db.transaction((): PoStatusResult => {
+    const line = db
+      .prepare(
+        `SELECT l.id, l.po_id, l.product_id, l.quantity, p.name AS product_name
+           FROM purchase_order_lines l
+           JOIN inventory_products p ON p.id = l.product_id
+          WHERE l.id = ? AND l.po_id = ?`
+      )
+      .get(lineId, poId) as
+      | { id: string; po_id: string; product_id: string; quantity: number; product_name: string }
+      | undefined
+    if (!line) return { po: getPurchaseOrder(poId), error: 'That line is gone.' }
+    // NULL is the operator saying "still do not know", which is a real answer
+    // and the reason this takes a nullable rather than a number.
+    const pending = unitPrice === null || unitPrice === undefined
+    if (!pending && !Number.isFinite(Number(unitPrice))) {
+      return { po: getPurchaseOrder(poId), error: 'That is not a price.' }
+    }
+    const price = pending ? 0 : Math.max(0, Number(unitPrice) || 0)
+
+    // Every cost layer this line has opened, and how much of each is still on
+    // the shelf. One row per RECEIPT — a line checked in over two visits has two
+    // layers — which is why this reads po_line_receipts rather than the line's
+    // own lot_id, the column that could only ever remember the last of them.
+    const layers = db
+      .prepare(
+        `SELECT lot.id AS lot_id, lot.qty_received, lot.qty_remaining
+           FROM po_line_receipts r
+           JOIN inventory_lots lot ON lot.id = r.lot_id
+          WHERE r.po_line_id = ?`
+      )
+      .all(lineId) as Array<{ lot_id: string; qty_received: number; qty_remaining: number }>
+    const drawnDown = layers.filter((l) => Number(l.qty_remaining) < Number(l.qty_received))
+    if (drawnDown.length > 0) {
+      return {
+        po: getPurchaseOrder(poId),
+        error:
+          `Some of the ${line.product_name} on this line has already been broken or sold, so it ` +
+          'has been costed at the old price and that cannot be changed now. Correct it with a ' +
+          'stock adjustment instead.'
+      }
+    }
+
+    const ts = nowIso()
+    db.prepare(
+      `UPDATE purchase_order_lines SET unit_price = ?, price_pending = ? WHERE id = ?`
+    ).run(price, pending ? 1 : 0, lineId)
+    if (layers.length > 0) {
+      const recost = db.prepare(`UPDATE inventory_lots SET unit_cost = ? WHERE id = ?`)
+      for (const l of layers) recost.run(unitMoney(price), l.lot_id)
+      syncProductAvgCost(db, line.product_id)
+    }
+    // The stored total is Σ(line) + freight, and a pending line carries a price
+    // of 0 — so the header total is the KNOWN total for free, and agrees with
+    // tabKnownTotal without either side knowing about the other.
+    restateOrderTotal(db, poId, ts)
+    const landed = layers.length > 0 ? ' — the stock on the shelf was re-costed to match' : ''
+    recordOrderEvent('po', poId, 'note', {
+      detail: pending
+        ? `Price on ${line.product_name} set back to "not known yet"`
+        : `Priced ${line.product_name} at ${price.toFixed(2)} each${landed}`,
+      actorId,
+      db
+    })
+    return { po: getPurchaseOrder(poId) }
+  })
+  try {
+    return run()
+  } catch (err) {
+    return { po: getPurchaseOrder(poId), error: (err as Error).message }
+  }
+}
+
+/**
+ * Settle the week: close the tab and mark it paid.
+ *
+ * ONE ACT, because they are one act. A tab exists to be paid once at the end,
+ * and closing it without paying would leave a shop owed money by a document
+ * nothing is chasing, while paying without closing would let Thursday's box
+ * land on a bill that has already been settled.
+ *
+ * REFUSED WHILE ANY PRICE IS MISSING. That is the guard the whole
+ * unknown-prices feature rests on: a total nobody can compute is not a bill
+ * anybody can pay, and a tab settled with three unpriced cases on it would
+ * under-report a week of cost of goods for ever. See settleTabRefusal, which
+ * owns the words.
+ *
+ * Closing RE-ARMS ordinary completion — completePoIfFullyReceived stops
+ * standing down — so a fully-received tab closes itself on the next receipt or
+ * can be moved by hand, exactly like any other purchase order.
+ */
+export function settleRoadshowTab(id: string, actorId: string | null): PoStatusResult {
+  const db = getDb()
+  const run = db.transaction((): PoStatusResult => {
+    const head = db
+      .prepare(
+        `SELECT id, po_number, tab_opened_at, tab_closed_at FROM purchase_orders WHERE id = ?`
+      )
+      .get(id) as
+      | { id: string; po_number: string; tab_opened_at: string | null; tab_closed_at: string | null }
+      | undefined
+    if (!head) return { po: null, error: 'Purchase order not found.' }
+    const lines = db
+      .prepare('SELECT price_pending FROM purchase_order_lines WHERE po_id = ?')
+      .all(id) as Array<{ price_pending: number | null }>
+    const refusal = settleTabRefusal(
+      { tabOpenedAt: head.tab_opened_at, tabClosedAt: head.tab_closed_at },
+      lines.map((l) => ({ unitPrice: 0, pricePending: l.price_pending === 1 }))
+    )
+    if (refusal) return { po: getPurchaseOrder(id), error: refusal }
+
+    const ts = nowIso()
+    db.prepare(
+      `UPDATE purchase_orders SET tab_closed_at = ?, updated_at = ? WHERE id = ?`
+    ).run(ts, ts, id)
+    recordOrderEvent('po', id, 'stage', {
+      detail: `Tab settled — closed to anything bought after this`,
+      actorId,
+      db
+    })
+    return { po: getPurchaseOrder(id) }
+  })
+  let res: PoStatusResult
+  try {
+    res = run()
+  } catch (err) {
+    return { po: getPurchaseOrder(id), error: (err as Error).message }
+  }
+  if (res.error) return res
+  // THE PAYMENT IS ITS OWN TRANSACTION and goes through the ordinary machinery,
+  // so it is logged, guarded and idempotent exactly like every other payment on
+  // this board. Writing paid_at straight in above would put the one fact the
+  // P&L reads behind a check nobody performed.
+  const paid = setPurchaseOrderPaid(id, true, actorId)
+  return paid.error ? paid : { po: getPurchaseOrder(id) }
 }
 
 export function setPurchaseOrderPaid(
@@ -1953,6 +2268,25 @@ export function completePoIfFullyReceived(db: Database.Database, poId: string): 
     prevReceivedAt: h?.received_at ?? null
   }
   if (!h || h.scanned_at) return unchanged
+  /**
+   * A TAB NEVER CLOSES ITSELF. This is the whole of what makes one work.
+   *
+   * Everything below asks "has every receivable unit landed?" and closes the
+   * order when it has — which is right for a delivery and exactly wrong for a
+   * week's trading with a roadshow shop. One case bought on Tuesday and carried
+   * home IS every receivable unit, so without this the order would shut the
+   * moment it was checked in and Wednesday's box would have nowhere to go.
+   *
+   * Read straight off the columns rather than through getPurchaseOrder: this
+   * runs inside somebody else's transaction on every receipt, and a full
+   * document read to answer one boolean would be paid for on every scanned box.
+   */
+  const tab = db
+    .prepare('SELECT tab_opened_at, tab_closed_at FROM purchase_orders WHERE id = ?')
+    .get(poId) as { tab_opened_at: string | null; tab_closed_at: string | null } | undefined
+  if (isOpenTab({ tabOpenedAt: tab?.tab_opened_at ?? null, tabClosedAt: tab?.tab_closed_at ?? null })) {
+    return unchanged
+  }
   // THE DENOMINATOR IS WHAT IS COMING HERE, not what was ordered.
   //
   // A line with drop units is finished the moment its stock-bound units are in;

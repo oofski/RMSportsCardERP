@@ -37,7 +37,8 @@ import { destinationHoldsStock } from '@shared/purchaseOrders'
 import { adoptLegacyFreight, deleteOrderExtras, recordOrderEvent } from './orderExtras'
 import { describeDims, hasDims, readyToShipBlockedReason } from '@shared/fulfillment'
 import { dealTicketRefFor } from './dealTickets'
-import { issueDealTicket, markDropshipPair } from './dealTickets'
+import { foldTicketIntoDocument, issueDealTicket, markDropshipPair } from './dealTickets'
+import { isOpenTab } from '@shared/roadshowTab'
 
 /**
  * What to STORE in a line's destination column.
@@ -1609,9 +1610,18 @@ export function linkDropshipPair(
   const db = getDb()
   const run = db.transaction((): { ok: boolean; error?: string } => {
     const po = db
-      .prepare(`SELECT po_number, supplier, linked_invoice_id FROM purchase_orders WHERE id = ?`)
+      .prepare(
+        `SELECT po_number, supplier, linked_invoice_id, tab_opened_at, tab_closed_at
+           FROM purchase_orders WHERE id = ?`
+      )
       .get(poId) as
-      | { po_number: string; supplier: string | null; linked_invoice_id: string | null }
+      | {
+          po_number: string
+          supplier: string | null
+          linked_invoice_id: string | null
+          tab_opened_at: string | null
+          tab_closed_at: string | null
+        }
       | undefined
     if (!po) return { ok: false, error: 'That purchase order is gone.' }
     const invoice = db
@@ -1648,14 +1658,22 @@ export function linkDropshipPair(
       invoiceId
     )
 
+    const runningTab = isOpenTab({
+      tabOpenedAt: po.tab_opened_at,
+      tabClosedAt: po.tab_closed_at
+    })
     const soLabel = invoice.invoice_number ? `sales order ${invoice.invoice_number}` : 'a sales order'
     recordOrderEvent('po', poId, 'link', {
-      detail: `Dropship — sold on to ${invoice.customer_name} as ${soLabel}`,
+      detail: runningTab
+        ? `Sold on to ${invoice.customer_name} as ${soLabel}, off this running tab`
+        : `Dropship — sold on to ${invoice.customer_name} as ${soLabel}`,
       actorId,
       db
     })
     recordOrderEvent('so', invoiceId, 'link', {
-      detail: `Dropship — bought from ${po.supplier ?? 'a supplier'} on ${po.po_number}`,
+      detail: runningTab
+        ? `Off the running tab with ${po.supplier ?? 'a roadshow'} (${po.po_number})`
+        : `Dropship — bought from ${po.supplier ?? 'a supplier'} on ${po.po_number}`,
       actorId,
       db
     })
@@ -1665,6 +1683,26 @@ export function linkDropshipPair(
     // what was dropshipped — see markDropshipPair for why re-issuing would be
     // the wrong repair.
     markDropshipPair(db, poId, invoiceId)
+
+    /**
+     * A SALE OFF A RUNNING TAB JOINS THE TAB'S TICKET.
+     *
+     * "The deal ticket is just linked to the ongoing PO until the PO is paid
+     * out" — a week of buying from one shop and everything sold out of it is one
+     * deal, and the register should say so under one number rather than list
+     * eleven unrelated-looking movements nothing ties together.
+     *
+     * ONLY WHILE IT IS OPEN, which is what "until it is paid out" means: once the
+     * tab has been settled the week is closed, and a sale raised afterwards is
+     * its own piece of trade with its own number.
+     *
+     * The merge is NOT undone at settling. Settling is the moment the week
+     * becomes a finished, auditable deal — scattering its documents back to
+     * eleven numbers exactly then would be the wrong way round.
+     */
+    if (runningTab) {
+      foldTicketIntoDocument(db, { kind: 'po', id: poId }, { kind: 'so', id: invoiceId }, actorId)
+    }
     return { ok: true }
   })
   return run()

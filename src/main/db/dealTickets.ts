@@ -301,6 +301,96 @@ export function markDropshipPair(
 }
 
 /**
+ * Fold one document's ticket into another document's, without renumbering
+ * either.
+ *
+ * WHAT IT IS FOR: a roadshow tab. A week's buying from one shop is ONE deal that
+ * happens to be spelled as a purchase order plus however many sales came off it,
+ * and the owner's words for it were "the deal ticket is just linked to the
+ * ongoing PO until the PO is paid out". So the sale's ticket points at the tab's
+ * and the register lists the week under one number.
+ *
+ * ## Exactly what `mergeDealTickets` does, addressed by DOCUMENT
+ *
+ * Deliberately the same mechanism rather than a second one: nothing is
+ * renumbered, nothing is deleted, the absorbed row keeps its own number and its
+ * own issue date, and `unmergeDealTickets` takes it back out. What differs is
+ * only the way in — the operator combines tickets they picked off a register,
+ * and this is called from inside a link where the two DOCUMENTS are what is
+ * known and no ticket ids are in hand.
+ *
+ * ## It swallows, like everything else on the issue path
+ *
+ * A sale that refused to link because a register could not be updated would be
+ * the register failing a real piece of trade — see the note at the top of this
+ * file. So a missing ticket on either side is skipped, and a member already
+ * folded into somebody ELSE is left exactly where it is rather than stolen.
+ */
+export function foldTicketIntoDocument(
+  db: Database.Database,
+  target: { kind: 'po' | 'so'; id: string },
+  member: { kind: 'po' | 'so'; id: string },
+  actorId: string | null
+): void {
+  try {
+    const targetTicket = readTicketFor(db, target.kind, target.id)
+    const memberTicket = readTicketFor(db, member.kind, member.id)
+    if (!targetTicket || !memberTicket) return
+    if (targetTicket.id === memberTicket.id) return
+
+    // JOINING A MEMBER JOINS ITS GROUP — the one-level-deep rule mergeDealTickets
+    // states. A tab whose own ticket had been combined into something bigger
+    // would otherwise start a chain, and a chain is a number nothing can resolve
+    // in one read.
+    let root = targetTicket
+    if (root.mergedInto) {
+      const up = db.prepare(`SELECT * FROM deal_tickets WHERE id = ?`).get(root.mergedInto) as
+        | Record<string, unknown>
+        | undefined
+      const parent = up ? rowToTicket(up) : null
+      if (parent && !parent.mergedInto) root = parent
+      // A parent that is ITSELF merged means the register is already in a state
+      // this function does not understand. Leaving the sale on its own number is
+      // the harmless outcome; guessing at a root is not.
+      else if (parent) return
+    }
+    if (memberTicket.mergedInto === root.id) return
+    if (memberTicket.mergedInto) return
+
+    const stamp = new Date().toISOString()
+    // Anything the member already speaks for comes with it, or those rows end up
+    // pointing at a row that no longer holds a group.
+    db.prepare(`UPDATE deal_tickets SET merged_into = ?, updated_at = ? WHERE merged_into = ?`).run(
+      root.id,
+      stamp,
+      memberTicket.id
+    )
+    db.prepare(`UPDATE deal_tickets SET merged_into = ?, updated_at = ? WHERE id = ?`).run(
+      root.id,
+      stamp,
+      memberTicket.id
+    )
+    // ON THE DOCUMENT'S OWN HISTORY, for the reason mergeDealTickets gives:
+    // somebody opening this order later has to be able to find out why its
+    // ticket number is not the one printed on the register.
+    recordOrderEvent(memberTicket.documentKind, memberTicket.documentId, 'note', {
+      detail: `Deal ticket ${memberTicket.number} joined ${root.number}`,
+      actorId,
+      db
+    })
+    recordOrderEvent(root.documentKind, root.documentId, 'note', {
+      detail: `${memberTicket.number} joined this deal ticket`,
+      actorId,
+      db
+    })
+  } catch {
+    // Same bargain as issueDealTicket and markDropshipPair: a register that
+    // failed to combine costs a reference number on one screen. A link that
+    // refused costs the operator their work.
+  }
+}
+
+/**
  * The register, newest first.
  *
  * Both live joins are LEFT, so a ticket whose document was deleted still comes

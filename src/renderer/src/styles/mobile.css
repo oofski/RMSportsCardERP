@@ -1284,6 +1284,62 @@
     width: 100%;
   }
 
+  /* AN ORDINARY RECEIPT FOLDS TOO, and until roadshow tabs nothing had noticed.
+     The six desktop columns come to 450px of track plus five 12px gaps — 510px
+     inside a 390px screen — so the product name was clipped to nothing and the
+     head row printed "PRODUCTQTY" on top of itself. Only the seven-column
+     routed variant below had ever been folded, because a dropship is read at a
+     desk.
+
+     A tab is not. It is opened standing in a shop with a phone in one hand,
+     which is what made this worth fixing rather than noting.
+
+     Same two-row shape as the routed variant, with the empty cell where its
+     Destination sits — so the two lay out alike and a reader moving between
+     them is not relearning the row. */
+  .po-receipt-lines:not(.po-receipt-lines-routed) .po-receipt-line {
+    grid-template-columns: 40px minmax(0, 1fr) 60px 66px 22px;
+    grid-template-areas:
+      'img name qty   in    kill'
+      'img .    price total kill';
+    row-gap: 4px;
+    gap: 8px;
+  }
+  .po-receipt-lines:not(.po-receipt-lines-routed) .po-rl-img {
+    grid-area: img;
+  }
+  .po-receipt-lines:not(.po-receipt-lines-routed) .po-rl-name {
+    grid-area: name;
+    /* The clamp on .po-rl-pname needs a track it cannot grow past. Belt and
+       braces on a grid item that already gets minmax(0, 1fr): the stepper
+       beside it has no background of its own, so anything that did spill would
+       print straight through the − and the number rather than behind it. */
+    min-width: 0;
+    overflow: hidden;
+  }
+  .po-receipt-lines:not(.po-receipt-lines-routed) .po-rl-qty {
+    grid-area: qty;
+  }
+  .po-receipt-lines:not(.po-receipt-lines-routed) .po-rl-recv {
+    grid-area: in;
+  }
+  .po-receipt-lines:not(.po-receipt-lines-routed) .po-rl-price {
+    grid-area: price;
+  }
+  .po-receipt-lines:not(.po-receipt-lines-routed) .po-rl-total {
+    grid-area: total;
+  }
+  /* The remove button gets a column of its OWN, spanning both rows. Sharing the
+     total's cell put the ✕ straight on top of the line total — and on an
+     unpriced line that total is the "—" saying nobody has given a price yet,
+     which is the one character on the row that has to be readable. The column
+     is reserved whether or not the button is drawn, so a read-only receipt and
+     an editable one line up. */
+  .po-receipt-lines:not(.po-receipt-lines-routed) .po-rl-kill {
+    grid-area: kill;
+    align-self: center;
+  }
+
   /* The receipt's seventh column folds onto a second row of the SAME grid
      rather than being dropped: where a line's units are going is the reason
      this column exists, and a receipt that omits it on a phone answers a
@@ -1511,5 +1567,55 @@
   .cons-row .cons-acts .btn {
     flex: 1 1 0;
     min-height: var(--rm-tap);
+  }
+
+  /* ROADSHOW TABS ON A PHONE, which is where this feature is actually used: a
+     roadshow buy is typed standing in a shop, not at a desk.
+
+     The row stacks its figures under the name rather than beside it. At 390px a
+     shop's name, a purchase order number, a date, an amount and "3 not priced"
+     do not fit on one line, and squeezing them ellipsed the shop's name to two
+     characters — the one thing the row exists to say. */
+  .rs-tab-row {
+    flex-wrap: wrap;
+    min-height: var(--rm-tap);
+  }
+  /* The name keeps the chevron company on the first line and the FIGURES take
+     the second. Left to wrap on its own the chevron landed under everything, on
+     a third line of its own at the far left — an arrow pointing at nothing,
+     which reads as a broken row rather than as "this opens". */
+  .rs-tab-main {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .rs-tab-row > svg:last-child {
+    order: 1;
+  }
+  .rs-tab-figs {
+    order: 2;
+    flex: 1 1 100%;
+    flex-direction: row;
+    align-items: baseline;
+    justify-content: flex-start;
+    gap: 8px;
+    margin-left: 45px;
+  }
+
+  /* The banner's two figures move under the sentence for the same reason, and
+     stay side by side with each other — the amount and the count of unpriced
+     lines must never be separated, because the amount alone reads as the bill. */
+  .po-tab-banner {
+    flex-wrap: wrap;
+  }
+  .po-tab-banner-text {
+    flex: 1 1 calc(100% - 26px);
+  }
+  .po-tab-banner-figs {
+    flex: 1 1 100%;
+    flex-direction: row;
+    align-items: baseline;
+    justify-content: flex-start;
+    gap: 8px;
+    margin-left: 26px;
   }
 }

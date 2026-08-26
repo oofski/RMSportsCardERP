@@ -650,6 +650,40 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       /** Shipping + payment details. Omitted keys are left as they are. */
       setFreight: (id: string, patch: FreightPatch): Promise<Result<PurchaseOrderDetail>> =>
         ipcRenderer.invoke(IPC.poSetFreight, { id, ...patch }),
+      /**
+       * This roadshow's running tab, opening one if there is not already one.
+       *
+       * FIND-OR-CREATE on purpose. There is only ever one open tab per shop — a
+       * second would split a week's trading across two amounts owed to a shop
+       * expecting one payment — so pressing the button on Monday and pressing it
+       * again on Thursday are the same gesture with the same answer.
+       */
+      openTab: (supplier: string, location: string): Promise<Result<PurchaseOrderDetail>> =>
+        ipcRenderer.invoke(IPC.poOpenTab, { supplier, location }),
+      /** Every tab still running, oldest first — what the roadshows are owed. */
+      openTabs: (): Promise<PurchaseOrder[]> => ipcRenderer.invoke(IPC.poOpenTabs),
+      /**
+       * Say what a line cost, or that nobody knows yet.
+       *
+       * `unitPrice: null` is the second of those and is a REAL ANSWER, not a
+       * missing argument — it is why this exists beside `updateLine`, which
+       * cannot express it. Zero means the shop threw it in free.
+       */
+      setLinePrice: (
+        id: string,
+        lineId: string,
+        unitPrice: number | null
+      ): Promise<Result<PurchaseOrderDetail>> =>
+        ipcRenderer.invoke(IPC.poSetLinePrice, { id, lineId, unitPrice }),
+      /**
+       * Settle the week: close the tab and mark it paid, in one act.
+       *
+       * Refused while any line still has no price. A total nobody can work out
+       * is not a bill anybody can pay, and a tab settled with unpriced cases on
+       * it would under-report a week of cost of goods for ever.
+       */
+      settleTab: (id: string): Promise<Result<PurchaseOrderDetail>> =>
+        ipcRenderer.invoke(IPC.poSettleTab, { id }),
       searchCatalog: (query: string): Promise<InventoryProduct[]> =>
         ipcRenderer.invoke(IPC.poCatalogSearch, query),
       /**

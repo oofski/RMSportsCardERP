@@ -15,6 +15,13 @@ import {
 } from '@shared/purchaseOrders'
 import { receiveProgress, receivableProgressOf } from '@shared/receiving'
 import { purchaseQtyFloor, stepDownBlockedReason, stepQty } from '@shared/lineQty'
+import {
+  isOpenTab,
+  isTab,
+  pendingPriceCount,
+  settleTabRefusal,
+  tabKnownTotal
+} from '@shared/roadshowTab'
 import { api } from '../../lib/api'
 import { Button, CenterLoader, Modal } from '../../components/ui'
 import { useToast } from '../../components/Toast'
@@ -162,6 +169,50 @@ export function PurchaseOrderReceipt({
     await onSaved()
   }
 
+  /**
+   * What one line cost, or that nobody has said yet.
+   *
+   * A DIFFERENT CALL from editLine, not a flag on it. `updateLine` cannot carry
+   * "unknown" — it takes a number — and the two refuse for different reasons, so
+   * folding them together would mean one control that sometimes silently means
+   * zero. See setPurchaseOrderLinePrice.
+   */
+  const priceLine = async (lineId: string, unitPrice: number | null): Promise<void> => {
+    const res = await api.purchaseOrders.setLinePrice(id, lineId, unitPrice)
+    if (!res.ok || !res.data) {
+      toast.error(res.error ?? 'Could not save that price.')
+      const fresh = await api.purchaseOrders.get(id)
+      if (fresh) setDetail(fresh)
+      return
+    }
+    setDetail(res.data)
+    await onSaved()
+  }
+
+  /**
+   * Settle the week: close the tab and pay it, in one press.
+   *
+   * Refused server-side while any price is missing, and the button is disabled
+   * with the same sentence on it — so the reason is readable BEFORE the press
+   * rather than discovered after it.
+   */
+  const settleTab = async (): Promise<void> => {
+    if (!detail) return
+    setPayBusy(true)
+    try {
+      const res = await api.purchaseOrders.settleTab(detail.id)
+      if (!res.ok || !res.data) {
+        toast.error(res.error ?? 'Could not settle that tab.')
+        return
+      }
+      setDetail(res.data)
+      toast.success(`Tab with ${res.data.supplier || 'the shop'} settled and paid.`)
+      await onSaved()
+    } finally {
+      setPayBusy(false)
+    }
+  }
+
   useEffect(() => {
     let active = true
     api.purchaseOrders.get(id).then((d) => {
@@ -204,7 +255,26 @@ export function PurchaseOrderReceipt({
    * The repository refuses either way — this only decides whether to draw
    * controls that would be rejected.
    */
-  const linesEditable = detail.status !== 'cancelled' && detail.status !== 'received'
+  /**
+   * The tab's own facts, and what they change about this document.
+   *
+   * A RUNNING TAB IS EDITABLE EVEN IN RECEIVED, which is the one exception to the
+   * rule above and the whole point of the feature: a tab is checked in as it goes
+   * and stays open on purpose, so a case bought on Wednesday must still be able
+   * to go on it after Tuesday's has landed. `addPurchaseOrderLines` makes the
+   * same exception on the same test, so this draws exactly what the repository
+   * will accept.
+   */
+  const tabFacts = {
+    tabOpenedAt: detail.tabOpenedAt ?? null,
+    tabClosedAt: detail.tabClosedAt ?? null
+  }
+  const runningTab = isOpenTab(tabFacts)
+  const tabPending = pendingPriceCount(detail.lines)
+  const tabSoFar = tabKnownTotal(detail.lines)
+  const settleRefusal = settleTabRefusal(tabFacts, detail.lines)
+  const linesEditable =
+    detail.status !== 'cancelled' && (detail.status !== 'received' || runningTab)
   // The Destination column earns its place only when there is more than one
   // answer, the same rule the PDF follows: an ordinary order all going to RM
   // prints the five columns it has always printed.
@@ -233,9 +303,26 @@ export function PurchaseOrderReceipt({
               order is closed or cancelled, because addPurchaseOrderLines
               refuses both — a button whose only outcome is a refusal teaches
               people the feature is broken. */}
-          {detail.status !== 'cancelled' && detail.status !== 'received' && (
+          {linesEditable && (
             <Button variant="secondary" icon="Plus" onClick={() => setAdding((a) => !a)}>
-              {adding ? 'Done adding' : 'Add product'}
+              {adding ? 'Done adding' : runningTab ? 'Add what we bought' : 'Add product'}
+            </Button>
+          )}
+          {/* SETTLING IS THE TAB'S OWN ENDING and it replaces nothing: the
+              ordinary stage buttons still sit beside it, because a settled tab
+              goes on being a purchase order. Shown disabled with the reason on
+              it rather than hidden while prices are missing — hiding it would
+              leave somebody hunting for the button that closes the week. */}
+          {runningTab && (
+            <Button
+              variant="primary"
+              icon="DollarSign"
+              loading={payBusy}
+              disabled={payBusy || !!settleRefusal}
+              title={settleRefusal ?? 'Close this tab and record the payment'}
+              onClick={() => void settleTab()}
+            >
+              Settle &amp; pay
             </Button>
           )}
           {moves.map((to) => (
@@ -361,6 +448,45 @@ export function PurchaseOrderReceipt({
           </div>
         </div>
 
+        {/* WHAT A RUNNING TAB IS, said on the document rather than left to be
+            inferred from a stage badge that reads "Ordered" all week.
+
+            Three facts, in the order somebody standing at a roadshow needs
+            them: this stays open, here is what it has come to, and here is how
+            much of that figure is still unknown. The last one is not decoration
+            — the total beside it is the PRICED lines only, and a number that
+            looks like money while quietly excluding three cases is exactly the
+            way this feature could mislead somebody paying a shop. */}
+        {isTab(tabFacts) && (
+          <div className={`po-tab-banner${runningTab ? '' : ' po-tab-banner-done'}`}>
+            <Icon name={runningTab ? 'Store' : 'CheckCircle'} size={16} />
+            <div className="po-tab-banner-text">
+              <b>{runningTab ? 'Running tab' : 'Tab settled'}</b>
+              {runningTab ? (
+                <span>
+                  {' '}
+                  with {detail.supplier || 'this shop'} since {formatDate(detail.tabOpenedAt)}. It
+                  stays open — keep adding what you buy, and settle up at the end.
+                </span>
+              ) : (
+                <span>
+                  {' '}
+                  with {detail.supplier || 'this shop'} on {formatDate(detail.tabClosedAt)}. Anything
+                  bought since needs a new tab.
+                </span>
+              )}
+            </div>
+            <div className="po-tab-banner-figs">
+              <span className="mono">{formatMoney(tabSoFar)}</span>
+              <em>
+                {tabPending > 0
+                  ? `${tabPending} line${tabPending === 1 ? '' : 's'} not priced yet`
+                  : 'everything priced'}
+              </em>
+            </div>
+          </div>
+        )}
+
         <div className="po-receipt-timeline">
           <TimeRow icon="ShoppingCart" label="Ordered" date={detail.orderedAt} />
           <TimeRow icon="DollarSign" label="Paid" date={detail.paidAt} />
@@ -383,6 +509,7 @@ export function PurchaseOrderReceipt({
           <AddLinePanel
             poId={detail.id}
             poNumber={number}
+            tab={runningTab}
             onAdded={async (fresh) => {
               setDetail(fresh)
               // The board holds its own copy of every PO, and the total and the
@@ -453,7 +580,9 @@ export function PurchaseOrderReceipt({
                   headerDestination={detail.location}
                   thumb={thumbnails[line.productId]}
                   editable={linesEditable}
+                  onTab={runningTab}
                   onEdit={editLine}
+                  onPrice={priceLine}
                   onRemove={removeLine}
                 />
               ))}
@@ -641,7 +770,9 @@ function ReceiptLine({
   headerDestination,
   thumb,
   editable,
+  onTab,
   onEdit,
+  onPrice,
   onRemove
 }: {
   line: PurchaseOrderLine
@@ -656,7 +787,11 @@ function ReceiptLine({
    * whose only outcome is a refusal teaches people the feature is broken.
    */
   editable: boolean
+  /** On a running tab the price cell becomes the tab's own, which can say
+   *  "nobody knows yet" and can be filled in after the case has landed. */
+  onTab: boolean
   onEdit: (lineId: string, patch: { quantity?: number; unitPrice?: number }) => Promise<void>
+  onPrice: (lineId: string, unitPrice: number | null) => Promise<void>
   onRemove: (lineId: string, productName: string) => Promise<void>
 }): JSX.Element {
   const [open, setOpen] = useState(false)
@@ -747,8 +882,17 @@ function ReceiptLine({
         )}
         {/* Frozen once anything has landed, and it says why on hover rather
             than silently doing nothing. The repository refuses this too — this
-            is the courtesy, not the rule. */}
-        {editable && line.qtyReceived === 0 ? (
+            is the courtesy, not the rule.
+
+            A RUNNING TAB TAKES THE OTHER CELL, and takes it even after the case
+            has been checked in: on a roadshow the goods come home days before
+            the price does, so a cell that froze on receipt would freeze on
+            every line the feature exists for. What it may not do is change a
+            price for stock that has since been broken or sold — that refusal
+            lives in setPurchaseOrderLinePrice, where it can see the layers. */}
+        {editable && onTab ? (
+          <TabPriceCell line={line} onPrice={onPrice} />
+        ) : editable && line.qtyReceived === 0 ? (
           <NumberCell
             className="po-rl-price"
             value={line.unitPrice}
@@ -758,6 +902,10 @@ function ReceiptLine({
             label={`Unit price of ${line.productName}`}
             onCommit={(v) => onEdit(line.id, { unitPrice: v })}
           />
+        ) : line.pricePending ? (
+          <span className="po-rl-price po-price-pending" title="Nobody has said what this cost yet.">
+            Not priced
+          </span>
         ) : (
           <span
             className="po-rl-price mono"
@@ -770,7 +918,13 @@ function ReceiptLine({
             {formatMoney(line.unitPrice)}
           </span>
         )}
-        <span className="po-rl-total mono">{formatMoney(line.lineTotal)}</span>
+        {/* "$0.00" IS A LIE ON AN UNPRICED LINE. Zero is a real price a roadshow
+            gives on a throw-in, so printing it for "we do not know" would make
+            the two indistinguishable on the one screen used to work out what to
+            pay a shop. */}
+        <span className="po-rl-total mono">
+          {line.pricePending ? '—' : formatMoney(line.lineTotal)}
+        </span>
         {editable && (
           <span className="po-rl-kill">
             <button
@@ -811,6 +965,102 @@ function ReceiptLine({
           </div>
         ))}
     </>
+  )
+}
+
+/**
+ * A price on a running tab, which may not be known yet.
+ *
+ * ## An EMPTY BOX is the answer, not a missing one
+ *
+ * The whole cell is one input. Type a figure and that is the price; clear it and
+ * the line goes back to "nobody has said". That is one gesture for both
+ * directions, and it is the gesture somebody already reaches for.
+ *
+ * The alternative — a number box plus a "don't know" toggle beside it — puts two
+ * controls in a table cell, and leaves the question of what the number says
+ * while the toggle is on. This has one control and one answer.
+ *
+ * ## Empty is NOT zero, and that is the point
+ *
+ * `NumberCell` cannot express this: it takes a number, so a cleared box would
+ * commit 0 — and a roadshow really does throw a box in free, so 0 has to stay
+ * available and has to mean it. The placeholder says which state the cell is in
+ * without anybody having to know that a blank means something.
+ *
+ * Commits on blur and Enter like every other cell on this receipt; Escape puts
+ * back what was stored.
+ */
+function TabPriceCell({
+  line,
+  onPrice
+}: {
+  line: PurchaseOrderLine
+  onPrice: (lineId: string, unitPrice: number | null) => Promise<void>
+}): JSX.Element {
+  const stored = line.pricePending ? '' : line.unitPrice.toFixed(2)
+  const [draft, setDraft] = useState(stored)
+  const [busy, setBusy] = useState(false)
+
+  // Follow the saved value when it changes underneath — the write returns the
+  // whole order, and a refusal returns what was there before.
+  useEffect(() => {
+    setDraft(line.pricePending ? '' : line.unitPrice.toFixed(2))
+  }, [line.pricePending, line.unitPrice])
+
+  const commit = async (): Promise<void> => {
+    const typed = draft.trim()
+    const next = typed === '' ? null : Number(typed)
+    if (next !== null && !Number.isFinite(next)) {
+      setDraft(stored)
+      return
+    }
+    // Nothing actually changed — do not spend a round trip, and do not write a
+    // history line saying a price was set to what it already was.
+    if (next === null ? line.pricePending : !line.pricePending && next === line.unitPrice) {
+      setDraft(stored)
+      return
+    }
+    setBusy(true)
+    try {
+      await onPrice(line.id, next)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <span className={`po-rl-price po-rl-edit${line.pricePending ? ' po-price-unset' : ''}`}>
+      <input
+        className="po-rl-input mono"
+        type="number"
+        inputMode="decimal"
+        aria-label={`Unit price of ${line.productName}, blank if nobody has said yet`}
+        min={0}
+        step={0.01}
+        disabled={busy}
+        placeholder="—"
+        title={
+          line.pricePending
+            ? 'Nobody has said what this cost yet. Type the price when the shop gives it.'
+            : 'Clear the box to put this back to "not priced yet".'
+        }
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onFocus={(e) => e.target.select()}
+        onBlur={() => void commit()}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault()
+            e.currentTarget.blur()
+          }
+          if (e.key === 'Escape') {
+            setDraft(stored)
+            e.currentTarget.blur()
+          }
+        }}
+      />
+    </span>
   )
 }
 
@@ -1065,10 +1315,18 @@ function SupplierEditor({
 function AddLinePanel({
   poId,
   poNumber,
+  tab,
   onAdded
 }: {
   poId: string
   poNumber: string
+  /**
+   * On a running tab an EMPTY PRICE is allowed and means "the shop has not said
+   * yet" — which is the ordinary case at a roadshow, not an edge one. Everywhere
+   * else it stays required, because a purchase order with a blank price is
+   * somebody who forgot rather than somebody who does not know.
+   */
+  tab: boolean
   onAdded: (fresh: PurchaseOrderDetail) => void | Promise<void>
 }): JSX.Element {
   const toast = useToast()
@@ -1105,7 +1363,10 @@ function AddLinePanel({
     setQuery(p.name)
     setHits([])
     // The recorded cost is a starting point, not an answer — see the note above.
-    setPrice(p.unitCost > 0 ? String(p.unitCost) : '')
+    // NOT PREFILLED ON A TAB: what a roadshow charges bears no relation to what
+    // this product has cost from a distributor, and a figure sitting in the box
+    // is one Enter away from becoming a price somebody never typed.
+    setPrice(!tab && p.unitCost > 0 ? String(p.unitCost) : '')
   }
 
   const reset = (): void => {
@@ -1116,13 +1377,19 @@ function AddLinePanel({
   }
 
   const n = Math.round(Number(qty))
+  // Blank on a tab is the answer "not yet", so it is checked BEFORE the number
+  // is read — Number('') is 0, and letting that through would file every unknown
+  // price as free.
+  const unpriced = tab && price.trim() === ''
   const p = Number(price)
   const problem = !picked
     ? 'Pick a product.'
     : !Number.isFinite(n) || n < 1
       ? 'Quantity must be at least 1.'
-      : !Number.isFinite(p) || p < 0
-        ? 'Enter a unit price.'
+      : !unpriced && (!Number.isFinite(p) || p < 0)
+        ? tab
+          ? 'Enter a unit price, or leave it blank if the shop has not said yet.'
+          : 'Enter a unit price.'
         : null
 
   const submit = async (): Promise<void> => {
@@ -1130,7 +1397,12 @@ function AddLinePanel({
     setBusy(true)
     try {
       const res = await api.purchaseOrders.addLines(poId, [
-        { productId: picked.id, quantity: n, unitPrice: p }
+        {
+          productId: picked.id,
+          quantity: n,
+          unitPrice: unpriced ? 0 : p,
+          pricePending: unpriced
+        }
       ])
       if (!res.ok || !res.data) {
         toast.error(res.error ?? 'Could not add that product.')
@@ -1146,7 +1418,9 @@ function AddLinePanel({
 
   return (
     <div className="po-addline">
-      <div className="po-addline-head">Add a product to {poNumber}</div>
+      <div className="po-addline-head">
+        {tab ? `Add what we bought, onto ${poNumber}` : `Add a product to ${poNumber}`}
+      </div>
       <div className="po-addline-row">
         <div className="typeahead po-addline-search">
           <input
@@ -1182,8 +1456,8 @@ function AddLinePanel({
           className="input po-addline-price"
           value={price}
           inputMode="decimal"
-          placeholder="Unit price"
-          aria-label="Unit price"
+          placeholder={tab ? 'Price (or blank)' : 'Unit price'}
+          aria-label={tab ? 'Unit price, blank if the shop has not said yet' : 'Unit price'}
           disabled={busy}
           onChange={(e) => setPrice(e.target.value)}
         />
@@ -1197,7 +1471,10 @@ function AddLinePanel({
         </Button>
       </div>
       <div className="po-addline-note">
-        {problem ?? `Adds ${n} × ${formatMoney(p)} — ${formatMoney(n * p)} onto this order.`}
+        {problem ??
+          (unpriced
+            ? `Adds ${n} with no price yet. Fill it in when the shop says — the tab cannot be settled until every line has one.`
+            : `Adds ${n} × ${formatMoney(p)} — ${formatMoney(n * p)} onto this order.`)}
       </div>
     </div>
   )

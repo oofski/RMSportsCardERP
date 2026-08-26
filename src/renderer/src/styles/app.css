@@ -27232,3 +27232,199 @@ button.sor-team:focus-visible {
   background: var(--surface-3);
   color: var(--text-3);
 }
+
+/* ---------- Roadshow tabs ----------
+   A week of buying from one shop, on a purchase order that does not close
+   itself. See @shared/roadshowTab. */
+
+/* WHAT A RUNNING TAB IS, said on the document. The stage badge reads "Ordered"
+   all week, which is true and tells nobody that this order is meant to stay
+   there — so the banner carries the fact, the amount so far and how much of
+   that amount is still unknown. */
+.po-tab-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 10px 13px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-bg);
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+.po-tab-banner > svg {
+  flex: none;
+  color: var(--accent);
+}
+.po-tab-banner-text {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.po-tab-banner-text b {
+  color: var(--text);
+}
+/* The two figures are one block and wrap together. Split across a line break
+   the total would read as the bill with the count of unpriced lines orphaned
+   somewhere else, which is the one way this banner could mislead. */
+.po-tab-banner-figs {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+}
+.po-tab-banner-figs .mono {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+}
+.po-tab-banner-figs em {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--text-3);
+}
+/* Settled: the week is closed, so it wears the finished colour rather than the
+   live one. Same shape, so nothing moves when it changes. */
+.po-tab-banner-done {
+  background: var(--surface-2);
+  border-color: var(--border);
+}
+.po-tab-banner-done > svg {
+  color: var(--success);
+}
+
+/* "Not priced" where a figure would be. Deliberately NOT $0.00 — zero is a real
+   price a roadshow gives on a throw-in, and the two must not look alike. */
+.po-price-pending {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--warning);
+}
+/* The same state in the editable cell: an empty box, tinted so it reads as
+   waiting for an answer rather than as a box somebody has not reached yet. */
+.po-rl-price.po-price-unset .po-rl-input {
+  border-color: color-mix(in srgb, var(--warning) 45%, var(--border));
+  background: var(--warning-bg);
+}
+
+/* One row per roadshow shop. Pressing a row opens that shop's running tab, or
+   starts one — the same press either way, which is why the whole row is the
+   button and there is no second control to choose between. */
+.rs-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.rs-tab-row {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  padding: 11px 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+.rs-tab-row:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--surface-2);
+}
+.rs-tab-row:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+/* A shop with money already on its tab is the one somebody came here for. */
+.rs-tab-row.is-open {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  background: var(--accent-bg);
+}
+.rs-tab-icon {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-3);
+  color: var(--accent);
+}
+.rs-tab-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.rs-tab-name {
+  font-weight: 650;
+  font-size: 13.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rs-tab-sub {
+  font-size: 11.5px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rs-tab-figs {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+}
+.rs-tab-figs .mono {
+  font-size: 14px;
+  font-weight: 700;
+}
+.rs-tab-figs em {
+  font-style: normal;
+  font-size: 10.5px;
+  color: var(--text-3);
+}
+.rs-tab-start {
+  font-size: 11.5px;
+  font-weight: 650;
+  color: var(--accent);
+}
+.rs-tabs-empty {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  padding: 18px 4px;
+  color: var(--text-2);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+.rs-tabs-empty svg {
+  flex: none;
+  color: var(--text-3);
+}
+
+/* On a board card: this order is a tab, so it is not stalled in Ordered — it is
+   meant to be there. Without it a tab open for six days reads as a purchase
+   somebody forgot to chase. */
+.po-tab-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--accent-bg);
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
+  font-size: 10.5px;
+  font-weight: 700;
+  white-space: nowrap;
+}
