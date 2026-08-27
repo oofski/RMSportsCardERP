@@ -43,6 +43,7 @@ import { DestinationSelect } from '../invoicing/PartySelect'
 import { CategoryLogo } from '../inventory/CategoryLogo'
 import { POCatalogTypeahead } from '../invoicing/POCatalogTypeahead'
 import { SourceOrderPicker } from './SourceOrderPicker'
+import { StockOnHand } from './StockOnHand'
 import { CustomerTypeahead } from './CustomerTypeahead'
 import { QboReadiness } from './QboReadiness'
 import { InvoiceStatusChip, formatDay } from './helpers'
@@ -978,6 +979,18 @@ export function CreateInvoiceModal({
                             quantity={parseFloat(l.quantity) || 0}
                             value={l.sourcePoId}
                             onChange={(poId) => patch(l.key, { sourcePoId: poId })}
+                          />
+                        )}
+                        {/* HOW MANY WE HAVE AND WHERE, but only when the number
+                            typed is more than is downstairs. "I have 4 in RM
+                            and I need 7" is the case this exists for, and the
+                            answer names the shop holding the other three. Silent
+                            on every line the shelf covers, which is almost all
+                            of them. See StockOnHand. */}
+                        {l.productId && (
+                          <StockOnHand
+                            productId={l.productId}
+                            quantity={parseFloat(l.quantity) || 0}
                           />
                         )}
                       </td>

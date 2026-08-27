@@ -164,6 +164,7 @@ import type {
   UploadedFile
 } from '@shared/types'
 import type { StockProvenance } from '@shared/provenance'
+import type { ProductAvailability } from '@shared/availability'
 import type {
   ShipBatchUrl,
   ShipBreakAudit,
@@ -457,6 +458,15 @@ export function createBridge(ipcRenderer: BridgeTransport) {
        */
       productProvenance: (productId: string): Promise<StockProvenance | null> =>
         ipcRenderer.invoke(IPC.invProductProvenance, productId),
+      /**
+       * Where a product is, place by place — our shelves and the roadshow shops.
+       *
+       * Drawn on a sales-order line as the quantity is typed, so somebody asking
+       * for seven can see the four here and the three at the shop. See
+       * @shared/availability.
+       */
+      productAvailability: (productId: string): Promise<ProductAvailability> =>
+        ipcRenderer.invoke(IPC.invProductAvailability, productId),
       // What the cost-lot picker draws itself from. A pure READ: the operator's
       // answer is carried on the write that follows (adjustStock / recordSale /
       // streaming.addItem), so closing the dialog leaves nothing behind to undo.
@@ -696,6 +706,16 @@ export function createBridge(ipcRenderer: BridgeTransport) {
        */
       settleTab: (id: string): Promise<Result<PurchaseOrderDetail>> =>
         ipcRenderer.invoke(IPC.poSettleTab, { id }),
+      /**
+       * Stop buying against the week, without paying it.
+       *
+       * Allowed with prices still unknown — "we have stopped buying" is a fact
+       * about the shop, not about the bill. Closing also settles where every
+       * case is going: a closed tab's routing can no longer be changed. See
+       * closeRoadshowTab.
+       */
+      closeTab: (id: string): Promise<Result<PurchaseOrderDetail>> =>
+        ipcRenderer.invoke(IPC.poCloseTab, { id }),
       searchCatalog: (query: string): Promise<InventoryProduct[]> =>
         ipcRenderer.invoke(IPC.poCatalogSearch, query),
       /**

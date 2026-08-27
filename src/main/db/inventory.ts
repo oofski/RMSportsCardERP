@@ -17,6 +17,8 @@ import type { Database } from 'better-sqlite3'
 import type { ProductUnits, StockUnit } from '@shared/units'
 import { QTY_SNAP } from '@shared/units'
 import { LOCATION_IDS } from '@shared/inventory'
+import type { ProductAvailability } from '@shared/availability'
+import { isHomeShelf } from '@shared/availability'
 import { normalizeUpc } from '@shared/upc'
 import { getDb } from './database'
 import type { LotPick } from '@shared/costLots'
@@ -82,6 +84,38 @@ function stockFor(productId: string): Record<string, number> {
   const entry: Record<string, number> = {}
   for (const r of rows) entry[r.location] = r.quantity
   return entry
+}
+
+/**
+ * WHERE THIS PRODUCT IS, PLACE BY PLACE — our shelves and the shops alike.
+ *
+ * The read behind "4 at RM · 3 at Roadshow Wichita" on a sales-order line. The
+ * owner's case: "when putting quantities of things I need the RM inventory +
+ * roadshow open tabs." A roadshow shop is an ordinary stock location now, so
+ * this is one query over `inventory_stock` and nothing has to know about tabs
+ * at all — which is the whole benefit of having modelled a shop as a place.
+ *
+ * EMPTY PLACES ARE DROPPED HERE rather than by the caller, so a product that
+ * has never been anywhere returns an empty list instead of a row of zeroes for
+ * every shelf that exists.
+ */
+export function productAvailability(productId: string): ProductAvailability {
+  const id = String(productId ?? '').trim()
+  if (!id) return { productId: '', places: [] }
+  const rows = getDb()
+    .prepare(
+      `SELECT location, quantity FROM inventory_stock
+        WHERE product_id = ? AND quantity > 0`
+    )
+    .all(id) as Array<{ location: string; quantity: number }>
+  return {
+    productId: id,
+    places: rows.map((r) => ({
+      location: r.location,
+      quantity: Number(r.quantity) || 0,
+      here: isHomeShelf(r.location)
+    }))
+  }
 }
 
 /**

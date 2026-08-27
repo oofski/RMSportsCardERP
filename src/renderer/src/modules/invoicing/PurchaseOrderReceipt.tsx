@@ -101,6 +101,7 @@ export function PurchaseOrderReceipt({
   const [detail, setDetail] = useState<PurchaseOrderDetail | null>(null)
   const [pdfBusy, setPdfBusy] = useState(false)
   const [payBusy, setPayBusy] = useState(false)
+  const [closeBusy, setCloseBusy] = useState(false)
   const [adding, setAdding] = useState(false)
 
   /**
@@ -196,6 +197,33 @@ export function PurchaseOrderReceipt({
    * with the same sentence on it — so the reason is readable BEFORE the press
    * rather than discovered after it.
    */
+  /**
+   * Stop buying against this week, without paying it.
+   *
+   * Never refused for a missing price — that guard belongs to the MONEY, and
+   * drawing a line under a week is not a payment. The toast says what actually
+   * happened to the routing, because that is the consequence somebody would
+   * otherwise find out about a day later.
+   */
+  const closeTab = async (): Promise<void> => {
+    if (!detail) return
+    setCloseBusy(true)
+    try {
+      const res = await api.purchaseOrders.closeTab(detail.id)
+      if (!res.ok || !res.data) {
+        toast.error(res.error ?? 'Could not close that tab.')
+        return
+      }
+      setDetail(res.data)
+      toast.success(
+        `Tab with ${res.data.supplier || 'the shop'} closed. The bill is still unpaid, and where its cases go is now settled.`
+      )
+      await onSaved()
+    } finally {
+      setCloseBusy(false)
+    }
+  }
+
   const settleTab = async (): Promise<void> => {
     if (!detail) return
     setPayBusy(true)
@@ -313,6 +341,28 @@ export function PurchaseOrderReceipt({
               goes on being a purchase order. Shown disabled with the reason on
               it rather than hidden while prices are missing — hiding it would
               leave somebody hunting for the button that closes the week. */}
+          {/* CLOSE AND SETTLE ARE TWO ACTS, and only one of them is about money.
+
+              The owner: "close should basically move the PO into the unpaid tab
+              section." Stopping the week and paying for it happen at different
+              moments — the line has to be drawn BEFORE the prices are chased,
+              or Thursday's box lands on a week somebody thought was finished.
+
+              So Close is always available on a running tab, prices known or
+              not, and it is what settles where every case is going: a closed
+              tab's routing can no longer be changed. See closeRoadshowTab. */}
+          {runningTab && (
+            <Button
+              variant="secondary"
+              icon="Lock"
+              loading={closeBusy}
+              disabled={closeBusy}
+              title="Stop buying against this week. The bill stays unpaid, and where its cases go is settled."
+              onClick={() => void closeTab()}
+            >
+              Close tab
+            </Button>
+          )}
           {runningTab && (
             <Button
               variant="primary"

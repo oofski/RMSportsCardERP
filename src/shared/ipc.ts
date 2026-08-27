@@ -104,6 +104,9 @@ export const IPC = {
   // not just to the product row, which is why it is not `invProductUpdate`.
   invCostBasisFix: 'inventory:cost-basis:fix',
   invProductLots: 'inventory:product:lots',
+  // Where a product is, place by place -- our shelves and the roadshow shops.
+  // Drawn on a sales-order line as the quantity is typed. See productAvailability.
+  invProductAvailability: 'inventory:product:availability',
   /** Where a product's stock came from, and which POs are still bringing more. */
   invProductProvenance: 'inventory:product:provenance',
   // The cost-lot picker's one read: the open layers for a (product, location)
@@ -351,6 +354,9 @@ export const IPC = {
   poOpenTabs: 'po:open-tabs',
   poSetLinePrice: 'po:set-line-price',
   poSettleTab: 'po:settle-tab',
+  // Stop buying against a week WITHOUT paying it. Two acts, and only one is
+  // about money -- see closeRoadshowTab.
+  poCloseTab: 'po:close-tab',
   // Carrier status: the hourly sweep, forced by hand.
   trackingCheckNow: 'tracking:check-now',
   trackingCanRead: 'tracking:can-read',

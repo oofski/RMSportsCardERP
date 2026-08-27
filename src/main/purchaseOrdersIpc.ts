@@ -55,6 +55,7 @@ import {
   setPurchaseOrderStatus,
   listOpenRoadshowTabs,
   setPurchaseOrderLinePrice,
+  closeRoadshowTab,
   settleRoadshowTab
 } from './db/purchaseOrders'
 import type { PoReceiptItem } from './db/purchaseOrders'
@@ -465,6 +466,22 @@ export function registerPurchaseOrdersIpc(): void {
             ? null
             : Number(payload.unitPrice)
         const res = setPurchaseOrderLinePrice(payload.id, payload.lineId, price, actor?.id ?? null)
+        return res.error
+          ? { ok: false, error: res.error }
+          : { ok: true, data: res.po as PurchaseOrderDetail }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  ipcMain.handle(
+    IPC.poCloseTab,
+    (_e, payload: { id: string }): Result<PurchaseOrderDetail> => {
+      try {
+        const actor = requireInvoicing()
+        if (!payload?.id) return { ok: false, error: 'No purchase order specified.' }
+        const res = closeRoadshowTab(payload.id, actor?.id ?? null)
         return res.error
           ? { ok: false, error: res.error }
           : { ok: true, data: res.po as PurchaseOrderDetail }

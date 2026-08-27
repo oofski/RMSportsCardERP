@@ -382,5 +382,185 @@ console.log('\n=== 1. the shop becomes a place stock can sit ===')
   )
 }
 
+console.log('\n=== 5. how many we have, and where ===')
+// ---------------------------------------------------------------------------
+/**
+ * THE QUESTION THE OWNER LED WITH, as a rule rather than as a screen: "say I
+ * have 4 of product A in RM but I need 7 ... when putting quantities of things I
+ * need the RM inventory + roadshow open tabs."
+ *
+ * The sales-order line editor showed nothing at all — not a count, not a place,
+ * not a warning — so the answer was found out later, when the shelf came up
+ * short and the order sat in Awaiting items with nothing on it to say why.
+ */
+{
+  const avail = require('../src/main/db/inventory').productAvailability
+  const {
+    availabilityNote,
+    placesWorthNaming,
+    unitsAway,
+    unitsHere,
+    unitsOwned
+  } = require('../src/shared/availability')
+
+  invStock.addStock('p_r', 'RM', 4, 250, 'four here', null, null)
+  const shopTab = poRepo.createPurchaseOrder(
+    {
+      supplier: SHOP,
+      ongoing: true,
+      lines: [{ productId: 'p_r', quantity: 3, unitPrice: 400 }]
+    },
+    null
+  )
+  poRepo.receivePurchaseOrderLines(
+    shopTab.id,
+    [{ lineId: poRepo.getPurchaseOrder(shopTab.id).lines[0].id, quantity: 3 }],
+    null
+  )
+
+  const a = avail('p_r')
+  ok(unitsHere(a) === 4, 'FOUR ON OUR OWN SHELVES', String(unitsHere(a)))
+  ok(unitsAway(a) === 3, 'AND THREE AT THE SHOP — ours, and not in this building', String(unitsAway(a)))
+  ok(unitsOwned(a) === 7, 'SEVEN OWNED IN TOTAL, which is the number that answers the question')
+  /**
+   * HOME SHELVES LEAD. Somebody reading this is deciding where boxes come from,
+   * and the answer is nearly always the shelf downstairs — putting a shop first
+   * because it happens to hold more would bury the ordinary case.
+   */
+  const places = placesWorthNaming(a)
+  ok(places[0].location === 'RM' && places[0].here === true, 'our own shelf is named first')
+  ok(
+    places.some((p: any) => p.location === SHOP && p.here === false),
+    'and the shop is named as somewhere else',
+    JSON.stringify(places)
+  )
+  ok(
+    !places.some((p: any) => p.quantity === 0),
+    'EMPTY PLACES ARE DROPPED — "0 at AM" is a row that costs a glance and answers nothing'
+  )
+
+  // --- what it tells somebody who typed a number --------------------------
+  ok(
+    availabilityNote(a, 4) === null,
+    'ASKING FOR FOUR SAYS NOTHING AT ALL — the shelf covers it, and a note under every line would be read past within a day'
+  )
+  const seven = availabilityNote(a, 7)
+  ok(
+    seven && seven.kind === 'away' && seven.here === 4 && seven.away === 3,
+    'ASKING FOR SEVEN SAYS WHERE THE OTHER THREE ARE — this is the case the whole change was built for',
+    JSON.stringify(seven)
+  )
+  const nine = availabilityNote(a, 9)
+  ok(
+    nine && nine.kind === 'short' && nine.short === 2,
+    'AND ASKING FOR NINE SAYS HOW MANY ARE MISSING, counting the shop before it calls anything short',
+    JSON.stringify(nine)
+  )
+  ok(
+    availabilityNote(a, 0) === null && availabilityNote(null, 5) === null,
+    'a blank quantity and an unknown product both say nothing rather than guessing'
+  )
+  /**
+   * IT NEVER REFUSES ANYTHING. Selling more than is on hand is ordinary trade —
+   * the case is in transit, the count is a day old — and `applyInvoiceStock`
+   * already draws what it can and leaves the rest owed. A note, not a gate.
+   */
+  const overSell = invoices.saveInvoice(
+    {
+      customerName: 'Optimistic Buyer',
+      invoiceNumber: 'SO-R200',
+      invoiceDate: '2026-08-27',
+      location: 'RM',
+      lines: [{ item: 'Roadshow Hobby Box', productId: 'p_r', quantity: 99, rate: 900 }]
+    },
+    null
+  )
+  ok(
+    !!overSell.id,
+    'A LINE FOR MORE THAN EXISTS IS STILL WRITTEN — the note is advice, and an app that refused it is one people work around'
+  )
+  inv_setVoid(overSell.id)
+}
+
+console.log('\n=== 6. close is not the same act as pay ===')
+// ---------------------------------------------------------------------------
+/**
+ * The owner, asked whether the two should be one button: "close should
+ * basically move the PO into the unpaid tab section."
+ *
+ * They are two different acts and only one is about money. Stopping the week
+ * has to be possible BEFORE every price has been chased — otherwise Thursday's
+ * box lands on a week somebody thought was finished — while paying a bill
+ * nobody can total stays refused, which is the guard the whole unknown-price
+ * feature rests on.
+ */
+{
+  const unpriced = poRepo.createPurchaseOrder(
+    {
+      supplier: SHOP,
+      ongoing: true,
+      lines: [{ productId: 'p_r', quantity: 2, unitPrice: 400 }]
+    },
+    null
+  )
+  const line = poRepo.getPurchaseOrder(unpriced.id).lines[0]
+  poRepo.setPurchaseOrderLinePrice(unpriced.id, line.id, null, null)
+  ok(
+    poRepo.getPurchaseOrder(unpriced.id).lines[0].pricePending === true,
+    'a case is on the tab at a price nobody knows yet'
+  )
+
+  const settle = poRepo.settleRoadshowTab(unpriced.id, null)
+  ok(
+    !!settle.error && /no price/i.test(settle.error ?? ''),
+    'PAYING IS STILL REFUSED WHILE A PRICE IS MISSING — a total nobody can work out is not a bill anybody can pay',
+    String(settle.error)
+  )
+  const closed = poRepo.closeRoadshowTab(unpriced.id, null)
+  ok(
+    !closed.error,
+    'BUT CLOSING IS NOT — "we have stopped buying" is a fact about the shop, not about the bill',
+    String(closed.error)
+  )
+  const after = poRepo.getPurchaseOrder(unpriced.id)
+  ok(!!after.tabClosedAt, 'the tab is closed')
+  ok(
+    !after.paidAt,
+    'AND THE BILL IS STILL UNPAID — closing moves it into the unpaid section, it does not settle it',
+    String(after.paidAt)
+  )
+  ok(
+    !!poRepo.closeRoadshowTab(unpriced.id, null).error,
+    'closing a second time is refused rather than silently doing nothing'
+  )
+  /**
+   * AND CLOSING IS WHAT FREEZES THE ROUTING. The two are one decision — "once
+   * we close out a tab it is done, you cannot change where things are going" —
+   * so the button that ends the week is the button that settles where every
+   * case went.
+   */
+  ok(
+    !!poRepo.setPurchaseOrderRouting(unpriced.id, {
+      lines: [{ lineId: line.id, destination: 'RM' }]
+    }).error,
+    'AND THE ROUTING IS FROZEN BY THE SAME PRESS, which is what makes closing mean something'
+  )
+  ok(
+    !!poRepo.closeRoadshowTab(
+      poRepo.createPurchaseOrder(
+        { supplier: 'Ordinary Distributors', location: 'RM', lines: [{ productId: 'p_r', quantity: 1, unitPrice: 1 }] },
+        null
+      ).id,
+      null
+    ).error,
+    'AN ORDINARY PURCHASE ORDER CANNOT BE "CLOSED" — it is not a tab, and there is no week to end'
+  )
+}
+
+/** Hand the over-sell fixture's stock back, so nothing below inherits it. */
+function inv_setVoid(id: string): void {
+  invoices.setInvoiceStatus(id, 'void', null)
+}
+
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

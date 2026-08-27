@@ -22,6 +22,8 @@ import type {
 } from '@shared/inventoryReset'
 import type { StockProvenance } from '@shared/provenance'
 import { productProvenance } from './db/provenance'
+import type { ProductAvailability } from '@shared/availability'
+import { productAvailability } from './db/inventory'
 import type { Consignment, NewConsignment } from '@shared/consignment'
 import {
   consignmentsForProduct,
@@ -266,6 +268,22 @@ export function registerInventoryIpc(): void {
   ipcMain.handle(IPC.invProductLots, (_e, productId: string): ProductLot[] =>
     can('module.inventory') ? listLots(String(productId ?? '')) : []
   )
+
+  /**
+   * WHERE THIS PRODUCT IS, place by place. See productAvailability.
+   *
+   * Gated on `module.invoicing` as well as inventory, because the screen that
+   * needs it is the sales-order line: somebody writing an invoice has to be
+   * able to see whether the seven exist without also being given the inventory
+   * module. It names quantities and places and no money at all, which is what
+   * makes that widening safe.
+   */
+  ipcMain.handle(IPC.invProductAvailability, (_e, productId: string): ProductAvailability => {
+    if (!can('module.inventory') && !can('module.invoicing')) {
+      return { productId: '', places: [] }
+    }
+    return productAvailability(String(productId ?? ''))
+  })
 
   /**
    * Where these cases came from, and what is still on order.

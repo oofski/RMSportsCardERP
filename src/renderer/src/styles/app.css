@@ -27553,6 +27553,35 @@ button.sor-team:focus-visible {
   font-size: 11px;
   line-height: 1.45;
 }
+/* HOW MANY WE HAVE AND WHERE, under a sales-order line whose quantity is more
+   than is downstairs. Muted rather than alarming in the ordinary case — "the
+   other three are at the Wichita shop" is an answer, not a problem — and only
+   warning-toned when the total genuinely will not cover it. See StockOnHand. */
+.so-onhand {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 5px;
+  padding: 4px 7px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text-3);
+  font-size: 11px;
+  line-height: 1.45;
+}
+.so-onhand > svg {
+  flex: none;
+  margin-top: 1px;
+  color: var(--accent);
+}
+.so-onhand.is-short {
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+.so-onhand.is-short > svg {
+  color: inherit;
+}
+
 /* The way out of an empty list, in place of the empty list. A dropship line
    records where its cases came from by naming a purchase order ATTACHED to the
    sale, so a sale with none attached has nothing to offer — and a dropdown with

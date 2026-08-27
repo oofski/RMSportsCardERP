@@ -31,7 +31,7 @@ import { addStock, adjustStock, reverseStockReceipt, stockQty } from './inventor
 import { recordPoCogs, voidPoCogs } from './finance'
 import { adoptLegacyFreight, deleteOrderExtras, recordOrderEvent } from './orderExtras'
 import { dealTicketRefFor, issueDealTicket } from './dealTickets'
-import { isOpenTab, settleTabRefusal, tabRoutingLocked } from '@shared/roadshowTab'
+import { isOpenTab, isTab, settleTabRefusal, tabRoutingLocked } from '@shared/roadshowTab'
 import { ensureTabLocation } from './stockLocations'
 import { syncProductAvgCost, unitMoney } from './lots'
 import { newId, nowIso } from '../util'
@@ -1743,6 +1743,74 @@ export function settleRoadshowTab(id: string, actorId: string | null): PoStatusR
   // P&L reads behind a check nobody performed.
   const paid = setPurchaseOrderPaid(id, true, actorId)
   return paid.error ? paid : { po: getPurchaseOrder(id) }
+}
+
+/**
+ * CLOSE THE TAB WITHOUT PAYING IT.
+ *
+ * The owner's words when asked whether closing and settling should be one
+ * button or two: "close should basically move the PO into the unpaid tab
+ * section."
+ *
+ * They are two different acts and only one of them is about money:
+ *
+ *   CLOSE    stop buying against this week. Nothing more can be added and
+ *            nothing more can be re-routed — see tabRoutingLocked, which is
+ *            what makes closing mean something. Allowed with prices still
+ *            unknown, because "we have stopped buying" is a fact about the
+ *            shop and not about the bill.
+ *   SETTLE   pay the shop. Still refused while any price is missing, for the
+ *            reason settleTabRefusal states: a total nobody can compute is not
+ *            a bill anybody can pay.
+ *
+ * Conflating them cost the operator the ability to draw a line under a week
+ * until every price had been chased, which is exactly backwards — the line has
+ * to be drawn BEFORE the chasing, or Thursday's box lands on a week somebody
+ * thought was finished.
+ *
+ * The order then sits where it already sits, unpaid, and the ordinary Paid
+ * button settles it. Closing re-arms `completePoIfFullyReceived`, so a
+ * fully-received tab behaves like any other purchase order from here.
+ */
+export function closeRoadshowTab(id: string, actorId: string | null): PoStatusResult {
+  const db = getDb()
+  const run = db.transaction((): PoStatusResult => {
+    const head = db
+      .prepare(
+        `SELECT id, po_number, tab_opened_at, tab_closed_at FROM purchase_orders WHERE id = ?`
+      )
+      .get(id) as
+      | { id: string; po_number: string; tab_opened_at: string | null; tab_closed_at: string | null }
+      | undefined
+    if (!head) return { po: null, error: 'Purchase order not found.' }
+    const facts = { tabOpenedAt: head.tab_opened_at, tabClosedAt: head.tab_closed_at }
+    // NOT `settleTabRefusal`, deliberately: that one guards the MONEY and turns
+    // an unpriced line into a refusal. Only the two facts about the tab itself
+    // are checked here.
+    if (!isTab(facts)) {
+      return { po: getPurchaseOrder(id), error: `${head.po_number} is not a roadshow tab.` }
+    }
+    if (!isOpenTab(facts)) {
+      return { po: getPurchaseOrder(id), error: `${head.po_number} has already been closed out.` }
+    }
+    const ts = nowIso()
+    db.prepare(`UPDATE purchase_orders SET tab_closed_at = ?, updated_at = ? WHERE id = ?`).run(
+      ts,
+      ts,
+      id
+    )
+    recordOrderEvent('po', id, 'stage', {
+      detail: 'Tab closed — nothing more can be bought against it, and where its cases go is settled',
+      actorId,
+      db
+    })
+    return { po: getPurchaseOrder(id) }
+  })
+  try {
+    return run()
+  } catch (err) {
+    return { po: getPurchaseOrder(id), error: (err as Error).message }
+  }
 }
 
 export function setPurchaseOrderPaid(
