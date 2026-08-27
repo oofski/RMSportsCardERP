@@ -52,12 +52,14 @@ import {
 import { deleteExpense, listExpenses, saveExpense } from './db/financeExpenses'
 import { listWholesaleSales } from './db/invoiceStock'
 import {
+  listHistorySources,
   listPurchaseOrderHistory,
   listSalesOrderHistory,
   orderHistoryYears
 } from './db/orderHistory'
 import type {
   OrderHistoryYears,
+  HistorySource,
   PurchaseOrderHistoryRow,
   SalesOrderHistoryRow
 } from '@shared/orderHistory'
@@ -344,18 +346,40 @@ export function registerFinanceIpc(): void {
     return orderHistoryYears(getDb())
   })
 
-  ipcMain.handle(IPC.finHistoryPos, (_e, year: unknown): PurchaseOrderHistoryRow[] => {
+  /**
+   * A SOURCE REPLACES THE YEAR rather than narrowing inside it, so the year is
+   * only validated when there is no source. Asking "what came out of the Kansas
+   * City trip" and getting only the part of it sold before 31 December would be
+   * half an answer with nothing to say half was missing — see the reads.
+   */
+  const sourceOf = (payload: unknown): string =>
+    typeof payload === 'object' && payload !== null
+      ? String((payload as { sourcePoId?: unknown }).sourcePoId ?? '').trim()
+      : ''
+  const yearOf = (payload: unknown): unknown =>
+    typeof payload === 'object' && payload !== null && 'year' in (payload as object)
+      ? (payload as { year?: unknown }).year
+      : payload
+
+  ipcMain.handle(IPC.finHistoryPos, (_e, payload: unknown): PurchaseOrderHistoryRow[] => {
     if (!can('module.finance')) return []
-    const y = Math.trunc(Number(year))
-    if (!Number.isInteger(y) || y < 1970 || y > 9999) return []
-    return listPurchaseOrderHistory(getDb(), y)
+    const source = sourceOf(payload)
+    const y = Math.trunc(Number(yearOf(payload)))
+    if (!source && (!Number.isInteger(y) || y < 1970 || y > 9999)) return []
+    return listPurchaseOrderHistory(getDb(), y, source || null)
   })
 
-  ipcMain.handle(IPC.finHistorySos, (_e, year: unknown): SalesOrderHistoryRow[] => {
+  ipcMain.handle(IPC.finHistorySos, (_e, payload: unknown): SalesOrderHistoryRow[] => {
     if (!can('module.finance')) return []
-    const y = Math.trunc(Number(year))
-    if (!Number.isInteger(y) || y < 1970 || y > 9999) return []
-    return listSalesOrderHistory(getDb(), y)
+    const source = sourceOf(payload)
+    const y = Math.trunc(Number(yearOf(payload)))
+    if (!source && (!Number.isInteger(y) || y < 1970 || y > 9999)) return []
+    return listSalesOrderHistory(getDb(), y, source || null)
+  })
+
+  ipcMain.handle(IPC.finHistorySources, (): HistorySource[] => {
+    if (!can('module.finance')) return []
+    return listHistorySources(getDb())
   })
 
   /**

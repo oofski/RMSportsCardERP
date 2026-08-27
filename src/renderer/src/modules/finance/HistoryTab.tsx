@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import type {
+  HistorySource,
   OrderHistoryLine,
   PurchaseOrderHistoryRow,
   SalesOrderHistoryRow
@@ -67,6 +68,20 @@ export function HistoryTab(): JSX.Element {
    */
   const [ticketYears, setTicketYears] = useState<{ years: number[]; next: string } | null>(null)
   const [ticketYear, setTicketYear] = useState<number | null>(null)
+  /**
+   * WHICH PURCHASE THE LEDGER IS NARROWED TO, or null for the whole year.
+   *
+   * The owner: "I can see where everything is coming from." Starting from a
+   * buying trip rather than from an order is the other half of that — pick the
+   * Kansas City roadshow and both tables show only what came out of it.
+   *
+   * A source REPLACES the year rather than narrowing inside it, because what was
+   * bought in December is mostly sold in January. The year buttons go quiet
+   * while one is picked, so nothing on screen implies a filter that is not being
+   * applied. See listPurchaseOrderHistory.
+   */
+  const [sources, setSources] = useState<HistorySource[] | null>(null)
+  const [source, setSource] = useState<string>('')
 
   useEffect(() => {
     void finance.historyYears().then((y) => {
@@ -94,8 +109,21 @@ export function HistoryTab(): JSX.Element {
     })
   }, [side, ticketYears])
 
-  // Re-read on every (side, year) change. Both lists are kept so flipping back
-  // and forth does not refetch, and both are cleared when the year moves.
+  /**
+   * The purchases worth narrowing to, fetched once.
+   *
+   * Not year-scoped and not re-fetched per side: the list is the same question
+   * whichever table is showing, and it only changes when somebody links a sale
+   * to a purchase — which is not something that happens while this screen is
+   * open.
+   */
+  useEffect(() => {
+    void finance.historySources().then(setSources)
+  }, [])
+
+  // Re-read on every (side, year, source) change. Both lists are kept so
+  // flipping back and forth does not refetch, and both are cleared when either
+  // moves.
   useEffect(() => {
     if (year === null) return
     // The register fetches its own rows from its own year — see DealTicketsTab.
@@ -105,15 +133,15 @@ export function HistoryTab(): JSX.Element {
     let alive = true
     if (side === 'purchase') {
       setPos(null)
-      void finance.historyPurchaseOrders(year).then((r) => alive && setPos(r))
+      void finance.historyPurchaseOrders(year, source).then((r) => alive && setPos(r))
     } else {
       setSos(null)
-      void finance.historySalesOrders(year).then((r) => alive && setSos(r))
+      void finance.historySalesOrders(year, source).then((r) => alive && setSos(r))
     }
     return () => {
       alive = false
     }
-  }, [side, year])
+  }, [side, year, source])
 
   const yearsFor =
     side === 'tickets'
@@ -187,6 +215,16 @@ export function HistoryTab(): JSX.Element {
             <button
               key={y}
               className={`hist-year ${y === activeYear ? 'active' : ''}`}
+              // DISABLED, NOT HIDDEN, while a source is picked. A source spans
+              // every year, so the buttons genuinely do nothing — and removing
+              // them would leave somebody unable to see that the year they were
+              // on is still there to go back to.
+              disabled={side !== 'tickets' && !!source}
+              title={
+                side !== 'tickets' && source
+                  ? 'Showing every year for the purchase order picked on the right'
+                  : undefined
+              }
               onClick={() => {
                 if (side === 'tickets') setTicketYear(y)
                 else setYear(y)
@@ -197,6 +235,40 @@ export function HistoryTab(): JSX.Element {
             </button>
           ))}
         </div>
+
+        {/* WHERE IT CAME FROM, as a starting point rather than an answer.
+
+            The rest of this screen answers "what was on order 2371". This
+            answers the other direction — "what came out of the Kansas City
+            trip" — which is the question the boards cannot ask at all, because
+            a purchase and the five sales that drew on it live on two different
+            screens. Absent on the deal-ticket view, which is already the same
+            movements grouped a third way. */}
+        {side !== 'tickets' && (sources?.length ?? 0) > 0 && (
+          <label className="hist-source">
+            <Icon name="Route" size={15} />
+            <select
+              className="select"
+              aria-label="Show only what came from one purchase order"
+              value={source}
+              onChange={(e) => {
+                setSource(e.target.value)
+                setOpen(null)
+              }}
+            >
+              <option value="">Any source</option>
+              {(sources ?? []).map((o) => (
+                <option key={o.poId} value={o.poId}>
+                  {o.roadshow ? '★ ' : ''}
+                  {o.poNumber}
+                  {o.supplier ? ` · ${o.supplier}` : ''}
+                  {o.orderedOn ? ` · ${o.orderedOn}` : ''} · {o.saleCount}{' '}
+                  {o.saleCount === 1 ? 'sale' : 'sales'}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
 
         <div className="hist-search">
           <Icon name="Search" size={15} />
@@ -335,6 +407,23 @@ function PoRow({
                   ['Tracking', row.trackingNumber ?? '—']
                 ]}
               />
+              {/* WHERE ITS GOODS WENT. The half a purchase order could never
+                  show: a $9,000 trip to a roadshow is only half a story, and
+                  the other half is which sales came out of it. */}
+              {row.suppliedSales.length > 0 && (
+                <div className="hist-went">
+                  <span className="hist-went-label">
+                    <Icon name="ArrowRight" size={13} /> Sold on
+                  </span>
+                  <span className="hist-went-list">
+                    {row.suppliedSales.map((s) => (
+                      <span key={s.invoiceId} className="hist-went-one">
+                        <b className="mono">{s.number}</b> {s.customerName}
+                      </span>
+                    ))}
+                  </span>
+                </div>
+              )}
               <Lines lines={row.lines} settledLabel="Received" />
             </div>
           </td>
@@ -404,6 +493,25 @@ function SoRow({
                   ['Cost of goods', row.cost > 0 ? money(row.cost) : '—']
                 ]}
               />
+              {/* THE DOCUMENT-LEVEL CLAIM, which is a different fact from what
+                  any one line says about its own cases — and on a dropship it
+                  is usually the only one there is, because the two documents
+                  share no catalog product at all. */}
+              {row.sourcePos.length > 0 && (
+                <div className="hist-went">
+                  <span className="hist-went-label">
+                    <Icon name="Link" size={13} /> Supplied by
+                  </span>
+                  <span className="hist-went-list">
+                    {row.sourcePos.map((p) => (
+                      <span key={p.poId} className="hist-went-one">
+                        <b className="mono">{p.poNumber}</b>
+                        {p.supplier ? ` ${p.supplier}` : ''}
+                      </span>
+                    ))}
+                  </span>
+                </div>
+              )}
               <Lines lines={row.lines} settledLabel="Out" />
             </div>
           </td>
@@ -459,7 +567,34 @@ function Lines({
       <tbody>
         {lines.map((l) => (
           <tr key={l.position}>
-            <td>{l.item}</td>
+            <td>
+              {l.item}
+              {/* WHERE THESE CAME FROM, under the name — the same place the
+                  sales-order form and the routing screen put it, so the fact
+                  lives in one position across the app.
+
+                  A LIST, because a line can be split by case: "8 off RM, 2
+                  shipped direct from Kestrel" is one line with two origins and
+                  printing only the first would put the wrong story in the one
+                  screen somebody reads a year later. Silent on an ordinary
+                  line off our own shelf that names no purchase, which is most
+                  of them — a "from RM" under every row would be noise nobody
+                  reads, and then the one that says Kestrel reads as noise too. */}
+              {l.sources.filter((o) => !o.fromShelf || o.poNumber).map((o, i) => (
+                <div key={i} className="hist-origin">
+                  <Icon name={o.fromShelf ? 'Package' : 'Truck'} size={11} />
+                  {o.quantity < l.quantity && <b className="mono">{o.quantity}</b>}
+                  {o.fromShelf ? `off ${o.where}` : `direct from ${o.where}`}
+                  {o.poNumber && (
+                    <>
+                      {' · '}
+                      <b className="mono">{o.poNumber}</b>
+                      {o.supplier && o.supplier !== o.where ? ` ${o.supplier}` : ''}
+                    </>
+                  )}
+                </div>
+              ))}
+            </td>
             <td className="hist-sku">{l.sku || '—'}</td>
             <td className="num">{l.quantity}</td>
             <td className="num">{l.settledQty === null ? '—' : l.settledQty}</td>

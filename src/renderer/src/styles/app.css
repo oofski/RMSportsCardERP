@@ -16959,6 +16959,73 @@ button.sor-team:focus-visible {
   font-size: 13px;
   font-variant-numeric: tabular-nums;
 }
+
+/* ---------- Where things came from, and where they went ----------
+   One row, label then list, because the answer is usually one or two documents
+   and giving each its own line would make a two-item list look like a section. */
+.hist-went {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-size: 12.5px;
+}
+.hist-went-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.hist-went-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  min-width: 0;
+}
+.hist-went-one {
+  white-space: nowrap;
+}
+/* The origin of a line's units, under the product name. Muted and small: it is
+   a note on the row, not a second column, and on most lines it is absent
+   entirely — see the comment where it is rendered. */
+.hist-origin {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+.hist-origin > svg {
+  flex: none;
+  color: var(--accent);
+}
+/* The source picker, beside the year buttons. Sized to the bar rather than to
+   its longest option: a purchase order label carries a number, a shop, a date
+   and a count, and letting that set the width would push the search box off. */
+.hist-source {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1 1 200px;
+  max-width: 340px;
+}
+.hist-source > svg {
+  flex: none;
+  color: var(--accent);
+}
+.hist-source .select {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 32px;
+  font-size: 12px;
+}
 /* The lines table sits inside a detail row rather than in a `.table-wrap`, so it
    carries its own frame. Tighter padding than the outer table too: it is a
    nested list, and matching the parent's row height would make four lines look

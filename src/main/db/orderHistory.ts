@@ -1,11 +1,16 @@
 import type Database from 'better-sqlite3'
 import { isSettledPurchaseOrder } from '@shared/purchaseOrders'
 import type {
+  HistoryLineSource,
+  HistoryPurchaseRef,
+  HistorySaleRef,
+  HistorySource,
   OrderHistoryLine,
   OrderHistoryYears,
   PurchaseOrderHistoryRow,
   SalesOrderHistoryRow
 } from '@shared/orderHistory'
+import { destinationHoldsStock } from '@shared/purchaseOrders'
 import type { PurchaseOrderStatus } from '@shared/types'
 import { isPurchaseOrderStatus } from '@shared/purchaseOrders'
 import { INVOICE_STAGES, isSettledInvoice, type InvoiceStatus } from '@shared/invoices'
@@ -46,6 +51,38 @@ function asInvoiceStatus(v: unknown): InvoiceStatus {
  */
 
 const CENTS = (n: number): number => Math.round((Number(n) || 0) * 100) / 100
+
+/**
+ * EVERY SALE THAT DRAWS ON A PURCHASE, AND EVERY PURCHASE A SALE DRAWS ON.
+ *
+ * The union of the three separate claims a sale can make about where its goods
+ * came from, because they are three different facts and any one of them makes
+ * that purchase the origin:
+ *
+ *   invoice_lines.source_po_id              this LINE's units came out of it
+ *   invoice_line_allocations.source_po_id   these CASES of the line did
+ *   sale_purchase_links                     this DOCUMENT was supplied by it
+ *
+ * Reading only the first — which is what every screen did before — misses a
+ * split line entirely and misses every dropship, where the two documents are one
+ * deal and often share no catalog product at all. Those are exactly the orders
+ * somebody opens a history to understand.
+ *
+ * VOID SALES ARE EXCLUDED. A cancelled order took nothing and supplied nothing,
+ * and counting it would have a roadshow claiming buyers it never had.
+ */
+const SALE_PURCHASE_PAIRS = `
+  SELECT DISTINCT l.invoice_id AS invoice_id, l.source_po_id AS po_id
+    FROM invoice_lines l JOIN invoices i ON i.id = l.invoice_id
+   WHERE l.source_po_id IS NOT NULL AND TRIM(l.source_po_id) != '' AND i.status != 'void'
+  UNION
+  SELECT DISTINCT a.invoice_id, a.source_po_id
+    FROM invoice_line_allocations a JOIN invoices i ON i.id = a.invoice_id
+   WHERE a.source_po_id IS NOT NULL AND TRIM(a.source_po_id) != '' AND i.status != 'void'
+  UNION
+  SELECT DISTINCT k.invoice_id, k.po_id
+    FROM sale_purchase_links k JOIN invoices i ON i.id = k.invoice_id
+   WHERE i.status != 'void'`
 
 // ---------------------------------------------------------------------------
 // Purchase orders
@@ -96,18 +133,39 @@ function asPoStatus(v: unknown): PurchaseOrderStatus {
  */
 export function listPurchaseOrderHistory(
   db: Database.Database,
-  year: number
+  year: number,
+  /**
+   * NARROWED TO ONE PURCHASE, and then the YEAR IS IGNORED.
+   *
+   * "Pick a purchase order or a roadshow and see everything that came out of
+   * it" — and what came out of a December trip is mostly sold in January, so
+   * keeping the year filter on would answer the question with half the answer
+   * and no sign that half was missing. Picking a source is a different question
+   * from picking a year, so it replaces it rather than narrowing inside it.
+   */
+  sourcePoId?: string | null
 ): PurchaseOrderHistoryRow[] {
+  const source = (sourcePoId ?? '').trim()
   const prefix = `${year}%`
-  const rows = db
-    .prepare(
-      `SELECT id, po_number, status, supplier, location, total, created_at,
-              ordered_at, paid_at, received_at, cancelled_at, carrier, tracking_number
-         FROM purchase_orders
-        WHERE COALESCE(ordered_at, created_at) LIKE ?
-        ORDER BY po_number DESC`
-    )
-    .all(prefix) as PoRow[]
+  const rows = (
+    source
+      ? db
+          .prepare(
+            `SELECT id, po_number, status, supplier, location, total, created_at,
+                    ordered_at, paid_at, received_at, cancelled_at, carrier, tracking_number
+               FROM purchase_orders WHERE id = ?`
+          )
+          .all(source)
+      : db
+          .prepare(
+            `SELECT id, po_number, status, supplier, location, total, created_at,
+                    ordered_at, paid_at, received_at, cancelled_at, carrier, tracking_number
+               FROM purchase_orders
+              WHERE COALESCE(ordered_at, created_at) LIKE ?
+              ORDER BY po_number DESC`
+          )
+          .all(prefix)
+  ) as PoRow[]
   if (rows.length === 0) return []
 
   const ids = rows.map((r) => r.id)
@@ -134,9 +192,38 @@ export function listPurchaseOrderHistory(
       quantity: l.quantity,
       unitPrice: CENTS(l.unit_price),
       amount: CENTS(l.quantity * l.unit_price),
-      settledQty: l.qty_received ?? 0
+      settledQty: l.qty_received ?? 0,
+      // EMPTY, ALWAYS. A purchase IS where goods came from; asking it the
+      // question is asking the wrong document. See OrderHistoryLine.sources.
+      sources: []
     })
     byPo.set(l.po_id, list)
+  }
+
+  /** Which sales each of these purchases supplied. See SALE_PURCHASE_PAIRS. */
+  const wentTo = new Map<string, HistorySaleRef[]>()
+  for (const s of db
+    .prepare(
+      `SELECT pairs.po_id, i.id AS invoice_id, i.invoice_number, i.qbo_doc_number, i.customer_name
+         FROM (${SALE_PURCHASE_PAIRS}) pairs
+         JOIN invoices i ON i.id = pairs.invoice_id
+        WHERE pairs.po_id IN (${placeholders})
+        ORDER BY i.invoice_date DESC, i.invoice_number DESC`
+    )
+    .all(...ids) as Array<{
+    po_id: string
+    invoice_id: string
+    invoice_number: string | null
+    qbo_doc_number: string | null
+    customer_name: string
+  }>) {
+    const list = wentTo.get(s.po_id) ?? []
+    list.push({
+      invoiceId: s.invoice_id,
+      number: s.invoice_number || s.qbo_doc_number || '—',
+      customerName: s.customer_name
+    })
+    wentTo.set(s.po_id, list)
   }
 
   const now = Date.now()
@@ -173,7 +260,8 @@ export function listPurchaseOrderHistory(
         },
         now
       ),
-      lines: own
+      lines: own,
+      suppliedSales: wentTo.get(r.id) ?? []
     }
   })
 }
@@ -188,6 +276,8 @@ interface SoRow {
   qbo_doc_number: string | null
   status: string
   customer_name: string
+  /** The order's own shelf. A blank line destination inherits it. */
+  location: string | null
   invoice_date: string
   due_date: string | null
   terms: string
@@ -202,6 +292,7 @@ interface SoRow {
 }
 
 interface SoLineRow {
+  id: string
   invoice_id: string
   position: number
   product_id: string | null
@@ -211,6 +302,18 @@ interface SoLineRow {
   rate: number
   amount: number
   qty_fulfilled: number
+  destination: string | null
+  supplier: string | null
+  source_po_id: string | null
+}
+
+/** One per-case split of a sales-order line, as stored. */
+interface SoAllocRow {
+  invoice_line_id: string
+  quantity: number
+  destination: string
+  supplier: string | null
+  source_po_id: string | null
 }
 
 /**
@@ -229,13 +332,14 @@ interface SoLineRow {
  */
 export function listSalesOrderHistory(
   db: Database.Database,
-  year: number
+  year: number,
+  /** One purchase, across every year. See the purchase-order twin above. */
+  sourcePoId?: string | null
 ): SalesOrderHistoryRow[] {
+  const source = (sourcePoId ?? '').trim()
   const prefix = `${year}%`
   const now = Date.now()
-  const rows = db
-    .prepare(
-      `SELECT id, invoice_number, qbo_doc_number, status, customer_name,
+  const COLS = `id, invoice_number, qbo_doc_number, status, customer_name, location,
               invoice_date, due_date, terms, total,
               paid_at, qbo_paid_at, qbo_voided,
               -- The same MAX the board's read takes: a tracking number IS the
@@ -243,24 +347,145 @@ export function listSalesOrderHistory(
               -- order was fully out the door. See saleCompletedAt.
               (SELECT MAX(s.created_at) FROM order_shipments s
                 WHERE s.order_kind = 'so' AND s.order_id = invoices.id
-                  AND TRIM(COALESCE(s.tracking_number, '')) != '') AS last_tracked_at
-         FROM invoices
-        WHERE invoice_date LIKE ?
-        ORDER BY invoice_date DESC, invoice_number DESC`
-    )
-    .all(prefix) as SoRow[]
+                  AND TRIM(COALESCE(s.tracking_number, '')) != '') AS last_tracked_at`
+  const rows = (
+    source
+      ? db
+          .prepare(
+            `SELECT ${COLS}
+               FROM invoices
+              WHERE id IN (SELECT invoice_id FROM (${SALE_PURCHASE_PAIRS}) WHERE po_id = ?)
+              ORDER BY invoice_date DESC, invoice_number DESC`
+          )
+          .all(source)
+      : db
+          .prepare(
+            `SELECT ${COLS}
+               FROM invoices
+              WHERE invoice_date LIKE ?
+              ORDER BY invoice_date DESC, invoice_number DESC`
+          )
+          .all(prefix)
+  ) as SoRow[]
   if (rows.length === 0) return []
 
   const ids = rows.map((r) => r.id)
   const placeholders = ids.map(() => '?').join(',')
   const lines = db
     .prepare(
-      `SELECT invoice_id, position, product_id, item, sku, quantity, rate, amount, qty_fulfilled
+      `SELECT id, invoice_id, position, product_id, item, sku, quantity, rate, amount,
+              qty_fulfilled, destination, supplier, source_po_id
          FROM invoice_lines
         WHERE invoice_id IN (${placeholders})
         ORDER BY invoice_id, position`
     )
     .all(...ids) as SoLineRow[]
+
+  /**
+   * The per-case splits, RAW.
+   *
+   * Read straight off the rows rather than through `effectiveSlices`, which is
+   * the COST view and deliberately blanks the purchase order on any slice that
+   * draws no shelf. That is right for money and wrong here: a dropship off a
+   * roadshow tab is precisely the case where nothing else will ever say where
+   * the goods came from.
+   */
+  const splits = new Map<string, SoAllocRow[]>()
+  for (const a of db
+    .prepare(
+      `SELECT a.invoice_line_id, a.quantity, a.destination, a.supplier, a.source_po_id
+         FROM invoice_line_allocations a
+        WHERE a.invoice_id IN (${placeholders})
+        ORDER BY a.position ASC, a.created_at ASC`
+    )
+    .all(...ids) as SoAllocRow[]) {
+    const list = splits.get(a.invoice_line_id) ?? []
+    list.push(a)
+    splits.set(a.invoice_line_id, list)
+  }
+
+  /**
+   * Every purchase order named anywhere on these sales, so a number and a
+   * supplier can be printed instead of an id. ONE query for the lot: a year of
+   * orders would otherwise cost a lookup per line, and almost every line names
+   * nothing at all.
+   */
+  const poNames = new Map<string, { number: string; supplier: string | null }>()
+  const namedPos = new Set<string>()
+  for (const l of lines) if (l.source_po_id) namedPos.add(l.source_po_id)
+  for (const list of splits.values()) {
+    for (const a of list) if (a.source_po_id) namedPos.add(a.source_po_id)
+  }
+  const linkRows = db
+    .prepare(
+      `SELECT k.invoice_id, k.po_id, po.po_number, po.supplier
+         FROM sale_purchase_links k
+         JOIN purchase_orders po ON po.id = k.po_id
+        WHERE k.invoice_id IN (${placeholders})
+        ORDER BY k.created_at ASC, po.po_number ASC`
+    )
+    .all(...ids) as Array<{
+    invoice_id: string
+    po_id: string
+    po_number: string
+    supplier: string | null
+  }>
+  const attached = new Map<string, HistoryPurchaseRef[]>()
+  for (const k of linkRows) {
+    poNames.set(k.po_id, { number: k.po_number, supplier: k.supplier })
+    const list = attached.get(k.invoice_id) ?? []
+    list.push({ poId: k.po_id, poNumber: k.po_number, supplier: k.supplier })
+    attached.set(k.invoice_id, list)
+  }
+  const unnamed = [...namedPos].filter((id) => !poNames.has(id))
+  if (unnamed.length > 0) {
+    for (const po of db
+      .prepare(
+        `SELECT id, po_number, supplier FROM purchase_orders
+          WHERE id IN (${unnamed.map(() => '?').join(',')})`
+      )
+      .all(...unnamed) as Array<{ id: string; po_number: string; supplier: string | null }>) {
+      poNames.set(po.id, { number: po.po_number, supplier: po.supplier })
+    }
+  }
+
+  /**
+   * WHERE ONE LINE'S GOODS CAME FROM, splits accounted for.
+   *
+   * Zero split rows is one implicit origin covering the whole line — the same
+   * back-compat rule `effectiveSlices` keeps, restated here because this read
+   * needs the raw purchase order and that function does not give it. A line with
+   * no product is stock nobody ever held, so it reports nothing rather than
+   * claiming it came off a shelf.
+   */
+  const originsOf = (l: SoLineRow, headerLocation: string): HistoryLineSource[] => {
+    if (!l.product_id) return []
+    const rows = splits.get(l.id) ?? []
+    const one = (
+      quantity: number,
+      destination: string | null,
+      supplier: string | null,
+      poId: string | null
+    ): HistoryLineSource => {
+      const where = (destination ?? '').trim() || headerLocation
+      const fromShelf = destinationHoldsStock(where)
+      const po = poId ? poNames.get(poId) : undefined
+      return {
+        quantity,
+        where,
+        fromShelf,
+        poId: poId || null,
+        poNumber: po?.number ?? null,
+        // The supplier of the PURCHASE when there is one; otherwise the party
+        // shipping it direct, which on a dropship IS the destination.
+        supplier: po?.supplier ?? (fromShelf ? null : (supplier ?? '').trim() || where)
+      }
+    }
+    if (rows.length > 0) {
+      return rows.map((a) => one(a.quantity, a.destination, a.supplier, a.source_po_id))
+    }
+    return [one(l.quantity, l.destination, l.supplier, l.source_po_id)]
+  }
 
   // What each order's units cost, and whether that cost is knowable at all.
   const cost = new Map<string, { total: number; priced: number }>()
@@ -277,6 +502,7 @@ export function listSalesOrderHistory(
     cost.set(m.invoice_id, { total: CENTS(m.c), priced: m.priced })
   }
 
+  const shelfOf = new Map(rows.map((r) => [r.id, (r.location ?? '').trim() || 'RM']))
   const byInvoice = new Map<string, OrderHistoryLine[]>()
   for (const l of lines) {
     const list = byInvoice.get(l.invoice_id) ?? []
@@ -291,7 +517,8 @@ export function listSalesOrderHistory(
       // A line with no product was never stock, so "how many went out" is not a
       // question about it. Null rather than zero, which would read as "none of
       // it shipped".
-      settledQty: l.product_id ? l.qty_fulfilled : null
+      settledQty: l.product_id ? l.qty_fulfilled : null,
+      sources: originsOf(l, shelfOf.get(l.invoice_id) ?? 'RM')
     })
     byInvoice.set(l.invoice_id, list)
   }
@@ -329,9 +556,56 @@ export function listSalesOrderHistory(
         },
         now
       ),
-      lines: own
+      lines: own,
+      sourcePos: attached.get(r.id) ?? []
     }
   })
+}
+
+/**
+ * THE PURCHASES WORTH NARROWING THE HISTORY TO.
+ *
+ * Only the ones that actually supplied something: a picker listing every
+ * purchase ever raised would bury the four that answer "what came out of the
+ * Kansas City trip" among two hundred that supplied nothing anybody is asking
+ * about. Counted through the same union the rest of this file uses, so a
+ * purchase attached to a dropship — which shares no catalog product with the
+ * sale and appears on no line — is offered exactly like one whose cases were
+ * picked off a shelf.
+ *
+ * NOT SCOPED TO A YEAR, deliberately. A December roadshow is mostly sold in
+ * January, and offering it only while the 2025 tab is open would hide the source
+ * from the year that actually needs it.
+ */
+export function listHistorySources(db: Database.Database): HistorySource[] {
+  return (
+    db
+      .prepare(
+        `SELECT po.id, po.po_number, po.supplier,
+                COALESCE(po.ordered_at, po.created_at) AS ordered_at,
+                po.tab_opened_at,
+                COUNT(DISTINCT pairs.invoice_id) AS sale_count
+           FROM (${SALE_PURCHASE_PAIRS}) pairs
+           JOIN purchase_orders po ON po.id = pairs.po_id
+          GROUP BY po.id
+          ORDER BY ordered_at DESC, po.po_number DESC`
+      )
+      .all() as Array<{
+      id: string
+      po_number: string
+      supplier: string | null
+      ordered_at: string | null
+      tab_opened_at: string | null
+      sale_count: number
+    }>
+  ).map((r) => ({
+    poId: r.id,
+    poNumber: r.po_number,
+    supplier: (r.supplier ?? '').trim() || null,
+    orderedOn: r.ordered_at ? r.ordered_at.slice(0, 10) : null,
+    roadshow: !!r.tab_opened_at,
+    saleCount: Number(r.sale_count) || 0
+  }))
 }
 
 /**

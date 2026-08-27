@@ -667,6 +667,8 @@ export const IPC = {
   finHistoryYears: 'finance:history:years',
   finHistoryPos: 'finance:history:purchase-orders',
   finHistorySos: 'finance:history:sales-orders',
+  // The purchases the ledger can be narrowed to. See listHistorySources.
+  finHistorySources: 'finance:history:sources',
   // The deal ticket register — one number per commercial movement, both sides.
   // Reads only: a ticket is struck by the thing it names, never by a screen, so
   // there is deliberately no channel here that can mint one.

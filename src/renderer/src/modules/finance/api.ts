@@ -14,6 +14,7 @@ import type {
 import type { PnlDetail, PnlDrillRequest } from '@shared/pnlDrill'
 import type { WholesaleSaleRow } from '@shared/invoices'
 import type {
+  HistorySource,
   OrderHistoryYears,
   PurchaseOrderHistoryRow,
   SalesOrderHistoryRow
@@ -83,9 +84,11 @@ export interface FinanceApi {
   /** Which years the order ledger covers, newest first. */
   historyYears(): Promise<OrderHistoryYears>
   /** One year of purchase orders, lines included so a row expands instantly. */
-  historyPurchaseOrders(year: number): Promise<PurchaseOrderHistoryRow[]>
+  historyPurchaseOrders(year: number, sourcePoId?: string | null): Promise<PurchaseOrderHistoryRow[]>
   /** One year of sales orders, with what the units on them cost. */
-  historySalesOrders(year: number): Promise<SalesOrderHistoryRow[]>
+  historySalesOrders(year: number, sourcePoId?: string | null): Promise<SalesOrderHistoryRow[]>
+  /** The purchases the ledger can be narrowed to. See listHistorySources. */
+  historySources(): Promise<HistorySource[]>
   /** The deal ticket register for one year, or the whole thing for null. */
   dealTickets(year: number | null): Promise<DealTicketRow[]>
   /** Which years the register covers, and what the next number will be. */

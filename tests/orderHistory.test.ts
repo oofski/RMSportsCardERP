@@ -478,5 +478,263 @@ ok(
   JSON.stringify(years.purchase)
 )
 
+// ---------------------------------------------------------------------------
+console.log('\n=== 6. where everything came from, and where it went ===')
+// ---------------------------------------------------------------------------
+/**
+ * The owner: "in Finance history, sales orders and purchase orders are good to
+ * go — and then what needs to happen is that I can see where everything is
+ * coming from."
+ *
+ * Everything needed to answer that was already stored and none of it reached
+ * this screen. A sales order showed what was on it and never where it came
+ * from; a purchase order showed what was bought and never who it was sold to.
+ *
+ * ## Three claims, and all three count
+ *
+ * A sale can name a purchase in three separate places, and reading only the
+ * first — which is what every screen did — misses the two that matter most:
+ *
+ *   invoice_lines.source_po_id             this LINE's units came out of it
+ *   invoice_line_allocations.source_po_id  these CASES of the line did
+ *   sale_purchase_links                    this DOCUMENT was supplied by it
+ *
+ * The second is a split line. The third is every dropship, where the sale and
+ * the purchase are one deal and often share no catalog product at all. Both are
+ * pinned below, because both are invisible to the naive read.
+ */
+{
+  const P3 = product('Origin Hobby Box', 'HIST-3')
+  inv.addStock(P3, 'RM', 40, 50, 'stock for the origin tests', null, null)
+
+  /** A roadshow tab, so the "star it in the picker" branch has something real. */
+  const tab = poRepo.createPurchaseOrder(
+    {
+      supplier: 'Roadshow Wichita',
+      location: 'RM',
+      ongoing: true,
+      lines: [{ productId: P3, quantity: 8, unitPrice: 50 }]
+    },
+    null
+  )
+  poRepo.setPurchaseOrderStatus(tab.id, 'received', null)
+
+  // --- a line that names a purchase --------------------------------------
+  const fromTab = invoices.saveInvoice(
+    {
+      customerName: 'Origin Buyer',
+      invoiceNumber: 'SO-H100',
+      invoiceDate: `${thisYear}-07-01`,
+      location: 'RM',
+      lines: [{ item: 'Origin Hobby Box', productId: P3, quantity: 3, rate: 200, sourcePoId: tab.id }]
+    },
+    null
+  )
+  const soRow = (id: string): any =>
+    history.listSalesOrderHistory(db, thisYear).find((r: any) => r.id === id)
+  const poRow = (id: string): any =>
+    history.listPurchaseOrderHistory(db, thisYear).find((r: any) => r.id === id)
+
+  const origin = soRow(fromTab.id).lines[0].sources
+  ok(
+    origin.length === 1 && origin[0].poNumber === tab.poNumber,
+    'A SALES-ORDER LINE SAYS WHICH PURCHASE ITS UNITS CAME OUT OF — the fact was stored and no history screen showed it',
+    JSON.stringify(origin)
+  )
+  ok(
+    origin[0].fromShelf === true && origin[0].where === 'RM',
+    'and that it came off our own shelf, which is a different fact from which purchase',
+    `${origin[0].fromShelf} / ${origin[0].where}`
+  )
+  ok(
+    origin[0].supplier === 'Roadshow Wichita',
+    'named by the shop it was bought from, not by an id',
+    String(origin[0].supplier)
+  )
+  ok(
+    poRow(tab.id).suppliedSales.some((s: any) => s.number === 'SO-H100'),
+    'AND THE PURCHASE SAYS WHERE ITS GOODS WENT — the half a purchase order could never show',
+    JSON.stringify(poRow(tab.id).suppliedSales)
+  )
+  ok(
+    poRow(tab.id).suppliedSales[0].customerName === 'Origin Buyer',
+    'with the buyer named, which is the thing somebody is actually looking for'
+  )
+  ok(
+    poRow(tab.id).lines.every((l: any) => l.sources.length === 0),
+    'A PURCHASE ORDER LINE REPORTS NO ORIGIN — a purchase IS the origin, and asking it the question is asking the wrong document'
+  )
+
+  // --- an ordinary line off the shelf says nothing -------------------------
+  const plain = invoices.saveInvoice(
+    {
+      customerName: 'Ordinary Buyer',
+      invoiceNumber: 'SO-H101',
+      invoiceDate: `${thisYear}-07-02`,
+      location: 'RM',
+      lines: [{ item: 'Origin Hobby Box', productId: P3, quantity: 1, rate: 200 }]
+    },
+    null
+  )
+  const plainOrigin = soRow(plain.id).lines[0].sources
+  ok(
+    plainOrigin.length === 1 && plainOrigin[0].fromShelf === true && plainOrigin[0].poId === null,
+    'ORDINARY STOCK REPORTS ITSELF AS ORDINARY STOCK — one origin, our shelf, no purchase named',
+    JSON.stringify(plainOrigin)
+  )
+  ok(
+    soRow(plain.id).sourcePos.length === 0,
+    'and an in-house sale is attached to nothing, which is most sales'
+  )
+
+  // --- a SPLIT line: two origins on one line ------------------------------
+  /**
+   * INVISIBLE TO THE NAIVE READ. The line's own column describes only its first
+   * slice, so a history that read it would report three cases off the shelf and
+   * silently lose the two that shipped direct.
+   */
+  const splitSale = invoices.saveInvoice(
+    {
+      customerName: 'Split Buyer',
+      invoiceNumber: 'SO-H102',
+      invoiceDate: `${thisYear}-07-03`,
+      location: 'RM',
+      lines: [{ item: 'Origin Hobby Box', productId: P3, quantity: 5, rate: 200 }]
+    },
+    null
+  )
+  db.prepare(`UPDATE invoices SET status = 'sent', qbo_id = 'qbo-h102' WHERE id = ?`).run(
+    splitSale.id
+  )
+  invoices.setInvoiceLineRouting(
+    splitSale.id,
+    [
+      {
+        lineId: invoices.getInvoice(splitSale.id).lines[0].id,
+        destination: 'RM',
+        supplier: null,
+        allocations: [
+          { quantity: 3, destination: 'RM', sourcePoId: tab.id },
+          { quantity: 2, destination: 'Kestrel Cards', sourcePoId: null }
+        ]
+      }
+    ],
+    null
+  )
+  const both = soRow(splitSale.id).lines[0].sources
+  ok(
+    both.length === 2,
+    'A SPLIT LINE REPORTS BOTH ORIGINS — reading the line alone would lose one of them entirely',
+    JSON.stringify(both)
+  )
+  ok(
+    both[0].quantity === 3 && both[0].fromShelf === true && both[0].poNumber === tab.poNumber,
+    'three off the shelf, out of the roadshow’s cases',
+    JSON.stringify(both[0])
+  )
+  ok(
+    both[1].quantity === 2 && both[1].fromShelf === false && both[1].where === 'Kestrel Cards',
+    'and two shipped direct by a supplier',
+    JSON.stringify(both[1])
+  )
+
+  // --- a DROPSHIP attached to a purchase it shares no product with --------
+  /**
+   * THE OTHER INVISIBLE ONE, and the commonest. A dropship's sale and purchase
+   * are one deal; the sale may be a hand-typed line and the purchase a case
+   * nobody put in the catalog, so nothing on any line connects them. The link
+   * table is the only place that claim lives.
+   */
+  const dropPo = poRepo.createPurchaseOrder(
+    {
+      supplier: 'Kestrel Cards',
+      location: 'Ordinary Buyer',
+      lines: [{ productId: P3, quantity: 2, unitPrice: 60 }]
+    },
+    null
+  )
+  const dropSale = invoices.saveInvoice(
+    {
+      customerName: 'Direct Buyer',
+      invoiceNumber: 'SO-H103',
+      invoiceDate: `${thisYear}-07-04`,
+      location: 'RM',
+      lines: [{ item: 'A case nobody catalogued', quantity: 1, rate: 700 }]
+    },
+    null
+  )
+  ok(invoices.linkDropshipPair(dropPo.id, dropSale.id, null).ok, 'the pair is linked')
+  ok(
+    soRow(dropSale.id).sourcePos.some((p: any) => p.poNumber === dropPo.poNumber),
+    'A DROPSHIP SALE NAMES THE PURCHASE THAT SUPPLIED IT — no line connects them, so the link table is the only place this lives',
+    JSON.stringify(soRow(dropSale.id).sourcePos)
+  )
+  ok(
+    poRow(dropPo.id).suppliedSales.some((s: any) => s.number === 'SO-H103'),
+    'and the purchase says so too, in the other direction'
+  )
+  ok(
+    soRow(dropSale.id).lines[0].sources.length === 0,
+    'while its hand-typed line reports no origin — it was never stock, so "which shelf" is not a question about it'
+  )
+
+  // --- the picker, and what it offers -------------------------------------
+  const sources = history.listHistorySources(db)
+  const tabSource = sources.find((o: any) => o.poId === tab.id)
+  ok(
+    !!tabSource && tabSource.saleCount === 2,
+    'THE PICKER COUNTS A LINE AND A PER-CASE SPLIT ALIKE — SO-H100 names it on its line, SO-H102 only inside a split, and reading the line alone would have counted one',
+    JSON.stringify(tabSource)
+  )
+  ok(tabSource.roadshow === true, 'and marks a running tab as a roadshow, which is what gets starred')
+  ok(
+    sources.some((o: any) => o.poId === dropPo.id),
+    'A PURCHASE THAT SHARES NO PRODUCT WITH ITS SALE IS STILL OFFERED — that is the dropship, and filtering it out would hide the case this exists for'
+  )
+  ok(
+    !sources.some((o: any) => o.saleCount === 0),
+    'AND A PURCHASE THAT SUPPLIED NOTHING IS NOT — a list of every order ever raised would bury the four that answer the question'
+  )
+
+  // --- filtering by a source ----------------------------------------------
+  const filtered = history.listSalesOrderHistory(db, thisYear, tab.id)
+  ok(
+    filtered.length === 2 &&
+      filtered.every((r: any) => r.number === 'SO-H100' || r.number === 'SO-H102'),
+    'FILTERING BY A PURCHASE SHOWS EVERY SALE THAT DREW ON IT, and only those',
+    filtered.map((r: any) => r.number).join()
+  )
+  ok(
+    history.listPurchaseOrderHistory(db, thisYear, tab.id).length === 1,
+    'and the purchase side narrows to the one purchase being asked about'
+  )
+  /**
+   * THE YEAR IS IGNORED WHILE A SOURCE IS PICKED. What was bought in December is
+   * mostly sold in January, so keeping the year on would answer the question
+   * with half the answer and nothing on screen to say half was missing.
+   */
+  ok(
+    history.listSalesOrderHistory(db, 1999, tab.id).length === 2,
+    'A SOURCE REPLACES THE YEAR RATHER THAN NARROWING INSIDE IT — a December trip is sold in January',
+    String(history.listSalesOrderHistory(db, 1999, tab.id).length)
+  )
+  ok(
+    history.listSalesOrderHistory(db, 1999).length === 0,
+    'while with no source the year still governs, exactly as it did'
+  )
+
+  // --- a void sale supplies nobody ----------------------------------------
+  invoices.setInvoiceStatus(splitSale.id, 'void', null)
+  ok(
+    !poRow(tab.id).suppliedSales.some((s: any) => s.number === 'SO-H102'),
+    'A VOIDED SALE DROPS OFF THE PURCHASE THAT SUPPLIED IT — it took nothing and sold nothing, and counting it would have a roadshow claiming a buyer it never had'
+  )
+  ok(
+    history.listHistorySources(db).find((o: any) => o.poId === tab.id).saleCount === 1,
+    'and the picker’s count follows it down',
+    String(history.listHistorySources(db).find((o: any) => o.poId === tab.id).saleCount)
+  )
+}
+
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

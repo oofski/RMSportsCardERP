@@ -234,6 +234,7 @@ import type {
   ThreadSummary
 } from '@shared/messages'
 import type {
+  HistorySource,
   OrderHistoryYears,
   PurchaseOrderHistoryRow,
   SalesOrderHistoryRow
@@ -1240,12 +1241,26 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       wholesale: (): Promise<WholesaleSaleRow[]> => ipcRenderer.invoke(IPC.finWholesale),
       /** Which years the ledger has anything in, newest first. */
       historyYears: (): Promise<OrderHistoryYears> => ipcRenderer.invoke(IPC.finHistoryYears),
-      /** Every purchase order filed under one year, lines included. */
-      historyPurchaseOrders: (year: number): Promise<PurchaseOrderHistoryRow[]> =>
-        ipcRenderer.invoke(IPC.finHistoryPos, year),
+      /**
+       * Every purchase order filed under one year, lines included.
+       *
+       * `sourcePoId` narrows to ONE purchase and then ignores the year, because
+       * what came out of a December trip is mostly sold in January — see
+       * listPurchaseOrderHistory.
+       */
+      historyPurchaseOrders: (
+        year: number,
+        sourcePoId?: string | null
+      ): Promise<PurchaseOrderHistoryRow[]> =>
+        ipcRenderer.invoke(IPC.finHistoryPos, { year, sourcePoId: sourcePoId ?? '' }),
       /** Every sales order filed under one year, lines and FIFO cost included. */
-      historySalesOrders: (year: number): Promise<SalesOrderHistoryRow[]> =>
-        ipcRenderer.invoke(IPC.finHistorySos, year),
+      historySalesOrders: (
+        year: number,
+        sourcePoId?: string | null
+      ): Promise<SalesOrderHistoryRow[]> =>
+        ipcRenderer.invoke(IPC.finHistorySos, { year, sourcePoId: sourcePoId ?? '' }),
+      /** The purchases the ledger can be narrowed to. See listHistorySources. */
+      historySources: (): Promise<HistorySource[]> => ipcRenderer.invoke(IPC.finHistorySources),
       /** The deal ticket register for one year, or the whole thing for null. */
       dealTickets: (year: number | null): Promise<DealTicketRow[]> =>
         ipcRenderer.invoke(IPC.finDealTickets, year),
