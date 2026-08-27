@@ -574,6 +574,9 @@ interface InvoiceRow extends AddressRow, ShipAddressRow {
   source_po_count: number | null
   stock_units: number | null
   drop_units: number | null
+  remote_units: number | null
+  remote_place_count: number | null
+  remote_from: string | null
   drawn_units: number | null
   tracked_parcels: number | null
   last_tracked_at: string | null
@@ -710,6 +713,18 @@ function toInvoice(r: InvoiceRow): Invoice {
     sourcePoCount: Number(r.source_po_count) || 0,
     stockUnits: Number(r.stock_units) || 0,
     dropshipUnits: Number(r.drop_units) || 0,
+    remoteUnits: Number(r.remote_units) || 0,
+    /**
+     * THE SHOP, when there is one shop.
+     *
+     * Null when two shops each hold part of the order — the same rule
+     * `dropSupplier` keeps a few lines above, for the same reason: a card that
+     * named one of two would send somebody to the wrong state. `remotePlaceCount`
+     * is what tells that null apart from "none of this is away".
+     */
+    remoteFrom:
+      Number(r.remote_place_count) === 1 ? (r.remote_from ?? '').trim() || null : null,
+    remotePlaceCount: Number(r.remote_place_count) || 0,
     drawnUnits: Number(r.drawn_units) || 0,
     // Nulls kept as nulls rather than coerced to 0: "not measured" and "measured
     // as nothing" are different facts, and hasDims reads a zero as absent
@@ -832,6 +847,55 @@ const INVOICE_COLS = `id, invoice_number, customer_id, customer_name, email, ter
                                                 THEN 0 ELSE u.quantity END), 0)
                          FROM invoice_unit_sources u WHERE u.invoice_id = invoices.id)
                         AS drop_units,
+                      -- OURS, AND NOT IN THIS BUILDING. The roadshow case.
+                      --
+                      -- The two columns above split every sold unit in two, and
+                      -- for the app's whole life that split answered everything
+                      -- at once: RM or AM meant real stock, real cost and we
+                      -- pack the box; anything else meant a supplier's goods
+                      -- shipping direct, with no stock and no cost. A tab broke
+                      -- that. Its cases were BOUGHT -- they carry cost layers
+                      -- and sit on a shelf -- but the shelf is in Wichita.
+                      --
+                      -- Those units count in drop_units above, deliberately and
+                      -- unchanged: nothing here knows whether a shop has a case
+                      -- in hand, so a roadshow order waits to be told, exactly
+                      -- as a dropship does. This column exists only so the CARD
+                      -- CAN SAY where the box is coming from, which is what was
+                      -- asked for: show it, but marked as shipping from the
+                      -- shop.
+                      --
+                      -- A REGISTERED PLACE, not a name that looks like one. The
+                      -- test is membership of stock_locations, which is the same
+                      -- question destinationHoldsStock answers in the renderer
+                      -- -- so a destination that draws stock down is exactly the
+                      -- one reported as away, and a supplier typed on a dropship
+                      -- line is not.
+                      (SELECT COALESCE(SUM(u.quantity), 0)
+                         FROM invoice_unit_sources u
+                        WHERE u.invoice_id = invoices.id
+                          AND UPPER(TRIM(u.destination)) NOT IN ('RM', 'AM')
+                          AND EXISTS (SELECT 1 FROM stock_locations sl
+                                       WHERE LOWER(sl.id) = LOWER(TRIM(u.destination))))
+                        AS remote_units,
+                      -- WHICH shop, when there is only one -- the same
+                      -- sole-answer-or-nothing rule drop_supplier keeps two
+                      -- notes below, and for the same reason: naming one of two
+                      -- shops sends somebody to the wrong state.
+                      (SELECT COUNT(DISTINCT UPPER(TRIM(u.destination)))
+                         FROM invoice_unit_sources u
+                        WHERE u.invoice_id = invoices.id
+                          AND UPPER(TRIM(u.destination)) NOT IN ('RM', 'AM')
+                          AND EXISTS (SELECT 1 FROM stock_locations sl
+                                       WHERE LOWER(sl.id) = LOWER(TRIM(u.destination))))
+                        AS remote_place_count,
+                      (SELECT MIN(TRIM(u.destination))
+                         FROM invoice_unit_sources u
+                        WHERE u.invoice_id = invoices.id
+                          AND UPPER(TRIM(u.destination)) NOT IN ('RM', 'AM')
+                          AND EXISTS (SELECT 1 FROM stock_locations sl
+                                       WHERE LOWER(sl.id) = LOWER(TRIM(u.destination))))
+                        AS remote_from,
                       -- THE FULFILMENT GATES. See @shared/fulfillment.
                       ship_weight_lb, ship_length_in, ship_width_in, ship_height_in,
                       items_in_hand_at, items_in_hand_by, force_ready_at, force_ready_by,
@@ -842,8 +906,20 @@ const INVOICE_COLS = `id, invoice_number, customer_id, customer_name, email, ter
                       -- owed. Compared against stock_units above, this is the only
                       -- honest signal that a stock order is not yet fillable -- and
                       -- without it Awaiting items could only ever speak for dropships.
+                      --
+                      -- COUNTED AT RM AND AM ONLY, to match stock_units above.
+                      -- A roadshow sale draws real stock and writes real moves,
+                      -- at the shop -- so a mixed order that drew three cases in
+                      -- Wichita would have cancelled out three it could not find
+                      -- on the shelf here, and reported no shortfall at all. The
+                      -- two numbers are subtracted from each other, so they have
+                      -- to be counting the same shelves. Every move written
+                      -- before roadshow tabs existed was at RM or AM, so no
+                      -- order that already exists reads any differently.
                       (SELECT COALESCE(SUM(m.quantity), 0)
-                         FROM invoice_stock_moves m WHERE m.invoice_id = invoices.id) AS drawn_units,
+                         FROM invoice_stock_moves m
+                        WHERE m.invoice_id = invoices.id
+                          AND UPPER(TRIM(m.location)) IN ('RM', 'AM')) AS drawn_units,
                       -- HAS ANY OF THIS SHIPPED?
                       --
                       -- The header tracking column is only half the answer. A

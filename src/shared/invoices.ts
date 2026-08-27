@@ -963,6 +963,20 @@ export interface Invoice {
   /** Units a supplier ships straight to the buyer. Never touch a shelf here. */
   dropshipUnits: number
   /**
+   * UNITS DRAWN FROM A SHELF OF OURS THAT IS NOT IN THIS BUILDING.
+   *
+   * A roadshow shop. See FulfillmentFacts.remoteUnits for why this had to become
+   * a third number: these are ours and bought and costed, like stock, and nobody
+   * here will ever pack them, like a dropship. They are counted in
+   * `dropshipUnits` as well — every gate treats them as a dropship, deliberately
+   * — and this exists so the card can say where the box is coming from.
+   */
+  remoteUnits: number
+  /** The sole shop holding part of this order, or null when two do. */
+  remoteFrom: string | null
+  /** How many shops hold part of it. > 1 is why remoteFrom is null. */
+  remotePlaceCount: number
+  /**
    * HOW MANY PURCHASE ORDERS SUPPLY THIS SALE.
    *
    * Not derivable from `sourcePoId`, which is the whole reason it exists: that

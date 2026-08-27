@@ -26926,6 +26926,25 @@ button.sor-team:focus-visible {
   opacity: 0.85;
 }
 
+/* OURS, AND NOT IN THIS BUILDING — a roadshow shop is holding it.
+
+   The same row shape as the supplier line above and a colour of its own,
+   because the two say opposite things about who owns the goods: one is a
+   supplier's box coming to a buyer, this is OUR box standing in another state.
+   Info blue rather than the warning amber a dropship wears, since nothing here
+   needs acting on — the stock is bought and paid for, it is simply somewhere
+   else, and the only thing it changes is that nobody downstairs should go
+   looking for it. */
+.inv-source-away {
+  color: var(--info);
+}
+.inv-source-away-n {
+  flex: 0 0 auto;
+  font-size: 10.5px;
+  color: var(--text-3);
+  opacity: 0.85;
+}
+
 /* The buyer a dropship purchase is FOR — its own row under the supplier, the
    mirror of the sell side's "from <supplier>" line. It started in the card
    header beside the → destination and both names ellipsed to two characters

@@ -14,7 +14,8 @@ import {
   fulfillmentNextStepDetail,
   fulfillmentStageOf,
   fulfillmentTickShort,
-  readyToShipBlockedReason
+  readyToShipBlockedReason,
+  shipsFromAway
 } from '@shared/fulfillment'
 import {
   ORDER_FILTERS,
@@ -940,6 +941,46 @@ function InvoiceCard({
    * nobody has typed says so plainly rather than going quiet, since "we do not
    * know who is shipping this" is the most useful thing this line can say.
    */
+  /**
+   * OURS, AND NOT IN THIS BUILDING — the roadshow case, said out loud.
+   *
+   * The owner's answer when asked whether these orders should show on the
+   * packing board at all: "show it, but marked as shipping from the shop." So
+   * the card keeps its place in the queue — somebody still has to confirm it
+   * went out — and the packer is told not to go downstairs looking for a box
+   * that is in Wichita.
+   *
+   * One shop is NAMED and two are COUNTED, the same rule the supplier line
+   * below keeps: naming one of two would send somebody to the wrong state.
+   */
+  const awayUnits = shipsFromAway(invoice) ? Number(invoice.remoteUnits) || 0 : 0
+  const awayLine =
+    awayUnits === 0
+      ? null
+      : invoice.remoteFrom
+        ? {
+            text: `ships from ${invoice.remoteFrom}`,
+            title:
+              `${awayUnits} unit${awayUnits === 1 ? '' : 's'} on this order ${awayUnits === 1 ? 'is' : 'are'} ours ` +
+              `and already bought, sitting at ${invoice.remoteFrom} — so the box goes out from there and ` +
+              'nothing here gets packed. The label is still bought here.'
+          }
+        : {
+            text: `ships from ${invoice.remotePlaceCount} shops`,
+            title:
+              `${awayUnits} units on this order are ours and already bought, split across ` +
+              `${invoice.remotePlaceCount} shops — so nothing here gets packed. Open it for the split.`
+          }
+  /**
+   * EVERY UNIT OFF OUR SHELVES IS AT ONE OF OUR OWN SHOPS.
+   *
+   * Then there is no supplier to chase and none to name, and the away line
+   * above has already said everything there is to say. Without this the card
+   * would print "supplier not named" under it — a warning about a fact that is
+   * not actually missing, on the commonest roadshow order there is.
+   */
+  const noSupplierToName = (Number(invoice.dropshipUnits) || 0) - awayUnits <= 0 && awayUnits > 0
+
   const sourceLine =
     kind === 'stock'
       ? null
@@ -955,11 +996,13 @@ function InvoiceCard({
                 ? `Ships from ${invoice.dropSupplier}, bought on ${invoice.sourcePoNumber}`
                 : `Ships from ${invoice.dropSupplier}`
             }
-          : {
-              text: 'supplier not named',
-              title:
-                'Nothing on this order says who ships it. Open it and name the supplier on the line.'
-            }
+          : noSupplierToName
+            ? null
+            : {
+                text: 'supplier not named',
+                title:
+                  'Nothing on this order says who ships it. Open it and name the supplier on the line.'
+              }
 
   return (
     <div
@@ -1032,6 +1075,25 @@ function InvoiceCard({
           {invoice.sourcePoNumber && (
             <span className="inv-source-po mono">{invoice.sourcePoNumber}</span>
           )}
+        </div>
+      )}
+
+      {/* AND WHEN IT IS OURS BUT NOT HERE, which is neither of the two states
+          this card could describe before.
+
+          A SHOP, not a truck: the icon is the difference between "somebody
+          else's goods are coming" and "our goods are standing somewhere else",
+          and those are the two things a packer has to tell apart. It sits under
+          the supplier line rather than replacing it, because a mixed order can
+          have a supplier shipping one half and a shop holding the other, and
+          both halves have to be findable. */}
+      {awayLine && (
+        <div className="inv-source inv-source-away" title={awayLine.title}>
+          <Icon name="Store" size={12} />
+          <span>{awayLine.text}</span>
+          <span className="inv-source-away-n">
+            {awayUnits} unit{awayUnits === 1 ? '' : 's'}
+          </span>
         </div>
       )}
 

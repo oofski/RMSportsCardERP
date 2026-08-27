@@ -557,6 +557,279 @@ console.log('\n=== 6. close is not the same act as pay ===')
   )
 }
 
+console.log('\n=== 7. the card says where the box is coming from ===')
+// ---------------------------------------------------------------------------
+/**
+ * The owner, asked whether a roadshow order should drop off the packing board
+ * the way a dropship does: "SHOW IT, BUT MARKED AS SHIPPING FROM THE SHOP."
+ *
+ * ## The two states a card could describe, and the one it could not
+ *
+ *   ours and here      RM or AM. Real stock, real cost, we pack the box.
+ *   theirs and direct  a dropship. No stock, no cost, somebody else ships it.
+ *
+ * A tab is neither: OURS, AND NOT HERE. Bought, costed, sitting in Wichita. The
+ * card had no way to say that, so a roadshow order read as an ordinary dropship
+ * and — worse — as one whose supplier nobody had bothered to type, because
+ * there is no supplier to type.
+ *
+ * ## It changes no gate, deliberately
+ *
+ * `stock_units` counts RM and AM only, so these units are drop units to every
+ * test on the fulfilment board and the order waits to be told the goods are in
+ * hand, exactly as a dropship does — nothing here knows whether a shop has a
+ * case on its counter. What is new is only what the card SAYS.
+ *
+ * ## A REGISTERED PLACE, not a name that looks like one
+ *
+ * The test is membership of `stock_locations`, the same question
+ * `destinationHoldsStock` answers — so a destination that draws stock down is
+ * exactly the one reported as away, and a supplier typed on a dropship line is
+ * not. That equivalence is pinned below, because the two drifting is how a card
+ * comes to call a distributor a shop of ours.
+ */
+{
+  const { shipsFromAway, shelfShortfall } = require('../src/shared/fulfillment')
+
+  db.prepare(
+    `INSERT INTO inventory_products (id, sku, name, category, unit_cost, created_at, updated_at)
+     VALUES ('p_card', 'SKU-CARD', 'Card Flag Box', 'Baseball', 400,
+             '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`
+  ).run()
+
+  /** Four here, three at the shop — the shape the whole change was built around. */
+  invStock.addStock('p_card', 'RM', 4, 250, 'four here', null, null)
+  const shopTab = poRepo.createPurchaseOrder(
+    { supplier: SHOP, ongoing: true, lines: [{ productId: 'p_card', quantity: 3, unitPrice: 400 }] },
+    null
+  )
+  poRepo.receivePurchaseOrderLines(
+    shopTab.id,
+    [{ lineId: poRepo.getPurchaseOrder(shopTab.id).lines[0].id, quantity: 3 }],
+    null
+  )
+
+  const mixed = invoices.saveInvoice(
+    {
+      customerName: 'Mixed Source Buyer',
+      invoiceNumber: 'SO-R300',
+      invoiceDate: '2026-08-27',
+      location: 'RM',
+      lines: [{ item: 'Card Flag Box', productId: 'p_card', quantity: 7, rate: 900 }]
+    },
+    null
+  )
+  invoices.setInvoiceLineRouting(
+    mixed.id,
+    [
+      {
+        lineId: invoices.getInvoice(mixed.id).lines[0].id,
+        destination: 'RM',
+        supplier: null,
+        allocations: [
+          { quantity: 4, destination: 'RM', sourcePoId: null },
+          { quantity: 3, destination: SHOP, sourcePoId: null }
+        ]
+      }
+    ],
+    null
+  )
+  const m = invoices.getInvoice(mixed.id)
+  ok(
+    m.remoteUnits === 3,
+    'THREE OF THE SEVEN ARE OURS AND NOT IN THIS BUILDING — the third number, which did not exist before tabs',
+    String(m.remoteUnits)
+  )
+  ok(
+    m.remoteFrom === SHOP && m.remotePlaceCount === 1,
+    'AND THE CARD CAN NAME THE SHOP, because there is only one to name',
+    `${m.remoteFrom} / ${m.remotePlaceCount}`
+  )
+  ok(shipsFromAway(m) === true, 'so the card says it ships from there')
+  ok(
+    m.stockUnits === 4 && m.dropshipUnits === 3,
+    'THE GATES ARE UNCHANGED — the away units still count as drop units, so the order still waits to be told the goods are in hand',
+    `${m.stockUnits} / ${m.dropshipUnits}`
+  )
+
+  /**
+   * AN ORDINARY SALE SAYS NOTHING. The flag has to be silent on the case that
+   * is almost every case, or it stops being read on the one that matters.
+   */
+  invStock.addStock('p_card', 'RM', 2, 250, 'two more here', null, null)
+  const plain = invoices.saveInvoice(
+    {
+      customerName: 'Ordinary Buyer',
+      invoiceNumber: 'SO-R301',
+      invoiceDate: '2026-08-27',
+      location: 'RM',
+      lines: [{ item: 'Card Flag Box', productId: 'p_card', quantity: 2, rate: 900 }]
+    },
+    null
+  )
+  const p = invoices.getInvoice(plain.id)
+  ok(
+    p.remoteUnits === 0 && p.remoteFrom === null && p.remotePlaceCount === 0,
+    'A SALE OFF OUR OWN SHELF SAYS NOTHING AT ALL — no count, no shop, no flag',
+    `${p.remoteUnits} / ${p.remoteFrom} / ${p.remotePlaceCount}`
+  )
+  ok(shipsFromAway(p) === false, 'and the card draws no away line on it')
+
+  /**
+   * A DROPSHIP IS NOT A SHOP OF OURS. The supplier's name is a destination on
+   * the line and it is not in `stock_locations`, so it must not be counted as
+   * somewhere our stock is standing — which would tell a packer that goods we
+   * never bought are ours and waiting in a building we cannot name.
+   */
+  const drop = invoices.saveInvoice(
+    {
+      customerName: 'Direct Buyer',
+      invoiceNumber: 'SO-R302',
+      invoiceDate: '2026-08-27',
+      location: 'RM',
+      lines: [
+        {
+          item: 'Card Flag Box',
+          productId: 'p_card',
+          quantity: 2,
+          rate: 900,
+          destination: 'Ordinary Distributors',
+          supplier: 'Ordinary Distributors'
+        }
+      ]
+    },
+    null
+  )
+  const d = invoices.getInvoice(drop.id)
+  ok(
+    d.dropshipUnits === 2 && d.remoteUnits === 0,
+    "A SUPPLIER'S NAME IS NOT ONE OF OUR SHELVES — those two units are a dropship and nothing of ours is away",
+    `${d.dropshipUnits} / ${d.remoteUnits}`
+  )
+  ok(
+    !destinationHoldsStock('Ordinary Distributors') && shipsFromAway(d) === false,
+    'AND THE TWO TESTS AGREE — a destination that holds no stock is never reported as holding ours'
+  )
+
+  /**
+   * TWO SHOPS ARE COUNTED, NOT NAMED. The same sole-answer-or-nothing rule
+   * `dropSupplier` keeps: naming one of two would send somebody to the wrong
+   * state, and a silent card would lose the fact that any of it is away.
+   */
+  const OTHER = 'Roadshow Dallas'
+  const secondTab = poRepo.createPurchaseOrder(
+    {
+      supplier: OTHER,
+      ongoing: true,
+      lines: [{ productId: 'p_card', quantity: 2, unitPrice: 500 }]
+    },
+    null
+  )
+  poRepo.receivePurchaseOrderLines(
+    secondTab.id,
+    [{ lineId: poRepo.getPurchaseOrder(secondTab.id).lines[0].id, quantity: 2 }],
+    null
+  )
+  const shopTab2 = poRepo.createPurchaseOrder(
+    { supplier: SHOP, ongoing: true, lines: [{ productId: 'p_card', quantity: 2, unitPrice: 400 }] },
+    null
+  )
+  poRepo.receivePurchaseOrderLines(
+    shopTab2.id,
+    [{ lineId: poRepo.getPurchaseOrder(shopTab2.id).lines[0].id, quantity: 2 }],
+    null
+  )
+  const twoShops = invoices.saveInvoice(
+    {
+      customerName: 'Two Shop Buyer',
+      invoiceNumber: 'SO-R303',
+      invoiceDate: '2026-08-27',
+      location: 'RM',
+      lines: [{ item: 'Card Flag Box', productId: 'p_card', quantity: 4, rate: 900 }]
+    },
+    null
+  )
+  invoices.setInvoiceLineRouting(
+    twoShops.id,
+    [
+      {
+        lineId: invoices.getInvoice(twoShops.id).lines[0].id,
+        destination: 'RM',
+        supplier: null,
+        allocations: [
+          { quantity: 2, destination: SHOP, sourcePoId: null },
+          { quantity: 2, destination: OTHER, sourcePoId: null }
+        ]
+      }
+    ],
+    null
+  )
+  const t = invoices.getInvoice(twoShops.id)
+  ok(
+    t.remoteUnits === 4 && t.remotePlaceCount === 2,
+    'FOUR UNITS ACROSS TWO SHOPS, and the card says so',
+    `${t.remoteUnits} / ${t.remotePlaceCount}`
+  )
+  ok(
+    t.remoteFrom === null,
+    'AND NEITHER IS NAMED — naming one of two would send somebody to the wrong state',
+    String(t.remoteFrom)
+  )
+
+  /**
+   * A SHOP'S CASES MUST NOT PAPER OVER AN EMPTY SHELF HERE.
+   *
+   * `shelfShortfall` subtracts what was drawn from what was asked of our own
+   * shelves, so the two have to be counting the same shelves. Before this, a
+   * roadshow draw counted towards the drawn side while the asked side counted
+   * RM and AM alone — so an order that found two cases in Wichita reported no
+   * shortfall for the two it could not find downstairs, and sat on the ready
+   * pile with nothing to pack.
+   */
+  const shortSale = invoices.saveInvoice(
+    {
+      customerName: 'Short Shelf Buyer',
+      invoiceNumber: 'SO-R304',
+      invoiceDate: '2026-08-27',
+      location: 'RM',
+      lines: [{ item: 'Card Flag Box', productId: 'p_card', quantity: 5, rate: 900 }]
+    },
+    null
+  )
+  invStock.addStock('p_card', SHOP, 2, 400, 'two at the shop', null, null)
+  invoices.setInvoiceLineRouting(
+    shortSale.id,
+    [
+      {
+        lineId: invoices.getInvoice(shortSale.id).lines[0].id,
+        destination: 'RM',
+        supplier: null,
+        allocations: [
+          { quantity: 3, destination: 'RM', sourcePoId: null },
+          { quantity: 2, destination: SHOP, sourcePoId: null }
+        ]
+      }
+    ],
+    null
+  )
+  const s = invoices.getInvoice(shortSale.id)
+  ok(
+    invStock.stockQty('p_card', 'RM') === 0,
+    'our own shelf is empty, and the order asked it for three',
+    String(invStock.stockQty('p_card', 'RM'))
+  )
+  ok(
+    s.stockUnits === 3 && s.drawnUnits === 0,
+    'DRAWN COUNTS RM AND AM ONLY, to match the number it is subtracted from',
+    `${s.stockUnits} asked / ${s.drawnUnits} drawn`
+  )
+  ok(
+    shelfShortfall(s) === 3,
+    'SO THE SHELF STILL OWES THREE — the two the shop gave up do not cancel out cases that are not here',
+    String(shelfShortfall(s))
+  )
+}
+
 /** Hand the over-sell fixture's stock back, so nothing below inherits it. */
 function inv_setVoid(id: string): void {
   invoices.setInvoiceStatus(id, 'void', null)
