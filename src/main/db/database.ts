@@ -4427,6 +4427,74 @@ function migrate(database: Database.Database): void {
   addColumnIfMissing(database, 'invoice_stock_moves', 'allocation_id', 'TEXT')
   setMeta(database, 'schema_version', '89')
 
+  /**
+   * v90: A SALE MAY BE SUPPLIED BY SEVERAL PURCHASE ORDERS.
+   *
+   * The owner's ask: "allow for multiple POs to be added to one sales order in
+   * terms of matching products", and "a way to link POs to SOs that are in
+   * history or active, in case of drop shipping".
+   *
+   * ## The relationship was already one-to-many, pointing the wrong way
+   *
+   * One purchase supplying several sales has worked since multi-shipment landed,
+   * because that direction is read off `invoices.source_po_id` — the MANY side.
+   * The other direction had no room at all: `source_po_id` is one column, and
+   * `linkDropshipPair` refused outright with "that sales order already came from
+   * another purchase order". A sale of ten cases sourced from three different
+   * purchases is an ordinary thing on this floor and could not be recorded.
+   *
+   * So this is the join table the pair always needed. The UNIQUE makes linking
+   * twice idempotent rather than an error, which matters because two people on
+   * two benches attaching the same purchase is a race, not a mistake.
+   *
+   * ## THE BACKFILL IS THE OPPOSITE CHOICE FROM v89, AND DELIBERATELY
+   *
+   * The allocations table above writes NO row for anything existing, because a
+   * line with no rows already means something exact. Here the reverse is true:
+   * every `invoices.source_po_id` that is set IS a link, and leaving those out
+   * would make the new list wrong on day one rather than empty. So they are
+   * copied in, and `INSERT OR IGNORE` makes the copy safe to re-run.
+   *
+   * ## `invoices.source_po_id` STAYS, AND BECOMES AN ANSWER RATHER THAN A FACT
+   *
+   * Kept in step by `syncSaleSourcePo`: the sole link when there is exactly one,
+   * NULL when there are several. That is the same rule `soleSourceOrder` already
+   * applies to a sale's LINES, applied to the sale. Every existing reader goes on
+   * working and none of them is ever shown one of three purchases as if it were
+   * the only one — a half-truth being the one outcome worth ruling out, since
+   * that column drives the dropship gate and the deal-ticket fold.
+   *
+   * NOT foreign keys with cascades, for the reason the v33 and v87 notes give: a
+   * purchase order deleted after a sale went out must not take the sale with it.
+   * Both sides are cleaned up explicitly where they are deleted.
+   */
+  database.exec(
+    `CREATE TABLE IF NOT EXISTS sale_purchase_links (
+       id         TEXT PRIMARY KEY,
+       invoice_id TEXT NOT NULL,
+       po_id      TEXT NOT NULL,
+       created_at TEXT NOT NULL,
+       created_by TEXT,
+       UNIQUE (invoice_id, po_id)
+     );
+     CREATE INDEX IF NOT EXISTS idx_sp_link_invoice ON sale_purchase_links (invoice_id);
+     CREATE INDEX IF NOT EXISTS idx_sp_link_po      ON sale_purchase_links (po_id);`
+  )
+  // Every sale that already names a purchase is already linked to it. Not
+  // runOnce: it is a cheap self-heal, it is scoped to pairs that are missing,
+  // and INSERT OR IGNORE means a re-run can only ever be a no-op.
+  database
+    .prepare(
+      `INSERT OR IGNORE INTO sale_purchase_links (id, invoice_id, po_id, created_at, created_by)
+       SELECT lower(hex(randomblob(16))), i.id, i.source_po_id,
+              COALESCE(i.created_at, datetime('now')), NULL
+         FROM invoices i
+         JOIN purchase_orders po ON po.id = i.source_po_id
+        WHERE i.source_po_id IS NOT NULL AND TRIM(i.source_po_id) != ''`
+    )
+    .run()
+  setMeta(database, 'schema_version', '90')
+
   // v41: re-derive every product's average cost from its remaining cost layers.
   //
   // The average used to be stored rounded to the cent, back when every total in

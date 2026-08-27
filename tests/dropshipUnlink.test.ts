@@ -425,14 +425,41 @@ console.log('\n=== ATTACHING A PURCHASE ORDER TO A SALE THAT IS ALREADY WRITTEN 
     .find((o: any) => o.poId === supplierPo.id)
   ok(forSecond.otherSales === 1, 'and each is told how many others it already supplies', String(forSecond?.otherSales))
 
-  // REPOINTING IS REFUSED. Moving a deal off the order it was recorded against
-  // would rewrite both of their histories with nothing saying it happened.
-  const moved = inv.linkDropshipPair(shelfPo.id, sale.id, null)
-  ok(moved.ok === false, 'A SALE CANNOT BE MOVED TO A DIFFERENT PURCHASE ORDER')
-  ok(/already came from another/i.test(moved.error ?? ''), 'and the refusal says why', String(moved.error))
+  /**
+   * A SECOND PURCHASE ON THE SAME SALE IS NOW ALLOWED, and this block asserted
+   * the opposite until the owner asked for it.
+   *
+   * The old rule — "moving a deal off the order it was recorded against would
+   * rewrite both of their histories with nothing saying it happened" — described
+   * a MOVE, and a move was the only thing one column could express: the second
+   * purchase could arrive only by overwriting the first. `sale_purchase_links`
+   * makes it an ADD. Nothing is overwritten, nothing is rewritten, both
+   * histories gain a line, and the first link is still standing underneath.
+   */
+  const added = inv.linkDropshipPair(shelfPo.id, sale.id, null)
+  ok(added.ok === true, 'A SALE TAKES A SECOND PURCHASE ORDER', String(added.error))
+  ok(
+    inv.getInvoice(sale.id).sourcePos.length === 2,
+    'AND THE ORIGINAL LINK IS STILL STANDING — an add, not a move',
+    String(inv.getInvoice(sale.id).sourcePos.length)
+  )
+  ok(
+    inv.getInvoice(sale.id).sourcePos.some((p: any) => p.poId === supplierPo.id),
+    'with the first purchase still on it by name'
+  )
+  ok(
+    inv.getInvoice(sale.id).sourcePoId === null,
+    'and the sole-purchase column goes null rather than naming one of two',
+    String(inv.getInvoice(sale.id).sourcePoId)
+  )
+  // Put it back, so the assertions after this section see the sale as they did.
+  ok(
+    require('../src/main/db/salePurchaseLinks').unlinkSaleFromPurchase(sale.id, shelfPo.id, null).ok,
+    'and it can be taken back off'
+  )
   ok(
     inv.getInvoice(sale.id).sourcePoId === supplierPo.id,
-    'with the original link left standing'
+    'which puts the column back to naming the one that is left'
   )
 
   // Attaching the SAME one again is a no-op rather than an error - somebody
@@ -515,16 +542,19 @@ console.log('\n=== WHICH ORDER THE PICKER PUTS FIRST, and what it refuses ===')
   )
 
   // --- the refusals -------------------------------------------------------
-  ok(linkPurchaseRefusal(kestrel, { sourcePoId: null }) === null, 'an unattached sale may attach')
-  ok(
-    linkPurchaseRefusal(kestrel, { sourcePoId: 'a' }) === null,
-    'and re-attaching the SAME order is not a refusal'
-  )
-  const moved = linkPurchaseRefusal(kestrel, { sourcePoId: 'zzz', sourcePoNumber: 'PO-0099' })
-  ok(!!moved && /PO-0099/.test(moved), 'A SALE ALREADY ON ANOTHER ORDER IS REFUSED, by name', String(moved))
-  const dead = linkPurchaseRefusal(po({ status: 'cancelled', poNumber: 'PO-0077' }), { sourcePoId: null })
+  /**
+   * ONE REFUSAL IS LEFT, and it used to be two.
+   *
+   * "A sale already on another order is refused, by name" went with the single
+   * column it protected — a sale may now be supplied by several purchases, so
+   * there is nothing to refuse and the function no longer takes the sale at all.
+   * What remains is the only thing that would produce a WRONG record: nothing on
+   * a cancelled order is being bought, so it cannot have supplied anything.
+   */
+  ok(linkPurchaseRefusal(kestrel) === null, 'a live order may be attached')
+  const dead = linkPurchaseRefusal(po({ status: 'cancelled', poNumber: 'PO-0077' }))
   ok(!!dead && /cancelled/i.test(dead), 'and a cancelled order is refused', String(dead))
-  ok(linkPurchaseRefusal(null, { sourcePoId: null }) === null, 'nothing chosen is not a refusal')
+  ok(linkPurchaseRefusal(null) === null, 'nothing chosen is not a refusal')
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)

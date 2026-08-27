@@ -110,6 +110,14 @@ export function applyOrderReset(
       // invoices alone left every line behind, in a table nothing lists and
       // nothing can clean, still syncing.
       db.prepare(`DELETE FROM invoice_lines`).run()
+      // AND THE TWO TABLES THAT HANG OFF THEM, for exactly the reason above:
+      // neither carries a foreign key that would take it along. The splits
+      // cascade on the LINE they belong to, which has just gone; the links carry
+      // no key at all by design (see the v90 note), so they are named here.
+      // A table nothing lists and nothing can clean, still syncing, is the state
+      // this block exists to prevent.
+      db.prepare(`DELETE FROM invoice_line_allocations`).run()
+      db.prepare(`DELETE FROM sale_purchase_links`).run()
 
       // Then the documents. invoice_stock_moves, purchase_order_lines and
       // po_unit_destinations DO cascade and go with them.

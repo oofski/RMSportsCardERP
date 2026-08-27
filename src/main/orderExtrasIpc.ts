@@ -45,6 +45,7 @@ import {
   setInvoiceReadyToShip
 } from './db/invoices'
 import { getPurchaseOrder, lookupPartyEmail } from './db/purchaseOrders'
+import { unlinkSaleFromPurchase } from './db/salePurchaseLinks'
 import { uploadedBytes, uploadedName } from './util'
 import type { EmailSettings, RedactedEmailSettings } from '@shared/emailSettings'
 import { redactEmailSettings } from '@shared/emailSettings'
@@ -628,7 +629,7 @@ export function registerOrderExtrasIpc(): void {
   ipcMain.handle(IPC.invoicesAwaitingShipment, (): InvoiceDetail[] => {
     try {
       requireInvoicing()
-      return listAwaitingShipment().map((i) => ({ ...i, lines: [] }))
+      return listAwaitingShipment().map((i) => ({ ...i, lines: [], sourcePos: [] }))
     } catch {
       return []
     }
@@ -636,12 +637,14 @@ export function registerOrderExtrasIpc(): void {
 
   // ---- The fulfilment board ------------------------------------------------
 
-  // Lines are dropped, as they are above: the board draws a card per ORDER and
-  // three columns of line items is a payload nobody reads.
+  // Lines are dropped, as they are above, and the linked purchases with them and
+  // for the same reason: the board draws a card per ORDER, and neither three
+  // columns of line items nor a list of supplying orders is a payload it reads.
+  // Both arrive in full the moment somebody opens the order.
   ipcMain.handle(IPC.invoicesFulfillment, (): InvoiceDetail[] => {
     try {
       requireInvoicing()
-      return listFulfillment().map((i) => ({ ...i, lines: [] }))
+      return listFulfillment().map((i) => ({ ...i, lines: [], sourcePos: [] }))
     } catch {
       return []
     }
@@ -828,6 +831,28 @@ export function registerOrderExtrasIpc(): void {
    * calls the SAME `saveInvoice` every other path calls, N times inside one
    * transaction, so the orders it produces are ordinary drafts in every respect.
    */
+  /**
+   * TAKE ONE PURCHASE OFF A SALE.
+   *
+   * There was nothing to detach before: a sale held one purchase in one column,
+   * so the only thing anybody could do was overwrite it. Now that a sale can be
+   * supplied by several, removing the wrong one has to be possible or the first
+   * mistaken attach is permanent.
+   */
+  ipcMain.handle(
+    IPC.orderUnlinkPurchase,
+    (_e, payload: { poId?: unknown; invoiceId?: unknown }): Result<{ unlinked: true }> => {
+      try {
+        const actor = requireInvoicing()
+        const res = unlinkSaleFromPurchase(str(payload?.invoiceId), str(payload?.poId), actor.id)
+        if (!res.ok) return { ok: false, error: res.error ?? 'That could not be detached.' }
+        return { ok: true, data: { unlinked: true } }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
   ipcMain.handle(
     IPC.orderSplitDropship,
     (

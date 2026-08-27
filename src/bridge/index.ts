@@ -1670,6 +1670,13 @@ export function createBridge(ipcRenderer: BridgeTransport) {
         ipcRenderer.invoke(IPC.orderLinkablePos, invoiceId),
       linkDropship: (poId: string, invoiceId: string): Promise<Result<{ linked: true }>> =>
         ipcRenderer.invoke(IPC.orderLinkDropship, { poId, invoiceId }),
+      /**
+       * Take one purchase back off a sale. A sale may be supplied by several,
+       * so attaching the wrong one has to be undoable — with one column there
+       * was nothing to detach from, only a value to overwrite.
+       */
+      unlinkPurchase: (poId: string, invoiceId: string): Promise<Result<{ unlinked: true }>> =>
+        ipcRenderer.invoke(IPC.orderUnlinkPurchase, { poId, invoiceId }),
 
       /**
        * One purchase, several buyers: write and link every buyer's sales order

@@ -1258,17 +1258,26 @@ function InvoiceCard({
             two were one deal. Attaching writes the link and nothing else: no
             line, no total, nothing in QuickBooks.
             
-            Hidden once it has one, because a second purchase order is a
-            different claim and `linkDropshipPair` refuses it anyway. */}
-        {!invoice.sourcePoId && (
+            ALWAYS OFFERED NOW, and it used to be hidden the moment the sale had
+            one — "a second purchase order is a different claim". That was true
+            of the storage, which had one column, and never true of the trade:
+            ten cases to one buyer sourced from three purchases is an ordinary
+            week here. `sale_purchase_links` is the many-to-many that replaced
+            the column, so the button opens a screen that both adds and removes
+            and it has to be reachable whatever is already attached. */}
+        {invoice.status !== 'void' && (
           <button
             type="button"
             className="btn po-move"
-            title="Record which purchase order supplied this sale"
+            title="Which purchase orders supplied this sale"
             onClick={onAttachPo}
           >
             <Icon name="Link" size={14} />
-            Attach purchase order
+            {invoice.sourcePoCount === 0
+              ? 'Attach purchase order'
+              : invoice.sourcePoCount === 1
+                ? 'Purchase order · 1'
+                : `Purchase orders · ${invoice.sourcePoCount}`}
           </button>
         )}
 

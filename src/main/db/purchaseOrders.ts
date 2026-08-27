@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3'
+import { syncSaleSourcePo } from './salePurchaseLinks'
 import type {
   NewPurchaseOrder,
   NewPurchaseOrderLine,
@@ -2971,8 +2972,31 @@ export function forceDeletePurchaseOrder(
      * line, and deleting the purchase order removes the label, not the line.
      */
     db.prepare(`UPDATE invoice_lines SET source_po_id = NULL WHERE source_po_id = ?`).run(id)
+    db.prepare(`UPDATE invoice_line_allocations SET source_po_id = NULL WHERE source_po_id = ?`).run(
+      id
+    )
+    /**
+     * AND THE ORDER-LEVEL LINKS, which are the many-to-many and not a column.
+     *
+     * `sale_purchase_links` carries no foreign key on purpose — the v90 note
+     * gives the reason, the same one v33 and v87 give: a purchase deleted after
+     * a sale went out must not take the sale with it. So the rows are removed
+     * here explicitly, and every sale that was linked has its own
+     * `source_po_id` re-derived afterwards. A sale supplied by three purchases,
+     * one of which is deleted, correctly goes from "three, so NULL" to "two, so
+     * still NULL"; a sale supplied by two goes to "one, so name it" — which is
+     * a state the old single column could never reach and would have got wrong.
+     */
+    const linked = db
+      .prepare(`SELECT DISTINCT invoice_id FROM sale_purchase_links WHERE po_id = ?`)
+      .all(id) as Array<{ invoice_id: string }>
+    db.prepare(`DELETE FROM sale_purchase_links WHERE po_id = ?`).run(id)
+    const stamp = nowIso()
+    for (const row of linked) syncSaleSourcePo(db, row.invoice_id, stamp)
+    // Belt and braces for a sale whose column pointed here without a link row —
+    // impossible on this build, and free to be sure of.
     db.prepare(`UPDATE invoices SET source_po_id = NULL, updated_at = ? WHERE source_po_id = ?`).run(
-      nowIso(),
+      stamp,
       id
     )
 
@@ -3143,20 +3167,38 @@ export function deletePurchaseOrder(
      * survives, and its own history is now the only place that says why the
      * badge went away.
      */
-    const linked = db
-      .prepare(`SELECT id FROM invoices WHERE source_po_id = ?`)
+    /**
+     * READ OFF THE LINK TABLE, not off the column.
+     *
+     * `invoices.source_po_id` is the SOLE link or NULL, so a sale supplied by
+     * this purchase and two others reads NULL there and would have been missed
+     * entirely — keeping a link row pointing at a deleted purchase, on the one
+     * shape this cleanup exists for.
+     *
+     * And the column is RE-DERIVED per sale rather than blanked. A sale that was
+     * supplied by two and is now supplied by one must go back to naming that
+     * one; blanking it would leave a sale with a real, single, live purchase
+     * behind it reading as though it had none.
+     */
+    const linkedRows = db
+      .prepare(`SELECT DISTINCT invoice_id AS id FROM sale_purchase_links WHERE po_id = ?`)
       .all(id) as Array<{ id: string }>
-    for (const inv of linked) {
-      db.prepare(`UPDATE invoices SET source_po_id = NULL, updated_at = ? WHERE id = ?`).run(
-        nowIso(),
-        inv.id
-      )
+    db.prepare(`DELETE FROM sale_purchase_links WHERE po_id = ?`).run(id)
+    const linkStamp = nowIso()
+    for (const inv of linkedRows) {
+      syncSaleSourcePo(db, inv.id, linkStamp)
       recordOrderEvent('so', inv.id, 'link', {
         detail: `Dropship link cleared — purchase order ${row.po_number} was deleted`,
         actorId,
         db
       })
     }
+    // Belt and braces for a sale whose column pointed here with no link row.
+    // Impossible on this build, and free to be sure of.
+    db.prepare(`UPDATE invoices SET source_po_id = NULL, updated_at = ? WHERE source_po_id = ?`).run(
+      linkStamp,
+      id
+    )
 
     /**
      * AND SO DO THE LINES THAT SAID THEY CAME OUT OF IT.
@@ -3172,6 +3214,12 @@ export function deletePurchaseOrder(
      * the purchase order removes the label, not the sale.
      */
     db.prepare(`UPDATE invoice_lines SET source_po_id = NULL WHERE source_po_id = ?`).run(id)
+    // And the SLICES, for exactly the same reason: a split line names its
+    // purchase per slice, and a slice pointing at a deleted order claims a
+    // provenance nothing can open. The stock does not move here either.
+    db.prepare(`UPDATE invoice_line_allocations SET source_po_id = NULL WHERE source_po_id = ?`).run(
+      id
+    )
 
     // Drop the COGS row explicitly rather than relying on the cascade, so the
     // ledger is corrected the same way cancelling would correct it.

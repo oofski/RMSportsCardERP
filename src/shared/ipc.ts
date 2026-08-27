@@ -271,6 +271,12 @@ export const IPC = {
   // this is called: the second screen writes an ordinary sales order through the
   // ordinary path, and this only records that the two are the same deal.
   orderLinkDropship: 'order:link-dropship',
+  /**
+   * Detach one purchase from one sale. The other half of orderLinkDropship,
+   * which was a one-way door until a sale could be supplied by several: with one
+   * column there was nothing to detach FROM, only a value to overwrite.
+   */
+  orderUnlinkPurchase: 'order:unlink-purchase',
   orderLinkablePos: 'order:linkable-pos',
   // One purchase, several buyers: write every buyer's sales order and link them
   // all to the purchase in ONE transaction. Deliberately not the linking call

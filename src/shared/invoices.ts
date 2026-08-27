@@ -41,6 +41,7 @@ import { composeCustomerMemo } from './invoiceDelivery'
 import { destinationHoldsStock } from './purchaseOrders'
 import { LOCATION_IDS } from './inventory'
 import type { InvoiceLineAllocation } from './invoiceAllocations'
+import type { SaleSourceLink } from './orders'
 import type { Carrier, PaymentTiming } from './freight'
 import type { ShipStatusCode } from './shippingTypes'
 
@@ -859,6 +860,17 @@ export interface Invoice {
   stockUnits: number
   /** Units a supplier ships straight to the buyer. Never touch a shelf here. */
   dropshipUnits: number
+  /**
+   * HOW MANY PURCHASE ORDERS SUPPLY THIS SALE.
+   *
+   * Not derivable from `sourcePoId`, which is the whole reason it exists: that
+   * column holds the sole purchase or NULL, so a sale supplied by three and a
+   * sale supplied by none both read null there. A card has to tell those two
+   * apart — one has nothing to show and the other has three — so this counts the
+   * links themselves. Zero is the commonest value and means an in-house sale
+   * that claims nothing about where its cases came from.
+   */
+  sourcePoCount: number
   /** How it ships, and when it settles. See @shared/freight. */
   carrier: Carrier | null
   service: string | null
@@ -879,6 +891,25 @@ export interface Invoice {
 
 export interface InvoiceDetail extends Invoice {
   lines: InvoiceLine[]
+  /**
+   * EVERY PURCHASE ORDER THIS SALE IS LINKED TO, oldest link first.
+   *
+   * A list, because a sale of ten cases sourced from three purchases is ordinary
+   * trade — the single `sourcePoId` above is the sole entry when there is one
+   * and NULL when there are several, so it can never name one of three as if it
+   * were the only one. See @main/db/salePurchaseLinks.
+   *
+   * EMPTY IS THE COMMONEST STATE and means exactly what it says: nothing is
+   * being claimed about where these cases came from. That is an in-house sale
+   * off the shelf, and it walks ordinary FIFO.
+   *
+   * NOTHING HERE MOVES STOCK. Cost of goods follows the LINE and the SLICE,
+   * where somebody said which units came from where; this is a claim about which
+   * purchases supplied the sale, which is what the histories and a dropship
+   * chase need. Keeping the two apart is what lets a sale be linked to a
+   * purchase whose stock it never drew — the dropship case.
+   */
+  sourcePos: SaleSourceLink[]
 }
 
 /**

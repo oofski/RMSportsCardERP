@@ -2206,5 +2206,282 @@ console.log('\n=== ONE LINE, SPLIT BY CASE, EACH CASE FROM ITS OWN PLACE ===')
   )
 }
 
+
+console.log('\n=== SEVERAL PURCHASE ORDERS SUPPLYING ONE SALE ===')
+// ---------------------------------------------------------------------------
+/**
+ * The owner's three asks, in his words: "allow for multiple POs to be added to
+ * one sales order in terms of matching products"; "it should still be able to
+ * handle not having an associated PO, where the order is being fulfilled
+ * in-house"; and "a way to link POs to SOs that are in history or active, in
+ * case of drop shipping."
+ *
+ * Then, on what actually matters: "what we have to make sure is just that
+ * inventory is being updated as well — that is kind of the point."
+ *
+ * ## THE LOAD-BEARING ASSERTION IS THAT LINKING MOVES NO STOCK
+ *
+ * Three different questions, and they stay three different answers:
+ *
+ *   sale_purchase_links        WHICH PURCHASES supplied this sale. A claim a
+ *                              person makes. Moves nothing.
+ *   invoice_lines.source_po_id which purchase THIS LINE's units came out of, so
+ *                              the cost is that order's layers. Moves stock.
+ *   invoice_line_allocations   the same, per slice. Moves stock.
+ *
+ * Keeping them apart is what lets a sale be linked to a purchase whose stock it
+ * never drew — the dropship case, which is the whole reason for the ask. If
+ * linking ever moved a unit, a bookkeeping note would be silently re-costing
+ * goods, so the shelf is measured across every link and unlink below.
+ */
+{
+  const poRepo = require('../src/main/db/purchaseOrders')
+  const links = require('../src/main/db/salePurchaseLinks')
+  const extrasRepo = require('../src/main/db/orderExtras')
+  const qtyAt = (loc: string): number => invStock.stockQty('p_d', loc)
+
+  const mkPo = (supplier: string, qty: number): any => {
+    const po = poRepo.createPurchaseOrder(
+      {
+        supplier,
+        location: 'RM',
+        lines: [{ productId: 'p_d', item: 'Dropship Hobby Box', quantity: qty, unitPrice: 400 }]
+      },
+      null
+    )
+    poRepo.setPurchaseOrderStatus(po.id, 'received', null)
+    return po
+  }
+  const alpha = mkPo('Alpha Supply', 3)
+  const bravo = mkPo('Bravo Supply', 3)
+  const charlie = mkPo('Charlie Supply', 3)
+
+  const shelfBefore = qtyAt('RM')
+  const sale = inv.saveInvoice(
+    {
+      customerName: 'Three Source Buyer',
+      invoiceNumber: 'SO-9300',
+      invoiceDate: '2026-08-24',
+      location: 'RM',
+      lines: [{ item: 'Dropship Hobby Box', productId: 'p_d', quantity: 2, rate: 900 }]
+    },
+    null
+  )
+  db.prepare(`UPDATE invoices SET status = 'sent', qbo_id = 'qbo-9300' WHERE id = ?`).run(sale.id)
+  const shelfAfterSale = qtyAt('RM')
+  ok(shelfAfterSale === shelfBefore - 2, 'the sale drew its two cases off the shelf', String(shelfAfterSale))
+
+  // --- 1. NO PURCHASE ORDER AT ALL is the ordinary case -------------------
+  ok(
+    inv.getInvoice(sale.id).sourcePos.length === 0,
+    'A SALE STARTS LINKED TO NOTHING — an in-house sale off the shelf claims nothing about ' +
+      'where its cases came from, and that is most sales'
+  )
+  ok(inv.getInvoice(sale.id).sourcePoId === null, 'and names no purchase order')
+
+  // --- 2. SEVERAL PURCHASE ORDERS ON ONE SALE ------------------------------
+  ok(inv.linkDropshipPair(alpha.id, sale.id, null).ok, 'the first purchase attaches')
+  ok(
+    inv.getInvoice(sale.id).sourcePoId === alpha.id,
+    'ONE LINK, so the header column names it — every reader written before this goes on working',
+    String(inv.getInvoice(sale.id).sourcePoId)
+  )
+
+  const second = inv.linkDropshipPair(bravo.id, sale.id, null)
+  ok(
+    second.ok,
+    'A SECOND PURCHASE ATTACHES TOO — this is the refusal that used to say ' +
+      '"that sales order already came from another purchase order"',
+    String(second.error)
+  )
+  ok(inv.linkDropshipPair(charlie.id, sale.id, null).ok, 'and a third')
+  const three = inv.getInvoice(sale.id)
+  ok(three.sourcePos.length === 3, 'all three are on the sale', String(three.sourcePos.length))
+  ok(
+    three.sourcePos.map((p: any) => p.poNumber).join() ===
+      [alpha, bravo, charlie].map((p: any) => p.poNumber).join(),
+    'in the order they were attached',
+    three.sourcePos.map((p: any) => p.poNumber).join()
+  )
+  /**
+   * AND THE HEADER COLUMN GOES NULL RATHER THAN NAMING ONE OF THREE.
+   *
+   * A half-truth in a column that drives the dropship gate and the deal-ticket
+   * fold is worse than an absence: the absence is visible and sends a reader to
+   * the real list. Same rule `soleSourceOrder` applies to a sale's lines.
+   */
+  ok(
+    three.sourcePoId === null,
+    'THE SOLE-PURCHASE COLUMN GOES NULL WITH THREE ATTACHED, rather than naming one as if it ' +
+      'were the only one',
+    String(three.sourcePoId)
+  )
+  ok(three.sourcePoCount === 3, 'while the count says three, so a card can tell three from none', String(three.sourcePoCount))
+
+  // --- 3. NONE OF THAT MOVED A SINGLE UNIT ---------------------------------
+  ok(
+    qtyAt('RM') === shelfAfterSale,
+    'THREE PURCHASES ATTACHED AND THE SHELF HAS NOT MOVED — linking is a claim about which ' +
+      'purchases supplied the sale, not about which layers its cost came from',
+    `${shelfAfterSale} -> ${qtyAt('RM')}`
+  )
+  ok(
+    inv.getInvoice(sale.id).lines[0].sourcePoId === null,
+    'AND THE LINE STILL NAMES NO ORDER, so its cost still walks ordinary FIFO — the two ' +
+      'questions stay two answers'
+  )
+  ok(
+    inv.getInvoice(sale.id).total === sale.total,
+    'with the total untouched, so nothing a buyer was billed has changed'
+  )
+
+  // --- 4. BOTH HISTORIES SAY SO -------------------------------------------
+  const poDetail = (poId: string): string =>
+    extrasRepo.listOrderEvents('po', poId).map((e: any) => e.detail ?? '').join(' | ')
+  ok(
+    /Sold on to|Supplies/i.test(poDetail(bravo.id)),
+    'the second purchase’s own history records that it supplies this sale',
+    poDetail(bravo.id)
+  )
+
+  // --- 5. DETACHING ONE, and it is possible at all -------------------------
+  /**
+   * With one column there was nothing to detach FROM — only a value to
+   * overwrite — so the first mistaken attach was permanent.
+   */
+  ok(inv.getInvoice(sale.id).sourcePos.length === 3, 'three before detaching')
+  ok(links.unlinkSaleFromPurchase(sale.id, bravo.id, null).ok, 'the middle one detaches')
+  const two = inv.getInvoice(sale.id)
+  ok(two.sourcePos.length === 2, 'two are left', String(two.sourcePos.length))
+  ok(
+    !two.sourcePos.some((p: any) => p.poId === bravo.id),
+    'and it is the right one that went'
+  )
+  ok(two.sourcePoId === null, 'the column stays null at two')
+  ok(
+    /No longer supplies/i.test(poDetail(bravo.id)),
+    'AND ITS HISTORY SAYS IT LOST THEM — a log that only ever gains claims is a wrong log',
+    poDetail(bravo.id)
+  )
+  ok(links.unlinkSaleFromPurchase(sale.id, charlie.id, null).ok, 'another detaches')
+  ok(
+    inv.getInvoice(sale.id).sourcePoId === alpha.id,
+    'AND BACK AT ONE THE COLUMN NAMES IT AGAIN — a state the single column could never reach',
+    String(inv.getInvoice(sale.id).sourcePoId)
+  )
+  ok(
+    qtyAt('RM') === shelfAfterSale,
+    'AND DETACHING MOVED NO UNIT EITHER',
+    `${shelfAfterSale} -> ${qtyAt('RM')}`
+  )
+
+  // --- 6. attaching twice is not an error ---------------------------------
+  /**
+   * Two people on two benches attaching the same purchase is a race, not a
+   * mistake, and the second being told off for it would be the app inventing a
+   * problem.
+   */
+  const before = extrasRepo.listOrderEvents('po', alpha.id).length
+  ok(inv.linkDropshipPair(alpha.id, sale.id, null).ok, 'ATTACHING THE SAME PURCHASE AGAIN IS NOT AN ERROR')
+  ok(
+    inv.getInvoice(sale.id).sourcePos.length === 1,
+    'and does not add a second row',
+    String(inv.getInvoice(sale.id).sourcePos.length)
+  )
+  ok(
+    extrasRepo.listOrderEvents('po', alpha.id).length === before,
+    'nor a second history line — a log cannot gain an entry for a no-op'
+  )
+
+  // --- 7. HISTORY AND ACTIVE ALIKE ----------------------------------------
+  /**
+   * "A way to link POs to SOs that are in history or active." A received,
+   * long-closed purchase is exactly what a dropship gets attached to after the
+   * fact, so status is not a filter — only cancelled is refused, because nothing
+   * on a cancelled order is being bought.
+   */
+  const offers = inv.linkablePurchaseOrders(sale.id, 200)
+  ok(
+    offers.some((o: any) => o.poId === charlie.id && o.status === 'received'),
+    'A RECEIVED, CLOSED PURCHASE IS STILL OFFERED — history is linkable, which is the whole ' +
+      'point of attaching a dropship after the fact'
+  )
+  const dead = mkPo('Cancelled Supply', 1)
+  poRepo.setPurchaseOrderStatus(dead.id, 'cancelled', null)
+  ok(
+    !inv.linkablePurchaseOrders(sale.id, 200).some((o: any) => o.poId === dead.id),
+    'but a CANCELLED one is not — nothing on it is being bought'
+  )
+  ok(
+    !links.linkSaleToPurchase(sale.id, dead.id, null).ok,
+    'and the write refuses it too, not just the picker'
+  )
+
+  // --- 8. MATCHING PRODUCTS is what makes the list a shortlist -------------
+  ok(
+    inv.linkablePurchaseOrders(sale.id, 200).find((o: any) => o.poId === alpha.id)
+      .matchingProducts === 1,
+    'A PURCHASE CARRYING THE PRODUCT BEING SOLD SAYS SO — "in terms of matching products"',
+    String(inv.linkablePurchaseOrders(sale.id, 200).find((o: any) => o.poId === alpha.id)?.matchingProducts)
+  )
+  // A DIFFERENT PRODUCT, not a blank one: purchase_order_lines.product_id is NOT
+  // NULL, so "shares nothing with the sale" has to be expressed as another real
+  // catalog item rather than as an absent one.
+  db.prepare(
+    `INSERT INTO inventory_products (id, sku, name, category, unit_cost, created_at, updated_at)
+     VALUES ('p_other', 'SKU-OTHER', 'Unrelated Supplies', 'Supplies', 2,
+             '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`
+  ).run()
+  const unrelated = poRepo.createPurchaseOrder(
+    {
+      supplier: 'Nothing In Common',
+      location: 'RM',
+      lines: [{ productId: 'p_other', item: 'Unrelated Supplies', quantity: 5, unitPrice: 2 }]
+    },
+    null
+  )
+  const un = inv.linkablePurchaseOrders(sale.id, 200).find((o: any) => o.poId === unrelated.id)
+  ok(!!un && un.matchingProducts === 0, 'one sharing nothing says zero', String(un?.matchingProducts))
+  ok(
+    !!un,
+    'AND IS STILL OFFERED — a dropship is exactly the case where the two documents share no ' +
+      'catalog product at all, so a filter here would break the scenario this exists for'
+  )
+
+  // --- 9. deleting a purchase takes its links and re-derives the column ----
+  /**
+   * A PURCHASE THAT CAN ACTUALLY BE DELETED.
+   *
+   * `deletePurchaseOrder` refuses a received order holding stock, correctly —
+   * there is a cost record to protect. So the one used here is raised and never
+   * received, which is the shape somebody deletes: a purchase typed by mistake,
+   * attached to the wrong sale, and taken back off.
+   */
+  const mistake = poRepo.createPurchaseOrder(
+    {
+      supplier: 'Typed By Mistake',
+      location: 'RM',
+      lines: [{ productId: 'p_d', item: 'Dropship Hobby Box', quantity: 1, unitPrice: 400 }]
+    },
+    null
+  )
+  ok(inv.linkDropshipPair(mistake.id, sale.id, null).ok, 'two attached again')
+  ok(inv.getInvoice(sale.id).sourcePoId === null, 'so the column is null')
+  const gone = poRepo.deletePurchaseOrder(mistake.id, null)
+  ok(gone.ok, 'the mistaken purchase is deleted', String(gone.error))
+  const afterDelete = inv.getInvoice(sale.id)
+  ok(
+    afterDelete.sourcePos.length === 1 && afterDelete.sourcePos[0].poId === alpha.id,
+    'A DELETED PURCHASE TAKES ITS LINK AND LEAVES THE OTHERS',
+    String(afterDelete.sourcePos.length)
+  )
+  ok(
+    afterDelete.sourcePoId === alpha.id,
+    'AND THE COLUMN IS RE-DERIVED — back to one, so it names it again rather than staying null',
+    String(afterDelete.sourcePoId)
+  )
+  ok(qtyAt('RM') === shelfAfterSale, 'and the shelf is still untouched by any of it', String(qtyAt('RM')))
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail > 0) process.exit(1)

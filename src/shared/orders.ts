@@ -558,6 +558,26 @@ export function dropshipSuppliersOf(
 // ---------------------------------------------------------------------------
 
 /** A purchase order a sale could be attached to, as the picker needs it. */
+/**
+ * One purchase that supplied a sale.
+ *
+ * A LIST, because a sale of ten cases sourced from three purchases is ordinary
+ * trade here — see @main/db/salePurchaseLinks. An empty list is the commonest
+ * state by far and means exactly what it says: this sale claims nothing about
+ * where its cases came from, which is what an in-house sale off the shelf is.
+ */
+export interface SaleSourceLink {
+  poId: string
+  poNumber: string
+  supplier: string | null
+  status: string
+  total: number
+  /** The day it was raised, for telling two orders to one supplier apart. */
+  orderedOn: string | null
+  /** When somebody attached it, which is not when the purchase was raised. */
+  linkedAt: string
+}
+
 export interface LinkablePurchaseOrder {
   poId: string
   poNumber: string
@@ -573,6 +593,23 @@ export interface LinkablePurchaseOrder {
   linkedHere: boolean
   /** How many other sales it already supplies. A purchase may supply several. */
   otherSales: number
+  /**
+   * HOW MANY OF THIS SALE'S PRODUCTS THIS PURCHASE ACTUALLY CARRIES.
+   *
+   * The owner asked for multiple purchases per sale "in terms of matching
+   * products", and this is what makes that concrete rather than a list of every
+   * order ever raised. A purchase holding two of the three things being sold is
+   * almost certainly one of the ones being looked for; a purchase holding none
+   * of them is almost certainly not, and says so instead of sitting in the list
+   * looking identical to the right answer.
+   *
+   * A COUNT, NOT A FILTER. Zero is still offered and still linkable, because a
+   * dropship is exactly the case where the sale and the purchase are the same
+   * deal and share no catalog product at all — the sale may be a hand-typed line
+   * and the purchase a case nobody put in the catalog. Hiding those would break
+   * the one scenario the linking was asked for.
+   */
+  matchingProducts: number
 }
 
 /**
@@ -585,19 +622,23 @@ export interface LinkablePurchaseOrder {
  * refused.
  */
 export function linkPurchaseRefusal(
-  po: LinkablePurchaseOrder | null | undefined,
-  sale: { sourcePoId?: string | null; sourcePoNumber?: string | null }
+  po: LinkablePurchaseOrder | null | undefined
 ): string | null {
   if (!po) return null
-  // Already pointed somewhere else. Overwriting would silently move a deal off
-  // the order it was recorded against, on both of their histories.
-  const held = (sale.sourcePoId ?? '').trim()
-  if (held && held !== po.poId) {
-    return (
-      `This sale is already attached to ${sale.sourcePoNumber || 'another purchase order'}. ` +
-      'Detach it there first — a sale belongs to one purchase.'
-    )
-  }
+  /**
+   * A SALE NO LONGER BELONGS TO ONE PURCHASE.
+   *
+   * This used to refuse outright when the sale already named a different order:
+   * "detach it there first — a sale belongs to one purchase." That was true of
+   * the storage and never true of the trade. Ten cases to one buyer, sourced
+   * from three purchases because that is who had them, is an ordinary week here,
+   * and the app made it unrecordable.
+   *
+   * `sale_purchase_links` is the many-to-many that replaced it, so there is
+   * nothing left to refuse on the sale's side at all — which is why this takes
+   * only the purchase now. The sale argument went with the rule: a parameter
+   * nothing reads is one somebody eventually passes wrongly.
+   */
   if (po.status === 'cancelled') {
     return `${po.poNumber} was cancelled, so nothing on it is being bought.`
   }
@@ -628,17 +669,37 @@ export function linkableOrder(
   return [...orders].sort(
     (a, b) =>
       rank(a) - rank(b) ||
+      // THEN BY WHAT IT ACTUALLY CARRIES, which is what the owner meant by
+      // matching "in terms of matching products". A purchase holding two of the
+      // three things being sold belongs above one holding none of them, and
+      // below the named supplier only because on a dropship the supplier IS the
+      // answer and the two documents often share no catalog product at all.
+      b.matchingProducts - a.matchingProducts ||
       (b.orderedOn ?? '').localeCompare(a.orderedOn ?? '') ||
       b.poNumber.localeCompare(a.poNumber)
   )
 }
 
-/** How it reads in the picker: "PO-0042 · Panini · 24 Aug · 2 units". */
+/**
+ * How it reads in the picker: "PO-0042 · Panini · 24 Aug · 2 units · 2 of these
+ * products".
+ *
+ * The product match is last and only appears when there IS one, because it is
+ * the only part of this label that is a judgement rather than a fact about the
+ * order. Silence on a purchase that shares nothing is the right silence: it is
+ * still perfectly linkable, and a "0 of these products" on every dropship would
+ * read as a warning about the commonest correct answer.
+ */
 export function linkableOrderLabel(po: LinkablePurchaseOrder): string {
   const bits = [po.poNumber]
   if (po.supplier) bits.push(po.supplier)
   if (po.orderedOn) bits.push(po.orderedOn)
   bits.push(`${po.unitsOrdered} unit${po.unitsOrdered === 1 ? '' : 's'}`)
+  if (po.matchingProducts > 0) {
+    bits.push(
+      po.matchingProducts === 1 ? '1 of these products' : `${po.matchingProducts} of these products`
+    )
+  }
   return bits.join(' · ')
 }
 

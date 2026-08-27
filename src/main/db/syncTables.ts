@@ -360,6 +360,12 @@ export const SYNCED_TABLES: SyncedTable[] = [
   // VIEW, created by the migration on every machine, so it is schema rather than
   // data — the same rule po_unit_destinations keeps above.
   { table: 'invoice_line_allocations', key: ['id'], tier: 3 },
+  // Which purchases supplied a sale. Tier 3: it names an INVOICE and a PURCHASE
+  // ORDER, both tier 1, and the recovery path applies rows one at a time — so it
+  // has to land after whichever of the two arrives last or it is a link to
+  // nothing. The UNIQUE on (invoice_id, po_id) is what makes a re-apply
+  // idempotent, the same standing stream_session_hosts has.
+  { table: 'sale_purchase_links', key: ['id'], tier: 3 },
   // Which line items are in which parcel. Tier 3, one below everything it
   // names: it points at a SHIPMENT (tier 1) and at a LINE, and the line it
   // names is an invoice line at tier 2 — so it has to be the last of the four

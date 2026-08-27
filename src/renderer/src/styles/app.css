@@ -27692,3 +27692,53 @@ button.sor-team:focus-visible {
   font-weight: 700;
   color: var(--text);
 }
+
+/* ---------- Which purchases supply a sale (AttachPurchaseOrderModal) ----------
+   A LIST, not a sentence: a sale may be supplied by several purchases, and each
+   row carries its own Detach because the first mistaken attach used to be
+   permanent — with one column there was nothing to detach from, only a value to
+   overwrite. */
+.so-linked {
+  margin: 4px 0 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.so-linked-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text);
+}
+.so-linked-head svg {
+  color: var(--brand-600);
+}
+.so-linked-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.so-linked-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.so-linked-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.so-linked-amt {
+  margin-left: auto;
+  flex: none;
+  color: var(--text-3);
+}

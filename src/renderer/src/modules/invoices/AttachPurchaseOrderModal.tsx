@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import type { Invoice } from '@shared/invoices'
 import type { LinkablePurchaseOrder } from '@shared/orders'
 import { linkPurchaseRefusal, linkableOrder, linkableOrderLabel } from '@shared/orders'
@@ -58,20 +58,26 @@ export function AttachPurchaseOrderModal({
   const [chosen, setChosen] = useState('')
   const [busy, setBusy] = useState(false)
 
-  useEffect(() => {
-    let alive = true
-    void api.orders
-      .linkablePos(invoice.id)
-      .then((res) => {
-        if (alive) setOrders(res.ok && res.data ? res.data : [])
-      })
-      .catch(() => {
-        if (alive) setOrders([])
-      })
-    return () => {
-      alive = false
+  /**
+   * Re-read after every attach and detach rather than closing.
+   *
+   * A sale may be supplied by SEVERAL purchases, so the ordinary job here is now
+   * "attach these three", and a modal that shut after the first one would make
+   * that three trips through the board. `linkedHere` comes back off the link
+   * table, so one read answers both what is attached and what is left to offer.
+   */
+  const load = useCallback(async (): Promise<void> => {
+    try {
+      const res = await api.orders.linkablePos(invoice.id)
+      setOrders(res.ok && res.data ? res.data : [])
+    } catch {
+      setOrders([])
     }
   }, [invoice.id])
+
+  useEffect(() => {
+    void load()
+  }, [load])
 
   /**
    * The supplier the sale's own lines name, when they name one.
@@ -81,9 +87,19 @@ export function AttachPurchaseOrderModal({
    * everything on a mismatch would hand it an empty picker.
    */
   const suppliers = invoice.dropSupplier ? [invoice.dropSupplier] : []
-  const offers = linkableOrder(orders ?? [], suppliers)
+  const ranked = linkableOrder(orders ?? [], suppliers)
+  /**
+   * ATTACHED ABOVE, ATTACHABLE BELOW, and never both.
+   *
+   * The picker used to carry an "already attached" suffix on rows that were, and
+   * that was the best a single-purchase model could do. Now that several are
+   * ordinary, they belong in a list with a Detach beside each — a dropdown entry
+   * that cannot be chosen and cannot be removed is furniture.
+   */
+  const attached = ranked.filter((o) => o.linkedHere)
+  const offers = ranked.filter((o) => !o.linkedHere)
   const picked = offers.find((o) => o.poId === chosen) ?? null
-  const problem = linkPurchaseRefusal(picked, invoice)
+  const problem = linkPurchaseRefusal(picked)
   const soLabel = invoice.invoiceNumber ? `Sales order ${invoice.invoiceNumber}` : 'This sales order'
 
   const attach = async (): Promise<void> => {
@@ -96,8 +112,28 @@ export function AttachPurchaseOrderModal({
         return
       }
       toast.success(`${picked.poNumber} and ${invoice.invoiceNumber || 'this sale'} are linked.`)
+      // The picker is cleared and the list re-read, and the modal STAYS OPEN:
+      // attaching three purchases to one sale is the ordinary job now, and
+      // closing after the first would make it three trips.
+      setChosen('')
+      await load()
       await onDone()
-      onClose()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const detach = async (po: LinkablePurchaseOrder): Promise<void> => {
+    setBusy(true)
+    try {
+      const res = await api.orders.unlinkPurchase(po.poId, invoice.id)
+      if (!res.ok) {
+        toast.error(res.error ?? 'Could not detach that purchase order.')
+        return
+      }
+      toast.success(`${po.poNumber} is no longer on this sale.`)
+      await load()
+      await onDone()
     } finally {
       setBusy(false)
     }
@@ -111,7 +147,7 @@ export function AttachPurchaseOrderModal({
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>
-            Cancel
+            Done
           </Button>
           <Button
             variant="primary"
@@ -131,12 +167,59 @@ export function AttachPurchaseOrderModal({
         the copy in QuickBooks — which is why it works on an order that has already been sent.
       </p>
 
+      {/* WHAT IS ALREADY ON IT. A sale may be supplied by several purchases, so
+          this is a list rather than a sentence, and each row can be taken off —
+          the first mistaken attach used to be permanent, because with one column
+          there was nothing to detach FROM, only a value to overwrite. */}
+      {attached.length > 0 && (
+        <div className="so-linked">
+          <div className="so-linked-head">
+            <Icon name="Link" size={14} />
+            <span>
+              {attached.length === 1
+                ? 'One purchase order supplies this sale'
+                : `${attached.length} purchase orders supply this sale`}
+            </span>
+          </div>
+          <ul className="so-linked-list">
+            {attached.map((o) => (
+              <li key={o.poId}>
+                <span className="so-linked-name">
+                  <b>{o.poNumber}</b>
+                  {o.supplier ? ` · ${o.supplier}` : ''}
+                  {o.orderedOn ? ` · ${o.orderedOn}` : ''}
+                </span>
+                <span className="so-linked-amt mono">{formatMoney(o.total)}</span>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  disabled={busy}
+                  onClick={() => void detach(o)}
+                  aria-label={`Detach ${o.poNumber} from this sale`}
+                >
+                  <Icon name="Link2Off" size={14} /> Detach
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {orders === null ? (
         <p className="fin-confirm-lead">Reading your purchase orders…</p>
       ) : offers.length === 0 ? (
         <p className="fin-confirm-lead">
-          There are <b>no purchase orders to attach</b> — every one you have is cancelled, or
-          there are none yet. Raise it from the Purchase Orders board and it will be here.
+          {attached.length > 0 ? (
+            <>
+              Every purchase order you have is <b>already attached</b>, cancelled, or there are no
+              others.
+            </>
+          ) : (
+            <>
+              There are <b>no purchase orders to attach</b> — every one you have is cancelled, or
+              there are none yet. Raise it from the Purchase Orders board and it will be here.
+            </>
+          )}
         </p>
       ) : (
         <label className="field">
@@ -149,11 +232,12 @@ export function AttachPurchaseOrderModal({
           >
             {/* NAMED, not blank. An empty first option reads as "not loaded yet";
                 this one says a choice has not been made, which is true. */}
-            <option value="">Choose the purchase order…</option>
+            <option value="">
+              {attached.length > 0 ? 'Attach another purchase order…' : 'Choose the purchase order…'}
+            </option>
             {offers.map((o) => (
               <option key={o.poId} value={o.poId}>
                 {linkableOrderLabel(o)}
-                {o.linkedHere ? ' · already attached' : ''}
               </option>
             ))}
           </select>

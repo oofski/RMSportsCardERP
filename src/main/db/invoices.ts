@@ -55,6 +55,7 @@ import { describeDims, hasDims, readyToShipBlockedReason } from '@shared/fulfill
 import { dealTicketRefFor } from './dealTickets'
 import { foldTicketIntoDocument, issueDealTicket, markDropshipPair } from './dealTickets'
 import { isOpenTab } from '@shared/roadshowTab'
+import { addSaleLink, listSaleLinks } from './salePurchaseLinks'
 import { soleSourceOrder } from '@shared/poStock'
 
 /**
@@ -482,6 +483,7 @@ interface InvoiceRow extends AddressRow {
   ready_to_ship_by: string | null
   source_po_id: string | null
   allow_credit_card: number | null
+  source_po_count: number | null
   stock_units: number | null
   drop_units: number | null
   drawn_units: number | null
@@ -615,6 +617,7 @@ function toInvoice(r: InvoiceRow): Invoice {
     dropSupplierCount: Number(r.drop_supplier_count) || 0,
     trackedParcels: Number(r.tracked_parcels) || 0,
     lastTrackedAt: r.last_tracked_at ?? null,
+    sourcePoCount: Number(r.source_po_count) || 0,
     stockUnits: Number(r.stock_units) || 0,
     dropshipUnits: Number(r.drop_units) || 0,
     drawnUnits: Number(r.drawn_units) || 0,
@@ -806,7 +809,17 @@ const INVOICE_COLS = `id, invoice_number, customer_id, customer_name, email, ter
                       (SELECT po.supplier FROM purchase_orders po
                         WHERE po.id = invoices.source_po_id) AS source_po_supplier,
                       (SELECT po.po_number FROM purchase_orders po
-                        WHERE po.id = invoices.source_po_id) AS source_po_number`
+                        WHERE po.id = invoices.source_po_id) AS source_po_number,
+                      -- HOW MANY PURCHASES SUPPLY THIS SALE.
+                      --
+                      -- Not derivable from source_po_id, and that is the point:
+                      -- that column is the SOLE link or NULL, so a sale with
+                      -- three purchases and a sale with none both read NULL
+                      -- there. The card needs to tell those two apart -- one has
+                      -- nothing to show and the other has three -- so the count
+                      -- comes off the link table itself.
+                      (SELECT COUNT(*) FROM sale_purchase_links sl
+                        WHERE sl.invoice_id = invoices.id) AS source_po_count`
 
 const LINE_COLS = `id, invoice_id, position, item, product_id, sku, description, quantity, rate,
                    amount, tax_rate, class_name, qty_fulfilled, fulfilled_at,
@@ -890,6 +903,10 @@ export function getInvoice(id: string): InvoiceDetail | null {
   return {
     ...head,
     ...dealTicketRefFor(db, 'so', id),
+    // Every purchase this sale is linked to. The header's own `sourcePoId` is
+    // the sole entry when there is one and null when there are several — see
+    // syncSaleSourcePo — so this is the only complete answer.
+    sourcePos: listSaleLinks(db, id),
     lines: lines.map((l) =>
       toLine(l, invoiceStockLocation(head.location), splits.get(l.id) ?? [])
     )
@@ -1941,16 +1958,39 @@ export function linkablePurchaseOrders(invoiceId: string, limit = 60): LinkableP
               COALESCE(po.ordered_at, po.created_at) AS ordered_at,
               (SELECT COALESCE(SUM(l.quantity), 0)
                  FROM purchase_order_lines l WHERE l.po_id = po.id) AS units,
-              (SELECT COUNT(*) FROM invoices i
-                WHERE i.source_po_id = po.id AND i.status != 'void' AND i.id != ?) AS other_sales,
-              (SELECT COUNT(*) FROM invoices i
-                WHERE i.source_po_id = po.id AND i.id = ?) AS linked_here
+              -- OFF THE LINK TABLE, both of them. invoices.source_po_id goes
+              -- NULL the moment a sale names more than one purchase (see
+              -- syncSaleSourcePo), so counting through it would make a purchase
+              -- look unused the moment its sale gained a second supplier.
+              (SELECT COUNT(*) FROM sale_purchase_links sl
+                 JOIN invoices i ON i.id = sl.invoice_id
+                WHERE sl.po_id = po.id AND i.status != 'void' AND i.id != ?) AS other_sales,
+              (SELECT COUNT(*) FROM sale_purchase_links sl
+                WHERE sl.po_id = po.id AND sl.invoice_id = ?) AS linked_here,
+              -- HOW MANY OF THIS SALE'S PRODUCTS THIS PURCHASE CARRIES.
+              --
+              -- What makes the list a shortlist instead of every order ever
+              -- raised. DISTINCT on the product, so a purchase holding the same
+              -- box on three lines counts once and does not out-rank one holding
+              -- three different things the sale actually needs.
+              --
+              -- Catalog product ids only. A hand-typed line on either side has
+              -- no id to match on, which is the ordinary shape of a dropship --
+              -- and those still appear, at zero, because a purchase sharing no
+              -- product with the sale is exactly the case the linking was asked
+              -- for. NO BACKTICKS in these comments: this is a template literal.
+              (SELECT COUNT(DISTINCT pl.product_id)
+                 FROM purchase_order_lines pl
+                WHERE pl.po_id = po.id AND pl.product_id IS NOT NULL
+                  AND pl.product_id IN (SELECT il.product_id FROM invoice_lines il
+                                         WHERE il.invoice_id = ? AND il.product_id IS NOT NULL))
+                AS matching_products
          FROM purchase_orders po
         WHERE po.status != 'cancelled'
         ORDER BY COALESCE(po.ordered_at, po.created_at) DESC, po.po_number DESC
         LIMIT ?`
     )
-    .all(invoiceId, invoiceId, Math.max(1, Math.min(500, limit))) as Array<{
+    .all(invoiceId, invoiceId, invoiceId, Math.max(1, Math.min(500, limit))) as Array<{
     id: string
     po_number: string
     supplier: string | null
@@ -1961,6 +2001,7 @@ export function linkablePurchaseOrders(invoiceId: string, limit = 60): LinkableP
     units: number
     other_sales: number
     linked_here: number
+    matching_products: number
   }>
   return rows.map((r) => ({
     poId: r.id,
@@ -1974,7 +2015,8 @@ export function linkablePurchaseOrders(invoiceId: string, limit = 60): LinkableP
     total: money(Number(r.total) || 0),
     unitsOrdered: Number(r.units) || 0,
     linkedHere: Number(r.linked_here) > 0,
-    otherSales: Number(r.other_sales) || 0
+    otherSales: Number(r.other_sales) || 0,
+    matchingProducts: Number(r.matching_products) || 0
   }))
 }
 
@@ -2012,10 +2054,20 @@ export function linkDropshipPair(
       | undefined
     if (!invoice) return { ok: false, error: 'That sales order is gone.' }
 
-    if (invoice.source_po_id && invoice.source_po_id !== poId) {
-      return { ok: false, error: 'That sales order already came from another purchase order.' }
-    }
-
+    /**
+     * IT USED TO REFUSE HERE, and that refusal was the whole of the owner's
+     * first ask: "allow for multiple POs to be added to one sales order."
+     *
+     *     if (invoice.source_po_id && invoice.source_po_id !== poId) {
+     *       return { ok: false, error: 'That sales order already came from
+     *                another purchase order.' }
+     *     }
+     *
+     * True of the storage — one column — and never true of the trade. Ten cases
+     * to one buyer sourced from three purchases is an ordinary week here.
+     * `sale_purchase_links` is the many-to-many that replaced the column, so a
+     * second purchase adds a second link and overwrites nothing.
+     */
     const stamp = nowIso()
     // FIRST SALE ONLY, and only while the column is empty. A multi-shipment
     // purchase raises several sales in one go; overwriting this each time would
@@ -2028,11 +2080,18 @@ export function linkDropshipPair(
     } else {
       db.prepare(`UPDATE purchase_orders SET updated_at = ? WHERE id = ?`).run(stamp, poId)
     }
-    db.prepare(`UPDATE invoices SET source_po_id = ?, updated_at = ? WHERE id = ?`).run(
-      poId,
-      stamp,
-      invoiceId
-    )
+    // THE LINK IS THE RECORD; the column is an answer derived from it — the sole
+    // purchase when there is one, NULL when there are several. See
+    // syncSaleSourcePo for why NULL rather than the first.
+    //
+    // FALSE MEANS IT WAS ALREADY LINKED, and everything below is then skipped.
+    // Two people on two benches attaching the same purchase is a race, not a
+    // mistake — so it is not refused — but a re-attach must not write a second
+    // pair of history lines saying a thing that happened once happened twice.
+    // Nor may it re-fold the deal ticket. It is a no-op, and a no-op leaves no
+    // trace.
+    const linked = addSaleLink(db, invoiceId, poId, actorId, stamp)
+    if (!linked) return { ok: true }
 
     const runningTab = isOpenTab({
       tabOpenedAt: po.tab_opened_at,
@@ -3625,6 +3684,11 @@ export function deleteInvoice(id: string): void {
     // longer exists.
     releaseInvoiceStock(db, id)
     db.prepare(`DELETE FROM invoice_lines WHERE invoice_id = ?`).run(id)
+    // Which purchases supplied it goes with it. No foreign key on that table by
+    // design — see the v90 note — so the rows are removed here rather than
+    // cascaded, and a purchase that supplied this sale and three others keeps
+    // the other three.
+    db.prepare(`DELETE FROM sale_purchase_links WHERE invoice_id = ?`).run(id)
     // The parcels and the paperwork go with the order; the EVENTS stay. A
     // deleted sales order is itself a thing that happened, and the log is the
     // only place left that would say so.

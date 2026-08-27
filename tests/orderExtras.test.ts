@@ -42,6 +42,8 @@ const employees = require('../src/main/db/employees')
 const po = require('../src/main/db/purchaseOrders')
 const inv = require('../src/main/db/invoices')
 const invStock = require('../src/main/db/invoiceStock')
+// stockQty lives on the inventory store, not the invoice-side stock engine.
+const inventoryRepo = require('../src/main/db/inventory')
 const inventory = require('../src/main/db/inventory')
 const extras = require('../src/main/db/orderExtras')
 const {
@@ -616,25 +618,57 @@ ok(
 ok(inv.linkDropshipPair(dropPo.id, dropSale.id, OWEN).ok === true, 'and re-linking the same pair is harmless')
 
 /**
- * WHAT IS STILL REFUSED: repointing a sale that came from a DIFFERENT purchase.
+ * AND THE OTHER DIRECTION IS NOW OPEN TOO: A SALE TAKES A SECOND PURCHASE.
  *
- * That is not a second buyer, it is the same boxes claimed by two purchases —
- * and it would leave the first one silently orphaned, which is the failure the
- * old rule was reaching for. Kept, and tested, because relaxing the other half
- * is exactly when this half stops being obvious.
+ * This block asserted the opposite until the owner asked for it: "allow for
+ * multiple POs to be added to one sales order". The old rule read
+ *
+ *     A SALE CANNOT BE REPOINTED AT ANOTHER PURCHASE — that is the same boxes
+ *     claimed twice, and it would orphan the first
+ *
+ * and the reasoning was sound about the STORAGE it was written against. There
+ * was one column, so a second purchase could only arrive by overwriting the
+ * first, and the first was then orphaned — pointed at by nothing, with its own
+ * history still claiming the sale.
+ *
+ * `sale_purchase_links` removes the premise. A second purchase adds a second
+ * ROW; nothing is overwritten and nothing is orphaned, so there is nothing left
+ * to refuse. Ten cases to one buyer sourced from three purchases is an ordinary
+ * week on this floor and was unrecordable.
+ *
+ * "The same boxes claimed twice" was never the risk it sounded like either:
+ * linking is a claim about which purchases supplied a sale, not about which
+ * cost layers it consumed. THAT question lives on the line and the slice
+ * (`invoice_lines.source_po_id`, `invoice_line_allocations`) and is untouched
+ * here — which is exactly why no stock moves below.
  */
 const rivalPo = po.createPurchaseOrder(
   { supplier: 'Rival Distribution', location: 'Steel City Cards',
     lines: [{ productId: WIDGET, quantity: 1, unitPrice: 5 }] },
   OWEN
 )
+const shelfBeforeSecond = inventoryRepo.stockQty(WIDGET, 'RM')
 ok(
-  inv.linkDropshipPair(rivalPo.id, otherSale.id, OWEN).ok === false,
-  'A SALE CANNOT BE REPOINTED AT ANOTHER PURCHASE — that is the same boxes claimed twice, and it would orphan the first'
+  inv.linkDropshipPair(rivalPo.id, otherSale.id, OWEN).ok === true,
+  'A SALE TAKES A SECOND PURCHASE ORDER — the refusal this used to assert was true of one ' +
+    'column and never true of the trade'
 )
 ok(
-  inv.getInvoice(otherSale.id).sourcePoId === dropPo.id,
-  'and the refusal leaves it where it was'
+  inv.getInvoice(otherSale.id).sourcePos.length === 2,
+  'BOTH ARE ON IT — the first is not overwritten and not orphaned',
+  String(inv.getInvoice(otherSale.id).sourcePos.length)
+)
+ok(
+  inv.getInvoice(otherSale.id).sourcePoId === null,
+  'AND THE SOLE-PURCHASE COLUMN GOES NULL rather than naming one of two as if it were the only ' +
+    'one — a half-truth in a column that drives the dropship gate is worse than an absence',
+  String(inv.getInvoice(otherSale.id).sourcePoId)
+)
+ok(
+  inventoryRepo.stockQty(WIDGET, 'RM') === shelfBeforeSecond,
+  'AND NOT ONE UNIT MOVED — linking says which purchases supplied the sale; which cost layers ' +
+    'it consumed is a different question, asked on the line and the slice',
+  `${shelfBeforeSecond} -> ${inventoryRepo.stockQty(WIDGET, 'RM')}`
 )
 
 // ---------------------------------------------------------------------------
