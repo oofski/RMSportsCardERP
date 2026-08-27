@@ -336,9 +336,12 @@ export function registerPurchaseOrdersIpc(): void {
     IPC.poAddLines,
     (_e, payload: { id: string; lines: NewPurchaseOrderLine[] }): Result<PurchaseOrderDetail> => {
       try {
-        requireInvoicing()
+        // The actor is carried now because adding to a running tab CHECKS THE
+        // CASES IN — see takeTabDelivery — and a receipt with nobody's name on
+        // it is a stock movement the log cannot explain.
+        const actor = requireInvoicing()
         if (!payload?.id) return { ok: false, error: 'No purchase order specified.' }
-        const res = addPurchaseOrderLines(payload.id, payload.lines ?? [])
+        const res = addPurchaseOrderLines(payload.id, payload.lines ?? [], actor.id)
         return res.error
           ? { ok: false, error: res.error }
           : { ok: true, data: res.po as PurchaseOrderDetail }

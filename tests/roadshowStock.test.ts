@@ -156,7 +156,28 @@ console.log('\n=== 1. the shop becomes a place stock can sit ===')
     'AND THE EXISTING SPELLING WINS, so no stock row is dragged through a rename',
     String(poRepo.getPurchaseOrder(second.id).location)
   )
-  poRepo.deletePurchaseOrder(second.id, null)
+  /**
+   * A TAB IS CANCELLED, NOT DELETED — a consequence of checking cases in as
+   * they are typed, and the right one.
+   *
+   * Delete has always refused an order with units already on a shelf, because
+   * removing the paperwork would leave that stock with no cost record behind
+   * it. A tab now always has units on a shelf, from the moment it is opened, so
+   * it always takes the Cancel road — which hands the cases back properly
+   * instead of orphaning them.
+   */
+  const cannotDelete = poRepo.deletePurchaseOrder(second.id, null)
+  ok(
+    !cannotDelete.ok && /checked in/i.test(cannotDelete.error ?? ''),
+    'DELETING A TAB WITH CASES ON IT IS REFUSED — the stock would be left with no cost record',
+    String(cannotDelete.error)
+  )
+  poRepo.setPurchaseOrderStatus(second.id, 'cancelled', null)
+  ok(
+    qtyAt(SHOP) === 3,
+    'AND CANCELLING HANDS THE CASE BACK — the shelf is left exactly as the mistake found it',
+    String(qtyAt(SHOP))
+  )
 
   /**
    * BUT AN EXPLICIT RM IS LEFT ALONE, and that is the owner's own rule: "unless
@@ -184,7 +205,30 @@ console.log('\n=== 1. the shop becomes a place stock can sit ===')
     isLocation(SHOP),
     'and the shop is registered as a place anyway, so the next case that stays there has somewhere to go'
   )
-  poRepo.deletePurchaseOrder(homeward.id, null)
+  /**
+   * AND IT IS NOT TAKEN IN, which is the other half of takeTabDelivery.
+   *
+   * A case bought at the shop and LEFT there is in hand the instant it is typed
+   * — somebody is holding it. A case bought at the shop and sent HOME is on a
+   * lorry, and it arrives on Thursday. Checking that one in now would put a box
+   * on our shelf that nobody can find, so the split is by destination and the
+   * homeward case waits for the ordinary Receive press like anything else.
+   */
+  ok(
+    qtyAt('RM') === 0,
+    'A TAB CASE POINTED HOME IS NOT TAKEN IN — it is on a lorry, and the gap between ordering and arriving is real for that one',
+    String(qtyAt('RM'))
+  )
+  ok(
+    poRepo.getPurchaseOrder(homeward.id).receivedUnits === 0,
+    'so its receipt still says nothing has arrived',
+    String(poRepo.getPurchaseOrder(homeward.id).receivedUnits)
+  )
+  // Nothing was checked in, so this one CAN still be deleted outright.
+  ok(
+    poRepo.deletePurchaseOrder(homeward.id, null).ok,
+    'and with nothing on a shelf it can be deleted rather than cancelled'
+  )
 
   // --- an ordinary order is untouched -------------------------------------
   const plain = poRepo.createPurchaseOrder(
@@ -204,23 +248,75 @@ console.log('\n=== 1. the shop becomes a place stock can sit ===')
     'and an ordinary supplier does NOT become a shelf — every distributor in the book would otherwise turn into one'
   )
 
-  console.log('\n=== 2. receiving a tab puts real stock at the shop ===')
-  // -------------------------------------------------------------------------
-  ok(qtyAt(SHOP) === 0, 'the shop holds nothing yet')
   /**
-   * CHECKED IN LINE BY LINE, the way a tab actually takes goods.
+   * AND WITHOUT THE TICK, NOTHING IS TAKEN IN — even when it is bound for a shop.
    *
-   * NOT `setPurchaseOrderStatus(..., 'received')`, which is the "the whole
-   * delivery is here" button and forces the order closed. A tab is never
-   * received that way — Tuesday's case is checked in on Tuesday and the order
-   * stays open for Wednesday's — so using it here would have tested a path this
-   * feature is specifically built to avoid.
+   * The narrowest and most missable case: an ordinary purchase from a
+   * distributor who is shipping the cases straight to a roadshow shop. The
+   * destination is a shelf of ours and the goods are still on a lorry, so this
+   * is an ordinary order with an ordinary week-long gap, and the Roadshow tick
+   * is the ONLY thing that says otherwise.
+   *
+   * Pinned because it is the exact difference a careless reading of
+   * takeTabDelivery would erase: hang it off the destination rather than off
+   * the tick and every distributor's shipment books itself onto a shelf the day
+   * it is ordered.
    */
-  const tabLine = poRepo.getPurchaseOrder(tab.id).lines[0]
-  poRepo.receivePurchaseOrderLines(tab.id, [{ lineId: tabLine.id, quantity: 3 }], null)
+  const shippedToShop = poRepo.createPurchaseOrder(
+    {
+      supplier: 'Ordinary Distributors',
+      location: SHOP,
+      lines: [{ productId: 'p_r', quantity: 5, unitPrice: 400 }]
+    },
+    null
+  )
+  ok(
+    poRepo.getPurchaseOrder(shippedToShop.id).receivedUnits === 0,
+    'AN ORDINARY ORDER BOUND FOR THE SHOP TAKES IN NOTHING — the tick is what says the goods are already in hand, not the destination',
+    String(poRepo.getPurchaseOrder(shippedToShop.id).receivedUnits)
+  )
   ok(
     qtyAt(SHOP) === 3,
-    'RECEIVING A TAB LINE PUTS ITS CASES AT THE SHOP — bought, therefore owned, therefore stock',
+    'so the shop still holds only what the tab put there',
+    String(qtyAt(SHOP))
+  )
+  poRepo.deletePurchaseOrder(shippedToShop.id, null)
+
+  console.log('\n=== 2. putting a case on a tab IS taking delivery of it ===')
+  // -------------------------------------------------------------------------
+  /**
+   * NOBODY PRESSES RECEIVE ON A TAB. The owner, on the step this removes:
+   * "anything being added to these roadshow check-marked ones doesn't come to
+   * us ... we just need to touch it and then basically it gets added and can
+   * just make the sales order."
+   *
+   * An ordinary purchase order has two events because they happen on two days:
+   * order Monday, open boxes Thursday, and the week between is real. A tab has
+   * one — somebody is standing in the shop holding the case. Asking them to then
+   * confirm it arrived is asking about something that was never in doubt, and
+   * the cost of forgetting was total: no stock, no cost layers, and a sales
+   * order that could draw nothing.
+   */
+  ok(
+    qtyAt(SHOP) === 3,
+    'THE CASES ARE AT THE SHOP THE MOMENT THE TAB IS OPENED — no second press, because there was no second event',
+    String(qtyAt(SHOP))
+  )
+  /**
+   * AND PRESSING RECEIVE AFTERWARDS ADDS NOTHING. The button still exists for
+   * an ordinary order; on a tab it now has nothing left to do, and the thing
+   * that must not happen is it booking a second copy of the same case.
+   */
+  const tabLine = poRepo.getPurchaseOrder(tab.id).lines[0]
+  const already = poRepo.receivePurchaseOrderLines(tab.id, [{ lineId: tabLine.id, quantity: 3 }], null)
+  ok(
+    !!already.error && /already fully received/i.test(already.error ?? ''),
+    'RECEIVING IT A SECOND TIME IS REFUSED BY NAME — one case bought is one case on the shelf',
+    String(already.error)
+  )
+  ok(
+    qtyAt(SHOP) === 3,
+    'and the shop still holds exactly three, not six',
     String(qtyAt(SHOP))
   )
   const layers = db
@@ -238,12 +334,13 @@ console.log('\n=== 1. the shop becomes a place stock can sit ===')
   /**
    * AND THE TAB IS STILL OPEN. An ordinary purchase order closes itself the
    * moment its last unit lands; a tab must not, or Wednesday's box would have
-   * nowhere to go. This is the rule roadshowTab was written for, checked here
-   * because receiving is the act that would break it.
+   * nowhere to go. This matters more now that checking in happens by itself: a
+   * tab that closed the instant its first case was typed would be the original
+   * bug arriving by a different road.
    */
   ok(
     poRepo.getPurchaseOrder(tab.id).status === 'ordered',
-    'AND THE TAB IS STILL OPEN AFTER RECEIVING — it does not close itself, which is what lets the week keep going',
+    'AND THE TAB IS STILL OPEN — taking the cases in does not end the week',
     String(poRepo.getPurchaseOrder(tab.id).status)
   )
 
@@ -412,11 +509,7 @@ console.log('\n=== 5. how many we have, and where ===')
     },
     null
   )
-  poRepo.receivePurchaseOrderLines(
-    shopTab.id,
-    [{ lineId: poRepo.getPurchaseOrder(shopTab.id).lines[0].id, quantity: 3 }],
-    null
-  )
+  // No receive press: opening the tab took the cases in. See takeTabDelivery.
 
   const a = avail('p_r')
   ok(unitsHere(a) === 4, 'FOUR ON OUR OWN SHELVES', String(unitsHere(a)))
@@ -603,11 +696,7 @@ console.log('\n=== 7. the card says where the box is coming from ===')
     { supplier: SHOP, ongoing: true, lines: [{ productId: 'p_card', quantity: 3, unitPrice: 400 }] },
     null
   )
-  poRepo.receivePurchaseOrderLines(
-    shopTab.id,
-    [{ lineId: poRepo.getPurchaseOrder(shopTab.id).lines[0].id, quantity: 3 }],
-    null
-  )
+  // Three cases at the shop, taken in as the tab was opened.
 
   const mixed = invoices.saveInvoice(
     {
@@ -725,18 +814,8 @@ console.log('\n=== 7. the card says where the box is coming from ===')
     },
     null
   )
-  poRepo.receivePurchaseOrderLines(
-    secondTab.id,
-    [{ lineId: poRepo.getPurchaseOrder(secondTab.id).lines[0].id, quantity: 2 }],
-    null
-  )
   const shopTab2 = poRepo.createPurchaseOrder(
     { supplier: SHOP, ongoing: true, lines: [{ productId: 'p_card', quantity: 2, unitPrice: 400 }] },
-    null
-  )
-  poRepo.receivePurchaseOrderLines(
-    shopTab2.id,
-    [{ lineId: poRepo.getPurchaseOrder(shopTab2.id).lines[0].id, quantity: 2 }],
     null
   )
   const twoShops = invoices.saveInvoice(
@@ -895,15 +974,14 @@ console.log('\n=== 8. the whole week, exactly as somebody does it ===')
     String(onScreen.orderKind)
   )
 
-  // --- Tuesday: the cases turn up at the shop ------------------------------
-  poRepo.receivePurchaseOrderLines(
-    ky.id,
-    [{ lineId: poRepo.getPurchaseOrder(ky.id).lines[0].id, quantity: 3 }],
-    null
-  )
+  // --- and there is no Tuesday, because there is nothing to wait for -------
+  /**
+   * NOBODY PRESSES ANYTHING. The cases were bought over a counter and are in
+   * the buyer's hands; the line IS the receipt. See takeTabDelivery.
+   */
   ok(
     invStock.stockQty('p_ky', KY) === 3,
-    'checking them in puts three at the shop',
+    'THE THREE CASES ARE ALREADY AT THE SHOP — typing them in was taking delivery of them',
     String(invStock.stockQty('p_ky', KY))
   )
   ok(
@@ -916,7 +994,7 @@ console.log('\n=== 8. the whole week, exactly as somebody does it ===')
     'and the tab is still open for the rest of the week'
   )
 
-  // --- Wednesday: sell one --------------------------------------------------
+  // --- straight to selling one ---------------------------------------------
   /**
    * THE SENTENCE UNDER THE SALES-ORDER LINE, which is where the owner saw this
    * fail: "You have 0 in total — 3 short of 3." Nothing was wrong with the
@@ -963,6 +1041,40 @@ console.log('\n=== 8. the whole week, exactly as somebody does it ===')
     sold.remoteUnits === 3 && sold.remoteFrom === KY,
     'and the sales order card says it ships from the shop',
     `${sold.remoteUnits} / ${sold.remoteFrom}`
+  )
+
+  // --- Thursday: buy two more against the same tab -------------------------
+  /**
+   * THE SENTENCE THE WHOLE FEATURE WAS ASKED FOR IN: "throughout the week I
+   * just add what I am buying from them."
+   *
+   * This path had no test at all, which is how it went unnoticed that adding a
+   * line and taking delivery of it were two acts. Each add is its own trip to
+   * the counter, so each one checks in ITS OWN cases and leaves the earlier
+   * ones alone — the failure to avoid is a second add re-receiving Monday's
+   * three and putting six on a shelf that holds three.
+   */
+  const more = poRepo.addPurchaseOrderLines(
+    ky.id,
+    [{ productId: 'p_ky', quantity: 2, unitPrice: 450 }],
+    null
+  )
+  ok(!more.error, 'a running tab keeps taking things all week', String(more.error))
+  ok(
+    invStock.stockQty('p_ky', KY) === 2,
+    'THURSDAY’S TWO CASES ARE AT THE SHOP TOO, checked in by the act of typing them',
+    String(invStock.stockQty('p_ky', KY))
+  )
+  const lines = poRepo.getPurchaseOrder(ky.id).lines
+  ok(
+    lines.length === 2 && lines[0].qtyReceived === 3 && lines[1].qtyReceived === 2,
+    'AND MONDAY’S LINE WAS NOT RECEIVED A SECOND TIME — each add takes in only its own cases',
+    JSON.stringify(lines.map((l: any) => l.qtyReceived))
+  )
+  ok(
+    poRepo.getPurchaseOrder(ky.id).status === 'ordered' &&
+      !poRepo.getPurchaseOrder(ky.id).tabClosedAt,
+    'and the tab is still open, still one bill'
   )
 }
 

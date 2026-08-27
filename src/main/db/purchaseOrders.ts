@@ -946,6 +946,18 @@ export function createPurchaseOrder(
     // Record the purchase as a Cost-of-Goods-Sold ledger entry (same rounded
     // total, same creation timestamp), atomic with the PO insert.
     recordPoCogs(db, { poId: id, poNumber, amount: total, occurredAt: ts, note: `Purchase order ${poNumber}` })
+    /**
+     * A TAB OPENED WITH CASES ON IT HAS ALREADY TAKEN THEM. See takeTabDelivery.
+     *
+     * The commonest way a tab starts: somebody is at the shop, they have bought
+     * three cases, and they open the week's tab by typing those three in. Both
+     * halves of that — the buying and the taking — happened before the form was
+     * submitted, so the order must not come back holding three cases nobody has
+     * checked in.
+     *
+     * After the lines and their allocations, because it reads them.
+     */
+    if (input.ongoing) takeTabDelivery(db, id, poNumber, actorId)
     return id
   })
 
@@ -1112,9 +1124,91 @@ const STATUS_TS_COLUMN: Record<PurchaseOrderStatus, string> = {
  * the board, and it should be made deliberately rather than as a side effect of
  * adding a product.
  */
+/**
+ * BUYING AT THE SHOP IS TAKING DELIVERY. Check the cases in where they stand.
+ *
+ * The owner, on the receive step this removes: "anything being added to these
+ * roadshow check-marked ones doesn't come to us ... we just need to touch it and
+ * then basically it gets added and can just make the sales order."
+ *
+ * ## Why an ordinary purchase order has two events and a tab has one
+ *
+ * Ordering and receiving are separate on a normal purchase because they happen
+ * on separate days to separate people: somebody places an order on Monday and
+ * somebody else opens boxes on Thursday, and the week in between is real — the
+ * goods are the supplier's, on a lorry, and may never turn up. The gap is the
+ * whole reason `qty_received` exists.
+ *
+ * A ROADSHOW TAB HAS NO GAP. Somebody is standing in the shop with the case in
+ * their hands; adding the line IS the purchase and IS the delivery, at the same
+ * instant, by the same person. Asking them to then press Receive is asking them
+ * to confirm something that was never in doubt — and, as the owner found, an
+ * order whose cases were never checked in has no stock, no cost layers and
+ * nothing any sales order can draw. The step was not a safeguard, it was a trap.
+ *
+ * ## Only the units STAYING AT THE SHOP
+ *
+ * A tab line pointed at RM is the other case — a case being sent home — and
+ * that one HAS a gap: it is on a lorry, it arrives on Thursday, and claiming it
+ * as stock now would put a box on our shelf that nobody can find. So the split
+ * is by destination, and it is the same split the whole roadshow feature turns
+ * on: ours and here, ours and not here.
+ *
+ * ## What it does not do
+ *
+ * It never completes the order. `completePoIfFullyReceived` is deliberately not
+ * called: a tab stays open all week by definition, and a tab that closed itself
+ * the moment its first case landed would be the bug this feature was built to
+ * fix, arriving by a different road.
+ *
+ * A pending price books a layer at zero and `setPurchaseOrderLinePrice` re-costs
+ * it when the real figure lands — that path already exists and already refuses
+ * once any of it has been sold. So price the week before you sell out of it.
+ *
+ * MUST be called inside the caller's transaction.
+ */
+function takeTabDelivery(
+  db: Database.Database,
+  poId: string,
+  poNumber: string,
+  actorId: string | null
+): void {
+  const due = db
+    .prepare(
+      `SELECT po_line_id, allocation_id, quantity, qty_received, destination
+         FROM po_unit_destinations
+        WHERE po_id = ?
+          AND quantity > qty_received
+          AND ${stockDest()}
+          AND UPPER(TRIM(destination)) NOT IN (${BUILTIN_LOCATION_IDS.map((id) => `'${id.toUpperCase()}'`).join(', ')})
+        ORDER BY position ASC`
+    )
+    .all(poId) as Array<{
+    po_line_id: string
+    allocation_id: string | null
+    quantity: number
+    qty_received: number
+    destination: string
+  }>
+  for (const row of due) {
+    const take = Math.max(0, Math.round(row.quantity) - Math.round(row.qty_received))
+    if (take <= 0) continue
+    receivePoLine(
+      db,
+      row.po_line_id,
+      take,
+      `Bought at ${row.destination} on ${poNumber}`,
+      actorId,
+      false,
+      row.allocation_id
+    )
+  }
+}
+
 export function addPurchaseOrderLines(
   poId: string,
-  lines: NewPurchaseOrderLine[]
+  lines: NewPurchaseOrderLine[],
+  actorId: string | null = null
 ): PoStatusResult {
   const db = getDb()
   const run = db.transaction((): PoStatusResult => {
@@ -1219,6 +1313,10 @@ export function addPurchaseOrderLines(
     // and the ledger row. A tab has a line added to it every day of the week,
     // which is how that finally showed up.
     restateOrderTotal(db, poId, ts)
+    // BUYING AT THE SHOP IS TAKING DELIVERY. See takeTabDelivery.
+    if (isOpenTab({ tabOpenedAt: head.tab_opened_at, tabClosedAt: head.tab_closed_at })) {
+      takeTabDelivery(db, poId, head.po_number, actorId ?? null)
+    }
     return { po: getPurchaseOrder(poId) }
   })
   try {
