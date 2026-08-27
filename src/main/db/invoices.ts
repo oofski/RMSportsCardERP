@@ -558,6 +558,7 @@ interface InvoiceRow extends AddressRow, ShipAddressRow {
   qbo_payments_applied: number | null
   qbo_payment_count: number | null
   qbo_status_checked_at: string | null
+  total_changed_at: string | null
   qbo_status_attempted_at: string | null
   qbo_status_error: string | null
   total: number
@@ -670,6 +671,7 @@ function toInvoice(r: InvoiceRow): Invoice {
     qboPaymentsApplied: r.qbo_payments_applied ?? null,
     qboPaymentCount: r.qbo_payment_count ?? null,
     qboStatusCheckedAt: r.qbo_status_checked_at ?? null,
+    totalChangedAt: r.total_changed_at ?? null,
     qboStatusAttemptedAt: r.qbo_status_attempted_at ?? null,
     qboStatusError: r.qbo_status_error ?? null,
     total: r.total,
@@ -785,6 +787,10 @@ const INVOICE_COLS = `id, invoice_number, customer_id, customer_name, email, ter
                       qbo_voided, qbo_paid_at, qbo_payments_applied, qbo_payment_count,
                       qbo_status_checked_at, qbo_status_attempted_at,
                       qbo_status_error,
+                      -- WHEN OUR OWN TOTAL LAST MOVED, so a QuickBooks reading
+                      -- taken before that change cannot be reported as a
+                      -- disagreement. See qboTotalState and the v92 note.
+                      total_changed_at,
                       ${ADDRESS_COLS},
                       ${SHIP_ADDRESS_COLS},
                       total, paid_at, paid_by,
@@ -4122,7 +4128,21 @@ export function setInvoiceLines(
      * screen did not touch, and then be wrong for ever with nothing to show it.
      */
     const total = invoiceTotal(after)
-    db.prepare(`UPDATE invoices SET total = ?, updated_at = ? WHERE id = ?`).run(total, stamp, id)
+    /**
+     * `total_changed_at` ONLY WHEN THE FIGURE ACTUALLY MOVED.
+     *
+     * It exists to answer "has anybody looked at QuickBooks since our number
+     * changed" — see the v92 note — so stamping it on a save that left the
+     * total where it was would mark an order unverified for no reason and hide
+     * a mismatch that is perfectly real. Splitting a line four ways at the same
+     * prices changes the document and not the money, and QuickBooks does not
+     * need re-reading for it.
+     */
+    const totalMoved = money(total) !== money(header.total ?? 0)
+    db.prepare(
+      `UPDATE invoices SET total = ?, updated_at = ?${totalMoved ? ', total_changed_at = ?' : ''}
+        WHERE id = ?`
+    ).run(...(totalMoved ? [total, stamp, stamp, id] : [total, stamp, id]))
 
     // 'note', for the same reason re-routing is a note: the log's kinds are the
     // things that happen TO an order, and a correction somebody made is a note.

@@ -228,6 +228,17 @@ export function EditOrderModal({
         toast.error(res.error ?? 'Could not save those changes.')
         return
       }
+      /**
+       * ASK QUICKBOOKS WHERE IT STANDS, right now, before saying anything about
+       * a gap.
+       *
+       * `qbo_total_amt` is what the sweep last READ, which on a busy order can
+       * be days old — so without this the card would open a difference against
+       * a stale figure and go on asserting it after the operator had already
+       * corrected Intuit. One invoice, best effort: the save is already
+       * committed, and a reading that fails never overwrites one that worked.
+       */
+      if (invoice.qboId) await api.invoices.syncQboStatus(invoice.id).catch(() => undefined)
       toast.success(
         `Order updated — total ${formatMoney(newTotal)}. Change it in QuickBooks too.`
       )

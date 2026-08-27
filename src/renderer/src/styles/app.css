@@ -27588,6 +27588,38 @@ button.sor-team:focus-visible {
 .po-card-qbogap > svg {
   flex: none;
 }
+.po-card-qbogap-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+/* "Not checked since you edited" is not a warning — nothing is known to be
+   wrong. Muted rather than yellow, so the colour goes on meaning "there IS a
+   difference" and does not get spent on "we have not looked". */
+.po-card-qbogap.is-unsure {
+  background: var(--surface-2);
+  color: var(--text-3);
+}
+/* The answer to the banner, in the banner. Inherits its colour so it reads as
+   part of the sentence rather than as a second thing competing with it. */
+.po-card-qbogap-check {
+  flex: none;
+  padding: 1px 6px;
+  border: 1px solid currentColor;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 10.5px;
+  cursor: pointer;
+  opacity: 0.85;
+}
+.po-card-qbogap-check:hover:not(:disabled) {
+  opacity: 1;
+}
+.po-card-qbogap-check:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
 
 /* ---------- Splitting a posted sale's line by case (RouteLinesModal) ----------
    The purchase order's split row, one column different: a buy split names a

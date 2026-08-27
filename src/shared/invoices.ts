@@ -808,6 +808,16 @@ export interface Invoice {
   qboStatusCheckedAt: string | null
   qboStatusAttemptedAt: string | null
   qboStatusError: string | null
+  /**
+   * WHEN OUR OWN TOTAL LAST MOVED, and null on an order nobody has edited.
+   *
+   * Only meaningful against `qboStatusCheckedAt`: together they say whether
+   * anybody has looked at QuickBooks SINCE our copy changed, which is the
+   * difference between reporting a disagreement and inventing one out of a
+   * week-old reading. See qboTotalState. Stamped by setInvoiceLines, and only
+   * when the figure actually moves.
+   */
+  totalChangedAt: string | null
   /** Σ of the line amounts, stored so a list does not have to read every line. */
   total: number
   /** When somebody recorded the money as arrived. Null until they do. */
@@ -2355,6 +2365,73 @@ export function qboTotalMismatch(invoice: {
   if (invoice.qboTotalAmt === null) return null
   const gap = money(money(invoice.total) - money(invoice.qboTotalAmt))
   return gap === 0 ? null : gap
+}
+
+/**
+ * WHAT THE CARD MAY ACTUALLY CLAIM about our total and QuickBooks'.
+ *
+ * The owner, looking at a card still accusing QuickBooks after he had already
+ * fixed it there: "is there a way to make sure that error is actually pulling
+ * live data and reporting that when it is actually true?"
+ *
+ * It was not, and `qboTotalMismatch` alone cannot be. `qboTotalAmt` is not what
+ * QuickBooks says — it is what the status sweep last READ, which may be days
+ * old. Correct the invoice in QuickBooks and nothing here hears about it, so
+ * the card went on naming a difference that had already been settled. A warning
+ * that is confidently wrong is worse than no warning: it teaches somebody to
+ * ignore the banner, and then the true one goes unread too.
+ *
+ * ## So the answer separates the gap from the EVIDENCE for it
+ *
+ *   agrees      the last reading matches. Nothing to say.
+ *   unread      QuickBooks has never been read for this invoice. Not evidence
+ *               of agreement, so still nothing to claim.
+ *   unverified  the reading is OLDER than the last time our total moved. Two
+ *               things changed and only one of them was looked at, so no figure
+ *               here is worth stating — the honest output is "nobody has
+ *               checked since", and a button to check.
+ *   differs     the reading is newer than our change and disagrees. THIS is the
+ *               only state that may name a number, and `checkedAt` says how old
+ *               even that is.
+ *
+ * ## `totalChangedAt` null means "not edited here", not "edited long ago"
+ *
+ * Every invoice written before v92 carries null, and null cannot be older than
+ * a reading — so those behave exactly as they did and a real mismatch on an
+ * order nobody has edited is still reported. The column is stamped only when
+ * the total actually moves; see setInvoiceLines.
+ */
+export type QboTotalState =
+  | { kind: 'agrees' }
+  | { kind: 'unread' }
+  | { kind: 'unverified'; checkedAt: string | null }
+  | { kind: 'differs'; gap: number; checkedAt: string | null }
+
+export function qboTotalState(invoice: {
+  qboId: string | null
+  qboTotalAmt: number | null
+  qboVoided: boolean
+  qboStatusCheckedAt: string | null
+  totalChangedAt: string | null
+  total: number
+}): QboTotalState {
+  if (!invoice.qboId || invoice.qboVoided) return { kind: 'agrees' }
+  if (invoice.qboTotalAmt === null) return { kind: 'unread' }
+  const checkedAt = invoice.qboStatusCheckedAt
+  const changedAt = invoice.totalChangedAt
+  /**
+   * COMPARED AS ISO STRINGS, which is a comparison and not a parse.
+   *
+   * Both columns are stamped by `nowIso` on the same machine and are always
+   * full UTC instants, so byte order IS chronological order — the same property
+   * the tracking columns rely on. No Date is constructed, so no timezone can
+   * shift either one, and a malformed value sorts rather than throwing.
+   */
+  if (changedAt && (!checkedAt || checkedAt < changedAt)) {
+    return { kind: 'unverified', checkedAt }
+  }
+  const gap = money(money(invoice.total) - money(invoice.qboTotalAmt))
+  return gap === 0 ? { kind: 'agrees' } : { kind: 'differs', gap, checkedAt }
 }
 
 // ---------------------------------------------------------------------------

@@ -4544,6 +4544,41 @@ function migrate(database: Database.Database): void {
   }
   setMeta(database, 'schema_version', '91')
 
+  /**
+   * v92: WHEN OUR COPY'S TOTAL LAST MOVED, so a stale reading cannot accuse.
+   *
+   * The owner, looking at a card: "QuickBooks says that, but we changed it in
+   * QuickBooks to 8000 — is there a way to make sure that error is actually
+   * pulling live data and reporting that when it is actually true?"
+   *
+   * It was not. `qboTotalMismatch` compares our total against `qbo_total_amt`,
+   * which is whatever the status sweep last READ from Intuit — and a reading
+   * taken before somebody fixed the invoice over there goes on disagreeing for
+   * ever. The card was stating a difference as fact using evidence that
+   * predated the correction, which is the one thing a warning must never do:
+   * a number that is confidently wrong teaches people to ignore the banner, and
+   * then the true one goes unread too.
+   *
+   * ## One column, and it answers "is the evidence newer than the change"
+   *
+   * Stamped by `setInvoiceLines` whenever the header total actually moves.
+   * `qbo_status_checked_at` is stamped by every reading. Comparing the two says
+   * whether anybody has looked at QuickBooks SINCE our copy changed — and when
+   * nobody has, the card says so and offers to look, instead of naming a figure
+   * it cannot stand behind.
+   *
+   * ## NULL on every invoice that exists, and that is the right default
+   *
+   * Null means "our total has not been edited since this column existed", so
+   * there is no local change for a reading to be older than, and the comparison
+   * behaves exactly as it did. Nothing is backfilled: guessing a change time
+   * from `updated_at` would mark every order ever touched for any reason —
+   * tracking, dims, a re-route — as having a moved total, and would suppress
+   * mismatches that are perfectly real.
+   */
+  addColumnIfMissing(database, 'invoices', 'total_changed_at', 'TEXT')
+  setMeta(database, 'schema_version', '92')
+
   // v41: re-derive every product's average cost from its remaining cost layers.
   //
   // The average used to be stored rounded to the cent, back when every total in

@@ -54,6 +54,13 @@
  *      corrects it there by hand, and the only thing stopping that being
  *      forgotten is that the disagreement shows on the card until it is fixed.
  *
+ *  8b. AND IT NEVER NAMES A FIGURE IT CANNOT STAND BEHIND. `qbo_total_amt` is
+ *      what the sweep last READ, not what QuickBooks says now — so a reading
+ *      older than our own change is not evidence of anything, and `qboTotalState`
+ *      answers "nobody has checked since" rather than inventing a difference.
+ *      This is the defect the owner reported: he fixed the invoice in QuickBooks
+ *      and the card went on accusing it.
+ *
  *   9. A QUANTITY CHANGE DOES MOVE STOCK, and moves exactly the difference. The
  *      one input here with a consequence outside the document, and it goes
  *      through the identical release-then-apply `saveInvoice` uses — so selling
@@ -91,7 +98,7 @@ const database = require('../src/main/db/database')
 const inv = require('../src/main/db/invoices')
 const invStock = require('../src/main/db/inventory')
 const extrasRepo = require('../src/main/db/orderExtras')
-const { qboTotalMismatch } = require('../src/shared/invoices')
+const { qboTotalMismatch, qboTotalState } = require('../src/shared/invoices')
 
 const db = database.getDb()
 
@@ -357,6 +364,135 @@ console.log('\n=== CORRECTING THE MONEY ON A POSTED SALE ===')
     qboTotalMismatch({ ...inv.getInvoice(sale.id), qboId: null, total: 1 }) === null,
     'AND NEITHER IS AN ORDER THAT NEVER WENT TO QUICKBOOKS'
   )
+
+  // --- 8b. and it never names a figure it cannot stand behind -------------
+  /**
+   * THE DEFECT THE OWNER REPORTED, reproduced.
+   *
+   * He edited an order to $8,000 here, went and set the QuickBooks invoice to
+   * $8,000 as well, and the card went on saying "QuickBooks is $8,000.00 lower"
+   * — because `qbo_total_amt` is not what QuickBooks SAYS, it is what the sweep
+   * last READ, and nothing had read it since. A warning that is confidently
+   * wrong is worse than none: it teaches somebody to ignore the banner, and
+   * then the true one goes unread too.
+   *
+   * So the state is decided by comparing the two timestamps rather than the two
+   * figures alone. Both are written by `nowIso` on this machine, so a plain
+   * string comparison IS the chronological one.
+   */
+  const past = '2026-08-20T10:00:00.000Z'
+  const later = '2026-08-27T10:00:00.000Z'
+  const base = {
+    qboId: 'qbo-7100',
+    qboVoided: false,
+    qboTotalAmt: 0,
+    total: 8000,
+    qboStatusCheckedAt: past,
+    totalChangedAt: null as string | null
+  }
+  ok(
+    qboTotalState(base).kind === 'differs',
+    'AN ORDER NOBODY HAS EDITED STILL REPORTS A REAL DIFFERENCE — null means "not edited here", so nothing changes for the orders that already existed',
+    qboTotalState(base).kind
+  )
+  const stale = qboTotalState({ ...base, totalChangedAt: later })
+  ok(
+    stale.kind === 'unverified',
+    'BUT A READING OLDER THAN OUR OWN CHANGE NAMES NO FIGURE — this is the card that kept accusing QuickBooks after it had been fixed',
+    stale.kind
+  )
+  ok(
+    stale.kind === 'unverified' && stale.checkedAt === past,
+    'and it still says when the reading was taken, so the banner can offer to take a new one'
+  )
+  const rechecked = qboTotalState({ ...base, totalChangedAt: past, qboStatusCheckedAt: later })
+  ok(
+    rechecked.kind === 'differs' && rechecked.gap === 8000,
+    'A READING TAKEN AFTER THE CHANGE MAY ACCUSE, and names the gap',
+    rechecked.kind
+  )
+  ok(
+    qboTotalState({
+      ...base,
+      totalChangedAt: past,
+      qboStatusCheckedAt: later,
+      qboTotalAmt: 8000
+    }).kind === 'agrees',
+    'AND GOES QUIET THE MOMENT A FRESH READING MATCHES — which is what pressing Check now does',
+  )
+  ok(
+    qboTotalState({ ...base, qboTotalAmt: null, totalChangedAt: later }).kind === 'unread',
+    'NEVER READ AT ALL IS ITS OWN ANSWER, not a disagreement and not an agreement'
+  )
+  /**
+   * AND THE COLUMN IS ONLY STAMPED WHEN THE TOTAL ACTUALLY MOVED. Stamping it
+   * on every save would mark an order unverified for a change that left the
+   * money alone — splitting a line at the same prices, say — and suppress a
+   * mismatch that is perfectly real.
+   */
+  const stampSale = inv.saveInvoice(
+    {
+      customerName: 'Stamp Buyer',
+      invoiceNumber: 'SO-7150',
+      invoiceDate: '2026-08-27',
+      location: 'RM',
+      lines: [{ item: 'Priced Hobby Box', productId: 'p_p', quantity: 2, rate: 900 }]
+    },
+    null
+  )
+  db.prepare(`UPDATE invoices SET status = 'sent', qbo_id = 'qbo-7150' WHERE id = ?`).run(
+    stampSale.id
+  )
+  const stampLine = inv.getInvoice(stampSale.id).lines[0]
+  ok(
+    inv.getInvoice(stampSale.id).totalChangedAt === null,
+    'a freshly written order has never had its total changed here'
+  )
+  inv.setInvoiceLines(
+    stampSale.id,
+    [
+      {
+        lineId: stampLine.id,
+        splitInto: [
+          { quantity: 1, rate: 900 },
+          { quantity: 1, rate: 900 }
+        ]
+      }
+    ],
+    null
+  )
+  ok(
+    inv.getInvoice(stampSale.id).total === 1800 &&
+      inv.getInvoice(stampSale.id).totalChangedAt === null,
+    'SPLITTING A LINE AT THE SAME PRICES LEAVES IT UNSTAMPED — the document changed and the money did not',
+    String(inv.getInvoice(stampSale.id).totalChangedAt)
+  )
+  inv.setInvoiceLines(
+    stampSale.id,
+    [{ lineId: inv.getInvoice(stampSale.id).lines[0].id, rate: 800 }],
+    null
+  )
+  ok(
+    !!inv.getInvoice(stampSale.id).totalChangedAt,
+    'AND A REAL PRICE CHANGE STAMPS IT — which is what makes the reading behind any warning checkable',
+    String(inv.getInvoice(stampSale.id).totalChangedAt)
+  )
+  ok(
+    qboTotalState(inv.getInvoice(stampSale.id)).kind === 'unread',
+    'and with QuickBooks never read for it, the card still claims nothing'
+  )
+  db.prepare(`UPDATE invoices SET qbo_total_amt = 1800, qbo_status_checked_at = ? WHERE id = ?`).run(
+    past,
+    stampSale.id
+  )
+  ok(
+    qboTotalState(inv.getInvoice(stampSale.id)).kind === 'unverified',
+    'A READING FROM BEFORE THE EDIT IS NOT EVIDENCE — end to end, through the real write and the real read',
+    qboTotalState(inv.getInvoice(stampSale.id)).kind
+  )
+  // Handed back, so the shelf assertion at the end of this block is measuring
+  // the order it names and not this fixture as well.
+  inv.setInvoiceStatus(stampSale.id, 'void', null)
 
   // --- and a voided order is refused outright -----------------------------
   inv.setInvoiceStatus(sale.id, 'void', null)

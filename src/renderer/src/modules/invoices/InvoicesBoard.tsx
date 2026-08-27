@@ -6,7 +6,7 @@ import {
   isDropshipSale,
   isInvoicePaid,
   money,
-  qboTotalMismatch,
+  qboTotalState,
   salesOrderKindOf
 } from '@shared/invoices'
 import {
@@ -616,7 +616,7 @@ export function InvoicesBoard({
                           setBusy(null)
                         }
                       }}
-                      onFulfillmentChanged={load}
+                      onReload={load}
                       onRetryPush={async () => {
                         // BUSY, LIKE EVERY OTHER ACTION ON THIS CARD. This one
                         // was the exception, and it is the one action that
@@ -807,7 +807,7 @@ function InvoiceCard({
   onItemsInHand,
   onSendAnyway,
   onSetPaid,
-  onFulfillmentChanged
+  onReload
 }: {
   invoice: Invoice
   busy: boolean
@@ -833,9 +833,10 @@ function InvoiceCard({
   onSendAnyway: () => Promise<void>
   /** Record, or withdraw, that the money arrived. Never moves the order. */
   onSetPaid: (paid: boolean) => Promise<void>
-  /** Reload after the dims editor writes. */
-  onFulfillmentChanged: () => Promise<void>
+  /** Reload the board — after the dims editor writes, or a QuickBooks re-check. */
+  onReload: () => Promise<void>
 }): JSX.Element {
+  const toast = useToast()
   const [measuring, setMeasuring] = useState(false)
   const [asking, setAsking] = useState<'items' | 'send' | 'paid' | 'unpaid' | null>(null)
   // What to call this order in a sentence. The number if it has one; a draft
@@ -872,8 +873,34 @@ function InvoiceCard({
    */
   const kind = salesOrderKindOf(invoice)
   const kindClass = kind === 'drop' ? ' po-card-drop' : kind === 'mixed' ? ' po-card-mixed' : ''
-  /** How far our total has drifted from Intuit's, or null. See qboTotalMismatch. */
-  const qboGap = qboTotalMismatch(invoice)
+  /**
+   * What this card may claim about our total versus QuickBooks'. See
+   * qboTotalState — it distinguishes a real disagreement from a reading that is
+   * simply older than the change, which is what the banner used to conflate.
+   */
+  const qboState = qboTotalState(invoice)
+  const [checkingQbo, setCheckingQbo] = useState(false)
+  /**
+   * Ask QuickBooks about THIS ONE invoice, now.
+   *
+   * The same read the board's Check QuickBooks button runs across everything —
+   * one invoice at a time so answering a banner costs one call rather than a
+   * sweep. Silent on failure beyond the toast: a reading that did not happen
+   * must never overwrite one that did, which the handler already guarantees.
+   */
+  const onCheckQbo = async (): Promise<void> => {
+    setCheckingQbo(true)
+    try {
+      const res = await api.invoices.syncQboStatus(invoice.id)
+      if (!res.ok) {
+        toast.error(res.error ?? 'Could not reach QuickBooks.')
+        return
+      }
+      await onReload()
+    } finally {
+      setCheckingQbo(false)
+    }
+  }
 
   /**
    * WHERE THE GOODS ARE, on the board about where the DOCUMENT is.
@@ -1060,13 +1087,40 @@ function InvoiceCard({
           moment a price moves and stays on the card until the two agree. Silent
           on an invoice QuickBooks has not been read for, because an absence of
           evidence is not agreement. See qboTotalMismatch. */}
-      {qboGap !== null && (
+      {(qboState.kind === 'differs' || qboState.kind === 'unverified') && (
         <div
-          className="po-card-qbogap"
-          title={`QuickBooks says ${formatMoney(money(invoice.qboTotalAmt ?? 0))} — open it there and set it to ${formatMoney(invoice.total)}`}
+          className={`po-card-qbogap${qboState.kind === 'unverified' ? ' is-unsure' : ''}`}
+          onClick={(e) => e.stopPropagation()}
+          title={
+            qboState.kind === 'differs'
+              ? `QuickBooks said ${formatMoney(money(invoice.qboTotalAmt ?? 0))} when it was last read${
+                  qboState.checkedAt ? ` on ${formatDate(qboState.checkedAt)}` : ''
+                } — open it there and set it to ${formatMoney(invoice.total)}`
+              : 'Your total has changed since QuickBooks was last read, so the two cannot be compared yet'
+          }
         >
-          <Icon name="AlertTriangle" size={12} />
-          QuickBooks is {formatMoney(Math.abs(qboGap))} {qboGap > 0 ? 'lower' : 'higher'}
+          <Icon name={qboState.kind === 'differs' ? 'AlertTriangle' : 'Info'} size={12} />
+          <span className="po-card-qbogap-text">
+            {qboState.kind === 'differs'
+              ? `QuickBooks is ${formatMoney(Math.abs(qboState.gap))} ${qboState.gap > 0 ? 'lower' : 'higher'}`
+              : 'QuickBooks not checked since you edited'}
+          </span>
+          {/* THE WHOLE POINT OF THE BANNER IS THAT IT CAN BE ANSWERED.
+
+              `qbo_total_amt` is what the sweep last READ, not what QuickBooks
+              says now — so correcting the invoice over there left this accusing
+              a difference that had already been settled, with nothing on the
+              card to do about it. This asks Intuit about THIS ONE invoice and
+              the banner corrects itself, which is the difference between a
+              warning and a nag. */}
+          <button
+            type="button"
+            className="po-card-qbogap-check"
+            disabled={checkingQbo}
+            onClick={() => void onCheckQbo()}
+          >
+            {checkingQbo ? 'Checking…' : 'Check now'}
+          </button>
         </div>
       )}
       {/* Drawn only once QuickBooks has said something — see PaymentBar, which
@@ -1145,7 +1199,7 @@ function InvoiceCard({
             onClose={() => setMeasuring(false)}
             onSaved={async () => {
               setMeasuring(false)
-              await onFulfillmentChanged()
+              await onReload()
             }}
           />
         </div>
