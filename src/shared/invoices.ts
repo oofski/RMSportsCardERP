@@ -75,6 +75,73 @@ export function hasAddress(a: InvoiceAddress | null | undefined): boolean {
   )
 }
 
+/**
+ * WHERE THE BOX GOES: the ship-to when there is one, the bill-to otherwise.
+ *
+ * The floor's words: "the QBO invoice will have the customer's typical billing
+ * address, but the SO must be referred to prior to making a label."
+ *
+ * ONE FUNCTION, and every label, packing slip and address panel asks it rather
+ * than choosing for itself. Two screens picking their own fallback is how a
+ * parcel ends up addressed to an accounts department while the packing slip in
+ * it says a warehouse.
+ *
+ * THE FALLBACK IS NOT A CONVENIENCE. Blank ship-to is the ordinary state on
+ * every sales order ever written, and on most of the ones written from now on —
+ * the two addresses are the same for almost every buyer. So a missing ship-to
+ * means "the same place the bill goes", which is both true and what the app did
+ * before this existed. It is only the orders where the two genuinely differ that
+ * the column exists for.
+ *
+ * Returns null when there is neither, which is a real state and has to stay
+ * distinguishable from an empty shell — see hasAddress.
+ */
+export function shipToAddress(order: {
+  shipAddr?: InvoiceAddress | null
+  billAddr?: InvoiceAddress | null
+}): InvoiceAddress | null {
+  if (hasAddress(order.shipAddr)) return order.shipAddr ?? null
+  if (hasAddress(order.billAddr)) return order.billAddr ?? null
+  return null
+}
+
+/** True when this order ships somewhere other than where it is billed. */
+export function shipsElsewhere(order: {
+  shipAddr?: InvoiceAddress | null
+  billAddr?: InvoiceAddress | null
+}): boolean {
+  if (!hasAddress(order.shipAddr)) return false
+  if (!hasAddress(order.billAddr)) return true
+  return formatAddress(order.shipAddr) !== formatAddress(order.billAddr)
+}
+
+/**
+ * An address as somebody would write it on a parcel.
+ *
+ * Newline-separated by default because that is what goes on a label; pass a
+ * separator for the one-line form a table cell needs. Blank parts are dropped
+ * rather than printed as gaps — a label with an empty second line is a label
+ * with a hole in it.
+ */
+export function formatAddress(
+  a: InvoiceAddress | null | undefined,
+  sep = '\n'
+): string {
+  if (!a) return ''
+  const cityLine = [a.city, a.region].map((v) => (v ?? '').trim()).filter(Boolean).join(', ')
+  const postal = (a.postalCode ?? '').trim()
+  return [
+    (a.line1 ?? '').trim(),
+    (a.line2 ?? '').trim(),
+    // The zip belongs ON the city line, not under it — "Dallas, TX 75201" is one
+    // line on every label anybody has ever printed.
+    [cityLine, postal].filter(Boolean).join(' '),
+    (a.country ?? '').trim()
+  ]
+    .filter(Boolean)
+    .join(sep)
+}
+
 /** Every part blank — the shape a screen binds to before anything is typed. */
 export const EMPTY_ADDRESS: InvoiceAddress = {
   line1: null,
@@ -223,6 +290,18 @@ export interface InvoiceCustomer {
    * is exactly what their own invoice form does.
    */
   billAddr: InvoiceAddress | null
+  /**
+   * WHERE THIS BUYER'S GOODS USUALLY GO, when that is not where the bill goes.
+   *
+   * The floor's words: "the QBO invoice will have the customer's typical billing
+   * address, but the SO must be referred to prior to making a label." So the two
+   * are different facts about the same buyer and this is the second one.
+   *
+   * Null on almost every buyer, and null is the right answer rather than a gap:
+   * `shipToAddress` falls back to the bill-to, which is where their parcels have
+   * always gone. This earns its keep only on a buyer whose two addresses differ.
+   */
+  shipAddr: InvoiceAddress | null
   /** QuickBooks Customer id, once matched. Null until it is. */
   qboId: string | null
   active: boolean
@@ -644,6 +723,19 @@ export interface Invoice {
    * where last year's invoice says it went.
    */
   billAddr: InvoiceAddress | null
+  /**
+   * SHIP-TO, snapshotted the same way and for the same reason.
+   *
+   * The address a label is made from. Kept apart from the bill-to because they
+   * are two different facts: one is where the document goes and is what reaches
+   * QuickBooks, the other is where the box goes and never leaves this app.
+   *
+   * NULL IS THE ORDINARY STATE, on every order ever written and on most written
+   * from now on. Ask `shipToAddress`, never this field directly — it resolves
+   * ship-to first and bill-to second, so a blank one means "the same place the
+   * bill goes" rather than "nowhere".
+   */
+  shipAddr: InvoiceAddress | null
   terms: InvoiceTerms
   /** YYYY-MM-DD, local calendar day. */
   invoiceDate: string
@@ -1005,6 +1097,8 @@ export interface NewInvoice {
   customerName: string
   email?: string | null
   billAddr?: InvoiceAddress | null
+  /** Where the box goes, when that is not where the bill goes. See Invoice.shipAddr. */
+  shipAddr?: InvoiceAddress | null
   terms?: InvoiceTerms
   invoiceDate: string
   dueDate?: string | null

@@ -3,6 +3,7 @@ import type { InventoryProduct } from '@shared/types'
 import type { Carrier, PaymentTiming } from '@shared/freight'
 import { carrierLabel } from '@shared/freight'
 import type {
+  InvoiceAddress,
   InvoiceCustomer,
   InvoiceDetail,
   InvoiceLine,
@@ -13,7 +14,12 @@ import type {
 } from '@shared/invoices'
 import {
   DEFAULT_INVOICE_TERMS,
+  EMPTY_ADDRESS,
   INVOICE_STAGES,
+  formatAddress,
+  hasAddress,
+  shipToAddress,
+  shipsElsewhere,
   termsOptionsFor,
   dueDateFor,
   lineAmount,
@@ -200,6 +206,19 @@ export function CreateInvoiceModal({
   const [className, setClassName] = useState(invoice?.className ?? '')
   const [memo, setMemo] = useState(invoice?.memo ?? '')
   const [message, setMessage] = useState(invoice?.message ?? '')
+  /**
+   * WHERE THE BOX GOES, which is not always where the bill goes.
+   *
+   * The floor's words: "the QBO invoice will have the customer's typical billing
+   * address, but the SO must be referred to prior to making a label." Blank is
+   * the ordinary state and means "the same place the bill goes" — `shipToAddress`
+   * resolves that, so an untouched order behaves exactly as it did.
+   */
+  const [shipAddr, setShipAddr] = useState<InvoiceAddress>(
+    invoice?.shipAddr ?? EMPTY_ADDRESS
+  )
+  const setShipPart = (k: keyof InvoiceAddress, v: string): void =>
+    setShipAddr((prev) => ({ ...prev, [k]: v.trim() === '' ? null : v }))
   const [carrier, setCarrier] = useState<Carrier | null>(invoice?.carrier ?? null)
   const [service, setService] = useState<string | null>(invoice?.service ?? null)
   const [trackingNumber, setTrackingNumber] = useState<string | null>(
@@ -300,6 +319,10 @@ export function CreateInvoiceModal({
     setLocation(c.location ?? '')
     setClassName(c.className ?? '')
     if (c.message) setMessage(c.message)
+    // The buyer's usual ship-to comes across with them. Only when THIS order has
+    // none typed yet: picking the buyer again after correcting an address must
+    // not throw the correction away.
+    if (hasAddress(c.shipAddr) && !hasAddress(shipAddr)) setShipAddr(c.shipAddr as InvoiceAddress)
   }
 
   /** Typing over the name detaches it from the saved record — otherwise a
@@ -427,6 +450,10 @@ export function CreateInvoiceModal({
     invoiceDate,
     dueDate,
     location: location.trim() || null,
+    // Sent as null when nothing was typed, so the stored columns stay empty and
+    // shipToAddress goes on falling back to the bill-to. An empty shell would
+    // make every order claim a ship-to it was never given.
+    shipAddr: hasAddress(shipAddr) ? shipAddr : null,
     memo: memo.trim() || null,
     message: message.trim() || null,
     sendLater: false,
@@ -744,6 +771,54 @@ export function CreateInvoiceModal({
                 value={location}
                 onChange={(e) => setLocation(e.target.value)}
                 placeholder="e.g. West"
+              />
+            </Field>
+          </div>
+
+          {/* ---- WHERE THE BOX GOES ---------------------------------------
+              Beside the freight fields, not beside the buyer: this is a fact
+              about the parcel, and the address the buyer is BILLED at already
+              travels to QuickBooks without anybody typing it here.
+
+              Blank is the ordinary state and the hint says what blank means, so
+              nobody fills it in defensively on an order that ships where it
+              bills — which is nearly all of them. */}
+          <div className="field-row">
+            <Field
+              label="Ship to — street"
+              hint="Leave blank if it goes to the billing address"
+            >
+              <Input
+                value={shipAddr.line1 ?? ''}
+                onChange={(e) => setShipPart('line1', e.target.value)}
+                placeholder="123 Main St"
+              />
+            </Field>
+            <Field label="Apt / suite" hint="Optional">
+              <Input
+                value={shipAddr.line2 ?? ''}
+                onChange={(e) => setShipPart('line2', e.target.value)}
+              />
+            </Field>
+          </div>
+          <div className="field-row">
+            <Field label="City">
+              <Input
+                value={shipAddr.city ?? ''}
+                onChange={(e) => setShipPart('city', e.target.value)}
+              />
+            </Field>
+            <Field label="State">
+              <Input
+                value={shipAddr.region ?? ''}
+                onChange={(e) => setShipPart('region', e.target.value)}
+                placeholder="TX"
+              />
+            </Field>
+            <Field label="ZIP">
+              <Input
+                value={shipAddr.postalCode ?? ''}
+                onChange={(e) => setShipPart('postalCode', e.target.value)}
               />
             </Field>
           </div>
@@ -1135,6 +1210,9 @@ function InvoiceReceipt({
   // The buyer on a stock sale, the supplier on a dropship — see labelRecipientFor
   // for why the buyer is not the fallback when a dropship's supplier is unknown.
   const labelRecipient = labelRecipientFor(invoice)
+  // The order's own ship-to when it has one, the bill-to otherwise. One rule,
+  // asked once — see shipToAddress for why no screen decides this for itself.
+  const shipTo = shipToAddress(invoice)
 
   return (
     <div className="po-receipt">
@@ -1153,6 +1231,37 @@ function InvoiceReceipt({
               ? 'Deal ticket — shared with other documents'
               : 'Deal ticket'}
           </span>
+        </div>
+      )}
+
+      {/* WHERE THE BOX GOES, on the receipt a packer actually opens.
+          
+          The whole point of the ship-to: "the SO must be referred to prior to
+          making a label." A posted sales order is a record rather than a form,
+          so this is the only place the address can be READ on one — and it has
+          to be here, or the packer is back to hunting for it in an email.
+          
+          shipToAddress resolves the fallback, so an order that ships where it
+          bills shows the billing address rather than nothing. `shipsElsewhere`
+          only badges the ones that genuinely differ, because a "ships elsewhere"
+          note on every order is a note nobody reads. */}
+      {shipTo && (
+        <div className="so-shipto">
+          <div className="so-shipto-head">
+            <Icon name="Truck" size={14} />
+            <span>Ship to</span>
+            {shipsElsewhere(invoice) && (
+              <span className="so-shipto-flag">not the billing address</span>
+            )}
+          </div>
+          <div className="so-shipto-body">
+            <div className="so-shipto-name">{invoice.customerName}</div>
+            {formatAddress(shipTo)
+              .split('\n')
+              .map((line, i) => (
+                <div key={i}>{line}</div>
+              ))}
+          </div>
         </div>
       )}
 

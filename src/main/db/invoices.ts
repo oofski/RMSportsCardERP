@@ -142,6 +142,23 @@ interface AddressRow {
 }
 
 /**
+ * The SHIP-TO half, on the same two tables and read by the same helpers.
+ *
+ * Optional on the interface rather than required, because a packaged main older
+ * than v91 selects rows without these columns and would otherwise typecheck into
+ * something it cannot produce. Absent reads as blank, which reads as "the same
+ * place the bill goes" — see shipToAddress.
+ */
+interface ShipAddressRow {
+  ship_line1?: string | null
+  ship_line2?: string | null
+  ship_city?: string | null
+  ship_region?: string | null
+  ship_postal_code?: string | null
+  ship_country?: string | null
+}
+
+/**
  * Null when nothing was filled in.
  *
  * An all-blank address must read as ABSENT rather than as an object of nulls:
@@ -157,6 +174,19 @@ function toAddress(r: AddressRow): InvoiceAddress | null {
     region: r.bill_region,
     postalCode: r.bill_postal_code,
     country: r.bill_country
+  }
+  return hasAddress(a) ? a : null
+}
+
+/** The ship-to columns off a row. Same rule: all blank reads as absent. */
+function toShipAddress(r: ShipAddressRow): InvoiceAddress | null {
+  const a: InvoiceAddress = {
+    line1: r.ship_line1 ?? null,
+    line2: r.ship_line2 ?? null,
+    city: r.ship_city ?? null,
+    region: r.ship_region ?? null,
+    postalCode: r.ship_postal_code ?? null,
+    country: r.ship_country ?? null
   }
   return hasAddress(a) ? a : null
 }
@@ -179,13 +209,40 @@ function addressParams(a: InvoiceAddress | null | undefined): {
   }
 }
 
+function shipAddressParams(a: InvoiceAddress | null | undefined): {
+  shipLine1: string | null
+  shipLine2: string | null
+  shipCity: string | null
+  shipRegion: string | null
+  shipPostalCode: string | null
+  shipCountry: string | null
+} {
+  return {
+    shipLine1: clean(a?.line1),
+    shipLine2: clean(a?.line2),
+    shipCity: clean(a?.city),
+    shipRegion: clean(a?.region),
+    shipPostalCode: clean(a?.postalCode),
+    shipCountry: clean(a?.country)
+  }
+}
+
 const ADDRESS_COLS = `bill_line1, bill_line2, bill_city, bill_region, bill_postal_code, bill_country`
+/**
+ * WHERE THE BOX GOES, selected alongside the bill-to everywhere it is.
+ *
+ * A separate constant rather than six more names inside ADDRESS_COLS, because
+ * the two are read by different code for different jobs — the bill-to goes to
+ * QuickBooks, the ship-to goes on a label — and a single blob would make it
+ * impossible to see at a call site which of the two a query was actually after.
+ */
+const SHIP_ADDRESS_COLS = `ship_line1, ship_line2, ship_city, ship_region, ship_postal_code, ship_country`
 
 // ---------------------------------------------------------------------------
 // Buyers
 // ---------------------------------------------------------------------------
 
-interface CustomerRow extends AddressRow {
+interface CustomerRow extends AddressRow, ShipAddressRow {
   id: string
   name: string
   email: string | null
@@ -215,6 +272,7 @@ function toCustomer(r: CustomerRow): InvoiceCustomer {
     message: r.message,
     notes: r.notes,
     billAddr: toAddress(r),
+    shipAddr: toShipAddress(r),
     qboId: r.qbo_id,
     active: r.active === 1,
     createdAt: r.created_at,
@@ -223,7 +281,8 @@ function toCustomer(r: CustomerRow): InvoiceCustomer {
 }
 
 const CUSTOMER_COLS = `id, name, email, phone, mobile, terms, location, class_name, message, notes,
-                       qbo_id, ${ADDRESS_COLS}, active, created_at, updated_at`
+                       qbo_id, ${ADDRESS_COLS}, ${SHIP_ADDRESS_COLS},
+                       active, created_at, updated_at`
 
 /**
  * The buyers.
@@ -273,6 +332,14 @@ export interface CustomerInput {
   message?: string | null
   notes?: string | null
   billAddr?: InvoiceAddress | null
+  /**
+   * Where this buyer's goods usually go, when that is not where the bill goes.
+   *
+   * Its own field and its own whole-or-nothing flag on the upsert, deliberately
+   * not folded in with billAddr: typing a billing address on a buyer who has a
+   * different ship-to must not blank the ship-to.
+   */
+  shipAddr?: InvoiceAddress | null
   qboId?: string | null
 }
 
@@ -317,10 +384,12 @@ export function saveCustomer(input: CustomerInput): InvoiceCustomer {
     `INSERT INTO invoice_customers
        (id, name, email, phone, mobile, terms, location, class_name, message, notes, qbo_id,
         bill_line1, bill_line2, bill_city, bill_region, bill_postal_code, bill_country,
+        ship_line1, ship_line2, ship_city, ship_region, ship_postal_code, ship_country,
         active, is_customer, created_at, updated_at)
      VALUES (@id, @name, @email, @phone, @mobile, @terms, @location, @className, @message, @notes,
              @qboId,
              @billLine1, @billLine2, @billCity, @billRegion, @billPostalCode, @billCountry,
+             @shipLine1, @shipLine2, @shipCity, @shipRegion, @shipPostalCode, @shipCountry,
              1, 1, @createdAt, @updatedAt)
      ON CONFLICT(id) DO UPDATE SET
        name       = excluded.name,
@@ -364,6 +433,22 @@ export function saveCustomer(input: CustomerInput): InvoiceCustomer {
                                ELSE invoice_customers.bill_postal_code END,
        bill_country     = CASE WHEN @hasAddress = 1 THEN excluded.bill_country
                                ELSE invoice_customers.bill_country END,
+       -- THE SHIP-TO MOVES AS A WHOLE TOO, on its OWN flag. Sharing the bill-to's
+       -- would tie the two together: typing a billing address on a buyer who has
+       -- a different ship-to would blank the ship-to, which is the exact mistake
+       -- the whole-or-nothing rule above exists to prevent, one field wider.
+       ship_line1       = CASE WHEN @hasShipAddress = 1 THEN excluded.ship_line1
+                               ELSE invoice_customers.ship_line1 END,
+       ship_line2       = CASE WHEN @hasShipAddress = 1 THEN excluded.ship_line2
+                               ELSE invoice_customers.ship_line2 END,
+       ship_city        = CASE WHEN @hasShipAddress = 1 THEN excluded.ship_city
+                               ELSE invoice_customers.ship_city END,
+       ship_region      = CASE WHEN @hasShipAddress = 1 THEN excluded.ship_region
+                               ELSE invoice_customers.ship_region END,
+       ship_postal_code = CASE WHEN @hasShipAddress = 1 THEN excluded.ship_postal_code
+                               ELSE invoice_customers.ship_postal_code END,
+       ship_country     = CASE WHEN @hasShipAddress = 1 THEN excluded.ship_country
+                               ELSE invoice_customers.ship_country END,
        updated_at = excluded.updated_at`
   ).run({
     id,
@@ -379,11 +464,13 @@ export function saveCustomer(input: CustomerInput): InvoiceCustomer {
     notes: clean(input.notes),
     qboId: clean(input.qboId),
     ...addressParams(input.billAddr),
+    ...shipAddressParams(input.shipAddr),
     // An edit that carries no address at all leaves the stored one alone. The
     // buyer form is not the only thing that saves a customer — writing one from
     // the invoice screen passes a name and an email and nothing else, and that
     // must not wipe an address somebody typed.
     hasAddress: hasAddress(input.billAddr) ? 1 : 0,
+    hasShipAddress: hasAddress(input.shipAddr) ? 1 : 0,
     createdAt: existing?.created_at ?? stamp,
     updatedAt: stamp
   })
@@ -440,7 +527,7 @@ export function removeCustomer(id: string): { deleted: boolean; keptAsVendor: bo
 // Invoices
 // ---------------------------------------------------------------------------
 
-interface InvoiceRow extends AddressRow {
+interface InvoiceRow extends AddressRow, ShipAddressRow {
   id: string
   invoice_number: string | null
   customer_id: string | null
@@ -551,6 +638,7 @@ function toInvoice(r: InvoiceRow): Invoice {
     customerName: r.customer_name,
     email: r.email,
     billAddr: toAddress(r),
+    shipAddr: toShipAddress(r),
     terms: asTerms(r.terms),
     invoiceDate: r.invoice_date,
     dueDate: r.due_date,
@@ -698,6 +786,7 @@ const INVOICE_COLS = `id, invoice_number, customer_id, customer_name, email, ter
                       qbo_status_checked_at, qbo_status_attempted_at,
                       qbo_status_error,
                       ${ADDRESS_COLS},
+                      ${SHIP_ADDRESS_COLS},
                       total, paid_at, paid_by,
                       paid_up_front, payment_method, payment_reference,
                       ready_to_ship_at, ready_to_ship_by, source_po_id, allow_credit_card,
@@ -991,6 +1080,15 @@ function customerAddress(customerId: string | null): InvoiceAddress | null {
   return row ? toAddress(row) : null
 }
 
+/** The buyer's stored ship-to. Null on almost everybody — see shipToAddress. */
+function customerShipAddress(customerId: string | null): InvoiceAddress | null {
+  if (!customerId) return null
+  const row = getDb()
+    .prepare(`SELECT ${SHIP_ADDRESS_COLS} FROM invoice_customers WHERE id = ?`)
+    .get(customerId) as ShipAddressRow | undefined
+  return row ? toShipAddress(row) : null
+}
+
 /**
  * The highest number an invoice actually carries. 0 when none are numeric.
  *
@@ -1130,6 +1228,26 @@ export function saveInvoice(
   // moves next year cannot rewrite where this document says it went.
   const billAddr =
     hasAddress(input.billAddr) ? (input.billAddr ?? null) : customerAddress(clean(input.customerId))
+  /**
+   * AND THE SHIP-TO, snapshotted on exactly the same rule.
+   *
+   * "The QBO invoice will have the customer's typical billing address, but the
+   * SO must be referred to prior to making a label." So this is the address the
+   * label is made from, and it is copied off the buyer at save time rather than
+   * joined at read time — a buyer who moves next year must not rewrite where
+   * last year's parcel actually went.
+   *
+   * NULL WHEN THE BUYER HAS NONE EITHER, and that is correct rather than a hole:
+   * `shipToAddress` falls back to the bill-to, which is where their parcels have
+   * always gone. Deliberately NOT defaulted to `billAddr` here — storing a copy
+   * of the billing address in the ship-to columns would make every order claim a
+   * ship-to it was never given, and `shipsElsewhere` could then never tell a
+   * real difference from an inherited sameness.
+   */
+  const shipAddr =
+    hasAddress(input.shipAddr)
+      ? (input.shipAddr ?? null)
+      : customerShipAddress(clean(input.customerId))
 
   const lines = input.lines.map((l, i) => {
     // THE SKU IS AUTO-FILLED FROM THE PRODUCT, once, at save time. Looked up
@@ -1233,12 +1351,14 @@ export function saveInvoice(
           qbo_synced_at, total, carrier, service, tracking_number, payment_timing, allow_credit_card,
           shipping_cost,
           bill_line1, bill_line2, bill_city, bill_region, bill_postal_code, bill_country,
+          ship_line1, ship_line2, ship_city, ship_region, ship_postal_code, ship_country,
           created_by, created_at, updated_at)
        VALUES (@id, @invoiceNumber, @customerId, @customerName, @email, @terms, @invoiceDate,
                @dueDate, @location, @memo, @message, @sendLater, @className, 'draft',
                NULL, NULL, NULL, @total, @carrier, @service, @trackingNumber, @paymentTiming,
                @allowCreditCard, @shippingCost,
                @billLine1, @billLine2, @billCity, @billRegion, @billPostalCode, @billCountry,
+               @shipLine1, @shipLine2, @shipCity, @shipRegion, @shipPostalCode, @shipCountry,
                @createdBy, @createdAt, @updatedAt)
        ON CONFLICT(id) DO UPDATE SET
          invoice_number = excluded.invoice_number,
@@ -1251,6 +1371,12 @@ export function saveInvoice(
          bill_region      = excluded.bill_region,
          bill_postal_code = excluded.bill_postal_code,
          bill_country     = excluded.bill_country,
+         ship_line1       = excluded.ship_line1,
+         ship_line2       = excluded.ship_line2,
+         ship_city        = excluded.ship_city,
+         ship_region      = excluded.ship_region,
+         ship_postal_code = excluded.ship_postal_code,
+         ship_country     = excluded.ship_country,
          terms          = excluded.terms,
          invoice_date   = excluded.invoice_date,
          due_date       = excluded.due_date,
@@ -1325,6 +1451,7 @@ export function saveInvoice(
           ? (existing?.shipping_cost ?? null)
           : shippingIn(input.shippingCost),
       ...addressParams(billAddr),
+      ...shipAddressParams(shipAddr),
       total: invoiceTotal(lines),
       // Null on an edit. The ON CONFLICT branch does not touch created_by, so
       // whatever is bound here is discarded on that path — but bind the value

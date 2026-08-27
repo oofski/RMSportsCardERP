@@ -4495,6 +4495,55 @@ function migrate(database: Database.Database): void {
     .run()
   setMeta(database, 'schema_version', '90')
 
+  /**
+   * v91: WHERE THE BOX ACTUALLY GOES.
+   *
+   * The ask, from the floor: "one thing we need to add is address on a sales
+   * order — just on SO I think, so we can make the label and upload tracking",
+   * and the reasoning beside it: "the QBO invoice will have the customer's
+   * typical billing address, but the SO must be referred to prior to making a
+   * label."
+   *
+   * That is the whole distinction, and the app had only one side of it. The
+   * bill-to landed in v40 (see the note above): the buyer record holds the
+   * address they use, the invoice SNAPSHOTS it, and the posting code sends it to
+   * QuickBooks. It is the address on the DOCUMENT — where the bill goes.
+   *
+   * Nothing anywhere held where the GOODS go. A packer opening a sales order to
+   * make a label found a customer name and no street, and the label email's own
+   * "Ship to:" line was the buyer's NAME with no address under it. So the
+   * address was being read off something else — an email, a message, somebody's
+   * memory — every single time.
+   *
+   * ## Six more columns, not a second table
+   *
+   * Exactly the shape and the reasoning bill-to already has, which is why they
+   * sit in the same loop: the buyer record carries the ship-to they usually use,
+   * the sales order snapshots it at the moment it is written, and a buyer who
+   * moves next year does not rewrite where last year's parcel went.
+   *
+   * ## THE FALLBACK IS THE POINT
+   *
+   * Nullable throughout, and blank is the ordinary state on every sales order
+   * ever written. `shipToAddress` in @shared/invoices resolves ship-to first and
+   * bill-to second, so an order with no ship-to of its own goes to the billing
+   * address — which is where it went before this existed and is right for almost
+   * every buyer. The column earns its keep only on the ones where the two
+   * differ, and those are exactly the ones that were being got wrong.
+   *
+   * A partial address is legal, for the reason v40 gives: refusing to store one
+   * only means it gets typed into the memo instead.
+   */
+  for (const table of ['invoice_customers', 'invoices']) {
+    addColumnIfMissing(database, table, 'ship_line1', 'TEXT')
+    addColumnIfMissing(database, table, 'ship_line2', 'TEXT')
+    addColumnIfMissing(database, table, 'ship_city', 'TEXT')
+    addColumnIfMissing(database, table, 'ship_region', 'TEXT')
+    addColumnIfMissing(database, table, 'ship_postal_code', 'TEXT')
+    addColumnIfMissing(database, table, 'ship_country', 'TEXT')
+  }
+  setMeta(database, 'schema_version', '91')
+
   // v41: re-derive every product's average cost from its remaining cost layers.
   //
   // The average used to be stored rounded to the cent, back when every total in

@@ -15,6 +15,7 @@ import type {
 import { composeLabelEmail, isOrderSide, labelMailtoUrl } from '@shared/orders'
 import type { LinkablePurchaseOrder } from '@shared/orders'
 import type { InvoiceDetail, InvoicePaymentInput, NewInvoice } from '@shared/invoices'
+import { formatAddress, shipToAddress } from '@shared/invoices'
 import { COMPANY_NAME } from '@shared/config'
 import { currentUser } from './services/auth'
 import {
@@ -133,9 +134,24 @@ function orderContext(
   }
   const invoice = getInvoice(orderId)
   if (!invoice) return null
+  /**
+   * THE NAME AND THE STREET, not just the name.
+   *
+   * This was `invoice.customerName` alone, which meant the label email said
+   * "Ship to: Ada Okonkwo" and stopped — a shipping instruction with no address
+   * in it. Whoever received it had to go and find the address somewhere else,
+   * every time, which is precisely the gap the ship-to columns were added for.
+   *
+   * `shipToAddress` resolves it: the order's own ship-to when it has one, the
+   * bill-to otherwise. So an order that ships where it bills — almost all of
+   * them — gains the address it always should have carried, and one that does
+   * not gains the right one.
+   */
+  const addr = shipToAddress(invoice)
+  const printed = formatAddress(addr, ', ')
   return {
     number: invoice.invoiceNumber || 'draft',
-    shipTo: invoice.customerName,
+    shipTo: printed ? `${invoice.customerName}, ${printed}` : invoice.customerName,
     lines: invoice.lines.map((l) => ({ description: l.item, quantity: l.quantity }))
   }
 }

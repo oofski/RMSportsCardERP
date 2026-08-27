@@ -27742,3 +27742,51 @@ button.sor-team:focus-visible {
   flex: none;
   color: var(--text-3);
 }
+
+/* ---------- Ship to, on the sales-order receipt ----------
+   A posted sales order is a record rather than a form, so this block is the only
+   place its address can be READ — and reading it before making a label is the
+   whole reason the ship-to exists. Boxed rather than run into the timeline
+   because a packer is copying it, not skimming it. */
+.so-shipto {
+  margin: 14px 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.so-shipto-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-3);
+}
+.so-shipto-head svg {
+  color: var(--brand-600);
+}
+/* Only on the orders that genuinely ship elsewhere — a flag on every order is a
+   flag nobody reads. */
+.so-shipto-flag {
+  margin-left: auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--warning-bg);
+  color: var(--warning);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+.so-shipto-body {
+  margin-top: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+}
+.so-shipto-name {
+  font-weight: 700;
+}

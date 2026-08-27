@@ -1808,5 +1808,185 @@ console.log('\n=== NOBODY IS LEFT SITTING ON NET 30 ===')
   ok(touchedAt(onNet2) === stamp, 'and never touched updated_at on a row it left alone', touchedAt(onNet2))
 }
 
+
+// ---------------------------------------------------------------------------
+console.log('\n=== WHERE THE BOX GOES: ship-to on a sales order ===')
+// ---------------------------------------------------------------------------
+/**
+ * The floor's words: "one thing we need to add is address on a sales order —
+ * just on SO, so we can make the label and upload tracking", and the reasoning
+ * beside it: "the QBO invoice will have the customer's typical billing address,
+ * but the SO must be referred to prior to making a label."
+ *
+ * Two different facts about one buyer. The bill-to landed years ago and goes to
+ * QuickBooks; nothing anywhere held where the GOODS go, so a packer opening a
+ * sales order found a name and no street.
+ *
+ * THE FALLBACK IS THE LOAD-BEARING PART. Blank ship-to is the state of every
+ * sales order ever written and of most written from now on, so it has to mean
+ * "the same place the bill goes" rather than "nowhere" — otherwise this feature
+ * would blank the address on every existing order the day it shipped.
+ */
+{
+  const shared = require('../src/shared/invoices')
+  const BILL = {
+    line1: '400 Ledger Way', line2: null, city: 'Dallas', region: 'TX',
+    postalCode: '75201', country: null
+  }
+  const WAREHOUSE = {
+    line1: '9 Dock Road', line2: 'Bay 4', city: 'Fort Worth', region: 'TX',
+    postalCode: '76102', country: null
+  }
+
+  // --- the resolution rule, in isolation ---------------------------------
+  ok(
+    shared.shipToAddress({ shipAddr: null, billAddr: BILL })?.line1 === '400 Ledger Way',
+    'NO SHIP-TO FALLS BACK TO THE BILL-TO — which is where every parcel went before this existed'
+  )
+  ok(
+    shared.shipToAddress({ shipAddr: WAREHOUSE, billAddr: BILL })?.line1 === '9 Dock Road',
+    'a ship-to wins when there is one'
+  )
+  ok(
+    shared.shipToAddress({ shipAddr: null, billAddr: null }) === null,
+    'and neither is null rather than an empty shell — a shell would read as "we have an address"'
+  )
+  ok(
+    shared.shipToAddress({ shipAddr: shared.EMPTY_ADDRESS, billAddr: BILL })?.line1 === '400 Ledger Way',
+    'AN ALL-BLANK SHIP-TO IS NOT A SHIP-TO, so a form that binds EMPTY_ADDRESS and is never typed ' +
+      'in does not silently override the billing address with nothing'
+  )
+  ok(shared.shipsElsewhere({ shipAddr: null, billAddr: BILL }) === false, 'and it is not flagged as elsewhere')
+  ok(shared.shipsElsewhere({ shipAddr: WAREHOUSE, billAddr: BILL }) === true, 'a real difference is')
+  ok(
+    shared.shipsElsewhere({ shipAddr: BILL, billAddr: BILL }) === false,
+    'BUT THE SAME ADDRESS TYPED TWICE IS NOT "ELSEWHERE" — a flag on an order that ships where it ' +
+      'bills is a flag nobody reads'
+  )
+
+  // --- how it prints -----------------------------------------------------
+  ok(
+    shared.formatAddress(WAREHOUSE) === '9 Dock Road\nBay 4\nFort Worth, TX 76102',
+    'THE ZIP SITS ON THE CITY LINE, as it does on every label anybody has printed',
+    JSON.stringify(shared.formatAddress(WAREHOUSE))
+  )
+  ok(
+    shared.formatAddress(BILL, ', ') === '400 Ledger Way, Dallas, TX 75201',
+    'and a separator gives the one-line form a table cell needs',
+    shared.formatAddress(BILL, ', ')
+  )
+  ok(
+    shared.formatAddress({ line1: 'A', line2: null, city: null, region: null, postalCode: null, country: null }) === 'A',
+    'BLANK PARTS ARE DROPPED, not printed as gaps — a label with an empty line has a hole in it'
+  )
+  ok(shared.formatAddress(null) === '', 'and nothing at all prints nothing')
+
+  // --- stored on the buyer, snapshotted onto the order --------------------
+  const buyer = repo.saveCustomer({
+    name: 'Warehouse Buyer',
+    email: 'wh@example.com',
+    billAddr: BILL,
+    shipAddr: WAREHOUSE
+  })
+  ok(buyer.billAddr?.city === 'Dallas', 'the buyer keeps a bill-to')
+  ok(buyer.shipAddr?.city === 'Fort Worth', 'AND A SHIP-TO BESIDE IT — two facts, two columns')
+
+  const order = repo.saveInvoice(
+    {
+      customerId: buyer.id,
+      customerName: buyer.name,
+      invoiceNumber: 'SO-SHIP-1',
+      invoiceDate: '2026-08-25',
+      lines: [{ item: 'A case', quantity: 1, rate: 100 }]
+    },
+    null
+  )
+  ok(
+    order.billAddr?.city === 'Dallas',
+    'a new order snapshots the bill-to as it always did',
+    String(order.billAddr?.city)
+  )
+  ok(
+    order.shipAddr?.city === 'Fort Worth',
+    'AND SNAPSHOTS THE SHIP-TO TOO — so a buyer who moves next year does not rewrite where ' +
+      'this parcel actually went',
+    String(order.shipAddr?.city)
+  )
+
+  // --- the buyer's ship-to is not COPIED from the bill-to -----------------
+  /**
+   * The one thing that must not happen. Defaulting the ship-to to the billing
+   * address would make every order claim a ship-to it was never given, and
+   * `shipsElsewhere` could then never tell a real difference from an inherited
+   * sameness.
+   */
+  const plain = repo.saveCustomer({ name: 'Plain Buyer', billAddr: BILL })
+  ok(plain.shipAddr === null, 'a buyer with only a bill-to has NO ship-to, not a copy of it')
+  const plainOrder = repo.saveInvoice(
+    {
+      customerId: plain.id,
+      customerName: plain.name,
+      invoiceNumber: 'SO-SHIP-2',
+      invoiceDate: '2026-08-25',
+      lines: [{ item: 'A case', quantity: 1, rate: 100 }]
+    },
+    null
+  )
+  ok(plainOrder.shipAddr === null, 'and neither does their order')
+  ok(
+    shared.shipToAddress(plainOrder)?.line1 === '400 Ledger Way',
+    'YET IT STILL SHIPS SOMEWHERE — the fallback is what makes every order written before this ' +
+      'feature go on working',
+    String(shared.shipToAddress(plainOrder)?.line1)
+  )
+  ok(shared.shipsElsewhere(plainOrder) === false, 'and is not flagged')
+
+  // --- the order can override the buyer ----------------------------------
+  const oneOff = { line1: '77 Show Hall', line2: null, city: 'Austin', region: 'TX', postalCode: '78701', country: null }
+  const overridden = repo.saveInvoice(
+    {
+      id: plainOrder.id,
+      customerId: plain.id,
+      customerName: plain.name,
+      invoiceNumber: 'SO-SHIP-2',
+      invoiceDate: '2026-08-25',
+      shipAddr: oneOff,
+      lines: [{ item: 'A case', quantity: 1, rate: 100 }]
+    },
+    null
+  )
+  ok(
+    overridden.shipAddr?.city === 'Austin',
+    'AN ORDER CAN SHIP SOMEWHERE THE BUYER USUALLY DOES NOT — a card show, a one-off',
+    String(overridden.shipAddr?.city)
+  )
+  ok(shared.shipsElsewhere(overridden) === true, 'and it is flagged as not the billing address')
+  ok(
+    overridden.billAddr?.city === 'Dallas',
+    'WHILE THE BILL-TO IS UNTOUCHED — that is the address QuickBooks gets, and a shipping ' +
+      'decision must not rewrite it'
+  )
+
+  // --- and it can be taken back off ---------------------------------------
+  const cleared = repo.saveInvoice(
+    {
+      id: plainOrder.id,
+      customerId: plain.id,
+      customerName: plain.name,
+      invoiceNumber: 'SO-SHIP-2',
+      invoiceDate: '2026-08-25',
+      shipAddr: null,
+      lines: [{ item: 'A case', quantity: 1, rate: 100 }]
+    },
+    null
+  )
+  ok(cleared.shipAddr === null, 'clearing it stores nothing rather than an empty shell')
+  ok(
+    shared.shipToAddress(cleared)?.city === 'Dallas',
+    'so it goes back to the billing address',
+    String(shared.shipToAddress(cleared)?.city)
+  )
+}
+
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)
