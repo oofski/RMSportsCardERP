@@ -335,13 +335,28 @@ ok(strayStockRows() === 0, 'T12 with no stock row and no lot anywhere off-shelf'
 ok(inv.getProduct('p_d').quantity === qtyBefore, 'T12 and no unit was added to a real shelf either')
 ok(dropReceived.po.receivedUnits === 0, 'T12 nothing was received', String(dropReceived.po.receivedUnits))
 
-// T13. The SQL and the TypeScript cannot drift: the predicate is GENERATED from
-// LOCATION_IDS, and this pins both the generator and its output.
-const wantedSql = `destination IN (${LOCATION_IDS.map((id: string) => `'${id}'`).join(', ')})`
-ok(poRepo.STOCK_DESTINATION_SQL === wantedSql, 'T13 the stock predicate is built from LOCATION_IDS', poRepo.STOCK_DESTINATION_SQL)
+/**
+ * T13. THE PREDICATE ASKS THE TABLE, and this pins that it does.
+ *
+ * It used to be generated from LOCATION_IDS — a live binding, so in principle
+ * the SQL could never drift from the TypeScript. In practice half its callers
+ * are module-level template literals evaluated at import, when the registry
+ * holds only the two built-ins, so every shelf registered afterwards read as a
+ * supplier's address to the header queries while every function knew better.
+ *
+ * A string check alone could never have caught that: the old string was exactly
+ * what the old test demanded. So this pins the SHAPE — the built-ins as
+ * literals, plus a lookup against stock_locations — and roadshowStock.test.ts
+ * section 8 pins the BEHAVIOUR the shape exists for.
+ */
 ok(
-  poRepo.STOCK_DESTINATION_SQL === "destination IN ('RM', 'AM')",
-  'T13 and today that is exactly RM and AM',
+  poRepo.STOCK_DESTINATION_SQL.includes("destination IN ('RM', 'AM')"),
+  'T13 the two built-in shelves are still literals, so a database with no stock_locations rows behaves as it always did',
+  poRepo.STOCK_DESTINATION_SQL
+)
+ok(
+  /EXISTS\s*\(\s*SELECT 1 FROM stock_locations/.test(poRepo.STOCK_DESTINATION_SQL),
+  'T13 AND EVERY OTHER SHELF IS LOOKED UP, not baked in at import time',
   poRepo.STOCK_DESTINATION_SQL
 )
 ok(

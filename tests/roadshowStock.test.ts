@@ -830,6 +830,142 @@ console.log('\n=== 7. the card says where the box is coming from ===')
   )
 }
 
+console.log('\n=== 8. the whole week, exactly as somebody does it ===')
+// ---------------------------------------------------------------------------
+/**
+ * THE TEST THAT WOULD HAVE CAUGHT THE ONE THING EVERY OTHER TEST HERE MISSED.
+ *
+ * Section 2 proves a tab line can be received and that the cases land at the
+ * shop, and it is true, and the feature was still completely broken in the app:
+ *
+ *   Drop-0424 · Kentucky Roadshow
+ *   "All 3 units drop-ship to Kentucky Roadshow. Nothing on this order
+ *    arrives here, so it never completes on its own."
+ *   0 of 3 received · sales order says "You have 0 in total — 3 short of 3"
+ *
+ * The receiving FUNCTION worked. The READ did not. `RECEIVABLE_UNITS_SQL` and
+ * the header query are module-level template literals, so the stock-destination
+ * predicate they embed was frozen at import — when the registry holds nothing
+ * but RM and AM. A shop registered afterwards, which is every shop, since
+ * opening the tab is what registers it, was a shelf to every function and a
+ * supplier's address to every read. So the screen offered nothing to receive,
+ * nothing was ever received, and the sale that was the entire point found an
+ * empty shelf.
+ *
+ * Calling the write path directly stepped straight over the part that was
+ * broken. So this section touches ONLY what the screens touch, in the order a
+ * person does it, and asserts the numbers those screens actually print.
+ */
+{
+  const KY = 'Kentucky Roadshow'
+  db.prepare(
+    `INSERT INTO inventory_products (id, sku, name, category, unit_cost, created_at, updated_at)
+     VALUES ('p_ky', '10407-119', 'Chaos Rising Booster 6-Box Case', 'Pokemon', 0,
+             '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`
+  ).run()
+
+  // --- Monday: open the tab and put three cases on it ----------------------
+  const ky = poRepo.createPurchaseOrder(
+    { supplier: KY, ongoing: true, lines: [{ productId: 'p_ky', quantity: 3, unitPrice: 425 }] },
+    null
+  )
+  const onScreen = poRepo.getPurchaseOrder(ky.id)
+  ok(onScreen.location === KY, 'the tab points at the shop', String(onScreen.location))
+  /**
+   * THE THREE NUMBERS THE RECEIPT PRINTS, and all three were wrong.
+   *
+   * `orderKind` is what turns PO-0424 into "Drop-0424" through
+   * displayOrderNumber, and what draws the yellow "nothing arrives here"
+   * banner. `receivableUnits` is the "0 of 3". `dropshipUnits` is what the
+   * banner counts. One frozen string produced all three.
+   */
+  ok(
+    onScreen.receivableUnits === 3,
+    'ALL THREE CASES ARE RECEIVABLE — this read said 0, which is why the screen offered nothing to check in',
+    String(onScreen.receivableUnits)
+  )
+  ok(
+    onScreen.dropshipUnits === 0,
+    'AND NONE OF THEM IS A DROPSHIP — they are ours, bought, and standing at the shop',
+    String(onScreen.dropshipUnits)
+  )
+  ok(
+    onScreen.orderKind === 'stock',
+    'SO IT IS NOT NUMBERED Drop-XXXX AND CARRIES NO "nothing arrives here" BANNER',
+    String(onScreen.orderKind)
+  )
+
+  // --- Tuesday: the cases turn up at the shop ------------------------------
+  poRepo.receivePurchaseOrderLines(
+    ky.id,
+    [{ lineId: poRepo.getPurchaseOrder(ky.id).lines[0].id, quantity: 3 }],
+    null
+  )
+  ok(
+    invStock.stockQty('p_ky', KY) === 3,
+    'checking them in puts three at the shop',
+    String(invStock.stockQty('p_ky', KY))
+  )
+  ok(
+    poRepo.getPurchaseOrder(ky.id).receivedUnits === 3,
+    'AND THE RECEIPT SAYS 3 OF 3 rather than 0 of 3',
+    String(poRepo.getPurchaseOrder(ky.id).receivedUnits)
+  )
+  ok(
+    poRepo.getPurchaseOrder(ky.id).status === 'ordered',
+    'and the tab is still open for the rest of the week'
+  )
+
+  // --- Wednesday: sell one --------------------------------------------------
+  /**
+   * THE SENTENCE UNDER THE SALES-ORDER LINE, which is where the owner saw this
+   * fail: "You have 0 in total — 3 short of 3." Nothing was wrong with the
+   * availability rule; there genuinely was no stock, because none had ever been
+   * receivable. It reads the truth either way, which is exactly why it was
+   * pointing at a bug three screens upstream.
+   */
+  const { availabilityNote, unitsOwned } = require('../src/shared/availability')
+  const have = require('../src/main/db/inventory').productAvailability('p_ky')
+  ok(unitsOwned(have) === 3, 'WE OWN THREE, and the sales order can see them', String(unitsOwned(have)))
+  ok(
+    availabilityNote(have, 3) && availabilityNote(have, 3).kind === 'away',
+    'ASKING FOR THREE SAYS THEY ARE AT THE SHOP — not "3 short of 3"',
+    JSON.stringify(availabilityNote(have, 3))
+  )
+
+  const kySale = invoices.saveInvoice(
+    {
+      customerName: 'Roadshow Case Buyer',
+      invoiceNumber: 'SO-KY01',
+      invoiceDate: '2026-08-27',
+      location: 'RM',
+      lines: [
+        { item: 'Chaos Rising Booster 6-Box Case', productId: 'p_ky', quantity: 3, rate: 900, destination: KY }
+      ]
+    },
+    null
+  )
+  ok(
+    invStock.stockQty('p_ky', KY) === 0,
+    'AND SELLING THEM DRAWS THE SHOP DOWN — the cases leave from where they are standing',
+    String(invStock.stockQty('p_ky', KY))
+  )
+  const cogs = db
+    .prepare(`SELECT COALESCE(SUM(cost_total), 0) AS c FROM invoice_stock_moves WHERE invoice_id = ?`)
+    .get(kySale.id) as { c: number }
+  ok(
+    Math.round(cogs.c) === 1275,
+    'WITH A REAL COST OF GOODS OF 3 × $425 — the thing a dropship could never have given us',
+    String(cogs.c)
+  )
+  const sold = invoices.getInvoice(kySale.id)
+  ok(
+    sold.remoteUnits === 3 && sold.remoteFrom === KY,
+    'and the sales order card says it ships from the shop',
+    `${sold.remoteUnits} / ${sold.remoteFrom}`
+  )
+}
+
 /** Hand the over-sell fixture's stock back, so nothing below inherits it. */
 function inv_setVoid(id: string): void {
   invoices.setInvoiceStatus(id, 'void', null)

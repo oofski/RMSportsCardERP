@@ -25,7 +25,7 @@ import {
 import type { Carrier, PaymentTiming } from '@shared/freight'
 import { asCarrier, asPaymentTiming, detectCarrier } from '@shared/freight'
 import { asShipStatus } from '@shared/tracking'
-import { LOCATION_IDS } from '@shared/inventory'
+import { BUILTIN_LOCATION_IDS, LOCATION_IDS } from '@shared/inventory'
 import { getDb, getMeta, setMeta } from './database'
 import { addStock, adjustStock, reverseStockReceipt, stockQty } from './inventory'
 import { recordPoCogs, voidPoCogs } from './finance'
@@ -112,33 +112,56 @@ type StockUnitRow = Pick<
 >
 
 /**
- * "May units bound here be checked into stock?", as SQL — GENERATED from
- * LOCATION_IDS rather than typed out beside it.
+ * "May units bound here be checked into stock?", as SQL — ASKED OF THE TABLE,
+ * not baked from a list held in memory.
  *
- * The alternative is a hard-coded IN ('RM','AM') in eight queries, which is
- * eight copies of a rule that lives in @shared/inventory. Generating it means
- * the SQL and the TypeScript cannot drift apart at all, rather than being
- * checked for drift after the fact; tests/dropship.test.ts (T13) still pins the
- * exact string, so widening LOCATION_IDS fails a test rather than silently
- * turning a new value into a stock-holding shelf everywhere at once.
+ * ## The bug this shape exists to make impossible
  *
- * The alias exists because purchase_order_lines now has a `destination` column
- * of its own, so an unqualified name is ambiguous in any query that joins it.
+ * This used to be generated from `LOCATION_IDS`: the registry is a live binding,
+ * so the reasoning was that SQL and TypeScript could never drift. They drifted
+ * anyway, and badly, because HALF THE CALLERS ARE MODULE-LEVEL CONSTANTS —
+ * `RECEIVABLE_UNITS_SQL` and the header read below are template literals
+ * evaluated once, at import, when the registry still holds nothing but RM and
+ * AM. Every shelf added after start-up — which is every roadshow shop, since
+ * opening a tab is what creates one — was therefore a stock location to every
+ * function and a supplier's address to every read.
  *
- * KNOWN AND DELIBERATELY LEFT: this test is CASE-SENSITIVE (SQLite compares
- * TEXT byte for byte by default) while `destinationHoldsStock` folds case
- * through `canonicalDestination`, so a stored destination of 'rm' would read as
- * a drop here and as a shelf there. Nothing can store one: every destination
- * goes through `canonicalDestination` at the door, in createPurchaseOrder and in
- * setPurchaseOrderRouting, which rewrites 'rm' to 'RM' before it is saved (T8
- * pins that). Adding COLLATE NOCASE here would make a destination named "rm
- * Collectibles" no more correct and would cost the index on every query that
- * uses this predicate, so the door is the place it is fixed.
+ * What that looked like on the screen: a tab raised against Kentucky Roadshow
+ * came back numbered Drop-0424, reported 0 of 3 units receivable, and told the
+ * operator "nothing on this order arrives here". Nothing could be checked in, so
+ * no stock and no cost layers ever appeared at the shop, so the sales order that
+ * was the whole point of the feature said "you have 0 in total". One frozen
+ * string, three symptoms, none of them pointing at it.
+ *
+ * ## So the question goes to the data
+ *
+ * `stock_locations` IS the set — see the v79 note and stockLocations.ts. A
+ * subquery cannot be frozen at import, cannot be stale, and cannot disagree with
+ * `destinationHoldsStock`, which asks the same table by way of the registry. It
+ * also picks up RETIRED places, which is right and which the old predicate got
+ * wrong: `LOCATION_IDS` drops them, `isLocation` keeps them, and every sale ever
+ * costed off a retired shelf depends on the second answer.
+ *
+ * The two built-ins stay as literals beside it. `setKnownLocations` guarantees
+ * RM and AM are shelves whatever any table says, and a database opened before
+ * v79 or caught mid-migration has no rows here at all — falling back to exactly
+ * the two is the behaviour this app had for its whole life.
+ *
+ * The alias exists because purchase_order_lines has a `destination` column of
+ * its own, so an unqualified name is ambiguous in any query that joins it.
+ *
+ * Case: the built-in half stays byte-for-byte, because every destination goes
+ * through `canonicalDestination` at the door and T8 pins that. The table half
+ * folds case, matching `ensureTabLocation`, which treats "roadshow dallas" and
+ * "Roadshow Dallas" as one shop precisely so they cannot become two shelves
+ * holding half the stock each.
  */
 const stockDest = (alias = ''): string =>
-  `${alias}destination IN (${LOCATION_IDS.map((id) => `'${id}'`).join(', ')})`
+  `(${alias}destination IN (${BUILTIN_LOCATION_IDS.map((id) => `'${id}'`).join(', ')})
+     OR EXISTS (SELECT 1 FROM stock_locations sl
+                 WHERE LOWER(sl.id) = LOWER(TRIM(${alias}destination))))`
 
-/** The generated stock-bound predicate, exported so a test can pin it. */
+/** The stock-bound predicate, exported so a test can pin it. */
 export const STOCK_DESTINATION_SQL = stockDest()
 
 /**
