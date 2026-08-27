@@ -3601,6 +3601,178 @@ export function setInvoiceItemsInHand(
 }
 
 /**
+ * CORRECT THE MONEY ON A SALE THAT HAS ALREADY BEEN POSTED.
+ *
+ * The owner's words: "add an edit button on sales orders that I can edit the
+ * price in the software — I know I would have to manually do that in
+ * QuickBooks."
+ *
+ * ## Why this is not `saveInvoice`, and why it is allowed anyway
+ *
+ * `saveInvoice` throws the moment an invoice is not a draft, with the reason
+ * written above it: this app is not the system of record for a document
+ * somebody has been billed against, and there is no update path to Intuit.
+ * Every word of that is still true, and none of it is an argument for the app
+ * being unable to hold a corrected figure — a price agreed on the phone after
+ * the invoice went out is an ordinary Tuesday here, and the choice today is
+ * between the app knowing the real number and the app being confidently wrong
+ * in every report it produces.
+ *
+ * So the gate moves rather than opens. `saveInvoice` rewrites EVERY column —
+ * buyer, number, dates, terms, quantities, lines added and removed — and
+ * widening it would let all of that drift silently. This writes exactly two
+ * money columns on the lines named, re-derives the header total from the line
+ * amounts, and touches nothing else at all.
+ *
+ * ## It changes NO quantity, so it moves NO stock
+ *
+ * That is the property that makes it safe on a posted order, and it is
+ * structural rather than a promise: there is no path from here to
+ * `applyInvoiceStock`, because the only inputs are a rate and an amount and
+ * neither is read by anything that costs a shelf. A sale of ten cases whose
+ * price was cut is still a sale of ten cases; the FIFO layers it consumed are
+ * the layers it consumed. Changing what a line SELLS is a different act, it
+ * belongs to `setInvoiceLineRouting` and the split editor, and it is not here.
+ *
+ * ## QuickBooks is not told, and the divergence is the point
+ *
+ * `pushToQbo` refuses an invoice that already has an id, and this app has no
+ * update path to Intuit at all — so the operator changes it there by hand, in
+ * their own words when they asked for this. What this does is make the gap
+ * VISIBLE: `qbo_total_amt` is Intuit's own figure and is deliberately left
+ * alone, so after an edit the two disagree, and `qboTotalMismatch` puts that
+ * disagreement on the card until somebody squares it. A silent local edit that
+ * nobody could see afterwards would be a worse feature than no edit at all.
+ *
+ * ## And the history says what happened, per line, in dollars
+ *
+ * Not "prices edited" — the old figure and the new one, so the trail survives
+ * the person who made it. Refused on a VOID order only.
+ */
+export function setInvoicePricing(
+  id: string,
+  changes: ReadonlyArray<{
+    lineId: string
+    /**
+     * The new unit price. `undefined` leaves it; the amount then follows the
+     * rate unless the caller overrides it below.
+     */
+    rate?: number | null
+    /**
+     * WHAT THE LINE ACTUALLY COMES TO, when it is not quantity × rate.
+     *
+     * The override exists because `amount` on this table has always been what
+     * was AGREED rather than arithmetic — "a buyer talked down to a round
+     * number is a real thing that happens on this floor" — and a screen that
+     * could only set the rate would make that number unreachable on exactly
+     * the orders somebody is here to correct. Absent means "follow the rate".
+     */
+    amount?: number | null
+  }>,
+  actorId: string | null
+): { invoice: InvoiceDetail | null; error?: string } {
+  const db = getDb()
+  const guard = liveInvoiceOr(db, id)
+  if (!guard.ok) return guard.result
+  if (changes.length === 0) return { invoice: getInvoice(id) }
+
+  const run = db.transaction((): { invoice: InvoiceDetail | null; error?: string } => {
+    const header = db.prepare(`SELECT invoice_number, total FROM invoices WHERE id = ?`).get(id) as
+      | { invoice_number: string | null; total: number | null }
+      | undefined
+    if (!header) return { invoice: null, error: 'That order is gone.' }
+    const stamp = nowIso()
+
+    type Row = { id: string; item: string; quantity: number; rate: number; amount: number }
+    const before = db
+      .prepare(`SELECT id, item, quantity, rate, amount FROM invoice_lines WHERE invoice_id = ?`)
+      .all(id) as Row[]
+
+    const setLine = db.prepare(
+      `UPDATE invoice_lines SET rate = ?, amount = ?, updated_at = ?
+        WHERE id = ? AND invoice_id = ?`
+    )
+    /** What changed, in words, for the history entry. */
+    const said: string[] = []
+
+    for (const change of changes) {
+      const line = before.find((l) => l.id === change.lineId)
+      if (!line) return { invoice: null, error: 'That line is no longer on this order.' }
+      if (change.rate === undefined && change.amount === undefined) continue
+
+      /**
+       * A FIGURE, AND NOT A TYPO. NaN and Infinity are refused rather than
+       * stored as zero — a blank box read as "free" is the one failure of this
+       * screen that would look like a successful save. The magnitude cap is
+       * the same reasoning as `setInvoiceDims`: nothing on this floor sells
+       * for ten million dollars a case, and a pasted account number that lands
+       * in a rate box should be a sentence rather than a total.
+       */
+      const num = (v: number | null | undefined, fallback: number, what: string): number | string => {
+        if (v === undefined || v === null) return fallback
+        const n = Number(v)
+        if (!Number.isFinite(n)) return `${line.item}: that ${what} is not a number.`
+        if (Math.abs(n) > 10_000_000) return `${line.item}: that ${what} is not a price.`
+        return money(n)
+      }
+      const rate = num(change.rate, line.rate, 'price')
+      if (typeof rate === 'string') return { invoice: null, error: rate }
+      // THE AMOUNT FOLLOWS THE RATE unless it was given its own answer. A
+      // caller that moves the price and says nothing about the total means the
+      // ordinary thing, and making them restate the multiplication would be a
+      // second place for the two to disagree.
+      const amount =
+        change.amount === undefined
+          ? lineAmount(line.quantity, rate)
+          : num(change.amount, line.amount, 'amount')
+      if (typeof amount === 'string') return { invoice: null, error: amount }
+
+      if (money(rate) === money(line.rate) && money(amount) === money(line.amount)) continue
+      setLine.run(rate, amount, stamp, line.id, id)
+      said.push(
+        `${line.item}: ${fmtMoney(line.rate)} → ${fmtMoney(rate)} each` +
+          (money(amount) === lineAmount(line.quantity, rate)
+            ? ''
+            : `, line total ${fmtMoney(amount)}`)
+      )
+    }
+
+    if (said.length === 0) return { invoice: getInvoice(id) }
+
+    /**
+     * THE HEADER TOTAL IS RE-DERIVED FROM THE LINES, never adjusted by the
+     * delta. Summing what is actually stored is the only version that cannot
+     * drift: an arithmetic patch would stay right until the first line this
+     * screen did not touch, and then be wrong for ever with nothing to show it.
+     */
+    const after = db
+      .prepare(`SELECT amount FROM invoice_lines WHERE invoice_id = ?`)
+      .all(id) as Array<{ amount: number }>
+    const total = invoiceTotal(after)
+    db.prepare(`UPDATE invoices SET total = ?, updated_at = ? WHERE id = ?`).run(total, stamp, id)
+
+    // 'note', for the same reason re-routing is a note: the log's kinds are the
+    // things that happen TO an order, and a correction somebody made is a note.
+    recordOrderEvent('so', id, 'note', {
+      detail:
+        `Price corrected — ${said.join('; ')}. ` +
+        `Order total ${fmtMoney(header.total ?? 0)} → ${fmtMoney(total)}. ` +
+        'QuickBooks was NOT changed; it has to be corrected there by hand.',
+      actorId,
+      db
+    })
+    return { invoice: getInvoice(id) }
+  })
+  return run()
+}
+
+/** Dollars, for a sentence in a log. Not a screen — no locale, no symbol drift. */
+function fmtMoney(n: number): string {
+  const v = money(Number(n) || 0)
+  return `$${v.toFixed(2)}`
+}
+
+/**
  * Send it anyway.
  *
  * The owner's case: a buyer on up-front terms whose package is going out

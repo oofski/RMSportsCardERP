@@ -37,6 +37,7 @@ import {
   setInvoiceForceReady,
   setInvoiceItemsInHand,
   setInvoiceLineRouting,
+  setInvoicePricing,
   setInvoicePaid,
   linkDropshipPair,
   linkablePurchaseOrders,
@@ -748,6 +749,42 @@ export function registerOrderExtrasIpc(): void {
           return { ok: false, error: 'A line was named without saying which one.' }
         }
         const res = setInvoiceLineRouting(str(payload?.id), changes, actor.id)
+        if (res.error) return { ok: false, error: res.error }
+        if (!res.invoice) return { ok: false, error: 'That order is gone.' }
+        return { ok: true, data: res.invoice }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  /**
+   * CORRECT THE MONEY ON A POSTED SALE. See setInvoicePricing.
+   *
+   * `requireInvoicing` and nothing more, the same permission that raises the
+   * invoice in the first place: somebody trusted to set a price is trusted to
+   * correct one, and a separate right here would only mean the correction gets
+   * made on paper instead.
+   */
+  ipcMain.handle(
+    IPC.invoiceSetPricing,
+    (_e, payload: { id?: unknown; changes?: unknown }): Result<InvoiceDetail> => {
+      try {
+        const actor = requireInvoicing()
+        const raw = Array.isArray(payload?.changes) ? payload.changes : []
+        const changes = raw.map((c: Record<string, unknown>) => ({
+          lineId: str(c?.lineId),
+          // ABSENCE HAS TO SURVIVE THE CROSSING. "Leave the amount alone and let
+          // it follow the rate" and "set the amount to this" are two different
+          // instructions, and a Number() over an absent key would flatten the
+          // first into a zero — a line silently marked free.
+          ...('rate' in (c ?? {}) ? { rate: Number(c?.rate) } : {}),
+          ...('amount' in (c ?? {}) ? { amount: Number(c?.amount) } : {})
+        }))
+        if (changes.some((c) => !c.lineId)) {
+          return { ok: false, error: 'A line was named without saying which one.' }
+        }
+        const res = setInvoicePricing(str(payload?.id), changes, actor.id)
         if (res.error) return { ok: false, error: res.error }
         if (!res.invoice) return { ok: false, error: 'That order is gone.' }
         return { ok: true, data: res.invoice }

@@ -5,6 +5,8 @@ import {
   canMoveInvoice,
   isDropshipSale,
   isInvoicePaid,
+  money,
+  qboTotalMismatch,
   salesOrderKindOf
 } from '@shared/invoices'
 import {
@@ -32,6 +34,7 @@ import { CheckTrackingButton } from '../../components/CheckTrackingButton'
 import { MatchByNumberModal } from './MatchByNumberModal'
 import { AttachPurchaseOrderModal } from './AttachPurchaseOrderModal'
 import { RouteLinesModal } from './RouteLinesModal'
+import { EditPricesModal } from './EditPricesModal'
 import { PayUpFrontModal } from '../orders/PayUpFrontModal'
 import { useToast } from '../../components/Toast'
 import { formatDate, formatMoney } from '../../lib/format'
@@ -103,6 +106,8 @@ export function InvoicesBoard({
    * Fetched on demand rather than held for every card.
    */
   const [routing, setRouting] = useState<InvoiceDetail | null>(null)
+  /** The order whose prices are being corrected. See EditPricesModal. */
+  const [pricing, setPricing] = useState<InvoiceDetail | null>(null)
   const [paying, setPaying] = useState<InvoiceDetail | null>(null)
   const [nextNumber, setNextNumber] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
@@ -646,6 +651,11 @@ export function InvoicesBoard({
                         if (full) setRouting(full)
                         else toast.error('That order is gone.')
                       }}
+                      onEditPrices={async () => {
+                        const full = await api.invoices.get(inv.id)
+                        if (full) setPricing(full)
+                        else toast.error('That order is gone.')
+                      }}
                       onPayUpFront={() => void openForPayment(inv.id)}
                     />
                   ))}
@@ -719,6 +729,10 @@ export function InvoicesBoard({
         />
       )}
 
+      {pricing && (
+        <EditPricesModal invoice={pricing} onClose={() => setPricing(null)} onDone={load} />
+      )}
+
       {paying && (
         <PayUpFrontModal
           invoice={paying}
@@ -788,6 +802,7 @@ function InvoiceCard({
   onPdf,
   onAttachPo,
   onRoute,
+  onEditPrices,
   onPayUpFront,
   onItemsInHand,
   onSendAnyway,
@@ -808,6 +823,8 @@ function InvoiceCard({
   onAttachPo: () => void
   /** Change where the lines are fulfilled from. See RouteLinesModal. */
   onRoute: () => void
+  /** Correct the money on a sale that has already posted. See EditPricesModal. */
+  onEditPrices: () => void
   /** Open the paid-up-front dialog for this order. */
   onPayUpFront: () => void
   /** Confirm the goods arrived — the only signal a dropship has. */
@@ -855,6 +872,8 @@ function InvoiceCard({
    */
   const kind = salesOrderKindOf(invoice)
   const kindClass = kind === 'drop' ? ' po-card-drop' : kind === 'mixed' ? ' po-card-mixed' : ''
+  /** How far our total has drifted from Intuit's, or null. See qboTotalMismatch. */
+  const qboGap = qboTotalMismatch(invoice)
 
   /**
    * WHERE THE GOODS ARE, on the board about where the DOCUMENT is.
@@ -1032,6 +1051,24 @@ function InvoiceCard({
             : `due ${formatDay(invoice.dueDate)}`}
         </span>
       </div>
+      {/* OUR TOTAL AND QUICKBOOKS' DISAGREE, and the card is where somebody
+          will see it.
+
+          Editing a price here cannot reach Intuit, so the copy over there is
+          corrected by hand — which means the whole feature turns on somebody
+          remembering. This is what removes the remembering: the gap opens the
+          moment a price moves and stays on the card until the two agree. Silent
+          on an invoice QuickBooks has not been read for, because an absence of
+          evidence is not agreement. See qboTotalMismatch. */}
+      {qboGap !== null && (
+        <div
+          className="po-card-qbogap"
+          title={`QuickBooks says ${formatMoney(money(invoice.qboTotalAmt ?? 0))} — open it there and set it to ${formatMoney(invoice.total)}`}
+        >
+          <Icon name="AlertTriangle" size={12} />
+          QuickBooks is {formatMoney(Math.abs(qboGap))} {qboGap > 0 ? 'lower' : 'higher'}
+        </div>
+      )}
       {/* Drawn only once QuickBooks has said something — see PaymentBar, which
           returns nothing rather than an empty rail, because "nothing paid" on a
           draft nobody has posted is a claim about money that nobody has made. */}
@@ -1312,6 +1349,33 @@ function InvoiceCard({
           >
             <Icon name="Route" size={14} />
             Fulfilled from
+          </button>
+        )}
+
+        {/* CORRECT THE MONEY, on an order already on the books.
+
+            The invoice form is refused once a document posts, and rightly: it
+            rewrites every column, and this app is not the system of record for
+            something a buyer has been billed against. But a price renegotiated
+            after the invoice went out is ordinary trade here, and the choice
+            was between the app holding the real figure and the app being
+            confidently wrong in every report it produces.
+
+            So the gate moved rather than opened. This writes two money columns
+            and the total, changes no quantity and therefore moves no stock, and
+            says on its face that QuickBooks has to be corrected by hand. On a
+            DRAFT it is absent — the ordinary form does prices better, and two
+            ways to edit the same thing is how they come to disagree. See
+            EditPricesModal. */}
+        {invoice.status !== 'void' && invoice.status !== 'draft' && (
+          <button
+            type="button"
+            className="btn po-move"
+            title="Correct the prices on your copy. QuickBooks has to be changed separately."
+            onClick={onEditPrices}
+          >
+            <Icon name="DollarSign" size={14} />
+            Edit prices
           </button>
         )}
 

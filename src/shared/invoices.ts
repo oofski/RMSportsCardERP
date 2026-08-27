@@ -2321,6 +2321,42 @@ export function clearedWithoutPayment(invoice: {
   return money(invoice.qboPaymentsApplied) < money(invoice.qboTotalAmt)
 }
 
+/**
+ * OUR TOTAL AND QUICKBOOKS' TOTAL DISAGREE — how much by, or null.
+ *
+ * The other half of `setInvoicePricing`. Correcting a price here cannot reach
+ * Intuit — `pushToQbo` refuses an invoice that already has an id and this app
+ * has no update path at all — so the operator changes it there by hand. This is
+ * what stops that being something anybody can forget: `qboTotalAmt` is Intuit's
+ * own figure, left deliberately untouched by the edit, so the gap opens the
+ * moment a price moves and stays on the card until the two agree again.
+ *
+ * ## Null when nobody has looked, not zero
+ *
+ * A missing `qboTotalAmt` means the status sweep has not read this invoice yet
+ * — no evidence either way — and reporting "no mismatch" from an absence would
+ * be the screen saying the books are square when it has not checked. A voided
+ * QuickBooks invoice is likewise not a mismatch: there is no live document over
+ * there for ours to disagree with.
+ *
+ * ## SIGNED, and the sign is the instruction
+ *
+ * Positive means our copy is HIGHER than Intuit's, so QuickBooks needs raising;
+ * negative means it needs lowering. A bare "they differ" makes somebody open
+ * both screens to find out which way.
+ */
+export function qboTotalMismatch(invoice: {
+  qboId: string | null
+  qboTotalAmt: number | null
+  qboVoided: boolean
+  total: number
+}): number | null {
+  if (!invoice.qboId || invoice.qboVoided) return null
+  if (invoice.qboTotalAmt === null) return null
+  const gap = money(money(invoice.total) - money(invoice.qboTotalAmt))
+  return gap === 0 ? null : gap
+}
+
 // ---------------------------------------------------------------------------
 // Binding a local order to a QuickBooks invoice by the number on it
 //
