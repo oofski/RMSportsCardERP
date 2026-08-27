@@ -2821,6 +2821,88 @@ function foldRoadshowTicket(
  * `effectiveSlices` is asked rather than `allocations.length` being tested here,
  * because that rule has to live in exactly one place. See @shared/invoiceAllocations.
  */
+/**
+ * RELEASE EVERYTHING THIS ORDER EVER TOOK, THEN TAKE AGAIN FROM WHAT IT NOW SAYS.
+ *
+ * The one answer to "re-derive this order's stock", shared by the two narrow
+ * writes that can change what a posted sale draws — `setInvoiceLineRouting`,
+ * which moves lines between shelves and suppliers, and `setInvoiceLines`, which
+ * changes how many units a line sells. Both need the identical release-then-
+ * apply that `saveInvoice` performs, and two copies of it would be two answers
+ * that drift the first time either is adjusted.
+ *
+ * ## Why release-then-apply rather than an adjustment
+ *
+ * `restoreFifo` puts units back into the exact layers they came from, so the
+ * re-take walks the same FIFO order and lands on the same layers at the same
+ * costs. Nothing to get wrong arithmetically, and a line that stopped drawing a
+ * shelf simply is not in the re-take. An incremental adjustment would have to
+ * reason about which layers a delta belongs to, which is the thing FIFO exists
+ * to decide.
+ *
+ * ## And `qty_fulfilled` is read off what the shelf ACTUALLY gave
+ *
+ * Never off the quantity asked for — the same rule `saveInvoice` keeps, so the
+ * record and the shelf say the same number when the consumption takes less than
+ * it was asked for. A line that drew a shelf until a moment ago and no longer
+ * does goes to zero: the number described that draw, and the draw has been
+ * handed back.
+ *
+ * MUST be called inside the caller's transaction, after every line write.
+ */
+function rederiveInvoiceStock(
+  db: Database.Database,
+  id: string,
+  header: { invoice_number: string | null; customer_name: string },
+  stockLocation: string,
+  after: ReadonlyArray<{
+    id: string
+    position: number
+    product_id: string | null
+    quantity: number
+    destination: string | null
+    supplier: string | null
+    source_po_id: string | null
+  }>,
+  splitsAfter: Map<string, InvoiceLineAllocation[]>,
+  /** The lines this change touched, so an untouched one keeps its own record. */
+  touched: ReadonlyArray<string>,
+  /** Whether each line drew a shelf BEFORE the change. See the zeroing above. */
+  wasStock: Map<string, boolean>,
+  actorId: string | null,
+  stamp: string
+): void {
+  const stockLines = stockDrawingLines(
+    after.map((l) => ({ ...l, allocations: splitsAfter.get(l.id) })),
+    stockLocation
+  )
+  releaseInvoiceStock(db, id)
+  const moved = applyInvoiceStock(
+    db,
+    id,
+    (header.invoice_number ?? '').trim() || null,
+    header.customer_name?.trim() || null,
+    stockLines,
+    stockLocation,
+    actorId
+  )
+  const movedQty = movedByPosition(moved)
+
+  const drawing = new Set(stockLines.map((l) => l.position))
+  const setFulfilled = db.prepare(
+    `UPDATE invoice_lines SET qty_fulfilled = ?, fulfilled_at = ?, updated_at = ?
+      WHERE id = ? AND invoice_id = ?`
+  )
+  for (const line of after) {
+    if (drawing.has(line.position)) {
+      const qty = movedQty.get(line.position) ?? 0
+      setFulfilled.run(qty, qty > 0 ? stamp : null, stamp, line.id, id)
+    } else if (touched.includes(line.id) && wasStock.get(line.id)) {
+      setFulfilled.run(0, null, stamp, line.id, id)
+    }
+  }
+}
+
 function stockDrawingLines(
   lines: ReadonlyArray<{
     position: number
@@ -3364,40 +3446,7 @@ export function setInvoiceLineRouting(
 
     const after = readLines()
     const splitsAfter = readLineAllocations(db, id)
-    const stockLines = stockDrawingLines(
-      after.map((l) => ({ ...l, allocations: splitsAfter.get(l.id) })),
-      stockLocation
-    )
-    releaseInvoiceStock(db, id)
-    const moved = applyInvoiceStock(
-      db,
-      id,
-      (header.invoice_number ?? '').trim() || null,
-      header.customer_name?.trim() || null,
-      stockLines,
-      stockLocation,
-      actorId
-    )
-    const movedQty = movedByPosition(moved)
-
-    const drawing = new Set(stockLines.map((l) => l.position))
-    const setFulfilled = db.prepare(
-      `UPDATE invoice_lines SET qty_fulfilled = ?, fulfilled_at = ?, updated_at = ?
-        WHERE id = ? AND invoice_id = ?`
-    )
-    for (const line of after) {
-      if (drawing.has(line.position)) {
-        // Read off what the shelf ACTUALLY gave, never off the quantity asked
-        // for — the same rule saveInvoice keeps, so the record and the shelf say
-        // the same number when the consumption takes less than was wanted.
-        const qty = movedQty.get(line.position) ?? 0
-        setFulfilled.run(qty, qty > 0 ? stamp : null, stamp, line.id, id)
-      } else if (touched.includes(line.id) && wasStock.get(line.id)) {
-        // It drew a shelf until a moment ago and does not any more. The number
-        // described that draw, and the draw has been given back.
-        setFulfilled.run(0, null, stamp, line.id, id)
-      }
-    }
+    rederiveInvoiceStock(db, id, header, stockLocation, after, splitsAfter, touched, wasStock, actorId, stamp)
 
     db.prepare(`UPDATE invoices SET updated_at = ? WHERE id = ?`).run(stamp, id)
 
@@ -3601,11 +3650,12 @@ export function setInvoiceItemsInHand(
 }
 
 /**
- * CORRECT THE MONEY ON A SALE THAT HAS ALREADY BEEN POSTED.
+ * EDIT THE LINES OF A SALE THAT HAS ALREADY BEEN POSTED — quantity and money.
  *
  * The owner's words: "add an edit button on sales orders that I can edit the
  * price in the software — I know I would have to manually do that in
- * QuickBooks."
+ * QuickBooks." Then: "can we also edit the quantity there, and if there are 2+
+ * units, be able to set individual prices if we don't sell them at each."
  *
  * ## Why this is not `saveInvoice`, and why it is allowed anyway
  *
@@ -3614,25 +3664,47 @@ export function setInvoiceItemsInHand(
  * somebody has been billed against, and there is no update path to Intuit.
  * Every word of that is still true, and none of it is an argument for the app
  * being unable to hold a corrected figure — a price agreed on the phone after
- * the invoice went out is an ordinary Tuesday here, and the choice today is
- * between the app knowing the real number and the app being confidently wrong
- * in every report it produces.
+ * the invoice went out is an ordinary Tuesday here, and the choice is between
+ * the app knowing the real number and the app being confidently wrong in every
+ * report it produces.
  *
- * So the gate moves rather than opens. `saveInvoice` rewrites EVERY column —
- * buyer, number, dates, terms, quantities, lines added and removed — and
- * widening it would let all of that drift silently. This writes exactly two
- * money columns on the lines named, re-derives the header total from the line
- * amounts, and touches nothing else at all.
+ * So the gate moves rather than opens. `saveInvoice` also rewrites the buyer,
+ * the number, the dates, the terms and the class, and reaches QuickBooks; this
+ * touches the LINES and the total that follows from them, and nothing else
+ * exists in it to get wrong.
  *
- * ## It changes NO quantity, so it moves NO stock
+ * ## TWO PRICES FOR THE SAME PRODUCT IS TWO LINES, not one line with a list
  *
- * That is the property that makes it safe on a posted order, and it is
- * structural rather than a promise: there is no path from here to
- * `applyInvoiceStock`, because the only inputs are a rate and an amount and
- * neither is read by anything that costs a shelf. A sale of ten cases whose
- * price was cut is still a sale of ten cases; the FIFO layers it consumed are
- * the layers it consumed. Changing what a line SELLS is a different act, it
- * belongs to `setInvoiceLineRouting` and the split editor, and it is not here.
+ * Four cases where two went at $900 and two at $850 is, on any invoice ever
+ * written, two lines. So `splitInto` makes real invoice lines: the first part
+ * keeps the original row — its id, its sourcing, everything that references it
+ * — and the rest are inserted straight after it.
+ *
+ * The alternative was per-unit prices hanging off `invoice_line_allocations`,
+ * and it is wrong twice over. Those slices answer WHERE UNITS COME FROM, and
+ * the invariant written on them is that splitting one never splits the invoice
+ * — "eight at $900 plus two at $900 is ten at $900". Hanging money on them
+ * would break that and leave two different meanings of the word split. And a
+ * document whose lines do not match the prices on it is a document nobody can
+ * hand to a buyer or retype into QuickBooks.
+ *
+ * ## CHANGING A QUANTITY MOVES STOCK, and that is the whole reason it is here
+ *
+ * Selling six instead of four takes two more off the shelf; selling two instead
+ * of four puts two back. Handled by `rederiveInvoiceStock` — release everything
+ * this order took, then take again from what it now says — which is the
+ * identical path `saveInvoice` and `setInvoiceLineRouting` use, so there is one
+ * answer to how an order's stock is derived and not three that can drift.
+ *
+ * ## AND IT DROPS THE LINE'S PER-CASE SOURCING when the quantity moves
+ *
+ * A line of ten split "eight off RM, two dropship" has slices that must sum to
+ * ten — `allocationProblem` refuses anything else, and it is right to. Change
+ * the line to twelve and those rows describe a line that no longer exists. They
+ * cannot be scaled (which two of the new cases are the dropship?), so they are
+ * DELETED and the line falls back to its own destination, which is the answer it
+ * had before anybody split it. Said on the screen, because somebody who set that
+ * up deserves to know it is being undone rather than to find out in a month.
  *
  * ## QuickBooks is not told, and the divergence is the point
  *
@@ -3644,15 +3716,22 @@ export function setInvoiceItemsInHand(
  * disagreement on the card until somebody squares it. A silent local edit that
  * nobody could see afterwards would be a worse feature than no edit at all.
  *
- * ## And the history says what happened, per line, in dollars
+ * ## And the history says what happened, per line, in dollars and units
  *
- * Not "prices edited" — the old figure and the new one, so the trail survives
- * the person who made it. Refused on a VOID order only.
+ * Not "the order was edited" — the old figures and the new ones, so the trail
+ * survives the person who made it. Refused on a VOID order only.
  */
-export function setInvoicePricing(
+export function setInvoiceLines(
   id: string,
   changes: ReadonlyArray<{
     lineId: string
+    /**
+     * How many units this line now sells. `undefined` leaves it.
+     *
+     * THE ONE INPUT HERE THAT MOVES STOCK, which is why it is separate from the
+     * money and why the screen that sends it says so out loud.
+     */
+    quantity?: number
     /**
      * The new unit price. `undefined` leaves it; the amount then follows the
      * rate unless the caller overrides it below.
@@ -3668,6 +3747,27 @@ export function setInvoicePricing(
      * the orders somebody is here to correct. Absent means "follow the rate".
      */
     amount?: number | null
+    /**
+     * BREAK THIS LINE INTO SEVERAL, each with its own quantity and price.
+     *
+     * At least two parts, and the parts define the new quantities outright
+     * rather than dividing the old one — the caller can change a quantity
+     * anyway, so a sum rule here would be an arbitrary refusal of something
+     * reachable one field away. `quantity`, `rate` and `amount` above are
+     * ignored when this is present: the parts are the answer.
+     */
+    splitInto?: ReadonlyArray<{ quantity: number; rate: number; amount?: number | null }>
+    /**
+     * Take this line off the order entirely.
+     *
+     * Present so a split made by mistake has a way back. Without it the only
+     * repair for a mis-typed split would be editing the database by hand, which
+     * is the trap `linkDropshipPair` fell into and had to be dug out of. The
+     * last line on an order cannot be removed: an invoice with no lines is not
+     * a corrected invoice, it is a void one, and voiding has its own path that
+     * hands the stock back and says so.
+     */
+    remove?: boolean
   }>,
   actorId: string | null
 ): { invoice: InvoiceDetail | null; error?: string } {
@@ -3677,45 +3777,195 @@ export function setInvoicePricing(
   if (changes.length === 0) return { invoice: getInvoice(id) }
 
   const run = db.transaction((): { invoice: InvoiceDetail | null; error?: string } => {
-    const header = db.prepare(`SELECT invoice_number, total FROM invoices WHERE id = ?`).get(id) as
-      | { invoice_number: string | null; total: number | null }
+    const header = db
+      .prepare(`SELECT invoice_number, customer_name, location, total FROM invoices WHERE id = ?`)
+      .get(id) as
+      | {
+          invoice_number: string | null
+          customer_name: string
+          location: string | null
+          total: number | null
+        }
       | undefined
     if (!header) return { invoice: null, error: 'That order is gone.' }
+    const stockLocation = invoiceStockLocation(header.location)
     const stamp = nowIso()
 
-    type Row = { id: string; item: string; quantity: number; rate: number; amount: number }
-    const before = db
-      .prepare(`SELECT id, item, quantity, rate, amount FROM invoice_lines WHERE invoice_id = ?`)
-      .all(id) as Row[]
+    type Row = {
+      id: string
+      position: number
+      item: string
+      product_id: string | null
+      sku: string | null
+      description: string | null
+      quantity: number
+      rate: number
+      amount: number
+      tax_rate: string | null
+      class_name: string | null
+      destination: string | null
+      supplier: string | null
+      source_po_id: string | null
+    }
+    const readLines = (): Row[] =>
+      db
+        .prepare(
+          `SELECT id, position, item, product_id, sku, description, quantity, rate, amount,
+                  tax_rate, class_name, destination, supplier, source_po_id
+             FROM invoice_lines WHERE invoice_id = ? ORDER BY position`
+        )
+        .all(id) as Row[]
 
-    const setLine = db.prepare(
-      `UPDATE invoice_lines SET rate = ?, amount = ?, updated_at = ?
-        WHERE id = ? AND invoice_id = ?`
+    const before = readLines()
+    const splitsBefore = readLineAllocations(db, id)
+    // DID THIS LINE DRAW A SHELF, splits accounted for — the same question
+    // setInvoiceLineRouting asks, and for the same reason: a line's own
+    // destination describes only its first slice once it has been split.
+    const wasStock = new Map(
+      before.map((l) => [
+        l.id,
+        stockUnitsOf(
+          {
+            quantity: l.quantity,
+            destination: lineDestination(l.destination, stockLocation) ?? stockLocation,
+            supplier: l.supplier,
+            sourcePoId: l.source_po_id,
+            allocations: splitsBefore.get(l.id)
+          },
+          stockLocation
+        ) > 0
+      ])
     )
-    /** What changed, in words, for the history entry. */
+
+    /**
+     * A FIGURE, AND NOT A TYPO. NaN and Infinity are refused rather than
+     * stored as zero — a blank box read as "free" is the one failure of this
+     * screen that would look like a successful save. The magnitude cap is the
+     * same reasoning as `setInvoiceDims`: nothing on this floor sells for ten
+     * million dollars a case, and a pasted account number that lands in a rate
+     * box should be a sentence rather than a total.
+     */
+    const money0 = (
+      v: number | null | undefined,
+      fallback: number,
+      item: string,
+      what: string
+    ): number | string => {
+      if (v === undefined || v === null) return fallback
+      const n = Number(v)
+      if (!Number.isFinite(n)) return `${item}: that ${what} is not a number.`
+      if (Math.abs(n) > 10_000_000) return `${item}: that ${what} is not a price.`
+      return money(n)
+    }
+    const qtyOf = (v: number | null | undefined, fallback: number, item: string): number | string => {
+      if (v === undefined || v === null) return fallback
+      const n = Number(v)
+      if (!Number.isFinite(n)) return `${item}: that quantity is not a number.`
+      if (!(n > 0)) return `${item}: a line has to sell at least something. Remove it instead.`
+      if (n > 1_000_000) return `${item}: that is not a quantity.`
+      return n
+    }
+
+    /**
+     * WHAT THE ORDER WILL LOOK LIKE, built completely before anything is
+     * written. A refusal halfway through a rewrite that had already deleted
+     * three rows would be rolled back by the transaction — but building it
+     * first means the refusal can name the line, which a constraint violation
+     * cannot.
+     */
+    type Planned = {
+      /** The row this becomes, or null when it is a new line being inserted. */
+      row: Row | null
+      /** The parent whose columns a new line copies. */
+      from: Row
+      quantity: number
+      rate: number
+      amount: number
+      /** True when the stored sourcing splits can no longer describe it. */
+      dropSplits: boolean
+    }
+    const planned: Planned[] = []
     const said: string[] = []
+    const touched: string[] = []
+    const removedIds: string[] = []
 
+    /**
+     * A CHANGE NAMING A LINE THAT IS NOT HERE IS REFUSED, not ignored.
+     *
+     * The loop below walks the lines and looks up their changes, so an unknown
+     * id would otherwise fall through and the save would report success having
+     * done nothing. Two people editing one order is the case: the other bench
+     * removed a line a moment ago, and the honest answer is to say so rather
+     * than to quietly drop half of what somebody just typed.
+     */
     for (const change of changes) {
-      const line = before.find((l) => l.id === change.lineId)
-      if (!line) return { invoice: null, error: 'That line is no longer on this order.' }
-      if (change.rate === undefined && change.amount === undefined) continue
-
-      /**
-       * A FIGURE, AND NOT A TYPO. NaN and Infinity are refused rather than
-       * stored as zero — a blank box read as "free" is the one failure of this
-       * screen that would look like a successful save. The magnitude cap is
-       * the same reasoning as `setInvoiceDims`: nothing on this floor sells
-       * for ten million dollars a case, and a pasted account number that lands
-       * in a rate box should be a sentence rather than a total.
-       */
-      const num = (v: number | null | undefined, fallback: number, what: string): number | string => {
-        if (v === undefined || v === null) return fallback
-        const n = Number(v)
-        if (!Number.isFinite(n)) return `${line.item}: that ${what} is not a number.`
-        if (Math.abs(n) > 10_000_000) return `${line.item}: that ${what} is not a price.`
-        return money(n)
+      if (!before.some((l) => l.id === change.lineId)) {
+        return { invoice: null, error: 'That line is no longer on this order.' }
       }
-      const rate = num(change.rate, line.rate, 'price')
+    }
+
+    for (const line of before) {
+      const change = changes.find((c) => c.lineId === line.id)
+      if (!change) {
+        planned.push({
+          row: line,
+          from: line,
+          quantity: line.quantity,
+          rate: line.rate,
+          amount: line.amount,
+          dropSplits: false
+        })
+        continue
+      }
+
+      if (change.remove) {
+        removedIds.push(line.id)
+        touched.push(line.id)
+        said.push(`${line.item}: removed`)
+        continue
+      }
+
+      const parts = change.splitInto
+      if (parts && parts.length > 0) {
+        if (parts.length < 2) {
+          return {
+            invoice: null,
+            error: `${line.item}: one part is just the line. Set the price on the line itself.`
+          }
+        }
+        const built: Planned[] = []
+        for (const p of parts) {
+          const q = qtyOf(p.quantity, line.quantity, line.item)
+          if (typeof q === 'string') return { invoice: null, error: q }
+          const r = money0(p.rate, line.rate, line.item, 'price')
+          if (typeof r === 'string') return { invoice: null, error: r }
+          const a = p.amount === undefined ? lineAmount(q, r) : money0(p.amount, 0, line.item, 'amount')
+          if (typeof a === 'string') return { invoice: null, error: a }
+          built.push({
+            // THE FIRST PART KEEPS THE ORIGINAL ROW. Its id is referenced by
+            // allocations, by anything holding a line id, and by a person who
+            // has this order open on another bench — so a split of four into
+            // three and one creates ONE new row rather than two.
+            row: built.length === 0 ? line : null,
+            from: line,
+            quantity: q,
+            rate: r,
+            amount: a,
+            dropSplits: true
+          })
+        }
+        planned.push(...built)
+        touched.push(line.id)
+        said.push(
+          `${line.item}: split into ` +
+            built.map((b) => `${b.quantity} at ${fmtMoney(b.rate)}`).join(' and ')
+        )
+        continue
+      }
+
+      const quantity = qtyOf(change.quantity, line.quantity, line.item)
+      if (typeof quantity === 'string') return { invoice: null, error: quantity }
+      const rate = money0(change.rate, line.rate, line.item, 'price')
       if (typeof rate === 'string') return { invoice: null, error: rate }
       // THE AMOUNT FOLLOWS THE RATE unless it was given its own answer. A
       // caller that moves the price and says nothing about the total means the
@@ -3723,21 +3973,147 @@ export function setInvoicePricing(
       // second place for the two to disagree.
       const amount =
         change.amount === undefined
-          ? lineAmount(line.quantity, rate)
-          : num(change.amount, line.amount, 'amount')
+          ? lineAmount(quantity, rate)
+          : money0(change.amount, line.amount, line.item, 'amount')
       if (typeof amount === 'string') return { invoice: null, error: amount }
 
-      if (money(rate) === money(line.rate) && money(amount) === money(line.amount)) continue
-      setLine.run(rate, amount, stamp, line.id, id)
-      said.push(
-        `${line.item}: ${fmtMoney(line.rate)} → ${fmtMoney(rate)} each` +
-          (money(amount) === lineAmount(line.quantity, rate)
-            ? ''
-            : `, line total ${fmtMoney(amount)}`)
-      )
+      const qtyMoved = quantity !== line.quantity
+      const moneyMoved = money(rate) !== money(line.rate) || money(amount) !== money(line.amount)
+      planned.push({
+        row: line,
+        from: line,
+        quantity,
+        rate,
+        amount,
+        // ONLY WHEN THE QUANTITY MOVED. A price change leaves the slices adding
+        // up exactly as they did, and throwing away somebody's sourcing because
+        // they corrected a dollar figure would be gratuitous.
+        dropSplits: qtyMoved
+      })
+      if (!qtyMoved && !moneyMoved) continue
+      touched.push(line.id)
+      const bits: string[] = []
+      if (qtyMoved) bits.push(`${line.quantity} → ${quantity}`)
+      if (money(rate) !== money(line.rate)) {
+        bits.push(`${fmtMoney(line.rate)} → ${fmtMoney(rate)} each`)
+      }
+      if (money(amount) !== lineAmount(quantity, rate)) {
+        bits.push(`line total ${fmtMoney(amount)}`)
+      } else if (bits.length === 0) {
+        bits.push(`line total ${fmtMoney(line.amount)} → ${fmtMoney(amount)}`)
+      }
+      said.push(`${line.item}: ${bits.join(', ')}`)
     }
 
     if (said.length === 0) return { invoice: getInvoice(id) }
+    if (planned.length === 0) {
+      return {
+        invoice: null,
+        error: 'An order has to have at least one line. Void it instead of emptying it.'
+      }
+    }
+
+    // --- nothing above this line has written anything --------------------
+
+    const dropAllocations = db.prepare(
+      `DELETE FROM invoice_line_allocations WHERE invoice_id = ? AND invoice_line_id = ?`
+    )
+    /**
+     * THE SOURCING ROWS GO FIRST, and yes, the cascade would do it.
+     *
+     * `invoice_line_allocations.invoice_line_id` carries ON DELETE CASCADE and
+     * `PRAGMA foreign_keys` is set ON when the database opens, so deleting the
+     * line alone is enough — removing this call breaks no test, and that is
+     * recorded here rather than treated as missing coverage.
+     *
+     * It stays because the pragma is a RUNTIME SETTING and this file toggles it
+     * off during a rebuild (see database.ts). An invariant as plain as "a line's
+     * rows go with the line" should not be one connection setting away from
+     * leaving rows that describe nothing — invisible to every screen, because
+     * `readLineAllocations` keys them by a line id no line has, and syncing
+     * between machines for ever.
+     */
+    for (const lineId of removedIds) {
+      dropAllocations.run(id, lineId)
+      db.prepare(`DELETE FROM invoice_lines WHERE id = ? AND invoice_id = ?`).run(lineId, id)
+    }
+
+    const insertLine = db.prepare(
+      `INSERT INTO invoice_lines
+         (id, invoice_id, position, item, product_id, sku, description, quantity, rate, amount,
+          tax_rate, class_name, qty_fulfilled, fulfilled_at, created_at, updated_at,
+          destination, supplier, source_po_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?, ?, ?)`
+    )
+    const updateLine = db.prepare(
+      `UPDATE invoice_lines SET position = ?, quantity = ?, rate = ?, amount = ?, updated_at = ?
+        WHERE id = ? AND invoice_id = ?`
+    )
+    /**
+     * RENUMBERED FROM ZERO, every line, every time.
+     *
+     * `invoice_stock_moves.line_position` is how a move finds its line, and a
+     * split that inserted a row without renumbering would leave two lines
+     * claiming one position and the stock landing on whichever came back first.
+     * Safe to do here because the re-derive below releases every move this order
+     * ever made and takes again from the positions as they now stand.
+     */
+    planned.forEach((p, i) => {
+      if (p.row) {
+        updateLine.run(i, p.quantity, p.rate, p.amount, stamp, p.row.id, id)
+        if (p.dropSplits) dropAllocations.run(id, p.row.id)
+      } else {
+        insertLine.run(
+          randomUUID(),
+          id,
+          i,
+          p.from.item,
+          p.from.product_id,
+          p.from.sku,
+          p.from.description,
+          p.quantity,
+          p.rate,
+          p.amount,
+          p.from.tax_rate,
+          p.from.class_name,
+          stamp,
+          stamp,
+          // THE PARENT'S ROUTING, copied. A part of a line that was coming off
+          // the RM shelf is still coming off the RM shelf, and a part of a line
+          // supplied by a roadshow tab still came off that tab — the split was
+          // about price, and inheriting the answer is what stops it silently
+          // becoming a different one.
+          p.from.destination,
+          p.from.supplier,
+          p.from.source_po_id
+        )
+      }
+    })
+
+    const after = readLines()
+    const splitsAfter = readLineAllocations(db, id)
+    rederiveInvoiceStock(
+      db,
+      id,
+      header,
+      stockLocation,
+      after,
+      splitsAfter,
+      // EVERY line, not just the ones this change named, because a renumbering
+      // moved positions under all of them.
+      //
+      // Narrowing it to `touched` breaks no test, and that is recorded here
+      // rather than left looking like a gap: the list only decides which lines
+      // get ZEROED when they stop drawing a shelf, and in this function nothing
+      // can stop drawing one without its quantity changing — which is exactly
+      // what puts it in `touched`. The two are equivalent today. They stop being
+      // equivalent the moment this function can change a destination, and the
+      // wider list is the one that stays correct.
+      after.map((l) => l.id),
+      wasStock,
+      actorId,
+      stamp
+    )
 
     /**
      * THE HEADER TOTAL IS RE-DERIVED FROM THE LINES, never adjusted by the
@@ -3745,9 +4121,6 @@ export function setInvoicePricing(
      * drift: an arithmetic patch would stay right until the first line this
      * screen did not touch, and then be wrong for ever with nothing to show it.
      */
-    const after = db
-      .prepare(`SELECT amount FROM invoice_lines WHERE invoice_id = ?`)
-      .all(id) as Array<{ amount: number }>
     const total = invoiceTotal(after)
     db.prepare(`UPDATE invoices SET total = ?, updated_at = ? WHERE id = ?`).run(total, stamp, id)
 
@@ -3755,7 +4128,7 @@ export function setInvoicePricing(
     // things that happen TO an order, and a correction somebody made is a note.
     recordOrderEvent('so', id, 'note', {
       detail:
-        `Price corrected — ${said.join('; ')}. ` +
+        `Lines corrected — ${said.join('; ')}. ` +
         `Order total ${fmtMoney(header.total ?? 0)} → ${fmtMoney(total)}. ` +
         'QuickBooks was NOT changed; it has to be corrected there by hand.',
       actorId,

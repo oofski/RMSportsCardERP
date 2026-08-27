@@ -2018,22 +2018,33 @@ export function createBridge(ipcRenderer: BridgeTransport) {
         ipcRenderer.invoke(IPC.invoiceSetLineRouting, { id, changes }),
 
       /**
-       * Correct the money on a POSTED sale. See setInvoicePricing.
+       * Edit the LINES of a POSTED sale — quantity and money. See
+       * setInvoiceLines.
        *
-       * Writes a rate and an amount on the lines named and re-derives the
-       * header total. It changes no quantity, so it moves no stock, and it
-       * cannot reach QuickBooks — that copy is corrected there by hand, and the
-       * card shows the gap until somebody does.
+       * Writes a quantity, a rate and an amount on the lines named, re-derives
+       * the order's stock and the header total, and cannot reach QuickBooks —
+       * that copy is corrected there by hand, and the card shows the gap until
+       * somebody does.
        *
-       * `rate` and `amount` are both optional and absence means "leave it":
-       * sending a rate alone lets the amount follow it, which is the ordinary
-       * case, and sending an amount alone corrects a line that was agreed at
-       * something other than quantity × rate.
+       * Every field is optional and absence means "leave it": sending a rate
+       * alone lets the amount follow it, which is the ordinary case, and
+       * sending an amount alone corrects a line agreed at something other than
+       * quantity × rate. `splitInto` replaces the line with several real lines,
+       * each with its own quantity and price — two prices for one product is
+       * two lines on any invoice ever written. `remove` takes a line off, so a
+       * split made by mistake has a way back.
        */
-      setPricing: (
+      setLines: (
         id: string,
-        changes: Array<{ lineId: string; rate?: number | null; amount?: number | null }>
-      ): Promise<Result<InvoiceDetail>> => ipcRenderer.invoke(IPC.invoiceSetPricing, { id, changes }),
+        changes: Array<{
+          lineId: string
+          quantity?: number
+          rate?: number | null
+          amount?: number | null
+          splitInto?: Array<{ quantity: number; rate: number; amount?: number | null }>
+          remove?: boolean
+        }>
+      ): Promise<Result<InvoiceDetail>> => ipcRenderer.invoke(IPC.invoiceSetLines, { id, changes }),
 
       /** Send it anyway, ahead of the gates. Recorded as its own decision. */
       setForceReady: (id: string, forced: boolean): Promise<Result<InvoiceDetail>> =>

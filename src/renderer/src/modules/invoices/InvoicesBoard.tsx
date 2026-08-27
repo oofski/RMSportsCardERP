@@ -34,7 +34,7 @@ import { CheckTrackingButton } from '../../components/CheckTrackingButton'
 import { MatchByNumberModal } from './MatchByNumberModal'
 import { AttachPurchaseOrderModal } from './AttachPurchaseOrderModal'
 import { RouteLinesModal } from './RouteLinesModal'
-import { EditPricesModal } from './EditPricesModal'
+import { EditOrderModal } from './EditOrderModal'
 import { PayUpFrontModal } from '../orders/PayUpFrontModal'
 import { useToast } from '../../components/Toast'
 import { formatDate, formatMoney } from '../../lib/format'
@@ -106,7 +106,7 @@ export function InvoicesBoard({
    * Fetched on demand rather than held for every card.
    */
   const [routing, setRouting] = useState<InvoiceDetail | null>(null)
-  /** The order whose prices are being corrected. See EditPricesModal. */
+  /** The order being corrected. See EditOrderModal. */
   const [pricing, setPricing] = useState<InvoiceDetail | null>(null)
   const [paying, setPaying] = useState<InvoiceDetail | null>(null)
   const [nextNumber, setNextNumber] = useState('')
@@ -730,7 +730,7 @@ export function InvoicesBoard({
       )}
 
       {pricing && (
-        <EditPricesModal invoice={pricing} onClose={() => setPricing(null)} onDone={load} />
+        <EditOrderModal invoice={pricing} onClose={() => setPricing(null)} onDone={load} />
       )}
 
       {paying && (
@@ -823,7 +823,7 @@ function InvoiceCard({
   onAttachPo: () => void
   /** Change where the lines are fulfilled from. See RouteLinesModal. */
   onRoute: () => void
-  /** Correct the money on a sale that has already posted. See EditPricesModal. */
+  /** Edit the lines of a sale that has already posted. See EditOrderModal. */
   onEditPrices: () => void
   /** Open the paid-up-front dialog for this order. */
   onPayUpFront: () => void
@@ -1352,30 +1352,36 @@ function InvoiceCard({
           </button>
         )}
 
-        {/* CORRECT THE MONEY, on an order already on the books.
+        {/* EDIT THE LINES, on an order already on the books.
 
             The invoice form is refused once a document posts, and rightly: it
-            rewrites every column, and this app is not the system of record for
-            something a buyer has been billed against. But a price renegotiated
-            after the invoice went out is ordinary trade here, and the choice
-            was between the app holding the real figure and the app being
-            confidently wrong in every report it produces.
+            rewrites every column and reaches QuickBooks, and this app is not
+            the system of record for something a buyer has been billed against.
+            But a price renegotiated after the invoice went out is ordinary
+            trade here, and the choice was between the app holding the real
+            figure and the app being confidently wrong in every report it
+            produces.
 
-            So the gate moved rather than opened. This writes two money columns
-            and the total, changes no quantity and therefore moves no stock, and
-            says on its face that QuickBooks has to be corrected by hand. On a
-            DRAFT it is absent — the ordinary form does prices better, and two
-            ways to edit the same thing is how they come to disagree. See
-            EditPricesModal. */}
+            So the gate moved rather than opened. This edits the LINES —
+            quantity, price, and splitting one line into two when half went at a
+            different price — re-derives the stock and the total, and says on
+            its face that QuickBooks has to be corrected by hand.
+
+            CALLED "EDIT" AND NOT "EDIT PRICES", because it stopped being only
+            about prices the moment quantity came with it, and a button that
+            undersells what it does is one people do not press when they need
+            it. On a DRAFT it is absent — the ordinary form does all of this and
+            the buyer and the dates besides, and two ways to edit the same thing
+            is how they come to disagree. See EditOrderModal. */}
         {invoice.status !== 'void' && invoice.status !== 'draft' && (
           <button
             type="button"
             className="btn po-move"
-            title="Correct the prices on your copy. QuickBooks has to be changed separately."
+            title="Change quantities and prices on your copy. QuickBooks has to be changed separately."
             onClick={onEditPrices}
           >
-            <Icon name="DollarSign" size={14} />
-            Edit prices
+            <Icon name="Pencil" size={14} />
+            Edit
           </button>
         )}
 

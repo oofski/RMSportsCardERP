@@ -37,7 +37,7 @@ import {
   setInvoiceForceReady,
   setInvoiceItemsInHand,
   setInvoiceLineRouting,
-  setInvoicePricing,
+  setInvoiceLines,
   setInvoicePaid,
   linkDropshipPair,
   linkablePurchaseOrders,
@@ -759,7 +759,7 @@ export function registerOrderExtrasIpc(): void {
   )
 
   /**
-   * CORRECT THE MONEY ON A POSTED SALE. See setInvoicePricing.
+   * EDIT THE LINES OF A POSTED SALE — quantity and money. See setInvoiceLines.
    *
    * `requireInvoicing` and nothing more, the same permission that raises the
    * invoice in the first place: somebody trusted to set a price is trusted to
@@ -767,7 +767,7 @@ export function registerOrderExtrasIpc(): void {
    * made on paper instead.
    */
   ipcMain.handle(
-    IPC.invoiceSetPricing,
+    IPC.invoiceSetLines,
     (_e, payload: { id?: unknown; changes?: unknown }): Result<InvoiceDetail> => {
       try {
         const actor = requireInvoicing()
@@ -778,13 +778,24 @@ export function registerOrderExtrasIpc(): void {
           // it follow the rate" and "set the amount to this" are two different
           // instructions, and a Number() over an absent key would flatten the
           // first into a zero — a line silently marked free.
+          ...('quantity' in (c ?? {}) ? { quantity: Number(c?.quantity) } : {}),
           ...('rate' in (c ?? {}) ? { rate: Number(c?.rate) } : {}),
-          ...('amount' in (c ?? {}) ? { amount: Number(c?.amount) } : {})
+          ...('amount' in (c ?? {}) ? { amount: Number(c?.amount) } : {}),
+          ...(c?.remove === true ? { remove: true } : {}),
+          ...(Array.isArray(c?.splitInto)
+            ? {
+                splitInto: (c.splitInto as Array<Record<string, unknown>>).map((p) => ({
+                  quantity: Number(p?.quantity),
+                  rate: Number(p?.rate),
+                  ...('amount' in (p ?? {}) ? { amount: Number(p?.amount) } : {})
+                }))
+              }
+            : {})
         }))
         if (changes.some((c) => !c.lineId)) {
           return { ok: false, error: 'A line was named without saying which one.' }
         }
-        const res = setInvoicePricing(str(payload?.id), changes, actor.id)
+        const res = setInvoiceLines(str(payload?.id), changes, actor.id)
         if (res.error) return { ok: false, error: res.error }
         if (!res.invoice) return { ok: false, error: 'That order is gone.' }
         return { ok: true, data: res.invoice }

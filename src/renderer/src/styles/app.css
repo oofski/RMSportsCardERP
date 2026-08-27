@@ -27545,6 +27545,31 @@ button.sor-team:focus-visible {
   font-size: 12px;
   color: var(--text-3);
 }
+/* A line broken into parts because half of it sold at another price. Indented
+   and marked so the second row reads as belonging to the first rather than as
+   a second product with the same name. */
+.so-line-part {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-left: 8px;
+}
+/* Struck through rather than hidden: a line somebody has marked for removal is
+   still on the order until Save, and vanishing it would leave them unsure
+   whether the click registered — and nothing to click to put it back. */
+.so-line-removed td {
+  opacity: 0.45;
+  text-decoration: line-through;
+}
+.so-line-removed .so-line-acts {
+  opacity: 1;
+  text-decoration: none;
+}
+.so-line-acts {
+  width: 1%;
+  white-space: nowrap;
+  text-align: right;
+}
 
 /* The same gap, one line, on the card — where somebody will actually see it
    without opening anything. See qboTotalMismatch. */

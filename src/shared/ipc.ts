@@ -301,9 +301,10 @@ export const IPC = {
   invoiceSetDims: 'invoices:set-dims',
   invoiceSetItemsInHand: 'invoices:set-items-in-hand',
   invoiceSetLineRouting: 'invoices:set-line-routing',
-  // Correcting the money on a sale already in QuickBooks. Separate from save,
-  // which rewrites every column and is refused once a document has posted.
-  invoiceSetPricing: 'invoices:set-pricing',
+  // Editing the LINES of a sale already in QuickBooks — quantity and money.
+  // Separate from save, which also rewrites the buyer, the number, the dates
+  // and the terms, and is refused once a document has posted.
+  invoiceSetLines: 'invoices:set-lines',
   invoiceSetForceReady: 'invoices:set-force-ready',
 
   // Purchase orders
