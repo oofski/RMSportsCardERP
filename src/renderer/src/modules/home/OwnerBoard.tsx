@@ -11,6 +11,10 @@ import { Icon } from '../../components/Icon'
 import { Button } from '../../components/ui'
 import { useToast } from '../../components/Toast'
 import { formatHours, formatMoney } from '../../lib/format'
+// The same span formatter the Finance statement prints under a week or a month,
+// so a range read on this board and the same range read there cannot render two
+// different ways and look like two different periods.
+import { compactDayLabel } from '../finance/time'
 
 /**
  * The owner's board: every side of the business, above the fold.
@@ -209,7 +213,14 @@ export function OwnerBoard(): JSX.Element | null {
         {board.wholesale && (
           <PnlCard
             title="Wholesale"
-            sub="Sold off-stream"
+            /* NOT A SECOND CHANNEL, AND THE OLD SUBTITLE SAID IT WAS.
+               This card reads bucket = 'product_sale': a whole box or case sold
+               sealed, ON the stream, and every one of those rows is ALREADY
+               inside the Whatnot card above. "Sold off-stream" invited exactly
+               one reading — that these were separate sales to be added on — and
+               adding them double-counts the lot. Two figures side by side get
+               summed; the only defence is to say which one contains the other. */
+            sub="Part of Whatnot above"
             icon="Package"
             windows={[board.wholesale.today, board.wholesale.week, board.wholesale.month]}
             /* After fees, NOT after cost of goods — unlike the Whatnot card
@@ -218,11 +229,11 @@ export function OwnerBoard(): JSX.Element | null {
                rather than inferred. */
             footer={
               board.wholesale.productCount > 0
-                ? `After fees, before cost of goods · ${board.wholesale.productCount} product${board.wholesale.productCount === 1 ? '' : 's'} this month` +
+                ? `Already counted in Whatnot — do not add · after fees, before cost of goods · ${board.wholesale.productCount} product${board.wholesale.productCount === 1 ? '' : 's'}` +
                   (board.wholesale.unmatchedCount > 0
                     ? ` · ${board.wholesale.unmatchedCount} not in the catalog`
                     : '')
-                : 'Nothing sold outright in the last 30 days'
+                : 'Nothing sold sealed in the last 30 days'
             }
             onOpen={() => navigate('finance')}
           >
@@ -781,6 +792,17 @@ function PnlCard({
               {formatMoney(w.netProfit)}
             </span>
             <em>{w.label}</em>
+            {/* THE DATES, NOT JUST THE LABEL. Every window here ROLLS — "Last 30
+                days" ends today and is not a calendar month — and the label
+                alone never said so. Checking one of these against a platform
+                statement month is then comparing two different windows, which
+                is exactly the mistake that sent the owner hunting for tens of
+                thousands of dollars that were never missing. */}
+            {w.days > 1 && (
+              <span className="ob-pnl-range mono" title={`${w.from} to ${w.to} inclusive`}>
+                {compactDayLabel(w.from)} – {compactDayLabel(w.to)}
+              </span>
+            )}
             <span className="ob-pnl-rev">
               {formatMoney(w.revenue)} in
               {w.activeDays > 0 && ` · ${w.activeDays}d`}

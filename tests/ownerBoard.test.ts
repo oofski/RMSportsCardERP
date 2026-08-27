@@ -473,5 +473,74 @@ ok(
   JSON.stringify(packer.toShip)
 )
 
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 13. every money window states the dates it actually covers ===')
+// ---------------------------------------------------------------------------
+/**
+ * THE MISTAKE THIS PREVENTS, which cost a fortnight of reconciling.
+ *
+ * Every window on this board ROLLS. "Last 30 days" is the thirty days ending
+ * today; it is not June, it is not July, and it never was. That is the right
+ * shape for a board somebody glances at each morning — and the wrong shape for
+ * checking against a platform statement, which closes on its own calendar.
+ *
+ * The label alone could not tell the two apart, so the owner compared a rolling
+ * tile against a Whatnot month and found twenty-odd thousand dollars that were
+ * never missing. The dates are now on the card, and these assertions are what
+ * keep them there and keep them honest.
+ */
+{
+  const b: any = owner.getOwnerBoard(ALL)
+  const windowsOf = (card: any): any[] => (card ? [card.today, card.week, card.month] : [])
+  const every = [...windowsOf(b.whatnot), ...windowsOf(b.wholesale)]
+  ok(every.length > 0, 'there are money windows to check', String(every.length))
+
+  const isDay = (v: any): boolean => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v)
+  ok(
+    every.every((w) => isDay(w.from) && isDay(w.to)),
+    'EVERY WINDOW CARRIES A REAL FROM AND TO, so a reader can see which days it covers',
+    JSON.stringify(every.map((w) => [w.label, w.from, w.to]))
+  )
+  ok(
+    every.every((w) => w.from <= w.to),
+    'and none of them runs backwards',
+    JSON.stringify(every.map((w) => [w.from, w.to]))
+  )
+
+  /**
+   * THE SPAN MATCHES THE PROMISE. "Last 7 days" covering four days would be a
+   * label lying about a number, which is the whole failure being fixed —
+   * inclusive of both ends, so 7 days is a 6-day difference.
+   */
+  const daysBetween = (a: string, z: string): number =>
+    Math.round((Date.parse(`${z}T12:00:00Z`) - Date.parse(`${a}T12:00:00Z`)) / 86400000) + 1
+  for (const w of every) {
+    ok(
+      daysBetween(w.from, w.to) === w.days,
+      `${w.label} spans exactly the ${w.days} day${w.days === 1 ? '' : 's'} it claims`,
+      `${w.from}..${w.to} = ${daysBetween(w.from, w.to)}`
+    )
+  }
+
+  /**
+   * AND THE WINDOWS ARE NESTED, which is what makes them a rolling set rather
+   * than three unrelated periods: today sits inside the week, the week inside
+   * the month, and all three end on the same day.
+   */
+  for (const card of [b.whatnot, b.wholesale]) {
+    if (!card) continue
+    ok(
+      card.today.to === card.week.to && card.week.to === card.month.to,
+      'all three windows on a card end on the same day — they roll, they do not tile',
+      `${card.today.to} / ${card.week.to} / ${card.month.to}`
+    )
+    ok(
+      card.month.from <= card.week.from && card.week.from <= card.today.from,
+      'and each is contained by the next one out'
+    )
+  }
+}
+
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

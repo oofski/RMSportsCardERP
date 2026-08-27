@@ -27573,3 +27573,15 @@ button.sor-team:focus-visible {
   line-height: 1.5;
   color: var(--text-2);
 }
+
+/* The real dates a dashboard window covers, under its label. Quiet — it is a
+   caption, not a third figure — but present on every rolling window, because
+   "Last 30 days" never said which thirty and that is how a rolling tile ends up
+   being reconciled against a calendar month. */
+.ob-pnl-range {
+  display: block;
+  font-size: 10.5px;
+  line-height: 1.3;
+  color: var(--text-3);
+  letter-spacing: 0.01em;
+}

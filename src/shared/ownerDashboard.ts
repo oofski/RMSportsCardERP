@@ -32,6 +32,22 @@ export interface OwnerPnlWindow {
   netProfit: number
   /** Days inside the window that carried any activity. */
   activeDays: number
+  /**
+   * THE ACTUAL DATES THIS WINDOW COVERS, inclusive, as YYYY-MM-DD.
+   *
+   * Every window on this board ROLLS: "Last 30 days" is the thirty days ending
+   * today, not a calendar month, and it has never been one. That is the right
+   * shape for a board somebody glances at each morning and the wrong shape for
+   * checking against a platform statement — and the label alone does not say
+   * which, so the owner spent a fortnight reconciling a rolling window against
+   * a Whatnot month and finding tens of thousands of dollars that were never
+   * missing.
+   *
+   * So the dates are stated on the card. A reader comparing this against any
+   * statement can see in one glance whether the two are even the same window.
+   */
+  from: string
+  to: string
 }
 
 /**

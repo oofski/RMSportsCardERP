@@ -59,7 +59,13 @@ const money = (n: number): number => Math.round((Number.isFinite(n) ? n : 0) * 1
  * shows this week" is a fact; "7 days" is not, and averaging over the second
  * one understates a business that runs four nights.
  */
-function windowOf(days: StreamDayFinance[], label: string, span: number): OwnerPnlWindow {
+function windowOf(
+  days: StreamDayFinance[],
+  label: string,
+  span: number,
+  from: string,
+  to: string
+): OwnerPnlWindow {
   let revenue = 0
   let fees = 0
   let cogs = 0
@@ -79,7 +85,9 @@ function windowOf(days: StreamDayFinance[], label: string, span: number): OwnerP
     fees: money(fees),
     cogs: money(cogs),
     netProfit: money(netProfit),
-    activeDays
+    activeDays,
+    from,
+    to
   }
 }
 
@@ -103,9 +111,9 @@ function whatnotPnl(): OwnerWhatnotPnl | null {
   const last = withMoney[0] ?? null
 
   return {
-    today: windowOf(view.days.filter((d) => d.streamDate === today), 'Today', 1),
-    week: windowOf(inRange(weekFrom), 'Last 7 days', 7),
-    month: windowOf(inRange(monthFrom), 'Last 30 days', 30),
+    today: windowOf(view.days.filter((d) => d.streamDate === today), 'Today', 1, today, today),
+    week: windowOf(inRange(weekFrom), 'Last 7 days', 7, weekFrom, today),
+    month: windowOf(inRange(monthFrom), 'Last 30 days', 30, monthFrom, today),
     lastDay: last?.streamDate ?? null,
     lastDayNet: money(last?.netProfit ?? 0),
     unreconciled: view.reconciled === false,
@@ -153,6 +161,7 @@ function wholesalePnl(): OwnerWholesalePnl | null {
    * it against that product's lots is not, and a fabricated cost would make this
    * widget the only place in the app that guesses.
    */
+  const today = localDay(new Date())
   const win = (from: string, label: string, span: number): OwnerPnlWindow => {
     let grossCents = 0
     let feeCents = 0
@@ -176,7 +185,9 @@ function wholesalePnl(): OwnerWholesalePnl | null {
       fees: money(fees),
       cogs: 0,
       netProfit: money(revenue + fees),
-      activeDays: activeDays.size
+      activeDays: activeDays.size,
+      from,
+      to: today
     }
   }
 
@@ -192,7 +203,7 @@ function wholesalePnl(): OwnerWholesalePnl | null {
     .all(monthFrom) as Array<{ name: string | null; pid: string | null; units: number; revenue: number }>
 
   return {
-    today: win(localDay(new Date()), 'Today', 1),
+    today: win(today, 'Today', 1),
     week: win(weekFrom, 'Last 7 days', 7),
     month: win(monthFrom, 'Last 30 days', 30),
     productCount: rows.length,
