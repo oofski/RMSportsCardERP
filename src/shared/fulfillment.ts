@@ -196,6 +196,29 @@ export interface FulfillmentFacts extends ShipDims {
    * order is not yet fillable, and it is why this is read rather than assumed.
    */
   drawnUnits: number
+  /**
+   * UNITS DRAWN FROM A PLACE THAT IS NOT THIS BUILDING — a roadshow shop.
+   *
+   * A third thing, and it had to become one. Until roadshow tabs, every unit on
+   * an order was in exactly one of two states and the two answered every
+   * question at once:
+   *
+   *   ours and here      RM or AM. Real stock, real cost, and we pack the box.
+   *   theirs and direct  a dropship. No stock, no cost, somebody else ships it.
+   *
+   * A tab is the case that has never existed: OURS, AND NOT HERE. The goods were
+   * bought — they carry real cost layers and are counted in `stockUnits` with
+   * everything else on a shelf — but the box is three states away and nobody on
+   * this floor will ever weigh it.
+   *
+   * IT CHANGES NO GATE. `stock_units` counts only RM and AM, so a roadshow
+   * order already walks the dropship path — waiting on somebody to confirm the
+   * goods are in hand, and on the measurements the label needs. This exists so
+   * the CARD CAN SAY where the box is coming from, which is what the owner
+   * asked for: "show it, but marked as shipping from the shop." A number rather
+   * than a flag, so a mixed order can say how much of it is away.
+   */
+  remoteUnits?: number
   /** Somebody confirmed the goods are in hand. The only signal a dropship has. */
   itemsInHandAt: string | null
   /** Somebody said send it regardless of the gates below. See forcedReady. */
@@ -368,8 +391,36 @@ export function fulfillmentStageOf(facts: FulfillmentFacts): FulfillmentStage | 
   if (forcedReady(facts)) return 'ready'
   if (!paymentClearsFulfillment(facts)) return null
   if (!itemsInHand(facts)) return 'awaiting_items'
+  /**
+   * MEASUREMENTS ARE STILL OWED, and roadshow orders are no exception.
+   *
+   * It is tempting to waive them for a box nobody here will weigh. They are not
+   * waived, because this app BUYS THE LABEL and sends it to whoever is holding
+   * the goods — see the dropship label path, which has worked that way since
+   * shipping landed. A shop shipping on our postage needs a label, a label needs
+   * a price, and a price needs the dimensions. Waiving them would produce an
+   * order that reads ready and cannot actually be sent.
+   *
+   * So a roadshow order walks the same gates a dropship walks, which is what it
+   * already did: `stock_units` counts only RM and AM, so its units are drop
+   * units to every one of these tests. What is new is only that the card SAYS
+   * where it ships from — see shipsFromAway.
+   */
   if (!hasDims(facts)) return 'awaiting_dims'
   return 'ready'
+}
+
+/**
+ * Does any of this order ship straight from a shop we are not standing in?
+ *
+ * What the card says out loud. The owner asked for these to stay ON the board
+ * rather than vanish the way a dropship does — "show it, but marked as shipping
+ * from the shop" — because somebody still has to confirm it went out. So the
+ * order keeps its place in the queue and the packer is told not to go looking
+ * for a box.
+ */
+export function shipsFromAway(facts: Pick<FulfillmentFacts, 'remoteUnits'>): boolean {
+  return (Number(facts.remoteUnits) || 0) > 0
 }
 
 /**

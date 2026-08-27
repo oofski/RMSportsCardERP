@@ -31,7 +31,8 @@ import { addStock, adjustStock, reverseStockReceipt, stockQty } from './inventor
 import { recordPoCogs, voidPoCogs } from './finance'
 import { adoptLegacyFreight, deleteOrderExtras, recordOrderEvent } from './orderExtras'
 import { dealTicketRefFor, issueDealTicket } from './dealTickets'
-import { isOpenTab, settleTabRefusal } from '@shared/roadshowTab'
+import { isOpenTab, settleTabRefusal, tabRoutingLocked } from '@shared/roadshowTab'
+import { ensureTabLocation } from './stockLocations'
 import { syncProductAvgCost, unitMoney } from './lots'
 import { newId, nowIso } from '../util'
 
@@ -694,11 +695,64 @@ export function createPurchaseOrder(
    * first, which is the rule ContactTypeahead already states for suppliers. Only
    * an empty destination falls back to RM, exactly as before.
    */
-  const location = canonicalDestination(String(input.location ?? '').trim()) || LOCATION_IDS[0]
+  const typedLocation = canonicalDestination(String(input.location ?? '').trim()) || LOCATION_IDS[0]
   const splitsByIndex = validateSplits(db, input.lines)
   const create = db.transaction((): string => {
     const id = newId()
     const ts = nowIso()
+    /**
+     * A TAB'S GOODS SIT AT THE SHOP, and the shop is the supplier.
+     *
+     * The owner's model: "roadshow is inventory that I don't have but it is mine
+     * and I can pull from it." Bought, therefore owned, therefore stock — just
+     * stock three states away. So the header destination of an ongoing order is
+     * the shop's own place, registered here the first time it is needed.
+     *
+     * ## THIS IS THE FIX FOR THE THING THAT WAS BROKEN
+     *
+     * Tabs were being raised against MULTI_SHIPMENT, which is the sentinel for a
+     * dropship to buyers nobody has named and holds NO STOCK by design. Every
+     * unit put on such a tab was unreceivable: no cost layer, nothing on any
+     * shelf, and so nothing any sales order could draw. A week of buying
+     * produced a bill and no inventory. Sending it to the shop's own place
+     * instead makes every existing mechanism work unchanged — receiving opens
+     * real layers, `supplyingOrders` finds them, FIFO costs them.
+     *
+     * The header is only the DEFAULT. A line or a single case that is coming
+     * home says RM on its own allocation, which the buy side has always been
+     * able to express — see PurchaseOrderAllocation.
+     *
+     * ## IT ONLY OVERRIDES A DESTINATION THAT HOLDS NO STOCK
+     *
+     * The owner's rule: "if anything is from roadshow it goes directly to the
+     * other person — unless the destination is RM, then it is the RM inventory
+     * and the whole thing flows." So RM on a tab is a REAL and meaningful
+     * answer: this case is coming home. Overriding it would take away the one
+     * choice he explicitly asked to keep.
+     *
+     * What is always wrong is a tab pointed somewhere that holds no stock —
+     * Multi-shipment, or a shop typed as a dropship — because those make its
+     * goods unreceivable and the week unsellable. That is redirected.
+     *
+     * AND SO IS SAYING NOTHING AT ALL. An empty destination falls back to RM
+     * everywhere else in this file, which is right for an ordinary purchase and
+     * wrong for a tab: a week's buying at a shop defaults to being AT the shop,
+     * not to having been carried home. Only a destination somebody actually
+     * typed is taken at its word.
+     *
+     * Falls back to whatever was typed when a tab has no supplier to name a
+     * place after, rather than refusing: an order half-typed is not the moment
+     * to stop somebody, and the tab screen asks for the shop anyway.
+     */
+    const askedFor = String(input.location ?? '').trim()
+    const location =
+      input.ongoing && (!askedFor || !destinationHoldsStock(typedLocation))
+        ? ensureTabLocation(db, input.supplier, actorId) || typedLocation
+        : typedLocation
+    // The shop is registered as a place whether or not this order points there,
+    // so a tab whose first case is coming home still has somewhere to put the
+    // second one — and the picker offers it before anybody needs it.
+    if (input.ongoing) ensureTabLocation(db, input.supplier, actorId)
     const poNumber = nextPoNumber(db)
     // Sum the SAME per-line rounded values the receipt/detail shows (toLine
     // rounds each line to cents), so the stored header total always equals
@@ -3810,7 +3864,11 @@ export function setPurchaseOrderRouting(poId: string, patch: PoRoutingPatch): Po
   const db = getDb()
   const run = db.transaction((): PoStatusResult => {
     const header = db
-      .prepare('SELECT id, po_number, status, supplier, location, scanned_at FROM purchase_orders WHERE id = ?')
+      .prepare(
+        `SELECT id, po_number, status, supplier, location, scanned_at,
+                tab_opened_at, tab_closed_at
+           FROM purchase_orders WHERE id = ?`
+      )
       .get(poId) as
       | {
           id: string
@@ -3819,11 +3877,37 @@ export function setPurchaseOrderRouting(poId: string, patch: PoRoutingPatch): Po
           supplier: string | null
           location: string
           scanned_at: string | null
+          tab_opened_at: string | null
+          tab_closed_at: string | null
         }
       | undefined
     if (!header) return { po: null, error: 'Purchase order not found.' }
     if (header.status === 'cancelled') {
       return { po: getPurchaseOrder(poId), error: 'This purchase order was cancelled.' }
+    }
+    /**
+     * A CLOSED TAB'S ROUTING IS FIXED.
+     *
+     * The owner's rule, in his words: "we can change the destination, that is
+     * the thing — but once we close out a tab it is done, you cannot change
+     * where things are going."
+     *
+     * That is what makes closing a tab MEAN something rather than being a
+     * cosmetic flag. Everything on it has been decided — which cases stayed at
+     * the shop and which came home — and the record stops moving. It is also
+     * what removes the need for a transfer between places: the question is
+     * settled while the answer can still be acted on.
+     *
+     * A SEPARATE GUARD FROM THE `received` ONE BELOW, and it has to be. A tab
+     * spends its whole life in `ordered` — that is the entire point of it, see
+     * completePoIfFullyReceived — so the status check cannot see a closed tab at
+     * all, and without this a settled week could be re-routed for ever.
+     */
+    if (tabRoutingLocked({ tabOpenedAt: header.tab_opened_at, tabClosedAt: header.tab_closed_at })) {
+      return {
+        po: getPurchaseOrder(poId),
+        error: `${header.po_number} has been closed out, so where its cases were going is settled and can no longer be changed. Raise a new order for anything else from this shop.`
+      }
     }
 
     const lines = db

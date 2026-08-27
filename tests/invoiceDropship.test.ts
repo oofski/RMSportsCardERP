@@ -1579,7 +1579,7 @@ console.log('\n=== WHOSE CASES A POSTED LINE TAKES, and both histories saying so
       supplier: 'Roadshow Dallas',
       location: 'RM',
       ongoing: true,
-      lines: [{ productId: 'p_d', item: 'Dropship Hobby Box', quantity: 6, unitPrice: 400 }]
+      lines: [{ productId: 'p_d', item: 'Dropship Hobby Box', quantity: 20, unitPrice: 400 }]
     },
     null
   )
@@ -2604,7 +2604,7 @@ console.log('\n=== SEVERAL PURCHASE ORDERS SUPPLYING ONE SALE ===')
   ok(qtyAt('RM') === shelfAfterSale, 'and the shelf is still untouched by any of it', String(qtyAt('RM')))
 }
 
-console.log('\n=== A ROADSHOW OPEN TAB, SHIPPED STRAIGHT TO THE BUYER ===')
+console.log('\n=== A ROADSHOW OPEN TAB: OURS, AT THE SHOP, SHIPPED STRAIGHT OUT ===')
 // ---------------------------------------------------------------------------
 /**
  * The owner's ask, in his words: "we need to know where products are coming from
@@ -2613,21 +2613,30 @@ console.log('\n=== A ROADSHOW OPEN TAB, SHIPPED STRAIGHT TO THE BUYER ===')
  * And, earlier, on what actually matters: "what we have to make sure is just
  * that inventory is being updated as well, that is kind of the point."
  *
- * ## The case that had nowhere to write itself down
+ * ## THIS SECTION USED TO SAY THE OPPOSITE, AND IT WAS WRONG
  *
- * Buy a case at a roadshow in a hotel ballroom, sell it that afternoon, have the
- * shop ship it straight to the buyer. The case is never in this building. There
- * is no receipt, no lot, no shelf — so nothing in inventory will ever answer
- * "where did that come from", and the line's own `source_po_id`, which is the
- * one place that could have, was forced to null the moment the line became a
- * dropship. The provenance was unrecordable on precisely the orders that need it.
+ * It was written as "a dropship off a tab moves no unit" — the case bought in a
+ * ballroom and shipped straight out, never in this building, no receipt, no lot,
+ * nothing for inventory to know about. That was the best available reading while
+ * a tab lived on MULTI_SHIPMENT, which holds no stock by design.
  *
- * ## What is being pinned
+ * The owner then said what a tab actually is: "roadshow is inventory that I
+ * don't have but it is mine and I can pull from it ... when putting quantities
+ * of things I need RM inventory + roadshow open tabs." Bought, therefore OWNED,
+ * therefore stock — just stock standing in somebody else's shop. A tab's goods
+ * now sit at a real location named for the shop (see tabLocation), they are
+ * checked in there, and they carry real cost layers.
  *
- *   · a dropship line records the open tab it came from
- *   · and moves NOT ONE UNIT doing it — the load-bearing assertion
- *   · the tab's own log says "supplied, shipped direct", never "out of stock"
- *   · the sale joins the tab's deal ticket, exactly as a shelf sale would
+ * So a sale off a tab is NOT a dropship in this app's accounting sense. A
+ * dropship has no stock and no cost of goods; these have both. What is "direct"
+ * about them is only the shipping.
+ *
+ * ## What is being pinned now
+ *
+ *   · a line off a tab draws the SHOP's stock, and RM is untouched
+ *   · it carries real cost, which a dropship never would
+ *   · the provenance still records which tab, which was the original point
+ *   · the sale joins the tab's deal ticket, off the line alone
  *   · two lines naming two different tabs decline to fold, rather than picking
  *   · taking it off says so in the log
  */
@@ -2639,23 +2648,37 @@ console.log('\n=== A ROADSHOW OPEN TAB, SHIPPED STRAIGHT TO THE BUYER ===')
     extrasRepo.listOrderEvents('po', poId).map((e: any) => e.detail ?? '')
 
   /**
-   * AN OPEN TAB THAT WAS NEVER RECEIVED, which is the honest shape of this deal:
-   * the goods went from the ballroom to the buyer and this business never had
-   * them. It holds no stock at all, so any assertion below that the shelf did
-   * not move is also an assertion that nothing tried to take from a tab with
-   * nothing on it.
+   * AN OPEN TAB, CHECKED IN AT THE SHOP.
+   *
+   * The location is not given: opening a tab sends it to the shop's own place,
+   * registered from the supplier — see the note on createPurchaseOrder. The
+   * cases are then checked in there, line by line, the way a week of buying
+   * actually goes. That is what makes them sellable, and it is the whole of the
+   * change this section was rewritten for.
    */
+  const SHOP = 'Roadshow Kansas City'
   const tab = poRepo.createPurchaseOrder(
     {
-      supplier: 'Roadshow Kansas City',
-      location: 'RM',
+      supplier: SHOP,
       ongoing: true,
-      lines: [{ productId: 'p_d', item: 'Dropship Hobby Box', quantity: 4, unitPrice: 400 }]
+      lines: [{ productId: 'p_d', item: 'Dropship Hobby Box', quantity: 30, unitPrice: 400 }]
     },
     null
   )
+  ok(
+    poRepo.getPurchaseOrder(tab.id).location === SHOP,
+    'the tab sits at the shop, not on a shelf here and not on Multi-shipment',
+    String(poRepo.getPurchaseOrder(tab.id).location)
+  )
+  poRepo.receivePurchaseOrderLines(
+    tab.id,
+    [{ lineId: poRepo.getPurchaseOrder(tab.id).lines[0].id, quantity: 30 }],
+    null
+  )
+  ok(qtyAt(SHOP) === 30, 'and its cases are checked in there', String(qtyAt(SHOP)))
 
   const shelfBefore = qtyAt('RM')
+  const shopBefore = qtyAt(SHOP)
   const sale = inv.saveInvoice(
     {
       customerName: 'Ballroom Buyer',
@@ -2675,14 +2698,31 @@ console.log('\n=== A ROADSHOW OPEN TAB, SHIPPED STRAIGHT TO THE BUYER ===')
     null
   )
   db.prepare(`UPDATE invoices SET status = 'sent', qbo_id = 'qbo-9400' WHERE id = ?`).run(sale.id)
+  /**
+   * THE SALE DREW THE SHOP'S CASES, not ours.
+   *
+   * The line's destination IS the shop, and the shop is a place that holds
+   * stock — so this is an ordinary stock sale that happens to be picked three
+   * states away. Under the old model it drew nothing at all, which is what made
+   * a week of roadshow buying invisible to inventory.
+   */
   ok(
     qtyAt('RM') === shelfBefore,
-    'a dropship sale draws no shelf to begin with',
+    'OUR OWN SHELF IS UNTOUCHED — the cases came from the shop, not from here',
     `${shelfBefore} -> ${qtyAt('RM')}`
   )
+  ok(
+    qtyAt(SHOP) === shopBefore - 2,
+    'AND THE SHOP GAVE UP TWO — bought, owned, and now sold',
+    `${shopBefore} -> ${qtyAt(SHOP)}`
+  )
   const line = inv.getInvoice(sale.id).lines[0]
-  ok(line.dropship === true, 'and the line is a dropship')
-  ok(line.sourcePoId === null, 'naming nobody yet')
+  ok(
+    line.dropship === false,
+    'THE LINE IS NOT A DROPSHIP — a dropship has no stock and no cost of goods, and these have both. Only the SHIPPING is direct.',
+    String(line.dropship)
+  )
+  ok(line.sourcePoId === null, 'and it names no purchase order yet')
 
   // --- attach the tab, then say which line came off it --------------------
   ok(inv.linkDropshipPair(tab.id, sale.id, null).ok, 'the open tab attaches to the sale')
@@ -2703,29 +2743,33 @@ console.log('\n=== A ROADSHOW OPEN TAB, SHIPPED STRAIGHT TO THE BUYER ===')
     String(inv.getInvoice(sale.id).lines[0].sourcePoId)
   )
   /**
-   * THE LOAD-BEARING ONE. `stockDrawingLines` filters on `holdsStock` before it
-   * reads the purchase order, so there is no path from here to `consumeFromPo`.
-   * Measured on the shelf rather than trusted from a flag.
+   * THE LOAD-BEARING ONE, AND IT NOW POINTS THE OTHER WAY.
+   *
+   * Naming the tab must cost the tab's cases at the tab's price — that is the
+   * whole reason a roadshow week is modelled as stock rather than as a dropship.
+   * A dropship would have contributed no cost of goods at all, which is exactly
+   * the wrong answer for something that was bought.
    */
   ok(
     qtyAt('RM') === shelfBefore,
-    'AND NOT ONE UNIT MOVED — the record is a record; inventory is untouched',
+    'OUR SHELF IS STILL UNTOUCHED after naming the tab',
     `${shelfBefore} -> ${qtyAt('RM')}`
   )
   const moves = db
-    .prepare(`SELECT COUNT(*) AS n FROM invoice_stock_moves WHERE invoice_id = ?`)
-    .get(sale.id) as { n: number }
-  ok(moves.n === 0, 'and no stock move was written at all', String(moves.n))
+    .prepare(
+      `SELECT COALESCE(SUM(quantity), 0) AS q, COALESCE(SUM(cost_total), 0) AS c
+         FROM invoice_stock_moves WHERE invoice_id = ?`
+    )
+    .get(sale.id) as { q: number; c: number }
+  ok(
+    moves.q === 2 && Math.round(moves.c) === 800,
+    'AND THE TWO CASES COST WHAT THE SHOP CHARGED — 2 × $400, which a dropship would have reported as nothing',
+    `${moves.q} units, ${moves.c}`
+  )
 
   ok(
-    poEvents(tab.id).some((d: string) => /supplied by this order, shipped direct/i.test(d)),
-    'THE TAB’S OWN LOG SAYS SUPPLIED AND SHIPPED DIRECT',
-    poEvents(tab.id).join(' | ')
-  )
-  ok(
-    !poEvents(tab.id).some((d: string) => /come out of this order.s stock/i.test(d)),
-    'AND NEVER THAT ITS STOCK WAS DRAWN — it has none, and a log that says otherwise is worse ' +
-      'than a log that says nothing',
+    poEvents(tab.id).some((d: string) => /come out of this order.s stock/i.test(d)),
+    'THE TAB’S OWN LOG SAYS ITS STOCK WAS DRAWN — which is now the true sentence, because it had stock to draw',
     poEvents(tab.id).join(' | ')
   )
 
@@ -2807,15 +2851,23 @@ console.log('\n=== A ROADSHOW OPEN TAB, SHIPPED STRAIGHT TO THE BUYER ===')
    * ONE deal, and folding a sale into one of the two shops that supplied it puts
    * a week's figure on the wrong one.
    */
+  const OTHER = 'Roadshow Tulsa'
   const otherTab = poRepo.createPurchaseOrder(
     {
-      supplier: 'Roadshow Tulsa',
-      location: 'RM',
+      supplier: OTHER,
       ongoing: true,
-      lines: [{ productId: 'p_d', item: 'Dropship Hobby Box', quantity: 4, unitPrice: 400 }]
+      lines: [{ productId: 'p_d', item: 'Dropship Hobby Box', quantity: 20, unitPrice: 400 }]
     },
     null
   )
+  // Checked in at ITS shop, so the two tabs are two separate shelves and a sale
+  // naming both really does draw from two different places.
+  poRepo.receivePurchaseOrderLines(
+    otherTab.id,
+    [{ lineId: poRepo.getPurchaseOrder(otherTab.id).lines[0].id, quantity: 20 }],
+    null
+  )
+  ok(qtyAt(OTHER) === 20, 'the second shop has its own', String(qtyAt(OTHER)))
   const twoTabs = inv.saveInvoice(
     {
       customerName: 'Two Ballrooms Buyer',
@@ -2927,9 +2979,19 @@ console.log('\n=== A ROADSHOW OPEN TAB, SHIPPED STRAIGHT TO THE BUYER ===')
       'poked into the column',
     sliced.map((a: any) => `${a.quantity}:${a.sourcePoId}`).join(' ')
   )
+  /**
+   * BOTH SLICES HOLD STOCK, and that is the corrected claim.
+   *
+   * This asserted the opposite while a roadshow shop was a dropship
+   * destination. The shops are shelves now, so a slice pointed at one draws
+   * real cases at a real cost — which is the whole reason a week's buying is
+   * worth recording. Only the SHIPPING is direct, and that is a fact about
+   * logistics rather than about the ledger.
+   */
   ok(
-    sliced.every((a: any) => a.holdsStock === false),
-    'both slices ship direct'
+    sliced.every((a: any) => a.holdsStock === true),
+    'BOTH SLICES DRAW REAL STOCK — one shop each, and each at its own cost',
+    sliced.map((a: any) => `${a.destination}:${a.holdsStock}`).join(' ')
   )
   ok(qtyAt('RM') === shelfBefore, 'and five cases moved no shelf', String(qtyAt('RM')))
   ok(
@@ -2977,8 +3039,8 @@ console.log('\n=== A ROADSHOW OPEN TAB, SHIPPED STRAIGHT TO THE BUYER ===')
   )
   ok(inv.getInvoice(sale.id).lines[0].sourcePoId === null, 'and the line names nobody again')
   ok(
-    poEvents(tab.id).some((d: string) => /no longer supplied by this order/i.test(d)),
-    'AND THE TAB IS TOLD IT LOST THEM — a log that only ever gains claims is a wrong log',
+    poEvents(tab.id).some((d: string) => /no longer come out of this order.s stock/i.test(d)),
+    'AND THE TAB IS TOLD IT LOST THEM — a log that only ever gains claims is a wrong log, and the sentence is the STOCK one now that its cases really are stock',
     poEvents(tab.id).join(' | ')
   )
   /**

@@ -75,6 +75,62 @@ export function isTab(po: TabFacts): boolean {
 }
 
 /**
+ * WHERE A TAB'S GOODS SIT: at the shop, and the shop IS the supplier.
+ *
+ * The owner, on what a roadshow tab is for: "roadshow is inventory that I don't
+ * have but it is mine and I can pull from it ... when putting quantities of
+ * things I need RM inventory + roadshow open tabs."
+ *
+ * That is not a dropship. A dropship is goods this business never owns — no
+ * cost layer, no COGS, nothing to sell out of. These were BOUGHT: the money is
+ * committed the moment a case is put on the tab, and what is unusual is only
+ * that the box is three states away. So the honest model is a STOCK LOCATION
+ * that is not this building — which this app has supported since locations
+ * stopped being the two hardcoded shelves and became a table.
+ *
+ * ## Why the supplier, rather than a name somebody types
+ *
+ * The four roadshow shops are already suppliers here. Deriving the place from
+ * the supplier means the two can never drift: there is no second name to keep in
+ * step, no picker offering "Roadshow Dallas" beside "Roadshow Dalas", and
+ * nothing to seed by hand before the feature works. Open a tab with a shop and
+ * the shop is where its goods are.
+ *
+ * ## THIS IS THE BUG IT REPLACES
+ *
+ * Tabs were being raised against MULTI_SHIPMENT, which is the sentinel for "a
+ * dropship to several buyers nobody has named yet" and is DEFINED as holding no
+ * stock. Units sent there are unreceivable on purpose: no cost layer, nothing on
+ * a shelf, nothing any sales order could ever draw. So a week's buying produced
+ * a bill and no inventory, and the tab could not be sold out of at all — which
+ * is exactly the symptom that was reported.
+ *
+ * Returns '' for a tab with no supplier, which the caller must treat as "not
+ * ready to be a tab yet" rather than as a place called nothing.
+ */
+export function tabLocation(supplier: string | null | undefined): string {
+  return String(supplier ?? '').trim()
+}
+
+/**
+ * May this tab's routing still be changed?
+ *
+ * The owner's rule, in his words: "we can change the destination, that is the
+ * thing — but once we close out a tab it is done, you cannot change where things
+ * are going."
+ *
+ * So an OPEN tab is editable and a CLOSED one is history. That is what makes
+ * closing meaningful rather than cosmetic: everything on it has been decided —
+ * which cases stayed at the shop and which came home — and the record stops
+ * moving. It also removes the need for a stock transfer between places, because
+ * the question "where is this going" is settled while the answer can still be
+ * acted on.
+ */
+export function tabRoutingLocked(po: TabFacts): boolean {
+  return isTab(po) && !isOpenTab(po)
+}
+
+/**
  * Is this tab still taking things?
  *
  * The one test the whole feature turns on. `completePoIfFullyReceived` asks it

@@ -54,6 +54,64 @@ export function listStockLocations(): StockLocation[] {
 const clean = (v: unknown): string => String(v ?? '').trim()
 
 /**
+ * MAKE SURE A ROADSHOW SHOP IS A PLACE STOCK CAN SIT. Idempotent.
+ *
+ * A tab's goods sit at the shop, and the shop is the supplier — see
+ * `tabLocation`. Rather than asking somebody to register four shelves by hand
+ * before the feature works at all, opening a tab registers its own.
+ *
+ * ## Why it does not go through `saveStockLocation`
+ *
+ * That one is the OPERATOR'S write: it refuses a clash by name, because two
+ * people typing "AM Storage" at the same screen should be told rather than
+ * silently merged. Here a clash is the ORDINARY case — the second tab with the
+ * same shop, and every tab after that — so it must be a no-op and not an error.
+ *
+ * ## Case-insensitively, and the existing spelling wins
+ *
+ * The location id is written onto every stock row and every FIFO layer as a
+ * plain string, so "Roadshow Dallas" and "roadshow dallas" must not become two
+ * shelves holding half the stock each. When the place already exists under some
+ * spelling, that spelling is returned and used — the alternative is a rename on
+ * every tab, which would drag every stock row with it.
+ *
+ * Returns the canonical location name, or '' when there was no supplier to make
+ * one from — which the caller must treat as "this cannot be a tab yet".
+ */
+export function ensureTabLocation(
+  db: Database.Database,
+  supplier: string | null | undefined,
+  actorId: string | null
+): string {
+  const wanted = clean(supplier)
+  if (!wanted) return ''
+  const existing = db
+    .prepare(`SELECT id FROM stock_locations WHERE LOWER(id) = LOWER(?)`)
+    .get(wanted) as { id: string } | undefined
+  if (existing) {
+    // Un-retire it. A shop that is trading again is a shop stock can sit at, and
+    // leaving it retired would keep it out of every picker the week it matters.
+    db.prepare(`UPDATE stock_locations SET retired = 0, updated_at = ? WHERE id = ?`).run(
+      new Date().toISOString(),
+      existing.id
+    )
+    hydrateLocations(db)
+    return existing.id
+  }
+  const stamp = new Date().toISOString()
+  const pos = db
+    .prepare(`SELECT COALESCE(MAX(position), 0) + 1 AS n FROM stock_locations`)
+    .get() as { n: number }
+  db.prepare(
+    `INSERT INTO stock_locations
+       (id, label, pinned, retired, position, created_by, created_at, updated_at)
+     VALUES (?, ?, 0, 0, ?, ?, ?, ?)`
+  ).run(wanted, wanted, pos.n, actorId, stamp, stamp)
+  hydrateLocations(db)
+  return wanted
+}
+
+/**
  * Add a place, or rename one that already exists.
  *
  * The id is the NAME. That is deliberate: a location is written onto every
