@@ -77,6 +77,7 @@ const {
 } = require('../src/shared/financeStreaming')
 const { buildPnlOmissions } = require('../src/shared/pnlOmissions')
 const { reconInRange, reconRows, reconTotals } = require('../src/shared/pnlRecon')
+const { fitStatement, fitVerdict, modelDivisor } = require('../src/shared/statementFit')
 const { streamDateOf } = require('../src/shared/streaming')
 
 const db = getDb()
@@ -2430,6 +2431,169 @@ console.log('\n=== 12. night by night: which rate each show was ACTUALLY charged
     'with nothing left uncovered across the window this section built',
     String(reconTotals(reconInRange(fixed, dayC, dayO)).uncoveredDays)
   )
+}
+
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 13. solving the terms from a statement ===')
+// ---------------------------------------------------------------------------
+/**
+ * "Figure out the projected revenue vs the actual and create some formula that
+ * adjusts the revenue to match, because it's off by the same amount."
+ *
+ * The formula is a FIT, not a correction. The model has three knobs and every
+ * one is a guess until it is checked against a document, so this reads the
+ * document and solves for what they must have been.
+ *
+ * "OFF BY THE SAME AMOUNT" IS ITSELF THE DIAGNOSIS, and section 13c pins it: a
+ * commission error is a percentage and scales with the money, so a month at a
+ * third of the volume is out by a third as much. A gap that barely moves while
+ * volume collapses is not a percentage — it is something charged per ORDER.
+ *
+ * The two windows below are the owner's REAL statements, kept as fixtures
+ * because they are the only two real fee schedules this app has ever been
+ * checked against. Only the totals are here; no order ids, no customer, nothing
+ * that identifies a buyer.
+ */
+{
+  const TAX = DEFAULT_TAX_RATE
+  const REAL = [
+    { label: 'first statement', sales: 411575.0, commission: 25584.76, processing: 15013.54 },
+    { label: 'second statement', sales: 127825.0, commission: 5113.0, processing: 4732.59 }
+  ]
+
+  // --- 13a. the fit reproduces both real statements exactly ---------------
+  for (const r of REAL) {
+    const netPaid = Math.round((r.sales - r.commission - r.processing) * 100) / 100
+    const f = fitStatement(r, { netPaid, derivedRevenue: 0, derivedCommission: 0, derivedProcessing: 0, orders: 0 }, TAX)
+    ok(f.sameWindow === true, `${r.label}: the ledger and the statement agree on the window`, String(f.windowGap))
+    ok(
+      Math.round(f.refitRevenue * 100) === Math.round(r.sales * 100),
+      `${r.label.toUpperCase()}: THE FITTED TERMS REPRODUCE THE STATED SALES TO THE CENT`,
+      `${f.refitRevenue} vs ${r.sales}`
+    )
+    ok(Math.abs(f.residual) < 0.01, `${r.label}: with no residual left over`, String(f.residual))
+    ok(
+      Math.abs(f.fittedCommissionRate - r.commission / r.sales) < 1e-12,
+      `${r.label}: and the commission it solved is the statement's own quotient`
+    )
+    ok(fitVerdict(f).tone === 'good', `${r.label}: so the verdict says these terms are the answer`)
+  }
+  // The second statement's commission really is exactly 4%, which is what made
+  // it worth keeping: a fit that could not land on a round number would be
+  // suspect, and one that lands on it by accident would be luckier than it looks.
+  const second = REAL[1]
+  ok(
+    Math.abs(second.commission / second.sales - 0.04) < 1e-12,
+    'the second statement is exactly 4.000% commission, and the fit finds it',
+    String(second.commission / second.sales)
+  )
+
+  // --- 13b. THE WINDOW IS CHECKED BEFORE THE RATE -------------------------
+  /**
+   * The gate. A fitted rate against the wrong fortnight is a confident number
+   * pointing the wrong way, so the verdict refuses to talk about rates at all
+   * until the two documents agree on what they paid.
+   */
+  const wrongWindow = fitStatement(
+    REAL[1],
+    { netPaid: 90000, derivedRevenue: 100000, derivedCommission: 0, derivedProcessing: 0, orders: 1000 },
+    TAX
+  )
+  ok(wrongWindow.sameWindow === false, 'A MISMATCHED WINDOW IS CAUGHT', String(wrongWindow.windowGap))
+  ok(
+    fitVerdict(wrongWindow).tone === 'bad' && /not the same days/i.test(fitVerdict(wrongWindow).headline),
+    'AND THE VERDICT SAYS SO RATHER THAN OFFERING A RATE',
+    fitVerdict(wrongWindow).headline
+  )
+  ok(
+    /statement period/i.test(fitVerdict(wrongWindow).detail),
+    'pointing at the period, which is the thing to go and check'
+  )
+  // A cent of rounding between two systems is not a period mismatch.
+  const offByACent = fitStatement(
+    REAL[1],
+    {
+      netPaid: Math.round((REAL[1].sales - REAL[1].commission - REAL[1].processing) * 100) / 100 + 0.01,
+      derivedRevenue: 0, derivedCommission: 0, derivedProcessing: 0, orders: 0
+    },
+    TAX
+  )
+  ok(offByACent.sameWindow === true, 'but a single cent is rounding, not a mismatch', String(offByACent.windowGap))
+
+  // --- 13c. a PER-ORDER error and a PER-DOLLAR one are told apart ----------
+  /**
+   * The owner's own signature: two windows, one a third the size of the other,
+   * out by roughly the SAME amount. A rate error cannot do that. A flat charge
+   * per order can, and `perOrderGap` is what makes the two distinguishable.
+   */
+  const bigOrders = 40000
+  const smallOrders = 38000
+  const flatCents = 30
+  // Model the app charging a flat 30c per order that the platform never charged.
+  const withFlat = (r: typeof REAL[number], orders: number): any => {
+    const netPaid = Math.round((r.sales - r.commission - r.processing) * 100) / 100
+    const f = fitStatement(r, { netPaid, derivedRevenue: 0, derivedCommission: 0, derivedProcessing: 0, orders }, TAX)
+    const div = modelDivisor(f.fittedCommissionRate, f.fittedProcessingRate, TAX)
+    // What the app WOULD derive if it also added a flat charge per order.
+    const inflated = Math.round(((netPaid + (flatCents / 100) * orders) / div) * 100) / 100
+    return fitStatement(r, { netPaid, derivedRevenue: inflated, derivedCommission: 0, derivedProcessing: 0, orders }, TAX)
+  }
+  const big = withFlat(REAL[0], bigOrders)
+  const small = withFlat(REAL[1], smallOrders)
+  ok(
+    big.revenueGap > 10000 && small.revenueGap > 10000,
+    'BOTH WINDOWS READ HIGH BY FIVE FIGURES even though one is a third the size',
+    `${big.revenueGap} / ${small.revenueGap}`
+  )
+  ok(
+    Math.abs(big.perOrderGap - small.perOrderGap) < 0.02,
+    'AND THE PER-ORDER FIGURE AGREES ACROSS BOTH — which a percentage error could never do, ' +
+      'and which is how a flat charge is identified rather than guessed at',
+    `${big.perOrderGap} vs ${small.perOrderGap}`
+  )
+  ok(
+    big.perOrderGap > 0.3 && big.perOrderGap < 0.4,
+    'landing on the flat charge that caused it, near enough to name it',
+    String(big.perOrderGap)
+  )
+
+  // --- 13d. a leftover residual is reported as the flat charge it implies ---
+  const leftover = fitStatement(
+    { sales: 100000, commission: 4000, processing: 3700 },
+    { netPaid: 92300 + 300, derivedRevenue: 0, derivedCommission: 0, derivedProcessing: 0, orders: 1000 },
+    TAX
+  )
+  ok(leftover.sameWindow === false, 'a payout that does not tie is a window problem first')
+  const fitted = fitStatement(
+    { sales: 100000, commission: 4000, processing: 3700 },
+    { netPaid: 92300, derivedRevenue: 0, derivedCommission: 0, derivedProcessing: 0, orders: 1000 },
+    TAX
+  )
+  ok(
+    Math.abs(fitted.residual) < 0.01,
+    'and a clean one fits with nothing left over',
+    `${fitted.refitRevenue} vs 100000, residual ${fitted.residual}`
+  )
+
+  // --- 13e. nonsense in does not produce a confident number out ------------
+  const nonsense = fitStatement(
+    { sales: 1000, commission: 900, processing: 900 },
+    { netPaid: -800, derivedRevenue: 0, derivedCommission: 0, derivedProcessing: 0, orders: 10 },
+    TAX
+  )
+  ok(
+    nonsense.refitRevenue === 0,
+    'FEES THAT SWALLOW THE WHOLE SALE PRODUCE NO FIGURE, not a negative or an infinity — ' +
+      'that is a typo in one of the three boxes, not a fee schedule',
+    String(nonsense.refitRevenue)
+  )
+  const empty = fitStatement(
+    { sales: 0, commission: 0, processing: 0 },
+    { netPaid: 0, derivedRevenue: 0, derivedCommission: 0, derivedProcessing: 0, orders: 0 },
+    TAX
+  )
+  ok(empty.fittedCommissionRate === 0 && empty.perOrderGap === null, 'and an empty window divides by nothing')
 }
 
 console.log(`\n${pass} passed, ${fail} failed${skipped ? `, ${skipped} skipped` : ''}\n`)

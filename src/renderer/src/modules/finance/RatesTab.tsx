@@ -26,6 +26,7 @@ import { Money, Note } from './bits'
 import { finance, resultError } from './api'
 import { compactDayLabel, todayKey } from './time'
 import { reconInRange, reconRows, reconTotals, type ReconRow } from '@shared/pnlRecon'
+import { fitStatement, fitVerdict, type StatementFit } from '@shared/statementFit'
 
 /**
  * Finance → Fees & rates: what the platform takes, and when it took it.
@@ -876,6 +877,182 @@ function DayCoverage({ periods }: { periods: WhatnotRatePeriod[] }): JSX.Element
         compare against it. Whatnot&rsquo;s own statement periods do not always run to a calendar
         month, so matching the window is the first thing to check when two numbers disagree.
       </p>
+
+      <StatementCheck totals={totals} taxRate={effTax(periods, to || from)} />
+    </section>
+  )
+}
+
+/** The tax rate in force at one end of the window, or the default. */
+function effTax(periods: WhatnotRatePeriod[], day: string): number {
+  const p = day ? periods.find((x) => x.fromDate <= day && (!x.toDate || x.toDate >= day)) : null
+  return p ? p.taxRate : DEFAULT_FEE_RATES.taxRate
+}
+
+/**
+ * TYPE IN WHAT THE STATEMENT SAYS, AND SOLVE FOR THE TERMS THAT PRODUCE IT.
+ *
+ * The owner's ask: "figure out the projected revenue vs the actual and create
+ * some formula that adjusts the revenue to match."
+ *
+ * The formula is not a correction bolted on the end — that would be a second
+ * number beside the first, and the two drift the first time anything changes.
+ * The model already has three knobs and every one of them is a guess until it is
+ * checked against a document. So this reads the document and works out what the
+ * knobs must have been. Set them, and the revenue matches by construction.
+ *
+ * ## IT CHECKS THE WINDOW BEFORE IT CHECKS THE RATE
+ *
+ * `sales − commission − processing` is what the statement says it paid. The
+ * ledger already knows what it actually paid. If those two disagree the two
+ * documents are covering different days, and no rate on earth closes that — so
+ * the fit is not even offered until they tie. See @shared/statementFit.
+ */
+function StatementCheck({
+  totals,
+  taxRate
+}: {
+  totals: { netPaid: number; grossSales: number; orders: number }
+  taxRate: number
+}): JSX.Element {
+  const [sales, setSales] = useState('')
+  const [commission, setCommission] = useState('')
+  const [processing, setProcessing] = useState('')
+
+  const num = (v: string): number => {
+    const x = Number((v || '').replace(/[^0-9.-]/g, ''))
+    return Number.isFinite(x) ? x : 0
+  }
+  const filled = sales.trim() !== '' && commission.trim() !== '' && processing.trim() !== ''
+
+  const fit: StatementFit | null = useMemo(() => {
+    if (!filled) return null
+    return fitStatement(
+      { sales: num(sales), commission: num(commission), processing: num(processing) },
+      {
+        netPaid: totals.netPaid,
+        derivedRevenue: totals.grossSales,
+        derivedCommission: 0,
+        derivedProcessing: 0,
+        orders: totals.orders
+      },
+      taxRate
+    )
+  }, [filled, sales, commission, processing, totals, taxRate])
+
+  const verdict = fit ? fitVerdict(fit) : null
+
+  return (
+    <section className="fin-fit" aria-label="Check against a statement">
+      <div className="fin-head-top">
+        <h3>Check against a statement</h3>
+        <span className="fin-head-scope">Solve the rate from the document</span>
+      </div>
+      <p className="fin-rates-lead">
+        Copy the three figures off a Whatnot statement for the <b>same window as the dates above</b>
+        , and this works out what the terms must have been to produce them. Nothing is saved until
+        you choose to.
+      </p>
+
+      <div className="fin-fit-inputs">
+        <label>
+          <span>Sales</span>
+          <input
+            className="input"
+            inputMode="decimal"
+            placeholder="127825.00"
+            value={sales}
+            onChange={(e) => setSales(e.target.value)}
+          />
+        </label>
+        <label>
+          <span>Commission fees</span>
+          <input
+            className="input"
+            inputMode="decimal"
+            placeholder="5113.00"
+            value={commission}
+            onChange={(e) => setCommission(e.target.value)}
+          />
+        </label>
+        <label>
+          <span>Payment processing</span>
+          <input
+            className="input"
+            inputMode="decimal"
+            placeholder="4732.59"
+            value={processing}
+            onChange={(e) => setProcessing(e.target.value)}
+          />
+        </label>
+      </div>
+
+      {fit && verdict && (
+        <>
+          <Note tone={verdict.tone === 'good' ? 'good' : verdict.tone === 'bad' ? 'danger' : 'warn'}
+            icon={verdict.tone === 'good' ? 'Check' : 'AlertTriangle'}>
+            <b>{verdict.headline}</b>
+            <p>{verdict.detail}</p>
+          </Note>
+
+          <table className="data fin-fit-table">
+            <tbody>
+              <tr>
+                <th scope="row">Statement says it paid out</th>
+                <td className="num"><Money value={fit.statementNet} /></td>
+              </tr>
+              <tr>
+                <th scope="row">Ledger says it was paid</th>
+                <td className="num"><Money value={totals.netPaid} /></td>
+              </tr>
+              <tr className={fit.sameWindow ? 'is-ok' : 'is-bad'}>
+                <th scope="row">Difference</th>
+                <td className="num"><Money value={fit.windowGap} strong /></td>
+              </tr>
+              {/* EVERYTHING BELOW IS MEANINGLESS UNTIL THE ROW ABOVE IS ZERO, so
+                  it is not drawn. A fitted rate against the wrong fortnight is a
+                  confident number pointing the wrong way, which is worse than no
+                  number at all. */}
+              {fit.sameWindow && (
+                <>
+                  <tr>
+                    <th scope="row">Revenue the app shows</th>
+                    <td className="num"><Money value={totals.grossSales} /></td>
+                  </tr>
+                  <tr>
+                    <th scope="row">Revenue the statement shows</th>
+                    <td className="num"><Money value={num(sales)} /></td>
+                  </tr>
+                  <tr className={Math.abs(fit.revenueGap) < 1 ? 'is-ok' : 'is-bad'}>
+                    <th scope="row">Out by</th>
+                    <td className="num"><Money value={fit.revenueGap} strong /></td>
+                  </tr>
+                  {/* THE COLUMN THAT TELLS A RATE ERROR FROM A PER-ORDER ONE.
+                      A commission error scales with the money; a flat charge
+                      scales with the ORDERS. Two windows that disagree on the
+                      total but agree on this figure are being broken by the same
+                      per-order term. */}
+                  {fit.perOrderGap !== null && Math.abs(fit.revenueGap) >= 1 && (
+                    <tr>
+                      <th scope="row">Per order, across {totals.orders.toLocaleString()} orders</th>
+                      <td className="num mono">
+                        {fit.perOrderGap < 0 ? '−' : ''}
+                        {Math.round(Math.abs(fit.perOrderGap) * 100)}¢
+                      </td>
+                    </tr>
+                  )}
+                  <tr className="fin-fit-fit">
+                    <th scope="row">Terms that reproduce the statement</th>
+                    <td className="num mono">
+                      {ratePct(fit.fittedCommissionRate)} + {ratePct(fit.fittedProcessingRate)} card
+                    </td>
+                  </tr>
+                </>
+              )}
+            </tbody>
+          </table>
+        </>
+      )}
     </section>
   )
 }

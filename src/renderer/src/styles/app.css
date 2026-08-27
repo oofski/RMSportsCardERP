@@ -27648,3 +27648,47 @@ button.sor-team:focus-visible {
   font-weight: 600;
   white-space: nowrap;
 }
+
+/* ---------- Check against a statement (RatesTab -> StatementCheck) ---------- */
+.fin-fit {
+  margin-top: 26px;
+}
+.fin-fit-inputs {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+  margin: 14px 0;
+}
+.fin-fit-inputs label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+.fin-fit-table {
+  margin-top: 14px;
+  max-width: 560px;
+}
+.fin-fit-table th {
+  font-weight: 500;
+  color: var(--text-2);
+}
+/* The two verdict rows carry the colour, not the whole table: every other row is
+   a fact and only these two are a judgement about it. */
+.fin-fit-table tr.is-ok td {
+  color: var(--success-strong);
+  font-weight: 700;
+}
+.fin-fit-table tr.is-bad td {
+  color: var(--warning);
+  font-weight: 700;
+}
+.fin-fit-table tr.fin-fit-fit th,
+.fin-fit-table tr.fin-fit-fit td {
+  border-top: 2px solid var(--border);
+  background: var(--surface-2);
+  font-weight: 700;
+  color: var(--text);
+}

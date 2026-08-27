@@ -61,6 +61,13 @@ export interface ReconRow {
   cogs: number
   netProfit: number
   /**
+   * Orders the fee model charged on this night.
+   *
+   * Carried because a per-ORDER error and a per-DOLLAR error look identical in a
+   * total and are told apart only by dividing by this. See @shared/statementFit.
+   */
+  orders: number
+  /**
    * The commission rate this day was actually priced at, as a fraction.
    *
    * Null when the day carried no sale rows, which is a real state — a night of
@@ -84,6 +91,8 @@ export interface ReconTotals {
   processing: number
   cogs: number
   netProfit: number
+  /** Orders the fee model charged across the window. */
+  orders: number
   /** Days in the list that fell through to the built-in rates. */
   uncoveredDays: number
   /** Money that was priced at the built-in rates rather than a chosen one. */
@@ -135,6 +144,7 @@ export function reconRows(
       processing: c2(n(d.processingFee)),
       cogs,
       netProfit: c2(n(d.netProfit)),
+      orders: Math.max(0, Math.round(n(d.feeSaleCount))),
       rate: slices.length > 0 ? n(slices[0].rate) : null,
       covered: !!covering,
       periodNote: covering ? (covering.note ?? '').trim() || null : null
@@ -160,6 +170,7 @@ export function reconTotals(rows: readonly ReconRow[]): ReconTotals {
     processing: 0,
     cogs: 0,
     netProfit: 0,
+    orders: 0,
     uncoveredDays: 0,
     uncoveredNetPaid: 0
   }
@@ -170,6 +181,7 @@ export function reconTotals(rows: readonly ReconRow[]): ReconTotals {
     t.processing += r.processing
     t.cogs += r.cogs
     t.netProfit += r.netProfit
+    t.orders += r.orders
     if (!r.covered) {
       t.uncoveredDays += 1
       t.uncoveredNetPaid += r.netPaid
