@@ -1472,22 +1472,56 @@ console.log('\n=== RE-ROUTING A LINE ON AN ORDER THAT IS ALREADY IN QUICKBOOKS =
   db.prepare(`UPDATE invoice_lines SET source_po_id = NULL WHERE id = ?`).run(fee.id)
 
   /**
-   * THE ROADSHOW POINTER GOES WITH THE SHELF. `source_po_id` on a line says which
-   * purchase order's cost layers to consume, which is meaningless on a line that
-   * consumes none — and the chooser itself hides on a dropship line.
+   * THE ROADSHOW POINTER SURVIVES THE FLIP TO DROPSHIP — as a RECORD.
+   *
+   * This used to assert the opposite, and the reasoning was half right:
+   * `source_po_id` says which cost layers to consume, and a line consuming none
+   * cannot say whose. True of the COST. But the owner's case is exactly the
+   * line that consumes nothing — "we need to know where products are coming
+   * from, and those are open tabs" — a case bought on a roadshow tab and
+   * shipped straight to the buyer, which never reaches a shelf here and under
+   * the old rule had nowhere to record where it came from either.
+   *
+   * So the column now answers "where did these goods come from" on any line,
+   * and `holdsStock` beside it says which of the two things that means. The
+   * safety is structural rather than a clear-on-write: `effectiveSlices` is the
+   * cost view and blanks the order on a slice that draws no shelf, and
+   * everything that spends money asks `effectiveSlices` — which the next
+   * assertion is here to prove.
    */
   const eight = inv.getInvoice(posted.id).lines.find((l: any) => l.quantity === 8)
   db.prepare(`UPDATE invoice_lines SET source_po_id = 'po-roadshow' WHERE id = ?`).run(eight.id)
   inv.setInvoiceLineRouting(posted.id, [{ lineId: eight.id, destination: 'Kestrel Cards', supplier: null }], null)
-  const cleared = db
+  const kept = db
     .prepare(`SELECT source_po_id FROM invoice_lines WHERE id = ?`)
     .get(eight.id) as { source_po_id: string | null }
   ok(
-    cleared.source_po_id === null,
-    'A LINE FLIPPED TO DROPSHIP DROPS ITS SOURCE PURCHASE ORDER — it consumes no layers',
-    String(cleared.source_po_id)
+    kept.source_po_id === 'po-roadshow',
+    'A LINE FLIPPED TO DROPSHIP KEEPS ITS PURCHASE ORDER — that is where the goods came from, and it is the only place a dropship can say so',
+    String(kept.source_po_id)
   )
-  // And put it back, so the assertions below start from a shelf again.
+  /**
+   * AND IT SPENDS NOTHING. 'po-roadshow' is not a row in this database at all,
+   * so if the value had reached the coverage check or `consumeFromPo` the write
+   * above would have been refused with "that purchase order is gone" — and if it
+   * had reached the shelf it would have taken eight cases off a purchase order
+   * that does not exist. Neither happened, because `stockDrawingLines` filters
+   * on `holdsStock` before it ever reads the column.
+   */
+  const dropMoves = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM invoice_stock_moves WHERE invoice_id = ? AND line_position = ?`
+    )
+    .get(posted.id, eight.position) as { n: number }
+  ok(
+    dropMoves.n === 0,
+    'AND MOVES NO STOCK AGAINST IT — the record is a record, and nothing that costs money can see it',
+    String(dropMoves.n)
+  )
+  // Cleared by hand before flipping back, because on a shelf the SAME column is
+  // a claim on cost layers and 'po-roadshow' holds none — the routing back would
+  // be refused, correctly, by the coverage check.
+  db.prepare(`UPDATE invoice_lines SET source_po_id = NULL WHERE id = ?`).run(eight.id)
   inv.setInvoiceLineRouting(posted.id, [{ lineId: eight.id, destination: 'RM', supplier: null }], null)
 
   // --- refusals -----------------------------------------------------------
@@ -1714,7 +1748,33 @@ console.log('\n=== WHOSE CASES A POSTED LINE TAKES, and both histories saying so
     'and the line is left on the order it had'
   )
 
-  // --- a dropship line cannot name one -----------------------------------
+  // --- a dropship line NAMES ONE, and it is a record ----------------------
+  /**
+   * THE OWNER'S CASE, and the one the old rule made unrecordable: "we need to
+   * know where products are coming from, and those are open tabs — so if we
+   * attach the roadshow open PO the correct products just have to be attached in
+   * the sales order."
+   *
+   * A case bought on a roadshow tab and shipped straight from the ballroom to
+   * the buyer never reaches a shelf here. It has no cost layers to consume, so
+   * `source_po_id` cannot be a claim on them — and until this changed it was
+   * therefore forced to null, which left the ONE kind of line whose provenance
+   * nobody can reconstruct from stock as the one kind of line that could not
+   * write it down.
+   *
+   * So the column records where the goods came from, on any line, and
+   * `holdsStock` says whether that is also a claim on cost.
+   */
+  const onHandBefore = (
+    db
+      .prepare(
+        `SELECT COALESCE(SUM(l.qty_remaining), 0) AS n
+           FROM inventory_lots l
+           JOIN po_line_receipts r ON r.lot_id = l.id
+          WHERE r.po_id = ? AND l.product_id = 'p_d'`
+      )
+      .get(roadshow.id) as { n: number }
+  ).n
   inv.setInvoiceLineRouting(
     sale.id,
     [{ lineId: line.id, destination: 'Kestrel Cards', supplier: null, sourcePoId: roadshow.id }],
@@ -1723,9 +1783,49 @@ console.log('\n=== WHOSE CASES A POSTED LINE TAKES, and both histories saying so
   const dropped = inv.getInvoice(sale.id).lines[0]
   ok(dropped.dropship === true, 'the line is a dropship now')
   ok(
-    dropped.sourcePoId === null,
-    'AND NAMES NO PURCHASE ORDER — it consumes no cost layers, so it cannot say whose',
+    dropped.sourcePoId === roadshow.id,
+    'AND IT STILL NAMES THE ROADSHOW ORDER — a dropship off an open tab is exactly where "where did this come from" has to be written down, because no shelf here will ever answer it',
     String(dropped.sourcePoId)
+  )
+  /**
+   * AND THE TAB GAVE UP NOTHING. This is the assertion that makes the record
+   * safe: `stockDrawingLines` filters on `holdsStock` BEFORE it reads the
+   * column, so there is no path from a dropship line's purchase order to
+   * `consumeFromPo`. Counted on the shelf rather than trusted from a flag — the
+   * cases the roadshow brought in are still all there.
+   */
+  const onHandAfter = (
+    db
+      .prepare(
+        `SELECT COALESCE(SUM(l.qty_remaining), 0) AS n
+           FROM inventory_lots l
+           JOIN po_line_receipts r ON r.lot_id = l.id
+          WHERE r.po_id = ? AND l.product_id = 'p_d'`
+      )
+      .get(roadshow.id) as { n: number }
+  ).n
+  ok(
+    onHandAfter === onHandBefore + 2,
+    'AND THE TWO CASES CAME BACK ONTO THE SHELF — the line stopped drawing it, and naming the order did not start again',
+    `${onHandBefore} -> ${onHandAfter}`
+  )
+  /**
+   * AND THE PURCHASE ORDER'S OWN LOG SAYS THE RIGHT THING — supplied, shipped
+   * direct, NOT "come out of this order's stock". Two claims, and only one of
+   * them is about money; a roadshow tab's history claiming a draw on stock it
+   * never held is the sort of half-truth that costs somebody an afternoon a year
+   * later.
+   */
+  ok(
+    poEvents(roadshow.id).some((d: string) => /supplied by this order, shipped direct/i.test(d)),
+    'AND THE PURCHASE ORDER IS TOLD IT SUPPLIED THEM DIRECT, in its own words',
+    poEvents(roadshow.id).join(' | ')
+  )
+  ok(
+    !poEvents(roadshow.id).some(
+      (d: string) => /come out of this order.s stock/i.test(d) && /shipped direct/i.test(d)
+    ),
+    'and never in the stock sentence — the two are separate passes precisely so neither can borrow the other’s claim'
   )
 }
 
@@ -2176,25 +2276,46 @@ console.log('\n=== ONE LINE, SPLIT BY CASE, EACH CASE FROM ITS OWN PLACE ===')
   )
   ok(qtyAt('RM') === shelfBefore - 7, 'and the shelf still stands at seven taken', String(qtyAt('RM')))
 
-  // --- a dropship slice cannot claim cost layers --------------------------
+  // --- a dropship slice RECORDS one, and still spends nothing --------------
   /**
-   * WRITTEN STRAIGHT INTO THE COLUMN, because no screen and no write path in
-   * this app can produce this state — `setInvoiceLineRouting` clears the pointer
-   * on any slice that does not hold stock. A row like this arrives from SYNC,
-   * off a copy of the app that is older or newer than this one, and the read has
-   * to be the thing that refuses it: a slice that goes supplier-to-buyer
-   * consumes no cost layers at all, so it cannot say whose it consumed, and
-   * carrying the claim forward would put a dropship on a purchase order's
-   * history as if that order had supplied it.
+   * TWO QUESTIONS, TWO ANSWERS, off one column.
+   *
+   * A slice that goes supplier-to-buyer consumes no cost layers, so it cannot
+   * say whose it consumed. That used to be enforced by blanking the column on
+   * read — which also threw away the only place a dropship can say WHERE ITS
+   * GOODS CAME FROM, and the owner's open tabs are almost all dropship.
+   *
+   * So the read returns the row as stored, and the blanking moved into
+   * `effectiveSlices` — the COST view, which is what `stockDrawingLines`,
+   * `claimsOf` and the purchase-order history all ask. Provenance survives;
+   * nothing that spends money can see it. Both halves are pinned below, because
+   * one without the other is either a lost record or a dropship quietly costed
+   * against somebody's cases.
    */
   db.prepare(
     `UPDATE invoice_line_allocations SET source_po_id = ?
       WHERE invoice_line_id = ? AND destination = 'Kestrel Cards'`
   ).run(first.id, lineId)
+  const dropSlice = inv.getInvoice(sale.id).lines[0].allocations[0]
   ok(
-    inv.getInvoice(sale.id).lines[0].allocations[0].sourcePoId === null,
-    'A DROPSHIP SPLIT NAMES NO PURCHASE ORDER, whatever is sitting in the column',
-    String(inv.getInvoice(sale.id).lines[0].allocations[0].sourcePoId)
+    dropSlice.sourcePoId === first.id,
+    'A DROPSHIP SPLIT RECORDS WHERE ITS CASES CAME FROM — the read hands back what the row says',
+    String(dropSlice.sourcePoId)
+  )
+  const allocRules = require('../src/shared/invoiceAllocations')
+  const costView = allocRules.effectiveSlices(
+    { quantity: 10, destination: 'RM', allocations: inv.getInvoice(sale.id).lines[0].allocations },
+    'RM'
+  )
+  ok(
+    costView[0].holdsStock === false && costView[0].sourcePoId === null,
+    'AND THE COST VIEW BLANKS IT, so nothing that spends money can charge a dropship against that order’s layers',
+    `${costView[0].holdsStock} / ${costView[0].sourcePoId}`
+  )
+  ok(
+    qtyAt('RM') === shelfBefore - 7,
+    'and the shelf is still exactly the seven the stock slice took',
+    String(qtyAt('RM'))
   )
 
   // --- voiding hands back exactly what the splits took --------------------
@@ -2481,6 +2602,396 @@ console.log('\n=== SEVERAL PURCHASE ORDERS SUPPLYING ONE SALE ===')
     String(afterDelete.sourcePoId)
   )
   ok(qtyAt('RM') === shelfAfterSale, 'and the shelf is still untouched by any of it', String(qtyAt('RM')))
+}
+
+console.log('\n=== A ROADSHOW OPEN TAB, SHIPPED STRAIGHT TO THE BUYER ===')
+// ---------------------------------------------------------------------------
+/**
+ * The owner's ask, in his words: "we need to know where products are coming from
+ * and that is important, and those are open tabs — so if we attach the roadshow
+ * open PO the correct products just have to be attached in the sales order."
+ * And, earlier, on what actually matters: "what we have to make sure is just
+ * that inventory is being updated as well, that is kind of the point."
+ *
+ * ## The case that had nowhere to write itself down
+ *
+ * Buy a case at a roadshow in a hotel ballroom, sell it that afternoon, have the
+ * shop ship it straight to the buyer. The case is never in this building. There
+ * is no receipt, no lot, no shelf — so nothing in inventory will ever answer
+ * "where did that come from", and the line's own `source_po_id`, which is the
+ * one place that could have, was forced to null the moment the line became a
+ * dropship. The provenance was unrecordable on precisely the orders that need it.
+ *
+ * ## What is being pinned
+ *
+ *   · a dropship line records the open tab it came from
+ *   · and moves NOT ONE UNIT doing it — the load-bearing assertion
+ *   · the tab's own log says "supplied, shipped direct", never "out of stock"
+ *   · the sale joins the tab's deal ticket, exactly as a shelf sale would
+ *   · two lines naming two different tabs decline to fold, rather than picking
+ *   · taking it off says so in the log
+ */
+{
+  const poRepo = require('../src/main/db/purchaseOrders')
+  const extrasRepo = require('../src/main/db/orderExtras')
+  const qtyAt = (loc: string): number => invStock.stockQty('p_d', loc)
+  const poEvents = (poId: string): string[] =>
+    extrasRepo.listOrderEvents('po', poId).map((e: any) => e.detail ?? '')
+
+  /**
+   * AN OPEN TAB THAT WAS NEVER RECEIVED, which is the honest shape of this deal:
+   * the goods went from the ballroom to the buyer and this business never had
+   * them. It holds no stock at all, so any assertion below that the shelf did
+   * not move is also an assertion that nothing tried to take from a tab with
+   * nothing on it.
+   */
+  const tab = poRepo.createPurchaseOrder(
+    {
+      supplier: 'Roadshow Kansas City',
+      location: 'RM',
+      ongoing: true,
+      lines: [{ productId: 'p_d', item: 'Dropship Hobby Box', quantity: 4, unitPrice: 400 }]
+    },
+    null
+  )
+
+  const shelfBefore = qtyAt('RM')
+  const sale = inv.saveInvoice(
+    {
+      customerName: 'Ballroom Buyer',
+      invoiceNumber: 'SO-9400',
+      invoiceDate: '2026-08-26',
+      location: 'RM',
+      lines: [
+        {
+          item: 'Dropship Hobby Box',
+          productId: 'p_d',
+          quantity: 2,
+          rate: 900,
+          destination: 'Roadshow Kansas City'
+        }
+      ]
+    },
+    null
+  )
+  db.prepare(`UPDATE invoices SET status = 'sent', qbo_id = 'qbo-9400' WHERE id = ?`).run(sale.id)
+  ok(
+    qtyAt('RM') === shelfBefore,
+    'a dropship sale draws no shelf to begin with',
+    `${shelfBefore} -> ${qtyAt('RM')}`
+  )
+  const line = inv.getInvoice(sale.id).lines[0]
+  ok(line.dropship === true, 'and the line is a dropship')
+  ok(line.sourcePoId === null, 'naming nobody yet')
+
+  // --- attach the tab, then say which line came off it --------------------
+  ok(inv.linkDropshipPair(tab.id, sale.id, null).ok, 'the open tab attaches to the sale')
+  ok(
+    inv.getInvoice(sale.id).sourcePos.some((p: any) => p.poId === tab.id),
+    'so the routing screen has something to offer — SuppliedByPicker reads exactly this list'
+  )
+
+  const routed = inv.setInvoiceLineRouting(
+    sale.id,
+    [{ lineId: line.id, destination: 'Roadshow Kansas City', supplier: null, sourcePoId: tab.id }],
+    null
+  )
+  ok(!routed.error, 'A DROPSHIP LINE MAY NAME THE TAB ITS CASES CAME OFF', String(routed.error))
+  ok(
+    inv.getInvoice(sale.id).lines[0].sourcePoId === tab.id,
+    'and it is stored — the one place this fact can live',
+    String(inv.getInvoice(sale.id).lines[0].sourcePoId)
+  )
+  /**
+   * THE LOAD-BEARING ONE. `stockDrawingLines` filters on `holdsStock` before it
+   * reads the purchase order, so there is no path from here to `consumeFromPo`.
+   * Measured on the shelf rather than trusted from a flag.
+   */
+  ok(
+    qtyAt('RM') === shelfBefore,
+    'AND NOT ONE UNIT MOVED — the record is a record; inventory is untouched',
+    `${shelfBefore} -> ${qtyAt('RM')}`
+  )
+  const moves = db
+    .prepare(`SELECT COUNT(*) AS n FROM invoice_stock_moves WHERE invoice_id = ?`)
+    .get(sale.id) as { n: number }
+  ok(moves.n === 0, 'and no stock move was written at all', String(moves.n))
+
+  ok(
+    poEvents(tab.id).some((d: string) => /supplied by this order, shipped direct/i.test(d)),
+    'THE TAB’S OWN LOG SAYS SUPPLIED AND SHIPPED DIRECT',
+    poEvents(tab.id).join(' | ')
+  )
+  ok(
+    !poEvents(tab.id).some((d: string) => /come out of this order.s stock/i.test(d)),
+    'AND NEVER THAT ITS STOCK WAS DRAWN — it has none, and a log that says otherwise is worse ' +
+      'than a log that says nothing',
+    poEvents(tab.id).join(' | ')
+  )
+
+  /**
+   * AND THE SALE JOINS THE TAB'S DEAL TICKET — OFF THE LINE, with nothing
+   * attached at the document level.
+   *
+   * "The deal ticket is just linked to the ongoing PO until the PO is paid out."
+   * A case bought on the tab and shipped straight to the buyer IS sold out of
+   * that tab — it just never touched a shelf on the way — and a deal ticket
+   * groups DOCUMENTS rather than spending anything, so `foldRoadshowTicket` gets
+   * the raw provenance and not the cost view. `saveInvoice` has always folded off
+   * the raw line, so reading the cost view here would put a draft and the
+   * identical posted order on two different tickets.
+   *
+   * ON ITS OWN SALE, and that is the whole point of the extra fixture:
+   * `linkDropshipPair` folds the ticket ITSELF when a purchase is attached, so
+   * asserting this on the sale above would have proved the attach screen works
+   * and said nothing whatever about the routing. This one is attached to nothing
+   * and stays attached to nothing, so the line naming the tab is the only thing
+   * that can have folded it.
+   */
+  const unattached = inv.saveInvoice(
+    {
+      customerName: 'Ticket Fold Buyer',
+      invoiceNumber: 'SO-9403',
+      invoiceDate: '2026-08-26',
+      location: 'RM',
+      lines: [
+        {
+          item: 'Dropship Hobby Box',
+          productId: 'p_d',
+          quantity: 1,
+          rate: 900,
+          destination: 'Roadshow Kansas City'
+        }
+      ]
+    },
+    null
+  )
+  db.prepare(`UPDATE invoices SET status = 'sent', qbo_id = 'qbo-9403' WHERE id = ?`).run(unattached.id)
+  const ticketOf = (invoiceId: string): string | null => {
+    const row = db
+      .prepare(`SELECT merged_into FROM deal_tickets WHERE document_kind = 'so' AND document_id = ?`)
+      .get(invoiceId) as any
+    return row?.merged_into ?? null
+  }
+  ok(ticketOf(unattached.id) === null, 'it starts on its own ticket, folded into nothing')
+  ok(
+    !inv.setInvoiceLineRouting(
+      unattached.id,
+      [
+        {
+          lineId: inv.getInvoice(unattached.id).lines[0].id,
+          destination: 'Roadshow Kansas City',
+          supplier: null,
+          sourcePoId: tab.id
+        }
+      ],
+      null
+    ).error,
+    'the line names the running tab'
+  )
+  ok(
+    inv.getInvoice(unattached.id).sourcePos.length === 0,
+    'and nothing was attached at the document level — this is the LINE talking'
+  )
+  ok(
+    !!ticketOf(unattached.id),
+    'A DROPSHIP OFF A RUNNING TAB JOINS THAT TAB’S DEAL TICKET, the same as a sale off its shelf',
+    String(ticketOf(unattached.id))
+  )
+  ok(qtyAt('RM') === shelfBefore, 'and folding a ticket moved no unit either', String(qtyAt('RM')))
+
+  // --- two tabs on one sale decline to fold -------------------------------
+  /**
+   * `soleSourceOrder` yields null when two lines name two orders, and that rule
+   * had to survive the switch to raw provenance: a deal ticket is a claim about
+   * ONE deal, and folding a sale into one of the two shops that supplied it puts
+   * a week's figure on the wrong one.
+   */
+  const otherTab = poRepo.createPurchaseOrder(
+    {
+      supplier: 'Roadshow Tulsa',
+      location: 'RM',
+      ongoing: true,
+      lines: [{ productId: 'p_d', item: 'Dropship Hobby Box', quantity: 4, unitPrice: 400 }]
+    },
+    null
+  )
+  const twoTabs = inv.saveInvoice(
+    {
+      customerName: 'Two Ballrooms Buyer',
+      invoiceNumber: 'SO-9401',
+      invoiceDate: '2026-08-26',
+      location: 'RM',
+      lines: [
+        {
+          item: 'Dropship Hobby Box',
+          productId: 'p_d',
+          quantity: 1,
+          rate: 900,
+          destination: 'Roadshow Kansas City'
+        },
+        {
+          item: 'Dropship Hobby Box',
+          productId: 'p_d',
+          quantity: 1,
+          rate: 900,
+          destination: 'Roadshow Tulsa'
+        }
+      ]
+    },
+    null
+  )
+  db.prepare(`UPDATE invoices SET status = 'sent', qbo_id = 'qbo-9401' WHERE id = ?`).run(twoTabs.id)
+  const both = inv.getInvoice(twoTabs.id).lines
+  ok(
+    !inv.setInvoiceLineRouting(
+      twoTabs.id,
+      [
+        {
+          lineId: both[0].id,
+          destination: 'Roadshow Kansas City',
+          supplier: null,
+          sourcePoId: tab.id
+        },
+        { lineId: both[1].id, destination: 'Roadshow Tulsa', supplier: null, sourcePoId: otherTab.id }
+      ],
+      null
+    ).error,
+    'two lines may name two different tabs'
+  )
+  const twoLines = inv.getInvoice(twoTabs.id).lines
+  ok(
+    twoLines[0].sourcePoId === tab.id && twoLines[1].sourcePoId === otherTab.id,
+    'AND EACH KEEPS ITS OWN ANSWER — "the correct products just have to be attached"',
+    `${twoLines[0].sourcePoId} / ${twoLines[1].sourcePoId}`
+  )
+  const notFolded = db
+    .prepare(`SELECT merged_into FROM deal_tickets WHERE document_kind = 'so' AND document_id = ?`)
+    .get(twoTabs.id) as any
+  ok(
+    !notFolded?.merged_into,
+    'AND THE SALE FOLDS INTO NEITHER TICKET, rather than picking one of the two shops',
+    String(notFolded?.merged_into)
+  )
+  ok(qtyAt('RM') === shelfBefore, 'the shelf has still not moved for any of it', String(qtyAt('RM')))
+
+  // --- one line, five cases, two ballrooms --------------------------------
+  /**
+   * SPLIT BY CASE AND EVERY SLICE A DROPSHIP. Five cases on one line at one
+   * price, three off the Kansas City tab and two off Tulsa, none of them ever
+   * here. The slice is where "the correct products just have to be attached"
+   * becomes exact: the answer is per case, not per document.
+   */
+  const splitSale = inv.saveInvoice(
+    {
+      customerName: 'Five Case Buyer',
+      invoiceNumber: 'SO-9402',
+      invoiceDate: '2026-08-26',
+      location: 'RM',
+      lines: [
+        {
+          item: 'Dropship Hobby Box',
+          productId: 'p_d',
+          quantity: 5,
+          rate: 900,
+          destination: 'Roadshow Kansas City'
+        }
+      ]
+    },
+    null
+  )
+  db.prepare(`UPDATE invoices SET status = 'sent', qbo_id = 'qbo-9402' WHERE id = ?`).run(splitSale.id)
+  const splitLineId = inv.getInvoice(splitSale.id).lines[0].id
+  const splitRes = inv.setInvoiceLineRouting(
+    splitSale.id,
+    [
+      {
+        lineId: splitLineId,
+        destination: 'Roadshow Kansas City',
+        supplier: null,
+        allocations: [
+          { quantity: 3, destination: 'Roadshow Kansas City', sourcePoId: tab.id },
+          { quantity: 2, destination: 'Roadshow Tulsa', sourcePoId: otherTab.id }
+        ]
+      }
+    ],
+    null
+  )
+  ok(!splitRes.error, 'A SPLIT OF DROPSHIP SLICES IS ACCEPTED', String(splitRes.error))
+  const sliced = inv.getInvoice(splitSale.id).lines[0].allocations
+  ok(
+    sliced.length === 2 &&
+      sliced[0].sourcePoId === tab.id &&
+      sliced[1].sourcePoId === otherTab.id,
+    'AND EACH SLICE REMEMBERS ITS OWN BALLROOM — written through the ordinary write path, not ' +
+      'poked into the column',
+    sliced.map((a: any) => `${a.quantity}:${a.sourcePoId}`).join(' ')
+  )
+  ok(
+    sliced.every((a: any) => a.holdsStock === false),
+    'both slices ship direct'
+  )
+  ok(qtyAt('RM') === shelfBefore, 'and five cases moved no shelf', String(qtyAt('RM')))
+  ok(
+    inv.getInvoice(splitSale.id).lines[0].sourcePoId === tab.id,
+    'THE LINE’S OWN COLUMN DESCRIBES ITS FIRST SLICE, so a reader written before splits existed ' +
+      'still sees a true answer rather than a blank',
+    String(inv.getInvoice(splitSale.id).lines[0].sourcePoId)
+  )
+  /**
+   * AND A CHANGE THAT DOES NOT MENTION THE SPLITS LEAVES THAT COLUMN ALONE.
+   *
+   * The head columns are copied off the first slice, and the slices are read
+   * back through `effectiveSlices` — the COST view, which blanks the purchase
+   * order on anything that draws no shelf. Copying that blank into the line
+   * would erase the record while the allocation row it is supposed to describe
+   * still holds it, so the raw row is what the column takes.
+   */
+  ok(
+    !inv.setInvoiceLineRouting(
+      splitSale.id,
+      [{ lineId: splitLineId, destination: 'Roadshow Kansas City', supplier: null }],
+      null
+    ).error,
+    'a route-only change on a split line is accepted'
+  )
+  ok(
+    inv.getInvoice(splitSale.id).lines[0].sourcePoId === tab.id,
+    'AND THE COLUMN STILL NAMES THE FIRST SLICE’S TAB — not blanked by the cost view on the way ' +
+      'through',
+    String(inv.getInvoice(splitSale.id).lines[0].sourcePoId)
+  )
+  ok(
+    inv.getInvoice(splitSale.id).lines[0].allocations.length === 2,
+    'and the slices are all still there'
+  )
+
+  // --- and taking it back off says so -------------------------------------
+  ok(
+    !inv.setInvoiceLineRouting(
+      sale.id,
+      [{ lineId: line.id, destination: 'Roadshow Kansas City', supplier: null, sourcePoId: null }],
+      null
+    ).error,
+    'the record can be taken back off'
+  )
+  ok(inv.getInvoice(sale.id).lines[0].sourcePoId === null, 'and the line names nobody again')
+  ok(
+    poEvents(tab.id).some((d: string) => /no longer supplied by this order/i.test(d)),
+    'AND THE TAB IS TOLD IT LOST THEM — a log that only ever gains claims is a wrong log',
+    poEvents(tab.id).join(' | ')
+  )
+  /**
+   * THE DOCUMENT-LEVEL LINK IS UNTOUCHED BY ANY OF IT. Two different claims:
+   * which purchases supplied this sale (`sale_purchase_links`, made by a person
+   * on the attach screen) and which one THIS LINE's goods came off. Clearing the
+   * second must not quietly retract the first.
+   */
+  ok(
+    inv.getInvoice(sale.id).sourcePos.some((p: any) => p.poId === tab.id),
+    'AND THE TAB IS STILL ATTACHED TO THE SALE — clearing a line’s provenance is not detaching ' +
+      'the purchase order'
+  )
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)

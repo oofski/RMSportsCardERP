@@ -53,10 +53,27 @@ export interface InvoiceLineAllocation {
   /** `destinationHoldsStock(destination)` — RM or AM, and nothing else. */
   holdsStock: boolean
   /**
-   * Which purchase order's cost layers this slice consumes.
+   * WHICH PURCHASE ORDER THESE UNITS CAME FROM. Set on ANY slice.
    *
-   * Only ever set on a slice that holds stock: a dropship slice consumes no
-   * layers, so it cannot say whose. See consumeFromPo.
+   * It used to be blanked on a dropship slice, on the reasoning that this
+   * column says which cost layers to consume and a slice consuming none cannot
+   * say whose. True of the COST — and it made the owner's case unrecordable:
+   * "we need to know where products are coming from, and those are open tabs".
+   * A case bought on a roadshow tab and shipped straight to the buyer never
+   * reaches a shelf here, so it has no layers to consume and, under the old
+   * rule, nowhere to record where it came from either.
+   *
+   * So the raw value is provenance, and `holdsStock` beside it says which of
+   * the two things it means:
+   *
+   *   holdsStock true   these units come out of THAT order's cost layers, and
+   *                     consumeFromPo is handed it, so it moves real money.
+   *   holdsStock false  supplied by that order, shipped direct. A record, and
+   *                     nothing that costs anything reads it.
+   *
+   * `effectiveSlices` is the COST view and blanks it on a non-stock slice, so
+   * every consumer that asks the shared rule is structurally unable to spend
+   * against a dropship — see there.
    */
   sourcePoId: string | null
   sourcePoNumber: string | null
@@ -117,12 +134,26 @@ export function allocationProblem(
 }
 
 /**
- * The slices a line ACTUALLY has, splits or not.
+ * The slices a line ACTUALLY has, splits or not — THE COST VIEW.
  *
  * The one function every reader should use, because it is where "no rows means
  * one implicit slice" lives. Ask it rather than checking `allocations.length`
  * and branching, or the zero-row case gets handled correctly in some places and
  * forgotten in others — which is how a back-compat mechanism becomes a bug.
+ *
+ * ## IT BLANKS `sourcePoId` ON EVERY SLICE THAT DRAWS NO SHELF
+ *
+ * A slice may now RECORD which purchase order supplied it even when it is a
+ * dropship — that is provenance, and the owner needs it on exactly those lines.
+ * But a dropship consumes no cost layers, so the answer to "whose layers does
+ * this spend" is nothing, and this is the function everything that spends asks:
+ * `stockDrawingLines`, `claimsOf`, the purchase-order history, the deal-ticket
+ * fold. Blanking here means none of them can be handed a purchase order to
+ * charge against goods that never touched a shelf, and none of them needs a
+ * guard of its own that somebody could forget to write.
+ *
+ * Read the stored row directly when you want the provenance. Ask this when you
+ * want the cost. They are two questions and they now have two answers.
  */
 export function effectiveSlices(
   line: {
@@ -149,7 +180,9 @@ export function effectiveSlices(
       destination: a.destination,
       supplier: a.supplier,
       holdsStock: a.holdsStock,
-      sourcePoId: a.sourcePoId
+      // The cost view — see above. The row keeps its own answer; this is what
+      // everything that spends money is allowed to see.
+      sourcePoId: a.holdsStock ? a.sourcePoId : null
     }))
   }
   const destination = (line.destination ?? '').trim() || headerLocation

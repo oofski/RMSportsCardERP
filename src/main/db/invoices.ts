@@ -1044,8 +1044,14 @@ function readLineAllocations(
       // slice cannot end up saying it holds stock at a customer's address.
       supplier: holdsStock ? null : (r.supplier ?? '').trim() || r.destination,
       holdsStock,
-      sourcePoId: holdsStock ? (r.source_po_id ?? null) : null,
-      sourcePoNumber: holdsStock ? ((r.source_po_number ?? '').trim() || null) : null
+      // READ RAW, on a dropship slice as much as a stock one. This is where a
+      // slice says WHERE ITS GOODS CAME FROM, and blanking it here is what used
+      // to make provenance unrecordable on the roadshow open tabs the owner
+      // ships direct. Nothing that spends money sees this value: everything
+      // that costs a slice goes through `effectiveSlices`, which is the cost
+      // view and blanks it when the slice draws no shelf.
+      sourcePoId: r.source_po_id ?? null,
+      sourcePoNumber: (r.source_po_number ?? '').trim() || null
     })
     out.set(r.invoice_line_id, list)
   }
@@ -3043,8 +3049,9 @@ export function setInvoiceLineRouting(
      *
      * `undefined` leaves whatever the line already names — a caller changing
      * only the destination must not silently drop a roadshow pointer somebody
-     * set. `null` clears it. Meaningless on a dropship line, and forced to null
-     * there: a line that consumes no cost layers cannot name which ones.
+     * set. `null` clears it. Accepted on a DROPSHIP line too, where it is a
+     * record of where the goods came from rather than a claim on cost layers —
+     * see the long note at the write below.
      */
     sourcePoId?: string | null
     /**
@@ -3186,12 +3193,39 @@ export function setInvoiceLineRouting(
       // destination IS the party shipping it, exactly as the sales form derives
       // it. A stock line has no supplier at all.
       const supplier = drawsStock ? null : (change.supplier ?? '').trim() || dest || null
-      // THE ROADSHOW POINTER GOES WITH THE SHELF. `source_po_id` on a line says
-      // which purchase order's cost layers to consume, which is meaningless on a
-      // line that consumes none. Left behind it would be a stale claim that the
-      // chooser itself hides on a dropship line.
+      /**
+       * WHICH PURCHASE ORDER THESE GOODS CAME FROM — on ANY line, including a
+       * dropship.
+       *
+       * This used to be forced to null the moment a line became a dropship, on
+       * the reasoning that `source_po_id` says which cost layers to consume and
+       * a line consuming none cannot name whose. True of the COST, and it threw
+       * away the thing the owner actually needs: "we need to know where products
+       * are coming from, and those are open tabs" — a case bought on a roadshow
+       * tab and shipped straight to the buyer never reaches a shelf here, so it
+       * has no layers to consume and nowhere to record where it came from
+       * either. The provenance was unrecordable on exactly the orders where it
+       * mattered most.
+       *
+       * ## ONE COLUMN, AND THE STOCK ENGINE STRUCTURALLY CANNOT READ IT WRONG
+       *
+       * It answers "where did this line come from", and each kind of line can
+       * only answer that one way:
+       *
+       *   stock line     out of THAT order's cost layers — and consumeFromPo is
+       *                  handed it, so it moves real money.
+       *   dropship line  supplied by that order, shipped direct. A record, and
+       *                  nothing else reads it.
+       *
+       * The safety is not a guard that could be forgotten; it is the shape of
+       * the code. `stockDrawingLines` filters on `holdsStock` BEFORE it ever
+       * looks at `sourcePoId`, so a dropship line's value cannot reach
+       * `applyInvoiceStock` at all — there is no path. `effectiveSlices` nulls it
+       * on a non-stock slice for the same reason, which is why the raw column is
+       * read for provenance and the slice rule is read for cost.
+       */
       const asked = change.sourcePoId === undefined ? line.source_po_id : change.sourcePoId
-      const sourcePo = drawsStock ? (asked ?? '').trim() || null : null
+      const sourcePo = (asked ?? '').trim() || null
 
       /**
        * THE SPLITS THIS LINE WILL HAVE, in the three states the caller can ask
@@ -3232,7 +3266,12 @@ export function setInvoiceLineRouting(
             destination: where,
             supplier: holds ? null : where,
             holdsStock: holds,
-            sourcePoId: holds ? (a.sourcePoId ?? '').trim() || null : null
+            // STORED RAW on a dropship slice as much as a stock one — the same
+            // provenance-not-cost rule the line's own column now keeps. These
+            // slices are handed to `claimsOf` below, which skips anything that
+            // draws no shelf before it ever reads this, and to the INSERT, which
+            // is where the record belongs.
+            sourcePoId: (a.sourcePoId ?? '').trim() || null
           }
         })
       }
@@ -3303,10 +3342,19 @@ export function setInvoiceLineRouting(
       // rather than "mixed": these columns have to hold a real destination, and
       // a made-up word in them would reach the QuickBooks export and the board.
       const head = keepSplits || (rewriteSplits && slices.length > 1) ? slices[0] : null
+      // THE FIRST SLICE'S RAW PROVENANCE, which is not always what `slices`
+      // carries. In the keep-splits branch `slices` came out of
+      // `effectiveSlices` — the cost view — so a first slice that ships direct
+      // has already had its purchase order blanked. Writing that into the line's
+      // own column would quietly erase the record while the allocation row it is
+      // supposed to describe still holds it.
+      const headSourcePo = keepSplits
+        ? (splitsBefore.get(line.id)?.[0]?.sourcePoId ?? null)
+        : (slices[0]?.sourcePoId ?? null)
       setLine.run(
         head ? lineDestination(head.destination, stockLocation) : dest,
         head ? head.supplier : supplier,
-        head ? head.sourcePoId : sourcePo,
+        head ? headSourcePo : sourcePo,
         stamp,
         line.id,
         id
@@ -3377,18 +3425,51 @@ export function setInvoiceLineRouting(
       if (!po) return
       m.set(po, [...(m.get(po) ?? []), item])
     }
+    /**
+     * WHERE EACH SLICE'S GOODS CAME FROM — the raw answer, cost view or not.
+     *
+     * `effectiveSlices` blanks the purchase order on a slice that draws no
+     * shelf, which is right for money and wrong for the question these two
+     * histories ask. A stock slice reads identically either way; a dropship
+     * slice is the whole reason this exists.
+     */
+    const provenanceOf = (
+      l: Row,
+      splits: Map<string, InvoiceLineAllocation[]>
+    ): Array<{ quantity: number; holdsStock: boolean; sourcePoId: string | null }> => {
+      const rows = splits.get(l.id) ?? []
+      if (rows.length > 0) {
+        return rows.map((a) => ({
+          quantity: a.quantity,
+          holdsStock: a.holdsStock,
+          sourcePoId: a.sourcePoId
+        }))
+      }
+      // The zero-rows case, resolved exactly as effectiveSlices resolves it —
+      // one implicit slice of the whole line at the line's own destination.
+      const where = lineDestination(l.destination, stockLocation) ?? stockLocation
+      return [
+        {
+          quantity: l.quantity,
+          holdsStock: destinationHoldsStock(where),
+          sourcePoId: (l.source_po_id ?? '').trim() || null
+        }
+      ]
+    }
     const pushSlices = (
       m: Map<string, string[]>,
       rows: Row[],
-      splits: Map<string, InvoiceLineAllocation[]>
+      splits: Map<string, InvoiceLineAllocation[]>,
+      /** true collects the slices that draw a shelf, false the ones that do not. */
+      wantStock: boolean
     ): void => {
       for (const l of rows) {
         if (!touched.includes(l.id)) continue
         // Summed per order first, so one line split into two slices of the same
         // purchase order reads as one claim of six rather than two of three.
         const byPo = new Map<string, number>()
-        for (const s of effectiveSlices(asSliceable(l, splits), stockLocation)) {
-          if (!s.holdsStock || !s.sourcePoId) continue
+        for (const s of provenanceOf(l, splits)) {
+          if (s.holdsStock !== wantStock || !s.sourcePoId) continue
           byPo.set(s.sourcePoId, (byPo.get(s.sourcePoId) ?? 0) + s.quantity)
         }
         for (const [poId, qty] of byPo) {
@@ -3396,8 +3477,8 @@ export function setInvoiceLineRouting(
         }
       }
     }
-    pushSlices(poBefore, before, splitsBefore)
-    pushSlices(poAfter, after, splitsAfter)
+    pushSlices(poBefore, before, splitsBefore, true)
+    pushSlices(poAfter, after, splitsAfter, true)
     const soLabel = (header.invoice_number ?? '').trim()
       ? `sales order ${(header.invoice_number ?? '').trim()}`
       : 'a sales order'
@@ -3418,6 +3499,41 @@ export function setInvoiceLineRouting(
       })
     }
 
+    /**
+     * AND THE SAME AGAIN FOR THE CASES A SUPPLIER SHIPS DIRECT.
+     *
+     * A SEPARATE PASS WITH ITS OWN WORDING, not a widening of the one above,
+     * because the two say different things and only one of them is about money.
+     * "These come out of this order's stock" is a claim on cost layers. "These
+     * are supplied by this order, shipped direct" is provenance — the owner's
+     * open-tab case, where a case bought on a roadshow never reaches a shelf
+     * here and there is no stock sentence that would be true about it.
+     *
+     * Writing both in one sentence would have a roadshow tab's history claiming
+     * a draw on stock it never held, which is the sort of half-truth in a log
+     * that costs somebody an afternoon a year later.
+     */
+    const dropBefore = new Map<string, string[]>()
+    const dropAfter = new Map<string, string[]>()
+    pushSlices(dropBefore, before, splitsBefore, false)
+    pushSlices(dropAfter, after, splitsAfter, false)
+    for (const [poId, items] of dropAfter) {
+      if ((dropBefore.get(poId) ?? []).join('|') === items.join('|')) continue
+      recordOrderEvent('po', poId, 'link', {
+        detail: `${items.join(', ')} on ${soLabel} are supplied by this order, shipped direct`,
+        actorId,
+        db
+      })
+    }
+    for (const [poId, items] of dropBefore) {
+      if (dropAfter.has(poId)) continue
+      recordOrderEvent('po', poId, 'link', {
+        detail: `${items.join(', ')} on ${soLabel} are no longer supplied by this order`,
+        actorId,
+        db
+      })
+    }
+
     // The same fold a draft save performs. Naming an order on a posted sale
     // means exactly what naming it on a draft did — see foldRoadshowTicket.
     //
@@ -3425,14 +3541,19 @@ export function setInvoiceLineRouting(
     // orders when a split line takes cases from two of them and declines to fold
     // — which is exactly what it should do: a deal ticket is a claim about one
     // deal, and picking one of the two would put a week's figure on the wrong shop.
+    //
+    // RAW PROVENANCE, not the cost view, and the distinction matters here. A case
+    // bought on a roadshow tab and shipped straight to the buyer IS sold out of
+    // that tab — it just never touched a shelf on the way — and a deal ticket
+    // groups DOCUMENTS, it does not spend anything. `saveInvoice` has always
+    // folded off the raw line for the same reason, so reading the cost view here
+    // would have a draft and the identical posted order land on two different
+    // tickets. The narrowing that keeps this honest is inside foldRoadshowTicket:
+    // a RUNNING open tab only, and only when every slice names the same one.
     foldRoadshowTicket(
       db,
       id,
-      after.flatMap((l) =>
-        effectiveSlices(asSliceable(l, splitsAfter), stockLocation).map((s) => ({
-          sourcePoId: s.sourcePoId
-        }))
-      ),
+      after.flatMap((l) => provenanceOf(l, splitsAfter).map((s) => ({ sourcePoId: s.sourcePoId }))),
       header.customer_name,
       actorId
     )

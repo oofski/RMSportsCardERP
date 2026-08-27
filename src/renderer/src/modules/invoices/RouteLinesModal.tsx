@@ -15,6 +15,7 @@ import { useToast } from '../../components/Toast'
 import { DestinationSelect } from '../invoicing/PartySelect'
 import { newDraftKey } from '../invoicing/helpers'
 import { SourceOrderPicker } from './SourceOrderPicker'
+import { SuppliedByPicker } from './SuppliedByPicker'
 
 /**
  * WHERE THE LINES OF A POSTED SALE ARE FULFILLED FROM — case by case.
@@ -67,11 +68,22 @@ type DraftSlice = {
 export function RouteLinesModal({
   invoice,
   onClose,
-  onDone
+  onDone,
+  onAttachOrders
 }: {
   invoice: InvoiceDetail
   onClose: () => void
   onDone: () => void | Promise<void>
+  /**
+   * Leave for the screen that attaches purchase orders to this sale.
+   *
+   * A line a supplier ships direct records where its goods came from by naming
+   * one of the orders ATTACHED to the sale — see SuppliedByPicker — so a sale
+   * with none attached has an empty list and nothing to say about it. This is
+   * the way out of that, offered in place of the dropdown rather than as a
+   * dropdown with nothing in it.
+   */
+  onAttachOrders?: () => void
 }): JSX.Element {
   const toast = useToast()
   const [busy, setBusy] = useState(false)
@@ -134,7 +146,10 @@ export function RouteLinesModal({
         destination: where,
         supplier: holdsStock ? null : where,
         holdsStock,
-        sourcePoId: holdsStock ? s.sourcePoId || null : null,
+        // RAW, on a dropship slice as much as a stock one: this field is now
+        // where a slice records which purchase order supplied it, and
+        // `effectiveSlices` is what blanks it for anything that costs money.
+        sourcePoId: s.sourcePoId || null,
         sourcePoNumber: null
       }
     })
@@ -424,19 +439,16 @@ export function RouteLinesModal({
                                   ariaLabel={`Where split ${i + 1} of ${l.item} comes from`}
                                   value={s.destination || null}
                                   drop={sliceDrop}
-                                  onChange={(d) =>
-                                    patchSlice(l, s.key, {
-                                      destination: d ?? '',
-                                      // A split that stops coming off a shelf
-                                      // cannot go on naming whose cases it
-                                      // takes — it consumes no cost layers at
-                                      // all. Cleared here so the stored row and
-                                      // the screen never disagree.
-                                      ...(destinationHoldsStock(d ?? '')
-                                        ? {}
-                                        : { sourcePoId: '' })
-                                    })
-                                  }
+                                  // THE ANSWER SURVIVES THE MOVE. This used to
+                                  // blank the purchase order the moment a split
+                                  // stopped coming off a shelf, because a
+                                  // dropship consumes no cost layers and so
+                                  // could not name whose. It can now RECORD
+                                  // which order supplied it — that is the whole
+                                  // point of the open-tab case — so throwing the
+                                  // answer away would be destroying provenance
+                                  // on the one kind of line that most needs it.
+                                  onChange={(d) => patchSlice(l, s.key, { destination: d ?? '' })}
                                 />
                                 <button
                                   type="button"
@@ -453,7 +465,24 @@ export function RouteLinesModal({
                                   <Icon name="Trash2" size={15} />
                                 </button>
                               </div>
-                              {!sliceDrop && (
+                              {/* WHERE THESE CASES CAME FROM — the same question
+                                  of both kinds of split, asked of whichever
+                                  thing can answer it. A split off a shelf asks
+                                  the shelf what is on it and is costed against
+                                  that order's layers; a split a supplier ships
+                                  direct never touched a shelf, so it names one
+                                  of the purchase orders attached to this sale
+                                  and the answer is a record rather than a
+                                  charge. See SuppliedByPicker. */}
+                              {sliceDrop ? (
+                                <SuppliedByPicker
+                                  orders={invoice.sourcePos}
+                                  productName={l.item}
+                                  value={s.sourcePoId}
+                                  onChange={(poId) => patchSlice(l, s.key, { sourcePoId: poId })}
+                                  onAttach={onAttachOrders}
+                                />
+                              ) : (
                                 <SourceOrderPicker
                                   productId={l.productId as string}
                                   productName={l.item}
@@ -503,16 +532,32 @@ export function RouteLinesModal({
                         drop={drop}
                         onChange={(d) => setEdits((prev) => ({ ...prev, [l.id]: d ?? '' }))}
                       />
-                      {/* WHOSE CASES, once it is established that it takes any.
+                      {/* WHICH PURCHASE ORDER, the second question — and it is
+                          asked of BOTH kinds of line, because both have an
+                          answer and only one of them costs anything.
 
-                          The second question, and only ever asked of a line that
-                          comes off a shelf: a dropship line went supplier-to-buyer
-                          and never sat on one, so there is no order's stock to sell
-                          out of. The same picker the invoice form shows on a draft,
-                          answering the same question — it renders nothing at all
-                          unless some purchase order actually holds this product on
-                          this shelf, which is almost never. */}
-                      {!drop && (
+                          A line off a shelf asks the shelf: the same picker the
+                          invoice form shows on a draft, offering the orders that
+                          actually hold this product here, and naming one decides
+                          which cost layers the line spends.
+
+                          A line a supplier ships direct has no shelf to ask —
+                          the cases went straight to the buyer and were never
+                          here — which is precisely why the question used to go
+                          unasked on the orders where the owner most needs it
+                          answered: "those are open tabs". So it names one of the
+                          purchase orders ATTACHED to this sale instead, and the
+                          answer is provenance rather than a charge. See
+                          SuppliedByPicker. */}
+                      {drop ? (
+                        <SuppliedByPicker
+                          orders={invoice.sourcePos}
+                          productName={l.item}
+                          value={l.id in sources ? sources[l.id] : (l.sourcePoId ?? '')}
+                          onChange={(poId) => setSources((prev) => ({ ...prev, [l.id]: poId }))}
+                          onAttach={onAttachOrders}
+                        />
+                      ) : (
                         <SourceOrderPicker
                           productId={l.productId}
                           productName={l.item}

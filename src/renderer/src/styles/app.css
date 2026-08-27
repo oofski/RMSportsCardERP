@@ -27486,6 +27486,17 @@ button.sor-team:focus-visible {
   font-size: 11px;
   line-height: 1.45;
 }
+/* The way out of an empty list, in place of the empty list. A dropship line
+   records where its cases came from by naming a purchase order ATTACHED to the
+   sale, so a sale with none attached has nothing to offer — and a dropdown with
+   one blank entry in it reads as a broken control rather than as a step nobody
+   has taken yet. See SuppliedByPicker. */
+.so-source-attach {
+  height: 24px;
+  padding: 0 8px;
+  font-size: 11px;
+  color: var(--text-3);
+}
 
 /* ---------- Splitting a posted sale's line by case (RouteLinesModal) ----------
    The purchase order's split row, one column different: a buy split names a

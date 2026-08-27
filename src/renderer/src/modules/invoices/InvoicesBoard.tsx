@@ -703,7 +703,20 @@ export function InvoicesBoard({
       )}
 
       {routing && (
-        <RouteLinesModal invoice={routing} onClose={() => setRouting(null)} onDone={load} />
+        <RouteLinesModal
+          invoice={routing}
+          onClose={() => setRouting(null)}
+          onDone={load}
+          // A line a supplier ships direct records where its goods came from by
+          // naming one of the purchase orders attached to this sale, so a sale
+          // with none attached needs a way to get there. Hands over rather than
+          // stacking two modals: the attach screen reloads the board, and the
+          // routing screen has to come back with the new list to offer it.
+          onAttachOrders={() => {
+            setRouting(null)
+            setAttaching(routing)
+          }}
+        />
       )}
 
       {paying && (
