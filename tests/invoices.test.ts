@@ -1967,6 +1967,125 @@ console.log('\n=== WHERE THE BOX GOES: ship-to on a sales order ===')
       'decision must not rewrite it'
   )
 
+  // --- THE BUYER LEARNS AN ADDRESS TYPED ON AN ORDER ----------------------
+  /**
+   * The owner's ask: "if we add an address to a certain customer, next time we
+   * do it, it auto-populates with the entered address."
+   *
+   * The snapshot ran one way only. A buyer who already had an address had it
+   * copied onto every new order; a buyer who did not never gained one, however
+   * many times somebody typed it — so it was re-typed on every order for that
+   * buyer, for ever.
+   */
+  const fresh = repo.saveCustomer({ name: 'Learns An Address', email: 'learn@example.com' })
+  ok(fresh.billAddr === null && fresh.shipAddr === null, 'a new buyer has neither address')
+
+  repo.saveInvoice(
+    {
+      customerId: fresh.id,
+      customerName: fresh.name,
+      invoiceNumber: 'SO-LEARN-1',
+      invoiceDate: '2026-08-25',
+      billAddr: BILL,
+      shipAddr: WAREHOUSE,
+      lines: [{ item: 'A case', quantity: 1, rate: 100 }]
+    },
+    null
+  )
+  const learned = repo.listCustomers().find((c: any) => c.id === fresh.id)
+  ok(
+    learned.billAddr?.city === 'Dallas',
+    'AFTER ONE ORDER THE BUYER HAS THE BILL-TO',
+    String(learned.billAddr?.city)
+  )
+  ok(
+    learned.shipAddr?.city === 'Fort Worth',
+    'AND THE SHIP-TO — so the next order for them starts pre-filled instead of being re-typed',
+    String(learned.shipAddr?.city)
+  )
+
+  /** Which is the whole point: the NEXT order picks it up with nothing typed. */
+  const nextOne = repo.saveInvoice(
+    {
+      customerId: fresh.id,
+      customerName: fresh.name,
+      invoiceNumber: 'SO-LEARN-2',
+      invoiceDate: '2026-08-26',
+      lines: [{ item: 'A case', quantity: 1, rate: 100 }]
+    },
+    null
+  )
+  ok(
+    nextOne.shipAddr?.city === 'Fort Worth' && nextOne.billAddr?.city === 'Dallas',
+    'AND THE NEXT ORDER AUTO-POPULATES BOTH, with nothing typed on it',
+    `${nextOne.billAddr?.city} / ${nextOne.shipAddr?.city}`
+  )
+
+  // --- A ONE-OFF DOES NOT BECOME THE DEFAULT ------------------------------
+  /**
+   * The rule that makes remembering safe. A card show, a hotel, a friend's shop
+   * for one week is typed on ONE order — and if that overwrote the buyer, the
+   * next three orders would silently ship to a convention centre that closed on
+   * Sunday.
+   */
+  const SHOW = {
+    line1: '1 Convention Plaza', line2: null, city: 'Chicago', region: 'IL',
+    postalCode: '60616', country: null
+  }
+  const oneOffOrder = repo.saveInvoice(
+    {
+      customerId: fresh.id,
+      customerName: fresh.name,
+      invoiceNumber: 'SO-LEARN-3',
+      invoiceDate: '2026-08-27',
+      shipAddr: SHOW,
+      lines: [{ item: 'A case', quantity: 1, rate: 100 }]
+    },
+    null
+  )
+  ok(oneOffOrder.shipAddr?.city === 'Chicago', 'the one-off order ships to the show')
+  const stillTheirs = repo.listCustomers().find((c: any) => c.id === fresh.id)
+  ok(
+    stillTheirs.shipAddr?.city === 'Fort Worth',
+    'BUT THE BUYER STILL SHIPS TO THEIR WAREHOUSE — an address already on file is never ' +
+      'overwritten, or one week at a card show would redirect every order after it',
+    String(stillTheirs.shipAddr?.city)
+  )
+  const afterOneOff = repo.saveInvoice(
+    {
+      customerId: fresh.id,
+      customerName: fresh.name,
+      invoiceNumber: 'SO-LEARN-4',
+      invoiceDate: '2026-08-28',
+      lines: [{ item: 'A case', quantity: 1, rate: 100 }]
+    },
+    null
+  )
+  ok(
+    afterOneOff.shipAddr?.city === 'Fort Worth',
+    'so the order after the show goes back to the warehouse',
+    String(afterOneOff.shipAddr?.city)
+  )
+
+  // --- a one-off NAME has no record to learn against ----------------------
+  const typedOver = repo.saveInvoice(
+    {
+      customerId: null,
+      customerName: 'Somebody Typed Once',
+      invoiceNumber: 'SO-LEARN-5',
+      invoiceDate: '2026-08-28',
+      shipAddr: SHOW,
+      lines: [{ item: 'A case', quantity: 1, rate: 100 }]
+    },
+    null
+  )
+  ok(typedOver.shipAddr?.city === 'Chicago', 'a one-off buyer keeps the address on the order')
+  ok(
+    !repo.listCustomers().some((c: any) => c.name === 'Somebody Typed Once'),
+    'AND NO BUYER RECORD IS INVENTED FOR THEM — remembering an address must not quietly create ' +
+      'a customer nobody asked for'
+  )
+
   // --- and it can be taken back off ---------------------------------------
   const cleared = repo.saveInvoice(
     {
@@ -1980,11 +2099,45 @@ console.log('\n=== WHERE THE BOX GOES: ship-to on a sales order ===')
     },
     null
   )
-  ok(cleared.shipAddr === null, 'clearing it stores nothing rather than an empty shell')
+  /**
+   * CLEARING MEANS "USE THE BUYER'S", and the buyer's is then snapshotted on —
+   * exactly what the bill-to has always done, and the same code path.
+   *
+   * `plain` had no ship-to when the Austin one-off was typed, so the buyer
+   * LEARNED it, which is the feature. Sending null afterwards does not blank the
+   * order; it re-reads the buyer and copies their address across, which is what
+   * a snapshot is. There is deliberately no way to make an order say "ships
+   * nowhere" — a sale with no destination at all is not a state this app has.
+   */
   ok(
-    shared.shipToAddress(cleared)?.city === 'Dallas',
-    'so it goes back to the billing address',
-    String(shared.shipToAddress(cleared)?.city)
+    cleared.shipAddr?.city === 'Austin',
+    'CLEARING RE-SNAPSHOTS THE BUYER rather than blanking the order — the same rule the ' +
+      'bill-to has always followed',
+    String(cleared.shipAddr?.city)
+  )
+  ok(
+    shared.shipToAddress(cleared)?.city === 'Austin',
+    'so it resolves to the buyer’s address, which they learned from this very order — the ' +
+      'auto-populate the owner asked for, seen from the other side'
+  )
+  /** A buyer who never learned one still falls all the way back to the bill-to. */
+  const noShip = repo.saveCustomer({ name: 'Bills Only Buyer', billAddr: BILL })
+  const noShipOrder = repo.saveInvoice(
+    {
+      customerId: noShip.id,
+      customerName: noShip.name,
+      invoiceNumber: 'SO-SHIP-3',
+      invoiceDate: '2026-08-25',
+      lines: [{ item: 'A case', quantity: 1, rate: 100 }]
+    },
+    null
+  )
+  ok(noShipOrder.shipAddr === null, 'a buyer with no ship-to gives their order none')
+  ok(
+    shared.shipToAddress(noShipOrder)?.city === 'Dallas',
+    'AND IT STILL SHIPS SOMEWHERE — the fallback, which is what carries every order written ' +
+      'before any of this existed',
+    String(shared.shipToAddress(noShipOrder)?.city)
   )
 }
 

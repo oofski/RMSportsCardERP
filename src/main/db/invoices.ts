@@ -1080,6 +1080,94 @@ function customerAddress(customerId: string | null): InvoiceAddress | null {
   return row ? toAddress(row) : null
 }
 
+/**
+ * AN ADDRESS TYPED ON AN ORDER IS REMEMBERED ON THE BUYER.
+ *
+ * The owner's ask: "if we add an address to a certain customer, next time we do
+ * it, it auto-populates with the entered address."
+ *
+ * The snapshot ran one way only. A buyer who already had an address had it
+ * copied onto every new order; a buyer who did not never gained one, however
+ * many times somebody typed it in — so the same address was re-typed on every
+ * order for that buyer, for ever. This closes the loop.
+ *
+ * ## FILL WHAT IS MISSING, NEVER OVERWRITE WHAT IS THERE
+ *
+ * The rule that makes this safe, and the reason it is not simply "save the
+ * order's address onto the buyer". A one-off — a card show, a hotel, a friend's
+ * shop for one week — is typed on ONE order and must not become that buyer's
+ * permanent default, because the next three orders would then silently ship to a
+ * convention centre that closed on Sunday.
+ *
+ * So: nothing stored, and an address typed → remembered. Something stored, and a
+ * different address typed → the order keeps its own and the buyer keeps theirs.
+ * Correcting a buyer's real address for good is an edit to the BUYER, which is a
+ * deliberate act on a different screen, and should be.
+ *
+ * The two addresses are considered independently, because a buyer can easily
+ * have a billing address on file and no ship-to.
+ *
+ * MUST be called inside the caller's transaction.
+ */
+function rememberCustomerAddresses(
+  db: Database.Database,
+  customerId: string | null,
+  billAddr: InvoiceAddress | null,
+  shipAddr: InvoiceAddress | null,
+  stamp: string
+): void {
+  const id = clean(customerId)
+  // No saved buyer, nothing to remember against. A name typed over the top is a
+  // one-off by construction — see `typeName` on the form, which detaches the id
+  // precisely so a one-off cannot rename or rewrite the record.
+  //
+  // AN EARLY-OUT, NOT THE SAFETY NET. The lookup below finds no row for a blank
+  // id and returns anyway, so removing this changes no outcome and no test can
+  // tell the difference. It stays because a query that can only ever come back
+  // empty is one worth not running on every save.
+  if (!id) return
+  if (!hasAddress(billAddr) && !hasAddress(shipAddr)) return
+  const row = db
+    .prepare(`SELECT ${ADDRESS_COLS}, ${SHIP_ADDRESS_COLS} FROM invoice_customers WHERE id = ?`)
+    .get(id) as (AddressRow & ShipAddressRow) | undefined
+  if (!row) return
+
+  const learnBill = hasAddress(billAddr) && !hasAddress(toAddress(row))
+  const learnShip = hasAddress(shipAddr) && !hasAddress(toShipAddress(row))
+  if (!learnBill && !learnShip) return
+
+  // Each half moves as a WHOLE or not at all, the same rule saveCustomer's upsert
+  // keeps: six independent COALESCEs would merge a new street onto an old city
+  // the first time one was cleared, producing an address that was never anybody's.
+  const sets: string[] = []
+  const params: Record<string, unknown> = { id, stamp }
+  if (learnBill) {
+    sets.push(
+      'bill_line1 = @billLine1',
+      'bill_line2 = @billLine2',
+      'bill_city = @billCity',
+      'bill_region = @billRegion',
+      'bill_postal_code = @billPostalCode',
+      'bill_country = @billCountry'
+    )
+    Object.assign(params, addressParams(billAddr))
+  }
+  if (learnShip) {
+    sets.push(
+      'ship_line1 = @shipLine1',
+      'ship_line2 = @shipLine2',
+      'ship_city = @shipCity',
+      'ship_region = @shipRegion',
+      'ship_postal_code = @shipPostalCode',
+      'ship_country = @shipCountry'
+    )
+    Object.assign(params, shipAddressParams(shipAddr))
+  }
+  db.prepare(
+    `UPDATE invoice_customers SET ${sets.join(', ')}, updated_at = @stamp WHERE id = @id`
+  ).run(params)
+}
+
 /** The buyer's stored ship-to. Null on almost everybody — see shipToAddress. */
 function customerShipAddress(customerId: string | null): InvoiceAddress | null {
   if (!customerId) return null
@@ -1461,6 +1549,15 @@ export function saveInvoice(
       createdAt: existing?.created_at ?? stamp,
       updatedAt: stamp
     })
+
+    /**
+     * AND THE BUYER LEARNS IT, when they had none. See rememberCustomerAddresses.
+     *
+     * Inside this transaction on purpose: the order and what the buyer learned
+     * from it are one act, and a crash between them would leave a buyer holding
+     * an address off an order that was never saved.
+     */
+    rememberCustomerAddresses(db, clean(input.customerId), billAddr, shipAddr, stamp)
 
     // The first line of the log, and only for a genuinely new order. A save that
     // edits a draft is not a creation, and stamping one on every keystroke would
