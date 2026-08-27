@@ -76,6 +76,7 @@ const {
   whatnotOrder
 } = require('../src/shared/financeStreaming')
 const { buildPnlOmissions } = require('../src/shared/pnlOmissions')
+const { reconInRange, reconRows, reconTotals } = require('../src/shared/pnlRecon')
 const { streamDateOf } = require('../src/shared/streaming')
 
 const db = getDb()
@@ -2285,6 +2286,149 @@ console.log('\n=== 11. what the profit does NOT include, said on the statement =
       .items.find((i: any) => i.key === 'uncostedNights')
       .detail.includes('of 21'),
     'and names the denominator when the period knows it'
+  )
+}
+
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 12. night by night: which rate each show was ACTUALLY charged at ===')
+// ---------------------------------------------------------------------------
+/**
+ * The owner set his real rates in the Fees & rates tab, checked the list, and
+ * his revenue figure was still tens of thousands out. The list was not the
+ * problem — the GAPS BETWEEN the periods in it were.
+ *
+ * `effectiveFeeRates` ends with:
+ *
+ *     const p = coveringRatePeriod(periods, day)
+ *     if (!p) return DEFAULT_FEE_RATES
+ *
+ * so a business day no period covers is priced at the built-in 8% and 2.9%,
+ * silently, with nothing on any screen saying so. Reading the period list can
+ * never catch that: a gap is the ABSENCE of a row, and absences do not appear in
+ * lists of what exists. So @shared/pnlRecon asks the question from the other
+ * end — start at the nights that took money, and say which terms each was
+ * charged under.
+ */
+{
+  const COVERED = back(130, 19)
+  const ORPHAN = back(129, 19)
+  const dayC = streamDateOf(COVERED.toISOString())
+  const dayO = streamDateOf(ORPHAN.toISOString())
+
+  ok(
+    createSession({ title: 'Covered', startedAt: COVERED.toISOString(), endedAt: back(130, 23).toISOString() }, null).ok &&
+      createSession({ title: 'Orphan', startedAt: ORPHAN.toISOString(), endedAt: back(129, 23).toISOString() }, null).ok,
+    'two shows on consecutive nights'
+  )
+  const csvR = join(DIR, 'recon.csv')
+  writeFileSync(
+    csvR,
+    csvOf([
+      { when: back(130, 20), amount: 400, message: spotMsg(11, 'Detroit Tigers'), type: 'SALES' },
+      { when: back(129, 20), amount: 700, message: spotMsg(12, 'Chicago Cubs'), type: 'SALES' }
+    ]),
+    'utf8'
+  )
+  ok(importLedger(csvR, null).ok, 'both nights imported')
+
+  // A period that covers the FIRST night and stops the day before the second.
+  // That one-day gap is the whole scenario, and it is exactly what an operator
+  // creates by typing a period for "last month" and forgetting this month.
+  const saved = saveRatePeriod(
+    { fromDate: dayC, toDate: dayC, rate: 0.04, taxRate: DEFAULT_TAX_RATE, processingRate: 0.037, processingFlatCents: 0, note: 'Real terms' },
+    null
+  )
+  ok(saved.ok, 'a rate period covering only the first night is saved', saved.ok ? '' : saved.error)
+
+  const vR = viewOf()
+  const periodsNow = listRatePeriods()
+  const rows = reconRows(vR.days, periodsNow)
+  const rowC = rows.find((r: any) => r.day === dayC)
+  const rowO = rows.find((r: any) => r.day === dayO)
+  ok(!!rowC && !!rowO, 'both nights appear in the reconciliation')
+
+  ok(rowC.covered === true, 'THE COVERED NIGHT SAYS SO', String(rowC.covered))
+  ok(
+    Math.abs(rowC.rate - 0.04) < 1e-9,
+    'and reports the rate the operator actually chose',
+    String(rowC.rate)
+  )
+  ok(rowC.periodNote === 'Real terms', 'naming the period it came from', String(rowC.periodNote))
+
+  /**
+   * THE ONE THAT MATTERS. The gap night is priced at the built-in default and
+   * nothing else in the app says so.
+   */
+  ok(rowO.covered === false, 'THE NIGHT IN THE GAP IS FLAGGED AS UNCOVERED', String(rowO.covered))
+  ok(
+    Math.abs(rowO.rate - DEFAULT_COMMISSION_RATE) < 1e-9,
+    'AND IT WAS CHARGED AT THE BUILT-IN DEFAULT, not at the rate in the list above it',
+    `${rowO.rate} vs ${DEFAULT_COMMISSION_RATE}`
+  )
+
+  /**
+   * SIZED IN MONEY, NOT IN NIGHTS. Four uncovered Tuesdays that took $40 between
+   * them is a footnote; one uncovered Saturday that took $60,000 is the whole
+   * discrepancy, and a count cannot tell those two apart.
+   */
+  const tot = reconTotals(rows)
+  ok(tot.uncoveredDays >= 1, 'the totals count the uncovered nights', String(tot.uncoveredDays))
+  ok(
+    Math.round(tot.uncoveredNetPaid * 100) >= 70000,
+    'AND CARRY THE TAKINGS ON THEM, so the gap is sized in dollars rather than in days',
+    String(tot.uncoveredNetPaid)
+  )
+
+  // --- net paid is a RECORD, and the identity holds on every row -----------
+  /**
+   * `Net paid` is the ledger's own figure and the only column here that is not a
+   * model. Revenue is that same money grossed up, so revenue plus the two fees
+   * must land back on it exactly — on a covered night and an uncovered one
+   * alike, which is why a wrong rate cannot move the bottom line.
+   */
+  for (const r of rows) {
+    ok(
+      Math.round((r.grossSales + r.commission + r.processing) * 100) === Math.round(r.netPaid * 100),
+      `revenue minus fees lands back on what was paid, on ${r.day}`,
+      `${r.grossSales} + ${r.commission} + ${r.processing} vs ${r.netPaid}`
+    )
+  }
+
+  // --- the range filter is what a statement gets compared against ----------
+  const justOne = reconInRange(rows, dayC, dayC)
+  ok(justOne.length === 1 && justOne[0].day === dayC, 'a window narrows to the nights inside it', String(justOne.length))
+  ok(
+    reconTotals(justOne).uncoveredDays === 0,
+    'AND ITS TOTALS ANSWER FOR THAT WINDOW ONLY — the uncovered night next door is not in it',
+    String(reconTotals(justOne).uncoveredDays)
+  )
+  ok(
+    reconInRange(rows, '', '').length === rows.length,
+    'blank ends mean the whole range, not an empty one'
+  )
+
+  // Fixing the gap makes the warning go away, which is what makes it actionable.
+  const widened = saveRatePeriod(
+    { id: saved.data[0].id, fromDate: dayC, toDate: dayO, rate: 0.04, taxRate: DEFAULT_TAX_RATE, processingRate: 0.037, processingFlatCents: 0, note: 'Real terms' },
+    null
+  )
+  ok(widened.ok, 'the period is widened to cover both nights', widened.ok ? '' : widened.error)
+  const fixed = reconRows(viewOf().days, listRatePeriods())
+  ok(
+    fixed.find((r: any) => r.day === dayO).covered === true,
+    'AND THE NIGHT STOPS BEING FLAGGED — a warning that cannot be cleared is one nobody acts on'
+  )
+  /**
+   * SCOPED TO THE TWO NIGHTS THIS SECTION SET UP, not to the whole database.
+   * Every other section in this file imports its own shows and none of them
+   * configures a rate period, so an all-time count here would be asserting
+   * something about their fixtures rather than about this one.
+   */
+  ok(
+    reconTotals(reconInRange(fixed, dayC, dayO)).uncoveredDays === 0,
+    'with nothing left uncovered across the window this section built',
+    String(reconTotals(reconInRange(fixed, dayC, dayO)).uncoveredDays)
   )
 }
 

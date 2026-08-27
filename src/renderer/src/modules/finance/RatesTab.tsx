@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import type { WhatnotRatePeriod } from '@shared/financeStreaming'
+import type { StreamDayFinance, WhatnotRatePeriod } from '@shared/financeStreaming'
 import {
   COMMISSION_RATE_MAX,
   COMMISSION_RATE_MIN,
@@ -24,7 +24,8 @@ import { useToast } from '../../components/Toast'
 import { useSession } from '../../lib/session'
 import { Money, Note } from './bits'
 import { finance, resultError } from './api'
-import { todayKey } from './time'
+import { compactDayLabel, todayKey } from './time'
+import { reconInRange, reconRows, reconTotals, type ReconRow } from '@shared/pnlRecon'
 
 /**
  * Finance → Fees & rates: what the platform takes, and when it took it.
@@ -158,6 +159,8 @@ export function RatesTab(): JSX.Element {
       />
 
       <EffectiveRate periods={periods} />
+
+      <DayCoverage periods={periods} />
 
       <ProcessingPanel />
 
@@ -696,4 +699,183 @@ function dayLabel(day: string): string {
 
 function spanLabel(p: { fromDate: string; toDate: string | null }): string {
   return p.toDate ? `${dayLabel(p.fromDate)} – ${dayLabel(p.toDate)}` : `${dayLabel(p.fromDate)} onwards`
+}
+
+/**
+ * EVERY NIGHT, WHAT WAS PAID, WHAT THE APP MADE OF IT, AND AT WHOSE RATE.
+ *
+ * The owner's words: "all I am doing is taking the net payments, asking for the
+ * revenue projection, and then looking at cost of goods sold" — and the two
+ * numbers would not tie. This is that sum, laid out one night at a time, so the
+ * night that does not tie can be pointed at instead of argued about.
+ *
+ * ## Why it lives on the RATES tab
+ *
+ * Because of the specific thing it catches. A rate period covers a DATE RANGE,
+ * and `effectiveFeeRates` falls back to the built-in 8% for any business day no
+ * period covers. The list above shows what somebody entered and looks perfectly
+ * correct; it cannot show the GAPS BETWEEN the periods, and a gap is exactly
+ * where a night gets priced at a rate nobody chose. So this asks the question
+ * from the other end — start at the nights that took money, and say which terms
+ * each one was actually charged under.
+ *
+ * Reading it: `Net paid` is the only column that is a RECORD rather than a
+ * model. It is the ledger's own figure, the number that was uploaded, and it
+ * should match Whatnot to the cent. `Revenue` is that same money with the
+ * modelled fees added back, and it is the one column a wrong rate moves.
+ */
+function DayCoverage({ periods }: { periods: WhatnotRatePeriod[] }): JSX.Element | null {
+  const [days, setDays] = useState<StreamDayFinance[] | null>(null)
+  const [failed, setFailed] = useState(false)
+  const [from, setFrom] = useState('')
+  const [to, setTo] = useState('')
+
+  useEffect(() => {
+    let alive = true
+    void finance
+      .streamView()
+      .then((v) => {
+        if (alive) setDays(Array.isArray(v?.days) ? v.days : [])
+      })
+      .catch(() => {
+        // No ledger imported yet is the ordinary state of a fresh install. The
+        // rate list above is still worth showing, so this panel simply is not.
+        if (alive) setFailed(true)
+      })
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  const all = useMemo(() => reconRows(days ?? [], periods), [days, periods])
+  const rows = useMemo(() => reconInRange(all, from, to), [all, from, to])
+  const totals = useMemo(() => reconTotals(rows), [rows])
+
+  if (failed || days === null) return null
+  if (all.length === 0) return null
+
+  return (
+    <section className="fin-recon" aria-label="Night by night">
+      <div className="fin-head-top">
+        <h3>Night by night</h3>
+        <span className="fin-head-scope">What was paid, what it grossed, what it cost</span>
+      </div>
+
+      <p className="fin-rates-lead">
+        <b>Net paid</b> is the ledger&rsquo;s own figure — the money that was uploaded, and the one
+        column here that is a record rather than a model. It should match Whatnot to the cent.{' '}
+        <b>Revenue</b> is that same money with the fees below added back on, so it is the column a
+        wrong rate moves. Everything else follows from those two.
+      </p>
+
+      {/* THE FINDING THIS PANEL EXISTS FOR, said before the table rather than
+          left for somebody to spot in a column of forty rows. A gap between two
+          rate periods is invisible in the list above — it is the absence of a
+          row, not a row — and this is the only place in the app it becomes
+          visible. Sized in MONEY, not in nights: four uncovered Tuesdays that
+          took $40 is a footnote, one uncovered Saturday that took $60,000 is the
+          entire discrepancy, and a count cannot tell those apart. */}
+      {totals.uncoveredDays > 0 && (
+        <Note tone="warn" icon="AlertTriangle">
+          <b>
+            {totals.uncoveredDays} night{totals.uncoveredDays === 1 ? '' : 's'} here{' '}
+            {totals.uncoveredDays === 1 ? 'is' : 'are'} not covered by any rate period above.
+          </b>
+          <p>
+            {totals.uncoveredDays === 1 ? 'It was' : 'They were'} priced at the built-in{' '}
+            {ratePct(DEFAULT_FEE_RATES.commissionRate)} default, not at a rate anybody chose —{' '}
+            <Money value={totals.uncoveredNetPaid} strong /> of takings between{' '}
+            {totals.uncoveredDays === 1 ? 'it' : 'them'}. The revenue figure for those nights is
+            wrong by whatever the real rate differs by. Extend a period to cover them, or add one.
+          </p>
+        </Note>
+      )}
+
+      <div className="fin-recon-range">
+        <label>
+          <span>From</span>
+          <input type="date" className="input" value={from} onChange={(e) => setFrom(e.target.value)} />
+        </label>
+        <label>
+          <span>To</span>
+          <input type="date" className="input" value={to} onChange={(e) => setTo(e.target.value)} />
+        </label>
+        {(from || to) && (
+          <button type="button" className="fin-more" onClick={() => { setFrom(''); setTo('') }}>
+            <Icon name="X" size={13} /> Clear
+          </button>
+        )}
+        <span className="fin-recon-count">
+          {rows.length} night{rows.length === 1 ? '' : 's'}
+        </span>
+      </div>
+
+      <div className="fin-recon-scroll">
+        <table className="data fin-recon-table">
+          <thead>
+            <tr>
+              <th scope="col">Night</th>
+              <th scope="col" className="num">Net paid</th>
+              <th scope="col" className="num">Revenue</th>
+              <th scope="col" className="num">Commission</th>
+              <th scope="col" className="num">Card fee</th>
+              <th scope="col" className="num">Cost of goods</th>
+              <th scope="col" className="num">Net profit</th>
+              <th scope="col">Rate used</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r: ReconRow) => (
+              <tr key={r.day} className={r.covered ? undefined : 'is-uncovered'}>
+                <td className="mono">{compactDayLabel(r.day)}</td>
+                <td className="num"><Money value={r.netPaid} /></td>
+                <td className="num"><Money value={r.grossSales} /></td>
+                <td className="num"><Money value={r.commission} /></td>
+                <td className="num"><Money value={r.processing} /></td>
+                {/* A NIGHT WITH NO COST IS SHOWN AS A DASH, NOT AS $0.00. Zero
+                    reads as "nothing was broken"; the dash reads as "nobody said
+                    what was broken", and on this table those are the two answers
+                    somebody is trying to tell apart. */}
+                <td className="num">
+                  {r.cogs === 0 ? <span className="muted">—</span> : <Money value={r.cogs} />}
+                </td>
+                <td className="num"><Money value={r.netProfit} strong /></td>
+                <td>
+                  {r.rate === null ? (
+                    <span className="muted">no sales</span>
+                  ) : r.covered ? (
+                    <span title={r.periodNote ?? 'From a rate period you set'}>
+                      {ratePct(r.rate)}
+                    </span>
+                  ) : (
+                    <span className="fin-recon-fallback" title="No rate period covers this night">
+                      <Icon name="AlertTriangle" size={12} /> {ratePct(r.rate)} default
+                    </span>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot>
+            <tr>
+              <th scope="row">Total</th>
+              <td className="num"><Money value={totals.netPaid} strong /></td>
+              <td className="num"><Money value={totals.grossSales} strong /></td>
+              <td className="num"><Money value={totals.commission} strong /></td>
+              <td className="num"><Money value={totals.processing} strong /></td>
+              <td className="num"><Money value={totals.cogs} strong /></td>
+              <td className="num"><Money value={totals.netProfit} strong /></td>
+              <td />
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+
+      <p className="fin-rates-lead">
+        Set the two dates to whatever window a statement covers and the total row is the figure to
+        compare against it. Whatnot&rsquo;s own statement periods do not always run to a calendar
+        month, so matching the window is the first thing to check when two numbers disagree.
+      </p>
+    </section>
+  )
 }

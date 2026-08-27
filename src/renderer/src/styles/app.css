@@ -27585,3 +27585,66 @@ button.sor-team:focus-visible {
   color: var(--text-3);
   letter-spacing: 0.01em;
 }
+
+/* ---------- Night by night (RatesTab -> DayCoverage) ----------
+   The reconciliation sheet: one row per show night, the ledger's own figure
+   beside the modelled one, and the rate each night was actually charged at.
+   Wide by nature, so it scrolls inside its own box rather than pushing the page
+   sideways. */
+.fin-recon {
+  margin-top: 26px;
+}
+.fin-recon-range {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 14px 0 10px;
+}
+.fin-recon-range label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+.fin-recon-range .input {
+  height: 32px;
+  font-size: 12.5px;
+}
+.fin-recon-count {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-3);
+}
+.fin-recon-scroll {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.fin-recon-table {
+  margin: 0;
+  min-width: 720px;
+  font-size: 12.5px;
+}
+.fin-recon-table tfoot th,
+.fin-recon-table tfoot td {
+  border-top: 2px solid var(--border);
+  background: var(--surface-2);
+  font-weight: 700;
+}
+/* A rail down the edge rather than a chip at the far end: these rows are read
+   down a column of forty, and a marker on the left is seen without tracking
+   across to the last cell. Same treatment a split drop row gets. */
+.fin-recon-table tr.is-uncovered td:first-child {
+  box-shadow: inset 3px 0 0 var(--warning);
+}
+.fin-recon-fallback {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--warning);
+  font-weight: 600;
+  white-space: nowrap;
+}
