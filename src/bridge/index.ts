@@ -164,7 +164,7 @@ import type {
   UploadedFile
 } from '@shared/types'
 import type { StockProvenance } from '@shared/provenance'
-import type { ProductAvailability } from '@shared/availability'
+import type { ProductAvailability, StockAtLocationRow } from '@shared/availability'
 import type {
   ShipBatchUrl,
   ShipBreakAudit,
@@ -468,6 +468,9 @@ export function createBridge(ipcRenderer: BridgeTransport) {
        */
       productAvailability: (productId: string): Promise<ProductAvailability> =>
         ipcRenderer.invoke(IPC.invProductAvailability, productId),
+      /** Everything standing at one place. See stockAtLocation. */
+      stockAtLocation: (location: string): Promise<StockAtLocationRow[]> =>
+        ipcRenderer.invoke(IPC.invStockAtLocation, location),
       // What the cost-lot picker draws itself from. A pure READ: the operator's
       // answer is carried on the write that follows (adjustStock / recordSale /
       // streaming.addItem), so closing the dialog leaves nothing behind to undo.

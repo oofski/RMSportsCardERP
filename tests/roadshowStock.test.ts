@@ -1078,6 +1078,196 @@ console.log('\n=== 8. the whole week, exactly as somebody does it ===')
   )
 }
 
+console.log('\n=== 9. the four shops are a list, not something anybody types ===')
+// ---------------------------------------------------------------------------
+/**
+ * "THE ROADSHOW LOGIC SHOULD NOT BE THIS HARD."
+ *
+ * It was not the model that was hard — the shops were already stock locations
+ * and a tab was already an ordinary purchase order. It was the FRONT DOOR. A
+ * tab's shop was whatever somebody typed into the supplier box, and that typed
+ * string BECAME the shelf its stock stood on. So "KY Roadshow" one week and
+ * "Kentucky Roadshow" the next were two shelves holding half the stock each,
+ * with nothing on any screen saying so: the sales order simply came up short
+ * and the rest was standing under a name nobody thought to look for.
+ *
+ * The owner's own reduction of what he wanted: "all I want is that I can put
+ * products into each roadshow column and see what I have, and then create sales
+ * orders using both my on-hand location and Kentucky."
+ */
+{
+  const {
+    ROADSHOW_SHOPS,
+    isRoadshowShop,
+    roadshowShopNamed
+  } = require('../src/shared/roadshowTab')
+  const { stockAtLocation } = require('../src/main/db/inventory')
+
+  ok(ROADSHOW_SHOPS.length === 4, 'there are four shops', String(ROADSHOW_SHOPS.length))
+  ok(
+    ROADSHOW_SHOPS.every((shop: string) => isLocation(shop)),
+    'AND ALL FOUR ARE PLACES STOCK CAN SIT, from the first time the app opens — nothing to seed by hand',
+    JSON.stringify(ROADSHOW_SHOPS.filter((s: string) => !isLocation(s)))
+  )
+  ok(
+    ROADSHOW_SHOPS.every((shop: string) => destinationHoldsStock(shop)),
+    'and every one of them holds stock, so a sale routed there draws it down'
+  )
+  /**
+   * THE SPELLING IS THE OWNER'S EXISTING ONE. "Kentucky Roadshow", state first,
+   * because that is what his live data already says — and a tidier convention
+   * would have meant renaming a shelf with stock standing on it.
+   */
+  ok(
+    ROADSHOW_SHOPS.includes('Kentucky Roadshow'),
+    'THE EXISTING KENTUCKY SPELLING IS THE ONE IN THE LIST — matching what exists beats matching a preference',
+    JSON.stringify(ROADSHOW_SHOPS)
+  )
+  ok(
+    isRoadshowShop('kentucky roadshow') && isRoadshowShop('  Texas Roadshow  '),
+    'a shop is recognised whatever the case or the stray spaces'
+  )
+  ok(
+    !isRoadshowShop('Ordinary Distributors') && !isRoadshowShop('') && !isRoadshowShop(null),
+    'and a distributor, a blank and a null are not shops'
+  )
+  ok(
+    roadshowShopNamed('KENTUCKY ROADSHOW') === 'Kentucky Roadshow',
+    'THE LIST OWNS THE SPELLING — which is what stops a second shelf opening beside the first',
+    String(roadshowShopNamed('KENTUCKY ROADSHOW'))
+  )
+  ok(roadshowShopNamed('Nowhere Roadshow') === null, 'and a name off the list resolves to nothing')
+
+  /**
+   * SEEDING TWICE DOES NOT MAKE EIGHT SHOPS. The seed runs on every open, so
+   * this is the property that matters most: a database running for months and
+   * one opened for the first time have to end up identical.
+   */
+  const before = db
+    .prepare(`SELECT COUNT(*) AS n FROM stock_locations WHERE LOWER(id) = LOWER(?)`)
+    .get('Kentucky Roadshow') as { n: number }
+  ok(before.n === 1, 'each shop is registered exactly once', String(before.n))
+
+  // --- what is on a shop's shelf ------------------------------------------
+  /**
+   * The board's whole read. It goes to the SHELF and not to the tab, and the
+   * difference shows the moment anything sells: a case sold out of Kentucky is
+   * still a line on the tab for ever.
+   */
+  db.prepare(
+    `INSERT INTO inventory_products (id, sku, name, category, unit_cost, created_at, updated_at)
+     VALUES ('p_col', 'SKU-COL', 'Column Board Case', 'Pokemon', 0,
+             '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`
+  ).run()
+  const KY = 'Kentucky Roadshow'
+  /**
+   * FILTERED TO THIS PRODUCT, because the shelf is not a fixture — section 8
+   * left two cases of its own in Kentucky, and that is the realistic state: a
+   * shop holds whatever the week has put there. A test that demanded an empty
+   * shelf would be testing the fixture rather than the read.
+   */
+  const onShelf = (loc: string, productId: string): number =>
+    stockAtLocation(loc).find((r: any) => r.productId === productId)?.quantity ?? 0
+  ok(onShelf(KY, 'p_col') === 0, 'the column does not list a product nobody has bought yet')
+
+  const kyTab = poRepo.createPurchaseOrder(
+    { supplier: KY, ongoing: true, lines: [{ productId: 'p_col', quantity: 5, unitPrice: 300 }] },
+    null
+  )
+  ok(
+    onShelf(KY, 'p_col') === 5,
+    'BUYING FIVE PUTS FIVE IN THE COLUMN — one press, no supplier typed, no destination chosen',
+    String(onShelf(KY, 'p_col'))
+  )
+  ok(
+    stockAtLocation(KY).some((r: any) => r.name === 'Column Board Case'),
+    'and the column names the product, which is the whole ask — "just what products I have"'
+  )
+  ok(
+    poRepo.getPurchaseOrder(kyTab.id).location === KY,
+    'and the tab points at the shop without anybody saying so',
+    String(poRepo.getPurchaseOrder(kyTab.id).location)
+  )
+
+  // --- selling from RM and the shop together -------------------------------
+  invStock.addStock('p_col', 'RM', 2, 250, 'two here', null, null)
+  const bothSale = invoices.saveInvoice(
+    {
+      customerName: 'Both Places Buyer',
+      invoiceNumber: 'SO-COL1',
+      invoiceDate: '2026-08-27',
+      location: 'RM',
+      lines: [{ item: 'Column Board Case', productId: 'p_col', quantity: 6, rate: 900 }]
+    },
+    null
+  )
+  invoices.setInvoiceLineRouting(
+    bothSale.id,
+    [
+      {
+        lineId: invoices.getInvoice(bothSale.id).lines[0].id,
+        destination: 'RM',
+        supplier: null,
+        allocations: [
+          { quantity: 2, destination: 'RM', sourcePoId: null },
+          { quantity: 4, destination: KY, sourcePoId: null }
+        ]
+      }
+    ],
+    null
+  )
+  ok(
+    invStock.stockQty('p_col', 'RM') === 0 && invStock.stockQty('p_col', KY) === 1,
+    'A SALE DRAWS FROM BOTH — two off our own shelf and four out of Kentucky',
+    `RM ${invStock.stockQty('p_col', 'RM')} / KY ${invStock.stockQty('p_col', KY)}`
+  )
+  /**
+   * AND THE COLUMN FOLLOWS THE SHELF DOWN. This is why the board reads
+   * inventory_stock rather than the tab's lines: the tab still says five,
+   * because five is what was bought, and one is what is actually there to sell.
+   */
+  ok(
+    onShelf(KY, 'p_col') === 1,
+    'THE COLUMN SAYS ONE, not the five still written on the tab — the board and the sale read the same table',
+    String(onShelf(KY, 'p_col'))
+  )
+  ok(
+    poRepo.getPurchaseOrder(kyTab.id).lines[0].quantity === 5,
+    'while the tab still owes the shop for all five, which is what settling up is about',
+    String(poRepo.getPurchaseOrder(kyTab.id).lines[0].quantity)
+  )
+  /**
+   * A SHOP NOBODY HAS BOUGHT AT IS EMPTY, not a list of zeroes for every product
+   * in the catalog. The column has to be readable at a glance, and thirty zeroes
+   * hide the four things actually standing there.
+   */
+  ok(
+    stockAtLocation('New York Roadshow').length === 0,
+    'A SHOP WITH NOTHING AT IT LISTS NOTHING',
+    JSON.stringify(stockAtLocation('New York Roadshow'))
+  )
+  /**
+   * AND A PRODUCT THAT RAN OUT DROPS OFF, which is the harder half.
+   *
+   * A shop nobody has bought at has no stock row at all, so it lists nothing
+   * whatever the query says. The case that actually needs the filter is a
+   * product that WAS there and sold out: the row stays behind at zero, and a
+   * column listing it would grow a line for every product the shop ever held
+   * until the four things actually standing there were unfindable.
+   */
+  invStock.bumpStock('p_col', KY, -1)
+  ok(
+    invStock.stockQty('p_col', KY) === 0,
+    'the last case leaves the shop',
+    String(invStock.stockQty('p_col', KY))
+  )
+  ok(
+    !stockAtLocation(KY).some((r: any) => r.productId === 'p_col'),
+    'AND THE COLUMN STOPS LISTING IT — a sold-out product is not something to look at',
+    JSON.stringify(stockAtLocation(KY))
+  )
+}
+
 /** Hand the over-sell fixture's stock back, so nothing below inherits it. */
 function inv_setVoid(id: string): void {
   invoices.setInvoiceStatus(id, 'void', null)

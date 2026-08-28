@@ -22,8 +22,8 @@ import type {
 } from '@shared/inventoryReset'
 import type { StockProvenance } from '@shared/provenance'
 import { productProvenance } from './db/provenance'
-import type { ProductAvailability } from '@shared/availability'
-import { productAvailability } from './db/inventory'
+import type { ProductAvailability, StockAtLocationRow } from '@shared/availability'
+import { productAvailability, stockAtLocation } from './db/inventory'
 import type { Consignment, NewConsignment } from '@shared/consignment'
 import {
   consignmentsForProduct,
@@ -278,6 +278,17 @@ export function registerInventoryIpc(): void {
    * module. It names quantities and places and no money at all, which is what
    * makes that widening safe.
    */
+  /**
+   * What one place is holding. The shop board's whole read.
+   *
+   * Same gate as every other inventory read: a shelf's contents is stock
+   * information and is not offered to somebody without the module.
+   */
+  ipcMain.handle(IPC.invStockAtLocation, (_e, location: string): StockAtLocationRow[] => {
+    if (!can('module.inventory')) return []
+    return stockAtLocation(String(location ?? ''))
+  })
+
   ipcMain.handle(IPC.invProductAvailability, (_e, productId: string): ProductAvailability => {
     if (!can('module.inventory') && !can('module.invoicing')) {
       return { productId: '', places: [] }

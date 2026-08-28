@@ -9,6 +9,7 @@ import { useSession } from '../../lib/session'
 import { api } from '../../lib/api'
 import { LIVE, useLiveRefresh } from '../../lib/live'
 import { isTab } from '@shared/roadshowTab'
+import { RoadshowBoard } from './RoadshowBoard'
 import { useToast } from '../../components/Toast'
 import { Button, CenterLoader, Modal } from '../../components/ui'
 import { Icon } from '../../components/Icon'
@@ -279,6 +280,15 @@ export function InvoicingModule({
     [pos]
   )
   const committed = useMemo(() => openPos.reduce((sum, p) => sum + p.total, 0), [openPos])
+  /**
+   * Which view of the buying is on screen.
+   *
+   * NOT remembered between visits, deliberately. The stage board is what
+   * somebody needs almost every time they come here; a roadshow week is a
+   * Saturday thing, and a screen that opened on last Saturday's view would put
+   * the exception in front of the rule for the rest of the week.
+   */
+  const [view, setView] = useState<'orders' | 'roadshow'>('orders')
 
   if (loading) return <CenterLoader />
 
@@ -288,6 +298,33 @@ export function InvoicingModule({
         {/* No section shell: the board IS the page. A card-in-a-card added a
             border, a tinted band and an icon plate around content that already
             reads as columns of cards, so the chrome went and the page flows. */}
+        {/* TWO VIEWS OF THE SAME BUYING, and a roadshow is not a third kind of
+            document — it is the same purchase orders, seen by shop instead of by
+            stage. It sits here rather than in its own place in the sidebar for
+            exactly that reason: somebody looking for what a shop owes is looking
+            for a purchase order, and putting it elsewhere would be claiming
+            otherwise. */}
+        <div className="inv-views">
+          <button
+            className={`inv-view ${view === 'orders' ? 'active' : ''}`}
+            onClick={() => setView('orders')}
+          >
+            <Icon name="ShoppingCart" size={15} />
+            Purchase orders
+          </button>
+          <button
+            className={`inv-view ${view === 'roadshow' ? 'active' : ''}`}
+            onClick={() => setView('roadshow')}
+          >
+            <Icon name="Store" size={15} />
+            Roadshow
+          </button>
+        </div>
+
+        {view === 'roadshow' ? (
+          <RoadshowBoard />
+        ) : (
+        <>
         <div className="po-page-head">
           <h2>Purchase orders</h2>
           <div className="po-page-stats">
@@ -359,6 +396,8 @@ export function InvoicingModule({
             onMoveSupply={moveSupply}
             onDeleteSupply={removeSupply}
           />
+        )}
+        </>
         )}
 
       </div>

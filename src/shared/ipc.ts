@@ -107,6 +107,8 @@ export const IPC = {
   // Where a product is, place by place -- our shelves and the roadshow shops.
   // Drawn on a sales-order line as the quantity is typed. See productAvailability.
   invProductAvailability: 'inventory:product:availability',
+  /** What ONE place is holding, product by product. See stockAtLocation. */
+  invStockAtLocation: 'inventory:location:stock',
   /** Where a product's stock came from, and which POs are still bringing more. */
   invProductProvenance: 'inventory:product:provenance',
   // The cost-lot picker's one read: the open layers for a (product, location)

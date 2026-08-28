@@ -829,19 +829,52 @@ mkContact('c_3', 'Copperpot Cards', 1, 1, 'Kiln Row')
 // T36. RM and AM first, always, and never removable.
 const parties = poRepo.listOrderParties()
 ok(parties[0].name === 'RM' && parties[1].name === 'AM', 'T36 RM and AM lead the list', JSON.stringify(parties.slice(0, 2).map((p: { name: string }) => p.name)))
-ok(parties[0].holdsStock === true && parties[1].holdsStock === true, 'T36 and are the only ones that hold stock')
+ok(parties[0].holdsStock === true && parties[1].holdsStock === true, 'T36 and both hold stock')
+/**
+ * THE HOME SHELVES ARE NO LONGER THE ONLY SHELVES, and this used to say they
+ * were.
+ *
+ * It was true when it was written and it stopped being true when the four
+ * roadshow shops became a seeded list — see ROADSHOW_SHOPS. A shop IS a place
+ * stock sits, that is the entire point of the feature, and a party list that
+ * called Kentucky a dropship destination would put the app back where it was
+ * when a week's buying produced a bill and no inventory.
+ *
+ * What the rule actually is, and what is pinned now: holding stock follows
+ * REGISTRATION, not the two built-in names. Everything a person or a business
+ * — a supplier, a buyer, a name off a document — still holds nothing.
+ */
+const shops = parties.filter((p: { name: string }) => /Roadshow/i.test(p.name))
+ok(shops.length === 4, 'T36 the four roadshow shops are in the list', String(shops.length))
 ok(
-  parties.slice(2).every((p: { holdsStock: boolean }) => p.holdsStock === false),
-  'T36 nothing else does'
+  shops.every((p: { holdsStock: boolean; kind: string }) => p.holdsStock && p.kind === 'location'),
+  'T36 AND THEY HOLD STOCK, like the shelves they are — not like the suppliers they used to read as'
 )
-ok(parties[0].pinnable === false && parties[1].pinnable === false, 'T36 and neither can be unpinned')
+ok(
+  parties
+    .filter((p: { kind: string }) => p.kind !== 'location')
+    .every((p: { holdsStock: boolean }) => p.holdsStock === false),
+  'T36 while nothing that is a PERSON or a BUSINESS holds stock — the rule is registration, not the name'
+)
+ok(parties[0].pinnable === false && parties[1].pinnable === false, 'T36 and neither built-in can be unpinned')
 ok(parties[0].kind === 'location', 'T36 they are locations, not parties', String(parties[0].kind))
 
 // T37.
 const pinnedList = poRepo.setPartyPinned('Bramble Wholesale', true)
-ok(pinnedList[2].name === 'Bramble Wholesale', 'T37 a pinned party sits at index 2', String(pinnedList[2]?.name))
-ok(pinnedList[2].pinned === true, 'T37 marked as pinned')
-ok(pinnedList[2].pinnable === true, 'T37 and this one CAN be unpinned')
+/**
+ * PINNED MEANS ABOVE THE UNPINNED, not at a fixed index. The index moved when
+ * the four shops were seeded, and an assertion keyed on the number 2 was
+ * measuring how many places happened to exist rather than what pinning does.
+ */
+const pinnedAt = pinnedList.findIndex((p: { name: string }) => p.name === 'Bramble Wholesale')
+const firstUnpinned = pinnedList.findIndex((p: { pinned: boolean }) => !p.pinned)
+ok(
+  pinnedAt > -1 && pinnedAt < firstUnpinned,
+  'T37 a pinned party sits above every unpinned one',
+  `${pinnedAt} of ${pinnedList.length}, first unpinned at ${firstUnpinned}`
+)
+ok(pinnedList[pinnedAt].pinned === true, 'T37 marked as pinned')
+ok(pinnedList[pinnedAt].pinnable === true, 'T37 and this one CAN be unpinned')
 const unpinned = poRepo.setPartyPinned('Bramble Wholesale', false)
 ok(
   unpinned.findIndex((p: { name: string }) => p.name === 'Bramble Wholesale') > 1,

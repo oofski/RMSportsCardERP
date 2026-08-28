@@ -17,7 +17,7 @@ import type { Database } from 'better-sqlite3'
 import type { ProductUnits, StockUnit } from '@shared/units'
 import { QTY_SNAP } from '@shared/units'
 import { LOCATION_IDS } from '@shared/inventory'
-import type { ProductAvailability } from '@shared/availability'
+import type { ProductAvailability, StockAtLocationRow } from '@shared/availability'
 import { isHomeShelf } from '@shared/availability'
 import { normalizeUpc } from '@shared/upc'
 import { getDb } from './database'
@@ -116,6 +116,62 @@ export function productAvailability(productId: string): ProductAvailability {
       here: isHomeShelf(r.location)
     }))
   }
+}
+
+/**
+ * WHAT ONE PLACE IS HOLDING, product by product.
+ *
+ * The owner's ask, reduced to its smallest form: "all I want is that I can put
+ * products into each roadshow column and see what I have — just what products I
+ * have."
+ *
+ * `productAvailability` answers the mirror question — one product, every place —
+ * and is what the sales-order line uses. This is the other axis, and the shop
+ * board needs it: a shelf you cannot walk up to has no other way of being
+ * looked at. RM has a whole Inventory screen for this; a roadshow shop had
+ * nothing at all, so the only way to find out what was in Kentucky was to open
+ * the tab and add up its lines by eye.
+ *
+ * ## Read off the SHELF, not off the tab
+ *
+ * The obvious shortcut is to list the open tab's lines, and it is wrong twice
+ * over. A case SOLD out of Kentucky is still a line on the tab, so the tab
+ * over-reports; and a case moved to Kentucky by any other route — a transfer, an
+ * ordinary purchase pointed there — is on no tab at all, so the tab
+ * under-reports. `inventory_stock` is the answer to "what is standing there",
+ * and it is the same table the sales order draws from, so the board and the sale
+ * can never disagree about what is available.
+ *
+ * Empty rows are dropped: a product that was there and is now gone is not
+ * something to look at, and a shelf listing thirty zeroes hides the four things
+ * actually on it.
+ */
+export function stockAtLocation(location: string): StockAtLocationRow[] {
+  const place = String(location ?? '').trim()
+  if (!place) return []
+  return (
+    getDb()
+      .prepare(
+        `SELECT p.id, p.name, p.sku, p.category, s.quantity
+           FROM inventory_stock s
+           JOIN inventory_products p ON p.id = s.product_id
+          WHERE LOWER(s.location) = LOWER(?) AND s.quantity > 0
+          ORDER BY p.name ASC`
+      )
+      .all(place) as Array<{
+      id: string
+      name: string
+      sku: string | null
+      category: string | null
+      quantity: number
+    }>
+  ).map((r) => ({
+    productId: r.id,
+    name: r.name,
+    sku: r.sku ?? null,
+    category: r.category ?? null,
+    quantity: Number(r.quantity) || 0
+  }))
 }
 
 /**

@@ -138,3 +138,24 @@ export function availabilityNote(
   const short = Math.max(0, want - here - away)
   return { kind: short > 0 ? 'short' : 'away', here, away, short }
 }
+
+/**
+ * One product standing at one place. See `stockAtLocation`.
+ *
+ * The mirror of `StockAtPlace`, which is one place on one product. Both are
+ * needed because the two screens ask opposite questions: a sales-order line asks
+ * "where is THIS product", and a shop board asks "what is at THIS shop".
+ *
+ * No cost figure on purpose. The board this feeds answers "what have I got in
+ * Kentucky" — a picking question, asked by somebody deciding whether they can
+ * fill an order — and a valuation column beside it would invite reading the
+ * shop's worth off a screen that is not reconciled to the ledger. What the week
+ * cost is on the tab, where the money already lives.
+ */
+export interface StockAtLocationRow {
+  productId: string
+  name: string
+  sku: string | null
+  category: string | null
+  quantity: number
+}

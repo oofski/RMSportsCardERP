@@ -231,3 +231,78 @@ export function settleTabRefusal(
 export function tabAcceptsLines(po: TabFacts): boolean {
   return isOpenTab(po)
 }
+
+/**
+ * THE FOUR SHOPS. Named here once, so nobody ever types one again.
+ *
+ * ## What this replaces, and why it was the hard part
+ *
+ * The shops were never a list. A tab's shop was whatever somebody TYPED into the
+ * supplier box, and that typed string became the shelf its stock stood on — see
+ * `ensureTabLocation`. So opening the week's tab was four decisions where there
+ * should have been one: raise a purchase order, find the Roadshow tick, type the
+ * shop's name exactly as it was typed last time, and leave the destination
+ * alone.
+ *
+ * The third one is the trap. "KY Roadshow" one week and "Kentucky Roadshow" the
+ * next are two shelves holding half the stock each, and nothing on any screen
+ * says so — the sales order simply comes up short and the other half is standing
+ * under a name nobody thinks to look for. The owner's own words: "the roadshow
+ * logic should not be this hard."
+ *
+ * With the shops as a list, opening a tab is one decision: WHICH SHOP. Nothing
+ * is typed, so nothing can be mistyped, and there is no second spelling for a
+ * shelf to split across.
+ *
+ * ## Why exactly four, in source, rather than a table
+ *
+ * Because there are exactly four, and they are the same four every season. A
+ * managed list would add a screen for maintaining something nobody maintains,
+ * and every screen that offers the shops would have to handle the empty case —
+ * "no shops configured" — which is a state this business is never in. A fifth
+ * shop is a change to this line and a push, which is the honest cost of a fact
+ * that changes about once.
+ *
+ * They are STILL ordinary stock locations underneath, registered on the way in
+ * like any other. This list decides what is offered; it does not decide what
+ * holds stock, and a shop retired from here would keep every case it ever
+ * costed. See the note on `retired` in @shared/inventory.
+ *
+ * ## The spelling is the owner's existing one
+ *
+ * State first — "Kentucky Roadshow" — because that is what his live data already
+ * says, and a tidier convention would have meant renaming a shelf with stock
+ * standing on it. Matching what exists beats matching a preference.
+ */
+export const ROADSHOW_SHOPS: readonly string[] = [
+  'Kentucky Roadshow',
+  'California Roadshow',
+  'Texas Roadshow',
+  'New York Roadshow'
+]
+
+/**
+ * Is this one of the four? Case-insensitively, and trimmed.
+ *
+ * Folded for case because the name reaches this from three directions — a
+ * location id written months ago, a supplier on an order, a value off a picker —
+ * and a shop that failed to recognise its own shelf because of a capital letter
+ * would be the exact bug the list exists to remove.
+ */
+export function isRoadshowShop(name: string | null | undefined): boolean {
+  const v = String(name ?? '').trim().toLowerCase()
+  if (!v) return false
+  return ROADSHOW_SHOPS.some((s) => s.toLowerCase() === v)
+}
+
+/**
+ * The shop's name as the list spells it, or null when it is not one of them.
+ *
+ * The canonical form, for a caller holding a name from somewhere else. Returning
+ * the LIST's spelling rather than the caller's is what stops "kentucky roadshow"
+ * opening a second shelf beside "Kentucky Roadshow".
+ */
+export function roadshowShopNamed(name: string | null | undefined): string | null {
+  const v = String(name ?? '').trim().toLowerCase()
+  return ROADSHOW_SHOPS.find((s) => s.toLowerCase() === v) ?? null
+}

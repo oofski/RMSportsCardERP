@@ -14,7 +14,8 @@ import { dedupeProducts } from './dedupe'
 import { backfillLots, resyncProductAvgCosts } from './lots'
 import { backfillWorkLog } from './workLogStore'
 import { installSyncTriggers } from './syncTriggers'
-import { hydrateLocations } from './stockLocations'
+import { ROADSHOW_SHOPS } from '@shared/roadshowTab'
+import { ensureTabLocation, hydrateLocations } from './stockLocations'
 import { fingerprintOf } from './financeStreaming'
 import { retireUnofferedCustomerTerms } from './invoices'
 
@@ -4621,6 +4622,25 @@ function migrate(database: Database.Database): void {
    *
    * Last in the migration run, after the table exists and the seed has landed.
    */
+  /**
+   * THE FOUR ROADSHOW SHOPS ARE PLACES, from the first time the app opens.
+   *
+   * They used to be conjured from whatever somebody typed into a supplier box —
+   * see ROADSHOW_SHOPS for why that was the hard part of the whole feature. Now
+   * they are a list, and a list has to exist before a picker can offer it or a
+   * board can have a column for it.
+   *
+   * IDEMPOTENT AND CASE-INSENSITIVE, so a shop somebody already opened a tab
+   * against is ADOPTED rather than duplicated: `ensureTabLocation` returns the
+   * existing spelling when it finds one, and the stock standing on that shelf
+   * never moves. A database that has been running for months and one opened for
+   * the first time end up in exactly the same state.
+   *
+   * Runs every open rather than once, deliberately: it is four lookups, and a
+   * run-once flag would mean a shop retired by hand and later wanted back would
+   * need somebody to know which flag to clear.
+   */
+  for (const shop of ROADSHOW_SHOPS) ensureTabLocation(database, shop, null)
   hydrateLocations(database)
 }
 
