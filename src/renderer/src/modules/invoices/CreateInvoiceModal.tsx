@@ -1262,6 +1262,131 @@ function InvoiceHead({
  * lookalike — the grid that lines those five columns up lives in `.po-receipt-*`
  * and a second copy of it would drift the first time a column moved.
  */
+/**
+ * What POSTING this sale cost us, corrected on the document itself.
+ *
+ * ## Why it has to be editable here
+ *
+ * It was reachable from exactly one place — the invoice form — and that form is
+ * refused the moment an order posts, correctly: this app is not the system of
+ * record for a document a buyer has been billed against. But postage is bought
+ * when the PARCEL goes, which is always after that. So the one cost on a sales
+ * order that cannot be known at draft time was the one cost only a draft could
+ * record, and every real postage figure had nowhere to land.
+ *
+ * ## Why it is safe where a line edit is not
+ *
+ * This is not on the buyer's invoice. It is deliberately absent from the order
+ * total and never sent to Intuit, so unlike a price correction it cannot leave
+ * our copy of a posted document disagreeing with QuickBooks' — which is the
+ * whole reason EditOrderModal has to announce itself. Nothing here touches a
+ * line, a stock move or a cost lot.
+ *
+ * ## Empty is not zero
+ *
+ * With nothing typed the per-parcel label costs answer instead, so the box says
+ * so rather than showing $0.00 — see orderShippingCost, where a typed figure
+ * wins and the parcels are the fallback. Printing a zero here would be this
+ * screen quietly asserting that a parcel went for free.
+ */
+function SalePostageEditor({ invoice }: { invoice: InvoiceDetail }): JSX.Element | null {
+  const toast = useToast()
+  const [saved, setSaved] = useState<number | null>(invoice.shippingCost ?? null)
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(invoice.shippingCost != null ? String(invoice.shippingCost) : '')
+  const [busy, setBusy] = useState(false)
+
+  // A void order keeps whatever was recorded and offers no way to move it —
+  // the repository refuses, and a button that is always refused is worse than
+  // no button. Absent entirely when there is also nothing to show.
+  const editable = invoice.status !== 'void'
+  if (!editable && saved === null) return null
+
+  const save = async (): Promise<void> => {
+    const raw = draft.trim()
+    const next = raw === '' ? null : Number(raw)
+    if (next !== null && (!Number.isFinite(next) || next < 0)) {
+      toast.error('Postage has to be a number, and not a negative one.')
+      return
+    }
+    if (next === saved) {
+      setEditing(false)
+      return
+    }
+    setBusy(true)
+    try {
+      const res = await api.invoices.setShippingCost(invoice.id, next)
+      if (!res.ok || !res.data) {
+        toast.error(res.error ?? 'Could not save the postage cost.')
+        return
+      }
+      setSaved(res.data.shippingCost ?? null)
+      setEditing(false)
+      toast.success(next === null ? 'Postage cost cleared.' : 'Postage cost saved.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className={`po-money-row po-money-ship so-postage${editing ? ' is-editing' : ''}`}>
+      <span>
+        Postage cost
+        {/* Said every time, not on hover. This figure sitting under a grand
+            total is exactly the place somebody could mistake a cost for a
+            charge, and the sentence that prevents it costs one line. */}
+        <em className="so-postage-note">what it cost us — not billed to the buyer</em>
+      </span>
+      {editing ? (
+        <div className="po-ship-form">
+          <Input
+            value={draft}
+            inputMode="decimal"
+            placeholder="0.00"
+            aria-label="Postage cost"
+            autoFocus
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void save()
+              if (e.key === 'Escape') {
+                setDraft(saved != null ? String(saved) : '')
+                setEditing(false)
+              }
+            }}
+          />
+          <Button variant="primary" loading={busy} onClick={() => void save()}>
+            Save
+          </Button>
+          <Button
+            variant="ghost"
+            onClick={() => {
+              setDraft(saved != null ? String(saved) : '')
+              setEditing(false)
+            }}
+          >
+            Cancel
+          </Button>
+        </div>
+      ) : editable ? (
+        <button
+          type="button"
+          className={`po-ship-edit${saved === null ? ' is-empty' : ''}`}
+          title="Click to record what postage cost"
+          onClick={() => {
+            setDraft(saved != null ? String(saved) : '')
+            setEditing(true)
+          }}
+        >
+          <span className="mono">{saved === null ? 'From parcel labels' : formatMoney(saved)}</span>
+          <Icon name="Pencil" size={11} />
+        </button>
+      ) : (
+        <span className="mono">{formatMoney(saved ?? 0)}</span>
+      )}
+    </div>
+  )
+}
+
 function InvoiceReceipt({
   invoice,
   thumbnails
@@ -1400,9 +1525,19 @@ function InvoiceReceipt({
         ))}
       </div>
 
-      <div className="po-grand-total">
-        <span>Grand total</span>
-        <span className="mono">{formatMoney(invoice.total)}</span>
+      <div className="po-money">
+        <div className="po-grand-total">
+          <span>Grand total</span>
+          <span className="mono">{formatMoney(invoice.total)}</span>
+        </div>
+        {/* BELOW the total, and outside it, because that is what it is.
+            On a purchase order freight joins the total — the supplier is
+            charging us for it. On a sale it is the opposite: postage is a cost
+            WE carry, it is not on the buyer's invoice and it never goes to
+            QuickBooks. Putting it in the same stack as the items, the way the
+            buy-side receipt does, would read as a line the buyer is paying,
+            which is the one thing this figure must never look like. */}
+        <SalePostageEditor invoice={invoice} />
       </div>
 
       {/* The same three panels the buy side carries, in the same order and at

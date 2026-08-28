@@ -2103,6 +2103,24 @@ export function createBridge(ipcRenderer: BridgeTransport) {
         }>
       ): Promise<Result<InvoiceDetail>> => ipcRenderer.invoke(IPC.invoiceSetLines, { id, changes }),
 
+      /**
+       * What POSTING this sale cost us, corrected after it has gone out.
+       *
+       * The mirror of the freight box on a purchase order, with one difference
+       * that decides everything about it: on a SALE this is a cost we carry,
+       * not a charge to the buyer. It stays out of the order total and never
+       * reaches QuickBooks, so unlike setLines it cannot make our copy of a
+       * posted document disagree with Intuit's — and it is editable long after
+       * the invoice form has closed, because postage is bought when the parcel
+       * goes.
+       *
+       * `null` clears it back to "nobody has said", which is not zero: with
+       * nothing typed, `orderShippingCost` answers from the parcel labels
+       * instead. Refused on a void order.
+       */
+      setShippingCost: (id: string, shippingCost: number | null): Promise<Result<InvoiceDetail>> =>
+        ipcRenderer.invoke(IPC.invoiceSetShippingCost, { id, shippingCost }),
+
       /** Send it anyway, ahead of the gates. Recorded as its own decision. */
       setForceReady: (id: string, forced: boolean): Promise<Result<InvoiceDetail>> =>
         ipcRenderer.invoke(IPC.invoiceSetForceReady, { id, forced }),

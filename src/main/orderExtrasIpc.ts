@@ -38,6 +38,7 @@ import {
   setInvoiceItemsInHand,
   setInvoiceLineRouting,
   setInvoiceLines,
+  setInvoiceShippingCost,
   setInvoicePaid,
   linkDropshipPair,
   linkablePurchaseOrders,
@@ -796,6 +797,37 @@ export function registerOrderExtrasIpc(): void {
           return { ok: false, error: 'A line was named without saying which one.' }
         }
         const res = setInvoiceLines(str(payload?.id), changes, actor.id)
+        if (res.error) return { ok: false, error: res.error }
+        if (!res.invoice) return { ok: false, error: 'That order is gone.' }
+        return { ok: true, data: res.invoice }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  /**
+   * WHAT POSTING A SALE COST US, corrected after it has gone out.
+   *
+   * Same permission as the line editor above and for the same reason. This one
+   * moves less, not more: postage is a cost we carry, absent from the invoice
+   * total and never sent to Intuit, so nothing here can make our copy of a
+   * posted document disagree with theirs.
+   */
+  ipcMain.handle(
+    IPC.invoiceSetShippingCost,
+    (_e, payload: { id?: unknown; shippingCost?: unknown }): Result<InvoiceDetail> => {
+      try {
+        requireInvoicing()
+        // An empty box and a missing key both mean "nobody has said", which is
+        // a different fact from zero — orderShippingCost falls back to the
+        // parcel labels on a null and must not be handed a 0 instead.
+        const raw = payload?.shippingCost
+        const cost = raw === null || raw === undefined || raw === '' ? null : Number(raw)
+        if (cost !== null && (!Number.isFinite(cost) || cost < 0)) {
+          return { ok: false, error: 'Postage has to be a number, and not a negative one.' }
+        }
+        const res = setInvoiceShippingCost(str(payload?.id), cost)
         if (res.error) return { ok: false, error: res.error }
         if (!res.invoice) return { ok: false, error: 'That order is gone.' }
         return { ok: true, data: res.invoice }

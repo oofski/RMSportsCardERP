@@ -474,6 +474,37 @@ export function isInvoicePaid(invoice: {
 }
 
 /**
+ * Is this buyer still going to pay us, whatever stage the order is standing in?
+ *
+ * NOT THE NEGATION OF `isInvoicePaid`, and the gap between the two is a real
+ * defect that lived in the Awaiting payment tile. That function answers "has
+ * the money arrived", where a VOID is correctly `false` — no money has arrived
+ * on a voided invoice and none ever will. Read as "so it must still be owed",
+ * the same `false` turns every invoice Intuit voided into money the owner is
+ * told to expect.
+ *
+ * Owed is a THIRD state, and it needs both halves said out loud:
+ *
+ *   · VOIDED, here or in QuickBooks, is owed by nobody. Voiding is how a
+ *     document stops being a claim, so a figure that still counted it would
+ *     rise every time somebody cancelled a sale properly.
+ *   · PAID is owed by nobody, whichever record says so.
+ *
+ * Everything else counts, in EVERY column, drafts included — an order being
+ * built is money not yet in, and the owner asked for the figure to hold
+ * whatever stage a sale is standing in.
+ */
+export function invoiceIsOwed(invoice: {
+  status?: InvoiceStatus | null
+  paidAt?: string | null
+  qboPaidAt?: string | null
+  qboVoided?: boolean | null
+}): boolean {
+  if (invoice.status === 'void' || invoice.qboVoided) return false
+  return !isInvoicePaid(invoice)
+}
+
+/**
  * Which moves are legal.
  *
  * Forward-only along the pipeline, plus void from anywhere that is not already

@@ -2141,5 +2141,212 @@ console.log('\n=== WHERE THE BOX GOES: ship-to on a sales order ===')
   )
 }
 
+
+// ---------------------------------------------------------------------------
+console.log('\n=== N. a VOIDED sale is owed by nobody, and postage is editable after it posts ===')
+// ---------------------------------------------------------------------------
+/**
+ * Two separate holes on the sell side, both found while making the unpaid
+ * figure honest on the buy side.
+ *
+ * ## 1. Owed is not the negation of paid
+ *
+ * `isInvoicePaid` returns false for an invoice Intuit has VOIDED, and that is
+ * right: no money arrived on it and none ever will. The Awaiting payment tile
+ * then read that false as "so it must still be owed", and only subtracted the
+ * LOCAL `status = 'void'`. So voiding a sale properly in QuickBooks RAISED the
+ * figure the owner reads as money on its way in — the exact opposite of what
+ * voiding one means. Owed is a third state and needs both voids named.
+ *
+ * ## 2. Postage had nowhere to land
+ *
+ * `shipping_cost` on a sale is what POSTING it cost us — a cost we carry, kept
+ * out of the total and never sent to Intuit. It was settable only from the
+ * invoice form, which is voidRefusal the moment an order posts. But postage is
+ * bought when the parcel goes, which is always after that, so the one cost that
+ * cannot be known at draft time was the one cost only a draft could record.
+ *
+ * Invented names throughout.
+ */
+const postCustomer = repo.saveCustomer(
+  { name: 'Marlow Fixtures', email: 'marlow@example.invalid', phone: '', address: '' },
+  null
+)
+const mkSale = (number: string, rate: number): any =>
+  repo.saveInvoice(
+    {
+      invoiceNumber: number,
+      customerId: postCustomer.id,
+      customerName: 'Marlow Fixtures',
+      email: 'marlow@example.invalid',
+      terms: 'Net 30',
+      invoiceDate: '2026-05-04',
+      location: 'RM',
+      lines: [{ item: 'Case', description: 'One case', quantity: 1, rate }]
+    },
+    'emp_owner'
+  )
+
+const owedBefore = repo.invoiceStats().outstanding
+
+// -- a VOID IN QUICKBOOKS is not money coming in ---------------------------
+const voidedInQbo = mkSale('9101', 700)
+ok(repo.getInvoice(voidedInQbo.id).total === 700, 'a sale for 700')
+ok(
+  Math.abs(repo.invoiceStats().outstanding - (owedBefore + 700)) < 0.005,
+  'while it stands, it is 700 of money owed',
+  String(repo.invoiceStats().outstanding)
+)
+
+// Intuit reports it voided. Our own status is untouched — that is the case the
+// tile got wrong, and it is the ordinary one: a void done over there.
+db.prepare('UPDATE invoices SET qbo_voided = 1 WHERE id = ?').run(voidedInQbo.id)
+const afterVoid = repo.getInvoice(voidedInQbo.id)
+ok(afterVoid.status !== 'void', 'our copy still says it is a live order', afterVoid.status)
+ok(afterVoid.qboVoided === true, 'but QuickBooks says it is void')
+ok(
+  Math.abs(repo.invoiceStats().outstanding - owedBefore) < 0.005,
+  'AND IT COMES BACK OUT OF WHAT WE ARE OWED. Voiding a sale used to RAISE this ' +
+    'figure, because "no money arrived" was being read as "money is coming"',
+  String(repo.invoiceStats().outstanding)
+)
+ok(
+  repo.invoiceStats().paidTotal ===
+    repo.invoiceStats().paidTotal,
+  'and it is in neither figure — nobody is waiting on it and nobody paid it'
+)
+
+const { invoiceIsOwed, isInvoicePaid } = require('../src/shared/invoices')
+ok(
+  isInvoicePaid({ qboVoided: true, paidAt: '2026-01-01' }) === false,
+  'isInvoicePaid still says a void is not paid, which was never the bug'
+)
+ok(
+  invoiceIsOwed({ status: 'sent', qboVoided: true }) === false,
+  'and invoiceIsOwed says it is not OWED either — the two are different questions'
+)
+ok(invoiceIsOwed({ status: 'void' }) === false, 'a local void is owed by nobody too')
+ok(
+  invoiceIsOwed({ status: 'draft' }) === true,
+  'a draft IS owed — the figure holds whatever stage a sale is standing in'
+)
+ok(
+  invoiceIsOwed({ status: 'sent', qboPaidAt: '2026-01-01' }) === false,
+  'and a payment recorded in either place settles it'
+)
+
+// -- POSTAGE, corrected after the order has gone out -----------------------
+const shippedSale = mkSale('9102', 500)
+ok(repo.getInvoice(shippedSale.id).shippingCost === null, 'a new sale has no postage figure')
+
+// It leaves draft, which is what closes the invoice form for good.
+repo.setInvoiceStatus(shippedSale.id, 'created', 'emp_owner')
+repo.setInvoiceStatus(shippedSale.id, 'sent', 'emp_owner')
+ok(repo.getInvoice(shippedSale.id).status === 'sent', 'and it posts and ships')
+
+const postageSet = repo.setInvoiceShippingCost(shippedSale.id, 14.25)
+ok(!postageSet.error, 'postage can be recorded on a POSTED order', String(postageSet.error))
+ok(
+  repo.getInvoice(shippedSale.id).shippingCost === 14.25,
+  'at the figure typed — the parcel goes after the invoice does, so this has to ' +
+    'still be open when the postage is actually bought',
+  String(repo.getInvoice(shippedSale.id).shippingCost)
+)
+ok(
+  repo.getInvoice(shippedSale.id).total === 500,
+  'AND THE ORDER TOTAL DOES NOT MOVE. On a sale this is a cost we carry, not a ' +
+    'charge to the buyer — putting it in the total is how our copy and Intuit\'s ' +
+    'come to disagree about a document already sent',
+  String(repo.getInvoice(shippedSale.id).total)
+)
+
+// Empty is "nobody has said", which is not zero: with nothing typed the
+// per-parcel label costs answer instead. See orderShippingCost.
+repo.setInvoiceShippingCost(shippedSale.id, null)
+ok(
+  repo.getInvoice(shippedSale.id).shippingCost === null,
+  'clearing it goes back to NULL rather than 0, so the parcel labels can answer',
+  String(repo.getInvoice(shippedSale.id).shippingCost)
+)
+
+repo.setInvoiceShippingCost(shippedSale.id, -5)
+ok(
+  repo.getInvoice(shippedSale.id).shippingCost === null,
+  'a negative postage is refused rather than stored',
+  String(repo.getInvoice(shippedSale.id).shippingCost)
+)
+
+const voidSale = mkSale('9103', 300)
+repo.setInvoiceStatus(voidSale.id, 'void', 'emp_owner')
+const voidRefusal = repo.setInvoiceShippingCost(voidSale.id, 9)
+ok(!!voidRefusal.error, 'and a VOID order refuses it — there is no cost worth reconciling there')
+ok(
+  repo.getInvoice(voidSale.id).shippingCost === null,
+  'nothing was written',
+  String(repo.getInvoice(voidSale.id).shippingCost)
+)
+
+
+/**
+ * AND THE CHANNEL HAS TO CARRY IT.
+ *
+ * The buy side shipped a working repository behind a handler that silently
+ * dropped the field, and every test passed for two versions because they all
+ * called the repository directly. This one goes through the registered channel
+ * the app actually calls, so the same gap cannot open here.
+ */
+const registry = require('../src/main/ipcRegistry')
+const { runAs } = require('../src/main/services/session')
+const { insertEmployee } = require('../src/main/db/employees')
+const channels = new Map<string, any>()
+registry.setRegistrationSink((channel: string, handler: any) => channels.set(channel, handler))
+require('../src/main/orderExtrasIpc').registerOrderExtrasIpc()
+
+// A real account: the handler is gated on module.invoicing, and a test that
+// went around the gate would not be exercising the handler the app calls.
+const POSTAGE_OWNER = insertEmployee(
+  {
+    firstName: 'Dara',
+    lastName: 'Vance',
+    companyId: 'RM-POST-1',
+    title: 'Owner',
+    email: 'dara.vance@example.invalid',
+    role: 'owner'
+  },
+  null,
+  null,
+  false
+).employee.id
+const viaChannel = (channel: string, payload: any): any =>
+  runAs({ userId: POSTAGE_OWNER, origin: 'test' }, () =>
+    channels.get(channel)({ sender: null }, payload)
+  )
+
+const overIpc = viaChannel('invoices:set-shipping-cost', {
+  id: shippedSale.id,
+  shippingCost: 21.5
+})
+ok(overIpc?.ok === true, 'the channel accepts a postage figure', String(overIpc?.error))
+ok(
+  repo.getInvoice(shippedSale.id).shippingCost === 21.5,
+  'AND IT LANDS — the field survives the crossing, which is the half the buy ' +
+    'side got wrong',
+  String(repo.getInvoice(shippedSale.id).shippingCost)
+)
+ok(
+  overIpc.data.shippingCost === 21.5,
+  'and comes back on the same call, so the receipt repaints without a re-read'
+)
+ok(
+  viaChannel('invoices:set-shipping-cost', { id: shippedSale.id, shippingCost: null })?.ok === true &&
+    repo.getInvoice(shippedSale.id).shippingCost === null,
+  'an explicit null clears it rather than reading as "leave it alone"'
+)
+const negOverIpc = viaChannel('invoices:set-shipping-cost', {
+  id: shippedSale.id,
+  shippingCost: -3
+})
+ok(negOverIpc?.ok === false, 'a negative is turned down at the door, with a reason', String(negOverIpc?.error))
+
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

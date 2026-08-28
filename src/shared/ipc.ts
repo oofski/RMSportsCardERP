@@ -312,6 +312,11 @@ export const IPC = {
   // Separate from save, which also rewrites the buyer, the number, the dates
   // and the terms, and is refused once a document has posted.
   invoiceSetLines: 'invoices:set-lines',
+  // What POSTING a sale cost us, corrected after it has gone out. Separate from
+  // save for the same reason set-lines is — and needed even more, because
+  // postage is bought when the parcel goes, which is always after the form
+  // that used to be the only way to record it has closed for good.
+  invoiceSetShippingCost: 'invoices:set-shipping-cost',
   invoiceSetForceReady: 'invoices:set-force-ready',
 
   // Purchase orders

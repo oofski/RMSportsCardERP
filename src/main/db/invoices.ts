@@ -3843,6 +3843,56 @@ export function setInvoiceItemsInHand(
  * Not "the order was edited" — the old figures and the new ones, so the trail
  * survives the person who made it. Refused on a VOID order only.
  */
+/**
+ * Correct what POSTING a sale cost us, on an order that has already gone out.
+ *
+ * ## Why this needs a door of its own
+ *
+ * The figure was reachable from exactly one place — the invoice form — and that
+ * form is refused the moment an invoice posts, correctly: this app is not the
+ * system of record for a document a buyer has been billed against. So the
+ * number became unreachable at precisely the wrong moment, because postage is
+ * bought when the parcel goes, which is AFTER the order leaves draft. The one
+ * cost on a sales order that is never known at draft time was the one cost only
+ * a draft could record.
+ *
+ * ## Why it is safe where a line edit is not
+ *
+ * This is a cost WE carry, not a charge to the buyer. It is deliberately absent
+ * from `total` and never reaches QuickBooks (see Invoice.shippingCost), so
+ * moving it cannot make our copy of a sent document disagree with Intuit's —
+ * which is the entire risk that makes `setInvoiceLines` announce itself and
+ * leave `qbo_total_amt` alone. Nothing here touches a line, a stock move, a
+ * cost lot or the invoice total.
+ *
+ * Refused on a VOID order only, the same floor `setInvoiceLines` uses: a void
+ * is not a document being corrected, and postage on one is not a cost anybody
+ * is going to reconcile.
+ *
+ * Empty clears to NULL rather than 0, keeping "nobody has said" distinct from
+ * "the postage was free" — `orderShippingCost` falls back to the per-parcel
+ * label costs on a null and must not be told zero instead.
+ */
+export function setInvoiceShippingCost(
+  id: string,
+  cost: number | null
+): { invoice: InvoiceDetail | null; error?: string } {
+  const db = getDb()
+  const row = db.prepare('SELECT id, status FROM invoices WHERE id = ?').get(id) as
+    | { id: string; status: string }
+    | undefined
+  if (!row) return { invoice: null, error: 'Sales order not found.' }
+  if (row.status === 'void') {
+    return { invoice: getInvoice(id), error: 'This order is void — its postage is not worth correcting.' }
+  }
+  db.prepare('UPDATE invoices SET shipping_cost = ?, updated_at = ? WHERE id = ?').run(
+    shippingIn(cost),
+    nowIso(),
+    id
+  )
+  return { invoice: getInvoice(id) }
+}
+
 export function setInvoiceLines(
   id: string,
   changes: ReadonlyArray<{
@@ -4814,7 +4864,26 @@ export function invoiceStats(): {
         .get() as { value: number }
     ).value
   const paidTotal = sumWhere(PAID_SQL)
-  const outstanding = sumWhere(`status != 'void' AND NOT (${PAID_SQL})`)
+  /**
+   * OWED IS NOT THE NEGATION OF PAID, and writing it as one put every invoice
+   * QuickBooks had voided into the Awaiting payment tile.
+   *
+   * `NOT (PAID_SQL)` is true for a qbo-voided invoice — correctly, because no
+   * money arrived on it and none ever will. But "no money arrived" and "money
+   * is coming" are different claims, and only the local `status = 'void'` was
+   * being subtracted. So voiding a sale properly in Intuit RAISED the figure
+   * the owner reads as money on its way in, which is the opposite of what
+   * voiding one means.
+   *
+   * This is the SQL form of `invoiceIsOwed`, and it has to stay that way: both
+   * kinds of void are owed by nobody, a payment recorded in either place
+   * settles it, and everything else is owed in every column — drafts included,
+   * because the figure is meant to hold whatever stage a sale is standing in.
+   */
+  const outstanding = sumWhere(
+    `status != 'void' AND COALESCE(qbo_voided, 0) != 1
+       AND paid_at IS NULL AND qbo_paid_at IS NULL`
+  )
 
   const month = new Date().toISOString().slice(0, 7)
   const thisMonth = (

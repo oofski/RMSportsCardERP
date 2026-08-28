@@ -160,6 +160,51 @@ export function poColumnOf(po: {
 }
 
 /**
+ * Has this supplier actually been paid?
+ *
+ * THE BUY-SIDE MIRROR OF `isInvoicePaid`, and it exists for the same reason
+ * that one does: the COLUMN an order sits in is not the answer.
+ *
+ * `paid_at` is stamped by `setPurchaseOrderPaid`, which deliberately does NOT
+ * move the card — an order regularly arrives before the invoice is settled, so
+ * it sits in Received while the money is still owed, and the reverse happens
+ * too. That is the whole design (see setPurchaseOrderPaid), and it means the
+ * only honest source for "have we paid" is the date.
+ *
+ * Anything reading `status === 'paid'` instead gets two answers wrong at once,
+ * in opposite directions: an order settled while still in Ordered looks unpaid,
+ * and an order in Received that nobody has paid looks like it is not owed. The
+ * card already reads this fact — the Paid chip and the Unpaid chip both key off
+ * `paidAt` — so a total that read the column disagreed with the cards it was
+ * sitting above.
+ */
+export function isPurchaseOrderPaid(po: { paidAt?: string | null }): boolean {
+  return !!po.paidAt
+}
+
+/**
+ * Is money still owed on this order, whatever stage it is standing in?
+ *
+ * The question "what do we owe" is NOT the negation of "have we paid" — a
+ * cancelled order is unpaid forever and owed by nobody, because calling an
+ * order off is how you stop owing for it. `deletePurchaseOrder`'s sibling
+ * `setPurchaseOrderStatus` voids the COGS row on cancel for exactly this
+ * reason, and a payables figure that ignored it would keep chasing a supplier
+ * whose order was called off.
+ *
+ * Everything else counts, in every column. An order that has arrived and not
+ * been paid for is the single most important thing on a payables list, and
+ * filtering on the Ordered column is what used to drop it.
+ */
+export function purchaseOrderIsOwed(po: {
+  status: PurchaseOrderStatus
+  paidAt?: string | null
+}): boolean {
+  if (po.status === 'cancelled') return false
+  return !isPurchaseOrderPaid(po)
+}
+
+/**
  * When this order stopped being live work, or null while it still is.
  *
  * Three ways to finish, and the moment matters because the board keeps a

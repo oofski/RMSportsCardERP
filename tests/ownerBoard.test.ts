@@ -542,5 +542,144 @@ console.log('\n=== 13. every money window states the dates it actually covers ==
   }
 }
 
+
+// ---------------------------------------------------------------------------
+console.log('\n=== N. what we owe is counted off the MONEY, not off the column ===')
+// ---------------------------------------------------------------------------
+/**
+ * The owner: "the unpaid amount should be accurate, all unpaid, regardless of
+ * what stage they are in."
+ *
+ * It was not. `payables()` filtered on `status === 'ordered'`, and because
+ * `setPurchaseOrderPaid` records a payment as a DATE and deliberately leaves
+ * the card where it is — arriving and being settled happen in either order —
+ * that one filter reported two lies at once, in opposite directions:
+ *
+ *   · AN ORDER ALREADY PAID still sat in Ordered, so the board kept asking the
+ *     owner to chase a bill that was settled.
+ *   · AN ORDER THAT HAD ARRIVED and had not been paid for was dropped
+ *     entirely, which is the single most important row a payables list has.
+ *     The card on the board wears an "Unpaid" chip in exactly that case, so
+ *     the total disagreed with the cards underneath it.
+ *
+ * Different amounts on the three orders below, deliberately: with equal ones
+ * the two errors cancel in the TOTAL and only the list is visibly wrong, which
+ * is how a bug like this survives being looked at.
+ */
+const owedProduct = inventory.createProduct(
+  {
+    name: 'Payables Test Box',
+    category: 'Baseball',
+    sku: `OB${++sku}`,
+    upc: null,
+    brand: '',
+    setName: '',
+    year: '',
+    unitType: 'box',
+    boxesPerCase: null,
+    packsPerBox: null,
+    giveawayItem: false,
+    unitCost: 10,
+    highBid: null,
+    salePrice: 0,
+    reorderPoint: 0,
+    notes: null
+  },
+  null
+)
+const mkOrder = (supplier: string, unitPrice: number): any =>
+  po.createPurchaseOrder(
+    {
+      supplier,
+      notes: null,
+      location: 'RM',
+      lines: [{ productId: owedProduct.id, quantity: 1, unitPrice }]
+    },
+    null
+  )
+
+// Three orders, three amounts, three states.
+const stillOwed = mkOrder('Owed Supply Co', 100)
+const alreadyPaid = mkOrder('Settled Supply Co', 200)
+const hereUnpaid = mkOrder('Arrived Supply Co', 400)
+
+// PAID WITHOUT MOVING. This is the call the "Mark paid" button makes, and the
+// one that used to leave an order sitting in the payables list.
+po.setPurchaseOrderPaid(alreadyPaid.id, true, null)
+// ARRIVED WITHOUT BEING PAID. The boxes are on the shelf and the bill is open.
+po.receivePurchaseOrderLines(
+  hereUnpaid.id,
+  [{ lineId: hereUnpaid.lines[0].id, quantity: 1 }],
+  null
+)
+
+ok(
+  po.getPurchaseOrder(alreadyPaid.id).status === 'ordered',
+  'the paid order is STILL in the Ordered column — paying does not move a card',
+  po.getPurchaseOrder(alreadyPaid.id).status
+)
+ok(
+  po.getPurchaseOrder(hereUnpaid.id).status === 'received',
+  'and the unpaid one has left it, because its boxes turned up',
+  po.getPurchaseOrder(hereUnpaid.id).status
+)
+
+const owedBoard = owner.getOwnerBoard(ALL)
+const owedNames = owedBoard.payables.items.map((i: any) => i.supplier).sort()
+
+ok(
+  owedBoard.payables.total === 500,
+  'WHAT WE OWE IS 100 + 400 — the unpaid order that arrived is counted, and the ' +
+    'paid one that never moved is not',
+  String(owedBoard.payables.total)
+)
+ok(owedBoard.payables.count === 2, 'two orders, not two columns', String(owedBoard.payables.count))
+ok(
+  owedNames.join(', ') === 'Arrived Supply Co, Owed Supply Co',
+  'AND IT IS THE RIGHT TWO. The old filter returned the other pair entirely: it ' +
+    'chased a settled supplier and was blind to an open bill on stock already here',
+  owedNames.join(', ')
+)
+ok(
+  !owedNames.includes('Settled Supply Co'),
+  'nobody is chased for a bill they have been paid'
+)
+
+// A cancelled order is unpaid forever and owed by nobody — calling one off is
+// how you stop owing for it, which is why the rule is not "not paid".
+const calledOff = mkOrder('Called Off Supply Co', 800)
+po.setPurchaseOrderStatus(calledOff.id, 'cancelled', null)
+const afterCancel = owner.getOwnerBoard(ALL)
+ok(
+  afterCancel.payables.total === 500,
+  'CANCELLING AN ORDER TAKES IT OFF WHAT WE OWE, though nobody ever paid it',
+  String(afterCancel.payables.total)
+)
+ok(
+  !afterCancel.payables.items.some((i: any) => i.supplier === 'Called Off Supply Co'),
+  'and off the list to chase'
+)
+
+// The shared rule, read directly. The board and the card chips must agree, and
+// they only can if there is one function to disagree with.
+const { isPurchaseOrderPaid, purchaseOrderIsOwed } = require('../src/shared/purchaseOrders')
+ok(
+  isPurchaseOrderPaid({ paidAt: '2026-01-01T00:00:00.000Z' }) === true &&
+    isPurchaseOrderPaid({ paidAt: null }) === false,
+  'paid is the DATE and nothing else'
+)
+ok(
+  purchaseOrderIsOwed({ status: 'received', paidAt: null }) === true,
+  'received and unpaid is owed'
+)
+ok(
+  purchaseOrderIsOwed({ status: 'ordered', paidAt: '2026-01-01T00:00:00.000Z' }) === false,
+  'ordered and paid is not'
+)
+ok(
+  purchaseOrderIsOwed({ status: 'cancelled', paidAt: null }) === false,
+  'and cancelled is not, however unpaid it is'
+)
+
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

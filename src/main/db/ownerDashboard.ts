@@ -13,6 +13,7 @@ import type {
 } from '@shared/ownerDashboard'
 import type { StreamDayFinance } from '@shared/financeStreaming'
 import { deriveSaleFee } from '@shared/financeStreaming'
+import { purchaseOrderIsOwed } from '@shared/purchaseOrders'
 import { getDb } from './database'
 import { streamingFinanceView } from './financeStreaming'
 import { rateLookup } from './whatnotRates'
@@ -255,11 +256,29 @@ function receivables(): OwnerReceivables | null {
   }
 }
 
-/** Purchase orders placed and not yet paid. */
+/**
+ * Purchase orders with money still owed on them — in every column.
+ *
+ * THE STAGE IS NOT THE ANSWER, and reading it here reported two lies at once,
+ * in opposite directions. `setPurchaseOrderPaid` records a payment as a DATE
+ * and deliberately leaves the card where it is, because arriving and being
+ * settled happen in either order; so filtering on `status === 'ordered'`:
+ *
+ *   · counted an order somebody had already paid, because paying it never
+ *     moved it out of Ordered — the owner was told to chase a settled bill;
+ *   · dropped every order that had ARRIVED and not been paid for, which is the
+ *     most important row a payables list has. The card on the board wears an
+ *     "Unpaid" chip in exactly that case, so the total disagreed with the
+ *     cards underneath it.
+ *
+ * `purchaseOrderIsOwed` is the one rule, shared with those chips. A cancelled
+ * order is excluded there rather than here: calling an order off is how you
+ * stop owing for it, and its COGS row is voided at the same moment.
+ */
 function payables(): { items: OwnerPayable[]; total: number; count: number } {
   const now = Date.now()
   const items = listPurchaseOrders()
-    .filter((po) => po.status === 'ordered')
+    .filter((po) => purchaseOrderIsOwed(po))
     .map((po): OwnerPayable => {
       const placed = po.createdAt ?? null
       const ageDays = placed
