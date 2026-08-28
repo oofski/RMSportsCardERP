@@ -27544,18 +27544,30 @@ button.sor-team:focus-visible {
   margin-top: 10px;
 }
 
-/* WHICH CASES a sales order line is selling — under the product name, beside
-   the description, where the thing being sold is named. Absent on almost every
-   line: it renders only when an open roadshow order actually holds some of that
-   product. See SourceOrderPicker. */
+/* WHICH CASES a sales order line is selling — DIRECTLY UNDER the place it is
+   coming from, because they are one question in two halves.
+
+   It used to sit under the product name, three columns away from "Fulfilled
+   from", and two dropdowns that far apart read as two competing answers to
+   "where does this come from" rather than as a place and then a refinement of
+   it. Stacked, the second is plainly a detail of the first.
+
+   Absent on almost every line: it renders only when an open roadshow order
+   actually holds some of that product on that shelf. See SourceOrderPicker. */
 .so-source {
   margin-top: 5px;
 }
+/* Stacked rather than side by side now that it lives in a narrow cell: the
+   label above and the select below, so neither is squeezed to nothing. */
 .so-source-row {
   display: flex;
-  align-items: center;
-  gap: 6px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 3px;
   min-width: 0;
+}
+.so-source-row > svg {
+  display: none;
 }
 .so-source-row > svg {
   flex: none;

@@ -971,16 +971,6 @@ export function CreateInvoiceModal({
                             DROPSHIPPED line never gets it either: those units
                             went supplier-to-buyer and never sat on a shelf, so
                             there is no order's stock to sell out of. */}
-                        {l.productId && !drop && (
-                          <SourceOrderPicker
-                            productId={l.productId}
-                            productName={l.item}
-                            location={from}
-                            quantity={parseFloat(l.quantity) || 0}
-                            value={l.sourcePoId}
-                            onChange={(poId) => patch(l.key, { sourcePoId: poId })}
-                          />
-                        )}
                         {/* HOW MANY WE HAVE AND WHERE, but only when the number
                             typed is more than is downstairs. "I have 4 in RM
                             and I need 7" is the case this exists for, and the
@@ -991,6 +981,7 @@ export function CreateInvoiceModal({
                           <StockOnHand
                             productId={l.productId}
                             quantity={parseFloat(l.quantity) || 0}
+                            location={from}
                           />
                         )}
                       </td>
@@ -1095,6 +1086,33 @@ export function CreateInvoiceModal({
                           drop={drop}
                           onChange={(d) => patch(l.key, { destination: d ?? '' })}
                         />
+                        {/* WHICH CASES, directly under WHERE FROM.
+                            
+                            These are one question in two halves — the place,
+                            and then which of that place's cases — and they used
+                            to sit at opposite ends of the row: a "Sell from"
+                            dropdown tucked under the product name, and
+                            "Fulfilled from" three columns away. Two dropdowns
+                            that far apart read as two competing answers to
+                            "where does this come from", which is exactly how
+                            the owner read them.
+
+                            It still renders nothing at all unless an open
+                            roadshow order actually holds some of this product
+                            on this shelf, which is almost never, and never on a
+                            dropshipped line — those units went
+                            supplier-to-buyer and never sat on a shelf, so there
+                            is no order's stock to sell out of. */}
+                        {l.productId && !drop && (
+                          <SourceOrderPicker
+                            productId={l.productId}
+                            productName={l.item}
+                            location={from}
+                            quantity={parseFloat(l.quantity) || 0}
+                            value={l.sourcePoId}
+                            onChange={(poId) => patch(l.key, { sourcePoId: poId })}
+                          />
+                        )}
                       </td>
                       <td className="num">
                         <button

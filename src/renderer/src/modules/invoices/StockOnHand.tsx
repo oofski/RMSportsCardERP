@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { ProductAvailability } from '@shared/availability'
-import { availabilityNote, placesWorthNaming, unitsHere } from '@shared/availability'
+import { availabilityNote, isHomeShelf, placesWorthNaming, unitsHere } from '@shared/availability'
 import { api } from '../../lib/api'
 import { Icon } from '../../components/Icon'
 
@@ -40,11 +40,26 @@ import { Icon } from '../../components/Icon'
  */
 export function StockOnHand({
   productId,
-  quantity
+  quantity,
+  location
 }: {
   productId: string
-  /** What the line is asking for. The note only appears when this exceeds home. */
+  /** What the line is asking for. */
   quantity: number
+  /**
+   * WHERE THIS LINE IS ACTUALLY DRAWING FROM — the "Fulfilled from" answer.
+   *
+   * This note used to ignore it and measure against the home shelves whatever
+   * the line said, which put a flat contradiction on the screen: a line pointed
+   * at Kentucky Roadshow, with two cases standing in Kentucky, was told "Only 0
+   * here — the rest are at 2 at Kentucky Roadshow". The line had already
+   * answered the question the note was asking.
+   *
+   * So the note answers about the place the line NAMES. Two controls that
+   * disagree about one fact are worse than one control, and the owner said as
+   * much: fulfilled-from "needs to match up".
+   */
+  location?: string | null
 }): JSX.Element | null {
   const [have, setHave] = useState<ProductAvailability | null>(null)
 
@@ -71,6 +86,35 @@ export function StockOnHand({
   }, [productId])
 
   if (!productId || !have) return null
+
+  /**
+   * A LINE THAT NAMES ITS SHELF IS ASKED ABOUT THAT SHELF.
+   *
+   * The general note — here versus away — is for a line that has not chosen,
+   * which is the ordinary case: it inherits the order's location and somebody
+   * wants to know whether the building can cover it. Once a line points
+   * somewhere specific, "here" stops being the question. What matters is
+   * whether THAT place has enough, and the note has to be silent when it does
+   * or it is arguing with the dropdown beside it.
+   */
+  const named = String(location ?? '').trim()
+  const namedPlace = named
+    ? placesWorthNaming(have).find((p) => p.location.toLowerCase() === named.toLowerCase())
+    : undefined
+  if (named && !isHomeShelf(named)) {
+    const want = Number(quantity) || 0
+    const at = namedPlace?.quantity ?? 0
+    if (want <= 0 || at >= want) return null
+    return (
+      <div className="so-onhand is-short">
+        <Icon name="AlertTriangle" size={12} />
+        <span>
+          {at === 0 ? 'None' : <b>{at}</b>} at {named} — <b>{want - at}</b> short of {want}.
+        </span>
+      </div>
+    )
+  }
+
   const note = availabilityNote(have, quantity)
   if (!note) return null
 
