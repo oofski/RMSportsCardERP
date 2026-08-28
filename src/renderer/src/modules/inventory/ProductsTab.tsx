@@ -1,3 +1,4 @@
+import { isHomeShelf } from '@shared/availability'
 import { useEffect, useMemo, useState, type CSSProperties } from 'react'
 import type { InventoryProduct, ProductImage, UpdateInventoryProduct } from '@shared/types'
 import { CATEGORY_ORDER, LOCATIONS, categoryColor } from '@shared/inventory'
@@ -21,6 +22,37 @@ import { RecordSaleModal } from './RecordSaleModal'
 import { ConsignModal } from './ConsignModal'
 import { ProductConsignments } from './ProductConsignments'
 import { StockModal } from './StockModal'
+
+/**
+ * THE PLACES WORTH NAMING ON A ROW.
+ *
+ * A row used to name every place there was, which was fine while there were
+ * two. The four roadshow shops made it six, and six labels on a row sized for
+ * three wrapped into a block of mostly-zeroes with the product's name squashed
+ * beside it — "California Roadshow 0, Kentucky Roadshow 0, New York Roadshow 0,
+ * Texas Roadshow 0" on a box that is sitting at AM.
+ *
+ * So: THE TWO HOME SHELVES ALWAYS, and anywhere else only when it is holding
+ * something. RM 0 is worth printing — it means look somewhere else, and it is
+ * the number somebody scans this column for. "Texas Roadshow 0" is not; it is
+ * the answer to a question nobody asked, repeated four times, and it pushes the
+ * one place that DOES have stock off the edge.
+ *
+ * The row therefore reads exactly as it did before the shops existed, until a
+ * shop actually has something — at which point that shop, and only that shop,
+ * appears beside them.
+ */
+function placesOnRow(byLocation: Record<string, number>): Array<{
+  id: string
+  label: string
+  qty: number
+}> {
+  return LOCATIONS.filter((l) => isHomeShelf(l.id) || (byLocation[l.id] ?? 0) > 0).map((l) => ({
+    id: l.id,
+    label: l.label,
+    qty: byLocation[l.id] ?? 0
+  }))
+}
 
 export function ProductsTab({
   products,
@@ -337,10 +369,9 @@ export function ProductsTab({
                       </span>
                     </span>
                     <span className="cr-stock">
-                      {LOCATIONS.map((l) => (
+                      {placesOnRow(p.quantityByLocation).map((l) => (
                         <span key={l.id} className="crs-loc">
-                          <em>{l.label}</em>{' '}
-                          {formatStockOnHand(productUnits(p), p.quantityByLocation[l.id] ?? 0)}
+                          <em>{l.label}</em> {formatStockOnHand(productUnits(p), l.qty)}
                         </span>
                       ))}
                       <span className={`crs-total ${low ? 'stock-low' : ''}`}>
@@ -605,10 +636,9 @@ function ProductDetail({
         <span>
           <em>Type</em> {structureLabel(product)}
         </span>
-        {LOCATIONS.map((l) => (
+        {placesOnRow(product.quantityByLocation).map((l) => (
           <span key={l.id}>
-            <em>{l.label}</em>{' '}
-            {formatStockOnHand(productUnits(product), product.quantityByLocation[l.id] ?? 0)}
+            <em>{l.label}</em> {formatStockOnHand(productUnits(product), l.qty)}
           </span>
         ))}
         <span>

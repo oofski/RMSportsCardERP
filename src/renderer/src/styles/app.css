@@ -2720,15 +2720,34 @@ table.data tfoot .data-total td {
   font-weight: 600;
   font-size: 11px;
 }
+/* WIDTH THAT FOLLOWS WHAT IS THERE.
+
+   This was a grid of exactly three fixed columns — two shelves and a total —
+   which was right while there were two shelves. The four roadshow shops made it
+   six, and the extras did not shrink, they WRAPPED: a block of mostly-zero
+   labels stacked under each other with the product name squashed beside them.
+
+   A row is not a table, so it should not pretend to have columns. Flexed and
+   right-aligned, each place takes the width of its own name and nothing more,
+   and the row is as wide as it needs to be — which, since placesOnRow drops
+   empty shops, is the same three items it always was until a shop is actually
+   holding something. */
 .cr-stock {
-  display: grid;
-  grid-template-columns: repeat(2, 56px) 48px;
+  display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 4px 10px;
   font-size: 12.5px;
   color: var(--text-2);
   font-variant-numeric: tabular-nums;
   text-align: right;
+}
+/* A place and its count are one thing and must never break between them —
+   "New York" on one line and "Roadshow 0" on the next is what the old layout
+   was doing, and it is unreadable. */
+.crs-loc {
+  white-space: nowrap;
 }
 .crs-loc em {
   font-style: normal;

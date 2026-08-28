@@ -1,3 +1,4 @@
+import { isHomeShelf } from '@shared/availability'
 import {
   useCallback,
   useEffect,
@@ -1595,11 +1596,33 @@ function InventoryDetail({
    * picker above the cards. Deriving both from this means a column can never
    * become sortable on one and not the other.
    */
+  /**
+   * THE PLACES THIS TABLE GIVES A COLUMN TO.
+   *
+   * The two home shelves always, and a roadshow shop only when some product on
+   * the list is actually holding something there. With four shops seeded, the
+   * unconditional version gave the table six numeric columns of which four were
+   * a wall of zeroes on every row — squeezing the product name, the money
+   * columns and everything somebody comes to this table for.
+   *
+   * A COLUMN, not a cell, so it is judged across the whole list rather than per
+   * row: a table whose columns changed from row to row would not be a table.
+   * The moment anything lands in Texas the column appears for everybody, which
+   * is the correct trigger — that is exactly when the number starts mattering.
+   */
+  const shownLocations = useMemo(
+    () =>
+      LOCATIONS.filter(
+        (l) => isHomeShelf(l.id) || shown.some((r) => (r.p.quantityByLocation[l.id] ?? 0) > 0)
+      ),
+    [shown]
+  )
+
   const columns: { key: string; label: string; align: 'left' | 'center' | 'right' }[] = useMemo(
     () => [
       { key: 'product', label: 'Product', align: 'left' },
       { key: 'structure', label: 'Structure', align: 'left' },
-      ...LOCATIONS.map((l) => ({
+      ...shownLocations.map((l) => ({
         key: locationSortKey(l.id),
         label: l.label,
         align: 'center' as const
@@ -1734,7 +1757,7 @@ function InventoryDetail({
                   <td data-label="Structure">
                     <UnitBadge unit={p.unitType} />
                   </td>
-                  {LOCATIONS.map((l) => (
+                  {shownLocations.map((l) => (
                     <td key={l.id} style={{ textAlign: 'center' }} className="mono" data-label={l.label}>
                       {formatUnitCount(p.quantityByLocation[l.id] ?? 0)}
                     </td>
