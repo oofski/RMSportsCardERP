@@ -981,10 +981,10 @@ export function addItem(input: NewStreamItem, actorId: string | null): Result<St
      * first with the entry, where the product is known and the refusal can name
      * the unit the price should have been in.
      */
-    const reconcile = isPastDatedSession({
-      streamDate: session.stream_date,
-      endedAt: session.ended_at
-    })
+    // Measured from the instant the show ENDED — see isPastDatedSession. The
+    // stream's calendar date is no longer part of the answer: it made the grace
+    // period depend on what time the show happened to finish.
+    const reconcile = isPastDatedSession({ endedAt: session.ended_at })
 
     if (!isLocation(location)) return { ok: false, error: 'Pick a stock location.' }
     const product = db

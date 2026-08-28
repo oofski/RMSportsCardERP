@@ -415,37 +415,83 @@ export function streamDateOf(iso: string): string {
 }
 
 /**
+ * HOW LONG AFTER A SHOW ENDS ITS STOCK CAN STILL BE DRAWN OFF THE SHELF.
+ *
+ * The owner's number, in his words: "it should be 24 hours after the stream
+ * that it is reconciliation, not right away, since I wanna pull from
+ * inventory."
+ */
+export const RECONCILE_AFTER_MS = 24 * 60 * 60 * 1000
+
+/**
  * Is this session HISTORY — a show being RECONCILED rather than one being run?
  *
- * The owner's rule is "a date in the past", and both obvious readings of that
- * break on the way RM actually streams.
+ * ## The two things this decides between
  *
- * `streamDate < today` flips at midnight — in the middle of a 9pm-to-2am show,
- * which is the one moment an operator is certainly still adding breaks to it.
- * The form would change under their hands mid-show. "It has ended" is no better
- * on its own: a show that finished ten minutes ago is over, but its stock came
- * off the shelf tonight and is costed at the layers it took, so there is nothing
- * to reconcile.
+ *   NOT history   a MOVEMENT. The cases come off the shelf, consume their FIFO
+ *                 layers, and cost what those layers cost. This is what somebody
+ *                 wants when they are entering what actually went out.
+ *   history       a RECONCILIATION. Nothing moves, because the stock is long
+ *                 gone; the operator STATES what the case cost and the books are
+ *                 squared from the assertion.
  *
- * So both, anchored on the END: a session is history once it has finished AND
- * the local day it finished on is already behind us. The mode can then only ever
- * change at a midnight with no show running and none just ended — which is what
- * stops it flickering while somebody is working.
+ * ## Why it is now measured in hours, not in days
  *
- * `streamDate` is checked as well, even though a valid session's business day
- * can never be later than the day it ended. A row written before start/end
- * validation existed could hold them the wrong way round, and for such a row the
- * conservative answer — both behind us, or it is not history — is the right one.
+ * It used to be "the show has ended AND the day it ended on is behind us". That
+ * was written to stop the form changing under somebody's hands at midnight
+ * mid-show, and it did — but it made the grace period depend on WHAT TIME THE
+ * SHOW HAPPENED TO FINISH. A show ending at 2am had until the following
+ * midnight, nearly a full day. A show ending at 11pm had one hour. Same act,
+ * same operator, and the answer to "can I pull this from inventory?" turned on
+ * the clock rather than on anything real.
+ *
+ * A day is the wrong unit anyway. Nobody enters a Friday night's cases at 11:59
+ * on Friday; they do it Saturday morning, over coffee, with the boxes in front
+ * of them — and the old rule had already switched to reconciliation by then and
+ * was refusing to touch the shelf.
+ *
+ * So: A FIXED TWENTY-FOUR HOURS FROM THE MOMENT THE SHOW ENDED. Every show gets
+ * the same window, the window covers the morning after, and it is one sentence
+ * to explain to somebody standing at the bench.
+ *
+ * ## An instant, not a calendar day
+ *
+ * `endedAt` is a UTC ISO instant — a physical event, the moment the stream
+ * stopped — so this compares instants and never touches a timezone. See the
+ * wall-clock-versus-instant note in CLAUDE.md: dragging a business calendar into
+ * a question about elapsed time is what made the old rule depend on the local
+ * midnight in the first place.
+ *
+ * A show still on air is never history, whatever day it started on: there is no
+ * end to measure from, and the cases are coming off the shelf right now.
  */
 export function isPastDatedSession(
-  session: Pick<StreamSession, 'streamDate' | 'endedAt'>,
+  session: Pick<StreamSession, 'endedAt'>,
   now: Date = new Date()
 ): boolean {
   if (!session.endedAt) return false
-  const today = streamDateOf(now.toISOString())
-  const ended = streamDateOf(session.endedAt)
-  if (!today || !ended) return false
-  return ended < today && session.streamDate < today
+  const ended = Date.parse(session.endedAt)
+  // An unparseable stamp answers "not history" — the conservative side, since a
+  // movement can be undone and a reconciliation asserts a cost nobody checked.
+  // An endedAt in the FUTURE lands here too, as a negative elapsed time.
+  if (!Number.isFinite(ended)) return false
+  return now.getTime() - ended >= RECONCILE_AFTER_MS
+}
+
+/**
+ * How long is left before this show becomes a reconciliation, in ms.
+ *
+ * Zero once it has. Null while it is still on air, which is a different
+ * statement from "no time left" — nothing is counting down yet.
+ */
+export function msUntilReconcile(
+  session: Pick<StreamSession, 'endedAt'>,
+  now: Date = new Date()
+): number | null {
+  if (!session.endedAt) return null
+  const ended = Date.parse(session.endedAt)
+  if (!Number.isFinite(ended)) return null
+  return Math.max(0, ended + RECONCILE_AFTER_MS - now.getTime())
 }
 
 /**

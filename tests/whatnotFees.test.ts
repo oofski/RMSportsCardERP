@@ -1402,11 +1402,51 @@ console.log('\n=== 9. two nights of a real show, itemised ===')
 // wrong reason.
 for (const p of listRatePeriods()) deleteRatePeriod(p.id)
 
+/**
+ * N days before TODAY, at a given hour — stepping around the two fixed July
+ * shows.
+ *
+ * ## The collision, and why it can only be solved here
+ *
+ * Sections 1-8 pin "Mon night" and "Tue night" to real July 2026 evenings
+ * (the 20th, 7pm-1am, and the 21st, 7pm-11pm). Every fixture from here down is
+ * dated N days before whenever the suite happens to RUN, at the same evening
+ * hours. So on any day where N days back lands on the 20th or the 21st, the two
+ * overlap and createSession refuses the fixture outright: "two shows cannot
+ * share the same minute". A suite that passes for eleven months and then fails
+ * for a week, reporting an overlap rather than anything the section is testing.
+ *
+ * It came due today at thirty-nine days back, and would have come due again at
+ * seventy, at a hundred, and at four more offsets after that.
+ *
+ * NEITHER SIDE'S HOURS CAN MOVE, which is what forces the fix into the offset:
+ *
+ *   · The July shows are evening shows on purpose. "Mon night" runs 7pm to 1am
+ *     specifically so it crosses midnight, which is what the rate-blend section
+ *     above exists to check — a show whose sales land on two calendar days.
+ *   · The relative fixtures are evening shows on purpose too. Their sections
+ *     time SALES against the show's window and the midnight boundary to prove
+ *     which night the money belongs to. Moved to the afternoon, they still
+ *     create cleanly and then fail four assertions about attribution.
+ *
+ * So the DAY steps instead. Seven days rather than one, because the fixtures
+ * come in adjacent pairs (39 and 40, 129 and 130) and a one-day nudge would
+ * simply move a collision from the July show onto this fixture's own sibling.
+ * Nothing depends on the exact offset — only on it being comfortably history,
+ * which every one of these still is.
+ */
+const COLLIDES = new Set(['2026-07-20', '2026-07-21'])
 const back = (days: number, hour: number, minute = 0): Date => {
-  const d = new Date()
-  d.setDate(d.getDate() - days)
-  d.setHours(hour, minute, 0, 0)
-  return d
+  const make = (n: number): Date => {
+    const d = new Date()
+    d.setDate(d.getDate() - n)
+    d.setHours(hour, minute, 0, 0)
+    return d
+  }
+  const probe = make(days)
+  const p = (n: number): string => String(n).padStart(2, '0')
+  const key = `${probe.getFullYear()}-${p(probe.getMonth() + 1)}-${p(probe.getDate())}`
+  return COLLIDES.has(key) ? make(days + 7) : probe
 }
 const NIGHT_A = back(40, 19)
 const NIGHT_B = back(39, 19)

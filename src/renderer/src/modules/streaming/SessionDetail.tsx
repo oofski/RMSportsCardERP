@@ -5,6 +5,7 @@ import {
   formatDuration,
   isPastDatedSession,
   isSuspiciouslyLong,
+  msUntilReconcile,
   parseMoneyInput,
   statedPriceUnit
 } from '@shared/streaming'
@@ -18,6 +19,22 @@ import { SessionFormModal } from './SessionFormModal'
 import { LiveChip, SourceChip, TimeSpan } from './bits'
 import { costEntryReady, resultError, streaming } from './api'
 import { longDayLabel } from './time'
+
+/**
+ * "You have about 6 hours" — the draw window, in words somebody can act on.
+ *
+ * ROUNDED, and rounded DOWN. "About 6 hours" understates a window of 6h59m by
+ * an hour, which is the safe direction: somebody who hurries loses nothing,
+ * somebody who dawdles on a promise of 7 finds the shelf closed. Under an hour
+ * it switches to minutes, because "about 0 hours" is not a sentence.
+ */
+function formatWindowLeft(ms: number): string {
+  const mins = Math.floor(ms / 60000)
+  if (mins < 1) return 'Under a minute left'
+  if (mins < 60) return `About ${mins} minute${mins === 1 ? '' : 's'} left`
+  const hours = Math.floor(mins / 60)
+  return `About ${hours} hour${hours === 1 ? '' : 's'} left`
+}
 
 /**
  * One session, in full — the screen where the money actually gets attributed.
@@ -159,6 +176,16 @@ export function SessionDetail({
   // Which act adding a line to THIS show is. The same rule main enforces on the
   // write, so the form the operator is given is the one that will be accepted.
   const reconcile = isPastDatedSession(session)
+  /**
+   * How long is left to draw this show's cases off the shelf.
+   *
+   * Read once per render rather than ticked on a timer: the window is a day
+   * long and the note is rounded to hours, so a second-by-second countdown
+   * would redraw the screen 86,400 times to change a number 24 times. Anybody
+   * who lands on the screen sees the answer as it is at that moment, which is
+   * what the note is for.
+   */
+  const drawWindowLeft = msUntilReconcile(session)
 
   return (
     <section className="stm-detail">
@@ -222,6 +249,24 @@ export function SessionDetail({
           <Icon name="History" size={14} />
           <span>
             <b>This show is history.</b> Lines added here record cost only — no stock moves.
+          </span>
+        </div>
+      )}
+
+      {/* AND THE OTHER SIDE OF THE SAME FACT: the show has ended, the shelf is
+          still open, and there is a clock on it.
+
+          The switch used to arrive without warning — somebody came back the
+          next morning to enter the night's cases and found a form that would
+          not touch inventory, with nothing on screen having ever said a
+          deadline existed. A window nobody can see is a trap however long it
+          is, so the window is now on the screen while it is running. */}
+      {!reconcile && session.endedAt && drawWindowLeft !== null && (
+        <div className="stm-inline-note">
+          <Icon name="Timer" size={14} />
+          <span>
+            <b>Ended.</b> {formatWindowLeft(drawWindowLeft)} to add lines that come off the shelf —
+            after that they record cost only.
           </span>
         </div>
       )}

@@ -247,29 +247,95 @@ const day = (daysAgo: number): string => {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
 }
 
+/**
+ * THE WINDOW IS TWENTY-FOUR HOURS FROM THE MOMENT THE SHOW ENDED.
+ *
+ * The owner's rule, in his words: "it should be 24 hours after the stream that
+ * it is reconciliation, not right away, since I wanna pull from inventory."
+ *
+ * It used to be "the day it ended is behind us", which made the grace period
+ * depend on what time the show happened to finish — nearly a full day for a
+ * show ending at 2am, one hour for a show ending at 11pm. Nobody enters a
+ * Friday night's cases at 11:59 on Friday; they do it on Saturday morning with
+ * the boxes in front of them, and the old rule had already closed the shelf.
+ */
+const hoursAgo = (h: number): string => new Date(nowRef.getTime() - h * 3600_000).toISOString()
+
 ok(
-  isPastDatedSession({ streamDate: day(30), endedAt: at(30, 23) }, nowRef),
+  isPastDatedSession({ endedAt: at(30, 23) }, nowRef),
   'a show that ended a month ago is history'
 )
 ok(
-  !isPastDatedSession({ streamDate: day(0), endedAt: at(0, 11) }, nowRef),
-  'a show dated today is not history, even though it has ended'
+  !isPastDatedSession({ endedAt: at(0, 11) }, nowRef),
+  'a show that ended earlier today is not history — its cases still come off the shelf'
 )
 ok(
-  !isPastDatedSession({ streamDate: day(1), endedAt: null }, nowRef),
+  !isPastDatedSession({ endedAt: null }, nowRef),
   'a show still on air is never history, whatever day it started on'
 )
-// THE case the rule exists for: a Monday 9pm show ends at 2am on Tuesday. Its
-// business day is already "yesterday" the moment it finishes, and a rule keyed
-// on stream_date alone would turn the add form into a reconciliation form at
-// midnight — while the operator is still typing breaks into it.
+// THE case the old rule got wrong, and the reason for the change: a Friday
+// 9pm-to-11pm show, opened on Saturday morning to enter what went out. Fifteen
+// hours have passed and the day HAS turned, so the calendar rule called it
+// history and refused to touch inventory.
 ok(
-  !isPastDatedSession({ streamDate: day(1), endedAt: at(0, 2) }, nowRef),
-  'a show that ran past midnight is not history on the day it finished'
+  !isPastDatedSession({ endedAt: hoursAgo(15) }, nowRef),
+  'THE MORNING AFTER IS STILL THE SHELF — fifteen hours on, and last night’s cases can still be drawn',
+  hoursAgo(15)
 )
 ok(
-  isPastDatedSession({ streamDate: day(2), endedAt: at(1, 2) }, nowRef),
-  'and it becomes history the day after it finished, not the day after it started'
+  !isPastDatedSession({ endedAt: hoursAgo(23.5) }, nowRef),
+  'and so is the twenty-third hour — the window is a full day, not "until midnight"'
+)
+ok(
+  isPastDatedSession({ endedAt: hoursAgo(24.5) }, nowRef),
+  'PAST TWENTY-FOUR HOURS IT IS A RECONCILIATION — the stock is long gone, so the price is stated instead'
+)
+/**
+ * EVERY SHOW GETS THE SAME WINDOW, which is the whole point of measuring an
+ * elapsed time rather than a calendar day. Two shows that ended twenty hours
+ * ago are in the same mode whether one finished at 2am and the other at 11pm.
+ */
+ok(
+  !isPastDatedSession({ endedAt: hoursAgo(20) }, nowRef) &&
+    !isPastDatedSession({ endedAt: hoursAgo(20.01) }, nowRef),
+  'and the answer turns on hours elapsed, never on the hour of the clock the show happened to end at'
+)
+// A stamp nobody can parse, and one in the future, both answer "not history":
+// a movement can be undone, a reconciliation asserts a cost nobody checked.
+ok(
+  !isPastDatedSession({ endedAt: 'not a date' }, nowRef) &&
+    !isPastDatedSession({ endedAt: hoursAgo(-5) }, nowRef),
+  'a broken or future end stamp leaves the shelf open rather than asserting a cost'
+)
+
+/**
+ * AND THE WINDOW IS VISIBLE WHILE IT RUNS.
+ *
+ * The switch used to arrive with no warning at all: somebody came back the
+ * morning after to enter the night's cases and met a form that would not touch
+ * inventory, with nothing on screen having ever mentioned a deadline. A window
+ * nobody can see is a trap however long it is.
+ */
+const { msUntilReconcile } = require('../src/shared/streaming')
+const hoursLeft = (v: number | null): number | null => (v === null ? null : v / 3600_000)
+ok(
+  msUntilReconcile({ endedAt: null }, nowRef) === null,
+  'NOTHING IS COUNTING DOWN WHILE THE SHOW IS ON AIR — that is not the same as "no time left"'
+)
+ok(
+  Math.abs((hoursLeft(msUntilReconcile({ endedAt: hoursAgo(15) }, nowRef)) ?? 0) - 9) < 0.01,
+  'fifteen hours after it ended, nine are left',
+  String(hoursLeft(msUntilReconcile({ endedAt: hoursAgo(15) }, nowRef)))
+)
+ok(
+  msUntilReconcile({ endedAt: hoursAgo(40) }, nowRef) === 0,
+  'AND IT IS ZERO ONCE THE SHELF HAS CLOSED, never negative — the screen has nothing left to promise',
+  String(msUntilReconcile({ endedAt: hoursAgo(40) }, nowRef))
+)
+ok(
+  msUntilReconcile({ endedAt: hoursAgo(24) }, nowRef) === 0 &&
+    isPastDatedSession({ endedAt: hoursAgo(24) }, nowRef),
+  'THE TWO AGREE AT THE BOUNDARY — the countdown hits zero exactly when the mode flips, so the note can never promise time the form will refuse'
 )
 
 console.log('\n--- money as a person types it ---')
