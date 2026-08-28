@@ -8,6 +8,7 @@ import { Button, CenterLoader } from '../../components/ui'
 import { useToast } from '../../components/Toast'
 import { formatMoney } from '../../lib/format'
 import { AddToShopModal } from './AddToShopModal'
+import { ShopBuysPanel } from './ShopBuysPanel'
 
 /**
  * THE FOUR SHOPS, AND WHAT IS STANDING IN EACH.
@@ -51,6 +52,10 @@ export function RoadshowBoard(): JSX.Element {
   const [tabs, setTabs] = useState<PurchaseOrder[] | null>(null)
   const [stock, setStock] = useState<Record<string, StockAtLocationRow[]>>({})
   const [adding, setAdding] = useState<string | null>(null)
+  /** The tile somebody opened, and which shop it is on. Null the rest of the time. */
+  const [openTile, setOpenTile] = useState<{ shop: string; product: StockAtLocationRow } | null>(
+    null
+  )
 
   const load = useCallback(async () => {
     const [openTabs, ...shelves] = await Promise.all([
@@ -119,11 +124,21 @@ export function RoadshowBoard(): JSX.Element {
               ) : (
                 <ul className="rs-list">
                   {rows.map((r) => (
-                    <li className="rs-item" key={r.productId}>
-                      <span className="rs-item-name" title={r.name}>
-                        {r.name}
-                      </span>
-                      <span className="rs-item-qty mono">{r.quantity}</span>
+                    <li key={r.productId}>
+                      {/* A TILE, and it opens. The count answers "have I got
+                          any"; the dates and the order numbers answer "when did
+                          I buy these and what did they cost", which is the
+                          question at settling-up time and the one this column
+                          could not reach. See ShopBuysPanel. */}
+                      <button
+                        type="button"
+                        className="rs-item"
+                        onClick={() => setOpenTile({ shop, product: r })}
+                        title={`When ${r.name} was bought at ${shop}`}
+                      >
+                        <span className="rs-item-name">{r.name}</span>
+                        <span className="rs-item-qty mono">{r.quantity}</span>
+                      </button>
                     </li>
                   ))}
                 </ul>
@@ -158,6 +173,14 @@ export function RoadshowBoard(): JSX.Element {
           )
         })}
       </div>
+
+      {openTile && (
+        <ShopBuysPanel
+          shop={openTile.shop}
+          product={openTile.product}
+          onClose={() => setOpenTile(null)}
+        />
+      )}
 
       {adding && (
         <AddToShopModal

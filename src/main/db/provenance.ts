@@ -31,6 +31,7 @@
  * split — naming one of two would send somebody to the wrong building.
  */
 
+import type { ShopBuy } from '@shared/availability'
 import type { PurchaseOrderStatus } from '@shared/types'
 import type { IncomingSource, StockProvenance, StockSource } from '@shared/provenance'
 import type { SupplyingOrder } from '@shared/poStock'
@@ -260,6 +261,90 @@ export function productProvenance(productId: string): StockProvenance {
  * it answers "anywhere", which is what the purchase order's own receipt wants
  * when it lists what it still has out there.
  */
+/**
+ * EVERY BUY BEHIND ONE PRODUCT AT ONE SHOP, newest first.
+ *
+ * The owner: "the products in the roadshow tab should be more like smooth tiles
+ * that I can click on and see dates at which I bought, and remember that each
+ * time I add a product it is a PO number."
+ *
+ * A column tells you Kentucky is holding four. It cannot tell you they arrived
+ * on three different days, on two different tabs, at two different prices — and
+ * that is the question somebody asks the moment they are settling up or working
+ * out what a case actually cost them. That answer already exists in the
+ * receipts and the cost layers; it had nowhere to be read.
+ *
+ * ## Every receipt is a row, deliberately
+ *
+ * Not one row per purchase order. A tab takes a case on Tuesday and two more on
+ * Thursday, and those are two separate acts of buying against one bill — the
+ * whole shape of a roadshow week. Grouping them by order would hide the dates,
+ * which are the thing being asked for.
+ *
+ * ## What is LEFT, beside what was bought
+ *
+ * A receipt of three with one remaining says the other two have gone. Reading
+ * only the receipt would make a shelf look fuller than it is; reading only
+ * what is left would lose the history. Both, and the tile shows the difference.
+ */
+export function shopBuys(location: string, productId: string): ShopBuy[] {
+  const place = String(location ?? '').trim()
+  const id = String(productId ?? '').trim()
+  if (!place || !id) return []
+  return (
+    getDb()
+      .prepare(
+        `SELECT r.id            AS receipt_id,
+                po.id           AS po_id,
+                po.po_number    AS po_number,
+                po.supplier     AS supplier,
+                r.created_at    AS bought_at,
+                r.quantity      AS quantity,
+                lot.qty_remaining AS remaining,
+                lot.unit_cost   AS unit_cost,
+                line.price_pending AS price_pending,
+                po.tab_opened_at AS tab_opened_at,
+                po.tab_closed_at AS tab_closed_at,
+                po.paid_at      AS paid_at
+           FROM po_line_receipts r
+           JOIN inventory_lots lot ON lot.id = r.lot_id
+           JOIN purchase_orders po ON po.id = r.po_id
+           JOIN purchase_order_lines line ON line.id = r.po_line_id
+          WHERE lot.product_id = ?
+            AND LOWER(lot.location) = LOWER(?)
+            AND po.status != 'cancelled'
+          ORDER BY r.created_at DESC, r.rowid DESC`
+      )
+      .all(id, place) as Array<{
+      receipt_id: string
+      po_id: string
+      po_number: string
+      supplier: string | null
+      bought_at: string
+      quantity: number
+      remaining: number
+      unit_cost: number | null
+      price_pending: number | null
+      tab_opened_at: string | null
+      tab_closed_at: string | null
+      paid_at: string | null
+    }>
+  ).map((r) => ({
+    id: String(r.receipt_id),
+    poId: String(r.po_id),
+    poNumber: String(r.po_number),
+    supplier: r.supplier ?? null,
+    boughtAt: String(r.bought_at),
+    quantity: Number(r.quantity) || 0,
+    remaining: Number(r.remaining) || 0,
+    // Null rather than zero while nobody has said, so a tile can show "price to
+    // come" instead of claiming a case was free. See pricePending.
+    unitCost: Number(r.price_pending) === 1 ? null : Number(r.unit_cost) || 0,
+    settled: !!r.paid_at,
+    tabOpen: !!r.tab_opened_at && !r.tab_closed_at
+  }))
+}
+
 export function supplyingOrders(
   productId: string,
   location?: string | null

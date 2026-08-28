@@ -21,8 +21,8 @@ import type {
   ResetRunSummary
 } from '@shared/inventoryReset'
 import type { StockProvenance } from '@shared/provenance'
-import { productProvenance } from './db/provenance'
-import type { ProductAvailability, StockAtLocationRow } from '@shared/availability'
+import { productProvenance, shopBuys } from './db/provenance'
+import type { ProductAvailability, ShopBuy, StockAtLocationRow } from '@shared/availability'
 import { productAvailability, stockAtLocation } from './db/inventory'
 import type { Consignment, NewConsignment } from '@shared/consignment'
 import {
@@ -284,6 +284,21 @@ export function registerInventoryIpc(): void {
    * Same gate as every other inventory read: a shelf's contents is stock
    * information and is not offered to somebody without the module.
    */
+  /**
+   * The dates and the order numbers behind one tile.
+   *
+   * Read on demand — when somebody opens a tile — rather than with the board:
+   * four shops of twenty products would be eighty queries to answer a question
+   * about one of them.
+   */
+  ipcMain.handle(
+    IPC.invShopBuys,
+    (_e, payload: { location: string; productId: string }): ShopBuy[] => {
+      if (!can('module.inventory')) return []
+      return shopBuys(String(payload?.location ?? ''), String(payload?.productId ?? ''))
+    }
+  )
+
   ipcMain.handle(IPC.invStockAtLocation, (_e, location: string): StockAtLocationRow[] => {
     if (!can('module.inventory')) return []
     return stockAtLocation(String(location ?? ''))

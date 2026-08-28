@@ -159,3 +159,30 @@ export interface StockAtLocationRow {
   category: string | null
   quantity: number
 }
+
+/**
+ * ONE ACT OF BUYING, behind a product standing at a shop. See `shopBuys`.
+ *
+ * A receipt, not a purchase order: a tab takes a case on Tuesday and two more
+ * on Thursday, and those are two separate acts of buying against one bill.
+ * Collapsing them onto the order would hide the dates, which are the thing
+ * worth showing.
+ */
+export interface ShopBuy {
+  id: string
+  poId: string
+  poNumber: string
+  supplier: string | null
+  /** When it was taken in. */
+  boughtAt: string
+  /** How many arrived on this receipt. */
+  quantity: number
+  /** How many of them are still standing there. */
+  remaining: number
+  /** What one cost, or NULL while nobody has said — never zero for unknown. */
+  unitCost: number | null
+  /** Has the bill been paid? */
+  settled: boolean
+  /** Is its tab still taking things this week? */
+  tabOpen: boolean
+}

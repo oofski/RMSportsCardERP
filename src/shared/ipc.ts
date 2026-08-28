@@ -109,6 +109,8 @@ export const IPC = {
   invProductAvailability: 'inventory:product:availability',
   /** What ONE place is holding, product by product. See stockAtLocation. */
   invStockAtLocation: 'inventory:location:stock',
+  /** Every buy behind one product at one shop, newest first. See shopBuys. */
+  invShopBuys: 'inventory:location:buys',
   /** Where a product's stock came from, and which POs are still bringing more. */
   invProductProvenance: 'inventory:product:provenance',
   // The cost-lot picker's one read: the open layers for a (product, location)

@@ -44,6 +44,7 @@ import { CategoryLogo } from '../inventory/CategoryLogo'
 import { POCatalogTypeahead } from '../invoicing/POCatalogTypeahead'
 import { SourceOrderPicker } from './SourceOrderPicker'
 import { StockOnHand } from './StockOnHand'
+import { PickSourceModal } from './PickSourceModal'
 import { CustomerTypeahead } from './CustomerTypeahead'
 import { QboReadiness } from './QboReadiness'
 import { InvoiceStatusChip, formatDay } from './helpers'
@@ -383,7 +384,15 @@ export function CreateInvoiceModal({
    * The old rule mapped across all of them, so once an order legitimately held
    * two lines of a product, a single pick added one to BOTH.
    */
-  const addLine = (p: InventoryProduct): void => {
+  /**
+   * The product somebody just clicked in the search, waiting to be sized and
+   * sourced. Null the rest of the time. See PickSourceModal.
+   */
+  const [picking, setPicking] = useState<InventoryProduct | null>(null)
+
+  const addLine = (p: InventoryProduct, choice?: { quantity: number; location: string }): void => {
+    const wanted = Math.max(1, Math.round(choice?.quantity ?? 1))
+    const where = choice?.location ?? ''
     setLines((prev) => {
       // Only a real id counts as "already here". Saved lines carry an empty one
       // and would otherwise all collapse onto whichever was picked first.
@@ -391,7 +400,7 @@ export function CreateInvoiceModal({
       if (mergeInto) {
         return prev.map((l) =>
           l.key === mergeInto.key
-            ? withAmount({ ...l, quantity: String((parseFloat(l.quantity) || 0) + 1) })
+            ? withAmount({ ...l, quantity: String((parseFloat(l.quantity) || 0) + wanted) })
             : l
         )
       }
@@ -404,7 +413,7 @@ export function CreateInvoiceModal({
           sku: p.sku ?? '',
           category: p.category ?? '',
           description: '',
-          quantity: '1',
+          quantity: String(wanted),
           // The catalog's sale price is OFFERED. It is a starting point, not the
           // deal — which is why the amount stops following it the moment
           // somebody types over either field.
@@ -412,8 +421,10 @@ export function CreateInvoiceModal({
           amount: '',
           amountEdited: false,
           // Empty inherits the order's location, which is what nearly every line
-          // wants. Somebody drop-shipping changes this one line.
-          destination: '',
+          // wants — and is exactly what the picker sends back when somebody
+          // leaves it on the order's own shelf. Somebody drop-shipping, or
+          // selling out of a roadshow shop, has already chosen by now.
+          destination: where,
           supplier: '',
           // ORDINARY STOCK until somebody says otherwise. A line that names no
           // order walks FIFO exactly as every sale always has.
@@ -880,7 +891,13 @@ export function CreateInvoiceModal({
           </Field>
 
           {/* ---- What they are buying ------------------------------------ */}
-          <POCatalogTypeahead onSelect={addLine} />
+          {/* CLICK A RESULT AND SAY HOW MANY AND FROM WHERE, in one step.
+              Adding straight to the table put a line of 1 on the order pointed
+              at whatever the header said, which is right almost every time and
+              silently wrong the moment the stock is somewhere else — and fixing
+              it afterwards meant finding a dropdown three columns away that
+              never said which shelf had any. See PickSourceModal. */}
+          <POCatalogTypeahead onSelect={setPicking} />
 
           {lines.length === 0 ? (
             <div className="po-lines-empty">
@@ -1176,6 +1193,21 @@ export function CreateInvoiceModal({
         </>
       ) : (
         invoice && <InvoiceReceipt invoice={invoice} thumbnails={thumbnails} />
+      )}
+
+      {/* Sits inside the form's own dialog rather than beside it, so closing
+          the order closes this with it and there is never a picker left
+          floating over a screen its product no longer belongs to. */}
+      {picking && (
+        <PickSourceModal
+          product={picking}
+          defaultLocation={location || 'RM'}
+          onCancel={() => setPicking(null)}
+          onAdd={(choice) => {
+            addLine(picking, choice)
+            setPicking(null)
+          }}
+        />
       )}
     </Modal>
   )

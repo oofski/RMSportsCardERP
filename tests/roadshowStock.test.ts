@@ -1603,6 +1603,110 @@ console.log('\n=== 10. selling at a shop buys what the shop is short of ===')
   )
 }
 
+console.log('\n=== 11. when a shop\'s cases were bought, and on which order ===')
+// ---------------------------------------------------------------------------
+/**
+ * "THE PRODUCTS IN THE ROADSHOW TAB SHOULD BE MORE LIKE SMOOTH TILES THAT I CAN
+ * CLICK ON AND SEE DATES AT WHICH I BOUGHT, AND REMEMBER THAT EACH TIME I ADD A
+ * PRODUCT IT IS A PO NUMBER."
+ *
+ * A column says Kentucky is holding four. It cannot say they arrived on two
+ * different days, on two different tabs, at two different prices — which is the
+ * question at settling-up time, and the one the board could not reach. Every
+ * fact was already recorded; none had anywhere to be read.
+ */
+{
+  const { shopBuys } = require('../src/main/db/provenance')
+  const NY = 'New York Roadshow'
+  db.prepare(
+    `INSERT INTO inventory_products (id, sku, name, category, unit_cost, created_at, updated_at)
+     VALUES ('p_tile', 'SKU-TILE', 'Tile History Case', 'Pokemon', 0,
+             '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`
+  ).run()
+
+  ok(shopBuys(NY, 'p_tile').length === 0, 'nothing bought there yet')
+
+  // Tuesday: two at a known price.
+  const week = poRepo.createPurchaseOrder(
+    { supplier: NY, ongoing: true, lines: [{ productId: 'p_tile', quantity: 2, unitPrice: 350 }] },
+    null
+  )
+  // Thursday: one more, on the SAME tab, at a price nobody knows yet.
+  poRepo.addPurchaseOrderLines(
+    week.id,
+    [{ productId: 'p_tile', quantity: 1, unitPrice: 0, pricePending: true }],
+    null
+  )
+
+  const buys = shopBuys(NY, 'p_tile')
+  ok(
+    buys.length === 2,
+    'TWO BUYS, NOT ONE ORDER — a tab takes a case on Tuesday and another on Thursday, and those are two acts',
+    String(buys.length)
+  )
+  ok(
+    buys.every((b: any) => b.poNumber === poRepo.getPurchaseOrder(week.id).poNumber),
+    'BOTH CARRY THE ORDER NUMBER — "each time I add a product it is a PO number"',
+    JSON.stringify(buys.map((b: any) => b.poNumber))
+  )
+  ok(
+    buys.every((b: any) => !!b.boughtAt),
+    'and both carry the date they were bought'
+  )
+  /**
+   * A PRICE NOBODY HAS ENTERED IS NULL, NEVER ZERO. The tile prints "price to
+   * come" from this; a zero would be the screen quietly agreeing that a case
+   * was free, which is the distinction the whole tab feature rests on.
+   */
+  const pending = buys.find((b: any) => b.unitCost === null)
+  const known = buys.find((b: any) => b.unitCost !== null)
+  ok(!!pending, 'THE UNPRICED BUY REPORTS NO PRICE AT ALL — not $0.00', JSON.stringify(buys.map((b: any) => b.unitCost)))
+  ok(known && known.unitCost === 350, 'and the priced one reports what it cost', String(known?.unitCost))
+  ok(
+    buys.every((b: any) => b.tabOpen === true && b.settled === false),
+    'both sit on a tab that is still open and still unpaid'
+  )
+
+  // --- what is LEFT, beside what was bought --------------------------------
+  /**
+   * Selling one must not erase the buy. A receipt of two with one remaining is
+   * the whole story of a shelf; reading only what is left would lose it.
+   */
+  invoices.saveInvoice(
+    {
+      customerName: 'Tile Buyer',
+      invoiceNumber: 'SO-TILE1',
+      invoiceDate: '2026-08-27',
+      location: 'RM',
+      lines: [{ item: 'Tile History Case', productId: 'p_tile', quantity: 1, rate: 900, destination: NY }]
+    },
+    null
+  )
+  const after = shopBuys(NY, 'p_tile')
+  ok(
+    after.length === 2,
+    'SELLING ONE DOES NOT ERASE THE BUY — the history is what was bought, not what is left',
+    String(after.length)
+  )
+  ok(
+    after.some((b: any) => b.remaining < b.quantity),
+    'AND ONE OF THEM NOW SAYS FEWER ARE LEFT THAN ARRIVED',
+    JSON.stringify(after.map((b: any) => `${b.remaining}/${b.quantity}`))
+  )
+  ok(
+    after.reduce((n: number, b: any) => n + b.remaining, 0) ===
+      require('../src/main/db/inventory').stockAtLocation(NY).find((r: any) => r.productId === 'p_tile')
+        .quantity,
+    'AND WHAT THE ROWS SAY IS LEFT ADDS UP TO WHAT THE COLUMN SHOWS — the tile and the count cannot disagree'
+  )
+
+  // --- one shop's history is its own ---------------------------------------
+  ok(
+    shopBuys('Texas Roadshow', 'p_tile').length === 0,
+    'ANOTHER SHOP SHOWS NONE OF IT — a shelf in Texas is not a shelf in New York'
+  )
+}
+
 /** Hand the over-sell fixture's stock back, so nothing below inherits it. */
 function inv_setVoid(id: string): void {
   invoices.setInvoiceStatus(id, 'void', null)
