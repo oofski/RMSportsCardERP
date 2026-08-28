@@ -1710,8 +1710,12 @@ export function createBridge(ipcRenderer: BridgeTransport) {
        * off after a day, and a purchase raised last week for goods only now
        * being invoiced is exactly the one somebody comes here looking for.
        */
-      linkablePos: (invoiceId: string): Promise<Result<LinkablePurchaseOrder[]>> =>
-        ipcRenderer.invoke(IPC.orderLinkablePos, invoiceId),
+      /** Every purchase this sale could name. `query` reaches past the newest 60. */
+      linkablePos: (
+        invoiceId: string,
+        query = ''
+      ): Promise<Result<LinkablePurchaseOrder[]>> =>
+        ipcRenderer.invoke(IPC.orderLinkablePos, { invoiceId, query }),
       linkDropship: (poId: string, invoiceId: string): Promise<Result<{ linked: true }>> =>
         ipcRenderer.invoke(IPC.orderLinkDropship, { poId, invoiceId }),
       /**

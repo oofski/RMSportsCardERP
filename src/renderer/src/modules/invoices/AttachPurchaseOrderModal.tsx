@@ -3,7 +3,7 @@ import type { Invoice } from '@shared/invoices'
 import type { LinkablePurchaseOrder } from '@shared/orders'
 import { linkPurchaseRefusal, linkableOrder, linkableOrderLabel } from '@shared/orders'
 import { api } from '../../lib/api'
-import { Button, Modal } from '../../components/ui'
+import { Button, Input, Modal } from '../../components/ui'
 import { Icon } from '../../components/Icon'
 import { useToast } from '../../components/Toast'
 import { formatMoney } from '../../lib/format'
@@ -66,14 +66,32 @@ export function AttachPurchaseOrderModal({
    * that three trips through the board. `linkedHere` comes back off the link
    * table, so one read answers both what is attached and what is left to offer.
    */
+  /**
+   * What somebody is looking for, and the settled copy the read actually uses.
+   *
+   * The list is newest-first and capped at sixty, which is right for browsing
+   * and useless for reaching: once sixty orders have been raised since, an older
+   * purchase is not on it and there was no other way to that order at all.
+   *
+   * THE SEARCH GOES TO THE DATABASE, not to the sixty rows already here.
+   * Filtering what was fetched can only ever find what was already reachable —
+   * the same dead end wearing a text box.
+   */
+  const [query, setQuery] = useState('')
+  const [settled, setSettled] = useState('')
+  useEffect(() => {
+    const t = window.setTimeout(() => setSettled(query.trim()), 200)
+    return () => window.clearTimeout(t)
+  }, [query])
+
   const load = useCallback(async (): Promise<void> => {
     try {
-      const res = await api.orders.linkablePos(invoice.id)
+      const res = await api.orders.linkablePos(invoice.id, settled)
       setOrders(res.ok && res.data ? res.data : [])
     } catch {
       setOrders([])
     }
-  }, [invoice.id])
+  }, [invoice.id, settled])
 
   useEffect(() => {
     void load()
@@ -166,6 +184,19 @@ export function AttachPurchaseOrderModal({
         <b>one deal</b>. It changes <b>no line, no price and no total</b>, and it does not touch
         the copy in QuickBooks — which is why it works on an order that has already been sent.
       </p>
+
+      {/* REACHING AN OLDER ORDER. The list shows the most recent sixty; typing
+          a number, a supplier or a shop searches every purchase ever raised,
+          however far back it is and whatever stage it reached. */}
+      <div className="so-link-search">
+        <Icon name="Search" size={15} />
+        <Input
+          value={query}
+          placeholder="Find a purchase order — number, supplier or shop…"
+          aria-label="Search purchase orders"
+          onChange={(e) => setQuery(e.target.value)}
+        />
+      </div>
 
       {/* WHAT IS ALREADY ON IT. A sale may be supplied by several purchases, so
           this is a list rather than a sentence, and each row can be taken off —

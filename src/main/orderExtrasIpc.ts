@@ -858,10 +858,22 @@ export function registerOrderExtrasIpc(): void {
    */
   ipcMain.handle(
     IPC.orderLinkablePos,
-    (_e, invoiceId: unknown): Result<LinkablePurchaseOrder[]> => {
+    (_e, payload: unknown): Result<LinkablePurchaseOrder[]> => {
       try {
         requireInvoicing()
-        return { ok: true, data: linkablePurchaseOrders(str(invoiceId)) }
+        /**
+         * A BARE ID IS STILL ACCEPTED. The picker sends an object now, but a
+         * renderer from before this change sends the id on its own — and the
+         * web build ships one bundle to browsers that may not have reloaded.
+         */
+        const req =
+          typeof payload === 'string' || payload === null || payload === undefined
+            ? { invoiceId: str(payload), query: '' }
+            : (payload as { invoiceId?: unknown; query?: unknown })
+        return {
+          ok: true,
+          data: linkablePurchaseOrders(str(req.invoiceId), 60, str(req.query ?? ''))
+        }
       } catch (err) {
         return fail(err)
       }

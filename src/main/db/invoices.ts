@@ -2264,7 +2264,29 @@ export function recordQboObservation(id: string, o: QboInvoiceObservation): bool
  * purchase legitimately supplies several. `otherSales` is carried so the picker
  * can say so rather than the operator finding out afterwards.
  */
-export function linkablePurchaseOrders(invoiceId: string, limit = 60): LinkablePurchaseOrder[] {
+export function linkablePurchaseOrders(
+  invoiceId: string,
+  limit = 60,
+  /**
+   * WHAT SOMEBODY IS LOOKING FOR — a number, a supplier, a shop.
+   *
+   * The list is newest-first and capped, which is right for browsing and useless
+   * for reaching. Once sixty orders have been raised since, an older purchase is
+   * simply not on the list and there was no other way to it: the owner's ask was
+   * "attach POs that I make to any SO, if they are in history or not", and it
+   * was the PURCHASE that could not be reached, not the sale.
+   *
+   * Matched HERE rather than in the picker, because filtering the sixty rows
+   * already fetched can only ever search the sixty that were already reachable.
+   * A search that cannot find the sixty-first is the same dead end wearing a
+   * text box.
+   */
+  query = ''
+): LinkablePurchaseOrder[] {
+  const q = String(query ?? '').trim()
+  // LIKE with the wildcards in the parameter, so a number typed with or without
+  // its prefix finds the same order and nothing has to be escaped into the SQL.
+  const like = `%${q.replace(/[%_]/g, ' ')}%`
   const rows = getDb()
     .prepare(
       `SELECT po.id, po.po_number, po.supplier, po.location, po.status, po.total,
@@ -2300,10 +2322,27 @@ export function linkablePurchaseOrders(invoiceId: string, limit = 60): LinkableP
                 AS matching_products
          FROM purchase_orders po
         WHERE po.status != 'cancelled'
+          -- A CANCELLED ORDER STAYS OUT, and that is the one exception to
+          -- "any". It is a purchase that was withdrawn, so hanging a sale's
+          -- provenance on it would claim the goods came from something that
+          -- never happened.
+          AND (? = ''
+               OR po.po_number LIKE ? COLLATE NOCASE
+               OR COALESCE(po.supplier, '') LIKE ? COLLATE NOCASE
+               OR COALESCE(po.location, '') LIKE ? COLLATE NOCASE)
         ORDER BY COALESCE(po.ordered_at, po.created_at) DESC, po.po_number DESC
         LIMIT ?`
     )
-    .all(invoiceId, invoiceId, invoiceId, Math.max(1, Math.min(500, limit))) as Array<{
+    .all(
+      invoiceId,
+      invoiceId,
+      invoiceId,
+      q,
+      like,
+      like,
+      like,
+      Math.max(1, Math.min(500, limit))
+    ) as Array<{
     id: string
     po_number: string
     supplier: string | null

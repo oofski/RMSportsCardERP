@@ -28501,3 +28501,26 @@ button.sor-team:focus-visible {
   font-size: 13px;
   line-height: 1.5;
 }
+
+/* REACHING AN OLDER PURCHASE ORDER. The picker lists the most recent sixty;
+   this searches every one ever raised. See AttachPurchaseOrderModal. */
+.so-link-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 14px 0 4px;
+  padding: 0 11px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-1);
+}
+.so-link-search > svg {
+  flex: none;
+  color: var(--text-3);
+}
+.so-link-search input {
+  border: none;
+  background: none;
+  padding-left: 0;
+  padding-right: 0;
+}
