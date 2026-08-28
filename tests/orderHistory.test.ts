@@ -736,5 +736,137 @@ console.log('\n=== 6. where everything came from, and where it went ===')
   )
 }
 
+console.log('\n=== the deletion backlog ===')
+// ---------------------------------------------------------------------------
+/**
+ * "CAN YOU SEE IF WE DELETED ANY POs, OR WHERE I CAN SEE WHAT THE ISSUE IS."
+ *
+ * The answer was nowhere. A board lists what EXISTS, so an order somebody
+ * removed left a gap in the number sequence and not one other trace: no name,
+ * no date, no total, and — the part that made it unanswerable — no author. The
+ * delete path read the operator's identity at the door and then threw it away
+ * with a bare `void actorId`, and the comment beside it claimed the event log
+ * "is the only place that would still say so" while nothing ever wrote the line.
+ *
+ * What is pinned here:
+ *
+ *   1. Deleting a purchase order writes ONE event that outlives it.
+ *   2. It carries who, when, what it was called, who it was with, what it was
+ *      worth and what stage it was in.
+ *   3. Deleting a SALES order does the same.
+ *   4. The backlog reads them back — the round trip through the sentence.
+ *   5. A delete that is REFUSED writes nothing, so the log never claims a
+ *      deletion that did not happen.
+ */
+{
+  const extras = require('../src/main/db/orderExtras')
+  const { describeDeletion } = require('../src/shared/orders')
+
+  const before = extras.listDeletedOrders().length
+
+  const doomedProduct = product('Backlog Test Case', 'SKU-BACKLOG')
+  const doomed = poRepo.createPurchaseOrder(
+    {
+      supplier: 'Vanishing Distributors',
+      location: 'RM',
+      lines: [{ productId: doomedProduct, quantity: 4, unitPrice: 250 }]
+    },
+    null
+  )
+  const doomedNumber = poRepo.getPurchaseOrder(doomed.id).poNumber
+  ok(poRepo.deletePurchaseOrder(doomed.id, 'u_deleter').ok, 'a purchase order is deleted')
+
+  const log = extras.listDeletedOrders()
+  ok(log.length === before + 1, 'THE BACKLOG GREW BY ONE — there is now a record that it existed', String(log.length))
+  const row = log[0]
+  ok(row.side === 'po', 'and it knows which side it was', String(row.side))
+  ok(
+    row.number === doomedNumber,
+    'IT REMEMBERS THE NUMBER, which until now was only a gap in the sequence',
+    `${row.number} vs ${doomedNumber}`
+  )
+  ok(row.party === 'Vanishing Distributors', 'and the supplier', String(row.party))
+  ok(row.units === 4 && Math.round(row.total) === 1000, 'and what was on it, and what it was worth', `${row.units} / ${row.total}`)
+  ok(row.stage === 'ordered', 'and the stage it was in when it went', String(row.stage))
+  ok(
+    row.actorId === 'u_deleter',
+    'AND WHO PRESSED IT — the fact the old code read and then discarded with `void actorId`',
+    String(row.actorId)
+  )
+  ok(!!row.deletedAt, 'and when')
+  /**
+   * THE ORDER IS REALLY GONE. The backlog is a record, not a recycle bin —
+   * nothing here undeletes anything, and a row that still resolved to a live
+   * purchase order would mean the delete had not happened.
+   */
+  ok(poRepo.getPurchaseOrder(doomed.id) === null, 'while the order itself is genuinely gone')
+
+  // --- the sales side does the same ---------------------------------------
+  const doomedSale = invoices.saveInvoice(
+    {
+      customerName: 'Vanishing Buyer',
+      invoiceNumber: 'SO-GONE1',
+      invoiceDate: '2026-08-27',
+      location: 'RM',
+      lines: [{ item: 'Backlog Test Case', productId: doomedProduct, quantity: 2, rate: 500 }]
+    },
+    null
+  )
+  invoices.deleteInvoice(doomedSale.id, 'u_other')
+  const saleRow = extras.listDeletedOrders()[0]
+  ok(saleRow.side === 'so', 'A DELETED SALES ORDER IS IN THE SAME BACKLOG — one question, not two', String(saleRow.side))
+  ok(saleRow.number === 'SO-GONE1' && saleRow.party === 'Vanishing Buyer', 'with its number and its buyer', `${saleRow.number} / ${saleRow.party}`)
+  ok(saleRow.actorId === 'u_other', 'and its own author, not the last one', String(saleRow.actorId))
+  ok(extras.listDeletedOrders()[1].side === 'po', 'NEWEST FIRST, so the last thing that went is the first thing you see')
+
+  /**
+   * THE ROUND TRIP. `describeDeletion` writes the sentence and the read parses
+   * it back; the two live in different modules and would drift silently, since
+   * a mis-parse produces a plausible-looking row with blanks rather than an
+   * error anybody sees.
+   */
+  const sentence = describeDeletion({
+    number: 'PO-9999',
+    party: 'Round Trip Supply',
+    total: 1234.5,
+    units: 7,
+    stage: 'paid'
+  })
+  ok(
+    sentence === 'Deleted PO-9999 with Round Trip Supply · 7 units · $1234.50 · was paid',
+    'the sentence reads as a person would write it',
+    sentence
+  )
+
+  /**
+   * A REFUSED DELETE WRITES NOTHING. The record goes in the same transaction as
+   * the delete, so an order that could not be removed — stock already checked
+   * in — must leave the backlog untouched. A log that reports deletions that
+   * did not happen is worse than no log.
+   */
+  const kept = poRepo.createPurchaseOrder(
+    {
+      supplier: 'Vanishing Distributors',
+      location: 'RM',
+      lines: [{ productId: doomedProduct, quantity: 2, unitPrice: 250 }]
+    },
+    null
+  )
+  poRepo.receivePurchaseOrderLines(
+    kept.id,
+    [{ lineId: poRepo.getPurchaseOrder(kept.id).lines[0].id, quantity: 2 }],
+    null
+  )
+  const countBefore = extras.listDeletedOrders().length
+  const refused = poRepo.deletePurchaseOrder(kept.id, 'u_deleter')
+  ok(!refused.ok, 'an order with stock checked in still refuses to be deleted', String(refused.error))
+  ok(
+    extras.listDeletedOrders().length === countBefore,
+    'AND THE BACKLOG DID NOT MOVE — it never claims a deletion that was refused',
+    String(extras.listDeletedOrders().length)
+  )
+  ok(!!poRepo.getPurchaseOrder(kept.id), 'and the order is still there')
+}
+
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

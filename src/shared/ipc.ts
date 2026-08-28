@@ -679,6 +679,15 @@ export const IPC = {
   // Reads only: a ticket is struck by the thing it names, never by a screen, so
   // there is deliberately no channel here that can mint one.
   finDealTickets: 'finance:deal-tickets:list',
+  /**
+   * EVERY ORDER SOMEBODY DELETED. See listDeletedOrders.
+   *
+   * On the finance side rather than the order side because it spans both — a
+   * deleted purchase and a deleted sale are one question ("what went missing,
+   * and who removed it") and two boards that each show only their own half
+   * would answer it twice, incompletely.
+   */
+  finDeletedOrders: 'finance:deleted-orders:list',
   finDealTicketYears: 'finance:deal-tickets:years',
   // Several documents under one ticket, and back out again. Writes, unlike the
   // two reads above — combining is the one thing about a register a person does.

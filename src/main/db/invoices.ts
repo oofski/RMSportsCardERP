@@ -50,6 +50,7 @@ import {
 } from '@shared/invoiceAllocations'
 import { destinationHoldsStock } from '@shared/purchaseOrders'
 import type { LinkablePurchaseOrder } from '@shared/orders'
+import { describeDeletion } from '@shared/orders'
 import { adoptLegacyFreight, deleteOrderExtras, recordOrderEvent } from './orderExtras'
 import { describeDims, hasDims, readyToShipBlockedReason } from '@shared/fulfillment'
 import { dealTicketRefFor } from './dealTickets'
@@ -4620,10 +4621,27 @@ export function setInvoiceStatus(
  * and an invoice that exists in the accounts and nowhere else is worse than one
  * that is merely voided — so voiding is what is offered instead.
  */
-export function deleteInvoice(id: string): void {
+export function deleteInvoice(id: string, actorId: string | null = null): void {
   const db = getDb()
-  const row = db.prepare(`SELECT qbo_id FROM invoices WHERE id = ?`).get(id) as
-    | { qbo_id: string | null }
+  // Read while there is still something to read from — the backlog has to
+  // remember all of this once the row is gone. See describeDeletion.
+  const row = db
+    .prepare(
+      `SELECT qbo_id, invoice_number, qbo_doc_number, customer_name, status, total,
+              (SELECT COALESCE(SUM(quantity), 0) FROM invoice_lines l WHERE l.invoice_id = i.id)
+                AS units
+         FROM invoices i WHERE id = ?`
+    )
+    .get(id) as
+    | {
+        qbo_id: string | null
+        invoice_number: string | null
+        qbo_doc_number: string | null
+        customer_name: string | null
+        status: string
+        total: number
+        units: number
+      }
     | undefined
   if (!row) throw new Error('That invoice is already gone.')
   // DELETING HERE NEVER DEPENDS ON QUICKBOOKS.
@@ -4679,6 +4697,27 @@ export function deleteInvoice(id: string): void {
     // deleted sales order is itself a thing that happened, and the log is the
     // only place left that would say so.
     deleteOrderExtras('so', id, db)
+    /**
+     * AND THE RECORD THAT THERE WAS ONE. See the matching note in
+     * deletePurchaseOrder — same reasoning, same transaction discipline.
+     *
+     * The number prefers what QUICKBOOKS calls it. That is the number on the
+     * copy the buyer has and the one somebody will be searching by a month
+     * later; our own invoice_number is the fallback for an order that never
+     * posted.
+     */
+    recordOrderEvent('so', id, 'deleted', {
+      fromStage: row.status,
+      detail: describeDeletion({
+        number: row.qbo_doc_number || row.invoice_number,
+        party: row.customer_name,
+        total: row.total,
+        units: row.units,
+        stage: row.status
+      }),
+      actorId,
+      db
+    })
     db.prepare(`DELETE FROM invoices WHERE id = ?`).run(id)
   })
   run()

@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto'
 import type Database from 'better-sqlite3'
 import type {
+  DeletedOrder,
   NewOrderShipment,
   OrderDocument,
   OrderEvent,
@@ -158,6 +159,108 @@ export function listOrderEvents(side: OrderSide, orderId: string, limit = 200): 
       )
       .all(side, orderId, Math.max(1, Math.min(1000, limit))) as EventRow[]
   ).map(toEvent)
+}
+
+/**
+ * EVERY ORDER SOMEBODY DELETED, newest first. The backlog.
+ *
+ * The owner's question, which had no answer anywhere in the app: "can you see if
+ * we deleted any POs, or where I can see what the issue is."
+ *
+ * A board shows what EXISTS. An order somebody removed left a gap in the number
+ * sequence and nothing else — no name, no date, no total, no author. The
+ * deal-ticket register knew a number had been handed out and could say "order
+ * deleted", which is the fact but not the story.
+ *
+ * ## Read off the events, which is the only place left to read
+ *
+ * There is no deleted_orders table and there should not be: a second table would
+ * need writing at exactly the same moment for exactly the same reason, and two
+ * records of one act is how they come to disagree. `deleteOrderExtras` already
+ * leaves order_events standing for precisely this — the comment saying so
+ * predates anything actually writing the line.
+ *
+ * ## Deliberately UNFILTERED by year at this level
+ *
+ * "Did we delete any POs?" is not a question about a calendar year, and a
+ * backlog that hid last December's deletion behind a year picker would answer
+ * "no" to somebody who needed "yes, in December". The screen can narrow it; the
+ * read does not decide for it.
+ */
+export function listDeletedOrders(limit = 500): DeletedOrder[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT id, order_kind, order_id, from_stage, detail, actor_id, actor_name, created_at
+         FROM order_events
+        WHERE kind = 'deleted'
+        ORDER BY created_at DESC, rowid DESC
+        LIMIT ?`
+    )
+    .all(Math.max(1, Math.min(5000, limit))) as Array<{
+    id: string
+    order_kind: string
+    order_id: string
+    from_stage: string | null
+    detail: string | null
+    actor_id: string | null
+    actor_name: string | null
+    created_at: string
+  }>
+  return rows.map((r) => {
+    const parsed = parseDeletionDetail(r.detail)
+    return {
+      id: String(r.id),
+      side: (r.order_kind === 'so' ? 'so' : 'po') as OrderSide,
+      orderId: String(r.order_id),
+      number: parsed.number,
+      party: parsed.party,
+      total: parsed.total,
+      units: parsed.units,
+      stage: clean(r.from_stage) || null,
+      actorName: clean(r.actor_name) || null,
+      actorId: clean(r.actor_id) || null,
+      deletedAt: String(r.created_at),
+      detail: r.detail ?? null
+    }
+  })
+}
+
+/**
+ * Pull the figures back out of the sentence the deletion wrote.
+ *
+ * ## Why the sentence is the storage
+ *
+ * `order_events` has one free-text column and no schema of its own, and giving
+ * it five more columns that only ONE of nine event kinds would ever fill is a
+ * worse trade than parsing a string this module also wrote. The format is not
+ * discovered or guessed at: `describeDeletion` composes it, this reads it, and
+ * the round trip is pinned by a test.
+ *
+ * EVERY FIELD FAILS SOFT. A row written before this existed, or by a future
+ * version that words it differently, still yields its date, its author and its
+ * whole sentence — which is most of the value — rather than being dropped from
+ * the list for failing to match a pattern. A backlog that silently omits what it
+ * cannot parse is worse than one that shows a line with blanks in it.
+ */
+function parseDeletionDetail(detail: string | null): {
+  number: string | null
+  party: string | null
+  total: number
+  units: number
+} {
+  const text = String(detail ?? '')
+  const head = /^Deleted\s+(.+?)(?:\s+·|$)/.exec(text)
+  const lead = head ? head[1].trim() : ''
+  const withParty = /\s+with\s+(.+)$/.exec(lead)
+  const number = (withParty ? lead.slice(0, withParty.index) : lead).trim()
+  const money = /·\s*\$([0-9]+(?:\.[0-9]+)?)/.exec(text)
+  const units = /·\s*([0-9]+)\s+units?\b/.exec(text)
+  return {
+    number: number && number !== 'An unnumbered order' ? number : null,
+    party: withParty ? withParty[1].trim() : null,
+    total: money ? Number(money[1]) : 0,
+    units: units ? Number(units[1]) : 0
+  }
 }
 
 // ---------------------------------------------------------------------------

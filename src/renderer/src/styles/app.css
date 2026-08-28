@@ -28039,3 +28039,31 @@ button.sor-team:focus-visible {
 .so-shipto-name {
   font-weight: 700;
 }
+
+/* THE DELETION BACKLOG — what is no longer here.
+
+   Grey and quiet on purpose. Every row is something that stopped existing, so
+   there is nothing on this table to act on and nothing that should compete with
+   the live ledgers beside it; it is read when somebody is looking for an answer,
+   not scanned daily. The one thing that carries colour is which SIDE it was,
+   because a deleted purchase and a deleted sale are different losses. */
+.del-side {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.del-side.in {
+  color: var(--warning);
+}
+.del-side.out {
+  color: var(--info);
+}
+/* "not recorded" is not a value somebody entered — it is the absence of one, on
+   a deletion made before the app wrote anybody down. Muted and italic so it
+   reads as a gap rather than as a person's name. */
+.del-nobody {
+  color: var(--text-3);
+  font-style: italic;
+}

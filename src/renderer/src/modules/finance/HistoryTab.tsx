@@ -10,6 +10,7 @@ import { CenterLoader, EmptyState, Input } from '../../components/ui'
 import { Money } from './bits'
 import { finance } from './api'
 import { DealTicketsTab } from './DealTicketsTab'
+import { DeletedTab } from './DeletedTab'
 
 /**
  * Finance → History: the year's ledger of orders, both sides.
@@ -48,7 +49,7 @@ import { DealTicketsTab } from './DealTicketsTab'
  * name by its ticket, and it renders its own component because it shares none of
  * the columns, expansion or totals the two document views share.
  */
-type Side = 'purchase' | 'sales' | 'tickets'
+type Side = 'purchase' | 'sales' | 'tickets' | 'deleted'
 
 export function HistoryTab(): JSX.Element {
   const [side, setSide] = useState<Side>('purchase')
@@ -129,7 +130,7 @@ export function HistoryTab(): JSX.Element {
     // The register fetches its own rows from its own year — see DealTicketsTab.
     // Without this guard the sales branch below would fire a second, pointless
     // read of the whole sales ledger every time somebody opened the tickets tab.
-    if (side === 'tickets') return
+    if (side === 'tickets' || side === 'deleted') return
     let alive = true
     if (side === 'purchase') {
       setPos(null)
@@ -208,6 +209,24 @@ export function HistoryTab(): JSX.Element {
             <Icon name="Hash" size={15} />
             Deal tickets
           </button>
+          {/* WHAT IS NO LONGER HERE, beside what is.
+
+              The other three tabs list documents that exist. This one lists the
+              ones that do not, which is the only question none of them could
+              answer: a deleted order left a gap in the numbers and nothing
+              else. It sits last because it is the exception, and it is on this
+              screen rather than on a board because a board is a list of what
+              exists by definition. */}
+          <button
+            className={`hist-side ${side === 'deleted' ? 'active' : ''}`}
+            onClick={() => {
+              setSide('deleted')
+              setOpen(null)
+            }}
+          >
+            <Icon name="Trash2" size={15} />
+            Deleted
+          </button>
         </div>
 
         <div className="hist-years">
@@ -219,7 +238,7 @@ export function HistoryTab(): JSX.Element {
               // every year, so the buttons genuinely do nothing — and removing
               // them would leave somebody unable to see that the year they were
               // on is still there to go back to.
-              disabled={side !== 'tickets' && !!source}
+              disabled={side === 'deleted' || (side !== 'tickets' && !!source)}
               title={
                 side !== 'tickets' && source
                   ? 'Showing every year for the purchase order picked on the right'
@@ -274,7 +293,11 @@ export function HistoryTab(): JSX.Element {
           <Icon name="Search" size={15} />
           <Input
             placeholder={
-              side === 'tickets' ? 'DT-000337, an order number, or a name…' : 'Number, name or product…'
+              side === 'tickets'
+                ? 'DT-000337, an order number, or a name…'
+                : side === 'deleted'
+                  ? 'A number, a supplier, or who deleted it…'
+                  : 'Number, name or product…'
             }
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -282,7 +305,9 @@ export function HistoryTab(): JSX.Element {
         </div>
       </div>
 
-      {side === 'tickets' ? (
+      {side === 'deleted' ? (
+        <DeletedTab query={query} />
+      ) : side === 'tickets' ? (
         ticketYear === null ? (
           <CenterLoader />
         ) : (

@@ -29,6 +29,7 @@ import { BUILTIN_LOCATION_IDS, LOCATION_IDS } from '@shared/inventory'
 import { getDb, getMeta, setMeta } from './database'
 import { addStock, adjustStock, reverseStockReceipt, stockQty } from './inventory'
 import { recordPoCogs, voidPoCogs } from './finance'
+import { describeDeletion } from '@shared/orders'
 import { adoptLegacyFreight, deleteOrderExtras, recordOrderEvent } from './orderExtras'
 import { dealTicketRefFor, issueDealTicket } from './dealTickets'
 import { isOpenTab, isTab, settleTabRefusal, tabRoutingLocked } from '@shared/roadshowTab'
@@ -3359,8 +3360,17 @@ export function deletePurchaseOrder(
   actorId: string | null
 ): { ok: boolean; error?: string } {
   const db = getDb()
-  const row = db.prepare('SELECT id, po_number, status FROM purchase_orders WHERE id = ?').get(id) as
-    | { id: string; po_number: string; status: string }
+  // Everything the backlog will have to remember, read while there is still
+  // something to read it from. See describeDeletion.
+  const row = db
+    .prepare(
+      `SELECT id, po_number, status, supplier, total,
+              (SELECT COALESCE(SUM(quantity), 0) FROM purchase_order_lines l WHERE l.po_id = po.id)
+                AS units
+         FROM purchase_orders po WHERE id = ?`
+    )
+    .get(id) as
+    | { id: string; po_number: string; status: string; supplier: string | null; total: number; units: number }
     | undefined
   if (!row) return { ok: false, error: 'Purchase order not found.' }
 
@@ -3471,11 +3481,39 @@ export function deletePurchaseOrder(
     // do not — a deleted purchase order is itself a thing that happened, and the
     // log is the only place that would still say so.
     deleteOrderExtras('po', id, db)
+    /**
+     * THE LAST THING WRITTEN, AND THE ONLY THING LEFT.
+     *
+     * Written BEFORE the row goes but INSIDE the transaction, so a delete that
+     * rolls back leaves no claim that it happened, and a delete that commits
+     * cannot commit without its record.
+     *
+     * The facts are copied onto the event rather than pointed at, because in a
+     * moment there will be nothing to point at — see DeletedOrder. This is the
+     * one place in the app where copying is right.
+     *
+     * `deleteOrderExtras` deliberately leaves order_events standing, which is
+     * what lets this line outlive its own subject. That was already true and
+     * already commented; what was missing was anything ever writing the line.
+     * The actor was read at the door and then thrown away with `void actorId`,
+     * so a deletion had no author and no timestamp anywhere in the app.
+     */
+    recordOrderEvent('po', id, 'deleted', {
+      fromStage: row.status,
+      detail: describeDeletion({
+        number: row.po_number,
+        party: row.supplier,
+        total: row.total,
+        units: row.units,
+        stage: row.status
+      }),
+      actorId,
+      db
+    })
     db.prepare('DELETE FROM purchase_orders WHERE id = ?').run(id)
   })
   try {
     run()
-    void actorId
     return { ok: true }
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) }

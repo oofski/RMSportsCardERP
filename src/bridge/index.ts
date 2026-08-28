@@ -241,6 +241,7 @@ import type {
   SalesOrderHistoryRow
 } from '@shared/orderHistory'
 import type { DealTicketRow } from '@shared/dealTickets'
+import type { DeletedOrder } from '@shared/orders'
 import type { NumberSeries, SeriesState } from '@shared/numbering'
 import type { StockLocation } from '@shared/inventory'
 import type { PnlDetail, PnlDrillRequest } from '@shared/pnlDrill'
@@ -1284,6 +1285,8 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       /** The deal ticket register for one year, or the whole thing for null. */
       dealTickets: (year: number | null): Promise<DealTicketRow[]> =>
         ipcRenderer.invoke(IPC.finDealTickets, year),
+      /** Every order somebody deleted, newest first. See listDeletedOrders. */
+      deletedOrders: (): Promise<DeletedOrder[]> => ipcRenderer.invoke(IPC.finDeletedOrders),
       /** Which years the register covers, and what it will call the next one. */
       dealTicketYears: (): Promise<{ years: number[]; next: string }> =>
         ipcRenderer.invoke(IPC.finDealTicketYears),

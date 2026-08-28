@@ -481,7 +481,10 @@ export function registerInvoicesIpc(): void {
     IPC.invoiceDelete,
     async (_e, id: unknown): Promise<Result<{ id: string; removedFromQbo: boolean; qboError: string | null }>> => {
       try {
-        requireInvoicing()
+        // The actor is carried because deleting WRITES A RECORD now — see
+        // listDeletedOrders. A deletion with nobody's name on it is the gap
+        // that made "did we delete any of these?" unanswerable.
+        const actor = requireInvoicing()
         const target = str(id)
         const invoice = getInvoice(target)
         if (!invoice) return { ok: false, error: 'That invoice is already gone.' }
@@ -496,7 +499,7 @@ export function registerInvoicesIpc(): void {
             qboError = err instanceof Error ? err.message : String(err)
           }
         }
-        deleteInvoice(target)
+        deleteInvoice(target, actor.id)
         return { ok: true, data: { id: target, removedFromQbo, qboError } }
       } catch (err) {
         return fail(err)

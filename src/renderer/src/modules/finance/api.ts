@@ -20,6 +20,7 @@ import type {
   SalesOrderHistoryRow
 } from '@shared/orderHistory'
 import type { DealTicketRow } from '@shared/dealTickets'
+import type { DeletedOrder } from '@shared/orders'
 import { api } from '../../lib/api'
 
 /** What `rows()` can be narrowed by. Every field is optional; an empty filter is
@@ -91,6 +92,8 @@ export interface FinanceApi {
   historySources(): Promise<HistorySource[]>
   /** The deal ticket register for one year, or the whole thing for null. */
   dealTickets(year: number | null): Promise<DealTicketRow[]>
+  /** Every order somebody deleted, newest first, across every year. */
+  deletedOrders(): Promise<DeletedOrder[]>
   /** Which years the register covers, and what the next number will be. */
   dealTicketYears(): Promise<{ years: number[]; next: string }>
   /** Put several documents under one ticket. Returns the whole register. */

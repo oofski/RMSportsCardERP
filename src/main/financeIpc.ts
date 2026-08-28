@@ -65,6 +65,8 @@ import type {
 } from '@shared/orderHistory'
 import type { WholesaleSaleRow } from '@shared/invoices'
 import type { DealTicketRow } from '@shared/dealTickets'
+import type { DeletedOrder } from '@shared/orders'
+import { listDeletedOrders } from './db/orderExtras'
 import {
   dealTicketYears,
   listDealTickets,
@@ -390,6 +392,19 @@ export function registerFinanceIpc(): void {
    * because the caller that sends no year at all is asking for exactly that and
    * the two must not be told apart by an accident of coercion.
    */
+  /**
+   * The deletion backlog.
+   *
+   * NO YEAR. "Did we delete any purchase orders?" is not a question about a
+   * calendar year, and a register that hid December's deletion behind a year
+   * picker would answer "no" to somebody who needed "yes, in December". The
+   * screen narrows it; this does not decide for it.
+   */
+  ipcMain.handle(IPC.finDeletedOrders, (): DeletedOrder[] => {
+    if (!can('module.finance')) return []
+    return listDeletedOrders()
+  })
+
   ipcMain.handle(IPC.finDealTickets, (_e, year: unknown): DealTicketRow[] => {
     if (!can('module.finance')) return []
     const y = Math.trunc(Number(year))

@@ -55,6 +55,19 @@ export type OrderEventKind =
   | 'email'
   | 'link'
   | 'note'
+  /**
+   * THE ORDER WAS DELETED. The one event whose subject no longer exists.
+   *
+   * Every other kind here describes something that happened TO an order you can
+   * still open. This one is the record that there was an order at all, and it
+   * is the only one there will ever be: deleting removes the row, its lines,
+   * its parcels and its paperwork, and `deleteOrderExtras` leaves the events
+   * standing precisely so this line survives its own subject.
+   *
+   * It is written BEFORE the delete, inside the same transaction, so a delete
+   * that rolls back leaves no claim that it happened.
+   */
+  | 'deleted'
 
 /** One thing that happened to one order. Immutable once written. */
 export interface OrderEvent {
@@ -110,9 +123,91 @@ export function describeOrderEvent(event: OrderEvent, stageLabel: (id: string) =
       return event.detail ?? 'Emailed'
     case 'link':
       return event.detail ?? 'Linked to another order'
+    case 'deleted':
+      return event.detail ?? 'Deleted'
     default:
       return event.detail ?? 'Note'
   }
+}
+
+/**
+ * ONE DELETED ORDER, as the backlog remembers it.
+ *
+ * ## Why the facts are copied onto the event rather than joined
+ *
+ * Everywhere else in this app a row points at its subject and the subject holds
+ * the facts — that is the derived-not-stored rule, and it is right, because a
+ * copy goes stale the moment the original changes. THIS is the one case where
+ * it cannot apply: there is no original any more, and there never will be
+ * again. A pointer would resolve to nothing, so "PO-0424, Kentucky Roadshow,
+ * $1,275" has to be written down at the moment of deletion or it is gone.
+ *
+ * Nothing here can go stale, for the same reason: the thing it describes stopped
+ * existing before the row was written.
+ *
+ * ## What it is FOR
+ *
+ * "Did we delete any POs?" — a question with no answer at all until now. The
+ * board only shows what exists, and an order somebody removed left a gap in the
+ * numbers and nothing else. The deal-ticket register knew a number had been
+ * handed out and could say "order deleted", but not by whom, not when, and not
+ * what was on it.
+ */
+export interface DeletedOrder {
+  /** The event row's own id. */
+  id: string
+  side: OrderSide
+  /** The id the order HAD. Nothing resolves it; it is here to trace by. */
+  orderId: string
+  /** PO-0424, or the invoice number. Null when it never had one. */
+  number: string | null
+  /** The supplier or the buyer, as it read at the time. */
+  party: string | null
+  /** What it was worth when it went. */
+  total: number
+  /** How many units were on it. */
+  units: number
+  /** The stage it was in — a deleted draft is a very different fact from a deleted paid order. */
+  stage: string | null
+  /** Who pressed it, named as they were then. Null on an older deletion that recorded nobody. */
+  actorName: string | null
+  actorId: string | null
+  /** When. */
+  deletedAt: string
+  /** The whole sentence, already written for a person to read. */
+  detail: string | null
+}
+
+/**
+ * The sentence a deletion writes into the log.
+ *
+ * Built here, in the contract, because the WRITE composes it and the read hands
+ * it straight to the screen — so if the two ever disagreed about what a deletion
+ * says, the log would be the last place anybody found out. Everything a person
+ * needs is in the line itself, since there is no order left to open for the
+ * rest.
+ */
+export function describeDeletion(facts: {
+  number?: string | null
+  party?: string | null
+  total?: number | null
+  units?: number | null
+  stage?: string | null
+}): string {
+  const bits: string[] = []
+  bits.push(String(facts.number ?? '').trim() || 'An unnumbered order')
+  const party = String(facts.party ?? '').trim()
+  if (party) bits.push(`with ${party}`)
+  const units = Number(facts.units) || 0
+  if (units > 0) bits.push(`· ${units} unit${units === 1 ? '' : 's'}`)
+  const total = Number(facts.total) || 0
+  // Zero is printed. "$0.00" on a deleted order is a fact worth seeing — an
+  // empty draft — and leaving it out would make that case look like a read that
+  // failed.
+  bits.push(`· $${total.toFixed(2)}`)
+  const stage = String(facts.stage ?? '').trim()
+  if (stage) bits.push(`· was ${stage}`)
+  return `Deleted ${bits.join(' ')}`
 }
 
 // ---------------------------------------------------------------------------
