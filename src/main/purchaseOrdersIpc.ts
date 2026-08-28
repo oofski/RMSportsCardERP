@@ -351,21 +351,43 @@ export function registerPurchaseOrdersIpc(): void {
     }
   )
 
-  // Who the order is from, and the note on it. No status gate: this edits
-  // nothing that has money attached, and the commonest moment to notice the
-  // supplier is missing is while filing an order that is already closed.
+  // Who the order is from, the note on it, and what the supplier charged to
+  // ship it. No status gate: the first two edit nothing with money attached,
+  // and the commonest moment to notice the supplier is missing is while filing
+  // an order that is already closed.
+  //
+  // FREIGHT is the one that moves money, and it is ungated for a reason of its
+  // own: the carrier's invoice routinely turns up AFTER the boxes do. Gating it
+  // on "not received" would lock the field at precisely the moment the real
+  // number arrives. It is safe to move late because freight never enters a FIFO
+  // cost lot — receivePoLine costs a lot at the LINE's unit price — so a
+  // correction here restates the document total and the COGS row without
+  // leaving the valuation on the shelf disagreeing with either. That is exactly
+  // the disagreement that freezes a line price once anything has landed.
   ipcMain.handle(
     IPC.poSetHeader,
     (
       _e,
-      payload: { id: string; supplier?: string | null; notes?: string | null }
+      payload: {
+        id: string
+        supplier?: string | null
+        notes?: string | null
+        shippingCost?: number | null
+      }
     ): Result<PurchaseOrderDetail> => {
       try {
         requireInvoicing()
         if (!payload?.id) return { ok: false, error: 'No purchase order specified.' }
-        const patch: { supplier?: string | null; notes?: string | null } = {}
+        const patch: {
+          supplier?: string | null
+          notes?: string | null
+          shippingCost?: number | null
+        } = {}
         if ('supplier' in payload) patch.supplier = payload.supplier ?? null
         if ('notes' in payload) patch.notes = payload.notes ?? null
+        // `in` rather than a truthiness check, so an explicit null clears the
+        // figure back to "nobody said" instead of being read as "leave it".
+        if ('shippingCost' in payload) patch.shippingCost = payload.shippingCost ?? null
         const res = updatePurchaseOrderHeader(payload.id, patch)
         return res.error
           ? { ok: false, error: res.error }

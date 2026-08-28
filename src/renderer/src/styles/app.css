@@ -5666,6 +5666,68 @@ tr.hoverable-row:hover {
 .po-ship-part {
   margin-left: 8px;
 }
+/* The money block: what the lines come to, what freight added, what is owed.
+   The rows above the total are quieter than it on purpose — they explain the
+   figure, they are not the figure. */
+.po-money {
+  margin-top: 16px;
+}
+.po-money-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 30px;
+  padding: 3px 0;
+  font-size: 13px;
+  color: var(--text-2);
+}
+.po-money-row > span:first-child {
+  font-weight: 600;
+}
+.po-ship-edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+.po-ship-edit:hover {
+  border-color: var(--border);
+  background: var(--surface-2);
+}
+/* The pencil is the affordance, so it stays put and only gains contrast on
+   hover — an icon that appears on hover cannot be discovered by looking.
+   Targeted as `svg` and not `.icon`: Icon renders a bare lucide element and
+   passes through only the className it is given, which is none here. */
+.po-ship-edit svg {
+  color: var(--text-3);
+  flex: none;
+}
+.po-ship-edit:hover svg {
+  color: var(--brand-600);
+}
+.po-ship-edit.is-empty {
+  color: var(--text-3);
+  font-style: italic;
+}
+.po-money-ship.is-editing {
+  align-items: center;
+  gap: 12px;
+}
+.po-ship-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.po-ship-form .input {
+  width: 110px;
+  text-align: right;
+}
 .po-grand-total {
   display: flex;
   align-items: center;
@@ -5676,6 +5738,33 @@ tr.hoverable-row:hover {
   font-size: 16px;
   font-weight: 700;
   color: var(--text);
+}
+/* Scoped, because .po-grand-total is shared with the sales-order form, which
+   has no breakdown above it and still needs its own gap. Here the rows above
+   have already provided the separation. */
+.po-money > .po-grand-total {
+  margin-top: 10px;
+}
+/* On a phone the label, the box and two buttons cannot share a line — the
+   input collapses to nothing and the buttons wrap under it half-width. */
+@media (max-width: 560px) {
+  .po-money-ship.is-editing {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  .po-ship-form {
+    width: 100%;
+  }
+  /* `min-width: 0` is the part that matters. An <input> carries an intrinsic
+     minimum width from its size attribute, so `flex: 1` alone lets it refuse
+     to shrink and pushes Cancel off the right edge — which is exactly what it
+     did at 420px. */
+  .po-ship-form .input {
+    width: auto;
+    flex: 1 1 0;
+    min-width: 0;
+  }
 }
 
 /* ---------- Stage badges ---------- */

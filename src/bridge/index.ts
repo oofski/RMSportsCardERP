@@ -640,17 +640,26 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       addLines: (id: string, lines: NewPurchaseOrderLine[]): Promise<Result<PurchaseOrderDetail>> =>
         ipcRenderer.invoke(IPC.poAddLines, { id, lines }),
       /**
-       * Correct the descriptive half: who the order is from, and its note.
+       * Correct the header: who the order is from, its note, and the freight
+       * the supplier charged.
        *
-       * No status gate — this touches nothing with money attached, and the
-       * commonest moment to notice the supplier is missing is while filing an
-       * order that is already closed. Lines that never named their own supplier
-       * follow the header automatically, because they store the inheritance
-       * rather than a copy.
+       * No status gate — the supplier and the note touch nothing with money
+       * attached, and the commonest moment to notice the supplier is missing is
+       * while filing an order that is already closed. Lines that never named
+       * their own supplier follow the header automatically, because they store
+       * the inheritance rather than a copy.
+       *
+       * SHIPPING COST does move money: it restates the order total and the COGS
+       * row behind it. It is still ungated, because the carrier's invoice
+       * usually arrives after the boxes and freight never enters a FIFO cost
+       * lot — so a late correction cannot leave the document and the shelf
+       * disagreeing, which is the risk that freezes a line price.
+       *
+       * Omit a field to leave it alone; an explicit null clears it.
        */
       setHeader: (
         id: string,
-        patch: { supplier?: string | null; notes?: string | null }
+        patch: { supplier?: string | null; notes?: string | null; shippingCost?: number | null }
       ): Promise<Result<PurchaseOrderDetail>> =>
         ipcRenderer.invoke(IPC.poSetHeader, { id, ...patch }),
       /**
