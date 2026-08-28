@@ -28524,3 +28524,33 @@ button.sor-team:focus-visible {
   padding-left: 0;
   padding-right: 0;
 }
+
+/* ATTACH A PURCHASE ORDER, from inside a history row.
+
+   Quiet: it sits at the end of the "Supplied by" line, which is a fact somebody
+   is reading rather than a control they came for. It only has to be findable
+   once they realise the fact is wrong. */
+.hist-attach {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: 8px;
+  padding: 2px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-1);
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.hist-attach:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+/* A sale with nothing attached says so, rather than the row simply not being
+   drawn — that sale is precisely the one somebody came here to fix. */
+.hist-went-none {
+  color: var(--text-3);
+  font-style: italic;
+}
