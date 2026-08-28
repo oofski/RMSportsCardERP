@@ -3,6 +3,8 @@ import { LOCATION_IDS, isLocation } from '@shared/inventory'
 import type { WholesaleSaleRow } from '@shared/invoices'
 import { newId, nowIso } from '../util'
 import { bumpStock, insertTxn, stockQty } from './inventory'
+import { buyShortfallAtShop } from './purchaseOrders'
+import { recordOrderEvent } from './orderExtras'
 import {
   allowsFractionalQty,
   consumeFifo,
@@ -258,6 +260,8 @@ export function applyInvoiceStock(
   )
   const out: InvoiceStockMove[] = []
   const touched = new Set<string>()
+  /** What this save had to buy at a shop to fill itself. See buyShortfallAtShop. */
+  const shopBuys: Array<{ shop: string; units: number }> = []
 
   for (const line of lines) {
     // THE SLICE'S OWN SHELF WHEN IT NAMES ONE. Only a split line ever does; an
@@ -271,8 +275,34 @@ export function applyInvoiceStock(
     if (!(asked > 0)) continue
     // What the shelf can actually give, read fresh so two lines of the same
     // product cannot both claim the last box.
-    const have = roundQty(Math.max(0, stockQty(line.productId, shelf)), fractional)
+    let have = roundQty(Math.max(0, stockQty(line.productId, shelf)), fractional)
     const fromPo = (line.sourcePoId ?? '').trim()
+    /**
+     * SHORT AT A ROADSHOW SHOP MEANS "BOUGHT AND NOT WRITTEN DOWN YET".
+     *
+     * Everywhere else a short shelf is a real shortfall and the clamp below is
+     * the honest answer: the boxes are not in the building, and the rest of the
+     * line stays owed. At one of the four shops it means something different,
+     * because the person writing this sale is standing next to the goods — they
+     * bought the case a minute ago and are selling it now. See
+     * buyShortfallAtShop, which is where the rule and its limits live.
+     *
+     * Deliberately NOT done for a line that names a purchase order. That line is
+     * a claim about WHICH units — "six of PO-0042's cases" — and buying more to
+     * satisfy it would be answering a question nobody asked; consumeFromPo
+     * refuses instead, which is right.
+     *
+     * The shelf is re-read afterwards rather than assumed, so a buy that was
+     * refused for any reason leaves the ordinary clamp in charge and the line
+     * simply stays short.
+     */
+    if (!fromPo && asked > have) {
+      const bought = buyShortfallAtShop(db, line.productId, shelf, asked - have, actorId)
+      if (bought > 0) {
+        have = roundQty(Math.max(0, stockQty(line.productId, shelf)), fractional)
+        shopBuys.push({ shop: shelf, units: bought })
+      }
+    }
     /**
      * A LINE THAT NAMES AN ORDER IS NOT TRIMMED TO THE SHELF.
      *
@@ -337,6 +367,31 @@ export function applyInvoiceStock(
   }
 
   for (const productId of touched) syncProductAvgCost(db, productId)
+  /**
+   * SAY WHAT THIS SALE BOUGHT, on the sale.
+   *
+   * Filling a line by buying at a shop creates a real liability — a case we now
+   * owe a shop for — and it happens as a SIDE EFFECT of saving a sales order.
+   * An effect like that must not be silent, or the first anybody knows of it is
+   * an unexplained line on a week's bill.
+   *
+   * One entry per shop rather than per line, because two lines filled at the
+   * same counter are one trip and one act. It reads back on the order's own
+   * history, next to everything else that happened to it.
+   */
+  if (shopBuys.length > 0) {
+    const byShop = new Map<string, number>()
+    for (const b of shopBuys) byShop.set(b.shop, (byShop.get(b.shop) ?? 0) + b.units)
+    for (const [shop, units] of byShop) {
+      recordOrderEvent('so', invoiceId, 'link', {
+        detail:
+          `Bought ${units} unit${units === 1 ? '' : 's'} at ${shop} to fill this order — ` +
+          'on that shop’s open tab, at a price still to be entered.',
+        actorId,
+        db
+      })
+    }
+  }
   return out
 }
 

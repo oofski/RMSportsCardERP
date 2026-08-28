@@ -32,9 +32,15 @@ import { recordPoCogs, voidPoCogs } from './finance'
 import { describeDeletion } from '@shared/orders'
 import { adoptLegacyFreight, deleteOrderExtras, recordOrderEvent } from './orderExtras'
 import { dealTicketRefFor, issueDealTicket } from './dealTickets'
-import { isOpenTab, isTab, settleTabRefusal, tabRoutingLocked } from '@shared/roadshowTab'
+import {
+  isOpenTab,
+  isTab,
+  roadshowShopNamed,
+  settleTabRefusal,
+  tabRoutingLocked
+} from '@shared/roadshowTab'
 import { ensureTabLocation } from './stockLocations'
-import { syncProductAvgCost, unitMoney } from './lots'
+import { restateConsumedCost, syncProductAvgCost, unitMoney } from './lots'
 import { newId, nowIso } from '../util'
 
 interface PoRow {
@@ -895,8 +901,9 @@ export function createPurchaseOrder(
 
     const insertLine = db.prepare(
       `INSERT INTO purchase_order_lines
-         (id, po_id, product_id, quantity, unit_price, position, created_at, supplier, destination)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         (id, po_id, product_id, quantity, unit_price, price_pending, position, created_at,
+          supplier, destination)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     const insertAllocation = db.prepare(
       `INSERT INTO purchase_order_allocations
@@ -915,12 +922,31 @@ export function createPurchaseOrder(
         line.destination ? canonicalDestination(line.destination) : null,
         headerDestination
       )
+      /**
+       * "NOBODY HAS SAID WHAT IT COST YET" SURVIVES THE FIRST LINE.
+       *
+       * This used to drop the flag on the floor: `addPurchaseOrderLines`
+       * honoured it and creation did not, so the FIRST case of a week — the one
+       * that opens the tab — recorded as priced at zero rather than as unpriced.
+       * The consequences were quiet and bad. The tab reported itself fully
+       * priced, so `settleTabRefusal` had nothing to refuse and the week could
+       * be marked paid with a case's cost missing from it; the header total was
+       * a figure somebody could read as the bill; and the case carried a cost
+       * layer of zero into whatever it was sold on.
+       *
+       * Only an OPEN TAB may hold one, the same rule the add path keeps: on an
+       * ordinary purchase order it would be a line nothing ever asks about,
+       * because only the tab screen shows the pending count.
+       */
+      const linePending =
+        !!line.pricePending && !!input.ongoing
       insertLine.run(
         lineId,
         id,
         line.productId,
         Math.round(line.quantity),
-        Math.max(0, line.unitPrice),
+        linePending ? 0 : Math.max(0, line.unitPrice),
+        linePending ? 1 : 0,
         i,
         ts,
         lineSupplier,
@@ -1204,6 +1230,92 @@ function takeTabDelivery(
       row.allocation_id
     )
   }
+}
+
+/**
+ * BUY WHAT THE SHOP IS SHORT OF, ONTO THE SHOP'S OWN TAB.
+ *
+ * The owner's case, and the last thing standing between the roadshow feature and
+ * how the work actually happens: "when creating an SO, if I put product A as
+ * location to one of the roadshows it adds it to the roadshow shop, and then
+ * later we can just edit the price."
+ *
+ * Somebody is at a counter in Kentucky. They buy a case and sell it to a buyer
+ * in the same five minutes. Before this, that was two jobs in two places: open
+ * the roadshow board, add the case, then go and write the sale — and if they did
+ * the sale first, the line simply came up short and sat in Awaiting items with
+ * nothing explaining why. Now writing the sale IS both, because at a shop being
+ * short means "I bought it here and have not written it down yet".
+ *
+ * ## Only at a roadshow shop, and that is the whole safety argument
+ *
+ * A short shelf ANYWHERE ELSE is a real shortfall and must stay one. If RM is
+ * short, the boxes are not in the building and inventing a purchase would be
+ * inventing stock; `applyInvoiceStock` already books what it can and leaves the
+ * rest owed, which is the honest answer. A supplier destination is a dropship
+ * and buys nothing at all.
+ *
+ * It is the four shops — see ROADSHOW_SHOPS — and only those, because they are
+ * the one place where the person writing the sale is standing next to the goods
+ * and the shop is trading with us on a running tab.
+ *
+ * ## Bought at NO PRICE, and that is not a shortcut
+ *
+ * Nothing here knows what the shop charged; the person does, and they are
+ * mid-sale. So the line goes on price-pending and the real figure is entered on
+ * the tab when the week is settled — which is exactly what a tab is for. This is
+ * only safe because pricing a pending line now corrects the cost of goods on
+ * sales already drawn from it (see restateConsumedCost); before that it would
+ * have booked a permanent zero, and this function would have been a money bug
+ * rather than a convenience.
+ *
+ * ## It goes on the WEEK'S tab
+ *
+ * One bill per shop. Opening a fresh order per sale would leave four amounts
+ * owed to a shop expecting one payment — the failure the tab was built to
+ * prevent — so an open tab is joined and a closed week is never reopened.
+ *
+ * Returns how many units it actually bought. MUST be called inside the caller's
+ * transaction.
+ */
+export function buyShortfallAtShop(
+  db: Database.Database,
+  productId: string,
+  shop: string,
+  units: number,
+  actorId: string | null
+): number {
+  const want = Math.round(Number(units) || 0)
+  const place = roadshowShopNamed(shop)
+  // Not one of the four: nothing is bought, and the caller's ordinary shortfall
+  // handling stands.
+  if (!place || want <= 0) return 0
+
+  const open = db
+    .prepare(
+      `SELECT id, po_number FROM purchase_orders
+        WHERE LOWER(TRIM(COALESCE(supplier, ''))) = LOWER(?)
+          AND tab_opened_at IS NOT NULL AND tab_closed_at IS NULL
+          AND status NOT IN ('cancelled')
+        ORDER BY tab_opened_at ASC
+        LIMIT 1`
+    )
+    .get(place) as { id: string; po_number: string } | undefined
+
+  const line = { productId, quantity: want, unitPrice: 0, pricePending: true }
+  if (open) {
+    const res = addPurchaseOrderLines(open.id, [line], actorId)
+    // A refusal is reported by NOT buying, rather than by throwing: the sale is
+    // the thing somebody is doing, and it still books what the shelf can give.
+    // The line simply stays short, which is what it would have been anyway.
+    if (res.error) return 0
+    return want
+  }
+  const created = createPurchaseOrder(
+    { supplier: place, location: '', ongoing: true, lines: [line] },
+    actorId
+  )
+  return created ? want : 0
 }
 
 export function addPurchaseOrderLines(
@@ -1733,13 +1845,20 @@ export function setPurchaseOrderLinePrice(
   const run = db.transaction((): PoStatusResult => {
     const line = db
       .prepare(
-        `SELECT l.id, l.po_id, l.product_id, l.quantity, p.name AS product_name
+        `SELECT l.id, l.po_id, l.product_id, l.quantity, l.price_pending, p.name AS product_name
            FROM purchase_order_lines l
            JOIN inventory_products p ON p.id = l.product_id
           WHERE l.id = ? AND l.po_id = ?`
       )
       .get(lineId, poId) as
-      | { id: string; po_id: string; product_id: string; quantity: number; product_name: string }
+      | {
+          id: string
+          po_id: string
+          product_id: string
+          quantity: number
+          price_pending: number | null
+          product_name: string
+        }
       | undefined
     if (!line) return { po: getPurchaseOrder(poId), error: 'That line is gone.' }
     // NULL is the operator saying "still do not know", which is a real answer
@@ -1762,8 +1881,27 @@ export function setPurchaseOrderLinePrice(
           WHERE r.po_line_id = ?`
       )
       .all(lineId) as Array<{ lot_id: string; qty_received: number; qty_remaining: number }>
+    /**
+     * WAS THIS LINE'S PRICE EVER KNOWN? The answer decides whether stock that
+     * has already gone out can be re-costed.
+     *
+     * A line that carried a REAL price and was then sold is left exactly as it
+     * was: that figure was stated, the sale was costed against it, and moving it
+     * now would restate a month somebody has already closed. That is the refusal
+     * below, and it stands.
+     *
+     * A PRICE-PENDING line is the opposite case and it is the whole reason a
+     * roadshow tab exists. Its zero was never a figure anybody stated — it was a
+     * placeholder standing in for "we don't know yet" — so filling it in
+     * COMPLETES the record rather than rewriting one. Refusing here was the bug:
+     * a case bought at an unknown price and sold before the invoice turned up
+     * booked a cost of goods of nothing, permanently, and the app's own advice
+     * was a stock adjustment, which does not touch the sale's cost at all. At a
+     * roadshow, selling before the price is known is the ordinary case.
+     */
+    const wasPending = Number(line.price_pending) === 1
     const drawnDown = layers.filter((l) => Number(l.qty_remaining) < Number(l.qty_received))
-    if (drawnDown.length > 0) {
+    if (drawnDown.length > 0 && !wasPending) {
       return {
         po: getPurchaseOrder(poId),
         error:
@@ -1777,16 +1915,32 @@ export function setPurchaseOrderLinePrice(
     db.prepare(
       `UPDATE purchase_order_lines SET unit_price = ?, price_pending = ? WHERE id = ?`
     ).run(price, pending ? 1 : 0, lineId)
+    let restated = 0
     if (layers.length > 0) {
       const recost = db.prepare(`UPDATE inventory_lots SET unit_cost = ? WHERE id = ?`)
-      for (const l of layers) recost.run(unitMoney(price), l.lot_id)
+      for (const l of layers) {
+        recost.run(unitMoney(price), l.lot_id)
+        /**
+         * AND WHAT HAS ALREADY LEFT THE LAYER, on a pending line.
+         *
+         * Re-costing the lot alone fixes the stock still standing there and
+         * leaves every sale drawn from it costed at the placeholder. See
+         * restateConsumedCost for the three places that have to move together.
+         */
+        if (wasPending) restated += restateConsumedCost(db, l.lot_id, price)
+      }
       syncProductAvgCost(db, line.product_id)
     }
     // The stored total is Σ(line) + freight, and a pending line carries a price
     // of 0 — so the header total is the KNOWN total for free, and agrees with
     // tabKnownTotal without either side knowing about the other.
     restateOrderTotal(db, poId, ts)
-    const landed = layers.length > 0 ? ' — the stock on the shelf was re-costed to match' : ''
+    const landed =
+      restated > 0
+        ? ` — the stock on the shelf was re-costed, and so was the cost of goods on ${restated} sale line${restated === 1 ? '' : 's'} already sold from it`
+        : layers.length > 0
+          ? ' — the stock on the shelf was re-costed to match'
+          : ''
     recordOrderEvent('po', poId, 'note', {
       detail: pending
         ? `Price on ${line.product_name} set back to "not known yet"`

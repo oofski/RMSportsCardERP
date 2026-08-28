@@ -591,6 +591,86 @@ export function consumeLots(
  *
  * MUST be called inside the caller's db.transaction().
  */
+/**
+ * CORRECT THE COST OF WHAT HAS ALREADY GONE OUT OF A LAYER.
+ *
+ * ## The hole this fills, which was a money hole
+ *
+ * A roadshow tab exists so a week can be bought now and priced later — "we
+ * don't always know in the moment" is the sentence the whole feature was built
+ * on. A case checked in at no price opens a cost layer at ZERO, and that is
+ * fine right up until somebody sells it before the invoice turns up, which at a
+ * roadshow is the ordinary case rather than the exception.
+ *
+ * What happened then: the sale booked a cost of goods of nothing, its margin
+ * read as the entire sale price, and `setPurchaseOrderLinePrice` REFUSED to
+ * correct it — "already been broken or sold ... that cannot be changed now". So
+ * the zero was permanent, and the app's own answer was to go and make a stock
+ * adjustment, which does not touch the sale's cost of goods at all. The
+ * price-later premise worked only for stock nobody had sold, and the whole point
+ * of a roadshow is selling out of it.
+ *
+ * ## Why this is a completion and not a rewrite of history
+ *
+ * The caller confines it to lines that were PRICE PENDING — see
+ * setPurchaseOrderLinePrice. That distinction is the whole licence: a pending
+ * line's zero was never a figure anybody stated, it was a placeholder standing
+ * in for an unanswered question. Filling it in finishes the record. A line that
+ * carried a REAL price and was then sold is left exactly as it was, because
+ * moving that one would be restating a month somebody has already closed.
+ *
+ * ## The three places a consumed cost is written
+ *
+ * All three move together or the books disagree with themselves:
+ *
+ *   inventory_txn_lots.unit_cost   what this slice was costed at
+ *   inventory_transactions.cost_basis  the ledger row the P&L reads
+ *   invoice_stock_moves.cost_total     what the SALE says its goods cost
+ *
+ * Deltas rather than recomputes, because a transaction can consume SEVERAL
+ * layers — six cases off an old lot and four off this one — and recomputing the
+ * row from this lot alone would throw the other six away.
+ *
+ * Returns how many slices it corrected, so the caller can say so.
+ *
+ * MUST be called inside the caller's transaction.
+ */
+export function restateConsumedCost(db: Database, lotId: string, newUnitCost: number): number {
+  const id = String(lotId ?? '').trim()
+  if (!id) return 0
+  const next = unitMoney(Math.max(0, Number(newUnitCost) || 0))
+  const slices = db
+    .prepare(
+      `SELECT tl.id, tl.txn_id, tl.quantity, tl.unit_cost
+         FROM inventory_txn_lots tl
+        WHERE tl.lot_id = ?`
+    )
+    .all(id) as Array<{ id: string; txn_id: string; quantity: number; unit_cost: number }>
+  let touched = 0
+  for (const s of slices) {
+    const was = Number(s.unit_cost) || 0
+    if (Math.abs(was - next) < 1e-9) continue
+    const delta = cents(Number(s.quantity) * (next - was))
+    if (delta === 0) continue
+    db.prepare(`UPDATE inventory_txn_lots SET unit_cost = ? WHERE id = ?`).run(next, s.id)
+    db.prepare(
+      `UPDATE inventory_transactions
+          SET cost_basis = COALESCE(cost_basis, 0) + ?
+        WHERE id = ?`
+    ).run(delta, s.txn_id)
+    // The SALE'S own copy of what its goods cost. Keyed on the transaction
+    // rather than on the lot, because a move is written per slice and carries
+    // exactly the txn it was booked against.
+    db.prepare(
+      `UPDATE invoice_stock_moves
+          SET cost_total = COALESCE(cost_total, 0) + ?
+        WHERE txn_id = ?`
+    ).run(delta, s.txn_id)
+    touched++
+  }
+  return touched
+}
+
 export function recordTxnLots(db: Database, txnId: string, slices: LotSlice[], picked: boolean): void {
   if (!txnId || slices.length === 0) return
   const ins = db.prepare(

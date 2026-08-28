@@ -1268,6 +1268,341 @@ console.log('\n=== 9. the four shops are a list, not something anybody types ===
   )
 }
 
+console.log('\n=== 10. selling at a shop buys what the shop is short of ===')
+// ---------------------------------------------------------------------------
+/**
+ * "IF I PUT PRODUCT A AS LOCATION TO ONE OF THE ROADSHOWS IT ADDS IT TO THE
+ * ROADSHOW SHOP, AND THEN LATER WE CAN JUST EDIT THE PRICE."
+ *
+ * Somebody is at a counter in Kentucky. They buy a case and sell it to a buyer
+ * in the same five minutes. That was two jobs in two places, and doing them in
+ * the natural order — sale first — left the line short and the order sitting in
+ * Awaiting items with nothing explaining why.
+ *
+ * ## THE MONEY BUG THIS SITS ON TOP OF, which had to be fixed first
+ *
+ * A case bought at an unknown price opens a cost layer of ZERO. Sell it before
+ * the invoice turns up and the sale books a cost of goods of nothing — and
+ * `setPurchaseOrderLinePrice` then REFUSED to correct it, because stock had
+ * already gone out. So the zero was permanent and the app's own advice was a
+ * stock adjustment, which never touches a sale's cost of goods.
+ *
+ * That was already live before this feature and would have made it a money bug
+ * rather than a convenience: its whole premise is buying at a price nobody knows
+ * and selling immediately. Both halves are pinned below.
+ */
+{
+  const KY = 'Kentucky Roadshow'
+  db.prepare(
+    `INSERT INTO inventory_products (id, sku, name, category, unit_cost, created_at, updated_at)
+     VALUES ('p_buy', 'SKU-BUY', 'Counter Sale Case', 'Pokemon', 0,
+             '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`
+  ).run()
+  const cogsOf = (invoiceId: string): number =>
+    (
+      db
+        .prepare(`SELECT COALESCE(SUM(cost_total), 0) AS c FROM invoice_stock_moves WHERE invoice_id = ?`)
+        .get(invoiceId) as { c: number }
+    ).c
+
+  // --- a price nobody knows survives being the FIRST line of a tab ---------
+  /**
+   * This was dropped on the floor. `addPurchaseOrderLines` honoured
+   * pricePending and creation did not, so the first case of a week recorded as
+   * priced at zero rather than as unpriced — and a tab that believes itself
+   * fully priced can be settled with a case's cost missing from the bill.
+   */
+  const pendingTab = poRepo.createPurchaseOrder(
+    {
+      supplier: KY,
+      ongoing: true,
+      lines: [{ productId: 'p_buy', quantity: 1, unitPrice: 0, pricePending: true }]
+    },
+    null
+  )
+  ok(
+    poRepo.getPurchaseOrder(pendingTab.id).lines[0].pricePending === true,
+    'THE FIRST CASE OF A WEEK CAN BE UNPRICED — creation used to drop the flag and call it $0',
+    String(poRepo.getPurchaseOrder(pendingTab.id).lines[0].pricePending)
+  )
+  ok(
+    !!poRepo.settleRoadshowTab(pendingTab.id, null).error,
+    'AND THE TAB REFUSES TO BE PAID while that price is missing, which it could not do before'
+  )
+
+  // --- sold before it was priced, then priced ------------------------------
+  const early = invoices.saveInvoice(
+    {
+      customerName: 'Counter Buyer',
+      invoiceNumber: 'SO-CTR1',
+      invoiceDate: '2026-08-27',
+      location: 'RM',
+      lines: [{ item: 'Counter Sale Case', productId: 'p_buy', quantity: 1, rate: 900, destination: KY }]
+    },
+    null
+  )
+  ok(cogsOf(early.id) === 0, 'sold before anybody priced it, the sale books nothing', String(cogsOf(early.id)))
+  const priced = poRepo.setPurchaseOrderLinePrice(
+    pendingTab.id,
+    poRepo.getPurchaseOrder(pendingTab.id).lines[0].id,
+    400,
+    null
+  )
+  ok(
+    !priced.error,
+    'PRICING IT AFTERWARDS IS ACCEPTED — refusing was the bug, and the case it broke is the ordinary one',
+    String(priced.error)
+  )
+  ok(
+    Math.round(cogsOf(early.id)) === 400,
+    'AND THE SALE IS RE-COSTED TO $400 — a placeholder filled in, not a month rewritten',
+    String(cogsOf(early.id))
+  )
+  const ledger = db
+    .prepare(
+      `SELECT COALESCE(SUM(t.cost_basis), 0) AS c
+         FROM inventory_transactions t WHERE t.product_id = 'p_buy' AND t.type = 'sale'`
+    )
+    .get() as { c: number }
+  ok(
+    Math.round(ledger.c) === 400,
+    'and the ledger row the P&L reads agrees with it — all three copies move together',
+    String(ledger.c)
+  )
+  /**
+   * A LINE THAT CARRIED A REAL PRICE IS STILL PROTECTED. That is the boundary
+   * the whole change rests on: a stated figure that has been sold against is
+   * history, and moving it would restate a closed month.
+   */
+  const realPrice = poRepo.createPurchaseOrder(
+    { supplier: KY, ongoing: true, lines: [{ productId: 'p_buy', quantity: 1, unitPrice: 300 }] },
+    null
+  )
+  invoices.saveInvoice(
+    {
+      customerName: 'Second Buyer',
+      invoiceNumber: 'SO-CTR2',
+      invoiceDate: '2026-08-27',
+      location: 'RM',
+      lines: [{ item: 'Counter Sale Case', productId: 'p_buy', quantity: 1, rate: 900, destination: KY }]
+    },
+    null
+  )
+  const refused = poRepo.setPurchaseOrderLinePrice(
+    realPrice.id,
+    poRepo.getPurchaseOrder(realPrice.id).lines[0].id,
+    350,
+    null
+  )
+  ok(
+    !!refused.error && /already been broken or sold/i.test(refused.error ?? ''),
+    'A STATED PRICE THAT HAS BEEN SOLD AGAINST IS STILL REFUSED — only a placeholder may be filled in',
+    String(refused.error)
+  )
+
+  // --- the feature itself: selling short at a shop buys the difference -----
+  const shelfBefore = invStock.stockQty('p_buy', KY)
+  ok(shelfBefore === 0, 'the shop has none of it left', String(shelfBefore))
+  const counterSale = invoices.saveInvoice(
+    {
+      customerName: 'Walk Up Buyer',
+      invoiceNumber: 'SO-CTR3',
+      invoiceDate: '2026-08-27',
+      location: 'RM',
+      lines: [{ item: 'Counter Sale Case', productId: 'p_buy', quantity: 3, rate: 900, destination: KY }]
+    },
+    null
+  )
+  const moved = db
+    .prepare(`SELECT COALESCE(SUM(quantity), 0) AS q FROM invoice_stock_moves WHERE invoice_id = ?`)
+    .get(counterSale.id) as { q: number }
+  ok(
+    moved.q === 3,
+    'SELLING THREE THE SHOP DID NOT HAVE STILL SHIPS THREE — it bought them on the way past',
+    String(moved.q)
+  )
+  ok(
+    invStock.stockQty('p_buy', KY) === 0,
+    'the shelf is level afterwards — bought three, sold three',
+    String(invStock.stockQty('p_buy', KY))
+  )
+  /**
+   * ON THE WEEK'S TAB, at no price. One bill per shop: opening a fresh order per
+   * sale would leave several amounts owed to a shop expecting one payment.
+   */
+  const kyTabs = db
+    .prepare(
+      `SELECT id, po_number FROM purchase_orders
+        WHERE LOWER(supplier) = LOWER(?) AND tab_opened_at IS NOT NULL AND tab_closed_at IS NULL
+          AND status <> 'cancelled'`
+    )
+    .all(KY) as Array<{ id: string; po_number: string }>
+  ok(kyTabs.length >= 1, 'the shop has an open tab', String(kyTabs.length))
+  const bought = db
+    .prepare(
+      `SELECT COALESCE(SUM(l.quantity), 0) AS q,
+              COALESCE(SUM(CASE WHEN l.price_pending = 1 THEN l.quantity ELSE 0 END), 0) AS pending
+         FROM purchase_order_lines l
+        WHERE l.po_id IN (${kyTabs.map(() => '?').join(', ')}) AND l.product_id = 'p_buy'`
+    )
+    .get(...kyTabs.map((t) => t.id)) as { q: number; pending: number }
+  ok(
+    bought.pending >= 3,
+    'AND THE THREE ARE ON IT AT A PRICE STILL TO COME — which is what "edit the price later" means',
+    JSON.stringify(bought)
+  )
+  /**
+   * AND THE SALE SAYS SO. Buying creates a real liability as a side effect of
+   * saving a sales order, and an effect like that must not be silent.
+   */
+  const events = require('../src/main/db/orderExtras').listOrderEvents('so', counterSale.id)
+  ok(
+    events.some((e: any) => /Bought 3 units at Kentucky Roadshow/i.test(e.detail ?? '')),
+    'THE ORDER RECORDS WHAT IT BOUGHT — a liability created by a side effect is not allowed to be silent',
+    JSON.stringify(events.map((e: any) => e.detail))
+  )
+
+  // --- and nowhere else -----------------------------------------------------
+  /**
+   * A SHORT RM SHELF IS A REAL SHORTFALL. The boxes are not in the building;
+   * inventing a purchase would be inventing stock. This is the property that
+   * keeps the feature safe, so it is pinned harder than the feature itself.
+   */
+  const poCount = (): number =>
+    (db.prepare(`SELECT COUNT(*) AS n FROM purchase_orders`).get() as { n: number }).n
+  const posBefore = poCount()
+  const rmSale = invoices.saveInvoice(
+    {
+      customerName: 'Home Shelf Buyer',
+      invoiceNumber: 'SO-CTR4',
+      invoiceDate: '2026-08-27',
+      location: 'RM',
+      lines: [{ item: 'Counter Sale Case', productId: 'p_buy', quantity: 2, rate: 900 }]
+    },
+    null
+  )
+  const rmMoved = db
+    .prepare(`SELECT COALESCE(SUM(quantity), 0) AS q FROM invoice_stock_moves WHERE invoice_id = ?`)
+    .get(rmSale.id) as { q: number }
+  ok(
+    rmMoved.q === 0,
+    'SELLING FROM AN EMPTY RM BUYS NOTHING AND SHIPS NOTHING — the line stays owed, as it always did',
+    String(rmMoved.q)
+  )
+  ok(
+    invStock.stockQty('p_buy', 'RM') === 0,
+    'and no stock was conjured onto our own shelf',
+    String(invStock.stockQty('p_buy', 'RM'))
+  )
+  /**
+   * AND NO PURCHASE ORDER WAS INVENTED, which is the half that matters most.
+   *
+   * Checking only that no stock moved is too weak: a top-up aimed at RM would
+   * fail to RECEIVE — takeTabDelivery leaves homeward cases alone — so the shelf
+   * would look untouched while a phantom order sat on the board claiming we owed
+   * somebody for goods nobody bought. The liability is the danger, not the
+   * count.
+   */
+  ok(
+    poCount() === posBefore,
+    'AND NO PURCHASE ORDER WAS INVENTED — an unbought liability is the real danger, not the unit count',
+    `${poCount()} vs ${posBefore}`
+  )
+  /**
+   * A LINE THAT NAMES A PURCHASE ORDER BUYS NOTHING EITHER, and this is the
+   * subtlest of the three limits.
+   *
+   * "Four of PO-0431's cases" is a claim about WHICH units. Topping the shop up
+   * and letting the line fill itself would quietly turn that into "four, of
+   * which three are cases I bought a moment ago" — the document would still say
+   * four and would no longer mean what it said. consumeFromPo refuses a named
+   * order that cannot cover its claim, and that refusal has to stay reachable.
+   *
+   * AT A SHOP WITH NO OTHER TAB OPEN, and with the line NAMING the order from
+   * the start. Both matter: at Kentucky a top-up would land on that shop's
+   * existing week rather than on the named order, and re-routing an already
+   * saved line is refused by the allocation validator long before any of this —
+   * so either shortcut produces a test that passes without exercising the rule.
+   */
+  const TX = 'Texas Roadshow'
+  const namedTab = poRepo.createPurchaseOrder(
+    { supplier: TX, ongoing: true, lines: [{ productId: 'p_buy', quantity: 1, unitPrice: 500 }] },
+    null
+  )
+  const posBeforeNamed = poCount()
+  let namedError = ''
+  let namedMoved = -1
+  try {
+    const namedSale = invoices.saveInvoice(
+      {
+        customerName: 'Named Order Buyer',
+        invoiceNumber: 'SO-CTR6',
+        invoiceDate: '2026-08-27',
+        location: 'RM',
+        lines: [
+          {
+            item: 'Counter Sale Case',
+            productId: 'p_buy',
+            quantity: 4,
+            rate: 900,
+            destination: TX,
+            // The claim: these four are THAT order's cases, and it holds one.
+            sourcePoId: namedTab.id
+          }
+        ]
+      },
+      null
+    )
+    namedMoved = (
+      db
+        .prepare(`SELECT COALESCE(SUM(quantity), 0) AS q FROM invoice_stock_moves WHERE invoice_id = ?`)
+        .get(namedSale.id) as { q: number }
+    ).q
+  } catch (err) {
+    namedError = err instanceof Error ? err.message : String(err)
+  }
+  ok(
+    !!namedError || namedMoved === 0,
+    'ASKING FOR MORE OF A NAMED ORDER THAN IT HOLDS IS REFUSED — the top-up must not answer a claim about which units',
+    namedError || `accepted and moved ${namedMoved}`
+  )
+  ok(
+    poCount() === posBeforeNamed,
+    'AND NOTHING WAS BOUGHT TO MAKE THAT CLAIM COME TRUE',
+    `${poCount()} vs ${posBeforeNamed}`
+  )
+
+  /** A supplier destination is a dropship and buys nothing either. */
+  const posBeforeDrop = poCount()
+  const dropSale = invoices.saveInvoice(
+    {
+      customerName: 'Direct Buyer',
+      invoiceNumber: 'SO-CTR5',
+      invoiceDate: '2026-08-27',
+      location: 'RM',
+      lines: [
+        {
+          item: 'Counter Sale Case',
+          productId: 'p_buy',
+          quantity: 2,
+          rate: 900,
+          destination: 'Ordinary Distributors'
+        }
+      ]
+    },
+    null
+  )
+  const dropMoved = db
+    .prepare(`SELECT COALESCE(SUM(quantity), 0) AS q FROM invoice_stock_moves WHERE invoice_id = ?`)
+    .get(dropSale.id) as { q: number }
+  ok(dropMoved.q === 0, 'A DROPSHIP BUYS NOTHING AT A SHOP EITHER', String(dropMoved.q))
+  ok(
+    poCount() === posBeforeDrop,
+    'and raises no purchase order against the supplier either',
+    `${poCount()} vs ${posBeforeDrop}`
+  )
+}
+
 /** Hand the over-sell fixture's stock back, so nothing below inherits it. */
 function inv_setVoid(id: string): void {
   invoices.setInvoiceStatus(id, 'void', null)
