@@ -305,14 +305,22 @@ console.log("\n=== 8. pay periods, and one person's own hours ===")
 // ---------------------------------------------------------------------------
 // THE FOUR DATES, exactly as the owner stated them:
 //
-//     work     Sun 02 Aug -> Sat 15 Aug
+//     work     Mon 03 Aug -> Sun 16 Aug
 //     run on   Wed 19 Aug
 //     paid on  Fri 21 Aug
-//     next     Sun 16 Aug -> Sat 29 Aug
+//     next     Mon 17 Aug -> Sun 30 Aug
 //
 // This is what Gusto is handed. A period that ends on the day it is paid — the
 // shape this used to have — exports a fortnight shifted three days off the one
 // the hours were actually worked in, and nothing downstream can tell.
+//
+// THE FORTNIGHT MOVED ONE DAY AND THE PAYDAYS DID NOT. The owner: "payroll is
+// the 17th through the 30th, and then the 31st through next." The anchor slid
+// a day later and both lags shrank by one, which is the same edit from
+// opposite ends — so the work period moved and Wednesday/Friday stayed put.
+// Had only the anchor moved, the lags being measured from the period's END
+// would have dragged payday onto a SATURDAY. The weekday assertions below are
+// what would have caught that, and they are the reason they are here.
 const {
   payrollPeriodFor,
   recentPayrollPeriods,
@@ -323,44 +331,49 @@ const {
   PAYROLL_PAY_LAG_DAYS
 } = require('../src/shared/homeTasks')
 
-ok(PAYROLL_ANCHOR === '2026-08-02', 'the series starts where the pay period does', PAYROLL_ANCHOR)
+ok(PAYROLL_ANCHOR === '2026-08-03', 'the series starts where the pay period does', PAYROLL_ANCHOR)
 ok(PAYROLL_EVERY_DAYS === 14, 'a fortnight of work', String(PAYROLL_EVERY_DAYS))
-ok(PAYROLL_RUN_LAG_DAYS === 4, 'run four days after it closes', String(PAYROLL_RUN_LAG_DAYS))
-ok(PAYROLL_PAY_LAG_DAYS === 6, 'paid six days after it closes', String(PAYROLL_PAY_LAG_DAYS))
+ok(PAYROLL_RUN_LAG_DAYS === 3, 'run three days after it closes', String(PAYROLL_RUN_LAG_DAYS))
+ok(PAYROLL_PAY_LAG_DAYS === 5, 'paid five days after it closes', String(PAYROLL_PAY_LAG_DAYS))
 
-const p1 = payrollPeriodFor('2026-08-02')
-ok(p1.start === '2026-08-02', 'the period opens on 2 August', p1.start)
-ok(p1.end === '2026-08-15', 'and closes on the 15th — fourteen days of work', p1.end)
-ok(p1.runOn === '2026-08-19', 'payroll is RUN on the 19th', p1.runOn)
-ok(p1.paidOn === '2026-08-21', 'and the money lands on the 21st', p1.paidOn)
+const p1 = payrollPeriodFor('2026-08-03')
+ok(p1.start === '2026-08-03', 'the period opens on 3 August', p1.start)
+ok(p1.end === '2026-08-16', 'and closes on the 16th — fourteen days of work', p1.end)
+ok(p1.runOn === '2026-08-19', 'payroll is RUN on the 19th — UNMOVED by the shift', p1.runOn)
+ok(p1.paidOn === '2026-08-21', 'and the money still lands on the 21st', p1.paidOn)
 
-// The days of the week are the reason those two lags are 4 and 6 rather than
-// arithmetic. If the anchor ever moves off a Sunday these break, which is the
-// point.
+// The days of the week are the reason those two lags are 3 and 5 rather than
+// arithmetic. If the anchor moves and the lags are not moved with it, the run
+// and the payment slide off Wednesday and Friday — these four are what says so.
 const dow = (d: string): number => new Date(`${d}T12:00:00Z`).getUTCDay()
-ok(dow(p1.start) === 0, 'a period starts on a Sunday')
-ok(dow(p1.end) === 6, 'and closes on a Saturday')
+ok(dow(p1.start) === 1, 'a period starts on a Monday')
+ok(dow(p1.end) === 0, 'and closes on a Sunday')
 ok(dow(p1.runOn) === 3, 'payroll runs on a Wednesday')
 ok(dow(p1.paidOn) === 5, 'and pays on a Friday')
 
-// The next period, stated by the owner as 16 Aug – 29 Aug.
-const p2 = payrollPeriodFor('2026-08-16')
-ok(p2.start === '2026-08-16', 'the next period opens on the 16th', p2.start)
-ok(p2.end === '2026-08-29', 'and closes on the 29th', p2.end)
+// The next period, stated by the owner as "the 17th through the 30th".
+const p2 = payrollPeriodFor('2026-08-17')
+ok(p2.start === '2026-08-17', 'the next period opens on the 17th', p2.start)
+ok(p2.end === '2026-08-30', 'and closes on the 30th', p2.end)
 ok(p2.runOn === '2026-09-02', 'run on 2 September', p2.runOn)
 ok(p2.paidOn === '2026-09-04', 'paid on the 4th', p2.paidOn)
 
+// "And then the 31st through next" — the owner's second period, in full.
+const p3 = payrollPeriodFor('2026-08-31')
+ok(p3.start === '2026-08-31', 'the one after opens on the 31st', p3.start)
+ok(p3.end === '2026-09-13', 'and runs into the next month', p3.end)
+
 // The boundary, both sides. Off by one here and somebody's last shift is paid a
 // fortnight late.
-ok(payrollPeriodFor('2026-08-15').start === '2026-08-02', 'the 15th still belongs to the first')
-ok(payrollPeriodFor('2026-08-16').start === '2026-08-16', 'and the 16th opens the second')
-ok(payrollPeriodFor('2026-08-01').start === '2026-07-19', 'the day before falls in the one before')
+ok(payrollPeriodFor('2026-08-16').start === '2026-08-03', 'the 16th still belongs to the first')
+ok(payrollPeriodFor('2026-08-17').start === '2026-08-17', 'and the 17th opens the second')
+ok(payrollPeriodFor('2026-08-02').start === '2026-07-20', 'the day before falls in the one before')
 
 // THE RUN DATE IS NOT A BOUNDARY. 19 August is when payroll is run for the
 // period that ENDED on the 15th — it sits in the middle of the period after it,
 // and reading it as a start is exactly the old bug.
 ok(
-  payrollPeriodFor('2026-08-19').start === '2026-08-16',
+  payrollPeriodFor('2026-08-19').start === '2026-08-17',
   'the 19th is mid-period, not the start of one',
   payrollPeriodFor('2026-08-19').start
 )
@@ -368,12 +381,16 @@ ok(
 const recent = recentPayrollPeriods('2026-08-20', 3)
 ok(recent.length === 3, 'three periods back', String(recent.length))
 ok(recent[0].current === true, 'newest first, and it is the current one')
-ok(recent[0].start === '2026-08-16', 'starting the 16th', recent[0].start)
-ok(recent[1].start === '2026-08-02', 'then the 2nd', recent[1].start)
-ok(recent[2].start === '2026-07-19', 'then the 19th of July', recent[2].start)
+ok(recent[0].start === '2026-08-17', 'starting the 17th', recent[0].start)
+ok(recent[1].start === '2026-08-03', 'then the 3rd', recent[1].start)
+ok(recent[2].start === '2026-07-20', 'then the 20th of July', recent[2].start)
 ok(
-  recent.every((p: any) => dow(p.start) === 0),
-  'and every period starts on a Sunday'
+  recent.every((p: any) => dow(p.start) === 1),
+  'and every period starts on a Monday'
+)
+ok(
+  recent.every((p: any) => dow(p.runOn) === 3 && dow(p.paidOn) === 5),
+  'AND EVERY ONE RUNS ON A WEDNESDAY AND PAYS ON A FRIDAY — the shift moved the work, not the money'
 )
 ok(
   recent.every((p: any) => p.runOn < p.paidOn && p.end < p.runOn),
@@ -382,13 +399,13 @@ ok(
 
 // "Last payroll" is the CLOSED fortnight, never the one being worked.
 const closed = lastClosedPayrollPeriod('2026-08-20')
-ok(closed.start === '2026-08-02', 'on 20 August the last closed period began 2 August', closed.start)
-ok(closed.end === '2026-08-15', 'and ended on the 15th', closed.end)
+ok(closed.start === '2026-08-03', 'on 20 August the last closed period began 3 August', closed.start)
+ok(closed.end === '2026-08-16', 'and ended on the 16th', closed.end)
 ok(closed.paidOn === '2026-08-21', 'paid on the 21st — the day after this reading', closed.paidOn)
 ok(
-  lastClosedPayrollPeriod('2026-08-02').start === '2026-07-19',
+  lastClosedPayrollPeriod('2026-08-03').start === '2026-07-20',
   'and on the first day of a period it is the one before',
-  lastClosedPayrollPeriod('2026-08-02').start
+  lastClosedPayrollPeriod('2026-08-03').start
 )
 
 // One person's own hours. Scoped to them and taken from the session, never an
