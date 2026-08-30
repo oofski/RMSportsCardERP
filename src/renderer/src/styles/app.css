@@ -4230,9 +4230,23 @@ tr.hoverable-row:hover {
 }
 /* Counters + the primary actions travel together, so on a narrow window they
    wrap to their own line as a block and stay right-aligned. */
+/* On a phone the four figures cannot hold one line. They wrap to two, and the
+   hairline has to be redrawn per ROW — a left border on every item but the
+   first would leave a stray line hanging at the start of the second row, and
+   one on the wrapped item would sit against the page edge. Halved padding
+   keeps four figures inside a 360px screen. */
 @media (max-width: 720px) {
-  .po-page-stats {
-    gap: 16px;
+  .po-page-stat {
+    padding: 2px 12px;
+    /* Two per row, so the pairs stay aligned instead of ragged. */
+    flex: 1 0 calc(50% - 12px);
+  }
+  .po-page-stat:nth-child(odd) {
+    padding-left: 0;
+    border-left: none;
+  }
+  .po-page-stat-val {
+    font-size: 16px;
   }
 }
 
@@ -12671,44 +12685,95 @@ button.sor-team:focus-visible {
    columns of cards. Nesting a card in a card added chrome and a gray caption
    without adding meaning, so the shell is gone and the page just flows.
    ------------------------------------------------------------------------ */
+/* THE PAGE HEADER, IN TWO BANDS RATHER THAN ONE CROWDED LINE.
+   Shared by the purchase board and the invoices board.
+
+   It used to be a single flex row — title, then counters pushed right by
+   margin-left:auto, then the buttons. That works with two counters and shows
+   its seams with four: the title, four figures and four buttons all sat on one
+   baseline at the same visual weight, three of the figures were money, and
+   nothing separated any of them. "$922.4K PAID" and "$944.8K BILLED THIS
+   MONTH" landed side by side with no divider — two similar numbers a reader
+   has to stop and disentangle, on the strip whose whole job is to be read at a
+   glance. Wrapping made it worse, not better: a counter would drop onto the
+   button row and read as a stray label beside them.
+
+   So the two bands are deliberate rather than whatever the width allowed.
+   Row one is IDENTITY AND ACTIONS — what page this is, what you can do on it.
+   Row two is THE NUMBERS, given their own line so they never compete with a
+   button for space. `flex-basis: 100%` is what forces that second row at every
+   width, so the layout is the same shape on a laptop and a wide monitor. */
 .po-page-head {
   display: flex;
   align-items: center;
-  gap: 12px;
+  column-gap: 12px;
+  row-gap: 14px;
   flex-wrap: wrap;
-  margin-bottom: 16px;
+  margin-bottom: 18px;
 }
 .po-page-head h2 {
   margin: 0;
-  font-size: 21px;
+  /* Bigger than the figures below it now, where before it was the same weight
+     and two pixels apart. The page's name should not have to compete with a
+     number for the eye. */
+  font-size: 23px;
   font-weight: 700;
   letter-spacing: -0.02em;
   color: var(--text);
+  /* Takes the slack so the actions sit hard right on the same line. */
+  margin-right: auto;
 }
-/* Pushes the counts and the actions to the right edge. */
 .po-page-stats {
+  order: 2;
+  flex-basis: 100%;
   display: flex;
-  align-items: center;
-  gap: 22px;
-  margin-left: auto;
+  align-items: stretch;
+  flex-wrap: wrap;
+  /* No column gap — the dividers and their padding do that job, and a gap on
+     top of them would leave the hairline floating between two voids. The ROW
+     gap matters only once the strip wraps, where without it the second row of
+     figures sits directly under the first row's labels and the four read as
+     one block. */
+  column-gap: 0;
+  row-gap: 12px;
 }
 .po-page-stat {
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
-  line-height: 1.15;
+  /* Left-aligned now the strip runs along the page rather than hugging the
+     right edge — a column of figures reads down its own left edge. */
+  align-items: flex-start;
+  justify-content: center;
+  line-height: 1.2;
+  padding: 2px 20px;
+  gap: 2px;
+}
+.po-page-stat:first-child {
+  padding-left: 0;
+}
+/* A HAIRLINE BETWEEN FIGURES, never before the first. This is the whole fix
+   for two similar money values reading as one number: the eye needs a wall,
+   and 22px of empty space was not one. */
+.po-page-stat + .po-page-stat {
+  border-left: 1px solid var(--border);
 }
 .po-page-stat-val {
-  font-size: 17px;
+  font-size: 18px;
   font-weight: 700;
   color: var(--text);
+  /* Every figure here is a number, so they all line up on their digits whether
+     or not the caller remembered the mono class. */
+  font-variant-numeric: tabular-nums;
 }
 .po-page-stat-label {
   font-size: 10.5px;
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--text-2);
+  /* One step quieter than the value it belongs to. The label names the figure;
+     it is not the figure. */
+  color: var(--text-3);
+  white-space: nowrap;
 }
 .po-page-empty {
   display: flex;
