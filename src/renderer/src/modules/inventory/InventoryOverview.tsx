@@ -26,6 +26,9 @@ import {
   type InventorySortRow,
   type SortState
 } from '@shared/inventorySort'
+import { countByPriceBand, matchesPriceBand } from '@shared/priceBands'
+import { SortTh } from '../../components/SortTh'
+import { PriceBandChips } from '../../components/PriceBandChips'
 import { countIdentifierGaps } from '@shared/identifiers'
 import { destinationSummary } from '@shared/purchaseOrders'
 import { receivableProgressOf } from '@shared/receiving'
@@ -1425,63 +1428,6 @@ function sortRowOf({ p, m }: { p: InventoryProduct; m: ProductMetrics }): Invent
   }
 }
 
-/**
- * A column header you can rank the table by.
- *
- * The arrow is always drawn, faint until the column is the one in use, because
- * an arrow that only appears on hover is a feature nobody finds. The whole
- * header is the button, so the target is the width of the column rather than a
- * 13px glyph.
- */
-function SortTh({
-  label,
-  sortKey,
-  sort,
-  onSort,
-  align = 'left'
-}: {
-  label: string
-  sortKey: string
-  sort: SortState
-  onSort: (key: string) => void
-  align?: 'left' | 'center' | 'right'
-}): JSX.Element {
-  const active = sort.key === sortKey
-  const dir = active ? sort.dir : null
-  const arrow = (
-    <Icon
-      name={dir === 'asc' ? 'ChevronUp' : dir === 'desc' ? 'ChevronDown' : 'ChevronsUpDown'}
-      size={13}
-      className="sort-arrow"
-    />
-  )
-  return (
-    <th
-      className={`sort-th sort-${align}${active ? ' sorted' : ''}`}
-      aria-sort={dir === 'asc' ? 'ascending' : dir === 'desc' ? 'descending' : 'none'}
-    >
-      <button
-        type="button"
-        className="sort-btn"
-        onClick={() => onSort(sortKey)}
-        title={
-          active
-            ? `Sorted by ${label}, ${dir === 'asc' ? 'lowest' : 'highest'} first — click to reverse`
-            : `Sort by ${label}`
-        }
-      >
-        {/* THE ARROW LEADS ON A MONEY COLUMN. Trailing it would push the
-            heading left by its own width and the heading would stop lining up
-            with the right-aligned figures under it — the same complaint the PO
-            card headers drew, one column over. */}
-        {align === 'right' && arrow}
-        <span className="sort-label">{label}</span>
-        {align !== 'right' && arrow}
-      </button>
-    </th>
-  )
-}
-
 function InventoryDetail({
   detail,
   refreshKey = 0,
@@ -1499,6 +1445,7 @@ function InventoryDetail({
   const [hover, setHover] = useState<{ data: ProductCardData; style: CSSProperties } | null>(null)
   const closeTimer = useRef<number | undefined>(undefined)
   const [sort, setSort] = useState<SortState>(() => defaultInventorySort(detail.kind))
+  const [band, setBand] = useState<string | null>(null)
 
   // A new drill-down arrives sorted by the figure ITS tile counts — see
   // defaultInventorySort. Carrying the previous view's column across would
@@ -1582,7 +1529,22 @@ function InventoryDetail({
     }
   }, [rows, detail])
 
-  const shown = useMemo(() => sortInventoryRows(filtered, sort, sortRowOf), [filtered, sort])
+  /**
+   * The band counts come off the drill-down's own list, BEFORE the band is
+   * applied, so a chip says how many rows a click would land on from inside
+   * whichever tile was opened. Counting the whole catalog here would promise
+   * products this table is not showing.
+   */
+  const bandCounts = useMemo(
+    () => countByPriceBand(filtered, (x) => (x.m.hasBid ? x.m.marketUnit : null)),
+    [filtered]
+  )
+  const banded = useMemo(
+    () => filtered.filter((x) => matchesPriceBand(x.m.hasBid ? x.m.marketUnit : null, band)),
+    [filtered, band]
+  )
+
+  const shown = useMemo(() => sortInventoryRows(banded, sort, sortRowOf), [banded, sort])
 
   const onSort = useCallback((key: string) => {
     setSort((cur) => nextSortState(cur, key))
@@ -1686,8 +1648,16 @@ function InventoryDetail({
         </div>
       </div>
 
+      {/* Outside the empty-state branch, so a band that filters everything away
+          still leaves its own chip on screen to click back off. */}
+      <PriceBandChips value={band} counts={bandCounts} onChange={setBand} label="Market value" />
+
       {shown.length === 0 ? (
-        <EmptyState icon="Boxes" title="Nothing to show here yet" />
+        <EmptyState
+          icon="Boxes"
+          title={band ? 'Nothing in that range' : 'Nothing to show here yet'}
+          message={band ? 'Click the chip again to clear the price filter.' : undefined}
+        />
       ) : (
         <>
           {/* The phone's version of the column headers. The stacked card layout

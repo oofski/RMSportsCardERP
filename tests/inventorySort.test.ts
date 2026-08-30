@@ -323,5 +323,167 @@ ok(
   'RE-RANKING BY ANOTHER COLUMN DOES NOT PULL IN A ROW THE VIEW EXCLUDED'
 )
 
+
+// ---------------------------------------------------------------------------
+console.log('\n=== N. price bands: the basic filter buttons ===')
+// ---------------------------------------------------------------------------
+/**
+ * The owner: "pricing range by category as well in inventory, just basic
+ * filtering buttons." Measured on the HIGH BID — market value, their answer
+ * when asked — and drawn identically on the Pricing tab, the Catalog and the
+ * on-hand Overview.
+ *
+ * Three screens sharing one predicate is the whole reason this is a module and
+ * not three arrays of numbers, so what is pinned here is the arithmetic that
+ * would let them disagree:
+ *
+ *   1. THE BANDS TILE THE LINE. `min` inclusive, `max` exclusive, so a box at
+ *      exactly $500 lands in one band — not two, and not none. A boundary
+ *      counted twice inflates a chip; counted zero times hides stock.
+ *   2. UNPRICED IS NOT ZERO. A product nobody has priced is not worth nothing,
+ *      and on a screen built for entering those numbers it is the most useful
+ *      filter there is. Folding it into "under $100" would bury the work.
+ *   3. NO BAND MEANS EVERYTHING. The chips toggle, and the un-clicked state has
+ *      to be the whole list rather than an empty one.
+ */
+const {
+  PRICE_BANDS,
+  matchesPriceBand,
+  countByPriceBand,
+  priceBandById
+} = require('../src/shared/priceBands')
+
+ok(matchesPriceBand(50, null) === true, 'no band selected lets everything through')
+ok(matchesPriceBand(null, null) === true, 'including the unpriced')
+
+// -- the boundaries, where a tiling error would show ------------------------
+ok(matchesPriceBand(99.99, 'under100') === true, '$99.99 is under $100')
+ok(matchesPriceBand(100, 'under100') === false, 'AND $100 IS NOT — max is exclusive')
+ok(matchesPriceBand(100, '100to500') === true, 'it belongs to the next band up, inclusively')
+ok(matchesPriceBand(499.99, '100to500') === true, 'which runs to just under 500')
+ok(matchesPriceBand(500, '100to500') === false, 'and stops there')
+ok(matchesPriceBand(500, '500to2000') === true, 'where the next one starts')
+ok(matchesPriceBand(1999.99, '500to2000') === true, 'running to just under 2000')
+ok(matchesPriceBand(2000, '500to2000') === false, 'and stopping')
+ok(matchesPriceBand(2000, 'over2000') === true, 'the top band is open-ended and starts at 2000')
+ok(
+  matchesPriceBand(999999, 'over2000') === true,
+  'WITH NO CEILING — a made-up one would drop the most valuable stock off the filter'
+)
+
+/**
+ * EVERY VALUE LANDS IN EXACTLY ONE NUMERIC BAND. Swept rather than spot-checked,
+ * because a tiling bug is exactly the kind that hides between the examples
+ * somebody thought to write down.
+ */
+const numericBands = PRICE_BANDS.filter((b: any) => !b.unpriced)
+let wrongCount = 0
+for (const v of [0, 0.01, 1, 99.99, 100, 250, 499.99, 500, 1200, 1999.99, 2000, 5000, 250000]) {
+  const hits = numericBands.filter((b: any) => matchesPriceBand(v, b.id)).length
+  if (hits !== 1) {
+    wrongCount += 1
+    console.log(`    value ${v} matched ${hits} bands`)
+  }
+}
+ok(wrongCount === 0, 'every price falls in exactly ONE band — the bands tile with no gap or overlap')
+
+// -- unpriced is its own answer, in both directions -------------------------
+ok(matchesPriceBand(null, 'unpriced') === true, 'null is unpriced')
+ok(matchesPriceBand(undefined, 'unpriced') === true, 'so is undefined')
+ok(matchesPriceBand(NaN, 'unpriced') === true, 'AND SO IS NaN — the cell shows a dash for all three')
+ok(matchesPriceBand(0, 'unpriced') === false, 'but a real zero is a price somebody entered')
+ok(
+  matchesPriceBand(null, 'under100') === false,
+  'AN UNPRICED PRODUCT IS NOT CHEAP — filing it under $100 would put stock nobody has valued in front of somebody who asked for the cheap ones'
+)
+ok(matchesPriceBand(NaN, 'under100') === false, 'and NaN is not cheap either')
+ok(matchesPriceBand(0, 'under100') === true, 'while a genuine $0 is')
+
+// -- the counts on the chips ------------------------------------------------
+const bandRows = [
+  { bid: null },
+  { bid: null },
+  { bid: 40 },
+  { bid: 250 },
+  { bid: 250 },
+  { bid: 1500 },
+  { bid: 9000 }
+]
+const counts = countByPriceBand(bandRows, (r: any) => r.bid)
+ok(counts.unpriced === 2, 'two unpriced', String(counts.unpriced))
+ok(counts.under100 === 1, 'one under a hundred', String(counts.under100))
+ok(counts['100to500'] === 2, 'two in the hundreds', String(counts['100to500']))
+ok(counts['500to2000'] === 1, 'one in the middle band', String(counts['500to2000']))
+ok(counts.over2000 === 1, 'one above two thousand', String(counts.over2000))
+ok(
+  Object.values(counts).reduce((a: any, b: any) => a + b, 0) === bandRows.length,
+  'AND THE COUNTS SUM TO THE LIST — nothing is counted twice and nothing is lost',
+  JSON.stringify(counts)
+)
+ok(
+  Object.keys(countByPriceBand([], (r: any) => r.bid)).length === PRICE_BANDS.length,
+  'an empty list still reports every band, so no chip vanishes from the row'
+)
+
+ok(priceBandById('nope') === null, 'an unknown id is no band')
+ok(matchesPriceBand(50, 'nope') === true, 'and therefore filters nothing, rather than everything')
+
+// ---------------------------------------------------------------------------
+console.log('\n=== N+1. sorting by when a product was last priced ===')
+// ---------------------------------------------------------------------------
+/**
+ * The Pricing tab's one column the on-hand table does not have. `lastPriced` is
+ * optional on the row for exactly that reason — a table with no such column
+ * must not be forced to invent a date.
+ *
+ * NEVER-PRICED SINKS IN BOTH DIRECTIONS, the same rule the money columns
+ * follow. `?? null` and not `?? ''` is what makes that true: an empty string is
+ * a real value that would sort below every date ascending and above none of
+ * them descending, so the rows the Pricing tab exists to surface would move
+ * depending on which way the arrow pointed.
+ */
+const priceRow = (name: string, at: string | null): any => ({
+  name,
+  unit: 'box',
+  quantity: 1,
+  byLocation: {},
+  highBid: 10,
+  invValue: 10,
+  avgCost: 5,
+  totalCost: 5,
+  spread: 5,
+  lastPriced: at
+})
+const priced = [
+  priceRow('Older', '2026-05-01T10:00:00.000Z'),
+  priceRow('Never', null),
+  priceRow('Newest', '2026-08-30T10:00:00.000Z')
+]
+const byRecent = sortInventoryRows(priced, { key: 'lastPriced', dir: 'desc' }, (r: any) => r)
+ok(byRecent[0].name === 'Newest', 'newest first when descending', byRecent[0].name)
+ok(byRecent[2].name === 'Never', 'and the never-priced sinks', byRecent[2].name)
+
+const byOldest = sortInventoryRows(priced, { key: 'lastPriced', dir: 'asc' }, (r: any) => r)
+ok(byOldest[0].name === 'Older', 'oldest first when ascending', byOldest[0].name)
+ok(
+  byOldest[2].name === 'Never',
+  'AND THE NEVER-PRICED STILL SINKS — missing is missing whichever way the arrow points',
+  byOldest[2].name
+)
+
+ok(
+  firstSortDir('lastPriced') === 'desc',
+  'the column opens on the most recent, like the other figures'
+)
+ok(
+  inventorySortValue({ ...priceRow('x', null) }, 'lastPriced') === null,
+  'a row that never carried a date reads as missing, not as an empty string'
+)
+ok(
+  inventorySortValue({ name: 'y', unit: '', quantity: 0, byLocation: {} } as any, 'lastPriced') ===
+    null,
+  'and a table that omits the field entirely sorts every row as missing rather than crashing'
+)
+
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail > 0) process.exit(1)

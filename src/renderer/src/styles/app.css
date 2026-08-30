@@ -322,6 +322,69 @@ table.data tbody tr:hover {
   letter-spacing: 0.01em;
 }
 
+/* ---------------------------------------------------------------------------
+   SCROLLBARS, once, for everything that scrolls.
+
+   The app styled exactly one scrollbar — the module carousel — and left every
+   other scrolling region on the platform default. On Windows that is a wide
+   grey trough with square buttons, drawn at full contrast, sitting inside
+   modals and tables that are otherwise soft-edged and light. Four of them can
+   be on screen at once (a modal, its table, a lane, the page), each one a
+   heavier line than any real border in the design, and every one of them a
+   different width from the app's own rhythm.
+
+   ## Overlay, not inset
+
+   `background: transparent` on the track means the bar floats over the content
+   rather than reserving a channel beside it, so a table does not lose 15px of
+   its last column to a groove. The thumb is the only thing drawn.
+
+   ## Visible at rest
+
+   Deliberately NOT a bar that fades in on hover. A scrollbar is the only thing
+   on screen that says how much MORE there is, and hiding it until somebody is
+   already scrolling answers the question after it stops being asked. It is
+   quiet — a hairline of --border-strong — not absent.
+
+   ## Only where something actually scrolls
+
+   These rules attach to elements, not to a class, so any region that gains
+   overflow inherits them; a region that does not overflow draws nothing at
+   all, because the browser only paints a scrollbar when there is one.
+   --------------------------------------------------------------------------- */
+* {
+  /* Firefox. Two keywords is the whole API there, so the colours are named
+     from the same tokens the WebKit rules below use. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background-color: var(--border-strong);
+  border-radius: 999px;
+  /* The border is transparent and clips to the padding box, which insets the
+     visible thumb to ~6px inside a 10px gutter. Doing it with a border rather
+     than a narrower scrollbar keeps the HIT AREA the full 10px — a 6px target
+     is a scrollbar that is nice to look at and hard to grab. */
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--text-3);
+}
+/* The little square where a vertical and a horizontal bar meet. Left at the
+   default it renders as a hard grey block in the corner of every table that
+   scrolls both ways. */
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 /* Avatar */
 .avatar {
   width: 34px;
@@ -28726,4 +28789,91 @@ button.sor-team:focus-visible {
 .hist-went-none {
   color: var(--text-3);
   font-style: italic;
+}
+
+/* ---------------------------------------------------------------------------
+   PRICE BAND CHIPS — the basic filter buttons on the three inventory screens.
+
+   Deliberately the same object on all three (Pricing, Catalog, on-hand
+   Overview): one component, one set of styles, so "Under $100" is the same
+   control wherever somebody meets it. See components/PriceBandChips.
+   --------------------------------------------------------------------------- */
+.band-chips {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 14px;
+}
+.band-chips-label {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  margin-right: 2px;
+}
+.band-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-1);
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background-color 0.12s ease,
+    border-color 0.12s ease,
+    color 0.12s ease;
+}
+.band-chip:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+/* The count rides inside the chip on its own quieter ground, so the number
+   reads as a quantity attached to the label rather than as part of it —
+   "$100 – $499" and "12" are two different facts sharing one button. */
+.band-chip-n {
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+  background: var(--surface-2);
+  border-radius: 999px;
+  padding: 2px 6px;
+  min-width: 20px;
+  text-align: center;
+}
+.band-chip.is-on {
+  background: var(--brand-soft);
+  border-color: var(--brand-600);
+  color: var(--brand-600);
+  font-weight: 600;
+}
+.band-chip.is-on .band-chip-n {
+  background: var(--brand-600);
+  color: #fff;
+}
+/* Empty bands stay in the row rather than disappearing — a row of chips that
+   changes length as you type is one whose buttons move under the cursor. */
+.band-chip:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+@media (max-width: 720px) {
+  .band-chips {
+    /* One line that scrolls beats five chips wrapping into three rows and
+       pushing the table off the screen. */
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 4px;
+  }
+  .band-chip {
+    flex: 0 0 auto;
+  }
 }
