@@ -681,5 +681,115 @@ ok(
   'and cancelled is not, however unpaid it is'
 )
 
+
+// ---------------------------------------------------------------------------
+console.log('\n=== N+1. the Open / Unpaid tile on the purchase board ===')
+// ---------------------------------------------------------------------------
+/**
+ * The owner, looking straight at the board: "the number that is unpaid is not
+ * reflective — on the PO side it should reflect the amount of money that is
+ * left open regardless of what deal stage this is."
+ *
+ * The header tile filtered on the STAGE — `status === 'ordered' || 'paid'` —
+ * and was wrong in both directions at once, visibly, on one screen:
+ *
+ *   · RECEIVED WAS MISSING. Six orders sat in the Received column, every card
+ *     wearing an "Unpaid" chip, and the tile above them left all six out. The
+ *     screen contradicted itself in a single glance.
+ *   · 'PAID' WAS COUNTED IN. That column means the supplier has been settled
+ *     with, so counting it says the business owes what it has already paid.
+ *
+ * This reproduces the owner's actual board — six ordered, six received and
+ * unpaid, one paid — and pins the figure the tile must show. Fixing
+ * `payables()` on the owner's home board did NOT fix this one; they were two
+ * copies of the same filter, which is why both now read `purchaseOrderIsOwed`.
+ */
+const tileProduct = inventory.createProduct(
+  {
+    name: 'Board Tile Test Box',
+    category: 'Baseball',
+    sku: `OB${++sku}`,
+    upc: null,
+    brand: '',
+    setName: '',
+    year: '',
+    unitType: 'box',
+    boxesPerCase: null,
+    packsPerBox: null,
+    giveawayItem: false,
+    unitCost: 10,
+    highBid: null,
+    salePrice: 0,
+    reorderPoint: 0,
+    notes: null
+  },
+  null
+)
+const tileOrder = (supplier: string, price: number): any =>
+  po.createPurchaseOrder(
+    {
+      supplier,
+      notes: null,
+      location: 'RM',
+      lines: [{ productId: tileProduct.id, quantity: 1, unitPrice: price }]
+    },
+    null
+  )
+
+// Wipe the slate so the arithmetic below is the owner's board and nothing else.
+for (const existing of po.listPurchaseOrders()) {
+  po.forceDeletePurchaseOrder(existing.id, null)
+}
+
+// The ORDERED column, from the screenshot.
+const orderedAmounts = [46992, 25000, 7815, 33650, 15630, 16570]
+orderedAmounts.forEach((amount, i) => tileOrder(`Ordered Supply ${i}`, amount))
+
+// The RECEIVED column — every card marked Unpaid.
+const receivedAmounts = [20475, 40750, 23410, 4733.4, 9690, 19910]
+for (const [i, amount] of receivedAmounts.entries()) {
+  const made = tileOrder(`Received Supply ${i}`, amount)
+  po.receivePurchaseOrderLines(made.id, [{ lineId: made.lines[0].id, quantity: 1 }], null)
+}
+
+// And one genuinely settled, which must NOT count however it is staged.
+const settledOrder = tileOrder('Settled Supply', 99999)
+po.setPurchaseOrderPaid(settledOrder.id, true, null)
+
+/**
+ * The tile's own arithmetic, lifted from InvoicingModule so the assertion is
+ * about the rule and not about React. If these two ever drift the board is
+ * wrong again — which is exactly what happened the first time.
+ */
+const boardPos = po.listPurchaseOrders()
+const openOnBoard = boardPos.filter((p: any) => purchaseOrderIsOwed(p))
+const unpaidOnBoard = openOnBoard.reduce((n: number, p: any) => n + p.total, 0)
+
+ok(
+  openOnBoard.length === 12,
+  'THE OPEN COUNT IS 12, not 6 — the six received-and-unpaid orders are open money too',
+  String(openOnBoard.length)
+)
+ok(
+  Math.abs(unpaidOnBoard - 264625.4) < 0.005,
+  'AND THE FIGURE IS $264,625.40. The tile showed $145,657 — the Ordered column ' +
+    'alone — hiding $118,968.40 of bills on stock already sitting on the shelf',
+  String(unpaidOnBoard)
+)
+ok(
+  !openOnBoard.some((p: any) => p.supplier === 'Settled Supply'),
+  'and the settled order is out of both, though nothing moved its card'
+)
+
+// The old rule, kept here as the thing that must never come back.
+const byOldRule = boardPos.filter((p: any) => p.status === 'ordered' || p.status === 'paid')
+ok(
+  byOldRule.reduce((n: number, p: any) => n + p.total, 0) > unpaidOnBoard - 118968.4 - 1 &&
+    byOldRule.length === 7,
+  'THE OLD STAGE FILTER RETURNS A DIFFERENT SET — 7 orders including the paid one, ' +
+    'which is what made the tile disagree with the chips on the cards beneath it',
+  `${byOldRule.length} orders`
+)
+
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

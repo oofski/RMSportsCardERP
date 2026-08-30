@@ -2348,5 +2348,62 @@ const negOverIpc = viaChannel('invoices:set-shipping-cost', {
 })
 ok(negOverIpc?.ok === false, 'a negative is turned down at the door, with a reason', String(negOverIpc?.error))
 
+
+/**
+ * HOW MANY, beside HOW MUCH — the Open tile, now on the sell side too.
+ *
+ * The owner: "I like the open, just make sure it is on the SO side too."
+ * The purchase board has always led with a count and this one led with money,
+ * so the two halves of one question — who still owes us, who do we still owe —
+ * could not be read the same way.
+ *
+ * Counted off the SAME predicate as the figure beside it, which is the point:
+ * a count and a total that disagree about which orders they cover is how the
+ * purchase board came to contradict its own cards.
+ */
+const countBefore = repo.invoiceStats()
+ok(
+  countBefore.owedCount ===
+    repo.listInvoices().filter((i: any) => invoiceIsOwed(i)).length,
+  'the Open count agrees with the shared predicate over the whole table',
+  `${countBefore.owedCount} vs ${repo.listInvoices().filter((i: any) => invoiceIsOwed(i)).length}`
+)
+
+const countedSale = mkSale('9104', 250)
+const afterOne = repo.invoiceStats()
+ok(
+  afterOne.owedCount === countBefore.owedCount + 1,
+  'a new sale adds one to Open — a draft is money not yet in, whatever stage it stands in',
+  `${countBefore.owedCount} -> ${afterOne.owedCount}`
+)
+ok(
+  Math.abs(afterOne.outstanding - (countBefore.outstanding + 250)) < 0.005,
+  'and its total joins the figure beside it',
+  String(afterOne.outstanding)
+)
+
+repo.setInvoicePaid(countedSale.id, true, 'emp_owner')
+const afterPaid = repo.invoiceStats()
+ok(
+  afterPaid.owedCount === countBefore.owedCount,
+  'paying it takes it off the count',
+  `${afterOne.owedCount} -> ${afterPaid.owedCount}`
+)
+ok(
+  Math.abs(afterPaid.outstanding - countBefore.outstanding) < 0.005,
+  'AND OFF THE FIGURE, together — the count and the money must never describe ' +
+    'two different sets of orders',
+  String(afterPaid.outstanding)
+)
+
+const voidedForCount = mkSale('9105', 400)
+db.prepare('UPDATE invoices SET qbo_voided = 1 WHERE id = ?').run(voidedForCount.id)
+const afterVoidCount = repo.invoiceStats()
+ok(
+  afterVoidCount.owedCount === countBefore.owedCount,
+  'and a sale voided in QuickBooks is in neither, the same rule the money follows',
+  `${afterVoidCount.owedCount} vs ${countBefore.owedCount}`
+)
+
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

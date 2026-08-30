@@ -4819,6 +4819,7 @@ export function invoiceStats(): {
   sent: number
   paid: number
   outstanding: number
+  owedCount: number
   paidTotal: number
   thisMonth: number
 } {
@@ -4880,10 +4881,21 @@ export function invoiceStats(): {
    * settles it, and everything else is owed in every column — drafts included,
    * because the figure is meant to hold whatever stage a sale is standing in.
    */
-  const outstanding = sumWhere(
-    `status != 'void' AND COALESCE(qbo_voided, 0) != 1
+  const OWED_SQL = `status != 'void' AND COALESCE(qbo_voided, 0) != 1
        AND paid_at IS NULL AND qbo_paid_at IS NULL`
-  )
+  const outstanding = sumWhere(OWED_SQL)
+  /**
+   * HOW MANY sales are still owed, beside how much.
+   *
+   * The mirror of the Open tile on the purchase board, counted off the same
+   * predicate as the money beside it so the two can never describe different
+   * sets of orders. A count answers "how many people do I have to chase",
+   * which is a different question from "how much", and the buy side has
+   * always been able to answer it.
+   */
+  const owedCount = (
+    getDb().prepare(`SELECT COUNT(*) AS n FROM invoices WHERE ${OWED_SQL}`).get() as { n: number }
+  ).n
 
   const month = new Date().toISOString().slice(0, 7)
   const thisMonth = (
@@ -4901,6 +4913,7 @@ export function invoiceStats(): {
     sent: count('sent'),
     paid: count('paid'),
     outstanding: money(outstanding),
+    owedCount,
     paidTotal: money(paidTotal),
     thisMonth: money(thisMonth)
   }

@@ -82,6 +82,7 @@ export function InvoicesBoard({
     sent: 0,
     paid: 0,
     outstanding: 0,
+    owedCount: 0,
     paidTotal: 0,
     thisMonth: 0
   })
@@ -408,6 +409,16 @@ export function InvoicesBoard({
       <div className="po-page-head">
         <h2>Invoices</h2>
         <div className="po-page-stats">
+          {/* OPEN, first and in the same place as the buy side.
+              The purchase board has always led with a count and this led with
+              money, so the two halves of the same question — who still owes
+              us, who do we still owe — could not be read the same way. Counted
+              off the same predicate as the figure beside it, so the pair can
+              never describe different sets of orders. */}
+          <div className="po-page-stat">
+            <span className="po-page-stat-val">{stats.owedCount}</span>
+            <span className="po-page-stat-label">Open</span>
+          </div>
           <div className="po-page-stat">
             <span className="po-page-stat-val mono">
               {formatMoney(stats.outstanding, { compact: true })}

@@ -1801,7 +1801,10 @@ export function createBridge(ipcRenderer: BridgeTransport) {
         created: number
         sent: number
         paid: number
+        /** What is still owed us, in every stage. See invoiceIsOwed. */
         outstanding: number
+        /** How many orders that figure is spread across. */
+        owedCount: number
         paidTotal: number
         thisMonth: number
       }> => ipcRenderer.invoke(IPC.invoiceStats),
