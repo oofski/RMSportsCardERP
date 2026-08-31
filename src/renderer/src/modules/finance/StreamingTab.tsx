@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { LIVE, useLiveRefresh } from '../../lib/live'
 import type { StreamingFinanceView, WhatnotRatePeriod } from '@shared/financeStreaming'
+import { describeImportStanding, importStanding } from '@shared/financeStreaming'
 import { reconInRange, reconRows, reconTotals } from '@shared/pnlRecon'
-import { Button, CenterLoader } from '../../components/ui'
+import { Icon } from '../../components/Icon'
+import { compactDayLabel } from './time'
+import { Button, CenterLoader, EmptyState } from '../../components/ui'
 import { useSession } from '../../lib/session'
 import { Money, Note } from './bits'
 import { Expenses } from './Expenses'
 import { FinanceCalendar } from './FinanceCalendar'
-import { ImportPanel } from './ImportPanel'
-import { Provenance } from './Provenance'
 import { RangeBar } from './RangeBar'
 import { RangeStatement } from './Statement'
 import { RangeWidgets } from './Widgets'
@@ -111,6 +112,13 @@ export function StreamingTab(): JSX.Element {
   useLiveRefresh(LIVE.finance, () => setAttempt((n) => n + 1))
 
   const applyView = useCallback((next: StreamingFinanceView) => setView(next), [])
+
+  /**
+   * The one line that survives the move to Admin. Built from the same function
+   * the Admin tile uses, so a pointer promising nothing is wrong can never sit
+   * above a tile listing four unreadable rows.
+   */
+  const standing = useMemo(() => importStanding(view?.imports ?? []), [view?.imports])
 
   /**
    * How much of the money on screen was priced at terms NOBODY CHOSE.
@@ -260,13 +268,27 @@ export function StreamingTab(): JSX.Element {
 
   const { imports } = view
 
-  // Nothing has ever been uploaded. The upload is the only thing anyone can do
-  // here, so it gets the page to itself rather than sitting under four empty
-  // panels explaining what they would say if it had.
+  /**
+   * Nothing has ever been uploaded.
+   *
+   * This used to BE the uploader — the panel had the page to itself, because
+   * uploading was the only thing anyone could do here. Now that uploading lives
+   * in Admin, the empty state has to say where it went: a tab that goes blank
+   * with no way forward is worse than the four empty panels the old comment was
+   * arguing against.
+   */
   if (imports.length === 0) {
     return (
       <div className="fin-stream">
-        <ImportPanel imports={imports} canManage={canManage} onView={applyView} />
+        <EmptyState
+          icon="Upload"
+          title="No ledger has been uploaded yet"
+          message={
+            canManage
+              ? 'Upload Whatnot’s export in Admin → Ledger, and every figure on this tab appears.'
+              : 'Once somebody uploads Whatnot’s export in Admin → Ledger, this tab fills in.'
+          }
+        />
       </div>
     )
   }
@@ -365,7 +387,20 @@ export function StreamingTab(): JSX.Element {
           and this is about a number that came from a person. */}
       <Expenses range={range} canManage={canManage} onView={applyView} />
 
-      <Provenance view={view} canManage={canManage} onView={applyView} />
+      {/* WHERE THE NUMBERS CAME FROM, in one line.
+          The upload box and the import history moved to Admin, so this tab is
+          about the money. But a screen reporting revenue must not go silent
+          about a reason its revenue could be wrong, so the line stays and says
+          plainly when something needs a person — see importStanding, which the
+          Admin tile is built from too, so the two cannot disagree. */}
+      <p className={`fin-imports-note${standing.needsAttention ? ' needs-attention' : ''}`}>
+        <Icon name={standing.needsAttention ? 'AlertTriangle' : 'Upload'} size={14} />
+        <span>
+          {describeImportStanding(standing)}
+          {standing.lastImportAt ? `, last on ${compactDayLabel(standing.lastImportAt.slice(0, 10))}` : ''}
+          . Uploading and import history are in <b>Admin → Ledger</b>.
+        </span>
+      </p>
     </div>
   )
 }

@@ -526,5 +526,66 @@ console.log('\n=== 6. the identity survives every rate and every scope ===')
   )
 }
 
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 10. the one line Streaming keeps after the panels moved ===')
+// ---------------------------------------------------------------------------
+/**
+ * The upload box and the import history moved to Admin, on the owner's ask that
+ * an upload should just land rather than sit on the screen that reports the
+ * money. Streaming keeps a single line — and BOTH that line and the Admin tile
+ * are built from `importStanding`, so the two cannot describe the same imports
+ * differently. A pointer saying all is well above a tile listing four unreadable
+ * rows is the failure this shares one function to prevent.
+ */
+{
+  const { describeImportStanding, importStanding } = require('../src/shared/financeStreaming')
+  const imp = (over: any = {}): any => ({
+    id: 'i', filename: 'ledger.csv', rowsParsed: 100, rowsImported: 100,
+    rowsDuplicate: 0, rowsRepaired: 0, rowsQuarantined: 0, attributedRows: 100,
+    unattributedRows: 0, unattributedAmount: 0, firstOccurredAt: null,
+    lastOccurredAt: null, warnings: [], createdAt: '2026-08-01T00:00:00.000Z',
+    createdBy: null, ...over
+  })
+
+  const none = importStanding([])
+  ok(none.importCount === 0 && none.lastImportAt === null, 'no imports reads as none')
+  ok(!none.needsAttention, 'AND IS NOT AN ALARM — an empty state is not a problem')
+  ok(
+    describeImportStanding(none) === 'No ledger has been uploaded yet',
+    'and says so in words a person can act on',
+    describeImportStanding(none)
+  )
+
+  const clean = importStanding([imp({ createdAt: '2026-08-01T00:00:00.000Z' }), imp({ id: 'j', rowsImported: 50, createdAt: '2026-08-09T00:00:00.000Z' })])
+  ok(clean.importCount === 2 && clean.rowsImported === 150, 'rows are summed across every import', JSON.stringify(clean))
+  ok(
+    clean.lastImportAt === '2026-08-09T00:00:00.000Z',
+    'THE NEWEST UPLOAD IS THE ONE NAMED, whatever order the list arrived in',
+    String(clean.lastImportAt)
+  )
+  ok(!clean.needsAttention, 'a clean pair of imports stays quiet')
+
+  const cut = importStanding([imp({ rowsQuarantined: 4 })])
+  ok(
+    cut.needsAttention,
+    'QUARANTINED ROWS RAISE IT — those are rows no parser could read, which is ' +
+      'money missing from the P&L rather than a cosmetic complaint'
+  )
+  ok(
+    describeImportStanding(cut).includes('4 rows could not be read'),
+    'and they are named separately from the rows that landed, never added to them',
+    describeImportStanding(cut)
+  )
+
+  const warned = importStanding([imp({ warnings: ['A vacuuming session'] })])
+  ok(warned.needsAttention && warned.withWarnings === 1, 'so does a warning on an import')
+  ok(
+    describeImportStanding(importStanding([imp()])) === '1 upload · 100 rows',
+    'and a single healthy import is one short sentence with no alarm in it',
+    describeImportStanding(importStanding([imp()]))
+  )
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail > 0) process.exit(1)

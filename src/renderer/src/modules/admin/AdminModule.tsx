@@ -14,6 +14,7 @@ import { ActivityTab } from './ActivityTab'
 import { DeveloperTab } from './DeveloperTab'
 import { NumberingTab } from './NumberingTab'
 import { BackupTab } from './BackupTab'
+import { LedgerTab } from './LedgerTab'
 
 type SectionId =
   | 'employees'
@@ -23,6 +24,7 @@ type SectionId =
   | 'roles'
   | 'activity'
   | 'numbering'
+  | 'ledger'
   | 'backup'
   | 'developer'
 
@@ -259,6 +261,19 @@ export function AdminModule(): JSX.Element {
       count: null,
       hint: 'Where deal tickets, invoices and POs start'
     },
+    // WHERE THE FINANCE FIGURES COME FROM. Moved off Finance -> Streaming, on
+    // the owner's ask that an upload should just land and the housekeeping live
+    // somewhere else. Streaming answers "what did we make"; this answers "where
+    // did that come from and did anything go wrong getting it here" — the same
+    // person in a different mood, and only one of those is a weekly question.
+    {
+      id: 'ledger',
+      label: 'Ledger',
+      icon: 'Upload',
+      visible: can('module.finance'),
+      count: null,
+      hint: 'Upload the Whatnot export, and every import before it'
+    },
     // THE OWNER'S INSURANCE POLICY. Its own tile rather than a corner of
     // Developer, on the argument the reset card makes one screen over:
     // somebody taking a backup is worrying about their business, not doing
@@ -325,6 +340,7 @@ export function AdminModule(): JSX.Element {
         {open.id === 'roles' && <RolesTab employees={employees} onChanged={loadEmployees} />}
         {open.id === 'activity' && <ActivityTab />}
         {open.id === 'numbering' && <NumberingTab />}
+        {open.id === 'ledger' && <LedgerTab />}
         {open.id === 'backup' && <BackupTab />}
         {open.id === 'developer' && <DeveloperTab />}
       </div>

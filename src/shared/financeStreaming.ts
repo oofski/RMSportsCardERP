@@ -768,6 +768,96 @@ export interface LedgerImport {
   createdBy: string | null
 }
 
+/**
+ * WHERE THE IMPORTS STAND, in the few facts a person acts on.
+ *
+ * The uploading and the import history moved off the Streaming tab and into
+ * Admin, on the owner's ask: "when the ledger gets uploaded and data is there I
+ * just want it to be there ... it should be just sent there and not in the
+ * streaming tab". Streaming is now about the money.
+ *
+ * But a screen that reports revenue must never go quiet about a reason its
+ * revenue might be wrong. So Streaming keeps one line, and this is what both
+ * that line and the Admin tile are built from — ONE function, so the two can
+ * never describe the same imports differently. A pointer saying everything is
+ * fine while the tile it points at says four rows could not be read is worse
+ * than having no pointer at all.
+ *
+ * `needsAttention` is the whole point of the type. It is deliberately NOT "are
+ * there any imports" or "is anything unusual": it is the narrow question of
+ * whether a human has something to do, so that the quiet state stays genuinely
+ * quiet and the loud one is believed when it comes.
+ */
+export interface ImportStanding {
+  importCount: number
+  /** The newest upload's timestamp, for the caller to format. */
+  lastImportAt: string | null
+  lastFilename: string | null
+  /** Rows that actually landed, across every import. */
+  rowsImported: number
+  /**
+   * Rows no parser could read, kept verbatim rather than dropped.
+   *
+   * The one figure here that is unambiguously money missing from the P&L, which
+   * is why it alone can raise `needsAttention` on an otherwise healthy import.
+   */
+  quarantined: number
+  /** Imports carrying a warning worth reading. */
+  withWarnings: number
+  needsAttention: boolean
+}
+
+export function importStanding(imports: readonly LedgerImport[]): ImportStanding {
+  const list = [...(imports ?? [])].sort((a, b) =>
+    String(a.createdAt) < String(b.createdAt) ? 1 : -1
+  )
+  const newest = list[0] ?? null
+  let rowsImported = 0
+  let quarantined = 0
+  let withWarnings = 0
+  for (const i of list) {
+    rowsImported += Number(i.rowsImported) || 0
+    quarantined += Number(i.rowsQuarantined) || 0
+    if ((i.warnings?.length ?? 0) > 0) withWarnings += 1
+  }
+  return {
+    importCount: list.length,
+    lastImportAt: newest?.createdAt ?? null,
+    lastFilename: newest?.filename ?? null,
+    rowsImported,
+    quarantined,
+    withWarnings,
+    needsAttention: quarantined > 0 || withWarnings > 0
+  }
+}
+
+/**
+ * The standing as one sentence, with no date in it.
+ *
+ * The date is left to the caller because the two screens format it differently
+ * — one wants "12 Aug", the other a full instant — and a sentence carrying a
+ * pre-formatted date would force one of them to take the other's.
+ */
+export function describeImportStanding(s: ImportStanding): string {
+  if (s.importCount === 0) return 'No ledger has been uploaded yet'
+  const parts = [
+    `${s.importCount.toLocaleString()} ${s.importCount === 1 ? 'upload' : 'uploads'}`,
+    `${s.rowsImported.toLocaleString()} ${s.rowsImported === 1 ? 'row' : 'rows'}`
+  ]
+  // Named separately rather than folded into the row count: these are rows that
+  // did NOT land, and adding them to a total of rows that did is how a number
+  // stops meaning anything.
+  if (s.quarantined > 0) {
+    parts.push(
+      `${s.quarantined.toLocaleString()} ${s.quarantined === 1 ? 'row' : 'rows'} could not be read`
+    )
+  }
+  if (s.withWarnings > 0) {
+    parts.push(`${s.withWarnings} with warnings`)
+  }
+  return parts.join(' · ')
+}
+
 /** A row that could not be parsed at all. Kept verbatim — never dropped, because
  *  a silently missing row is money that vanished with no trace. */
 export interface LedgerQuarantine {

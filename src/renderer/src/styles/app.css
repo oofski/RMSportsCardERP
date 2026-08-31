@@ -28897,6 +28897,45 @@ button.sor-team:focus-visible {
 }
 
 /* ---------------------------------------------------------------------------
+   WHERE THE NUMBERS CAME FROM — one line, at the foot of the Streaming tab.
+
+   The upload box and the import history moved to Admin, and this is what is left
+   in their place. Deliberately a line of prose rather than a card: a card would
+   be the fourth panel on a tab whose whole point was to stop being a place where
+   maintenance happens, and the move would have bought nothing.
+
+   It turns amber ONLY when a person actually has something to do — quarantined
+   rows or a warning. A pointer that looks urgent every time it is read stops
+   being read, and then the one time it matters goes unnoticed too.
+   --------------------------------------------------------------------------- */
+.fin-imports-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 18px 0 4px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+.fin-imports-note svg {
+  flex: none;
+  margin-top: 2px;
+}
+.fin-imports-note b {
+  color: var(--text-2);
+  font-weight: 600;
+}
+.fin-imports-note.needs-attention {
+  color: var(--text-2);
+}
+.fin-imports-note.needs-attention svg {
+  color: var(--warning);
+}
+.fin-imports-note.needs-attention b {
+  color: var(--text);
+}
+
+/* ---------------------------------------------------------------------------
    BACKUP — the owner's copy of the database.
 
    Deliberately plain. This screen is opened by somebody who is worried about
