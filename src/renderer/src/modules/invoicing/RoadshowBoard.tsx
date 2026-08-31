@@ -3,6 +3,7 @@ import type { PurchaseOrder } from '@shared/types'
 import type { StockAtLocationRow } from '@shared/availability'
 import { ROADSHOW_SHOPS, emptyShelfNote } from '@shared/roadshowTab'
 import { api } from '../../lib/api'
+import { LIVE, useLiveRefresh } from '../../lib/live'
 import { Icon } from '../../components/Icon'
 import { Button, CenterLoader } from '../../components/ui'
 import { useToast } from '../../components/Toast'
@@ -73,6 +74,25 @@ export function RoadshowBoard(): JSX.Element {
   useEffect(() => {
     void load()
   }, [load])
+
+  /**
+   * IT REPAINTS WHEN THE FACTS MOVE, which every other board here already did.
+   *
+   * This one read once on mount and then only after its own Add — so a price
+   * filled in on the purchase order, a case sold at the counter, or anything a
+   * second laptop did left the columns showing what was true when the screen was
+   * opened. On a Saturday that is the whole point of the board: two people are
+   * buying and selling out of the same four shelves at once, and the one staring
+   * at this screen was the one with the stale numbers.
+   *
+   * BOTH families, because the card is two different facts. The columns are the
+   * SHELVES (inventory) and the footer is the TAB (purchasing), and watching one
+   * would leave the other half of every card stale — which reads as the two
+   * disagreeing rather than as one of them being old.
+   */
+  useLiveRefresh([...LIVE.purchasing, ...LIVE.inventory], () => {
+    void load()
+  })
 
   /**
    * The open tab for each shop, folded for case.
