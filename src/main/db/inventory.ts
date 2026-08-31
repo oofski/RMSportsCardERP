@@ -1387,6 +1387,30 @@ export function inventoryStats(): InventoryStats {
   // box is market value the Spread is leaving out, while an uncosted case is
   // market value the Spread is still counting as profit. One list, two
   // sentences. Ordered by how much money each is carrying either way.
+  //
+  // EXCEPT STOCK THAT IS ONLY ON A ROADSHOW SHELF. The owner: "if something is
+  // from the roadshow and doesn't have the price it does not need to have
+  // anything weird in there ... it can just be shown as 0 ... it is fine".
+  //
+  // That is right, and it is a statement about what this list IS. A roadshow
+  // week buys and sells against itself for days before anybody knows what a case
+  // cost; carrying it at zero in the meantime is the ordinary state of a shop
+  // that is still running, not a number somebody forgot. This list is a work
+  // queue — the fix is "put the real cost on the product" — and a queue that is
+  // permanently full of rows nobody should act on is a queue that stops being
+  // read, taking the genuinely wrong ones down with it.
+  //
+  // ONLY THE LIST. `outsideSpreadValue` and the Spread tile are untouched,
+  // because `totalValue − totalCost = spread + outsideSpreadValue` is an exact
+  // identity across three tiles and filtering one side of it would make them
+  // stop reconciling — the very failure that field exists to prevent. So the
+  // tile goes on counting this money and the banner stops naming it; see the
+  // note on `outsideSpreadValue` in @shared/types, which says so.
+  //
+  // The LIKE duplicates `isRoadshowLocation` in @shared/inventory, which is the
+  // source of truth and matches the same way (case-insensitive, anywhere in the
+  // name). It is restated here for the same reason the RM/AM test is restated in
+  // po_unit_destinations: SQL cannot call it.
   const zeroCost = (
     db
       .prepare(
@@ -1394,6 +1418,11 @@ export function inventoryStats(): InventoryStats {
            FROM (${PRODUCT_TOTALS}) t
            JOIN inventory_products p ON p.id = t.id
           WHERE t.qty > 0 AND t.cost_value <= 0
+            AND EXISTS (
+              SELECT 1 FROM inventory_stock st
+               WHERE st.product_id = t.id AND st.quantity > 0
+                 AND st.location NOT LIKE '%roadshow%'
+            )
           ORDER BY market_value DESC`
       )
       .all() as Array<{

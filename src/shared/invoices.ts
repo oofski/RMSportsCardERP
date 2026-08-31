@@ -2865,6 +2865,31 @@ export interface WholesaleSaleRow {
   margin: number
   /** False for a pre-v68 line, whose layers cannot be recovered. */
   costKnown: boolean
+  /**
+   * THE COST IS KNOWABLE AND NOBODY HAS SAID IT YET — a roadshow case sold
+   * before the shop gave a price.
+   *
+   * A third state, and it has to be its own. `costKnown` false means the layers
+   * are gone and no figure will ever arrive; this means the layer is right there
+   * with a placeholder zero on it, waiting for somebody to type the number into
+   * the tab. Folding the two together would either give up on money that is
+   * still coming, or report a 100% margin on a case that plainly cost something.
+   *
+   * Left out of the priced totals for exactly the reason the legacy rows are:
+   * a cost of nothing counted as a cost is the one failure a finance screen must
+   * not have. Unlike those, this one CLEARS ITSELF — pricing the tab line
+   * re-costs the layer and this sale with it (see restateConsumedCost), and the
+   * row joins the totals with a real margin.
+   */
+  costPending: boolean
+  /**
+   * The tab to go and price, when `costPending`. Null otherwise.
+   *
+   * Named rather than counted, on the same reasoning as the roadshow board's
+   * footer: "PO-0452" is something somebody can go and open, and "an unpriced
+   * purchase order" is not.
+   */
+  pendingPoNumber: string | null
 }
 
 // ---------------------------------------------------------------------------

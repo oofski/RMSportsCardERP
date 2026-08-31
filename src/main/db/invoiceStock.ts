@@ -428,6 +428,25 @@ export function applyInvoiceStock(
  * knowable from here. `cost_total` is 0, so the row reports its revenue and a
  * margin equal to it. Flagged rather than hidden — `costKnown` is false on those
  * rows so the screen can mark them instead of quietly overstating the month.
+ *
+ * ## AND ROWS WHOSE COST HAS NOT BEEN SAID YET, which is a different zero
+ *
+ * A roadshow case is bought on a tab at a price nobody knows and can be sold the
+ * same afternoon — that is the ordinary shape of a shop, not an edge case, and
+ * `buyShortAtShop` produces it without anybody choosing to. Its layer opens at
+ * zero, so the sale landed here reporting the whole sale price as margin.
+ *
+ * That zero reads exactly like a legacy one and is the opposite of it: the layer
+ * is right there and the figure is coming. So it gets its own flag, found by
+ * walking the slices this move consumed back to the purchase-order line that
+ * opened them and asking whether that line is still price-pending. The screen
+ * holds it out of the margin totals — a cost of nothing counted as a cost is the
+ * one failure this report must not have — and names the tab to go and price.
+ *
+ * IT CLEARS ITSELF. `setPurchaseOrderLinePrice` re-costs the layer AND the sales
+ * already drawn from it (see restateConsumedCost), which writes the real figure
+ * into `cost_total` on the very rows below. Nothing here is re-derived on the
+ * fly, so what this reports and what the ledger holds cannot drift.
  */
 
 export function listWholesaleSales(db: Database.Database, limit = 500): WholesaleSaleRow[] {
@@ -436,7 +455,19 @@ export function listWholesaleSales(db: Database.Database, limit = 500): Wholesal
       `SELECT m.invoice_id, m.product_id, m.location, m.quantity, m.cost_total, m.txn_id,
               i.invoice_number, i.invoice_date, i.customer_name, i.status,
               l.rate, l.item,
-              p.name AS product_name, p.sku AS product_sku
+              p.name AS product_name, p.sku AS product_sku,
+              -- The tab still owing a price on one of the layers these units
+              -- came off, or NULL when every layer has a real figure on it.
+              -- MIN because a move can walk several layers and one name is what
+              -- the screen has room for; the smallest number is the oldest tab,
+              -- which is the one that has been waiting longest.
+              (SELECT MIN(pend_po.po_number)
+                 FROM inventory_txn_lots pend_tl
+                 JOIN po_line_receipts pend_r ON pend_r.lot_id = pend_tl.lot_id
+                 JOIN purchase_order_lines pend_l ON pend_l.id = pend_r.po_line_id
+                 JOIN purchase_orders pend_po ON pend_po.id = pend_l.po_id
+                WHERE pend_tl.txn_id = m.txn_id
+                  AND pend_l.price_pending = 1) AS pending_po
          FROM invoice_stock_moves m
          JOIN invoices i ON i.id = m.invoice_id
          LEFT JOIN invoice_lines l
@@ -461,6 +492,7 @@ export function listWholesaleSales(db: Database.Database, limit = 500): Wholesal
     item: string | null
     product_name: string | null
     product_sku: string | null
+    pending_po: string | null
   }>
 
   return rows.map((r) => {
@@ -482,7 +514,9 @@ export function listWholesaleSales(db: Database.Database, limit = 500): Wholesal
       revenue,
       cost,
       margin: Math.round((revenue - cost) * 100) / 100,
-      costKnown: !!r.txn_id
+      costKnown: !!r.txn_id,
+      costPending: !!r.pending_po,
+      pendingPoNumber: r.pending_po ?? null
     }
   })
 }

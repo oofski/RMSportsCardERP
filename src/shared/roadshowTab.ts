@@ -306,3 +306,106 @@ export function roadshowShopNamed(name: string | null | undefined): string | nul
   const v = String(name ?? '').trim().toLowerCase()
   return ROADSHOW_SHOPS.find((s) => s.toLowerCase() === v) ?? null
 }
+
+/**
+ * WHY A SHOP'S COLUMN IS EMPTY WHEN ITS TAB PLAINLY IS NOT.
+ *
+ * The owner, looking at New York: 0 units, "Nothing here yet", and directly
+ * underneath it "PO-0452 · $0.00 · 1 unpriced". His words: "why is the roadshow
+ * tab not showing the product ... that doesn't make sense."
+ *
+ * ## Both halves of that card were telling the truth
+ *
+ * The column reads the SHELF and the footer reads the TAB, deliberately — see
+ * the note at the top of RoadshowBoard for why, and it is the right split. A
+ * case bought at a shop and sold out of it the same afternoon leaves the shelf
+ * at zero and stays on the week's tab for ever, which is exactly the shape a
+ * roadshow produces: writing the sale short at a shop BUYS the case onto the tab
+ * and consumes it in the same transaction (see buyShortAtShop), so a product can
+ * be bought, sold and gone without ever having been seen standing there.
+ *
+ * ## So the bug was the SENTENCE, and it was a real one
+ *
+ * "Nothing here yet. Add what you buy and it lands on this shelf straight away"
+ * asserts that nothing was ever added. When a tab is running, that is false, and
+ * it is false in the one direction that costs money: it invites somebody to add
+ * the case a second time. What is true is that nothing is standing there NOW,
+ * and the tab says where it went.
+ *
+ * ## The unpriced count stops being decoration
+ *
+ * A line still price-pending after its case has gone out means that sale was
+ * costed at nothing. Pricing it later fixes both — `setPurchaseOrderLinePrice`
+ * re-costs the stock AND the sales already drawn from it, which is precisely
+ * what makes a tab safe to sell out of — but only if somebody does it. On an
+ * empty column that is the only thing left to act on, so it is said in full
+ * rather than left as two words in the footer.
+ */
+export interface ShopTabStanding {
+  /** The tab's own number, so the sentence can point at something findable. */
+  poNumber: string
+  /** Σ(line quantity) on the tab — everything bought from this shop this week. */
+  orderedUnits: number
+  /**
+   * Units actually checked in. At a shop that is every unit STAYING there, taken
+   * the moment it was typed; units routed home are on a lorry and are not.
+   */
+  receivedUnits: number
+  /** Lines still waiting for a price. */
+  pendingPriceCount: number
+}
+
+/** What to print where the list of products would be. */
+export interface EmptyShelfNote {
+  /** Why the shelf is bare, in one sentence. */
+  headline: string
+  /** The one thing left to do about it, or null. */
+  warning: string | null
+}
+
+const NOTHING_YET =
+  'Nothing here yet. Add what you buy and it lands on this shelf straight away.'
+
+const whole = (v: unknown): number => {
+  const n = Math.round(Number(v))
+  return Number.isFinite(n) && n > 0 ? n : 0
+}
+
+const units = (n: number): string => `${n} unit${n === 1 ? '' : 's'}`
+
+/**
+ * The sentence for a shop holding nothing, given the week's tab.
+ *
+ * A tab with nothing on it is still "nothing here yet" — the week has been
+ * opened and not yet bought against, which is the same state to the person
+ * looking at the column and should not read as a different one.
+ */
+export function emptyShelfNote(tab: ShopTabStanding | null): EmptyShelfNote {
+  const ordered = whole(tab?.orderedUnits)
+  if (!tab || ordered <= 0) return { headline: NOTHING_YET, warning: null }
+
+  // Capped at what was ordered: the two figures come from the same order, but a
+  // count that read "4 sold and −1 coming" would be worse than merely wrong.
+  const landed = Math.min(ordered, whole(tab.receivedUnits))
+  const coming = ordered - landed
+
+  const said: string[] = []
+  if (landed > 0) {
+    said.push(`the ${units(landed)} bought here ${landed === 1 ? 'has' : 'have'} been sold`)
+  }
+  if (coming > 0) {
+    said.push(
+      `${landed > 0 ? `${units(coming)} more ${coming === 1 ? 'is' : 'are'}` : `the ${units(coming)} on it ${coming === 1 ? 'is' : 'are'}`} coming home rather than staying at the shop`
+    )
+  }
+
+  const headline = `Nothing is standing here now — ${said.join(', and ')}. It is all on ${tab.poNumber}.`
+
+  const pending = whole(tab.pendingPriceCount)
+  const warning =
+    pending > 0
+      ? `${pending} line${pending === 1 ? '' : 's'} on ${tab.poNumber} still ${pending === 1 ? 'has' : 'have'} no price, so anything sold from ${pending === 1 ? 'it' : 'them'} was costed at nothing. Fill the price in on the tab and both the shelf and those sales are put right.`
+      : null
+
+  return { headline, warning }
+}

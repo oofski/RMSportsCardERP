@@ -17414,6 +17414,24 @@ button.sor-team:focus-visible {
   font-style: italic;
   font-size: 12px;
 }
+/* A cost that is COMING, not one that is lost. Accent rather than the muted
+   grey above, because this row rejoins the margin the moment somebody prices the
+   tab — it is a job, and the other one never will be. */
+.wsale-toprice {
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+/* Told apart from the note above it by a left bar in the accent, because
+   `--warn-soft` is undefined and both notes fall back to the same surface — two
+   identical panels saying opposite things is worse than one. */
+.wsale-note.is-todo {
+  border-left: 3px solid var(--accent);
+}
+.wsale-note.is-todo svg {
+  color: var(--accent);
+}
 
 /* ---------- Tabs that are honestly not built ---------- */
 .fin-soon {
@@ -28435,11 +28453,21 @@ button.sor-team:focus-visible {
   font-weight: 700;
 }
 .rs-col-empty {
-  margin: 0;
   padding: 16px 13px;
   color: var(--text-3);
   font-size: 12px;
   line-height: 1.5;
+}
+.rs-col-empty p {
+  margin: 0;
+}
+/* The unpriced sentence is the one thing on an empty column somebody can act
+   on, and it is about money already booked wrong — same warning colour the
+   footer's count carries, for the same reason. Spaced with p + p so the rule
+   above does not have to be fought with !important. */
+.rs-col-empty p + p.rs-col-empty-warn {
+  margin-top: 8px;
+  color: var(--warning);
 }
 .rs-list {
   margin: 0;

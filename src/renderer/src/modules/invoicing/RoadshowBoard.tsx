@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { PurchaseOrder } from '@shared/types'
 import type { StockAtLocationRow } from '@shared/availability'
-import { ROADSHOW_SHOPS } from '@shared/roadshowTab'
+import { ROADSHOW_SHOPS, emptyShelfNote } from '@shared/roadshowTab'
 import { api } from '../../lib/api'
 import { Icon } from '../../components/Icon'
 import { Button, CenterLoader } from '../../components/ui'
@@ -101,6 +101,19 @@ export function RoadshowBoard(): JSX.Element {
           const rows = stock[shop] ?? []
           const units = rows.reduce((n, r) => n + r.quantity, 0)
           const tab = tabFor.get(shop.toLowerCase()) ?? null
+          // Only read when the column is bare, but derived here because that is
+          // where the tab already is. The shelf and the tab are two different
+          // facts and this is the one place they have to be told together.
+          const empty = emptyShelfNote(
+            tab
+              ? {
+                  poNumber: tab.poNumber,
+                  orderedUnits: tab.orderedUnits,
+                  receivedUnits: tab.receivedUnits,
+                  pendingPriceCount: tab.pendingPriceCount ?? 0
+                }
+              : null
+          )
           return (
             <section className="rs-col" key={shop}>
               <header className="rs-col-head">
@@ -118,9 +131,15 @@ export function RoadshowBoard(): JSX.Element {
               </header>
 
               {rows.length === 0 ? (
-                <p className="rs-col-empty">
-                  Nothing here yet. Add what you buy and it lands on this shelf straight away.
-                </p>
+                /* WHY IT IS EMPTY, not merely THAT it is. A shop with a running
+                   tab has almost never had "nothing added" — a case bought and
+                   sold the same afternoon leaves the shelf at zero and the tab
+                   holding it for ever — and saying so invites somebody to add it
+                   twice. See emptyShelfNote. */
+                <div className="rs-col-empty">
+                  <p>{empty.headline}</p>
+                  {empty.warning && <p className="rs-col-empty-warn">{empty.warning}</p>}
+                </div>
               ) : (
                 <ul className="rs-list">
                   {rows.map((r) => (
