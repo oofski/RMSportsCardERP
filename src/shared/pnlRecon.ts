@@ -116,13 +116,20 @@ const n = (v: number | null | undefined): number => {
  * is built from the same accumulator as `grossSales` — so it is the rate that
  * was APPLIED, not a rate re-derived here that could disagree with it.
  *
- * A SINGLE BUSINESS DAY ALWAYS HAS EXACTLY ONE SLICE, because the rate is
- * resolved once per business day and every row on that day is charged under it.
- * So the sort below cannot change the answer for anything this screen passes,
- * and no test can distinguish its direction. It is kept for the rolled-up shape:
- * `FinancePeriodRow` extends this same type and its `rateBreakdown` IS merged
- * across days, so a week spanning a rate change has two slices — and there the
- * honest single answer is the terms that priced most of the money.
+ * THE SORT DECIDES THE ANSWER, and it did not always have to. A business day
+ * once had exactly one slice — the rate was resolved per day and every row on
+ * it was charged under that one — so the direction of this sort could not change
+ * anything and no test could tell it apart from the reverse.
+ *
+ * That stopped being true when a rate gained a SCOPE. A night selling both break
+ * spots and sealed product under different terms now carries two slices, and
+ * this column has to report one rate. It reports the terms that priced most of
+ * the money, which is the same answer the rolled-up shape gives: `FinancePeriodRow`
+ * extends this type and its `rateBreakdown` is merged across days, so a week
+ * spanning a rate change has always landed here needing exactly this rule.
+ *
+ * The `covered` flag beside it is unaffected and stays the honest one: it asks
+ * whether a period covered the day at all, not which of two did.
  */
 export function reconRows(
   days: readonly StreamDayFinance[],

@@ -22,6 +22,7 @@ import { IPC, type AppInfo } from '@shared/ipc'
 import type { Permission } from '@shared/permissions'
 import type { OrderResetInput, OrderResetPreview, OrderResetResult } from '@shared/orderReset'
 import type { RestoreCheck, RestoreStatus } from '@shared/restore'
+import type { RevenueCheck, StatementInput, WhatnotStatement } from '@shared/statementFit'
 import type { FreightPatch } from '@shared/freight'
 import type { SupplyingOrder } from '@shared/poStock'
 import type { BreakBenchDetail, BreakStepState } from '@shared/breakSteps'
@@ -1413,6 +1414,25 @@ export function createBridge(ipcRenderer: BridgeTransport) {
         ipcRenderer.invoke(IPC.finRateSave, input),
       deleteRate: (id: string): Promise<Result<WhatnotRatePeriod[]>> =>
         ipcRenderer.invoke(IPC.finRateDelete, id),
+      /**
+       * What the platform says a window sold, and whether we agree.
+       *
+       * Revenue on the Streaming tab is DERIVED — the ledger states only the net
+       * and the gross is that net with a modelled fee added back — so these are
+       * the only calls in the finance surface that reach for something outside
+       * the app. `check` stores nothing: running it must never be the thing that
+       * moves a number, so saving the fitted rate is a separate `saveRate`.
+       */
+      statements: (): Promise<WhatnotStatement[]> => ipcRenderer.invoke(IPC.finStatements),
+      saveStatement: (input: StatementInput): Promise<Result<WhatnotStatement[]>> =>
+        ipcRenderer.invoke(IPC.finStatementSave, input),
+      deleteStatement: (id: string): Promise<Result<WhatnotStatement[]>> =>
+        ipcRenderer.invoke(IPC.finStatementDelete, id),
+      revenueCheck: (input: {
+        fromDate: string
+        toDate: string
+        statedGross: number
+      }): Promise<RevenueCheck | null> => ipcRenderer.invoke(IPC.finRevenueCheck, input),
       /**
        * Costs typed against a business day — a pack opened for fun, a box written
        * off. A DOLLAR AMOUNT ONLY: nothing on this bridge moves stock, which is

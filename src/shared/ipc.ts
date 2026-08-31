@@ -682,6 +682,18 @@ export const IPC = {
   finRatesList: 'finance:rates:list',
   finRateSave: 'finance:rates:save',
   finRateDelete: 'finance:rates:delete',
+  // What the PLATFORM says a window sold, and how that compares with what this
+  // app derives for the same days.
+  //
+  // Revenue here is calculated, not recorded — the ledger states only the net,
+  // and gross is the net with a modelled fee added back — so until these
+  // channels there was nothing outside the app any revenue figure had ever been
+  // checked against. The check solves the commission that reproduces the stated
+  // figure, which is the one term that actually varies.
+  finStatements: 'finance:statements:list',
+  finStatementSave: 'finance:statements:save',
+  finStatementDelete: 'finance:statements:delete',
+  finRevenueCheck: 'finance:revenue:check',
   // Costs typed against a business day — product opened, given away or written
   // off. A dollar amount only: nothing here moves stock.
   finExpensesList: 'finance:expenses:list',

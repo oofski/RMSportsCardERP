@@ -1005,6 +1005,20 @@ function migrate(database: Database.Database): void {
       tax_rate              REAL NOT NULL DEFAULT 0.0518,
       processing_rate       REAL NOT NULL DEFAULT 0.029,
       processing_flat_cents INTEGER NOT NULL DEFAULT 30,
+      -- v93: WHAT THESE TERMS APPLY TO. 'all', 'break_spots' or 'whole_products'.
+      --
+      -- The commission is not one number. It depends on what was sold, and this
+      -- table resolved it by date alone -- one rate for every row on a night --
+      -- so a night mixing break spots and sealed product was priced wrong on
+      -- some of them by construction. Because gross is derived from net by
+      -- adding the modelled fee back, that error lands entirely on REVENUE and
+      -- never on the bottom line, which is exactly how it went unnoticed.
+      --
+      -- 'all' is what every existing row means, so the default changes no
+      -- stored figure. A scoped period MAY share dates with an 'all' period;
+      -- coveringRatePeriod prefers the narrower one, which is what lets an
+      -- exception be stated without carving the calendar around it.
+      scope                 TEXT NOT NULL DEFAULT 'all',
       note                  TEXT NOT NULL DEFAULT '',
       created_at            TEXT NOT NULL,
       updated_at            TEXT NOT NULL,
@@ -1012,6 +1026,38 @@ function migrate(database: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_whatnot_fee_periods_from
       ON whatnot_fee_periods (from_date);
+
+    -- v93: WHAT THE PLATFORM SAYS THE WINDOW SOLD, in the platform's own words.
+    --
+    -- Revenue in this app is not recorded, it is CALCULATED: the ledger states
+    -- only the net, and gross is reverse-engineered per row by adding a modelled
+    -- fee back. So every error in the fee model lands on revenue, and until this
+    -- table there was nothing outside the app that any figure was ever checked
+    -- against. The owner reported revenue running 15 to 25 thousand a month over
+    -- Whatnot's own stated sales, every month, and no screen could confirm or
+    -- deny it.
+    --
+    -- One row is one document: a dashboard reading, a statement, a 1099. Storing
+    -- it makes the check STANDING rather than a calculator somebody runs once
+    -- and forgets, and it is the same record a year-end tie-out needs -- the
+    -- only external document that can confirm a whole year of derived revenue.
+    --
+    -- stated_fees is nullable on purpose. A dashboard often gives sales alone,
+    -- and demanding a number nobody has would mean the check never gets used.
+    CREATE TABLE IF NOT EXISTS whatnot_statements (
+      id           TEXT PRIMARY KEY,
+      -- Inclusive BUSINESS days, matching how rate periods and shows are dated.
+      from_date    TEXT NOT NULL,
+      to_date      TEXT NOT NULL,
+      stated_gross REAL NOT NULL,
+      stated_fees  REAL,
+      note         TEXT NOT NULL DEFAULT '',
+      created_at   TEXT NOT NULL,
+      updated_at   TEXT NOT NULL,
+      created_by   TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_whatnot_statements_from
+      ON whatnot_statements (from_date);
 
     -- v44: costs somebody TYPED against a business day.
     --
@@ -4593,6 +4639,37 @@ function migrate(database: Database.Database): void {
    */
   addColumnIfMissing(database, 'invoices', 'total_changed_at', 'TEXT')
   setMeta(database, 'schema_version', '92')
+
+  /**
+   * v93: A RATE CAN NOW SAY WHAT IT APPLIES TO, and a stated figure can be kept.
+   *
+   * The owner reported streaming revenue running $15-25k a month above
+   * Whatnot's own sales figure, every month, and both halves of the cause were
+   * in the fee model rather than in the data.
+   *
+   * The commission was resolved by DATE ALONE — `effectiveFeeRates(periods,
+   * day)` returned one rate for every row on a night — while the real
+   * commission depends on what was sold. So any night carrying both break spots
+   * and sealed product was priced wrong on some rows by construction. And
+   * because the derived gross is net with the modelled fee added back, the whole
+   * error appears on revenue and none of it on net profit, which is why it
+   * survived: the bottom line looked right the entire time.
+   *
+   * Sizing it: at the model's own constants, 8% versus 4% is 4.84 cents of
+   * invented revenue per dollar of net. On the $285,333 month quoted in
+   * financeStreaming's own comments that is $13.8k, and $24.2k at half a million
+   * — the reported band, scaling with volume.
+   *
+   * The scope column is the second argument that module header had been asking
+   * for. The statements table is the other half: something outside the app for a
+   * derived figure to be checked against, which nothing has ever had.
+   *
+   * NOTHING IS BACKFILLED AND NOTHING MOVES. Every existing period defaults to
+   * 'all', which is what it already meant, so no stored figure changes until
+   * somebody deliberately narrows one.
+   */
+  addColumnIfMissing(database, 'whatnot_fee_periods', 'scope', "TEXT NOT NULL DEFAULT 'all'")
+  setMeta(database, 'schema_version', '93')
 
   // v41: re-derive every product's average cost from its remaining cost layers.
   //

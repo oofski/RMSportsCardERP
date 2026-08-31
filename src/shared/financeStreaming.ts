@@ -1104,6 +1104,43 @@ export function itemPriceFromPayout(payoutCents: number, rates: WhatnotFeeRates)
 // ---------------------------------------------------------------------------
 
 /**
+ * WHAT A SET OF TERMS APPLIES TO, when it does not apply to everything.
+ *
+ * Whatnot does not charge one commission. The rate depends on what was sold,
+ * and this app resolved it by DATE alone — one rate for every row on a night —
+ * so any night mixing break spots and sealed product was priced wrong on some
+ * of them by construction. Because gross is derived from net by adding the
+ * modelled fee back, that error lands entirely on REVENUE and never on the
+ * bottom line, which is how it survived: net profit looked right while the top
+ * line ran high.
+ *
+ * ## Why these two and not a category list
+ *
+ * Because these two are the split the app already resolves for free and
+ * reliably. `classifyLedgerRow` separates break spots from whole products on
+ * the message text, and `tests/marketplace.test.ts` pins that split against
+ * 9,225 rows of real ledger including the typos. A category taxonomy would be
+ * a second thing to maintain and a guess until a statement proves it; this is
+ * evidence the app is already holding.
+ *
+ * `all` is what every existing period means and what a new one means unless
+ * somebody says otherwise, so adding this changes no stored figure.
+ */
+export type RateScope = 'all' | 'break_spots' | 'whole_products'
+
+/** What a ledger bucket is priced as. Anything not a sale is never priced. */
+export function scopeForBucket(bucket: string): RateScope {
+  if (bucket === 'product_sale') return 'whole_products'
+  return 'break_spots'
+}
+
+export const RATE_SCOPES: ReadonlyArray<{ key: RateScope; label: string; hint: string }> = [
+  { key: 'all', label: 'Everything', hint: 'Break spots and whole products alike.' },
+  { key: 'break_spots', label: 'Break spots', hint: 'Spots sold out of a break.' },
+  { key: 'whole_products', label: 'Whole products', hint: 'Sealed boxes and cases sold outright.' }
+]
+
+/**
  * A stretch of SHOWS priced on some particular set of terms.
  *
  * SHOWS, NOT CALENDAR DAYS, and the distinction is the whole of it: both dates
@@ -1131,6 +1168,15 @@ export interface WhatnotRatePeriod {
   processingRate: number
   /** The card flat charge per order, in CENTS. */
   processingFlatCents: number
+  /**
+   * What these terms apply to. `all` unless somebody narrowed it.
+   *
+   * A scoped period may share dates with an `all` period — see
+   * `coveringRatePeriod`, which prefers the narrower one. That is what lets
+   * somebody say "8% generally, 4% on sealed product" without carving the
+   * calendar into pieces to express it.
+   */
+  scope: RateScope
   /** Why these terms, in the operator's words. */
   note: string
   createdAt: string
@@ -1150,23 +1196,52 @@ export function isDayKey(value: string): boolean {
   return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d
 }
 
+/** Dates only. Whether the SCOPE also applies is `ratePeriodApplies`. */
 export function ratePeriodCovers(period: WhatnotRatePeriod, day: string): boolean {
   return day >= period.fromDate && day <= (period.toDate ?? OPEN_ENDED)
 }
 
 /**
+ * Dates AND scope. An `all` period applies to anything; a scoped one only to
+ * its own kind.
+ */
+export function ratePeriodApplies(
+  period: WhatnotRatePeriod,
+  day: string,
+  scope: RateScope = 'all'
+): boolean {
+  if (!ratePeriodCovers(period, day)) return false
+  const s = period.scope ?? 'all'
+  return s === 'all' || s === scope
+}
+
+/**
  * The period that owns a day, or null when the defaults apply.
  *
- * A plain linear scan. It stops at the FIRST match because a day cannot be
- * covered twice — that is enforced at the point of writing, and it is the whole
- * reason this function needs no tie-breaker.
+ * THE NARROWER PERIOD WINS, and this function does now need that tie-breaker
+ * where it once did not. Before scopes a day could not be covered twice and a
+ * first match was the only match; now "8% on everything" and "4% on sealed
+ * product" are two periods deliberately sharing the same dates, and taking
+ * whichever the scan met first would make the answer depend on row order in a
+ * table.
+ *
+ * Specific beats general because that is the only reading that lets somebody
+ * state an exception without carving the calendar around it. Two periods of the
+ * SAME scope still cannot overlap — that remains refused on save, and it is
+ * what keeps this a choice between at most two candidates.
  */
 export function coveringRatePeriod(
   periods: readonly WhatnotRatePeriod[],
-  day: string
+  day: string,
+  scope: RateScope = 'all'
 ): WhatnotRatePeriod | null {
-  for (const p of periods) if (ratePeriodCovers(p, day)) return p
-  return null
+  let general: WhatnotRatePeriod | null = null
+  for (const p of periods) {
+    if (!ratePeriodApplies(p, day, scope)) continue
+    if ((p.scope ?? 'all') !== 'all') return p
+    if (general === null) general = p
+  }
+  return general
 }
 
 /**
@@ -1186,9 +1261,10 @@ export function coveringRatePeriod(
  */
 export function effectiveFeeRates(
   periods: readonly WhatnotRatePeriod[],
-  day: string
+  day: string,
+  scope: RateScope = 'all'
 ): WhatnotFeeRates {
-  const p = coveringRatePeriod(periods, day)
+  const p = coveringRatePeriod(periods, day, scope)
   if (!p) return DEFAULT_FEE_RATES
   return resolveFeeRates({
     commissionRate: p.rate,
@@ -1211,17 +1287,32 @@ export function effectiveFeeRates(
  * itself the answer: read it top to bottom and every day has exactly one set of
  * terms or the defaults, with no arbitration happening in anyone's head.
  *
+ * ## WITHIN A SCOPE. Across scopes, sharing dates is the point.
+ *
+ * "8% on everything" and "4% on sealed product" are two periods deliberately
+ * covering the same nights, and refusing that would force somebody to express
+ * an exception by carving the calendar around it — which is unreadable and
+ * wrong the moment either date moves. So the refusal narrowed to what it was
+ * always actually about: TWO PERIODS THAT COULD BOTH PRICE THE SAME ROW.
+ *
+ * Two periods of the same scope still cannot overlap, and neither can two
+ * `all` periods. What is now allowed is exactly the case `coveringRatePeriod`
+ * has a stated rule for, so the list remains the answer: read it, and every row
+ * has one set of terms — the narrowest one that names it.
+ *
  * `ignoreId` is the row being edited — a period always overlaps itself.
  */
 export function overlappingRatePeriod(
   periods: readonly WhatnotRatePeriod[],
-  candidate: { fromDate: string; toDate: string | null },
+  candidate: { fromDate: string; toDate: string | null; scope?: RateScope },
   ignoreId?: string
 ): WhatnotRatePeriod | null {
   const from = candidate.fromDate
   const to = candidate.toDate ?? OPEN_ENDED
+  const scope = candidate.scope ?? 'all'
   for (const p of periods) {
     if (ignoreId && p.id === ignoreId) continue
+    if ((p.scope ?? 'all') !== scope) continue
     if (from <= (p.toDate ?? OPEN_ENDED) && to >= p.fromDate) return p
   }
   return null
@@ -1237,6 +1328,8 @@ export interface RatePeriodInput {
   processingRate: number
   /** CENTS. 30, not 0.30 — money in this app is integer cents. */
   processingFlatCents: number
+  /** What these terms apply to. Absent means everything. */
+  scope?: RateScope
   note: string
 }
 
@@ -1273,6 +1366,13 @@ export function validateRatePeriod(input: RatePeriodInput): string | null {
           `Enter it in cents — 30, not 0.30.`
     }
     return null
+  }
+
+  // An unknown scope is refused rather than coerced to 'all'. Quietly widening
+  // a period somebody meant to narrow would price rows it was never meant to
+  // touch, and the row would look correct in the list afterwards.
+  if (input.scope !== undefined && !RATE_SCOPES.some((s) => s.key === input.scope)) {
+    return 'That is not something a rate can apply to.'
   }
 
   const bad =

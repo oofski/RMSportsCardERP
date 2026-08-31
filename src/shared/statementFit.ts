@@ -36,6 +36,16 @@
  * divide the miss by the orders and see whether the two windows agree on it.
  */
 
+/**
+ * The one dependency this otherwise-standalone module takes.
+ *
+ * The band is imported rather than restated because the fit must never OFFER a
+ * rate that saving it would then refuse. Two copies of "what counts as a fee
+ * schedule" drift, and the day they do, this hands somebody a number, the save
+ * rejects it, and nothing on screen explains why the app disagreed with itself.
+ */
+import { COMMISSION_RATE_MAX, COMMISSION_RATE_MIN } from './financeStreaming'
+
 /** What the platform's own statement says, typed off the document. */
 export interface StatementActuals {
   /** The statement's Sales line — what buyers paid, before anything came off. */
@@ -229,3 +239,280 @@ export function fitVerdict(fit: StatementFit): {
 const money = (v: number): string =>
   `$${Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 const pct = (v: number): string => `${(v * 100).toFixed(3).replace(/\.?0+$/, '')}%`
+
+/* ===========================================================================
+   FITTING FROM A GROSS FIGURE ALONE
+
+   `fitStatement` above needs three numbers off a statement — sales, commission
+   and processing — and solves both rates at once. That is the right tool when
+   somebody is holding a real statement.
+
+   It is the wrong tool for the case that actually comes up. Whatnot's dashboard
+   states SALES and nothing else, and a 1099 states gross and nothing else. An
+   owner looking at "your revenue says $320k, Whatnot says $307k" has exactly one
+   number to offer, and until now there was nowhere to put it.
+
+   One number is still enough, because the window is not one equation with three
+   unknowns — the ledger already supplies the answer to two of them. The net is a
+   RECORD: it is the column that was uploaded and it reconciles to the bank. The
+   order count is a record too. So the only unknown left is the commission rate,
+   and one equation solves it.
+
+   ## Why commission and not the card rate
+
+   Both would fit. Commission is the one to solve for because it is the one that
+   varies: it is negotiated, it changes when terms are renegotiated, and it
+   differs by what is being sold. The card rate is a processor's published number
+   that a marketplace does not get to negotiate per seller, and pinning the term
+   that does not move is what makes the answer a point rather than a line.
+
+   That is the same argument `fitStatement` makes for pinning the flat charge at
+   zero, applied to the axis this call has evidence about.
+   =========================================================================== */
+
+/** The terms held fixed while the commission is solved. */
+export interface PinnedTerms {
+  processingRate: number
+  taxRate: number
+  processingFlatCents: number
+}
+
+export interface GrossFit {
+  /** What the platform says the window sold. Typed in, not derived. */
+  statedGross: number
+  /** The ledger's own Amount for the same window. A record. */
+  netPaid: number
+  orders: number
+  /** What the app derives for this window today. */
+  derivedRevenue: number
+  /** derivedRevenue − statedGross. POSITIVE MEANS THE APP READS HIGH. */
+  revenueGap: number
+  /** How much of the gap each order accounts for. See `gapShape`. */
+  perOrderGap: number | null
+  /**
+   * The commission rate that reproduces `statedGross` exactly.
+   *
+   *   net   = gross × (1 − commission − processing × (1 + tax)) − flat × orders
+   *   ⇒ commission = 1 − processing × (1 + tax) − (net + flat × orders) ÷ gross
+   */
+  fittedCommissionRate: number
+  /**
+   * Did the pair produce a rate a fee schedule could actually have?
+   *
+   * False is not a rounding complaint. A rate outside the band means the two
+   * numbers cannot both be describing the same window, and the fitted figure
+   * must not be offered for saving — it would silently re-price every night it
+   * covered with a number derived from a mismatch.
+   */
+  solvable: boolean
+  /** What went wrong, in the owner's words, when `solvable` is false. */
+  problem: string | null
+  /** Revenue re-derived at the fitted rate. Lands on `statedGross`. */
+  refitRevenue: number
+}
+
+/**
+ * IS THE MISS A PERCENTAGE OR IS IT PER ORDER?
+ *
+ * The single most useful thing a gap can tell you, and it is the same question
+ * in both fits, so it is asked in one place.
+ *
+ * A commission error scales with the money: halve the volume and the gap halves.
+ * A per-order charge does not — it tracks the order COUNT, so a quiet month is
+ * out by nearly as much as a busy one. Comparing two windows of different sizes
+ * on `perOrderGap` is what separates them, and getting it backwards sends
+ * somebody hunting a rate error that a flat charge is producing (or the reverse,
+ * which is how a fortnight was lost once already — see the header).
+ */
+export function gapShape(
+  gap: number,
+  orders: number
+): { perOrder: number | null; hint: string } {
+  const per = orders > 0 ? Math.round((gap / orders) * 100) / 100 : null
+  if (per === null) return { perOrder: null, hint: 'No orders in this window.' }
+  return {
+    perOrder: per,
+    hint:
+      `${money(gap)} across ${orders.toLocaleString()} orders is ${money(per)} each. ` +
+      'Check a second window of a different size: a gap that holds this per-order ' +
+      'figure is a flat charge, and one that moves with the money is the commission.'
+  }
+}
+
+/**
+ * Solve the commission rate from one stated gross figure.
+ *
+ * Refuses rather than returns nonsense. Two impossibilities are checked before
+ * the arithmetic, because both produce a plausible-looking rate that is wrong:
+ *
+ *   · A stated gross at or below the net. Gross is what buyers paid and net is
+ *     what survived the fees, so gross is always the larger. Equal or smaller
+ *     means the window does not match, or the two figures were entered the wrong
+ *     way round — and the division would hand back a negative rate.
+ *   · A fitted rate outside the band the model validates elsewhere. There is no
+ *     fee schedule at 60%, so a fit that lands there is evidence about the
+ *     inputs rather than about the platform.
+ */
+export function fitFromGross(
+  statedGross: number,
+  app: Pick<WindowFigures, 'netPaid' | 'derivedRevenue' | 'orders'>,
+  pinned: PinnedTerms
+): GrossFit {
+  const gross = c2(n(statedGross))
+  const netPaid = c2(n(app.netPaid))
+  const derivedRevenue = c2(n(app.derivedRevenue))
+  const orders = Math.max(0, Math.round(n(app.orders)))
+  const revenueGap = c2(derivedRevenue - gross)
+  const shape = gapShape(revenueGap, orders)
+
+  const base = {
+    statedGross: gross,
+    netPaid,
+    orders,
+    derivedRevenue,
+    revenueGap,
+    perOrderGap: shape.perOrder
+  }
+
+  if (gross <= 0) {
+    return {
+      ...base,
+      fittedCommissionRate: 0,
+      solvable: false,
+      problem: 'Enter the sales figure the platform states for this window.',
+      refitRevenue: 0
+    }
+  }
+  if (gross <= netPaid) {
+    return {
+      ...base,
+      fittedCommissionRate: 0,
+      solvable: false,
+      problem:
+        `The stated ${money(gross)} is not more than the ${money(netPaid)} the ledger says was ` +
+        'paid out. Gross is what buyers paid and net is what survived the fees, so gross is ' +
+        'always larger — these two are not describing the same days.',
+      refitRevenue: 0
+    }
+  }
+
+  // net = gross × divisor − flat × orders, solved for the commission in divisor.
+  const flatDollars = (Math.max(0, n(pinned.processingFlatCents)) * orders) / 100
+  const impliedDivisor = (netPaid + flatDollars) / gross
+  const fitted = 1 - n(pinned.processingRate) * (1 + n(pinned.taxRate)) - impliedDivisor
+  const rate = Math.round(fitted * 1e6) / 1e6
+
+  if (rate < COMMISSION_RATE_MIN || rate > COMMISSION_RATE_MAX) {
+    return {
+      ...base,
+      fittedCommissionRate: rate,
+      solvable: false,
+      problem:
+        `Those two figures imply a commission of ${pct(rate)}, which is not a fee schedule. ` +
+        'Check that the stated figure covers exactly the days in this window, and that it is ' +
+        'sales rather than payouts.',
+      refitRevenue: 0
+    }
+  }
+
+  const divisor = modelDivisor(rate, pinned.processingRate, pinned.taxRate)
+  const refitRevenue = divisor > 0 ? c2((netPaid + flatDollars) / divisor) : 0
+
+  return {
+    ...base,
+    fittedCommissionRate: rate,
+    solvable: true,
+    problem: null,
+    refitRevenue
+  }
+}
+
+/** What the gross fit is telling somebody to do next, in one sentence. */
+export function grossFitVerdict(fit: GrossFit): {
+  tone: 'bad' | 'warn' | 'good'
+  headline: string
+  detail: string
+} {
+  if (!fit.solvable) {
+    return {
+      tone: 'bad',
+      headline: 'These two figures cannot both be right.',
+      detail: fit.problem ?? 'Check the figure entered against the window selected.'
+    }
+  }
+  // Under a dollar over a whole period is per-row rounding, not a term.
+  if (Math.abs(fit.revenueGap) < 1) {
+    return {
+      tone: 'good',
+      headline: 'Revenue already matches the stated figure.',
+      detail:
+        `The app derives ${money(fit.derivedRevenue)} against a stated ${money(fit.statedGross)}. ` +
+        'The rates in force for these days are reproducing the platform’s own number.'
+    }
+  }
+  const dir = fit.revenueGap > 0 ? 'higher than' : 'lower than'
+  return {
+    tone: 'warn',
+    headline: `Revenue reads ${money(fit.revenueGap)} ${dir} the stated figure.`,
+    detail:
+      `A commission of ${pct(fit.fittedCommissionRate)} reproduces ${money(fit.statedGross)} ` +
+      `exactly from the ${money(fit.netPaid)} the ledger says was paid out. ` +
+      gapShape(fit.revenueGap, fit.orders).hint
+  }
+}
+
+/* ===========================================================================
+   A STATED FIGURE, KEPT
+
+   These live in the contract rather than beside their repository because the
+   bridge carries them, and the bridge is bundled into a browser where nothing
+   from `src/main` can follow it.
+   =========================================================================== */
+
+export interface WhatnotStatement {
+  id: string
+  /** Inclusive business days — the same dating rate periods and shows use. */
+  fromDate: string
+  toDate: string
+  /** What the platform says the window sold, before anything came off. */
+  statedGross: number
+  /** What it says came off, when the document says. Null is ordinary. */
+  statedFees: number | null
+  note: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface StatementInput {
+  id?: string
+  fromDate: string
+  toDate: string
+  statedGross: number
+  statedFees?: number | null
+  note?: string
+}
+
+/** What the revenue-check panel needs, in one read. */
+export interface RevenueCheck {
+  fromDate: string
+  toDate: string
+  /** False when the window holds no money at all — nothing to check. */
+  hasData: boolean
+  fit: GrossFit
+  verdict: { tone: 'bad' | 'warn' | 'good'; headline: string; detail: string }
+  /** The terms held fixed while the commission was solved. */
+  pinned: PinnedTerms
+  /**
+   * Do all the nights in this window share one set of card terms?
+   *
+   * A single fitted commission assumes they do. When they do not, the fit is
+   * still the best single answer available but it is an average of two regimes,
+   * and saying so is cheaper than letting somebody act on it believing
+   * otherwise.
+   */
+  mixedTerms: boolean
+  /** Nights priced at the built-in defaults rather than a chosen period. */
+  uncoveredDays: number
+  uncoveredNetPaid: number
+}
+

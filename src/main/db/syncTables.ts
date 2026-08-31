@@ -133,6 +133,10 @@ export const SYNCED_TABLES: SyncedTable[] = [
   // order, and the rates screen shows both, which is the state somebody has to
   // resolve rather than one the app should silently pick a winner for.
   { table: 'whatnot_fee_periods', key: ['id'], tier: 0 },
+  // What the platform said a window sold. Synced because it is the evidence a
+  // derived revenue figure is checked against, and a check only one machine can
+  // see is one the others quietly go without.
+  { table: 'whatnot_statements', key: ['id'], tier: 0 },
   // Synced, on the same argument that put the rate periods above it here: it
   // changes the reported bottom line of a day. A laptop missing an entry the
   // owner typed would show a HIGHER net profit for that night than the machine he

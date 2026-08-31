@@ -28209,6 +28209,24 @@ button.sor-team:focus-visible {
   color: var(--text);
 }
 
+/* The one button on this screen that changes history, with the sentence saying
+   so beside it rather than under it — a warning below a button is read after it
+   is pressed. Wraps on a phone so the button never shrinks to fit the text. */
+.fin-fit-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  margin-top: 14px;
+}
+.fin-fit-actions .btn {
+  flex: none;
+}
+.fin-fit-actions .fin-head-scope {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+
 /* ---------- Which purchases supply a sale (AttachPurchaseOrderModal) ----------
    A LIST, not a sentence: a sale may be supplied by several purchases, and each
    row carries its own Detach because the first mistaken attach used to be

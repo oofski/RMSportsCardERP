@@ -26,7 +26,13 @@ import { Money, Note } from './bits'
 import { finance, resultError } from './api'
 import { compactDayLabel, todayKey } from './time'
 import { reconInRange, reconRows, reconTotals, type ReconRow } from '@shared/pnlRecon'
-import { fitStatement, fitVerdict, type StatementFit } from '@shared/statementFit'
+import {
+  fitFromGross,
+  fitStatement,
+  fitVerdict,
+  grossFitVerdict,
+  type StatementFit
+} from '@shared/statementFit'
 
 /**
  * Finance → Fees & rates: what the platform takes, and when it took it.
@@ -161,7 +167,7 @@ export function RatesTab(): JSX.Element {
 
       <EffectiveRate periods={periods} />
 
-      <DayCoverage periods={periods} />
+      <DayCoverage periods={periods} onSaved={setPeriods} />
 
       <ProcessingPanel />
 
@@ -725,7 +731,15 @@ function spanLabel(p: { fromDate: string; toDate: string | null }): string {
  * should match Whatnot to the cent. `Revenue` is that same money with the
  * modelled fees added back, and it is the one column a wrong rate moves.
  */
-function DayCoverage({ periods }: { periods: WhatnotRatePeriod[] }): JSX.Element | null {
+function DayCoverage({
+  periods,
+  onSaved
+}: {
+  periods: WhatnotRatePeriod[]
+  /** Hands the re-read list up, so saving a fitted rate refreshes the table
+   *  above rather than leaving the screen showing terms it no longer uses. */
+  onSaved: (next: WhatnotRatePeriod[]) => void
+}): JSX.Element | null {
   const [days, setDays] = useState<StreamDayFinance[] | null>(null)
   const [failed, setFailed] = useState(false)
   const [from, setFrom] = useState('')
@@ -878,6 +892,14 @@ function DayCoverage({ periods }: { periods: WhatnotRatePeriod[] }): JSX.Element
         month, so matching the window is the first thing to check when two numbers disagree.
       </p>
 
+      <RevenueCheck
+        totals={totals}
+        periods={periods}
+        from={from}
+        to={to}
+        onSaved={onSaved}
+      />
+
       <StatementCheck totals={totals} taxRate={effTax(periods, to || from)} />
     </section>
   )
@@ -887,6 +909,205 @@ function DayCoverage({ periods }: { periods: WhatnotRatePeriod[] }): JSX.Element
 function effTax(periods: WhatnotRatePeriod[], day: string): number {
   const p = day ? periods.find((x) => x.fromDate <= day && (!x.toDate || x.toDate >= day)) : null
   return p ? p.taxRate : DEFAULT_FEE_RATES.taxRate
+}
+
+/**
+ * ONE NUMBER IS ENOUGH: type what the platform says the window sold.
+ *
+ * ## Why this exists beside the three-figure check below
+ *
+ * `StatementCheck` needs sales, commission and processing off a real statement
+ * and solves both rates at once. It is the better tool when somebody is holding
+ * that document. They usually are not. Whatnot's dashboard states SALES and
+ * nothing else, and a 1099 states gross and nothing else — so the case that
+ * actually comes up had nowhere to go, and the owner watching revenue run
+ * $15-25k a month over Whatnot's own figure had exactly one number to offer.
+ *
+ * One is enough because the window is not three unknowns. The ledger already
+ * supplies two of them: the net is a RECORD — the column that was uploaded, the
+ * one that reconciles to the bank — and so is the order count. Only the
+ * commission is unknown, and one equation solves it. See `fitFromGross`.
+ *
+ * ## It solves the commission and pins the rest
+ *
+ * Because the commission is the term that actually moves: negotiated, revised,
+ * and different by what is being sold. The card percentage is a processor's
+ * published number a seller does not negotiate, so pinning the term that does
+ * not vary is what makes the answer a point rather than a line.
+ *
+ * ## NOTHING IS SAVED BY LOOKING
+ *
+ * Running the check changes no figure anywhere. Saving the fitted rate is a
+ * separate button and a separate decision, because it re-prices every night in
+ * the window the moment it lands — and somebody who was only checking must not
+ * discover that by finding their history moved.
+ */
+function RevenueCheck({
+  totals,
+  periods,
+  from,
+  to,
+  onSaved
+}: {
+  totals: { netPaid: number; grossSales: number; orders: number }
+  periods: WhatnotRatePeriod[]
+  from: string
+  to: string
+  onSaved: (next: WhatnotRatePeriod[]) => void
+}): JSX.Element {
+  const toast = useToast()
+  const [stated, setStated] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const num = (v: string): number => {
+    const x = Number((v || '').replace(/[^0-9.-]/g, ''))
+    return Number.isFinite(x) ? x : 0
+  }
+  const filled = stated.trim() !== ''
+
+  // The terms held fixed come from the window's own dates rather than the
+  // defaults, so a period that already sets a card rate is respected.
+  const pinned = useMemo(() => {
+    const r = effectiveFeeRates(periods, to || from || todayKey())
+    return {
+      processingRate: r.processingRate,
+      taxRate: r.taxRate,
+      processingFlatCents: r.processingFlatCents
+    }
+  }, [periods, from, to])
+
+  const fit = useMemo(
+    () =>
+      filled
+        ? fitFromGross(
+            num(stated),
+            { netPaid: totals.netPaid, derivedRevenue: totals.grossSales, orders: totals.orders },
+            pinned
+          )
+        : null,
+    [filled, stated, totals, pinned]
+  )
+  const verdict = fit ? grossFitVerdict(fit) : null
+
+  const applyRate = async (): Promise<void> => {
+    if (!fit?.solvable || !from || !to) return
+    setBusy(true)
+    try {
+      const res = await finance.saveRate({
+        fromDate: from,
+        toDate: to,
+        rate: fit.fittedCommissionRate,
+        taxRate: pinned.taxRate,
+        processingRate: pinned.processingRate,
+        processingFlatCents: pinned.processingFlatCents,
+        note: `Fitted to a stated ${fmtMoney(fit.statedGross)}`
+      })
+      if (!res.ok) {
+        toast.error(resultError(res, 'That rate could not be saved.'))
+        return
+      }
+      onSaved(res.data ?? [])
+      toast.success('Saved. Every night in this window is now priced on those terms.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section className="fin-fit" aria-label="Check revenue against a stated figure">
+      <div className="fin-head-top">
+        <h3>Check revenue against Whatnot</h3>
+        <span className="fin-head-scope">One figure, and it solves the commission</span>
+      </div>
+      <p className="fin-rates-lead">
+        Revenue on the Streaming tab is <b>worked out, not recorded</b> — Whatnot states only what it
+        paid, and the price a buyer bid is that figure with the fees added back. Type what Whatnot
+        says this window <b>sold</b> and this works out the commission that would reproduce it.
+        Nothing changes until you choose to save it.
+      </p>
+
+      <div className="fin-fit-inputs">
+        <label>
+          <span>Whatnot says this window sold</span>
+          <input
+            className="input"
+            inputMode="decimal"
+            placeholder="306977.00"
+            value={stated}
+            onChange={(e) => setStated(e.target.value)}
+          />
+        </label>
+      </div>
+
+      {fit && verdict && (
+        <>
+          <Note
+            tone={verdict.tone === 'good' ? 'good' : verdict.tone === 'bad' ? 'danger' : 'warn'}
+            icon={verdict.tone === 'good' ? 'Check' : 'AlertTriangle'}
+          >
+            <b>{verdict.headline}</b>
+            <p>{verdict.detail}</p>
+          </Note>
+
+          {fit.solvable && (
+            <table className="data fin-fit-table">
+              <tbody>
+                <tr>
+                  <th scope="row">Revenue the app shows</th>
+                  <td className="num"><Money value={fit.derivedRevenue} /></td>
+                </tr>
+                <tr>
+                  <th scope="row">Whatnot says</th>
+                  <td className="num"><Money value={fit.statedGross} /></td>
+                </tr>
+                <tr className={Math.abs(fit.revenueGap) < 1 ? 'is-ok' : 'is-bad'}>
+                  <th scope="row">Out by</th>
+                  <td className="num"><Money value={fit.revenueGap} strong /></td>
+                </tr>
+                {/* THE ROW THAT TELLS A RATE ERROR FROM A PER-ORDER ONE. A
+                    commission error scales with the money; a flat charge scales
+                    with the ORDERS. Two windows of different sizes that agree on
+                    this figure are being broken by the same per-order term. */}
+                {fit.perOrderGap !== null && Math.abs(fit.revenueGap) >= 1 && (
+                  <tr>
+                    <th scope="row">Per order, across {fit.orders.toLocaleString()} orders</th>
+                    <td className="num mono">
+                      {fit.perOrderGap < 0 ? '\u2212' : ''}
+                      {Math.round(Math.abs(fit.perOrderGap) * 100)}¢
+                    </td>
+                  </tr>
+                )}
+                <tr className="fin-fit-fit">
+                  <th scope="row">Commission that reproduces it</th>
+                  <td className="num mono">{ratePct(fit.fittedCommissionRate)}</td>
+                </tr>
+              </tbody>
+            </table>
+          )}
+
+          {fit.solvable && Math.abs(fit.revenueGap) >= 1 && from && to && (
+            <div className="fin-fit-actions">
+              <Button variant="primary" loading={busy} onClick={() => void applyRate()}>
+                Use {ratePct(fit.fittedCommissionRate)} for {compactDayLabel(from)} –{' '}
+                {compactDayLabel(to)}
+              </Button>
+              <span className="fin-head-scope">
+                Saves a rate period over exactly these dates and re-prices every night in it.
+              </span>
+            </div>
+          )}
+        </>
+      )}
+    </section>
+  )
+}
+
+/** "$306,977.00" — for a note somebody will read on a saved rate period. */
+function fmtMoney(v: number): string {
+  return `$${Math.abs(v).toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  })}`
 }
 
 /**

@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { LIVE, useLiveRefresh } from '../../lib/live'
-import type { StreamingFinanceView } from '@shared/financeStreaming'
+import type { StreamingFinanceView, WhatnotRatePeriod } from '@shared/financeStreaming'
+import { reconInRange, reconRows, reconTotals } from '@shared/pnlRecon'
 import { Button, CenterLoader } from '../../components/ui'
 import { useSession } from '../../lib/session'
-import { Note } from './bits'
+import { Money, Note } from './bits'
 import { Expenses } from './Expenses'
 import { FinanceCalendar } from './FinanceCalendar'
 import { ImportPanel } from './ImportPanel'
@@ -61,6 +62,16 @@ export function StreamingTab(): JSX.Element {
   const toast = useToast()
 
   const [view, setView] = useState<StreamingFinanceView | null>(null)
+  /**
+   * The rate periods, read only so this tab can say when a night was priced at
+   * terms nobody chose. See the banner below.
+   *
+   * Fetched here rather than folded into the view because the answer depends on
+   * the SELECTED RANGE, which only this tab knows — and because reusing the same
+   * reconRows the Fees tab reads means the two screens cannot report different
+   * uncovered figures.
+   */
+  const [periods, setPeriods] = useState<WhatnotRatePeriod[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [attempt, setAttempt] = useState(0)
@@ -78,6 +89,10 @@ export function StreamingTab(): JSX.Element {
       try {
         const next = await finance.streamView()
         if (alive) setView(next)
+        // Failing to read the rate list must not blank the tab: the numbers are
+        // still worth showing, the coverage warning simply is not available.
+        const rates = await finance.rates().catch(() => [] as WhatnotRatePeriod[])
+        if (alive) setPeriods(rates)
       } catch (err) {
         if (alive) {
           setError(err instanceof Error ? err.message : 'The streaming ledger could not be read.')
@@ -96,6 +111,33 @@ export function StreamingTab(): JSX.Element {
   useLiveRefresh(LIVE.finance, () => setAttempt((n) => n + 1))
 
   const applyView = useCallback((next: StreamingFinanceView) => setView(next), [])
+
+  /**
+   * How much of the money on screen was priced at terms NOBODY CHOSE.
+   *
+   * `effectiveFeeRates` falls back to the built-in 8% for any business day no
+   * rate period covers, and it does so silently. That is not a small default:
+   * revenue here is the net with the modelled fee added back, so pricing a night
+   * at 8% when the real commission is 4% invents about 4.8 cents of revenue per
+   * dollar Whatnot actually paid — around $19k on a $400k month. It moves no
+   * bottom line, because the fee is subtracted again two sections down, which is
+   * exactly why nothing caught it.
+   *
+   * Sized in MONEY, never in nights. Four uncovered Tuesdays worth $40 between
+   * them is a footnote; one uncovered Saturday that took $60,000 is the whole
+   * discrepancy, and a count cannot tell those apart — the same argument
+   * `reconTotals` already makes for the figure it returns.
+   */
+  const uncovered = useMemo(() => {
+    if (!view || periods.length === 0) return null
+    const rows = reconInRange(
+      reconRows(view.days, periods),
+      range?.from ?? '',
+      range?.to ?? ''
+    )
+    const t = reconTotals(rows)
+    return t.uncoveredNetPaid > 0 ? t : null
+  }, [view, periods, range])
 
   /**
    * Re-run attribution over every stored row.
@@ -243,6 +285,31 @@ export function StreamingTab(): JSX.Element {
           </p>
           <p>
             Re-attribute first. If that fails, delete the last import and upload it again.
+          </p>
+        </Note>
+      )}
+
+      {/* SECOND, and at the same weight. The reconcile banner above says the rows
+          do not add up; this one says they add up to a figure priced on terms
+          nobody set. Both make every number below untrustworthy, and only one of
+          them used to be said out loud. */}
+      {uncovered && (
+        <Note tone="warn" icon="AlertTriangle" role="alert">
+          <b>
+            <Money value={uncovered.uncoveredNetPaid} /> of this was priced at the standard rates,
+            not yours.
+          </b>
+          <p>
+            {uncovered.uncoveredDays === 1
+              ? 'One night in this range is not covered by any rate period'
+              : `${uncovered.uncoveredDays} nights in this range are not covered by any rate period`}
+            , so they were charged at the built-in 8% commission and 2.9% card fee. If your real
+            terms are lower, revenue for those nights reads high — and only revenue, which is why
+            the profit below still looks right.
+          </p>
+          <p>
+            Set a rate period covering them in <b>Fees &amp; rates</b>, or use the revenue check
+            there to work out what the commission must have been.
           </p>
         </Note>
       )}

@@ -29,13 +29,14 @@
  * and a main that did not would be a check, not a rule.
  */
 import type { Result } from '@shared/types'
-import type { RatePeriodInput, WhatnotRatePeriod } from '@shared/financeStreaming'
+import type { RatePeriodInput, RateScope, WhatnotRatePeriod } from '@shared/financeStreaming'
 import type { WhatnotFeeRates } from '@shared/financeStreaming'
 import {
   DEFAULT_FEE_RATES,
   DEFAULT_PROCESSING_FLAT_CENTS,
   DEFAULT_PROCESSING_RATE,
   DEFAULT_TAX_RATE,
+  RATE_SCOPES,
   effectiveFeeRates,
   overlappingRatePeriod,
   validateRatePeriod
@@ -51,6 +52,7 @@ interface RateRow {
   tax_rate: number | null
   processing_rate: number | null
   processing_flat_cents: number | null
+  scope: string | null
   note: string | null
   created_at: string
   updated_at: string
@@ -65,6 +67,10 @@ interface RateRow {
  * cells empty. A NULL tax rate reaching the model would price the whole range at
  * nothing.
  */
+function isScope(v: unknown): v is RateScope {
+  return typeof v === 'string' && RATE_SCOPES.some((s) => s.key === v)
+}
+
 function toPeriod(r: RateRow): WhatnotRatePeriod {
   return {
     id: r.id,
@@ -74,6 +80,10 @@ function toPeriod(r: RateRow): WhatnotRatePeriod {
     taxRate: r.tax_rate ?? DEFAULT_TAX_RATE,
     processingRate: r.processing_rate ?? DEFAULT_PROCESSING_RATE,
     processingFlatCents: r.processing_flat_cents ?? DEFAULT_PROCESSING_FLAT_CENTS,
+    // A row synced from a machine that predates the column arrives without one.
+    // 'all' is what such a period has always meant, so this reads it as itself
+    // rather than narrowing it to something nobody chose.
+    scope: isScope(r.scope) ? r.scope : 'all',
     note: r.note ?? '',
     createdAt: r.created_at,
     updatedAt: r.updated_at
@@ -85,7 +95,7 @@ export function listRatePeriods(): WhatnotRatePeriod[] {
   const rows = getDb()
     .prepare(
       `SELECT id, from_date, to_date, rate, tax_rate, processing_rate,
-              processing_flat_cents, note, created_at, updated_at
+              processing_flat_cents, scope, note, created_at, updated_at
          FROM whatnot_fee_periods
         ORDER BY from_date ASC, rowid ASC`
     )
@@ -106,14 +116,20 @@ export function listRatePeriods(): WhatnotRatePeriod[] {
  * the row's `stream_date`; passing a calendar date instead is what made one show
  * report two rates and a blended percentage nobody had configured.
  */
-export function rateLookup(): (day: string) => WhatnotFeeRates {
+export function rateLookup(): (day: string, scope?: RateScope) => WhatnotFeeRates {
   const periods = listRatePeriods()
   const cache = new Map<string, WhatnotFeeRates>()
-  return (day: string): WhatnotFeeRates => {
-    const hit = cache.get(day)
+  return (day: string, scope: RateScope = 'all'): WhatnotFeeRates => {
+    // KEYED ON BOTH, because the answer now depends on both. A cache still keyed
+    // on the day alone would serve the first scope asked for to every later one
+    // — so a night whose first row happened to be a sealed box would price its
+    // break spots at the box rate, and the day would look internally consistent
+    // while being wrong.
+    const key = `${day}|${scope}`
+    const hit = cache.get(key)
     if (hit !== undefined) return hit
-    const rates = effectiveFeeRates(periods, day)
-    cache.set(day, rates)
+    const rates = effectiveFeeRates(periods, day, scope)
+    cache.set(key, rates)
     return rates
   }
 }
@@ -127,8 +143,8 @@ export function rateLookup(): (day: string) => WhatnotFeeRates {
  * calendar date. That is the whole reason the preview and the statement agree:
  * ask both about 20 July and they are asking the period list the same question.
  */
-export function rateForDate(day: string): WhatnotFeeRates {
-  return effectiveFeeRates(listRatePeriods(), day)
+export function rateForDate(day: string, scope: RateScope = 'all'): WhatnotFeeRates {
+  return effectiveFeeRates(listRatePeriods(), day, scope)
 }
 
 function fail(err: unknown): Result<never> {
@@ -145,6 +161,11 @@ function dayLabel(day: string): string {
 
 function spanLabel(p: WhatnotRatePeriod): string {
   return p.toDate ? `${dayLabel(p.fromDate)} – ${dayLabel(p.toDate)}` : `${dayLabel(p.fromDate)} onwards`
+}
+
+/** "break spots" / "everything" — for an error somebody has to act on. */
+function scopeLabel(scope: RateScope): string {
+  return (RATE_SCOPES.find((s) => s.key === scope)?.label ?? 'Everything').toLowerCase()
 }
 
 /** The note, bounded. A rate is not a place to keep an essay. */
@@ -186,6 +207,11 @@ export function saveRatePeriod(
     processingFlatCents: Math.round(
       num(input?.processingFlatCents, DEFAULT_FEE_RATES.processingFlatCents)
     ),
+    // Absent means 'all', which is what every period meant before scopes and
+    // what a renderer packaged before them still sends. A PRESENT but unknown
+    // value is left as-is so validateRatePeriod refuses it rather than being
+    // quietly widened here into covering everything.
+    scope: input?.scope === undefined ? 'all' : (input.scope as RateScope),
     note: String(input?.note ?? '').trim().slice(0, NOTE_MAX)
   }
 
@@ -204,9 +230,11 @@ export function saveRatePeriod(
       return {
         ok: false,
         error:
-          `That range overlaps ${spanLabel(clash)} at ${(clash.rate * 100).toFixed(2).replace(/\.?0+$/, '')}%. ` +
-          `Two periods cannot both claim a day — a show's fee would depend on which one was read first. ` +
-          `Narrow one of them, or edit the existing period instead.`
+          `That range overlaps ${spanLabel(clash)} at ${(clash.rate * 100).toFixed(2).replace(/\.?0+$/, '')}%, ` +
+          `which covers ${scopeLabel(clash.scope)}. ` +
+          `Two periods covering the same thing cannot both claim a day — a row's fee would depend ` +
+          `on which was read first. Narrow one of them, edit the existing period, or set this one ` +
+          `to cover something different.`
       }
     }
 
@@ -215,7 +243,7 @@ export function saveRatePeriod(
         `UPDATE whatnot_fee_periods
             SET from_date = @from, to_date = @to, rate = @rate, tax_rate = @tax,
                 processing_rate = @proc, processing_flat_cents = @flat,
-                note = @note, updated_at = @ts
+                scope = @scope, note = @note, updated_at = @ts
           WHERE id = @id`
       ).run({
         id: clean.id,
@@ -225,6 +253,7 @@ export function saveRatePeriod(
         tax: clean.taxRate,
         proc: clean.processingRate,
         flat: clean.processingFlatCents,
+        scope: clean.scope ?? 'all',
         note: clean.note,
         ts
       })
@@ -232,8 +261,8 @@ export function saveRatePeriod(
       db.prepare(
         `INSERT INTO whatnot_fee_periods
            (id, from_date, to_date, rate, tax_rate, processing_rate,
-            processing_flat_cents, note, created_at, updated_at, created_by)
-         VALUES (@id, @from, @to, @rate, @tax, @proc, @flat, @note, @ts, @ts, @by)`
+            processing_flat_cents, scope, note, created_at, updated_at, created_by)
+         VALUES (@id, @from, @to, @rate, @tax, @proc, @flat, @scope, @note, @ts, @ts, @by)`
       ).run({
         id: newId(),
         from: clean.fromDate,
@@ -242,6 +271,7 @@ export function saveRatePeriod(
         tax: clean.taxRate,
         proc: clean.processingRate,
         flat: clean.processingFlatCents,
+        scope: clean.scope ?? 'all',
         note: clean.note,
         ts,
         by: actorId
