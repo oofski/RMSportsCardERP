@@ -1130,6 +1130,27 @@ export interface NewInvoiceLine {
    * Only an OPEN roadshow order is ever offered; see @shared/poStock.
    */
   sourcePoId?: string | null
+  /**
+   * THIS LINE'S UNITS SPREAD ACROSS SEVERAL SHELVES, at creation.
+   *
+   * The owner, looking at three shelves each holding one and a line for three:
+   * "I want to be able to add each of these here to sum to 3." Splitting was
+   * already possible — `setInvoiceLineRouting` writes exactly these rows and the
+   * cost consumption has always honoured them per slice — but only AFTER the
+   * order existed, through a second screen. So the ordinary case, which is
+   * knowing where the units come from while the order is being written, meant
+   * create-then-go-and-fix.
+   *
+   * OMITTED OR EMPTY IS THE NORMAL CASE and writes no rows at all, which is the
+   * whole back-compat mechanism: no rows means one implicit slice of the whole
+   * quantity at `destination`, exactly as every sales order ever written behaves.
+   * See @shared/invoiceAllocations, which owns that rule.
+   *
+   * The quantities must sum to the line's `quantity`. They are checked in main
+   * rather than trusted, because a renderer is a convenience and these decide
+   * which shelves get drawn down.
+   */
+  allocations?: Array<{ location: string; quantity: number }> | null
 }
 
 export interface NewInvoice {

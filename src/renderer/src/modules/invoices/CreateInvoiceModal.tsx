@@ -45,6 +45,7 @@ import { POCatalogTypeahead } from '../invoicing/POCatalogTypeahead'
 import { SourceOrderPicker } from './SourceOrderPicker'
 import { StockOnHand } from './StockOnHand'
 import { PickSourceModal } from './PickSourceModal'
+import type { ShelfSlice } from '@shared/pickSource'
 import { CustomerTypeahead } from './CustomerTypeahead'
 import { QboReadiness } from './QboReadiness'
 import { InvoiceStatusChip, formatDay } from './helpers'
@@ -126,6 +127,14 @@ interface DraftLine {
    * the week with that shop be costed against its own cases.
    */
   sourcePoId: string
+  /**
+   * THE LINE'S UNITS SPREAD ACROSS SHELVES, when somebody spread them.
+   *
+   * Empty on almost every line, which is the whole back-compat mechanism: no
+   * rows means one implicit slice of the whole quantity at `destination`, which
+   * is exactly what a line has always meant. See @shared/invoiceAllocations.
+   */
+  allocations: ShelfSlice[]
 }
 
 function today(): string {
@@ -276,7 +285,8 @@ export function CreateInvoiceModal({
         // A prefill comes from a DROPSHIP purchase, which is the other kind of
         // link entirely — those units never touched a shelf, so there is no
         // order's cases to sell out of.
-        sourcePoId: ''
+        sourcePoId: '',
+        allocations: []
       }))
     }
     return (invoice?.lines ?? []).map((l) => ({
@@ -297,7 +307,8 @@ export function CreateInvoiceModal({
       supplier: l.supplier ?? '',
       // Read back so reopening an order shows which cases it sold, and re-saving
       // it does not quietly turn them into ordinary stock.
-      sourcePoId: l.sourcePoId ?? ''
+      sourcePoId: l.sourcePoId ?? '',
+      allocations: []
     }))
   })
   const [error, setError] = useState('')
@@ -390,13 +401,23 @@ export function CreateInvoiceModal({
    */
   const [picking, setPicking] = useState<InventoryProduct | null>(null)
 
-  const addLine = (p: InventoryProduct, choice?: { quantity: number; location: string }): void => {
+  const addLine = (
+    p: InventoryProduct,
+    choice?: { quantity: number; location: string; allocations?: ShelfSlice[] }
+  ): void => {
     const wanted = Math.max(1, Math.round(choice?.quantity ?? 1))
     const where = choice?.location ?? ''
+    const split = choice?.allocations ?? []
     setLines((prev) => {
       // Only a real id counts as "already here". Saved lines carry an empty one
       // and would otherwise all collapse onto whichever was picked first.
-      const mergeInto = stockLineForProduct(prev, p.id ?? '', location)
+      //
+      // A SPLIT IS NEVER MERGED INTO AN EXISTING LINE. Merging adds to the
+      // quantity, and the shelves the operator just chose would go with the
+      // discarded half — the line would claim more units than its slices place.
+      // Two lines of the same product is already legal here, and a second line
+      // saying what it says is better than one line quietly saying less.
+      const mergeInto = split.length > 0 ? null : stockLineForProduct(prev, p.id ?? '', location)
       if (mergeInto) {
         return prev.map((l) =>
           l.key === mergeInto.key
@@ -428,7 +449,8 @@ export function CreateInvoiceModal({
           supplier: '',
           // ORDINARY STOCK until somebody says otherwise. A line that names no
           // order walks FIFO exactly as every sale always has.
-          sourcePoId: ''
+          sourcePoId: '',
+          allocations: split
         })
       ]
     })
@@ -515,7 +537,10 @@ export function CreateInvoiceModal({
         // A supplier the operator already typed on a saved line is kept — it may
         // name a party the destination does not, on a line entered before this
         // column went away.
-        supplier: shipsItself ? null : l.supplier || from
+        supplier: shipsItself ? null : l.supplier || from,
+        // Empty on an ordinary line, so `saveInvoice` writes no allocation rows
+        // and the sale behaves byte for byte as it did before splitting existed.
+        allocations: l.allocations.map((a) => ({ location: a.location, quantity: a.quantity }))
       }
     })
   })

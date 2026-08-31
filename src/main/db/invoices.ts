@@ -60,6 +60,73 @@ import { addSaleLink, listSaleLinks } from './salePurchaseLinks'
 import { soleSourceOrder } from '@shared/poStock'
 
 /**
+ * The picker's split, checked and turned into rows.
+ *
+ * ## MAIN IS THE TRUST BOUNDARY, and these decide which shelves get drawn down
+ *
+ * The form checks the sum too and disables its button — but a renderer is a
+ * convenience, not a guarantee, and every other path into `saveInvoice` (the
+ * server transport, a future import, a test) reaches this with whatever it was
+ * handed. Rows that do not add up to the line's quantity would put a different
+ * number of units on the document than on the shelves, silently, so they are
+ * refused here rather than trusted.
+ *
+ * ## What is NOT checked: whether a shelf has enough
+ *
+ * Deliberately. Selling ahead of the shelf is ordinary — the case is in transit,
+ * the shop is holding one, the count is a day old — and `applyInvoiceStock`
+ * already takes what is there and leaves the rest owed on the line. That rule is
+ * inherited from the single-shelf picker and is not revisited by splitting.
+ *
+ * ## An empty split is not a split
+ *
+ * Zero-quantity rows are dropped, and a line left with none returns none — which
+ * is the implicit single slice every sales order ever written already has.
+ */
+function buildLineAllocations(
+  input: ReadonlyArray<{ location: string; quantity: number }> | null | undefined,
+  quantity: number,
+  item: string
+): InvoiceLineAllocation[] {
+  const rows = (input ?? [])
+    .map((a) => ({
+      location: String(a?.location ?? '').trim(),
+      quantity: Math.max(0, Math.round(Number(a?.quantity) || 0))
+    }))
+    .filter((a) => a.location !== '' && a.quantity > 0)
+  // ONE SHELF IS NOT A SPLIT. The line's own destination already says it, and
+  // `allocationProblem` refuses a single stored row for exactly that reason —
+  // two ways to say the same thing can disagree. `toLineChoice` collapses this
+  // on the way out of the picker; main does it again because main is the trust
+  // boundary and every other caller reaches here unmediated.
+  if (rows.length <= 1) return []
+
+  const problem = allocationProblem(rows, quantity)
+  if (problem) {
+    throw new Error(`${item || 'A line'}: ${problem}`)
+  }
+
+  return rows.map((r) => {
+    const holdsStock = destinationHoldsStock(r.location)
+    return {
+      id: randomUUID(),
+      quantity: r.quantity,
+      destination: r.location,
+      // The same rule the line itself follows: goods off our own shelf came from
+      // stock and name no supplier, and anything else is somebody shipping direct.
+      supplier: holdsStock ? null : r.location,
+      holdsStock,
+      /** Nothing names an order here, so there is no number to print. */
+      sourcePoNumber: null,
+      // The picker chooses SHELVES. Naming a purchase order is a separate
+      // question asked on the line, and inventing an answer here would put a
+      // cost basis on units nobody said came from that order.
+      sourcePoId: null
+    }
+  })
+}
+
+/**
  * What to STORE in a line's destination column.
  *
  * Null when it is the same as the order's, which is the ordinary case and is
@@ -1458,7 +1525,20 @@ export function saveInvoice(
       // Null on every ordinary line — see @shared/poStock for why only an open
       // roadshow order is ever offered, and consumeFromPo for what naming one
       // does to the cost.
-      sourcePoId: clean(l.sourcePoId)
+      sourcePoId: clean(l.sourcePoId),
+      /**
+       * THE LINE SPREAD ACROSS SHELVES, when the picker split it.
+       *
+       * Built HERE, once, so the stock pass and the row insert below are handed
+       * the identical objects. `stockDrawingLines` runs before the lines are
+       * written and reads this field, so a split that existed only in the insert
+       * would draw the wrong shelves and leave a table that disagreed with the
+       * movement it caused.
+       *
+       * Empty for every ordinary line, which writes no rows and leaves the whole
+       * path byte for byte as it was — see @shared/invoiceAllocations.
+       */
+      allocations: buildLineAllocations(l.allocations, Number(l.quantity) || 0, l.item)
     }
   })
 
@@ -1794,6 +1874,12 @@ export function saveInvoice(
     }
 
     db.prepare(`DELETE FROM invoice_lines WHERE invoice_id = ?`).run(id)
+    const insertAllocation = db.prepare(
+      `INSERT INTO invoice_line_allocations
+         (id, invoice_id, invoice_line_id, quantity, destination, supplier, source_po_id,
+          position, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
     const insert = db.prepare(
       `INSERT INTO invoice_lines
          (id, invoice_id, position, item, product_id, sku, description, quantity, rate, amount,
@@ -1861,6 +1947,23 @@ export function saveInvoice(
         destination: lineDestination(l.destination, stockLocation),
         supplier: (l.supplier ?? '').trim() || null
       })
+      // The split, when there is one. The same rows the stock pass above was
+      // given, so the table and the movement can never describe different
+      // shelves. Nothing is written for an ordinary line.
+      for (const [n, a] of l.allocations.entries()) {
+        insertAllocation.run(
+          a.id,
+          id,
+          l.id,
+          a.quantity,
+          a.destination,
+          a.supplier,
+          a.sourcePoId,
+          n,
+          stamp,
+          stamp
+        )
+      }
     }
   })
   run()

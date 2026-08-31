@@ -28604,22 +28604,24 @@ button.sor-team:focus-visible {
   flex-direction: column;
   gap: 6px;
 }
-/* A whole row is the target, not a radio dot. Somebody is picking between four
-   or five places with a count each, and the count is what they are reading —
-   so the count is inside the thing they press. */
+/* THE ROW IS NOW TWO CONTROLS, not one.
+   It used to be a single button: press a place, take everything from there. A
+   line can now come off several shelves at once, so the name is still pressable
+   — it fills this shelf with whatever is still unplaced, which is what makes
+   1 + 1 + 1 three clicks — and the quantity beside it is its own stepper. The
+   row itself stopped being the target and became the container. */
 .ps-place {
   display: flex;
   align-items: center;
   width: 100%;
   gap: 10px;
-  padding: 10px 12px;
+  padding: 6px 8px 6px 12px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface-1);
   color: var(--text-1);
   font-size: 13px;
   text-align: left;
-  cursor: pointer;
 }
 .ps-place:hover {
   background: var(--surface-2);
@@ -28635,11 +28637,103 @@ button.sor-team:focus-visible {
 .ps-place.is-empty {
   color: var(--text-3);
 }
+/* The pressable half. A bare button so it inherits nothing that would make it
+   look like a second control competing with the stepper beside it. */
 .ps-place-name {
   display: flex;
   align-items: center;
   gap: 6px;
+  flex: 1 1 auto;
   min-width: 0;
+  padding: 4px 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+/* WHAT IS ON THAT SHELF, beside the name rather than where the editable figure
+   is. The number on the right used to mean this, and the whole change is that it
+   no longer does — so the two must never be mistaken for each other. */
+.ps-place-have {
+  margin-left: auto;
+  padding-right: 4px;
+  color: var(--text-3);
+  font-size: 11.5px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* HOW MANY ARE COMING OFF IT. The figure being edited. */
+.ps-place-take {
+  display: flex;
+  align-items: center;
+  flex: none;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  overflow: hidden;
+  background: var(--surface-1);
+}
+.ps-place-take button {
+  width: 26px;
+  height: 28px;
+  border: 0;
+  background: var(--surface-2);
+  color: var(--text-1);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.ps-place-take button:hover:not(:disabled) {
+  background: var(--surface-3);
+}
+.ps-place-take button:disabled {
+  color: var(--text-3);
+  cursor: default;
+}
+.ps-place-take input {
+  width: 34px;
+  height: 28px;
+  border: 0;
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  background: var(--surface-1);
+  color: var(--text-1);
+  font-size: 13px;
+  font-weight: 650;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+/* THE RUNNING SUM. Green while it adds up, amber while it does not — because
+   the Add button is disabled in that state and a disabled button has to say why
+   before somebody reaches for it. */
+.ps-total {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 14px 0 0;
+  padding: 9px 12px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.ps-total > svg {
+  flex: none;
+  margin-top: 1px;
+  color: var(--success-strong);
+}
+.ps-total b {
+  color: var(--text);
+}
+.ps-total.is-off {
+  background: var(--warning-bg);
+  color: var(--text);
+}
+.ps-total.is-off > svg {
+  color: var(--warning);
 }
 .ps-default {
   padding: 1px 6px;
