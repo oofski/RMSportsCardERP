@@ -69,7 +69,29 @@ gives you at your registrar. The certificate is automatic.
 ## Backups — do this before you trust it
 
 Render backs up disks on paid plans, but the safe copy is the one you can
-restore without asking anybody. Open a Shell from the service page:
+restore without asking anybody.
+
+**Sign in as the Owner and open Admin → Backup → Download backup.** It shows
+what is in the database right now — products, orders, timesheets, ledger rows —
+and hands you one `.db` file. That is the whole business in a single file, and
+it is the procedure to use, because it is the only one anybody will actually
+follow at the moment it is needed.
+
+Two things about that file:
+
+- **It is secret.** The QuickBooks connection and the payment instructions are
+  in it in readable form. Keep it where you would keep a password, not in a
+  shared folder.
+- **Photos are not in it.** Product images live beside the database, not inside
+  it. Everything else is.
+
+Keep the copies somewhere that is not Render. A backup on the same disk as the
+thing it is backing up is not a backup.
+
+### If the app will not start
+
+Then there is no Admin screen to click, and this is the fallback. Open a Shell
+from the service page:
 
 ```bash
 node -e "
@@ -78,11 +100,20 @@ node -e "
 "
 ```
 
-`VACUUM INTO` is safe on a live database. Copying the `.db` file while people
-are using it is not — that is how you get a backup that restores into a corrupt
-database months later.
+This is the same operation the button performs. `VACUUM INTO` is safe on a live
+database; copying the `.db` file while people are using it is not — WAL means
+the `.db` file alone is not the whole database, which is how you get a backup
+that restores into a corrupt database months later.
 
-Download it from the Shell, and keep the copies somewhere that is not Render.
+Download it from the Shell.
+
+### Putting one back
+
+There is no restore button yet — restoring is deliberately still a manual job,
+because putting an old file back on a machine that syncs with everyone else can
+roll the whole team backwards. Ask before doing it. The mechanics, when you do:
+stop the service, move the backup onto `/data/rm-operations.db`, delete any
+`-wal` and `-shm` files sitting next to it, and start the service again.
 
 ## Updating
 

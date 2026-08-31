@@ -28877,3 +28877,80 @@ button.sor-team:focus-visible {
     flex: 0 0 auto;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   BACKUP — the owner's copy of the database.
+
+   Deliberately plain. This screen is opened by somebody who is worried about
+   losing their business, and every ornament on it is a thing between them and
+   one button. One card with the figures and the download, then the three
+   sentences that change where they put the file.
+   --------------------------------------------------------------------------- */
+.bk-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 18px 20px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-1);
+  margin-bottom: 16px;
+}
+.bk-what {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.bk-what-label {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.bk-what-value {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+}
+.bk-what-size {
+  font-size: 12.5px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+/* The three notes read as prose, not as warnings. None of them is an error —
+   they are facts that change what somebody does next, and styling them as
+   alerts would make the screen look like something had gone wrong. */
+.bk-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.5;
+  margin-bottom: 10px;
+}
+.bk-note svg {
+  flex: none;
+  margin-top: 1px;
+  color: var(--text-3);
+}
+.bk-note b {
+  color: var(--text);
+}
+@media (max-width: 560px) {
+  .bk-card {
+    align-items: stretch;
+  }
+  .bk-card .btn {
+    width: 100%;
+    justify-content: center;
+  }
+}

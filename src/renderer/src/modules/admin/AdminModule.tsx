@@ -13,6 +13,7 @@ import { RolesTab } from './RolesTab'
 import { ActivityTab } from './ActivityTab'
 import { DeveloperTab } from './DeveloperTab'
 import { NumberingTab } from './NumberingTab'
+import { BackupTab } from './BackupTab'
 
 type SectionId =
   | 'employees'
@@ -22,6 +23,7 @@ type SectionId =
   | 'roles'
   | 'activity'
   | 'numbering'
+  | 'backup'
   | 'developer'
 
 interface SectionDef {
@@ -87,13 +89,22 @@ interface SectionDef {
  * independent defences rather than one.
  */
 export function AdminModule(): JSX.Element {
-  const { can } = useSession()
+  const { can, user } = useSession()
   const [employees, setEmployees] = useState<Employee[]>([])
   const [customerCount, setCustomerCount] = useState<number | null>()
   const [vendorCount, setVendorCount] = useState<number | null>()
   const [loading, setLoading] = useState(true)
   const [section, setSection] = useState<SectionId | null>(null)
 
+  /**
+   * OWNER, not a permission. `ROLE_PERMISSIONS.owner` is every key, so a
+   * backup permission would be held by the owner automatically — and would
+   * also show up in Roles & Permissions, where it could be handed to somebody
+   * else. The file is credential material; a control the screen can give away
+   * is not the control this needs. The handler checks the same thing, and the
+   * handler is the lock.
+   */
+  const isOwner = user?.role === 'owner'
   const canPeople = can('admin.employees.view')
   const canInvoicing = can('module.invoicing')
 
@@ -248,6 +259,18 @@ export function AdminModule(): JSX.Element {
       count: null,
       hint: 'Where deal tickets, invoices and POs start'
     },
+    // THE OWNER'S INSURANCE POLICY. Its own tile rather than a corner of
+    // Developer, on the argument the reset card makes one screen over:
+    // somebody taking a backup is worrying about their business, not doing
+    // developer work, and a door labelled Developer is not where they look.
+    {
+      id: 'backup',
+      label: 'Backup',
+      icon: 'Archive',
+      visible: isOwner,
+      count: null,
+      hint: 'Download a copy of everything'
+    },
     // THE BACK OF THE HOUSE, in one tile.
     //
     // Cloud sync and the inventory reset are not administration in the sense the
@@ -302,6 +325,7 @@ export function AdminModule(): JSX.Element {
         {open.id === 'roles' && <RolesTab employees={employees} onChanged={loadEmployees} />}
         {open.id === 'activity' && <ActivityTab />}
         {open.id === 'numbering' && <NumberingTab />}
+        {open.id === 'backup' && <BackupTab />}
         {open.id === 'developer' && <DeveloperTab />}
       </div>
     )

@@ -18,6 +18,7 @@ import { registerOwnerIpc } from './ownerIpc'
 import { registerScheduleIpc } from './scheduleIpc'
 import { registerInvoicesIpc } from './invoicesIpc'
 import { registerOrderExtrasIpc } from './orderExtrasIpc'
+import { registerBackupIpc } from './backupIpc'
 import { registerMessagesIpc } from './messagesIpc'
 import { registerPerformanceIpc } from './performanceIpc'
 import { getDb, closeDb } from './db/database'
@@ -130,6 +131,7 @@ app.whenReady().then(() => {
   registerScheduleIpc()
   registerInvoicesIpc()
   registerOrderExtrasIpc()
+  registerBackupIpc()
   registerMessagesIpc()
   registerPerformanceIpc()
   initUpdater()

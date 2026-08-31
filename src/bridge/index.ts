@@ -76,6 +76,7 @@ import type { ContactImportResult } from '@shared/contacts'
 import type { ClockPushState, PushSubscriptionInput } from '@shared/webPush'
 import type { OrderParty, SupplierSuggestion, VendorSummary } from '@shared/purchaseOrders'
 import type { NewPurchaseOrderLine, PoRoutingPatch } from '@shared/types'
+import type { BackupPreview } from '@shared/backup'
 import type {
   ShipPickAdvanced,
   ShipStationBoard,
@@ -358,6 +359,22 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       timesheet: (employeeId: string, start: string, end: string): Promise<TimeEntry[]> =>
         ipcRenderer.invoke(IPC.hoursTimesheet, { employeeId, start, end }),
       export: (req: ExportRequest): Promise<ExportResult> => ipcRenderer.invoke(IPC.hoursExport, req)
+    },
+    /**
+     * A copy of the database the owner can keep.
+     *
+     * OWNER ONLY, enforced in the handler rather than here — the file carries
+     * the QuickBooks token and the payment instructions, so it is credential
+     * material. `preview` answers null to anybody else, which is what makes the
+     * panel render an empty state instead of throwing a banner.
+     *
+     * `download` needs no transport branch: it is the save-dialog shape every
+     * other exporter uses, which the server turns into a download token on its
+     * own. See src/main/backupIpc.ts.
+     */
+    backup: {
+      preview: (): Promise<BackupPreview | null> => ipcRenderer.invoke(IPC.backupPreview),
+      download: (): Promise<ExportResult> => ipcRenderer.invoke(IPC.backupDownload)
     },
     clock: {
       status: (): Promise<ClockStatus> => ipcRenderer.invoke(IPC.clockStatus),

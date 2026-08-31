@@ -320,6 +320,12 @@ export const IPC = {
   invoiceSetForceReady: 'invoices:set-force-ready',
 
   // Purchase orders
+  // A copy of the database the owner can keep. Owner-only, both channels —
+  // the file carries the QuickBooks token and the payment instructions, so it
+  // is credential material and not an ordinary export.
+  backupPreview: 'backup:preview',
+  backupDownload: 'backup:download',
+
   poList: 'po:list',
   poGet: 'po:get',
   poCreate: 'po:create',
