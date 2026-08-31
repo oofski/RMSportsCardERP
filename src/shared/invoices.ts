@@ -2988,11 +2988,53 @@ export function salesOrderKindOf(invoice: {
   return 'mixed'
 }
 
-/** True when any part of this sale is a dropship — either routing or a link. */
+/**
+ * IS THERE A PURCHASE ORDER OWED FOR THIS SALE?
+ *
+ * The gate on the "Now buy the goods" prompt, and its ONLY caller — so it is
+ * named for the badge it used to feed and asked for the question it actually
+ * answers. Both readings agree on everything except one case, and that case is
+ * an ordinary week here.
+ *
+ * ## WHY A ROADSHOW SALE HAS TO BE EXCLUDED
+ *
+ * The owner, on the prompt appearing over a sale he had just written: "what does
+ * this mean ... let me know what the issue is here."
+ *
+ * `dropshipUnits` counts every unit going somewhere that is not RM or AM, and
+ * that deliberately includes a roadshow shop — see the note on `remoteUnits`,
+ * and the `drop_units` column it sits beside. Those units are ours: bought,
+ * costed, standing on a shelf, and merely three states away. Nothing about them
+ * is owed to a supplier.
+ *
+ * So selling out of Texas or New York tripped this, the prompt opened, and it
+ * then said "There is nothing here to buy" — because the modal reads
+ * `line.dropship`, which asks `destinationHoldsStock` and correctly answers no.
+ * Two reads of one order, disagreeing on screen, in a box demanding an answer.
+ *
+ * ## The subtraction is the whole fix
+ *
+ * `dropshipUnits` is everything not on a home shelf; `remoteUnits` is the part
+ * of that which IS one of our own registered shelves. What is left is going to
+ * somewhere that is not ours at all — a buyer's address, on a supplier's van —
+ * and that is exactly the thing a purchase order buys.
+ *
+ * A LINK STILL COUNTS with no units at all, which is `salesOrderKindOf`'s rule
+ * for an empty draft raised from a purchase, kept unchanged.
+ */
 export function isDropshipSale(invoice: {
   stockUnits: number
   dropshipUnits: number
+  /**
+   * REQUIRED, not optional with a zero default. An optional one would let a
+   * caller that simply forgot it fall silently back to the behaviour this fixes
+   * — and the symptom is a modal appearing over an order it has nothing to say
+   * about, which nobody would trace back to a missing field.
+   */
+  remoteUnits: number
   sourcePoId: string | null
 }): boolean {
-  return salesOrderKindOf(invoice) !== 'stock'
+  const away = Math.max(0, Number(invoice.remoteUnits) || 0)
+  const supplied = Math.max(0, (Number(invoice.dropshipUnits) || 0) - away)
+  return salesOrderKindOf({ ...invoice, dropshipUnits: supplied }) !== 'stock'
 }

@@ -3056,5 +3056,106 @@ console.log('\n=== A ROADSHOW OPEN TAB: OURS, AT THE SHOP, SHIPPED STRAIGHT OUT 
   )
 }
 
+
+console.log('\n=== a roadshow sale is NOT a dropship, and must not be asked to buy ===')
+// ---------------------------------------------------------------------------
+/**
+ * The owner, sent a screenshot of a modal that had opened over a sale he had
+ * just written: "what does this mean ... let me know what the issue is here."
+ *
+ * The modal was "Now buy the goods", and its own body said "There is nothing
+ * here to buy." Two reads of one order disagreeing on screen, in a box demanding
+ * an answer.
+ *
+ * ## Where the two reads came apart
+ *
+ * `drop_units` counts every unit going somewhere that is not RM or AM, and that
+ * DELIBERATELY includes a roadshow shop — see the note beside `remote_units`,
+ * which exists because those units are ours: bought, costed, on a shelf, three
+ * states away. The modal reads `line.dropship`, which asks
+ * `destinationHoldsStock` and correctly answers that a registered shelf is not a
+ * dropship. So the gate said yes and the contents said no.
+ *
+ * Selling out of Texas or New York is an ordinary week here, so this fired
+ * constantly and never had anything to offer when it did. `remoteUnits` is
+ * subtracted at the gate now: what is left is going somewhere that is not ours
+ * at all, which is the only thing a purchase order can buy.
+ */
+{
+  const SHOP_D = 'Roadshow Ipswich'
+  db.prepare(
+    `INSERT INTO inventory_products (id, sku, name, category, unit_cost, created_at, updated_at)
+     VALUES ('p_ips', 'SKU-IPS', 'Ipswich Hobby Case', 'Baseball', 0,
+             '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`
+  ).run()
+  const poRepo = require('../src/main/db/purchaseOrders')
+  const tabD = poRepo.createPurchaseOrder(
+    {
+      supplier: SHOP_D,
+      location: '',
+      ongoing: true,
+      lines: [{ productId: 'p_ips', quantity: 3, unitPrice: 150 }]
+    },
+    null
+  )
+  ok(!!tabD.id, 'a tab puts three cases on the shop shelf')
+
+  const shopSale = inv.saveInvoice(
+    {
+      customerName: 'Ipswich Buyer',
+      invoiceNumber: 'SO-RS900',
+      invoiceDate: '2026-08-31',
+      location: SHOP_D,
+      lines: [{ item: 'Ipswich Hobby Case', productId: 'p_ips', quantity: 2, rate: 700 }]
+    },
+    null
+  )
+  const shopRow = listed(shopSale.id)
+  ok(
+    shopRow.dropshipUnits === 2 && shopRow.stockUnits === 0,
+    'THE COUNT IS UNCHANGED — roadshow units are still counted outside the home shelves, which every other gate depends on',
+    `${shopRow.stockUnits} / ${shopRow.dropshipUnits}`
+  )
+  ok(
+    shopRow.remoteUnits === 2 && shopRow.remoteFrom === SHOP_D,
+    'and they are reported as OURS, at a named shop',
+    `${shopRow.remoteUnits} / ${shopRow.remoteFrom}`
+  )
+  ok(
+    isDropshipSale(shopRow) === false,
+    'THE FIX: nothing is owed to a supplier, so the "Now buy the goods" prompt does not open'
+  )
+
+  // The mixed case, which is the one a blunt "any roadshow units means no"
+  // would get wrong: part of it really IS a supplier's to ship.
+  const mixedSale = inv.saveInvoice(
+    {
+      customerName: 'Ipswich Buyer',
+      invoiceNumber: 'SO-RS901',
+      invoiceDate: '2026-08-31',
+      location: SHOP_D,
+      lines: [
+        { item: 'Ipswich Hobby Case', productId: 'p_ips', quantity: 1, rate: 700 },
+        { item: 'Direct Case', productId: null, quantity: 2, rate: 900, destination: 'Kestrel Supply' }
+      ]
+    },
+    null
+  )
+  const mixedRow = listed(mixedSale.id)
+  ok(
+    mixedRow.remoteUnits === 1 && mixedRow.dropshipUnits === 3,
+    'a sale part off a shop and part shipped direct reports both',
+    `remote ${mixedRow.remoteUnits} / drop ${mixedRow.dropshipUnits}`
+  )
+  ok(
+    isDropshipSale(mixedRow) === true,
+    'AND IT STILL ASKS, because two of those units are a supplier’s to ship — the subtraction is not a blanket exemption'
+  )
+
+  // The two shapes already pinned above must not have moved.
+  ok(isDropshipSale(listed(drop.id)) === true, 'a real dropship is untouched by any of this')
+  ok(isDropshipSale(listed(normal.id)) === false, 'and so is an ordinary shelf sale')
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail > 0) process.exit(1)
