@@ -30,12 +30,26 @@ let db: Database.Database | null = null
  * RM Cardz moves to a shared cloud database the schema and queries port over
  * with minimal change.
  */
+/**
+ * Where the one file lives, for the things that must reason about it as a FILE
+ * rather than as a database.
+ *
+ * Restore is the reason this is exported. Swapping the database has to happen
+ * before anything opens it, so the code that does the swapping cannot ask an
+ * open handle where it lives — and a second copy of `join(userData,
+ * 'rm-operations.db')` somewhere else is a rename waiting to put the app's data
+ * and the app's idea of its data in two different places.
+ */
+export function databasePath(): string {
+  const dir = app.getPath('userData')
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+  return join(dir, 'rm-operations.db')
+}
+
 export function getDb(): Database.Database {
   if (db) return db
 
-  const dir = app.getPath('userData')
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-  const file = join(dir, 'rm-operations.db')
+  const file = databasePath()
 
   db = new Database(file)
   db.pragma('journal_mode = WAL')

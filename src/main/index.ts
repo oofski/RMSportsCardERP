@@ -5,6 +5,8 @@ import { APP_NAME } from '@shared/config'
 import { setRegistrationSink } from './ipcRegistry'
 import { registerIpcHandlers } from './ipc'
 import { honourOwnerReset } from './services/ownerRecovery'
+import { applyPendingRestore } from './services/restoreOnBoot'
+import { resetSyncAfterRestore } from './db/sync'
 import { registerInventoryIpc } from './inventoryIpc'
 import { registerPurchaseOrdersIpc } from './purchaseOrdersIpc'
 import { startTrackingPoller } from './tracking/poller'
@@ -18,7 +20,7 @@ import { registerOwnerIpc } from './ownerIpc'
 import { registerScheduleIpc } from './scheduleIpc'
 import { registerInvoicesIpc } from './invoicesIpc'
 import { registerOrderExtrasIpc } from './orderExtrasIpc'
-import { registerBackupIpc } from './backupIpc'
+import { registerBackupIpc, registerRestoreIpc } from './backupIpc'
 import { registerMessagesIpc } from './messagesIpc'
 import { registerPerformanceIpc } from './performanceIpc'
 import { getDb, closeDb } from './db/database'
@@ -110,8 +112,36 @@ app.whenReady().then(() => {
   // Name the business clock BEFORE anything reads or writes a date. Every
   // business day and every ledger instant is measured against it.
   configureBusinessTimeZone()
+  /**
+   * BEFORE getDb(), and the order is the whole safety argument.
+   *
+   * A restore replaces the database FILE. Once a handle is open it points at an
+   * inode rather than a name, so a swap performed afterwards leaves this process
+   * happily serving — and writing back over — the file that was just moved
+   * aside. This is the only moment in the app's life when nothing has the
+   * database open. No-op on every ordinary boot.
+   */
+  const restored = applyPendingRestore()
+  if (restored) {
+    console.log(
+      restored.ok
+        ? `[restore] ${restored.filename} is now the database.` +
+            (restored.replacedPath ? ` The previous one is kept at ${restored.replacedPath}.` : '')
+        : `[restore] FAILED — ${restored.error}`
+    )
+  }
   // Initialise the database up front so a failure surfaces early.
   getDb()
+  /**
+   * Now that it is open: forget this machine's sync history, so the restored
+   * rows are never announced to the relay as new work. Without this a month-old
+   * backup would win last-write-wins against everybody's current data. See
+   * resetSyncAfterRestore.
+   */
+  if (restored?.ok) {
+    const { cleared } = resetSyncAfterRestore()
+    console.log(`[restore] sync reset — ${cleared} queued change(s) dropped, cursor back to 0.`)
+  }
   // Before the window opens, so the new password is on screen at the same time
   // as the login form asking for it. No-op unless the trigger file is present.
   honourOwnerReset()
@@ -132,6 +162,7 @@ app.whenReady().then(() => {
   registerInvoicesIpc()
   registerOrderExtrasIpc()
   registerBackupIpc()
+  registerRestoreIpc()
   registerMessagesIpc()
   registerPerformanceIpc()
   initUpdater()

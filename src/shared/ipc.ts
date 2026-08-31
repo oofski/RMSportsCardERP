@@ -326,6 +326,15 @@ export const IPC = {
   backupPreview: 'backup:preview',
   backupDownload: 'backup:download',
 
+  // Putting one back. Four channels rather than one, because staging, judging
+  // and swapping are separate acts with separate blast radii — see
+  // src/shared/restore.ts. `restoreStage` writes a file and decides nothing;
+  // `restoreConfirm` is the only one that can cost anybody data.
+  restoreStage: 'restore:stage',
+  restoreStatus: 'restore:status',
+  restoreConfirm: 'restore:confirm',
+  restoreCancel: 'restore:cancel',
+
   poList: 'po:list',
   poGet: 'po:get',
   poCreate: 'po:create',

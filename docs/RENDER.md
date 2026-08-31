@@ -109,11 +109,46 @@ Download it from the Shell.
 
 ### Putting one back
 
-There is no restore button yet — restoring is deliberately still a manual job,
-because putting an old file back on a machine that syncs with everyone else can
-roll the whole team backwards. Ask before doing it. The mechanics, when you do:
-stop the service, move the backup onto `/data/rm-operations.db`, delete any
-`-wal` and `-shm` files sitting next to it, and start the service again.
+**Admin → Backup → Restore a backup.** Choose the file. Before anything is
+touched the app checks it and shows you what is in it beside what is on the
+machine now — including what you would lose — and you type RESTORE to confirm.
+The app then restarts and swaps the file during startup, which is the only
+moment nothing has the database open.
+
+Four things it does that a hand-typed `mv` does not:
+
+- **Your current database is kept**, renamed `rm-operations-replaced-<stamp>.db`
+  beside the live one. A restore you regret is itself undoable.
+- **A backup from a NEWER version is refused.** Loading one into an older build
+  runs the migrations backwards and then pushes broken rows to everybody through
+  the relay. Update the app first, then restore.
+- **Damaged and unrelated files are refused** before anything moves, by an
+  integrity check that reads every page. A half-finished download opens fine and
+  falls apart weeks later.
+- **It does not roll the team back.** After the swap this machine forgets its
+  sync history and catches up from the relay, so the restored rows are never
+  pushed at anyone else. That is deliberate: the relay resolves conflicts
+  last-write-wins, so a month-old backup allowed to push would overwrite
+  everybody's current work. Restore fixes YOUR copy.
+
+On Render the restart is automatic — the process ends and the platform starts it
+again. Nothing to click.
+
+### If the app will not start at all
+
+Then there is no screen to restore from either. From the Shell:
+
+```bash
+# Stop writing first, then put the file in place.
+mv /data/rm-operations.db /data/rm-operations-old.db
+mv /data/your-backup.db  /data/rm-operations.db
+rm -f /data/rm-operations.db-wal /data/rm-operations.db-shm
+```
+
+Deleting the `-wal` and `-shm` is not optional. They belong to the database you
+just moved aside, and SQLite finding a write-ahead log from a *different*
+database will replay it into the new one — which is how a restore becomes
+corruption. Restart the service afterwards.
 
 ## Updating
 

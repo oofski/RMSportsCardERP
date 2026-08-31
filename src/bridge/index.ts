@@ -21,6 +21,7 @@
 import { IPC, type AppInfo } from '@shared/ipc'
 import type { Permission } from '@shared/permissions'
 import type { OrderResetInput, OrderResetPreview, OrderResetResult } from '@shared/orderReset'
+import type { RestoreCheck, RestoreStatus } from '@shared/restore'
 import type { FreightPatch } from '@shared/freight'
 import type { SupplyingOrder } from '@shared/poStock'
 import type { BreakBenchDetail, BreakStepState } from '@shared/breakSteps'
@@ -292,6 +293,15 @@ export interface BridgeTransport {
     as: 'text' | 'bytes'
     multiple?: boolean
   }): Promise<UploadedFile[]>
+  /**
+   * Choose a backup and stream it to the server, bypassing the JSON body.
+   *
+   * Browser-only, and optional for the same reason the pickers are: Electron
+   * does not have it, and its absence is how `restore.stage` knows to open a
+   * native dialog instead. A database is far too large to travel as base64
+   * inside an ordinary request — see the /api/restore route.
+   */
+  uploadRestore?(): Promise<Result<RestoreCheck>>
 }
 
 export function createBridge(ipcRenderer: BridgeTransport) {
@@ -375,6 +385,30 @@ export function createBridge(ipcRenderer: BridgeTransport) {
     backup: {
       preview: (): Promise<BackupPreview | null> => ipcRenderer.invoke(IPC.backupPreview),
       download: (): Promise<ExportResult> => ipcRenderer.invoke(IPC.backupDownload)
+    },
+    /**
+     * Putting a backup back.
+     *
+     * `stage` is the one method here with a transport branch, and it is the same
+     * branch `pickFile` uses: the ABSENCE of a browser-only capability is how a
+     * method knows it is on the desktop. Electron opens a native dialog inside
+     * the handler and reads the path directly. A browser has no path to give, so
+     * `uploadRestore` streams the bytes to the server — deliberately not through
+     * `invoke`, because every ordinary call is JSON and a database base64'd into
+     * a JSON body would hit the request cap at around 35 MB.
+     *
+     * The other three are ordinary calls on both transports. Only the delivery
+     * of the file differs; the judging and the swapping are identical.
+     */
+    restore: {
+      stage: (): Promise<Result<RestoreCheck>> =>
+        ipcRenderer.uploadRestore
+          ? ipcRenderer.uploadRestore()
+          : ipcRenderer.invoke(IPC.restoreStage),
+      status: (): Promise<RestoreStatus | null> => ipcRenderer.invoke(IPC.restoreStatus),
+      confirm: (input: { stageId: string; typed: string }): Promise<Result<{ filename: string }>> =>
+        ipcRenderer.invoke(IPC.restoreConfirm, input),
+      cancel: (): Promise<Result<true>> => ipcRenderer.invoke(IPC.restoreCancel)
     },
     clock: {
       status: (): Promise<ClockStatus> => ipcRenderer.invoke(IPC.clockStatus),

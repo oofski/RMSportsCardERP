@@ -75,6 +75,53 @@ export function setCursor(value: number): void {
   syncStateSet('cursor', String(value))
 }
 
+/**
+ * Forget everything this machine knows about syncing, and become a new device.
+ *
+ * Called ONCE, on the first boot after a restored database has been swapped
+ * into place. It is the difference between recovering one machine and rolling
+ * the whole company backwards.
+ *
+ * ## Why the outbox must be emptied
+ *
+ * A restored file arrives carrying whatever was queued when the backup was
+ * taken — rows that were already pushed weeks ago, and now would be pushed
+ * again. The relay resolves conflicts LAST-WRITE-WINS on `updated_at`, and
+ * `cloud/worker.js` decides by the value it receives, so re-announcing a
+ * month-old row does not lose politely: it OVERWRITES the current one on every
+ * other machine. One person restoring their own copy would silently undo
+ * everybody else's month.
+ *
+ * ## Why the cursor goes back to zero
+ *
+ * The restored file also carries the cursor from the day it was taken, which
+ * points into a change log that has moved on. Trusting it would skip
+ * everything the relay recorded between the backup and now — the machine would
+ * come back looking healthy and quietly miss a month of other people's work.
+ * Zero means "tell me everything you have", which is slower exactly once and
+ * correct always.
+ *
+ * ## Why the device identity is regenerated
+ *
+ * A device ignores the echo of its own pushes. Restored from a backup, this
+ * machine would recognise its old id on rows it no longer has and skip them —
+ * declining to receive precisely the changes it most needs. A new id makes
+ * every one of them somebody else's news.
+ *
+ * The net effect is the behaviour the owner chose: put this machine back, then
+ * let the relay bring it forward. It cannot damage anyone else's data, because
+ * after this call there is nothing left that says otherwise.
+ */
+export function resetSyncAfterRestore(): { cleared: number } {
+  const db = getDb()
+  const cleared = db.prepare('DELETE FROM sync_outbox').run().changes
+  setCursor(0)
+  // Deleted rather than overwritten so `deviceId()` mints a fresh one on its
+  // next call, in the one place that already knows how.
+  db.prepare(`DELETE FROM sync_state WHERE key = 'device_id'`).run()
+  return { cleared }
+}
+
 export function pendingCount(): number {
   const row = getDb().prepare('SELECT COUNT(*) AS n FROM sync_outbox').get() as { n: number }
   return row.n

@@ -28954,3 +28954,158 @@ button.sor-team:focus-visible {
     justify-content: center;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   RESTORE — the same plainness, one degree more careful.
+
+   The download card above is an ordinary action. This one replaces the
+   business, so it is boxed rather than free-standing: everything from the
+   filename to the confirm button is visibly ONE thing, and the border is what
+   stops somebody reading the Restore button as belonging to the panel above it.
+
+   It is deliberately NOT red all over. A screen that shouts stops being read,
+   and the person here has usually already had a bad day. The alarm is spent
+   where it earns its keep — the losses, the blockers, the final button — and
+   nowhere else.
+   --------------------------------------------------------------------------- */
+.bk-restore-head {
+  margin-top: 30px;
+}
+.bk-restore {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  background: var(--surface-1);
+  margin-bottom: 16px;
+}
+/* A file that cannot be restored gets the border, not a full red panel: the
+   reason is already spelled out in words inside it. */
+.bk-restore.is-blocked {
+  border-color: var(--danger);
+}
+.bk-restore-file {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 14px;
+  color: var(--text);
+  margin-bottom: 14px;
+  min-width: 0;
+}
+.bk-restore-file svg {
+  flex: none;
+  color: var(--text-3);
+}
+.bk-restore-file b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* The trade, side by side. The arrow between them is what makes it read as a
+   direction rather than as two unrelated figures. */
+.bk-compare {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+  margin-bottom: 12px;
+}
+.bk-compare > svg {
+  flex: none;
+  color: var(--text-3);
+}
+.bk-compare-side {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  /* min-width:0 on a flex child, or a long count list refuses to wrap and
+     pushes the arrow off the card. */
+  flex: 1 1 0;
+  min-width: 0;
+}
+.bk-compare-label {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.bk-compare-value {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.45;
+}
+
+.bk-note.bk-loss {
+  border-color: var(--warning);
+  background: var(--warning-bg);
+  color: var(--text);
+}
+.bk-note.bk-loss svg {
+  color: var(--warning);
+}
+.bk-note.bk-blocker {
+  border-color: var(--danger);
+  background: var(--danger-bg);
+  color: var(--text);
+}
+.bk-note.bk-blocker svg {
+  color: var(--danger-strong);
+}
+
+.bk-confirm {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 14px 0 4px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+.bk-confirm input {
+  flex: 0 1 180px;
+  min-width: 0;
+  padding: 8px 11px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.bk-restore-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+@media (max-width: 560px) {
+  /* Stacked, because the arrow between two columns stops meaning "becomes" the
+     moment the columns are too narrow to read. */
+  .bk-compare {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .bk-compare > svg {
+    transform: rotate(90deg);
+    align-self: center;
+  }
+  .bk-restore-actions {
+    flex-direction: column-reverse;
+  }
+  .bk-restore-actions .btn {
+    width: 100%;
+    justify-content: center;
+  }
+  .bk-confirm input {
+    flex: 1 1 100%;
+  }
+}
