@@ -950,7 +950,7 @@ function RevenueCheck({
   to,
   onSaved
 }: {
-  totals: { netPaid: number; grossSales: number; orders: number }
+  totals: { netPaid: number; ledgerNet: number; grossSales: number; orders: number }
   periods: WhatnotRatePeriod[]
   from: string
   to: string
@@ -1001,8 +1001,8 @@ function RevenueCheck({
    * orders from the one the statement is about. See payoutCheck.
    */
   const paid = useMemo(
-    () => (paidOut.trim() === '' ? null : payoutCheck(totals.netPaid, num(paidOut))),
-    [paidOut, totals.netPaid]
+    () => (paidOut.trim() === '' ? null : payoutCheck(totals.ledgerNet, num(paidOut))),
+    [paidOut, totals.ledgerNet]
   )
 
   const applyRate = async (): Promise<void> => {
@@ -1089,8 +1089,8 @@ function RevenueCheck({
           <table className="data fin-fit-table">
             <tbody>
               <tr>
-                <th scope="row">The ledger you uploaded holds</th>
-                <td className="num"><Money value={paid.netPaid} /></td>
+                <th scope="row">Every row you uploaded, added up</th>
+                <td className="num"><Money value={paid.ledgerNet} /></td>
               </tr>
               <tr>
                 <th scope="row">Whatnot paid out</th>

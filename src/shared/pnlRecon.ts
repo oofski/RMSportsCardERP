@@ -51,6 +51,26 @@ export interface ReconRow {
   day: string
   /** The ledger's own figure for this day's sale rows. Not derived. */
   netPaid: number
+  /**
+   * EVERY LEDGER ROW ON THIS DAY, summed at face value — the money that actually
+   * left Whatnot for the bank.
+   *
+   * `netPaid` is the sale rows ALONE. That is the right number to fit a
+   * commission against, because the commission was charged on those rows and
+   * nothing else. It is the wrong number to compare with a payout: postage,
+   * boosts, refunds, tips and bonuses are all real ledger rows that moved real
+   * money, and a payout figure has every one of them in it already.
+   *
+   * Comparing a payout with `netPaid` therefore reports the app's own missing
+   * buckets as a discrepancy. On a light month that is a couple of thousand
+   * dollars of false alarm; on a month of heavy postage it is enough to bury a
+   * real one. So the payout comparison uses THIS, and the fee fit uses that.
+   *
+   * `giveawayLoss` is stripped because it is the one figure on a day that comes
+   * from outside the ledger — a prize somebody typed in, which Whatnot never
+   * saw and never deducted. See StreamDayFinance.netAfterCosts.
+   */
+  ledgerNet: number
   /** netPaid with the modelled fees added back. The only modelled column. */
   grossSales: number
   /** Negative. */
@@ -86,6 +106,8 @@ export interface ReconRow {
 
 export interface ReconTotals {
   netPaid: number
+  /** Every ledger row across the window. The figure a payout is checked against. */
+  ledgerNet: number
   grossSales: number
   commission: number
   processing: number
@@ -146,6 +168,7 @@ export function reconRows(
     rows.push({
       day: d.streamDate,
       netPaid,
+      ledgerNet: c2(n(d.netAfterCosts) - n(d.giveawayLoss)),
       grossSales,
       commission: c2(n(d.whatnotFee)),
       processing: c2(n(d.processingFee)),
@@ -172,6 +195,7 @@ export function reconRows(
 export function reconTotals(rows: readonly ReconRow[]): ReconTotals {
   const t: ReconTotals = {
     netPaid: 0,
+    ledgerNet: 0,
     grossSales: 0,
     commission: 0,
     processing: 0,
@@ -183,6 +207,7 @@ export function reconTotals(rows: readonly ReconRow[]): ReconTotals {
   }
   for (const r of rows) {
     t.netPaid += r.netPaid
+    t.ledgerNet += r.ledgerNet
     t.grossSales += r.grossSales
     t.commission += r.commission
     t.processing += r.processing
@@ -196,6 +221,7 @@ export function reconTotals(rows: readonly ReconRow[]): ReconTotals {
   }
   for (const k of [
     'netPaid',
+    'ledgerNet',
     'grossSales',
     'commission',
     'processing',

@@ -286,14 +286,20 @@ export function revenueCheck(
     uncoveredDays: totals.uncoveredDays,
     uncoveredNetPaid: totals.uncoveredNetPaid,
     /**
-     * Only when the statement states one. Both sides here are RECORDED — the
-     * ledger's own Amount column and the platform's payout — so this is the
-     * check that can say whether the app holds the right rows at all, which is
-     * upstream of every question about rates. See payoutCheck.
+     * Only when the statement states one. Both sides here are RECORDED — every
+     * row of the ledger's own Amount column and the platform's payout — so this
+     * is the check that can say whether the app holds the right rows at all,
+     * which is upstream of every question about rates.
+     *
+     * `ledgerNet` AND NOT `netPaid`: the payout has postage, boosts, refunds and
+     * tips in it, and so must the figure it is compared with, or the app's own
+     * other buckets are reported as a discrepancy. `netPaid` — the sale rows
+     * alone — is the right input to the fit two lines up and the wrong one here.
+     * See ReconRow.ledgerNet and payoutCheck.
      */
     payout:
       window.statedPayout === undefined || window.statedPayout === null
         ? null
-        : payoutCheck(totals.netPaid, Number(window.statedPayout))
+        : payoutCheck(totals.ledgerNet, Number(window.statedPayout))
   }
 }

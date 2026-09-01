@@ -541,20 +541,32 @@ export interface StatementInput {
  */
 export interface PayoutCheck {
   statedPayout: number
-  /** Σ of the ledger's Amount column across the window. */
-  netPaid: number
+  /**
+   * Σ of the ledger's Amount column across the window — EVERY row, not the sale
+   * rows alone.
+   *
+   * The sale rows are what a commission is fitted against; they are not what a
+   * payout is. Postage, boosts, refunds, tips and bonuses are ledger rows that
+   * moved money, and the payout figure already has all of them in it — so
+   * checking a payout against sale rows alone reports the app's own other
+   * buckets as a discrepancy. See ReconRow.ledgerNet, which is what feeds this.
+   */
+  ledgerNet: number
   /** netPaid − statedPayout. POSITIVE MEANS THE LEDGER HOLDS MORE. */
   gap: number
   /** The gap as a share of what the platform paid. */
   gapShare: number
   /**
-   * Is the gap too big to be the costs a statement lists separately?
+   * Is the gap too big to be timing and rounding?
+   *
+   * Both sides count the same buckets, so the honest reasons two figures of the
+   * same kind still differ are small ones: a Saturday night that paid out in the
+   * next cycle, an adjustment Whatnot posted after the export, cents.
    *
    * Two percent, and the number is a judgement rather than a derivation — said
-   * so here rather than buried in a screen. Shipping, boosts and refunds on a
-   * real month came to half a percent of the payout; the gap that prompted this
-   * was seven. Anything in between is worth a look either way, which is what the
-   * sentence says.
+   * so here rather than buried in a screen. The gap that prompted this was over
+   * seven, and no amount of timing is seven percent of a month. Anything in
+   * between is worth a look either way, which is what the sentence says.
    */
   material: boolean
   sentence: string
@@ -565,24 +577,24 @@ const share = (a: number, b: number): number => (b === 0 ? 0 : a / b)
 /** The gap that means "look at the window", above which it cannot be shipping. */
 export const PAYOUT_GAP_LIMIT = 0.02
 
-export function payoutCheck(netPaid: number, statedPayout: number): PayoutCheck {
+export function payoutCheck(ledgerNet: number, statedPayout: number): PayoutCheck {
   const paid = c2(n(statedPayout))
-  const net = c2(n(netPaid))
+  const net = c2(n(ledgerNet))
   const gap = c2(net - paid)
   const gapShare = share(Math.abs(gap), paid)
   const material = gapShare > PAYOUT_GAP_LIMIT
   const sentence = material
     ? gap > 0
       ? `The ledger holds ${money(gap)} MORE than this statement paid out — ${(gapShare * 100).toFixed(1)}% of it. ` +
-        'Shipping, boosts and refunds are a fraction of a percent, so a gap this size is the window or the rows: ' +
+        'Postage, boosts and refunds are already counted on both sides, so a gap this size is the window or the rows: ' +
         'check that the statement covers exactly these days, and that it is not a payout cycle running to a different cutoff.'
       : `This statement paid out ${money(-gap)} MORE than the ledger holds — ${(gapShare * 100).toFixed(1)}% of it. ` +
         'That usually means nights are missing from the import, or the statement covers days beyond the ones on screen.'
     : gap === 0
       ? 'The ledger and the payout agree exactly.'
-      : `The ledger is within ${money(Math.abs(gap))} of what was paid out, which is the size of ` +
-        'shipping, boosts and refunds — nothing here needs chasing.'
-  return { statedPayout: paid, netPaid: net, gap, gapShare, material, sentence }
+      : `The ledger is within ${money(Math.abs(gap))} of what was paid out — rounding and a ` +
+        'stray adjustment either side. Nothing here needs chasing.'
+  return { statedPayout: paid, ledgerNet: net, gap, gapShare, material, sentence }
 }
 
 /** What the revenue-check panel needs, in one read. */

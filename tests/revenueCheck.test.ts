@@ -632,15 +632,34 @@ console.log('\n=== the payout check: is the app holding the right ORDERS at all 
   const APP_NET = APP_REVENUE - APP_COMMISSION - APP_PROCESSING
   const ORDERS = 6_123
 
-  const check = payoutCheck(APP_NET, PAYOUT)
+  // WHAT THE LEDGER HOLDS, on the same footing as the payout.
+  //
+  // The statement lists $42,839.24 of fees against $40,598.30 of commission and
+  // processing, so $2,240.94 is postage, boosts and refunds — rows the app keeps
+  // in their own buckets and OUTSIDE netSales. Whatnot had already taken them
+  // off before it paid, so they come off this side too before the two figures
+  // are compared. Tips and adjustments ($614.98) go the other way for the same
+  // reason. That is what ReconRow.ledgerNet does on real days; here the terms
+  // are written out so the fixture shows its working.
+  const OTHER_COSTS = 2_240.94
+  const TIPS_AND_ADJ = 614.98
+  const APP_LEDGER = APP_NET - OTHER_COSTS + TIPS_AND_ADJ
+
+  const check = payoutCheck(APP_LEDGER, PAYOUT)
   ok(
-    check.gap > 28_000 && check.gap < 29_000,
-    'THE LEDGER HELD ~$28.6k MORE THAN WHATNOT PAID OUT — the finding neither the revenue nor the fee gap could name',
+    check.gap > 26_000 && check.gap < 27_500,
+    'THE LEDGER HELD ~$27k MORE THAN WHATNOT PAID OUT — the finding neither the revenue nor the fee gap could name',
     String(check.gap)
   )
   ok(
+    payoutCheck(APP_NET, PAYOUT).gap - check.gap > 1_600,
+    'AND IT IS SMALLER THAN THE SALE ROWS ALONE SUGGEST — the first cut of this check compared a ' +
+      'payout with netSales and charged the app $1.6k for its own postage and boosts',
+    `${payoutCheck(APP_NET, PAYOUT).gap} vs ${check.gap}`
+  )
+  ok(
     check.material === true && /MORE than this statement paid out/.test(check.sentence),
-    'and it is called out as too big to be shipping or refunds',
+    'and it is called out as too big to be timing or an adjustment',
     check.sentence
   )
   ok(
@@ -672,10 +691,10 @@ console.log('\n=== the payout check: is the app holding the right ORDERS at all 
   )
 
   // --- the shapes the check has to tell apart -------------------------------
-  const close = payoutCheck(371_600.0, PAYOUT)
+  const close = payoutCheck(371_600.0, PAYOUT)  // 0.6% out
   ok(
-    close.material === false && /nothing here needs chasing/.test(close.sentence),
-    'A GAP THE SIZE OF SHIPPING AND REFUNDS IS NOT RAISED — 0.6% is the ordinary shape of a real month',
+    close.material === false && /[Nn]othing here needs chasing/.test(close.sentence),
+    'A GAP THE SIZE OF TIMING AND ROUNDING IS NOT RAISED — 0.6% is the ordinary shape of a real month',
     close.sentence
   )
   ok(
@@ -698,6 +717,94 @@ console.log('\n=== the payout check: is the app holding the right ORDERS at all 
     payoutCheck(PAYOUT * 1.02, PAYOUT).material === false &&
       payoutCheck(PAYOUT * 1.0201, PAYOUT).material === true,
     'the line is drawn at 2% of the payout, exactly'
+  )
+}
+
+
+// ---------------------------------------------------------------------------
+console.log('\n=== the payout is checked against EVERY ledger row, not the sale rows ===')
+// ---------------------------------------------------------------------------
+/**
+ * THE DEFECT THIS PINS, which shipped and was caught by reading it back.
+ *
+ * `netPaid` is the sale rows alone. That is exactly right for fitting a
+ * commission — the commission was charged on those rows and nothing else — and
+ * exactly wrong for checking a payout, because a payout has the postage, the
+ * boosts, the refunds and the tips in it already.
+ *
+ * Compare a payout with `netPaid` and the app is charged for its own other
+ * buckets: it reports a discrepancy the size of a month's postage on a month
+ * where nothing whatever is wrong. A heavy-shipping month would have read as a
+ * $12,000 problem on a ledger that reconciles to the cent.
+ *
+ * `giveawayLoss` is the one term stripped back out, because it is the only
+ * figure on a day that never was a ledger row — a prize somebody typed in, which
+ * Whatnot neither saw nor deducted.
+ */
+{
+  // One month. Every bucket populated, and the payout is what such a month
+  // would actually pay: sales, plus tips and a bonus, less postage, a boost and
+  // a reversal. The giveaway prize is a cost the OWNER carried, not Whatnot.
+  const NET_SALES = 400_000
+  const TIPS = 1_500
+  const BONUSES = 800
+  const POSTAGE = -12_000        // netShipping: subsidy + charges + giveaway + refunds
+  const BOOST = -3_000
+  const REVERSALS = -900
+  const GIVEAWAY_LOSS = -5_000   // typed in, never a ledger row
+
+  const netRevenue = NET_SALES + TIPS + BONUSES
+  const TRUE_PAYOUT = netRevenue + POSTAGE + BOOST + REVERSALS   // 386,400
+
+  const days: any[] = [
+    {
+      streamDate: '2026-07-15',
+      netSales: NET_SALES,
+      grossSales: 449_691.86,
+      whatnotFee: -35_975.35,
+      processingFee: -13_716.51,
+      cogs: -180_000,
+      netProfit: 200_000,
+      feeSaleCount: 6_000,
+      rateBreakdown: [{ rate: 0.08, grossSales: 449_691.86 }],
+      netAfterCosts: TRUE_PAYOUT + GIVEAWAY_LOSS,
+      giveawayLoss: GIVEAWAY_LOSS
+    }
+  ]
+  const t = reconTotals(reconRows(days, []))
+
+  ok(
+    t.netPaid === NET_SALES,
+    'netPaid is still the SALE ROWS ALONE — the fit needs that and must not change',
+    String(t.netPaid)
+  )
+  ok(
+    t.ledgerNet === TRUE_PAYOUT,
+    'AND ledgerNet IS EVERY LEDGER ROW — tips and bonuses in, postage and boosts and reversals off',
+    `${t.ledgerNet} vs ${TRUE_PAYOUT}`
+  )
+  ok(
+    t.ledgerNet !== t.netPaid && t.ledgerNet - t.netPaid === TIPS + BONUSES + POSTAGE + BOOST + REVERSALS,
+    'differing by exactly the buckets netSales leaves out, and by nothing else',
+    String(t.ledgerNet - t.netPaid)
+  )
+  ok(
+    t.ledgerNet !== t.netPaid + POSTAGE + BOOST + REVERSALS + TIPS + BONUSES + GIVEAWAY_LOSS,
+    'THE TYPED-IN GIVEAWAY PRIZE IS STRIPPED — Whatnot never saw it, so it cannot be missing from a payout'
+  )
+
+  // The whole point: this month reconciles, and must be reported as reconciling.
+  const right = payoutCheck(t.ledgerNet, TRUE_PAYOUT)
+  ok(
+    right.gap === 0 && right.material === false,
+    'A MONTH THAT RECONCILES TO THE CENT IS REPORTED AS RECONCILING',
+    right.sentence
+  )
+  const wrong = payoutCheck(t.netPaid, TRUE_PAYOUT)
+  ok(
+    wrong.material === true && Math.abs(wrong.gap - 13_600) < 0.01,
+    'WHILE THE SALE ROWS ALONE WOULD HAVE CRIED WOLF over $13,600 of the app\'s own postage and boosts',
+    `${wrong.gap} — ${wrong.sentence}`
   )
 }
 
