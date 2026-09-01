@@ -348,5 +348,152 @@ console.log('\n=== 5. EVERY SYNC KEY NAMES A REAL CONSTRAINT — the other half 
   )
 }
 
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 6. a stale QuickBooks reading cannot overwrite a fresh one ===')
+// ---------------------------------------------------------------------------
+/**
+ * ONE MACHINE CAN ASK QUICKBOOKS. EVERY MACHINE CAN OVERWRITE THE ANSWER.
+ *
+ * The QuickBooks tokens live in `meta`, sealed with safeStorage, and meta never
+ * travels — so exactly one machine can refresh an invoice's balance, and the
+ * card says which: "Checked on the desktop app". Everybody else holds whatever
+ * arrived by sync and can never correct it.
+ *
+ * Under plain last-write-wins that eats itself. A laptop that has never spoken
+ * to QuickBooks still carries a copy of the answer from its last sync; edit
+ * anything on that invoice there — a memo, a tracking number — and the whole row
+ * goes up carrying the frozen balance, lands on the desktop, and overwrites the
+ * reading taken minutes ago. The invoice reverts to owing money that was paid,
+ * and the only machine that could fix it is the one that just got clobbered.
+ *
+ * No conflict, no reject, no error: two valid rows, later one wins. And it gets
+ * WORSE the more the team syncs, which is backwards.
+ */
+{
+  const inv = 'inv-qbo'
+  db.prepare(
+    `INSERT INTO invoices
+       (id, customer_name, terms, invoice_date, due_date, status, total, created_at, updated_at,
+        qbo_balance, qbo_total_amt, qbo_payments_applied, qbo_status_checked_at)
+     VALUES (?, 'WeTheHobby', 'Due on receipt', '2026-09-01', '2026-09-01', 'paid', 28000,
+             '2026-09-01T10:00:00.000Z', '2026-09-01T10:00:00.000Z',
+             0, 28000, 28000, '2026-09-01T18:00:00.000Z')`
+  ).run(inv)
+
+  const send = (row: Record<string, unknown>, seq: number): void => {
+    sync.applyRows([
+      {
+        kind: 'invoices',
+        id: inv,
+        seq,
+        updated_at: String(row.updated_at),
+        deleted: 0 as const,
+        data: JSON.stringify({ id: inv, ...row })
+      }
+    ])
+  }
+  const read = () =>
+    db
+      .prepare(
+        `SELECT memo, qbo_balance, qbo_payments_applied, qbo_status_checked_at
+           FROM invoices WHERE id = ?`
+      )
+      .get(inv) as {
+      memo: string | null
+      qbo_balance: number
+      qbo_payments_applied: number
+      qbo_status_checked_at: string
+    }
+
+  // THE LAPTOP'S EDIT. Later row, real change to a normal column — and a
+  // QuickBooks reading eight hours STALER than the one already here.
+  send(
+    {
+      customer_name: 'WeTheHobby',
+      terms: 'Due on receipt',
+      invoice_date: '2026-09-01',
+      due_date: '2026-09-01',
+      status: 'paid',
+      total: 28000,
+      created_at: '2026-09-01T10:00:00.000Z',
+      updated_at: '2026-09-01T20:00:00.000Z',
+      memo: 'left with the front desk',
+      qbo_balance: 28000,
+      qbo_total_amt: 28000,
+      qbo_payments_applied: 0,
+      qbo_status_checked_at: '2026-09-01T10:00:00.000Z'
+    },
+    1
+  )
+  const after = read()
+  ok(after.memo === 'left with the front desk', 'the ordinary edit lands — normal columns still merge')
+  ok(
+    after.qbo_balance === 0 && after.qbo_payments_applied === 28000,
+    'BUT THE STALE QUICKBOOKS READING DOES NOT — the paid balance survives the laptop that ' +
+      'cannot ask QuickBooks and was carrying an eight-hour-old answer',
+    `balance ${after.qbo_balance}, applied ${after.qbo_payments_applied}`
+  )
+  ok(
+    after.qbo_status_checked_at === '2026-09-01T18:00:00.000Z',
+    'and the observation time does not go backwards',
+    after.qbo_status_checked_at
+  )
+
+  // A GENUINELY NEWER READING STILL WINS. The guard is freshness, not a freeze:
+  // the desktop checks again, finds a credit memo reversed, and that must land.
+  send(
+    {
+      customer_name: 'WeTheHobby',
+      terms: 'Due on receipt',
+      invoice_date: '2026-09-01',
+      due_date: '2026-09-01',
+      status: 'paid',
+      total: 28000,
+      created_at: '2026-09-01T10:00:00.000Z',
+      updated_at: '2026-09-01T21:00:00.000Z',
+      memo: 'left with the front desk',
+      qbo_balance: 500,
+      qbo_total_amt: 28000,
+      qbo_payments_applied: 27500,
+      qbo_status_checked_at: '2026-09-01T20:30:00.000Z'
+    },
+    2
+  )
+  const newer = read()
+  ok(
+    newer.qbo_balance === 500 && newer.qbo_payments_applied === 27500,
+    'A NEWER READING STILL LANDS — this is a freshness rule, not a freeze, or the answer ' +
+      'could never leave the one machine allowed to ask',
+    `balance ${newer.qbo_balance}`
+  )
+
+  // A row from a build that has no observation time at all must not be treated
+  // as an observation from the beginning of time.
+  send(
+    {
+      customer_name: 'WeTheHobby',
+      terms: 'Due on receipt',
+      invoice_date: '2026-09-01',
+      due_date: '2026-09-01',
+      status: 'paid',
+      total: 28000,
+      created_at: '2026-09-01T10:00:00.000Z',
+      updated_at: '2026-09-01T22:00:00.000Z',
+      memo: 'collected',
+      qbo_balance: 28000,
+      qbo_payments_applied: 0
+    },
+    3
+  )
+  const bare = read()
+  ok(
+    bare.memo === 'collected' && bare.qbo_balance === 500,
+    'AND A ROW CARRYING NO OBSERVATION TIME CANNOT TOUCH THE READING AT ALL — it is not ' +
+      'evidence of anything, so it merges everything else and leaves this alone',
+    `memo ${bare.memo}, balance ${bare.qbo_balance}`
+  )
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail > 0) process.exit(1)
