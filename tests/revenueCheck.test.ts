@@ -68,7 +68,13 @@ const {
   scopeForBucket,
   validateRatePeriod
 } = require('../src/shared/financeStreaming')
-const { fitFromGross, gapShape, grossFitVerdict, modelDivisor } = require('../src/shared/statementFit')
+const {
+  fitFromGross,
+  gapShape,
+  grossFitVerdict,
+  modelDivisor,
+  payoutCheck
+} = require('../src/shared/statementFit')
 const { reconInRange, reconRows, reconTotals } = require('../src/shared/pnlRecon')
 const { streamDateOf } = require('../src/shared/streaming')
 
@@ -584,6 +590,114 @@ console.log('\n=== 10. the one line Streaming keeps after the panels moved ===')
     describeImportStanding(importStanding([imp()])) === '1 upload · 100 rows',
     'and a single healthy import is one short sentence with no alarm in it',
     describeImportStanding(importStanding([imp()]))
+  )
+}
+
+
+console.log('\n=== the payout check: is the app holding the right ORDERS at all ===')
+// ---------------------------------------------------------------------------
+/**
+ * THE REAL JULY, from the owner's own statement, pinned as a fixture.
+ *
+ * He sent it beside a screen reading $24k higher: "the things I am uploading is
+ * what we get in our account, so that is the most important part, since it is
+ * that minus COGS to profit. But why is the streaming fees $5,000 less and
+ * revenue $22,000 more?"
+ *
+ * ## Both gaps were real, and they had DIFFERENT causes
+ *
+ * The fee gap is a rate: the app applied 5.26% commission where the month's
+ * blended rate was 6.22%. That is what a fitted commission is for.
+ *
+ * The revenue gap is not, and this is the point of the whole section. Revenue is
+ * net grossed up, so if the NET is wrong no rate can fix it — and the net was
+ * wrong: the ledger held $28.6k more than Whatnot paid out. `fitFromGross`
+ * correctly refused, returning a NEGATIVE commission, but a negative rate says
+ * "these cannot both be right" without saying which one to go and look at.
+ *
+ * The payout comparison says which. Both its sides are RECORDED — the ledger's
+ * Amount column and the money that actually moved — so it contains no fee
+ * schedule and cannot be wrong for a fee schedule's reasons.
+ */
+{
+  // Straight off the July statement.
+  const SALES = 411_575.0
+  const PAYOUT = 369_362.53
+  const STMT_COMMISSION = 25_584.76
+  const STMT_PROCESSING = 15_013.54
+  // What the app showed for the same window.
+  const APP_REVENUE = 436_029.79
+  const APP_COMMISSION = 22_938.75
+  const APP_PROCESSING = 15_135.61
+  const APP_NET = APP_REVENUE - APP_COMMISSION - APP_PROCESSING
+  const ORDERS = 6_123
+
+  const check = payoutCheck(APP_NET, PAYOUT)
+  ok(
+    check.gap > 28_000 && check.gap < 29_000,
+    'THE LEDGER HELD ~$28.6k MORE THAN WHATNOT PAID OUT — the finding neither the revenue nor the fee gap could name',
+    String(check.gap)
+  )
+  ok(
+    check.material === true && /MORE than this statement paid out/.test(check.sentence),
+    'and it is called out as too big to be shipping or refunds',
+    check.sentence
+  )
+  ok(
+    /window or the rows/.test(check.sentence) && /payout cycle/.test(check.sentence),
+    'naming the two things worth checking rather than offering to re-price the month',
+    check.sentence
+  )
+
+  // The fit, on the same numbers, cannot help — and says so.
+  const july = fitFromGross(
+    SALES,
+    { netPaid: APP_NET, derivedRevenue: APP_REVENUE, orders: ORDERS },
+    { processingRate: 0.029, taxRate: 0.0518, processingFlatCents: 30 }
+  )
+  ok(
+    july.solvable === false && july.fittedCommissionRate < 0,
+    'THE FIT REFUSES: no commission reproduces those sales from that net, because the net is too high',
+    String(july.fittedCommissionRate)
+  )
+  ok(
+    Math.abs(july.revenueGap - 24_454.79) < 0.01,
+    'and the revenue gap it reports is the $24.5k the owner saw',
+    String(july.revenueGap)
+  )
+  ok(
+    Math.abs(APP_COMMISSION + APP_PROCESSING - (STMT_COMMISSION + STMT_PROCESSING) + 2_523.94) < 0.01,
+    'while the like-for-like fee gap is $2.5k, not the $4.8k the tile suggested — the rest is shipping and refunds the app does not model',
+    String(APP_COMMISSION + APP_PROCESSING - (STMT_COMMISSION + STMT_PROCESSING))
+  )
+
+  // --- the shapes the check has to tell apart -------------------------------
+  const close = payoutCheck(371_600.0, PAYOUT)
+  ok(
+    close.material === false && /nothing here needs chasing/.test(close.sentence),
+    'A GAP THE SIZE OF SHIPPING AND REFUNDS IS NOT RAISED — 0.6% is the ordinary shape of a real month',
+    close.sentence
+  )
+  ok(
+    payoutCheck(PAYOUT, PAYOUT).gap === 0 &&
+      /agree exactly/.test(payoutCheck(PAYOUT, PAYOUT).sentence),
+    'an exact match says so plainly'
+  )
+
+  const short = payoutCheck(300_000.0, PAYOUT)
+  ok(
+    short.material === true &&
+      short.gap < 0 &&
+      /nights are missing from the import/.test(short.sentence),
+    'AND A LEDGER HOLDING LESS POINTS THE OTHER WAY — missing nights, not extra ones',
+    short.sentence
+  )
+
+  // The threshold is a judgement and is pinned so it cannot drift silently.
+  ok(
+    payoutCheck(PAYOUT * 1.02, PAYOUT).material === false &&
+      payoutCheck(PAYOUT * 1.0201, PAYOUT).material === true,
+    'the line is drawn at 2% of the payout, exactly'
   )
 }
 

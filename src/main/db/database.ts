@@ -4671,6 +4671,28 @@ function migrate(database: Database.Database): void {
   addColumnIfMissing(database, 'whatnot_fee_periods', 'scope', "TEXT NOT NULL DEFAULT 'all'")
   setMeta(database, 'schema_version', '93')
 
+  // v94: WHAT THE PLATFORM ACTUALLY PAID OUT, on a stated figure.
+  //
+  // The owner, on a July statement beside a screen reading $24k higher: "the
+  // things I am uploading is what we get in our account, so that is the most
+  // important part, since it is that minus COGS to profit."
+  //
+  // Sales and fees on a statement are totals the platform COMPUTED. The payout
+  // is cash that moved, and the app holds a figure of the same kind — the sum of
+  // the ledger's Amount column, recorded per row rather than derived. Comparing
+  // those two asks whether the app is holding the right SET OF ROWS, which is
+  // the question every fee comparison confounds and the one that has to be
+  // answered first: when the ledger holds more money than the window covers, no
+  // commission rate reproduces the stated sales, and fitFromGross correctly
+  // reports a negative rate without being able to say which figure to go and
+  // look at.
+  //
+  // NULLABLE, and every existing row stays null. A dashboard reading states
+  // sales alone, and a check that demanded a payout nobody had to hand is a
+  // check nobody runs.
+  addColumnIfMissing(database, 'whatnot_statements', 'stated_payout', 'REAL')
+  setMeta(database, 'schema_version', '94')
+
   // v41: re-derive every product's average cost from its remaining cost layers.
   //
   // The average used to be stored rounded to the cent, back when every total in

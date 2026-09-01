@@ -29419,3 +29419,15 @@ button.sor-team:focus-visible {
 .sb-sold-qty {
   font-weight: 700;
 }
+
+/* "optional" beside the payout label — the field is the more useful of the two
+   when it is to hand and absent from most dashboards, so it has to read as
+   welcome rather than required. */
+.fin-fit-opt {
+  margin-left: 6px;
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+}

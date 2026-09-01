@@ -478,6 +478,31 @@ export interface WhatnotStatement {
   statedGross: number
   /** What it says came off, when the document says. Null is ordinary. */
   statedFees: number | null
+  /**
+   * WHAT ACTUALLY LEFT THE PLATFORM AND LANDED IN THE BANK.
+   *
+   * The owner, sending a July statement beside a screen reading $24k higher:
+   * "the things I am uploading is what we get in our account, so that is the
+   * most important part, since it is that minus COGS to profit."
+   *
+   * ## The only figure on a statement that is not a modelled anything
+   *
+   * Sales is a total the platform computed. Fees are its own arithmetic. The
+   * PAYOUT is cash that moved — and the app has a number of the same kind, the
+   * sum of the ledger's Amount column, which is recorded per row rather than
+   * derived. Comparing those two isolates the question every other comparison
+   * confounds: is the app holding the right SET OF ROWS, before anything is
+   * asked about whether it prices them correctly.
+   *
+   * That distinction is what a fitted commission cannot make. If the ledger
+   * holds more money than the statement's window covers, no rate reproduces the
+   * stated sales — `fitFromGross` returns a negative commission and says the
+   * figures cannot both be right, which is true but does not say which one to go
+   * and look at. This does.
+   *
+   * Null is ordinary: a dashboard reading states sales alone.
+   */
+  statedPayout: number | null
   note: string
   createdAt: string
   updatedAt: string
@@ -489,7 +514,75 @@ export interface StatementInput {
   toDate: string
   statedGross: number
   statedFees?: number | null
+  statedPayout?: number | null
   note?: string
+}
+
+/**
+ * THE LEDGER'S OWN MONEY AGAINST THE MONEY THAT MOVED.
+ *
+ * Both sides are recorded rather than modelled — Σ of the ledger's Amount
+ * column, and the platform's payout — so this comparison has no fee schedule in
+ * it and cannot be wrong for the reasons a fitted rate can.
+ *
+ * ## What a gap means, and why it is checked FIRST
+ *
+ * The two are not expected to match to the cent. Between them sit the costs a
+ * statement lists separately and the ledger has already had taken off — seller
+ * paid shipping, boosts, refunds, surcharges — and the timing difference of a
+ * payout cycle that does not end on the last day of the month.
+ *
+ * What matters is the SIZE. Those costs are ordinarily a fraction of a percent,
+ * so a gap of several percent is not shipping: it is the window, or the rows.
+ * Either the statement covers different days from the ones on screen, or the
+ * import holds orders the statement does not. Both are answerable; a fitted
+ * commission is not, and quietly re-pricing the month to close a hole of that
+ * size would bury the very thing worth finding.
+ */
+export interface PayoutCheck {
+  statedPayout: number
+  /** Σ of the ledger's Amount column across the window. */
+  netPaid: number
+  /** netPaid − statedPayout. POSITIVE MEANS THE LEDGER HOLDS MORE. */
+  gap: number
+  /** The gap as a share of what the platform paid. */
+  gapShare: number
+  /**
+   * Is the gap too big to be the costs a statement lists separately?
+   *
+   * Two percent, and the number is a judgement rather than a derivation — said
+   * so here rather than buried in a screen. Shipping, boosts and refunds on a
+   * real month came to half a percent of the payout; the gap that prompted this
+   * was seven. Anything in between is worth a look either way, which is what the
+   * sentence says.
+   */
+  material: boolean
+  sentence: string
+}
+
+const share = (a: number, b: number): number => (b === 0 ? 0 : a / b)
+
+/** The gap that means "look at the window", above which it cannot be shipping. */
+export const PAYOUT_GAP_LIMIT = 0.02
+
+export function payoutCheck(netPaid: number, statedPayout: number): PayoutCheck {
+  const paid = c2(n(statedPayout))
+  const net = c2(n(netPaid))
+  const gap = c2(net - paid)
+  const gapShare = share(Math.abs(gap), paid)
+  const material = gapShare > PAYOUT_GAP_LIMIT
+  const sentence = material
+    ? gap > 0
+      ? `The ledger holds ${money(gap)} MORE than this statement paid out — ${(gapShare * 100).toFixed(1)}% of it. ` +
+        'Shipping, boosts and refunds are a fraction of a percent, so a gap this size is the window or the rows: ' +
+        'check that the statement covers exactly these days, and that it is not a payout cycle running to a different cutoff.'
+      : `This statement paid out ${money(-gap)} MORE than the ledger holds — ${(gapShare * 100).toFixed(1)}% of it. ` +
+        'That usually means nights are missing from the import, or the statement covers days beyond the ones on screen.'
+    : gap === 0
+      ? 'The ledger and the payout agree exactly.'
+      : `The ledger is within ${money(Math.abs(gap))} of what was paid out, which is the size of ` +
+        'shipping, boosts and refunds — nothing here needs chasing.'
+  return { statedPayout: paid, netPaid: net, gap, gapShare, material, sentence }
 }
 
 /** What the revenue-check panel needs, in one read. */
@@ -514,5 +607,14 @@ export interface RevenueCheck {
   /** Nights priced at the built-in defaults rather than a chosen period. */
   uncoveredDays: number
   uncoveredNetPaid: number
+  /**
+   * THE LEDGER'S MONEY AGAINST THE MONEY THAT MOVED — read before the fit.
+   *
+   * Null when the statement does not state a payout. When it does, this is the
+   * check that runs first, because both sides of it are recorded rather than
+   * modelled: a gap here means the app is holding the wrong set of rows, and no
+   * commission rate can be right until that is settled. See payoutCheck.
+   */
+  payout: PayoutCheck | null
 }
 

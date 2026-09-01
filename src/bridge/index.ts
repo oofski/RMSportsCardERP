@@ -1455,6 +1455,8 @@ export function createBridge(ipcRenderer: BridgeTransport) {
         fromDate: string
         toDate: string
         statedGross: number
+        /** What the platform actually paid out. Null when the document does not say. */
+        statedPayout?: number | null
       }): Promise<RevenueCheck | null> => ipcRenderer.invoke(IPC.finRevenueCheck, input),
       /**
        * Costs typed against a business day — a pack opened for fun, a box written

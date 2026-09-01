@@ -37,7 +37,7 @@
  */
 import type { Result } from '@shared/types'
 import type { PinnedTerms, RevenueCheck, StatementInput, WhatnotStatement } from '@shared/statementFit'
-import { fitFromGross, grossFitVerdict } from '@shared/statementFit'
+import { fitFromGross, grossFitVerdict, payoutCheck } from '@shared/statementFit'
 import type { StreamDayFinance, WhatnotRatePeriod } from '@shared/financeStreaming'
 import { effectiveFeeRates, isDayKey } from '@shared/financeStreaming'
 import { reconInRange, reconRows, reconTotals } from '@shared/pnlRecon'
@@ -53,6 +53,7 @@ interface StatementRow {
   to_date: string
   stated_gross: number
   stated_fees: number | null
+  stated_payout: number | null
   note: string | null
   created_at: string
   updated_at: string
@@ -65,6 +66,7 @@ function toStatement(r: StatementRow): WhatnotStatement {
     toDate: r.to_date,
     statedGross: r.stated_gross,
     statedFees: r.stated_fees ?? null,
+    statedPayout: r.stated_payout ?? null,
     note: r.note ?? '',
     createdAt: r.created_at,
     updatedAt: r.updated_at
@@ -80,7 +82,8 @@ function toStatement(r: StatementRow): WhatnotStatement {
 export function listStatements(): WhatnotStatement[] {
   const rows = getDb()
     .prepare(
-      `SELECT id, from_date, to_date, stated_gross, stated_fees, note, created_at, updated_at
+      `SELECT id, from_date, to_date, stated_gross, stated_fees, stated_payout, note,
+              created_at, updated_at
          FROM whatnot_statements
         ORDER BY from_date DESC, rowid DESC`
     )
@@ -106,6 +109,16 @@ export function validateStatement(input: StatementInput): string | null {
     const fees = Number(input.statedFees)
     if (!Number.isFinite(fees) || fees < 0) return 'The fees figure is not a number.'
     if (fees >= gross) return 'The fees cannot be the whole of the sales.'
+  }
+  if (input?.statedPayout !== undefined && input.statedPayout !== null) {
+    const paid = Number(input.statedPayout)
+    if (!Number.isFinite(paid) || paid < 0) return 'The payout figure is not a number.'
+    // A payout ABOVE sales is possible for a day and absurd for a window — it
+    // would mean the platform paid out more than it took. Almost always the
+    // gross box has the payout in it and the payout box has the sales.
+    if (paid > gross) {
+      return 'The payout is larger than the sales, which cannot be right for a whole window — are the two figures the other way round?'
+    }
   }
   return null
 }
@@ -134,6 +147,12 @@ export function saveStatement(
       input?.statedFees === undefined || input.statedFees === null || input.statedFees === ('' as never)
         ? null
         : c2(Number(input.statedFees)),
+    statedPayout:
+      input?.statedPayout === undefined ||
+      input.statedPayout === null ||
+      input.statedPayout === ('' as never)
+        ? null
+        : c2(Number(input.statedPayout)),
     note: String(input?.note ?? '').trim().slice(0, NOTE_MAX)
   }
 
@@ -148,7 +167,7 @@ export function saveStatement(
         .prepare(
           `UPDATE whatnot_statements
               SET from_date = @from, to_date = @to, stated_gross = @gross,
-                  stated_fees = @fees, note = @note, updated_at = @ts
+                  stated_fees = @fees, stated_payout = @paid, note = @note, updated_at = @ts
             WHERE id = @id`
         )
         .run({
@@ -157,6 +176,7 @@ export function saveStatement(
           to: clean.toDate,
           gross: clean.statedGross,
           fees: clean.statedFees,
+          paid: clean.statedPayout ?? null,
           note: clean.note,
           ts
         })
@@ -164,14 +184,16 @@ export function saveStatement(
     } else {
       db.prepare(
         `INSERT INTO whatnot_statements
-           (id, from_date, to_date, stated_gross, stated_fees, note, created_at, updated_at, created_by)
-         VALUES (@id, @from, @to, @gross, @fees, @note, @ts, @ts, @by)`
+           (id, from_date, to_date, stated_gross, stated_fees, stated_payout, note,
+            created_at, updated_at, created_by)
+         VALUES (@id, @from, @to, @gross, @fees, @paid, @note, @ts, @ts, @by)`
       ).run({
         id: newId(),
         from: clean.fromDate,
         to: clean.toDate,
         gross: clean.statedGross,
         fees: clean.statedFees,
+        paid: clean.statedPayout ?? null,
         note: clean.note,
         ts,
         by: actorId
@@ -222,7 +244,7 @@ export function deleteStatement(id: string): Result<WhatnotStatement[]> {
 export function revenueCheck(
   days: readonly StreamDayFinance[],
   periods: readonly WhatnotRatePeriod[],
-  window: { fromDate: string; toDate: string; statedGross: number }
+  window: { fromDate: string; toDate: string; statedGross: number; statedPayout?: number | null }
 ): RevenueCheck {
   const from = String(window.fromDate ?? '').trim()
   const to = String(window.toDate ?? '').trim()
@@ -262,6 +284,16 @@ export function revenueCheck(
     pinned,
     mixedTerms,
     uncoveredDays: totals.uncoveredDays,
-    uncoveredNetPaid: totals.uncoveredNetPaid
+    uncoveredNetPaid: totals.uncoveredNetPaid,
+    /**
+     * Only when the statement states one. Both sides here are RECORDED — the
+     * ledger's own Amount column and the platform's payout — so this is the
+     * check that can say whether the app holds the right rows at all, which is
+     * upstream of every question about rates. See payoutCheck.
+     */
+    payout:
+      window.statedPayout === undefined || window.statedPayout === null
+        ? null
+        : payoutCheck(totals.netPaid, Number(window.statedPayout))
   }
 }

@@ -379,13 +379,28 @@ export function registerFinanceIpc(): void {
    */
   ipcMain.handle(
     IPC.finRevenueCheck,
-    (_e, input: { fromDate?: string; toDate?: string; statedGross?: number }): RevenueCheck | null => {
+    (
+      _e,
+      input: {
+        fromDate?: string
+        toDate?: string
+        statedGross?: number
+        statedPayout?: number | null
+      }
+    ): RevenueCheck | null => {
       if (!can('module.finance')) return null
       const view = streamingFinanceView()
       return revenueCheck(view.days, listRatePeriods(), {
         fromDate: str(input?.fromDate).trim(),
         toDate: str(input?.toDate).trim(),
-        statedGross: Number(input?.statedGross) || 0
+        statedGross: Number(input?.statedGross) || 0,
+        // Absent and null both mean "the document did not say", which is the
+        // ordinary case — a dashboard reading states sales alone. Only a real
+        // number turns the payout comparison on.
+        statedPayout:
+          input?.statedPayout === undefined || input.statedPayout === null
+            ? null
+            : Number(input.statedPayout)
       })
     }
   )

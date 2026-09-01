@@ -88,6 +88,8 @@ export interface FinanceApi {
     fromDate: string
     toDate: string
     statedGross: number
+    /** What the platform actually paid out. Null when the document does not say. */
+    statedPayout?: number | null
   }): Promise<RevenueCheck | null>
   /** Costs typed against a business day — product opened, given away or written
    *  off. A dollar amount only; nothing here moves stock. Both writes hand back

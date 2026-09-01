@@ -31,7 +31,8 @@ import {
   fitStatement,
   fitVerdict,
   grossFitVerdict,
-  type StatementFit
+  type StatementFit,
+  payoutCheck
 } from '@shared/statementFit'
 
 /**
@@ -957,6 +958,7 @@ function RevenueCheck({
 }): JSX.Element {
   const toast = useToast()
   const [stated, setStated] = useState('')
+  const [paidOut, setPaidOut] = useState('')
   const [busy, setBusy] = useState(false)
 
   const num = (v: string): number => {
@@ -988,6 +990,20 @@ function RevenueCheck({
     [filled, stated, totals, pinned]
   )
   const verdict = fit ? grossFitVerdict(fit) : null
+
+  /**
+   * THE UPSTREAM CHECK, and it runs whether or not a sales figure was typed.
+   *
+   * Both sides are RECORDED — the ledger's own Amount column and the money the
+   * platform actually sent — so unlike the fit it contains no fee schedule and
+   * cannot be wrong for a fee schedule's reasons. When it disagrees, no
+   * commission rate can be right, because the app is holding a different set of
+   * orders from the one the statement is about. See payoutCheck.
+   */
+  const paid = useMemo(
+    () => (paidOut.trim() === '' ? null : payoutCheck(totals.netPaid, num(paidOut))),
+    [paidOut, totals.netPaid]
+  )
 
   const applyRate = async (): Promise<void> => {
     if (!fit?.solvable || !from || !to) return
@@ -1037,7 +1053,57 @@ function RevenueCheck({
             onChange={(e) => setStated(e.target.value)}
           />
         </label>
+        {/* THE PAYOUT, beside the sales figure and answering a different
+            question. Sales is a total Whatnot computed; the payout is money that
+            moved, and the app has a figure of the same kind. Optional, because a
+            dashboard reading states sales alone — but when it is to hand it is
+            the more useful of the two, and it is checked first. */}
+        <label>
+          <span>
+            And paid out <span className="fin-fit-opt">optional</span>
+          </span>
+          <input
+            className="input"
+            inputMode="decimal"
+            placeholder="369362.53"
+            value={paidOut}
+            onChange={(e) => setPaidOut(e.target.value)}
+          />
+        </label>
       </div>
+
+      {/* BEFORE the fit, always. A gap here means the app is holding the wrong
+          ORDERS, and a commission fitted on top of that would be a rate invented
+          to paper over a window that does not line up. */}
+      {paid && (
+        <Note
+          tone={paid.material ? 'danger' : paid.gap === 0 ? 'good' : 'warn'}
+          icon={paid.material ? 'AlertTriangle' : 'Check'}
+        >
+          <b>
+            {paid.material
+              ? 'Start here — the ledger and the payout do not agree'
+              : 'The ledger matches what was paid out'}
+          </b>
+          <p>{paid.sentence}</p>
+          <table className="data fin-fit-table">
+            <tbody>
+              <tr>
+                <th scope="row">The ledger you uploaded holds</th>
+                <td className="num"><Money value={paid.netPaid} /></td>
+              </tr>
+              <tr>
+                <th scope="row">Whatnot paid out</th>
+                <td className="num"><Money value={paid.statedPayout} /></td>
+              </tr>
+              <tr className={paid.material ? 'is-bad' : 'is-ok'}>
+                <th scope="row">Out by</th>
+                <td className="num"><Money value={paid.gap} strong /></td>
+              </tr>
+            </tbody>
+          </table>
+        </Note>
+      )}
 
       {fit && verdict && (
         <>
