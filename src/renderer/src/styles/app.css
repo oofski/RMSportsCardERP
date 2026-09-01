@@ -29291,3 +29291,41 @@ button.sor-team:focus-visible {
     flex: 1 1 100%;
   }
 }
+
+/* BRINGING A ROADSHOW CASE HOME — the block under the buying history in
+   ShopBuysPanel. Set off by a rule rather than a card, because it is the one
+   ACTION on a panel that is otherwise a record, and a second card inside a
+   modal reads as a second subject. */
+.sb-move {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.sb-move-row {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  gap: 12px;
+}
+.sb-move-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 10px 0 0;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.sb-move-note svg {
+  flex: none;
+  margin-top: 2px;
+}
+/* A refusal is the same sentence slot in warning colour — one place to read,
+   whether it says what will happen or why it will not. */
+.sb-move-note.is-bad {
+  color: var(--warning);
+}
+@media (max-width: 560px) {
+  .sb-move-row {
+    grid-template-columns: 1fr;
+  }
+}

@@ -74,6 +74,7 @@ import type {
 import type { EmailSettings, RedactedEmailSettings } from '@shared/emailSettings'
 import type { InvoiceDelivery } from '@shared/invoiceDelivery'
 import type { Consignment, NewConsignment } from '@shared/consignment'
+import type { StockMoveRequest } from '@shared/stockMove'
 import type { ContactImportResult } from '@shared/contacts'
 import type { ClockPushState, PushSubscriptionInput } from '@shared/webPush'
 import type { OrderParty, SupplierSuggestion, VendorSummary } from '@shared/purchaseOrders'
@@ -458,6 +459,13 @@ export function createBridge(ipcRenderer: BridgeTransport) {
         ipcRenderer.invoke(IPC.invStockAdd, input),
       adjustStock: (input: AdjustStockInput): Promise<Result<InventoryProduct>> =>
         ipcRenderer.invoke(IPC.invStockAdjust, input),
+      /**
+       * Carry units to another shelf WITHOUT touching what they are worth — the
+       * layer travels with them. See @shared/stockMove for why two adjustments
+       * are not the same thing.
+       */
+      moveStock: (input: StockMoveRequest): Promise<Result<InventoryProduct>> =>
+        ipcRenderer.invoke(IPC.invStockMove, input),
       /**
        * Stock we own and no longer have. Sending CONSUMES the cost lots, which
        * is what makes consigned units unsellable and unbreakable — see

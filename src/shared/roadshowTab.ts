@@ -408,39 +408,40 @@ export function emptyShelfHeadline(tab: ShopTabStanding | null): string {
 /**
  * WHAT THIS WEEK STILL OWES A NUMBER — on every column, full or empty.
  *
- * ## Why the sentence changes with what is left on the shelf
+ * ## One sentence, and it took a wrong one to find it
  *
- * An unpriced line is one fact with two different consequences, and saying the
- * wrong one is worse than saying nothing:
+ * This shipped with two: a future-tense warning for a shop still holding its
+ * cases ("price them before they are sold") and a past-tense one for a shop that
+ * had emptied ("anything sold from them was costed at nothing"), chosen by
+ * comparing what the tab checked in against what is standing there now.
  *
- *   · NOTHING HAS GONE YET — the cases are standing there at a cost of zero, so
- *     the shelf is under-valued and the first sale out of them will book pure
- *     profit. That is a warning about the FUTURE, and the fix is to price them
- *     before selling.
- *   · SOME HAS GONE — a sale has already been costed at nothing. That is a
- *     warning about the PAST, and pricing the line now corrects the sale as well
- *     as the shelf (see restateConsumedCost), which is the only reason selling
- *     out of an unpriced tab is safe at all.
+ * Running it found the hole. Move two cases home and the column empties, so the
+ * sentence flipped to the past tense and accused a sale that never happened —
+ * the units were driven to RM, not sold. Stock leaves a shelf THREE ways: sold,
+ * moved, and adjusted away, and the difference between two counts cannot tell
+ * them apart. A screen guessing at a mechanism it cannot see will eventually
+ * guess wrong, and this one sends somebody hunting an invoice that does not
+ * exist.
  *
- * Telling a shop still holding all four cases that "anything sold from them was
- * costed at nothing" would be a sentence about a sale that never happened, on a
- * screen somebody is using to decide what to chase.
+ * So it says the thing that is true in all three cases and claims no mechanism:
+ * the units are carried at nothing WHEREVER THEY NOW ARE, and pricing the line
+ * puts both the stock and any sale already drawn from it right. That second half
+ * is not a guess — `setPurchaseOrderLinePrice` does exactly that whether or not
+ * a sale exists to correct.
  *
- * `unitsOnShelf` is what the COLUMN counts, and `receivedUnits` is what the tab
- * checked in; the difference is what has left by any route. Passing the shelf in
- * rather than deriving it here keeps the one number the board already has as the
- * one this reads — there is no second count to disagree with it.
+ * The shelf count is no longer an argument, which is the real fix: a parameter
+ * that can only support a wrong inference is better removed than guarded.
  */
-export function unpricedTabWarning(
-  tab: ShopTabStanding | null,
-  unitsOnShelf: number
-): string | null {
+export function unpricedTabWarning(tab: ShopTabStanding | null): string | null {
   const pending = whole(tab?.pendingPriceCount)
   if (!tab || pending <= 0) return null
   const one = pending === 1
-  const lines = `${pending} line${one ? '' : 's'} on ${tab.poNumber} still ${one ? 'has' : 'have'} no price`
-  const gone = whole(tab.receivedUnits) - whole(unitsOnShelf)
-  return gone > 0
-    ? `${lines}, so anything sold from ${one ? 'it' : 'them'} was costed at nothing. Fill the price in on the tab and both the shelf and those sales are put right.`
-    : `${lines}, so ${one ? 'that case is' : 'those cases are'} sitting here at a cost of nothing. Fill the price in on the tab before ${one ? 'it is' : 'they are'} sold.`
+  // "what it bought", not "that case" — ONE LINE CAN BE SIX CASES, and the count
+  // in this sentence is lines, so naming a case would be a second, different
+  // number pretending to be the same one.
+  return (
+    `${pending} line${one ? '' : 's'} on ${tab.poNumber} still ${one ? 'has' : 'have'} no price, ` +
+    `so what ${one ? 'it' : 'they'} bought is carried at nothing wherever it now is. ` +
+    'Fill the price in on the tab and the stock and any sale already made from it are both put right.'
+  )
 }

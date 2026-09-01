@@ -1199,17 +1199,14 @@ console.log('\n=== 9. an empty shop column says WHY it is empty ===')
     'singular reads as one unit, not "1 units"',
     sold
   )
-  const soldWarn = unpricedTabWarning(SOLD_TAB, 0)
+  const soldWarn = unpricedTabWarning(SOLD_TAB)
   ok(
-    !!soldWarn && /no price/.test(soldWarn) && /costed at nothing/.test(soldWarn),
+    !!soldWarn && /no price/.test(soldWarn) && /carried at nothing/.test(soldWarn),
     'AND THE UNPRICED LINE IS SPELLED OUT — that sale was costed at nothing until somebody fills the price in',
     String(soldWarn)
   )
   ok(
-    unpricedTabWarning(
-      { poNumber: 'PO-0452', orderedUnits: 2, receivedUnits: 2, pendingPriceCount: 0 },
-      0
-    ) === null,
+    unpricedTabWarning({ poNumber: 'PO-0452', orderedUnits: 2, receivedUnits: 2, pendingPriceCount: 0 }) === null,
     'a fully priced tab has nothing left to warn about'
   )
 
@@ -1313,7 +1310,7 @@ console.log('\n=== 9. an empty shop column says WHY it is empty ===')
     note
   )
   ok(
-    !!unpricedTabWarning(standing9, 0),
+    !!unpricedTabWarning(standing9),
     'with the unpriced line named, because that sale is sitting at a cost of nothing until it is filled in'
   )
 
@@ -1324,15 +1321,12 @@ console.log('\n=== 9. an empty shop column says WHY it is empty ===')
   const after = po.listOpenRoadshowTabs().find((t: any) => t.id === tabId)
   ok(
     (after.pendingPriceCount ?? 0) === 0 &&
-      unpricedTabWarning(
-        {
-          poNumber: after.poNumber,
-          orderedUnits: after.orderedUnits,
-          receivedUnits: after.receivedUnits,
-          pendingPriceCount: after.pendingPriceCount ?? 0
-        },
-        0
-      ) === null,
+      unpricedTabWarning({
+        poNumber: after.poNumber,
+        orderedUnits: after.orderedUnits,
+        receivedUnits: after.receivedUnits,
+        pendingPriceCount: after.pendingPriceCount ?? 0
+      }) === null,
     'and the warning goes away once it is done — a nag that does not clear is one people stop reading'
   )
 }
@@ -1499,61 +1493,57 @@ console.log('\n=== 11. the unpriced warning belongs to the TAB, not to an empty 
  * reads it, the Spread reads it, and the first sale out of them books pure
  * profit.
  *
- * ## The sentence has to change with what is left, though
+ * ## AND IT MUST NOT GUESS HOW THE STOCK LEFT
  *
- * "Anything sold from them was costed at nothing" is a claim about a sale. On a
- * shop still holding everything it bought, no such sale exists, and putting that
- * sentence there sends somebody looking through invoices for a mistake nobody
- * made. So the warning asks what has LEFT — received minus what is standing —
- * and says either the past thing or the future one.
+ * The first fix had two sentences — future tense while a shop still held its
+ * cases, past tense once it had emptied — chosen by comparing what the tab
+ * checked in against what is standing there. Running it found the hole: MOVING
+ * two cases home empties the column, so the warning flipped to "anything sold
+ * from them was costed at nothing" about units nobody had sold. Stock leaves a
+ * shelf three ways — sold, moved, adjusted away — and two counts cannot tell
+ * them apart. One sentence now, true in all three, claiming no mechanism.
  */
 {
   const FULL = { poNumber: 'PO-0451', orderedUnits: 4, receivedUnits: 4, pendingPriceCount: 4 }
 
   // THE CASE THAT WAS SILENT.
-  const held = unpricedTabWarning(FULL, 4)
+  const held = unpricedTabWarning(FULL)
   ok(
     !!held && held.includes('PO-0451') && /4 lines/.test(held),
-    'A SHOP STILL HOLDING ITS CASES NOW WARNS — this is the column where it matters most, and it was the only one saying nothing',
+    'A SHOP STILL HOLDING ITS CASES WARNS — this is the column where it matters most, and it was the only one saying nothing',
     String(held)
   )
   ok(
-    !!held && /cost of nothing/.test(held) && !/was costed at nothing/.test(held),
-    'and it warns about the RIGHT thing: those cases are carried at nothing, not "a sale was costed at nothing" that never happened',
+    !!held && /carried at nothing wherever it now is/.test(held),
+    'and it says the thing that is true whether the stock is here, sold, or driven home',
     String(held)
   )
   ok(
-    !!held && /before they are sold/.test(held),
-    'so the instruction is to price them BEFORE selling',
+    !!held && !/sold from/.test(held),
+    'IT NEVER CLAIMS A SALE — two cases moved to RM empty a column too, and accusing a sale sends somebody hunting an invoice that does not exist',
+    String(held)
+  )
+  ok(
+    !!held && !/case/.test(held),
+    'AND IT DOES NOT COUNT CASES — the number in this sentence is LINES, and one line can be six cases',
+    String(held)
+  )
+  ok(
+    !!held && /any sale already made from it are both put right/.test(held),
+    'while still saying what pricing fixes, which setPurchaseOrderLinePrice does whether or not a sale exists',
     String(held)
   )
 
-  // Same tab, everything gone — the past-tense sentence.
-  const emptied = unpricedTabWarning(FULL, 0)
   ok(
-    !!emptied && /was costed at nothing/.test(emptied) && /those sales are put right/.test(emptied),
-    'once the cases have gone it says the other thing — a sale HAS been costed at nothing, and pricing the line corrects it',
-    String(emptied)
-  )
-
-  // Part sold is the past tense too: one wrong cost is one wrong cost.
-  const partly = unpricedTabWarning(FULL, 1)
-  ok(
-    !!partly && /was costed at nothing/.test(partly),
-    'three gone and one left is still the past-tense warning — three sales are already wrong',
-    String(partly)
-  )
-
-  ok(
-    unpricedTabWarning({ ...FULL, pendingPriceCount: 0 }, 4) === null,
+    unpricedTabWarning({ ...FULL, pendingPriceCount: 0 }) === null,
     'a fully priced week says nothing at all, however much is standing there'
   )
-  ok(unpricedTabWarning(null, 0) === null, 'and a shop with no tab has nothing to warn about')
+  ok(unpricedTabWarning(null) === null, 'and a shop with no tab has nothing to warn about')
 
-  const one = unpricedTabWarning({ ...FULL, pendingPriceCount: 1 }, 4)
+  const one = unpricedTabWarning({ ...FULL, pendingPriceCount: 1 })
   ok(
-    !!one && /1 line .* still has no price/.test(one) && /that case is/.test(one),
-    'singular reads as one line and one case throughout',
+    !!one && /1 line on PO-0451 still has no price/.test(one) && /what it bought/.test(one),
+    'singular reads as one line throughout',
     String(one)
   )
 

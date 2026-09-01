@@ -136,7 +136,7 @@ export function RoadshowBoard(): JSX.Element {
           // column that still holds its cases — those are standing there at a
           // cost of zero and every screen that values stock is reading it. See
           // unpricedTabWarning.
-          const warning = unpricedTabWarning(standing, units)
+          const warning = unpricedTabWarning(standing)
           return (
             <section className="rs-col" key={shop}>
               <header className="rs-col-head">
@@ -226,6 +226,10 @@ export function RoadshowBoard(): JSX.Element {
           shop={openTile.shop}
           product={openTile.product}
           onClose={() => setOpenTile(null)}
+          onMoved={async (what) => {
+            toast.success(what)
+            await load()
+          }}
         />
       )}
 

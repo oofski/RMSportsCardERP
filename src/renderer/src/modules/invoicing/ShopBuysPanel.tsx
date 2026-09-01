@@ -1,8 +1,12 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { ShopBuy, StockAtLocationRow } from '@shared/availability'
+import { LOCATIONS } from '@shared/inventory'
+import { isRoadshowLocation } from '@shared/roadshowTab'
+import { moveRefusal } from '@shared/stockMove'
 import { api } from '../../lib/api'
 import { Icon } from '../../components/Icon'
-import { CenterLoader, Modal } from '../../components/ui'
+import { useToast } from '../../components/Toast'
+import { Button, CenterLoader, Field, Input, Modal, Select } from '../../components/ui'
 import { formatDate, formatMoney } from '../../lib/format'
 
 /**
@@ -37,17 +41,45 @@ import { formatDate, formatMoney } from '../../lib/format'
  * Not $0.00. "We don't always know in the moment" is what the whole tab feature
  * exists for, and a zero printed here would be this screen quietly agreeing
  * that a case was free. See pricePending.
+ *
+ * ## AND IT IS WHERE YOU BRING THEM HOME
+ *
+ * The owner: "sometimes I want to be able to take things that I buy from
+ * roadshow and move them out of roadshow inventory and then move it to be with
+ * us." Here rather than on a screen of its own, because this is already the
+ * panel somebody opens holding the question "what are these and where did they
+ * come from" — and the answer to "should I drive them back" is the buying
+ * history sitting directly above the box.
+ *
+ * It moves the COST LAYERS, not just the count. See @shared/stockMove for why
+ * two hand adjustments would quietly re-value a $400 case, and why a case still
+ * waiting on a price can be moved and priced afterwards.
  */
 export function ShopBuysPanel({
   shop,
   product,
-  onClose
+  onClose,
+  onMoved
 }: {
   shop: string
   product: StockAtLocationRow
   onClose: () => void
+  /** Called once the shelf has actually changed, with the sentence to toast. */
+  onMoved?: (message: string) => void | Promise<void>
 }): JSX.Element {
+  const toast = useToast()
   const [buys, setBuys] = useState<ShopBuy[] | null>(null)
+  const [qty, setQty] = useState(String(product.quantity))
+  /**
+   * HOME IS THE DEFAULT, and it is the only one that needs no thought.
+   *
+   * The ask was about bringing cases back, so the box opens on the first shelf
+   * that is not a shop. Every other place is still offered — moving between two
+   * roadshows is a real, if rarer, thing — but the common case is one press.
+   */
+  const homeShelves = useMemo(() => LOCATIONS.filter((l) => !isRoadshowLocation(l.id)), [])
+  const [to, setTo] = useState(() => homeShelves[0]?.id ?? 'RM')
+  const [busy, setBusy] = useState(false)
 
   useEffect(() => {
     let alive = true
@@ -60,11 +92,59 @@ export function ShopBuysPanel({
     }
   }, [shop, product.productId])
 
+  const wanted = Math.round(Number(qty))
+  // THE SAME RULE THE STORE ENFORCES, asked here so the button can explain
+  // itself before it is pressed rather than after. The store asks again against
+  // what the shelf actually holds, because this count is as old as the screen.
+  const refusal = moveRefusal(
+    { productId: product.productId, from: shop, to, quantity: wanted },
+    product.quantity
+  )
+
+  const move = async (): Promise<void> => {
+    if (refusal) return
+    setBusy(true)
+    try {
+      const res = await api.inventory.moveStock({
+        productId: product.productId,
+        from: shop,
+        to,
+        quantity: wanted
+      })
+      if (!res.ok) {
+        toast.error(res.error ?? 'Those could not be moved.')
+        return
+      }
+      const said = `${wanted} × ${product.name} moved from ${shop} to ${to}`
+      if (onMoved) await onMoved(said)
+      else toast.success(said)
+      onClose()
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
     <Modal
       title={product.name}
       subtitle={`${product.quantity} standing at ${shop}`}
       onClose={onClose}
+      footer={
+        <>
+          <Button onClick={onClose} disabled={busy}>
+            Close
+          </Button>
+          <Button
+            variant="primary"
+            icon="Truck"
+            onClick={move}
+            disabled={busy || !!refusal}
+            title={refusal ?? `Move ${wanted} to ${to}, cost and all`}
+          >
+            {busy ? 'Moving…' : `Move to ${to}`}
+          </Button>
+        </>
+      }
     >
       {buys === null ? (
         <CenterLoader />
@@ -120,6 +200,37 @@ export function ShopBuysPanel({
           ))}
         </ul>
       )}
+
+      {/* BELOW the history, because the history is what the decision is made
+          on. The note says the one thing somebody would otherwise have to
+          trust: the money comes with the boxes. */}
+      <div className="sb-move">
+        <div className="sb-move-row">
+          <Field label="How many">
+            <Input
+              value={qty}
+              inputMode="numeric"
+              onChange={(e) => setQty(e.target.value)}
+              onFocus={(e) => e.currentTarget.select()}
+            />
+          </Field>
+          <Field label="Move them to">
+            <Select value={to} onChange={(e) => setTo(e.target.value)}>
+              {LOCATIONS.filter((l) => l.id !== shop).map((l) => (
+                <option key={l.id} value={l.id}>
+                  {l.label}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        </div>
+        <p className={`sb-move-note${refusal ? ' is-bad' : ''}`}>
+          <Icon name={refusal ? 'AlertTriangle' : 'Info'} size={13} />
+          {refusal ??
+            'What they cost comes with them — the same figure, the same purchase order, ' +
+              'and a price entered later still lands on them.'}
+        </p>
+      </div>
     </Modal>
   )
 }

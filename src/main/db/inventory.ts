@@ -20,6 +20,8 @@ import { LOCATION_IDS } from '@shared/inventory'
 import type { ProductAvailability, StockAtLocationRow } from '@shared/availability'
 import { isHomeShelf } from '@shared/availability'
 import { normalizeUpc } from '@shared/upc'
+import type { StockMoveRequest } from '@shared/stockMove'
+import { moveNote, moveRefusal } from '@shared/stockMove'
 import { getDb } from './database'
 import type { LotPick } from '@shared/costLots'
 import {
@@ -29,6 +31,7 @@ import {
   createLot,
   listOpenLots,
   recordTxnLots,
+  relocateLots,
   reverseLotReceipt,
   roundQty,
   slicesCost,
@@ -1541,4 +1544,79 @@ export function salesSeries(days: number): SalesPoint[] {
 function dayKey(d: Date): string {
   const p = (n: number): string => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
+
+/**
+ * DRIVE STOCK FROM ONE SHELF TO ANOTHER, cost and all.
+ *
+ * The owner: "sometimes I want to be able to take things that I buy from
+ * roadshow and move them out of roadshow inventory and then move it to be with
+ * us." Somebody has put four cases in a car in Kentucky and unloaded them at RM,
+ * and until now the app had no way to be told.
+ *
+ * ## Neither of the two things it looks like
+ *
+ * NOT A RE-ROUTE. `setPurchaseOrderRouting` refuses once units are checked in,
+ * and a roadshow line is checked in the instant it is typed — see
+ * takeTabDelivery. That refusal is correct: routing says where units WILL go,
+ * and these have already been.
+ *
+ * NOT TWO ADJUSTMENTS. Down at the shop consumes its layer; up at home opens a
+ * fresh one at the destination's own basis. That is how a $400 case becomes a
+ * $150 one, permanently. See relocateLots, which moves the layer instead.
+ *
+ * ## The money must not move, and the ledger says so out loud
+ *
+ * Two rows, equal and opposite, both `adjustment`, both carrying the same
+ * COST BASIS with the same sign as their quantity. Nothing is earned or spent by
+ * carrying a box to a different room, so the pair sums to zero units and zero
+ * dollars — which is the property the P&L depends on and the reason this is not
+ * written as a sale at one end and a purchase at the other.
+ *
+ * Two rows rather than one because the stock ledger is read PER SHELF: a single
+ * row would leave one of the two shelves with no record of the day its count
+ * changed, and "where did those four go" is exactly the question somebody asks
+ * it.
+ */
+export function moveStock(req: StockMoveRequest, actorId: string | null): StockResult {
+  const db = getDb()
+  const productId = String(req?.productId ?? '').trim()
+  const from = String(req?.from ?? '').trim()
+  const to = String(req?.to ?? '').trim()
+
+  const run = db.transaction((): StockResult => {
+    const exists = db.prepare('SELECT id FROM inventory_products WHERE id = ?').get(productId)
+    if (!exists) return { product: null, error: 'Product not found.' }
+
+    const qty = roundQty(req?.quantity ?? 0, allowsFractionalQty(db, productId))
+    // Validated against what the shelf HOLDS, read here rather than taken from
+    // the caller: a screen's count is as old as its last refresh, and this is
+    // the one check standing between a typo and a negative shelf.
+    const refusal = moveRefusal({ ...req, productId, from, to, quantity: qty }, stockQty(productId, from))
+    if (refusal) return { product: getProduct(productId), error: refusal }
+
+    const moved = relocateLots(db, productId, from, to, qty)
+    bumpStock(productId, from, -qty)
+    bumpStock(productId, to, qty)
+
+    // What these units are carried at — the layers' own figure, not the
+    // product's average. It is the same number on both rows because it is the
+    // same boxes, which is the whole claim this operation is making.
+    const basis = slicesCost(moved)
+    const note = moveNote(from, to, req?.note ?? null)
+    insertTxn(productId, 'adjustment', -qty, null, null, note, actorId, from, -basis)
+    insertTxn(productId, 'adjustment', qty, null, null, note, actorId, to, basis)
+
+    // The average is across every shelf, so moving between two of them cannot
+    // change it — called anyway, because "cannot change" is an invariant this
+    // function should be keeping rather than relying on.
+    syncProductAvgCost(db, productId)
+    return { product: getProduct(productId) }
+  })
+
+  try {
+    return run()
+  } catch (err) {
+    return { product: getProduct(productId), error: (err as Error).message }
+  }
 }

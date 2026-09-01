@@ -77,6 +77,16 @@ export const IPC = {
   invSaleRecord: 'inventory:sale:record',
   invStockAdd: 'inventory:stock:add',
   invStockAdjust: 'inventory:stock:adjust',
+  /**
+   * MOVE UNITS BETWEEN TWO SHELVES, cost layers and all.
+   *
+   * Its own channel rather than a flag on the adjust one, because it is a
+   * different act with a different guarantee: an adjustment changes how much
+   * there is, and a move changes only where it is. Folding them together would
+   * put the one operation that must never alter valuation behind the one that
+   * exists to alter it. See @shared/stockMove.
+   */
+  invStockMove: 'inventory:stock:move',
   // Stock we own and no longer have. Sending CONSUMES the cost lots, which is
   // what makes consigned units unsellable and unbreakable without a check being
   // added to either path — see @shared/consignment.

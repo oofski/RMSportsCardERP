@@ -31,6 +31,7 @@ import {
   sendOnConsignment,
   settleConsignment
 } from './db/consignment'
+import type { StockMoveRequest } from '@shared/stockMove'
 import type {
   AddStockInput,
   AdjustStockInput,
@@ -79,6 +80,7 @@ import {
   addProductImage,
   addStock,
   adjustStock,
+  moveStock,
   categorySummaries,
   createProduct,
   deleteProduct,
@@ -671,6 +673,37 @@ export function registerInventoryIpc(): void {
         input.note ?? null,
         actor.id,
         allocation
+      )
+      return res.error ? { ok: false, error: res.error } : { ok: true, data: res.product as InventoryProduct }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  /**
+   * CARRY UNITS TO ANOTHER SHELF. See moveStock, and @shared/stockMove for why
+   * this is neither a re-route nor a pair of adjustments.
+   *
+   * Both shelves are checked against the registry, not just the destination: a
+   * move OFF a name that is not a place could only ever be a move off nothing,
+   * and the honest answer is to say so rather than to silently succeed at
+   * changing no stock.
+   */
+  ipcMain.handle(IPC.invStockMove, (_e, input: StockMoveRequest): Result<InventoryProduct> => {
+    try {
+      const actor = requireManage()
+      if (!input?.productId) return { ok: false, error: 'Select a product.' }
+      if (!isLocation(input?.from)) return { ok: false, error: 'Choose where these are coming from.' }
+      if (!isLocation(input?.to)) return { ok: false, error: 'Choose where these are going.' }
+      const res = moveStock(
+        {
+          productId: String(input.productId),
+          from: String(input.from),
+          to: String(input.to),
+          quantity: Number(input.quantity),
+          note: input.note ?? null
+        },
+        actor.id
       )
       return res.error ? { ok: false, error: res.error } : { ok: true, data: res.product as InventoryProduct }
     } catch (err) {
