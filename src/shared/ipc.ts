@@ -119,6 +119,14 @@ export const IPC = {
   invProductAvailability: 'inventory:product:availability',
   /** What ONE place is holding, product by product. See stockAtLocation. */
   invStockAtLocation: 'inventory:location:stock',
+  /**
+   * WHAT ONE SHOP HAS HANDED OVER AND WHAT BECAME OF IT — bought, here, sold.
+   *
+   * Beside the shelf read rather than replacing it: a sales order still asks
+   * "what can I draw", which is the shelf alone. This is the settling-up
+   * question. See shopShelf.
+   */
+  invShopShelf: 'inventory:location:shelf',
   /** Every buy behind one product at one shop, newest first. See shopBuys. */
   invShopBuys: 'inventory:location:buys',
   /** Where a product's stock came from, and which POs are still bringing more. */
@@ -367,6 +375,14 @@ export const IPC = {
   poSetHeader: 'po:set-header',
   poUpdateLine: 'po:update-line',
   poRemoveLine: 'po:remove-line',
+  /**
+   * TAKE A LINE OFF A ROADSHOW TAB, reversing what it put on the shelf.
+   *
+   * Its own channel because it is a different act with a different guard: the
+   * one above refuses anything already checked in, which is every tab line ever
+   * written. See removeTabLine.
+   */
+  poRemoveTabLine: 'po:remove-tab-line',
   poSetFreight: 'po:set-freight',
   // WHICH OPEN ROADSHOW ORDER STILL HAS THIS PRODUCT ON THE SHELF, so a sales
   // order line can sell that order's cases rather than whatever is oldest.

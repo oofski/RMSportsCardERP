@@ -28837,6 +28837,10 @@ button.sor-team:focus-visible {
   grid-row: 1 / span 2;
   grid-column: 2;
   align-self: center;
+  /* The chip and the undo sit on one line — the state and the way to change it,
+     which is the pair somebody is looking at when they open this. */
+  display: flex;
+  align-items: center;
 }
 .sb-what {
   display: flex;
@@ -29328,4 +29332,39 @@ button.sor-team:focus-visible {
   .sb-move-row {
     grid-template-columns: 1fr;
   }
+}
+
+/* SOLD, beside what is left. Muted because it is history and the number next to
+   it is stock — a row reading "1 · 2 sold" has to make that difference obvious
+   at a glance or the column becomes two numbers nobody can tell apart. */
+.rs-item-sold {
+  color: var(--text-3);
+  font-weight: 500;
+}
+/* A product this shop has dealt in but is not holding. Still a row — that is the
+   whole point — but it must not look like stock somebody can pick. */
+.rs-item.is-gone .rs-item-name {
+  color: var(--text-3);
+}
+/* Taking a receipt back off a tab. Quiet until hovered, and greyed rather than
+   hidden when it cannot go, so the tooltip can say why. */
+.sb-undo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 8px;
+  padding: 3px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-3);
+  cursor: pointer;
+}
+.sb-undo:hover:not(:disabled) {
+  background: var(--danger-soft, var(--surface-3));
+  color: var(--danger, var(--warning));
+}
+.sb-undo:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
 }

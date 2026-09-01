@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { PurchaseOrder } from '@shared/types'
-import type { StockAtLocationRow } from '@shared/availability'
+import type { ShopShelfRow } from '@shared/availability'
 import { ROADSHOW_SHOPS, emptyShelfHeadline, unpricedTabWarning } from '@shared/roadshowTab'
 import { api } from '../../lib/api'
 import { LIVE, useLiveRefresh } from '../../lib/live'
@@ -30,15 +30,20 @@ import { ShopBuysPanel } from './ShopBuysPanel'
  *
  * Four columns. Pick a shop, add what you bought, look at what is there.
  *
- * ## The columns are the SHELVES, not the tabs
+ * ## The columns list WHAT THE SHOP HAS HANDED OVER, and what became of it
  *
- * Read from `stockAtLocation` — the same table a sales order draws from — rather
- * than from the open tab's lines. The tab is what was BOUGHT and the shelf is
- * what is THERE, and after the first sale those stop being the same number: a
- * case sold out of Kentucky stays on the tab for ever, and a case that reached
- * Kentucky any other way was never on one. Reading the shelf means this board
- * and the sales order can never disagree about what is available, which is the
- * only property that makes the board worth looking at.
+ * They used to list `stockAtLocation` — what is standing there — and that hid
+ * the busiest days. A case bought at a shop and sold out of it the same
+ * afternoon never appeared at all, so a shop that had traded all day read as
+ * empty, and the only trace was a line on a tab nobody had opened. The owner:
+ * "anything that is sold from the roadshow shops should still show up on the
+ * list ... it shows me what is sold and what is what's stuck. That is a big
+ * thing."
+ *
+ * So a row is a PRODUCT THIS SHOP HAS DEALT IN, carrying three counted figures —
+ * bought, still here, sold — from `shopShelf`. The count in the header is still
+ * the shelf alone, because that is the number a sales order can draw and the two
+ * must never disagree; the rows say the rest.
  *
  * ## The tab is still down there, and still where the money is
  *
@@ -51,19 +56,17 @@ import { ShopBuysPanel } from './ShopBuysPanel'
 export function RoadshowBoard(): JSX.Element {
   const toast = useToast()
   const [tabs, setTabs] = useState<PurchaseOrder[] | null>(null)
-  const [stock, setStock] = useState<Record<string, StockAtLocationRow[]>>({})
+  const [stock, setStock] = useState<Record<string, ShopShelfRow[]>>({})
   const [adding, setAdding] = useState<string | null>(null)
   /** The tile somebody opened, and which shop it is on. Null the rest of the time. */
-  const [openTile, setOpenTile] = useState<{ shop: string; product: StockAtLocationRow } | null>(
-    null
-  )
+  const [openTile, setOpenTile] = useState<{ shop: string; product: ShopShelfRow } | null>(null)
 
   const load = useCallback(async () => {
     const [openTabs, ...shelves] = await Promise.all([
       api.purchaseOrders.openTabs(),
-      ...ROADSHOW_SHOPS.map((shop) => api.inventory.stockAtLocation(shop))
+      ...ROADSHOW_SHOPS.map((shop) => api.inventory.shopShelf(shop))
     ])
-    const next: Record<string, StockAtLocationRow[]> = {}
+    const next: Record<string, ShopShelfRow[]> = {}
     ROADSHOW_SHOPS.forEach((shop, i) => {
       next[shop] = shelves[i] ?? []
     })
@@ -119,7 +122,11 @@ export function RoadshowBoard(): JSX.Element {
       <div className="rs-board">
         {ROADSHOW_SHOPS.map((shop) => {
           const rows = stock[shop] ?? []
-          const units = rows.reduce((n, r) => n + r.quantity, 0)
+          // THE HEADER COUNT IS THE SHELF, not the list length. A row for
+          // something wholly sold belongs on the list and contributes nothing to
+          // what can be picked, and this number has to keep agreeing with what a
+          // sales order can draw.
+          const units = rows.reduce((n, r) => n + r.here, 0)
           const tab = tabFor.get(shop.toLowerCase()) ?? null
           // The shelf and the tab are two different facts, and this is the one
           // place they are held together — so both sentences are derived here.
@@ -173,12 +180,25 @@ export function RoadshowBoard(): JSX.Element {
                           could not reach. See ShopBuysPanel. */}
                       <button
                         type="button"
-                        className="rs-item"
+                        className={`rs-item${r.here <= 0 ? ' is-gone' : ''}`}
                         onClick={() => setOpenTile({ shop, product: r })}
-                        title={`When ${r.name} was bought at ${shop}`}
+                        title={`When ${r.name} was bought at ${shop}, and what became of it`}
                       >
                         <span className="rs-item-name">{r.name}</span>
-                        <span className="rs-item-qty mono">{r.quantity}</span>
+                        {/* WHAT IS LEFT, then what went. A row showing only "2"
+                            cannot tell four-bought-two-sold from two-bought, and
+                            those are different weeks. The sold half is muted
+                            because it is history and the other half is stock. */}
+                        <span className="rs-item-qty mono">
+                          {r.here > 0 && <b>{r.here}</b>}
+                          {r.sold > 0 && (
+                            <span className="rs-item-sold">
+                              {r.here > 0 ? ' · ' : ''}
+                              {r.sold} sold
+                            </span>
+                          )}
+                          {r.here <= 0 && r.sold <= 0 && <span className="rs-item-sold">gone</span>}
+                        </span>
                       </button>
                     </li>
                   ))}
@@ -227,6 +247,10 @@ export function RoadshowBoard(): JSX.Element {
           product={openTile.product}
           onClose={() => setOpenTile(null)}
           onMoved={async (what) => {
+            toast.success(what)
+            await load()
+          }}
+          onRemoved={async (what) => {
             toast.success(what)
             await load()
           }}

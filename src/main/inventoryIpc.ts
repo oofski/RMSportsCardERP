@@ -21,8 +21,10 @@ import type {
   ResetRunSummary
 } from '@shared/inventoryReset'
 import type { StockProvenance } from '@shared/provenance'
-import { productProvenance, shopBuys } from './db/provenance'
-import type { ProductAvailability, ShopBuy, StockAtLocationRow } from '@shared/availability'
+import { productProvenance, shopBuys,
+  shopShelf
+} from './db/provenance'
+import type { ProductAvailability, ShopBuy, StockAtLocationRow, ShopShelfRow } from '@shared/availability'
 import { productAvailability, stockAtLocation } from './db/inventory'
 import type { Consignment, NewConsignment } from '@shared/consignment'
 import {
@@ -305,6 +307,16 @@ export function registerInventoryIpc(): void {
     if (!can('module.inventory')) return []
     return stockAtLocation(String(location ?? ''))
   })
+
+  /**
+   * WHAT A SHOP HANDED OVER AND WHAT BECAME OF IT — bought, here, sold.
+   *
+   * A read, gated like every other inventory read. Bare array on the empty case,
+   * matching stockAtLocation beside it.
+   */
+  ipcMain.handle(IPC.invShopShelf, (_e, location: unknown): ShopShelfRow[] =>
+    can('module.inventory') ? shopShelf(String(location ?? '')) : []
+  )
 
   ipcMain.handle(IPC.invProductAvailability, (_e, productId: string): ProductAvailability => {
     if (!can('module.inventory') && !can('module.invoicing')) {

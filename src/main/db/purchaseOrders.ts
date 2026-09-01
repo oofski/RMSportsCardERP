@@ -1717,6 +1717,155 @@ export function updatePurchaseOrderLine(
  * Refused on the LAST line, because an order with nothing on it is not a
  * corrected order, it is a deleted one wearing a number. Delete or cancel it.
  */
+/**
+ * TAKE SOMETHING BACK OFF A ROADSHOW TAB — the undo the shop board had no button
+ * for.
+ *
+ * The owner: "need a delete button for items added on the thing."
+ *
+ * ## Why `removePurchaseOrderLine` could not be that button
+ *
+ * It refuses the moment any unit on a line has been checked in, and that refusal
+ * is right for an ordinary purchase: the boxes are on a shelf, costed against a
+ * lot that points at this line's price, and deleting the row would leave stock
+ * whose origin cannot be explained. Its advice is to cancel the order, which
+ * reverses receipts properly.
+ *
+ * A TAB LINE IS ALWAYS ALREADY CHECKED IN. Buying at a shop IS taking delivery —
+ * see takeTabDelivery — so that refusal fires on every single line the roadshow
+ * board can create, and its advice is to cancel a week's trading because
+ * somebody typed the wrong box. There was no way to correct a mistake at all.
+ *
+ * ## So this reverses the receipt AND removes the line, together
+ *
+ * Exactly what cancelling would do, scoped to one line: `reverseStockReceipt`
+ * takes the units off the shop's shelf and closes the layer they opened, the
+ * receipt rows go, and the line goes. Every one of those inside the caller's
+ * transaction, so a refusal anywhere leaves the tab untouched.
+ *
+ * ## THE UNITS MUST STILL BE THERE, and that is the whole safety argument
+ *
+ * `reverseLotReceipt` throws when any of a layer has been drawn down, and that
+ * throw is the guard rather than a check written here — one rule, in the place
+ * that owns it. A case that has been SOLD cannot be un-bought: the sale is real,
+ * its cost of goods came out of this layer, and deleting the purchase would
+ * leave a sale costed against a purchase that does not exist. Correct that by
+ * pricing the line, or by voiding the sale first.
+ *
+ * It follows the LOT rather than the receipt's recorded shelf, because a case may
+ * have been driven home since — see moveStock, which moves the layer. Deleting
+ * the purchase then correctly takes it off RM, where it actually is.
+ *
+ * ## Only an OPEN tab
+ *
+ * A settled week is history: the bill has been paid on the strength of what was
+ * on it, and quietly removing a line afterwards would make the record disagree
+ * with the money that changed hands. Reopen it first, deliberately.
+ *
+ * An empty tab is left standing rather than deleted — unlike an ordinary order,
+ * a week with nothing on it yet is an ordinary state here, and it is what
+ * `settleTabRefusal` already says.
+ */
+export function removeTabLine(
+  poId: string,
+  lineId: string,
+  actorId: string | null
+): PoStatusResult {
+  const db = getDb()
+  const run = db.transaction((): PoStatusResult => {
+    const head = db
+      .prepare(
+        `SELECT id, po_number, status, tab_opened_at, tab_closed_at
+           FROM purchase_orders WHERE id = ?`
+      )
+      .get(poId) as
+      | {
+          id: string
+          po_number: string
+          status: PurchaseOrderStatus
+          tab_opened_at: string | null
+          tab_closed_at: string | null
+        }
+      | undefined
+    if (!head) return { po: null, error: 'Purchase order not found.' }
+    if (!isOpenTab({ tabOpenedAt: head.tab_opened_at, tabClosedAt: head.tab_closed_at })) {
+      return {
+        po: getPurchaseOrder(poId),
+        error: isTab({ tabOpenedAt: head.tab_opened_at, tabClosedAt: head.tab_closed_at })
+          ? `${head.po_number} has been settled, so what was on it is now the record of a bill that was paid. Reopen it first if it really is wrong.`
+          : `${head.po_number} is not a roadshow tab. Change it on the purchase order itself.`
+      }
+    }
+
+    const line = db
+      .prepare(
+        `SELECT l.id, l.product_id, l.quantity, p.name AS product_name
+           FROM purchase_order_lines l
+           JOIN inventory_products p ON p.id = l.product_id
+          WHERE l.id = ? AND l.po_id = ?`
+      )
+      .get(lineId, poId) as
+      | { id: string; product_id: string; quantity: number; product_name: string }
+      | undefined
+    if (!line) return { po: getPurchaseOrder(poId), error: 'That line is not on this tab.' }
+
+    // The receipts this line wrote, each with the layer it opened and WHERE THAT
+    // LAYER IS NOW — not where it landed, which may be a different shelf since.
+    const receipts = db
+      .prepare(
+        `SELECT r.id, r.lot_id, r.quantity, lot.location AS lot_location
+           FROM po_line_receipts r
+           JOIN inventory_lots lot ON lot.id = r.lot_id
+          WHERE r.po_line_id = ?`
+      )
+      .all(lineId) as Array<{
+      id: string
+      lot_id: string
+      quantity: number
+      lot_location: string
+    }>
+
+    for (const r of receipts) {
+      // Throws, and the throw is the guard: anything drawn down cannot be
+      // un-bought. Caught below and reported as the refusal it is.
+      reverseStockReceipt(db, {
+        productId: line.product_id,
+        location: r.lot_location,
+        quantity: r.quantity,
+        lotId: r.lot_id,
+        note: `Removed from ${head.po_number}`,
+        actorId
+      })
+    }
+
+    db.prepare('DELETE FROM po_line_receipts WHERE po_line_id = ?').run(lineId)
+    db.prepare('DELETE FROM purchase_order_allocations WHERE po_line_id = ?').run(lineId)
+    db.prepare('DELETE FROM purchase_order_lines WHERE id = ?').run(lineId)
+
+    const ts = nowIso()
+    restateOrderTotal(db, poId, ts)
+    recordOrderEvent('po', poId, 'note', {
+      detail: `Removed ${line.quantity} × ${line.product_name} from this tab — the shelf was put back as it was.`,
+      actorId,
+      db
+    })
+    return { po: getPurchaseOrder(poId) }
+  })
+  try {
+    return run()
+  } catch (err) {
+    const why = (err as Error).message
+    return {
+      po: getPurchaseOrder(poId),
+      // The lot layer's own refusal names the situation but not the product, and
+      // this is a screen showing a list of products.
+      error: /already been sold/.test(why)
+        ? 'Some of that has already been sold, so it cannot be un-bought. Void the sale first, or put the real price on the line instead.'
+        : why
+    }
+  }
+}
+
 export function removePurchaseOrderLine(poId: string, lineId: string): PoStatusResult {
   const db = getDb()
   const run = db.transaction((): PoStatusResult => {

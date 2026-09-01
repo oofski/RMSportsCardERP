@@ -49,6 +49,8 @@ const invoices = require('../src/main/db/invoices')
 const inventory = require('../src/main/db/inventory')
 const dealTickets = require('../src/main/db/dealTickets')
 const prov = require('../src/main/db/provenance')
+const inv = require('../src/main/db/inventory')
+const { assertStockLotsConsistent } = require('../src/main/db/lots')
 const invoiceStock = require('../src/main/db/invoiceStock')
 const orderExtras = require('../src/main/db/orderExtras')
 const { saveStockLocation } = require('../src/main/db/stockLocations')
@@ -1674,6 +1676,150 @@ console.log('\n=== 12. a tab the APP opened says so, on the tab ===')
       .listOrderEvents('so', quiet.id)
       .some((e: any) => /to fill this order/.test(String(e.detail ?? ''))),
     'A SALE THE SHELF COULD COVER SAYS NOTHING — the note marks an automatic purchase, not every roadshow sale'
+  )
+}
+
+
+console.log('\n=== 13. taking something back off a tab, and the shop’s whole story ===')
+// ---------------------------------------------------------------------------
+/**
+ * Two asks, one screen. The owner: "need a delete button for items added on the
+ * thing" and "anything that is sold from the roadshow shops should still show up
+ * on the list ... it shows me what is sold and what is what's stuck."
+ *
+ * ## Why there was no delete button to add
+ *
+ * `removePurchaseOrderLine` refuses the moment any unit has been checked in —
+ * correctly, for an ordinary purchase. But a tab line is checked in the instant
+ * it is typed, so that refusal fired on every line the roadshow board could
+ * create and its advice was to cancel a week's trading over one wrong box.
+ * `removeTabLine` reverses the receipt and removes the line together, and the
+ * guard is `reverseLotReceipt` throwing on anything drawn down — a case that has
+ * been SOLD cannot be un-bought, because the sale is real and its cost of goods
+ * came out of that layer.
+ *
+ * ## Why the column could not show what sold
+ *
+ * It listed what was STANDING. A case bought and sold the same afternoon never
+ * appeared, so a shop that had traded all day read as empty. `shopShelf` counts
+ * three things from three tables — bought off the receipts, here off the shelf,
+ * sold off the invoice moves — rather than one number and two subtractions,
+ * because stock leaves a shelf three ways and a subtraction cannot tell a sale
+ * from a case driven home.
+ */
+{
+  const SHOP13 = 'Kentucky Roadshow'
+  saveStockLocation({ label: SHOP13 }, 'emp_owner')
+  product('p_keep', 'RS-KEP', 'Kentucky Keeper Case')
+  product('p_oops', 'RS-OOP', 'Kentucky Mistake Case')
+  product('p_gone', 'RS-GON', 'Kentucky Sold Case')
+
+  const tab13 = po.createPurchaseOrder(
+    {
+      supplier: SHOP13,
+      location: '',
+      ongoing: true,
+      lines: [
+        { productId: 'p_keep', quantity: 2, unitPrice: 300 },
+        { productId: 'p_oops', quantity: 1, unitPrice: 400 },
+        { productId: 'p_gone', quantity: 3, unitPrice: 500 }
+      ]
+    },
+    'emp_owner'
+  )
+  invoices.saveInvoice(
+    {
+      customerName: 'Kentucky Buyer',
+      invoiceNumber: 'SO-R990',
+      invoiceDate: '2026-08-31',
+      location: SHOP13,
+      lines: [{ item: 'Kentucky Sold Case', productId: 'p_gone', quantity: 3, rate: 900 }]
+    },
+    'emp_owner'
+  )
+
+  // --- the list: everything the shop dealt in, not just what is left ---------
+  const shelf = prov.shopShelf(SHOP13)
+  const row = (id: string): any => shelf.find((r: any) => r.productId === id)
+  ok(shelf.length === 3, 'ALL THREE PRODUCTS ARE LISTED, including the one wholly sold', String(shelf.length))
+  ok(
+    !!row('p_gone') && row('p_gone').bought === 3 && row('p_gone').here === 0 && row('p_gone').sold === 3,
+    'THE ASK: a case bought and sold at the shop still shows, and says it sold — it used to vanish entirely',
+    JSON.stringify(row('p_gone'))
+  )
+  ok(
+    row('p_keep').bought === 2 && row('p_keep').here === 2 && row('p_keep').sold === 0,
+    'something untouched reads as bought and still here',
+    JSON.stringify(row('p_keep'))
+  )
+  ok(
+    shelf.every((r: any) => r.movedOn === 0),
+    'and nothing is reported as having moved on, because nothing did'
+  )
+
+  // A case driven home is NOT reported as sold — the reason sold is counted.
+  const drove = inv.moveStock({ productId: 'p_keep', from: SHOP13, to: 'RM', quantity: 1 }, 'emp_owner')
+  ok(!drove.error, 'one keeper is driven home', String(drove.error))
+  const after13 = prov.shopShelf(SHOP13).find((r: any) => r.productId === 'p_keep')
+  ok(
+    after13.bought === 2 && after13.here === 1 && after13.sold === 0 && after13.movedOn === 1,
+    'IT COUNTS AS MOVED ON, NOT SOLD — a subtraction would have called it a sale and sent somebody looking for the money',
+    JSON.stringify(after13)
+  )
+
+  // --- the delete: what can go, and what cannot ------------------------------
+  const detail13 = po.getPurchaseOrder(tab13.id)
+  const oopsLine = detail13.lines.find((l: any) => l.productId === 'p_oops')
+  const goneLine = detail13.lines.find((l: any) => l.productId === 'p_gone')
+
+  ok(
+    !!po.removePurchaseOrderLine(tab13.id, oopsLine.id).error,
+    'THE OLD DELETE STILL REFUSES IT — a tab line is always already checked in, which is why there was no button'
+  )
+
+  const removed = po.removeTabLine(tab13.id, oopsLine.id, 'emp_owner')
+  ok(!removed.error, 'THE NEW ONE TAKES IT BACK', String(removed.error))
+  ok(
+    inv.stockQty('p_oops', SHOP13) === 0,
+    'AND THE SHELF GOES BACK AS IT WAS — the receipt was reversed, not just the paperwork deleted',
+    String(inv.stockQty('p_oops', SHOP13))
+  )
+  ok(
+    !prov.shopShelf(SHOP13).some((r: any) => r.productId === 'p_oops'),
+    'so it leaves the shop’s list entirely — it was never bought'
+  )
+  ok(
+    !po.getPurchaseOrder(tab13.id).lines.some((l: any) => l.id === oopsLine.id),
+    'and the line is off the tab'
+  )
+  ok(
+    po.getPurchaseOrder(tab13.id).total === 2 * 300 + 3 * 500,
+    'the tab’s total drops by exactly what that line was worth',
+    String(po.getPurchaseOrder(tab13.id).total)
+  )
+
+  const sold13 = po.removeTabLine(tab13.id, goneLine.id, 'emp_owner')
+  ok(
+    !!sold13.error && /already been sold/.test(String(sold13.error)),
+    'A LINE WHOSE CASES ARE SOLD IS REFUSED — the sale is real and its cost came out of that layer',
+    String(sold13.error)
+  )
+  ok(
+    po.getPurchaseOrder(tab13.id).lines.some((l: any) => l.id === goneLine.id),
+    'and the refusal changed nothing'
+  )
+  assertStockLotsConsistent(db)
+  ok(true, 'the stock/lot invariant survived the removal')
+
+  // A settled week is history.
+  const keepLine = po.getPurchaseOrder(tab13.id).lines.find((l: any) => l.productId === 'p_keep')
+  po.setPurchaseOrderLinePrice(tab13.id, keepLine.id, 300, 'emp_owner')
+  po.closeRoadshowTab(tab13.id, 'emp_owner')
+  const shut = po.removeTabLine(tab13.id, keepLine.id, 'emp_owner')
+  ok(
+    !!shut.error && /settled/.test(String(shut.error)),
+    'AND A SETTLED TAB REFUSES TOO — the bill was paid on the strength of what was on it',
+    String(shut.error)
   )
 }
 

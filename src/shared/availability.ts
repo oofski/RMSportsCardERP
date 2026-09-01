@@ -168,9 +168,64 @@ export interface StockAtLocationRow {
  * Collapsing them onto the order would hide the dates, which are the thing
  * worth showing.
  */
+/**
+ * ONE PRODUCT'S WHOLE STORY AT ONE SHOP — bought, still here, gone out.
+ *
+ * The owner: "anything that is sold from the roadshow shops should still show up
+ * on the list, and when I click on the roadshow shop it shows me what is sold
+ * and what is what's stuck. That is a big thing."
+ *
+ * ## Why the column could not say it before
+ *
+ * It listed `stockAtLocation`, which is what is STANDING there. That is the
+ * right answer to "what can I sell", and the wrong one to "what did this week
+ * do" — a case bought and sold on the same afternoon never appeared at all, so a
+ * shop that had traded all day could read as empty. Settling up with a shop is
+ * the other question, and it was the one with no screen.
+ *
+ * ## Three numbers, from three different places, none of them derived
+ *
+ * `bought` is the RECEIPTS, read off po_line_receipts.location — the shelf a
+ * case landed on, which does not change when the layer is later moved. `here` is
+ * the live shelf. `sold` is what actually left on invoices, off
+ * invoice_stock_moves.location.
+ *
+ * Counting `sold` rather than inferring it from bought − here is the whole point
+ * of doing it this way. Stock leaves a shelf three ways — sold, driven home,
+ * adjusted away — and the subtraction cannot tell them apart. Reporting a case
+ * that was carried back to RM as "sold" would be a sentence about money that
+ * nobody received, on the screen somebody uses to settle a bill.
+ */
+export interface ShopShelfRow {
+  productId: string
+  name: string
+  sku: string | null
+  category: string | null
+  /** Units this shop has ever handed over, off its receipts. */
+  bought: number
+  /** Units standing there right now. What a sales order can draw. */
+  here: number
+  /** Units that left on a sale from this shop. Never inferred — counted. */
+  sold: number
+  /**
+   * Bought, minus what is here, minus what was sold: units that left some other
+   * way — driven home, or adjusted off. Zero on almost every row, and the reason
+   * `sold` is not a subtraction.
+   */
+  movedOn: number
+}
+
 export interface ShopBuy {
   id: string
   poId: string
+  /**
+   * The tab LINE this receipt came in on, so the row can be undone.
+   *
+   * The receipt is what arrived; the line is what was bought, and removing
+   * something added by mistake means removing the line — see removeTabLine,
+   * which reverses the receipt as part of it.
+   */
+  poLineId: string
   poNumber: string
   supplier: string | null
   /** When it was taken in. */

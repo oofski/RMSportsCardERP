@@ -949,7 +949,7 @@ export function relocateLots(
       lot.vendor,
       ts
     )
-    splitLotReceipts(db, lot.id, newId_, take, to)
+    splitLotReceipts(db, lot.id, newId_, take)
     moved.push({ lotId: newId_, qty: take, unitCost: lot.unit_cost })
     need = normQty(need - take)
   }
@@ -978,18 +978,26 @@ export function relocateLots(
  * receipt of nothing is not a receipt, and it would show on the provenance panel
  * as a delivery that never happened.
  *
+ * ## THE NEW ROW KEEPS THE OLD ROW'S LOCATION, and that is not an oversight
+ *
+ * It shipped stamping the DESTINATION, which reads as "where these units are"
+ * and is the wrong question. A receipt is a historical event: these units were
+ * handed over AT THAT SHOP, and driving them home on Thursday does not change
+ * where they arrived on Tuesday. `shopShelf` counts a shop's receipts to answer
+ * "what has this shop handed over", and with the destination stamped, moving a
+ * case home silently reduced what the shop was recorded as having sold us —
+ * which is the beginning of an argument with a supplier that the app would lose.
+ *
+ * Nothing reads this column as a live position. The reversal paths follow the
+ * LOT, which does move; see removeTabLine, which reads lot.location precisely so
+ * it takes a case off whatever shelf it is actually on now.
+ *
  * MUST be called inside the caller's transaction.
  */
-function splitLotReceipts(
-  db: Database,
-  fromLotId: string,
-  toLotId: string,
-  qty: number,
-  toLocation: string
-): void {
+function splitLotReceipts(db: Database, fromLotId: string, toLotId: string, qty: number): void {
   const rows = db
     .prepare(
-      `SELECT id, po_id, po_line_id, quantity, allocation_id
+      `SELECT id, po_id, po_line_id, quantity, allocation_id, location
          FROM po_line_receipts
         WHERE lot_id = ?
         ORDER BY created_at ASC, rowid ASC`
@@ -1000,6 +1008,7 @@ function splitLotReceipts(
     po_line_id: string
     quantity: number
     allocation_id: string | null
+    location: string | null
   }>
   if (rows.length === 0) return
 
@@ -1019,7 +1028,7 @@ function splitLotReceipts(
     const left = normQty(r.quantity - take)
     if (left <= QTY_EPS) drop.run(r.id)
     else cut.run(left, r.id)
-    add.run(newId(), r.po_id, r.po_line_id, toLotId, take, r.allocation_id, toLocation, ts)
+    add.run(newId(), r.po_id, r.po_line_id, toLotId, take, r.allocation_id, r.location, ts)
     need = normQty(need - take)
   }
 }

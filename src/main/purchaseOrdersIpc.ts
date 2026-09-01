@@ -51,6 +51,7 @@ import {
   updatePurchaseOrderHeader,
   updatePurchaseOrderLine,
   removePurchaseOrderLine,
+  removeTabLine,
   setPurchaseOrderPaid,
   setPurchaseOrderStatus,
   listOpenRoadshowTabs,
@@ -432,6 +433,31 @@ export function registerPurchaseOrdersIpc(): void {
         if (!payload?.id) return { ok: false, error: 'No purchase order specified.' }
         if (!payload?.lineId) return { ok: false, error: 'No line specified.' }
         const res = removePurchaseOrderLine(payload.id, payload.lineId)
+        return res.error
+          ? { ok: false, error: res.error }
+          : { ok: true, data: res.po as PurchaseOrderDetail }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  /**
+   * UNDO SOMETHING ADDED AT A SHOP.
+   *
+   * Separate from poRemoveLine because a tab line is always already checked in,
+   * so that handler's guard refuses every one of them. This reverses the receipt
+   * and removes the line together, and refuses anything already sold — see
+   * removeTabLine, where both rules live.
+   */
+  ipcMain.handle(
+    IPC.poRemoveTabLine,
+    (_e, payload: { id: string; lineId: string }): Result<PurchaseOrderDetail> => {
+      try {
+        const actor = requireInvoicing()
+        if (!payload?.id) return { ok: false, error: 'No purchase order specified.' }
+        if (!payload?.lineId) return { ok: false, error: 'No line specified.' }
+        const res = removeTabLine(payload.id, payload.lineId, actor.id)
         return res.error
           ? { ok: false, error: res.error }
           : { ok: true, data: res.po as PurchaseOrderDetail }
