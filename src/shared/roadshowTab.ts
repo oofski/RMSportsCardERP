@@ -334,12 +334,23 @@ export function roadshowShopNamed(name: string | null | undefined): string | nul
  *
  * ## The unpriced count stops being decoration
  *
- * A line still price-pending after its case has gone out means that sale was
- * costed at nothing. Pricing it later fixes both — `setPurchaseOrderLinePrice`
- * re-costs the stock AND the sales already drawn from it, which is precisely
- * what makes a tab safe to sell out of — but only if somebody does it. On an
- * empty column that is the only thing left to act on, so it is said in full
- * rather than left as two words in the footer.
+ * A line still price-pending means its cases are carried at nothing, and if any
+ * have gone out that sale was costed at nothing too. Pricing it later fixes
+ * both — `setPurchaseOrderLinePrice` re-costs the stock AND the sales already
+ * drawn from it, which is precisely what makes a tab safe to sell out of — but
+ * only if somebody does it, so it is said in full rather than left as two words
+ * in the footer.
+ *
+ * THAT WARNING BELONGS TO THE TAB, NOT TO AN EMPTY SHELF, and it was wired to
+ * the wrong one. It shipped inside the empty-column branch, so a shop still
+ * holding its cases said nothing at all — and that is the shop where it matters
+ * most, because those cases are on the shelf at a cost of zero and every screen
+ * that values stock is reading that zero. The owner, looking at California
+ * holding four unpriced cases in silence beside two empty shops shouting about
+ * one each: "why can not everything is showing like that, it should be the
+ * same." Quite. `unpricedTabWarning` is separate from the headline for exactly
+ * that reason — one answers "why is this empty", the other "what does this
+ * week still owe a number", and only the first is about emptiness.
  */
 export interface ShopTabStanding {
   /** The tab's own number, so the sentence can point at something findable. */
@@ -353,14 +364,6 @@ export interface ShopTabStanding {
   receivedUnits: number
   /** Lines still waiting for a price. */
   pendingPriceCount: number
-}
-
-/** What to print where the list of products would be. */
-export interface EmptyShelfNote {
-  /** Why the shelf is bare, in one sentence. */
-  headline: string
-  /** The one thing left to do about it, or null. */
-  warning: string | null
 }
 
 const NOTHING_YET =
@@ -380,9 +383,9 @@ const units = (n: number): string => `${n} unit${n === 1 ? '' : 's'}`
  * opened and not yet bought against, which is the same state to the person
  * looking at the column and should not read as a different one.
  */
-export function emptyShelfNote(tab: ShopTabStanding | null): EmptyShelfNote {
+export function emptyShelfHeadline(tab: ShopTabStanding | null): string {
   const ordered = whole(tab?.orderedUnits)
-  if (!tab || ordered <= 0) return { headline: NOTHING_YET, warning: null }
+  if (!tab || ordered <= 0) return NOTHING_YET
 
   // Capped at what was ordered: the two figures come from the same order, but a
   // count that read "4 sold and −1 coming" would be worse than merely wrong.
@@ -399,13 +402,45 @@ export function emptyShelfNote(tab: ShopTabStanding | null): EmptyShelfNote {
     )
   }
 
-  const headline = `Nothing is standing here now — ${said.join(', and ')}. It is all on ${tab.poNumber}.`
+  return `Nothing is standing here now — ${said.join(', and ')}. It is all on ${tab.poNumber}.`
+}
 
-  const pending = whole(tab.pendingPriceCount)
-  const warning =
-    pending > 0
-      ? `${pending} line${pending === 1 ? '' : 's'} on ${tab.poNumber} still ${pending === 1 ? 'has' : 'have'} no price, so anything sold from ${pending === 1 ? 'it' : 'them'} was costed at nothing. Fill the price in on the tab and both the shelf and those sales are put right.`
-      : null
-
-  return { headline, warning }
+/**
+ * WHAT THIS WEEK STILL OWES A NUMBER — on every column, full or empty.
+ *
+ * ## Why the sentence changes with what is left on the shelf
+ *
+ * An unpriced line is one fact with two different consequences, and saying the
+ * wrong one is worse than saying nothing:
+ *
+ *   · NOTHING HAS GONE YET — the cases are standing there at a cost of zero, so
+ *     the shelf is under-valued and the first sale out of them will book pure
+ *     profit. That is a warning about the FUTURE, and the fix is to price them
+ *     before selling.
+ *   · SOME HAS GONE — a sale has already been costed at nothing. That is a
+ *     warning about the PAST, and pricing the line now corrects the sale as well
+ *     as the shelf (see restateConsumedCost), which is the only reason selling
+ *     out of an unpriced tab is safe at all.
+ *
+ * Telling a shop still holding all four cases that "anything sold from them was
+ * costed at nothing" would be a sentence about a sale that never happened, on a
+ * screen somebody is using to decide what to chase.
+ *
+ * `unitsOnShelf` is what the COLUMN counts, and `receivedUnits` is what the tab
+ * checked in; the difference is what has left by any route. Passing the shelf in
+ * rather than deriving it here keeps the one number the board already has as the
+ * one this reads — there is no second count to disagree with it.
+ */
+export function unpricedTabWarning(
+  tab: ShopTabStanding | null,
+  unitsOnShelf: number
+): string | null {
+  const pending = whole(tab?.pendingPriceCount)
+  if (!tab || pending <= 0) return null
+  const one = pending === 1
+  const lines = `${pending} line${one ? '' : 's'} on ${tab.poNumber} still ${one ? 'has' : 'have'} no price`
+  const gone = whole(tab.receivedUnits) - whole(unitsOnShelf)
+  return gone > 0
+    ? `${lines}, so anything sold from ${one ? 'it' : 'them'} was costed at nothing. Fill the price in on the tab and both the shelf and those sales are put right.`
+    : `${lines}, so ${one ? 'that case is' : 'those cases are'} sitting here at a cost of nothing. Fill the price in on the tab before ${one ? 'it is' : 'they are'} sold.`
 }

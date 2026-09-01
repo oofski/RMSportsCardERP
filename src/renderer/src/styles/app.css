@@ -28461,13 +28461,16 @@ button.sor-team:focus-visible {
 .rs-col-empty p {
   margin: 0;
 }
-/* The unpriced sentence is the one thing on an empty column somebody can act
-   on, and it is about money already booked wrong — same warning colour the
-   footer's count carries, for the same reason. Spaced with p + p so the rule
-   above does not have to be fought with !important. */
-.rs-col-empty p + p.rs-col-empty-warn {
-  margin-top: 8px;
+/* The unpriced sentence carries the same warning colour as the footer's count,
+   because it is the same fact said in full. It sits OUTSIDE the empty block —
+   a column still holding its unpriced cases needs it most — so it owns its own
+   padding rather than inheriting the empty state's. */
+.rs-col-warn {
+  margin: 0;
+  padding: 2px 13px 10px;
   color: var(--warning);
+  font-size: 12px;
+  line-height: 1.5;
 }
 .rs-list {
   margin: 0;

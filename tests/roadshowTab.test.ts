@@ -53,7 +53,8 @@ const invoiceStock = require('../src/main/db/invoiceStock')
 const { offerableOrders, soleSourceOrder, supplyRefusal } = require('../src/shared/poStock')
 const { salesOrderKindOf } = require('../src/shared/invoices')
 const {
-  emptyShelfNote,
+  emptyShelfHeadline,
+  unpricedTabWarning,
   isOpenTab,
   isRoadshowLocation,
   isTab,
@@ -1170,86 +1171,80 @@ console.log('\n=== 9. an empty shop column says WHY it is empty ===')
  * produces would pass its own test and still be wrong on the screen.
  */
 {
-  const noTab = emptyShelfNote(null)
   ok(
-    /Nothing here yet/.test(noTab.headline) && noTab.warning === null,
+    /Nothing here yet/.test(emptyShelfHeadline(null)) && unpricedTabWarning(null, 0) === null,
     '9a — NO TAB IS STILL "nothing here yet": the week has not started and there is nothing else to say'
   )
   ok(
     /Nothing here yet/.test(
-      emptyShelfNote({ poNumber: 'PO-9001', orderedUnits: 0, receivedUnits: 0, pendingPriceCount: 0 })
-        .headline
+      emptyShelfHeadline({ poNumber: 'PO-9001', orderedUnits: 0, receivedUnits: 0, pendingPriceCount: 0 })
     ),
     'a tab opened and not yet bought against reads the same — to the person looking at the column it IS the same state'
   )
 
-  const sold = emptyShelfNote({
+  const SOLD_TAB = {
     poNumber: 'PO-0452',
     orderedUnits: 1,
     receivedUnits: 1,
     pendingPriceCount: 1
-  })
+  }
+  const sold = emptyShelfHeadline(SOLD_TAB)
   ok(
-    !/Nothing here yet/.test(sold.headline) &&
-      /has been sold/.test(sold.headline) &&
-      sold.headline.includes('PO-0452'),
+    !/Nothing here yet/.test(sold) && /has been sold/.test(sold) && sold.includes('PO-0452'),
     '9b — THE ONE THAT WAS WRONG: everything bought here has been sold, and the sentence names the tab holding it',
-    sold.headline
+    sold
   )
   ok(
-    /1 unit\b/.test(sold.headline) && !/1 units/.test(sold.headline),
+    /1 unit\b/.test(sold) && !/1 units/.test(sold),
     'singular reads as one unit, not "1 units"',
-    sold.headline
+    sold
   )
+  const soldWarn = unpricedTabWarning(SOLD_TAB, 0)
   ok(
-    !!sold.warning && /no price/.test(sold.warning) && /costed at nothing/.test(sold.warning),
+    !!soldWarn && /no price/.test(soldWarn) && /costed at nothing/.test(soldWarn),
     'AND THE UNPRICED LINE IS SPELLED OUT — that sale was costed at nothing until somebody fills the price in',
-    String(sold.warning)
+    String(soldWarn)
   )
   ok(
-    emptyShelfNote({
-      poNumber: 'PO-0452',
-      orderedUnits: 2,
-      receivedUnits: 2,
-      pendingPriceCount: 0
-    }).warning === null,
+    unpricedTabWarning(
+      { poNumber: 'PO-0452', orderedUnits: 2, receivedUnits: 2, pendingPriceCount: 0 },
+      0
+    ) === null,
     'a fully priced tab has nothing left to warn about'
   )
 
-  const home = emptyShelfNote({
+  const home = emptyShelfHeadline({
     poNumber: 'PO-0453',
     orderedUnits: 3,
     receivedUnits: 0,
     pendingPriceCount: 0
   })
   ok(
-    /coming home/.test(home.headline) && !/been sold/.test(home.headline),
+    /coming home/.test(home) && !/been sold/.test(home),
     'UNITS ROUTED HOME ARE NOT "SOLD" — they are on a lorry, and saying sold would send somebody looking for money that was never taken',
-    home.headline
+    home
   )
-  const both = emptyShelfNote({
+  const both = emptyShelfHeadline({
     poNumber: 'PO-0454',
     orderedUnits: 5,
     receivedUnits: 2,
     pendingPriceCount: 0
   })
   ok(
-    /2 units bought here have been sold/.test(both.headline) &&
-      /3 units more are coming home/.test(both.headline),
+    /2 units bought here have been sold/.test(both) && /3 units more are coming home/.test(both),
     'and a week that did both says both, with the right count on each side',
-    both.headline
+    both
   )
-  const impossible = emptyShelfNote({
+  const impossible = emptyShelfHeadline({
     poNumber: 'PO-0455',
     orderedUnits: 1,
     receivedUnits: 9,
     pendingPriceCount: 0
   })
   ok(
-    /the 1 unit bought here has been sold/.test(impossible.headline) &&
-      !/coming home/.test(impossible.headline),
+    /the 1 unit bought here has been sold/.test(impossible) && !/coming home/.test(impossible),
     'RECEIVED IS CAPPED AT ORDERED: a column reading "9 sold and −8 coming home" is worse than merely wrong',
-    impossible.headline
+    impossible
   )
 }
 
@@ -1303,21 +1298,22 @@ console.log('\n=== 9. an empty shop column says WHY it is empty ===')
     'reading $0.00 and 1 unpriced, which is what the footer showed',
     `${tab9.total} / ${tab9.pendingPriceCount}`
   )
-  const note = emptyShelfNote({
+  const standing9 = {
     poNumber: tab9.poNumber,
     orderedUnits: tab9.orderedUnits,
     receivedUnits: tab9.receivedUnits,
     pendingPriceCount: tab9.pendingPriceCount ?? 0
-  })
+  }
+  const note = emptyShelfHeadline(standing9)
   ok(
-    !/Nothing here yet/.test(note.headline) &&
-      /has been sold/.test(note.headline) &&
-      note.headline.includes(tab9.poNumber),
+    !/Nothing here yet/.test(note) &&
+      /has been sold/.test(note) &&
+      note.includes(tab9.poNumber),
     'AND THE COLUMN NOW SAYS SO, off figures a real purchase order produced',
-    note.headline
+    note
   )
   ok(
-    !!note.warning,
+    !!unpricedTabWarning(standing9, 0),
     'with the unpriced line named, because that sale is sitting at a cost of nothing until it is filled in'
   )
 
@@ -1328,12 +1324,15 @@ console.log('\n=== 9. an empty shop column says WHY it is empty ===')
   const after = po.listOpenRoadshowTabs().find((t: any) => t.id === tabId)
   ok(
     (after.pendingPriceCount ?? 0) === 0 &&
-      emptyShelfNote({
-        poNumber: after.poNumber,
-        orderedUnits: after.orderedUnits,
-        receivedUnits: after.receivedUnits,
-        pendingPriceCount: after.pendingPriceCount ?? 0
-      }).warning === null,
+      unpricedTabWarning(
+        {
+          poNumber: after.poNumber,
+          orderedUnits: after.orderedUnits,
+          receivedUnits: after.receivedUnits,
+          pendingPriceCount: after.pendingPriceCount ?? 0
+        },
+        0
+      ) === null,
     'and the warning goes away once it is done — a nag that does not clear is one people stop reading'
   )
 }
@@ -1481,6 +1480,90 @@ console.log('\n=== 10. pricing a tab line updates the RIGHT product on Wholesale
     plainRow.cost === 300 && plainRow.margin === 200,
     'and it reports its real cost and margin as it always did',
     `cost ${plainRow.cost} / margin ${plainRow.margin}`
+  )
+}
+
+
+console.log('\n=== 11. the unpriced warning belongs to the TAB, not to an empty shelf ===')
+// ---------------------------------------------------------------------------
+/**
+ * The owner, looking at a board where California held four unpriced cases in
+ * silence while two empty shops each shouted about one: "why can not everything
+ * is showing like that, it should be the same."
+ *
+ * He is right, and the version that shipped had it exactly backwards. The
+ * warning was written inside the empty-column branch, so the ONLY columns that
+ * said anything were the ones with nothing left to lose — and the column still
+ * holding four unpriced cases, which is where the money actually is, said
+ * nothing. Those cases are standing on a shelf at a cost of zero: the valuation
+ * reads it, the Spread reads it, and the first sale out of them books pure
+ * profit.
+ *
+ * ## The sentence has to change with what is left, though
+ *
+ * "Anything sold from them was costed at nothing" is a claim about a sale. On a
+ * shop still holding everything it bought, no such sale exists, and putting that
+ * sentence there sends somebody looking through invoices for a mistake nobody
+ * made. So the warning asks what has LEFT — received minus what is standing —
+ * and says either the past thing or the future one.
+ */
+{
+  const FULL = { poNumber: 'PO-0451', orderedUnits: 4, receivedUnits: 4, pendingPriceCount: 4 }
+
+  // THE CASE THAT WAS SILENT.
+  const held = unpricedTabWarning(FULL, 4)
+  ok(
+    !!held && held.includes('PO-0451') && /4 lines/.test(held),
+    'A SHOP STILL HOLDING ITS CASES NOW WARNS — this is the column where it matters most, and it was the only one saying nothing',
+    String(held)
+  )
+  ok(
+    !!held && /cost of nothing/.test(held) && !/was costed at nothing/.test(held),
+    'and it warns about the RIGHT thing: those cases are carried at nothing, not "a sale was costed at nothing" that never happened',
+    String(held)
+  )
+  ok(
+    !!held && /before they are sold/.test(held),
+    'so the instruction is to price them BEFORE selling',
+    String(held)
+  )
+
+  // Same tab, everything gone — the past-tense sentence.
+  const emptied = unpricedTabWarning(FULL, 0)
+  ok(
+    !!emptied && /was costed at nothing/.test(emptied) && /those sales are put right/.test(emptied),
+    'once the cases have gone it says the other thing — a sale HAS been costed at nothing, and pricing the line corrects it',
+    String(emptied)
+  )
+
+  // Part sold is the past tense too: one wrong cost is one wrong cost.
+  const partly = unpricedTabWarning(FULL, 1)
+  ok(
+    !!partly && /was costed at nothing/.test(partly),
+    'three gone and one left is still the past-tense warning — three sales are already wrong',
+    String(partly)
+  )
+
+  ok(
+    unpricedTabWarning({ ...FULL, pendingPriceCount: 0 }, 4) === null,
+    'a fully priced week says nothing at all, however much is standing there'
+  )
+  ok(unpricedTabWarning(null, 0) === null, 'and a shop with no tab has nothing to warn about')
+
+  const one = unpricedTabWarning({ ...FULL, pendingPriceCount: 1 }, 4)
+  ok(
+    !!one && /1 line .* still has no price/.test(one) && /that case is/.test(one),
+    'singular reads as one line and one case throughout',
+    String(one)
+  )
+
+  // THE HEADLINE IS NOT THE WARNING. A column with stock never prints a
+  // headline, and mixing the two back together is the bug this section exists
+  // to stop returning.
+  ok(
+    !/no price/.test(emptyShelfHeadline(FULL)),
+    'THE HEADLINE SAYS NOTHING ABOUT PRICING — one answers "why is this empty" and the other "what still owes a number"',
+    emptyShelfHeadline(FULL)
   )
 }
 

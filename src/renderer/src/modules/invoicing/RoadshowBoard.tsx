@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { PurchaseOrder } from '@shared/types'
 import type { StockAtLocationRow } from '@shared/availability'
-import { ROADSHOW_SHOPS, emptyShelfNote } from '@shared/roadshowTab'
+import { ROADSHOW_SHOPS, emptyShelfHeadline, unpricedTabWarning } from '@shared/roadshowTab'
 import { api } from '../../lib/api'
 import { LIVE, useLiveRefresh } from '../../lib/live'
 import { Icon } from '../../components/Icon'
@@ -121,19 +121,22 @@ export function RoadshowBoard(): JSX.Element {
           const rows = stock[shop] ?? []
           const units = rows.reduce((n, r) => n + r.quantity, 0)
           const tab = tabFor.get(shop.toLowerCase()) ?? null
-          // Only read when the column is bare, but derived here because that is
-          // where the tab already is. The shelf and the tab are two different
-          // facts and this is the one place they have to be told together.
-          const empty = emptyShelfNote(
-            tab
-              ? {
-                  poNumber: tab.poNumber,
-                  orderedUnits: tab.orderedUnits,
-                  receivedUnits: tab.receivedUnits,
-                  pendingPriceCount: tab.pendingPriceCount ?? 0
-                }
-              : null
-          )
+          // The shelf and the tab are two different facts, and this is the one
+          // place they are held together — so both sentences are derived here.
+          const standing = tab
+            ? {
+                poNumber: tab.poNumber,
+                orderedUnits: tab.orderedUnits,
+                receivedUnits: tab.receivedUnits,
+                pendingPriceCount: tab.pendingPriceCount ?? 0
+              }
+            : null
+          const headline = emptyShelfHeadline(standing)
+          // NOT INSIDE THE EMPTY BRANCH. An unpriced line matters MOST on a
+          // column that still holds its cases — those are standing there at a
+          // cost of zero and every screen that values stock is reading it. See
+          // unpricedTabWarning.
+          const warning = unpricedTabWarning(standing, units)
           return (
             <section className="rs-col" key={shop}>
               <header className="rs-col-head">
@@ -155,10 +158,9 @@ export function RoadshowBoard(): JSX.Element {
                    tab has almost never had "nothing added" — a case bought and
                    sold the same afternoon leaves the shelf at zero and the tab
                    holding it for ever — and saying so invites somebody to add it
-                   twice. See emptyShelfNote. */
+                   twice. See emptyShelfHeadline. */
                 <div className="rs-col-empty">
-                  <p>{empty.headline}</p>
-                  {empty.warning && <p className="rs-col-empty-warn">{empty.warning}</p>}
+                  <p>{headline}</p>
                 </div>
               ) : (
                 <ul className="rs-list">
@@ -182,6 +184,12 @@ export function RoadshowBoard(): JSX.Element {
                   ))}
                 </ul>
               )}
+
+              {/* AFTER the list and before the buttons, on every column that
+                  has one. Below the products because it is about them, and
+                  above the footer because filling the price in is the thing it
+                  is asking for. */}
+              {warning && <p className="rs-col-warn">{warning}</p>}
 
               <footer className="rs-col-foot">
                 <Button
