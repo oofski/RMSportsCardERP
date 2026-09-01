@@ -34,7 +34,7 @@ mkdirSync(DIR, { recursive: true })
 /* eslint-disable @typescript-eslint/no-var-requires */
 const { getDb } = require('../src/main/db/database')
 const sync = require('../src/main/db/sync')
-const { SYNCED_BY_TABLE, NEVER_SYNCED } = require('../src/main/db/syncTables')
+const { SYNCED_BY_TABLE, SYNCED_TABLES, NEVER_SYNCED } = require('../src/main/db/syncTables')
 
 let pass = 0
 let fail = 0
@@ -222,6 +222,129 @@ console.log('\n=== 4. and a receipt from another machine lands, with its cost ==
   ok(
     (db.prepare('SELECT COUNT(*) AS n FROM invoice_stock_moves').get() as { n: number }).n === 1,
     'AND A REDELIVERY IS IDEMPOTENT — one receipt, not two, so a rewound cursor cannot double a cost'
+  )
+}
+
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 5. EVERY SYNC KEY NAMES A REAL CONSTRAINT — the other half of the check ===')
+// ---------------------------------------------------------------------------
+/**
+ * A KEY THAT IS NOT A KEY IS NOT A MERGE BUG, IT IS BROKEN SQL.
+ *
+ * `upsertRow` builds `ON CONFLICT (<the manifest key columns>)`. SQLite accepts
+ * that clause only when those columns are exactly a PRIMARY KEY or a UNIQUE
+ * index. Name anything else and it refuses the statement outright — not for the
+ * row that collides, for EVERY row.
+ *
+ * ship_break_audit was declared on `break_label` while its primary key is
+ * `break_id`. So every audit row ever sent was refused, in the batch and again
+ * on the row-by-row retry, and surfaced to the owner under "usually the same
+ * thing created twice. Nothing is lost" — which described the one failure mode
+ * it was not.
+ *
+ * Section 2 checks that a table is on a list. This checks that being on the
+ * list means something. Both were absent, and the second is the one no amount
+ * of reading the manifest could catch: `key: ['break_label']` looks exactly as
+ * plausible as `key: ['id']` until it meets the schema.
+ */
+{
+  const cols = (t: string): Array<{ name: string; pk: number }> =>
+    db.prepare('SELECT name, pk FROM pragma_table_info(?)').all(t) as Array<{
+      name: string
+      pk: number
+    }>
+
+  /** Every column set this table can legally be upserted on. */
+  const constraintsOf = (t: string): string[] => {
+    const sets: string[] = []
+    const pk = cols(t)
+      .filter((c) => c.pk > 0)
+      .map((c) => c.name)
+      .sort()
+    if (pk.length > 0) sets.push(pk.join('|'))
+    const indexes = db.prepare('SELECT name, "unique" AS uniq FROM pragma_index_list(?)').all(t) as
+      Array<{ name: string; uniq: number }>
+    for (const ix of indexes) {
+      if (!ix.uniq) continue
+      const on = (
+        db.prepare('SELECT name FROM pragma_index_info(?)').all(ix.name) as Array<{ name: string }>
+      )
+        .map((c) => c.name)
+        .sort()
+      if (on.length > 0) sets.push(on.join('|'))
+    }
+    return sets
+  }
+
+  const offenders: string[] = []
+  let checked = 0
+  for (const spec of SYNCED_TABLES) {
+    if (cols(spec.table).length === 0) continue // not built on this schema version
+    checked += 1
+    const want = [...spec.key].sort().join('|')
+    if (!constraintsOf(spec.table).includes(want)) {
+      offenders.push(`${spec.table} keyed on (${spec.key.join(', ')}) — real: ${constraintsOf(spec.table).join(' / ')}`)
+    }
+  }
+
+  ok(checked > 60, 'every synced table was checked against the live schema', `${checked} tables`)
+  ok(
+    offenders.length === 0,
+    'NO SYNCED TABLE IS KEYED ON COLUMNS THAT ARE NOT A PRIMARY KEY OR A UNIQUE INDEX — ' +
+      'the ON CONFLICT clause is built from this key, and a key that names no constraint ' +
+      'makes SQLite refuse every row of the table rather than merge them',
+    offenders.join(' ;; ')
+  )
+
+  const audit = SYNCED_BY_TABLE.get('ship_break_audit')
+  ok(
+    audit?.key.length === 1 && audit.key[0] === 'break_id',
+    'ship_break_audit specifically travels on its primary key, which is also ship_breaks.id',
+    JSON.stringify(audit?.key)
+  )
+
+  // The row proves it: an upsert on the fixed key has to actually run, and a
+  // second copy of the same audit has to REPLACE rather than duplicate.
+  db.prepare('DELETE FROM ship_break_audit').run()
+  const auditRow = (teams: number) => ({
+    break_id: 'brk1',
+    break_label: 'Break 1',
+    break_number: 1,
+    team_count: teams,
+    distinct_team_count: teams,
+    max_teams: 30,
+    missing_count: 0,
+    missing_teams: '[]',
+    has_all: 1,
+    collisions: '[]'
+  })
+  const send = (teams: number, seq: number): void => {
+    sync.applyRows([
+      {
+        kind: 'ship_break_audit',
+        id: 'brk1',
+        seq,
+        updated_at: '2026-09-01T16:33:00.000Z',
+        deleted: 0 as const,
+        data: JSON.stringify(auditRow(teams))
+      }
+    ])
+  }
+  send(28, 1)
+  const after = db.prepare(`SELECT team_count FROM ship_break_audit WHERE break_id = 'brk1'`).get() as
+    | { team_count: number }
+    | undefined
+  ok(!!after, 'AN AUDIT ROW FROM ANOTHER MACHINE NOW APPLIES — this is the row that was refused')
+  send(30, 2)
+  const rows = db.prepare('SELECT break_id, team_count FROM ship_break_audit').all() as Array<{
+    break_id: string
+    team_count: number
+  }>
+  ok(
+    rows.length === 1 && rows[0].team_count === 30,
+    'and a corrected copy REPLACES it rather than landing beside it',
+    JSON.stringify(rows)
   )
 }
 

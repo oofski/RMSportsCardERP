@@ -94,7 +94,23 @@ export const SYNCED_TABLES: SyncedTable[] = [
   { table: 'ship_customers', key: ['id'], tier: 0 },
   { table: 'ship_settings', key: ['key'], tier: 0 },
   { table: 'ship_batch_urls', key: ['batch_number'], tier: 0 },
-  { table: 'ship_break_audit', key: ['break_label'], tier: 0 },
+  /**
+   * BY break_id, WHICH IS THE PRIMARY KEY — and it was by break_label, which is
+   * not a key at all.
+   *
+   * The upsert is built as ON CONFLICT (<these columns>), so a key that names no
+   * PRIMARY KEY and no UNIQUE index is not a merge that picks the wrong winner:
+   * it is SQL SQLite refuses to run. Every row of this table was rejected on
+   * arrival, in the batch and again on the row-by-row retry, and landed in
+   * sync_rejects under "usually the same thing created twice" — which is exactly
+   * what it was not.
+   *
+   * break_id is safe to merge on for the same reason ship_breaks is: it IS
+   * ship_breaks.id, which already travels under that id, and it comes off the
+   * parsed slip rather than being minted per machine. Both writers here key on
+   * it, and the audit is one row per break.
+   */
+  { table: 'ship_break_audit', key: ['break_id'], tier: 0 },
   { table: 'ship_imports', key: ['id'], tier: 0 },
   // The packing slip itself, in slices. Tier 0 because a slice points at nothing
   // — it carries its own document's metadata precisely so it does not have to
