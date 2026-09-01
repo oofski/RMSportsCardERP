@@ -1176,7 +1176,7 @@ console.log('\n=== 9. an empty shop column says WHY it is empty ===')
  */
 {
   ok(
-    /Nothing here yet/.test(emptyShelfHeadline(null)) && unpricedTabWarning(null, 0) === null,
+    /Nothing here yet/.test(emptyShelfHeadline(null)) && unpricedTabWarning(null, 3) === null,
     '9a — NO TAB IS STILL "nothing here yet": the week has not started and there is nothing else to say'
   )
   ok(
@@ -1203,14 +1203,13 @@ console.log('\n=== 9. an empty shop column says WHY it is empty ===')
     'singular reads as one unit, not "1 units"',
     sold
   )
-  const soldWarn = unpricedTabWarning(SOLD_TAB)
   ok(
-    !!soldWarn && /no price/.test(soldWarn) && /carried at nothing/.test(soldWarn),
-    'AND THE UNPRICED LINE IS SPELLED OUT — that sale was costed at nothing until somebody fills the price in',
-    String(soldWarn)
+    unpricedTabWarning(SOLD_TAB, 0) === null,
+    'AND A SHOP WHOSE CASE HAS SOLD IS NOT WARNED — the money is spent and the sale is booked; Wholesale reports that, and this board can only prevent the NEXT one',
+    String(unpricedTabWarning(SOLD_TAB, 0))
   )
   ok(
-    unpricedTabWarning({ poNumber: 'PO-0452', orderedUnits: 2, receivedUnits: 2, pendingPriceCount: 0 }) === null,
+    unpricedTabWarning({ poNumber: 'PO-0452', orderedUnits: 2, receivedUnits: 2, pendingPriceCount: 0 }, 0) === null,
     'a fully priced tab has nothing left to warn about'
   )
 
@@ -1314,8 +1313,8 @@ console.log('\n=== 9. an empty shop column says WHY it is empty ===')
     note
   )
   ok(
-    !!unpricedTabWarning(standing9),
-    'with the unpriced line named, because that sale is sitting at a cost of nothing until it is filled in'
+    unpricedTabWarning(standing9, 0) === null,
+    'and NOT warned about, because its case has already gone — nothing on this shelf can be saved by shouting'
   )
 
   // And the fix the warning asks for actually works from here.
@@ -1325,12 +1324,15 @@ console.log('\n=== 9. an empty shop column says WHY it is empty ===')
   const after = po.listOpenRoadshowTabs().find((t: any) => t.id === tabId)
   ok(
     (after.pendingPriceCount ?? 0) === 0 &&
-      unpricedTabWarning({
-        poNumber: after.poNumber,
-        orderedUnits: after.orderedUnits,
-        receivedUnits: after.receivedUnits,
-        pendingPriceCount: after.pendingPriceCount ?? 0
-      }) === null,
+      unpricedTabWarning(
+        {
+          poNumber: after.poNumber,
+          orderedUnits: after.orderedUnits,
+          receivedUnits: after.receivedUnits,
+          pendingPriceCount: after.pendingPriceCount ?? 0
+        },
+        0
+      ) === null,
     'and the warning goes away once it is done — a nag that does not clear is one people stop reading'
   )
 }
@@ -1482,85 +1484,81 @@ console.log('\n=== 10. pricing a tab line updates the RIGHT product on Wholesale
 }
 
 
-console.log('\n=== 11. the unpriced warning belongs to the TAB, not to an empty shelf ===')
+console.log('\n=== 11. the warning is about stock STILL HERE, and nothing else ===')
 // ---------------------------------------------------------------------------
 /**
- * The owner, looking at a board where California held four unpriced cases in
- * silence while two empty shops each shouted about one: "why can not everything
- * is showing like that, it should be the same."
+ * Two owner corrections, in order.
  *
- * He is right, and the version that shipped had it exactly backwards. The
- * warning was written inside the empty-column branch, so the ONLY columns that
- * said anything were the ones with nothing left to lose — and the column still
- * holding four unpriced cases, which is where the money actually is, said
- * nothing. Those cases are standing on a shelf at a cost of zero: the valuation
- * reads it, the Spread reads it, and the first sale out of them books pure
- * profit.
+ * FIRST: the warning shipped inside the empty-column branch, so the only shops
+ * that said anything were the ones with nothing left to lose, and a shop holding
+ * four unpriced cases was silent. "Why can not everything is showing like that,
+ * it should be the same."
  *
- * ## AND IT MUST NOT GUESS HOW THE STOCK LEFT
+ * THEN, once it showed everywhere: it was keyed on the TAB'S UNPRICED LINE
+ * COUNT, so a shop whose only case had been bought and sold in one afternoon got
+ * four lines of warning about a case that was gone. "Can you like not do the
+ * warnings for anything that was sold, but rather let me click on it if it was
+ * sold and then it tells me which PO and SO it was attached to."
  *
- * The first fix had two sentences — future tense while a shop still held its
- * cases, past tense once it had emptied — chosen by comparing what the tab
- * checked in against what is standing there. Running it found the hole: MOVING
- * two cases home empties the column, so the warning flipped to "anything sold
- * from them was costed at nothing" about units nobody had sold. Stock leaves a
- * shelf three ways — sold, moved, adjusted away — and two counts cannot tell
- * them apart. One sentence now, true in all three, claiming no mechanism.
+ * That is the right split. An unpriced case that has SOLD is money spent and a
+ * sale booked; the board cannot undo either, and Wholesale is the screen that
+ * reports it — holding those rows out of its margin totals and naming the tab.
+ * What a shop board can prevent is the NEXT wrong sale, which is only ever about
+ * stock still on the shelf. So the count is UNITS STANDING HERE at no price.
  */
 {
-  const FULL = { poNumber: 'PO-0451', orderedUnits: 4, receivedUnits: 4, pendingPriceCount: 4 }
+  const TAB = { poNumber: 'PO-0451', orderedUnits: 4, receivedUnits: 4, pendingPriceCount: 4 }
 
-  // THE CASE THAT WAS SILENT.
-  const held = unpricedTabWarning(FULL)
+  const held = unpricedTabWarning(TAB, 4)
   ok(
-    !!held && held.includes('PO-0451') && /4 lines/.test(held),
-    'A SHOP STILL HOLDING ITS CASES WARNS — this is the column where it matters most, and it was the only one saying nothing',
+    !!held && held.includes('PO-0451') && /4 units standing here/.test(held),
+    'A SHOP STILL HOLDING UNPRICED CASES IS WARNED, and the count is UNITS ON THE SHELF',
     String(held)
   )
   ok(
-    !!held && /carried at nothing wherever it now is/.test(held),
-    'and it says the thing that is true whether the stock is here, sold, or driven home',
+    !!held && /before they are sold/.test(held),
+    'so the instruction is the one thing the board can still prevent',
     String(held)
   )
   ok(
-    !!held && !/sold from/.test(held),
-    'IT NEVER CLAIMS A SALE — two cases moved to RM empty a column too, and accusing a sale sends somebody hunting an invoice that does not exist',
-    String(held)
-  )
-  ok(
-    !!held && !/case/.test(held),
-    'AND IT DOES NOT COUNT CASES — the number in this sentence is LINES, and one line can be six cases',
-    String(held)
-  )
-  ok(
-    !!held && /any sale already made from it are both put right/.test(held),
-    'while still saying what pricing fixes, which setPurchaseOrderLinePrice does whether or not a sale exists',
+    !!held && !/sold from/.test(held) && !/already made/.test(held),
+    'IT NEVER CLAIMS A SALE — two cases moved to RM empty a column too',
     String(held)
   )
 
   ok(
-    unpricedTabWarning({ ...FULL, pendingPriceCount: 0 }) === null,
-    'a fully priced week says nothing at all, however much is standing there'
+    unpricedTabWarning(TAB, 0) === null,
+    'THE CORRECTION: a tab whose unpriced cases have all gone says NOTHING, however many lines it still has',
+    String(unpricedTabWarning(TAB, 0))
   )
-  ok(unpricedTabWarning(null) === null, 'and a shop with no tab has nothing to warn about')
-
-  const one = unpricedTabWarning({ ...FULL, pendingPriceCount: 1 })
   ok(
-    !!one && /1 line on PO-0451 still has no price/.test(one) && /what it bought/.test(one),
-    'singular reads as one line throughout',
+    unpricedTabWarning({ ...TAB, pendingPriceCount: 0 }, 0) === null,
+    'and a fully priced week says nothing either'
+  )
+  ok(unpricedTabWarning(null, 5) === null, 'a shop with no tab has nothing to warn about')
+
+  const one = unpricedTabWarning(TAB, 1)
+  ok(
+    !!one && /1 unit standing here has no price/.test(one) && /before it is sold/.test(one),
+    'singular reads as one unit throughout',
     String(one)
   )
 
-  // THE HEADLINE IS NOT THE WARNING. A column with stock never prints a
-  // headline, and mixing the two back together is the bug this section exists
-  // to stop returning.
+  // UNITS, NOT LINES. A line of six that has sold five leaves one problem, and a
+  // line count would report the whole line long after most of it stopped being
+  // one.
   ok(
-    !/no price/.test(emptyShelfHeadline(FULL)),
+    /1 unit/.test(String(unpricedTabWarning({ ...TAB, pendingPriceCount: 1 }, 1))),
+    'the number said is the units left, not the lines on the tab',
+    String(unpricedTabWarning({ ...TAB, pendingPriceCount: 1 }, 1))
+  )
+
+  ok(
+    !/no price/.test(emptyShelfHeadline(TAB)),
     'THE HEADLINE SAYS NOTHING ABOUT PRICING — one answers "why is this empty" and the other "what still owes a number"',
-    emptyShelfHeadline(FULL)
+    emptyShelfHeadline(TAB)
   )
 }
-
 
 console.log('\n=== 12. a tab the APP opened says so, on the tab ===')
 // ---------------------------------------------------------------------------
@@ -1820,6 +1818,168 @@ console.log('\n=== 13. taking something back off a tab, and the shop’s whole s
     !!shut.error && /settled/.test(String(shut.error)),
     'AND A SETTLED TAB REFUSES TOO — the bill was paid on the strength of what was on it',
     String(shut.error)
+  )
+}
+
+
+console.log('\n=== 14. click a sold case and it names the PO and the SO ===')
+// ---------------------------------------------------------------------------
+/**
+ * The owner: "let me click on it if it was sold and then it tells me which PO
+ * and SO it was attached to."
+ *
+ * The panel could already say which purchase order a case came IN on and had
+ * nothing at all about where it went — so the ordinary roadshow case, bought and
+ * sold in one afternoon, left two documents and no way to get from the shelf to
+ * either. `shopSales` is the other half.
+ *
+ * Also pins `unpricedHere`, which is what the column's warning now counts. It
+ * comes off the LAYERS rather than the tab's lines, because a line of six that
+ * has sold five leaves one unpriced unit standing and a line count cannot say
+ * so.
+ */
+{
+  const SHOP14 = 'California Roadshow'
+  saveStockLocation({ label: SHOP14 }, 'emp_owner')
+  product('p_trail', 'RS-TRL', 'California Trail Case')
+
+  const tab14 = po.createPurchaseOrder(
+    {
+      supplier: SHOP14,
+      location: '',
+      ongoing: true,
+      lines: [{ productId: 'p_trail', quantity: 6, unitPrice: 0, pricePending: true }]
+    },
+    'emp_owner'
+  )
+  const before14 = prov.shopShelf(SHOP14).find((r: any) => r.productId === 'p_trail')
+  ok(
+    before14.unpricedHere === 6,
+    'six unpriced cases are standing at the shop, and the shelf count knows it',
+    JSON.stringify(before14)
+  )
+  ok(
+    prov.shopSales(SHOP14, 'p_trail').length === 0,
+    'and nothing has been sold from it yet'
+  )
+
+  const sale14 = invoices.saveInvoice(
+    {
+      customerName: 'Trail Buyer',
+      invoiceNumber: 'SO-R995',
+      invoiceDate: '2026-09-01',
+      location: SHOP14,
+      lines: [{ item: 'California Trail Case', productId: 'p_trail', quantity: 5, rate: 800 }]
+    },
+    'emp_owner'
+  )
+
+  const went = prov.shopSales(SHOP14, 'p_trail')
+  ok(went.length === 1, 'THE SALE IS FOUND from the shelf', JSON.stringify(went))
+  ok(
+    went[0].invoiceNumber === 'SO-R995' &&
+      went[0].customerName === 'Trail Buyer' &&
+      went[0].quantity === 5,
+    'naming the sales order, the buyer and how many THIS shop supplied',
+    JSON.stringify(went[0])
+  )
+  const buys14 = prov.shopBuys(SHOP14, 'p_trail')
+  ok(
+    buys14.length === 1 && buys14[0].poNumber === po.getPurchaseOrder(tab14.id).poNumber,
+    'AND THE PURCHASE ORDER IS STILL THERE BESIDE IT — both ends of the case, from one click',
+    JSON.stringify(buys14.map((b: any) => b.poNumber))
+  )
+
+  // UNITS, NOT LINES: one line, five sold, ONE still unpriced on the shelf.
+  const after14 = prov.shopShelf(SHOP14).find((r: any) => r.productId === 'p_trail')
+  ok(
+    after14.unpricedHere === 1 && after14.here === 1 && after14.sold === 5,
+    'ONE unpriced unit is left standing, not "one unpriced line" covering six — that is why the warning counts layers',
+    JSON.stringify(after14)
+  )
+  ok(
+    /1 unit standing here/.test(
+      String(
+        unpricedTabWarning(
+          { poNumber: 'PO-X', orderedUnits: 6, receivedUnits: 6, pendingPriceCount: 1 },
+          after14.unpricedHere
+        )
+      )
+    ),
+    'so the column warns about the one, not the six'
+  )
+
+  // A PRICED CASE STANDING BESIDE AN UNPRICED ONE IS NOT A PROBLEM, and this is
+  // the only arrangement that proves the filter is doing anything: without the
+  // price-pending test, unpricedHere would simply be "what is on the shelf" and
+  // the column would nag about stock whose cost is perfectly well known.
+  product('p_known', 'RS-KNW', 'California Known Case')
+  po.createPurchaseOrder(
+    {
+      supplier: SHOP14,
+      location: '',
+      ongoing: true,
+      lines: [{ productId: 'p_known', quantity: 3, unitPrice: 275 }]
+    },
+    'emp_owner'
+  )
+  const known = prov.shopShelf(SHOP14).find((r: any) => r.productId === 'p_known')
+  ok(
+    known.here === 3 && known.unpricedHere === 0,
+    'THREE CASES AT A KNOWN PRICE COUNT AS NONE UNPRICED — the filter is on the line’s price, not on the shelf',
+    JSON.stringify(known)
+  )
+  const mixed = prov
+    .shopShelf(SHOP14)
+    .reduce((n: number, r: any) => n + r.unpricedHere, 0)
+  ok(
+    mixed === 1,
+    'so a shop holding one unpriced case and three priced ones warns about ONE',
+    String(mixed)
+  )
+  ok(
+    /1 unit standing here/.test(
+      String(
+        unpricedTabWarning(
+          { poNumber: 'PO-X', orderedUnits: 9, receivedUnits: 9, pendingPriceCount: 1 },
+          mixed
+        )
+      )
+    ),
+    'and says so in those words'
+  )
+
+  // A SALE FROM ANOTHER SHELF IS NOT THIS SHOP'S. The move puts a case at RM;
+  // selling it there must not appear on the shop's trail.
+  inv.moveStock({ productId: 'p_trail', from: SHOP14, to: 'RM', quantity: 1 }, 'emp_owner')
+  invoices.saveInvoice(
+    {
+      customerName: 'Home Buyer',
+      invoiceNumber: 'SO-R996',
+      invoiceDate: '2026-09-01',
+      location: 'RM',
+      lines: [{ item: 'California Trail Case', productId: 'p_trail', quantity: 1, rate: 800 }]
+    },
+    'emp_owner'
+  )
+  const still = prov.shopSales(SHOP14, 'p_trail')
+  ok(
+    still.length === 1 && still.every((x: any) => x.invoiceNumber !== 'SO-R996'),
+    'A CASE DRIVEN HOME AND SOLD FROM RM IS NOT ON THE SHOP’S TRAIL — the move row is keyed on the shelf it actually left from',
+    JSON.stringify(still.map((x: any) => x.invoiceNumber))
+  )
+  const end14 = prov.shopShelf(SHOP14).find((r: any) => r.productId === 'p_trail')
+  ok(
+    end14.sold === 5 && end14.movedOn === 1 && end14.here === 0,
+    'and the shop’s own row reads five sold, one moved on, none left',
+    JSON.stringify(end14)
+  )
+  ok(
+    unpricedTabWarning(
+      { poNumber: 'PO-X', orderedUnits: 6, receivedUnits: 6, pendingPriceCount: 1 },
+      end14.unpricedHere
+    ) === null,
+    'AND THE COLUMN FALLS SILENT — nothing unpriced is standing there any more, whatever the tab still says'
   )
 }
 

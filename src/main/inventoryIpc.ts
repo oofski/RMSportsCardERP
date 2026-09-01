@@ -22,9 +22,10 @@ import type {
 } from '@shared/inventoryReset'
 import type { StockProvenance } from '@shared/provenance'
 import { productProvenance, shopBuys,
-  shopShelf
+  shopShelf,
+  shopSales
 } from './db/provenance'
-import type { ProductAvailability, ShopBuy, StockAtLocationRow, ShopShelfRow } from '@shared/availability'
+import type { ProductAvailability, ShopBuy, StockAtLocationRow, ShopShelfRow, ShopSale } from '@shared/availability'
 import { productAvailability, stockAtLocation } from './db/inventory'
 import type { Consignment, NewConsignment } from '@shared/consignment'
 import {
@@ -316,6 +317,15 @@ export function registerInventoryIpc(): void {
    */
   ipcMain.handle(IPC.invShopShelf, (_e, location: unknown): ShopShelfRow[] =>
     can('module.inventory') ? shopShelf(String(location ?? '')) : []
+  )
+
+  /** Where this product went from this shop. See shopSales. */
+  ipcMain.handle(
+    IPC.invShopSales,
+    (_e, payload: { location?: string; productId?: string }): ShopSale[] =>
+      can('module.inventory')
+        ? shopSales(String(payload?.location ?? ''), String(payload?.productId ?? ''))
+        : []
   )
 
   ipcMain.handle(IPC.invProductAvailability, (_e, productId: string): ProductAvailability => {

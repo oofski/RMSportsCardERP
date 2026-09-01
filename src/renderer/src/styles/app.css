@@ -29368,3 +29368,54 @@ button.sor-team:focus-visible {
   opacity: 0.3;
   cursor: not-allowed;
 }
+
+/* WHERE IT WENT — the sales half of the shop panel, under the purchase rows.
+   Deliberately lighter than those: the buying is what somebody is settling up,
+   and this is the trail that explains an empty shelf. */
+.sb-sold {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.sb-sold-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  color: var(--text-3);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+.sb-sold-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.sb-sold-row {
+  display: grid;
+  grid-template-columns: auto auto 1fr auto;
+  align-items: baseline;
+  gap: 10px;
+  padding: 5px 0;
+  font-size: 12.5px;
+}
+.sb-sold-when {
+  color: var(--text-3);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+.sb-sold-so {
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+.sb-sold-who {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sb-sold-qty {
+  font-weight: 700;
+}

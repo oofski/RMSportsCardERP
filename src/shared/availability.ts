@@ -213,6 +213,40 @@ export interface ShopShelfRow {
    * `sold` is not a subtraction.
    */
   movedOn: number
+  /**
+   * UNITS STILL STANDING HERE whose cost nobody has entered yet.
+   *
+   * The warning on the column is derived from this and nothing else. A line that
+   * has already SOLD is not something the board can usefully shout about — the
+   * money is spent, the sale is booked, and the place that reports it is the
+   * Wholesale tab, which holds those rows out of its margin totals and names the
+   * tab to price. What a shop board can prevent is the NEXT wrong sale, and that
+   * is only ever about stock that is still there.
+   */
+  unpricedHere: number
+}
+
+/**
+ * A SALE THAT TOOK THIS PRODUCT OFF THIS SHOP'S SHELF.
+ *
+ * The owner: "let me click on it if it was sold and then it tells me which PO
+ * and SO it was attached to."
+ *
+ * The panel could already say which purchase order a case came IN on, and had
+ * nothing at all about where it went. Both halves matter at a roadshow, because
+ * the case that arrives and leaves in an afternoon is the ordinary one and the
+ * only trace of it was two documents nobody had a reason to open.
+ */
+export interface ShopSale {
+  invoiceId: string
+  /** The sales order's number. Blank on a draft that has not been numbered. */
+  invoiceNumber: string
+  customerName: string
+  /** The day it was billed. */
+  soldOn: string
+  /** How many this sale took from THIS shop. */
+  quantity: number
+  status: string
 }
 
 export interface ShopBuy {

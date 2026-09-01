@@ -127,6 +127,14 @@ export const IPC = {
    * question. See shopShelf.
    */
   invShopShelf: 'inventory:location:shelf',
+  /**
+   * WHICH SALES TOOK THIS PRODUCT OFF THIS SHOP'S SHELF.
+   *
+   * The other half of invShopBuys: that one says which purchase order a case
+   * arrived on, this says which sale took it. Both are needed at a roadshow,
+   * where the case that arrives and leaves in one afternoon is the ordinary one.
+   */
+  invShopSales: 'inventory:location:sales',
   /** Every buy behind one product at one shop, newest first. See shopBuys. */
   invShopBuys: 'inventory:location:buys',
   /** Where a product's stock came from, and which POs are still bringing more. */

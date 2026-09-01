@@ -139,11 +139,14 @@ export function RoadshowBoard(): JSX.Element {
               }
             : null
           const headline = emptyShelfHeadline(standing)
-          // NOT INSIDE THE EMPTY BRANCH. An unpriced line matters MOST on a
-          // column that still holds its cases — those are standing there at a
-          // cost of zero and every screen that values stock is reading it. See
-          // unpricedTabWarning.
-          const warning = unpricedTabWarning(standing)
+          // ONLY ABOUT STOCK STILL STANDING. A case that has already sold is
+          // money spent and a sale booked — the board cannot undo either, and
+          // Wholesale is where it is reported. What this can prevent is the next
+          // wrong sale. See unpricedTabWarning.
+          const warning = unpricedTabWarning(
+            standing,
+            rows.reduce((n, r) => n + r.unpricedHere, 0)
+          )
           return (
             <section className="rs-col" key={shop}>
               <header className="rs-col-head">

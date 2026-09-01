@@ -171,6 +171,7 @@ import type { StockProvenance } from '@shared/provenance'
 import type {
   ProductAvailability,
   ShopBuy,
+  ShopSale,
   ShopShelfRow,
   StockAtLocationRow
 } from '@shared/availability'
@@ -539,6 +540,9 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       /** Everything a shop has handed over, and what became of it. */
       shopShelf: (location: string): Promise<ShopShelfRow[]> =>
         ipcRenderer.invoke(IPC.invShopShelf, location),
+      /** Which sales took this product off this shop's shelf. */
+      shopSales: (location: string, productId: string): Promise<ShopSale[]> =>
+        ipcRenderer.invoke(IPC.invShopSales, { location, productId }),
       /** The dates and order numbers behind one product at one shop. */
       shopBuys: (location: string, productId: string): Promise<ShopBuy[]> =>
         ipcRenderer.invoke(IPC.invShopBuys, { location, productId }),

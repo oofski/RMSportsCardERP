@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { ShopBuy, ShopShelfRow } from '@shared/availability'
+import type { ShopBuy, ShopSale, ShopShelfRow } from '@shared/availability'
 import { LOCATIONS } from '@shared/inventory'
 import { isRoadshowLocation } from '@shared/roadshowTab'
 import { moveRefusal } from '@shared/stockMove'
@@ -85,6 +85,7 @@ export function ShopBuysPanel({
 }): JSX.Element {
   const toast = useToast()
   const [buys, setBuys] = useState<ShopBuy[] | null>(null)
+  const [sales, setSales] = useState<ShopSale[]>([])
   const [qty, setQty] = useState(String(product.here))
   /**
    * HOME IS THE DEFAULT, and it is the only one that needs no thought.
@@ -103,6 +104,13 @@ export function ShopBuysPanel({
       .shopBuys(shop, product.productId)
       .then((r) => alive && setBuys(r))
       .catch(() => alive && setBuys([]))
+    // WHERE IT WENT, beside where it came from. Fetched separately rather than
+    // folded into shopBuys because they are different questions about different
+    // documents, and a receipt does not know which sale later drew on it.
+    void api.inventory
+      .shopSales(shop, product.productId)
+      .then((r) => alive && setSales(r))
+      .catch(() => alive && setSales([]))
     return () => {
       alive = false
     }
@@ -278,6 +286,29 @@ export function ShopBuysPanel({
             </li>
           ))}
         </ul>
+      )}
+
+      {/* WHERE IT WENT. The owner: "let me click on it if it was sold and then
+          it tells me which PO and SO it was attached to." The purchase orders
+          are the rows above; these are the sales, and between them a case that
+          arrived and left in one afternoon can be followed end to end. */}
+      {sales.length > 0 && (
+        <div className="sb-sold">
+          <div className="sb-sold-head">
+            <Icon name="Send" size={13} />
+            Sold from {shop}
+          </div>
+          <ul className="sb-sold-list">
+            {sales.map((sale) => (
+              <li className="sb-sold-row" key={sale.invoiceId}>
+                <span className="sb-sold-when">{formatDate(sale.soldOn)}</span>
+                <span className="sb-sold-so mono">{sale.invoiceNumber || 'draft'}</span>
+                <span className="sb-sold-who">{sale.customerName || '—'}</span>
+                <span className="sb-sold-qty">{sale.quantity}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
 
       {/* BELOW the history, because the history is what the decision is made

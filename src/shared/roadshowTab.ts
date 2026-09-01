@@ -406,42 +406,42 @@ export function emptyShelfHeadline(tab: ShopTabStanding | null): string {
 }
 
 /**
- * WHAT THIS WEEK STILL OWES A NUMBER — on every column, full or empty.
+ * STOCK STANDING HERE THAT NOBODY HAS PRICED — the one thing a shop board can
+ * still prevent.
  *
- * ## One sentence, and it took a wrong one to find it
+ * ## It used to shout about sold cases too, and that was the wrong half
  *
- * This shipped with two: a future-tense warning for a shop still holding its
- * cases ("price them before they are sold") and a past-tense one for a shop that
- * had emptied ("anything sold from them was costed at nothing"), chosen by
- * comparing what the tab checked in against what is standing there now.
+ * The warning was keyed on the TAB's unpriced line count, so a shop whose only
+ * case had been bought and sold in one afternoon got four lines of warning about
+ * a case that was gone. The owner: "can you like not do the warnings for
+ * anything that was sold, but rather let me click on it if it was sold and then
+ * it tells me which PO and SO it was attached to."
  *
- * Running it found the hole. Move two cases home and the column empties, so the
- * sentence flipped to the past tense and accused a sale that never happened —
- * the units were driven to RM, not sold. Stock leaves a shelf THREE ways: sold,
- * moved, and adjusted away, and the difference between two counts cannot tell
- * them apart. A screen guessing at a mechanism it cannot see will eventually
- * guess wrong, and this one sends somebody hunting an invoice that does not
- * exist.
+ * That is the right split, and not merely a quieter one. An unpriced case that
+ * has SOLD is money already spent and a sale already booked; the board cannot
+ * undo either, and the screen that reports it is Wholesale, which holds those
+ * rows out of its margin totals and names the tab to go and price. What a shop
+ * board CAN prevent is the next wrong sale — and that is only ever about stock
+ * still on the shelf. So the warning counts units standing here at no price, and
+ * where a sold case went is answered by clicking it.
  *
- * So it says the thing that is true in all three cases and claims no mechanism:
- * the units are carried at nothing WHEREVER THEY NOW ARE, and pricing the line
- * puts both the stock and any sale already drawn from it right. That second half
- * is not a guess — `setPurchaseOrderLinePrice` does exactly that whether or not
- * a sale exists to correct.
+ * ## Units, not lines
  *
- * The shelf count is no longer an argument, which is the real fix: a parameter
- * that can only support a wrong inference is better removed than guarded.
+ * A line of six that has sold five leaves ONE unpriced unit standing, and a line
+ * count cannot say so — it would report the whole line as a problem long after
+ * most of it stopped being one. `unpricedHere` comes off the layers, which is
+ * what is actually there.
  */
-export function unpricedTabWarning(tab: ShopTabStanding | null): string | null {
-  const pending = whole(tab?.pendingPriceCount)
-  if (!tab || pending <= 0) return null
-  const one = pending === 1
-  // "what it bought", not "that case" — ONE LINE CAN BE SIX CASES, and the count
-  // in this sentence is lines, so naming a case would be a second, different
-  // number pretending to be the same one.
+export function unpricedTabWarning(
+  tab: ShopTabStanding | null,
+  unpricedUnitsHere: number
+): string | null {
+  const units = whole(unpricedUnitsHere)
+  if (!tab || units <= 0) return null
+  const one = units === 1
   return (
-    `${pending} line${one ? '' : 's'} on ${tab.poNumber} still ${one ? 'has' : 'have'} no price, ` +
-    `so what ${one ? 'it' : 'they'} bought is carried at nothing wherever it now is. ` +
-    'Fill the price in on the tab and the stock and any sale already made from it are both put right.'
+    `${units} ${one ? 'unit' : 'units'} standing here ${one ? 'has' : 'have'} no price on ` +
+    `${tab.poNumber} yet, so ${one ? 'it is' : 'they are'} carried at nothing. ` +
+    `Fill the price in on the tab before ${one ? 'it is' : 'they are'} sold.`
   )
 }
