@@ -225,6 +225,16 @@ export const IPC = {
   // rather than a button.
   invoiceQboSetItemSku: 'invoices:qbo:set-item-sku',
   invoiceSendFromQbo: 'invoices:qbo:send',
+  /**
+   * Record a payment in QuickBooks for an invoice already marked paid here.
+   *
+   * A SEPARATE PRESS, never a side effect of ticking paid, and the reason is the
+   * same one createQboItem gives: this writes to somebody else's books, and an
+   * action that moves money has to be the thing somebody pressed rather than
+   * something that happened while they pressed something else. It is also the
+   * only way a failure can be reported to the person who caused it.
+   */
+  invoiceRecordQboPayment: 'invoices:qbo:record-payment',
   invoiceOpenInQbo: 'invoices:qbo:open',
   // How the invoice reaches the buyer: the standing payment instructions that go
   // on every one of them, and whether QuickBooks emails it the moment it is

@@ -851,6 +851,9 @@ function InvoiceCard({
   const toast = useToast()
   const [measuring, setMeasuring] = useState(false)
   const [asking, setAsking] = useState<'items' | 'send' | 'paid' | 'unpaid' | null>(null)
+  /** A payment is being recorded in QuickBooks. Locks the button so a slow
+   *  relay cannot be pressed twice into two payments. */
+  const [payingQbo, setPayingQbo] = useState(false)
   // What to call this order in a sentence. The number if it has one; a draft
   // may not, and "Invoice null moves on" is worse than the vaguer phrase.
   const label = invoice.invoiceNumber ? `Sales order ${invoice.invoiceNumber}` : 'This order'
@@ -1509,6 +1512,53 @@ function InvoiceCard({
           >
             <Icon name="Pencil" size={14} />
             Edit
+          </button>
+        )}
+
+        {/* PUT THE MONEY IN QUICKBOOKS, and only where that sentence means
+            something: an invoice paid here, living in QuickBooks, that this app
+            has not already paid.
+
+            A SEPARATE PRESS AND NOT PART OF TICKING PAID. This writes to the
+            operator's books, and an action that moves money has to be the thing
+            somebody pressed rather than something that happened while they
+            pressed something else — the same rule createQboItem keeps. It is
+            also the only arrangement where a failure reaches the person who
+            caused it instead of a log.
+
+            The amount is not decided here and is deliberately not shown on the
+            button: the backend takes a FRESH reading and pays what QuickBooks
+            says is outstanding at that moment, which is not necessarily what
+            this screen is displaying. Promising a figure the post might not use
+            would be the wrong half of the truth. See @shared/quickbooksPayment. */}
+        {invoice.qboId && invoice.status === 'paid' && !invoice.qboPaymentId && (
+          <button
+            type="button"
+            className="btn po-move"
+            disabled={payingQbo}
+            title="Record this payment against the invoice in QuickBooks, for what it still shows outstanding"
+            onClick={async () => {
+              setPayingQbo(true)
+              try {
+                const res = await api.invoices.recordQboPayment(invoice.id)
+                if (!res.ok) {
+                  toast.error(res.error || 'QuickBooks would not take the payment.')
+                  return
+                }
+                // POSTED and DID-NOT-NEED-POSTING are both successes and read
+                // differently on purpose: "nothing was owing" is not a thing that
+                // went wrong, and a red box for it teaches people to dismiss the
+                // red box that matters.
+                if (res.data?.posted) toast.success(res.data.message)
+                else toast.success(res.data?.message ?? 'Nothing needed recording.')
+                await onReload()
+              } finally {
+                setPayingQbo(false)
+              }
+            }}
+          >
+            <Icon name="DollarSign" size={14} />
+            {payingQbo ? 'Recording…' : 'Record payment in QuickBooks'}
           </button>
         )}
 

@@ -629,6 +629,10 @@ interface InvoiceRow extends AddressRow, ShipAddressRow {
   total_changed_at: string | null
   qbo_status_attempted_at: string | null
   qbo_status_error: string | null
+  qbo_payment_id: string | null
+  qbo_payment_posted_at: string | null
+  qbo_payment_error: string | null
+  qbo_payment_attempted_at: string | null
   total: number
   paid_at: string | null
   paid_by: string | null
@@ -745,6 +749,10 @@ function toInvoice(r: InvoiceRow): Invoice {
     totalChangedAt: r.total_changed_at ?? null,
     qboStatusAttemptedAt: r.qbo_status_attempted_at ?? null,
     qboStatusError: r.qbo_status_error ?? null,
+    qboPaymentId: r.qbo_payment_id ?? null,
+    qboPaymentPostedAt: r.qbo_payment_posted_at ?? null,
+    qboPaymentError: r.qbo_payment_error ?? null,
+    qboPaymentAttemptedAt: r.qbo_payment_attempted_at ?? null,
     total: r.total,
     paidAt: r.paid_at,
     paidBy: r.paid_by,
@@ -2240,6 +2248,49 @@ export function listPostedInvoices(limit = 200): Invoice[] {
  *
  * Compared before the write, over the four figures the card actually draws.
  */
+/**
+ * THE PAYMENT LANDED. Write the id, and nothing else may write it.
+ *
+ * This is the interlock the double-payment guard reads, so it is deliberately a
+ * separate statement from everything else a successful post touches: an id that
+ * only gets written as part of a wider update is an id that goes missing the
+ * first time some other column in that update is invalid.
+ *
+ * The balance is NOT written here. What QuickBooks now says is outstanding is
+ * QuickBooks' to report, and reading it back is `Check QuickBooks` — guessing it
+ * to zero would put a number nobody observed under a label that means observed.
+ */
+export function recordQboPayment(id: string, paymentId: string): boolean {
+  const stamp = nowIso()
+  const res = getDb()
+    .prepare(
+      `UPDATE invoices
+          SET qbo_payment_id = ?, qbo_payment_posted_at = ?, qbo_payment_attempted_at = ?,
+              qbo_payment_error = NULL, updated_at = ?
+        WHERE id = ? AND qbo_payment_id IS NULL`
+    )
+    .run(paymentId, stamp, stamp, stamp, id)
+  return res.changes > 0
+}
+
+/**
+ * IT DID NOT LAND. Record why, and leave the interlock alone.
+ *
+ * `qbo_payment_id` is untouched on purpose: a payment that was never created
+ * must not block the one that should be. The error is a state somebody can see
+ * and retry from, rather than a toast that scrolled past.
+ */
+export function recordQboPaymentFailure(id: string, error: string): void {
+  const stamp = nowIso()
+  getDb()
+    .prepare(
+      `UPDATE invoices
+          SET qbo_payment_error = ?, qbo_payment_attempted_at = ?, updated_at = ?
+        WHERE id = ?`
+    )
+    .run(String(error ?? '').slice(0, 500), stamp, stamp, id)
+}
+
 export function recordQboObservation(id: string, o: QboInvoiceObservation): boolean {
   const stamp = nowIso()
   const looked = o.payments.length > 0 || o.linkedPayments === 0

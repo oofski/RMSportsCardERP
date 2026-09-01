@@ -2292,6 +2292,11 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       > => ipcRenderer.invoke(IPC.invoiceCreateInQbo, { id, open }),
       sendFromQbo: (id: string): Promise<Result<{ id: string }>> =>
         ipcRenderer.invoke(IPC.invoiceSendFromQbo, id),
+      /** Record the payment in QuickBooks for an invoice paid here. */
+      recordQboPayment: (
+        id: string
+      ): Promise<Result<{ id: string; posted: boolean; message: string }>> =>
+        ipcRenderer.invoke(IPC.invoiceRecordQboPayment, id),
       /**
        * The standing payment instructions, and whether QuickBooks emails each
        * invoice as it is posted. Machine-local — see the store.

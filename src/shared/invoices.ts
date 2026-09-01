@@ -840,6 +840,18 @@ export interface Invoice {
   qboStatusAttemptedAt: string | null
   qboStatusError: string | null
   /**
+   * The payment THIS APP recorded in QuickBooks, if it has.
+   *
+   * Its presence is an interlock, not a label: paymentPlan() refuses to post
+   * while it is set, because a retry after a relay timeout is exactly how the
+   * same money gets banked twice. See @shared/quickbooksPayment.
+   */
+  qboPaymentId: string | null
+  qboPaymentPostedAt: string | null
+  /** Why the last attempt failed. Never blocks the next one. */
+  qboPaymentError: string | null
+  qboPaymentAttemptedAt: string | null
+  /**
    * WHEN OUR OWN TOTAL LAST MOVED, and null on an order nobody has edited.
    *
    * Only meaningful against `qboStatusCheckedAt`: together they say whether
@@ -2121,6 +2133,15 @@ export interface QboInvoicePayment {
 export interface QboInvoiceObservation {
   qboId: string
   docNumber: string | null
+  /**
+   * Who QuickBooks says the invoice belongs to.
+   *
+   * Carried because a PAYMENT has to name a customer — QuickBooks refuses one
+   * that does not — and the invoice is the only place this app can learn it
+   * without a second round trip. Null when QuickBooks did not say, which is a
+   * refusal to post rather than a licence to guess. See @shared/quickbooksPayment.
+   */
+  customerId: string | null
   /** 'NotSet' | 'NeedToSend' | 'EmailSent'. Kept as a string: it is theirs. */
   emailStatus: string | null
   /** DeliveryInfo.DeliveryTime — when QUICKBOOKS sent it, not when it was read. */

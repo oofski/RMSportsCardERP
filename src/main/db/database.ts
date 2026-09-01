@@ -4693,6 +4693,24 @@ function migrate(database: Database.Database): void {
   addColumnIfMissing(database, 'whatnot_statements', 'stated_payout', 'REAL')
   setMeta(database, 'schema_version', '94')
 
+  // v95: the payment this app recorded in QuickBooks for an invoice.
+  //
+  // THE ID IS THE INTERLOCK, not a decoration. Posting a payment moves money in
+  // somebody else's books, and the one failure that must never happen is posting
+  // the same one twice — which is exactly what a retry after a relay timeout
+  // would do. So the id QuickBooks hands back is written here, and
+  // paymentPlan() refuses outright when it is present. See @shared/quickbooksPayment.
+  //
+  // The error and the attempt time sit beside it so a failure is a state
+  // somebody can see and retry rather than a toast that scrolled away. They are
+  // deliberately NOT part of the interlock: a failed attempt records no id,
+  // because a payment that was not created must not block the one that should be.
+  addColumnIfMissing(database, 'invoices', 'qbo_payment_id', 'TEXT')
+  addColumnIfMissing(database, 'invoices', 'qbo_payment_posted_at', 'TEXT')
+  addColumnIfMissing(database, 'invoices', 'qbo_payment_error', 'TEXT')
+  addColumnIfMissing(database, 'invoices', 'qbo_payment_attempted_at', 'TEXT')
+  setMeta(database, 'schema_version', '95')
+
   // v41: re-derive every product's average cost from its remaining cost layers.
   //
   // The average used to be stored rounded to the cent, back when every total in

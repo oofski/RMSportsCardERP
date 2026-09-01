@@ -77,6 +77,7 @@ import {
   type QboCustomerRef,
   type QboItemRef
 } from './quickbooks/invoices'
+import { postQboPaymentFor } from './quickbooks/payments'
 import { fetchQboInvoiceStatuses, findQboInvoicesByDocNumber } from './quickbooks/invoiceStatus'
 import { getInvoiceDelivery, setInvoiceDelivery } from './quickbooks/store'
 import {
@@ -1113,6 +1114,38 @@ export function registerInvoicesIpc(): void {
   )
 
   /** Ask QuickBooks to email it. Separate from creating it — see the note there. */
+  /**
+   * Put the money in QuickBooks. Guarded by the same permission as sending.
+   *
+   * Returns ok with a SENTENCE for every ordinary refusal — nothing owing,
+   * already recorded, not in QuickBooks. Those are answers, and a screen that
+   * shows them as failures teaches people to dismiss a red box that sometimes
+   * means a real one. Only a transport or API fault comes back ok:false.
+   */
+  ipcMain.handle(
+    IPC.invoiceRecordQboPayment,
+    async (_e, id: unknown): Promise<Result<{ id: string; posted: boolean; message: string }>> => {
+      try {
+        requireInvoicing()
+        const target = str(id)
+        const invoice = getInvoice(target)
+        if (!invoice) return { ok: false, error: 'That invoice is gone.' }
+        const outcome = await postQboPaymentFor(target)
+        if (!outcome.ok) return { ok: false, error: outcome.error ?? outcome.plan.sentence }
+        return {
+          ok: true,
+          data: {
+            id: target,
+            posted: outcome.paymentId !== null,
+            message: outcome.plan.sentence
+          }
+        }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
   ipcMain.handle(IPC.invoiceSendFromQbo, async (_e, id: unknown): Promise<Result<{ id: string }>> => {
     try {
       requireInvoicing()
