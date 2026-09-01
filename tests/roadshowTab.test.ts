@@ -50,6 +50,8 @@ const inventory = require('../src/main/db/inventory')
 const dealTickets = require('../src/main/db/dealTickets')
 const prov = require('../src/main/db/provenance')
 const invoiceStock = require('../src/main/db/invoiceStock')
+const orderExtras = require('../src/main/db/orderExtras')
+const { saveStockLocation } = require('../src/main/db/stockLocations')
 const { offerableOrders, soleSourceOrder, supplyRefusal } = require('../src/shared/poStock')
 const { salesOrderKindOf } = require('../src/shared/invoices')
 const {
@@ -1554,6 +1556,124 @@ console.log('\n=== 11. the unpriced warning belongs to the TAB, not to an empty 
     !/no price/.test(emptyShelfHeadline(FULL)),
     'THE HEADLINE SAYS NOTHING ABOUT PRICING — one answers "why is this empty" and the other "what still owes a number"',
     emptyShelfHeadline(FULL)
+  )
+}
+
+
+console.log('\n=== 12. a tab the APP opened says so, on the tab ===')
+// ---------------------------------------------------------------------------
+/**
+ * The owner, looking at a roadshow board where two shops he had never bought
+ * anything at each held a tab with one unpriced line on it: "why are there
+ * inventory items showing in California but nowhere else, that doesn't make
+ * sense?"
+ *
+ * ## Nothing was wrong with the board. Something was missing from the record
+ *
+ * Writing a sales order that draws from a shop with an empty shelf BUYS the
+ * shortfall onto that shop's tab and sells it in the same transaction — see
+ * buyShortfallAtShop, which exists because at a counter "short" means "I bought
+ * it a minute ago and have not written it down". So a tab appears, holding one
+ * unpriced line, with nothing standing on the shelf, for a shop nobody
+ * deliberately bought at.
+ *
+ * That is a REAL LIABILITY created as a side effect, and applyInvoiceStock has
+ * always said so — on the SALES ORDER. Which is the wrong document: the sale is
+ * the thing somebody has just written and already understands, and the
+ * unexplained line turns up on the tab, a week later, when they are working out
+ * what a shop is owed. Its own comment names the failure — "the first anybody
+ * knows of it is an unexplained line on a week's bill" — and that is exactly
+ * what happened.
+ *
+ * Both documents now carry it, each naming the other.
+ */
+{
+  /**
+   * ONE OF THE FOUR REAL SHOPS, and it has to be. `roadshowShopNamed` gates the
+   * automatic purchase on ROADSHOW_SHOPS, so an invented name would buy nothing
+   * and this section would pass by testing the wrong thing entirely — which is
+   * also the reason it never fires at RM or at a supplier's address.
+   *
+   * Registered as a shelf first, because a sale only reaches this path when its
+   * destination is a place stock can sit; opening a tab normally does that, and
+   * here there is no tab yet.
+   */
+  const SHOP12 = 'Texas Roadshow'
+  saveStockLocation({ label: SHOP12 }, 'emp_owner')
+  product('p_auto', 'RS-AUT', 'Kendal Auto Case')
+
+  const before = po.listOpenRoadshowTabs().length
+  const sale12 = invoices.saveInvoice(
+    {
+      customerName: 'Kendal Buyer',
+      invoiceNumber: 'SO-R980',
+      invoiceDate: '2026-08-31',
+      location: SHOP12,
+      lines: [{ item: 'Kendal Auto Case', productId: 'p_auto', quantity: 2, rate: 800 }]
+    },
+    'emp_owner'
+  )
+  ok(!!sale12.id, 'a sale is written against a shop holding nothing')
+
+  const tabs12 = po.listOpenRoadshowTabs()
+  const auto = tabs12.find((t: any) => (t.supplier ?? '').toLowerCase() === SHOP12.toLowerCase())
+  ok(
+    tabs12.length === before + 1 && !!auto,
+    'THE APP OPENED A TAB BY ITSELF — this is the shape that made no sense on the board',
+    `${before} → ${tabs12.length}`
+  )
+  ok(
+    auto.lineCount === 1 && (auto.pendingPriceCount ?? 0) === 1 && auto.total === 0,
+    'one unpriced line, nothing owed yet — exactly what the card showed',
+    `${auto.lineCount} / ${auto.pendingPriceCount} / ${auto.total}`
+  )
+  ok(
+    inventory.stockAtLocation(SHOP12).length === 0,
+    'and nothing is standing at the shop, because the sale consumed it in the same breath'
+  )
+
+  const poLog = orderExtras.listOrderEvents('po', auto.id).map((e: any) => String(e.detail ?? ''))
+  const said = poLog.find((d: string) => /added automatically/.test(d))
+  ok(
+    !!said,
+    'THE FIX: THE TAB ITSELF EXPLAINS WHERE ITS LINE CAME FROM — this is the document somebody opens to settle a week',
+    JSON.stringify(poLog)
+  )
+  ok(
+    !!said && said.includes('SO-R980') && said.includes(SHOP12) && /2 units/.test(said),
+    'naming the sale that caused it, the shop, and how many',
+    String(said)
+  )
+  ok(
+    !!said && /price still to be entered/.test(said),
+    'and saying the price is still owed, which is the thing that has to be chased'
+  )
+
+  const soLog = orderExtras.listOrderEvents('so', sale12.id).map((e: any) => String(e.detail ?? ''))
+  const mirror = soLog.find((d: string) => /to fill this order/.test(d))
+  ok(
+    !!mirror && mirror.includes(auto.poNumber),
+    'AND THE SALE STILL SAYS IT TOO, now naming the tab — either document can be read on its own',
+    JSON.stringify(soLog)
+  )
+
+  // A sale off a shelf that HAS the stock buys nothing and says nothing.
+  inventory.addStock('p_auto', SHOP12, 3, 250, 'bought properly this time', 'emp_owner')
+  const quiet = invoices.saveInvoice(
+    {
+      customerName: 'Kendal Buyer',
+      invoiceNumber: 'SO-R981',
+      invoiceDate: '2026-08-31',
+      location: SHOP12,
+      lines: [{ item: 'Kendal Auto Case', productId: 'p_auto', quantity: 1, rate: 800 }]
+    },
+    'emp_owner'
+  )
+  ok(
+    !orderExtras
+      .listOrderEvents('so', quiet.id)
+      .some((e: any) => /to fill this order/.test(String(e.detail ?? ''))),
+    'A SALE THE SHELF COULD COVER SAYS NOTHING — the note marks an automatic purchase, not every roadshow sale'
   )
 }
 

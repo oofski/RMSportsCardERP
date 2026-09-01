@@ -1275,21 +1275,29 @@ function takeTabDelivery(
  * owed to a shop expecting one payment — the failure the tab was built to
  * prevent — so an open tab is joined and a closed week is never reopened.
  *
- * Returns how many units it actually bought. MUST be called inside the caller's
- * transaction.
+ * Returns the tab it bought onto and how many units, or null when it bought
+ * nothing — the caller needs the ORDER, not just the count, so the liability can
+ * be explained on the document that carries it. MUST be called inside the
+ * caller's transaction.
  */
+export interface ShopShortfallBuy {
+  poId: string
+  poNumber: string
+  units: number
+}
+
 export function buyShortfallAtShop(
   db: Database.Database,
   productId: string,
   shop: string,
   units: number,
   actorId: string | null
-): number {
+): ShopShortfallBuy | null {
   const want = Math.round(Number(units) || 0)
   const place = roadshowShopNamed(shop)
   // Not one of the four: nothing is bought, and the caller's ordinary shortfall
   // handling stands.
-  if (!place || want <= 0) return 0
+  if (!place || want <= 0) return null
 
   const open = db
     .prepare(
@@ -1308,14 +1316,14 @@ export function buyShortfallAtShop(
     // A refusal is reported by NOT buying, rather than by throwing: the sale is
     // the thing somebody is doing, and it still books what the shelf can give.
     // The line simply stays short, which is what it would have been anyway.
-    if (res.error) return 0
-    return want
+    if (res.error) return null
+    return { poId: open.id, poNumber: open.po_number, units: want }
   }
   const created = createPurchaseOrder(
     { supplier: place, location: '', ongoing: true, lines: [line] },
     actorId
   )
-  return created ? want : 0
+  return created ? { poId: created.id, poNumber: created.poNumber, units: want } : null
 }
 
 export function addPurchaseOrderLines(

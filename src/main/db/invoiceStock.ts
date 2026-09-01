@@ -260,8 +260,12 @@ export function applyInvoiceStock(
   )
   const out: InvoiceStockMove[] = []
   const touched = new Set<string>()
-  /** What this save had to buy at a shop to fill itself. See buyShortfallAtShop. */
-  const shopBuys: Array<{ shop: string; units: number }> = []
+  /**
+   * What this save had to buy at a shop to fill itself, and WHICH TAB it went
+   * onto. See buyShortfallAtShop — the order is carried, not just the count,
+   * because the liability has to be explained on the document that holds it.
+   */
+  const shopBuys: Array<{ shop: string; units: number; poId: string; poNumber: string }> = []
 
   for (const line of lines) {
     // THE SLICE'S OWN SHELF WHEN IT NAMES ONE. Only a split line ever does; an
@@ -298,9 +302,9 @@ export function applyInvoiceStock(
      */
     if (!fromPo && asked > have) {
       const bought = buyShortfallAtShop(db, line.productId, shelf, asked - have, actorId)
-      if (bought > 0) {
+      if (bought) {
         have = roundQty(Math.max(0, stockQty(line.productId, shelf)), fractional)
-        shopBuys.push({ shop: shelf, units: bought })
+        shopBuys.push({ shop: shelf, units: bought.units, poId: bought.poId, poNumber: bought.poNumber })
       }
     }
     /**
@@ -368,25 +372,59 @@ export function applyInvoiceStock(
 
   for (const productId of touched) syncProductAvgCost(db, productId)
   /**
-   * SAY WHAT THIS SALE BOUGHT, on the sale.
+   * SAY WHAT THIS SALE BOUGHT — ON BOTH DOCUMENTS.
    *
    * Filling a line by buying at a shop creates a real liability — a case we now
    * owe a shop for — and it happens as a SIDE EFFECT of saving a sales order.
    * An effect like that must not be silent, or the first anybody knows of it is
    * an unexplained line on a week's bill.
    *
+   * ## THAT IS EXACTLY WHAT HAPPENED, because it was only written on one of them
+   *
+   * The entry went on the SALE, which is the document somebody has just written
+   * and already understands. The unexplained line appears on the TAB, which is
+   * the document somebody opens a week later to work out what a shop is owed —
+   * and it said nothing. The owner, looking at a roadshow board with two shops
+   * he had never bought anything at, each holding a tab with one unpriced line:
+   * "why are there inventory items showing in California but nowhere else, that
+   * doesn't make sense?" Nothing on either screen could tell him the app had
+   * opened those tabs itself.
+   *
+   * So the same fact is recorded on the purchase order too, naming the sale that
+   * caused it. Two documents, one act, and either one can now be read on its own.
+   *
    * One entry per shop rather than per line, because two lines filled at the
-   * same counter are one trip and one act. It reads back on the order's own
-   * history, next to everything else that happened to it.
+   * same counter are one trip and one act.
    */
   if (shopBuys.length > 0) {
-    const byShop = new Map<string, number>()
-    for (const b of shopBuys) byShop.set(b.shop, (byShop.get(b.shop) ?? 0) + b.units)
-    for (const [shop, units] of byShop) {
+    const byShop = new Map<string, { units: number; poId: string; poNumber: string }>()
+    for (const b of shopBuys) {
+      const at = byShop.get(b.shop)
+      // The first tab wins when two lines somehow landed on different orders:
+      // the count is what matters to the sentence, and naming one of two orders
+      // is better than naming neither.
+      if (at) at.units += b.units
+      else byShop.set(b.shop, { units: b.units, poId: b.poId, poNumber: b.poNumber })
+    }
+    const sale = (
+      db.prepare('SELECT invoice_number FROM invoices WHERE id = ?').get(invoiceId) as
+        | { invoice_number: string | null }
+        | undefined
+    )?.invoice_number
+    const saleName = (sale ?? '').trim() || 'a sales order'
+    for (const [shop, at] of byShop) {
+      const many = at.units === 1 ? '' : 's'
       recordOrderEvent('so', invoiceId, 'link', {
         detail:
-          `Bought ${units} unit${units === 1 ? '' : 's'} at ${shop} to fill this order — ` +
-          'on that shop’s open tab, at a price still to be entered.',
+          `Bought ${at.units} unit${many} at ${shop} to fill this order — ` +
+          `on ${at.poNumber}, that shop’s open tab, at a price still to be entered.`,
+        actorId,
+        db
+      })
+      recordOrderEvent('po', at.poId, 'link', {
+        detail:
+          `${at.units} unit${many} added automatically to fill ${saleName} — the shelf at ${shop} ` +
+          'was short, so this tab bought them at a price still to be entered.',
         actorId,
         db
       })
