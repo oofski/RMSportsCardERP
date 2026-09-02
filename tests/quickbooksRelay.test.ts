@@ -496,8 +496,46 @@ async function main(): Promise<void> {
   ok(dead.startsWith('fetch failed'), 'while keeping the original text rather than inventing one')
   ok(explainQboRelayProblem('') !== '', 'an empty error still says something')
 
+  /**
+   * THE MESSAGE NODE ACTUALLY PRODUCES, which was the one shape this missed.
+   *
+   * `controller.abort()` — what the relay's own timeout calls — throws
+   * "This operation was aborted". The check looked for "the operation was
+   * aborted", which is what `AbortSignal.timeout()` says and nothing here uses.
+   * One word, and the timeout this app causes itself was the only transport
+   * failure that did not read as one.
+   */
+  ok(
+    isRelayTransportFailure('This operation was aborted'),
+    'THE ABORT NODE ACTUALLY THROWS is a transport failure — "This", not "The", and the ' +
+      'difference was the whole bug'
+  )
+  ok(
+    isRelayTransportFailure('The operation was aborted due to timeout'),
+    'and so is the other spelling, which is what AbortSignal.timeout says'
+  )
+  ok(isRelayTransportFailure('AbortError'), 'and the bare error name, however it reaches here')
   ok(isRelayTransportFailure('fetch failed'), 'a dead socket is a transport failure')
   ok(isRelayTransportFailure('Relay error 500.'), 'and so is a relay 500')
+  {
+    const said = explainQboRelayProblem('This operation was aborted')
+    ok(
+      /did not answer in time/i.test(said) && /NOTHING WAS REFUSED/.test(said),
+      'A TIMEOUT IS EXPLAINED AS A TIMEOUT, not repeated as "aborted" — which reads like ' +
+        'QuickBooks looked at the invoice and said no, when nothing looked at it',
+      said
+    )
+    ok(
+      !/^This operation was aborted/.test(said),
+      'and the raw wording does not lead the sentence, because it sent people to check their ' +
+        'QuickBooks data for a fault that was never there'
+    )
+    ok(
+      /Cloudflare/i.test(said),
+      'and it names where the answer actually is — the Worker log',
+      said
+    )
+  }
   ok(
     !isRelayTransportFailure('QuickBooks: Invalid Reference Id — Names element id not found'),
     'AND AN INTUIT REFUSAL IS NOT — retrying that unchanged never works'

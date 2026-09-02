@@ -50,6 +50,23 @@ const NO_RELAY =
  */
 const MEMO_TTL_MS = 2 * 60 * 1000
 
+/**
+ * How long to wait for a QuickBooks call that goes THROUGH the relay.
+ *
+ * A sync pull is one hop and the loop's 30 seconds is generous for it. This is
+ * three: this app, the relay, and Intuit — with a token refresh possible in the
+ * middle that waits up to six seconds on another invocation's lease before it
+ * even begins its own round trip to Intuit. On the same ceiling, the longest
+ * chain got the shortest patience and gave up on work that was still running,
+ * reported as "This operation was aborted", which reads like a refusal.
+ *
+ * Ninety seconds. Long enough that a slow-but-working call finishes; short
+ * enough that a relay which is genuinely dead does not hold a button down for
+ * minutes. An upload carries a file as well, so it gets more again.
+ */
+const QBO_CALL_TIMEOUT_MS = 90 * 1000
+const QBO_UPLOAD_TIMEOUT_MS = 180 * 1000
+
 interface RelayStatusReply {
   ok?: boolean
   hasConfig?: boolean
@@ -183,6 +200,7 @@ export async function relayQboRequest<T = unknown>(options: QboCallEnvelope): Pr
   let reply: RelayRequestReply
   try {
     reply = (await call('/v1/qbo/request', {
+      timeoutMs: QBO_CALL_TIMEOUT_MS,
       method: 'POST',
       body: {
         method: options.method ?? 'GET',
@@ -226,6 +244,7 @@ export async function relayQboUpload(input: {
 
   try {
     const reply = (await call('/v1/qbo/upload', {
+      timeoutMs: QBO_UPLOAD_TIMEOUT_MS,
       method: 'POST',
       body: {
         entityType: input.entityType,

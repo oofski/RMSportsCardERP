@@ -206,6 +206,20 @@ export function explainQboRelayProblem(message: string): string {
       'connection. Check the key under Admin → Developer → Cloud sync.'
     )
   }
+  // A TIMEOUT IS NOT A REFUSAL, and "This operation was aborted" reads like one
+  // — like QuickBooks looked at the invoice and said no. Nothing looked at it.
+  // The relay did not answer in time and this app gave up waiting, which is a
+  // different problem with a different fix, and the raw wording sent people to
+  // check their QuickBooks data for a fault that was never there.
+  if (/operation was aborted|aborterror|timed out|timeout/i.test(text)) {
+    return (
+      'The cloud relay did not answer in time, so this app stopped waiting. NOTHING WAS REFUSED ' +
+      'and nothing is wrong with the invoice — it is saved here, and QuickBooks may or may not ' +
+      'have received it. Check the invoice in QuickBooks before sending it again, then press ' +
+      'retry. If it keeps happening, the Worker log in the Cloudflare dashboard says what the ' +
+      'relay was doing.'
+    )
+  }
   return `${text} That is the cloud relay, not QuickBooks — the invoice itself is saved here.`
 }
 
@@ -248,7 +262,14 @@ export function isRelayTransportFailure(message: string): boolean {
     text.includes('relay error') ||
     text.includes('sync is not configured') ||
     text.includes('fetch failed') ||
-    text.includes('the operation was aborted') ||
+    // BOTH SPELLINGS, because they are different events and only one of them
+    // was here. `controller.abort()` — which is what the relay's own timeout
+    // does — produces "THIS operation was aborted"; `AbortSignal.timeout()`
+    // produces "THE operation was aborted due to timeout". Matching only the
+    // second meant the timeout this app causes itself was the one shape that
+    // did not read as a transport failure.
+    text.includes('operation was aborted') ||
+    text.includes('aborterror') ||
     text.includes('network') ||
     text.includes('timed out') ||
     text.includes('econnrefused') ||

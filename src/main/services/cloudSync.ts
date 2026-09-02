@@ -206,7 +206,7 @@ function announceChange(kinds: string[]): void {
 
 export async function call(
   path: string,
-  init: { method: 'GET' | 'POST'; body?: unknown }
+  init: { method: 'GET' | 'POST'; body?: unknown; timeoutMs?: number }
 ): Promise<Record<string, unknown>> {
   const config = getSyncConfig()
   const key = sharedKey()
@@ -228,9 +228,18 @@ export async function call(
   }
 
   const controller = new AbortController()
-  // Long enough for a big first push over a bad connection, short enough that a
-  // dead relay does not hold the loop open indefinitely.
-  const timeout = setTimeout(() => controller.abort(), 30_000)
+  /**
+   * Long enough for a big first push over a bad connection, short enough that a
+   * dead relay does not hold the loop open indefinitely.
+   *
+   * OVERRIDABLE, because not every caller is a sync round. A pull is this app
+   * talking to the relay and nothing else; a QuickBooks call is this app, then
+   * the relay, then INTUIT, and possibly a token refresh in the middle that
+   * waits up to six seconds on its own lease before it even starts. Holding
+   * both to the same ceiling meant the longest chain got the shortest patience,
+   * and gave up on work that was still running.
+   */
+  const timeout = setTimeout(() => controller.abort(), init.timeoutMs ?? 30_000)
   try {
     const response = await fetch(`${config.url}${path}`, {
       method: init.method,
