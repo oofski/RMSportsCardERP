@@ -515,5 +515,52 @@ console.log('\n=== the payroll fortnight, and the words that describe it ===')
   )
 }
 
+// ---------------------------------------------------------------------------
+console.log('\n=== the payroll export must be NAMED for the days it covers ===')
+// ---------------------------------------------------------------------------
+// The owner: "in the payroll export ... make sure when we export it that the
+// dates in the export name are the correct ones because right now it's showing
+// an inaccurate one."
+//
+// Every hours range in this app ends EXCLUSIVELY — listInRange filters on
+// clock_in < end, and payperiod.ts builds the payroll window as the day AFTER
+// the fortnight closes so the whole of the last day is inside. Right for
+// selecting rows, wrong for printing: the 17–30 August fortnight was exported as
+// `..._2026-08-31.csv` with a "Pay period end" of 31 August — a day nobody
+// worked in it, and the first day of the NEXT fortnight. The hours were always
+// right, which is why it survived.
+{
+  const { lastDayIncluded } = require('../src/main/services/csv')
+  const { payrollPeriodFor, addDays } = require('../src/shared/homeTasks')
+
+  const mid = payrollPeriodFor('2026-08-20')
+  // The window the exporter is handed, built exactly as payperiod.ts builds it.
+  const endExclusive = new Date(`${addDays(mid.end, 1)}T00:00:00`).toISOString()
+  ok(
+    lastDayIncluded(endExclusive) === '2026-08-30',
+    'THE NAME SAYS 30 AUGUST — the last day worked, not the boundary after it',
+    lastDayIncluded(endExclusive)
+  )
+  ok(
+    lastDayIncluded(endExclusive) !== addDays(mid.end, 1),
+    'and never the exclusive end, which is the next fortnight\'s first day',
+    `${lastDayIncluded(endExclusive)} vs ${addDays(mid.end, 1)}`
+  )
+
+  // Across a month boundary, where an off-by-one also changes the month.
+  const next = payrollPeriodFor('2026-09-02')
+  const nextEnd = new Date(`${addDays(next.end, 1)}T00:00:00`).toISOString()
+  ok(
+    lastDayIncluded(nextEnd) === '2026-09-13',
+    'and it holds for the following fortnight too',
+    lastDayIncluded(nextEnd)
+  )
+
+  // A window ending on the 1st: naive formatting of the exclusive end would roll
+  // the month forward, which is the loudest version of the same mistake.
+  const rolls = new Date('2026-10-01T00:00:00').toISOString()
+  ok(lastDayIncluded(rolls) === '2026-09-30', 'and steps back over a month end', lastDayIncluded(rolls))
+}
+
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

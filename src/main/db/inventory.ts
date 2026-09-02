@@ -23,6 +23,7 @@ import { normalizeUpc } from '@shared/upc'
 import type { StockMoveRequest } from '@shared/stockMove'
 import { moveNote, moveRefusal } from '@shared/stockMove'
 import { getDb } from './database'
+import { pushCostToPurchaseOrders, type CostPushBack } from './poCostLink'
 import type { LotPick } from '@shared/costLots'
 import {
   QTY_EPS,
@@ -627,7 +628,14 @@ export function updateProduct(input: UpdateInventoryProduct): InventoryProduct |
   // nothing — the same two guards `setZeroCostBasis` gives the banner's field,
   // which remains the version that REPORTS what it did.
   if (input.unitCost != null && next.unit_cost > 0 && productCostValue(getDb(), input.id) <= 0) {
-    rebaseZeroCostLayers(getDb(), input.id, unitMoney(next.unit_cost))
+    // The SAME linkage the banner does. Wiring one door and not the other is
+    // exactly the shape of the bug being fixed here — a price entered on the
+    // product form is the same claim as one entered on the banner, and the
+    // purchase order behind the stock needs it either way.
+    const db = getDb()
+    const cost = unitMoney(next.unit_cost)
+    const rebased = rebaseZeroCostLayers(db, input.id, cost)
+    pushCostToPurchaseOrders(db, rebased.lotIds, cost, nowIso())
   }
   return getProduct(input.id)
 }
@@ -641,8 +649,25 @@ export function updateProduct(input: UpdateInventoryProduct): InventoryProduct |
  * the dashboard banner's, because "a cost typed here reaches the stock" has to
  * be one behaviour rather than two that drift.
  */
-function rebaseZeroCostLayers(db: Database, productId: string, cost: number): number {
-  const run = db.transaction((): number => {
+function rebaseZeroCostLayers(
+  db: Database,
+  productId: string,
+  cost: number
+): { changed: number; lotIds: string[] } {
+  const run = db.transaction((): { changed: number; lotIds: string[] } => {
+    // THE IDS ARE READ FIRST, not just the count. A bulk UPDATE can say how many
+    // rows it moved and never which — and "which" is what the purchase orders
+    // behind them need. See pushCostToPurchaseOrders: a product can hold layers
+    // from several orders at several prices, and only the ones carrying nothing
+    // are this operation's business.
+    const lotIds = (
+      db
+        .prepare(
+          `SELECT id FROM inventory_lots
+            WHERE product_id = ? AND qty_remaining > 0 AND unit_cost <= 0`
+        )
+        .all(productId) as Array<{ id: string }>
+    ).map((r) => r.id)
     const info = db
       .prepare(
         `UPDATE inventory_lots SET unit_cost = ?
@@ -653,7 +678,7 @@ function rebaseZeroCostLayers(db: Database, productId: string, cost: number): nu
     // none it returns early and the figure already on the product row stands,
     // which is the number the valuation falls back to.
     syncProductAvgCost(db, productId)
-    return info.changes
+    return { changed: info.changes, lotIds }
   })
   return run()
 }
@@ -697,18 +722,39 @@ export function setZeroCostBasis(productId: string, unitCost: number): CostBasis
   // quantity again, the same precision a layer and a product average are stored
   // at everywhere else.
   const cost = unitMoney(Math.max(0, unitCost))
-  const run = db.transaction((): number => {
+  const run = db.transaction((): { changed: number; pushed: CostPushBack } => {
+    const ts = nowIso()
     db.prepare('UPDATE inventory_products SET unit_cost = ?, updated_at = ? WHERE id = ?').run(
       cost,
-      nowIso(),
+      ts,
       productId
     )
-    return rebaseZeroCostLayers(db, productId, cost)
+    const rebased = rebaseZeroCostLayers(db, productId, cost)
+    /**
+     * AND BACK TO THE PURCHASE ORDER THE STOCK CAME IN ON.
+     *
+     * The owner's words: "when I went and I placed the price of this item, it
+     * went through and it registered in the inventory correctly. But on the PO,
+     * it didn't update." PO-0458 read $0.00 a unit and $0.00 total for a case
+     * that cost real money, because this function stopped at the shelf.
+     *
+     * IN THE SAME TRANSACTION as the re-base, so the shelf and the document can
+     * never be left disagreeing by a failure halfway through — which is the
+     * state this whole fix exists to end. See pushCostToPurchaseOrders for the
+     * one thing it refuses to touch.
+     */
+    const pushed = pushCostToPurchaseOrders(db, rebased.lotIds, cost, ts)
+    return { changed: rebased.changed, pushed }
   })
-  const layersRevalued = run()
+  const result = run()
   const product = getProduct(productId)
   if (!product) return null
-  return { product, layersRevalued, costValue: productCostValue(db, productId) }
+  return {
+    product,
+    layersRevalued: result.changed,
+    costValue: productCostValue(db, productId),
+    ordersPriced: result.pushed
+  }
 }
 
 /** Update only a product's high bid (market value) + when it was set. */

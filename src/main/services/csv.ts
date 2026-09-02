@@ -21,6 +21,33 @@ function localDate(iso: string): string {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
 }
 
+/**
+ * THE LAST DAY THE WINDOW ACTUALLY COVERS, from an EXCLUSIVE end.
+ *
+ * Every hours range in this app ends exclusively — `listInRange` filters on
+ * `clock_in < end`, and `payperiod.ts` builds the payroll windows as
+ * `addDays(period.end, 1)` so the whole of the final day is inside. That is the
+ * right way to select rows and the WRONG number to print: the fortnight worked
+ * 17–30 August was exported as a file called `..._2026-08-31.csv` carrying a
+ * "Pay period end" of 31 August — a day nobody worked in it, and the first day
+ * of the NEXT fortnight.
+ *
+ * The rows were always correct. Only the label on them was off by one, which is
+ * the sort of wrong that survives: the hours add up, so nothing looks broken
+ * until somebody matches the file against the period it is for.
+ *
+ * Parsed as a local instant and stepped back a whole day rather than by
+ * subtracting a millisecond: the boundary is a local midnight, and 23:59:59.999
+ * of the previous day formats to the same date only until a daylight-saving
+ * change moves it.
+ */
+export function lastDayIncluded(endExclusive: string): string {
+  const d = new Date(endExclusive)
+  if (Number.isNaN(d.getTime())) return localDate(endExclusive)
+  d.setDate(d.getDate() - 1)
+  return localDate(d.toISOString())
+}
+
 function localTime(iso: string): string {
   const d = new Date(iso)
   return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`
@@ -212,7 +239,10 @@ export function gustoCsv(rows: GustoRow[], start: string, end: string): string {
         esc(hoursCell(totals.overtimeMinutes)),
         esc(hoursCell(totals.totalMinutes)),
         esc(localDate(start)),
-        esc(localDate(end))
+        // The last day WORKED, not the exclusive boundary. See lastDayIncluded
+        // — Gusto reads this column, so an off-by-one here names the wrong
+        // fortnight in somebody else's payroll system.
+        esc(lastDayIncluded(end))
       ].join(',')
     )
   }

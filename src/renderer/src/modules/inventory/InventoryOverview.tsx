@@ -590,7 +590,19 @@ function ZeroCostBanner({
       ...s,
       [id]: { saved: String(cost), state: worked ? 'fixed' : 'stuck' }
     }))
-    if (worked) toast.success(`${res.data.product.name} is now carried at cost.`)
+    // SAY WHAT ELSE MOVED. Pricing from here now carries the figure back to the
+    // purchase order the stock arrived on — the thing that used to be left at
+    // $0.00 with nothing said about it — so the message names the order rather
+    // than leaving the operator to go and check.
+    if (worked) {
+      const p = res.data.ordersPriced
+      const orders = p && p.poNumbers.length > 0 ? ` ${p.poNumbers.join(', ')} now priced.` : ''
+      const sales =
+        p && p.salesRestated > 0
+          ? ` Cost of goods corrected on ${p.salesRestated} sale line${p.salesRestated === 1 ? '' : 's'} already sold from it.`
+          : ''
+      toast.success(`${res.data.product.name} is now carried at cost.${orders}${sales}`)
+    }
     await onChanged()
   }
 

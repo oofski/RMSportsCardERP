@@ -60,7 +60,13 @@ import {
 } from './db/timeEntries'
 import { composeInviteEmail } from './services/email'
 import { roughLocation } from './services/location'
-import { computePayroll, gustoCsv, timesheetCsv, type GustoRow } from './services/csv'
+import {
+  computePayroll,
+  gustoCsv,
+  lastDayIncluded,
+  timesheetCsv,
+  type GustoRow
+} from './services/csv'
 import { clearRemembered, getRemembered, setRemembered } from './services/credentials'
 import { generateTempPassword, isValidEmail, uploadedBytes, uploadedName } from './util'
 import { hasRequestContext } from './services/session'
@@ -540,14 +546,18 @@ export function registerIpcHandlers(): void {
           totals: computePayroll(listInRange(req.start, req.end, emp.id))
         }))
         csv = gustoCsv(rows, req.start, req.end)
-        defaultName = `gusto-hours-${datePart(req.start)}_${datePart(req.end)}.csv`
+        // NAMED FOR THE DAYS IT COVERS. `req.end` is exclusive — payperiod.ts
+        // builds it as the day AFTER the fortnight closes — so printing it raw
+        // called the 17–30 August file `..._2026-08-31.csv`, naming the first
+        // day of the next fortnight. See lastDayIncluded.
+        defaultName = `gusto-hours-${datePart(req.start)}_${lastDayIncluded(req.end)}.csv`
       } else {
         if (!req.employeeId) return { ok: false, error: 'Select an employee.' }
         const emp = getEmployeeById(req.employeeId)
         if (!emp) return { ok: false, error: 'Employee not found.' }
         const entries = listInRange(req.start, req.end, emp.id)
         csv = timesheetCsv(emp, entries)
-        defaultName = `timesheet-${emp.companyId}-${datePart(req.start)}_${datePart(req.end)}.csv`
+        defaultName = `timesheet-${emp.companyId}-${datePart(req.start)}_${lastDayIncluded(req.end)}.csv`
       }
 
       const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]

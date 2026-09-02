@@ -28,6 +28,9 @@ import { asShipStatus } from '@shared/tracking'
 import { BUILTIN_LOCATION_IDS, LOCATION_IDS } from '@shared/inventory'
 import { getDb, getMeta, setMeta } from './database'
 import { addStock, adjustStock, reverseStockReceipt, stockQty } from './inventory'
+// Shared with the Inventory cost path so the two doors onto "what this order
+// cost" cannot disagree. See db/poCostLink.ts.
+import { restateOrderTotal } from './poCostLink'
 import { recordPoCogs, voidPoCogs } from './finance'
 import { describeDeletion } from '@shared/orders'
 import { adoptLegacyFreight, deleteOrderExtras, recordOrderEvent } from './orderExtras'
@@ -1486,21 +1489,6 @@ function freightIn(v: unknown): number | null {
   return Math.round(n * 100) / 100
 }
 
-function restateOrderTotal(db: Database.Database, poId: string, ts: string): void {
-  const all = db
-    .prepare('SELECT quantity, unit_price FROM purchase_order_lines WHERE po_id = ?')
-    .all(poId) as Array<{ quantity: number; unit_price: number }>
-  const freightRow = db
-    .prepare('SELECT shipping_cost FROM purchase_orders WHERE id = ?')
-    .get(poId) as { shipping_cost: number | null } | undefined
-  const freight = Math.max(0, Number(freightRow?.shipping_cost) || 0)
-  const total = cents(
-    all.reduce((sum, l) => sum + cents(Math.round(l.quantity) * Math.max(0, l.unit_price)), 0) +
-      cents(freight)
-  )
-  db.prepare('UPDATE purchase_orders SET total = ?, updated_at = ? WHERE id = ?').run(total, ts, poId)
-  db.prepare('UPDATE finance_cogs SET amount = ? WHERE po_id = ?').run(total, poId)
-}
 
 /**
  * Correct the descriptive half of an order: who it is from, and the note on it.

@@ -525,6 +525,21 @@ export interface CostBasisFix {
   layersRevalued: number
   /** The product's cost basis after the write, read the way the banner reads it. */
   costValue: number
+  /**
+   * WHAT THE PURCHASE ORDERS BEHIND THAT STOCK DID ABOUT IT.
+   *
+   * Reported rather than done silently, for the same reason `costValue` is:
+   * pricing from the shelf used to leave the purchase order reading $0.00 and
+   * nothing said otherwise, so the operator had no way to know the document was
+   * still wrong. Zeroes here are an ordinary answer — hand-counted stock has no
+   * order behind it, and a line that already carried a real price is left alone.
+   */
+  ordersPriced: {
+    linesPriced: number
+    ordersRestated: number
+    salesRestated: number
+    poNumbers: string[]
+  }
 }
 
 /** One shelf where Σ lot.qty_remaining and inventory_stock.quantity disagree. */
