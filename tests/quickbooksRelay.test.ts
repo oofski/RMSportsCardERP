@@ -517,6 +517,42 @@ async function main(): Promise<void> {
   ok(isRelayTransportFailure('AbortError'), 'and the bare error name, however it reaches here')
   ok(isRelayTransportFailure('fetch failed'), 'a dead socket is a transport failure')
   ok(isRelayTransportFailure('Relay error 500.'), 'and so is a relay 500')
+
+  /**
+   * EVERY CALL OUT OF THE WORKER HAS A DEADLINE.
+   *
+   * It had none, and that is the whole reason a stuck QuickBooks call produced
+   * silence rather than an error: the app asks the relay, the relay asks Intuit,
+   * and with nothing bounding the second hop the only observable event was the
+   * APP giving up — which names the wrong end of the chain.
+   *
+   * Asserted against the FILE because the Worker is deployed by hand and never
+   * imported by these tests. A bare fetch added later would reintroduce exactly
+   * this, invisibly.
+   */
+  {
+    const worker = require('node:fs').readFileSync('cloud/worker.js', 'utf8') as string
+    const intuitHosts = ['QBO_TOKEN_URL', 'QBO_REVOKE_URL']
+    const bare = intuitHosts.filter((h) =>
+      new RegExp(`fetch\\(\\s*${h}`).test(worker)
+    )
+    ok(
+      bare.length === 0,
+      'NO CALL TO INTUIT IS MADE WITH A BARE fetch — they all go through qboUpstream, which ' +
+        'carries the deadline. Without one, a quiet Intuit hangs the relay for ever and the ' +
+        'app can only report itself giving up',
+      bare.join(', ')
+    )
+    ok(
+      /AbortSignal\.timeout\(QBO_UPSTREAM_TIMEOUT_MS\)/.test(worker),
+      'and the deadline is a real AbortSignal, not a comment about one'
+    )
+    ok(
+      /TimeoutError|AbortError/.test(worker) && /did not answer within/.test(worker),
+      'AND A TIMEOUT COMES BACK AS A SENTENCE naming Intuit and the stage, rather than as a ' +
+        'dropped connection the app has to guess about'
+    )
+  }
   {
     const said = explainQboRelayProblem('This operation was aborted')
     ok(
