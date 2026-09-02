@@ -1229,6 +1229,106 @@ export function invoiceTotal(lines: Array<{ amount: number }>): number {
   return money(lines.reduce((sum, l) => sum + (Number(l.amount) || 0), 0))
 }
 
+/**
+ * The three money fields a QuickBooks line has to carry, made to agree.
+ *
+ * ## The problem this exists for
+ *
+ * This app lets a line's amount disagree with quantity × rate on purpose — see
+ * the note on `InvoiceLine.amount`: three cases listed at $6,500 and talked down
+ * to a flat $19,000 is an ordinary Tuesday, and the agreed number is the fact.
+ *
+ * QUICKBOOKS DOES NOT ALLOW THAT. It re-does the arithmetic on every line and
+ * refuses the entire invoice when it disagrees, with a message that quotes the
+ * agreed figure back and explains nothing:
+ *
+ *     Amount calculation incorrect in the request.
+ *     Amount is not equal to UnitPrice * Qty. Supplied value: 19,000
+ *
+ * So the negotiated invoices — the interesting ones — were the only ones that
+ * could not be posted, and the failure looked like a connection fault because
+ * the next invoice went through fine.
+ *
+ * ## What this does instead
+ *
+ * Works the unit price back OUT of the agreed total, which is what somebody
+ * does on paper: $19,000 for three cases is $6,333.33 each. That keeps the
+ * total exact — the total is what the buyer owes — and lets the per-unit price
+ * absorb the untidiness, which is the right way round.
+ *
+ * THE EXTRA DECIMALS ARE THE WHOLE TRICK, and dropping them re-breaks this.
+ * $19,000 ÷ 3 does not land on a cent: $6,333.33 × 3 is $18,999.99 and
+ * $6,333.34 × 3 is $19,000.02, so NO two-decimal unit price can multiply back
+ * to the agreed total, and rounding to cents here would send QuickBooks the
+ * same contradiction in a different shape. QuickBooks holds a unit price to
+ * five decimals and checks the product only to the cent, which is exactly the
+ * room needed: $6,333.33333 × 3 = $18,999.99999, which is $19,000.00 to the
+ * cent. It prints as $6,333.33.
+ *
+ * The order of attempts matters:
+ *
+ *   1. ALREADY AGREES — send it untouched. The overwhelming majority of lines,
+ *      and this must not perturb them: a line that posts correctly today has to
+ *      produce a byte-identical payload tomorrow.
+ *   2. DIVIDES CLEANLY — $19,000 over 8 is $2,375.00 exactly. Prefer the tidy
+ *      two-decimal price when there is one; nobody wants trailing zeros on a
+ *      price that was never untidy.
+ *   3. NEEDS THE DECIMALS — the $6,333.33333 case above.
+ *   4. CANNOT BE DONE — sell it as one unit at the agreed price, and say the
+ *      real count in the description so it is not simply lost. Only reachable
+ *      at quantities in the thousands, where five decimals stop being enough to
+ *      absorb the remainder; kept because "cannot happen" is how a refused
+ *      invoice gets shipped.
+ */
+export interface QboLineMoney {
+  Qty: number
+  UnitPrice: number
+  Amount: number
+  /**
+   * Did the count have to be collapsed to one to make the sum tie out?
+   *
+   * Reported rather than handled silently: the caller owes the reader a
+   * description saying how many units it really was.
+   */
+  collapsed: boolean
+}
+
+/** Unit prices carry five decimals; QuickBooks stores no more than that. */
+const UNIT_DP = 5
+
+const roundTo = (n: number, dp: number): number => {
+  const f = 10 ** dp
+  return Math.round(n * f) / f
+}
+
+export function qboLineMoney(quantity: number, rate: number, amount: number): QboLineMoney {
+  const amt = money(Number(amount) || 0)
+  const qty = Number(quantity) || 0
+  const listed = money(Number(rate) || 0)
+
+  // 1. Already consistent. Includes the zero-quantity, zero-amount line, which
+  //    is arithmetically fine and which QuickBooks accepts.
+  if (money(qty * listed) === amt) {
+    return { Qty: qty, UnitPrice: listed, Amount: amt, collapsed: false }
+  }
+
+  if (qty > 0) {
+    // 2. A clean per-unit price, when the division gives one.
+    const cents = roundTo(amt / qty, 2)
+    if (money(cents * qty) === amt) {
+      return { Qty: qty, UnitPrice: cents, Amount: amt, collapsed: false }
+    }
+    // 3. The remainder lives in the extra decimals.
+    const fine = roundTo(amt / qty, UNIT_DP)
+    if (money(fine * qty) === amt) {
+      return { Qty: qty, UnitPrice: fine, Amount: amt, collapsed: false }
+    }
+  }
+
+  // 4. One unit at the agreed price. Always ties out, by construction.
+  return { Qty: 1, UnitPrice: amt, Amount: amt, collapsed: true }
+}
+
 // ---------------------------------------------------------------------------
 // Dates
 // ---------------------------------------------------------------------------
@@ -2008,14 +2108,23 @@ export function toQboInvoice(
     ...(invoice.memo ? { PrivateNote: invoice.memo } : {}),
     Line: invoice.lines.map((l) => {
       const ref = resolveLineItemRef(l, itemRefs, refs.itemsBySku)
+      // The agreed amount is the fact and goes over untouched; the unit price
+      // is worked back out of it so QuickBooks' own arithmetic agrees. See
+      // `qboLineMoney` for why a two-decimal price is not always enough.
+      const sums = qboLineMoney(l.quantity, l.rate, l.amount)
+      // Only when the count could not survive the sum — which is the one thing
+      // this conversion can lose, so it is written down where the buyer and the
+      // owner can both still read it rather than quietly dropped.
+      const lost = sums.collapsed && l.quantity > 1 ? `${l.quantity} units` : null
+      const description = [l.description, lost].filter(Boolean).join(' — ')
       return {
         DetailType: 'SalesItemLineDetail' as const,
-        Amount: money(l.amount),
-        ...(l.description ? { Description: l.description } : {}),
+        Amount: sums.Amount,
+        ...(description ? { Description: description } : {}),
         SalesItemLineDetail: {
           ItemRef: { value: ref?.id ?? '', ...(ref?.name ? { name: ref.name } : {}) },
-          Qty: l.quantity,
-          UnitPrice: l.rate,
+          Qty: sums.Qty,
+          UnitPrice: sums.UnitPrice,
           ...(onLine && classRef ? { ClassRef: classRef } : {})
         }
       }

@@ -46,6 +46,7 @@ const {
   money,
   nextInvoiceNumber,
   qboInvoiceUrl,
+  qboLineMoney,
   toQboInvoice,
   toUsDate,
   validateCustomer,
@@ -465,6 +466,97 @@ ok(payload.CustomerMemo?.value === 'Thank you for your business!', 'CustomerMemo
 ok(payload.PrivateNote === 'First invoice of 3 month contract.', 'PrivateNote is internal')
 ok(payload.BillEmail?.Address === 'email1@intuit.com', 'the email travels')
 ok(payload.DocNumber === '1001', 'and our number is offered')
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 7b. an agreed price QuickBooks can accept ===')
+// ---------------------------------------------------------------------------
+// THE INVOICE THAT WAS REFUSED, reproduced. Three cases listed at $6,500 and
+// talked down to a flat $19,000: this app calls that the agreed amount and
+// QuickBooks called it "Amount is not equal to UnitPrice * Qty. Supplied value:
+// 19,000" and refused the whole document.
+const agreed = qboLineMoney(3, 6500, 19000)
+ok(agreed.Amount === 19000, 'the agreed total goes over untouched', String(agreed.Amount))
+ok(agreed.Qty === 3, 'and the case count survives', String(agreed.Qty))
+ok(!agreed.collapsed, 'so nothing had to be given up')
+// The rule QuickBooks applies, applied here. This is the assertion that matters:
+// everything else is presentation.
+ok(
+  money(agreed.UnitPrice * agreed.Qty) === agreed.Amount,
+  'AND QUICKBOOKS ARITHMETIC AGREES — UnitPrice x Qty is the Amount, to the cent',
+  `${agreed.UnitPrice} x ${agreed.Qty} = ${money(agreed.UnitPrice * agreed.Qty)}`
+)
+// The extra decimals are not decoration. Rounding the unit price to cents here
+// sends the same contradiction in a different shape, and this is the assertion
+// that catches somebody "tidying" it.
+ok(
+  money(money(19000 / 3) * 3) !== 19000,
+  'A TWO-DECIMAL UNIT PRICE CANNOT EXPRESS THIS — 6333.33 x 3 is 18999.99',
+  String(money(money(19000 / 3) * 3))
+)
+
+// A line that is already consistent must come out BYTE-IDENTICAL. The common
+// case is the one a change like this is most likely to quietly damage.
+const plain = qboLineMoney(4, 250, 1000)
+ok(
+  plain.Qty === 4 && plain.UnitPrice === 250 && plain.Amount === 1000 && !plain.collapsed,
+  'an ordinary line is passed through untouched',
+  JSON.stringify(plain)
+)
+
+// A tidy division keeps a tidy price — no trailing decimals on a number that
+// never needed them.
+const clean = qboLineMoney(8, 2500, 19000)
+ok(clean.UnitPrice === 2375 && clean.Qty === 8, 'a clean division gives a clean price', JSON.stringify(clean))
+
+// Every shape it can be handed still ties out. A rule that holds on the example
+// and fails on the fifth case is the bug this whole section exists to stop.
+const shapes: Array<[number, number, number]> = [
+  [3, 6500, 19000],
+  [6, 3200, 19000],
+  [7, 2800, 19000],
+  [9, 2200, 19000],
+  [11, 1800, 19000],
+  [13, 1500, 19000],
+  [3, 0, 19000],
+  [1, 6500, 19000],
+  [0, 6500, 0],
+  [2.5, 100, 260],
+  [3, 6500, -19000]
+]
+let allTie = true
+let firstBad = ''
+for (const [q, r, a] of shapes) {
+  const m = qboLineMoney(q, r, a)
+  if (money(m.UnitPrice * m.Qty) !== m.Amount || m.Amount !== money(a)) {
+    allTie = false
+    firstBad = `${q} x ${r} = ${a} -> ${JSON.stringify(m)}`
+    break
+  }
+}
+ok(allTie, 'EVERY SHAPE TIES OUT and keeps the agreed total', firstBad)
+
+// The one thing this conversion can lose is the count, and it must say so
+// rather than drop it silently. Only reachable at quantities in the thousands.
+const huge = qboLineMoney(700000, 1, 19000)
+ok(huge.collapsed && huge.Qty === 1, 'an impossible split falls back to one unit', JSON.stringify(huge))
+ok(money(huge.UnitPrice * huge.Qty) === huge.Amount, 'and that fallback ties out too')
+
+// End to end, through the payload the API actually receives.
+const negotiated = repo.saveInvoice({
+  customerName: 'Invented Wholesale Co',
+  invoiceDate: '2024-03-04',
+  terms: 'Net 30',
+  lines: [{ item: 'Trimming', quantity: 3, rate: 6500, amount: 19000 }]
+})
+const negPayload = toQboInvoice(repo.getInvoice(negotiated.id), { id: '17' }, itemRefs)
+const negLine = negPayload.Line[0]
+ok(negLine.Amount === 19000, 'the posted line carries the agreed total', String(negLine.Amount))
+ok(negLine.SalesItemLineDetail.Qty === 3, 'and the three cases')
+ok(
+  money(negLine.SalesItemLineDetail.UnitPrice * negLine.SalesItemLineDetail.Qty) === negLine.Amount,
+  'AND THE PAYLOAD PASSES QUICKBOOKS\' OWN CHECK, which is the whole point',
+  JSON.stringify(negLine.SalesItemLineDetail)
+)
 
 // AN ITEM QUICKBOOKS DOES NOT KNOW IS REFUSED BY NAME, before anything is sent.
 // Half an invoice is not a useful thing to have created in somebody's books.
