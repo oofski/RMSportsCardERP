@@ -72,73 +72,95 @@ export function restateOrderTotal(db: Database, poId: string, ts: string): void 
 }
 
 export interface CostPushBack {
-  /** Purchase order lines that were given this price. */
+  /** Purchase order lines that were given a price. */
   linesPriced: number
   /** Distinct orders whose total was recomputed. */
   ordersRestated: number
   /** Sale lines whose cost of goods was corrected off the old zero. */
   salesRestated: number
-  /** The order numbers touched, newest-typed first, for the message on screen. */
+  /** The order numbers touched, for the message on screen. */
   poNumbers: string[]
 }
 
-interface ReceiptRow {
+interface BlankLineRow {
   po_line_id: string
   po_id: string
   po_number: string | null
-  unit_price: number
-  price_pending: number
+  lot_id: string
+  lot_cost: number
 }
 
 /**
- * Carry a unit cost back to the purchase order lines behind these cost layers.
+ * Fill in every purchase order line for this product that is still blank, using
+ * the cost of the layer its own receipt created.
  *
- * `lotIds` is what the caller actually re-based — not "every layer of this
- * product". A product can hold layers from several orders at several prices, and
- * only the ones that were carrying nothing are this operation's business.
+ * ## Why this is driven by the PRODUCT and not by "the layers I just changed"
+ *
+ * The first cut took a list of lot ids — the layers the caller had that moment
+ * re-based from zero — and priced the lines behind them. It passed its tests and
+ * DID NOT WORK ON THE OWNER'S DATA, which is the only test that counts:
+ *
+ *     after the old behaviour  : PO line $0 | layer $900 | PO total $0
+ *     after re-typing the price: PO line $0 | layer $900 | PO total $0
+ *
+ * Everything he had already priced from the Inventory screen was in exactly that
+ * state — layer costed, purchase order blank — and re-typing the price moved
+ * NOTHING, because there was no longer a zero-cost layer to re-base, so the list
+ * of lot ids came back empty and the push had nothing to push. The repair I told
+ * him to use was a dead end for the very rows that needed it.
+ *
+ * The question is not "what did I just change". It is "which purchase order
+ * lines are still blank, and what did the stock behind them actually cost". That
+ * is answerable at any time, from the data as it stands, which is why this now
+ * runs off the product and reaches rows priced long before the fix existed.
+ *
+ * THE PRICE COMES FROM THE LAYER, not from whatever the caller typed. A line
+ * gets the cost of the units IT received. Where a product's layers came in at
+ * different prices from different orders, handing every line the newest typed
+ * figure would quietly restate what the older ones cost.
+ *
+ * The refusal is unchanged and is the thing that keeps this safe: a line that
+ * already states a price is never touched. See the header.
  */
-export function pushCostToPurchaseOrders(
-  db: Database,
-  lotIds: readonly string[],
-  unitCost: number,
-  ts: string
-): CostPushBack {
+export function pushCostToPurchaseOrders(db: Database, productId: string, ts: string): CostPushBack {
   const empty: CostPushBack = { linesPriced: 0, ordersRestated: 0, salesRestated: 0, poNumbers: [] }
-  if (lotIds.length === 0 || !(unitCost > 0)) return empty
+  if (!productId) return empty
 
-  const receiptFor = db.prepare(
-    `SELECT r.po_line_id, r.po_id, po.po_number,
-            l.unit_price, COALESCE(l.price_pending, 0) AS price_pending
-       FROM po_line_receipts r
-       JOIN purchase_order_lines l ON l.id = r.po_line_id
-       JOIN purchase_orders po ON po.id = r.po_id
-      WHERE r.lot_id = ?`
-  )
+  const rows = db
+    .prepare(
+      `SELECT r.po_line_id, r.po_id, po.po_number, r.lot_id, lot.unit_cost AS lot_cost
+         FROM po_line_receipts r
+         JOIN purchase_order_lines l ON l.id = r.po_line_id
+         JOIN purchase_orders po ON po.id = r.po_id
+         JOIN inventory_lots lot ON lot.id = r.lot_id
+        WHERE l.product_id = ?
+          AND lot.unit_cost > 0
+          -- The refusal, in the query: a line that already states a price is not
+          -- this operation's business. See the header.
+          AND (COALESCE(l.price_pending, 0) = 1 OR COALESCE(l.unit_price, 0) <= 0)
+        ORDER BY r.created_at ASC`
+    )
+    .all(productId) as BlankLineRow[]
+  if (rows.length === 0) return empty
+
   const priceLine = db.prepare(
     `UPDATE purchase_order_lines SET unit_price = ?, price_pending = 0 WHERE id = ?`
   )
-
   const orders = new Map<string, string>()
   const linesDone = new Set<string>()
   let salesRestated = 0
 
-  for (const lotId of lotIds) {
-    const rows = receiptFor.all(lotId) as ReceiptRow[]
-    for (const r of rows) {
-      // See the header: a line with a real price on it is a stated fact and this
-      // screen does not get to restate it. Only a line that never had one.
-      const neverPriced = Number(r.price_pending) === 1 || !(Number(r.unit_price) > 0)
-      if (!neverPriced) continue
-      if (!linesDone.has(r.po_line_id)) {
-        priceLine.run(unitCost, r.po_line_id)
-        linesDone.add(r.po_line_id)
-      }
-      orders.set(r.po_id, (r.po_number ?? '').trim())
-      // WHAT HAS ALREADY LEFT THIS LAYER. Re-costing the lot fixes the stock
-      // still on the shelf and leaves every sale drawn from it costed at the
-      // zero. The same three things move together here as in setLinePrice.
-      salesRestated += restateConsumedCost(db, lotId, unitCost)
+  for (const r of rows) {
+    const cost = Number(r.lot_cost)
+    if (!(cost > 0)) continue
+    if (!linesDone.has(r.po_line_id)) {
+      priceLine.run(cost, r.po_line_id)
+      linesDone.add(r.po_line_id)
     }
+    orders.set(r.po_id, (r.po_number ?? '').trim())
+    // WHAT HAS ALREADY LEFT THIS LAYER. Re-costing the lot fixes the stock still
+    // on the shelf and leaves every sale drawn from it costed at the old zero.
+    salesRestated += restateConsumedCost(db, r.lot_id, cost)
   }
 
   for (const poId of orders.keys()) restateOrderTotal(db, poId, ts)

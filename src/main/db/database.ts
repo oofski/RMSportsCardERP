@@ -4727,6 +4727,32 @@ function migrate(database: Database.Database): void {
   // work anyone did on this one.
   runOnce(database, 'product_avg_cost_unit_dp_v1', () => resyncProductAvgCosts(database))
 
+  // A ONE-TIME REPAIR, not a schema change — no version is bumped, because no
+  // column moves. PRICE THE PURCHASE ORDER LINES LEFT BLANK BEHIND COSTED STOCK.
+  //
+  // The owner, looking at PO-0457 and PO-0458 after two rounds of fixes: "it does
+  // not work still I am seeing purchase orders with $0.00 even though we edited
+  // the prices ... inventory is accurate to it."
+  //
+  // He was right both times. Until today, pricing stock from the Inventory screen
+  // wrote the cost layer and stopped, leaving the purchase order at $0.00. That
+  // path is now wired — but wiring it did NOTHING for the orders already in that
+  // state, and the repair offered was to type the price again, which also did
+  // nothing: the layer was no longer at zero, so there was nothing to re-base and
+  // nothing to push. Every one of those orders was stuck at $0.00 with no way
+  // back through the app at all.
+  //
+  // So the rows are repaired here, once. This INVENTS NOTHING: the price written
+  // is the unit cost of the cost layer that this line's OWN RECEIPT created, read
+  // through po_line_receipts. The link was always there; only the write back to
+  // the document was missing. And it fills blanks only — a line already stating a
+  // price is untouched, the same refusal pushCostToPurchaseOrders enforces every
+  // other day.
+  //
+  // Placed after the average-cost re-derivation for the same reason that one is
+  // placed late: it can only be as right as the layers it reads.
+  runOnce(database, 'po_line_price_from_layer_v1', () => backfillBlankPoLinePrices(database))
+
   // v29: install the sync capture triggers LAST, after every seed, backfill and
   // one-time fixup above.
   //
@@ -4861,6 +4887,71 @@ function reFingerprintLedger(database: Database.Database): void {
 }
 
 /** Run `fn` once, ever, tracked by a meta flag. */
+/**
+ * Give every blank purchase order line the cost of the layer its own receipt
+ * created, and restate the orders that changed.
+ *
+ * WRITTEN AS SQL HERE RATHER THAN CALLING pushCostToPurchaseOrders, because this
+ * runs during migration — before the module graph is safe to lean on and before
+ * anything else has opened the database — and a migration that imports half the
+ * app is a migration that fails on the one machine with an odd load order. The
+ * RULE is the same one that module enforces and the comment there is the place
+ * it is explained; this is the one-time application of it.
+ *
+ * Totals are recomputed from the lines plus freight, matching restateOrderTotal,
+ * and the COGS row keyed on the order moves with it — otherwise Finance goes on
+ * reporting a purchase that cost nothing.
+ */
+function backfillBlankPoLinePrices(database: Database.Database): void {
+  const rows = database
+    .prepare(
+      `SELECT r.po_line_id AS line_id, r.po_id AS po_id, lot.unit_cost AS cost
+         FROM po_line_receipts r
+         JOIN purchase_order_lines l ON l.id = r.po_line_id
+         JOIN inventory_lots lot ON lot.id = r.lot_id
+        WHERE lot.unit_cost > 0
+          AND (COALESCE(l.price_pending, 0) = 1 OR COALESCE(l.unit_price, 0) <= 0)
+        ORDER BY r.created_at ASC`
+    )
+    .all() as Array<{ line_id: string; po_id: string; cost: number }>
+  if (rows.length === 0) return
+
+  const priceLine = database.prepare(
+    `UPDATE purchase_order_lines SET unit_price = ?, price_pending = 0 WHERE id = ?`
+  )
+  const done = new Set<string>()
+  const orders = new Set<string>()
+  for (const r of rows) {
+    if (done.has(r.line_id)) continue
+    priceLine.run(r.cost, r.line_id)
+    done.add(r.line_id)
+    orders.add(r.po_id)
+  }
+
+  const linesOf = database.prepare(
+    'SELECT quantity, unit_price FROM purchase_order_lines WHERE po_id = ?'
+  )
+  const freightOf = database.prepare('SELECT shipping_cost FROM purchase_orders WHERE id = ?')
+  const setTotal = database.prepare('UPDATE purchase_orders SET total = ? WHERE id = ?')
+  const setCogs = database.prepare('UPDATE finance_cogs SET amount = ? WHERE po_id = ?')
+  const c2 = (n: number): number => Math.round(n * 100) / 100
+  for (const poId of orders) {
+    const all = linesOf.all(poId) as Array<{ quantity: number; unit_price: number }>
+    const freight = Math.max(
+      0,
+      Number((freightOf.get(poId) as { shipping_cost: number | null } | undefined)?.shipping_cost) || 0
+    )
+    const total = c2(
+      all.reduce((sum, l) => sum + c2(Math.round(l.quantity) * Math.max(0, l.unit_price)), 0) + c2(freight)
+    )
+    setTotal.run(total, poId)
+    setCogs.run(total, poId)
+  }
+  console.log(
+    `[migration] priced ${done.size} purchase order line(s) from their cost layers across ${orders.size} order(s)`
+  )
+}
+
 function runOnce(database: Database.Database, key: string, fn: () => void): void {
   if (getMeta(database, key) === '1') return
   fn()

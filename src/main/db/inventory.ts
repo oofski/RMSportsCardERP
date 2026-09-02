@@ -649,8 +649,8 @@ export function updateProduct(input: UpdateInventoryProduct): InventoryProduct |
     // purchase order behind the stock needs it either way.
     const db = getDb()
     const cost = unitMoney(next.unit_cost)
-    const rebased = rebaseZeroCostLayers(db, input.id, cost)
-    pushCostToPurchaseOrders(db, rebased.lotIds, cost, nowIso())
+    rebaseZeroCostLayers(db, input.id, cost)
+    pushCostToPurchaseOrders(db, input.id, nowIso())
   }
   return getProduct(input.id)
 }
@@ -758,7 +758,7 @@ export function setZeroCostBasis(productId: string, unitCost: number): CostBasis
      * state this whole fix exists to end. See pushCostToPurchaseOrders for the
      * one thing it refuses to touch.
      */
-    const pushed = pushCostToPurchaseOrders(db, rebased.lotIds, cost, ts)
+    const pushed = pushCostToPurchaseOrders(db, productId, ts)
     return { changed: rebased.changed, pushed }
   })
   const result = run()

@@ -268,5 +268,102 @@ console.log('\n=== 4. THE CATALOG PRICE REACHES THE PO TOO — either door ===')
   ok(priced.n > 0, 'AND THE $900 LAYERS ARE STILL AT $900 — a catalog edit reprices nothing', String(priced.n))
 }
 
+// ---------------------------------------------------------------------------
+console.log('\n=== 5. RE-TYPING THE PRICE FIXES AN ORDER ALREADY LEFT AT $0.00 ===')
+// ---------------------------------------------------------------------------
+// The state the owner's data was actually in, and the one both earlier fixes
+// missed: the layer was costed by the OLD code and the purchase order was left
+// blank. Re-typing the price used to move nothing — there was no zero-cost layer
+// left to re-base, so the push had nothing to push, and PO-0457/PO-0458 were
+// stuck at $0.00 with no way back through the app at all.
+{
+  db.prepare(
+    `INSERT INTO inventory_products (id, sku, name, category, unit_cost, created_at, updated_at)
+     VALUES ('p_stuck', 'SKU-ST', 'Invented Stuck Case', 'Basketball', 0,
+             '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`
+  ).run()
+  const madeStuck = po.createPurchaseOrder(
+    {
+      supplier: 'California Roadshow',
+      location: 'RM',
+      lines: [{ productId: 'p_stuck', quantity: 2, unitPrice: 0, pricePending: true }]
+    },
+    null
+  )
+  const stuckPo = madeStuck?.id ?? madeStuck?.po?.id ?? madeStuck?.data?.id
+  po.scanInPurchaseOrder(stuckPo, null)
+
+  // EXACTLY what the old code left behind: layer costed, document blank.
+  db.prepare(`UPDATE inventory_lots SET unit_cost = 640 WHERE product_id = 'p_stuck'`).run()
+  db.prepare(`UPDATE inventory_products SET unit_cost = 640 WHERE id = 'p_stuck'`).run()
+  ok(Number(lineOf(stuckPo).unit_price) === 0, 'the order is stuck at $0.00 with the stock costed', String(lineOf(stuckPo).unit_price))
+
+  const repaired = invDb.setZeroCostBasis('p_stuck', 640)
+  ok(
+    Number(lineOf(stuckPo).unit_price) === 640,
+    'AND RE-TYPING THE PRICE NOW REPAIRS IT — the case both earlier fixes missed',
+    String(lineOf(stuckPo).unit_price)
+  )
+  ok(totalOf(stuckPo) === 1280, 'the total is the two units at $640', String(totalOf(stuckPo)))
+  ok(
+    repaired.ordersPriced.linesPriced === 1,
+    'and it reports the line it priced',
+    JSON.stringify(repaired.ordersPriced)
+  )
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 6. THE PRICE COMES FROM THE LAYER, NOT FROM WHAT WAS TYPED ===')
+// ---------------------------------------------------------------------------
+// A product bought at different prices on different orders. Handing every blank
+// line the newest typed figure would quietly restate what the older one cost, so
+// each line takes the cost of the units IT received.
+{
+  db.prepare(
+    `INSERT INTO inventory_products (id, sku, name, category, unit_cost, created_at, updated_at)
+     VALUES ('p_two', 'SKU-2', 'Invented Two Prices Case', 'Baseball', 0,
+             '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`
+  ).run()
+  const mk = (): string => {
+    const m = po.createPurchaseOrder(
+      {
+        supplier: 'Invented Supply Co',
+        location: 'RM',
+        lines: [{ productId: 'p_two', quantity: 1, unitPrice: 0, pricePending: true }]
+      },
+      null
+    )
+    const pid = m?.id ?? m?.po?.id ?? m?.data?.id
+    po.scanInPurchaseOrder(pid, null)
+    return pid
+  }
+  const poA = mk()
+  const poB = mk()
+  // Two layers at two different costs, one per order — as two real deliveries
+  // bought at different prices would be.
+  const lots = db
+    .prepare(
+      `SELECT r.po_id, r.lot_id FROM po_line_receipts r
+         JOIN purchase_order_lines l ON l.id = r.po_line_id
+        WHERE l.product_id = 'p_two'`
+    )
+    .all() as Array<{ po_id: string; lot_id: string }>
+  for (const l of lots) {
+    db.prepare(`UPDATE inventory_lots SET unit_cost = ? WHERE id = ?`).run(l.po_id === poA ? 300 : 700, l.lot_id)
+  }
+
+  invDb.setZeroCostBasis('p_two', 999)
+  ok(
+    Number(lineOf(poA).unit_price) === 300,
+    'the first order takes ITS layer’s $300, not the $999 typed',
+    String(lineOf(poA).unit_price)
+  )
+  ok(
+    Number(lineOf(poB).unit_price) === 700,
+    'and the second takes its own $700',
+    String(lineOf(poB).unit_price)
+  )
+}
+
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)
