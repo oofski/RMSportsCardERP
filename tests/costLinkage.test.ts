@@ -205,5 +205,68 @@ ok(
   JSON.stringify(collided.ordersPriced)
 )
 
+// ---------------------------------------------------------------------------
+console.log('\n=== 4. THE CATALOG PRICE REACHES THE PO TOO — either door ===')
+// ---------------------------------------------------------------------------
+// The owner: "if I adjusted the price in inventory that price should be
+// automatically fed into the POs ... it can be either or."
+//
+// AND THE CASE THAT USED TO BE SKIPPED: a product holding BOTH priced and
+// unpriced stock. The catalog path used to require the product to have no cost
+// anywhere before it would touch the layers, so five cases already costed from
+// an old order meant the one roadshow case at zero was silently ignored — the
+// one case that needed it. That gate is gone; the layer and line guards are what
+// keep it safe.
+{
+  db.prepare(
+    `INSERT INTO inventory_products (id, sku, name, category, unit_cost, created_at, updated_at)
+     VALUES ('p_mix', 'SKU-M', 'Invented Mixed Basis Case', 'Basketball', 0,
+             '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`
+  ).run()
+
+  // Stock already carrying a real cost — this is what used to block everything.
+  invDb.addStock('p_mix', 'RM', 5, 900, null)
+  const basis = db
+    .prepare(
+      `SELECT COALESCE(SUM(qty_remaining * unit_cost), 0) AS v
+         FROM inventory_lots WHERE product_id = 'p_mix'`
+    )
+    .get() as { v: number }
+  ok(basis.v > 0, 'the product already has a real cost basis — what used to block everything', String(basis.v))
+
+  // And a roadshow case in at no price, on its own purchase order.
+  const madeMix = po.createPurchaseOrder(
+    {
+      supplier: 'New York Roadshow',
+      location: 'RM',
+      lines: [{ productId: 'p_mix', quantity: 1, unitPrice: 0, pricePending: true }]
+    },
+    null
+  )
+  const mixPo = madeMix?.id ?? madeMix?.po?.id ?? madeMix?.data?.id
+  po.scanInPurchaseOrder(mixPo, null)
+  ok(Number(lineOf(mixPo).unit_price) === 0, 'the roadshow line is at $0.00', String(lineOf(mixPo).unit_price))
+
+  // Type the price into the CATALOG, not the banner.
+  invDb.updateProduct({ id: 'p_mix', unitCost: 750 })
+
+  ok(
+    Number(lineOf(mixPo).unit_price) === 750,
+    'AND THE CATALOG PRICE REACHED THE PURCHASE ORDER — the case the old gate skipped',
+    String(lineOf(mixPo).unit_price)
+  )
+  ok(totalOf(mixPo) === 750, 'and its total followed', String(totalOf(mixPo)))
+
+  // AND THE $900 STOCK IS UNTOUCHED. Only layers carrying nothing are re-based,
+  // so a catalog edit still cannot reprice a purchase that already has one.
+  const priced = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM inventory_lots
+        WHERE product_id = 'p_mix' AND ROUND(unit_cost, 2) = 900`
+    )
+    .get() as { n: number }
+  ok(priced.n > 0, 'AND THE $900 LAYERS ARE STILL AT $900 — a catalog edit reprices nothing', String(priced.n))
+}
+
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

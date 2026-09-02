@@ -623,11 +623,26 @@ export function updateProduct(input: UpdateInventoryProduct): InventoryProduct |
   // The catalog is where somebody goes to put a price on a product, so it is
   // where doing so has to land.
   //
-  // It can only ever ADD basis, never reprice a purchase. It runs solely when
-  // the product's cost value is nil, and even then touches only layers carrying
-  // nothing — the same two guards `setZeroCostBasis` gives the banner's field,
-  // which remains the version that REPORTS what it did.
-  if (input.unitCost != null && next.unit_cost > 0 && productCostValue(getDb(), input.id) <= 0) {
+  // IT CAN ONLY EVER ADD BASIS, NEVER REPRICE A PURCHASE — and that guarantee
+  // comes from the LAYER and LINE guards below, not from a product-level one.
+  //
+  // This used to also require `productCostValue(...) <= 0`: the product had to
+  // have no cost ANYWHERE before a catalog price would reach the stock. The
+  // owner found what that costs — "if I adjusted the price in inventory that
+  // price should be automatically fed into the POs ... it can be either or".
+  // Hold five cases of a product at $900 from an old order and take one more in
+  // at a roadshow with no price, and the product's cost value is well above
+  // zero, so typing the price in the catalog moved NOTHING: not the roadshow
+  // layer, not its purchase order. The one case that needed it was the one case
+  // it skipped.
+  //
+  // The gate is gone because it was never the thing keeping this safe.
+  // `rebaseZeroCostLayers` touches only layers carrying NOTHING, and
+  // `pushCostToPurchaseOrders` refuses any line that already states a price. A
+  // product holding both priced and unpriced stock is the ordinary case, not the
+  // dangerous one, and those two guards handle it exactly right: the blanks get
+  // filled and everything already stated is left alone.
+  if (input.unitCost != null && next.unit_cost > 0) {
     // The SAME linkage the banner does. Wiring one door and not the other is
     // exactly the shape of the bug being fixed here — a price entered on the
     // product form is the same claim as one entered on the banner, and the
