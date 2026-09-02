@@ -29431,3 +29431,18 @@ button.sor-team:focus-visible {
   text-transform: none;
   letter-spacing: 0;
 }
+
+/* The relay diagnosis: three timed hops and one sentence saying which failed.
+   See @shared/relayDiagnosis. */
+.qbo-diagnosis {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2, #fafafa);
+}
+.qbo-diagnosis table { width: 100%; }
+.qbo-diagnosis td { vertical-align: top; padding: 5px 8px; }
+.qbo-diagnosis tr.is-bad td { color: var(--danger, #b42318); font-weight: 600; }
+.qbo-diagnosis-why { font-weight: 400; font-size: 12px; opacity: 0.85; margin-top: 3px; }
+.qbo-diagnosis-verdict { margin: 10px 2px 0; font-size: 13px; line-height: 1.5; }

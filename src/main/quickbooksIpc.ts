@@ -53,6 +53,7 @@ import {
 } from '@shared/quickbooksRelay'
 import { activeRealmId, fetchCompanyInfo, qboHolder } from './quickbooks/client'
 import {
+  diagnoseRelay,
   probeRelayQbo,
   relayAdoptQboTokens,
   relayConfigured,
@@ -68,6 +69,7 @@ import { getAccountMap, setAccountMap, suggestMap, validateMap } from './quickbo
 import { forgetInvoiceRefs } from './quickbooks/invoiceRefs'
 import { listSyncRows } from './db/qboSync'
 import { currentUser } from './services/auth'
+import type { RelayDiagnosis } from '@shared/relayDiagnosis'
 import { getDb, getMeta, setMeta } from './db/database'
 
 const COMPANY_KEY = 'qbo_company_name'
@@ -661,6 +663,20 @@ export function registerQuickBooksIpc(): void {
    * moment somebody suspects the connection is wrong, and answering it out of a
    * two-minute-old memo would be answering a different question.
    */
+  /**
+   * Which hop is broken. Always ok:true — a failing hop is the ANSWER here, not
+   * an error, and returning ok:false would hide the finding behind a red box
+   * with none of the timings in it.
+   */
+  ipcMain.handle(IPC.qboDiagnoseRelay, async (): Promise<Result<RelayDiagnosis>> => {
+    try {
+      requireAdmin()
+      return { ok: true, data: await diagnoseRelay() }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
   ipcMain.handle(IPC.qboTest, async (): Promise<Result<{ companyName: string; realmId: string }>> => {
     try {
       requireAdmin()

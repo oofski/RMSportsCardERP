@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import type { HopResult, RelayDiagnosis } from '@shared/relayDiagnosis'
 import type { QboStatus } from '@shared/quickbooks'
 import {
   QBO_DEFAULT_REDIRECT_URI,
@@ -52,6 +53,8 @@ const INTUIT_APPS_URL = 'https://developer.intuit.com/app/developer/myapps'
 export function QuickBooksTab(): JSX.Element {
   const toast = useToast()
   const [status, setStatus] = useState<QboStatus | null>(null)
+  /** The last hop-by-hop diagnosis, once somebody has asked for one. */
+  const [diagnosis, setDiagnosis] = useState<RelayDiagnosis | null>(null)
   const [loading, setLoading] = useState(true)
   const [clientId, setClientId] = useState('')
   const [clientSecret, setClientSecret] = useState('')
@@ -59,7 +62,16 @@ export function QuickBooksTab(): JSX.Element {
   /** The whole address the browser landed on. Parsed here, not by the operator. */
   const [landed, setLanded] = useState('')
   const [busy, setBusy] = useState<
-    'save' | 'connect' | 'test' | 'disconnect' | 'forget' | 'paste' | 'code' | 'promote' | null
+    | 'save'
+    | 'connect'
+    | 'test'
+    | 'diagnose'
+    | 'disconnect'
+    | 'forget'
+    | 'paste'
+    | 'code'
+    | 'promote'
+    | null
   >(null)
   const [advanced, setAdvanced] = useState(false)
   const [redirectUri, setRedirectUri] = useState('')
@@ -259,6 +271,34 @@ export function QuickBooksTab(): JSX.Element {
           >
             Test
           </Button>
+          {/* WHICH HOP, when Test just fails.
+              Test answers "does the whole thing work". This answers "which part
+              of it does not" — a different and much harder question when every
+              failure along a three-hop chain arrives as the single word
+              "aborted". Each step is timed separately and given its own short
+              deadline, so the diagnosis cannot hang the way the fault does.
+              See @shared/relayDiagnosis. */}
+          <Button
+            icon="Stethoscope"
+            loading={busy === 'diagnose'}
+            disabled={busy !== null}
+            title="Time each step of the relay separately and say which one is failing"
+            onClick={async () => {
+              setBusy('diagnose')
+              try {
+                const res = await api.quickbooks.diagnoseRelay()
+                if (!res.ok) {
+                  toast.error(res.error || 'The diagnosis could not run.')
+                  return
+                }
+                setDiagnosis(res.data ?? null)
+              } finally {
+                setBusy(null)
+              }
+            }}
+          >
+            Where is it failing?
+          </Button>
           <Button
             icon="Ban"
             loading={busy === 'disconnect'}
@@ -289,6 +329,33 @@ export function QuickBooksTab(): JSX.Element {
           <div className="qbo-error">
             <Icon name="AlertTriangle" size={15} />
             <span>{status.lastError}</span>
+          </div>
+        )}
+
+        {/* THE TIMINGS ARE THE FINDING, not decoration. Two steps that both say
+            "ok" are not the same when one took 40ms and the other took 25
+            seconds, and the second one is what gets given up on under load. So
+            every step shows its own time whether it passed or failed. */}
+        {diagnosis && (
+          <div className="qbo-diagnosis">
+            <table className="data">
+              <tbody>
+                {diagnosis.hops.map((h: HopResult) => (
+                  <tr key={h.key} className={h.ok ? 'is-ok' : 'is-bad'}>
+                    <td>
+                      <Icon name={h.ok ? 'Check' : 'AlertTriangle'} size={13} />
+                      {h.label}
+                    </td>
+                    <td className="num mono">{(h.ms / 1000).toFixed(1)}s</td>
+                    <td>
+                      {h.ok ? 'answered' : h.timedOut ? 'never answered' : 'failed'}
+                      {h.error && <div className="qbo-diagnosis-why">{h.error}</div>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="qbo-diagnosis-verdict">{diagnosis.verdict}</p>
           </div>
         )}
 

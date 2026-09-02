@@ -28,6 +28,13 @@ import {
   RELAY_UPLOAD_UNSUPPORTED,
   type QboCallEnvelope
 } from '@shared/quickbooksRelay'
+import {
+  describeRelayDiagnosis,
+  firstFailedHop,
+  type HopKey,
+  type HopResult,
+  type RelayDiagnosis
+} from '@shared/relayDiagnosis'
 import { call, getSyncConfig } from '../services/cloudSync'
 import { getQboRelayMemo, setQboRelayMemo, type QboRelayMemo } from './store'
 
@@ -353,5 +360,97 @@ export async function relayQboAuthorizeUrl(
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     throw new Error(explainQboRelayProblem(message))
+  }
+}
+
+/**
+ * TIME EACH HOP SEPARATELY, so a failure names the step that failed.
+ *
+ * Every call here gets its own short deadline — a diagnostic that hangs the way
+ * the bug hangs tells nobody anything. Twelve seconds is well past a healthy
+ * round trip (they run in tens of milliseconds) and well short of the ninety a
+ * real QuickBooks call is allowed, so a step that trips this is genuinely stuck
+ * rather than merely busy.
+ *
+ * The steps run in order and DO NOT stop at the first failure: knowing that the
+ * relay answered and Intuit did not is the whole point, and stopping early
+ * would throw away the half of the picture that identifies the culprit.
+ */
+const HOP_TIMEOUT_MS = 12 * 1000
+
+async function timeHop(
+  key: HopKey,
+  label: string,
+  run: () => Promise<unknown>
+): Promise<HopResult> {
+  const started = Date.now()
+  try {
+    await run()
+    return { key, label, ok: true, ms: Date.now() - started, timedOut: false, error: null }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    const ms = Date.now() - started
+    return {
+      key,
+      label,
+      ok: false,
+      ms,
+      // An abort is this deadline, not a refusal — the same distinction
+      // explainQboRelayProblem draws, and the reason it is drawn here too.
+      timedOut: /operation was aborted|aborterror|timed out/i.test(message),
+      error: describeRelayFailure(message)
+    }
+  }
+}
+
+export async function diagnoseRelay(): Promise<RelayDiagnosis> {
+  if (!relayConfigured()) {
+    const hops: HopResult[] = [
+      { key: 'relay', label: 'the relay', ok: false, ms: 0, timedOut: false, error: NO_RELAY }
+    ]
+    return {
+      hops,
+      firstFailure: 'relay',
+      relayLastError: null,
+      verdict: describeRelayDiagnosis(hops, null)
+    }
+  }
+
+  const hops: HopResult[] = []
+  // 1. The Worker and the shared key. No QuickBooks anywhere in this.
+  hops.push(
+    await timeHop('relay', 'the relay', () =>
+      call('/v1/state', { method: 'GET', timeoutMs: HOP_TIMEOUT_MS })
+    )
+  )
+  // 2. Its QuickBooks routes, tables and secrets. Still nothing leaves Cloudflare.
+  hops.push(
+    await timeHop('quickbooks-tables', "the relay's QuickBooks side", () =>
+      call('/v1/qbo/status', { method: 'GET', timeoutMs: HOP_TIMEOUT_MS })
+    )
+  )
+  // 3. The only step that leaves Cloudflare, and the same path an invoice takes.
+  hops.push(
+    await timeHop('intuit', 'the call out to Intuit', () =>
+      call('/v1/qbo/company', { method: 'GET', timeoutMs: HOP_TIMEOUT_MS })
+    )
+  )
+
+  // What the RELAY itself last recorded, which is a different witness from what
+  // this machine saw: a call that failed inside the Worker leaves a note there
+  // even when nothing useful came back down the wire.
+  let relayLastError: string | null = null
+  try {
+    const probe = await probeRelayQbo()
+    relayLastError = probe.lastError ?? null
+  } catch {
+    // The probe is a courtesy here. Its failure is already covered by hop 2.
+  }
+
+  return {
+    hops,
+    firstFailure: firstFailedHop(hops),
+    relayLastError,
+    verdict: describeRelayDiagnosis(hops, relayLastError)
   }
 }

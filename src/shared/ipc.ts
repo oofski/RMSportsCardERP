@@ -659,6 +659,14 @@ export const IPC = {
   qboForget: 'qbo:forget',
   qboTest: 'qbo:test',
   /**
+   * Time each hop of the relay chain separately and name the one that failed.
+   *
+   * `qboTest` answers "does the whole thing work". This answers "which part of
+   * it does not", which is a different and much harder question when every
+   * failure arrives as the single word "aborted". See @shared/relayDiagnosis.
+   */
+  qboDiagnoseRelay: 'qbo:relay:diagnose',
+  /**
    * Move the connection this machine already holds onto the cloud relay. Run
    * ONCE, by the owner, on the one laptop that is connected today — after which
    * no machine holds QuickBooks credentials at all. See the handler for why the

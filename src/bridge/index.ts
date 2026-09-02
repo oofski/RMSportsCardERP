@@ -19,6 +19,7 @@
  * channel names. That is the property that lets it be bundled into a browser.
  */
 import { IPC, type AppInfo } from '@shared/ipc'
+import type { RelayDiagnosis } from '@shared/relayDiagnosis'
 import type { Permission } from '@shared/permissions'
 import type { OrderResetInput, OrderResetPreview, OrderResetResult } from '@shared/orderReset'
 import type { RestoreCheck, RestoreStatus } from '@shared/restore'
@@ -651,6 +652,9 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       > => ipcRenderer.invoke(IPC.qboPromote),
       test: (): Promise<Result<{ companyName: string; realmId: string }>> =>
         ipcRenderer.invoke(IPC.qboTest),
+      /** Time each hop and name the one that failed. See @shared/relayDiagnosis. */
+      diagnoseRelay: (): Promise<Result<RelayDiagnosis>> =>
+        ipcRenderer.invoke(IPC.qboDiagnoseRelay),
       authorizeUrl: (): Promise<Result<{ url: string; redirectUri: string }>> =>
         ipcRenderer.invoke(IPC.qboAuthorizeUrl),
       pasteTokens: (
