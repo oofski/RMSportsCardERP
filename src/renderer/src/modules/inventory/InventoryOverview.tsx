@@ -1152,8 +1152,19 @@ function PurchaseOrderBox({
                     <CategoryLogo category={l.category} size={16} />
                   )}
                 </span>
-                <span className="po-ship-name" title={l.productName}>
-                  {l.productName}
+                {/* The SKU under the name, for the same reason it is under the
+                    name on the counting form and on the receipt: these names
+                    agree for their first forty characters and this column cuts
+                    them off, so "2026 Topps Chrome Baseball Jumbo Hobby 8-Box…"
+                    and "2026 Topps Chrome Baseball Delight 6-Box Case" arrive on
+                    screen as the same words. The SKU is what is printed on the
+                    carton, and it is the only field here that tells two boxes
+                    apart at a glance. The full name stays on the title. */}
+                <span className="po-ship-id">
+                  <span className="po-ship-name" title={l.productName}>
+                    {l.productName}
+                  </span>
+                  {l.sku && <span className="po-ship-sku mono">{l.sku}</span>}
                 </span>
                 {/* A wholly drop-shipped line stays on the list — the box has to
                     account for every line on the order or its counts look like a

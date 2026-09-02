@@ -6177,12 +6177,28 @@ tr.hoverable-row:hover {
   object-fit: cover;
   display: block;
 }
+/* Name over SKU in the middle grid column. `min-width: 0` is load-bearing: a
+   grid child defaults to min-content width, which would stop the name
+   ellipsising and push the count off the end of the row. */
+.po-ship-id {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
 .po-ship-name {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text);
+}
+/* Quieter than the name and never truncated — half a SKU identifies nothing,
+   and it is short enough that it never needs to be. */
+.po-ship-sku {
+  font-size: 11px;
+  color: var(--text-3);
+  white-space: nowrap;
 }
 .po-ship-qty {
   font-weight: 700;
