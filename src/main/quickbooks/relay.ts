@@ -366,17 +366,24 @@ export async function relayQboAuthorizeUrl(
 /**
  * TIME EACH HOP SEPARATELY, so a failure names the step that failed.
  *
- * Every call here gets its own short deadline — a diagnostic that hangs the way
- * the bug hangs tells nobody anything. Twelve seconds is well past a healthy
- * round trip (they run in tens of milliseconds) and well short of the ninety a
- * real QuickBooks call is allowed, so a step that trips this is genuinely stuck
- * rather than merely busy.
+ * Every call here gets its own deadline — a diagnostic that hangs the way the
+ * bug hangs tells nobody anything.
+ *
+ * IT MUST BE LONGER THAN THE RELAY'S OWN, and the first cut was not. The Worker
+ * gives Intuit twenty seconds and then returns a sentence naming the stage it
+ * died at; this waited twelve and hung up first, so the one message worth having
+ * could never arrive. A diagnostic that talks over its own witness is worse than
+ * none — it looks like evidence and is only the sound of this end giving up.
+ *
+ * Thirty-five seconds: comfortably past the relay's twenty so the Worker's
+ * account of what happened wins the race, comfortably short of a healthy call
+ * (tens of milliseconds) meaning anything that trips this is genuinely stuck.
  *
  * The steps run in order and DO NOT stop at the first failure: knowing that the
  * relay answered and Intuit did not is the whole point, and stopping early
  * would throw away the half of the picture that identifies the culprit.
  */
-const HOP_TIMEOUT_MS = 12 * 1000
+const HOP_TIMEOUT_MS = 35 * 1000
 
 async function timeHop(
   key: HopKey,

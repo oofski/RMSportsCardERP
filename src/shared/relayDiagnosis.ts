@@ -25,13 +25,22 @@
  *
  *   3. INTUIT     GET /v1/qbo/company. The same path a real invoice takes, and
  *                 the ONLY step that leaves Cloudflare. A relay that passes 2
- *                 and fails 3 is not a relay problem in any sense the owner can
- *                 fix by re-pasting: it is the Worker's own call to Intuit
- *                 hanging or being refused, and the Worker makes that call with
- *                 no timeout of its own.
+ *                 and fails 3 is the Worker's own call to Intuit hanging or
+ *                 being refused.
  *
- * Each step gets its own short deadline so the diagnosis cannot itself hang —
- * a diagnostic that reproduces the bug it is diagnosing is no use to anybody.
+ * Each step gets its own deadline so the diagnosis cannot itself hang — a
+ * diagnostic that reproduces the bug it is diagnosing is no use to anybody.
+ *
+ * THAT DEADLINE MUST BE LONGER THAN THE RELAY'S OWN, and the first cut of this
+ * got it backwards. The Worker gives Intuit twenty seconds and then returns a
+ * sentence naming the stage it died at; this waited twelve and hung up first, so
+ * the one message worth having could never arrive and step 3 read as silence
+ * whatever the relay had to say. A diagnostic that talks over its own witness
+ * looks like evidence and is only the sound of this end giving up.
+ *
+ * Which turns the silence itself into a reading: a CURRENT relay always beats
+ * this app to the answer, so step 3 timing out with no stage named means the
+ * deployed Worker predates that change and is still waiting on Intuit for ever.
  *
  * The timings matter as much as the verdicts. A step that answers in 40ms and a
  * step that answers in 25 seconds are both "ok", and the second one is the
@@ -113,10 +122,13 @@ export function describeRelayDiagnosis(
       'the Worker is fine and holding a connection. THE STEP THAT FAILED IS THE WORKER CALLING ' +
       'INTUIT' +
       (intuit?.timedOut ? `, which did not come back within ${secs(intuit.ms)}` : '') +
-      '. That is not something re-pasting the Worker fixes and it is not this app timing out too ' +
-      'early — the Worker makes that call with no deadline of its own, so when Intuit does not ' +
-      'answer, nothing does. Check the Worker log in the Cloudflare dashboard for what it was ' +
-      'doing, and whether the QuickBooks connection needs re-authorising.' +
+      '. This app is NOT hanging up too early: it waits longer than the relay is meant to, so a ' +
+      'current relay would have come back first with the stage it died at — "while refreshing ' +
+      'the QuickBooks token" or "while calling QuickBooks". SILENCE INSTEAD OF ONE OF THOSE ' +
+      'MEANS THE DEPLOYED WORKER IS OLDER THAN THAT CHANGE and is still waiting on Intuit for ' +
+      'ever. Paste cloud/worker.js into the Cloudflare dashboard and run this again; if it then ' +
+      'names a stage, that stage is the answer. If it still says nothing, the Worker log in ' +
+      'Cloudflare is the only place left that knows.' +
       (intuit?.error ? ` The exact failure: ${intuit.error}` : '') +
       (relayLastError ? ` The relay's own last recorded error: ${relayLastError}` : '')
     )

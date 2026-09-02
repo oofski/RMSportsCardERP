@@ -80,8 +80,14 @@ console.log('\n=== 2. each verdict sends somebody to the right place ===')
     'and when only the last hop fails, THAT is named — the one case re-pasting cannot fix'
   )
   ok(
-    /no deadline of its own/.test(intuit),
-    'saying why nothing comes back at all: the Worker calls Intuit with no timeout'
+    /NOT hanging up too early/.test(intuit) && /waits longer than the relay/.test(intuit),
+    'AND IT SAYS THIS APP IS NOT THE ONE GIVING UP EARLY — the hop deadline is deliberately ' +
+      'longer than the relay\'s own, so a current relay always answers first'
+  )
+  ok(
+    /DEPLOYED WORKER IS OLDER THAN THAT CHANGE/.test(intuit),
+    'SO SILENCE IS ITSELF A READING: no stage named means the Worker predates the deadline and ' +
+      'is still waiting on Intuit for ever — which is a different problem from Intuit being slow'
   )
   ok(
     /Cloudflare/.test(intuit),
@@ -137,6 +143,47 @@ console.log("\n=== 4. the relay's own record is carried through ===")
     /AuthenticationFailed/.test(healthy),
     'AND IT IS SHOWN EVEN WHEN EVERY HOP PASSES — the chain being healthy now does not mean ' +
       'the last real failure is not still the answer'
+  )
+}
+
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 5. THE APP MUST OUT-WAIT THE RELAY, or it talks over the answer ===')
+// ---------------------------------------------------------------------------
+/**
+ * THE MISTAKE THIS PINS WAS MINE, and it made the diagnostic lie.
+ *
+ * The Worker gives Intuit twenty seconds and then returns a sentence naming the
+ * stage it died at. The first cut of the diagnostic waited twelve and hung up
+ * first — so the one message worth having could never arrive, and step 3 read
+ * as "never answered" no matter what the relay had to say.
+ *
+ * A diagnostic that talks over its own witness is worse than none: it looks
+ * like evidence and is only the sound of this end giving up. Both numbers live
+ * in files that are edited independently — one shipped by CI, one pasted into
+ * Cloudflare by hand — so nothing but this connects them.
+ */
+{
+  const read = (f: string): string => require('node:fs').readFileSync(f, 'utf8') as string
+  const num = (src: string, name: string): number | null => {
+    const m = new RegExp(`${name}\\s*=\\s*(\\d+)\\s*\\*\\s*(\\d+)`).exec(src)
+    return m ? Number(m[1]) * Number(m[2]) : null
+  }
+  const hop = num(read('src/main/quickbooks/relay.ts'), 'HOP_TIMEOUT_MS')
+  const upstream = num(read('cloud/worker.js'), 'QBO_UPSTREAM_TIMEOUT_MS')
+
+  ok(hop !== null && upstream !== null, 'both deadlines are found where they are declared', `${hop} / ${upstream}`)
+  ok(
+    (hop ?? 0) > (upstream ?? 0),
+    'THE APP WAITS LONGER THAN THE RELAY DOES — so a current relay always gets its answer in ' +
+      'first, and step 3 timing out silently means something real rather than this end being ' +
+      'impatient',
+    `app ${hop}ms vs relay ${upstream}ms`
+  )
+  ok(
+    (hop ?? 0) - (upstream ?? 0) >= 10_000,
+    'and by a wide enough margin that a slow reply still beats it, not by a second or two',
+    `${((hop ?? 0) - (upstream ?? 0)) / 1000}s of headroom`
   )
 }
 
