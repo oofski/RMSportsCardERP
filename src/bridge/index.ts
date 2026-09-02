@@ -20,6 +20,7 @@
  */
 import { IPC, type AppInfo } from '@shared/ipc'
 import type { RelayDiagnosis } from '@shared/relayDiagnosis'
+import type { StockAudit } from '@shared/stockAudit'
 import type { Permission } from '@shared/permissions'
 import type { OrderResetInput, OrderResetPreview, OrderResetResult } from '@shared/orderReset'
 import type { RestoreCheck, RestoreStatus } from '@shared/restore'
@@ -503,6 +504,8 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       removeImage: (imageId: string): Promise<Result<ProductImage[]>> =>
         ipcRenderer.invoke(IPC.invImageRemove, imageId),
       listIncoming: (): Promise<IncomingShipment[]> => ipcRenderer.invoke(IPC.invIncomingList),
+      /** What in the inventory does not tie out. Read-only. */
+      stockAudit: (): Promise<StockAudit> => ipcRenderer.invoke(IPC.invStockAudit),
       addIncoming: (input: NewIncomingShipment): Promise<Result<IncomingShipment>> =>
         ipcRenderer.invoke(IPC.invIncomingAdd, input),
       receiveIncoming: (id: string): Promise<Result> =>

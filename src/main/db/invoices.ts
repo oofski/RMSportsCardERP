@@ -1168,7 +1168,8 @@ export function getInvoice(id: string): InvoiceDetail | null {
  * splits are simply absent from the map, and `toLine` defaults them to `[]`,
  * which is the zero-rows case `effectiveSlices` reads as one implicit slice.
  */
-function readLineAllocations(
+/** Exported for the stock audit, which needs the same splits the engine sees. */
+export function readLineAllocations(
   db: Database.Database,
   invoiceId: string
 ): Map<string, InvoiceLineAllocation[]> {
@@ -3179,7 +3180,15 @@ function rederiveInvoiceStock(
   }
 }
 
-function stockDrawingLines(
+/**
+ * WHICH SLICES OF WHICH LINES SHOULD DRAW A SHELF.
+ *
+ * Exported for the stock audit, which must ask this question with EXACTLY this
+ * answer. A second copy of the rule in the audit would drift the first time a
+ * destination rule changed, and the failure would be an audit quietly declaring
+ * every dropship broken — which is how a report gets switched off.
+ */
+export function stockDrawingLines(
   lines: ReadonlyArray<{
     position: number
     productId?: string | null

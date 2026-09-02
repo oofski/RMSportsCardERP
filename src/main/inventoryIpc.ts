@@ -108,6 +108,8 @@ import {
   upcExists
 } from './db/inventory'
 import { addIncoming, cancelIncoming, listIncoming, receiveIncoming } from './db/incoming'
+import { auditStock } from './db/stockAudit'
+import type { StockAudit } from '@shared/stockAudit'
 import { commitScan, listScans, logScanMiss, resolveScan, undoScan } from './db/scanning'
 import type { ResetApplyInput, ResetPreview, ResetPreviewInput } from './db/inventoryReset'
 import {
@@ -266,6 +268,13 @@ export function registerInventoryIpc(): void {
   )
   ipcMain.handle(IPC.invIncomingList, (): IncomingShipment[] =>
     can('module.inventory') ? listIncoming() : []
+  )
+  // READS ONLY. The audit names what disagrees; the repairs are the buttons that
+  // already exist on the orders and the shelves. See @shared/stockAudit.
+  ipcMain.handle(IPC.invStockAudit, (): StockAudit =>
+    can('module.inventory')
+      ? auditStock()
+      : { findings: [], ordersChecked: 0, shelvesChecked: 0, checkedAt: new Date().toISOString() }
   )
   ipcMain.handle(IPC.invPricingList, (): PricingRow[] =>
     can('module.inventory') ? pricingList() : []

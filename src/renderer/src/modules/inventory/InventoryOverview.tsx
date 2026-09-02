@@ -53,6 +53,7 @@ import {
   receivableOutstanding
 } from '../invoicing/helpers'
 import { DeliveryPanel } from '../invoicing/DeliveryPanel'
+import { StockCheckPanel } from './StockCheckPanel'
 
 type MetricKind = 'value' | 'cost' | 'spread' | 'cases' | 'skus'
 type Detail =
@@ -380,6 +381,11 @@ export function InventoryOverview({
           loading={incomingLoading}
         />
       </div>
+
+      {/* Under Incoming, ABOVE the category breakdown. This is a question about
+          whether the numbers below can be trusted, so it belongs before them
+          rather than at the bottom of the page where nobody scrolls. */}
+      <StockCheckPanel />
 
       <div className="section-head">
         <div>

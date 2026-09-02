@@ -105,6 +105,8 @@ export const IPC = {
   invImageAdd: 'inventory:images:add',
   invImageRemove: 'inventory:images:remove',
   invIncomingList: 'inventory:incoming:list',
+  /** Read-only: what in the inventory does not tie out. See @shared/stockAudit. */
+  invStockAudit: 'inventory:stock:audit',
   invIncomingAdd: 'inventory:incoming:add',
   invIncomingReceive: 'inventory:incoming:receive',
   invIncomingCancel: 'inventory:incoming:cancel',

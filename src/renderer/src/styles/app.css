@@ -29478,3 +29478,108 @@ button.sor-team:focus-visible {
 .qbo-diagnosis tr.is-bad td { color: var(--danger, #b42318); font-weight: 600; }
 .qbo-diagnosis-why { font-weight: 400; font-size: 12px; opacity: 0.85; margin-top: 3px; }
 .qbo-diagnosis-verdict { margin: 10px 2px 0; font-size: 13px; line-height: 1.5; }
+
+/* ---------------------------------------------------------------------------
+   Does it all tie out? — the stock check on the Inventory dashboard.
+   See renderer/modules/inventory/StockCheckPanel.tsx and @shared/stockAudit.
+   --------------------------------------------------------------------------- */
+.stkchk {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  padding: 14px 16px;
+  margin: 18px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.stkchk-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.stkchk-head h3 {
+  margin: 0;
+  font-size: 14px;
+}
+.stkchk-sub {
+  margin: 3px 0 0;
+  font-size: 12px;
+  color: var(--text-3);
+  /* Wraps rather than ellipsising: this sentence is the only thing telling
+     somebody what the button will do, so half of it is worse than none. */
+  max-width: 52ch;
+}
+.stkchk-verdict {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.stkchk-verdict.good {
+  color: var(--success);
+}
+.stkchk-verdict.bad {
+  color: var(--text);
+  font-weight: 600;
+}
+.stkchk-error {
+  font-size: 12.5px;
+  color: var(--danger);
+}
+.stkchk-row {
+  border-left: 3px solid var(--accent, var(--border));
+  border-radius: 0 var(--radius) var(--radius) 0;
+  background: var(--surface);
+  padding: 9px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+/* Loud only for the findings that cost money. See toneOf. */
+.stkchk-row-bad {
+  --accent: var(--danger);
+}
+.stkchk-row-warn {
+  --accent: var(--warning, var(--brand-500));
+}
+.stkchk-row-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+.stkchk-kind {
+  font-size: 12px;
+  font-weight: 700;
+  /* min-width 0 so a long label ellipsises instead of pushing the unit count
+     off the row — the same trap the delivery list fell into. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stkchk-units {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+  flex-shrink: 0;
+}
+.stkchk-say {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+.stkchk-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.stkchk-remedy {
+  font-size: 11.5px;
+  color: var(--text-3);
+}
