@@ -854,6 +854,9 @@ function InvoiceCard({
   /** A payment is being recorded in QuickBooks. Locks the button so a slow
    *  relay cannot be pressed twice into two payments. */
   const [payingQbo, setPayingQbo] = useState(false)
+  /** Re-taking the shelf for this order. Locks the button so a slow write
+   *  cannot be pressed twice. */
+  const [rebooking, setRebooking] = useState(false)
   // What to call this order in a sentence. The number if it has one; a draft
   // may not, and "Invoice null moves on" is worse than the vaguer phrase.
   const label = invoice.invoiceNumber ? `Sales order ${invoice.invoiceNumber}` : 'This order'
@@ -1512,6 +1515,46 @@ function InvoiceCard({
           >
             <Icon name="Pencil" size={14} />
             Edit
+          </button>
+        )}
+
+        {/* TAKE THE SHELF FOR AN ORDER THAT TOOK NOTHING.
+            A line clamped to an empty shelf writes no stock move, and no move
+            means the order is absent from inventory, from the wholesale history
+            AND from the P&L — all three read FROM invoice_stock_moves. Nothing
+            re-ran when the goods landed, so it stayed missing for ever.
+            Offered on any posted, non-void order: pressing it on one that is
+            already booked is harmless (the release hands back exactly what was
+            taken and the re-take lands on the same layers), and requiring the
+            app to be sure first would hide the button on precisely the orders
+            whose records are wrong. See rebookInvoiceStock. */}
+        {invoice.status !== 'draft' && invoice.status !== 'void' && (
+          <button
+            type="button"
+            className="btn po-move"
+            disabled={rebooking}
+            title="Take the stock for this order against today's shelf — for an order sold before its goods arrived"
+            onClick={async () => {
+              setRebooking(true)
+              try {
+                const res = await api.invoices.rebookStock(invoice.id)
+                if (!res.ok) {
+                  toast.error(res.error || 'The stock could not be booked.')
+                  return
+                }
+                // BOOKED and STILL-NOTHING are both successes and must read
+                // differently: "no stock on the shelf" is a different problem
+                // from "done", and a green tick on it would be a lie.
+                if ((res.data?.units ?? 0) > 0) toast.success(res.data!.message)
+                else toast.error(res.data?.message ?? 'Nothing was booked.')
+                await onReload()
+              } finally {
+                setRebooking(false)
+              }
+            }}
+          >
+            <Icon name="PackageCheck" size={14} />
+            {rebooking ? 'Booking…' : 'Book the stock'}
           </button>
         )}
 

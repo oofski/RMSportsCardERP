@@ -2296,6 +2296,11 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       > => ipcRenderer.invoke(IPC.invoiceCreateInQbo, { id, open }),
       sendFromQbo: (id: string): Promise<Result<{ id: string }>> =>
         ipcRenderer.invoke(IPC.invoiceSendFromQbo, id),
+      /** Take the shelf for an order that booked none. See rebookInvoiceStock. */
+      rebookStock: (
+        id: string
+      ): Promise<Result<{ id: string; units: number; message: string }>> =>
+        ipcRenderer.invoke(IPC.invoiceRebookStock, id),
       /** Record the payment in QuickBooks for an invoice paid here. */
       recordQboPayment: (
         id: string

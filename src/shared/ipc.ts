@@ -235,6 +235,15 @@ export const IPC = {
    * only way a failure can be reported to the person who caused it.
    */
   invoiceRecordQboPayment: 'invoices:qbo:record-payment',
+  /**
+   * Take the stock for an order that never took any.
+   *
+   * A line clamped to an empty shelf writes no stock move, and no move means the
+   * order is missing from inventory, from the wholesale history and from the
+   * P&L — all three of which read FROM invoice_stock_moves. Nothing re-ran when
+   * the goods arrived. See rebookInvoiceStock.
+   */
+  invoiceRebookStock: 'invoices:stock:rebook',
   invoiceOpenInQbo: 'invoices:qbo:open',
   // How the invoice reaches the buyer: the standing payment instructions that go
   // on every one of them, and whether QuickBooks emails it the moment it is

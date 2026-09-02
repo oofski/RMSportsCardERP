@@ -40,6 +40,7 @@ import {
   countRenumberedInvoices,
   deleteInvoice,
   getInvoice,
+  rebookInvoiceStock,
   getInvoices,
   invoiceStats,
   listCustomers,
@@ -1138,6 +1139,40 @@ export function registerInvoicesIpc(): void {
             id: target,
             posted: outcome.paymentId !== null,
             message: outcome.plan.sentence
+          }
+        }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  /**
+   * Re-take the shelf for one order. Gated on the same permission as editing an
+   * order's lines, because that is what it is: the stock half of a save, run
+   * again with nothing else touched.
+   */
+  ipcMain.handle(
+    IPC.invoiceRebookStock,
+    (_e, id: unknown): Result<{ id: string; units: number; message: string }> => {
+      try {
+        const actor = requireInvoicing()
+        const target = str(id)
+        const res = rebookInvoiceStock(target, actor.id)
+        if (res.error) return { ok: false, error: res.error }
+        const units = res.units ?? 0
+        return {
+          ok: true,
+          data: {
+            id: target,
+            units,
+            // The count is the answer, including when it is zero: this cannot
+            // invent stock, and "still nothing on the shelf" is a different
+            // problem from "it worked" and must not read like one.
+            message:
+              units > 0
+                ? `${units} ${units === 1 ? 'unit' : 'units'} booked. The order is now in inventory, the history and the P&L.`
+                : 'Nothing was booked — there is still no stock on the shelf these lines draw from. Receive the goods first, then press this again.'
           }
         }
       } catch (err) {

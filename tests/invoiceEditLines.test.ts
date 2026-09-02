@@ -968,5 +968,136 @@ console.log('\n=== A SPLIT PART INHERITS WHERE ITS GOODS COME FROM ===')
   )
 }
 
+
+console.log('\n=== AN ORDER SOLD BEFORE ITS STOCK ARRIVED, and how it comes back ===')
+// ---------------------------------------------------------------------------
+/**
+ * THE SILENT CLAMP, AND THE THREE SCREENS IT EMPTIES.
+ *
+ * `applyInvoiceStock` gives every line `Math.min(asked, have)` and skips it
+ * entirely when that is zero. At the moment of saving that is right: the boxes
+ * are not in the building and the line stays owed.
+ *
+ * What was missing is the second half. Nothing re-ran when the goods landed, so
+ * an order written the day before the pallet stayed at zero units drawn for
+ * ever. And because `invoice_stock_moves` is the row that `listWholesaleSales`
+ * — the wholesale history and the P&L's input — starts FROM, the order was not
+ * merely uncosted. It was ABSENT. One clamp, three screens missing an order,
+ * and nothing anywhere saying so.
+ *
+ * The owner met this as "2366 and 2367 were marked but the inventory wasn't
+ * updated and they aren't in the history and P&L" — which is one cause wearing
+ * three faces, and is why all three are asserted here together.
+ */
+{
+  db.prepare(
+    `INSERT INTO inventory_products (id, sku, name, category, unit_cost, created_at, updated_at)
+     VALUES ('p_late', 'SKU-LATE', 'Sold Before It Landed', 'Baseball', 300,
+             '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`
+  ).run()
+
+  const invStockRepo = require('../src/main/db/invoiceStock')
+  const movesFor = (id: string): Array<{ quantity: number; cost_total: number }> =>
+    db
+      .prepare('SELECT quantity, cost_total FROM invoice_stock_moves WHERE invoice_id = ?')
+      .all(id) as Array<{ quantity: number; cost_total: number }>
+  const inHistory = (id: string): boolean =>
+    invStockRepo.listWholesaleSales(db, 5000).some((r: any) => r.invoiceId === id)
+
+  ok(invStock.stockQty('p_late', 'RM') === 0, 'the shelf starts empty — the pallet has not landed')
+
+  const early = inv.saveInvoice(
+    {
+      customerName: 'Bought Ahead',
+      invoiceNumber: 'SO-7400',
+      invoiceDate: '2026-09-02',
+      location: 'RM',
+      lines: [{ item: 'Sold Before It Landed', productId: 'p_late', quantity: 4, rate: 800 }]
+    },
+    null
+  )
+  const soId = early.id ?? ''
+  ok(!!soId, 'the order saves anyway — selling ahead of the stock is a real thing somebody does')
+  ok(
+    movesFor(soId).length === 0,
+    'AND IT TOOK NOTHING OFF THE SHELF — the clamp wrote no move at all, which is the whole bug',
+    JSON.stringify(movesFor(soId))
+  )
+  ok(
+    !inHistory(soId),
+    'SO IT IS ABSENT FROM THE WHOLESALE HISTORY AND THE P&L — both read FROM invoice_stock_moves, ' +
+      'so no move does not mean uncosted, it means the order is not there at all'
+  )
+
+  // The pallet lands.
+  invStock.addStock('p_late', 'RM', 10, 300, null)
+  ok(invStock.stockQty('p_late', 'RM') === 10, 'the goods arrive')
+  ok(
+    movesFor(soId).length === 0,
+    'AND NOTHING COMES BACK FOR THE ORDER ON ITS OWN — this is why it stayed missing for ever'
+  )
+
+  const fixed = inv.rebookInvoiceStock(soId, null)
+  ok(!fixed.error, 'the repair runs', fixed.error ?? '')
+  ok(fixed.units === 4, 'and books the four units the order sells', String(fixed.units))
+  ok(
+    invStock.stockQty('p_late', 'RM') === 6,
+    'THE SHELF MOVES — ten in, four sold, six left',
+    String(invStock.stockQty('p_late', 'RM'))
+  )
+  const booked = movesFor(soId)
+  ok(
+    booked.length === 1 && booked[0].quantity === 4 && booked[0].cost_total === 1200,
+    'the move carries the FIFO cost, so the order finally has a cost of goods',
+    JSON.stringify(booked)
+  )
+  ok(
+    inHistory(soId),
+    'AND IT IS IN THE HISTORY AND THE P&L — the same one row fixes all three complaints'
+  )
+
+  /**
+   * SAFE TO PRESS TWICE, and this is the assertion that makes the button safe to
+   * offer on every posted order rather than only where the app is sure. The
+   * release hands back exactly what the stored moves took, so the re-take walks
+   * the same layers to the same answer.
+   */
+  const again = inv.rebookInvoiceStock(soId, null)
+  ok(again.units === 4, 'a second press books the same four, not another four', String(again.units))
+  ok(
+    invStock.stockQty('p_late', 'RM') === 6 && movesFor(soId).length === 1,
+    'THE SHELF AND THE MOVES ARE UNCHANGED — pressing it on an order that is already right is harmless',
+    `${invStock.stockQty('p_late', 'RM')} on hand, ${movesFor(soId).length} moves`
+  )
+
+  /**
+   * IT CANNOT INVENT STOCK. A repair that reported success on an empty shelf
+   * would be worse than the bug: the owner would believe the books were fixed.
+   */
+  db.prepare(
+    `INSERT INTO inventory_products (id, sku, name, category, unit_cost, created_at, updated_at)
+     VALUES ('p_none', 'SKU-NONE', 'Still Not Here', 'Baseball', 100,
+             '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`
+  ).run()
+  const stillOut = inv.saveInvoice(
+    {
+      customerName: 'Waiting',
+      invoiceNumber: 'SO-7401',
+      invoiceDate: '2026-09-02',
+      location: 'RM',
+      lines: [{ item: 'Still Not Here', productId: 'p_none', quantity: 2, rate: 500 }]
+    },
+    null
+  )
+  const emptyId = stillOut.id ?? ''
+  const nothing = inv.rebookInvoiceStock(emptyId, null)
+  ok(
+    nothing.units === 0 && !nothing.error,
+    'AN EMPTY SHELF STILL BOOKS NOTHING, and says so rather than reporting success',
+    String(nothing.units)
+  )
+  ok(!inHistory(emptyId), 'and that order is still honestly absent from the history')
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail > 0) process.exit(1)

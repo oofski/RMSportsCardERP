@@ -4047,6 +4047,109 @@ export function setInvoiceShippingCost(
   return { invoice: getInvoice(id) }
 }
 
+/**
+ * BOOK THE STOCK FOR AN ORDER THAT NEVER TOOK ANY.
+ *
+ * `applyInvoiceStock` clamps every line to what the shelf could give —
+ * `Math.min(asked, have)` — and a line that could give NOTHING writes no move at
+ * all. That is the right answer at the moment of saving: the boxes are not in the
+ * building and the line stays owed.
+ *
+ * What was missing is the second half. Nothing ever came back when the stock DID
+ * arrive, so an order sold ahead of its pallet stayed at zero units drawn for
+ * ever — and because `invoice_stock_moves` is the row the wholesale list, the
+ * history and the P&L all start FROM, the order was not merely uncosted. It was
+ * INVISIBLE to every one of them. One silent clamp, three screens missing an
+ * order, and nothing anywhere saying so.
+ *
+ * This is the deliberate, named repair: release whatever this order holds and
+ * take it again against today's shelf. It is exactly what saving the order does,
+ * with no edit to make — which matters, because the only existing way to re-run
+ * it was to change something, and changing a posted order to fix an accounting
+ * gap is how a quantity gets altered by accident.
+ *
+ * SAFE TO PRESS TWICE. The release puts back precisely what was taken (see
+ * releaseInvoiceStock, which walks the stored moves), so a re-run on an order
+ * that is already fully booked hands the units back and takes the same ones
+ * again — identical result, no drift. An order that is already right is not
+ * harmed by asking.
+ *
+ * It cannot invent stock. If the shelf is still empty the order books nothing
+ * again and says so, which is the honest answer and is why the count comes back.
+ */
+export function rebookInvoiceStock(
+  id: string,
+  actorId: string | null
+): { invoice: InvoiceDetail | null; error?: string; units?: number } {
+  const db = getDb()
+  const guard = liveInvoiceOr(db, id)
+  if (!guard.ok) return guard.result
+
+  const run = db.transaction((): { invoice: InvoiceDetail | null; error?: string; units?: number } => {
+    const header = db
+      .prepare(`SELECT invoice_number, customer_name, location FROM invoices WHERE id = ?`)
+      .get(id) as
+      | { invoice_number: string | null; customer_name: string; location: string | null }
+      | undefined
+    if (!header) return { invoice: null, error: 'That order is gone.' }
+    const stockLocation = invoiceStockLocation(header.location)
+    const stamp = nowIso()
+
+    type Row = {
+      id: string
+      position: number
+      product_id: string | null
+      quantity: number
+      destination: string | null
+      supplier: string | null
+      source_po_id: string | null
+    }
+    const lines = db
+      .prepare(
+        `SELECT id, position, product_id, quantity, destination, supplier, source_po_id
+           FROM invoice_lines WHERE invoice_id = ? ORDER BY position`
+      )
+      .all(id) as Row[]
+    const splits = readLineAllocations(db, id)
+
+    /**
+     * EVERY line counts as having drawn a shelf before.
+     *
+     * `wasStock` decides which lines get their fulfilled quantity ZEROED when
+     * they no longer draw one. Nothing about the order is changing here, so
+     * claiming they all did is the conservative answer: a line that still draws
+     * is re-derived from the move it just took, and one that does not is zeroed
+     * — which is correct, because it is holding a figure describing a draw it no
+     * longer makes.
+     */
+    const wasStock = new Map(lines.map((l) => [l.id, true]))
+
+    rederiveInvoiceStock(
+      db,
+      id,
+      { invoice_number: header.invoice_number, customer_name: header.customer_name },
+      stockLocation,
+      lines,
+      splits,
+      lines.map((l) => l.id),
+      wasStock,
+      actorId,
+      stamp
+    )
+
+    const units = (
+      db
+        .prepare(
+          `SELECT COALESCE(SUM(quantity), 0) AS n FROM invoice_stock_moves WHERE invoice_id = ?`
+        )
+        .get(id) as { n: number }
+    ).n
+    return { invoice: getInvoice(id), units }
+  })
+
+  return run()
+}
+
 export function setInvoiceLines(
   id: string,
   changes: ReadonlyArray<{
