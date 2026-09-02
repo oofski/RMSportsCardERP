@@ -29583,3 +29583,111 @@ button.sor-team:focus-visible {
   font-size: 11.5px;
   color: var(--text-3);
 }
+
+/* ---------------------------------------------------------------------------
+   "Where did these units come from" — the hover on a sold line's quantity.
+   See modules/invoices/CreateInvoiceModal.tsx (LineSourcePop) and
+   @shared/lineSources.
+   --------------------------------------------------------------------------- */
+.src-handle {
+  /* Reads as the number it replaces until you approach it — a quantity column
+     full of buttons would look like a form. The dotted rule is the only hint,
+     and it is the conventional one for "there is more here". */
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: help;
+  position: relative;
+  border-bottom: 1px dotted var(--text-3);
+}
+.src-handle:hover,
+.src-handle:focus-visible {
+  color: var(--brand-600, var(--brand-500));
+}
+.src-pop {
+  /* Hidden by default and revealed by hover OR focus, so the keyboard reaches
+     it. `visibility` rather than `display` so it can transition, and so its
+     size is measurable before it is shown. */
+  visibility: hidden;
+  opacity: 0;
+  transition: opacity 90ms ease;
+  position: absolute;
+  z-index: 60;
+  /* Anchored to the RIGHT edge and opening leftwards: the quantity sits in a
+     narrow column near the middle of a wide row, and a popover opening right
+     would leave the page over the Amount column and off the modal. */
+  top: calc(100% + 6px);
+  right: 0;
+  width: max-content;
+  max-width: min(320px, 76vw);
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-2, 0 8px 24px rgb(0 0 0 / 12%));
+  white-space: normal;
+}
+.src-handle:hover .src-pop,
+.src-handle:focus-visible .src-pop {
+  visibility: visible;
+  opacity: 1;
+}
+.src-pop-head {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-2);
+  font-weight: 600;
+}
+.src-pop-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 1px 10px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+.src-pop-name {
+  font-size: 12px;
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.src-pop-meta {
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+}
+.src-pop-where {
+  grid-column: 1 / -1;
+  font-size: 11px;
+  color: var(--text-3);
+}
+/* ON A NARROW SCREEN THE POPOVER BELONGS TO THE ROW, NOT THE CELL.
+   Anchored to the quantity it ran off the LEFT edge at 390px — the quantity
+   column sits close to the left and a 296px panel opening leftwards from it has
+   nowhere to go. Caught by measuring it in the real app; it looked right in the
+   markup and was 32px off screen.
+   Making the ROW the positioning context and stretching the panel across it
+   means the panel is exactly as wide as the space that exists, at any width. */
+@media (max-width: 820px) {
+  .po-receipt-line {
+    position: relative;
+  }
+  .src-handle {
+    position: static;
+  }
+  .src-pop {
+    left: 0;
+    right: 0;
+    max-width: none;
+    width: auto;
+  }
+}

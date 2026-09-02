@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { InventoryProduct } from '@shared/types'
 import type { Carrier, PaymentTiming } from '@shared/freight'
 import { carrierLabel } from '@shared/freight'
@@ -32,6 +32,8 @@ import { Button, Checkbox, Field, Input, Modal, Select } from '../../components/
 import { Icon } from '../../components/Icon'
 import { SALES_QTY_FLOOR, canStep, stepDownBlockedReason, stepQty } from '@shared/lineQty'
 import { formatDate, formatMoney } from '../../lib/format'
+import { describeLineSources, sourceName } from '@shared/lineSources'
+import type { LineSources } from '@shared/lineSources'
 import { FreightFields } from '../../components/FreightFields'
 import { PaymentBar } from '../../components/PaymentProgress'
 import { OrderHistory } from '../orders/OrderHistory'
@@ -1419,6 +1421,25 @@ function InvoiceReceipt({
   invoice: InvoiceDetail
   thumbnails: Record<string, string>
 }): JSX.Element {
+  // WHERE EACH LINE'S UNITS CAME FROM, fetched once for the whole order rather
+  // than per line: one query answers every row, and a fetch per line on an order
+  // with twenty of them is twenty round trips for one popover nobody may open.
+  // A failure degrades to no hover at all, which is the honest outcome — an
+  // empty popover would claim the line drew nothing.
+  const [sources, setSources] = useState<Map<number, LineSources>>(new Map())
+  useEffect(() => {
+    let live = true
+    void api.invoices
+      .lineSources(invoice.id)
+      .then((rows) => {
+        if (live) setSources(new Map(rows.map((r) => [r.position, r])))
+      })
+      .catch(() => undefined)
+    return () => {
+      live = false
+    }
+  }, [invoice.id])
+
   const shipsWith = [carrierLabel(invoice.carrier), invoice.service].filter(Boolean).join(' · ')
   // The buyer on a stock sale, the supplier on a dropship — see labelRecipientFor
   // for why the buyer is not the fallback when a dropship's supplier is unknown.
@@ -1546,7 +1567,12 @@ function InvoiceReceipt({
           <span className="po-rl-total">Amount</span>
         </div>
         {invoice.lines.map((line) => (
-          <ReceiptLine key={line.id} line={line} thumbnails={thumbnails} />
+          <ReceiptLine
+            key={line.id}
+            line={line}
+            thumbnails={thumbnails}
+            sources={sources.get(line.position)}
+          />
         ))}
       </div>
 
@@ -1634,10 +1660,13 @@ function TimeRow({
 
 function ReceiptLine({
   line,
-  thumbnails
+  thumbnails,
+  sources
 }: {
   line: InvoiceLine
   thumbnails: Record<string, string>
+  /** Which cost layers this line drew, if it drew any. */
+  sources?: LineSources
 }): JSX.Element {
   const thumb = line.productId ? thumbnails[line.productId] : undefined
 
@@ -1655,9 +1684,54 @@ function ReceiptLine({
         {line.sku && <span className="po-rl-sku mono">{line.sku}</span>}
         {line.description && <span className="po-line-sub">{line.description}</span>}
       </span>
-      <span className="po-rl-qty">{line.quantity}</span>
+      {/* THE QUANTITY IS THE HANDLE, because it is the number somebody is
+          questioning: "three cases — three cases of what, from where?".
+          A button rather than a hovered span so it answers to the keyboard and
+          to a finger as well as to a mouse; the popover shows on hover AND on
+          focus, in CSS, so nothing here depends on a pointer existing. */}
+      <span className="po-rl-qty">
+        {sources ? (
+          <button type="button" className="src-handle" aria-label={`Where these ${line.quantity} came from`}>
+            {line.quantity}
+            <LineSourcePop sources={sources} />
+          </button>
+        ) : (
+          line.quantity
+        )}
+      </span>
       <span className="po-rl-price mono">{formatMoney(line.rate)}</span>
       <span className="po-rl-total mono">{formatMoney(line.amount)}</span>
     </div>
+  )
+}
+
+/**
+ * Where one line's units came from.
+ *
+ * Rendered ALWAYS and revealed by CSS rather than mounted on hover: a popover
+ * that mounts on mouseover flickers when the pointer crosses its own edge, and
+ * the amount of markup here is trivial next to the shipping panels already on
+ * this screen.
+ */
+function LineSourcePop({ sources }: { sources: LineSources }): JSX.Element {
+  return (
+    <span className="src-pop" role="tooltip">
+      <span className="src-pop-head">{describeLineSources(sources)}</span>
+      {sources.sources.map((s, i) => (
+        <span className="src-pop-row" key={`${s.poId ?? 'none'}-${i}`}>
+          <span className="src-pop-name">{sourceName(s)}</span>
+          <span className="src-pop-meta mono">
+            {s.quantity} @ {formatMoney(s.unitCost)}
+          </span>
+          <span className="src-pop-where">
+            {s.location}
+            {/* Said only when it was a decision. FIFO running unasked is the
+                default and does not need announcing on every row. */}
+            {s.picked ? ' · picked' : ''}
+            {s.supplier && !s.poNumber ? ` · ${s.supplier}` : ''}
+          </span>
+        </span>
+      ))}
+    </span>
   )
 }

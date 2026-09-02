@@ -352,6 +352,8 @@ export const IPC = {
   // The fulfilment board — one read for all three columns, because the column
   // an order belongs in is derived. See @shared/fulfillment.
   invoicesFulfillment: 'invoices:fulfillment',
+  /** Which cost layers each line drew. Read-only. See @shared/lineSources. */
+  invoiceLineSources: 'invoices:line-sources',
   invoiceSetDims: 'invoices:set-dims',
   invoiceSetItemsInHand: 'invoices:set-items-in-hand',
   invoiceSetLineRouting: 'invoices:set-line-routing',

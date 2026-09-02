@@ -21,6 +21,7 @@
 import { IPC, type AppInfo } from '@shared/ipc'
 import type { RelayDiagnosis } from '@shared/relayDiagnosis'
 import type { StockAudit } from '@shared/stockAudit'
+import type { LineSources } from '@shared/lineSources'
 import type { Permission } from '@shared/permissions'
 import type { OrderResetInput, OrderResetPreview, OrderResetResult } from '@shared/orderReset'
 import type { RestoreCheck, RestoreStatus } from '@shared/restore'
@@ -2299,6 +2300,9 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       > => ipcRenderer.invoke(IPC.invoiceCreateInQbo, { id, open }),
       sendFromQbo: (id: string): Promise<Result<{ id: string }>> =>
         ipcRenderer.invoke(IPC.invoiceSendFromQbo, id),
+      /** Where each line's units came from — which purchase order, at what cost. */
+      lineSources: (id: string): Promise<LineSources[]> =>
+        ipcRenderer.invoke(IPC.invoiceLineSources, id),
       /** Take the shelf for an order that booked none. See rebookInvoiceStock. */
       rebookStock: (
         id: string

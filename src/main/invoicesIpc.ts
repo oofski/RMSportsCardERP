@@ -28,6 +28,8 @@ import {
   nextStageFromQbo
 } from '@shared/invoices'
 import { currentUser } from './services/auth'
+import { invoiceLineSources } from './db/lineSources'
+import type { LineSources } from '@shared/lineSources'
 import type { OrderResetInput, OrderResetPreview, OrderResetResult } from '@shared/orderReset'
 import { applyOrderReset, previewOrderReset } from './db/orderReset'
 import type { NumberSeries, SeriesState } from '@shared/numbering'
@@ -1152,6 +1154,18 @@ export function registerInvoicesIpc(): void {
    * order's lines, because that is what it is: the stock half of a save, run
    * again with nothing else touched.
    */
+  // READ-ONLY, and gated on the same permission as reading the order itself:
+  // this says nothing the order's own receipt does not already imply, it just
+  // says it where somebody can see it. See @shared/lineSources.
+  ipcMain.handle(IPC.invoiceLineSources, (_e, id: unknown): LineSources[] => {
+    try {
+      requireInvoicing()
+      return invoiceLineSources(str(id))
+    } catch {
+      return []
+    }
+  })
+
   ipcMain.handle(
     IPC.invoiceRebookStock,
     (_e, id: unknown): Result<{ id: string; units: number; message: string }> => {
