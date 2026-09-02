@@ -451,5 +451,69 @@ ok(
 )
 ok(tasks.myHours('emp_nobody').totalMinutes === 0, "somebody else's hours are not mine")
 
+// ---------------------------------------------------------------------------
+console.log('\n=== the payroll fortnight, and the words that describe it ===')
+// ---------------------------------------------------------------------------
+// THE OWNER NAMED THIS PERIOD OUT LOUD: "payroll should be August 17th through
+// the 30th". Asserted against the real dates rather than against the anchor,
+// because the anchor is the thing that could be wrong.
+{
+  const {
+    payrollPeriodFor,
+    lastClosedPayrollPeriod,
+    weekdayName,
+    PAYROLL_OPENS_ON,
+    PAYROLL_CLOSES_ON,
+    PAYROLL_RUN_WEEKDAY,
+    PAYROLL_PAY_WEEKDAY
+  } = require('../src/shared/homeTasks')
+
+  const mid = payrollPeriodFor('2026-08-20')
+  ok(mid.start === '2026-08-17', 'THE FORTNIGHT OPENS ON AUGUST 17', mid.start)
+  ok(mid.end === '2026-08-30', 'AND CLOSES ON AUGUST 30', mid.end)
+
+  // "and then correspond the next payrolls accordingly" — the series follows
+  // from it with no gap and no overlap.
+  const next = payrollPeriodFor('2026-09-02')
+  ok(next.start === '2026-08-31', 'the next one opens the very next day', next.start)
+  ok(next.end === '2026-09-13', 'and closes a fortnight later', next.end)
+  const after = payrollPeriodFor('2026-09-20')
+  ok(after.start === '2026-09-14' && after.end === '2026-09-27', 'and so does the one after', `${after.start}..${after.end}`)
+
+  // The one before, so the boundary is pinned from both sides.
+  const before = payrollPeriodFor('2026-08-05')
+  ok(before.end === '2026-08-16', 'the previous fortnight closes the day before this one opens', before.end)
+
+  // A run on the Wednesday and money on the Friday, which is the promise.
+  ok(mid.runOn === '2026-09-02', 'payroll for it is run on 2 September', mid.runOn)
+  ok(mid.paidOn === '2026-09-04', 'and the money lands on the 4th', mid.paidOn)
+
+  // THE WORDS MUST NOT BE A SECOND SOURCE OF TRUTH. My Hours described the
+  // schedule as "Sunday to Saturday" for weeks after it became Monday to Sunday:
+  // the dates on that screen were right and the sentence beside them was not,
+  // and nothing failed because a sentence cannot fail. These are derived now,
+  // and this is what keeps them derived.
+  ok(PAYROLL_OPENS_ON === 'Monday', 'the printed opening weekday is Monday', PAYROLL_OPENS_ON)
+  ok(PAYROLL_CLOSES_ON === 'Sunday', 'and the closing one is Sunday', PAYROLL_CLOSES_ON)
+  ok(
+    weekdayName(mid.start) === PAYROLL_OPENS_ON && weekdayName(mid.end) === PAYROLL_CLOSES_ON,
+    'AND THEY AGREE WITH A REAL PERIOD — the words cannot drift from the dates',
+    `${weekdayName(mid.start)}/${weekdayName(mid.end)} vs ${PAYROLL_OPENS_ON}/${PAYROLL_CLOSES_ON}`
+  )
+  ok(
+    weekdayName(mid.runOn) === PAYROLL_RUN_WEEKDAY && weekdayName(mid.paidOn) === PAYROLL_PAY_WEEKDAY,
+    'and so do the run and pay weekdays',
+    `${weekdayName(mid.runOn)}/${weekdayName(mid.paidOn)}`
+  )
+
+  // An export is for the fortnight that has CLOSED, not the one being worked.
+  const closed = lastClosedPayrollPeriod('2026-09-02')
+  ok(
+    closed.start === '2026-08-17' && closed.end === '2026-08-30',
+    'and on 2 September the last closed fortnight is exactly 17–30 August',
+    `${closed.start}..${closed.end}`
+  )
+}
+
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

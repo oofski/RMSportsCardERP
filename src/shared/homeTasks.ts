@@ -251,6 +251,53 @@ export const PAYROLL_RUN_LAG_DAYS = 3
 /** Days after the period ENDS that the money lands. Sunday close → Friday pay. */
 export const PAYROLL_PAY_LAG_DAYS = 5
 
+/**
+ * THE WEEKDAYS THE FORTNIGHT OPENS AND CLOSES ON, DERIVED — never typed.
+ *
+ * The My Hours screen explained the schedule in words: "a period is 14 days of
+ * work, Sunday to Saturday ... so a fortnight ending on a Saturday is run that
+ * Wednesday". Every one of those weekday names was TRUE when it was written and
+ * FALSE the moment the anchor moved forward a day, and nothing failed — the
+ * dates on the same screen were right while the sentence beside them described a
+ * different fortnight. A second source of truth about the same fact always ends
+ * this way; the only question is how long before somebody reads the wrong half.
+ *
+ * So the sentence now asks the anchor. These cannot disagree with the schedule
+ * because they ARE the schedule.
+ *
+ * Parsed at UTC noon like every other date-only value here: local midnight
+ * shifted across a daylight-saving boundary lands on 23:00 the previous day and
+ * would name the wrong weekday twice a year.
+ */
+const WEEKDAYS = [
+  'Sunday',
+  'Monday',
+  'Tuesday',
+  'Wednesday',
+  'Thursday',
+  'Friday',
+  'Saturday'
+] as const
+
+export function weekdayName(day: string): string {
+  const t = Date.parse(`${day}T12:00:00Z`)
+  if (!Number.isFinite(t)) return ''
+  return WEEKDAYS[new Date(t).getUTCDay()]
+}
+
+/** The weekday a fortnight opens on, e.g. "Monday". */
+export const PAYROLL_OPENS_ON = weekdayName(PAYROLL_ANCHOR)
+/** The weekday a fortnight closes on, e.g. "Sunday". */
+export const PAYROLL_CLOSES_ON = weekdayName(addDays(PAYROLL_ANCHOR, PAYROLL_EVERY_DAYS - 1))
+/** The weekday payroll is run on. */
+export const PAYROLL_RUN_WEEKDAY = weekdayName(
+  addDays(PAYROLL_ANCHOR, PAYROLL_EVERY_DAYS - 1 + PAYROLL_RUN_LAG_DAYS)
+)
+/** The weekday the money lands. */
+export const PAYROLL_PAY_WEEKDAY = weekdayName(
+  addDays(PAYROLL_ANCHOR, PAYROLL_EVERY_DAYS - 1 + PAYROLL_PAY_LAG_DAYS)
+)
+
 export interface PayrollPeriod {
   /** First day of work in the period, inclusive. A Monday. */
   start: string
