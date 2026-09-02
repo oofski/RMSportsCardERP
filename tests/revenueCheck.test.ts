@@ -75,7 +75,14 @@ const {
   modelDivisor,
   payoutCheck
 } = require('../src/shared/statementFit')
-const { reconInRange, reconRows, reconTotals } = require('../src/shared/pnlRecon')
+const {
+  checkWindow,
+  pinTermsFor,
+  reconInRange,
+  reconRows,
+  reconTotals,
+  revenueStanding
+} = require('../src/shared/pnlRecon')
 const { streamDateOf } = require('../src/shared/streaming')
 
 const db = getDb()
@@ -807,6 +814,381 @@ console.log('\n=== the payout is checked against EVERY ledger row, not the sale 
     `${wrong.gap} — ${wrong.sentence}`
   )
 }
+
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 11. a window that cannot be compared with a statement is REFUSED ===')
+// ---------------------------------------------------------------------------
+/**
+ * `RatesTab` starts both date boxes at useState(''), and a blank end means NO
+ * FILTER. So every answer both revenue panels have ever given was a figure off
+ * one month's statement set against the entire ledger. `checkWindow` is the gate
+ * that ends that, and it refuses rather than guessing a month nobody chose.
+ */
+{
+  const blank = checkWindow('', '')
+  ok(
+    blank.bounded === false && blank.days === 0,
+    'THE SHIPPED DEFAULT — blank/blank — IS NOT A WINDOW, and says so',
+    JSON.stringify(blank)
+  )
+  ok(
+    /every night ever imported/.test(String(blank.problem)),
+    'and the reason is the owner-facing one, not a validation message',
+    String(blank.problem)
+  )
+
+  const noStart = checkWindow('', '2026-07-31')
+  const noEnd = checkWindow('2026-07-01', '')
+  ok(
+    noStart.bounded === false && noEnd.bounded === false,
+    'one blank end is still no window — half a period cannot cover a statement'
+  )
+  ok(
+    /no start date/.test(String(noStart.problem)) && /no end date/.test(String(noEnd.problem)),
+    'and each names the end that is actually missing',
+    `${noStart.problem} / ${noEnd.problem}`
+  )
+
+  const back = checkWindow('2026-07-31', '2026-07-01')
+  ok(
+    back.bounded === false && /falls after the end/.test(String(back.problem)),
+    'a reversed pair covers no nights at all and is told so plainly',
+    String(back.problem)
+  )
+
+  const junk = checkWindow('07/01/26', '2026-07-31')
+  ok(
+    junk.bounded === false && /not a day this app can read/.test(String(junk.problem)),
+    'a date the app cannot read is refused rather than silently ignored',
+    String(junk.problem)
+  )
+  ok(
+    checkWindow('2026-02-30', '2026-03-31').bounded === false,
+    'INCLUDING A WELL-SHAPED DAY THAT DOES NOT EXIST — Date.UTC would roll it into March'
+  )
+
+  const reasons = new Set(
+    [blank, noStart, noEnd, back, junk].map((w: any) => String(w.problem))
+  )
+  ok(reasons.size === 5, 'every refusal gives its own reason — none is a generic "invalid"')
+
+  const july = checkWindow('2026-07-01', '2026-07-31')
+  ok(july.bounded === true && july.problem === null, 'a real month is a window')
+  ok(
+    july.days === 31,
+    'AND BOTH ENDS COUNT — July is 31 days, not 30. Every window in this app is inclusive',
+    String(july.days)
+  )
+  ok(
+    checkWindow('2026-07-15', '2026-07-15').days === 1,
+    'one day is one day, not zero'
+  )
+  ok(
+    checkWindow('2026-03-01', '2026-03-31').days === 31,
+    'and a month spanning the daylight-saving change is still 31 — parsed at UTC noon',
+    String(checkWindow('2026-03-01', '2026-03-31').days)
+  )
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 12. THE ALL-TIME DEFAULT WAS LYING — what the panels actually compared ===')
+// ---------------------------------------------------------------------------
+/**
+ * THE ASSERTION THAT PINS THE SHIPPED BUG.
+ *
+ * Two months in the ledger. The panel's own default window — blank/blank —
+ * filters nothing, so a payout or a sales figure typed off July's statement was
+ * compared against June AND July. The gap that comes back is not a fee error and
+ * is not a rate error; it is the rest of the ledger, reported as a discrepancy.
+ *
+ * `reconInRange` is left exactly as it is: blank-means-open is correct for the
+ * night-by-night table, which describes what is stored. It is `checkWindow` that
+ * must stop the two panels asserting agreement across it.
+ */
+{
+  const JUNE_NET = 250_000
+  const JULY_NET = 300_000
+  const days: any[] = [
+    {
+      streamDate: '2026-06-14', netSales: JUNE_NET, grossSales: 281_000,
+      whatnotFee: -22_480, processingFee: -8_520, cogs: -120_000, netProfit: 130_000,
+      feeSaleCount: 3_500, rateBreakdown: [{ rate: 0.08, grossSales: 281_000 }],
+      netAfterCosts: JUNE_NET, giveawayLoss: 0
+    },
+    {
+      streamDate: '2026-07-18', netSales: JULY_NET, grossSales: 337_200,
+      whatnotFee: -26_976, processingFee: -10_224, cogs: -150_000, netProfit: 150_000,
+      feeSaleCount: 4_200, rateBreakdown: [{ rate: 0.08, grossSales: 337_200 }],
+      netAfterCosts: JULY_NET, giveawayLoss: 0
+    }
+  ]
+  const rows = reconRows(days, [])
+
+  const allTime = reconTotals(reconInRange(rows, '', ''))
+  const july = reconTotals(reconInRange(rows, '2026-07-01', '2026-07-31'))
+
+  ok(
+    allTime.netPaid === JUNE_NET + JULY_NET,
+    'the panel default sweeps up every night ever imported',
+    String(allTime.netPaid)
+  )
+  ok(
+    july.netPaid === JULY_NET,
+    'while the month somebody meant holds only July',
+    String(july.netPaid)
+  )
+  ok(
+    allTime.netPaid - july.netPaid === JUNE_NET,
+    'THE TWO DIFFER BY A WHOLE MONTH — $250,000 of June, reported as July disagreeing',
+    `$${(allTime.netPaid - july.netPaid).toLocaleString()}`
+  )
+  ok(
+    allTime.grossSales - july.grossSales > 100_000 &&
+      allTime.ledgerNet - july.ledgerNet === JUNE_NET,
+    'and every column the panels read moves with it — revenue, and the payout figure too',
+    `${allTime.grossSales - july.grossSales} / ${allTime.ledgerNet - july.ledgerNet}`
+  )
+
+  // A payout typed off July's statement, checked the way the panel checked it.
+  const asShipped = payoutCheck(allTime.ledgerNet, JULY_NET)
+  const asMeant = payoutCheck(july.ledgerNet, JULY_NET)
+  ok(
+    asShipped.material === true && asMeant.gap === 0 && asMeant.material === false,
+    'A MONTH THAT RECONCILES TO THE CENT READ AS AN 83% DISCREPANCY on the default window',
+    `${(asShipped.gapShare * 100).toFixed(1)}% vs ${(asMeant.gapShare * 100).toFixed(1)}%`
+  )
+  ok(
+    checkWindow('', '').bounded === false && checkWindow('2026-07-01', '2026-07-31').bounded,
+    'which is exactly the window checkWindow now refuses, and the one it allows'
+  )
+  ok(
+    reconInRange(rows, '', '').length === 2,
+    'reconInRange is UNCHANGED — blank still means open, because the table describes what is stored'
+  )
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 13. what the app derives against what Whatnot actually stated ===')
+// ---------------------------------------------------------------------------
+{
+  const JULY = checkWindow('2026-07-01', '2026-07-31')
+  const DERIVED = 331_000
+
+  const never = revenueStanding(JULY, [], DERIVED)
+  ok(
+    never.state === 'never' && never.statedGross === null,
+    'no saved figure at all is its own state — it asks for a number, not for new dates',
+    never.sentence
+  )
+
+  // A fortnight's figure, and a window covering the whole month.
+  const halfMonth: any[] = [
+    { fromDate: '2026-07-01', toDate: '2026-07-15', statedGross: 150_000 }
+  ]
+  const stale = revenueStanding(JULY, halfMonth, DERIVED)
+  ok(
+    stale.state === 'stale' && stale.statement === null && stale.gap === null,
+    'PARTIAL OVERLAP IS NOT COVERAGE — 1-15 July does not answer a question about all of July',
+    stale.sentence
+  )
+  ok(
+    !/\$/.test(stale.sentence),
+    'and it prints no money, because half a month set against a whole one invents the gap',
+    stale.sentence
+  )
+
+  // The panel's own default window, with figures on file.
+  const allTime = revenueStanding(checkWindow('', ''), [
+    { fromDate: '2026-06-01', toDate: '2026-06-30', statedGross: 260_000 },
+    { fromDate: '2026-08-01', toDate: '2026-08-31', statedGross: 280_000 }
+  ] as any, DERIVED)
+  ok(
+    allTime.state === 'stale' && allTime.statedGross === null,
+    'AN ALL-TIME WINDOW CAN NEVER BE COVERED — there are no ends for a statement to contain',
+    allTime.sentence
+  )
+  ok(
+    !/\$/.test(allTime.sentence) && !/540/.test(allTime.sentence),
+    'AND THE STATEMENTS ARE NEVER SUMMED — $540,000 is a figure nobody stated, for a period ' +
+      'nobody reported on, and July is missing from the middle of it',
+    allTime.sentence
+  )
+
+  const stated: any[] = [{ fromDate: '2026-07-01', toDate: '2026-07-31', statedGross: 307_000 }]
+  const high = revenueStanding(JULY, stated, DERIVED)
+  ok(
+    high.state === 'disagrees' && high.gap === 24_000,
+    'THE $24k THE OWNER HAS BEEN CHASING, once the window is honest',
+    `${high.gap} — ${high.sentence}`
+  )
+  ok(
+    /higher,/.test(high.sentence) && /307,000\.00/.test(high.sentence),
+    'the sentence names the stated figure and which way the app reads',
+    high.sentence
+  )
+  ok(
+    /331,000\.00/.test(high.sentence),
+    'AND PRINTS THE DERIVED FIGURE IT WAS HANDED — never a re-derived one that would ' +
+      'contradict the tile it sits under',
+    high.sentence
+  )
+  ok(
+    /[Cc]ompared/.test(high.sentence) && !/reconcil/i.test(high.sentence),
+    'it says COMPARED and never "reconciled" — the app’s July is July’s SHOWS, not July’s rows',
+    high.sentence
+  )
+
+  const low = revenueStanding(JULY, stated, 280_000)
+  ok(
+    low.state === 'disagrees' && low.gap === -27_000 && /lower,/.test(low.sentence),
+    'and a ledger reading UNDER the stated figure points the other way, not the same way',
+    low.sentence
+  )
+
+  // The threshold is the one already exported for the payout check, not a copy.
+  const close = revenueStanding(JULY, stated, 307_000 * 1.02)
+  const over = revenueStanding(JULY, stated, 307_000 * 1.0201)
+  ok(
+    close.state === 'compared' && over.state === 'disagrees',
+    'the line is PAYOUT_GAP_LIMIT — 2% — imported rather than restated, so it cannot drift apart',
+    `${(close.gapShare * 100).toFixed(3)}% vs ${(over.gapShare * 100).toFixed(3)}%`
+  )
+  ok(
+    !/reconcil/i.test(close.sentence) && /[Cc]ompared/.test(close.sentence),
+    'agreement is reported as compared too — evidence, never proof'
+  )
+
+  // A quarter and a month both contain July.
+  const both: any[] = [
+    { fromDate: '2026-07-01', toDate: '2026-09-30', statedGross: 900_000 },
+    { fromDate: '2026-07-01', toDate: '2026-07-31', statedGross: 307_000 }
+  ]
+  const narrow = revenueStanding(JULY, both, DERIVED)
+  ok(
+    narrow.statedGross === 307_000,
+    'NARROWEST WINS — the July figure answers a July question; the quarter only bounds it',
+    String(narrow.statedGross)
+  )
+  ok(
+    revenueStanding(JULY, [both[0]] as any, DERIVED).statedGross === 900_000,
+    'though a quarter alone still covers the month, and is used when it is all there is'
+  )
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 14. the terms are pinned to the night that carried the money ===')
+// ---------------------------------------------------------------------------
+/**
+ * `RatesTab` pinned off the window's LAST DAY, falling back to TODAY when the
+ * box was blank — and the box defaulted to blank. So a fit on July's money was
+ * being held to whatever rates are in force this afternoon. The main process
+ * pinned off the heaviest night. Two answers to one question; this is the one.
+ */
+{
+  const HEAVY = { processingRate: 0.029, taxRate: 0.0518, processingFlatCents: 30 }
+  const LIGHT = { processingRate: 0.035, taxRate: 0.0518, processingFlatCents: 0 }
+  // Newest first, the way reconRows returns them — so the LAST DAY of the window
+  // is the quiet night, and the heaviest is three weeks earlier.
+  const rows: any[] = [
+    { day: '2026-07-28', netPaid: 40 },
+    { day: '2026-07-04', netPaid: 60_000 }
+  ]
+  const termsFor = (day: string): any => (day === '2026-07-04' ? HEAVY : LIGHT)
+
+  const pin = pinTermsFor(rows, termsFor)
+  ok(
+    pin.pinnedDay === '2026-07-04' && pin.pinned.processingRate === 0.029,
+    'THE $60,000 SATURDAY DECIDES THE TERMS, not the $40 Tuesday that happens to close the month',
+    `${pin.pinnedDay} @ ${pin.pinned.processingRate}`
+  )
+  ok(
+    pin.pinned.processingFlatCents === 30 && termsFor(rows[0].day).processingFlatCents === 0,
+    'which is a different answer from the one the window’s last day gives — that was the defect'
+  )
+  ok(
+    pin.mixedTerms === true,
+    'and a window spanning two sets of card terms says so, rather than passing an average as exact'
+  )
+
+  const single = pinTermsFor(
+    [{ day: '2026-07-04', netPaid: 60_000 }, { day: '2026-07-05', netPaid: 900 }] as any,
+    () => HEAVY
+  )
+  ok(
+    single.mixedTerms === false && single.pinned.processingRate === 0.029,
+    'one set of terms across the window is not "mixed"'
+  )
+
+  const empty = pinTermsFor([] as any, termsFor, LIGHT)
+  ok(
+    empty.pinnedDay === null && empty.pinned.processingRate === 0.035,
+    'an empty window has no heaviest night, so the caller’s own fallback stands — nothing is ' +
+      'being priced, and this must not invent a night'
+  )
+
+  // Ties must not depend on the order the rows arrived in.
+  const tieA = pinTermsFor([{ day: '2026-07-01', netPaid: 100 }, { day: '2026-07-02', netPaid: 100 }] as any, () => HEAVY)
+  const tieB = pinTermsFor([{ day: '2026-07-02', netPaid: 100 }, { day: '2026-07-01', netPaid: 100 }] as any, () => HEAVY)
+  ok(
+    tieA.pinnedDay === tieB.pinnedDay && tieA.pinnedDay === '2026-07-02',
+    'two nights holding identical money break the tie on the date, not on list order',
+    `${tieA.pinnedDay} / ${tieB.pinnedDay}`
+  )
+}
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 15. THE TWO SCREENS MUST COMPARE THE SAME QUANTITY ===')
+// ---------------------------------------------------------------------------
+// Found in review, and it is the failure this whole feature exists to end: the
+// Streaming tab fed revenueStanding the P&L revenue SUBTOTAL (gross sales plus
+// tips, seller bonuses and unrecognised rows) while Fees & rates fed it gross
+// sales. A statement's stated figure is what the window SOLD, so tips were
+// counted on one side only and the same document got opposite verdicts on two
+// screens.
+{
+  const july = { from: '2026-07-01', to: '2026-07-31', bounded: true, days: 31, problem: null }
+  const stmt = [{ fromDate: '2026-07-01', toDate: '2026-07-31', statedGross: 307000 }]
+
+  // The sales agree with Whatnot to the cent.
+  const onSales = revenueStanding(july, stmt, 307000)
+  ok(onSales.state === 'compared', 'sales that match the statement read as compared', onSales.state)
+
+  // The same window with $8,000 of tips and bonuses in it. Total revenue is
+  // 315,000 — and if THAT is what gets compared, a perfect month reads as broken.
+  const onTotalRevenue = revenueStanding(july, stmt, 315000)
+  ok(
+    onTotalRevenue.state === 'disagrees',
+    'AND THE REVENUE SUBTOTAL WOULD READ AS A DISAGREEMENT — 8k of tips is 2.6%, over the 2% limit',
+    `${onTotalRevenue.state} ${onTotalRevenue.gapShare}`
+  )
+  ok(
+    onSales.state !== onTotalRevenue.state,
+    'so the two figures give OPPOSITE verdicts on one statement — which is why the comparand is pinned',
+    `${onSales.state} vs ${onTotalRevenue.state}`
+  )
+}
+
+// The sentence must name SALES. It sits directly under a tile labelled "Total
+// revenue" that shows a LARGER number, and a sentence about "revenue" there
+// reads as a claim about the tile it is not describing.
+{
+  const july = { from: '2026-07-01', to: '2026-07-31', bounded: true, days: 31, problem: null }
+  const agreed = revenueStanding(
+    july,
+    [{ fromDate: '2026-07-01', toDate: '2026-07-31', statedGross: 307000 }],
+    307000
+  )
+  ok(/sales/i.test(agreed.sentence), 'the agreeing sentence says SALES', agreed.sentence)
+  ok(
+    !/the revenue this app derives/i.test(agreed.sentence),
+    'and never calls the compared figure "revenue" — the tile above it means something bigger',
+    agreed.sentence
+  )
+  const none = revenueStanding(july, [], 307000)
+  ok(/sales/i.test(none.sentence), 'and so does the never-saved sentence', none.sentence)
+}
+
 
 console.log(`\n${pass} passed, ${fail} failed`)
 if (fail > 0) process.exit(1)

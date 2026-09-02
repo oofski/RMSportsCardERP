@@ -350,6 +350,26 @@ export function registerFinanceIpc(): void {
               input?.statedFees === null || input?.statedFees === undefined
                 ? null
                 : Number(input.statedFees),
+            // The payout takes the SAME rule as the fees above it: absent or
+            // null stays null, because a statement that only quotes sales is
+            // ordinary; anything else goes through Number() so an unparseable
+            // form string arrives as NaN and is refused, rather than landing as
+            // a stated zero the payout check would then read as the platform
+            // having paid nothing.
+            //
+            // THIS LINE WAS MISSING, and nothing downstream could tell. The
+            // column, the shared type, the validator and the read all carry the
+            // field, so the value was simply dropped in transit here and every
+            // saved statement came back with a null payout — which the payout
+            // comparison treats as 'not stated' and skips. The operator typed a
+            // figure into the box, saved, and the one check that answers 'did
+            // the money that moved match the money the ledger holds' quietly
+            // never ran. A dropped field on a boundary fails like this: no
+            // error anywhere, just a feature that is never reached.
+            statedPayout:
+              input?.statedPayout === null || input?.statedPayout === undefined
+                ? null
+                : Number(input.statedPayout),
             note: str(input?.note)
           },
           actor.id

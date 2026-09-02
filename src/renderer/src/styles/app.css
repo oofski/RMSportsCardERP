@@ -29691,3 +29691,98 @@ button.sor-team:focus-visible {
     width: auto;
   }
 }
+
+
+/* ---------------------------------------------------------------------------
+   WHAT THE REVENUE TILE DOES NOT KNOW
+
+   Two pieces, one subject. The top line on the widget row is the only figure up
+   there that nobody imported: it is the net Whatnot paid with a MODELLED fee
+   added back, so a rate change moves it and leaves net profit identical to the
+   cent — which is exactly why being wrong about it went unnoticed for a
+   fortnight. Both of these are therefore worded and styled as PROVENANCE, not
+   as an error.
+
+   NEITHER IS A WARNING, and that is not a matter of taste. The tile is not
+   wrong, it is derived, and it is derived every single day. A red badge on a
+   figure that is usually fine is a badge the owner stops seeing inside a week,
+   and then it is worth nothing on the day the figure really is wrong. The loud
+   styling on this row belongs to .fin-widgets-drift — the five figures failing
+   to add up — and it keeps it.
+   --------------------------------------------------------------------------- */
+/* Sits INSIDE .fin-widget-label, which is 11px uppercase with wide tracking,
+   hence the reset of both: the chip has to read as an aside rather than as more
+   of the label. --text-2 on --surface-3, the same neutral pairing the rest of
+   the finance surface uses for a note that is not a judgement. */
+.fin-widget-derived {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--text-2);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  white-space: nowrap;
+  vertical-align: 1px;
+  cursor: help;
+}
+/* Spans the whole grid like the drift line does, because it is about the row
+   rather than about one cell, and it sits immediately ABOVE that line so a
+   screen carrying both reads the quiet one first and the hard one last.
+   No border of its own: .fin-widgets has a 1px gap over a --border ground, so
+   the separating rule is already drawn and a second one doubles it.
+   --text-2, not --text-3: this is a sentence somebody has to read, not a label
+   they glance at. The same weight whatever the state — see the note in
+   Widgets.tsx about a line that only shouts on the bad days. */
+.fin-widgets-standing {
+  grid-column: 1 / -1;
+  grid-row: auto;
+  margin: 0;
+  padding: 9px 14px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+/* ---------- What Whatnot states (RatesTab -> StatementList) ----------
+   THE SAME CARD THE RATE PERIODS SIT IN, deliberately: it is the same kind of
+   list — a figure, the span it applies to, a note about where it came from, and
+   the two actions that maintain it — and a second visual language for the second
+   list of dated figures on one screen would be a thing to learn for no reason.
+   So the rows reuse .fin-rate wholesale and only the box and the picked row are
+   new here. */
+.fin-stmt-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  margin: 16px 0 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  min-width: 0;
+}
+/* THE ROW THE TABLE BELOW IS ACTUALLY SHOWING. A rail down the left edge rather
+   than a tint across the row, matching the uncovered-night marker on the
+   reconciliation table: these are read down a column and a marker on the left is
+   seen without tracking across to the far end. It has to be visible at a glance,
+   because "which of these windows am I looking at" is the exact question the
+   hand-typed date pair kept answering wrongly. */
+.fin-stmt.is-active {
+  box-shadow: inset 3px 0 0 var(--brand-600);
+  padding-left: 10px;
+}
+/* The window in words, beside the night count. Louder than the count because it
+   is the thing being checked against a document in somebody's other hand, and
+   two date inputs render in the machine's own format and read as boxes rather
+   than as a period. */
+.fin-recon-window {
+  margin-right: 10px;
+  color: var(--text);
+  font-weight: 700;
+}

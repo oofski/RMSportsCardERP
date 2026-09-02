@@ -40,7 +40,7 @@ import type { PinnedTerms, RevenueCheck, StatementInput, WhatnotStatement } from
 import { fitFromGross, grossFitVerdict, payoutCheck } from '@shared/statementFit'
 import type { StreamDayFinance, WhatnotRatePeriod } from '@shared/financeStreaming'
 import { effectiveFeeRates, isDayKey } from '@shared/financeStreaming'
-import { reconInRange, reconRows, reconTotals } from '@shared/pnlRecon'
+import { pinTermsFor, reconInRange, reconRows, reconTotals } from '@shared/pnlRecon'
 import { getDb } from './database'
 import { newId, nowIso } from '../util'
 
@@ -240,6 +240,15 @@ export function deleteStatement(id: string): Result<WhatnotStatement[]> {
  * one answer is required the honest one is the terms that priced most of it.
  * When the window is not all on one set of card terms, `mixedTerms` says so
  * rather than letting the average pass as exact.
+ *
+ * THAT RULE IS `pinTermsFor` IN @shared/pnlRecon AND IS NOT COPIED HERE. It used
+ * to be, and the copy is how the app came to hold two answers to one question:
+ * the Rates tab pins the same terms for the same window and picked them off the
+ * window's LAST DAY, falling back to TODAY when the date box was blank — which
+ * it defaulted to — so the panel could fit July's money on this month's rates
+ * while this store fitted it on July's heaviest night, and nothing on either
+ * screen said they disagreed. Deleted rather than kept in step: a second copy is
+ * exactly how they drifted apart, and it would drift again.
  */
 export function revenueCheck(
   days: readonly StreamDayFinance[],
@@ -251,8 +260,12 @@ export function revenueCheck(
   const rows = reconInRange(reconRows(days, periods), from, to)
   const totals = reconTotals(rows)
 
-  // The night that carried the most money decides the pinned terms.
-  const heaviest = [...rows].sort((a, b) => b.netPaid - a.netPaid)[0]
+  // The night that carried the most money decides the pinned terms — the shared
+  // rule, called, not reimplemented. See the note above about the second copy.
+  //
+  // The day-to-terms lookup goes in as a CALLBACK because resolving it is a
+  // main-process job: it reads the rate periods this process holds, and dragging
+  // that into `@shared` would put it in the browser bundle as well.
   const termsFor = (day: string): PinnedTerms => {
     const r = effectiveFeeRates(periods, day)
     return {
@@ -261,13 +274,16 @@ export function revenueCheck(
       processingFlatCents: r.processingFlatCents
     }
   }
-  const pinned = heaviest
-    ? termsFor(heaviest.day)
-    : { processingRate: 0.029, taxRate: 0.0518, processingFlatCents: 30 }
-
-  const key = (t: PinnedTerms): string =>
-    `${t.processingRate}|${t.taxRate}|${t.processingFlatCents}`
-  const mixedTerms = new Set(rows.map((r) => key(termsFor(r.day)))).size > 1
+  // The fallback is named here rather than left to the shared default because it
+  // is this file's own answer for a window that held no money: nothing is being
+  // priced, so the built-in card terms stand in. These are the same figures as
+  // `DEFAULT_FEE_RATES`, written out so that changing the platform defaults
+  // cannot quietly change what an EMPTY window reports.
+  const { pinned, mixedTerms } = pinTermsFor(rows, termsFor, {
+    processingRate: 0.029,
+    taxRate: 0.0518,
+    processingFlatCents: 30
+  })
 
   const fit = fitFromGross(
     Number(window.statedGross) || 0,

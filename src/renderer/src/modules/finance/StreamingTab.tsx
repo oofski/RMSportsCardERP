@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { LIVE, useLiveRefresh } from '../../lib/live'
 import type { StreamingFinanceView, WhatnotRatePeriod } from '@shared/financeStreaming'
 import { describeImportStanding, importStanding } from '@shared/financeStreaming'
-import { reconInRange, reconRows, reconTotals } from '@shared/pnlRecon'
+import { checkWindow, reconInRange, reconRows, reconTotals } from '@shared/pnlRecon'
+import type { WhatnotStatement } from '@shared/statementFit'
 import { Icon } from '../../components/Icon'
 import { compactDayLabel } from './time'
 import { Button, CenterLoader, EmptyState } from '../../components/ui'
@@ -73,6 +74,17 @@ export function StreamingTab(): JSX.Element {
    * uncovered figures.
    */
   const [periods, setPeriods] = useState<WhatnotRatePeriod[]>([])
+  /**
+   * What Whatnot itself says a window sold — the only figures reachable from
+   * this tab that did not come out of the app.
+   *
+   * Read here for the same reason the rate periods are: which of them is
+   * relevant depends on the SELECTED RANGE, and only this tab knows that. An
+   * empty list is not an error state — it is the honest 'never' answer, and it
+   * is also where a failed read lands, because "nothing has ever been saved to
+   * check this against" is exactly what is true when the app cannot tell.
+   */
+  const [statements, setStatements] = useState<WhatnotStatement[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [attempt, setAttempt] = useState(0)
@@ -90,10 +102,32 @@ export function StreamingTab(): JSX.Element {
       try {
         const next = await finance.streamView()
         if (alive) setView(next)
-        // Failing to read the rate list must not blank the tab: the numbers are
-        // still worth showing, the coverage warning simply is not available.
-        const rates = await finance.rates().catch(() => [] as WhatnotRatePeriod[])
-        if (alive) setPeriods(rates)
+        // Failing to read either of these must not blank the tab: the numbers are
+        // still worth showing, the coverage warning simply is not available, and
+        // the revenue standing degrades to "no figure has ever been saved" —
+        // which is the truthful answer when the app cannot tell, and the one
+        // thing this line must never do is claim agreement it did not check.
+        // CALLED BEHIND A typeof GUARD, not just wrapped in .catch. On a build
+        // whose preload predates saved figures, `finance.statements` is
+        // undefined and calling it throws a TypeError SYNCHRONOUSLY, while the
+        // array literal is still being evaluated — before the .catch beside it
+        // has been attached to anything. The rejection then escapes to the outer
+        // catch and blanks the entire tab with "the streaming ledger could not be
+        // read", over a line that is only a disclosure. Main and renderer ship as
+        // separate artifacts and can skew; RatesTab already guards this exact
+        // call for this exact reason.
+        const [rates, stated] = await Promise.all([
+          typeof finance.rates === 'function'
+            ? finance.rates().catch(() => [] as WhatnotRatePeriod[])
+            : Promise.resolve([] as WhatnotRatePeriod[]),
+          typeof finance.statements === 'function'
+            ? finance.statements().catch(() => [] as WhatnotStatement[])
+            : Promise.resolve([] as WhatnotStatement[])
+        ])
+        if (alive) {
+          setPeriods(rates)
+          setStatements(stated)
+        }
       } catch (err) {
         if (alive) {
           setError(err instanceof Error ? err.message : 'The streaming ledger could not be read.')
@@ -146,6 +180,30 @@ export function StreamingTab(): JSX.Element {
     const t = reconTotals(rows)
     return t.uncoveredNetPaid > 0 ? t : null
   }, [view, periods, range])
+
+  /**
+   * WHAT THIS SCREEN IS ENTITLED TO SAY ABOUT ITS OWN TOP LINE.
+   *
+   * The window is judged FIRST and separately, by `checkWindow`, because this
+   * tab opens on all-time and all-time is not a period any statement covers. A
+   * figure typed off one month's document compared against every night ever
+   * imported produces a gap the size of the rest of the ledger, and the screen
+   * reports it with a straight face — that is not hypothetical, it is where the
+   * $24k on the Fees & rates tab came from. Blank ends are a legitimate
+   * selection for the table below and an impossible one for a comparison; the
+   * difference is in the CLAIM, not in the filter. See the block comment in
+   * @shared/pnlRecon, which spells out why `reconInRange` must keep treating a
+   * blank end as open while this refuses it.
+   *
+   * The derived figure is deliberately absent from what is handed over. The
+   * widgets own it — it is the number they print — so passing them the window
+   * and the saved statements is what keeps the sentence and the tile above it
+   * from ever quoting different revenues.
+   */
+  const againstWhatnot = useMemo(
+    () => ({ window: checkWindow(range?.from ?? '', range?.to ?? ''), statements }),
+    [range, statements]
+  )
 
   /**
    * Re-run attribution over every stored row.
@@ -350,6 +408,7 @@ export function StreamingTab(): JSX.Element {
           priorLabel={
             prior ? `previous ${daySpan(prior.range.from, prior.range.to)} days` : null
           }
+          againstWhatnot={againstWhatnot}
         />
       </section>
 

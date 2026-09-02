@@ -1,6 +1,8 @@
 import { useMemo } from 'react'
 import type { StreamFinanceTotals } from '@shared/financeStreaming'
 import { profitMargin } from '@shared/financeStreaming'
+import type { CheckWindow, CoveringStatement } from '@shared/pnlRecon'
+import { revenueStanding } from '@shared/pnlRecon'
 import { Icon } from '../../components/Icon'
 import { Money, moneyText } from './bits'
 import { buildStatement, pnlDrift, sectionSubtotal } from './Pnl'
@@ -45,6 +47,20 @@ interface Widget {
   amount: number
   prior: number | null
   sub: JSX.Element | string | null
+  /**
+   * A note on the FACE of the tile about where its figure came from, with the
+   * long version in the tooltip.
+   *
+   * NEUTRAL, and that is the entire design. The tile carrying one is not WRONG,
+   * it is DERIVED — a different thing, and true of it every single day. A red
+   * badge on a figure that is usually fine is a badge the owner learns to look
+   * past inside a week, and then it is worth nothing on the day the figure
+   * really is wrong. So it reads at --text-2, like the label beside it: a fact
+   * about where the number came from, not an alarm about its value. The loud
+   * styling on this row belongs to the checksum failure, which means the
+   * figures do not add up at all.
+   */
+  chip?: { text: string; why: string }
   /** The bottom line gets the green/red ramp. A cost is not a loss, so nothing
    *  else does — costs print neutral and negative, the way a statement does. */
   bottomLine?: boolean
@@ -67,12 +83,31 @@ interface Widget {
 export function RangeWidgets({
   totals,
   prior,
-  priorLabel
+  priorLabel,
+  againstWhatnot
 }: {
   totals: StreamFinanceTotals
   /** The equivalent window immediately before this one, or null for all-time. */
   prior: StreamFinanceTotals | null
   priorLabel: string | null
+  /**
+   * EVERYTHING NEEDED TO CHECK THE TOP LINE AGAINST WHATNOT — except the figure
+   * itself, which this component owns and which is deliberately NOT passed in.
+   *
+   * The derived revenue used below is `revenue`, the same variable the tile
+   * prints. Hand a component a window and a set of statements and it can only
+   * say something about the number it is already showing; hand it a
+   * pre-computed answer and the day someone derives "revenue" a second way
+   * upstream, the sentence quietly starts quoting a figure different from the
+   * one directly above it. A screen that contradicts itself is worth less than
+   * a blank one.
+   */
+  againstWhatnot: {
+    /** The selected range, already judged fit or unfit to compare against. */
+    window: CheckWindow
+    /** Every figure ever saved off a Whatnot statement. Empty is ordinary. */
+    statements: readonly CoveringStatement[]
+  }
 }): JSX.Element {
   const sections = useMemo(() => buildStatement(totals), [totals])
   const priorSections = useMemo(() => (prior ? buildStatement(prior) : null), [prior])
@@ -97,6 +132,42 @@ export function RangeWidgets({
   const cogsRate = revenue > 0 ? (Math.abs(sub('cogs')) / revenue) * 100 : null
   const margin = profitMargin(revenue, net)
 
+  /**
+   * WHERE THE TOP LINE STANDS AGAINST WHATNOT'S OWN FIGURE FOR THE SAME DAYS.
+   *
+   * Every other figure on this row can be checked against something. Net paid is
+   * the ledger's own Amount column, cost of goods is what the stock cost, and
+   * the checksum below proves the four of them reconcile to the stored net
+   * profit. Revenue is the one with nothing behind it but a rate somebody typed
+   * — and because the same modelled fee is subtracted again two sections down,
+   * getting that rate wrong moves this tile and leaves net profit identical to
+   * the cent, which is precisely why nothing ever caught it. The row printed all
+   * four in the same weight and said none of that out loud.
+   *
+   * The sentence is built in @shared/pnlRecon and not here, on purpose: a
+   * component that assembles it out of a state and two numbers will eventually
+   * assemble one the numbers do not support. This prints what it is handed.
+   */
+  const standing = useMemo(
+    // GROSS SALES, NOT THE REVENUE SUBTOTAL, and the distinction is the whole
+    // difference between a check and a second opinion nobody asked for.
+    //
+    // Whatnot's stated figure is what the window SOLD. The revenue subtotal on
+    // the tile beside this is grossSales PLUS tips, seller bonuses and
+    // unrecognised rows — money that arrives whole and was never a sale. Feeding
+    // that in compares two different quantities and calls the difference a
+    // discrepancy: a July that agrees with Whatnot to the cent reads as 2.7% out
+    // because $8,000 of tips landed in the same month, and the Fees & rates
+    // screen — which passes grossSales — calls the very same statement a match.
+    // Two screens contradicting each other about one document is the exact
+    // failure this whole feature exists to end.
+    //
+    // `feeRate` directly above already refuses total revenue for its denominator
+    // and says why. Same reason, same base.
+    () => revenueStanding(againstWhatnot.window, againstWhatnot.statements, totals.grossSales),
+    [againstWhatnot, totals.grossSales]
+  )
+
   const widgets: Widget[] = [
     {
       key: 'revenue',
@@ -104,6 +175,19 @@ export function RangeWidgets({
       amount: revenue,
       prior: priorSub('revenue'),
       goodWhenUp: true,
+      // WORKED OUT, not stated. Whatnot's export gives one money column and it
+      // is what they PAID; this figure is that column with the modelled fees put
+      // back on top, so it is the app's arithmetic and not the platform's
+      // assertion. Two words on the tile and the whole reason in the tooltip,
+      // because the tile is the thing somebody is looking at when the question
+      // occurs to them. Neutral by construction — see `chip` on the interface
+      // above for why this must never be dressed as a warning.
+      chip: {
+        text: 'worked out',
+        why:
+          'Whatnot’s export states only what it paid. This is that figure with the modelled ' +
+          'fees added back — it is not a number Whatnot stated.'
+      },
       sub:
         totals.saleCount > 0
           ? `${totals.saleCount.toLocaleString()} sales across ${totals.sessionCount.toLocaleString()} ${
@@ -159,6 +243,17 @@ export function RangeWidgets({
         <WidgetCard key={w.key} widget={w} priorLabel={priorLabel} />
       ))}
 
+      {/* ONE LINE, and it prints the sentence it was given and nothing else.
+          SECOND TO LAST ON PURPOSE. The drift line below is the harder failure —
+          the figures do not add up, so nothing on this row means what it says —
+          and it stays last and loudest. This one is quieter and always present:
+          it says whether anybody has ever checked the top line against the
+          document it is modelling, and it says so in the same weight whatever
+          the answer is, 'disagrees' included. A line that shouts on the bad days
+          is a line that gets skipped on all the others, and the sentence itself
+          is emphatic enough without help from the styling. */}
+      <p className="fin-widgets-standing">{standing.sentence}</p>
+
       {!check.ok && (
         <p className="fin-widgets-drift" role="alert">
           <Icon name="AlertTriangle" size={14} />
@@ -190,7 +285,18 @@ function WidgetCard({
 
   return (
     <div className={`fin-widget${bottomLine ? ' is-bottom' : ''}${tone ? ` ${tone}` : ''}`}>
-      <span className="fin-widget-label">{widget.label}</span>
+      {/* The chip lives INSIDE the label rather than in a band of its own. The
+          four widgets share four subgrid rows so their figures line up, and a
+          fifth row would be blank on three of the four cards — the label simply
+          wraps instead, which it is already built to do. */}
+      <span className="fin-widget-label">
+        {widget.label}
+        {widget.chip ? (
+          <span className="fin-widget-derived" title={widget.chip.why}>
+            {widget.chip.text}
+          </span>
+        ) : null}
+      </span>
       <span className="fin-widget-value">
         {bottomLine ? (
           <span className={`fin-widget-figure mono ${tone}`}>
