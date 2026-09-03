@@ -366,11 +366,14 @@ export function EditOrderModal({
          a table and a measurement row, which is exactly the reason
          CreateInvoiceModal states for taking modal-xl.
 
-         The two are the same document seen twice, entered by the same person on
-         the same afternoon; they should not be two different shapes. The phone
-         layer sizes .modal to the whole screen and wins on source order, so this
-         is a desktop width and cannot reach a phone. */
-      className="modal-xl"
+         modal-xl's fixed 940px stopped the clipping and was still a window in
+         the middle of a screen; asked again, the owner wanted it LARGER. So this
+         screen takes the viewport rather than a fixed number — see
+         .modal-edit-order, which is 94vw up to a cap.
+
+         The phone layer sizes .modal to the whole screen and wins on source
+         order, so this is a desktop width and cannot reach a phone. */
+      className="modal-edit-order"
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>

@@ -24606,6 +24606,31 @@ button.sor-team:focus-visible {
   max-width: 940px;
 }
 
+/* THE EDIT-AN-ORDER SCREEN IS THE BIGGEST DIALOG IN THE APP, deliberately.
+
+   The owner, twice: "I think it needs to be like more horiztonal when I click on
+   it", then "I don't wnat the card to be smaller I want it to be larger ...
+   larger in size when i clcike dit".
+
+   It was on the default 520px, where the five-column line table did not fit —
+   the Line total header clipped mid-word and the table grew its own sideways
+   scrollbar — and the four measurement boxes stacked into a tall column beneath
+   it. modal-xl's fixed 940px fixed the clipping and is still a window in the
+   middle of a screen rather than a screen.
+
+   So this one takes the viewport instead of a fixed number: 94vw up to a cap, so
+   it is as large as the display allows on a laptop AND on the 27-inch monitor,
+   without the line table ever stretching so wide that the quantity box is a
+   mouse-journey away from the price. The cap is what stops "larger" becoming
+   "unreadable".
+
+   PHONES ARE UNAFFECTED. mobile.css sizes `.modal` to the whole screen with the
+   same specificity and later in source order, so this is a desktop width by
+   construction — the same property modal-xl relies on. */
+.modal-edit-order {
+  max-width: min(1280px, 94vw);
+}
+
 /* The one marker. Small, amber, and always adjacent to the thing it qualifies
    — never floating at the end of a row where it could be read as applying to
    the line above. */
