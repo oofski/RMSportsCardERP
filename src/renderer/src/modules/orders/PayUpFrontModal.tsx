@@ -6,9 +6,25 @@ import { Button, Checkbox, Field, Input, Modal, Select } from '../../components/
 import { Icon } from '../../components/Icon'
 import { useToast } from '../../components/Toast'
 import { formatMoney } from '../../lib/format'
+import { paidAction } from '@shared/orderActions'
 
 /**
- * "They paid before we shipped."
+ * RECORD THE MONEY. One dialog, whichever terms the buyer is on.
+ *
+ * ## It used to be half of a pair, and the pair was the owner's complaint
+ *
+ * "mark it as paid, like dont need 2 buttons there because if something is set
+ * as marked as paid in the begingin marking it paid would mark it paid according
+ * to the terms." There were two: this one, called "Paid up front…", which
+ * recorded the amount, the method, the reference, moved the card and released
+ * the order to be picked — and a plain "Mark paid" tick in the Payment column
+ * that stamped a date and nothing else. Which of the two somebody got depended
+ * on which column the card was standing in.
+ *
+ * This is now the only one, because it is a strict superset: leave every field
+ * alone and it does exactly what the tick did. The terms decide the WORDS, not
+ * which screen opens — see `paidAction` in @shared/orderActions, which also
+ * decides whether the payment counts as having arrived before anything shipped.
  *
  * ## Why this is a dialog and not a button
  *
@@ -53,6 +69,8 @@ export function PayUpFrontModal({
   const [readyToShip, setReadyToShip] = useState(true)
   const [markPaid, setMarkPaid] = useState(true)
   const [saving, setSaving] = useState(false)
+  /** The words and the up-front flag, from the order's own terms. */
+  const plan = paidAction(invoice)
 
   const value = Number(amount)
   const partial = Number.isFinite(value) && value > 0 && value < invoice.total - 0.005
@@ -67,7 +85,12 @@ export function PayUpFrontModal({
         method: method === 'Other' ? otherMethod.trim() || 'Other' : method,
         reference: reference.trim() || null,
         readyToShip,
-        markPaid
+        markPaid,
+        // NOT ALWAYS TRUE ANY MORE. This call used to be reachable only from a
+        // button called "Paid up front…", so the column it writes agreed with
+        // the door by construction. One button now serves both terms, and an
+        // on-delivery buyer paying on delivery did not pay up front.
+        upFront: plan.upFront
       })
       if (!res.ok || !res.data) {
         toast.error(res.error ?? 'Could not record that payment.')
@@ -87,7 +110,7 @@ export function PayUpFrontModal({
 
   return (
     <Modal
-      title="Paid up front"
+      title="Record the payment"
       subtitle={`${invoice.customerName} · ${formatMoney(invoice.total)}`}
       onClose={() => (saving ? undefined : onClose())}
       footer={
@@ -107,6 +130,11 @@ export function PayUpFrontModal({
         </>
       }
     >
+      {/* WHAT THE TERMS MEAN FOR THIS PRESS, in one sentence, written by the
+          same helper that put the button on the card — so the card and the
+          dialog can never describe the order differently. */}
+      <p className="fin-confirm-lead">{plan.detail}</p>
+
       <Field label="How much arrived" hint={problem ?? 'Defaults to the whole order.'}>
         <Input
           type="number"
@@ -154,7 +182,11 @@ export function PayUpFrontModal({
         checked={readyToShip}
         onChange={setReadyToShip}
         label="Get it ready to ship"
-        hint="Puts it on the packing list. This is separate from the money — a deposit usually is not ready."
+        hint={
+          invoice.paymentTiming === 'front'
+            ? 'This is the gate that is holding it — nothing ships on these terms until the money is in.'
+            : 'Puts it on the packing list. This is separate from the money — a deposit usually is not ready.'
+        }
       />
       <Checkbox
         checked={markPaid}

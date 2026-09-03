@@ -4448,6 +4448,24 @@ tr.hoverable-row:hover {
   white-space: nowrap;
   flex: 0 0 auto;
 }
+/* THE NUMBER IS ALSO THE DOOR TO QUICKBOOKS once the invoice is over there.
+   Rendered as a button so it is reachable by keyboard and announced as a
+   control, and stripped back to the span it replaces so the card's header does
+   not change shape when an order gets posted. The underline is the only
+   affordance, and it only appears on hover — a permanently underlined number
+   would read as a link on every card including the drafts that are not one. */
+button.po-card-num-link {
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}
+button.po-card-num-link:hover,
+button.po-card-num-link:focus-visible {
+  text-decoration: underline;
+}
 /* Where the boxes land — a quiet chip so the number keeps the line's weight.
 
    IT TRUNCATES RATHER THAN PUSHING. A destination is a party name and party
@@ -7093,6 +7111,37 @@ tr.hoverable-row:hover {
 /* Order history — finished supply orders that have aged off the PO board.
    Shut by default and visually quieter than the live table above it, because it
    answers a question about the past, not about what needs doing. */
+/* Sections inside the Edit-an-order screen — the box measurements, and the
+   hand-offs to the three screens that used to be buttons on the card. Ruled off
+   rather than boxed: they are parts of one form, not cards in a list. */
+.so-edit-section {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+.so-edit-section h4 {
+  margin: 0 0 2px;
+  font-size: 13px;
+  font-weight: 700;
+}
+.so-edit-section .p-sub {
+  margin: 0 0 10px;
+}
+.so-dims-grid {
+  display: grid;
+  /* Four across where there is room, two across on a phone, and never a fifth
+     column of nothing. auto-fit rather than a phone-only rule so the four boxes
+     reflow at whatever width the modal happens to be, which is not the same as
+     the viewport width once a dialog has its own padding. */
+  grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
+  gap: 10px;
+}
+.so-edit-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .supply-history {
   margin-top: 18px;
 }

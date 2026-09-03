@@ -2855,10 +2855,14 @@ export function recordInvoicePayment(
     )
     const markPaid = input.markPaid !== false
     const ready = input.readyToShip !== false
+    // TRUE UNLESS SOMEBODY SAYS OTHERWISE. Every caller that predates the flag
+    // was the "Paid up front…" dialog, so absent means yes and no stored row
+    // changes meaning. See InvoicePaymentInput.upFront.
+    const upFront = input.upFront !== false
 
     db.prepare(
       `UPDATE invoices
-          SET paid_up_front = 1,
+          SET paid_up_front = CASE WHEN ? THEN 1 ELSE paid_up_front END,
               payment_method = COALESCE(?, payment_method),
               payment_reference = COALESCE(?, payment_reference),
               paid_at = COALESCE(paid_at, ?),
@@ -2868,6 +2872,7 @@ export function recordInvoicePayment(
               updated_at = ?
         WHERE id = ?`
     ).run(
+      upFront ? 1 : 0,
       (input.method ?? '').trim() || null,
       (input.reference ?? '').trim() || null,
       stamp,
@@ -2882,8 +2887,11 @@ export function recordInvoicePayment(
 
     const how = (input.method ?? '').trim()
     recordOrderEvent('so', id, 'paid', {
+      // The log line follows the same flag as the column. An on-delivery order
+      // logged as "Paid up front" would put a claim nobody made into the one
+      // record of this order that is never rewritten.
       detail:
-        `Paid up front — ${amount.toFixed(2)}` +
+        `${upFront ? 'Paid up front' : 'Payment recorded'} — ${amount.toFixed(2)}` +
         (how ? ` by ${how}` : '') +
         ((input.reference ?? '').trim() ? ` (${(input.reference as string).trim()})` : ''),
       actorId,

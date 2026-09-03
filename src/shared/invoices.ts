@@ -554,6 +554,21 @@ export interface InvoicePaymentInput {
   readyToShip?: boolean
   /** Move the card to Paid as well. Off for a deposit against a bigger order. */
   markPaid?: boolean
+  /**
+   * Did the money arrive BEFORE anything shipped?
+   *
+   * Straight through to `paid_up_front`, whose meaning is exactly that sentence.
+   * It used to be written as 1 unconditionally, because the only door onto this
+   * call was a dialog called "Paid up front…" — so the flag and the door agreed
+   * by construction. Now that one Mark paid button serves both terms, a buyer
+   * who pays ON DELIVERY reaches the same call, and writing the flag for them
+   * would state something nobody claimed.
+   *
+   * DEFAULTS TO TRUE when absent, which is what every existing caller means and
+   * what every stored row already says. See paidAction in @shared/orderActions
+   * for how the card decides.
+   */
+  upFront?: boolean
 }
 
 export const PAYMENT_REFERENCE_MAX = 120
