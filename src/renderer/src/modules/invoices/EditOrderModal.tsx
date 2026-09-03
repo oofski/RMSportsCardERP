@@ -354,6 +354,23 @@ export function EditOrderModal({
         invoice.status === 'draft' ? ' — still a draft' : ' — your copy only'
       }`}
       onClose={onClose}
+      wide
+      /* THE SAME WIDTH AS THE FORM THAT WROTE THE ORDER.
+
+         The owner, on a screenshot of this dialog on his own machine: "I think
+         it needs to be like more horiztonal when I click on it". At the default
+         520px the five-column line table did not fit — the Line total header was
+         clipped mid-word and the table grew its own horizontal scrollbar — and
+         then the four measurement boxes stacked underneath it into a tall
+         column. This screen stopped being a column of fields the moment it grew
+         a table and a measurement row, which is exactly the reason
+         CreateInvoiceModal states for taking modal-xl.
+
+         The two are the same document seen twice, entered by the same person on
+         the same afternoon; they should not be two different shapes. The phone
+         layer sizes .modal to the whole screen and wins on source order, so this
+         is a desktop width and cannot reach a phone. */
+      className="modal-xl"
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>
