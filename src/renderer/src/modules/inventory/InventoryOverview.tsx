@@ -27,6 +27,12 @@ import {
   type SortState
 } from '@shared/inventorySort'
 import { countByPriceBand, matchesPriceBand } from '@shared/priceBands'
+import {
+  formatSpreadPercent,
+  spreadPercent,
+  spreadPercentText,
+  spreadTone
+} from '@shared/spread'
 import { SortTh } from '../../components/SortTh'
 import { PriceBandChips } from '../../components/PriceBandChips'
 import { countIdentifierGaps } from '@shared/identifiers'
@@ -224,9 +230,19 @@ export function InventoryOverview({
           onClick={() => openDetail({ kind: 'value', label: 'Inventory value' })}
         />
         <Stat icon="Wallet" value={formatMoney(stats.totalCost, { compact: true })} label="Total cost" onClick={() => openDetail({ kind: 'cost', label: 'Total cost' })} />
+        {/* THE PERCENTAGE RIDES ON THE SPREAD TILE — asked for as "% gain/loss
+            next to spread ... as a total number on that screen", and explicitly
+            not as a tile of its own. `unit` is the small slot beside the figure
+            that Cases on hand already uses for its noun, so it inherits the
+            tile's pos/neg colour and the two halves of one fact stay one fact.
+
+            Against TOTAL COST, which is the cost basis the spread is measured
+            from. Uncosted boxes contribute nothing to either side (see
+            InventoryStats.spread), so they cannot flatter or dent this. */}
         <Stat
           icon="TrendingUp"
           value={formatMoney(stats.spread, { compact: true })}
+          unit={spreadPercentText(stats.spread, stats.totalCost) ?? undefined}
           label="Spread"
           tone={stats.spread < 0 ? 'neg' : stats.spread > 0 ? 'pos' : undefined}
           onClick={() => openDetail({ kind: 'spread', label: 'Spread' })}
@@ -1514,7 +1530,8 @@ function sortRowOf({ p, m }: { p: InventoryProduct; m: ProductMetrics }): Invent
     invValue: p.quantity > 0 ? m.invValue : null,
     avgCost: m.hasCost ? m.avgCost : null,
     totalCost: m.hasCost && p.quantity > 0 ? m.totalCost : null,
-    spread: m.hasCost && !m.outsideSpread && p.quantity > 0 ? m.spread : null
+    spread: m.hasCost && !m.outsideSpread && p.quantity > 0 ? m.spread : null,
+    spreadPct: m.hasCost && !m.outsideSpread && p.quantity > 0 ? m.spreadPct : null
   }
 }
 
@@ -1684,7 +1701,14 @@ function InventoryDetail({
       { key: 'invValue', label: 'Inv. value', align: 'right' },
       { key: 'avgCost', label: 'Avg cost', align: 'right' },
       { key: 'totalCost', label: 'Total cost', align: 'right' },
-      { key: 'spread', label: 'Spread', align: 'right' }
+      { key: 'spread', label: 'Spread', align: 'right' },
+      // ITS OWN COLUMN RATHER THAN A SECOND LINE IN THE SPREAD CELL, and the
+      // reason is the arrow on the header: ranking by dollars ranks by how much
+      // of a product is held as much as by how well it was bought — "gain/loss
+      // could be huge on something but to contextualize it sometimes its a ton
+      // of that product" — so the two are different questions and each needs to
+      // be sortable on its own. It is the narrowest money column on the table.
+      { key: 'spreadPct', label: 'Spread %', align: 'right' }
     ],
     []
   )
@@ -1845,6 +1869,18 @@ function InventoryDetail({
                   >
                     {m.hasCost && !m.outsideSpread && p.quantity > 0 ? formatMoney(m.spread) : dash}
                   </td>
+                  {/* The same row's spread against what it cost. Dashed on
+                      exactly the rows the column beside it dashes — see
+                      productMetrics, where spreadPct is nulled by the same two
+                      conditions, so the pair can never disagree. */}
+                  <td
+                    className={`money ${spreadTone(m.spreadPct) ?? ''}`}
+                    data-label="Spread %"
+                  >
+                    {(m.hasCost && !m.outsideSpread && p.quantity > 0
+                      ? formatSpreadPercent(m.spreadPct)
+                      : null) ?? dash}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -1870,6 +1906,16 @@ function InventoryDetail({
                   data-label="Spread"
                 >
                   {formatMoney(totals.spread)}
+                </td>
+                {/* THE WHOLE SCREEN'S RETURN, against the cost in the column two
+                    to the left — not an average of the row percentages, which
+                    would weight a single $40 box the same as a $200,000 position
+                    and answer a question nobody asked. */}
+                <td
+                  className={`money ${spreadTone(spreadPercent(totals.spread, totals.cost)) ?? ''}`}
+                  data-label="Spread %"
+                >
+                  {spreadPercentText(totals.spread, totals.cost) ?? dash}
                 </td>
               </tr>
             </tfoot>

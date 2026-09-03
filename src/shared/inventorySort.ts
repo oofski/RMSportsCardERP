@@ -46,6 +46,15 @@ export interface InventorySortRow {
   totalCost: number | null
   spread: number | null
   /**
+   * The spread as a percentage of what was paid, or null wherever `spread` is.
+   *
+   * ITS OWN KEY, not a derivation at sort time, and that is the point of the
+   * whole column: ranking by dollar spread ranks by how much of a product is
+   * held as much as by how well it was bought, so the two orders are genuinely
+   * different questions and each needs its own arrow. See @shared/spread.
+   */
+  spreadPct: number | null
+  /**
    * When somebody last entered a high bid, as an ISO instant, or null if
    * nobody ever has.
    *
@@ -81,6 +90,7 @@ export const INVENTORY_SORT_KEYS = [
   'avgCost',
   'totalCost',
   'spread',
+  'spreadPct',
   'lastPriced'
 ] as const
 
@@ -110,6 +120,8 @@ export function inventorySortValue(row: InventorySortRow, key: string): SortValu
       return row.totalCost
     case 'spread':
       return row.spread
+    case 'spreadPct':
+      return row.spreadPct
     case 'lastPriced':
       // `?? null` and not `?? ''`: a product nobody has priced is MISSING, and
       // compareSortValues sinks missing to the bottom in both directions. An

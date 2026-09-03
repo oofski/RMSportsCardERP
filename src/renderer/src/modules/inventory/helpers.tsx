@@ -1,4 +1,5 @@
 import type { InventoryProduct, InventoryTxnType, UnitType } from '@shared/types'
+import { spreadPercent } from '@shared/spread'
 
 /** The text a product is searchable by. */
 function haystack(p: InventoryProduct): string {
@@ -64,6 +65,14 @@ export interface ProductMetrics {
   outsideSpread: boolean
   /** Whether a high bid is recorded. */
   hasBid: boolean
+  /**
+   * The spread as a return on what was paid, or null when there is no basis.
+   *
+   * "gain/loss could be huge on something but to contextualize it sometimes its
+   * a ton of that product" — the dollars say how much is held, this says how the
+   * product is doing. Since purchase, not day to day; see @shared/spread.
+   */
+  spreadPct: number | null
 }
 
 /**
@@ -90,7 +99,12 @@ export function productMetrics(
     spread: outsideSpread ? 0 : p.marketValue - p.costValue,
     hasCost: p.costValue > 0 || p.unitCost > 0,
     outsideSpread,
-    hasBid
+    hasBid,
+    // Null on the same rows the dollar spread dashes, so the two columns cannot
+    // tell different stories about one product: spreadPercent already refuses a
+    // basis of zero, and `outsideSpread` is the case where a basis exists on
+    // paper but the dashboard has excluded it.
+    spreadPct: outsideSpread ? null : spreadPercent(p.marketValue - p.costValue, p.costValue)
   }
 }
 

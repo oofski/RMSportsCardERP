@@ -24631,6 +24631,16 @@ button.sor-team:focus-visible {
   max-width: min(1280px, 94vw);
 }
 
+/* The spread percentage in the Pricing header, riding on the dollar figure it
+   qualifies. Lighter and smaller so the dollars stay the headline — the two are
+   one fact and the percentage is the context, not a competing number. It
+   inherits the pos/neg colour from the <strong> it sits inside. */
+.pricing-tot-pct {
+  font-size: 0.85em;
+  font-weight: 600;
+  opacity: 0.75;
+}
+
 /* The one marker. Small, amber, and always adjacent to the thing it qualifies
    — never floating at the end of a row where it could be read as applying to
    the line above. */

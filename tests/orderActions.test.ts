@@ -143,6 +143,31 @@ console.log('\n=== 1. the QuickBooks button names the act and states the status 
     columnOnly.title
   )
 
+  // A BALANCE NOBODY REPORTED IS NOT A BALANCE OF ZERO.
+  //
+  // `toObservation` writes null, never 0, when Intuit omits the Balance field —
+  // "QuickBooks says nothing is owed" and "QuickBooks did not tell us" are
+  // different facts. The first draft of the ladder read it as `?? 0`, which made
+  // this state fall through to Open with the sentence "nothing owing", AND
+  // withdrew the only control in the app that posts the payment, because the
+  // record-payment rung requires owing > 0. Found by an adversarial review, not
+  // by the cross-product below, which had no assertion about what the sentence
+  // may CLAIM.
+  const unknownBalance = quickBooksAction(
+    qb({ status: 'paid', qboBalance: null, paidAt: '2026-09-01T00:00:00.000Z' }),
+    FMT
+  )
+  ok(
+    unknownBalance.id === 'check',
+    'an unreported balance asks for a re-read — the same answer paymentPlan gives it',
+    unknownBalance.id
+  )
+  ok(
+    !/nothing owing/i.test(unknownBalance.title) && /did not say what is outstanding/i.test(unknownBalance.title),
+    'and never claims nothing is owing on a figure nobody has',
+    unknownBalance.title
+  )
+
   const voided = quickBooksAction(qb({ qboVoided: true }), FMT)
   ok(voided.id === 'open' && voided.label === 'Voided in QuickBooks', 'a void says so', voided.label)
 }
@@ -206,6 +231,12 @@ console.log('\n=== 2. EVERY state yields exactly one action, with words on it ==
                       // Never claim a tick nobody made. See the wording note above.
                       if (/marked paid here/i.test(a.title) && !paidAt) {
                         bad.push('claimed "marked paid here" with no paidAt')
+                      }
+                      // Never claim a balance nobody reported. The assertion the
+                      // first draft was missing, which is why the `?? 0` slipped
+                      // through a 15,360-state walk.
+                      if (/nothing owing/i.test(a.title) && qboBalance === null) {
+                        bad.push('claimed "nothing owing" on an unreported balance')
                       }
                       }
                     }

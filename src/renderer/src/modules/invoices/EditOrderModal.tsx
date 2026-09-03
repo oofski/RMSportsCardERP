@@ -257,9 +257,25 @@ export function EditOrderModal({
     dimNum(lengthIn) !== invoice.lengthIn ||
     dimNum(widthIn) !== invoice.widthIn ||
     dimNum(heightIn) !== invoice.heightIn
-  if (dimsFilled > 0 && dimsFilled < 4) {
-    problems.push('A parcel needs all four measurements, or none — a carrier prices on all of them.')
-  }
+  /**
+   * A PART-MEASURED PARCEL IS A NOTE, NOT A REFUSAL — and the first draft of
+   * this screen got it wrong in the way that mattered most.
+   *
+   * It pushed the completeness rule into `problems`, which gates the footer for
+   * the WHOLE screen. So an incomplete parcel disabled Save for the LINES too,
+   * and because these boxes are seeded from what is stored, an order already
+   * carrying a partial measurement — which DimsModal is perfectly happy to
+   * write — opened here reading "Fix the boxes above" before anybody had typed
+   * a character, with no way to correct a price.
+   *
+   * The comment above it claimed "the same rule DimsModal keeps". DimsModal
+   * keeps no such rule: its Save is never disabled, `setInvoiceDims` stores
+   * whatever is non-null, and its own helper text describes the incomplete save
+   * as a supported outcome — the order simply stays in Awaiting dims. Refusing
+   * here meant the app wrote a state through one door and then would not open
+   * the other.
+   */
+  const dimsComplete = dimsFilled === 4
 
   const gapNow = qboTotalMismatch(invoice)
   const gapAfter = qboTotalMismatch({ ...invoice, total: newTotal })
@@ -635,6 +651,15 @@ export function EditOrderModal({
           What the carrier prices on. All four or none — leave them all empty to un-measure a parcel
           that has been repacked.
         </p>
+        {/* The same sentence DimsModal ends on, for the same reason: a partial
+            answer looks saved and does nothing, and the card keeps its amber
+            chip with numbers printed under it. */}
+        {dimsFilled > 0 && !dimsComplete && (
+          <p className="sync-note">
+            A carrier prices on all four, so this order stays in <b>Awaiting dims</b> until every box
+            has a number. Clearing them all is how a repacked parcel gets measured again.
+          </p>
+        )}
         <div className="so-dims-grid">
           <Field label="Weight (lb)">
             <Input

@@ -3,6 +3,7 @@ import type { PricingRow } from '@shared/types'
 import type { InventorySortRow, SortState } from '@shared/inventorySort'
 import { nextSortState, sortInventoryRows } from '@shared/inventorySort'
 import { countByPriceBand, matchesPriceBand } from '@shared/priceBands'
+import { formatSpreadPercent, spreadPercent, spreadPercentText, spreadTone } from '@shared/spread'
 import { api } from '../../lib/api'
 import { useToast } from '../../components/Toast'
 import { Icon } from '../../components/Icon'
@@ -86,6 +87,7 @@ export function DailyPricingTab({ onChanged }: { onChanged: () => Promise<void> 
     avgCost: r.unitCost > 0 ? r.unitCost : null,
     totalCost: r.costValue > 0 ? r.costValue : null,
     spread: r.outsideSpread ? null : r.spread,
+    spreadPct: r.outsideSpread ? null : spreadPercent(r.spread, r.costValue),
     lastPriced: r.highBidAt
   })
 
@@ -102,13 +104,18 @@ export function DailyPricingTab({ onChanged }: { onChanged: () => Promise<void> 
         (acc, r) => {
           acc.value += r.invValue
           acc.spread += r.spread
+          // The denominator for the header percentage. Summed alongside the
+          // spread it qualifies rather than derived afterwards, so a row that is
+          // outside the spread is outside the basis too and the two halves of
+          // the ratio always describe the same set of products.
+          if (!r.outsideSpread) acc.cost += r.costValue
           if (r.outsideSpread) {
             acc.outside += r.invValue
             acc.outsideCount += 1
           }
           return acc
         },
-        { value: 0, spread: 0, outside: 0, outsideCount: 0 }
+        { value: 0, spread: 0, cost: 0, outside: 0, outsideCount: 0 }
       ),
     [filtered]
   )
@@ -170,6 +177,12 @@ export function DailyPricingTab({ onChanged }: { onChanged: () => Promise<void> 
               Value <strong>{formatMoney(totals.value, { compact: true })}</strong> · Spread{' '}
               <strong className={totals.spread < 0 ? 'neg' : totals.spread > 0 ? 'pos' : ''}>
                 {formatMoney(totals.spread, { compact: true })}
+                {spreadPercentText(totals.spread, totals.cost) && (
+                  <span className="pricing-tot-pct">
+                    {' '}
+                    {spreadPercentText(totals.spread, totals.cost)}
+                  </span>
+                )}
               </strong>
               {totals.outsideCount > 0 && (
                 <span>
@@ -224,6 +237,7 @@ export function DailyPricingTab({ onChanged }: { onChanged: () => Promise<void> 
                 <SortTh label="High bid" sortKey="highBid" sort={sort} onSort={onSort} align="right" />
                 <SortTh label="Inv. value" sortKey="invValue" sort={sort} onSort={onSort} align="right" />
                 <SortTh label="Spread" sortKey="spread" sort={sort} onSort={onSort} align="right" />
+                <SortTh label="Spread %" sortKey="spreadPct" sort={sort} onSort={onSort} align="right" />
                 <SortTh label="Last priced" sortKey="lastPriced" sort={sort} onSort={onSort} align="right" />
               </tr>
             </thead>
@@ -253,6 +267,15 @@ export function DailyPricingTab({ onChanged }: { onChanged: () => Promise<void> 
                     title={r.outsideSpread ? 'No cost recorded — this stock is outside the spread.' : undefined}
                   >
                     {r.outsideSpread ? <span className="muted">—</span> : formatMoney(r.spread)}
+                  </td>
+                  {/* How the product is DOING, beside how much of it is held.
+                      Dashed on exactly the rows the column before it dashes. */}
+                  <td className={`money ${r.outsideSpread ? '' : spreadTone(spreadPercent(r.spread, r.costValue)) ?? ''}`}>
+                    {(r.outsideSpread
+                      ? null
+                      : formatSpreadPercent(spreadPercent(r.spread, r.costValue))) ?? (
+                      <span className="muted">—</span>
+                    )}
                   </td>
                   <td className="money" style={{ color: 'var(--text-3)' }}>{r.highBidAt ? formatDate(r.highBidAt) : '—'}</td>
                 </tr>

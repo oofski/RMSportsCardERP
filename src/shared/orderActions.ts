@@ -224,7 +224,18 @@ export function quickBooksAction(facts: QboActionFacts, fmt: OrderTextFormats): 
     )
   }
 
-  const owing = Number(facts.qboBalance ?? 0)
+  /**
+   * WHAT QUICKBOOKS SAYS IS OUTSTANDING, and null is a real third answer.
+   *
+   * `toObservation` writes null and never 0 when Intuit omits the Balance field,
+   * under a comment saying exactly why: "QuickBooks says nothing is owed" and
+   * "QuickBooks did not tell us" are different facts. This read used to coerce
+   * with `?? 0`, which made the second look like the first — so a card whose
+   * last reading came back without a balance printed "nothing owing" about a
+   * figure nobody had, AND lost the only control in the app that posts the
+   * payment, because the record-payment rung requires owing > 0.
+   */
+  const owing = facts.qboBalance === null ? null : Number(facts.qboBalance)
 
   if (facts.qboStatusCheckedAt === null) {
     return act('check', 'Check QuickBooks', `In QuickBooks as ${doc}. Nobody has read its status yet — press to read it.`)
@@ -240,6 +251,17 @@ export function quickBooksAction(facts: QboActionFacts, fmt: OrderTextFormats): 
       'check',
       'Check QuickBooks',
       `In QuickBooks as ${doc}, ${fmt.money(Math.abs(totals.gap))} ${side} than this order. Change it over there, then press to re-read.`
+    )
+  }
+
+  // A BALANCE NOBODY REPORTED IS NOT A BALANCE OF ZERO. Answered the way
+  // `paymentPlan` answers it — a retryable stale reading — rather than by
+  // guessing, and answered HERE so every comparison below narrows to a number.
+  if (owing === null) {
+    return act(
+      'check',
+      'Check QuickBooks',
+      `In QuickBooks as ${doc}, but it did not say what is outstanding. Press to read it again.`
     )
   }
 
