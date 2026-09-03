@@ -29786,3 +29786,49 @@ button.sor-team:focus-visible {
   color: var(--text);
   font-weight: 700;
 }
+
+/* ---------------------------------------------------------------------------
+   Where the units are — one chip per shelf holding something, on its own row
+   under the Inventory value header. See ShelfUnitStrip; the run-on string this
+   replaced squeezed the header until the title wrapped mid-phrase.
+   --------------------------------------------------------------------------- */
+.shelf-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  /* Pulled up under the header's own margin rather than adding to it, so the
+     chart below keeps the spacing it already had. */
+  margin: -8px 0 14px;
+}
+.shelf-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 3px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  font-size: 11.5px;
+  /* A long shop name is allowed to shorten; the COUNT never is — a truncated
+     number is a wrong number, which is the whole failure being fixed here. */
+  min-width: 0;
+}
+.shelf-chip-name {
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 15ch;
+}
+.shelf-chip-n {
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+.shelf-strip-empty,
+.shelf-strip-none {
+  font-size: 11.5px;
+  color: var(--text-3);
+}

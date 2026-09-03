@@ -337,6 +337,15 @@ export function InventoryOverview({
 
       <div className="panel-row">
         <div className="panel-card">
+          {/* THE HEADER IS THE TITLE AND THE MONEY, AND NOTHING ELSE.
+              The shelf breakdown used to live in the right-hand column beside
+              the total, as one run-on string of every location whether it held
+              anything or not: "RM 487.7501 · AM 2 · California Roadshow 0 ·
+              Kentucky Roadshow 0 · New York Roadshow 0 · Texas Roadshow 0
+              units". Four empty shops took two lines, which squeezed the column
+              until the title itself wrapped mid-phrase. The information was
+              real; the shape was wrong. It moves to its own row below, where it
+              has the full width and nothing to fight with. */}
           <div className="panel-head">
             <div>
               <h3>Inventory value by category</h3>
@@ -344,11 +353,9 @@ export function InventoryOverview({
             </div>
             <div className="ph-right">
               <div className="ph-total">{formatMoney(stats.totalValue, { compact: true })}</div>
-              <div className="ph-sub">
-                {LOCATIONS.map((l) => `${l.label} ${stats.unitsByLocation[l.id] ?? 0}`).join(' · ')} units
-              </div>
             </div>
           </div>
+          <ShelfUnitStrip unitsByLocation={stats.unitsByLocation} />
           {valueByCategory.length === 0 ? (
             <div className="chart-empty">
               <Icon name="BarChart3" size={26} />
@@ -1073,6 +1080,60 @@ function IncomingPanel({
             await load()
           }}
         />
+      )}
+    </div>
+  )
+}
+
+/**
+ * Where the units actually are, one chip per shelf that holds something.
+ *
+ * ## Two things that made the old line unreadable
+ *
+ * EMPTY SHELVES WERE PRINTED. Every location appeared whether or not it held a
+ * unit, so four roadshow shops sitting at zero — the ordinary state between
+ * shows — took up more of the line than the two shelves with stock on them. A
+ * shop with nothing in it is not news; the count is only interesting where
+ * there is a count. They are still accounted for, as a quiet "+4 empty", so the
+ * list cannot be mistaken for the whole set of shelves.
+ *
+ * AND THE NUMBERS WERE RAW FLOATS. "RM 487.7501" is what a sum of fractional
+ * box quantities looks like before anybody rounds it, and it reads as a broken
+ * number rather than a precise one. Fractions are legal here — a giveaway
+ * product legitimately sits at 9.75 boxes — so this rounds to two places and
+ * then drops trailing zeros, which prints a whole number as a whole number and
+ * keeps the fraction where there is one.
+ */
+function ShelfUnitStrip({
+  unitsByLocation
+}: {
+  unitsByLocation: Record<string, number>
+}): JSX.Element | null {
+  const held = LOCATIONS.map((l) => ({ label: l.label, units: Number(unitsByLocation[l.id]) || 0 }))
+  const withStock = held.filter((h) => h.units > 0)
+  const empty = held.length - withStock.length
+  if (held.length === 0) return null
+
+  // Two decimals, then trailing zeros dropped: 488 stays 488, 487.7501 becomes
+  // 487.75, and 9.50 becomes 9.5.
+  const tidy = (n: number): string => String(Math.round(n * 100) / 100)
+
+  return (
+    <div className="shelf-strip">
+      {withStock.length === 0 ? (
+        <span className="shelf-strip-none">Nothing on any shelf yet</span>
+      ) : (
+        withStock.map((h) => (
+          <span className="shelf-chip" key={h.label}>
+            <span className="shelf-chip-name">{h.label}</span>
+            <span className="shelf-chip-n mono">{tidy(h.units)}</span>
+          </span>
+        ))
+      )}
+      {empty > 0 && (
+        <span className="shelf-strip-empty" title="Shelves holding nothing right now">
+          +{empty} empty
+        </span>
       )}
     </div>
   )
