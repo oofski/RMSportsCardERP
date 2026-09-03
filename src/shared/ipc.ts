@@ -174,6 +174,7 @@ export const IPC = {
   supplySetImage: 'supplies:set-image',
   supplyRemoveImage: 'supplies:remove-image',
   supplyOrdersList: 'supplies:orders:list',
+  supplyOrderHistory: 'supplies:orders:history',
   supplyOrderCreate: 'supplies:orders:create',
   supplyOrderSetStatus: 'supplies:orders:set-status',
   supplyOrderDelete: 'supplies:orders:delete',

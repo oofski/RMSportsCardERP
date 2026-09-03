@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { Supply, SupplyStats } from '@shared/types'
+import type { Supply, SupplyOrder, SupplyStats } from '@shared/types'
 import { api } from '../../lib/api'
 import { Button, CenterLoader, EmptyState } from '../../components/ui'
 import { Icon } from '../../components/Icon'
-import { formatMoney } from '../../lib/format'
+import { formatMoney, formatDate } from '../../lib/format'
 import { SupplyFormModal } from './SupplyFormModal'
 import { SupplyStockModal } from './SupplyStockModal'
 
@@ -26,7 +26,9 @@ type StockTarget = { supply: Supply; mode: 'purchase' | 'use' | 'adjust' }
  *
  * This tab owns the supplies themselves — stock, per-item cost, buy/use/adjust.
  * Tracking a reorder through Ordered → In-transit → Delivered lives on the
- * Purchase Orders tab, next to the buy-side PO board.
+ * Purchase Orders tab, next to the buy-side PO board — and once an order has
+ * been finished for a day it leaves that board and lands in Order history here,
+ * which is the other half of the same change. See SUPPLY_BOARD_WINDOW_MS.
  */
 export function SuppliesTab({ canManage }: { canManage: boolean }): JSX.Element {
   const [supplies, setSupplies] = useState<Supply[]>([])
@@ -35,6 +37,8 @@ export function SuppliesTab({ canManage }: { canManage: boolean }): JSX.Element 
   const [editing, setEditing] = useState<Supply | null | 'new'>(null)
   const [stockFor, setStockFor] = useState<StockTarget | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<Supply | null>(null)
+  const [history, setHistory] = useState<SupplyOrder[]>([])
+  const [showHistory, setShowHistory] = useState(false)
   const mounted = useRef(true)
 
   useEffect(() => {
@@ -45,10 +49,18 @@ export function SuppliesTab({ canManage }: { canManage: boolean }): JSX.Element 
   }, [])
 
   const load = useCallback(async () => {
-    const [list, st] = await Promise.all([api.supplies.list(), api.supplies.stats()])
+    // The history read is allowed to fail on its own. It is a record of what
+    // already happened; a screen that will not open because an extra list did
+    // not come back would be a worse trade than a missing panel.
+    const [list, st, past] = await Promise.all([
+      api.supplies.list(),
+      api.supplies.stats(),
+      api.supplies.orderHistory().catch((): SupplyOrder[] => [])
+    ])
     if (!mounted.current) return
     setSupplies(list)
     setStats(st)
+    setHistory(past)
   }, [])
 
   useEffect(() => {
@@ -250,6 +262,12 @@ export function SuppliesTab({ canManage }: { canManage: boolean }): JSX.Element 
         </div>
       )}
 
+      <OrderHistory
+        orders={history}
+        open={showHistory}
+        onToggle={() => setShowHistory((v) => !v)}
+      />
+
       {editing === 'new' && (
         <SupplyFormModal onClose={() => setEditing(null)} onSaved={load} />
       )}
@@ -273,6 +291,101 @@ export function SuppliesTab({ canManage }: { canManage: boolean }): JSX.Element 
       )}
     </>
   )
+}
+
+/**
+ * WHAT LEFT THE BOARD. The owner: "supply tab purchase orders once they are ...
+ * delivered also disappear after 24 hours into history ... those can also be
+ * tracked".
+ *
+ * Shut by default, because the question this tab answers day to day is "what do
+ * I have and what do I need to buy", not "what did I buy last month". The count
+ * sits on the toggle so the answer to "is anything in there" costs no click.
+ *
+ * Deliberately read-only. Everything in here is finished and terminal — a
+ * delivered order has already moved its stock and booked its spend, and a
+ * cancelled one never will. Offering a button would only offer a way to break
+ * that.
+ */
+function OrderHistory({
+  orders,
+  open,
+  onToggle
+}: {
+  orders: SupplyOrder[]
+  open: boolean
+  onToggle: () => void
+}): JSX.Element | null {
+  if (orders.length === 0) return null
+  const spend = orders
+    .filter((o) => o.status === 'delivered')
+    .reduce((sum, o) => sum + o.total, 0)
+  return (
+    <div className="supply-history">
+      <button className="supply-history-head" onClick={onToggle} aria-expanded={open}>
+        <Icon name={open ? 'ChevronDown' : 'ChevronRight'} size={16} />
+        <span className="supply-history-title">Order history</span>
+        <span className="supply-history-count">{orders.length}</span>
+        <span className="supply-history-spend">{formatMoney(spend)} delivered</span>
+      </button>
+      {open && (
+        <div className="table-wrap">
+          <table className="data as-cards">
+            <thead>
+              <tr>
+                <th>Supply</th>
+                <th style={{ textAlign: 'right' }}>Ordered</th>
+                <th style={{ textAlign: 'right' }}>Total</th>
+                <th style={{ textAlign: 'right' }}>Finished</th>
+              </tr>
+            </thead>
+            <tbody>
+              {orders.map((o) => (
+                <tr key={o.id}>
+                  <td>
+                    <div className="supply-name-cell">
+                      <span style={{ fontWeight: 600 }}>{o.supplyName}</span>
+                      <span
+                        className={`supply-chip ${o.status === 'cancelled' ? 'is-cancelled' : ''}`}
+                      >
+                        {o.status === 'cancelled' ? 'Cancelled' : 'Delivered'}
+                      </span>
+                    </div>
+                  </td>
+                  <td style={{ textAlign: 'right' }} data-label="Ordered">
+                    {o.units} {UNIT_LABEL[o.unit] ?? o.unit}
+                    {o.itemsPerUnit > 1 && <div className="p-sub">{o.items} items</div>}
+                  </td>
+                  <td className="money" style={{ textAlign: 'right' }} data-label="Total">
+                    {/* A cancelled order was never paid for. Printing its total
+                        as money next to delivered spend would read as a cost the
+                        business carried. */}
+                    {o.status === 'cancelled' ? (
+                      <span className="muted">—</span>
+                    ) : (
+                      formatMoney(o.total)
+                    )}
+                  </td>
+                  <td style={{ textAlign: 'right' }} data-label="Finished">
+                    {finishedOn(o) ? (
+                      formatDate(finishedOn(o) as string)
+                    ) : (
+                      <span className="muted">—</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** When an order stopped being live — whichever terminal stamp it carries. */
+function finishedOn(o: SupplyOrder): string | null {
+  return o.deliveredAt ?? o.cancelledAt ?? null
 }
 
 function SupplyStat({

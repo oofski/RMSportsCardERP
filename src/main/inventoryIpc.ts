@@ -132,6 +132,7 @@ import {
   deleteSupplyOrder,
   listSupplies,
   listSupplyOrders,
+  listSupplyOrderHistory,
   purchaseSupply,
   setSupplyImage,
   setSupplyOrderStatus,
@@ -1092,6 +1093,12 @@ export function registerInventoryIpc(): void {
   // ---- Supply orders (Ordered → In-transit → Delivered) -------------------
   ipcMain.handle(IPC.supplyOrdersList, (): SupplyOrder[] =>
     can('module.inventory') ? listSupplyOrders() : []
+  )
+
+  // What has fallen off the board. Read-only, and gated on the same permission
+  // as the board itself: it is the same orders, one day older.
+  ipcMain.handle(IPC.supplyOrderHistory, (): SupplyOrder[] =>
+    can('module.inventory') ? listSupplyOrderHistory() : []
   )
 
   ipcMain.handle(IPC.supplyOrderCreate, (_e, input: NewSupplyOrder): Result<SupplyOrder> => {

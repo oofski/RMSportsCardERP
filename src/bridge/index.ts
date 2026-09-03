@@ -628,6 +628,8 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       removeImage: (id: string): Promise<Result<Supply>> =>
         ipcRenderer.invoke(IPC.supplyRemoveImage, { id }),
       listOrders: (): Promise<SupplyOrder[]> => ipcRenderer.invoke(IPC.supplyOrdersList),
+      /** Finished orders that have aged off the board. */
+      orderHistory: (): Promise<SupplyOrder[]> => ipcRenderer.invoke(IPC.supplyOrderHistory),
       createOrder: (input: NewSupplyOrder): Promise<Result<SupplyOrder>> =>
         ipcRenderer.invoke(IPC.supplyOrderCreate, input),
       setOrderStatus: (id: string, status: SupplyOrderStatus): Promise<Result<SupplyOrder>> =>

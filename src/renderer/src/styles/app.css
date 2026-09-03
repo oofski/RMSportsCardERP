@@ -7090,6 +7090,53 @@ tr.hoverable-row:hover {
   width: 11px;
   height: 11px;
 }
+/* Order history — finished supply orders that have aged off the PO board.
+   Shut by default and visually quieter than the live table above it, because it
+   answers a question about the past, not about what needs doing. */
+.supply-history {
+  margin-top: 18px;
+}
+.supply-history-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  cursor: pointer;
+  color: var(--text-2);
+  text-align: left;
+}
+.supply-history-head:hover {
+  border-color: var(--border-strong);
+}
+.supply-history-title {
+  font-weight: 600;
+  color: var(--text-1);
+}
+.supply-history-count {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--info-bg);
+  color: var(--info);
+}
+.supply-history-spend {
+  margin-left: auto;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+}
+.supply-history .table-wrap {
+  margin-top: 10px;
+}
+.supply-chip.is-cancelled {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
 .supply-low-row {
   background: color-mix(in srgb, var(--danger) 5%, transparent);
 }

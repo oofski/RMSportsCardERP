@@ -40,9 +40,10 @@ import { PO_MOVE_LABEL, PO_STAGE_META } from './helpers'
  * paid-for box of sleeves under a heading about money still outstanding.
  *
  * They leave on their own clock, not the PO one: listSupplyOrders keeps a
- * terminal supply order for 14 days, where a completed PO goes at 1. Nothing
- * reconciles the two numbers because nothing needs to — the card says Supply on
- * it, and neither sweep can strand the other's rows.
+ * terminal supply order for SUPPLY_BOARD_WINDOW_MS — a day — and then it shows
+ * up under Inventory → Supplies → Order history instead. Nothing reconciles that
+ * against the PO sweep because nothing needs to: the card says Supply on it, and
+ * neither sweep can strand the other's rows.
  */
 const SUPPLY_COLUMN: Record<SupplyOrderStatus, PoColumn> = {
   ordered: 'ordered',
