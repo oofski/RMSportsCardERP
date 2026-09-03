@@ -416,6 +416,8 @@ export const IPC = {
    */
   poRemoveTabLine: 'po:remove-tab-line',
   poSetFreight: 'po:set-freight',
+  poAddAdjustment: 'po:adjustment:add',
+  poRemoveAdjustment: 'po:adjustment:remove',
   // WHICH OPEN ROADSHOW ORDER STILL HAS THIS PRODUCT ON THE SHELF, so a sales
   // order line can sell that order's cases rather than whatever is oldest.
   // See @shared/poStock.

@@ -63,9 +63,33 @@ export function restateOrderTotal(db: Database, poId: string, ts: string): void 
     .prepare('SELECT shipping_cost FROM purchase_orders WHERE id = ?')
     .get(poId) as { shipping_cost: number | null } | undefined
   const freight = Math.max(0, Number(freightRow?.shipping_cost) || 0)
+  /**
+   * MONEY THAT BOUGHT NO GOODS, on the same terms as freight.
+   *
+   * A credit carried over from another deal, or a shortfall settled on the next
+   * wire — the owner's case is "we wired 5000 but actually paid them 4900". It
+   * changes what this order cost and what was paid; it buys nothing that lands
+   * on a shelf.
+   *
+   * NOT CLAMPED, unlike freight, because the sign is the whole point: negative
+   * is the common case. Summed in SQL so an order with none of them adds zero
+   * without a second query.
+   *
+   * It reaches the FIFO layers through no path at all. A lot's unit cost comes
+   * from its LINE's unit_price at the moment of receipt, and nothing here
+   * touches a line — the same reason freight has never moved a per-unit cost.
+   * What it does move is the order's total and, through the row below, the COGS
+   * keyed on it, which is right: the cash that left the business for this
+   * purchase is the figure the P&L wants.
+   */
+  const adjRow = db
+    .prepare('SELECT COALESCE(SUM(amount), 0) AS total FROM purchase_order_adjustments WHERE po_id = ?')
+    .get(poId) as { total: number } | undefined
+  const adjustments = cents(Number(adjRow?.total) || 0)
   const total = cents(
     all.reduce((sum, l) => sum + cents(Math.round(l.quantity) * Math.max(0, l.unit_price)), 0) +
-      cents(freight)
+      cents(freight) +
+      adjustments
   )
   db.prepare('UPDATE purchase_orders SET total = ?, updated_at = ? WHERE id = ?').run(total, ts, poId)
   db.prepare('UPDATE finance_cogs SET amount = ? WHERE po_id = ?').run(total, poId)

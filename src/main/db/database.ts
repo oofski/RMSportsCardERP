@@ -4711,6 +4711,51 @@ function migrate(database: Database.Database): void {
   addColumnIfMissing(database, 'invoices', 'qbo_payment_attempted_at', 'TEXT')
   setMeta(database, 'schema_version', '95')
 
+  // v96: MONEY ON A PURCHASE ORDER THAT BOUGHT NO GOODS.
+  //
+  // The owner: "sometimes there might be like inventory that we add that is not
+  // actual inventory ... like we wired some 5000 but actually paid them 4900
+  // because of another deal ... add a line item as like a payment adjustment
+  // that doesnt tie back to inventory but just we can add nothing to
+  // discrepancy."
+  //
+  // A credit carried over from a previous deal, a shortfall settled on the next
+  // wire, a rebate. It changes what the ORDER cost and what was paid; it buys
+  // nothing that lands on a shelf.
+  //
+  // ## Why this is its own table and not a purchase order line
+  //
+  // Because a line means goods, all the way down. purchase_order_lines declares
+  // product_id NOT NULL with a foreign key, LINE_SELECT inner-joins the catalog,
+  // and receiving walks lines into po_line_receipts and opens a FIFO cost layer
+  // for each. A line carrying money and no product would either have to be given
+  // a fake product or be special-cased in every one of those places, and the
+  // first person to forget the special case would put a phantom case on a shelf.
+  //
+  // Kept out of the FIFO path by construction rather than by a guard: nothing in
+  // inventory reads this table.
+  //
+  // ## The amount is SIGNED
+  //
+  // Negative is the case the owner described and the common one — we paid less
+  // than the goods came to. Positive is the same fact the other way, a charge
+  // added on settlement. One column, either sign, so the arithmetic never has to
+  // ask which kind of adjustment it is holding.
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS purchase_order_adjustments (
+      id         TEXT PRIMARY KEY,
+      po_id      TEXT NOT NULL,
+      amount     REAL NOT NULL,
+      note       TEXT,
+      created_by TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (po_id) REFERENCES purchase_orders (id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_po_adjustments_po
+      ON purchase_order_adjustments (po_id);
+  `)
+  setMeta(database, 'schema_version', '96')
+
   // v41: re-derive every product's average cost from its remaining cost layers.
   //
   // The average used to be stored rounded to the cent, back when every total in

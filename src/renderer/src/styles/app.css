@@ -5839,6 +5839,54 @@ button.po-card-num-link:focus-visible {
   width: 110px;
   text-align: right;
 }
+/* Money on a purchase order that bought no goods — a credit from another deal,
+   a rebate, a shortfall settled later. Sits beside Shipping because it answers
+   the same question: why the total is not what the lines add up to. */
+.po-money-adj.is-editing {
+  align-items: center;
+  gap: 12px;
+}
+.po-adj-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.po-adj-form .input {
+  width: 110px;
+  text-align: right;
+}
+/* The reason box is the wide one: an amount is five characters and "Credit from
+   the March deal" is the part somebody actually needs six months later. */
+.po-adj-form .input:nth-of-type(2) {
+  width: 210px;
+  text-align: left;
+}
+.po-adj-kind {
+  margin-left: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-3);
+}
+.po-adj-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.po-adj-value .icon-btn {
+  width: 22px;
+  height: 22px;
+}
+/* A credit is money coming back, so it reads in the same green the app uses for
+   money in — not the red it would get for being negative, which would make a
+   refund look like a problem. */
+.po-adj-neg {
+  color: var(--success);
+}
 .po-grand-total {
   display: flex;
   align-items: center;

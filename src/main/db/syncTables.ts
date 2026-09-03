@@ -317,6 +317,12 @@ export const SYNCED_TABLES: SyncedTable[] = [
   { table: 'message_participants', key: ['id'], tier: 1 },
   { table: 'messages', key: ['id'], tier: 1 },
   { table: 'purchase_order_lines', key: ['id'], tier: 1 },
+  // Money on an order that bought no goods — see PurchaseOrderAdjustment. It
+  // travels for the same reason a line does: it changes the order's total, and
+  // a machine holding the lines without the credits would price the same
+  // purchase differently from the one beside it. Tier 1 puts it after the
+  // purchase_orders header it points at.
+  { table: 'purchase_order_adjustments', key: ['id'], tier: 1 },
   { table: 'supply_transactions', key: ['id'], tier: 1 },
   { table: 'supply_orders', key: ['id'], tier: 1 },
   { table: 'finance_cogs', key: ['id'], tier: 1 },

@@ -765,6 +765,11 @@ export function createBridge(ipcRenderer: BridgeTransport) {
       /** Shipping + payment details. Omitted keys are left as they are. */
       setFreight: (id: string, patch: FreightPatch): Promise<Result<PurchaseOrderDetail>> =>
         ipcRenderer.invoke(IPC.poSetFreight, { id, ...patch }),
+      /** Money on the order that bought no goods. Signed — negative is a credit. */
+      addAdjustment: (id: string, amount: number, note: string | null): Promise<Result<PurchaseOrderDetail>> =>
+        ipcRenderer.invoke(IPC.poAddAdjustment, { id, amount, note }),
+      removeAdjustment: (adjustmentId: string): Promise<Result<PurchaseOrderDetail>> =>
+        ipcRenderer.invoke(IPC.poRemoveAdjustment, { adjustmentId }),
       /**
        * Which open roadshow orders still have this product on a given shelf.
        *

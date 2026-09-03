@@ -1155,6 +1155,34 @@ export interface PurchaseOrder {
 /** A PO with its line items (detail view + receipt). */
 export interface PurchaseOrderDetail extends PurchaseOrder {
   lines: PurchaseOrderLine[]
+  /** Money on this order that bought no goods. See PurchaseOrderAdjustment. */
+  adjustments: PurchaseOrderAdjustment[]
+}
+
+/**
+ * MONEY ON A PURCHASE ORDER THAT BOUGHT NOTHING.
+ *
+ * The owner: "we wired some 5000 but actually paid them 4900 because of another
+ * deal ... a payment adjustment that doesnt tie back to inventory but just we
+ * can add nothing to discrepancy."
+ *
+ * A credit carried over from a previous deal, a shortfall settled on the next
+ * wire, a rebate agreed after the fact. It belongs to the ORDER, not to any line
+ * on it, and that distinction is the whole design: it changes what the order
+ * cost and what was paid, and it never reaches a shelf.
+ *
+ * SIGNED. Negative is the owner's case and the common one — we paid less than
+ * the goods came to. Positive is a charge added on settlement. One field, either
+ * sign, so nothing downstream has to ask which kind it is holding.
+ */
+export interface PurchaseOrderAdjustment {
+  id: string
+  poId: string
+  /** Negative for a credit, positive for an extra charge. Never zero. */
+  amount: number
+  /** Why. Optional, but the reason is the thing somebody needs six months on. */
+  note: string | null
+  createdAt: string
 }
 
 /** A Cost-of-Goods-Sold ledger entry recorded when a PO (a purchase) is created. */

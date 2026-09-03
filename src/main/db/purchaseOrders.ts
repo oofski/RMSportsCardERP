@@ -6,6 +6,7 @@ import type {
   PoRoutingPatch,
   PurchaseOrder,
   PurchaseOrderAllocation,
+  PurchaseOrderAdjustment,
   PurchaseOrderDetail,
   PurchaseOrderLine,
   PurchaseOrderStatus,
@@ -603,6 +604,36 @@ export function listPurchaseOrders(): PurchaseOrder[] {
   return rows.map(toSummary).filter((po) => !isSettledPurchaseOrder(po, now))
 }
 
+/**
+ * Money on this order that bought no goods, oldest first.
+ *
+ * See PurchaseOrderAdjustment. Read on the detail path only: the board's cards
+ * carry the TOTAL, which already contains these, and a card does not itemise.
+ */
+export function listPoAdjustments(db: Database.Database, poId: string): PurchaseOrderAdjustment[] {
+  const rows = db
+    .prepare(
+      `SELECT id, po_id, amount, note, created_at
+         FROM purchase_order_adjustments
+        WHERE po_id = ?
+        ORDER BY created_at ASC, id ASC`
+    )
+    .all(poId) as Array<{
+    id: string
+    po_id: string
+    amount: number
+    note: string | null
+    created_at: string
+  }>
+  return rows.map((r) => ({
+    id: r.id,
+    poId: r.po_id,
+    amount: Number(r.amount) || 0,
+    note: r.note,
+    createdAt: r.created_at
+  }))
+}
+
 export function getPurchaseOrder(id: string): PurchaseOrderDetail | null {
   const db = getDb()
   const header = db.prepare(`${PO_SELECT} WHERE po.id = ?`).get(id) as PoHeaderRow | undefined
@@ -613,7 +644,73 @@ export function getPurchaseOrder(id: string): PurchaseOrderDetail | null {
   )
   // Attached on the DETAIL path only, and behind a guard — see dealTicketRefFor
   // for why it is not part of PO_SELECT.
-  return { ...toSummary(header), ...dealTicketRefFor(db, 'po', id), lines }
+  return {
+    ...toSummary(header),
+    ...dealTicketRefFor(db, 'po', id),
+    lines,
+    adjustments: listPoAdjustments(db, id)
+  }
+}
+
+export interface PoAdjustmentResult {
+  order: PurchaseOrderDetail | null
+  error?: string
+}
+
+/**
+ * Record money on this order that bought no goods.
+ *
+ * ZERO IS REFUSED. An adjustment of nothing is a row that changes no figure and
+ * explains nothing, and the commonest way to write one is a half-typed number —
+ * so it is refused rather than stored as a line reading $0.00 that somebody has
+ * to work out the meaning of later.
+ *
+ * The total is restated inside the same transaction, which is what carries the
+ * change into the COGS row as well. See restateOrderTotal.
+ */
+export function addPoAdjustment(
+  poId: string,
+  amount: number,
+  note: string | null,
+  actorId: string | null
+): PoAdjustmentResult {
+  const db = getDb()
+  const value = Math.round((Number(amount) || 0) * 100) / 100
+  if (!Number.isFinite(value) || value === 0) {
+    return { order: getPurchaseOrder(poId), error: 'Enter an amount other than zero.' }
+  }
+  const run = db.transaction((): PoAdjustmentResult => {
+    const head = db.prepare('SELECT id, status FROM purchase_orders WHERE id = ?').get(poId) as
+      | { id: string; status: string }
+      | undefined
+    if (!head) return { order: null, error: 'That order is gone.' }
+    if (head.status === 'cancelled') {
+      return { order: getPurchaseOrder(poId), error: 'That order was cancelled.' }
+    }
+    const ts = nowIso()
+    db.prepare(
+      `INSERT INTO purchase_order_adjustments (id, po_id, amount, note, created_by, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ).run(newId(), poId, value, (note ?? '').trim() || null, actorId, ts)
+    restateOrderTotal(db, poId, ts)
+    return { order: getPurchaseOrder(poId) }
+  })
+  return run()
+}
+
+/** Take one back off. The total is restated the same way it was applied. */
+export function removePoAdjustment(adjustmentId: string): PoAdjustmentResult {
+  const db = getDb()
+  const run = db.transaction((): PoAdjustmentResult => {
+    const row = db
+      .prepare('SELECT po_id FROM purchase_order_adjustments WHERE id = ?')
+      .get(adjustmentId) as { po_id: string } | undefined
+    if (!row) return { order: null, error: 'That adjustment is gone.' }
+    db.prepare('DELETE FROM purchase_order_adjustments WHERE id = ?').run(adjustmentId)
+    restateOrderTotal(db, row.po_id, nowIso())
+    return { order: getPurchaseOrder(row.po_id) }
+  })
+  return run()
 }
 
 /**
@@ -646,7 +743,8 @@ export function listActivePurchaseOrderBoxes(): PurchaseOrderDetail[] {
       // A wholly-drop line is still RETURNED — the box has to be able to explain
       // why its count is 12 when the order says 20 — but it carries
       // qtyReceivable 0 and contributes nothing to any total.
-      lines: (lineStmt.all(h.id) as PoLineRow[]).map((l) => toLine(l, units.get(l.id) ?? []))
+      lines: (lineStmt.all(h.id) as PoLineRow[]).map((l) => toLine(l, units.get(l.id) ?? [])),
+      adjustments: listPoAdjustments(db, h.id)
     }
   })
 }

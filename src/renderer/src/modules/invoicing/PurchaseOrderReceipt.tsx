@@ -306,6 +306,9 @@ export function PurchaseOrderReceipt({
   // Clamped the same way restateOrderTotal clamps it, so the breakdown drawn
   // from this figure matches the arithmetic that produced the stored total.
   const freight = Math.max(0, Number(detail.shippingCost) || 0)
+  // Signed, and summed the same way restateOrderTotal sums them, so the Items
+  // row derived by subtraction below still lands on the lines.
+  const adjustments = (detail.adjustments ?? []).reduce((sum, a) => sum + (Number(a.amount) || 0), 0)
   // The Destination column earns its place only when there is more than one
   // answer, the same rule the PDF follows: an ordinary order all going to RM
   // prints the five columns it has always printed.
@@ -652,10 +655,10 @@ export function PurchaseOrderReceipt({
             the three numbers on screen always add up even if the arithmetic
             behind them ever changes. */}
         <div className="po-money">
-          {freight > 0 && (
+          {(freight > 0 || adjustments !== 0) && (
             <div className="po-money-row">
               <span>Items</span>
-              <span className="mono">{formatMoney(detail.total - freight)}</span>
+              <span className="mono">{formatMoney(detail.total - freight - adjustments)}</span>
             </div>
           )}
           <ShippingCostEditor
@@ -665,6 +668,14 @@ export function PurchaseOrderReceipt({
               setDetail(fresh)
               // The board's copy of this PO carries the total, and it just
               // moved. Same reason adding a line repaints.
+              void onSaved()
+            }}
+          />
+          <AdjustmentRows
+            po={detail}
+            editable={detail.status !== 'cancelled'}
+            onSaved={(fresh) => {
+              setDetail(fresh)
               void onSaved()
             }}
           />
@@ -748,6 +759,185 @@ function groupBySupplier(
     else groups.push({ supplier: name, lines: [line] })
   }
   return groups
+}
+
+/**
+ * MONEY ON THE ORDER THAT BOUGHT NO GOODS.
+ *
+ * The owner: "sometimes there might be like inventory that we add that is not
+ * actual inventory ... like we wired some 5000 but actually paid them 4900
+ * because of another deal ... add a line item as like a payment adjustment that
+ * doesnt tie back to inventory but just we can add nothing to discrepancy."
+ *
+ * A credit carried from a previous deal, a shortfall settled on the next wire, a
+ * rebate agreed after the fact. Each one is its own row so the reasons stay
+ * separate — two credits from two deals netted into one figure is a number
+ * nobody can explain six months later.
+ *
+ * ## It sits in the money block, not among the lines
+ *
+ * Because it is not a line, and the difference is the point: a line has a
+ * product, a quantity and a shelf to land on. This has none of those and must
+ * never look as though it does. Beside Shipping is exactly right — that is the
+ * app's existing answer to "why is the total not what the lines add up to", and
+ * this is the second answer to the same question.
+ *
+ * ## Signed, and typed as the owner says it
+ *
+ * He says "we paid 4900 instead of 5000", so the box takes −100. Minus is a
+ * credit, plus is a charge, and the row colours itself accordingly rather than
+ * making somebody read the sign.
+ *
+ * ## Editable after the boxes land, on freight's terms and for freight's reason
+ *
+ * It never enters a FIFO cost lot — a lot is costed at its LINE's unit price —
+ * so moving it late restates the document and the COGS row together and leaves
+ * nothing on a shelf disagreeing. Only a cancelled order refuses.
+ */
+function AdjustmentRows({
+  po,
+  editable,
+  onSaved
+}: {
+  po: PurchaseOrderDetail
+  editable: boolean
+  onSaved: (po: PurchaseOrderDetail) => void
+}): JSX.Element | null {
+  const toast = useToast()
+  const [adding, setAdding] = useState(false)
+  const [amount, setAmount] = useState('')
+  const [note, setNote] = useState('')
+  const [busy, setBusy] = useState(false)
+  const rows = po.adjustments ?? []
+
+  useEffect(() => {
+    setAdding(false)
+    setAmount('')
+    setNote('')
+  }, [po.id])
+
+  // Nothing recorded and nothing to be done about it — a cancelled order does
+  // not need a dead "Add" affordance under its total.
+  if (!editable && rows.length === 0) return null
+
+  const save = async (): Promise<void> => {
+    const value = Number(amount.trim())
+    if (!Number.isFinite(value) || value === 0) {
+      toast.error('Enter an amount other than zero — minus for a credit.')
+      return
+    }
+    setBusy(true)
+    try {
+      const res = await api.purchaseOrders.addAdjustment(po.id, value, note.trim() || null)
+      if (!res.ok || !res.data) {
+        toast.error(res.error ?? 'Could not save that adjustment.')
+        return
+      }
+      onSaved(res.data)
+      setAdding(false)
+      setAmount('')
+      setNote('')
+      toast.success('Adjustment saved.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const remove = async (id: string): Promise<void> => {
+    setBusy(true)
+    try {
+      const res = await api.purchaseOrders.removeAdjustment(id)
+      if (!res.ok || !res.data) {
+        toast.error(res.error ?? 'Could not remove that adjustment.')
+        return
+      }
+      onSaved(res.data)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <>
+      {rows.map((a) => (
+        <div className="po-money-row po-money-adj" key={a.id}>
+          <span>
+            {a.note?.trim() || 'Payment adjustment'}
+            {/* WHICH KIND, in a word, because the sign alone is easy to misread
+                on a row of right-aligned figures. */}
+            <span className="po-adj-kind">{a.amount < 0 ? 'credit' : 'charge'}</span>
+          </span>
+          <span className="po-adj-value">
+            <span className={`mono${a.amount < 0 ? ' po-adj-neg' : ''}`}>{formatMoney(a.amount)}</span>
+            {editable && (
+              <button
+                type="button"
+                className="icon-btn"
+                disabled={busy}
+                title="Remove this adjustment"
+                aria-label="Remove this adjustment"
+                onClick={() => void remove(a.id)}
+              >
+                <Icon name="X" size={12} />
+              </button>
+            )}
+          </span>
+        </div>
+      ))}
+
+      {editable && !adding && (
+        <div className="po-money-row po-money-adj">
+          <span>Payment adjustment</span>
+          <button
+            type="button"
+            className="po-ship-edit is-empty"
+            title="Money on this order that bought no goods — a credit from another deal, a rebate, a shortfall settled later"
+            onClick={() => setAdding(true)}
+          >
+            <span className="mono">Add</span>
+            <Icon name="Plus" size={11} />
+          </button>
+        </div>
+      )}
+
+      {editable && adding && (
+        <div className="po-money-row po-money-adj is-editing">
+          <span>Payment adjustment</span>
+          <div className="po-adj-form">
+            <Input
+              value={amount}
+              inputMode="decimal"
+              placeholder="-100.00"
+              autoFocus
+              aria-label="Adjustment amount"
+              className="po-price-input"
+              onChange={(e) => setAmount(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void save()
+                if (e.key === 'Escape') setAdding(false)
+              }}
+            />
+            <Input
+              value={note}
+              placeholder="Credit from the March deal"
+              aria-label="What this adjustment is for"
+              onChange={(e) => setNote(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void save()
+                if (e.key === 'Escape') setAdding(false)
+              }}
+            />
+            <Button variant="primary" icon="Check" loading={busy} onClick={() => void save()}>
+              Save
+            </Button>
+            <Button variant="ghost" onClick={() => setAdding(false)} disabled={busy}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      )}
+    </>
+  )
 }
 
 /**

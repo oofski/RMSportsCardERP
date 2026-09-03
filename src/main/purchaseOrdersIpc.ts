@@ -45,6 +45,8 @@ import {
   receivePurchaseOrderLines,
   scanInPurchaseOrder,
   setPartyPinned,
+  addPoAdjustment,
+  removePoAdjustment,
   setPurchaseOrderFreight,
   setPurchaseOrderRouting,
   addPurchaseOrderLines,
@@ -570,6 +572,48 @@ export function registerPurchaseOrdersIpc(): void {
         return res.error
           ? { ok: false, error: res.error }
           : { ok: true, data: res.po as PurchaseOrderDetail }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  /**
+   * MONEY ON THE ORDER THAT BOUGHT NO GOODS. See PurchaseOrderAdjustment.
+   *
+   * Gated like every other write on this module. It moves the order's total and
+   * the COGS row keyed on it, so it is `requireInvoicing` rather than a read.
+   */
+  ipcMain.handle(
+    IPC.poAddAdjustment,
+    (_e, payload: { id?: unknown; amount?: unknown; note?: unknown }): Result<PurchaseOrderDetail> => {
+      try {
+        const actor = requireInvoicing()
+        const id = String(payload?.id ?? '')
+        if (!id) return { ok: false, error: 'No purchase order specified.' }
+        const amount = Number(payload?.amount)
+        if (!Number.isFinite(amount)) return { ok: false, error: 'Enter an amount.' }
+        const res = addPoAdjustment(id, amount, payload?.note == null ? null : String(payload.note), actor.id)
+        return res.error
+          ? { ok: false, error: res.error }
+          : { ok: true, data: res.order as PurchaseOrderDetail }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  ipcMain.handle(
+    IPC.poRemoveAdjustment,
+    (_e, payload: { adjustmentId?: unknown }): Result<PurchaseOrderDetail> => {
+      try {
+        requireInvoicing()
+        const id = String(payload?.adjustmentId ?? '')
+        if (!id) return { ok: false, error: 'No adjustment specified.' }
+        const res = removePoAdjustment(id)
+        return res.error
+          ? { ok: false, error: res.error }
+          : { ok: true, data: res.order as PurchaseOrderDetail }
       } catch (err) {
         return fail(err)
       }
