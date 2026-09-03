@@ -44,6 +44,8 @@ const { invoiceLineSources } = require('../src/main/db/lineSources')
 const {
   describeLineSources,
   sourceName,
+  sourceVendor,
+  sourceWhere,
   sourcedCost,
   sourcedUnits
 } = require('../src/shared/lineSources')
@@ -232,6 +234,62 @@ ok(
   'and the empty case gets a sentence rather than a blank',
   describeLineSources(null)
 )
+
+// ---------------------------------------------------------------------------
+console.log('\n=== 6. the vendor is shown BESIDE the purchase order, not instead of it ===')
+// ---------------------------------------------------------------------------
+// The owner: "can we also show the vendor as well please."
+//
+// The first version treated the two as alternatives — sourceName returns the PO
+// number when there is one, and the detail line printed the supplier only when
+// there was NOT one. So the commonest case, a layer that came in on a real
+// purchase order, showed "PO-0458" and hid who sold it. That number answers
+// which order; it does not answer who.
+{
+  const withPo = {
+    poNumber: 'PO-0458',
+    poId: 'po_1',
+    supplier: 'Invented Card Distributors',
+    location: 'RM',
+    quantity: 2,
+    unitCost: 900,
+    receivedAt: '2026-04-01T12:00:00.000Z',
+    picked: false
+  }
+  ok(sourceName(withPo) === 'PO-0458', 'the headline is still the order number', sourceName(withPo))
+  ok(
+    sourceVendor(withPo) === 'Invented Card Distributors',
+    'AND THE VENDOR IS NAMED TOO — this is the whole change',
+    String(sourceVendor(withPo))
+  )
+  ok(
+    sourceWhere(withPo) === 'RM · Invented Card Distributors',
+    'so the second line carries the shelf and who sold it',
+    sourceWhere(withPo)
+  )
+  ok(
+    sourceWhere({ ...withPo, picked: true }) === 'RM · picked · Invented Card Distributors',
+    'with the picked note kept in the middle, where it was',
+    sourceWhere({ ...withPo, picked: true })
+  )
+
+  // SAID ONCE. A hand-counted layer has no purchase order, so sourceName titles
+  // the row with the vendor — repeating it underneath would state one fact twice.
+  const noPo = { ...withPo, poNumber: null, poId: null }
+  ok(sourceName(noPo) === 'Invented Card Distributors', 'a layer with no order is titled by its vendor')
+  ok(sourceVendor(noPo) === null, 'and the vendor is NOT repeated on the line below it', String(sourceVendor(noPo)))
+  ok(sourceWhere(noPo) === 'RM', 'so that row says the shelf and nothing redundant', sourceWhere(noPo))
+
+  // Nothing known about who sold it: no separator left dangling.
+  const anon = { ...withPo, supplier: null }
+  ok(sourceVendor(anon) === null, 'an unnamed supplier adds nothing')
+  ok(sourceWhere(anon) === 'RM', 'and leaves no trailing separator', sourceWhere(anon))
+  ok(
+    sourceWhere({ ...anon, picked: true }) === 'RM · picked',
+    'nor between the two parts that are there',
+    sourceWhere({ ...anon, picked: true })
+  )
+}
 
 console.log(`\n${pass} passed, ${fail} failed\n`)
 process.exit(fail === 0 ? 0 : 1)

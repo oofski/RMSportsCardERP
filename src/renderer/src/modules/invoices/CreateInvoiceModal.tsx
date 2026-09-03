@@ -32,7 +32,7 @@ import { Button, Checkbox, Field, Input, Modal, Select } from '../../components/
 import { Icon } from '../../components/Icon'
 import { SALES_QTY_FLOOR, canStep, stepDownBlockedReason, stepQty } from '@shared/lineQty'
 import { formatDate, formatMoney } from '../../lib/format'
-import { describeLineSources, sourceName } from '@shared/lineSources'
+import { describeLineSources, sourceName, sourceWhere } from '@shared/lineSources'
 import type { LineSources } from '@shared/lineSources'
 import { FreightFields } from '../../components/FreightFields'
 import { PaymentBar } from '../../components/PaymentProgress'
@@ -1723,13 +1723,11 @@ function LineSourcePop({ sources }: { sources: LineSources }): JSX.Element {
           <span className="src-pop-meta mono">
             {s.quantity} @ {formatMoney(s.unitCost)}
           </span>
-          <span className="src-pop-where">
-            {s.location}
-            {/* Said only when it was a decision. FIFO running unasked is the
-                default and does not need announcing on every row. */}
-            {s.picked ? ' · picked' : ''}
-            {s.supplier && !s.poNumber ? ` · ${s.supplier}` : ''}
-          </span>
+          {/* Where it sat, whether it was chosen, and WHO IT CAME FROM —
+              assembled by sourceWhere so the three cannot drift apart. The
+              vendor used to be printed only when there was no purchase order,
+              which hid it in the commonest case; see sourceVendor. */}
+          <span className="src-pop-where">{sourceWhere(s)}</span>
         </span>
       ))}
     </span>

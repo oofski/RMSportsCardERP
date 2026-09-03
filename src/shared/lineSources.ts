@@ -89,6 +89,47 @@ export function sourceName(s: SoldSource): string {
 }
 
 /**
+ * WHO SOLD US THESE, said alongside the purchase order rather than instead of it.
+ *
+ * The owner: "can we also show the vendor as well please."
+ *
+ * The first version treated the two as alternatives — `sourceName` returns the
+ * PO number when there is one and falls back to the supplier, and the detail
+ * line printed the supplier only when there was no PO. So the commonest case,
+ * a layer that came in on a real purchase order, showed the number and hid the
+ * name. "PO-0458" answers WHICH ORDER; it does not answer WHO, and on a floor
+ * buying from several distributors that is the question actually being asked.
+ *
+ * Returns null when the name is ALREADY the headline — a hand-counted layer with
+ * no purchase order is titled with its vendor by `sourceName`, and printing it
+ * again underneath would say one fact twice.
+ */
+export function sourceVendor(s: SoldSource): string | null {
+  const name = (s.supplier ?? '').trim()
+  if (!name) return null
+  return s.poNumber ? name : null
+}
+
+/**
+ * The second line of a layer's row: where it sat, whether it was chosen, and who
+ * it came from.
+ *
+ * Assembled here rather than in the renderer so the three parts cannot drift
+ * apart, and so the "say it once" rule above is enforced in the place that knows
+ * what the headline said.
+ */
+export function sourceWhere(s: SoldSource): string {
+  const parts = [s.location]
+  // Said only when it was a decision. FIFO running unasked is the default and
+  // does not need announcing on every row.
+  if (s.picked) parts.push('picked')
+
+  const vendor = sourceVendor(s)
+  if (vendor) parts.push(vendor)
+  return parts.filter(Boolean).join(' · ')
+}
+
+/**
  * The one line printed above the list.
  *
  * Leads with the count and the cost, because those are what somebody is
